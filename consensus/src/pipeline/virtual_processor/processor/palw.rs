@@ -458,14 +458,49 @@ impl VirtualStateProcessor {
         &self,
         candidate: BlockHash,
     ) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
-        let state = self.palw_candidate_state_v2(candidate)?;
+        self.palw_candidate_order_v2_checked(candidate).ok().flatten()
+    }
+
+    /// A local capacity refusal aborts the selection attempt; it cannot rank a
+    /// candidate below another branch or be counted as a consensus refusal.
+    pub(crate) fn palw_candidate_order_v2_checked(
+        &self,
+        candidate: BlockHash,
+    ) -> Result<
+        Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        let Some(state) = self.palw_candidate_state_for_selection_v2(candidate)? else { return Ok(None) };
         let (frontier_blue_score, _) = state.safe_frontier();
-        Some(kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1::new(
+        Ok(Some(kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1::new(
             frontier_blue_score,
             state.safe_weight(),
             state.bounded_immature(),
             candidate,
-        ))
+        )))
+    }
+
+    pub(crate) fn palw_candidate_state_for_selection_v2(
+        &self,
+        candidate: BlockHash,
+    ) -> Result<
+        Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        match self.palw_candidate_state_v2_checked(candidate) {
+            Ok(state) => Ok(Some(state)),
+            Err(PalwWeighFaultV2::NativeCapacityUnavailable) => Err(Self::palw_selection_capacity_unavailable_v1()),
+            Err(PalwWeighFaultV2::NoOpinion | PalwWeighFaultV2::StoreUnreadable) => Ok(None),
+        }
+    }
+
+    fn palw_selection_capacity_unavailable_v1() -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        >(
+            "candidate selection native state",
+            "local typed native state or delta capacity unavailable; retry without changing fork choice",
+        )
     }
 
     /// **ADR-0065 D2 — a deep reorg may not rest on bonds the fork minted for itself.**
@@ -496,16 +531,25 @@ impl VirtualStateProcessor {
     ///
     /// **Everything here is node-local.** Both states come from this node's root-verified tip and
     /// its own reachability walk; the peer proposing the reorg supplies none of it.
+    #[cfg(test)]
     pub(crate) fn palw_frontier_provenance_outcome(&self, candidate: BlockHash, prev_sink: BlockHash) -> DnsReorgOutcome {
+        self.palw_frontier_provenance_outcome_checked(candidate, prev_sink).expect("fixture has native selection capacity")
+    }
+
+    pub(crate) fn palw_frontier_provenance_outcome_checked(
+        &self,
+        candidate: BlockHash,
+        prev_sink: BlockHash,
+    ) -> Result<DnsReorgOutcome, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         use kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2;
 
         // Read at the INCUMBENT's DAA: a candidate's own score is attacker-chosen, and this is the
         // same one-sided clock the confirmed-anchor TTL uses a few hundred lines below.
         let incumbent_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or(0);
         if !self.palw_frontier_provenance.is_some_and(|fence| fence.is_active(incumbent_daa)) {
-            return DnsReorgOutcome::GateInactive;
+            return Ok(DnsReorgOutcome::GateInactive);
         }
-        let Some(panel_params) = self.palw_panel_params_v2.as_ref() else { return DnsReorgOutcome::GateInactive };
+        let Some(panel_params) = self.palw_panel_params_v2.as_ref() else { return Ok(DnsReorgOutcome::GateInactive) };
 
         // **A veto that cannot name a fork point abstains.** The horizon is `finality_depth`, which
         // is exactly the deepest reorg the sink search will ever offer, and it is canonical-side —
@@ -516,7 +560,7 @@ impl VirtualStateProcessor {
         let horizon = self.finality_depth;
         let Some(ancestor) = self.chain_common_ancestor_within(candidate, prev_sink, horizon) else {
             warn!("PALW frontier provenance abstains: no common ancestor for {candidate} and {prev_sink} within {horizon}");
-            return DnsReorgOutcome::GateInactive;
+            return Ok(DnsReorgOutcome::GateInactive);
         };
         // **An absence abstains; a FAULT refuses.** Both used to arrive as `None` and both
         // abstained, so a tip snapshot this node could not read turned D2's veto off — the gate
@@ -527,24 +571,26 @@ impl VirtualStateProcessor {
         let (challenger_state, ancestor_state) =
             match (self.palw_candidate_state_v2_checked(candidate), self.palw_candidate_state_v2_checked(ancestor)) {
                 (Ok(challenger), Ok(ancestor_state)) => (challenger, ancestor_state),
-                (Err(PalwWeighFaultV2::StoreUnreadable | PalwWeighFaultV2::NativeCapacityUnavailable), _)
-                | (_, Err(PalwWeighFaultV2::StoreUnreadable | PalwWeighFaultV2::NativeCapacityUnavailable)) => {
+                (Err(PalwWeighFaultV2::NativeCapacityUnavailable), _) | (_, Err(PalwWeighFaultV2::NativeCapacityUnavailable)) => {
+                    return Err(Self::palw_selection_capacity_unavailable_v1());
+                }
+                (Err(PalwWeighFaultV2::StoreUnreadable), _) | (_, Err(PalwWeighFaultV2::StoreUnreadable)) => {
                     warn!(
                         "deep reorg refused: this node's own PALW snapshot is unavailable, so ADR-0065 D2 cannot clear \
                          candidate {candidate} — a veto that cannot read its evidence does not wave the reorg through"
                     );
-                    return DnsReorgOutcome::FrontierProvenanceViolation;
+                    return Ok(DnsReorgOutcome::FrontierProvenanceViolation);
                 }
                 _ => {
                     warn!("PALW frontier provenance abstains: this node cannot materialize both sides of the fork at {ancestor}");
-                    return DnsReorgOutcome::GateInactive;
+                    return Ok(DnsReorgOutcome::GateInactive);
                 }
             };
 
         let minted: std::collections::BTreeSet<_> =
             challenger_state.bonds_iter().map(|(k, _)| *k).filter(|k| ancestor_state.bond(k).is_none()).collect();
         if minted.is_empty() {
-            return DnsReorgOutcome::GateInactive;
+            return Ok(DnsReorgOutcome::GateInactive);
         }
 
         // **The fast path is exact, not an approximation.** `PalwPanelParamsV2::new` enforces
@@ -553,7 +599,7 @@ impl VirtualStateProcessor {
         // violation, so not scanning is a proof rather than a shortcut. On the shipped (5, 3) that
         // is 2, so a static registry never pays for the walk.
         if !kaspa_consensus_core::palw_panel_v2::palw_minted_seats_can_reach_quorum_v1(minted.len(), panel_params) {
-            return DnsReorgOutcome::GateInactive;
+            return Ok(DnsReorgOutcome::GateInactive);
         }
 
         // Past it, the panels themselves. Read off the DELTAS rather than the challenger's tip
@@ -563,10 +609,16 @@ impl VirtualStateProcessor {
         let path = self.dag_traversal_manager.calculate_chain_path(ancestor, candidate, None);
         let store = self.palw_state_v2_store.read();
         for block in path.added.iter() {
-            let Ok((_, delta)) = store.delta_of_retained_v1(*block) else {
-                drop(store);
-                warn!("PALW frontier provenance abstains: delta for {block} is unavailable");
-                return DnsReorgOutcome::GateInactive;
+            let (_, delta) = match store.delta_of_retained_v1(*block) {
+                Ok(row) => row,
+                Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(_)) => {
+                    return Err(Self::palw_selection_capacity_unavailable_v1());
+                }
+                Err(_) => {
+                    drop(store);
+                    warn!("PALW frontier provenance abstains: delta for {block} is unavailable");
+                    return Ok(DnsReorgOutcome::GateInactive);
+                }
             };
             for entry in delta.entries.iter() {
                 let PalwDeltaEntryV2::Panel { new: Some(panel), .. } = entry else { continue };
@@ -578,11 +630,11 @@ impl VirtualStateProcessor {
                          from bonds registered after the fork point {ancestor} — its matured work is its own",
                         panel.seats.len()
                     );
-                    return DnsReorgOutcome::FrontierProvenanceViolation;
+                    return Ok(DnsReorgOutcome::FrontierProvenanceViolation);
                 }
             }
         }
-        DnsReorgOutcome::GateInactive
+        Ok(DnsReorgOutcome::GateInactive)
     }
 
     /// **The PALW state AT a chain block**, materialized from this node's own stores.

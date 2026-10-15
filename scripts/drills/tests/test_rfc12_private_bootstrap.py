@@ -73,6 +73,69 @@ class DriverControls(unittest.TestCase):
         self.assertEqual(result['evidence']['carrierBudget']['spent'], 25)
         self.assertIsNone(result['evidence']['completeCheck'])
 
+    def test_v4_conformance_precedes_native_execution_and_both_producers_stop_before_cold(self):
+        events = []
+
+        class FakeDrill:
+            plan = dict(privateProfile='paid-v4', nodes={role: dict(borsh='owned:1',
+                argv=['--palw-produce'] if role == 'A' else []) for role in ('A', 'B', 'JOIN')})
+
+            def start(self, role):
+                events.append('start-' + role)
+
+            def kill(self, role):
+                events.append('kill-' + role)
+
+            def join_link(self, role, target):
+                pass
+
+            def wait(self, predicate, label):
+                return predicate()
+
+        included = {role: dict(sink='owned', onboarding=dict(classId='class', artifactRoot='artifact',
+            registrant='registrant', artifactBindings=[])) for role in ('A', 'B', 'JOIN')}
+        bootstrap = dict(envelopeValidFromDaa=0, envelopeValidUntilDaa=0,
+            fundingKeyFile='owned.key', signedRegistration='registration', artifactBinding='binding')
+        preview = dict(dry_run=True, total_fee_sompi=12)
+        sent = dict(ok=True, submitted=True, carriers=[dict(fee_sompi=5), dict(fee_sompi=7)])
+
+        def passed(*args):
+            events.append('actual-conformance')
+            return dict(passed='native-verdict')
+
+        def custody(*args, **kwargs):
+            self.assertIn('actual-conformance', events)
+            events.append('native-execution')
+            return dict(nativeRecovery=dict(root='exact-root', boundClaim='exact-claim'), custodyStoreObserved=True)
+
+        def clock_stop(*args):
+            self.assertIn('native-execution', events)
+            events.append('stop-B-clock')
+            return dict(stopped=True)
+
+        def cold(*args):
+            self.assertLess(events.index('stop-B-clock'), events.index('kill-A'))
+            events.append('cold-conformance')
+            return dict(passed=True)
+
+        with patch.object(driver, 'ready', return_value=True), \
+                patch.object(driver, 'rpc_read', return_value=dict(virtualDaaScore=0)), \
+                patch.object(driver, 'command', side_effect=[preview, sent]), \
+                patch.object(driver, 'agreement', return_value=included), \
+                patch.object(driver, 'activate_complete_clock', return_value=dict(role='B')), \
+                patch.object(driver.complete, 'run', side_effect=passed), \
+                patch.object(driver, 'exercise_native_custody', side_effect=custody), \
+                patch.object(driver, 'stop_private_heartbeat_clock', side_effect=clock_stop), \
+                patch.object(driver.recovery, 'agreement', return_value=dict(accepted=True)) as native_read, \
+                patch.object(driver.complete, 'verify_after_cold_reopen', side_effect=cold):
+            result = driver.run(FakeDrill(), None, Path('/owned/cli'), '74' * 32, Path('/owned/fixture'),
+                bootstrap, 100, True, 100, 1, native_session=True)
+        self.assertTrue(result['nativeRecoveryConformanceBeforeExecution'])
+        self.assertFalse(result['providerCarrierFeesMeasured'])
+        self.assertEqual(native_read.call_args.kwargs, dict(expected_root='exact-root', expected_claim='exact-claim'))
+        self.assertEqual(events.count('actual-conformance'), 1)
+        self.assertIn('cold-conformance', events)
+
     def test_complete_clock_restarts_observer_and_preserves_producer_fee_rollover(self):
         events = []
 

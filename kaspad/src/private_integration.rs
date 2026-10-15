@@ -416,7 +416,13 @@ pub fn create_private_integration_core_with_runtime(
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
     prepare_private_integration_probe(args, &config)?;
     kaspa_core::warn!("RFC12 PRIVATE INTEGRATION PROBE: injected test policy; release/soundness evidence remains unapproved");
-    Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config), None))
+    let observer = config.params.palw_material_release_recovery_v2.is_some().then(|| {
+        Box::new(|ctx: crate::palw_native_custody_v3::PalwNativeCustodyContextV3| {
+            recovery_observation_v4::start(&ctx)?;
+            Ok(None)
+        }) as crate::palw_native_custody_v3::PalwNativeCustodyHookV3
+    });
+    Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config), observer))
 }
 
 /// The paid-v3 private node with the RFC-0008 PAV3 loopback native custody wiring (unverified source): a provider service

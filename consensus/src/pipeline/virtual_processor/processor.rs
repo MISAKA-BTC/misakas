@@ -4961,7 +4961,7 @@ impl VirtualStateProcessor {
         // resumes seamlessly.
         if let Some(preferred) = self.dns_stake_preferred_tip(prev_sink, &tips, finality_point) {
             diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, preferred)?;
-            if diff_point == preferred && self.dns_reorg_outcome(preferred, prev_sink, bond_view).is_accept() {
+            if diff_point == preferred && self.dns_reorg_outcome_checked(preferred, prev_sink, bond_view)?.is_accept() {
                 info!(
                     "DNS stake preference: this chain's own overlay is dead (anchor stale past TTL) and tip {preferred} carries a confirmation-grade live overlay within the work-deficit bound; moving the sink there (previous sink {prev_sink}). Templates now extend the live-overlay branch."
                 );
@@ -5059,7 +5059,7 @@ impl VirtualStateProcessor {
                     // rejection is soft — we fall through to push the candidate's parents
                     // and continue, converging on a DNS-valid sink (mirrors the
                     // invalid-UTXO handling below).
-                    let dns_outcome = self.dns_reorg_outcome(candidate, prev_sink, bond_view);
+                    let dns_outcome = self.dns_reorg_outcome_checked(candidate, prev_sink, bond_view)?;
                     if dns_outcome.is_accept() {
                         // Self-wedge signal (incident 2026-07-19 §2-1). The 7/19 freeze ran 3.5h
                         // with ZERO warnings: the gate refused every block of the network's chain
@@ -5073,7 +5073,7 @@ impl VirtualStateProcessor {
                                 candidate,
                                 gate_rejected.map(|(rejected, reason, _)| (rejected, reason)),
                                 false,
-                            )?;
+                            );
                         }
                         if let Some((rejected, reason, rejected_work)) = gate_rejected {
                             warn!(

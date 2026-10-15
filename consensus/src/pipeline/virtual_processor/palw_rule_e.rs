@@ -130,12 +130,20 @@ impl VirtualStateProcessor {
         matches!(self.palw_rule_e_span_at_most_v1(higher, lower, PALW_REORG_SHALLOW_TIE_DAA_V1), Some(true))
     }
 
-    fn palw_rule_e_state_v1(
+    fn palw_rule_e_state_checked_v1(
         &self,
         states: &mut PalwRuleEStatesV1,
         block: BlockHash,
-    ) -> Option<Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>> {
-        states.0.entry(block).or_insert_with(|| self.palw_candidate_state_v2(block).map(Arc::new)).clone()
+    ) -> Result<
+        Option<Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        if let Some(cached) = states.0.get(&block) {
+            return Ok(cached.clone());
+        }
+        let value = self.palw_candidate_state_for_selection_v2(block)?.map(Arc::new);
+        states.0.insert(block, value.clone());
+        Ok(value)
     }
 
     /// **Rule E's two sides for tips `a` and `b`, and whether participation counts**: each tip's claims accepted above their fork
@@ -148,35 +156,53 @@ impl VirtualStateProcessor {
         a: BlockHash,
         b: BlockHash,
     ) -> Option<(PalwRuleEPairV1, bool)> {
-        let params = self.palw_state_params_v2.as_ref()?;
-        let fork = self.palw_rule_e_fork_v1(a, b)?;
-        let (state_a, state_b) = (self.palw_rule_e_state_v1(states, a)?, self.palw_rule_e_state_v1(states, b)?);
-        let state_fork = self.palw_rule_e_state_v1(states, fork.fork)?;
+        // Diagnostic/test view only. Selection takes the checked result below.
+        self.palw_rule_e_pair_checked_v1(states, a, b).ok().flatten()
+    }
+
+    pub(crate) fn palw_rule_e_pair_checked_v1(
+        &self,
+        states: &mut PalwRuleEStatesV1,
+        a: BlockHash,
+        b: BlockHash,
+    ) -> Result<Option<(PalwRuleEPairV1, bool)>, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        let Some(fork) = self.palw_rule_e_fork_v1(a, b) else { return Ok(None) };
+        let Some(state_a) = self.palw_rule_e_state_checked_v1(states, a)? else { return Ok(None) };
+        let Some(state_b) = self.palw_rule_e_state_checked_v1(states, b)? else { return Ok(None) };
+        let Some(state_fork) = self.palw_rule_e_state_checked_v1(states, fork.fork)? else { return Ok(None) };
         let weightless = |block: BlockHash| {
             self.headers_store.get_daa_score(block).ok().map(|daa| self.palw_uncertified_weightless.is_some_and(|f| f.is_active(daa)))
         };
-        let pair = palw_rule_e_sides_above_fork_v1(
+        let (Some(weightless_a), Some(weightless_b)) = (weightless(a), weightless(b)) else { return Ok(None) };
+        let Ok(pair) = palw_rule_e_sides_above_fork_v1(
             &state_a,
             &state_b,
             &state_fork,
             fork.fork_blue_score,
             params,
-            weightless(a)?,
-            weightless(b)?,
+            weightless_a,
+            weightless_b,
             self.palw_canonical_work_daa,
-        )
-        .ok()?;
-        Some((pair, palw_rule_e_participation_counts_v1(fork.lower_span)))
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some((pair, palw_rule_e_participation_counts_v1(fork.lower_span))))
     }
 
     /// **Rule E's deep-reorg gate** (ADR-0178): may `candidate` replace the incumbent `prev_sink`? Unweighable refuses.
-    pub(crate) fn palw_rule_e_gate_v1(&self, candidate: BlockHash, prev_sink: BlockHash, incumbent_daa: u64) -> PalwDeepReorgV2 {
+    pub(crate) fn palw_rule_e_gate_v1(
+        &self,
+        candidate: BlockHash,
+        prev_sink: BlockHash,
+        incumbent_daa: u64,
+    ) -> Result<PalwDeepReorgV2, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         let mut states = PalwRuleEStatesV1::default();
-        let Some((pair, counts)) = self.palw_rule_e_pair_v1(&mut states, candidate, prev_sink) else {
+        let Some((pair, counts)) = self.palw_rule_e_pair_checked_v1(&mut states, candidate, prev_sink)? else {
             info!(
                 "deep reorg refused (rule E): candidate {candidate} or the incumbent {prev_sink} cannot be weighed over their exclusive pasts"
             );
-            return PalwDeepReorgV2::Refuse;
+            return Ok(PalwDeepReorgV2::Refuse);
         };
         let heavier = || match (self.ghostdag_store.get_blue_work(candidate), self.ghostdag_store.get_blue_work(prev_sink)) {
             (Ok(c), Ok(p)) => SortableBlock::new(candidate, c) > SortableBlock::new(prev_sink, p),
@@ -189,16 +215,21 @@ impl VirtualStateProcessor {
             "rule E gate: candidate {candidate} {:?} against the incumbent {prev_sink} {:?} (participation counts: {counts}, even split at {}) — {decision:?}",
             pair.a, pair.b, pair.even_split_min
         );
-        decision
+        Ok(decision)
     }
 
     /// **Rule E's choice between two admitted candidates**: `true` iff `challenger` replaces `best` — a strict win in rule E's
     /// order over their exclusive pasts, or, on a tie where participation counts and both reach the even split, the heavier in
     /// GHOSTDAG's order (the gate's own tie rule; any other tie keeps `best`). Unweighable never replaces.
-    pub(crate) fn palw_rule_e_prefers_v1(&self, states: &mut PalwRuleEStatesV1, challenger: BlockHash, best: BlockHash) -> bool {
+    pub(crate) fn palw_rule_e_prefers_v1(
+        &self,
+        states: &mut PalwRuleEStatesV1,
+        challenger: BlockHash,
+        best: BlockHash,
+    ) -> Result<bool, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         use std::cmp::Ordering;
-        let Some((pair, counts)) = self.palw_rule_e_pair_v1(states, challenger, best) else { return false };
-        match palw_rule_e_order_v1(&pair.a, &pair.b, counts) {
+        let Some((pair, counts)) = self.palw_rule_e_pair_checked_v1(states, challenger, best)? else { return Ok(false) };
+        Ok(match palw_rule_e_order_v1(&pair.a, &pair.b, counts) {
             Ordering::Greater => true,
             Ordering::Less => false,
             Ordering::Equal => {
@@ -210,7 +241,7 @@ impl VirtualStateProcessor {
                         _ => false,
                     }
             }
-        }
+        })
     }
 
     /// **Header-level participation of `candidate` against `first`**: the distinct executor bonds, registered in `registry`
@@ -297,7 +328,7 @@ impl VirtualStateProcessor {
         let mut states = PalwRuleEStatesV1::default();
         let mut report = PalwRuleESearchV1::default();
         let mut best = first;
-        if let Some(registry) = self.palw_rule_e_state_v1(&mut states, first) {
+        if let Some(registry) = self.palw_rule_e_state_checked_v1(&mut states, first)? {
             let mut ranked: Vec<(usize, usize, BlockHash)> = Vec::new();
             while report.scored < PALW_RULE_E_MAX_SCORED_V1 {
                 let Some(entry) = heap.pop() else { break };
@@ -327,10 +358,10 @@ impl VirtualStateProcessor {
                 }
                 report.validated += 1;
                 diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, candidate)?;
-                if diff_point == candidate && self.dns_reorg_outcome(candidate, prev_sink, bond_view).is_accept() {
+                if diff_point == candidate && self.dns_reorg_outcome_checked(candidate, prev_sink, bond_view)?.is_accept() {
                     report.admitted += 1;
                     accepted.push(candidate);
-                    if self.palw_rule_e_prefers_v1(&mut states, candidate, best) {
+                    if self.palw_rule_e_prefers_v1(&mut states, candidate, best)? {
                         best = candidate;
                     }
                 }

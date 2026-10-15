@@ -17670,3 +17670,6 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
     assert_eq!(vp.pruning_meta_stores.read().utxoset_position().unwrap(), original_position);
     assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_utxos);
 }
+
+// Local native capacity is retryable, never a branch preference or invalidity.
+mod rfc12_native_capacity_selection;
