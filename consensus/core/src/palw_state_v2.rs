@@ -3591,8 +3591,18 @@ pub fn palw_claim_final_floor_v1(
 ) -> Result<u64, PalwStateV2Error> {
     let floor =
         licensed_daa.checked_add(params.window_challenge_at(licensed_daa)).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
-    Ok(match palw_claim_verify_horizon_v1(state, params, claim_id, claim) {
+    let floor = match palw_claim_verify_horizon_v1(state, params, claim_id, claim) {
         Some(horizon) => floor.max(horizon),
+        None => floor,
+    };
+    // **G14 R6 (`palw_tir_public_conviction_v1`): an ORIGINAL TIR frame's claim reaches `Final` only after the frame's own
+    // collection door closes** — the d0 window in which one public bonded verifier can still convict it from public material. So
+    // no Final weight, receipt spend, escrow leg, model allocation, Gate C credit or coinbase leg is paid before adjudication can
+    // land, and no clawback is ever assumed. The frame row exists only past that fence (no row: the floor is unchanged on every
+    // shipped network). An honest claim is delayed, never voided or charged for the wait; its receipt draws are anchored at its
+    // own `final_daa`, so none expires.
+    Ok(match crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, *claim_id) {
+        Some(frame) => floor.max(frame.plan_v1().terms.collect_until_daa),
         None => floor,
     })
 }

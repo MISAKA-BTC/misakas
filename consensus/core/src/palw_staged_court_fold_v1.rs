@@ -190,6 +190,25 @@ impl PalwChainStateV2 {
             .map(|frame| u128::from(frame.plan_v1().terms.plan.deposit_sompi))
             .fold(0u128, u128::saturating_add)
     }
+    /// **G14 R5: an outside owner's demand on an ORIGINAL TIR frame is open** — a pending accusation (the one
+    /// `palw_accusation_pending_v1` predicate), so no non-fraud end closes the claim neutrally while the demanded custodians still
+    /// owe their answer or the owner its collection. Rows exist only past `palw_tir_public_conviction_v1`.
+    pub fn staged_tir_public_demand_open_v1(&self, claim: &Hash64) -> bool {
+        self.staged_tir_by_claim.get(claim).is_some_and(|rows| {
+            rows.iter().any(|(_, key)| match key {
+                PalwStagedCourtKeyV1::TirAcquisition(row_claim, owner, allocation) => self
+                    .staged_tir_acquisition_v1(*row_claim, *owner, *allocation)
+                    .is_some_and(|row| row.owned.active_v1().is_some()),
+                _ => false,
+            })
+        })
+    }
+    /// **G14 R6: an ORIGINAL TIR frame's d0 conviction door is still open at `now`** — `[accepted, collect_until)` of the frame's
+    /// own terms. Gate C waits on it (never a deadline failure), and the claim's `Final` floor is its close.
+    pub fn palw_tir_public_prosecution_open_v1(&self, claim: &Hash64, now: u64) -> bool {
+        crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)
+            .is_some_and(|frame| now < frame.plan_v1().terms.collect_until_daa)
+    }
     pub fn staged_tir_source_until_v1(&self, claim: Hash64) -> Option<u64> {
         self.staged_tir_by_claim.get(&claim).and_then(|rows| rows.last().map(|(until, _)| *until))
     }

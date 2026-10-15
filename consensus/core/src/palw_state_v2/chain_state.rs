@@ -1455,6 +1455,8 @@ impl PalwChainStateV2 {
             || self.da_claims.get(claim_id).is_some_and(|record| record.open_sessions() > 0)
             || self.open_courts_by_claim.get(claim_id).is_some_and(|open| *open > 0)
             || matches!(self.claims.get(claim_id).map(|claim| &claim.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
+            // G14 R5/R6: an outside owner's open demand on an ORIGINAL TIR frame (empty below `palw_tir_public_conviction_v1`).
+            || self.staged_tir_public_demand_open_v1(claim_id)
     }
 
     /// **A V3 claim's S2 licence held by a pending accusation** (DL-1's G14 row): the engine bound it (its record exists, released
