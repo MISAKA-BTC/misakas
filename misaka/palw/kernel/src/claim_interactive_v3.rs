@@ -77,15 +77,16 @@ impl CompiledClaimProofPlanV3 {
         ))
     }
 }
-/// **R7-RELATION (RFC-0007 2026-10-15, item 5): compact proof families need their own versioned contracts.** The relation families
-/// a compact contract could cover; each has its own compiler identity, distinct from [`full_material_compiler_v3`].
+/// Historical family wire IDs, retained for explicit rejection and archive
+/// identification. Computation validity proofs are permanently prohibited by
+/// PRINCIPLES §8; this is not a list of future implementation candidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum CompactProofFamilyV1 {
-    /// A sum-check reduction over the committed relation's multilinear extension.
+    /// Prohibited historical validity-proof family.
     SumCheckV1 = 0,
-    /// A layered-circuit (GKR-style) interactive proof.
+    /// Prohibited historical validity-proof family.
     GkrV1 = 1,
     /// A Freivalds-style randomized matrix-product check with an encoded query.
     FreivaldsV1 = 2,
@@ -95,10 +96,9 @@ impl CompactProofFamilyV1 {
     pub const ALL: [Self; 3] = [Self::SumCheckV1, Self::GkrV1, Self::FreivaldsV1];
 }
 
-/// **The versioned compact proof family contract — a STUB.** It names what such a contract must bind (the family, the exact target
-/// and relation encoding, the reviewed soundness statement and its bits, and finite proof/verifier bounds), so it can be reviewed and
-/// versioned apart from the full-material-opening compiler. No compact verifier exists in this tree: registration refuses every
-/// contract with [`COMPACT_PROOF_FAMILY_REFUSAL_V1`] — never silently accepted, never a fallback to the full-material plan.
+/// Historical contract grammar only. Registration is always refused. Direct
+/// Freivalds checks use authenticated operands and their own direct-check
+/// contract; no family-level validity proof can receive computation credit.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct CompactProofFamilyContractV1 {
     pub version: u16,
@@ -115,9 +115,7 @@ pub struct CompactProofFamilyContractV1 {
 }
 
 /// Why registration refuses every compact family contract today.
-pub const COMPACT_PROOF_FAMILY_REFUSAL_V1: &str = "family-level compact proof contracts are refused: they carry no relation coverage \
-     map, and no GKR/PCS verifier or independent soundness review exists (RFC-0007 2026-10-15 R7-RELATION); relation-level compact \
-     compilers use their own contract (claim_compact_v1, round 3, unreviewed)";
+pub const COMPACT_PROOF_FAMILY_REFUSAL_V1: &str = "computation validity-proof family contracts are permanently prohibited by PRINCIPLES section 8; historical wire IDs cannot be activated or relabelled as direct checks";
 
 /// The compiler identity of a compact family (distinct per family; never [`full_material_compiler_v3`]).
 pub fn compact_proof_family_compiler_v1(family: CompactProofFamilyV1) -> Digest {
@@ -305,7 +303,8 @@ pub fn compact_plan_v4(
     plan.validate(coverage.target, mode, rounds, maximum_stream_blocks)?;
     Ok(plan)
 }
-/// Reabsorb each previous post-seed proof before drawing the next challenge.
+/// Bind previous direct-check records before drawing the next audit challenge.
+/// Hashes authenticate audit history only; no validity argument is accepted.
 /// No V3 domain or byte encoding changes.
 pub fn fs_round_seed_v4(
     plan: &CompiledClaimProofPlanV3,
