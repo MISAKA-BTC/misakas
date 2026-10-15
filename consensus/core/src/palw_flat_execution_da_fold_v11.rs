@@ -346,13 +346,14 @@ pub(super) fn settle(
         finder: palw_kernel_bond_id_v1(&d.body.requester),
         kind: NativeAdjudicationKindV11::DataUnavailable,
     };
-    let reserve = claim.reserved_original;
-    if builder.state.bonds.get(&row.header.producer).is_none_or(|b| b.collateral < reserve) {
-        return Err(refused("native original DA default slash unavailable"));
-    }
+    // G14 lane closure G-14: a default is never refused for short collateral; what the bond still holds of the reserve is collected.
+    let reserve = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
+        builder.state.bonds.get(&row.header.producer).map(|b| b.collateral),
+        claim.reserved_original,
+    );
     let settlement = book.adjudicate(class.record(), &result, reserve).map_err(refused)?;
     close_adjudicated_quota(builder, ctx, p, d.job_id, &class, &book, &plan, *signer)?;
-    let collected = builder.slash_bond(row.header.producer, reserve as u128)?;
+    let collected = if reserve == 0 { 0 } else { builder.slash_bond(row.header.producer, reserve as u128)? };
     if collected != reserve {
         return Err(refused("native original DA default debit changed"));
     }

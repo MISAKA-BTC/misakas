@@ -671,7 +671,8 @@ async fn run_until(chain: &mut Chain, node: &KNode, secs: u64, what: &str, done:
 /// and an honest twin, all licensed by Panels in which every seat signed a passing receipt. One public bond registered after them
 /// all, on a node that validated the public history from an empty database, holding the registered model: its service convicts each
 /// lie (before Final where the claim had not reached it, inside the liability horizon where it had), slashing the producer's real
-/// bond and charging no colluding seat, and files nothing against the honest twin, which reaches Final.
+/// bond and — G14 lane closure G-K1 (2026-10-16) — charging each colluding seat its signer liability lock once per convicted claim it
+/// covered, and files nothing against the honest twin, which reaches Final (its seats are never charged).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_the_honest_twin_finalizes() {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
@@ -757,16 +758,22 @@ async fn g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_th
             "card {p}: each conviction slashed its real bond"
         );
     }
-    // No colluding seat is charged. The jobs' poster (card 1) pays exactly one thing in the meantime: the honest twin's Final reward,
-    // out of its job escrow (GAP-5: user-pays; the bond's `slashed` records the escrow spend). No convicted claim is paid.
+    // G14 lane closure G-K1: each colluding seat is charged its signer liability lock once per convicted claim it covered (the
+    // honest twin's seats are not). The jobs' poster (card 1) also pays one thing in the meantime: the honest twin's Final reward, out
+    // of its job escrow (GAP-5: user-pays; the bond's `slashed` records the escrow spend). No convicted claim is paid.
+    let lock = kaspa_consensus_core::palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1(
+        policy.claim_reward,
+        kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1,
+    );
+    let convicted_seats: Vec<Vec<usize>> = after_final.iter().chain(before_final.iter()).map(|(.., s)| s.clone()).collect();
     for (card, before) in &seat_slashed {
         if !producers.contains(card) {
             let paid = if *card == REGISTRANT { policy.claim_reward } else { 0 };
+            let covered = convicted_seats.iter().filter(|seats| seats.contains(card)).count() as u64;
             assert_eq!(
                 collateral_of(&w.chain, w.chain.bonds[*card]).1,
-                before + paid,
-                "card {card}: a colluding seat is not charged (seats: {:?})",
-                after_final.iter().chain(before_final.iter()).map(|(.., s)| s.clone()).collect::<Vec<_>>()
+                before + paid + covered * lock,
+                "card {card}: a colluding seat is charged its lock per convicted claim it covered (seats: {convicted_seats:?})"
             );
         }
     }

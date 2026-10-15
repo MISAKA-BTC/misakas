@@ -1234,6 +1234,8 @@ fn apply_settlements_to_exec_vesting(
     // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): a paid V2 claim's conviction in this batch is recorded once and its
     // Clean receipt signers are charged their liability. A no-op below the fence.
     super::palw_paid_claim_trap_fold_v1::on_paid_claim_convictions_v1(builder, events, now)?;
+    // G14 lane closure G-K1: every conviction in this batch charges the claim's receipt signers' liability locks.
+    super::palw_g14_lane_closure_fold_v1::charge_kernel_signers_on_conviction_v1(builder, events)?;
     Ok(())
 }
 
@@ -1744,6 +1746,11 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         }
         _ => None,
     };
+    // G14 lane closure G-K4: a response's target, recorded below once the object stands.
+    let responded = match &object {
+        KernelRouteObjectV1::Respond { claim, .. } => Some(*claim),
+        _ => None,
+    };
     let events = match ledger.apply_object_reserved_v1(object, &AuthV1 { signer_bond: kid }).map_err(PalwStateV2Error::NativeResource)? {
         Ok(events) => events,
         Err(_refusal) => {
@@ -1930,6 +1937,10 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     }
     // The object stands: the route has now seen its signer.
     builder.note_kernel_bond(signer)?;
+    // G14 lane closure G-K4: a segmented claim's served parts live only in block bodies — record the first block that carried one.
+    if let Some(claim) = responded {
+        super::palw_g14_lane_closure_fold_v1::note_served_material_v1(builder, ctx, &ledger, &claim)?;
+    }
     for event in &events {
         if let LedgerEventV1::ClaimCommitted { claim } = event {
             let deadline = ledger.claims.get(claim).map(|c| c.committed_daa + ledger.policy.check_window_daa).unwrap_or(ctx.daa_score);
@@ -2071,6 +2082,20 @@ pub(super) fn apply_kernel_receipt_v1(
     if receipts.iter().any(|r| r.seat_bond == receipt.seat_bond && r.scope_root == receipt.scope_root) {
         return Ok(()); // a seat's first receipt for a duty is the one counted
     }
+    // G14 lane closure G-K1: a counted PASSING receipt locks its signer's liability on the seat's free collateral until the claim's
+    // liability horizon (charged at any conviction of the claim, released after the horizon); a seat that cannot back it is not counted.
+    if matches!(receipt.verdict, misaka_palw_kernel::receipt::ReceiptVerdictV1::Pass)
+        && !super::palw_g14_lane_closure_fold_v1::lock_kernel_signer_v1(
+            builder,
+            ctx,
+            &seat_key,
+            &claim,
+            ledger.policy.claim_reward,
+            assignment.quorum,
+        )?
+    {
+        return Ok(());
+    }
     receipts.push(receipt.clone());
     let mut tally = ConstraintTallyV1::new(TallyPolicyV1 { per_segment_quorum: assignment.quorum }, evidence);
     for r in &receipts {
@@ -2120,6 +2145,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0007 §4.1 T6: held check fees past their trap reveal window (claim terminal) are released once; conviction rows past
     // their window are forgotten. A no-op below `palw_paid_claim_trap_v1`.
     super::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(builder, ctx.daa_score)?;
+    // G14 lane closure G-K1: signer locks whose claim can no longer be convicted are released (a convicted one charged), whatever
+    // the ledger is doing.
+    super::palw_g14_lane_closure_fold_v1::sweep_kernel_signer_locks_v1(builder, ctx.daa_score)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.

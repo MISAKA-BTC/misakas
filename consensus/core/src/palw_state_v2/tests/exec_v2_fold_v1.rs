@@ -3421,8 +3421,17 @@ mod amendment_1 {
             convicted.claim(&claim).unwrap().phase,
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceProvenFalse, voided_daa: 131 }
         ));
+        // G14 lane closure G-X1 (T-N12 below): the REAL claim's V2 Valid signers answer for its own proven-false piece; no other
+        // V2 charge (the producer's one charge for the lie is its prefix claim's kernel reservation, the route's).
+        let signers: Vec<PalwBondKeyV2> = sybil_seats().iter().map(|seat| seat.bond).collect();
         let after: Vec<(PalwBondKeyV2, u64)> = convicted.bonds.iter().map(|(k, b)| (*k, b.collateral)).collect();
-        assert_eq!(after, collateral, "no V2 charge");
+        for ((bond, before), (_, now)) in collateral.iter().zip(&after) {
+            if signers.contains(bond) {
+                assert!(now < before, "a Valid signer of the REAL claim is charged");
+            } else {
+                assert_eq!(now, before, "no other V2 charge");
+            }
+        }
         assert_eq!(convicted.reserved_exposure(&bond_key(20)), 0, "the extra executors' exposure returns");
         assert!(convicted.vesting_row(&claim).is_none(), "nobody is paid");
         // (c) the prefix claim's material was withheld: a default, the same void.
@@ -3433,6 +3442,63 @@ mod amendment_1 {
             defaulted.claim(&claim).unwrap().phase,
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceDefaulted, .. }
         ));
+    }
+
+    /// **T-N12 (G14 lane closure G-X1): the REAL root's V2 Valid signers are charged when its piece is proven false.** The session's
+    /// first piece — the REAL claim's own run, carried by the root bond's prefix claim (GAP-62) — is exactly what the five V2 seats
+    /// licensed: a conviction of it charges each Valid signer S4 on its lock (lock first, once per seat and claim, the false-Valid
+    /// offence consumed), voids the REAL claim and pays nobody. A later executor's slice is NOT something those seats signed (they
+    /// licensed the claim before any slice existed): its conviction voids the suffix and the root but charges them nothing — its own
+    /// kernel claim's reservation and receipt signers answer for it (the route's, G-K1). The fence is at DAA 0.
+    #[test]
+    fn exec_real_root_v2_signers_are_charged_when_a_slice_is_proven_false() {
+        let (p, s, claim, slices, prefix) =
+            session_with(1_000, ClaimStateV1::Challengeable { since_daa: 100, window_end_daa: 200 }, false, None);
+        assert_eq!(p.exec_v2_from_daa(), Some(0), "EXEC from genesis");
+        let s = license(&p, &s, claim, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let signers: Vec<PalwBondKeyV2> = sybil_seats().iter().map(|seat| seat.bond).collect();
+        let locks: Vec<u128> = signers
+            .iter()
+            .map(|seat| s.slashable_locks.get(&(*seat, claim)).expect("each Valid signer locked its share at the licence").amount)
+            .collect();
+        let money = |s: &PalwChainStateV2, bond: &PalwBondKeyV2| s.bonds.get(bond).map(|b| (b.collateral, b.slashed)).unwrap();
+        let before: Vec<(u64, u64)> = signers.iter().map(|seat| money(&s, seat)).collect();
+        let producer = s.claim(&claim).unwrap().bond;
+        let producer_before = money(&s, &producer);
+
+        // (a) the REAL claim's own piece is proven false by an outsider's conviction of its prefix claim.
+        let convicted = kernel_block(&p, &s, 61, 131, vec![prefix.write(ClaimStateV1::Convicted { daa: 131 }, true)]);
+        assert_eq!(convicted.exec_v2_root_v1(&claim).unwrap().prefix, PalwWorkPrefixStageV2::ProvenFalse { daa: 131 });
+        assert!(matches!(
+            convicted.claim(&claim).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceProvenFalse, voided_daa: 131 }
+        ));
+        for ((seat, (collateral, slashed)), lock) in signers.iter().zip(&before).zip(&locks) {
+            let (c, sl) = money(&convicted, seat);
+            assert!(u128::from(collateral - c) >= *lock, "{seat:?}: charged at least its lock (S4 = lock + action)");
+            assert_eq!(collateral - c, sl - slashed, "{seat:?}: a real slash");
+            assert!(!convicted.slashable_locks.contains_key(&(*seat, claim)), "{seat:?}: the lock is spent first");
+            let offence = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim);
+            assert!(convicted.consumed_offences.contains_key(&offence), "{seat:?}: once — the false-Valid offence is consumed");
+        }
+        assert_eq!(money(&convicted, &producer), producer_before, "the producer's one charge is its prefix claim's (the route's)");
+        assert!(convicted.vesting_row(&claim).is_none(), "nobody is paid");
+        // Once: a later block that writes the same verdict again charges nobody twice.
+        let again = kernel_block(&p, &convicted, 62, 132, vec![prefix.write(ClaimStateV1::Convicted { daa: 131 }, true)]);
+        for seat in &signers {
+            assert_eq!(money(&again, seat), money(&convicted, seat), "{seat:?}: charged once");
+        }
+
+        // (b) the prefix verifies; a LATER executor's slice is proven false: the suffix and the root are void, the V2 seats are not
+        // charged (they never signed it).
+        let verified = kernel_block(&p, &s, 61, 131, vec![prefix.write(ClaimStateV1::Final { final_daa: 131 }, false)]);
+        let sliced = kernel_block(&p, &verified, 62, 132, vec![slices[1].write(ClaimStateV1::Convicted { daa: 132 }, true)]);
+        assert_eq!(sliced.exec_v2_slice_v1(&claim, 1).unwrap().stage, PalwWorkSliceStageV2::ProvenFalse { daa: 132 });
+        assert!(matches!(sliced.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { from_index: 1, .. }));
+        for (seat, before) in signers.iter().zip(&before) {
+            assert_eq!(money(&sliced, seat), *before, "{seat:?}: a V2 seat never answers for a slice it did not sign");
+        }
     }
 
     /// Install real kernel reservations and their consumer bond mappings. These rows are setup,

@@ -3636,6 +3636,8 @@ wire_struct!(crate::palw_opv_bootstrap_v1::CompleteCheckPostV1; u16, [u8;64], Ve
 wire_struct!(crate::palw_opv_bootstrap_v1::CompleteRootsV1; [u8;64], [u8;64], [u8;64]);
 wire_struct!(crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1; u8, [u8; 64], [u8; 64], u64, [u8; 64], u64, u64);
 wire_struct!(crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1; u8, [u8; 64], [u8; 64], [u8; 64], u64, u64);
+wire_struct!(crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1; u8, [u8; 64], crate::palw_state_v2::PalwBondKeyV2, u64, u64);
+wire_struct!(crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1; u8, [u8; 64], u64, u64);
 wire_struct!(crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1; u8, [u8; 64], [u8; 64], crate::palw_state_v2::PalwBondKeyV2, [u8; 64], u64, u64, u64);
 wire_struct!(crate::palw_panel_economy_v1::PalwSeatEconomyV1; u64, u32, u32);
 wire_struct!(crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2; misaka_palw_kernel::panel_lifetime_v2::PanelLifetimeAuthorizationV2, crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::Hash64, Option<crate::Hash64>);

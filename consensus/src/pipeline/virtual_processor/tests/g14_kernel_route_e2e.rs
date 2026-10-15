@@ -3487,3 +3487,6 @@ mod rfc15_panel_free;
 // RFC-0017 (2026-10-15, test source): model eligibility at the door and past the fence on the real node — A-2 refusal of inner 74,
 // genesis classes ungoverned byte for byte against an unarmed twin, a genesis exam refused: `g14_kernel_route_e2e/rfc17_eligibility.rs`.
 mod rfc17_eligibility;
+// G14 lane closure (2026-10-16): the kernel route's Valid signers answer for a conviction (G-K1, T-N11), over the production
+// onboarding path (no attestation hook): `g14_kernel_route_e2e/g14_lane_closure.rs`.
+mod g14_lane_closure;

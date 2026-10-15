@@ -1063,6 +1063,13 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1::scan_native_wire_v1(frame)?
         }
         142 => return Err(wire::wire_bad("unallocated paid-claim trap row namespace")),
+        143 if key_bytes == 129 && prefix == crate::palw_g14_lane_closure_v1::PALW_KERNEL_SIGNER_LOCK_PREFIX_V1 => {
+            crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1::scan_native_wire_v1(frame)?
+        }
+        143 if key_bytes == 65 && prefix == crate::palw_g14_lane_closure_v1::PALW_SERVED_MATERIAL_PREFIX_V1 => {
+            crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1::scan_native_wire_v1(frame)?
+        }
+        143 => return Err(wire::wire_bad("unallocated G14 lane-closure row namespace")),
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
