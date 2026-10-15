@@ -88,6 +88,9 @@ pub struct TirBoundaryLieV1 {
     pub boundary: usize,
 }
 
+/// A free-prompt job's decode rule: `(ids generated so far, logits row, row index) -> selected id`.
+pub type TirDecodeSelectorV1 = std::sync::Arc<dyn Fn(&[u32], &[i32], u32) -> u32 + Send + Sync>;
+
 /// Runs jobs of one IR class over one artifact's params.
 pub struct TirClassRunnerV1<'a> {
     pub space: &'a PalwTirStepSpaceV1,
@@ -100,6 +103,9 @@ pub struct TirClassRunnerV1<'a> {
     fused: bool,
     /// The drill's lie at a shard boundary, if one is asked for.
     boundary_lie: Option<TirBoundaryLieV1>,
+    /// **The decode rule** of a free-prompt job (G14's TIR replay hook): `(generated so far, row, row index) -> id`. `None` is
+    /// the attempt lane's shipped rule (`base0_decode_token_select_v1`), which every attempt commits.
+    selector: Option<TirDecodeSelectorV1>,
 }
 
 /// The leaf lanes of values of `dtype` (PALW-TIR-5): `i8`/`i16`/`i32` as little-endian `i32`,
@@ -145,12 +151,19 @@ impl<'a> TirClassRunnerV1<'a> {
             }
             tiles.push(row);
         }
-        Ok(TirClassRunnerV1 { space, plan, params, class_id, tiles, fused: false, boundary_lie: None })
+        Ok(TirClassRunnerV1 { space, plan, params, class_id, tiles, fused: false, boundary_lie: None, selector: None })
     }
 
     /// **Run with a consistent lie at a shard boundary** (the drill's D-S3; see [`TirBoundaryLieV1`]).
     pub fn with_boundary_lie(mut self, lie: Option<TirBoundaryLieV1>) -> Self {
         self.boundary_lie = lie;
+        self
+    }
+
+    /// **Select each generated id with `selector`** instead of the attempt lane's greedy rule — a free-prompt job's own decode
+    /// rule (a constrained job's masked greedy key, a V4 job's pipeline) over this run's own prefix.
+    pub fn with_selector(mut self, selector: TirDecodeSelectorV1) -> Self {
+        self.selector = Some(selector);
         self
     }
 
@@ -362,7 +375,11 @@ impl<'a> TirClassRunnerV1<'a> {
                 if row.is_empty() {
                     return Err("an empty logits row selects no token".into());
                 }
-                generated.push(base0_decode_token_select_v1(&row) as u32);
+                let id = match self.selector.as_ref() {
+                    Some(select) => select(&generated, &row, generated.len() as u32),
+                    None => base0_decode_token_select_v1(&row) as u32,
+                };
+                generated.push(id);
                 rows.push(row);
             }
             // Fixed-state checkpoints: every instance after this position's write.

@@ -1177,6 +1177,49 @@ impl TirBackendV1 {
     }
 }
 
+/// **G14's TIR route hooks over this executor** (the four `PalwExecutionBackendV1` TIR methods; contracts in
+/// `kaspa_consensus_core::palw_backend`): every answer is read from a [`TirCaptureV1`] of THIS class whose binding IS the claim's
+/// admitted public header, or — for the verifier's replay — from this node's own run of the registered program.
+impl TirBackendV1 {
+    /// The capture `material`, refused unless it is this class's run of exactly `header` (job context, trace root, step tree and
+    /// execution root) and its committed rows and ids reproduce the header's trace root.
+    fn capture_of_tir_header_v1(
+        &self,
+        material: &[u8],
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<TirCaptureV1, String> {
+        let capture = self.decode_capture(material)?;
+        if kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&capture.binding) != *header {
+            return Err("the capture is not this TIR header's run".into());
+        }
+        tir_authenticate_capture_metadata_v1(&capture, self.class_id, self.prompt_ids_form, self.ladder)?;
+        Ok(capture)
+    }
+
+    /// The decode view the chain derives for `header` under this class's registration record.
+    fn tir_view_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1, String> {
+        let (record, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(&self.class, &self.artifact_root)
+            .map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, &record, self.ladder)
+    }
+
+    /// The step leaf preimages a capture answers for, by index (a dense capture's own; a fold's re-derived by this node's replay,
+    /// which must reproduce the capture's binding), and the leaf hashes its tree is over.
+    fn tir_leaf_source_v1<R>(
+        &self,
+        material: &[u8],
+        f: impl FnOnce(&dyn Fn(u64) -> Option<PalwStepTileLeafV1>, &[Hash64]) -> Result<R, String>,
+    ) -> Result<R, String> {
+        use kaspa_consensus_core::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+        let capture = self.decode_capture(material)?;
+        let hashes = self.capture_leaf_hashes(&capture)?;
+        self.with_capture_store(material, self.prompt_ids_form, |store, _| f(&|index| store.step_leaf(index), &hashes.hashes))
+    }
+}
+
 impl PalwExecutionBackendV1 for TirBackendV1 {
     fn model_id(&self) -> &str {
         &self.model_id
@@ -1409,5 +1452,135 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
     fn artifact_row_opening(&self, index: u32) -> Result<PalwArtifactOpeningV1, String> {
         use super::inventory::TirParamOpenerV1;
         self.artifact.param_opening(index).ok_or_else(|| format!("inventory leaf {index} does not open"))
+    }
+
+    /// G14: the selected tiled event `(row, tile)` of a TIR claim's committed logits, from this class's capture of exactly the
+    /// claim's admitted header — the reference construction (`of_public_rows_view_v1` over the header's view, self-authenticated).
+    fn disclose_tir_selected_event_v1(
+        &self,
+        material: &[u8],
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        row: u32,
+        tile: u32,
+        maximum_leaves: u64,
+    ) -> Result<kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedTiledEventV1, String> {
+        let capture = self.capture_of_tir_header_v1(material, header)?;
+        let view = self.tir_view_v1(header)?;
+        kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedTiledEventV1::of_public_rows_view_v1(
+            &view,
+            &capture.logits_rows,
+            &capture.generated,
+            kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1 { row, tile },
+            maximum_leaves,
+        )
+    }
+
+    /// G14: the outside verifier's OWN run of the registered program on the job's authenticated prompt ids, selecting exactly
+    /// `exact_decode_tokens` ids with the job's own rule over this run's own prefix: a constrained job's masked greedy key (the
+    /// host's token table for the job, refused without it), a V4 job's pipeline, otherwise the shipped greedy rule.
+    fn replay_tir_generated_ids_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_token_ids: &[u32],
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwTirReplayV1, String> {
+        let ctx = &header.job_context;
+        if ctx.shape_profile_id != self.class_id
+            || job.class_id != self.class_id
+            || header.artifact_root != self.artifact_root
+            || job.tokenizer_id != ctx.tokenizer_id
+            || job.prompt_token_ids_hash != ctx.prompt_token_ids_hash
+            || job.prompt_tokens != ctx.declared_prefill_tokens
+            || job.max_context_tokens != ctx.max_context_tokens
+            || prompt_token_ids.len() as u64 != u64::from(job.prompt_tokens)
+            || !prompt_token_ids_match_v1(self.prompt_ids_form, prompt_token_ids, &ctx.prompt_token_ids_hash)
+        {
+            return Err("the prompt ids are not this TIR class's job and context".into());
+        }
+        let mask = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(
+            job,
+            self.token_table_for_job_v1(job),
+        )?;
+        let sampling = job.sampling_v2();
+        let pipeline = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules()).cloned();
+        let select: super::run::TirDecodeSelectorV1 = Arc::new(move |before: &[u32], row: &[i32], index: u32| -> u32 {
+            if let Some(mask) = mask.as_ref() {
+                return mask.select(mask.state_after(before).as_ref(), row, index, &sampling).0;
+            }
+            if let Some(config) = pipeline.as_ref() {
+                return match kaspa_consensus_core::palw_decode_pipeline_v4::decode_select_v4(config, &sampling, before, row, &|_| true)
+                {
+                    Some(lane) => lane as u32,
+                    None => kaspa_consensus_core::palw_decode_select_v2::decode_token_select_v2(
+                        row,
+                        &sampling.seed,
+                        index,
+                        sampling.temperature_q,
+                    ) as u32,
+                };
+            }
+            kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32
+        });
+        let run = self.runner().with_selector(select).run(ctx, prompt_token_ids, self.ladder, false, &mut |_| {})?;
+        if run.generated.len() as u64 != u64::from(ctx.exact_decode_tokens) {
+            return Err("the TIR replay selected another number of ids than the header's exact decode count".into());
+        }
+        Ok(kaspa_consensus_core::palw_backend::PalwTirReplayV1 {
+            generated_ids: run.generated,
+            full_logits_trace_root: run.trace_root,
+        })
+    }
+
+    /// G14: step leaf `leaf_index` of a TIR claim — its canonical lanes and its capped opening against the header's step root,
+    /// from this class's capture of exactly the header (a fold's leaves re-derived, and refused unless they reach its root).
+    fn disclose_tir_step_leaf_v1(
+        &self,
+        material: &[u8],
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        leaf_index: u64,
+        maximum_leaves: u64,
+    ) -> Result<(Vec<u8>, PalwStepOpeningV1), String> {
+        self.capture_of_tir_header_v1(material, header)?;
+        if leaf_index >= header.step_leaf_count {
+            return Err(format!("leaf {leaf_index} is past the TIR claim's {} step leaves", header.step_leaf_count));
+        }
+        self.tir_leaf_source_v1(material, |leaf, hashes| {
+            if hashes.len() as u64 != header.step_leaf_count
+                || step_merkle_root_capped_v1(hashes, self.ladder).ok() != Some(header.step_merkle_root)
+            {
+                return Err("the capture's leaves do not reach the TIR header's step root".into());
+            }
+            let preimage = leaf(leaf_index).ok_or_else(|| format!("step leaf {leaf_index} is not held"))?;
+            let opening = kaspa_consensus_core::palw_step_leg::step_opening_from_leaf_source_capped_v1(
+                header.step_leaf_count,
+                leaf_index,
+                maximum_leaves,
+                |i| hashes[i as usize],
+            )
+            .map_err(|e| e.to_string())?;
+            Ok((preimage.values_le, opening))
+        })
+    }
+
+    /// G14: the executor's declaration of a TIR prefix state — `palw_fp_prefix_state_root_v1(class, k, palw_tir_prefix_kv_digest_v1
+    /// over the run's own boundary lanes)` — for an aligned boundary only (refused otherwise, as the chain refuses its quote). The
+    /// chain also requires the class layout (tag 169) published before such a claim; that is the producer's chain step, not this.
+    fn declare_tir_prefix_state_v1(
+        &self,
+        material: &[u8],
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        prefix_tokens: u32,
+    ) -> Result<Hash64, String> {
+        self.capture_of_tir_header_v1(material, header)?;
+        let ctx = &header.job_context;
+        self.space
+            .prefix_state_leaf_count_v1(ctx, prefix_tokens)
+            .ok_or("an unaligned or out-of-prompt TIR prefix boundary has no committed state")?;
+        let digest = self.tir_leaf_source_v1(material, |leaf, _| {
+            kaspa_consensus_core::palw_tir_prefix_state_v1::palw_tir_prefix_kv_digest_v1(&self.space, ctx, prefix_tokens, |boundary| {
+                leaf(boundary.index).map(|p| p.values_le).ok_or_else(|| format!("boundary leaf {} is not held", boundary.index))
+            })
+        })?;
+        Ok(kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&self.class_id, prefix_tokens, &digest))
     }
 }
