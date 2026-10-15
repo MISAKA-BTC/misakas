@@ -778,52 +778,53 @@ builds the envelope and refuses a required-family claim without a delegation.
 grant automatically once native state credits their exact Valid receipt (signing Valid attests holding the
 material, per the 10-12 ruling that Miner and Panel hold the registered model).
 
-**Explicitly uncovered lanes (refused at admission, no reward, no weight):**
-- **Float32 Constraint.** The base Float32 lane has no decode-token adjudicator (`check_base0_decode_token_refutation_v2`
-  refuses Float32; `PalwDecodeTokenPinV1::FloatV2` authenticates ids but adjudicates no selection), and the Flat
-  constraint stream requires the Int32 lane. A required-family Constraint claim of a Float32 class is refused by
-  `staged_preclaim_quote_v1`. *Progress 2026-10-15 (source only, unverified):* the adjudicator core exists
-  (`palw_float_decode_v1`): an order key reproducing the reference worker's greedy first-index f32 argmax
-  (signed zero equal), a bounded streaming verifier that authenticates one committed f32 row against its event
-  hash, event opening and the claim's trace root, the greedy decode verdict and the constrained beat comparison.
-  Seeded Float32 jobs remain unadjudicable (no canonical float sampler). Still missing: a rooted, restartable
-  Float32 row court (the stream's hash state is in-memory), Float32 source sessions (custodians streaming a
-  committed row), the constraint court's Float32 seed, and node actors; the lane stays refused.
-- **TIR required families.** `staged_preclaim_quote_v1` refuses a TIR header. Missing, exactly:
-  (1) a quote projection from the registered TIR class/layout to family geometry (vocabulary, logits scheme, lane,
-  prefix-state relation dims) replacing `fp_work_profiles`; (2) a TIR state relation for the prefix-state court
-  (the PublicPrefix family consumes `PalwStepBindingV2` + the Qwen36 hybrid-cache relation; TIR state openings come
-  from the TIR step Merkle tree); (3) authenticated generated-id and logits row/tile openings from the TIR trace
-  commitment for the Constraint courts and the selected/Flat sources; (4) generated-id authentication from the TIR
-  output commitment for the tokenizer court; (5) TIR capture readers for the node responders; (6) TIR execution
-  backends in the fraud filer stages. Until all six exist the lane is uncovered and unrewarded.
-  *Progress 2026-10-15 (source only, unverified):* (1) is implemented as
-  `staged_preclaim_tir_quote_v1` over a decode view derived from the admitted TIR header and the
-  registered record (`palw_decode_view_v1`; execution root recomputed under the TIR domain), covering
-  Constraint over tiled TIR logits and the raw tokenizer; TIR prefix-state and flat-scheme TIR
-  Constraint are refused by name. Part of (3) exists: tiled row/tile authentication, the selected
-  source demand/answer core and the Constraint court seed run over the decode view
-  (`new_from_tiled_view_v1`). Still missing: a native-context selected answer/seed carriage (a TIR
-  binding cannot ride a carrier), the fold's TIR selected/seed admission, (2), (4), (5), (6). The quote
-  is gated by `PALW_STAGED_TIR_ROUTE_ADMITTED_V1 = false`, so TIR required-family claims stay refused.
+**Route extensions behind their own dormant fences (2026-10-15, source only, unverified).**
+Two fences, `palw_staged_tir_route_v1` and `palw_staged_float_constraint_v1` (`None` on
+every preset, in force only with the staged court), own the forms they append inside the
+staged court's kinds (`palw_staged_route_forms_v1`) and TIR's native seed kind (tag 168).
+Below its fence a form is the live build's undecodable payload and rides unjudged (A-2).
+The preclaim quote admits a lane only above its fence (`PalwStagedRouteGatesV1`); below it
+the claim is refused at admission (uncovered, no reward, no weight).
 
-  *Design of the remaining TIR wiring (each item is code, none is evidence):*
-  (a) **Native-context carriage.** Append `SelectedEventDemandNative { demand }`,
-  `SelectedEventAnswerNative { answerer, demand_id, coordinate, event }` and a constraint seed form that names
-  no binding; the fold derives the decode view from the claim's admitted `original_binding` (legacy: resolve
-  against the registered profile; TIR: `from_tir_header_v1` against `tir_classes`). Answer authority is the typed
-  answerer (validator `authorization_bond_v1`), below-fence bytes stay undecodable/unjudged.
-  (b) **Retained context.** `PalwSelectedSourceContextV1` holds a decode-view source (legacy binding or the TIR
-  header identity bytes) instead of a legacy binding only; node readers (`context.binding`) move to the view.
-  (c) **Seed admission.** `PalwOwnedConstraintStreamV1::admit_*` and the fold `open` accept the view seed, calling
-  `PalwConstraintStreamCourtV1::new_from_tiled_view_v1` with the TIR header bytes as seed identity.
-  (d) **Custodian actors.** The selected responder builds `PalwSelectedTiledEventV1` from a TIR capture's logits
-  rows (the TIR executor's `post` logits node) instead of a legacy capture.
-  (e) **Outside owner.** A fraud-filer TIR stage replays the TIR job with the verifier's own registered program
-  (kernel-route executor) to obtain its own ids for the beat nominee, then follows the same bundle stages.
-  (f) **Tokenizer and prefix-state.** The tokenizer court reads generated ids authenticated through the view; a
-  TIR prefix-state relation (TIR `Fixed`/`Hist` state openings from the step Merkle tree) is a new family court.
-  Flip `PALW_STAGED_TIR_ROUTE_ADMITTED_V1` only after (a)–(e) are wired and verified for the Constraint lane.
+- **Greedy Float32 Constraint.** Done in source:
+  - the adjudicator core (`palw_float_decode_v1`): a greedy first-index f32 order key and
+    the decode verdict;
+  - a rooted, restartable row court (the stored keyed-BLAKE2b continuation, re-checked on
+    load);
+  - the Float32 source session (`palw_float_constraint_source_v1`): ids are authenticated
+    against the v2 trace root, the owner nominates over authenticated ids, the nominated
+    f32 row is streamed in 64 KiB parts, and a finish carries the event opening. Slots are
+    isolated literal custody slots, and the clocks follow Flat;
+  - the Constraint court's Float32 seed and its fold admission (`FloatConstraint`);
+  - node actors: the custodian responder (generic public sidecar or backend projection),
+    an owner stage in the fraud filer, and the scheduler over Flat|Float pins.
+  - **Seeded Float32 is refused at every height**: there is no canonical float sampler.
+  - Open: no in-node backend retains f32 rows (seam `open/write_float_public_source_v1`,
+    default `Err`/`false`). A Float32 producer must implement the seam or write the
+    sidecar.
+- **TIR required families.** Done in source:
+  - (1) the quote projection;
+  - (3) authenticated tiled ids/rows/tiles through the decode view;
+  - (4) the tokenizer court reads its statement and vocabulary through the view;
+  - (a) carriers name no binding (NativeSelected* moves and the tag-168 seed, which signs
+    the admitted header's identity);
+  - (b) retained native context (`selected_native`; `Legacy | Native` stage contexts);
+  - (c) the fold derives the view from the claim's admitted header and the `tir_classes`
+    record at every move, and admits the native seed (Constraint through
+    `new_from_tiled_view_v1`, tokenizer through `admit_native_view_v1`);
+  - (d) the selected responder answers TIR duties;
+  - (e) the fraud filer runs TIR bundles over the view and emits native seeds.
+
+  Still missing:
+  - (2) a TIR state relation for the public prefix court. TIR prefix-state stays refused
+    by name; this is a new family court.
+  - (5)/(6) the TIR FP execution backend: `disclose_tir_selected_event_v1` and
+    `replay_tir_generated_ids_v1` default to `Err`. These are owned by the RFC-0002 lane.
+  - The filer's discovery/reservation of TIR claims still goes through the legacy pursuit
+    pipeline.
+
+  Without a TIR replay, the owner can still nominate an id the constraint forbids, but not
+  a beat.
 
 **Inclusion pressure without a consensus cap (lead default).** No per-block cap on staged moves (it would let a
 coalition fill the cap). Load is bounded by fees (every move is an ordinary fee-paying transaction), by prepaid
@@ -834,6 +835,45 @@ past its margin costs the coalition at least `inclusion_margin_daa x block_mass_
 (`PALW_STAGED_MEASURED_BLOCK_MASS_PER_DAA_V1`, `PALW_STAGED_MEASURED_CARRIER_MASS_V1`,
 `PALW_STAGED_OUTSIDER_FEERATE_HEADROOM_V1`) and read by no consensus rule. Whether the margin suffices is a
 measurement item, not a proof.
+
+## 2j. GAP-00..82 triage (2026-10-15, read-only review of `codex/g14-public-conviction` at `8c6733aba`, updated for the 10-15 route work)
+
+"Closed in source" means the code exists on this branch, usually through a merged lane branch. It does not mean verified.
+For the staged route, GAP-01..04 are evidence-only until the consolidated validation phase runs the end-to-end suites.
+All of these lane branches are ancestors of this branch: g14/completion, g14/r4-fixes, g14/r-recovery-resume,
+g14/k-kernel-service, g14/l-parallel-sessions, g14/s-scope-gates, g14/v-all-violations, g14/b-budgets-deadlines,
+k2/real-scale, opv/bootstrap-beacon, da16/transport-provider-court, g14/legacy-filer, rfc8/x8r-review and
+meas/opv-timings. `adv/c4r4` is not merged.
+
+| GAP | status | where / what is missing | owner | touches the active-plan invariant |
+|---|---|---|---|---|
+| 00 | closed in source | C4R4 fixes carried as `8e400f014`, `10d7d8079`, `660fa4fbc` and `b5d4ba90c`; C4R3 fixes as `7da2d9ee2`, `a09c6119d` and `70069988c`. The F-C4R4-05 PoC is kernel-level only. | G14R | no |
+| 01 | closed in source | `c995dfcc3` and `ba8274d6b` (canonical node E2E); legacy fresh-service cases in §2b | G14C | no (evidence pending for the staged route) |
+| 02 | closed in source | canonical.rs (IBD/pruned import) and `af486fb2a` (recovery) | G14C | no |
+| 03 | closed in source | `c995dfcc3` (RPC builders) and `af486fb2a` (socket RPC). A strict-teardown failure is recorded. | G14C/G14-R | no |
+| 04 | closed in source | canonical "a peer refusing the model changes no verdict" | G14C | no |
+| 05 | closed in source | `49f8c4d5e` (DA16b) | DA16 | no |
+| 06 | closed in source | `49f8c4d5e` and G14-S `3a0696438` | DA16/G14-S | no |
+| 07 | evidence-only | Only the F1 classes are measured. The staged load inputs `PALW_STAGED_MEASURED_*` are placeholders. | MEAS | **yes** (deadlines/margins are interim until measured) |
+| 10 | closed in source | `2ee5c6609` | G14C | no |
+| 20 | code still missing | Pipeline claims on the node (F2): no verifier path | G14C | no (kernel route) |
+| 21 | code still missing | Pipeline onboarding/eligibility (OB GAP-B4) | G14C/OPVB | no |
+| 30 | closed in source | `56ee4a0c3`, `52868f3b9` | K2S | no |
+| 31 | partial | Still missing: 9B-8k at real shape (`COURT_SCOPE_INCOMPLETE`), real-scale v4 carriage, the 262k window | K2S | no (kernel route) |
+| 32 | closed in source | `1435062a8` | K2S | no |
+| 40 | closed in source | `56ee4a0c3`. The `HEAD_DECODE_V1` court is design only. | K2S | no |
+| 50 | closed in source | `ed6857b85` | G14C | no |
+| 51 | closed in source | `ed6857b85` | G14C | no |
+| 52 | closed in source | `49f8c4d5e` | DA16 | no |
+| 60 | closed in source | `555091d2a` | X8R | no |
+| 61 | decision | Superseded by the GAP-81 ruling; the seam stays `cfg(test)` | X8R/Lead | no |
+| 62 | closed in source | `555091d2a` | X8R/Lead | no |
+| 63 | closed in source | `3b2b655d4` | X8R | no |
+| 70 | closed in source | §5a ruling; `c3221bc34`, `a7464a450` | Lead/OPVB | no |
+| 71 | closed in source | `c3221bc34`, `ed6857b85` | OPVB/G14C | no |
+| 80 | in progress on this branch | Legacy is in G14 scope (`b594620dd`). Of the staged route's residue, TIR (a)-(f) and greedy Float32 are now wired in source behind their own dormant fences (§2i). Still missing: the TIR prefix-state relation (refused), the TIR FP execution backend (RFC-0002 lane), a Float32 row-retaining producer, and validation of all of it. | this branch (+ RFC-0002 for the backend) | **yes**: the covered set is exactly what each fence admits; everything else is refused at admission |
+| 81 | closed in source | `a7464a450`, `69d0e31a3` | OPVB | no |
+| 82 | code still missing | Chain-path E2E of `--palw-tir-shard-watch` with every seat colluding, and its V2 Final hold. Only the core reference test exists. | G14C | partly (only if legacy TIR shard claims stay in G14 scope beyond the staged set) |
 
 ## 3. Family matrices (milestone baseline)
 
@@ -1064,10 +1104,12 @@ same job, the way slices are), or give the V2 claim a G14 path.
    per-claim reward gate (OPVB implements).
 9. **K2-TIR v1/v2 single-program classes** until GAP-00, -01, -02, -03, -04, -05, -06 and -10. This is the nearest family.
 10. **EXEC slice legs** until GAP-60 to -63 and F1's items. Pipeline-class slices are refused.
-11. **Float32 Constraint claims on the staged public route**: refused at admission; no decode-token adjudicator
-    exists for the Float32 lane (§2i).
-12. **TIR required-family claims on the staged public route**: refused at admission until the six TIR projection
-    items in §2i exist.
+11. **Float32 Constraint claims on the staged public route**: refused at admission below the dormant
+    `palw_staged_float_constraint_v1`. Above it, greedy jobs only, with the rooted row court and sources wired in
+    source but unverified (§2i). Seeded Float32 is refused at every height.
+12. **TIR required-family claims on the staged public route**: refused at admission below the dormant
+    `palw_staged_tir_route_v1`. Above it, Constraint and tokenizer are wired in source but unverified (§2i), and
+    prefix-state stays refused. The TIR FP execution backend that answers and replays is the RFC-0002 lane's.
 
 Economics are outside the G14 columns, but they block reward under PRINCIPLES §6.5 and §6.6:
 - the verifier incentive / bounty capture (ECON);

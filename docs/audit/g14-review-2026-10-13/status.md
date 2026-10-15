@@ -630,3 +630,86 @@ streamed EOG/rendering context would have differed from native too. The schedule
 now rebuilds its court through `court_with_resolved_binding_v1` exactly as native
 admission does and uses that court's id (open and archived reopen). Source fix
 only; the test must be rerun in the consolidated validation phase.
+
+### TIR and greedy Float32 lanes wired behind two new dormant fences, 2026-10-15 (unverified source only)
+
+Commits `fe2a26101` (fences), `7cfeffc8d` and `49eb9a9a3` (Float32), `b94021a1d` and
+`8bcd816ea` (TIR), on `codex/g14-public-conviction`. Nothing below was built, tested or
+run; it waits for the consolidated validation phase.
+
+**Fences.** `palw_staged_tir_route_v1` and `palw_staged_float_constraint_v1`: `Params`
+fields that are `None` on every preset, require ConsensusV2 and the staged public court at
+or below them, and appear in the identity hash, fork id, validation and transition
+extras. They are lifecycle owning fences (`StagedTirRouteV1`, `StagedFloatConstraintV1`),
+in force only where the staged court is too. The forms each route appends inside the
+staged court's kinds 165/167 (FloatSource* moves, the FloatConstraint auxiliary seed,
+NativeSelected* moves) are owned by their route's fence through `palw_staged_route_forms_v1`.
+Below the fence they are the live build's undecodable payload: they ride unjudged (A-2
+uniform), validation skips them, and the fold refuses them as defence in depth. TIR's
+native seed is a new kind, tag 168 `PublicCourtStreamOpenedNativeV1`, owned by the TIR
+fence. The preclaim quote admits TIR required families only with `gates.tir`, and a
+Float32 Constraint job only with `gates.float32` and a greedy job.
+
+**Greedy Float32 Constraint.**
+- The row stream is a stored keyed-BLAKE2b continuation with a byte-position check, so
+  the court can restart.
+- The per-owner source session authenticates in this order: the ids against the v2 trace
+  root; the owner's nomination over those authenticated ids; the nominated f32 row in
+  64 KiB parts; and a finish carrying the event opening.
+- Each slot is isolated (producer, held Panel, owner). The clocks follow Flat. Unpaid
+  custodians go to the native sanction fold.
+- The Constraint court has a Float32 seed: `new_from_float_pin_with_original_stop_context_v1`.
+  The owned row admits it, and the FloatConstraint seed is admitted in the fold.
+- Node side:
+  - a custodian responder that reads a generic public Float32 sidecar or the backend's
+    projection;
+  - producer-side sidecar retention through a backend seam (default `false`);
+  - an owner stage in the fraud filer;
+  - the constraint scheduler generalised over Flat|Float pins.
+- **Seeded Float32 stays refused at every height**, because there is no canonical float
+  sampler. The quote, the session and the court all refuse it.
+
+**TIR required families**, items (a)-(f) of matrix §2i:
+- (a) Carriers name no binding: NativeSelectedDemand/Answer, and the tag-168 seed, which
+  signs the admitted header's identity and the view vocabulary.
+- (b) The bundle retains `selected_native` (the header and the job). Opened stage contexts
+  are now `Legacy | Native`.
+- (c) The fold derives the view from the claim's admitted header and the `tir_classes`
+  record at every move. Constraint is admitted through `new_from_tiled_view_v1`, with the
+  header bytes as seed identity.
+- (d) The selected responder answers TIR duties through `disclose_tir_selected_event_v1`.
+- (e) The fraud filer dispatches TIR bundles with the native view and has Constraint and
+  tokenizer stages that emit native seeds. Its beat nominee comes from
+  `replay_tir_generated_ids_v1`.
+- (f) The tokenizer statement and court run over the view.
+
+**Not adjudicable on this branch.**
+- **TIR prefix-state stays refused by name**: there is no TIR state relation for the
+  public prefix court. That would be a new family court.
+- **No in-node backend executes TIR FP jobs or retains Float32 rows.** Both seams
+  (`disclose_tir_selected_event_v1` / `replay_tir_generated_ids_v1`,
+  `open/write_float_public_source_v1`) default to `Err`/`false`. The TIR FP execution
+  backend belongs to the RFC-0002 lane; a Float32 producer can write the generic sidecar.
+- Until those exist, the node actors are wired but cannot answer or replay. Separately,
+  the filer's candidate discovery for TIR claims (case creation, reservation) still goes
+  through the legacy pursuit pipeline.
+
+**Test sources (not run).**
+- Float32:
+  - the restart of a stored row continuation;
+  - a source session that authenticates ids and then the nominated row per isolated slot;
+  - the G14 collusion test: total withholding is collected, a substituted row never
+    authenticates, the committed row shows `beats = true` in the Constraint court, and a
+    seeded job is refused.
+- TIR: `g14_tir_outside_verifier_convicts_from_the_native_view_under_full_collusion`. It
+  uses a registered tiled record and an admitted header with its TIR-domain execution
+  root, and no binding. Total withholding is collected, a forged tile is refused, and the
+  authenticated event seeds a court that sees the beat.
+- A-2: a route form rides unjudged until its own fence, even where the staged court is
+  armed.
+
+**Validation items added.**
+- The lifecycle fence ownership test now also accepts the forms ledger
+  (`PALW_STAGED_ROUTE_FORMS_V1`).
+- The A2U harness arms both new fences.
+- Object tag 168 must not collide with another lane's tag at merge.
