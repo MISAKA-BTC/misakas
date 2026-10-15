@@ -437,6 +437,8 @@ pub mod cli;
 pub mod private_bootstrap;
 pub mod producer_resources;
 pub mod provider_handoff_v4;
+/// RFC-0007: the explicit drawn-verifier assumption report of one paid claim (reporting only; never a credit path).
+pub mod assumptions_v1;
 pub mod provider_reader_v4;
 pub mod provider_actions_v4;
 
