@@ -74,3 +74,9 @@ pub mod native_ready_v3;
 
 /// RFC-0008 PAV3 (2026-10-15 round 3): the integrity-authenticated producer↔provider envelope between hosts.
 pub mod provider_transport_v1;
+
+// Real typed kernel execution fixtures reused by the provider GC consumer tests.
+// They do not establish a native finality witness or independent remote hosts.
+#[cfg(test)]
+#[path = "../../kernel/tests/common/mod.rs"]
+mod monetary_gc_kernel_fixture;

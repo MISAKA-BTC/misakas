@@ -453,7 +453,29 @@ impl LoopbackNativeProviderV3 {
                         kaspa_core::warn!("RFC12 PRIVATE: PAV3 provider GC retained everything this round: {reason}");
                     }
                 }
-                Err(error) => kaspa_core::warn!("RFC12 PRIVATE: PAV3 provider GC failed; everything retained: {error}"),
+                Err(error) => kaspa_core::warn!(
+                    "RFC12 PRIVATE: PAV3 provider GC stopped; verified prior deletions may be durable, other material retained: {error}"
+                ),
+            }
+            // Receipts survive store deletion, marker replay and restart. Never
+            // infer cleanup authority from a missing bundle alone.
+            let receipts: Vec<_> = janitor.completed_receipts().cloned().collect();
+            let still_held: BTreeSet<_> = store.held_native_authorities().into_values().flatten().collect();
+            for receipt in receipts {
+                let retired: BTreeSet<_> = receipt.native_claims.iter().copied().filter(|claim| !still_held.contains(claim)).collect();
+                let result = provider
+                    .authorities
+                    .lock()
+                    .map_err(|_| "authority metadata lock poisoned".to_string())
+                    .and_then(|mut index| index.remove_finalized(&retired));
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = janitor.acknowledge_metadata_cleanup(receipt.intent.stored_consent) {
+                            kaspa_core::warn!("RFC12 PRIVATE: finalized authority metadata ack retained: {error}");
+                        }
+                    }
+                    Err(error) => kaspa_core::warn!("RFC12 PRIVATE: finalized provider metadata retained for retry: {error}"),
+                }
             }
         }
     }
@@ -524,8 +546,12 @@ impl LoopbackNativeProviderV3 {
                 return Err("the chain's registered key for this roster bond is not the key this service holds".into());
             }
             // The reopen index first: a crash after publication must still find the authority to re-verify the bundle.
-            provider.authorities.lock().map_err(|_| "authority index poisoned")?.record(bundle.claim, authority.material)?;
+            // One lock order for sign and GC: store then authority index. Keep
+            // it across authority publication + material publication, otherwise
+            // GC could erase a new authority while its Ready waits on the store.
             let mut store = provider.store.lock().map_err(|_| "provider store poisoned")?;
+            let mut authorities = provider.authorities.lock().map_err(|_| "authority index poisoned")?;
+            authorities.record(bundle.claim, authority.material)?;
             let signature = misaka_palw_remote::native_ready_v3::provider_sign_native_ready_v3(
                 &mut store,
                 provider.bond,
@@ -751,24 +777,58 @@ struct AuthorityIndexV3 {
 }
 
 type AuthorityRowV3 = (Hash64, Hash64, Hash64, Hash64, u64, u8);
+const AUTHORITY_ROW_BYTES_V3: usize = 4 * 64 + 8 + 1;
+const AUTHORITY_MAX_ROWS_V3: usize = kaspa_consensus_core::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_MAX_CONTRACTS_V1 as usize
+    * kaspa_consensus_core::palw_material_capacity_v1::PALW_MATERIAL_MAX_SCOPES_V1;
+const AUTHORITY_MAX_BYTES_V3: u64 = (4 + AUTHORITY_MAX_ROWS_V3 * AUTHORITY_ROW_BYTES_V3) as u64;
 
 impl AuthorityIndexV3 {
     fn open(file: &Path) -> Result<Self, String> {
-        let rows = match std::fs::read(file) {
-            Ok(bytes) => borsh::from_slice::<Vec<AuthorityRowV3>>(&bytes)
-                .map_err(|e| format!("native provider authority index: {e}"))?
-                .into_iter()
-                .map(|(claim, execution_root, class_id, artifact_root, ladder, form)| {
+        let rows = match std::fs::File::open(file) {
+            Ok(source) => {
+                if source.metadata().map_err(|e| e.to_string())?.len() > AUTHORITY_MAX_BYTES_V3 {
+                    return Err("native provider authority index exceeds cap".into());
+                }
+                let mut bytes = Vec::new();
+                source.take(AUTHORITY_MAX_BYTES_V3 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                if bytes.len() as u64 > AUTHORITY_MAX_BYTES_V3 || bytes.len() < 4 {
+                    return Err("native provider authority index byte bound".into());
+                }
+                let count = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+                // Every row is exactly four 64-byte digests + u64 + u8. Reject
+                // a forged Vec count before Borsh allocates any rows.
+                if count > AUTHORITY_MAX_ROWS_V3
+                    || 4usize.checked_add(count.checked_mul(AUTHORITY_ROW_BYTES_V3).ok_or("authority count overflow")?)
+                        != Some(bytes.len())
+                {
+                    return Err("native provider authority index extent/count differs".into());
+                }
+                let decoded =
+                    borsh::from_slice::<Vec<AuthorityRowV3>>(&bytes).map_err(|e| format!("native provider authority index: {e}"))?;
+                let mut rows = BTreeMap::new();
+                let mut previous = None;
+                for (claim, execution_root, class_id, artifact_root, ladder, form) in decoded {
+                    if previous.is_some_and(|p| p >= claim)
+                        || claim == Hash64::default()
+                        || execution_root == Hash64::default()
+                        || class_id == Hash64::default()
+                        || artifact_root == Hash64::default()
+                        || ladder == 0
+                    {
+                        return Err("native provider authority index is unordered, duplicated or incomplete".into());
+                    }
+                    previous = Some(claim);
                     let form = match form {
                         0 => PalwPromptIdsFormV1::Flat,
                         1 => PalwPromptIdsFormV1::MerkleV1,
-                        _ => return Err("native provider authority index names an unknown prompt form".to_string()),
+                        _ => return Err("native provider authority index names an unknown prompt form".into()),
                     };
-                    Ok((claim, PalwMaterialNativeAuthorityV1 { execution_root, class_id, artifact_root, ladder, form }))
-                })
-                .collect::<Result<_, _>>()?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
-            Err(error) => return Err(error.to_string()),
+                    rows.insert(claim, PalwMaterialNativeAuthorityV1 { execution_root, class_id, artifact_root, ladder, form });
+                }
+                rows
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => return Err(e.to_string()),
         };
         Ok(Self { file: file.to_path_buf(), rows })
     }
@@ -781,8 +841,35 @@ impl AuthorityIndexV3 {
             Some(_) => return Err("a claim's native authority changed between two Ready requests".into()),
             None => {}
         }
+        if self.rows.len() >= AUTHORITY_MAX_ROWS_V3 {
+            return Err("native provider authority index capacity exhausted".into());
+        }
+        if claim == Hash64::default()
+            || authority.execution_root == Hash64::default()
+            || authority.class_id == Hash64::default()
+            || authority.artifact_root == Hash64::default()
+            || authority.ladder == 0
+        {
+            return Err("native provider authority identity incomplete".into());
+        }
         let mut rows = self.rows.clone();
         rows.insert(claim, authority);
+        self.publish(rows)
+    }
+    /// Called only with claims of exact consents deleted under a true native
+    /// finality witness, after subtracting claims any live store still retains.
+    fn remove_finalized(&mut self, claims: &BTreeSet<Hash64>) -> Result<(), String> {
+        let mut rows = self.rows.clone();
+        rows.retain(|claim, _| !claims.contains(claim));
+        if rows.len() == self.rows.len() {
+            return Ok(());
+        }
+        self.publish(rows)
+    }
+    fn publish(&mut self, rows: BTreeMap<Hash64, PalwMaterialNativeAuthorityV1>) -> Result<(), String> {
+        if rows.len() > AUTHORITY_MAX_ROWS_V3 {
+            return Err("authority publication exceeds cap".into());
+        }
         let encoded: Vec<AuthorityRowV3> = rows
             .iter()
             .map(|(claim, a)| {
@@ -883,5 +970,30 @@ mod tests {
         assert_eq!(reopened.get(&claim), Some(a));
         reopened.record(claim, a).unwrap();
         assert!(reopened.record(claim, PalwMaterialNativeAuthorityV1 { ladder: 1, ..a }).is_err());
+    }
+    #[test]
+    fn authority_index_refuses_length_bombs_duplicates_and_cleans_only_completed_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("gc.authorities");
+        let h = Hash64::from_u64_word;
+        let authority = PalwMaterialNativeAuthorityV1 {
+            execution_root: h(2),
+            class_id: h(3),
+            artifact_root: h(4),
+            ladder: 64,
+            form: PalwPromptIdsFormV1::MerkleV1,
+        };
+        let mut index = AuthorityIndexV3::open(&file).unwrap();
+        index.record(h(10), authority).unwrap();
+        index.record(h(11), authority).unwrap();
+        index.remove_finalized(&std::iter::once(h(10)).collect()).unwrap();
+        let reopened = AuthorityIndexV3::open(&file).unwrap();
+        assert!(reopened.get(&h(10)).is_none());
+        assert_eq!(reopened.get(&h(11)), Some(authority));
+        let row = (h(11), authority.execution_root, authority.class_id, authority.artifact_root, authority.ladder, 1u8);
+        std::fs::write(&file, borsh::to_vec(&vec![row, row]).unwrap()).unwrap();
+        assert!(AuthorityIndexV3::open(&file).is_err());
+        std::fs::write(&file, u32::MAX.to_le_bytes()).unwrap();
+        assert!(AuthorityIndexV3::open(&file).is_err());
     }
 }

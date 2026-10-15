@@ -225,6 +225,9 @@ impl DurableMonetaryMaterialProviderV1 {
         Ok(replacement.id())
     }
     /// `(stored consent, root)` of every retained obligation (read-only; see `monetary_material_gc`).
+    pub fn held_native_authorities(&self) -> std::collections::BTreeMap<Hash64, std::collections::BTreeSet<Hash64>> {
+        self.store.held_native_authorities_v1()
+    }
     pub fn held_contracts(&self) -> Vec<(Hash64, Hash64)> {
         self.store.held_contracts_v1()
     }

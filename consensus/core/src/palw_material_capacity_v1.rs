@@ -567,6 +567,24 @@ impl PalwMonetaryMaterialProviderStoreV1 {
     }
     /// Every retained obligation as `(stored consent, signed root)`, in key order, for a provider janitor that asks the
     /// native GC witness about each one. Reading it authorizes nothing: deletion stays [`Self::release_if_finalized`]'s.
+    /// Exact retained native codec claims, grouped by stored consent. Metadata
+    /// GC uses the pre-delete set and only a verified native GC completion.
+    pub fn held_native_authorities_v1(&self) -> BTreeMap<Hash64, BTreeSet<Hash64>> {
+        self.contracts
+            .iter()
+            .map(|(consent, (_, manifest, _))| {
+                (
+                    *consent,
+                    manifest
+                        .scopes
+                        .iter()
+                        .filter(|scope| scope.codec == PalwMaterialCodecV1::NativeHeldComplete)
+                        .map(|scope| scope.claim)
+                        .collect(),
+                )
+            })
+            .collect()
+    }
     pub fn held_contracts_v1(&self) -> Vec<(Hash64, Hash64)> {
         self.contracts.iter().map(|(consent, (_, manifest, _))| (*consent, manifest.root)).collect()
     }
