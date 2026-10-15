@@ -274,6 +274,10 @@ pub(crate) fn topk_relation_rows_v25(
     only_row: Option<u64>,
     known_output: Option<crate::seg::NodeOpeningV1>,
 ) -> FlatFindingV25 {
+    // A borrowed output comes from the selected-TopK locator, which has already run this
+    // node's header court. The envelope prices exactly one header read per attempt, so the
+    // court must not be asked a second time.
+    let header_checked = known_output.is_some();
     let output = match known_output {
         Some(o) if common::authenticate_node(&c.base, pr, &o, (unit.position, unit.occurrence, unit.node)) => o,
         Some(_) => return error("borrowed TopK25 output node"),
@@ -292,7 +296,7 @@ pub(crate) fn topk_relation_rows_v25(
         Err(e) => return error(e),
         _ => {}
     }
-    if let Err(f) = header(c, scope_root, public, unit, &output) {
+    if !header_checked && let Err(f) = header(c, scope_root, public, unit, &output) {
         return f;
     }
     let Prim::TopK { axis, k } = pr.w.node(s, n).prim else { return error("wrong TopK relation") };

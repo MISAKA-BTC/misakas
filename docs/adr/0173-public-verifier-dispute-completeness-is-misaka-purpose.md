@@ -16,6 +16,7 @@
 * **Audit:** [All-RFC/ADR alignment report](evidence/0173-mission-alignment-audit-2026-10-07.md). The report records document versions, dispositions and the limits of this documentation change.
 * **Amendment, 2026-10-10:** 旧Seeder/TRDC/FPR可用性方針は、後続の[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)で撤回した。従来の整合チェックは履歴で、新配分の経済/実装証拠ではない。
 * **Further amendment, 2026-10-10:** 旧Seeder/TRDC/FPR可用性方針は、後続の[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)で撤回した。従来の整合チェックは履歴で、新配分の経済/実装証拠ではない。
+* **Amendment, 2026-10-14 (user decision, [PRINCIPLES §0](../PRINCIPLES.md)):** MISAKAの**最終Goal**は「モデルを非公開にしておくことが経済的に不利になる仕組み」であり、不正の完全排除ではない。本ADRの公開検証者による不正追及の完結は、その下の制度要件として維持する: **登録モデルが1人にでも共有され、正しいPanel（正直な検証者）を建てられれば、claim固有の公開・認証済み証拠から不正を局所化し、客観的なcourtで立証してslashできる。** 誰にも共有されない閉鎖モデル（`p = 0`）の不正は排除を保証せず、ADR-0176のbond単位の上限で被害を有界化する残余リスクとする。検出確率の下限と期待利益が負であることは有効化gateではなく評価指標である。
 
 ## 1. MISAKAの中核目標
 

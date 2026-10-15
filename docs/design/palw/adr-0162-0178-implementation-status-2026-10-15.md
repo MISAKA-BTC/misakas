@@ -63,14 +63,14 @@ Status words: **live** (in force on testnet-12 — several older fences are arme
 | V2 Attempt (lead, merged) | `plan_attempt_budget_v1` Q 1, B 1 block, R escrow, F Final contribution, K liability (formula total past `palw_bond_formula_v2`) | B at once; R moved to kind-0 income hold, Final reward capped at it; F clipped at Final | Panel=1 | the block's uncarved worker base (`worker_base − carve`, 0 at t12's 720 ‰ carve) and tx-fee shares are per-block subsidy, paid even to a budget-refused attempt block → **user decision** whether R_total includes them (needs a coinbase change) |
 | Riders / batches | Q 1, B its share of the lead's block, R its escrow, F | as Attempt; lead's block re-attributed in the same block (shadows follow) | Panel=1 | — |
 | Free Prompt | Q 1, B quanta blocks, R quanta carves, F quanta weight | each receipt spend: B strict, R carve strict, F clipped | Panel=1 | receipt block pays the full worker base (carve = base at t12) — same decision as above |
-| Kernel route, Panel-licensed | Q 1, R job escrow (user-paid), B = F = 0; producer liability = formula total past the fence | Final reward capped by kernel caps | Panel=1 | user escrow must never be clipped by the model budget — **fix landing in another lane** (merge pending) |
+| Kernel route, Panel-licensed | Q 1, R job escrow (user-paid), B = F = 0; producer liability = formula total past the fence | Final reward capped by kernel caps | Panel=1 | user escrow never clipped by the model budget: RFC-0016 P4 (`eee1710ce`) merged; `preview_claim_for_origin_moded_v1` keeps it and adds the hold admission |
 | Kernel route, OPV (Panel=0) | as above | as above | Panel=0 | refused unbudgeted where the OPV policy requires a budget |
 | Native funded v11/v13, stage v14/v28, text29 | Q 1, liability (class reserve, ≥ formula total past the fence), R held in native income rows | income payout through the income rows | Panel=0 | — |
 | EXEC slices / EXEC_TX | slices reserve nothing new | paid from the root claim's R (kind-2 income hold); weight and DAA stay 0 | (root's) | `consume_block_for_bond` (H-3) has no caller: no EXEC block is reward-bearing |
 | Round rights / fee-only Rounds | `reserve_round_rights_v1` (ExecutionCap T, 7-day long view) | used at the draw | — | per-day Round-rights rate = user decision (no day view for T) |
 | Income rows (market fee, Round fee, source fee, native income, reporter) | R only | at payment, held `payment + W` | long view | per-day income rate = user decision |
 | Final weight readers | fold `bond_budget_final_weight_v1`; **rule E** `PalwRuleEBudgetEngineV1` | — | — | the leaf v2 window and the node's sides read the same engine |
-| Allocation (ADR-0177) | model R clip (existing) + **block opportunity** (this round) | — | — | P_m applied once: reconcile after the escrow-clip merge |
+| Allocation (ADR-0177) | model R clip (coinbase-derived origins only, RFC-0016 P4) + **per-model reward-bearing block rights** (this round) | — | — | P_m applied once: reconcile the two (decision C4); physical opportunity (RFC-0016 D-Q1 / V+) not implemented |
 
 ## Other ADRs — decision items
 
@@ -160,7 +160,7 @@ Refusal code complete and dormant (`palw_model_immutable_v1`, `params.rs:2419`; 
 | D4 `A_m = S_m^α`, α = 1.5 (decided 2026-10-14) | curve; **V3 validation pins α = 1.5** | dormant — this round |
 | D5 model budget + per-bond caps, caps never raised by allocation | caps read only capital | dormant |
 | 2026-10-14: miner + verifier capital, 30-day average | **`roll_epoch_v3` `allocation_v3.rs:173`**, fold `bond_budget_verifier_capital_v1` | dormant — this round |
-| 2026-10-14: P_m for block opportunity and coinbase, applied once | **`model_blocks_available_v1` `allocation_v3.rs:264`**, fold plan/commit; coinbase = existing R share | dormant — this round; single application pending the escrow-clip merge |
+| 2026-10-14: P_m for block opportunity and coinbase, applied once | **`model_blocks_available_v1` `allocation_v3.rs:264`**, fold plan/commit (reward-bearing block rights per model: the attempt block itself still exists, only its claim is refused — RFC-0016's "B+" level; the physical layer of RFC-0016 D-Q1 is Draft and not implemented); coinbase = existing R share | dormant — this round; single application = decision C4 |
 | 2026-10-14: no registrant/owner coinbase leg | allocation pays none | implemented |
 | D6/D7 economic evaluation, effective `p` | — | evidence-only |
 | μ (1.3–2×) | — | kept for comparison only (user) |

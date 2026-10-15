@@ -105,6 +105,7 @@ sum_m R_m(t) <= R_PALW(t)
 他モデルも増資する場合に絶対額が必ず増えるとはしない。全モデルの配分合計は一定の総予算内にある。
 資本預託だけでは支払わず、当該モデルの有効claim、固有の計算仕事、Finalと適用会計を満たしたものにだけ支払う。
 既存のowner/Panel等のlegとの接続と帰属を明示し、同じcoinbaseを別legから二重支払しない。
+**2026-10-14改定:** モデル配分のcoinbaseにowner/登録者のlegは置かない。マイナー報酬は登録者へ直接分配せず、登録者の収入はModelPositionの売買手数料とする（末尾の2026-10-14決定）。
 
 ### D5 — モデル配分とminerの採掘枠を別々に制限する
 
@@ -191,7 +192,7 @@ DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実�
 - **大口資本の受容:** 悪意ある主体でも本物の資本を大量に拘束した場合、それだけを理由に配分から排除しない。資本集中による報酬集中と支配リスクは残余リスクとして明記する。
   2乗配分は資本集中を積極的に優遇し、運営の初期資本も有利にする（身分の特権がないことと、初期資本の優位が小さいことは別である）。
   少ない実資本を大きく見せる行為（複数モデルへの重複計上、epoch直前の移動、鍵・claim分割による増幅）はD3のとおり引き続き禁止する。
-- **p=0の分離:** モデルを閉じた参加者が計算しないclaimを報酬まで通せる問題は、配分曲線の変更では解消しない。ADR-0176 D6の`p(R_risk + L_collectible,net) > C_saved`は`p=0`で成立せず、独立した安全性gateとして未解決のまま残す。
+- **p=0の分離:** モデルを閉じた参加者が計算しないclaimを報酬まで通せる問題は、配分曲線の変更では解消しない。ADR-0176 D6の`p(R_risk + L_collectible,net) > C_saved`は`p=0`で成立しない。**2026-10-14改定:** これは有効化を止める安全性gateではなく、ADR-0176のbond単位のBlock / Reward / Final Weight上限・共通拘束期間・Final前払い出し禁止で被害を有界化する残余リスクとする（[PRINCIPLES §0](../PRINCIPLES.md)）。
   資本集約優位の成立をその解消証拠に流用しない。報告は「正直なverifierが機能する範囲（G14・裁定・抑止）」と「全所有者が閉鎖し実効`p=0`となる範囲（配分曲線による利益比較と、残る不正収益・合意への影響）」に分ける。
 - **範囲:** 変更するのはモデル別coinbase配分だけである。個別bondのQ/B/R/F上限、元本の重複禁止、共通拘束期間、総発行予算はADR-0176・D3–D5のまま維持する。
   bond集約倍率をblock発行数・beacon・Final weight・fork-choiceへ掛けることは含めない。
@@ -222,10 +223,32 @@ DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実�
 - **範囲:** 2026-10-10の改定は「変更するのはモデル別coinbase配分だけ。block発行数・Final weight・fork-choiceへは掛けない」とした。本提案はブロック生成機会の配分への接続を含むが、物理block頻度・DAA・fork choice・Final weightの変更は決定しておらず、Final weightへ係数を自動乗算しない。ブロック機会への接続はRFC-0008/0010/0012で別review・versioned activationを要する。
 - **評価:** 閉鎖攻撃者が同額の実資本を拘束できれば同じ係数を得る。倍率だけで全Panel共謀や`p=0`の計算省略益を排除できるとはしない（2026-10-10改定の「p=0の分離」を維持）。
 
-## モデル配分の確定 — 2026-10-14（ユーザー決定、`pre` 18987a94b）と休眠実装 — 2026-10-15
+## 最終Goalと達成条件の改定 — 2026-10-14（ユーザー決定）
 
-**決定（RFC-0015 §8.5.5、`pre` 18987a94bで記録）:** `S_m = C_miner_claim(m) + C_verifier_claim(m)`（資金単位で重複なし）、`S̄_m`は30日相当DAAの平均、`P_m = S̄_m^1.5 / Σ_j S̄_j^1.5`（分母0なら0）。`P_m`をモデル別のブロック生成機会とcoinbase予算の共通目標とし、1 block当たりの報酬に再び掛けない。network全体のblock頻度・DAA・難易度・fork-choice・Final weightは変えない。共通拘束期間`W`は7日相当DAA（Panel=1は1日、ADR-0176 2026-10-15改定）。各bondのQ/B/R/F capはモデル配分で増えない。マイナー報酬はモデル登録者へ直接分配せず、登録者・ownerのcoinbase legは置かない（登録者の収入はModelPositionの売買手数料、`palw_model_leg_v2`以後5 %）。`S_m · μ(S_m)`（1.3〜2倍）は比較試験用に保持する。
+[PRINCIPLES §0](../PRINCIPLES.md)に従う。本ADRの配分は、MISAKAの最終Goal「**モデルを非公開にしておくことが経済的に不利になる仕組み**」を担う。不正の完全排除は目標にしない。
+
+- **非公開は不利になる。** chainはモデルが共有されたかを判定せず、拘束されたbond資本と検証の成立だけを読む。非公開は二つの経路で不利になる。(1) 公開モデルへbondが集まる結果として、閉鎖モデルが相対的な配分を失う。(2) 検証attestation gate（ECON round 2、readiness §3f）は維持し、bondから抽選された検証者が自分のコピーで検査して所定数が承認しないmodel-epochにはモデル配分を払わない。誰にも共有されないモデルは検証が成立せず配分を受けられない。理由は「検証が承認されなかった」であり、D1の「配布を合意で管理しない」と両立する（2026-10-12改定の「非公開や提供拒否だけで登録者を罰しない」とも両立する。罰するのではなく、検証が成立しないmodel-epochに補助配分を払わないだけである）。配分曲線は末尾の「モデル配分の確定 — 2026-10-14」で`α = 1.5`に確定した。配分曲線は現行の暫定値`α = 1.5`（readiness §3g）のままとする。
+- **共有されたモデル:** 1人にでも共有され、正しいPanel（正直な検証者）を建てられれば、claim固有の公開・認証済み証拠から不正を客観的なcourtで立証しslashできる（ADR-0173）。
+- **非公開モデル（`p = 0`）:** 上の「p=0の分離」の改定のとおり、有界化する残余リスクであり、未解決のgateではない（2026-10-12改定の「p=0の分離を維持」もこの意味で読む）。
+- **達成条件（D6の受入要件に追加）— 二段で評価する。**
+  - **(a) モデル全体:** 非公開のときと、共有して外部bondを集めたときで、モデルの総bond・配分割合・経済規模の差。例（他モデル900M、自己100M、外部200M参加）: 総bond 100M→300M、配分割合は`α = 1.5`で3.6%→16.1%（`α = 1`なら10%→25%）。
+  - **(b) 所有者個人:** 元の所有者の取り分が共有で増えるか。モデル内の配分と、自己資本を追加してbondを増やす場合の資本コスト・期待収益の差を含める（自己資本の追加は禁止しない）。
+  - モデル全体の伸びを所有者個人の伸びとして報告しない。
+
+## モデル配分の確定 — 2026-10-14（ユーザー決定）
+
+2026-10-12改定の提案のうち、**Miner＋検証者の元本合算**と**ブロック生成機会への接続**を採用し、配分曲線は**`α = 1.5`**に確定する。`S_m · μ(S_m)`（1.3〜2倍）は採用せず、比較試験用に保持する。正式式・表・試験は[RFC-0015 §8.5.5](../rfc/0015-panel-free-permissionless-verification.md)に置く。
+
+- **式:** `S_m = C_miner_claim(m) + C_verifier_claim(m)`（資金単位で重複なし）、`S̄_m`は30日相当DAAの平均、`P_m = S̄_m^1.5 / Σ_j S̄_j^1.5`（分母0なら0）。
+- **適用先:** `P_m`をモデル別のブロック生成機会とcoinbase予算の共通目標にする。1 block当たりの報酬に再び掛けない。network全体のblock頻度・DAA・難易度・fork-choice・Final weightは変えない。上の「範囲」の「block発行数へ掛けない」は、モデル間のblock機会の配分についてこの決定で改める。
+- **検証者の元本:** 2026-10-12改定の「Panelのclaim bond」を、Panel=0に合わせて「claimに実際に紐付いて拘束され、検証上の責任を負うpermissionless verifierの元本」へ一般化する。固定seatは要らない。待機bondは数えず、MinerとVerifierで二重計上しない。Verifier元本はMiner個人のQ/B/R/F capを増やさない。参加手順・責任・拘束期間・報酬条件と「預けるだけで検査しない」対策はrelease前に定義する。
+- **個別上限:** 共通拘束期間`W`は7日相当DAA。各bondのQ/B/R/F capはモデル配分で増えない。
+- **マイナー報酬はモデル登録者へ直接分配しない。** モデル別のcoinbaseとブロック報酬はclaimを生成したMinerと検証責任を果たしたVerifierにだけ帰属し、登録者・ownerのlegを置かない（[ADR-0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)の「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**（売買ごとのBILI額の5 %、[ADR-0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)。fence `palw_model_leg_v2`でADR-0087の1 %から引き上げ。別に5 %をburn）であり、モデルが使われPositionの売買が増えるほど増える。報酬の5 %による買い上げ（ADR-0091）はlegなしで価格を上げるだけである。登録者が自らMiner/Verifierとして参加する場合は、その役割の報酬を同じ規則で受ける。
+- **二段評価の(b)所有者個人:** 所有者の収入は、Position売買手数料と、自らMiner/Verifierとして得る報酬の和で測る。モデル配分の伸びが直接登録者の収入になるとは扱わない。
+- **必須の受入試験:** `α = 1.5`は資本集中を強める。新規モデルが採掘機会を失いすぎないことを有効化前の必須評価とする。
+
+## 休眠実装 — 2026-10-15（上の2026-10-14決定の実装）
 
 **休眠実装（未build・未検証、`palw_model_bond_allocation_v1`は全presetで`None`、有効化は拒否）:** V3 allocation policy（`PalwAllocationAverageV1`: 30日、verifier元本、block機会。validationで`α = 1.5`と30日を固定）。`roll_epoch_v3`がepochごとにminerの成熟した割当とPanel seatが生存claimに拘束した額（`seat_exposure`）をbondごとに合算・元本でpro-rata clipして`S_m(k)`を記録し、30日分の平均`S̄_m`から`A_m = ⌊S̄_m^1.5⌋`を書く。`model_blocks_available_v1`は1 DAA = 1 block機会として`⌊accrued · A_m / ΣA⌋ − reserved_m`を返し、claimのplanが不足を拒否（clipしない）、commitが予約する（riderは先頭blockで計上済み）。待機bond・登録料・AMM/Position・未払報酬は数えない。所在: `consensus/core/src/palw_bond_budget_v1/allocation_v3.rs`、`palw_bond_budget_fold_v1.rs`（epoch roll、plan/commit）、試験source `consensus/core/tests/adr0177_allocation_v3.rs`。
 
-**未了:** coinbase側のR clip（`palw_model_available_v1`）は別laneがescrow clip修正を入れる箇所であり今回は変更しない — V3では`P_m`を一度だけ適用するよう、merge後にblock機会とR clipの二重適用を解消する必要がある。新規モデルが`α = 1.5`で採掘機会を失いすぎないことの評価、verifierの参加手順・責任・拘束期間・報酬条件（預けるだけで検査しない対策を含む）の定義は有効化前の必須事項（ユーザー）。
+**未了:** 利用者escrowをmodel予算で削らない修正（RFC-0016 P4、`eee1710ce`）はmerge済み。coinbase由来のclaimについて、V3のmodel別報酬対象block権利とcoinbase側のR clip（`palw_model_available_v1`）が`P_m`を二重に適用しないよう解消する必要がある（ユーザー判断待ち）。実装したblock機会は報酬対象ブロック権利の層（claimが拒否されても物理blockは残る）であり、RFC-0016 D-Q1の物理層（V+、Draft）は未実装。新規モデルが`α = 1.5`で採掘機会を失いすぎないことの評価、verifierの参加手順・責任・拘束期間・報酬条件（預けるだけで検査しない対策を含む）の定義は有効化前の必須事項（ユーザー）。

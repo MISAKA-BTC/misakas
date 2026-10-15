@@ -675,7 +675,9 @@ mod tests {
         assert!(palw_offence_is_intent_class_v1(O::CourtFraud));
         for tag in 0..=20u8 {
             let intent = palw_offence_is_intent_class_v1(O::Contradiction { tag });
-            assert_eq!(intent, matches!(tag, 9 | 10 | 11 | 13 | 14 | 15), "tag {tag}");
+            // 16 (registered table mismatch, b31278797) and 17 (prefix state mismatch, da63ea284) joined the class:
+            // both contradict immutable registered or committed data, which no honest engine non-determinism produces.
+            assert_eq!(intent, matches!(tag, 9 | 10 | 11 | 13 | 14 | 15 | 16 | 17), "tag {tag}");
         }
         for tier in
             [O::CourtHeldVerdict, O::Equivocation, O::CoveringSigner, O::Contradiction { tag: 5 }, O::Contradiction { tag: 12 }]

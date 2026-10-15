@@ -1645,7 +1645,10 @@ async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_v
 
 #[tokio::test]
 async fn g14_opv_bootstrap_paid_v5_pre_fence_promise_migrates_into_the_recipient_income_window() {
-    run_paid_v5_source_budget(500).await;
+    // The budget fence falls after the paid promise is funded (DAA 60 in this world) and at or before the sources' reveals (seal end
+    // 92): since b1d32672e (RFC-0015 §8.3 lead default) an OPV claim is admitted only with a budget reservation, so the sources
+    // themselves can no longer be revealed below the fence; the promise still migrates (hold_until 594 is past it).
+    run_paid_v5_source_budget(80).await;
 }
 
 async fn run_paid_v5_source_budget(budget_activation: u64) {
@@ -1712,6 +1715,7 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
     assert!(net.ledger().beacon_sources.is_empty(), "funding never retroactively awards an unsigned source promise");
     paid_sources(&mut net, terms, &jobs, &PRODUCERS[..2]).await;
     if budget_activation > 1 {
+        assert!(budget_activation <= terms.source.seal_end, "the sources' reveals (OPV claims) land past the budget fence");
         assert!(
             net.daa() < budget_activation,
             "fixture must admit real paid promises before the declared budget fence: {} vs {}",

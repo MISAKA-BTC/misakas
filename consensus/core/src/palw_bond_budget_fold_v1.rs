@@ -773,7 +773,12 @@ impl TransitionBuilder<'_> {
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
         let capital = self.state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
-        let model = model.filter(|_| mirror.allocation_at(ctx.daa_score).is_some());
+        // RFC-0016 P4 (user decision 2026-10-15): a user-paid escrow claim (the kernel route) is never clipped by, and never
+        // reserves against, the coinbase-derived model-allocation budget; its whole reward is reserved inside the producer's
+        // common R cap or the claim is refused here, before acceptance.
+        let model = model
+            .filter(|_| mirror.allocation_at(ctx.daa_score).is_some())
+            .filter(|_| !crate::palw_bond_budget_v1::palw_budget_origin_is_user_escrow_v1(origin));
         // The engine is created by the tick at the fence's first block, so it exists here; a fixture that skipped the tick plans
         // against an empty engine (the same answers).
         let empty;
@@ -785,7 +790,7 @@ impl TransitionBuilder<'_> {
             }
         };
         let reservation = budget
-            .preview_claim_moded_v1(&mirror.policy, capital, bond, model, ask, mode)
+            .preview_claim_for_origin_moded_v1(&mirror.policy, capital, bond, model, ask, origin, mode)
             .map_err(|why| budget_refused(bond, why))?;
         if consume_blocks_now > reservation.block_units {
             return Err(budget_refused(bond, PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::BlockUnits }));

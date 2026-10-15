@@ -255,6 +255,15 @@ pub enum PalwBudgetOriginV1 {
     HoldLiability = 15,
 }
 
+/// **RFC-0016 P4 (user decision 2026-10-15): is this origin's reward user-paid escrow rather than a coinbase-derived leg?** A
+/// kernel-route claim is paid out of its job's escrow, never issued (GAP-5), so the coinbase-derived model-allocation budget
+/// (`model_available`, which accrues the worker carve) must never reduce it: the model clip applies only to coinbase-derived legs.
+/// Such a claim still reserves its whole reward inside the producer's common `R` cap, and a cap that cannot hold it refuses the claim
+/// before acceptance.
+pub fn palw_budget_origin_is_user_escrow_v1(origin: PalwBudgetOriginV1) -> bool {
+    matches!(origin, PalwBudgetOriginV1::KernelRoute)
+}
+
 /// Why the engine refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwBudgetRefusalV1 {
@@ -287,6 +296,9 @@ pub enum PalwBudgetRefusalV1 {
     },
     /// ADR-0177 (2026-10-14): the claim's model has no reward-bearing block opportunity left this epoch (`P_m` applied to blocks).
     ModelBlockOpportunity,
+    /// **RFC-0016 P4 (user decision 2026-10-15):** a user-paid (escrow-funded) claim whose full escrow reward cannot be reserved — the
+    /// policy's per-claim ceiling is below it. Decided BEFORE acceptance; an escrow reward is never clipped after.
+    EscrowNotReservable,
 }
 
 impl std::fmt::Display for PalwBudgetRefusalV1 {
@@ -307,6 +319,9 @@ impl std::fmt::Display for PalwBudgetRefusalV1 {
             Self::Burst { dim } => write!(f, "the bond's short-period burst cap has no room in {dim:?} (ADR-0176, ユーザー方針 2026-10-15)"),
             Self::ModelBlockOpportunity => {
                 write!(f, "the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5)")
+            }
+            Self::EscrowNotReservable => {
+                write!(f, "the user-paid escrow reward exceeds one claim's reservation; refused, never clipped (RFC-0016 P4)")
             }
         }
     }
@@ -2871,8 +2886,9 @@ impl PalwBondBudgetStateV1 {
         if self.claims.contains_key(&claim_id) {
             return Err(PalwBudgetRefusalV1::Duplicate);
         }
-        let reservation = self.preview_claim_moded_v1(policy, capital, bond, model, ask, mode)?;
-        let model = match (model, self.header.allocation) {
+        let reservation = self.preview_claim_for_origin_moded_v1(policy, capital, bond, model, ask, origin, mode)?;
+        // RFC-0016 P4: a user-paid escrow claim takes nothing from (and records nothing against) the coinbase-derived model budget.
+        let model = match (model.filter(|_| !palw_budget_origin_is_user_escrow_v1(origin)), self.header.allocation) {
             (Some(m), Some(epoch)) => Some((m, epoch.index)),
             _ => None,
         };
@@ -2926,6 +2942,53 @@ impl PalwBondBudgetStateV1 {
         let mut reservation = palw_bond_budget_reservation_v1(policy, ask);
         if let (Some(m), Some(_)) = (model, self.header.allocation) {
             reservation.reward_sompi = reservation.reward_sompi.min(self.model_available(&m));
+        }
+        if reservation.reward_sompi > 0 && self.has_unattributed_income_v1() {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        palw_bond_budget_admit_v1(policy, capital, self.bonds.get(&bond), &reservation, ask.liability_sompi)?;
+        self.hold_admit_v1(policy, capital, &bond, &reservation, ask.liability_sompi, mode)?;
+        Ok(reservation)
+    }
+
+    /// **[`Self::preview_claim_v1`] for a claim of `origin`** (RFC-0016 P4, user decision 2026-10-15). A coinbase-derived origin is
+    /// [`Self::preview_claim_v1`] unchanged. A user-paid escrow origin ([`palw_budget_origin_is_user_escrow_v1`]):
+    ///
+    /// * is NEVER clipped by the model-allocation budget (`model` is ignored: that budget is coinbase-derived);
+    /// * must reserve its WHOLE reward: a per-claim ceiling below the escrow is [`PalwBudgetRefusalV1::EscrowNotReservable`], and a
+    ///   bond whose common `R` cap cannot hold it is `Exhausted { Reward }` — both before acceptance, never a clip after.
+    pub fn preview_claim_for_origin_v1(
+        &self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        bond: PalwBondKeyV2,
+        model: Option<Hash64>,
+        ask: PalwBudgetAskV1,
+        origin: PalwBudgetOriginV1,
+    ) -> Result<PalwBudgetVectorV1, PalwBudgetRefusalV1> {
+        self.preview_claim_for_origin_moded_v1(policy, capital, bond, model, ask, origin, PalwHoldModeV1::for_origin(origin))
+    }
+
+    /// [`Self::preview_claim_for_origin_v1`] with the claim's verification mode (ユーザー方針 2026-10-15): a coinbase-derived origin is
+    /// [`Self::preview_claim_moded_v1`]; a user-paid escrow origin keeps RFC-0016 P4's rules and runs the same hold admission (day view
+    /// for Panel=1, burst view, concurrent liability).
+    #[allow(clippy::too_many_arguments)]
+    pub fn preview_claim_for_origin_moded_v1(
+        &self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        bond: PalwBondKeyV2,
+        model: Option<Hash64>,
+        ask: PalwBudgetAskV1,
+        origin: PalwBudgetOriginV1,
+        mode: PalwHoldModeV1,
+    ) -> Result<PalwBudgetVectorV1, PalwBudgetRefusalV1> {
+        if !palw_budget_origin_is_user_escrow_v1(origin) {
+            return self.preview_claim_moded_v1(policy, capital, bond, model, ask, mode);
+        }
+        let reservation = palw_bond_budget_reservation_v1(policy, ask);
+        if reservation.reward_sompi < ask.reward_sompi {
+            return Err(PalwBudgetRefusalV1::EscrowNotReservable);
         }
         if reservation.reward_sompi > 0 && self.has_unattributed_income_v1() {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
@@ -5322,6 +5385,118 @@ mod tests {
         assert_eq!(palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(1))), 4);
         assert!(s.claim_row(&id).is_none(), "the row leaves at its release");
         s.check_consistency().unwrap();
+    }
+
+    /// **RFC-0016 P4: a user-paid escrow reward is never clipped by the coinbase-derived model budget.** The same ask on the same
+    /// model in the same epoch: an Attempt (coinbase-derived) is clipped to `model_available`; a kernel-route claim (job escrow)
+    /// reserves its whole reward, takes nothing from the model's budget and records no model on its row.
+    #[test]
+    fn rfc0016_p4_user_escrow_is_never_clipped_by_the_model_budget() {
+        let p = policy(1, false);
+        let ap = PalwModelAllocationPolicyV1 {
+            version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
+            epoch_daa: 10,
+            seasoning_epochs: 1,
+            curve: PalwAllocationCurveV1 { alpha_halves: 3 },
+            max_models_per_bond: 4,
+            average: None,
+        };
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        s.assign(&ap, bond(1), &[(h(1), 300 * BILI)], 1, capital, 0, |_| true, &mut j).unwrap();
+        s.roll_epoch(&ap, 2, 20, |_| (capital, true), &mut j);
+        s.accrue(5 * BILI, &mut j);
+        assert_eq!(s.model_available(&h(1)), 5 * BILI);
+        let ask = PalwBudgetAskV1 { block_units: 0, reward_sompi: 20 * BILI, final_weight: 0, liability_sompi: 0 };
+        // Coinbase-derived: clipped to the model's budget (the existing rule).
+        let attempt = s.preview_claim_for_origin_v1(&p, capital, bond(1), Some(h(1)), ask, PalwBudgetOriginV1::Attempt).unwrap();
+        assert_eq!(attempt.reward_sompi, 5 * BILI);
+        // User-paid escrow: the whole escrow, whatever the model budget says.
+        let kernel = s.preview_claim_for_origin_v1(&p, capital, bond(1), Some(h(1)), ask, PalwBudgetOriginV1::KernelRoute).unwrap();
+        assert_eq!(kernel.reward_sompi, 20 * BILI, "an escrow reward is never clipped by the model allocation");
+        let r = s.reserve_claim_v1(&p, capital, h(7), bond(1), Some(h(1)), 21, ask, PalwBudgetOriginV1::KernelRoute, &mut j).unwrap();
+        assert_eq!(r.reward_sompi, 20 * BILI);
+        assert_eq!(s.claim_row(&h(7)).unwrap().model, None, "an escrow claim records no model-budget reservation");
+        assert_eq!(s.model_row(&h(1)).unwrap().reserved_sompi, 0, "the coinbase-derived model budget is untouched");
+        assert_eq!(s.model_available(&h(1)), 5 * BILI);
+        s.check_consistency().unwrap();
+    }
+
+    /// **RFC-0016 P4: an escrow reward the producer's common `R` cap cannot hold is refused BEFORE acceptance** — by the cap
+    /// (`Exhausted { Reward }`) or by a per-claim ceiling below the escrow (`EscrowNotReservable`) — and nothing is written.
+    #[test]
+    fn rfc0016_p4_insufficient_r_refuses_an_escrow_claim_before_acceptance() {
+        let capital = 1_000 * BILI;
+        // The common cap: R_max = 50 BILI per W at this capital (TEST policy).
+        let p = policy(1, false);
+        let r_max = palw_bond_budget_caps_v1(&p, capital).reward_sompi;
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        let ask = |r: u64| PalwBudgetAskV1 { block_units: 0, reward_sompi: r, final_weight: 0, liability_sompi: 0 };
+        let before = (s.clone(), j.len());
+        assert_eq!(
+            s.reserve_claim_v1(&p, capital, h(1), bond(1), None, 5, ask(r_max + 1), PalwBudgetOriginV1::KernelRoute, &mut j),
+            Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward })
+        );
+        assert_eq!((s.clone(), j.len()), before, "a refusal writes nothing");
+        s.reserve_claim_v1(&p, capital, h(2), bond(1), None, 5, ask(r_max), PalwBudgetOriginV1::KernelRoute, &mut j).unwrap();
+        assert_eq!(
+            s.preview_claim_for_origin_v1(&p, capital, bond(1), None, ask(1), PalwBudgetOriginV1::KernelRoute),
+            Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward }),
+            "a full R window refuses the next escrow claim instead of reserving less"
+        );
+        // A per-claim ceiling (rho slicing) below the escrow: refused, where a coinbase-derived ask would be sliced.
+        let sliced = policy(3, true);
+        let t = PalwBondBudgetStateV1::new(0, &sliced);
+        let (r_claim, _) = palw_bond_budget_claim_ceilings_v1(&sliced).unwrap();
+        assert_eq!(
+            t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_claim + 1), PalwBudgetOriginV1::KernelRoute),
+            Err(PalwBudgetRefusalV1::EscrowNotReservable)
+        );
+        assert_eq!(
+            t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_claim + 1), PalwBudgetOriginV1::Attempt)
+                .unwrap()
+                .reward_sompi,
+            r_claim,
+            "a coinbase-derived leg keeps the per-claim slice"
+        );
+        assert!(t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_claim), PalwBudgetOriginV1::KernelRoute).is_ok());
+        s.check_consistency().unwrap();
+    }
+
+    /// **RFC-0016 / user decision 2026-10-15: switching between Panel=0 (kernel-route, OPV) and Panel=1 (V2 Attempt) claims never
+    /// re-acquires issuance capacity.** One bond window holds both modes' reservations, each until its own `accepted + W`: a claim of
+    /// the other mode is refused while the first one's reservation is in the window, in both directions, and the window does not reset
+    /// at a mode switch. (The per-mode hold — 7-day-equivalent for Panel=0, 1-day-equivalent for Panel=1 — is a code-follow item of
+    /// RFC-0016 §11.2; this engine has one `W`, and a per-mode `W` must keep this property.)
+    #[test]
+    fn rfc0016_a_mode_switch_never_reacquires_issuance_capacity() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let r_max = palw_bond_budget_caps_v1(&p, capital).reward_sompi;
+        let ask = |r: u64| PalwBudgetAskV1 { block_units: 0, reward_sompi: r, final_weight: 0, liability_sompi: 0 };
+        for (first, second) in [
+            (PalwBudgetOriginV1::KernelRoute, PalwBudgetOriginV1::Attempt),
+            (PalwBudgetOriginV1::Attempt, PalwBudgetOriginV1::KernelRoute),
+        ] {
+            let mut s = PalwBondBudgetStateV1::new(0, &p);
+            let mut j = Vec::new();
+            s.reserve_claim_v1(&p, capital, h(1), bond(1), None, 10, ask(r_max), first, &mut j).unwrap();
+            // Terminal early (Final, void or conviction): the issuance window still holds it (ADR-0176 D4).
+            s.close(&h(1), &mut j);
+            for now in [11, 10 + p.window_daa - 1] {
+                s.release_due(now, &mut j);
+                assert_eq!(
+                    s.preview_claim_for_origin_v1(&p, capital, bond(1), None, ask(1), second),
+                    Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward }),
+                    "{first:?} -> {second:?} at {now}: the other mode does not open a fresh budget"
+                );
+            }
+            s.release_due(10 + p.window_daa, &mut j);
+            assert!(s.preview_claim_for_origin_v1(&p, capital, bond(1), None, ask(r_max), second).is_ok(), "free only at d + W");
+            s.check_consistency().unwrap();
+        }
     }
 }
 
