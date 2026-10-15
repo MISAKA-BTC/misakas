@@ -784,6 +784,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 PAID_CLAIM_FINALS_V2 => {
                     let row: PalwPaidClaimFinalV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     let a = route.paid_claim_enrollment_v3(&row.enrollment).map_err(&refuse)?;
+                    if !l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
+                        return Err(refuse("stored paid Final lacks assigned verifier approvals".into()));
+                    }
                     let claim = l.claims.get(&a.enrollment.base_claim).ok_or_else(|| refuse("Final base claim missing".into()))?;
                     if id != row.enrollment
                         || row.base_claim != a.enrollment.base_claim

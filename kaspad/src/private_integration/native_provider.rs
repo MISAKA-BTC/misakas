@@ -372,16 +372,40 @@ impl LoopbackNativeProviderV3 {
             .collect();
         let dir = ctx.data_dir.join("palw-native-provider-v3");
         let mut providers = Vec::new();
+        let metadata_limits = kaspa_consensus_core::palw_native_resource_v1::native_declared_logical_limits_v1()
+            .map(|limits| {
+                let n = keys.len().max(1) as u64;
+                let orphan = kernel_ingress_v4::unhosted_metadata_reservation_v4(&dir, &keys)?;
+                Ok::<_, String>(kaspa_consensus_core::palw_kernel_material_context_v4::PalwKernelMaterialContextLimitsV4 {
+                    max_encoded_bytes: limits
+                        .database_bytes
+                        .checked_sub(orphan)
+                        .ok_or("unhosted provider metadata exhausts explicit DB capacity")?
+                        / n,
+                    max_heap_bytes: limits.memory_bytes / n,
+                })
+            })
+            .transpose()?;
         for key in keys {
             let file = dir.join(format!("{}-{}.store", key.bond.0.transaction_id, key.bond.0.index));
             let authorities = AuthorityIndexV3::open(&file.with_extension("authorities"))?;
-            let store = DurableMonetaryMaterialProviderV1::open(
-                &file,
-                policy.max_bytes_per_contract,
-                policy.max_bytes_per_provider,
-                None,
-                |claim| authorities.get(&claim),
-            )?;
+            let store = if params.palw_material_release_recovery_v2.is_some() && metadata_limits.is_some() {
+                DurableMonetaryMaterialProviderV1::open_with_kernel_contexts_v4(
+                    &file,
+                    policy.max_bytes_per_contract,
+                    policy.max_bytes_per_provider,
+                    |claim| authorities.get(&claim),
+                    metadata_limits.unwrap(),
+                )?
+            } else {
+                DurableMonetaryMaterialProviderV1::open(
+                    &file,
+                    policy.max_bytes_per_contract,
+                    policy.max_bytes_per_provider,
+                    None,
+                    |claim| authorities.get(&claim),
+                )?
+            };
             let operator = *operators.get(&key.bond).ok_or("a native provider bond is not a fixture seat")?;
             let janitor = MonetaryMaterialGcJanitorV1::open(&file)?;
             let recovery_acks = misaka_palw_remote::material_recovery_ack_v2::MaterialRecoveryAckOutboxV2::open(
@@ -505,6 +529,10 @@ impl LoopbackNativeProviderV3 {
                 continue;
             };
             let mut oracle = ConsensusGcOracleV3(&self.consensus_manager);
+            let native = self.consensus_manager.consensus().unguarded_session_blocking();
+            if let Err(error) = store.expire_unused_kernel_offer_tick_v4(&*native) {
+                kaspa_core::warn!("RFC08 kernel unused-offer metadata retained for retry: {error}");
+            }
             match janitor.tick(&mut store, &mut oracle) {
                 Ok(report) => {
                     if !report.deleted.is_empty() {
@@ -656,7 +684,8 @@ impl LoopbackNativeProviderV3 {
         let Some(row) = queue.get(&id) else { return Ok(true) };
         let api = self.consensus_manager.consensus().unguarded_session_blocking();
         let applied = match row.purpose {
-            NativeCarrierPurposeV4::Enrollment { root, consent, recovery, until_daa, .. } => {
+            NativeCarrierPurposeV4::Enrollment { root, consent, recovery, until_daa, .. }
+            | NativeCarrierPurposeV4::KernelEnrollmentV4 { root, consent, recovery, until_daa } => {
                 api.palw_material_recovery_enrollment_finalized_v4(root, consent, recovery)?
                     || api.palw_material_recovery_finalized_daa_v4()?.is_some_and(|daa| daa > until_daa)
             }
@@ -948,6 +977,13 @@ fn request_nonce_v3(body: &[u8]) -> [u8; 32] {
 }
 
 impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
+    fn ingest_kernel_material_v4(
+        &self,
+        material: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        ingress: &kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4,
+    ) -> Result<(), String> {
+        self.ingest_kernel_v4(material, ingress)
+    }
     fn recovery_provider_roster_v4(&self) -> &[PalwBondKeyV2] {
         &self.recovery_roster
     }
@@ -1072,6 +1108,10 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
     };
     if request.header.purpose == ProviderTransportPurposeV1::RecoveryEnrollmentV4 {
         recovery_runtime_v4::handle_recovery_v4(&mut stream, service, &request);
+        return;
+    }
+    if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialIngressV4 {
+        kernel_ingress_v4::handle_kernel_v4(&mut stream, service, &request);
         return;
     }
     let native = match service.authenticate(&request) {
@@ -1497,5 +1537,7 @@ mod tests {
     }
 }
 
+#[path = "native_kernel_material_ingress_v4.rs"]
+mod kernel_ingress_v4;
 #[path = "native_recovery_runtime_v4.rs"]
 mod recovery_runtime_v4;

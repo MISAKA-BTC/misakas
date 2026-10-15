@@ -154,6 +154,8 @@ pub fn restore_kernel_material_context_v4(
     candidate.try_reserve_kernel_material_v4(&claim).map_err(|e| e.to_string())?;
     let coverage = crate::palw_material_capacity_v1::prospective_kernel_bundle_requests_v4(bundle)?;
     let _inner = reserve_native_requests_v1(coverage.bytes().ok_or_else(|| coverage.to_string())?).map_err(|e| e.to_string())?;
+    let auth = crate::palw_material_capacity_v1::prospective_kernel_bundle_auth_requests_v4(bundle, &candidate)?;
+    let _auth = reserve_native_requests_v1(auth.bytes().ok_or_else(|| auth.to_string())?).map_err(|e| e.to_string())?;
     let scope = bundle.verify(&candidate, max_material_bytes).map_err(|e| e.to_string())?;
     if context.intent.manifest.scopes.len() != 1 || context.intent.manifest.scopes.first() != Some(&scope) {
         return Err("restored material differs from exact enrolled manifest".into());

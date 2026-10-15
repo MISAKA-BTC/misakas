@@ -47,6 +47,9 @@ pub enum ProviderTransportPurposeV1 {
     NativeReadyV3,
     /// Independent V4 canonical prospective enrollment, never reinterprets Ready V3.
     RecoveryEnrollmentV4,
+    /// Producer-signed actual kernel work and full typed material, followed by
+    /// atomic 240/242 FundedEnroll. Old native Ready/enrollment are unchanged.
+    KernelMaterialIngressV4,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -454,7 +457,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Provide
     ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
         r.step()?;
         match r.byte()? {
-            0 | 1 => Ok(Default::default()),
+            0 | 1 | 2 => Ok(Default::default()),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown provider transport purpose")),
         }
     }

@@ -747,6 +747,9 @@ pub(super) fn tick_paid_claim_final_projection_v2(
         if matches!(row.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })
             && !r.aux.contains_key(&(PAID_CLAIM_FINALS_V2, key(&a.enrollment.id())))
         {
+            if !l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
+                return Err(refused("paid Final lacks approvals of the randomly selected assigned verifiers"));
+            }
             let (lock, completed_rounds, transcript_root) = if let Some(plan) = &a.class.interactive_plan {
                 if !r.paid_claim_interactive_complete_v3(&a, &l).map_err(refused)? {
                     return Err(refused("interactive Final lacks complete full-material rounds"));

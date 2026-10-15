@@ -84,6 +84,11 @@ fn check_enrollment(
             return Err(refused("signed material manifest belongs to another obligation"));
         }
         manifest.validate(t.max_material_bytes).map_err(|e| refused(e.to_string()))?;
+        if manifest.scopes.iter().any(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
+            && builder.params.material_release_recovery_at_v2(ctx.daa_score).is_none()
+        {
+            return Err(refused("typed complete material codec is below its signed recovery fence"));
+        }
         if t.exec_plan_root.is_none()
             && manifest.scopes.iter().any(|scope| scope.claim != t.root && !t.dependencies.contains(&scope.claim))
         {
@@ -564,7 +569,21 @@ fn action_inner_v4(
                 .unwrap()
                 .kernel_claim_row_v1(dependency)
                 .ok_or_else(|| refused("material dependency is missing"))?;
-            if claim.body.position(*stage, *position).is_none() {
+            let scope = row.terms.material_manifest.as_ref().and_then(|m| m.scope(*dependency));
+            let typed = scope.is_some_and(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4);
+            let required = if typed {
+                let ledger = builder.state.kernel_route().unwrap().ledger_native_projection_v9().map_err(refused)?;
+                crate::palw_prospective_kernel_material_v4::typed_kernel_required_unit_v4(
+                    &ledger,
+                    &dependency.as_bytes(),
+                    *stage,
+                    *position,
+                )
+                .map_err(refused)?
+            } else {
+                claim.body.position(*stage, *position).is_some()
+            };
+            if !required {
                 return Err(refused("material challenge names no committed position"));
             }
             super::palw_material_release_recovery_fold_v2::reserve_answer_event_v4(builder, root, provider)?;
@@ -596,14 +615,28 @@ fn action_inner_v4(
             if !super::palw_kernel_route_fold_v1::charge_route_budget_v1(builder, ctx, 0, false)? {
                 return Err(refused("material answer adjudication budget spent"));
             }
-            builder
-                .state
-                .kernel_route()
-                .unwrap()
-                .ledger_native_projection_v9()
-                .map_err(refused)?
-                .classify_served_position_v1(&dependency.as_bytes(), *stage, *position, bytes)
+            if bytes.len() as u64 > row.terms.max_material_bytes {
+                return Err(refused("material answer exceeds its signed capacity"));
+            }
+            let ledger = builder.state.kernel_route().unwrap().ledger_native_projection_v9().map_err(refused)?;
+            if row
+                .terms
+                .material_manifest
+                .as_ref()
+                .and_then(|m| m.scope(*dependency))
+                .is_some_and(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
+            {
+                crate::palw_prospective_kernel_material_v4::typed_kernel_classify_unit_v4(
+                    &ledger,
+                    &dependency.as_bytes(),
+                    *stage,
+                    *position,
+                    bytes,
+                )
                 .map_err(refused)?;
+            } else {
+                ledger.classify_served_position_v1(&dependency.as_bytes(), *stage, *position, bytes).map_err(refused)?;
+            }
             builder.slash_bond(c.challenger, u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1))?;
             c.answered = true;
         }
