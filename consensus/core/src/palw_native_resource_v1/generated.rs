@@ -84,7 +84,7 @@ native_enum!(misaka_palw_kernel::claim_paid_v2::PaidClaimCheckingV2; Panel, Pros
 native_struct!(misaka_palw_kernel::claim_interactive_v3::CompiledClaimProofPlanV3; version, compiler, target, mode, rounds, maximum_material_bytes, maximum_stream_blocks);
 native_struct!(misaka_palw_challenge::policy::ReviewedTupleV2; policy, algebraic, binding, source, coverage, review_root);
 native_struct!(crate::palw_kernel_route_v1::KernelSeatV1; bond, kernel_bond, scope);
-native_enum!(crate::palw_kernel_route_v1::PalwKernelChunkTargetV1; Claim(f0), Binding { v2_class, kernel_param_root }, Conformance { v2_class }, FlatProofV6 { vector, actor }, FlatProofV7 { vector, actor }, FlatProofV9 { vector, actor });
+native_enum!(crate::palw_kernel_route_v1::PalwKernelChunkTargetV1; Claim(f0), Binding { v2_class, kernel_param_root }, Conformance { v2_class }, FlatProofV6 { vector, actor }, FlatProofV7 { vector, actor }, FlatProofV9 { vector, actor }, FundedProofV11 { seal, actor }, StageProofV14 { seal, actor });
 native_enum!(misaka_palw_kernel::verify::ScopeV1; WholeClaim, Segments(f0), AuditOnly(f0));
 native_enum!(misaka_palw_kernel::receipt::ReceiptVerdictV1; Pass, Fail { position, occurrence, node }, Unavailable);
 native_struct!(misaka_palw_challenge::lifecycle::OnboardingRecordV1; state, last_failure, program_root, plan_root, class_id, commitment_root, conformance_evidence_id, beacon_retries, conformance_failures, attempt_limit);

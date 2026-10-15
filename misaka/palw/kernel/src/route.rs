@@ -1244,7 +1244,8 @@ mod tests {
             assert!(borrowed_native_action_v1(&extra).is_err());
         }
         assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw { bond: [1; 64] }.encode()).unwrap().is_none());
-        for (tag, last) in [(TAG_FUNDED_EXECUTION_V11, 44), (TAG_STAGE_EXECUTION_V14, 33)] {
+        // Funded actions run to 46: 45/46 are the typed window class v37 register/attach (RFC02 §II.14.60), as the decoder admits.
+        for (tag, last) in [(TAG_FUNDED_EXECUTION_V11, 46), (TAG_STAGE_EXECUTION_V14, 33)] {
             let mut raw = vec![1, tag, last, 0, 0, 0, 0];
             assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action, last);
             raw[2] = last + 1;

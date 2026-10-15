@@ -71,9 +71,12 @@ for path in sorted(G['visited']):
         private.setdefault(item['module'],[]).append(code)
     else:public.append(code.replace('crate::palw_bond_budget_v1::material::','crate::palw_bond_budget_v1::').replace('crate::palw_bond_budget_v1::consumer::','crate::palw_bond_budget_v1::'))
 OUT.write_text('//! Generated structural Borsh visitors; manual codecs are separate adapters.\n#![allow(unused_mut)]\nuse super::*;\nuse std::collections::{BTreeMap,BTreeSet};\nuse std::sync::Arc;\nuse super::wire::wire_struct;\n'+'\n'.join(public)+'\n')
+# Idempotent: the inventory generator (run above via runpy) has just rewritten every owner-local
+# file it owns, so appending once lands after its fresh content. A module the inventory did not
+# write this run is rewritten here instead of appended to, so re-running never duplicates code.
 for module,codes in private.items():
     p=CORE/'palw_native_resource_v1/private'/ (module.replace('::','_')+'.rs')
-    with p.open('a') as f:f.write('\nuse super::*;\n#[allow(unused_imports)]\nuse crate::palw_native_resource_v1::{NativeWireScanV1,NativeWireReaderV1,NativeWireShapeV1};\nuse crate::palw_native_resource_v1::wire::wire_struct;\n'+'\n'.join(codes)+'\n')
+    with p.open('a' if module in G['private'] else 'w') as f:f.write('\nuse super::*;\n#[allow(unused_imports)]\nuse crate::palw_native_resource_v1::{NativeWireScanV1,NativeWireReaderV1,NativeWireShapeV1};\nuse crate::palw_native_resource_v1::wire::wire_struct;\n'+'\n'.join(codes)+'\n')
 # The manual carriage serializer defines exactly the legacy fields and tail read
 # order. Derive the scanner's dispatch from those actual names/types; refuse any
 # special decoder not explicitly audited below.
