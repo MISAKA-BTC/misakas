@@ -18,10 +18,11 @@ use crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1;
 use crate::palw_state_v2::PalwConsensusObjectV2;
 
 /// The appended forms and their owning fences — the ledger the fence-ownership audit reads.
-pub const PALW_STAGED_ROUTE_FORMS_V1: [(&str, PalwLifecycleKindFenceV1); 3] = [
+pub const PALW_STAGED_ROUTE_FORMS_V1: [(&str, PalwLifecycleKindFenceV1); 4] = [
     ("PalwConstraintStreamActionV1::FloatSource*", PalwLifecycleKindFenceV1::StagedFloatConstraintV1),
     ("PalwAuxiliaryPublicCourtSeedV1::FloatConstraint", PalwLifecycleKindFenceV1::StagedFloatConstraintV1),
     ("PalwConstraintStreamActionV1::NativeSelected*", PalwLifecycleKindFenceV1::StagedTirRouteV1),
+    ("PalwConstraintStreamActionV1::NativeTirPrefix*", PalwLifecycleKindFenceV1::StagedTirRouteV1),
 ];
 
 /// The newer fence that owns `object`'s appended staged-route form, if it carries one.
@@ -32,7 +33,10 @@ pub fn palw_staged_route_form_fence_v1(object: &PalwConsensusObjectV2) -> Option
             A::FloatSourceOpen { .. } | A::FloatSourceAnswer(_) | A::FloatSourceNominate { .. } | A::FloatSourceCollect => {
                 Some(PalwLifecycleKindFenceV1::StagedFloatConstraintV1)
             }
-            A::NativeSelectedDemand { .. } | A::NativeSelectedAnswer(_) => Some(PalwLifecycleKindFenceV1::StagedTirRouteV1),
+            A::NativeSelectedDemand { .. }
+            | A::NativeSelectedAnswer(_)
+            | A::NativeTirPrefixAnswer(_)
+            | A::NativeTirPrefixCollect => Some(PalwLifecycleKindFenceV1::StagedTirRouteV1),
             _ => None,
         },
         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => match &seed.auxiliary {

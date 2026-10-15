@@ -105,6 +105,9 @@ pub enum PalwNativeSeedFamilyV1 {
         tokenizer_key_events: u64,
         operand_tokenizer_bytes: u64,
     },
+    /// The prefix-state family (`crate::palw_tir_prefix_owned_v1`): the boundary is the job's own
+    /// declared prefix state; the class layout is the one published on chain for the class.
+    PrefixState { prefix_tokens: u32 },
 }
 /// **A seed that names no binding** (tag 168, `PublicCourtStreamOpenedNativeV1`, owned by
 /// `palw_staged_tir_route_v1`). It signs the IDENTITY of the claim's admitted TIR public header
@@ -165,6 +168,7 @@ impl PalwConstraintStreamNativeSeedV1 {
                     && [&pin.row_opening, &pin.committed_opening, &pin.beat_opening].iter().all(|o| o.siblings.len() <= 64)
             }
             PalwNativeSeedFamilyV1::Tokenizer { opening, .. } => opening.siblings.len() <= 23,
+            PalwNativeSeedFamilyV1::PrefixState { prefix_tokens } => *prefix_tokens > 0,
         };
         if !openings {
             return Err("native seed exceeds its bounded original proof shape".into());
@@ -282,6 +286,10 @@ pub enum PalwConstraintStreamActionV1 {
         demand: crate::palw_selected_event_source_v1::PalwSelectedEventDemandV1,
     },
     NativeSelectedAnswer(crate::palw_selected_event_source_v1::PalwSelectedEventNativeAnswerV1),
+    /// A custodian's (or the owner's) next TIR prefix-state boundary leaf.
+    NativeTirPrefixAnswer(crate::palw_tir_prefix_owned_v1::PalwTirPrefixLeafAnswerV1),
+    /// After the custody clock: charge custodians that did not complete their boundary stream.
+    NativeTirPrefixCollect,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -577,6 +585,7 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::FlatSourceAnswer(answer) => answer.answerer,
             PalwConstraintStreamActionV1::FloatSourceAnswer(answer) => answer.answerer,
             PalwConstraintStreamActionV1::NativeSelectedAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::NativeTirPrefixAnswer(answer) => answer.answerer,
             _ => self.reserver,
         }
     }
@@ -644,6 +653,17 @@ impl PalwConstraintStreamMoveV1 {
         }
         if let PalwConstraintStreamActionV1::NativeSelectedAnswer(answer) = &self.action {
             answer.check_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::NativeTirPrefixAnswer(answer) = &self.action {
+            answer.check_wire_v1()?;
+            bounded_encoded_len(self, PALW_PREFIX_BATCH_CARRIER_BYTES_V1)?;
+        }
+        if matches!(
+            &self.action,
+            PalwConstraintStreamActionV1::NativeTirPrefixAnswer(_) | PalwConstraintStreamActionV1::NativeTirPrefixCollect
+        ) && self.phase != PalwConstraintStreamPhaseV1::PrefixCourt
+        {
+            return Err("TIR prefix moves ride the fixed prefix carrier phase".into());
         }
         if let PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt } = &self.action {
             grant.check_receipt_v1(receipt)?;

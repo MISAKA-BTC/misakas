@@ -6783,6 +6783,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::PublicCourtStreamLeafV1 { .. } => "PublicCourtStreamLeafV1",
         O::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
         O::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
+        O::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::ClassSemanticsDeclaredV1 { .. } => "ClassSemanticsDeclaredV1",

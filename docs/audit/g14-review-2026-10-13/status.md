@@ -810,3 +810,69 @@ wires to RFC-0002's TIR executor. Full text in `consensus/core/src/palw_backend.
     honest. The ids are only a nominee.
 
 **Object tag 168** (`PublicCourtStreamOpenedNativeV1`) belongs to this branch.
+
+### Round 6, 2026-10-15: TIR prefix-state family wired end to end (unverified source only)
+
+Dormant under `palw_staged_tir_route_v1` (A-2: every new form and kind is owned by it).
+Nothing was built, tested or run.
+
+- **Layout on chain (tag 169, `TirClassLayoutPublishedV1`).** A registered TIR class's layout is
+  public class data. It is authenticated by the record's `layout_digest` and program and checked
+  to build a step space. It is stored once as staged row `TirLayout` under key `TirLayout(class)`,
+  which never expires; publishing it again is a no-op. The quote needs it, because the record has
+  only the digest. A producer publishes it before claiming. Without it, the TIR prefix quote
+  refuses by name.
+- **Seed and moves.** The native seed family is `PrefixState { prefix_tokens }`. The moves are
+  `NativeTirPrefixAnswer { answerer, seed_id, ordinal, values_le, opening }`, whose authority is
+  the typed answerer, and `NativeTirPrefixCollect` (owner only). Both are route forms inside tag
+  167.
+- **Family row `TirPrefix`** (`palw_tir_prefix_owned_v1`). It has isolated slots: the producer,
+  the held Panel and the owner. Every custodian owes its complete boundary stream by
+  `stream_until`. The first completed slot decides: `Honest`, or `StateRootMismatch`, which yields
+  a certificate that resolves as a `Prefix` staged fault through the existing conviction paths.
+  The stage is honest-complete only after collection. Unpaid custodians go to the native default
+  charge.
+- **Exhaustive matches updated:**
+  - row codec (discriminant 9) and checkpoint codec (5);
+  - `active_row`, cache leases, owner accounting, checkpoint and restore, key check;
+  - family mapping (PublicPrefix), honest-complete, bundle stage check;
+  - certificate resolution;
+  - paid authority, owned progress and the new `TirPrefix` owned cursor;
+  - fold `index_rows` and the streamed-duty index;
+  - bundle scheduler honest/family, filer paid-stage arm.
+- **Quote.** `staged_preclaim_tir_quote_v1` now prices the prefix family instead of refusing it,
+  above the fence only:
+  - boundary leaves from the published layout;
+  - largest leaf ≤ 80,000 bytes, so one leaf fits one carrier;
+  - opening depth;
+  - slots = custody + owner, plus reorg replay.
+- **Fold.** `open_native` admits `PrefixState`: it checks qualified custody and an owner outside it,
+  and that the actual plan fits the frozen stage plan. `tir_prefix_control_v1` rebuilds the step
+  space natively at every move from the admitted header, registered program and published layout.
+  `publish_tir_layout` handles tag 169.
+- **Fix found on the way.** The shared streamed-duty page validated entries against Flat sources
+  only, which would have refused round 4's Float32 entries and these. It now checks the full
+  `flat_response_index_rows_v1` union.
+- **Node.**
+  - Custodian responder `palw_tir_prefix_responder.rs` (own and delegated slots, lane `MAX − 23`):
+    the slot cursor goes through the reader `palw_staged_tir_prefix_leaf_index_v1` to a leaf index,
+    then to `disclose_tir_step_leaf_v1` over the retained capture.
+  - The fraud filer's TIR bundle has a prefix stage: open the native seed, collect after the
+    custody clock, file a staged conviction on mismatch.
+  - Also fixed: the filer's queue checks now accept `NativeSelectedDemand` as a bundle-control
+    move (round 4 omitted it).
+- **Executor contracts for the integration branch** (in `palw_backend.rs`):
+  - `disclose_tir_step_leaf_v1(material, header, leaf_index, maximum_leaves) -> (values_le,
+    opening)`;
+  - `declare_tir_prefix_state_v1(material, header, prefix_tokens) -> state_root`, where
+    `palw_fp_prefix_state_root_v1(class, k, palw_tir_prefix_kv_digest_v1(...))` over the run's own
+    boundary lanes; aligned `k` only; the layout must be published first.
+- **Test source.** `g14_tir_prefix_state_full_collusion_is_collected_or_convicted_from_the_claims_own_leaves`
+  runs over the real tiny TIR execution (`tiny_execution`):
+  - unaligned and out-of-prompt boundaries are refused;
+  - total withholding collects both custodians;
+  - a forged leaf is refused;
+  - authentic leaves convict a lying declared root and clear an honest one;
+  - checkpoint and restore round-trip;
+  - honest completion waits for collection.
+- **Object tags 168 and 169 belong to this branch.**

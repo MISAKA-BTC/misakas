@@ -196,15 +196,16 @@ struct PalwPreclaimSourceGeometryV1 {
 
 /// **The TIR preclaim quote**: the same planner over a TIR claim's decode view, derived from the
 /// native-admitted public header and the class's registered record (no layout, no binding on the
-/// wire). Covered families: Constraint over the TIR class's tiled logits and the raw tokenizer.
-/// A TIR prefix-state job and a flat-scheme TIR Constraint job have no TIR source/relation and are
-/// refused by name.
+/// wire). Covered families: Constraint over the TIR class's tiled logits, the raw tokenizer, and
+/// the prefix-state family over an aligned boundary of the class's published layout. A
+/// flat-scheme TIR Constraint job has no TIR Flat source and is refused by name.
 #[allow(clippy::too_many_arguments)]
 pub fn staged_preclaim_tir_quote_v1(
     geometry: &PalwStagedClaimGeometryV1,
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
     record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: Option<&crate::palw_tir_class_v1::PalwTirLayoutV1>,
     semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
     inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
     maximum_custodians: u64,
@@ -224,9 +225,20 @@ pub fn staged_preclaim_tir_quote_v1(
     }
     let mut families = Vec::new();
     if original.job.is_prefix_state() {
-        // The relation core exists (`palw_tir_prefix_state_v1`: aligned boundary, canonical digest,
-        // authenticated stream); its source session, family row, fold, quote and node actors do not.
-        return Err("a TIR prefix-state job's family court is not wired (relation core only); refused".into());
+        // The TIR prefix-state family (`palw_tir_prefix_owned_v1`): the class's published layout
+        // rebuilds its step space; the boundary must be aligned and fit one carrier per leaf.
+        let layout = layout.ok_or("a TIR prefix-state claim needs its class's layout published first (tag 169)")?;
+        let context = crate::palw_staged_court_state_v1::palw_tir_prefix_context_v1(record, layout, header, &original.job, maximum_leaves)?;
+        families.push((
+            PalwStagedFamilyV1::PublicPrefix,
+            crate::palw_tir_prefix_owned_v1::tir_prefix_resource_plan_v1(
+                context.template.total_v1(),
+                context.leaf_bytes,
+                context.depth,
+                u32::try_from(maximum_custodians).map_err(|_| "TIR prefix custody exceeds format")?,
+                config.prices,
+            )?,
+        ));
     }
     if original.job.is_constraint() {
         if view.lane == crate::palw_step::PalwStepLaneV1::Float32 {

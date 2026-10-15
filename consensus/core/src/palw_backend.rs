@@ -630,6 +630,58 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this family has no TIR FP execution backend".into())
     }
 
+    /// **One committed TIR step leaf** (the TIR prefix-state source behind
+    /// `palw_staged_tir_route_v1`). Default `Err`: no in-node backend executes TIR FP jobs.
+    /// RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract:**
+    /// * `material` is one retained payload of THIS claim (as for `disclose_tir_selected_event_v1`).
+    ///   Parse only your own capture format; return `Err` for anything else or for a capture that
+    ///   is not `header`'s run (same job context, step Merkle root and leaf count).
+    /// * Return the leaf at step-tree index `leaf_index`: its canonical 4-byte lanes `values_le`
+    ///   (`palw_tir_lanes_le_v1(leaf.dtype, values)`, the bytes the step leg hashed) and its
+    ///   opening against `header.step_merkle_root`
+    ///   (`step_opening_from_leaf_source_capped_v1(step_leaf_count, leaf_index, maximum_leaves, …)`
+    ///   over the run's leaf hashes, `step_tile_leaf_hash_v1(context_hash, class_id, preimage)`).
+    /// * The node asks for the prefix boundary's leaves in order: the consensus reader
+    ///   `palw_staged_tir_prefix_leaf_index_v1` maps a slot's cursor to `leaf_index`. Each answer
+    ///   must authenticate in `PalwTirPrefixStateStreamV1::leaf_v1`.
+    /// * Read-only; `Err` means "cannot answer", never a verdict (the duty is collected).
+    fn disclose_tir_step_leaf_v1(
+        &self,
+        _material: &[u8],
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _leaf_index: u64,
+        _maximum_leaves: u64,
+    ) -> Result<(Vec<u8>, crate::palw_step_leg::PalwStepOpeningV1), String> {
+        Err("this family has no TIR capture with committed step leaves".into())
+    }
+
+    /// **The executor-side declaration of a TIR prefix state** (a version-11 prefix-state job of a
+    /// TIR class). Default `Err`. RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract:**
+    /// * Admissible boundaries only: `0 < prefix_tokens < prefill` and `prefix_tokens` a multiple
+    ///   of both the class layout's `checkpoint_interval` and `h_tile`
+    ///   (`PalwTirStepSpaceV1::prefix_state_leaf_count_v1` is `Some`). Otherwise return `Err`: the
+    ///   chain refuses such a claim's quote, and a staged court could not re-derive its state.
+    /// * Return `palw_fp_prefix_state_root_v1(class_id, prefix_tokens, kv_digest)` with
+    ///   `kv_digest = palw_tir_prefix_kv_digest_v1(space, job_context, prefix_tokens, lanes_of)`.
+    ///   `lanes_of(leaf)` is the run's own committed canonical lanes of that boundary leaf (the
+    ///   `Fixed` checkpoint at `prefix_tokens − 1` and the `Hist` chunks `0..prefix_tokens`): the
+    ///   very bytes the step leg commits, so the outside court re-derives this root from the
+    ///   claim's own leaves.
+    /// * The producer must also have published the class layout (tag 169) before claiming. The
+    ///   preclaim quote, the producer's own included, refuses a TIR prefix-state claim without it.
+    fn declare_tir_prefix_state_v1(
+        &self,
+        _material: &[u8],
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prefix_tokens: u32,
+    ) -> Result<Hash64, String> {
+        Err("this family has no TIR FP execution backend".into())
+    }
+
     fn bisect_prefix_state(&self, _material: &[u8], _index: u64) -> Option<Hash64> {
         None
     }

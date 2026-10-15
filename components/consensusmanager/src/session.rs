@@ -350,6 +350,29 @@ impl ConsensusSessionOwned {
         self.consensus.palw_staged_owned_native_seed_v1(key)
     }
 
+    pub fn palw_staged_tir_prefix_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedTirPrefixProgressV1>, String> {
+        self.consensus.palw_staged_tir_prefix_v1(key)
+    }
+
+    pub fn palw_staged_tir_prefix_leaf_index_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        ordinal: u64,
+        maximum_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        self.consensus.palw_staged_tir_prefix_leaf_index_v1(key, ordinal, maximum_leaves)
+    }
+
+    pub fn palw_staged_tir_layout_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1> {
+        self.consensus.palw_staged_tir_layout_v1(class_id)
+    }
+
     pub fn palw_staged_flat_pin_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

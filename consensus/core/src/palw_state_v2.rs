@@ -7204,6 +7204,13 @@ pub enum PalwConsensusObjectV2 {
     PublicCourtStreamOpenedNativeV1 {
         seed: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1>,
     } = 168,
+    /// **(tag 169): a registered TIR class's layout, published** — public class data (no signature), authenticated by the
+    /// class record's `layout_digest` and program. The TIR prefix-state quote and court rebuild the class's step space from
+    /// it. Owned by `palw_staged_tir_route_v1` (below it the live build's undecodable payload, riding unjudged). **Tag 169.**
+    TirClassLayoutPublishedV1 {
+        class_id: Hash64,
+        layout: Box<crate::palw_tir_class_v1::PalwTirLayoutV1>,
+    } = 169,
     /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
@@ -8094,7 +8101,8 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed } => {
             let config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
             match &seed.family {
-                crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Constraint { .. } => {
+                crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Constraint { .. }
+                | crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::PrefixState { .. } => {
                     config.claim_terms(0, 4095, seed.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX)
                 }
                 crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Tokenizer {

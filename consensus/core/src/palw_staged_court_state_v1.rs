@@ -45,6 +45,8 @@ pub enum PalwStagedCourtKeyV1 {
     Owner(Hash64, PalwBondKeyV2),
     InventoryOpen(Hash64, PalwBondKeyV2),
     Inventory(Hash64),
+    /// A registered TIR class's published layout (behind `palw_staged_tir_route_v1`).
+    TirLayout(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -65,19 +67,25 @@ pub enum PalwStagedCourtRowV1 {
     OwnerBundle(PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1>),
     ArtifactInventoryOpen(PalwSharedCourtV1<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1>),
     ArtifactInventory(crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1),
+    /// The TIR prefix-state family court (behind `palw_staged_tir_route_v1`).
+    TirPrefix(PalwSharedCourtV1<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCourtV1>),
+    /// A registered TIR class's layout, published once, authenticated by the record's
+    /// `layout_digest` (behind `palw_staged_tir_route_v1`): what a TIR prefix quote and court
+    /// rebuild the class's step space from.
+    TirLayout(Box<crate::palw_tir_class_v1::PalwTirLayoutV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) => None,
+            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_) => None,
             _ => Some(self),
         }
     }
     pub fn active_row_mut_v1(&mut self) -> Option<&mut Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) => None,
+            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_) => None,
             _ => Some(self),
         }
     }
@@ -87,6 +95,7 @@ impl PalwStagedCourtRowV1 {
             Self::Tokenizer(c) => (c.claim, c.reserver, c.reserved_daa, c.seed_id(), c.terms.material_until_daa),
             Self::Prefix(c) => (c.claim, c.reserver, c.reserved_daa, c.seed_id(), c.terms.material_until_daa),
             Self::PublicPrefix(c) => (c.claim, c.reserver, c.reserved_daa, c.seed_id(), c.terms.material_until_daa),
+            Self::TirPrefix(c) => (c.claim, c.reserver, c.reserved_daa, c.seed_id(), c.terms.material_until_daa),
             Self::OwnerBundle(bundle) => {
                 let mut leases = vec![crate::palw_prefix_history_v1::PalwStagedCacheLeaseV1 {
                     claim: bundle.claim,
@@ -110,6 +119,7 @@ impl PalwStagedCourtRowV1 {
             Self::Tokenizer(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
             Self::Prefix(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
             Self::PublicPrefix(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
+            Self::TirPrefix(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
             Self::OwnerBundle(c) => Some((c.claim, c.owner, c.plan.terms.plan.deposit_sompi, c.plan.terms.material_until_daa)),
             Self::ArtifactInventoryOpen(c) => Some((c.offer.artifact_hash, c.offer.opener, c.plan.deposit_sompi, c.until_daa)),
             _ => None,
@@ -121,6 +131,7 @@ impl PalwStagedCourtRowV1 {
             Self::Tokenizer(c) => Ok(PalwStagedCheckpointV1::Tokenizer(Box::new(c.checkpoint_v1()))),
             Self::Prefix(c) => Ok(PalwStagedCheckpointV1::Prefix(Box::new(c.checkpoint_v1()))),
             Self::PublicPrefix(c) => Ok(PalwStagedCheckpointV1::PublicPrefix(Box::new(c.checkpoint_v1()))),
+            Self::TirPrefix(c) => Ok(PalwStagedCheckpointV1::TirPrefix(Box::new(c.checkpoint_v1()))),
             Self::OwnerBundle(c) => Ok(PalwStagedCheckpointV1::Bundle(Box::new(c.checkpoint_v1()?))),
             _ => Err("claim contract is not an owned mutable court".into()),
         }
@@ -131,6 +142,7 @@ impl PalwStagedCourtRowV1 {
             (Self::Tokenizer(c), PalwStagedCheckpointV1::Tokenizer(cp)) => c.restore_checkpoint_v1(cp),
             (Self::Prefix(c), PalwStagedCheckpointV1::Prefix(cp)) => c.restore_checkpoint_v1(cp),
             (Self::PublicPrefix(c), PalwStagedCheckpointV1::PublicPrefix(cp)) => c.restore_checkpoint_v1(cp),
+            (Self::TirPrefix(c), PalwStagedCheckpointV1::TirPrefix(cp)) => c.restore_checkpoint_v1(cp),
             (Self::OwnerBundle(c), PalwStagedCheckpointV1::Bundle(cp)) => c.restore_checkpoint_v1(cp),
             _ => Err("staged checkpoint changes immutable court type".into()),
         }
@@ -153,6 +165,12 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Tokenizer(c)) if (*claim, *bond) == c.key() => c.check(),
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Prefix(c)) if (*claim, *bond) == (c.claim, c.reserver) => c.check(),
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::PublicPrefix(c)) if (*claim, *bond) == (c.claim, c.reserver) => c.check(),
+            (PalwStagedCourtKeyV1::Owner(claim, bond), Self::TirPrefix(c)) if (*claim, *bond) == c.key() => c.check(),
+            (PalwStagedCourtKeyV1::TirLayout(_), Self::TirLayout(layout))
+                if layout.version == crate::palw_tir_class_v1::PALW_TIR_LAYOUT_VERSION_V1 =>
+            {
+                Ok(())
+            }
             (PalwStagedCourtKeyV1::Claim(claim), Self::ClaimBundle(c)) => {
                 c.plan.check_v1()?;
                 c.config.check()?;
@@ -189,6 +207,7 @@ pub enum PalwStagedCheckpointV1 {
     Prefix(Box<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCheckpointV1>),
     PublicPrefix(Box<crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCheckpointV1>),
     Bundle(Box<crate::palw_staged_bundle_v1::PalwStagedBundleCheckpointV1>),
+    TirPrefix(Box<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCheckpointV1>),
 }
 impl PalwStagedCheckpointV1 {
     pub fn history_recoveries_v1(
@@ -610,6 +629,111 @@ pub fn palw_staged_tir_view_v1(
     Ok(Some((view, Box::new(header.clone()))))
 }
 
+/// A registered TIR class's published layout (behind `palw_staged_tir_route_v1`).
+pub fn palw_staged_tir_layout_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    class_id: Hash64,
+) -> Option<&crate::palw_tir_class_v1::PalwTirLayoutV1> {
+    match state.staged_courts.get(&PalwStagedCourtKeyV1::TirLayout(class_id)) {
+        Some(PalwStagedCourtRowV1::TirLayout(layout)) => Some(layout.as_ref()),
+        _ => None,
+    }
+}
+
+/// **The TIR prefix-state context**, rebuilt natively for one claim (behind
+/// `palw_staged_tir_route_v1`): the class's step space from its registered program and published
+/// layout (the layout authenticated by the record's digest and class id), the admitted header's
+/// job context, and an unstarted stream over the job's declared prefix state. `None` for a claim
+/// that is not a TIR prefix-state claim.
+pub struct PalwTirPrefixContextV1 {
+    pub space: crate::palw_tir_step_v1::PalwTirStepSpaceV1,
+    pub job_context: crate::palw_v2::PalwJobContextV2,
+    pub template: crate::palw_tir_prefix_state_v1::PalwTirPrefixStateStreamV1,
+    /// The largest boundary leaf's lanes, in bytes; and the step tree's opening depth.
+    pub leaf_bytes: u64,
+    pub depth: u64,
+}
+pub fn palw_tir_prefix_context_v1(
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    maximum_leaves: u64,
+) -> Result<PalwTirPrefixContextV1, String> {
+    let binding = header.resolve_registered_layout_v1(record, layout, header.committed_execution_root, maximum_leaves)?;
+    let space = crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&binding.class).map_err(|e| e.to_string())?;
+    if space.leaf_count_capped(&header.job_context, maximum_leaves).map_err(|e| e.to_string())? != header.step_leaf_count {
+        return Err("TIR header's step leaf count is not its class's leaf space".into());
+    }
+    let named = crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job).map_err(|e| e.to_string())?;
+    if named.class_id != record.facts.class_id {
+        return Err("TIR prefix state names another class".into());
+    }
+    let template = crate::palw_tir_prefix_state_v1::PalwTirPrefixStateStreamV1::new_v1(
+        &space,
+        record.facts.class_id,
+        &header.job_context,
+        header.step_merkle_root,
+        header.step_leaf_count,
+        maximum_leaves,
+        named.prefix_tokens,
+        named.state_root,
+    )?;
+    let lanes = space
+        .fixed_instances()
+        .iter()
+        .map(|s| u64::from(s.tile_lanes))
+        .chain(space.hist_instances().iter().map(|s| u64::from(s.tile_lanes) * u64::from(space.layout.h_tile)))
+        .max()
+        .ok_or("TIR class declares no state to prefix")?;
+    let leaf_bytes = lanes.checked_mul(4).ok_or("TIR prefix leaf bytes overflow")?;
+    if leaf_bytes > crate::palw_tir_prefix_owned_v1::PALW_TIR_PREFIX_LEAF_MAX_BYTES_V1 as u64 {
+        return Err("a TIR prefix boundary leaf exceeds one paid staged carrier".into());
+    }
+    let depth = u64::from(64 - header.step_leaf_count.leading_zeros());
+    Ok(PalwTirPrefixContextV1 { space, job_context: header.job_context.clone(), template, leaf_bytes, depth })
+}
+
+/// The accepted TIR prefix-state stage of one owner frame, for node readers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStagedTirPrefixProgressV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub row: PalwSharedCourtV1<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCourtV1>,
+    pub header: Box<crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>,
+}
+pub fn palw_staged_tir_prefix_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+) -> Result<Option<PalwStagedTirPrefixProgressV1>, String> {
+    let point = state.last_point().ok_or("TIR prefix snapshot has no accepted clock")?;
+    let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = state.staged_owned_row_v1(key.0, key.1) else { return Ok(None) };
+    let Some(PalwStagedCourtRowV1::TirPrefix(row)) = bundle.active_v1() else { return Ok(None) };
+    let header = bundle.active_native_seed_v1().ok_or("TIR prefix stage lost its native context")?.header.clone();
+    Ok(Some(PalwStagedTirPrefixProgressV1 { snapshot_block: point.block, now_daa: point.daa_score, row: row.clone(), header }))
+}
+
+/// The step-tree index of boundary leaf `ordinal` of an owner frame's active TIR prefix stage
+/// (node responders turn a slot's cursor into the leaf they disclose).
+pub fn palw_staged_tir_prefix_leaf_index_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+    ordinal: u64,
+    maximum_leaves: u64,
+) -> Result<Option<u64>, String> {
+    let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = state.staged_owned_row_v1(key.0, key.1) else { return Ok(None) };
+    let Some(native) = bundle.active_native_seed_v1() else { return Ok(None) };
+    let Some(PalwStagedCourtRowV1::TirPrefix(_)) = bundle.active_v1() else { return Ok(None) };
+    let class = native.header.job_context.shape_profile_id;
+    let record = state.tir_classes.get(&class).ok_or("TIR prefix class record absent")?;
+    let layout = palw_staged_tir_layout_v1(state, class).ok_or("TIR prefix class layout absent")?;
+    let context = palw_tir_prefix_context_v1(record, layout, &native.header, &native.job, maximum_leaves)?;
+    let crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::PrefixState { prefix_tokens } = native.seed.family else {
+        return Ok(None);
+    };
+    Ok(context.space.prefix_state_leaf_v1(&context.job_context, prefix_tokens, ordinal).map(|leaf| leaf.index))
+}
+
 /// The active native TIR stage's seed and admitted header (node readers; `None` for a legacy stage).
 pub fn palw_staged_owned_native_seed_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
@@ -719,6 +843,18 @@ impl PalwStagedCertificateRefV1 {
                 }
                 Ok(PalwStagedFaultV1::Prefix(fault))
             }
+            PalwStagedCourtRowV1::TirPrefix(row) => {
+                if row.reserved_daa != self.reserved_daa || row.seed_id() != self.seed_id {
+                    return Err("TIR prefix certificate changes immutable owner/seed/reservation".into());
+                }
+                let fault = row.certificate()?.ok_or("TIR prefix court re-derived the declared state root")?;
+                if (fault.claim, fault.reserver, fault.reserved_daa, fault.seed_id, fault.execution_root)
+                    != (self.claim, self.reserver, self.reserved_daa, self.seed_id, expected_root)
+                {
+                    return Err("TIR prefix certificate does not convict target claim".into());
+                }
+                Ok(PalwStagedFaultV1::Prefix(fault))
+            }
             _ => Err("claim contract alone cannot convict".into()),
         }
     }
@@ -773,6 +909,14 @@ pub struct PalwStagedOwnedProgressV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwStagedOwnedCursorV1 {
+    /// A TIR prefix-state stage (behind `palw_staged_tir_route_v1`): the boundary's leaf count,
+    /// whether the custody clock was collected, and Some(false) honest-complete / Some(true) a
+    /// re-derived root that differs from the declared one.
+    TirPrefix {
+        total: u64,
+        collected: bool,
+        completed: Option<bool>,
+    },
     Prefix {
         moves_used: u64,
         cursor: crate::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1,
@@ -828,6 +972,7 @@ pub fn palw_staged_paid_authority_v1(
         PalwStagedCourtRowV1::Tokenizer(c) => (c.reserved_daa, c.seed_id(), c.terms, c.execution_root_v1()),
         PalwStagedCourtRowV1::Prefix(c) => (c.reserved_daa, c.seed_id(), c.terms, c.execution_root_v1()),
         PalwStagedCourtRowV1::PublicPrefix(c) => (c.reserved_daa, c.seed_id(), c.terms, c.execution_root_v1()),
+        PalwStagedCourtRowV1::TirPrefix(c) => (c.reserved_daa, c.seed_id(), c.terms, c.execution_root_v1()),
         PalwStagedCourtRowV1::OwnerBundle(c) => {
             let seed = c.active_seed_id_v1().unwrap_or_else(|| c.plan.id_v1(c.claim));
             let terms = match c.active_v1() {
@@ -835,6 +980,7 @@ pub fn palw_staged_paid_authority_v1(
                 Some(PalwStagedCourtRowV1::Tokenizer(row)) => row.terms,
                 Some(PalwStagedCourtRowV1::Prefix(row)) => row.terms,
                 Some(PalwStagedCourtRowV1::PublicPrefix(row)) => row.terms,
+                Some(PalwStagedCourtRowV1::TirPrefix(row)) => row.terms,
                 _ => c.plan.terms,
             };
             (c.reserved_daa, seed, terms, c.execution_root)
@@ -944,6 +1090,21 @@ pub fn palw_staged_owned_progress_v1(
                 }),
             )
         }
+        Some(PalwStagedCourtRowV1::TirPrefix(row)) => {
+            row.check()?;
+            if row.reserved_daa != reserved_daa {
+                return Err("TIR prefix progress reservation differs from owned seed".into());
+            }
+            let completed = match row.verdict_v1() {
+                Some(crate::palw_tir_prefix_state_v1::PalwTirPrefixStateVerdictV1::StateRootMismatch { .. }) => Some(true),
+                Some(crate::palw_tir_prefix_state_v1::PalwTirPrefixStateVerdictV1::Honest) if row.collected_v1() => Some(false),
+                _ => None,
+            };
+            (
+                Some(row.seed_id()),
+                Some(PalwStagedOwnedCursorV1::TirPrefix { total: row.total_v1(), collected: row.collected_v1(), completed }),
+            )
+        }
         Some(_) => return Err("staged owner key contains a claim contract".into()),
         None => (
             match owned {
@@ -964,6 +1125,7 @@ pub fn palw_staged_owned_progress_v1(
             Some(PalwStagedCourtRowV1::Prefix(row)) => row.terms,
             Some(PalwStagedCourtRowV1::Tokenizer(row)) => row.terms,
             Some(PalwStagedCourtRowV1::Constraint(row)) => row.terms,
+            Some(PalwStagedCourtRowV1::TirPrefix(row)) => row.terms,
             _ => match owned {
                 Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) => bundle.plan.terms,
                 _ => contract.terms,

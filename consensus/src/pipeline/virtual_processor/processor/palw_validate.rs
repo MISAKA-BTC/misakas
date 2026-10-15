@@ -3643,6 +3643,18 @@ impl VirtualStateProcessor {
                         return Err("staged move is not signed by its literal reserver".into());
                     }
                 }
+                Obj::TirClassLayoutPublishedV1 { layout, .. } => {
+                    // A-2: below its owning fence (`palw_staged_tir_route_v1`) the kind rides unjudged.
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score)
+                        || !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score))
+                    {
+                        continue;
+                    }
+                    // Public class data: the fold authenticates it against the registered record's digest.
+                    if layout.version != kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_LAYOUT_VERSION_V1 {
+                        return Err("published TIR layout is not its prospective version".into());
+                    }
+                }
                 Obj::PublicCourtStreamOpenedNativeV1 { seed } => {
                     use kaspa_consensus_core::palw_constraint_stream_carriage_v1 as stage;
                     // A-2: below its owning fence (`palw_staged_tir_route_v1`, in force only with the staged court) the kind
@@ -3810,6 +3822,7 @@ impl VirtualStateProcessor {
                                     stage::PalwConstraintStreamActionV1::PrefixPublicCollect { .. }
                                         | stage::PalwConstraintStreamActionV1::FlatSourceCollect
                                         | stage::PalwConstraintStreamActionV1::FloatSourceCollect
+                                        | stage::PalwConstraintStreamActionV1::NativeTirPrefixCollect
                                         | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. }
                                         | stage::PalwConstraintStreamActionV1::HistoryRecovery {
                                             action:

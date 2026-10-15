@@ -24,6 +24,7 @@ pub(super) fn honest_complete_v1(cursor: Option<&PalwStagedOwnedCursorV1>) -> bo
                 | PalwStagedOwnedCursorV1::Tokenizer { completed: Some(false), .. }
                 | PalwStagedOwnedCursorV1::Prefix { completed: Some(false), .. }
                 | PalwStagedOwnedCursorV1::PublicPrefix { pending: None, completed: Some(false), .. }
+                | PalwStagedOwnedCursorV1::TirPrefix { completed: Some(false), .. }
         )
     )
 }
@@ -31,7 +32,9 @@ fn cursor_family_v1(cursor: &PalwStagedOwnedCursorV1) -> PalwStagedFamilyV1 {
     match cursor {
         PalwStagedOwnedCursorV1::Constraint { .. } => PalwStagedFamilyV1::Constraint,
         PalwStagedOwnedCursorV1::Tokenizer { .. } => PalwStagedFamilyV1::Tokenizer,
-        PalwStagedOwnedCursorV1::Prefix { .. } | PalwStagedOwnedCursorV1::PublicPrefix { .. } => PalwStagedFamilyV1::PublicPrefix,
+        PalwStagedOwnedCursorV1::Prefix { .. }
+        | PalwStagedOwnedCursorV1::PublicPrefix { .. }
+        | PalwStagedOwnedCursorV1::TirPrefix { .. } => PalwStagedFamilyV1::PublicPrefix,
     }
 }
 fn movement(

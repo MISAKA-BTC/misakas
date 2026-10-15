@@ -816,14 +816,14 @@ the claim is refused at admission (uncovered, no reward, no weight).
   - (e) the fraud filer runs TIR bundles over the view and emits native seeds.
 
   Still missing:
-  - (2) the TIR prefix-state family. The relation core exists (`palw_tir_prefix_state_v1`):
-    aligned boundary `k ≡ 0 mod (checkpoint_interval, h_tile)`, a job-independent digest over
-    the boundary State/Hist lanes, and an authenticated restartable stream with a verdict
-    against the declared state root. Its seed family, source session, family row, quote, fold
-    and node actors are not wired (status.md, round 5), so TIR prefix-state stays refused by
-    name.
-  - (5)/(6) the TIR FP execution backend: `disclose_tir_selected_event_v1` and
-    `replay_tir_generated_ids_v1` default to `Err`. These are owned by the RFC-0002 lane.
+  - Round 6: (2) the TIR prefix-state family is wired: layout publication (tag 169), native
+    `PrefixState` seed, `TirPrefix` family row, quote, fold, custodian responder and filer
+    owner stage, all behind `palw_staged_tir_route_v1`. Aligned boundaries only; an unaligned
+    `k` is refused by name.
+  - (5)/(6) the TIR FP execution backend: `disclose_tir_selected_event_v1`,
+    `replay_tir_generated_ids_v1`, `disclose_tir_step_leaf_v1` and `declare_tir_prefix_state_v1`
+    default to `Err`. Their interface contracts are in `palw_backend.rs`; the integration branch
+    wires them to RFC-0002's TIR executor.
   - Done in round 5: the fraud filer's TIR entry is native (own replay -> verdict -> reservation
     -> staged TIR bundle; no legacy binding pipeline).
 
@@ -1112,8 +1112,9 @@ same job, the way slices are), or give the V2 claim a G14 path.
     `palw_staged_float_constraint_v1`. Above it, greedy jobs only, with the rooted row court and sources wired in
     source but unverified (§2i). Seeded Float32 is refused at every height.
 12. **TIR required-family claims on the staged public route**: refused at admission below the dormant
-    `palw_staged_tir_route_v1`. Above it, Constraint and tokenizer are wired in source but unverified (§2i), and
-    prefix-state stays refused. The TIR FP execution backend that answers and replays is the RFC-0002 lane's.
+    `palw_staged_tir_route_v1`. Above it, Constraint, tokenizer and prefix-state (aligned boundaries, published
+    layout) are wired in source but unverified (§2i). The TIR FP execution backend that answers and replays is the
+    RFC-0002 lane's.
 
 Economics are outside the G14 columns, but they block reward under PRINCIPLES §6.5 and §6.6:
 - the verifier incentive / bounty capture (ECON);

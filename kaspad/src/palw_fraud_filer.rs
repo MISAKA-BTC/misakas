@@ -4924,6 +4924,107 @@ impl PalwPanelService {
         Ok((None, false))
     }
 
+    /// **A TIR claim's prefix-state stage** (behind `palw_staged_tir_route_v1`): the owner opens
+    /// the stage with a native `PrefixState` seed; the claim's literal custody then owes the
+    /// boundary leaves (the node's TIR prefix responders answer); after the custody clock the
+    /// owner collects; a completed slot that re-derives another state root than the job declared
+    /// is filed as a staged-court conviction.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_tir_prefix_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        tir: &FilerTirContextV1,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{
+                PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
+                PalwConstraintStreamNativeSeedV1, PalwNativeSeedFamilyV1,
+            },
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_staged_court_state_v1::{PalwStagedCertificateRefV1, PalwStagedOwnedCursorV1},
+        };
+        if progress.claim != claim || progress.reserver == target.executor_bond {
+            return Err("snapshot is not this outside verifier's accepted TIR claim/clock".into());
+        }
+        let object = match &progress.cursor {
+            None => {
+                if progress.now_daa >= progress.terms.open_until_daa {
+                    return Err("TIR prefix opening door is closed".into());
+                }
+                let named = kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job).map_err(|e| e.to_string())?;
+                let mut seed = PalwConstraintStreamNativeSeedV1 {
+                    version: 1,
+                    claim,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    view_identity: kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(&tir.header),
+                    vocab_size: tir.view.vocab_size,
+                    job: None,
+                    family: PalwNativeSeedFamilyV1::PrefixState { prefix_tokens: named.prefix_tokens },
+                    signature: Vec::new(),
+                };
+                seed.signature =
+                    self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR prefix owner signing key")?;
+                seed.check(90_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+            }
+            Some(PalwStagedOwnedCursorV1::TirPrefix { completed: Some(true), .. }) => {
+                let reference = PalwStagedCertificateRefV1 {
+                    claim,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    seed_id: progress.seed_id.ok_or("TIR prefix fault lost its accepted seed")?,
+                };
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    target.executor_bond,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("TIR prefix staged reporter key mismatch")?;
+                return Ok((Some(filing), false));
+            }
+            Some(PalwStagedOwnedCursorV1::TirPrefix { completed: Some(false), .. }) => return Ok((None, true)),
+            Some(PalwStagedOwnedCursorV1::TirPrefix { collected: false, .. })
+                if progress.now_daa >= progress.terms.stream_until_daa && progress.now_daa < progress.terms.collect_until_daa =>
+            {
+                let mut movement = PalwConstraintStreamMoveV1 {
+                    version: 1,
+                    claim,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    seed_id: progress.seed_id.ok_or("TIR prefix collection lost its accepted seed")?,
+                    phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+                    action: PalwConstraintStreamActionV1::NativeTirPrefixCollect,
+                    signature: Vec::new(),
+                };
+                movement.signature =
+                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR prefix owner signing key")?;
+                movement.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
+            }
+            // The custody is streaming (or was collected without a completed slot): nothing to send.
+            Some(PalwStagedOwnedCursorV1::TirPrefix { .. }) => return Ok((None, false)),
+            Some(_) => return Err("another immutable family owns this TIR prefix stage".into()),
+        };
+        let _ = session;
+        Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, progress.now_daa, court_pending, court_due)?;
+        Ok((None, false))
+    }
+
     /// **A TIR claim's tokenizer stage** (behind `palw_staged_tir_route_v1`): the legacy tokenizer
     /// worker over the natively derived view, signing a native seed.
     #[allow(clippy::too_many_arguments)]
@@ -5346,7 +5447,8 @@ impl PalwPanelService {
                             .await?
                         }
                         PalwStagedFamilyV1::PublicPrefix => {
-                            return Err("a TIR claim has no prefix-state family (refused at its native quote)".into());
+                            self.fraud_filer_tir_prefix_stage_v1(session, book, claim, target, job, tir, child, maximum, file_by, court_pending, court_due)
+                                .await?
                         }
                     };
                     return Ok((result.0, false));
@@ -5648,6 +5750,8 @@ impl PalwPanelService {
             matches!(progress.cursor, Some(PalwStagedOwnedCursorV1::PublicPrefix { .. } | PalwStagedOwnedCursorV1::Prefix { .. }));
         let constraint = matches!(progress.cursor, Some(PalwStagedOwnedCursorV1::Constraint { .. }));
         let (filing, honest) = match progress.cursor.as_ref().ok_or("paid stage has no accepted cursor")? {
+            // A TIR prefix stage is always bundled and was dispatched through the TIR branch above.
+            PalwStagedOwnedCursorV1::TirPrefix { .. } => return Err("a TIR prefix stage runs only inside its TIR bundle".into()),
             PalwStagedOwnedCursorV1::PublicPrefix { .. } | PalwStagedOwnedCursorV1::Prefix { .. } => {
                 self.fraud_filer_prefix_stage_v1(
                     session,
@@ -6122,6 +6226,7 @@ impl PalwPanelService {
                             | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::SelectedEventDemand {..}
                             | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::SelectedEventAnswer (_)
                             | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::SelectedEventCollect {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::NativeSelectedDemand {..}
                             | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceOpen {..}
                             | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceAnswer (_)
                             | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceNominate {..}
@@ -6203,6 +6308,7 @@ impl PalwPanelService {
                         .open_until_daa
                         .saturating_sub(1),
                     PalwConstraintStreamActionV1::SelectedEventDemand { .. }
+                    | PalwConstraintStreamActionV1::NativeSelectedDemand { .. }
                     | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
                     | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
                     | PalwConstraintStreamActionV1::FloatSourceOpen { .. }
@@ -6215,7 +6321,8 @@ impl PalwPanelService {
                         .saturating_sub(1),
                     PalwConstraintStreamActionV1::SelectedEventCollect { .. }
                     | PalwConstraintStreamActionV1::FlatSourceCollect
-                    | PalwConstraintStreamActionV1::FloatSourceCollect => {
+                    | PalwConstraintStreamActionV1::FloatSourceCollect
+                    | PalwConstraintStreamActionV1::NativeTirPrefixCollect => {
                         progress.terms.collect_until_daa.saturating_sub(1)
                     }
                     _ => palw_fraud_filer_staged_due_v1(&object, &progress.terms),
@@ -6275,6 +6382,7 @@ impl PalwPanelService {
             }
             PalwConstraintStreamActionV1::SelectedEventDemand { .. }
             | PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+            | PalwConstraintStreamActionV1::NativeSelectedDemand { .. }
             | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
             | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
             | PalwConstraintStreamActionV1::FlatSourceCollect

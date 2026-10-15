@@ -391,6 +391,7 @@ impl BorshDeserialize for PalwStagedFamilyRowV1 {
             2 => PalwStagedCourtRowV1::Tokenizer(BorshDeserialize::deserialize_reader(reader)?),
             3 => PalwStagedCourtRowV1::Prefix(BorshDeserialize::deserialize_reader(reader)?),
             4 => PalwStagedCourtRowV1::PublicPrefix(BorshDeserialize::deserialize_reader(reader)?),
+            9 => PalwStagedCourtRowV1::TirPrefix(BorshDeserialize::deserialize_reader(reader)?),
             _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "nested or unknown family court")),
         };
         Ok(Self(row))
@@ -401,7 +402,9 @@ impl PalwStagedFamilyRowV1 {
         match self.0 {
             PalwStagedCourtRowV1::Constraint(_) => Some(PalwStagedFamilyV1::Constraint),
             PalwStagedCourtRowV1::Tokenizer(_) => Some(PalwStagedFamilyV1::Tokenizer),
-            PalwStagedCourtRowV1::Prefix(_) | PalwStagedCourtRowV1::PublicPrefix(_) => Some(PalwStagedFamilyV1::PublicPrefix),
+            PalwStagedCourtRowV1::Prefix(_) | PalwStagedCourtRowV1::PublicPrefix(_) | PalwStagedCourtRowV1::TirPrefix(_) => {
+                Some(PalwStagedFamilyV1::PublicPrefix)
+            }
             _ => None,
         }
     }
@@ -418,6 +421,7 @@ impl PalwStagedFamilyRowV1 {
             PalwStagedCourtRowV1::PublicPrefix(c) => Ok(c.pending_progress_v1().is_none()
                 && matches!(c.cursor_v1()?, crate::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1::Complete)
                 && matches!(c.certificate(), Ok(None))),
+            PalwStagedCourtRowV1::TirPrefix(c) => Ok(c.honest_complete_v1()),
             _ => Err("bundle child is not a typed court".into()),
         }
     }
@@ -533,6 +537,7 @@ impl BorshDeserialize for PalwStagedFamilyCheckpointV1 {
             1 => PalwStagedCheckpointV1::Tokenizer(BorshDeserialize::deserialize_reader(reader)?),
             2 => PalwStagedCheckpointV1::Prefix(BorshDeserialize::deserialize_reader(reader)?),
             3 => PalwStagedCheckpointV1::PublicPrefix(BorshDeserialize::deserialize_reader(reader)?),
+            5 => PalwStagedCheckpointV1::TirPrefix(BorshDeserialize::deserialize_reader(reader)?),
             _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "nested or unknown bundle checkpoint")),
         };
         Ok(Self(checkpoint))
@@ -825,6 +830,7 @@ impl PalwOwnedStagedBundleV1 {
                 PalwStagedCourtRowV1::Tokenizer(row) => (row.terms, row.reserved_daa, row.seed_id()),
                 PalwStagedCourtRowV1::Prefix(row) => (row.terms, row.reserved_daa, row.seed_id()),
                 PalwStagedCourtRowV1::PublicPrefix(row) => (row.terms, row.reserved_daa, row.seed_id()),
+                PalwStagedCourtRowV1::TirPrefix(row) => (row.terms, row.reserved_daa, row.seed_id()),
                 _ => return Err("bundle retains an untyped or recursive child".into()),
             };
             if stage.row.family_v1() != Some(self.plan.stages[index].family)

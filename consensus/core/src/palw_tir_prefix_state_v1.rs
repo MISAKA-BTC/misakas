@@ -1,7 +1,6 @@
-//! **The TIR prefix-state relation** — the relation core of the TIR prefix-state family court.
-//! Specified and implemented here; the family is NOT wired: the TIR preclaim quote still refuses
-//! TIR prefix-state jobs by name. See g14-completion-matrix §2i "TIR prefix-state" for the
-//! remaining wiring.
+//! **The TIR prefix-state relation**: the relation core of the TIR prefix-state family court
+//! ([`crate::palw_tir_prefix_owned_v1`]), wired behind `palw_staged_tir_route_v1`. The class
+//! layout the step space needs is published on chain once per class (tag 169).
 //!
 //! A prefix-state job (FP version 11) consumes a declared state: `state_root =
 //! palw_fp_prefix_state_root_v1(class_id, k, kv_digest)`. For a legacy class, `kv_digest` is its
@@ -127,6 +126,29 @@ impl PalwTirPrefixStateStreamV1 {
     }
     pub fn verdict_v1(&self) -> Option<PalwTirPrefixStateVerdictV1> {
         self.verdict
+    }
+
+    /// The immutable contract two streams of one court must share (everything but progress).
+    pub fn same_contract_v1(&self, other: &Self) -> bool {
+        (
+            self.class_id,
+            self.context_hash,
+            self.step_merkle_root,
+            self.step_leaf_count,
+            self.maximum_leaves,
+            self.prefix_tokens,
+            self.declared_state_root,
+            self.total,
+        ) == (
+            other.class_id,
+            other.context_hash,
+            other.step_merkle_root,
+            other.step_leaf_count,
+            other.maximum_leaves,
+            other.prefix_tokens,
+            other.declared_state_root,
+            other.total,
+        )
     }
 
     pub fn check_v1(&self) -> Result<(), String> {

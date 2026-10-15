@@ -1233,6 +1233,26 @@ pub trait ConsensusApi: Send + Sync {
         Err("staged native seed reader unavailable".into())
     }
 
+    fn palw_staged_tir_prefix_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedTirPrefixProgressV1>, String> {
+        Err("staged TIR prefix reader unavailable".into())
+    }
+
+    fn palw_staged_tir_prefix_leaf_index_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _ordinal: u64,
+        _maximum_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        Err("staged TIR prefix reader unavailable".into())
+    }
+
+    fn palw_staged_tir_layout_v1(&self, _class_id: crate::Hash64) -> Option<crate::palw_tir_class_v1::PalwTirLayoutV1> {
+        None
+    }
+
     fn palw_staged_resolved_public_context_v1(
         &self,
         _claim: crate::Hash64,

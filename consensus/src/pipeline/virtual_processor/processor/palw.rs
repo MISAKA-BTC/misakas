@@ -1168,6 +1168,45 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_owned_native_seed_v1(&state, key)
     }
 
+    pub fn palw_staged_tir_prefix_v1_impl(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedTirPrefixProgressV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("TIR prefix snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_tir_prefix_v1(&state, key)
+    }
+
+    pub fn palw_staged_tir_prefix_leaf_index_v1_impl(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        ordinal: u64,
+        maximum_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("TIR prefix snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_tir_prefix_leaf_index_v1(&state, key, ordinal, maximum_leaves)
+    }
+
+    pub fn palw_staged_tir_layout_v1_impl(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1> {
+        let params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_v2_reader_state(params).ok().flatten()?;
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&state, class_id).cloned()
+    }
+
     pub fn palw_staged_flat_pin_v1_impl(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

@@ -96,6 +96,8 @@ mod artifact_inventory;
 mod flat_source_responder;
 #[path = "palw_float_source_responder.rs"]
 mod float_source_responder;
+#[path = "palw_tir_prefix_responder.rs"]
+mod tir_prefix_responder;
 /// Paid public history recovery: the literal custodians' answers (producer and granted Valid
 /// seats) and the outside owner's native Demand/Collect when every peer and archive lacks a link.
 #[path = "palw_history_recovery_actor.rs"]
@@ -133,6 +135,7 @@ struct PalwDelegatedSlotsV1 {
     selected: HashMap<PalwBondKeyV2, Option<(u64, Hash64, PalwBondKeyV2)>>,
     flat: HashMap<PalwBondKeyV2, flat_source_responder::FlatSourceBookV1>,
     float: HashMap<PalwBondKeyV2, float_source_responder::FloatSourceBookV1>,
+    tir_prefix: HashMap<PalwBondKeyV2, tir_prefix_responder::TirPrefixBookV1>,
     history: HashMap<PalwBondKeyV2, history_recovery_actor::HistoryResponderBookV1>,
 }
 const PALW_DELEGATED_SLOTS_PER_TICK_V1: usize = 8;
@@ -8318,6 +8321,7 @@ impl PalwPanelService {
                     book.selected.retain(|p, _| live.contains(p));
                     book.flat.retain(|p, _| live.contains(p));
                     book.float.retain(|p, _| live.contains(p));
+                    book.tir_prefix.retain(|p, _| live.contains(p));
                     book.history.retain(|p, _| live.contains(p));
                 }
             }
@@ -8342,6 +8346,10 @@ impl PalwPanelService {
             let float = book.float.entry(*producer).or_default();
             if let Err(why) = self.public_float_answer_tick_v1(session, slot, float, pending, due, moved).await {
                 debug!("[{PALW_PANEL}] delegated Float32 response for {producer:?} remains pending: {why}");
+            }
+            let tir_prefix = book.tir_prefix.entry(*producer).or_default();
+            if let Err(why) = self.public_tir_prefix_answer_tick_v1(session, slot, tir_prefix, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated TIR prefix response for {producer:?} remains pending: {why}");
             }
             let history = book.history.entry(*producer).or_default();
             if let Err(why) = self.history_recovery_answer_tick_v1(session, slot, history, pending, due, moved).await {
@@ -8640,6 +8648,7 @@ impl PalwPanelService {
         let mut public_selected_response_cursor = None;
         let mut public_flat_response_book = flat_source_responder::FlatSourceBookV1::default();
         let mut public_float_response_book = float_source_responder::FloatSourceBookV1::default();
+        let mut public_tir_prefix_response_book = tir_prefix_responder::TirPrefixBookV1::default();
         let mut public_history_response_book = history_recovery_actor::HistoryResponderBookV1::default();
         let mut delegated_slots = PalwDelegatedSlotsV1::default();
         let mut artifact_inventory_book = artifact_inventory::ArtifactInventoryBookV1::default();
@@ -11091,6 +11100,19 @@ impl PalwPanelService {
                 .await
             {
                 debug!("[{PALW_PANEL}] Float32 public response remains pending: {why}");
+            }
+            if let Err(why) = self
+                .public_tir_prefix_answer_tick_v1(
+                    &session,
+                    PalwAnswerSlotV1::own(bond_key),
+                    &mut public_tir_prefix_response_book,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] TIR prefix public response remains pending: {why}");
             }
             if let Err(why) = self
                 .history_recovery_answer_tick_v1(
@@ -15060,6 +15082,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. } => "PublicCourtStreamLeafV1",
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => "PublicCourtStreamMoveV1",
         PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
+        PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         PalwConsensusObjectV2::VerificationVertexV1 { .. } => "VerificationVertexV1",

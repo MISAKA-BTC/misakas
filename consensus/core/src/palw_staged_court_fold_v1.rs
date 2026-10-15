@@ -80,6 +80,7 @@ impl PalwChainStateV2 {
                 original,
                 header,
                 record,
+                crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(self, geometry.class_id),
                 semantics,
                 self.staged_tokenizer_inventory_v1(semantics.tokenizer_id),
                 maximum_custodians,
@@ -359,8 +360,8 @@ impl PalwChainStateV2 {
             let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = self.staged_owned_row_v1(*claim, *owner) else {
                 return Err("Flat response index has no paid frame".into());
             };
-            let source = bundle.flat.as_ref().ok_or("Flat index has no frozen public source")?;
-            if !source.has_response_duty_v1(&signer) || source.response_deadline_v1(&signer) != Some(*at) {
+            // The streamed-source index is shared by Flat, greedy Float32 and TIR prefix-state duties.
+            if !flat_response_index_rows_v1(&PalwStagedCourtRowV1::OwnerBundle(bundle.clone())).contains(&(signer, *at, *claim, *owner)) {
                 return Err("Flat response index changes literal phase or original deadline".into());
             }
             page.push((*claim, *owner));
@@ -1354,6 +1355,9 @@ pub(super) fn movement(
     if matches!(movement.action, Action::NativeSelectedDemand { .. } | Action::NativeSelectedAnswer(_)) {
         return native_selected_control_v1(b, ctx, movement);
     }
+    if matches!(movement.action, Action::NativeTirPrefixAnswer(_) | Action::NativeTirPrefixCollect) {
+        return tir_prefix_control_v1(b, ctx, movement);
+    }
     if matches!(movement.action, Action::HistoryCustodyGrant { .. } | Action::HistoryRecovery { .. }) {
         return history_control_v1(b, ctx, movement);
     }
@@ -1954,6 +1958,116 @@ fn native_selected_control_v1(
     Ok(())
 }
 
+/// **A TIR prefix-state stage's moves** (behind `palw_staged_tir_route_v1`): a custodian's (or
+/// the owner's) next authenticated boundary leaf, or the owner's collection after the custody
+/// clock. The class's step space and job context are rebuilt natively at every move: the
+/// admitted header, the registered program and the published layout.
+fn tir_prefix_control_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    movement: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1 as Action;
+    if b.extras.staged_public_court.is_none() || !b.extras.staged_tir_route_active {
+        return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+    }
+    movement.check().map_err(|e| stage_refused(movement.claim, e))?;
+    let key = PalwStagedCourtKeyV1::Owner(movement.claim, movement.reserver);
+    let Some(PalwStagedCourtRowV1::OwnerBundle(mut bundle)) = b.state.staged_courts.get(&key).cloned() else {
+        return Err(stage_refused(movement.claim, "TIR prefix move has no prepaid owner frame"));
+    };
+    let native = bundle
+        .active_native_seed_v1()
+        .cloned()
+        .ok_or_else(|| stage_refused(movement.claim, "TIR prefix move has no active native stage"))?;
+    if movement.reserved_daa != bundle.reserved_daa
+        || movement.seed_id != native.seed.seed_id_v1()
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
+    {
+        return Err(stage_refused(movement.claim, "TIR prefix move changes the paid frame, active seed or clock"));
+    }
+    let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &movement.claim)
+        .ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
+    let ladder = b.state.class_step_ladder_v1(
+        &target.class_id,
+        b.extras.held_context_ladder.or(b.extras.shard_court_ladder).ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
+    );
+    let record = b
+        .state
+        .tir_classes
+        .get(&target.class_id)
+        .ok_or_else(|| stage_refused(movement.claim, "TIR prefix move has no registered class record"))?;
+    let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, target.class_id)
+        .ok_or_else(|| stage_refused(movement.claim, "TIR prefix move lost the class's published layout"))?;
+    let context = crate::palw_staged_court_state_v1::palw_tir_prefix_context_v1(record, layout, &native.header, &native.job, ladder)
+        .map_err(|e| stage_refused(movement.claim, e))?;
+    let old = PalwStagedCourtRowV1::OwnerBundle(bundle.clone()).checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    let old_index = flat_response_index_rows_v1(&PalwStagedCourtRowV1::OwnerBundle(bundle.clone()));
+    let Some(PalwStagedCourtRowV1::TirPrefix(court)) = bundle.active_mut_v1() else {
+        return Err(stage_refused(movement.claim, "TIR prefix move has no active TIR prefix court"));
+    };
+    let (unpaid, producer) = match &movement.action {
+        Action::NativeTirPrefixAnswer(answer) => {
+            court
+                .answer_v1(ctx.daa_score, &context.space, &context.job_context, answer)
+                .map_err(|e| stage_refused(movement.claim, e))?;
+            (Vec::new(), court.producer)
+        }
+        Action::NativeTirPrefixCollect => {
+            if movement.reserver != court.reserver {
+                return Err(stage_refused(movement.claim, "only the stage owner collects its custody clock"));
+            }
+            (court.collect_v1(ctx.daa_score).map_err(|e| stage_refused(movement.claim, e))?, court.producer)
+        }
+        _ => return Err(stage_refused(movement.claim, "not a TIR prefix move")),
+    };
+    bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    if !unpaid.is_empty() {
+        let claim = b.state.claim(&movement.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
+        let unpaid: BTreeSet<_> = unpaid.into_iter().collect();
+        b.staged_selected_default_charge_v1(ctx, movement.claim, &claim, producer, &unpaid, movement.reserver)?;
+    }
+    let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
+    let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    let new_index = flat_response_index_rows_v1(&row);
+    b.state.staged_courts.insert(key, row);
+    update_flat_response_indices_v1(&mut b.state, old_index, new_index);
+    b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key: (movement.claim, movement.reserver), old, new });
+    Ok(())
+}
+
+/// **A registered TIR class's layout, published** (tag 169, behind `palw_staged_tir_route_v1`):
+/// authenticated by the class record's `layout_digest` and program and checked to build a step
+/// space. Publishing it again is a no-op; nothing about it is a claim or a court.
+pub(super) fn publish_tir_layout(
+    b: &mut TransitionBuilder<'_>,
+    _ctx: &PalwBlockContextV2,
+    class_id: Hash64,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+) -> Result<(), PalwStateV2Error> {
+    if b.extras.staged_public_court.is_none() || !b.extras.staged_tir_route_active {
+        return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+    }
+    let key = PalwStagedCourtKeyV1::TirLayout(class_id);
+    if b.state.staged_courts.contains_key(&key) {
+        return Ok(());
+    }
+    let record = b.state.tir_classes.get(&class_id).ok_or_else(|| stage_refused(class_id, "layout names no registered TIR class"))?;
+    let class = crate::palw_tir_class_v1::PalwTirClassV1 {
+        version: crate::palw_tir_class_v1::PALW_TIR_CLASS_VERSION_V1,
+        program: record.program.as_ref().clone(),
+        layout: layout.clone(),
+        tokenizer_id: record.tokenizer_id,
+    };
+    if class.layout_digest() != record.layout_digest || class.graph_ir_root() != record.graph_ir_root {
+        return Err(stage_refused(class_id, "published layout does not authenticate the registered class"));
+    }
+    crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&class).map_err(|e| stage_refused(class_id, e.to_string()))?;
+    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::TirLayout(Box::new(layout.clone()))));
+    Ok(())
+}
+
 /// **A TIR claim's stage seed** (tag 168, behind `palw_staged_tir_route_v1`): the Constraint or
 /// tokenizer family of a prepaid required-family bundle, admitted over the decode view derived
 /// from the claim's admitted TIR public header and registered class record. The seed signs that
@@ -1988,6 +2102,7 @@ pub(super) fn open_native(
     let family = match &seed.family {
         NativeFamily::Constraint { .. } => Family::Constraint,
         NativeFamily::Tokenizer { .. } => Family::Tokenizer,
+        NativeFamily::PrefixState { .. } => Family::PublicPrefix,
     };
     let next = bundle.plan.stages[bundle.opened.len()].clone();
     if next.family != family {
@@ -2057,6 +2172,63 @@ pub(super) fn open_native(
                         &exits,
                         &view,
                         &identity,
+                    )
+                    .map_err(|e| stage_refused(seed.claim, e))?,
+                )
+                .into(),
+            )
+        }
+        Family::PublicPrefix => {
+            let NativeFamily::PrefixState { prefix_tokens } = &seed.family else { unreachable!("mapped above") };
+            let record = b
+                .state
+                .tir_classes
+                .get(&target.class_id)
+                .ok_or_else(|| stage_refused(seed.claim, "TIR prefix stage has no registered class record"))?;
+            let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, target.class_id)
+                .ok_or_else(|| stage_refused(seed.claim, "TIR prefix stage needs the class's published layout"))?;
+            let context = crate::palw_staged_court_state_v1::palw_tir_prefix_context_v1(record, layout, &header, &original.job, ladder)
+                .map_err(|e| stage_refused(seed.claim, e))?;
+            let named =
+                crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&original.job).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
+            if named.prefix_tokens != *prefix_tokens {
+                return Err(stage_refused(seed.claim, "TIR prefix seed names another boundary than the job's declared state"));
+            }
+            let custody = contract
+                .prefix_custody
+                .as_ref()
+                .ok_or_else(|| stage_refused(seed.claim, "TIR prefix stage original signed material custody absent"))?
+                .current_signed_v1();
+            if !custody.public_qualified_v1() || contract.panel.contains(&seed.reserver) || contract.producer == seed.reserver {
+                return Err(stage_refused(seed.claim, "TIR prefix stage needs qualified custody and an owner outside it"));
+            }
+            let custodians: BTreeSet<_> = custody.expected_panel.into_iter().chain([contract.producer]).collect();
+            let actual = crate::palw_tir_prefix_owned_v1::tir_prefix_resource_plan_v1(
+                context.template.total_v1(),
+                context.leaf_bytes,
+                context.depth,
+                u32::try_from(custodians.len()).map_err(|_| stage_refused(seed.claim, "TIR prefix custody exceeds format"))?,
+                config.prices,
+            )
+            .map_err(|e| stage_refused(seed.claim, e))?;
+            frozen_or_extended_terms_v1(&contract.terms, actual, ctx.daa_score, true).map_err(|e| stage_refused(seed.claim, e))?;
+            PalwStagedCourtRowV1::TirPrefix(
+                Box::new(
+                    crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCourtV1::admit_v1(
+                        seed.seed_id_v1(),
+                        seed.claim,
+                        seed.reserver,
+                        seed.reserved_daa,
+                        target.execution_root,
+                        contract.terms,
+                        ctx.daa_score,
+                        funded,
+                        contract.producer,
+                        custodians,
+                        context.template,
+                        retention,
+                        contract.terms.bond_exit_after_daa,
+                        &exits,
                     )
                     .map_err(|e| stage_refused(seed.claim, e))?,
                 )
@@ -2640,7 +2812,8 @@ pub(super) fn index_rows(
             (due, vec![(c.owner, c.plan.terms.material_until_daa, key)])
         }
         PalwStagedCourtRowV1::ArtifactInventoryOpen(c) => (c.until_daa, vec![(c.offer.opener, c.until_daa, key)]),
-        PalwStagedCourtRowV1::ArtifactInventory(_) => (u64::MAX, Vec::new()),
+        PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) => (u64::MAX, Vec::new()),
+        PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
     }
 }
 pub(super) fn update_indices(
@@ -2732,6 +2905,14 @@ pub(super) fn selected_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec
 /// (one bundle holds at most one of them), so a node's source responder reads one page.
 pub(super) fn flat_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)> {
     let PalwStagedCourtRowV1::OwnerBundle(bundle) = row else { return Vec::new() };
+    if let Some(PalwStagedCourtRowV1::TirPrefix(court)) = bundle.active_v1() {
+        return court
+            .custodians
+            .iter()
+            .filter(|key| court.has_response_duty_v1(key))
+            .filter_map(|key| court.response_deadline_v1(key).map(|at| (*key, at, bundle.claim, bundle.owner)))
+            .collect();
+    }
     if let Some(float) = &bundle.float {
         return float
             .custodians
