@@ -279,9 +279,49 @@ pub async fn preflight(
     expectations: &MisakaWalletExpectationsV1,
     transactions: &[Transaction],
 ) -> Result<MisakaPreflightOkV1, MisakaPreflightRefusalV1> {
-    let capabilities = fetch_capabilities_v1(rpc).await;
+    let before = rpc.get_palw_node_status().await.map_err(|e| e.to_string());
+    let settlement = rpc.get_palw_settlement(0).await.map_err(|e| e.to_string());
+    let dns = rpc.get_dns_confirmation().await.map_err(|e| e.to_string());
+    let after = rpc.get_palw_node_status().await.map_err(|e| e.to_string());
+    check_read_bracket_v1(&before, &after)?;
+    let capabilities = capabilities_from_reads_v1(
+        before.as_ref().map_err(Clone::clone),
+        settlement.as_ref().map_err(Clone::clone),
+        dns.as_ref().map_err(Clone::clone),
+    );
     let subnetworks: Vec<SubnetworkId> = transactions.iter().map(|tx| tx.subnetwork_id.clone()).collect();
     evaluate_preflight_v1(&capabilities, expectations, &subnetworks)
+}
+
+fn check_read_bracket_v1(
+    before: &Result<GetPalwNodeStatusResponse, String>,
+    after: &Result<GetPalwNodeStatusResponse, String>,
+) -> Result<(), MisakaPreflightRefusalV1> {
+    let stable = match (before, after) {
+        (Ok(a), Ok(b)) => {
+            a.genesis_hash == b.genesis_hash
+                && a.drill_salt_id == b.drill_salt_id
+                && a.consensus_params_id == b.consensus_params_id
+                && a.consensus_schedule_id == b.consensus_schedule_id
+                && a.import_session_available == b.import_session_available
+                && a.import_session_epoch == b.import_session_epoch
+                && a.import_session_point == b.import_session_point
+                && a.import_session_phase == b.import_session_phase
+                && a.pruning_import_stable == b.pruning_import_stable
+        }
+        // Preserve the dormant legacy capability rule. The normal evaluator
+        // still rejects missing genesis/import status whenever the caller's
+        // expectations require it; no native import is certified by this arm.
+        (Err(_), Err(_)) => true,
+        _ => false,
+    };
+    if stable {
+        Ok(())
+    } else {
+        Err(MisakaPreflightRefusalV1::InvalidCapabilities {
+            reason: "node identity or durable import epoch changed during the capability reads; retry before signing".into(),
+        })
+    }
 }
 
 /// JSON form for bindings (wasm, FFI): `{"ok":true,...}` or `{"ok":false,"refusal":{"code":...}}`. Malformed input refuses.
@@ -327,6 +367,18 @@ mod tests {
     }
     fn expect(retirement: Option<u64>) -> MisakaWalletExpectationsV1 {
         MisakaWalletExpectationsV1 { expected_genesis_hash: Some("AA".repeat(64)), retirement_daa: retirement }
+    }
+
+    #[test]
+    fn a_completed_import_between_stable_reads_is_not_the_same_signing_view() {
+        let mut before = status("idle", true);
+        before.import_session_epoch = 7;
+        let mut after = before.clone();
+        after.produced_blocks += 1;
+        assert!(check_read_bracket_v1(&Ok(before.clone()), &Ok(after.clone())).is_ok(), "ordinary production can advance");
+        after.import_session_epoch += 1;
+        assert!(check_read_bracket_v1(&Ok(before.clone()), &Ok(after)).is_err(), "stable -> import -> stable is still a new epoch");
+        assert!(check_read_bracket_v1(&Ok(before), &Err("restarted".into())).is_err());
     }
 
     #[test]
