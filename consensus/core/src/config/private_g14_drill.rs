@@ -98,7 +98,7 @@ fn digest32(label: &[u8]) -> [u8; 32] {
 
 /// **One drill arm-readiness record** for `fence` at `at_daa` on `genesis`: one distinct labelled digest per requirement, a labelled
 /// review and source commit. It authorizes exactly this (fence, genesis, height) through the record path and nothing else; it is
-/// never pinned in [`crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1`].
+/// never pinned in [`kaspa_consensus_core::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1`].
 pub fn private_g14_drill_record_v1(fence: PalwG14GatedFenceV1, genesis: crate::Hash64, at_daa: u64) -> PalwG14ArmingRecordV1 {
     let subject = |what: &str, i: usize| {
         let mut label = Vec::new();

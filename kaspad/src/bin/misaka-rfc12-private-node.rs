@@ -25,7 +25,7 @@ const USAGE: &str = "misaka-rfc12-private-node (requires --features private-inte
 population-v1 additionally requires --private-probe-bonds=N (actual funded registry only).
 g14-v1 (the G14 collusion drill, scripts/drills/g14_collusion_drill.py): --private-probe-g14-at=N (0: every G14 fence from
   genesis; N > 0: testnet-12's shipped rules below N and the DAA-14,000 candidate set from N), --private-probe-g14-set=full|
-  route-required-only (default full), --private-probe-panel-seats=1..3 (default 2). Armed through drill arming records naming
+  route-required-only (default full), --private-probe-panel-seats=3..5 (default 3; R-core+ fixes the quorum at 3). Armed through drill arming records naming
   this genesis and height, never pinned; the shipped validation still refuses the ruleset.
 Any profile: --private-probe-retirement-daa=N (N >= 2) arms palw_dns_retirement_v1 at DAA N instead of DAA 1, so a private
   run accumulates DNS-validator history before the fence (RFC-0012 §4.4); Rule E and its commitment stay at DAA 1. The
@@ -151,8 +151,8 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .map(|n| n.parse::<u64>().map_err(|_| "the G14 drill height must be u64".to_owned()))
         .transpose()?;
     let g14_set = match flags.values.remove("--private-probe-g14-set").as_deref() {
-        None | Some("full") => kaspa_consensus_core::config::private_g14_drill::PrivateG14DrillSetV1::Full,
-        Some("route-required-only") => kaspa_consensus_core::config::private_g14_drill::PrivateG14DrillSetV1::RouteRequiredOnly,
+        None | Some("full") => kaspad_lib::private_integration::g14_drill_factory::PrivateG14DrillSetV1::Full,
+        Some("route-required-only") => kaspad_lib::private_integration::g14_drill_factory::PrivateG14DrillSetV1::RouteRequiredOnly,
         Some(other) => return Err(format!("unknown G14 drill set {other} (full | route-required-only)")),
     };
     let panel_seats = flags
@@ -273,7 +273,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         "population-v1" => {
             private_native_settlement_params_v1(derive_private_population_v1(&salt, population.expect("size checked"))?.params)?
         }
-        "g14-v1" => private_g14_drill_params_v1(&salt, g14_at.expect("height checked"), g14_set, panel_seats.unwrap_or(2))?,
+        "g14-v1" => private_g14_drill_params_v1(&salt, g14_at.expect("height checked"), g14_set, panel_seats.unwrap_or(3))?,
         _ => return Err("unallocated private profile".into()),
     };
     // RFC-0012 §4.4: only the retirement height moves; the DAA-1 profile is unchanged when the option is absent.

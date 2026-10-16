@@ -29,6 +29,8 @@ use std::{
 };
 
 mod bootstrap;
+/// The G14 collusion drill's private rulesets (`g14-v1`).
+pub mod g14_drill_factory;
 pub use bootstrap::export_private_complete_bootstrap_v1;
 mod claim_paid_bootstrap;
 pub use claim_paid_bootstrap::{PrivatePaidNativeRequestV4, PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
@@ -214,10 +216,10 @@ fn validate_private_complete_relations(params: &kaspa_consensus_core::config::pa
 pub fn private_g14_drill_params_v1(
     salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1,
     at_daa: u64,
-    set: kaspa_consensus_core::config::private_g14_drill::PrivateG14DrillSetV1,
+    set: self::g14_drill_factory::PrivateG14DrillSetV1,
     seats: u16,
 ) -> Result<kaspa_consensus_core::config::params::Params, String> {
-    use kaspa_consensus_core::config::private_g14_drill::{PrivateG14DrillModeV1, private_g14_drill_v1};
+    use self::g14_drill_factory::{PrivateG14DrillModeV1, private_g14_drill_v1};
     Ok(private_g14_drill_v1(salt, PrivateG14DrillModeV1::from_daa(at_daa), set, seats)?.params)
 }
 
@@ -225,11 +227,9 @@ pub fn private_g14_drill_params_v1(
 /// its salt, height, set and Panel so its records and ruleset id can be checked; `None` for every other profile.
 fn private_g14_drill_of_config_v1(
     config: &Config,
-) -> Result<Option<kaspa_consensus_core::config::private_g14_drill::PrivateG14DrillV1>, String> {
-    use kaspa_consensus_core::config::{
-        params::ForkActivation,
-        private_g14_drill::{PrivateG14DrillModeV1, PrivateG14DrillSetV1, private_g14_drill_v1},
-    };
+) -> Result<Option<self::g14_drill_factory::PrivateG14DrillV1>, String> {
+    use self::g14_drill_factory::{PrivateG14DrillModeV1, PrivateG14DrillSetV1, private_g14_drill_v1};
+    use kaspa_consensus_core::config::params::ForkActivation;
     let Some(at) = config.params.palw_g14_route_required_v1.filter(|f| *f != ForkActivation::never()) else { return Ok(None) };
     let salt = config.palw_drill_genesis_salt.as_ref().ok_or("the G14 drill needs its salted genesis")?;
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
@@ -320,15 +320,15 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             unreachable!("the drill validated its ConsensusV2 bundle")
         };
         let mode = match drill.mode {
-            kaspa_consensus_core::config::private_g14_drill::PrivateG14DrillModeV1::Genesis => "genesis",
-            kaspa_consensus_core::config::private_g14_drill::PrivateG14DrillModeV1::Cross { .. } => "cross",
+            self::g14_drill_factory::PrivateG14DrillModeV1::Genesis => "genesis",
+            self::g14_drill_factory::PrivateG14DrillModeV1::Cross { .. } => "cross",
         };
         let records: Vec<serde_json::Value> = drill
             .records
             .iter()
             .map(|r| serde_json::json!({"fence": r.fence.name(), "activationDaa": r.activation_daa}))
             .collect();
-        let flag_days = kaspa_consensus_core::config::private_g14_drill::PRIVATE_G14_DRILL_FLAG_DAYS_V1.to_vec();
+        let flag_days = self::g14_drill_factory::PRIVATE_G14_DRILL_FLAG_DAYS_V1.to_vec();
         manifest["g14Drill"] = serde_json::json!({
             "version": 1,
             "mode": mode,

@@ -12,13 +12,15 @@ Roles (every role its own process, its own fresh app dir under --work; loopback 
   P    the colluding producer — genesis card 0 (judges nothing), `--palw-produce --palw-drill-tamper-leaf=L`: every attempt it makes
        commits an execution corrupted at one step leaf, its roots re-derived so the lie is self-consistent; heartbeat miner.
   S1.. the colluding Panel — genesis cards 1..seats, `--palw-drill-collude-with=<P's bonds>`: every seat signs Valid on P's claims
-       without judging them and files nothing (no accusation, demand, disclosure or filing leaves the node).
+       without judging them and files nothing (no accusation, demand, disclosure or filing leaves the node). Three seats by default:
+       testnet-12 arms R-core+ at genesis and `validate_palw_v2` fixes the panel quorum at its colluding quorum (3), so the smallest
+       Panel the shipped rules allow is 3-of-3 — five processes with P and O (one more than the host's guideline; RSS is recorded).
   O    the outside verifier — drill bond key 8, funded by the drill main wallet and registered by an ordinary BondRegistered AFTER
        genesis (`--palw-register-bond`), declaring no capability (never drawn as a seat); then started with that bond as an ordinary
        node. It runs only the node's own G14 automation (the common fraud filer, LG14-A/B) on public chain material and its own
        copy of the floor model.
-  P3   (D-11) a second colluding producer — genesis card 3, `--palw-drill-tamper-leaf=L --palw-drill-withhold-held-da`: it never
-       answers a legacy held DA unit, so the public descent's demand ends in the objective DA default.
+  P3   (D-11) a second colluding producer — genesis card seats+1, `--palw-drill-tamper-auto-leaf --palw-drill-withhold-held-da`: it
+       never answers a legacy held DA unit, so the public descent's demand ends in the objective DA default (P stops first).
   F    (IBD) a fresh relay with no bond, empty app dir, synced from the others.
 
 Rulesets (`misaka-rfc12-private-node --private-probe-profile=g14-v1`, feature `private-integration-config`; the shipped validation
@@ -30,6 +32,13 @@ still refuses both, and every gated fence is armed through drill arming records 
             extensions, N4, palw_reward_liability_horizon_v1).
   cross-b   --mode cross --at H --set route-required-only: option (b) alone at H, no route armed — every legacy-route family is
             refused past H, so the heartbeat lane alone must carry block production.
+
+--family positive (user decision 2026-10-16, the fence moves past DAA 14,000): the same rulesets with an HONEST producer and an
+HONEST Panel (no tamper, no collusion) and the outside verifier present — P-1 honest claims accepted on routed families, P-2 Final
+and settlement / safe frontier growth, P-3 the reward paid after the liability-horizon hold (the delay in DAA recorded), P-4 block
+production never stalls (heartbeat and PALW claims), P-5 rent per claim and time to Final. A row whose G14 route has not landed in
+the build (the court-capacity lane for the V2 Attempt family; the IR Free Prompt lane and frame pricing for FP) is BLOCKED, with
+what the build was observed to do attached as evidence.
 
 Every verdict is read from public wRPC (JSON) of the running nodes and from their logs; nothing is approved here. A scenario row is
 PASS only when every assertion of the row was OBSERVED; FAIL names what was observed instead; BLOCKED names the missing lane or the
@@ -227,7 +236,7 @@ class Drill:
         self.work.mkdir(parents=True, exist_ok=True)
         free = shutil.disk_usage(self.work).free
         self.facts['diskFreeGiB'] = round(free / 2**30, 1)
-        for i in range(6):
+        for i in range(10):
             for port in range(a.port_base + 10 * i, a.port_base + 10 * i + 5):
                 with socket.socket() as s:
                     if s.connect_ex(('127.0.0.1', port)) == 0:
@@ -267,9 +276,10 @@ class Drill:
         s = self.seat(card)
         flags = ['--palw-produce', '--palw-producer-key=%s' % self.key(s['seed_file']), '--palw-producer-bond=%s' % s['bond_outpoint'],
                  '--palw-producer-pay-address=%s' % s['address'], '--palw-fee-outpoint=%s' % s['fee_float_outpoint'],
-                 ('--palw-drill-tamper-leaf=%d' % self.args.tamper_leaf) if self.args.tamper_leaf is not None
-                 else '--palw-drill-tamper-auto-leaf',
                  '--palw-heartbeat-miner-address=%s' % self.keyring['heartbeat'][card]['address']]
+        if self.args.family == 'collusion':
+            flags.append(('--palw-drill-tamper-leaf=%d' % self.args.tamper_leaf) if self.args.tamper_leaf is not None
+                         else '--palw-drill-tamper-auto-leaf')
         if withhold:
             flags.append('--palw-drill-withhold-held-da')
         if canonical:
@@ -279,10 +289,12 @@ class Drill:
     def seat_flags(self, card):
         s = self.seat(card)
         colluders = ','.join(self.seat(c)['bond_outpoint'] for c in self.colluding_producers())
-        return ['--palw-producer-key=%s' % self.key(s['seed_file']), '--palw-producer-bond=%s' % s['bond_outpoint'],
-                '--palw-producer-pay-address=%s' % s['address'], '--palw-fee-outpoint=%s' % s['fee_float_outpoint'],
-                '--palw-drill-collude-with=%s' % colluders,
-                '--palw-heartbeat-miner-address=%s' % self.keyring['heartbeat'][card]['address']]
+        flags = ['--palw-producer-key=%s' % self.key(s['seed_file']), '--palw-producer-bond=%s' % s['bond_outpoint'],
+                 '--palw-producer-pay-address=%s' % s['address'], '--palw-fee-outpoint=%s' % s['fee_float_outpoint'],
+                 '--palw-heartbeat-miner-address=%s' % self.keyring['heartbeat'][card]['address']]
+        if self.args.family == 'collusion':
+            flags.append('--palw-drill-collude-with=%s' % colluders)
+        return flags
 
     def colluding_producers(self):
         return [0, self.args.seats + 1]
@@ -334,7 +346,7 @@ class Drill:
         raise Blocked('%s: timed out after %d s (DAA %s; last error %s)' % (label, timeout_s, last_daa, last_err))
 
     def ref(self):
-        for role in ('O', 'S1', 'P', 'S2', 'P3', 'F'):
+        for role in ('O', 'S1', 'P', 'S2', 'S3', 'P3', 'F'):
             n = self.nodes.get(role)
             if n and n.alive():
                 return n
@@ -407,7 +419,7 @@ class Drill:
             return r.get('balance', 0) > 0 and r
 
         self.wait('the outside verifier funding confirms', funded, 3600)
-        o = self.add('O', 3, ['--palw-producer-key=%s' % self.key(o_key['seed_file']), '--palw-producer-pay-address=%s' % o_key['address'],
+        o = self.add('O', 7, ['--palw-producer-key=%s' % self.key(o_key['seed_file']), '--palw-producer-pay-address=%s' % o_key['address'],
                               '--palw-register-bond'] + (['--palw-bond-collateral=%d' % (self.args.outsider_collateral_bili * SOMPI)]
                                                          if self.args.outsider_collateral_bili else []))
         o.start()
@@ -433,9 +445,15 @@ class Drill:
     # ---- the collusion scenario --------------------------------------------------------------------------------------------------
 
     def lying_claim(self, producer_bond, after_daa, label, timeout_s):
-        """The first claim of `producer_bond` accepted at or after `after_daa`."""
+        """The earliest claim of `producer_bond` accepted at or after `after_daa` that the outside verifier has RESERVED (LG14-A) — the
+        producer lies on every draw, so the outsider's own choice decides which claim is pursued first; the driver follows it."""
+        obond = self.facts['outsider']['bond']
+
         def first():
-            rows = [r for r in self.claims(producer_bond).get('claims', []) if r['acceptedDaa'] >= after_daa and not r['isFreePrompt']]
+            reserved = self.ref().rpc('getPalwLegacyDisputes', {'reserver': obond, 'limit': 0})
+            ids = {norm(x) for x in reserved.get('claimIds') or []}
+            rows = [r for r in self.claims(producer_bond).get('claims', [])
+                    if norm(r['claimId']) in ids and r['acceptedDaa'] >= after_daa and not r['isFreePrompt']]
             rows.sort(key=lambda r: r['acceptedDaa'])
             return rows[0] if rows else None
         return self.wait(label, first, timeout_s)
@@ -710,7 +728,7 @@ class Drill:
         # IBD: a fresh relay with no bond (one seat stops to keep the host within four light nodes).
         s1 = self.nodes['S1']
         s1.stop()
-        f = self.add('F', 5, [], bonded=False)
+        f = self.add('F', 9, [], bonded=False)
         f.start()
         self.wait_rpc(f)
         self.peer_all()
@@ -734,9 +752,9 @@ class Drill:
                  'and palw_tir_shard_v1 armed (RFC-0006, in no release and not in the DAA-14,000 candidate set); the drill ruleset arms '
                  'neither and the floor (BASE-0) class has no shards')
         self.row('D-04', 'NOT-INJECTABLE', {},
-                 '--palw-drill-tamper-eval exists, but an evaluation claim needs palw_improvement_v1 (RFC-0004, the int-11 list at '
-                 'DAA 5,300 on testnet-12, not reached by this drill) and a governed model line with an open epoch; the drill has no '
-                 'line fixture')
+                 '--palw-drill-tamper-eval exists, but an evaluation claim needs a governed model line with an open evaluation epoch '
+                 '(RFC-0004: a founded line, a published candidate, its evaluation jobs and their artifacts); the drill has no line '
+                 'fixture, so no evaluation claim exists to lie in')
         self.row('D-08', 'NOT-INJECTABLE', {}, 'no prompt / input substitution injector exists (g14 proof §5.3 D-08)')
         self.row('D-09', 'NOT-INJECTABLE', {}, 'no prefix-state / KV forgery injector exists (D-09)')
         self.row('D-10', 'NOT-INJECTABLE', {}, 'no tokenizer mismatch injector exists (D-10)')
@@ -800,6 +818,15 @@ class Drill:
         if norm(st.get('consensusParamsId')) != norm(self.profile['consensusParamsId']):
             raise Blocked('the producer runs a ruleset other than the drill profile')
         self.wait_for_chain(list(self.nodes.values()), min_daa=2, timeout_s=a.step_timeout)
+        self.observe('node RSS MiB after the chain moves', self.rss())
+
+    def rss(self):
+        out = {}
+        for n in self.nodes.values():
+            if n.alive():
+                r = subprocess.run(['ps', '-o', 'rss=', '-p', str(n.proc.pid)], capture_output=True, text=True).stdout.strip()
+                out[n.role] = int(r) // 1024 if r.isdigit() else None
+        return out
 
     def lane_mix(self):
         out = {}
@@ -818,7 +845,7 @@ class Drill:
         obond = self.fund_and_register_outsider()
         o_daa = self.facts['outsider']['registeredDaa'] or 0
         # Past the compressed testnet-12 flag days (the freeze — ADR-0160 F-L — arms with them), and after the outsider exists.
-        d02 = self.run_conviction('D-02', 'P', 0, max(o_daa, self.args.after_daa))
+        d02 = self.run_conviction('D-02', 'P', 0, self.args.after_daa)
         self.d15_row(d02)
         self.fp_refusal_row('D-01', 'P', 0, governs_from=0)
         self.d17_row('P', 0, governs_from=0)
@@ -832,7 +859,7 @@ class Drill:
         # D-11: a second colluding producer that never answers a held unit.
         if self.args.d11:
             self.nodes['P'].stop()
-            p3 = self.add('P3', 4, self.producer_flags(self.args.seats + 1, withhold=True))
+            p3 = self.add('P3', 8, self.producer_flags(self.args.seats + 1, withhold=True))
             p3.start()
             self.wait_rpc(p3)
             self.peer_all()
@@ -936,6 +963,144 @@ class Drill:
                      'restart same=%s, fresh IBD same=%s' % (rs['restart']['same'], rs['ibd']['same']))
         return results
 
+    # ---- the positive family (P-1..P-5) ---------------------------------------------------------------------------------------
+
+    def run_positive(self):
+        a = self.args
+        self.start_core(canonical=True)
+        pbond = self.seat(0)['bond_outpoint']
+        self.fund_and_register_outsider()
+        fence = self.at_daa
+        landed = self.facts.get('courtCapacityLane', {}).get('landedInHead')
+        blocked_attempt = None if landed else ('the V2 Attempt family counts as routed only with LG14-A/B AND the court-capacity fence '
+                                               '(user decision 2026-10-16: fused-leaf adjudication is not a G14 route until starvation '
+                                               'resistance is shown); %s has not landed in this build' % self.COURT_CAPACITY_BRANCH)
+        blocked_fp = None if self.ir_fp_open else ('the IR Free Prompt lane (TIR frame) is not in this build (%s), and frame pricing '
+                                                   '(audit §9: minimum rent >= 2e7 MSK, Final after 6e7 DAA at t12 prices) is unresolved'
+                                                   % TIR_FP_CLOSED_SENTINEL)
+        samples = []
+        t0 = time.monotonic()
+
+        def sample():
+            dag = self.dag()
+            rows = self.claims(pbond).get('claims', [])
+            st = {}
+            try:
+                st = self.ref().rpc('getPalwSettlement', {'daaScore': 0})
+            except Exception:  # noqa: BLE001
+                pass
+            mix = self.lane_mix().get('P', {})
+            row = {'wallS': round(time.monotonic() - t0), 'daa': dag['virtualDaaScore'], 'blocks': dag['blockCount'],
+                   'claims': len(rows), 'pastFence': sum(1 for r in rows if r['acceptedDaa'] >= fence),
+                   'final': sum(1 for r in rows if r['phase'] == 'final'),
+                   'finalPastFence': sum(1 for r in rows if r['phase'] == 'final' and r['acceptedDaa'] >= fence),
+                   'voided': sum(1 for r in rows if r['phase'] == 'voided'),
+                   'settlementDepth': st.get('depth'), 'safeFrontierDaa': st.get('safeFrontierDaa'),
+                   'safeFrontierBlueScore': st.get('safeFrontierBlueScore'),
+                   'laneWork': mix.get('laneWorkBlocks') if isinstance(mix, dict) else None,
+                   'laneHeartbeat': mix.get('laneHeartbeatBlocks') if isinstance(mix, dict) else None}
+            samples.append(row)
+            self.facts['positiveSamples'] = samples[-200:]
+            return row
+
+        # Watch until a claim accepted past the fence is Final (or the window ends), sampling every few minutes.
+        deadline = time.monotonic() + a.settle_timeout
+        last_daa, moved = None, time.monotonic()
+        stall = None
+        while time.monotonic() < deadline:
+            self.check_alive()
+            try:
+                row = sample()
+            except Exception as e:  # noqa: BLE001
+                log('positive sample failed: %r' % e)
+                time.sleep(30)
+                continue
+            if row['daa'] != last_daa:
+                last_daa, moved = row['daa'], time.monotonic()
+            if time.monotonic() - moved > a.stall_s:
+                stall = 'DAA %s did not move for %d s' % (last_daa, a.stall_s)
+                break
+            if row['finalPastFence'] >= a.positive_finals:
+                break
+            time.sleep(a.positive_every)
+        rows = self.claims(pbond).get('claims', [])
+        past = [r for r in rows if r['acceptedDaa'] >= fence and not r['isFreePrompt']]
+        fp_past = [r for r in rows if r['acceptedDaa'] >= fence and r['isFreePrompt']]
+        finals = [r for r in past if r['phase'] == 'final']
+        first, last = (samples[0] if samples else {}), (samples[-1] if samples else {})
+        ev1 = {'v2AttemptClaimsPastFence': len(past), 'fpClaimsPastFence': len(fp_past),
+               'phases': {k: sum(1 for r in past if r['phase'] == k) for k in {r['phase'] for r in past}}}
+        # P-1
+        self.row('P-1a honest V2 Attempt accepted on a routed family', 'BLOCKED' if blocked_attempt else ('PASS' if past else 'FAIL'),
+                 ev1, (blocked_attempt + ' — observed in this build: %d honest V2 Attempt claims admitted past the fence' % len(past))
+                 if blocked_attempt else '%d honest V2 Attempt claims admitted past the fence' % len(past))
+        self.row('P-1b honest IR Free Prompt via the TIR frame', 'BLOCKED' if blocked_fp else ('PASS' if fp_past else 'FAIL'),
+                 {'fpClaimsPastFence': len(fp_past)},
+                 (blocked_fp + ' — observed: %d FP claims admitted past the fence (frameless FP is refused by option (b))' % len(fp_past))
+                 if blocked_fp else '%d framed FP claims' % len(fp_past))
+        # P-2
+        ev2 = {'finalPastFence': len(finals), 'first': first, 'last': last,
+               'timeToFinalDaa': sorted(r['phaseDaa'] - r['acceptedDaa'] for r in finals)[:10]}
+        grew = bool(finals) and (last.get('settlementDepth') or 0) > (first.get('settlementDepth') or 0) and \
+            (last.get('safeFrontierDaa') or 0) > (first.get('safeFrontierDaa') or 0)
+        verdict2 = 'PASS' if grew else 'FAIL'
+        self.row('P-2 Final, settlement depth and safe frontier grow', 'BLOCKED' if blocked_attempt else verdict2, ev2,
+                 ('%s — observed: %d claims past the fence Final; depth %s→%s; safe frontier DAA %s→%s (would be %s)' % (
+                     blocked_attempt, len(finals), first.get('settlementDepth'), last.get('settlementDepth'), first.get('safeFrontierDaa'),
+                     last.get('safeFrontierDaa'), verdict2)) if blocked_attempt else
+                 '%d Final; depth %s→%s; safe frontier DAA %s→%s' % (len(finals), first.get('settlementDepth'), last.get('settlementDepth'),
+                                                                   first.get('safeFrontierDaa'), last.get('safeFrontierDaa')))
+        # P-3: the vesting hold on each Final claim (the reward is paid only after its liability horizon).
+        holds = [{'claim': r['claimId'][:16], 'finalDaa': r['phaseDaa'], 'vestingStage': r.get('vestingStage'),
+                  'vestingSompi': r.get('vestingSompi'), 'vestingExpiryDaa': r.get('vestingExpiryDaa'),
+                  'vestingMaturedAt': r.get('vestingMaturedAt'), 'vestingEtaDaa': r.get('vestingEtaDaa'),
+                  'holdDaa': (r.get('vestingExpiryDaa') - r['phaseDaa']) if r.get('vestingExpiryDaa') else None} for r in finals[:10]]
+        paid = [h for h in holds if h['vestingMaturedAt']]
+        ev3 = {'holds': holds, 'daaNow': last.get('daa')}
+        if not finals:
+            self.row('P-3 reward paid after the liability-horizon hold', 'BLOCKED', ev3,
+                     (blocked_attempt + '; ' if blocked_attempt else '') + 'no claim past the fence reached Final in the window')
+        elif not paid:
+            self.row('P-3 reward paid after the liability-horizon hold', 'BLOCKED', ev3,
+                     (blocked_attempt + '; ' if blocked_attempt else '') + 'Final observed; the payout is held to its horizon (hold %s DAA) '
+                     'and the horizon was not reached in the window (DAA now %s) — the payment itself is unobserved' % (
+                         sorted({h['holdDaa'] for h in holds if h['holdDaa'] is not None}), last.get('daa')))
+        else:
+            self.row('P-3 reward paid after the liability-horizon hold', 'BLOCKED' if blocked_attempt else 'PASS', ev3,
+                     '%d rewards matured after their hold' % len(paid))
+        # P-4: block production across the fence — heartbeat and PALW both.
+        across = [x for x in samples if x['daa'] >= fence]
+        hb = (last.get('laneHeartbeat') or 0) > 0
+        work_after = any(x['pastFence'] > 0 for x in samples)
+        ok4 = stall is None and len(across) >= 2 and across[-1]['daa'] > across[0]['daa'] and hb and (work_after or blocked_attempt)
+        self.row('P-4 block production never stalls across the fence', 'PASS' if ok4 else 'FAIL',
+                 {'stall': stall, 'daaFirst': first.get('daa'), 'daaLast': last.get('daa'), 'fence': fence, 'samples': len(samples),
+                  'heartbeatInWindow': last.get('laneHeartbeat'), 'workInWindow': last.get('laneWork'),
+                  'palwClaimsPastFence': len(past)},
+                 'DAA %s→%s across fence %d; heartbeat blocks in window %s; PALW claims past the fence %d%s' % (
+                     first.get('daa'), last.get('daa'), fence, last.get('laneHeartbeat'), len(past), '; stall: %s' % stall if stall else ''))
+        # P-5: economics — what a claim holds and costs, and how long to Final.
+        if rows:
+            esc = sorted(int(r.get('escrowSompi') or 0) for r in past or rows)
+            res = sorted(int(r.get('reservedSompi') or 0) for r in past or rows)
+        else:
+            esc = res = []
+        try:
+            bal = self.ref().rpc('getBalanceByAddress', {'address': self.seat(0)['address']}).get('balance')
+        except Exception as e:  # noqa: BLE001
+            bal = repr(e)
+        ttf = sorted(r['phaseDaa'] - r['acceptedDaa'] for r in finals)
+        ev5 = {'claimsObserved': len(past), 'escrowSompiMedian': esc[len(esc) // 2] if esc else None,
+               'reservedSompiMedian': res[len(res) // 2] if res else None, 'timeToFinalDaaMedian': ttf[len(ttf) // 2] if ttf else None,
+               'producerAddressBalanceNow': bal, 'wallSecondsPerDaa': round(last['wallS'] / max(1, last['daa'] - first['daa']), 1)
+               if last and first and last.get('daa') != first.get('daa') else None,
+               'note': 'attempt claims ride their own blocks (no carrier rent); the per-claim figures are the bond reservation and '
+                       'escrow; the FP frame rent is unmeasurable here (no IR FP lane)'}
+        self.row('P-5 economics (rent per claim, time to Final)', 'BLOCKED', ev5,
+                 (blocked_attempt or blocked_fp or 'recorded') + ' — recorded: escrow median %s sompi, reserved median %s sompi, time to Final median %s '
+                 'DAA, %s s per DAA' % (ev5['escrowSompiMedian'], ev5['reservedSompiMedian'], ev5['timeToFinalDaaMedian'],
+                                        ev5['wallSecondsPerDaa']))
+
     def run_cross_b(self):
         """Option (b) alone at H: no route — the legacy families earn nothing past H and the heartbeat lane carries the chain."""
         a = self.args
@@ -961,9 +1126,14 @@ class Drill:
         try:
             self.preflight()
             self.write_keyring()
-            self.static_rows()
-            self.court_capacity_rows()
-            if self.args.mode == 'genesis':
+            if self.args.family == 'collusion':
+                self.static_rows()
+                self.court_capacity_rows()
+            else:
+                self.court_capacity_landed()
+            if self.args.family == 'positive':
+                self.run_positive()
+            elif self.args.mode == 'genesis':
                 self.run_genesis()
             elif self.args.set == 'full':
                 self.run_cross()
@@ -974,6 +1144,10 @@ class Drill:
             self.facts['status'] = 'BLOCKED'
             self.facts['blockedReason'] = str(e)
             log('BLOCKED: %s' % e)
+        except KeyboardInterrupt as e:
+            self.facts['status'] = 'INTERRUPTED'
+            self.facts['error'] = repr(e)
+            log('INTERRUPTED: %r' % e)
         except Exception as e:  # noqa: BLE001 — recorded with the observations
             self.facts['status'] = 'ERROR'
             self.facts['error'] = repr(e)
@@ -983,6 +1157,7 @@ class Drill:
         finally:
             try:
                 self.facts['laneMixAtEnd'] = self.lane_mix()
+                self.facts['rssMiBAtEnd'] = self.rss()
             except Exception:  # noqa: BLE001
                 pass
             for n in self.nodes.values():
@@ -995,9 +1170,12 @@ class Drill:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--mode', choices=['genesis', 'cross'], required=True)
+    ap.add_argument('--family', choices=['collusion', 'positive'], default='collusion')
+    ap.add_argument('--positive-finals', type=int, default=3, help='positive: stop once this many claims past the fence are Final')
+    ap.add_argument('--positive-every', type=int, default=180)
     ap.add_argument('--at', type=int, default=40, help='cross mode: the fence height H (DAA)')
     ap.add_argument('--set', choices=['full', 'route-required-only'], default='full')
-    ap.add_argument('--seats', type=int, default=2)
+    ap.add_argument('--seats', type=int, default=3)
     ap.add_argument('--salt', required=True, help='64 hex, this drill only (openssl rand -hex 32)')
     ap.add_argument('--work', required=True, help='fresh directory for app dirs, logs and the keyring (scratch, never ~/.misaka)')
     ap.add_argument('--out', required=True)
@@ -1015,7 +1193,7 @@ def main():
     ap.add_argument('--settle-timeout', type=int, default=12 * 3600)
     ap.add_argument('--stall-s', type=int, default=1800)
     ap.add_argument('--liveness-span', type=int, default=15)
-    ap.add_argument('--after-daa', type=int, default=30, help='genesis mode: the first claim judged is accepted at or past this DAA')
+    ap.add_argument('--after-daa', type=int, default=0, help='genesis mode: the claim judged is accepted at or past this DAA')
     ap.add_argument('--frozen-timeout', type=int, default=3600)
     ap.add_argument('--no-d11', dest='d11', action='store_false')
     ap.add_argument('--no-d16', dest='d16', action='store_false')
@@ -1024,6 +1202,13 @@ def main():
         ap.error('--salt: 64 hex, not all zero')
     if args.mode == 'cross' and args.at <= 0:
         ap.error('--at must be positive in cross mode')
+
+    # A background start (nohup … &) inherits SIGINT ignored: restore it, and make SIGTERM unwind the same way, so the finally block
+    # always stops every node this driver started.
+    def unwind(signum, frame):
+        raise KeyboardInterrupt('signal %d' % signum)
+    signal.signal(signal.SIGINT, unwind)
+    signal.signal(signal.SIGTERM, unwind)
     Drill(args).run()
 
 

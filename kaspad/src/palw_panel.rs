@@ -11737,8 +11737,21 @@ impl PalwPanelService {
                     // and nothing about it is judged or filed. What the drill then shows is that one bond OUTSIDE the Panel still
                     // convicts it from public material, and that each of these Valid signatures is charged.
                     if colluding {
-                        licensed_by_replay = true;
-                        licensed_by_verified_resume = true;
+                        // As the seat's own role would license it: a full seat by its replay, a partial seat (SEAT-S4) by a verified
+                        // resume over exactly its assigned mask.
+                        if seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {
+                            licensed_by_verified_resume = true;
+                            segments_attested = Some(
+                                kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
+                                    duty.panel_anchor,
+                                    duty.claim_id,
+                                    duty.panel_seat_count.max(1),
+                                )
+                                .mask_of(duty.seat_index as u16),
+                            );
+                        } else {
+                            licensed_by_replay = true;
+                        }
                         info!(
                             "[{PALW_PANEL}] PALW DRILL (G14 collusion): claim {} of colluding producer {}:{} — signed Valid without judging it",
                             duty.claim_id, duty.executor_bond.0.transaction_id, duty.executor_bond.0.index
