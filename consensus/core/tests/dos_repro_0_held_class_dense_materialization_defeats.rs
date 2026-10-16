@@ -428,7 +428,13 @@ fn dos_repro_0_held_class_dense_materialization_defeats_defect_record() {
             let price = palw_fp_commitment_price_v1(
                 &s0,
                 &b.state,
-                PalwFpPriceInputsV1 { fp_derived_work_daa: None, canonical_work_daa: None, daa_score: 0, receipt_rights: None },
+                PalwFpPriceInputsV1 {
+                    fp_derived_work_daa: None,
+                    canonical_work_daa: None,
+                    daa_score: 0,
+                    receipt_rights: None,
+                    tir_free_prompt_active: false,
+                },
                 &h(0xC1A1),
                 &id,
                 &[1u32; 4],

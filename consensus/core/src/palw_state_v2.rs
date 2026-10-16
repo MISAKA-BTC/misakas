@@ -19040,6 +19040,10 @@ pub struct PalwFpPriceInputsV1 {
     /// The fold and a node's price answer fill it from the same fences, so a gateway checks the
     /// reservation the ledger will write.
     pub receipt_rights: Option<PalwFpRightsInputsV1>,
+    /// **RFC-0002 Phase H: the IR class free-prompt lane is open** — `palw_tir_public_conviction_v1` (resolved) in force at
+    /// `daa_score`. Past it an IR class's work is derived from its admitted program and published layout
+    /// ([`crate::palw_tir_fp_lane_v1`]); below it an IR class has no work profile and is refused exactly as before.
+    pub tir_free_prompt_active: bool,
 }
 
 /// **The two numbers a free-prompt claim's receipt rights are priced from** (the audit's #5): the
@@ -19076,7 +19080,8 @@ pub struct PalwFpCommitmentPriceV1 {
     pub reserved: u128,
     /// ADR-0148: priced in compute (past the canonical-work fence) rather than in leaves.
     pub priced_in_compute: bool,
-    pub derived_work: Option<(crate::palw_freeprompt_v3::PalwFpDerivedWorkV1, Box<crate::palw_step::PalwShapeProfileV3>)>,
+    /// The run's derived work, past `palw_fp_derived_work` (the legacy class's published graph, or an IR class's admitted program).
+    pub derived_work: Option<crate::palw_freeprompt_v3::PalwFpDerivedWorkV1>,
 }
 
 /// **What a node answers a gateway's "what would this job cost" with** (`GetPalwFreePromptPrice`):
@@ -19200,6 +19205,14 @@ pub fn palw_fp_commitment_price_from_state_v1(
         return Err(PalwStateV2Error::FreePromptLaneUnpriced);
     }
     let decode_rules = params.fp_decode_rules_at(inputs.daa_score);
+    // **RFC-0002 Phase H: an IR class's graph is its admitted program** (`crate::palw_tir_fp_lane_v1`). Past the IR lane's fence
+    // (the TIR public frame's, `inputs.tir_free_prompt_active`) an IR class with no legacy row is priced from its `tir_classes`
+    // record and the layout the frame already requires; below it, or without the layout, it has no work profile and is refused by
+    // the same name as before — byte-identical there.
+    let tir_class = match (inputs.tir_free_prompt_active, state.fp_work_profiles.contains_key(class_id), state.tir_class_v1(class_id)) {
+        (true, false, Some(record)) => Some(record),
+        _ => None,
+    };
     let derived = if inputs.fp_derived_work_daa.is_some_and(|height| inputs.daa_score >= height) {
         if !prefix_state.is_genesis() && prefix_state.class_id != *class_id {
             return Err(PalwStateV2Error::FreePromptPrefixStateClassMismatch {
@@ -19208,11 +19221,23 @@ pub fn palw_fp_commitment_price_from_state_v1(
                 class: *class_id,
             });
         }
-        let profile = state
-            .fp_work_profiles
-            .get(class_id)
-            .ok_or(PalwStateV2Error::FreePromptClassHasNoWorkProfile { claim: *claim_id, class: *class_id })?
-            .clone();
+        let source = match tir_class {
+            Some(record) => {
+                let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, *class_id)
+                    .ok_or(PalwStateV2Error::FreePromptClassHasNoWorkProfile { claim: *claim_id, class: *class_id })?;
+                let class = crate::palw_tir_fp_lane_v1::palw_tir_fp_class_v1(record, layout).map_err(|why| {
+                    PalwStateV2Error::FreePromptWorkUnderivable { claim: *claim_id, class: *class_id, why }
+                })?;
+                PalwFpWorkGraphV1::Tir(Box::new(class))
+            }
+            None => PalwFpWorkGraphV1::Profile(
+                state
+                    .fp_work_profiles
+                    .get(class_id)
+                    .ok_or(PalwStateV2Error::FreePromptClassHasNoWorkProfile { claim: *claim_id, class: *class_id })?
+                    .clone(),
+            ),
+        };
         // **The ids are how the chain reads the cache, so a mode that carries none cannot
         // be priced past this fence.** `PanelDa` keeps the prompt off chain and a canonical
         // claim derives it from the anchor; in both the chain holds no token list, so the
@@ -19249,19 +19274,34 @@ pub fn palw_fp_commitment_price_from_state_v1(
         } else {
             crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid)
         };
-        let work = crate::palw_freeprompt_v3::fp_derive_work_from_state_v1(
-            &profile,
-            prompt_tokens,
-            decode_tokens_executed,
-            accounted,
-            prefix_state,
-            ladder,
-        )
-        .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
-            claim: *claim_id,
-            class: *class_id,
-            why: e.to_string(),
-        })?;
+        let underivable = |why: String| PalwStateV2Error::FreePromptWorkUnderivable { claim: *claim_id, class: *class_id, why };
+        let (work, credited) = match &source {
+            PalwFpWorkGraphV1::Profile(profile) => (
+                crate::palw_freeprompt_v3::fp_derive_work_from_state_v1(
+                    profile,
+                    prompt_tokens,
+                    decode_tokens_executed,
+                    accounted,
+                    prefix_state,
+                    ladder,
+                )
+                .map_err(|e| underivable(e.to_string()))?,
+                None,
+            ),
+            PalwFpWorkGraphV1::Tir(class) => {
+                let tir = crate::palw_tir_fp_lane_v1::palw_tir_fp_derive_work_v1(
+                    class,
+                    prompt_tokens,
+                    decode_tokens_executed,
+                    accounted,
+                    prefix_state,
+                    ladder,
+                    params.tir_fence2_active_at(inputs.daa_score),
+                )
+                .map_err(underivable)?;
+                (tir.derived, Some(tir.credited_compute))
+            }
+        };
         if work.total_leaves != work_leaves {
             return Err(PalwStateV2Error::FreePromptWorkLeavesMismatch {
                 claim: *claim_id,
@@ -19269,7 +19309,7 @@ pub fn palw_fp_commitment_price_from_state_v1(
                 derived: work.total_leaves,
             });
         }
-        Some((work, profile))
+        Some((work, source, credited))
     } else {
         None
     };
@@ -19301,21 +19341,28 @@ pub fn palw_fp_commitment_price_from_state_v1(
     let pricing = PalwFpPricingV1::of(params, inputs.canonical_work_daa);
     let in_compute = pricing.canonical_work_daa.is_some_and(|height| inputs.daa_score >= height);
     let (quanta, pwu, reserved) = if in_compute {
-        let Some((work, profile)) = &derived else {
+        let Some((work, source, tir_credited)) = &derived else {
             return Err(PalwStateV2Error::FreePromptComputeWithoutDerivation { claim: *claim_id, class: *class_id });
         };
-        let credited = crate::palw_freeprompt_v3::fp_derive_credited_compute_from_state_v1(
-            profile,
-            prompt_tokens,
-            decode_tokens_executed,
-            work.accounted_prefix_tokens,
-            prefix_state,
-        )
-        .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
-            claim: *claim_id,
-            class: *class_id,
-            why: e.to_string(),
-        })?;
+        let credited = match (source, tir_credited) {
+            // An IR class: the structural work vector of the NEW positions, derived above with the leaves.
+            (PalwFpWorkGraphV1::Tir(_), Some(credited)) => *credited,
+            (PalwFpWorkGraphV1::Profile(profile), _) => crate::palw_freeprompt_v3::fp_derive_credited_compute_from_state_v1(
+                profile,
+                prompt_tokens,
+                decode_tokens_executed,
+                work.accounted_prefix_tokens,
+                prefix_state,
+            )
+            .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
+                claim: *claim_id,
+                class: *class_id,
+                why: e.to_string(),
+            })?,
+            (PalwFpWorkGraphV1::Tir(_), None) => {
+                return Err(PalwStateV2Error::FreePromptComputeWithoutDerivation { claim: *claim_id, class: *class_id });
+            }
+        };
         let quantum = pricing.network_quantum(state);
         if quantum == 0 {
             return Err(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id });
@@ -19333,7 +19380,15 @@ pub fn palw_fp_commitment_price_from_state_v1(
         (quanta, pwu, reserved)
     } else {
         let credited = match &derived {
-            Some((work, _)) => work.credited_leaves,
+            // RFC-0002 Phase H: an IR class prices compute only (ADR-0148); it has no leaves-era price.
+            Some((_, PalwFpWorkGraphV1::Tir(_), _)) => {
+                return Err(PalwStateV2Error::FreePromptWorkUnderivable {
+                    claim: *claim_id,
+                    class: *class_id,
+                    why: crate::palw_tir_fp_lane_v1::PALW_TIR_FP_COMPUTE_ONLY_V1.to_string(),
+                });
+            }
+            Some((work, _, _)) => work.credited_leaves,
             // Below the derivation the chain holds no graph to split the capture with, so the
             // decode rules cannot price this claim: refused by name (unreachable on an assembled
             // ruleset — `validate_palw_v2` arms the rules only over `palw_fp_derived_work`).
@@ -19360,7 +19415,21 @@ pub fn palw_fp_commitment_price_from_state_v1(
         (Some(rights), true) => palw_fp_receipt_rights_bound_v1(pwu, rights),
         _ => 0,
     };
-    Ok(PalwFpCommitmentPriceV1 { quanta, pwu, rights_reserved, reserved, priced_in_compute: in_compute, derived_work: derived })
+    Ok(PalwFpCommitmentPriceV1 {
+        quanta,
+        pwu,
+        rights_reserved,
+        reserved,
+        priced_in_compute: in_compute,
+        derived_work: derived.map(|(work, _, _)| work),
+    })
+}
+
+/// **The graph a free-prompt run's work is derived from** (ADR-0145 §5): a legacy class's published profile, or an IR class's
+/// admitted program under its published layout (RFC-0002 Phase H, [`crate::palw_tir_fp_lane_v1`]).
+enum PalwFpWorkGraphV1 {
+    Profile(Box<crate::palw_step::PalwShapeProfileV3>),
+    Tir(Box<crate::palw_tir_class_v1::PalwTirClassV1>),
 }
 
 /// **ADR-0148's reservation for a compute-priced claim** — its claimed compute in the floor's
@@ -25385,7 +25454,7 @@ mod staged_court_state_tests_v1 {
     fn tir_preparation_is_claim_wide_retained_and_rebuilt_without_an_owner() {
         use crate::palw_tir_public_owned_v1::{
             PalwTirPublicPreparationContractV1, PalwTirPublicPreparationV1, PalwTirPublicWorkRulesV1,
-            derive_tir_public_preparation_plan_v1, derive_tir_public_work_allocation_v1,
+            derive_tir_public_preparation_plan_v1, derive_tir_public_preparation_work_allocation_v1,
         };
         // A structural lifecycle fixture, not full-SUM payment, native grant
         // authentication or a computation-correctness credential.
@@ -25403,7 +25472,7 @@ mod staged_court_state_tests_v1 {
             maximum_replay_io_bytes: 0,
         };
         let original = template.owned.contract_v1();
-        let work = derive_tir_public_work_allocation_v1(
+        let work = derive_tir_public_preparation_work_allocation_v1(
             &record, &x.binding.class.layout, source.header_v1(), &source, &original.plan, rules,
         ).unwrap();
         let plan = derive_tir_public_preparation_plan_v1(&source, &work, &original.plan).unwrap();

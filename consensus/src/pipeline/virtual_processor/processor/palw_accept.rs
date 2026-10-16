@@ -2380,7 +2380,18 @@ impl VirtualStateProcessor {
                 derived_work: if self.palw_fp_derived_work_at(block_daa) {
                     match state.fp_work_profile_of(class_id) {
                         Some(profile) => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Derived(profile),
-                        None => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Unpublished,
+                        // RFC-0002 Phase H: past the TIR public frame's fence an IR class's graph is its admitted program
+                        // under its published layout; below it (or without the layout) it stays unpublished, as before.
+                        None => match (
+                            self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(block_daa)),
+                            state.tir_class_v1(class_id),
+                            kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, *class_id),
+                        ) {
+                            (true, Some(record), Some(layout)) => {
+                                kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Tir(record, layout)
+                            }
+                            _ => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Unpublished,
+                        },
                     }
                 } else {
                     kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared

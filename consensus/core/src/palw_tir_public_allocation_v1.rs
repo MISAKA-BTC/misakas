@@ -51,6 +51,31 @@ pub fn tir_public_tree_disk_bytes_v1(mut n: u64) -> Result<u64, String> {
     Ok(bytes)
 }
 
+/// **The original capture and the durable prepared generation one literal actor writes per pass** — the full original
+/// capture, offsets, original-leaf spool, every public index and a header page. Native geometry only (no sender-proposed
+/// length). Shared by the executor plan and the work allocation, which counts a publication's 16 KiB WorkDebit slices from
+/// these bytes (`derive_tir_public_work_allocation_v1`). Returns `(original_capture_bytes, prepared_disk_bytes)`.
+pub fn tir_public_prepared_bytes_v1(
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    source: &PalwTirPublicSourceV1,
+) -> Result<(u64, u64), String> {
+    let d = u64::from(source.decode_count_v1());
+    let prefill = u64::from(source.header_v1().job_context.declared_prefill_tokens);
+    let vocab = u64::from(source.vocab_v1());
+    let tiles = vocab.div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+    let n = source.leaf_count_v1();
+    let step_tree_bytes = tir_public_tree_disk_bytes_v1(n)?;
+    let row_tree_bytes = tir_public_tree_disk_bytes_v1(d)?;
+    let tile_forest_bytes = mul(d, tir_public_tree_disk_bytes_v1(tiles)?)?;
+    let raw_format_leaf = add(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?, 26)?;
+    let capture_payload = add(add(mul(prefill, 4)?, mul(d, add(mul(vocab, 4)?, 8)?)?)?, mul(n, raw_format_leaf)?)?;
+    let original_capture_bytes = add(capture_payload, add(mul(u64::from(record.program_bytes), 64)?, 65_536)?)?;
+    let original_indexes = add(add(add(step_tree_bytes, mul(n, 8)?)?, tile_forest_bytes)?, mul(row_tree_bytes, 2)?)?;
+    let spool = mul(n, raw_format_leaf)?;
+    let prepared_disk_bytes = add(add(add(original_capture_bytes, original_indexes)?, spool)?, 4096)?;
+    Ok((original_capture_bytes, prepared_disk_bytes))
+}
+
 /// Resolved by the accepting native ruleset, never deserialized from a carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwTirPublicAllocationRulesV1 {
@@ -345,12 +370,7 @@ fn executor_plan(
     let max_leaf = source.unit_bound_v1(&PalwTirPublicRequestV1::StepLeaf { index: 0 })?.maximum_response_bytes;
     // Full original capture, offsets, original-leaf spool, every public index,
     // and a disjoint durable prepared generation. No sender-proposed length.
-    let raw_format_leaf = add(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?, 26)?;
-    let capture_payload = add(add(mul(prefill, 4)?, mul(d, add(mul(vocab, 4)?, 8)?)?)?, mul(n, raw_format_leaf)?)?;
-    let original_capture_bytes = add(capture_payload, add(mul(u64::from(record.program_bytes), 64)?, 65_536)?)?;
-    let original_indexes = add(add(add(step_tree_bytes, mul(n, 8)?)?, tile_forest_bytes)?, mul(row_tree_bytes, 2)?)?;
-    let spool = mul(n, raw_format_leaf)?;
-    let prepared_disk_bytes = add(add(add(original_capture_bytes, original_indexes)?, spool)?, 4096)?;
+    let (original_capture_bytes, prepared_disk_bytes) = tir_public_prepared_bytes_v1(record, source)?;
     // The independent own executor stores just its own disk step/row roots and
     // IDs. It does not retain all N hashes or all historical checkpoints in RAM.
     let own_disk_bytes = add(add(step_tree_bytes, row_tree_bytes)?, add(mul(d, 4)?, artifact_tree)?)?;
@@ -651,10 +671,11 @@ pub fn derive_tir_public_allocation_v1(
     let executor = executor_plan(record, &verified.space, &source, rules)?;
     let native_work = work_rules(&verified.space, &source, &executor, rules)?;
     let owner_work = derive_tir_public_work_allocation_v1(record, layout, header, &source, &acquisition, native_work)?;
-    // Two separate rooted spent pools MUST have two prepaid components. This
-    // conservative quote can later be tightened by a separately versioned rule;
-    // it never lets public responders consume the owner's replay/probe credit.
-    let preparation_work = owner_work.clone();
+    // Two separate rooted spent pools MUST have two prepaid components. The
+    // claim-wide preparation holds literal custodian lanes only (a preparer
+    // reads no other slot's answers); it never lets public responders consume
+    // the owner's replay/probe credit (the frame allocation fix of 2026-10-16).
+    let preparation_work = owner_work.preparation_lanes_v1(&acquisition)?;
     let preparation = derive_tir_public_preparation_plan_v1(&source, &preparation_work, &acquisition)?;
     if executor.prepared_disk_bytes > preparation.maximum_prepared_bytes {
         return incomplete(PalwTirPublicAllocationMissingV1::PreparedPublicationBound {

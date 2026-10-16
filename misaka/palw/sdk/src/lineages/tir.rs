@@ -336,14 +336,18 @@ impl PalwModelLineageV1 for TirLineageV1 {
         class_id: Hash64,
         artifact_root: Hash64,
         holdings: &[PalwLoadedArtifactV1],
-        _network_id: &[u8],
+        network_id: &[u8],
     ) -> Option<Result<Box<dyn PalwExecutionBackendV1>, String>> {
         let entry = holdings
             .iter()
             .filter(|h| h.lineage_id == TIR_LINEAGE_ID_V1)
             .filter_map(|h| h.payload().downcast_ref::<PalwTirClassEntryV1>().cloned())
             .find(|e| e.class_id() == class_id && e.artifact_root == artifact_root)?;
-        Some(Self::backend(&entry, court, prompt_ids_form).map(|b| Box::new(b) as Box<dyn PalwExecutionBackendV1>))
+        // RFC-0002 Phase H: the free-prompt lane builds its contexts under the node's network id.
+        Some(
+            Self::backend(&entry, court, prompt_ids_form)
+                .map(|b| Box::new(b.with_network_id_v1(network_id)) as Box<dyn PalwExecutionBackendV1>),
+        )
     }
 }
 

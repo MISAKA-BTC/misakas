@@ -4022,9 +4022,9 @@ fn seat_conformance_on_v1() -> bool {
 /// - **D-18 `NoTfp1`**: the original is published without its `TFP1` frame even past `palw_tir_public_conviction_v1`; G-03
 ///   refuses it at acceptance (before the fix it earned on the legacy route).
 ///
-/// **Status:** a backend must serve the IR free-prompt lane for D-05/D-06 to produce a TIR original; the IR backend still refuses
-/// free prompts (`TIR_FREE_PROMPT_CLOSED_V1`, RFC-0002 Phase H), so on a real node these two produce no TIR claim yet. D-07 and
-/// D-18 act on the commitment and the carrier and are backend-independent.
+/// **Status:** D-05/D-06 need a backend that serves the IR free-prompt lane: the IR backend does past RFC-0002 Phase H
+/// (`TirBackendV1::execute_free_prompt*` and its two drill verbs; the canonical claim carries its ids on an IR class past the frame's
+/// fence). D-07 and D-18 act on the commitment and the carrier and are backend-independent. None of these is run here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwDrillTirFrameFaultV1 {
     Cone { leaf: u64 },
@@ -7812,6 +7812,15 @@ impl PalwPanelService {
         // V3 job decodes, with the same work). Below the fence it stays V3, byte for byte.
         if self.consensus_config.params.palw_fp_decode_rules_active_at(current_daa) {
             job = job.into_v4(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        }
+        // **RFC-0002 Phase H: an IR class's claim carries its prompt ids.** Past the TIR public frame's fence the IR lane prices
+        // compute from the ids its carrier holds (a canonical carrier holds none: `FreePromptPromptNotAccountable`), so the job
+        // states the anchor's prompt as its own (`USER` mode, the same ids) and the original rides its `TFP1` frame below (G-03).
+        // Below the fence, and for every legacy class, the canonical job is what it was.
+        if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_some_and(|f| f.is_active(current_daa))
+            && session.palw_tir_class_record_v1(class_id).is_some()
+        {
+            job.prompt_mode = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER;
         }
         // The anchor is a function of the job's own facts, not of its prompt — so the prompt
         // can be derived from it and then written into the job.

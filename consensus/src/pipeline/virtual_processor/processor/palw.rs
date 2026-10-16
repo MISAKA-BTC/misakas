@@ -3404,6 +3404,8 @@ impl VirtualStateProcessor {
             // The audit's #5: the rights the fold will reserve beside the weight, priced from the same
             // carve and `W₀` the fold reads at this DAA — so the answer is the ledger's reservation.
             receipt_rights: self.palw_fp_receipt_rights_inputs_at(daa_score),
+            // RFC-0002 Phase H: the IR class lane opens with the TIR public frame (the fold's own reading of the same fence).
+            tir_free_prompt_active: self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(daa_score)),
         };
         // The claim id only names a refusal; no claim exists until the rail signs one.
         let price = kaspa_consensus_core::palw_state_v2::palw_fp_commitment_price_v1(
@@ -4699,7 +4701,18 @@ impl VirtualStateProcessor {
                 derived_work: if self.palw_fp_derived_work_at(block_daa) {
                     match state.fp_work_profile_of(class_id) {
                         Some(profile) => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Derived(profile),
-                        None => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Unpublished,
+                        // RFC-0002 Phase H: past the TIR public frame's fence an IR class's graph is its admitted program
+                        // under its published layout; below it (or without the layout) it stays unpublished, as before.
+                        None => match (
+                            self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(block_daa)),
+                            state.tir_class_v1(class_id),
+                            kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, *class_id),
+                        ) {
+                            (true, Some(record), Some(layout)) => {
+                                kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Tir(record, layout)
+                            }
+                            _ => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Unpublished,
+                        },
                     }
                 } else {
                     kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared

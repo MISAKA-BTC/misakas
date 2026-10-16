@@ -3381,6 +3381,7 @@ fn apply_object_inner(
             if let Some(certified) = &builder.params.fp_certified_classes
                 && !certified.contains(class_id)
                 && !builder.state.fp_certified_classes.contains_key(class_id)
+                && !tir_fp_lane_covered_v1(builder, class_id)
             {
                 return Err(PalwStateV2Error::FreePromptLaneUncertified(*class_id));
             }
@@ -3440,6 +3441,8 @@ fn apply_object_inner(
                     canonical_work_daa: builder.extras.canonical_work_daa,
                     daa_score: ctx.daa_score,
                     receipt_rights: builder.fp_receipt_rights_inputs_v1(ctx),
+                    // RFC-0002 Phase H: the IR class lane is open exactly where the TIR public frame is (G-03 frames every IR original).
+                    tir_free_prompt_active: builder.extras.tir_public_conviction_active,
                 },
                 claim_id,
                 class_id,
@@ -3671,6 +3674,24 @@ fn apply_object_inner(
         }
     }
     Ok(())
+}
+
+/// **RFC-0002 Phase H: an IR class's free-prompt lane is authenticated by coverage** — past the TIR public frame's fence (the IR
+/// lane's), a registered IR class whose every reachable primitive one certified family covers (either lane: the generic interpreter
+/// court is the same court for an attempt and a free prompt; the free-prompt doors are the frame's, in consensus code). `false`
+/// below the fence and for every non-IR class, so the legacy gate is byte-identical there. No per-class drill, no model review.
+fn tir_fp_lane_covered_v1(builder: &TransitionBuilder<'_>, class_id: &Hash64) -> bool {
+    if !builder.extras.tir_public_conviction_active {
+        return false;
+    }
+    let Some(record) = builder.state.tir_class_v1(class_id) else { return false };
+    let families = builder
+        .state
+        .certified_family_records(PalwCertifiedLaneV1::Attempt)
+        .values()
+        .chain(builder.state.certified_family_records(PalwCertifiedLaneV1::FreePrompt).values())
+        .map(|record| &record.family);
+    crate::palw_tir_fp_lane_v1::palw_tir_fp_lane_covered_v1(record, families).is_ok()
 }
 
 /// **D2 on seat readiness (REQ-T6-3, restricted; `palw_court_model_scope_v1`)**: `SeatReadinessLeaves` publishes ~16 plaintext

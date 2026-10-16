@@ -16,7 +16,7 @@
 > at checkpoints, not per position.
 
 Contents: §0 decisions at a glance · §1 integration map · §2 designs · §3 Phase 0(a) · §4 work plan
-· §5 decisions needed · Appendix A object sketches.
+· §5 decisions needed · §6 Phase H: the IR free-prompt lane (2026-10-16) · Appendix A object sketches.
 
 ---
 
@@ -997,6 +997,80 @@ From the lead (design) or the user (network):
     `2^32` peak live bytes; `2^16` admission work (`PALW_T12_TIR_CEILINGS_V1`).
 12. **(lead)** the free-prompt lane and ADR-0133 segment claims for IR classes stay closed (refused
     by name) until Phase H; Phase F certifies the attempt lane, panels and the court.
+    **Free-prompt half superseded by §6 (RFC-0002 Phase H, 2026-10-16):** the IR free-prompt lane opens with the TIR public
+    frame. ADR-0133 segment claims for IR classes stay closed.
+
+---
+
+## 6. Phase H — the Free Prompt lane of an IR class (2026-10-16)
+
+> **Status: implemented on `integ/rfc02-ir-free-prompt`, dormant on every preset, not armed.** Fold-level and node-unit tests only;
+> no node E2E (T-N1) and no drill have run. Binding premises: no cryptographic proof of computation (PRINCIPLES §8); the frozen
+> two-tier model premise (§9; nothing here is model-level review); claim-level verification for every tier.
+
+**Why it is on the critical path.** Under the user's 2026-10-16 decision (G-01 option (b)), a family with no armed G14 route earns
+no new reward past DAA 14,000 on testnet-12. For Free Prompt the only such route is the TIR public frame (tag 170/171,
+`palw_tir_public_conviction_v1`), and G-03 makes the frame mandatory for a TIR FP original. The frame attaches only to IR-class
+FP claims, and that lane was closed (decision 12): the node's backend refused, and past `palw_fp_derived_work` the fold refused
+every IR commitment with `FreePromptClassHasNoWorkProfile`, because an IR class had no way to obtain an `fp_work_profiles` row.
+So no frame-bearing claim could exist on any network (audit §7.3). Future networks want G14 from genesis with IR genesis models,
+so the lane must work with every fence it reads at DAA 0.
+
+### 6.1 Decisions
+
+| # | Question | Decision | Why |
+| --- | --- | --- | --- |
+| H1 | Which fence | **No new fence.** The lane opens exactly where `palw_tir_public_conviction_v1` (resolved: the latest of it and its prerequisites) is in force. | The lane exists only to carry the frame, and the frame exists only for this lane. Past the fence G-03 refuses every frameless IR original, so the lane can never admit an IR FP claim without its conviction door. Below the fence an IR FP claim has no G14 selection route, so option (b) would deny it reward anyway. One decision, one arming record (G-10's V1–V7 for the TIR frame). A separate fence would add a Params field, fingerprint and schedule plumbing, and a ruleset state in which one half is armed without the other, with no use. |
+| H2 | Admission / authentication | An IR class passes the FP certification gate when **one** certified family (either lane) covers every primitive its program reaches. This is the IR attempt lane's rule (`ClassLaneCertifiedTirV1`). No new object. | The IR court is one generic interpreter court for an attempt and a free prompt. The FP-specific doors (selection under the job's own rule, output identity, stop rule, DA) are the frame's, written once in consensus code for every class. The legacy lane needs a per-family FP drill because legacy FP runs a family-specific capture path; an IR FP run uses the same TIR capture as an attempt. This is not model-level review: the check is the family certificate the attempt lane already uses. |
+| H3 | The work profile | **No new row.** The work is derived from the two rows the class already holds: the admitted program (`tir_classes`, checked against `graph_ir_root`) and the published layout (`TirLayout`, checked against `layout_digest`; the frame already requires it). | The legacy `fp_work_profiles` row exists because a legacy class's state held only an id. An IR class's state holds its graph, so a copy would be a second source of truth. That row's type is a legacy `PalwShapeProfileV3`; reusing it for IR would change its borsh and move every state root. |
+| H4 | The price | Leaves: `PalwTirStepSpaceV1::running_total` over the run's positions `[0, P + D − 1)` (the closed form the frame's source and the court enumerate). `work_leaves` must equal it. Credited compute: `palw_tir_work_shape_with_v1(program, fence2).work_v1(P, D, reused = accounted prefix)`, the walk the IR attempt weight and the registry work come from. Under the decode rules the whole prompt is accounted, so only the decode positions (and the first logits) earn. **Compute only:** in the leaves era an IR class is refused by name. | No invented constant. The only bounds are the class's step ladder and the layout's `max_context`. Every network that can arm the frame prices compute (testnet-12 from genesis). |
+| H5 | Extraction walk | A new variant `PalwFpDerivedWorkCapV1::Tir(record, layout)`. Past the fence the walk counts an IR run's leaves over the IR step space and skips a carrier whose `work_leaves` disagrees. | It mirrors `Derived(profile)` for a legacy class. A peer's carrier never invalidates the block that carried it. |
+| H6 | Node execution | `TirBackendV1::execute_free_prompt*` runs the integer engine under the job's FP context (`palw_fp_job_context_v3` with the class id in `shape_profile_id` and the class's semantics' runtime ids). Each id is selected by `PalwTirSelectionRuleV1::select_v1`, the decode-token door's own rule (greedy, seeded V3, V4). The run goes to exactly where the job's decoder stops (`palw_fp_decode_run_v1`). Refused by name: a flat-scheme class, a job tail, a constrained or prefix-state job, an image job, a host with no network id. Drill verbs: D-05 (leaf) and D-06 (selection). | One rule for the producer and the door, so an honest producer is never convicted by a second spelling of the rule. |
+| H7 | TFP1 on the producer side | (a) `palw_fp_commitment_from_context_v3` accepts the IR root (`palw_fp_tir_execution_root_v1`: trace, class, leaf count, step root), the root `TFP1` re-derives from its header. (b) The IR backend exports the original header (`public_execution_binding_header_v1`), so the node's existing frame path quotes, pledges and builds `TFP1` past the fence. (c) Past the fence the node's own claim on an IR class carries its prompt ids (USER mode, the anchor's prompt). Without the ids the IR lane cannot price it. | The frame wiring in `palw_panel.rs` already existed. It needed a header from the backend and a priceable original. |
+| H8 | Out of scope (decided) | Seeded Float32 (the frame refuses a Float32 view). Image, vision and MTP paths (genesis models are text-only: token ids → next-token logits). A consumed prefix state. Constrained jobs, which need a staged semantic court, and that court needs the unarmable legacy filer (G-18). | User decision 2026-10-16 and the frame's own refusals. |
+
+### 6.2 Byte identity and A-2
+
+- Below the fence every path is byte for byte what it was. The pricing branch, the walk's `Tir` cap, the certification gate's IR
+  clause and the canonical claim's USER mode all test the frame's fence first. An IR commitment there is refused exactly as before
+  (`FreePromptClassHasNoWorkProfile` in the fold, `Unpublished` in the walk).
+- No object kind, state table, Params field or fingerprint input is added. A-2 ("a new kind rides unjudged below its fence") holds
+  trivially. TFP1 (tag 170/171) is owned by the G14 fence and dropped before the walk below it, as it already was.
+- `PalwFpCommitmentPriceV1::derived_work` lost the legacy profile it carried; no consumer read it.
+- Not consensus: the RPC price answer for an IR class is now the fold's own refusal or price (it was an RPC error with the closed
+  sentence).
+
+### 6.3 DAA 0
+
+The lane reads three fences: derived work, canonical work and the frame. Each can be in force at DAA 0. On testnet-12 the first two
+already are, at genesis. The frame resolves at the latest of its prerequisites; on the test-only G14-genesis ruleset that is DAA
+1,700, because of testnet-12's own prerequisite heights. A future network that sets the prerequisites at 0 opens the lane at 0. The
+lane needs no history: no legacy row, no published profile and no prior claim. It needs only three things: the class's admitted
+record, its published layout and one certified covering family. The fold test folds a claim with all three fences in force from
+0. IR genesis rows are not part of this lane; `validate_palw_v2` refuses them until Phase H.
+
+### 6.4 What arming this lane with the TIR frame at DAA 14,000 still requires
+
+The lane has no arming record of its own; it arms with the frame's record (G-10). That record must also carry:
+
+0. **The frame's allocation must fit at the network's Panel size (found by this lane; the frame lane owns the fix).** The frame's
+   native allocation (`derive_tir_public_allocation_v1`) uses checked `u64` arithmetic. Under the network's staged config and a
+   `2^22` ladder, every corpus class (52–222 step leaves, vocabulary 24) frames at a native custodian upper of 2–4, but is refused
+   at 6, which is testnet-12's five-seat Panel plus the producer. The refusal is either `required-family sum overflows
+   maximum_parser_steps` or `native TIR allocation exceeds u64`. Under G-03 such a class takes no free-prompt claim at all; a real
+   model, with orders of magnitude more leaves, cannot be framed either. The test
+   `misaka/palw/tir/exec/tests/free_prompt.rs::tir_frame_allocation_overflows_at_testnet12s_panel_gap_pin` pins this gap.
+1. **T-N1 (node E2E):** signed TFP1 → mempool → template → fold, then an outsider's Open / Demand / filing, conviction, slashes,
+   `ProducerFrozen`, receipt-spend refusal and the Gate C wait. It has not been written; see the audit's §8.4 (`g14-completeness-proof-2026-10-16.md`).
+2. **The prerequisites' own arming:** the frame resolves only over the staged TIR route and the staged public court. The staged court
+   needs `palw_legacy_public_filer_v1` (G-18), which this binary refuses to arm. Until that changes, the TIR frame (and with it this
+   lane) cannot be armed on a real network. The layout row (tag 169) is also published only behind the staged TIR route.
+3. **Drills on the shipping binary, crossing the fence:** D-05 and D-06 (now producible on an IR class: the backend's drill verbs),
+   D-07 and D-18. The class must be registered after genesis and its layout published.
+4. **Measured values (UNKNOWN until measured):** the generic backend's FP run time at the largest genesis profile against the bind
+   window; the frame's V5 profile (preparation door, answer windows, terminal witness ceiling) with K_owner = 8 concurrent demands.
+5. **The class semantics' runtime ids** on the node (`with_fp_class_facts_v1`): a class with registered semantics must run under
+   them, or the frame refuses its header. This is not wired from chain state yet.
 
 ---
 
