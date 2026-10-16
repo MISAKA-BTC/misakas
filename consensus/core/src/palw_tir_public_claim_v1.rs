@@ -98,6 +98,7 @@ impl PalwTirPublicClaimV1 {
             source_id: source.source_id_v1(),
             maximum_leaves: rules.maximum_leaves,
             native_config: rules.config,
+            native_clock: rules.clock,
             native_custodian_upper: rules.maximum_custodians,
             work_rules: Some(plan.owner_work.rules),
         };
@@ -177,6 +178,7 @@ impl PalwTirPublicClaimV1 {
             || d.header_digest != header_digest(&self.header)?
             || d.source_id != self.plan.source_id
             || d.native_config != self.plan.acquisition.config
+            || d.native_clock != self.plan.acquisition.clock
             || d.native_custodian_upper != p.maximum_custodians
             || d.work_rules != Some(self.plan.owner_work.rules)
             || d.maximum_leaves == 0
@@ -224,6 +226,18 @@ impl PalwTirPublicClaimV1 {
         maximum_leaves: u64,
     ) -> Result<PalwTirPublicSourceV1, String> {
         self.check_structure_v1(&self.key_v1())?;
+        self.source_identity_v1(record, layout, maximum_leaves)
+    }
+
+    /// **The rooted frame's source without re-checking the whole frame** (audit §10): the per-action path of an owner's acquisition
+    /// (Demand, answers, debits), on a frame the fold checked in full when it wrote it (install and every custody write) and the
+    /// state root authenticates since. Checks the class, layout, leaf ceiling and source identity it builds from.
+    pub fn source_identity_v1(
+        &self,
+        record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        maximum_leaves: u64,
+    ) -> Result<PalwTirPublicSourceV1, String> {
         if maximum_leaves != self.descriptor.maximum_leaves
             || record.facts.class_id != self.descriptor.class_id
             || record.layout_digest != self.descriptor.layout_digest
@@ -522,6 +536,7 @@ mod tests {
             dissection: true,
             prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+            clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
         };
         let PalwTirPublicAllocationQuoteV1::Complete(plan) =
             derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, None, None, rules).unwrap()
@@ -672,6 +687,7 @@ mod tests {
             dissection: true,
             prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+            clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
         };
         let PalwTirPublicAllocationQuoteV1::Complete(plan) =
             derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, None, None, rules).unwrap()

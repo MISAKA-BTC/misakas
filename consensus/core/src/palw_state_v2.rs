@@ -25292,7 +25292,7 @@ mod staged_court_state_tests_v1 {
             &record, &x.binding.class.layout, &header, header.committed_execution_root, header.full_logits_trace_root, maximum_leaves,
         ).unwrap();
         let config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
-        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config).unwrap();
+        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock).unwrap();
         let terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
             100, plan.envelope, config.acquisition_daa, config.collection_daa, config.reorg_retention_daa,
         ).unwrap();
@@ -25307,10 +25307,11 @@ mod staged_court_state_tests_v1 {
                 class_id: record.facts.class_id, layout_digest: record.layout_digest,
                 header_digest: Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64)
                     .key(b"misaka-palw/tir-source-header/v1").hash(&borsh::to_vec(&header).unwrap()).as_bytes().try_into().unwrap()),
-                source_id: source.source_id_v1(), maximum_leaves, native_config: config, native_custodian_upper: 3,
+                source_id: source.source_id_v1(), maximum_leaves, native_config: config,
+                native_clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock, native_custodian_upper: 3,
                 work_rules: None,
             },
-            owned: Box::new(PalwTirPublicOwnedV1::admit_native_v1(contract, &source, &BTreeSet::new(), config, 3, 101, capital).unwrap()).into(),
+            owned: Box::new(PalwTirPublicOwnedV1::admit_native_v1(contract, &source, &BTreeSet::new(), config, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock, 3, 101, capital).unwrap()).into(),
         };
         let response = crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
             preimage: x.preimages[0].clone(), opening: crate::palw_step_leg::step_opening_v1(&x.hashes, 0).unwrap(),
@@ -25409,7 +25410,7 @@ mod staged_court_state_tests_v1 {
         let capital = second_contract.terms.plan.rent_sompi.checked_add(second_contract.terms.plan.deposit_sompi).unwrap();
         let mut second = row.clone();
         second.owned = Box::new(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1::admit_native_v1(
-            second_contract, &source, &BTreeSet::new(), contract.plan.config, 3, 102, capital,
+            second_contract, &source, &BTreeSet::new(), contract.plan.config, contract.plan.clock, 3, 102, capital,
         ).unwrap()).into();
         let second_key = second.key_v1().unwrap();
         assert_ne!(second_key, key);
@@ -25579,7 +25580,7 @@ mod staged_court_state_tests_v1 {
             let mut c = base.clone();
             c.claim = Hash64::from_u64_word(99300 + i);
             let capital = c.terms.plan.rent_sompi.checked_add(c.terms.plan.deposit_sompi).unwrap();
-            let owned = PalwTirPublicOwnedV1::admit_native_v1(c, &source, &BTreeSet::new(), base.plan.config, 3, 101, capital).unwrap();
+            let owned = PalwTirPublicOwnedV1::admit_native_v1(c, &source, &BTreeSet::new(), base.plan.config, base.plan.clock, 3, 101, capital).unwrap();
             let mut row = template.clone();
             row.owned = Box::new(owned).into();
             row.owned.demand_v1(&source, owner, 101, PalwTirPublicRequestV1::StepLeaf { index: 0 }).unwrap();

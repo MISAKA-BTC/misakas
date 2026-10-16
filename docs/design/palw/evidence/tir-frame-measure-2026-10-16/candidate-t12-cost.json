@@ -1,0 +1,28 @@
+{
+  "record": "misaka-palw/tir-frame-cost-candidate/v1",
+  "status": "CANDIDATE, not a pinned record: PALW_TIR_FRAME_COST_RECORDS_V1 stays empty. Values marked network-input are not yet observed on testnet-12; arming needs them observed with the shipped binary (V5/V6/V7) and a reviewed record.",
+  "host": "Apple M1 Max, 10 cores, 32 GiB, Darwin 25.6.0, release build (lto thin, overflow checks)",
+  "evidence": [
+    "fold-actions-after.json (consensus-core tir_frame_accepting_actions_are_measured_across_custodian_uppers)",
+    "frame-ops-before.json / frame-ops-after.json (misaka-palw-tir-exec --features node --test frame_measure)"
+  ],
+  "config": {
+    "inclusion_margin_daa": { "value": 4, "source": "network_v1 (unchanged); testnet-12 inclusion latency is a network-input to observe" },
+    "rent_per_stream_byte": { "value": 1, "source": "network_v1 price (unchanged)" },
+    "rent_per_parser_step": { "value": 1, "source": "network_v1 price (unchanged)" },
+    "rent_per_row_byte": { "value": 1, "source": "network_v1 price (unchanged)" },
+    "deposit_per_move": { "value": 1, "source": "network_v1 price (unchanged)" },
+    "reorg_replay_moves": { "value": 1, "source": "network-input: one restart turn per door; was 64 (a multiplier on every pass and turn). The V7 restart/reorg drill observes it" },
+    "acquisition_daa": { "value": 1, "source": "measured: the slowest single build on this host (court check 93 ms, publication 66 ms, cold answer slice 7.5 ms, FP execute 3.1 ms) is far below one testnet-12 DAA (~171 s at the release plan's 21 DAA/h); genesis-size classes are not measured" },
+    "collection_daa": { "value": 8, "source": "derived: two inclusion margins (the collecting move and its inclusion); a filing is held by the filing allowance" },
+    "reorg_retention_daa": { "value": 256, "source": "network_v1 (unchanged)" },
+    "maximum_owned_rows_per_reserver": { "value": 1, "source": "network_v1 (unchanged)" }
+  },
+  "clock": {
+    "action_parser_steps": { "value": 8674280, "source": "measured: read action (Demand/Begin/Part/Finish) fitted a + b*upper over uppers 6 and 257, a = 75.7 us, plus one ML-DSA-87 verify 97.7 us, at 50.02 parser steps per ns (one full-frame pass: 1.727 ms over 2,700,334 B at 32 steps per byte)" },
+    "action_parser_steps_per_custodian": { "value": 45961, "source": "measured: b = 0.919 us per custodian of the upper" },
+    "frame_passes_per_check": { "value": 2, "source": "measured: Open 1.90 ms and filing 1.32 ms at upper 257 against one pass of 1.73 ms, rounded up" },
+    "control_bytes": { "value": 14320, "source": "measured control 7,101 B (largest non-part control) plus one ML-DSA-87 carrier input (signature 4,627 B and key 2,592 B, protocol constants)" },
+    "parallel_bytes_per_daa": { "value": 125000, "source": "ceiling, network-input: testnet-12 max_block_mass 500,000 / TRANSIENT_BYTE_TO_MASS_FACTOR 4 at one block a DAA, no other traffic; the frame's share under contention is to be observed" }
+  }
+}

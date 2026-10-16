@@ -225,6 +225,10 @@ impl PalwTirPublicSourceV1 {
     pub fn header_v1(&self) -> &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1 {
         &self.header
     }
+    /// The largest leaf preimage this source decodes (`4 ×` the class layout's widest committed tile; every leaf is refused past it).
+    pub fn maximum_leaf_bytes_v1(&self) -> u64 {
+        self.maximum_leaf_bytes
+    }
     pub fn leaf_count_v1(&self) -> u64 {
         self.header.step_leaf_count
     }

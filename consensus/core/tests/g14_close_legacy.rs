@@ -190,6 +190,18 @@ fn fp_recoverable_families_have_no_remaining_lg14a_dependency() {
     p.palw_staged_public_court_v1 = at;
     p.palw_staged_tir_route_v1 = at;
     p.palw_tir_public_conviction_v1 = at;
+    // Audit §10: the frame needs a measured cost model a record names (here the TEST-ONLY config and a test record).
+    let cost = kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    p.palw_tir_frame_cost_v1 = Some(cost);
+    let cost_records = [kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1 {
+        version: kaspa_consensus_core::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
+        genesis: t12.genesis.hash,
+        activation_daa: RELEASE,
+        source_commit: [0x5C; 20],
+        measurement: [0x5D; 32],
+        review: [0x5E; 32],
+        cost,
+    }];
     p.palw_g14_route_required_v1 = at;
     p.sync_palw_g14_gates_v1();
     let records: Vec<PalwG14ArmingRecordV1> = [
@@ -202,11 +214,14 @@ fn fp_recoverable_families_have_no_remaining_lg14a_dependency() {
     .into_iter()
     .map(|fence| record(fence, t12.genesis.hash, RELEASE))
     .collect();
-    p.validate_palw_v2_with_arming_records_v1(&records).unwrap_or_else(|e| panic!("the FP route ruleset validates with its records: {e:?}"));
+    p.validate_palw_v2_with_arming_and_cost_records_v1(&records, &cost_records)
+        .unwrap_or_else(|e| panic!("the FP route ruleset validates with its records: {e:?}"));
+    let why = p.validate_palw_v2_with_arming_records_v1(&records).expect_err("no pinned frame cost record");
+    assert!(format!("{why:?}").contains("TIR frame cost"), "{why:?}");
     // Without LG14-A's record the staged court's prerequisite cannot be armed (G-18 stands; only the record unlocks it).
     let without_filer: Vec<PalwG14ArmingRecordV1> =
         records.iter().copied().filter(|r| r.fence != PalwG14GatedFenceV1::LegacyPublicFilerV1).collect();
-    let why = p.validate_palw_v2_with_arming_records_v1(&without_filer).expect_err("LG14-A unrecorded");
+    let why = p.validate_palw_v2_with_arming_and_cost_records_v1(&without_filer, &cost_records).expect_err("LG14-A unrecorded");
     assert!(format!("{why:?}").contains("palw_legacy_public_filer_v1"), "{why:?}");
     let mirror = bundle(&p).state.g14_route_required_v1().expect("option (b)");
     eprintln!("[FP] route mirror at {RELEASE}: {mirror:?}");

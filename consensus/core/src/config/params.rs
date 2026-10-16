@@ -2430,6 +2430,12 @@ pub struct Params {
     /// Original paid TIR public-conviction allocations and signed controls.
     /// Independent and dormant on every shipped preset; never reprices old claims.
     pub palw_tir_public_conviction_v1: Option<ForkActivation>,
+    /// **The TIR public frame's measured cost model** (G14 audit §10, [`crate::palw_tir_frame_cost_v1`]): the court config (windows,
+    /// margin, restarts, prices) and the measured clock (cost units per accepting action, full-frame passes, parallel inclusion
+    /// capacity) every frame of `palw_tir_public_conviction_v1` is priced and clocked with. `None` on every shipped preset; hashed
+    /// Some-only in both fingerprints. Arming the frame needs it AND a pinned frame cost record naming this network, height and
+    /// value (`PALW_TIR_FRAME_COST_RECORDS_V1`, empty); without it the frame route resolves no rules.
+    pub palw_tir_frame_cost_v1: Option<crate::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
     /// G14 greedy Float32 Constraint staged route (rooted f32 row court and Float32 sources).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_float_constraint_v1: Option<ForkActivation>,
@@ -6062,6 +6068,7 @@ impl Params {
             palw_staged_public_court_v1: self.palw_staged_public_court_v1,
             palw_staged_tir_route_v1: self.palw_staged_tir_route_v1,
             palw_tir_public_conviction_v1: self.palw_tir_public_conviction_v1,
+            palw_tir_frame_cost_v1: self.palw_tir_frame_cost_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
@@ -7224,6 +7231,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7578,6 +7586,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7914,6 +7923,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -13423,6 +13433,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,

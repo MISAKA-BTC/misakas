@@ -235,6 +235,7 @@ fn lane(certify: bool) -> Lane {
         dissection: true,
         prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+        clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
     });
     let plan = palw_tir_public_original_quote_v1(&state, &p, &extras, AT_DAA, &original, &header)
         .expect("the quote folds")

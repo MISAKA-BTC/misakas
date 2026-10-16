@@ -2171,7 +2171,11 @@ impl VirtualStateProcessor {
         {
             return None;
         }
-        let config = extras.staged_public_court?;
+        // The staged court must be in force; the frame is priced and clocked by its own MEASURED cost model (audit §10), never
+        // by the staged routes' `network_v1` template. No model (every shipped preset): no rules, the route stays closed.
+        extras.staged_public_court?;
+        let cost = self.palw_tir_frame_cost_v1?;
+        cost.check_v1().ok()?;
         let params = self.palw_state_params_v2.as_ref()?;
         let court = self.palw_court_params_at(daa_score)?.ok()?;
         // The legacy helper has a conservative u16::MAX fallback for callers without registry
@@ -2193,7 +2197,8 @@ impl VirtualStateProcessor {
             court,
             dissection: self.palw_fused_dissectable_at(daa_score),
             prompt_form: self.palw_prompt_ids_form_at(daa_score),
-            config,
+            config: cost.config,
+            clock: cost.clock,
         })
     }
 

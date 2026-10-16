@@ -65,16 +65,59 @@ const NET: &[u8] = b"testnet-12";
 const LADDER: u64 = 1 << 26;
 const PART: u64 = 16_384;
 
-/// The frame's native rules at testnet-12's ladder and staged config (`network_v1`), at a custodian upper of `custodians`.
-fn rules(custodians: u64) -> PalwTirPublicAllocationRulesV1 {
+/// **The candidate testnet-12 frame cost** — read from the recorded measurement's candidate
+/// (`docs/design/palw/evidence/tir-frame-measure-2026-10-16/candidate-t12-cost.json`): every value there names its source (this
+/// harness, the fold-level measurement, testnet-12's shipped parameters, or a network input still to be observed). A candidate, not
+/// a pinned record: `PALW_TIR_FRAME_COST_RECORDS_V1` stays empty.
+fn candidate() -> kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1 {
+    use kaspa_consensus_core::palw_rendering_resources_v1::{PalwRenderingResourcePricesV1, PalwStagedPublicCourtConfigV1};
+    use kaspa_consensus_core::palw_tir_frame_cost_v1::{PALW_TIR_FRAME_CLOCK_VERSION_V1, PalwTirFrameClockV1, PalwTirFrameCostV1};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../../docs/design/palw/evidence/tir-frame-measure-2026-10-16/candidate-t12-cost.json");
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("the candidate cost record")).unwrap();
+    let u = |section: &str, key: &str| v[section][key]["value"].as_u64().unwrap_or_else(|| panic!("{section}.{key}"));
+    let cost = PalwTirFrameCostV1 {
+        config: PalwStagedPublicCourtConfigV1 {
+            prices: PalwRenderingResourcePricesV1 {
+                inclusion_margin_daa: u("config", "inclusion_margin_daa"),
+                rent_per_stream_byte: u("config", "rent_per_stream_byte"),
+                rent_per_parser_step: u("config", "rent_per_parser_step"),
+                rent_per_row_byte: u("config", "rent_per_row_byte"),
+                deposit_per_move: u("config", "deposit_per_move"),
+                reorg_replay_moves: u("config", "reorg_replay_moves"),
+            },
+            acquisition_daa: u("config", "acquisition_daa"),
+            collection_daa: u("config", "collection_daa"),
+            reorg_retention_daa: u("config", "reorg_retention_daa"),
+            maximum_owned_rows_per_reserver: u("config", "maximum_owned_rows_per_reserver") as u32,
+        },
+        clock: PalwTirFrameClockV1 {
+            version: PALW_TIR_FRAME_CLOCK_VERSION_V1,
+            action_parser_steps: u("clock", "action_parser_steps"),
+            action_parser_steps_per_custodian: u("clock", "action_parser_steps_per_custodian"),
+            frame_passes_per_check: u("clock", "frame_passes_per_check"),
+            control_bytes: u("clock", "control_bytes"),
+            parallel_bytes_per_daa: u("clock", "parallel_bytes_per_daa"),
+        },
+    };
+    cost.check_v1().expect("a well-formed candidate");
+    cost
+}
+
+/// The frame's native rules at testnet-12's ladder, at a custodian upper of `custodians`, with `cost`.
+fn rules_with(custodians: u64, cost: kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1) -> PalwTirPublicAllocationRulesV1 {
     PalwTirPublicAllocationRulesV1 {
         maximum_leaves: 1 << 22,
         maximum_custodians: custodians,
         court: PalwCourtParamsV2::new(1 << 22, 45, 2).unwrap(),
         dissection: true,
         prompt_form: PalwPromptIdsFormV1::Flat,
-        config: kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+        config: cost.config,
+        clock: cost.clock,
     }
+}
+fn rules(custodians: u64) -> PalwTirPublicAllocationRulesV1 {
+    rules_with(custodians, candidate())
 }
 
 /// A user free-prompt job of `backend`'s class over `prompt`, at `decode` tokens, greedy (the free-prompt suite's job).
@@ -180,7 +223,20 @@ fn component(c: &kaspa_consensus_core::palw_rendering_resources_v1::PalwRenderin
 fn bounds(plan: &kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1) -> Value {
     let base = plan.terms.accepted_daa;
     let owner = plan.owner_terms_v1().unwrap();
+    // testnet-12's challenge window and court window (the shipped bundle's state params at the planned fence): a framed claim's
+    // Final floor is max(licence + window_challenge, the frame's collect door, and — past the liability horizon fence — licence +
+    // window_challenge + window_court, `palw_legacy_fp_liability_floor_v1`). Licensed no earlier than accepted, so these are lower
+    // bounds relative to acceptance.
+    let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else { unreachable!() };
+    let wc = bundle.state.window_challenge_at(14_000);
+    let court = bundle.state.window_court();
+    let collect = plan.terms.collect_until_daa - base;
     json!({
+        "window_challenge": wc,
+        "window_court": court,
+        "final_floor": collect.max(wc),
+        "final_floor_with_liability_hold": collect.max(wc + court),
         "upper": plan.acquisition.maximum_custodians,
         "claim_rent_sompi": plan.terms.plan.rent_sompi,
         "owner_open_rent_sompi": owner.plan.rent_sompi,
@@ -193,6 +249,8 @@ fn bounds(plan: &kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPub
         "frame_writes": plan.control_footprint.maximum_frame_writes,
         "owner_turns": plan.acquisition.maximum_turns,
         "preparation_slices_per_actor": plan.preparation.maximum_slices_per_actor,
+        "owner_lane": format!("{:?}", plan.owner_work.per_actor),
+        "custodian_lane": format!("{:?}", plan.owner_work.per_custodian),
         "components": {
             "acquisition": component(&plan.acquisition.envelope),
             "preparation_work": component(&plan.preparation_work.envelope),
@@ -323,11 +381,13 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
     let publish_io = writer.progress_v1().charged.io_bytes;
     drop(writer);
     drop(reader);
-    // The allocation's bounds hold for what ran: the generation fits `prepared_disk_bytes`, its slices the per-pass bound.
+    // The allocation's bounds hold for what ran: the generation fits `prepared_disk_bytes`; a pass is ONE debit (audit §10), its
+    // publication's node slices and their IO ride inside the preparer's lane.
     assert!(descriptor.retained_bytes <= plan6.executor.prepared_disk_bytes, "{name}: the generation fits the executor's bound");
     assert!(descriptor.retained_bytes <= plan6.owner_work.prepared_bytes, "{name}: and the work allocation's");
     let per_pass_slices = plan6.preparation.maximum_slices_per_actor / passes;
-    assert!(publish_slices <= per_pass_slices, "{name}: {publish_slices} publication slices within the per-pass bound {per_pass_slices}");
+    assert_eq!(per_pass_slices, 1, "{name}: one debit per pass");
+    assert!(publish_io <= plan6.preparation_work.per_actor.io_bytes, "{name}: the publication's IO within the preparer's lane");
     let start = Instant::now();
     let mut warm = backend.reopen_tir_prepared_capture_v1(&header, &descriptor, durable.path(), 100, 11).unwrap();
     let warm_open_ns = ns(start);

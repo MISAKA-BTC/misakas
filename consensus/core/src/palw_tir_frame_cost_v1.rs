@@ -1,0 +1,422 @@
+//! **The TIR public frame's measured cost model and de-stacked clock** (G14 audit §10, `docs/design/palw/g14-completeness-proof-2026-10-16.md`).
+//!
+//! The frame of `palw_tir_public_conviction_v1` (the only G14 route of an IR class's Free Prompt claim) was priced and clocked as if
+//! every accepting action re-read the whole frame 32 times at 32 parser steps a byte, as if every move of every actor — every 16 KiB
+//! WorkDebit slice, every custodian's every answer part — waited one inclusion margin behind the one before it, and as if each actor
+//! replayed everything 65 times (`reorg_replay_moves` = 64). At testnet-12's 6 custodians that made the minimum claim rent ≥ 2e7 MSK,
+//! the outside owner's Open 0.9e6–3.8e6 DAA after the claim, and the Final floor 6e7–2.4e8 DAA after it (audit §9.5).
+//!
+//! This module holds what replaces those three factors, from MEASUREMENTS only (`misaka/palw/tir/exec/tests/frame_measure.rs`,
+//! the fold-level `tir_frame_accepting_actions_are_measured_across_custodian_uppers`):
+//!
+//! * **Cost units per accepting action** ([`PalwTirFrameClockV1::action_parser_steps`]): the fold's measured work for one control,
+//!   instead of `frame_bytes × 32 × 32`. A full-frame pass is charged only where the fold makes one — an outside owner's Open and a
+//!   conviction filing ([`PalwTirFrameClockV1::frame_passes_per_check`]); every other control checks its own row and the frame's
+//!   immutable identity (the rooted frame is authenticated by the state root and re-checked on every write).
+//! * **Which moves are serial** ([`tir_public_turn_span_v1`], [`tir_public_preparation_door_v1`]): only moves that need an earlier
+//!   move ACCEPTED ON CHAIN wait an inclusion margin — the owner's Demand before a custodian's answer, an answer's Begin / parts /
+//!   Finish in order, a turn's answers before the owner's next Demand, a preparer's debit before its Ready. Different custodians answer
+//!   in parallel (not end to end), preparers work in parallel, and one WorkDebit carries a whole pass's (or a whole turn's) slices
+//!   — the fold already counts grants, not slices. What every actor at once puts on chain is bounded by the network's measured
+//!   inclusion capacity ([`PalwTirFrameClockV1::parallel_bytes_per_daa`]).
+//! * **Turns on the honest critical path** ([`tir_public_localization_turns_v1`]): the owner's localization (the IDs, the step-tree
+//!   descent, the faulty leaf, its cone in runs, the trace row/tile path), not the turn BUDGET (which lets an owner fetch every unit
+//!   and stays the capital bound). Restarts are an additive allowance of whole turns (`reorg_replay_moves`), not a multiplier.
+//!
+//! **No value is invented.** [`PALW_TIR_FRAME_COST_RECORDS_V1`] is EMPTY: arming `palw_tir_public_conviction_v1` on a real network is
+//! refused until a reviewed change pins a record for that network and height whose measurement digest is the canonical measurement
+//! record (slowest supported node, release build, the network's maximum profile) and whose network inputs (inclusion margin, parallel
+//! capacity, restarts) are observed on that network. [`palw_tir_frame_test_only_cost_v1`] is a TEST-ONLY config (small windows and
+//! prices) that no preset and no record carries.
+//!
+//! No cryptographic computation proof of any kind is used (PRINCIPLES §8): these are deadlines and prices for public answers, local
+//! recomputation and a deterministic court.
+
+use crate::Hash64;
+use crate::palw_rendering_resources_v1::{PalwRenderingResourcePricesV1, PalwStagedPublicCourtConfigV1};
+use crate::palw_tir_public_source_v1::PalwTirPublicSourceV1;
+use borsh::{BorshDeserialize, BorshSerialize};
+
+/// The clock / cost-unit format's version.
+pub const PALW_TIR_FRAME_CLOCK_VERSION_V1: u16 = 1;
+
+/// WorkDebits on a preparer's serial path per pass: ONE debit carries the whole pass (the fold counts grants, not slices; the
+/// preparer's own lane bounds its cumulative work). Then its Ready.
+pub const PALW_TIR_FRAME_PREPARATION_DEBITS_PER_PASS_V1: u64 = 1;
+/// WorkDebits on a custodian's serial path per answered turn (its warm reopen, response build and body hash in one debit).
+pub const PALW_TIR_FRAME_RESPONSE_DEBITS_PER_TURN_V1: u64 = 1;
+/// WorkDebits on the outside owner's serial path per turn (its body read, authentication, probe and replay in one debit).
+pub const PALW_TIR_FRAME_OWNER_DEBITS_PER_TURN_V1: u64 = 1;
+/// Concurrent outside owners a frame admits (K_owner, `PalwTirPublicClaimV1::MAXIMUM_OWNERS_V1`): each custodian may answer this many
+/// owners' turns at once, so the parallel inclusion term counts them.
+pub const PALW_TIR_FRAME_CONCURRENT_OWNERS_V1: u64 = 8;
+
+/// **The measured per-frame cost units and network inclusion capacity** — with the frame's court config (windows, margin, restarts,
+/// prices) they make the frame's prices and clocks. Carried in the acquisition plan and the source descriptor so every re-derivation
+/// in the fold reproduces the accepted frame exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirFrameClockV1 {
+    pub version: u16,
+    /// Parser steps (the rent unit) the fold spends on ONE accepting control that re-reads no full frame, before its per-custodian
+    /// growth: the slowest such action's measured fold time plus one ML-DSA-87 verification, fitted over the measured uppers and
+    /// converted at the measured parse rate of one full-frame pass (the existing tariff of 32 steps per byte), rounded up.
+    pub action_parser_steps: u64,
+    /// Parser steps each read action adds per custodian of the frame's upper (the measured growth of a read action from the smallest
+    /// to the largest measured upper: its liable-signer and contract sets), so a small Panel's frame is not charged a large one's.
+    pub action_parser_steps_per_custodian: u64,
+    /// Full-frame passes (structure check, copy, encode) the fold makes at an outside owner's Open and at a conviction filing.
+    pub frame_passes_per_check: u64,
+    /// Carrier bytes of one control besides its answer bytes (the signed control's framing and its ML-DSA-87 signature, measured).
+    pub control_bytes: u64,
+    /// Bytes the network includes per DAA for ONE frame's actors moving at once: a lower bound observed on the network (or, as a
+    /// ceiling before that observation, the shipped block's transient-mass byte budget at one block a DAA).
+    pub parallel_bytes_per_daa: u64,
+}
+
+impl PalwTirFrameClockV1 {
+    /// Parser steps one read action costs on a frame whose custodian upper is `maximum_custodians`.
+    pub fn action_steps_v1(&self, maximum_custodians: u64) -> Result<u64, String> {
+        sum(&[self.action_parser_steps, product(self.action_parser_steps_per_custodian, maximum_custodians)?])
+    }
+    /// DAA the network needs to include `moves` controls carrying `body` answer bytes in all, at the parallel capacity.
+    pub fn inclusion_daa_v1(&self, moves: u64, body: u64) -> Result<u64, String> {
+        Ok(sum(&[product(moves, self.control_bytes)?, body])?.div_ceil(self.parallel_bytes_per_daa))
+    }
+    pub fn check_v1(&self) -> Result<(), String> {
+        if self.version != PALW_TIR_FRAME_CLOCK_VERSION_V1
+            || self.action_parser_steps == 0
+            || self.frame_passes_per_check == 0
+            || self.control_bytes == 0
+            || self.parallel_bytes_per_daa < self.control_bytes.saturating_add(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64)
+        {
+            return Err("TIR frame clock needs its version and positive measured cost units and inclusion capacity".into());
+        }
+        Ok(())
+    }
+}
+
+/// **The frame's whole cost model**: its court config (inclusion margin, restarts, response / collection windows, retention, prices)
+/// and its measured clock. A `Params` mirror (`palw_tir_frame_cost_v1`), `None` on every shipped preset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirFrameCostV1 {
+    pub config: PalwStagedPublicCourtConfigV1,
+    pub clock: PalwTirFrameClockV1,
+}
+
+impl PalwTirFrameCostV1 {
+    pub fn check_v1(&self) -> Result<(), String> {
+        self.config.check()?;
+        self.clock.check_v1()
+    }
+}
+
+/// The record format's version.
+pub const PALW_TIR_FRAME_COST_RECORD_VERSION_V1: u16 = 1;
+
+/// **A frame cost record** (the arm-readiness record format of [`crate::palw_g14_gates_v1::PalwG14ArmingRecordV1`]): the network
+/// (genesis) and the exact `palw_tir_public_conviction_v1` height it prices, the source commit of the binary that measured, the
+/// digest of the canonical measurement record (`misaka-palw/tir-frame-measure/v1` and the fold record, one BLAKE2b-256 over both),
+/// the review's digest, and the values those measurements give.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirFrameCostRecordV1 {
+    pub version: u16,
+    pub genesis: Hash64,
+    pub activation_daa: u64,
+    pub source_commit: [u8; 20],
+    pub measurement: [u8; 32],
+    pub review: [u8; 32],
+    pub cost: PalwTirFrameCostV1,
+}
+
+/// **The pinned frame cost records — EMPTY.** No real network's frame is priced or clocked until a reviewed change pins one.
+pub const PALW_TIR_FRAME_COST_RECORDS_V1: &[PalwTirFrameCostRecordV1] = &[];
+
+/// Why a frame cost record does not price a network.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwTirFrameCostRefusalV1 {
+    NoRecord,
+    Version,
+    SourceCommit,
+    Measurement,
+    Review,
+    Values,
+    Differs,
+}
+
+impl PalwTirFrameCostRefusalV1 {
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::NoRecord => {
+                "palw_tir_public_conviction_v1 cannot be armed: no measured TIR frame cost record (PALW_TIR_FRAME_COST_RECORDS_V1 is \
+                 empty) names this network and height (audit §10)"
+            }
+            Self::Version => "the TIR frame cost record's version is not this binary's",
+            Self::SourceCommit => "the TIR frame cost record names no source commit",
+            Self::Measurement => "the TIR frame cost record carries no measurement digest",
+            Self::Review => "the TIR frame cost record carries no review digest, or it equals the measurement",
+            Self::Values => "the TIR frame cost record's values are incomplete",
+            Self::Differs => "the ruleset's TIR frame cost differs from the pinned record for this network and height",
+        }
+    }
+}
+
+/// **Does `records` price the frame at `activation_daa` on the network whose genesis is `genesis` with `cost`?** The first record
+/// naming exactly this (network, height) decides; none is [`PalwTirFrameCostRefusalV1::NoRecord`].
+pub fn palw_tir_frame_cost_record_admits_v1(
+    genesis: Hash64,
+    activation_daa: u64,
+    cost: Option<&PalwTirFrameCostV1>,
+    records: &[PalwTirFrameCostRecordV1],
+) -> Result<(), PalwTirFrameCostRefusalV1> {
+    let Some(record) = records.iter().find(|r| r.genesis == genesis && r.activation_daa == activation_daa) else {
+        return Err(PalwTirFrameCostRefusalV1::NoRecord);
+    };
+    if record.version != PALW_TIR_FRAME_COST_RECORD_VERSION_V1 {
+        return Err(PalwTirFrameCostRefusalV1::Version);
+    }
+    if record.source_commit == [0; 20] {
+        return Err(PalwTirFrameCostRefusalV1::SourceCommit);
+    }
+    if record.measurement == [0; 32] {
+        return Err(PalwTirFrameCostRefusalV1::Measurement);
+    }
+    if record.review == [0; 32] || record.review == record.measurement {
+        return Err(PalwTirFrameCostRefusalV1::Review);
+    }
+    if record.cost.check_v1().is_err() {
+        return Err(PalwTirFrameCostRefusalV1::Values);
+    }
+    if cost != Some(&record.cost) {
+        return Err(PalwTirFrameCostRefusalV1::Differs);
+    }
+    Ok(())
+}
+
+/// **TEST-ONLY** — small windows and prices for fold and node tests (T-N1). NOT a measurement, in no preset and no record; a real
+/// network that names it is refused by [`palw_tir_frame_cost_record_admits_v1`] (no record carries it).
+pub const fn palw_tir_frame_test_only_cost_v1() -> PalwTirFrameCostV1 {
+    PalwTirFrameCostV1 {
+        config: PalwStagedPublicCourtConfigV1 {
+            prices: PalwRenderingResourcePricesV1 {
+                inclusion_margin_daa: 1,
+                rent_per_stream_byte: 1,
+                rent_per_parser_step: 1,
+                rent_per_row_byte: 1,
+                deposit_per_move: 1,
+                reorg_replay_moves: 1,
+            },
+            acquisition_daa: 2,
+            collection_daa: 8,
+            reorg_retention_daa: 8,
+            maximum_owned_rows_per_reserver: 1,
+        },
+        clock: PalwTirFrameClockV1 {
+            version: PALW_TIR_FRAME_CLOCK_VERSION_V1,
+            action_parser_steps: 1_024,
+            action_parser_steps_per_custodian: 8,
+            frame_passes_per_check: 1,
+            control_bytes: 8_192,
+            parallel_bytes_per_daa: 4 << 20,
+        },
+    }
+}
+
+fn sum(values: &[u64]) -> Result<u64, String> {
+    values.iter().try_fold(0u64, |total, value| total.checked_add(*value).ok_or_else(|| "TIR frame clock sum overflow".into()))
+}
+fn product(a: u64, b: u64) -> Result<u64, String> {
+    a.checked_mul(b).ok_or_else(|| "TIR frame clock product overflow".into())
+}
+fn height(count: u64) -> u64 {
+    if count <= 1 { 0 } else { u64::from(64 - (count - 1).leading_zeros()) }
+}
+/// Turns of a node descent of a tree of `count` leaves, `DEPTH` levels per node request, plus the leaf level.
+fn descent(count: u64) -> u64 {
+    height(count).div_ceil(u64::from(crate::palw_tir_court_v1::PALW_TIR_STEP_NODE_DEPTH_V1)) + 1
+}
+
+/// **The honest outside owner's turns on its critical path** — a deterministic function of the original source only:
+///
+/// * the complete committed IDs (one demand; its 1,024-ID chunks are the answer's parts) — the owner compares them with its own
+///   replay first (G-T2);
+/// * the step-tree descent to the first differing leaf ([`PalwTirPublicSourceV1::step_descent_units_v1`]), the leaf itself;
+/// * the leaf's cone, in runs of `PALW_TIR_STEP_RUN_MAX_LEAVES_V1` leaves. Bounded SAFELY by every leaf of the claim in runs (an owner
+///   that needs all of them still finishes); a tighter per-program cone bound is a later refinement, never assumed here;
+/// * a decode-selection fault's trace path: the rows descent, the tiles descent and every tile of one row;
+/// * one turn for the output / stop-rule check.
+pub fn tir_public_localization_turns_v1(source: &PalwTirPublicSourceV1) -> Result<u64, String> {
+    let n = source.leaf_count_v1();
+    let d = u64::from(source.decode_count_v1());
+    let run = u64::from(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1);
+    let (ids, trace) = if source.supports_tiled_trace_v1() && d > 0 {
+        let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+        // The owned IDs are ONE demand (`Ids { offset: 0 }` acquires the complete sequence; its chunks are the answer's parts).
+        (1, sum(&[descent(d), descent(tiles), tiles])?)
+    } else {
+        (0, 0)
+    };
+    sum(&[ids, source.step_descent_units_v1(), 1, n.div_ceil(run), trace, 1])
+}
+
+/// **One turn's span for a request whose answer body is `body_bytes`** (`slots` answering literal custodians and the owner):
+/// the owner's Demand and its own per-turn debit, then ONE custodian's serial chain (its per-turn debit, Begin, each 16 KiB part,
+/// Finish) — custodians answer in parallel, so the span does not grow with them — one response window `acquisition_daa` for the
+/// answer's build, and the time the network needs to include every custodian's chain for every concurrent owner at its measured
+/// parallel capacity.
+pub fn tir_public_turn_span_v1(
+    body_bytes: u64,
+    slots: u64,
+    config: &PalwStagedPublicCourtConfigV1,
+    clock: &PalwTirFrameClockV1,
+) -> Result<u64, String> {
+    clock.check_v1()?;
+    let parts = body_bytes.div_ceil(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64).max(1);
+    let custodian = sum(&[PALW_TIR_FRAME_RESPONSE_DEBITS_PER_TURN_V1, 2, parts])?;
+    let owner = sum(&[1, PALW_TIR_FRAME_OWNER_DEBITS_PER_TURN_V1])?;
+    let all = product(slots, PALW_TIR_FRAME_CONCURRENT_OWNERS_V1)?;
+    let parallel = clock.inclusion_daa_v1(product(all, custodian)?, product(all, body_bytes)?)?;
+    sum(&[config.acquisition_daa, product(sum(&[owner, custodian])?, config.prices.inclusion_margin_daa)?, parallel])
+}
+
+/// **The acquisition's critical path: `(turns, DAA)`** — the honest owner's localization turns ([`tir_public_localization_turns_v1`])
+/// each at the span of ITS request's largest answer (the IDs, a root-level step node, the leaf, a full run of the cone, a rows /
+/// tile node, a trace tile — `request_body_bound_v1`, the same bound every demand's span is computed from), plus
+/// `reorg_replay_moves` restart turns at the widest of them (a reorg undoes at most the turns it rolls back and the same signed moves
+/// are re-included). Before the frame pricing fix every one of `fresh × 65` budgeted turns stood end to end at `acquisition_daa`
+/// plus a margin per move of every slot.
+pub fn tir_public_localization_path_v1(
+    source: &PalwTirPublicSourceV1,
+    maximum_custodians: u64,
+    config: &PalwStagedPublicCourtConfigV1,
+    clock: &PalwTirFrameClockV1,
+) -> Result<(u64, u64), String> {
+    use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1 as R;
+    let slots = maximum_custodians.checked_add(1).ok_or("TIR frame slots overflow")?;
+    let span = |request: R| -> Result<u64, String> {
+        let (bytes, _) = crate::palw_tir_public_owned_v1::request_body_bound_v1(source, request)?;
+        tir_public_turn_span_v1(bytes, slots, config, clock)
+    };
+    let level = |count: u64| height(count).min(u64::from(crate::palw_tir_court_v1::PALW_TIR_STEP_NODE_DEPTH_V1)) as u8;
+    // (turns, DAA, widest span) accumulated over the path.
+    let mut path = (0u64, 0u64, 0u64);
+    let add = |path: &mut (u64, u64, u64), count: u64, each: u64| -> Result<(), String> {
+        path.0 = sum(&[path.0, count])?;
+        path.1 = sum(&[path.1, product(count, each)?])?;
+        path.2 = path.2.max(each);
+        Ok(())
+    };
+    let n = source.leaf_count_v1();
+    let d = u64::from(source.decode_count_v1());
+    let tiled = source.supports_tiled_trace_v1() && d > 0;
+    if tiled {
+        add(&mut path, 1, span(R::Ids { offset: 0 })?)?;
+    }
+    let leaf = span(R::StepLeaf { index: 0 })?;
+    let node = if n > 1 { span(R::StepNode { level: level(n), index: 0 })? } else { leaf };
+    add(&mut path, source.step_descent_units_v1(), node)?;
+    add(&mut path, 1, leaf)?;
+    let run = u32::try_from(n.clamp(1, u64::from(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)))
+        .map_err(|_| "TIR run overflow")?;
+    let cone = if run > 1 { span(R::StepRun { first: 0, count: run })? } else { leaf };
+    add(&mut path, n.div_ceil(u64::from(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)), cone)?;
+    if tiled {
+        let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+        let tile = span(R::TraceTile { row: 0, tile: 0 })?;
+        add(&mut path, descent(d), if d > 1 { span(R::RowsNode { level: level(d), index: 0 })? } else { tile })?;
+        add(&mut path, descent(tiles), if tiles > 1 { span(R::TileNode { row: 0, level: level(tiles), index: 0 })? } else { tile })?;
+        add(&mut path, tiles, tile)?;
+    }
+    // The output / stop-rule check, then the restart turns, each at the widest span on the path.
+    let widest = path.2;
+    add(&mut path, 1, widest)?;
+    add(&mut path, config.prices.reorg_replay_moves, widest)?;
+    if path.0 != sum(&[tir_public_localization_turns_v1(source)?, config.prices.reorg_replay_moves])? {
+        return Err("TIR localization path disagrees with its turn count".into());
+    }
+    Ok((path.0, path.1))
+}
+
+/// **The preparation door** (after the claim's acceptance): one response window for the pass's build, then each preparer's serial
+/// chain — one batched debit per pass (its first pass and `reorg_replay_moves` restarts) and its Ready — every preparer at once,
+/// included at the measured parallel capacity.
+pub fn tir_public_preparation_door_v1(
+    maximum_custodians: u64,
+    config: &PalwStagedPublicCourtConfigV1,
+    clock: &PalwTirFrameClockV1,
+) -> Result<u64, String> {
+    clock.check_v1()?;
+    let passes = config.prices.reorg_replay_moves.checked_add(1).ok_or("TIR preparation passes overflow")?;
+    let serial = sum(&[product(passes, PALW_TIR_FRAME_PREPARATION_DEBITS_PER_PASS_V1)?, 1])?;
+    let parallel = clock.inclusion_daa_v1(product(maximum_custodians, serial)?, 0)?;
+    sum(&[config.acquisition_daa, product(serial, config.prices.inclusion_margin_daa)?, parallel])
+}
+
+/// **The filing allowance** after the stream door: the filer's witness parts (in order) and its conviction, at the measured capacity.
+pub fn tir_public_filing_daa_v1(
+    witness_moves: u64,
+    config: &PalwStagedPublicCourtConfigV1,
+    clock: &PalwTirFrameClockV1,
+) -> Result<u64, String> {
+    clock.check_v1()?;
+    let parts = product(witness_moves, crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64)?;
+    sum(&[product(2, config.prices.inclusion_margin_daa)?, clock.inclusion_daa_v1(witness_moves, parts)?])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cost_record_list_is_empty_and_refuses_every_network() {
+        assert!(PALW_TIR_FRAME_COST_RECORDS_V1.is_empty());
+        let cost = palw_tir_frame_test_only_cost_v1();
+        cost.check_v1().expect("the test-only config is well formed");
+        assert_eq!(
+            palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, Some(&cost), PALW_TIR_FRAME_COST_RECORDS_V1),
+            Err(PalwTirFrameCostRefusalV1::NoRecord)
+        );
+        // A well-formed record admits exactly its own values, network and height.
+        let record = PalwTirFrameCostRecordV1 {
+            version: PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
+            genesis: Hash64::from_u64_word(1),
+            activation_daa: 16_000,
+            source_commit: [1; 20],
+            measurement: [2; 32],
+            review: [3; 32],
+            cost,
+        };
+        let records = [record];
+        assert_eq!(palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, Some(&cost), &records), Ok(()));
+        assert_eq!(
+            palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_001, Some(&cost), &records),
+            Err(PalwTirFrameCostRefusalV1::NoRecord)
+        );
+        let mut other = cost;
+        other.clock.parallel_bytes_per_daa += 1;
+        assert_eq!(
+            palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, Some(&other), &records),
+            Err(PalwTirFrameCostRefusalV1::Differs)
+        );
+        assert_eq!(
+            palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, None, &records),
+            Err(PalwTirFrameCostRefusalV1::Differs)
+        );
+        let unreviewed = [PalwTirFrameCostRecordV1 { review: [2; 32], ..record }];
+        assert_eq!(
+            palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, Some(&cost), &unreviewed),
+            Err(PalwTirFrameCostRefusalV1::Review)
+        );
+    }
+
+    #[test]
+    fn a_turn_span_does_not_grow_with_custodians_end_to_end() {
+        let cost = palw_tir_frame_test_only_cost_v1();
+        let six = tir_public_turn_span_v1(700, 7, &cost.config, &cost.clock).unwrap();
+        let wide = tir_public_turn_span_v1(700, 258, &cost.config, &cost.clock).unwrap();
+        // Serial: owner (Demand + debit) and ONE custodian chain (debit, Begin, 1 part, Finish) at margin 1, window 2.
+        assert_eq!(six, 2 + 6 + (7 * 8 * (4 * 8_192 + 700u64)).div_ceil(4 << 20));
+        // 257 custodians add only their inclusion at the parallel capacity, not 257 serial chains.
+        assert_eq!(wide, 2 + 6 + (258 * 8 * (4 * 8_192 + 700u64)).div_ceil(4 << 20));
+        assert!(wide < 258 * 4, "not end to end");
+    }
+}

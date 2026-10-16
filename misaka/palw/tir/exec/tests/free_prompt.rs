@@ -112,6 +112,8 @@ fn rules(custodians: u64) -> PalwTirPublicAllocationRulesV1 {
         dissection: true,
         prompt_form: PalwPromptIdsFormV1::Flat,
         config: kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+        // The allocation's shape, not its prices, is under test here: the TEST-ONLY clock (audit §10).
+        clock: kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
     }
 }
 

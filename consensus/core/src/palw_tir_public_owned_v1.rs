@@ -13,6 +13,7 @@ use crate::palw_tir_public_source_v1::{
     PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicAuthenticatedIdsV1, PalwTirPublicAuthenticatedUnitV1, PalwTirPublicDemandScopeV1,
     PalwTirPublicIdsAssemblerV1, PalwTirPublicRequestV1, PalwTirPublicResponseV1, PalwTirPublicSourceV1,
 };
+use crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1;
 use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -271,7 +272,9 @@ fn work_allocation_from_lanes_v1(
         maximum_moves: maximum.attempts,
         maximum_parser_steps: parser,
         maximum_blake_blocks: maximum.hash_bytes.div_ceil(128),
-        inclusion_daa: product(maximum.attempts, plan.config.prices.inclusion_margin_daa)?,
+        // Audit §10: every debit rides inside its turn's span or its pass's preparation door (one per turn / pass); none adds a
+        // deadline of its own. Before the fix each debit added one inclusion margin, end to end.
+        inclusion_daa: 0,
         rent_sompi: sum(&[
             product(bytes, plan.config.prices.rent_per_stream_byte)?,
             product(row, plan.config.prices.rent_per_row_byte)?,
@@ -310,7 +313,7 @@ pub fn derive_tir_public_work_allocation_v1(
         || source.source_id_v1() != plan.source_id
         || rules.max_step_leaf_count < source.leaf_count_v1()
         || rules.maximum_probe_copy_bytes == 0
-        || *plan != PalwTirPublicOwnedPlanV1::derive_v1(source, plan.maximum_custodians, plan.config)?
+        || *plan != PalwTirPublicOwnedPlanV1::derive_v1(source, plan.maximum_custodians, plan.config, plan.clock)?
     {
         return Err("TIR work quote changes native source/geometry/frozen rules".into());
     }
@@ -348,24 +351,27 @@ pub fn derive_tir_public_work_allocation_v1(
     let d = u64::from(source.decode_count_v1());
     let p = u64::from(header.job_context.declared_prefill_tokens);
     let positions = p.checked_add(d).and_then(|v| v.checked_sub(1)).ok_or("TIR work positions overflow")?;
-    let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
-    let probes = product(n.checked_add(1).ok_or("TIR work probes overflow")?, passes)?;
     let unit = plan.unit_bytes_v1(source)?;
     let (_, prepared_bytes) = crate::palw_tir_public_allocation_v1::tir_public_prepared_bytes_v1(record, source)?;
-    let walk = product(passes, sum(&[n, product(d, tiles)?, positions, d, 32])?)?;
     let arithmetic_work = model.arithmetic_mac_eq().checked_mul(u128::from(passes)).ok_or("TIR arithmetic work overflow")?;
     let traffic_bytes = model.traffic_bytes().checked_mul(u128::from(passes)).ok_or("TIR traffic work overflow")?;
     let replay_io = sum(&[exact(traffic_bytes)?, product(rules.maximum_replay_io_bytes, passes)?])?;
-    let program_parse = product(probes, record.program.len() as u64)?;
     let replay_id_words = product(product(positions, p.checked_add(d).ok_or("TIR replay IDs overflow")?)?, passes)?;
     // One lane that reads `answering` slots' answers of every turn and carries `moves` acquisition moves.
-    let lane = |answering: u64, moves: u64| -> Result<PalwTirPublicWorkV1, String> {
+    // **Audit §10 (the frame pricing fix): a lane's `attempts` are its WorkDebits, and one debit carries a whole turn's or a whole
+    // pass's slices** (the fold counts grants, not slices; the lane's own work quantities bound what the debits carry). Before the
+    // fix every 16 KiB slice, every logical walk unit and every acquisition move was its own debit, sixteen times over, so a lane
+    // held 1e5–1e7 debits that the clock then stacked one inclusion margin each.
+    // **Audit §10: a lane's cone probes are its own.** The outside owner probes at most once a turn (its localization: the leaf
+    // it reached and its cone); a literal custodian / preparer replays and publishes and parses the program once a pass, and probes
+    // no cone. Before the fix every lane was budgeted a probe per leaf per pass (`(N + 1) × 65`), each at the court's maximum
+    // evaluation, target and source-read limits — the largest term of every lane's rent.
+    let lane = |answering: u64, per_turn: u64, probes: u64| -> Result<PalwTirPublicWorkV1, String> {
+        let program_parse = product(probes, record.program.len() as u64)?;
         let answer_bytes = product(product(plan.maximum_turns, answering)?, unit)?;
-        let durable = sum(&[answer_bytes, product(prepared_bytes, passes)?])?;
         let attempts = sum(&[
-            product(16, sum(&[moves, walk, answer_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), product(probes, 4)?])?)?,
-            product(durable.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), 4)?,
-            32,
+            product(plan.maximum_turns, per_turn)?,
+            product(passes, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_PREPARATION_DEBITS_PER_PASS_V1)?,
         ])?;
         let io = sum(&[answer_bytes, replay_io])?;
         let copy = sum(&[product(io, 8)?, product(product(probes, rules.maximum_probe_copy_bytes)?, 2)?, product(program_parse, 8)?])?;
@@ -389,10 +395,10 @@ pub fn derive_tir_public_work_allocation_v1(
             target_requests: product(probes, rules.max_target_requests)?,
         })
     };
-    // The outside owner reads every slot's answers and carries the whole acquisition; a literal custodian answers its own slot
-    // and carries its share of the acquisition's moves.
-    let owner = lane(slots, plan.envelope.maximum_moves)?;
-    let custodian = lane(1, plan.envelope.maximum_moves.div_ceil(slots))?;
+    // The outside owner reads every slot's answers and debits once a turn; a literal custodian answers its own slot, debits once a
+    // turn it answers and once a pass it prepares.
+    let owner = lane(slots, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_OWNER_DEBITS_PER_TURN_V1, plan.maximum_turns)?;
+    let custodian = lane(1, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_RESPONSE_DEBITS_PER_TURN_V1, passes)?;
     work_allocation_from_lanes_v1(source.source_id_v1(), source.vocab_v1(), rules, plan, owner, custodian, prepared_bytes)
 }
 
@@ -574,16 +580,12 @@ pub fn derive_tir_public_preparation_plan_v1(
     {
         return Err("TIR preparation quote changes original source or native custody upper".into());
     }
-    let p = u64::from(source.header_v1().job_context.declared_prefill_tokens);
-    let d = u64::from(source.decode_count_v1());
-    let positions = p.checked_add(d).and_then(|n| n.checked_sub(1)).ok_or("TIR preparation position overflow")?;
-    let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
-    let one_pass = sum(&[source.leaf_count_v1().max(positions), product(d, tiles)?, p.div_ceil(1024), d.div_ceil(1024), 32])?;
-    // A preparer's slices: its logical walk and its prepared generation's 16 KiB slices (written, then reopened), once per
-    // pass. Replay RAM traffic is debited in the IO budget, not sliced (the frame allocation fix of 2026-10-16).
+    // **Audit §10 (the frame pricing fix): a preparer's debits are one per pass** — the pass's logical walk and its prepared
+    // generation's slices ride one WorkDebit whose work quantities carry them (its own lane bounds the total). Before the fix every
+    // walk unit and every 16 KiB slice (written, then reopened) was its own debit and its own inclusion margin: 2.3e5–9.5e5 debits
+    // per preparer and a door of 0.9e6–3.8e6 DAA at testnet-12's config, against a measured publication of 6–8 node slices.
     let passes = work.maximum_restarts.checked_add(1).ok_or("TIR preparation retries overflow")?;
-    let durable_slices = product(product(work.prepared_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), passes)?, 2)?;
-    let maximum_slices_per_actor = sum(&[product(one_pass, passes)?, durable_slices])?;
+    let maximum_slices_per_actor = product(passes, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_PREPARATION_DEBITS_PER_PASS_V1)?;
     if product(maximum_slices_per_actor, 2)? > work.per_actor.attempts {
         return Err("TIR work quote does not cover cold/publication pre-debits and validation slices".into());
     }
@@ -593,14 +595,12 @@ pub fn derive_tir_public_preparation_plan_v1(
     let row = sum(&[4096, product(upper, 1024)?])?;
     let bytes = product(moves, sum(&[16_384, product(row, 8)?])?)?;
     let parser = product(bytes, 32)?;
-    let margin = acquisition.config.prices.inclusion_margin_daa;
-    // **The preparation door is one preparer's serial time**: each of its slices is one WorkDebit (`capture_debit_v1` refuses
-    // a grant past `maximum_slices_per_actor`), then its Ready, one inclusion margin each. The preparers work at once, each on
-    // its own lane; the door does not add every actor's carriers end to end (that sum is what the SUM's rent pays for).
-    let preparation_daa = sum(&[
-        acquisition.config.acquisition_daa,
-        product(maximum_slices_per_actor.checked_add(1).ok_or("TIR Ready moves overflow")?, margin)?,
-    ])?;
+    // **The preparation door is one preparer's serial time**: its debit per pass (`capture_debit_v1` refuses a grant past
+    // `maximum_slices_per_actor`), then its Ready, one inclusion margin each, after one response window for the build. The
+    // preparers work at once, each on its own lane; what they all put on chain is included at the measured parallel capacity
+    // (`palw_tir_frame_cost_v1::tir_public_preparation_door_v1`).
+    let preparation_daa =
+        crate::palw_tir_frame_cost_v1::tir_public_preparation_door_v1(upper, &acquisition.config, &acquisition.clock)?;
     let envelope = PalwRenderingResourcePlanV1 {
         prefix_tokens: 0,
         vocab: source.vocab_v1(),
@@ -610,7 +610,8 @@ pub fn derive_tir_public_preparation_plan_v1(
         maximum_moves: moves,
         maximum_parser_steps: parser,
         maximum_blake_blocks: parser.div_ceil(128),
-        inclusion_daa: product(moves, margin)?,
+        // The door itself: every preparer's Ready and default carriers are included inside it.
+        inclusion_daa: preparation_daa,
         row_bytes: row,
         resident_ram_bytes: product(row, 8)?,
         rent_sompi: sum(&[
@@ -1072,6 +1073,8 @@ pub struct PalwTirPublicOwnedPlanV1 {
     pub maximum_turns: u64,
     pub maximum_unit_bytes: u64,
     pub config: PalwStagedPublicCourtConfigV1,
+    /// The frame's measured cost units and inclusion capacity (audit §10): with `config` they fix every span and door below.
+    pub clock: PalwTirFrameClockV1,
     pub envelope: PalwRenderingResourcePlanV1,
 }
 impl PalwTirPublicOwnedPlanV1 {
@@ -1111,10 +1114,12 @@ impl PalwTirPublicOwnedPlanV1 {
         source: &PalwTirPublicSourceV1,
         maximum_custodians: u64,
         config: PalwStagedPublicCourtConfigV1,
+        clock: PalwTirFrameClockV1,
     ) -> Result<Self, String> {
         if maximum_custodians == 0 || config.acquisition_daa == 0 || config.prices.inclusion_margin_daa == 0 {
             return Err("TIR acquisition requires native custody and positive original response/inclusion windows".into());
         }
+        clock.check_v1()?;
         let n = source.leaf_count_v1();
         let d = u64::from(source.decode_count_v1());
         let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
@@ -1145,7 +1150,12 @@ impl PalwTirPublicOwnedPlanV1 {
                 + if source.supports_tiled_trace_v1() { u128::from(d) * (u128::from(tiles) * 3 + 2) + 1 } else { 0 },
         )?;
         let reacquire = exact(u128::from(fresh) * u128::from(config.prices.reorg_replay_moves))?;
-        let turns = fresh.checked_add(reacquire).ok_or("TIR acquisition turn budget overflow")?;
+        // **Turns (audit §10): the honest owner's critical path plus `reorg_replay_moves` whole restart turns** — the door holds no
+        // more (`inclusion_daa` below), so no owner prepays turns its clock cannot fit. Before the frame pricing fix the budget was
+        // `fresh + reacquire` turns (every unit fetched alone, 65 times), each stacked at `acquisition_daa` plus a margin per move.
+        // The logical-unit budgets still let any turn name any unit; they bound WHAT a turn may fetch, not how many turns run.
+        let (turns, path_daa) =
+            crate::palw_tir_frame_cost_v1::tir_public_localization_path_v1(source, maximum_custodians, &config, &clock)?;
         let slots = maximum_custodians.checked_add(1).ok_or("TIR literal slots overflow")?;
         let attempts = product(turns, slots)?;
         let moves = sum(&[product(attempts, atom.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64) + 3)?, product(turns, 2)?, 1])?;
@@ -1175,7 +1185,9 @@ impl PalwTirPublicOwnedPlanV1 {
             maximum_moves: moves,
             maximum_parser_steps: work,
             maximum_blake_blocks: work.div_ceil(128),
-            inclusion_daa: sum(&[product(moves, config.prices.inclusion_margin_daa)?, product(turns, config.acquisition_daa)?])?,
+            // The critical path: each localization turn at its own request's span (custodians answer in parallel), restarts at the
+            // widest — `palw_tir_frame_cost_v1::tir_public_localization_path_v1`. Not `moves × margin + turns × acquisition_daa`.
+            inclusion_daa: path_daa,
             rent_sompi: sum(&[
                 product(sum(&[disk, carrier])?, config.prices.rent_per_stream_byte)?,
                 product(row, config.prices.rent_per_row_byte)?,
@@ -1194,6 +1206,7 @@ impl PalwTirPublicOwnedPlanV1 {
             maximum_turns: turns,
             maximum_unit_bytes,
             config,
+            clock,
             envelope,
         })
     }
@@ -1245,10 +1258,11 @@ impl PalwTirPublicContractV1 {
         &self,
         source: &PalwTirPublicSourceV1,
         config: PalwStagedPublicCourtConfigV1,
+        clock: PalwTirFrameClockV1,
         maximum_custodians: u64,
     ) -> Result<(), String> {
-        if self.plan.config != config || self.plan.maximum_custodians != maximum_custodians {
-            return Err("TIR wire quote substitutes native prices or admitted custody upper bound".into());
+        if self.plan.config != config || self.plan.clock != clock || self.plan.maximum_custodians != maximum_custodians {
+            return Err("TIR wire quote substitutes native prices, measured clock or admitted custody upper bound".into());
         }
         self.check_v1(source)
     }
@@ -1256,7 +1270,8 @@ impl PalwTirPublicContractV1 {
         if self.claim == Hash64::default()
             || self.bundle_id == Hash64::default()
             || self.source_id != source.source_id_v1()
-            || self.plan != PalwTirPublicOwnedPlanV1::derive_v1(source, self.plan.maximum_custodians, self.plan.config)?
+            || self.plan
+                != PalwTirPublicOwnedPlanV1::derive_v1(source, self.plan.maximum_custodians, self.plan.config, self.plan.clock)?
             || self.custodians.len() as u64 > self.plan.maximum_custodians
             || !self.custodians.contains(&self.producer)
             || self.custodians.contains(&self.owner)
@@ -1776,11 +1791,12 @@ impl PalwTirPublicOwnedV1 {
         source: &PalwTirPublicSourceV1,
         drawn_panel: &BTreeSet<PalwBondKeyV2>,
         config: PalwStagedPublicCourtConfigV1,
+        clock: PalwTirFrameClockV1,
         maximum_custodians: u64,
         now: u64,
         capital: u64,
     ) -> Result<Self, String> {
-        contract.check_native_config_v1(source, config, maximum_custodians)?;
+        contract.check_native_config_v1(source, config, clock, maximum_custodians)?;
         Self::admit_v1(contract, source, drawn_panel, now, capital)
     }
     pub fn admit_v1(
@@ -1966,28 +1982,16 @@ impl PalwTirPublicOwnedV1 {
         // Bound owner rows inherit the fixed ORIGINAL preparation barrier and
         // price warm response work below. Unbound legacy rows retain their old
         // span and cannot be reinterpreted as the new native full-SUM route.
+        //
+        // **Audit §10 (the frame pricing fix): one turn's span is the owner's Demand and its per-turn debit, then ONE custodian's
+        // serial chain (its batched warm debit, Begin, each part, Finish) and the response window** — custodians answer in
+        // parallel, each on its own row and lane, so their chains are not added end to end (the old span multiplied every move and
+        // every warm 16 KiB pre-debit by the slots). What all of them put on chain at once is bounded by the measured parallel
+        // inclusion capacity (`palw_tir_frame_cost_v1::tir_public_turn_span_v1`).
         self.source(source)?;
         let (bytes, _) = request_bound(source, request)?;
         let slots = (self.response_custodians_v1().len() as u64).checked_add(1).ok_or("TIR slot count overflow")?;
-        let moves = sum(&[product(slots, bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64) + 2)?, 1])?;
-        let work_moves = if self.preparation.is_some() {
-            // Warm reopen authenticates only the durable manifest/IDs, never N
-            // cold leaves or a model replay. Include one pre-debit per warm
-            // slice, response build/body hash and each Begin/Part/Finish build.
-            let warm = sum(&[u64::from(source.decode_count_v1()).div_ceil(1024), 8])?;
-            let ids = if matches!(request, PalwTirPublicRequestV1::Ids { offset: 0 }) {
-                product(u64::from(source.decode_count_v1()).div_ceil(1024), 2)?
-            } else {
-                0
-            };
-            product(slots, sum(&[warm, ids, bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), 6])?)?
-        } else {
-            0
-        };
-        sum(&[
-            self.contract.plan.config.acquisition_daa,
-            product(sum(&[moves, work_moves])?, self.contract.plan.config.prices.inclusion_margin_daa)?,
-        ])
+        crate::palw_tir_frame_cost_v1::tir_public_turn_span_v1(bytes, slots, &self.contract.plan.config, &self.contract.plan.clock)
     }
     pub fn check_v1(&self, source: &PalwTirPublicSourceV1) -> Result<(), String> {
         self.contract.check_v1(source)?;
@@ -2548,6 +2552,7 @@ mod tests {
             source_id: c.source_id,
             maximum_leaves: work.rules.max_step_leaf_count,
             native_config: c.plan.config,
+            native_clock: c.plan.clock,
             native_custodian_upper: c.plan.maximum_custodians,
             work_rules: Some(work.rules),
         };
@@ -2948,7 +2953,7 @@ mod tests {
             1 << 40,
         )
         .unwrap();
-        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, PalwStagedPublicCourtConfigV1::network_v1()).unwrap();
+        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, PalwStagedPublicCourtConfigV1::network_v1(), crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock).unwrap();
         let terms = PalwRenderingClaimTermsV1::derive(
             10,
             plan.envelope,
@@ -3125,15 +3130,15 @@ mod tests {
             row_bytes,
             resident_ram_bytes
         );
-        assert!(PalwTirPublicOwnedPlanV1::derive_v1(&source, u64::MAX, contract.plan.config).is_err());
+        assert!(PalwTirPublicOwnedPlanV1::derive_v1(&source, u64::MAX, contract.plan.config, contract.plan.clock).is_err());
         let mut config = contract.plan.config;
         config.prices.reorg_replay_moves = u64::MAX;
-        assert!(PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config).is_err());
+        assert!(PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config, contract.plan.clock).is_err());
         let mut config = contract.plan.config;
         config.prices.rent_per_parser_step = u64::MAX;
-        assert!(PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config).is_err());
-        assert!(contract.check_native_config_v1(&source, config, contract.plan.maximum_custodians).is_err());
-        assert!(contract.check_native_config_v1(&source, contract.plan.config, contract.plan.maximum_custodians + 1).is_err());
+        assert!(PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config, contract.plan.clock).is_err());
+        assert!(contract.check_native_config_v1(&source, config, contract.plan.clock, contract.plan.maximum_custodians).is_err());
+        assert!(contract.check_native_config_v1(&source, contract.plan.config, contract.plan.clock, contract.plan.maximum_custodians + 1).is_err());
     }
     #[test]
     fn history_frontier_matches_original_step_merkle_and_part_decoder_bounds_before_allocation() {

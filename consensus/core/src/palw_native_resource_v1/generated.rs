@@ -374,7 +374,8 @@ native_struct!(crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1; members, span
 native_struct!(crate::palw_model_registry_v1::PalwModelRegistryFoldV1; globals, span_daa, genesis_works, grace_until_daa, admission_audit_period_daa, readiness_v2_active, bond_maturity);
 native_struct!(crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1; rate_sompi_per_giga, panel_share_alpha_permille, panel_share_min_permille, panel_share_max_permille, cap_utilization_max_permille, block_bits);
 native_struct!(crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1; prices, acquisition_daa, collection_daa, reorg_retention_daa, maximum_owned_rows_per_reserver);
-native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1; maximum_leaves, maximum_custodians, court, dissection, prompt_form, config);
+native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1; maximum_leaves, maximum_custodians, court, dissection, prompt_form, config, clock);
+native_struct!(crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1; version, action_parser_steps, action_parser_steps_per_custodian, frame_passes_per_check, control_bytes, parallel_bytes_per_daa);
 native_struct!(crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1; version, declared_rent_sompi, original_payload, header, pledge, history_pledge);
 native_struct!(crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1; version, claim, producer, execution_root, job_identity, cu_ruleset_id, resource_plan_id, maximum_records, maximum_custodians, accept_until_daa, material_until_daa, signature);
 native_enum!(crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1; Legacy(f0), Tir(f0));
@@ -1028,7 +1029,7 @@ native_struct!(crate::palw_history_custody_v1::PalwHistoryRecoveryV1; initial, r
 native_struct!(crate::palw_staged_bundle_v1::PalwStagedOpenedFamilyV1; row, context);
 native_struct!(crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1; prefix_tokens, vocab, maximum_stream_bytes, maximum_stream_leaves, maximum_eog_bytes, maximum_moves, maximum_parser_steps, maximum_blake_blocks, inclusion_daa, rent_sompi, deposit_sompi, row_bytes, resident_ram_bytes);
 native_enum!(crate::palw_tir_prefix_state_v1::PalwTirPrefixStateVerdictV1; Honest, StateRootMismatch { derived });
-native_struct!(crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1; class_id, layout_digest, header_digest, source_id, maximum_leaves, native_config, native_custodian_upper, work_rules);
+native_struct!(crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1; class_id, layout_digest, header_digest, source_id, maximum_leaves, native_config, native_clock, native_custodian_upper, work_rules);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicChunkRecordV1; demand_id, answerer, previous, offset, bytes);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicAcceptedBodyRefV1; source_id, demand_id, turn, request, answerer, body_hash, total_bytes, chunk_head, opened_daa, respond_until_daa);
 native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1; version, source_id, original_claim, rules_id, resource_plan_id, allocation_id, semantic, semantic_resource_plan_id, maximum_semantic_history_records, acquisition, flat_trace, preparation_work, owner_work, preparation, executor, terminal, controls, control_footprint, owner_validation, preparation_until_daa, terms);
@@ -1126,7 +1127,7 @@ native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicPreparationReferenc
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicAcceptedRowsV1; body, rows_root);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicPreparationContractV1; claim, allocation_id, source_id, original_accepted_daa, preparation_until_daa, collect_until_daa, material_until_daa, producer, custodians, drawn_panel, plan);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicReadyV1; descriptor, accepted_daa, work_receipt);
-native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1; source_id, maximum_custodians, maximum_fresh_logical_units, maximum_reacquire_logical_units, maximum_turns, maximum_unit_bytes, config, envelope);
+native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1; source_id, maximum_custodians, maximum_fresh_logical_units, maximum_reacquire_logical_units, maximum_turns, maximum_unit_bytes, config, clock, envelope);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicWorkAllocationV1; source_id, rules, maximum, per_actor, per_custodian, maximum_custodians, maximum_restarts, prepared_bytes, envelope);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicPreparationPlanV1; source_id, maximum_custodians, maximum_restarts, maximum_slices_per_actor, maximum_prepared_bytes, preparation_daa, envelope);
 native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicExecutorPlanV1; artifact_bytes, inventory_leaves, inventory_ram_bytes, step_tree_bytes, row_tree_bytes, tile_forest_bytes, original_capture_bytes, prepared_disk_bytes, own_disk_bytes, maximum_file_operations, working_ram_bytes, envelope);

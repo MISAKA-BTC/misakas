@@ -545,6 +545,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_staged_public_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_staged_tir_route_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_tir_public_conviction_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The TIR frame's measured cost model (G14 audit §10); `None` on every shipped preset, so the frame route resolves no rules.
+    pub(super) palw_tir_frame_cost_v1: Option<kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
     pub(super) palw_staged_float_constraint_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1397,6 +1399,7 @@ impl VirtualStateProcessor {
             palw_staged_public_court_v1: params.palw_staged_public_court_v1_fence(),
             palw_staged_tir_route_v1: params.palw_staged_tir_route_v1_fence(),
             palw_tir_public_conviction_v1: params.palw_tir_public_conviction_v1_fence(),
+            palw_tir_frame_cost_v1: params.palw_tir_frame_cost_v1,
             palw_staged_float_constraint_v1: params.palw_staged_float_constraint_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),

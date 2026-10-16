@@ -25,13 +25,31 @@ fn source(
         .ok_or_else(|| refused("TIR original registered layout is absent"))?;
     frame.source_v1(record, layout, frame.descriptor_v1().maximum_leaves).map_err(refused)
 }
-fn native_frame(b: &TransitionBuilder<'_>, claim: Hash64, allocation: Hash64, source_id: Hash64) -> Result<Frame, PalwStateV2Error> {
+/// The CURRENT rooted original frame of `claim`, shared (an `Arc` clone, not a deep copy of every credit).
+///
+/// **Audit §10 (the frame pricing fix): the full structure check runs only where the fold re-reads the whole frame** — an outside
+/// owner's Open and a conviction filing (`full`), whose prices carry one measured full-frame pass each. Every other control checks
+/// the frame's immutable identity (claim, allocation, source) here and its own row in its transition: the rooted frame is written
+/// only by its install and its custody writes, each of which checks the whole frame it writes, and the state root authenticates it
+/// in between. Measured before the fix: every Demand / Begin / Part / Finish re-checked it (2.3 ms at a 2.7 MB frame, 0.12 ms at
+/// 63 KB) and its price assumed 32 such passes.
+fn native_frame(
+    b: &TransitionBuilder<'_>,
+    claim: Hash64,
+    allocation: Hash64,
+    source_id: Hash64,
+    full: bool,
+) -> Result<crate::palw_staged_court_state_v1::PalwSharedCourtV1<Frame>, PalwStateV2Error> {
     rules(b)?;
-    let frame = palw_tir_public_claim_v1(&b.state, claim).ok_or_else(|| refused("TIR control has no paid original frame"))?;
-    if frame.plan_v1().allocation_id != allocation || frame.plan_v1().source_id != source_id {
+    let Some(Row::TirClaim(frame)) = b.state.staged_court_row_v1(&Key::TirClaim(claim)) else {
+        return Err(refused("TIR control has no paid original frame"));
+    };
+    if frame.plan_v1().allocation_id != allocation || frame.plan_v1().source_id != source_id || frame.key_v1() != Key::TirClaim(claim) {
         return Err(refused("TIR control substitutes original allocation or source"));
     }
-    frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
+    if full {
+        frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
+    }
     Ok(frame.clone())
 }
 /// **Who may own (Open / Demand / Collect) on an ORIGINAL frame** — any Active above-floor bond that is not liable on the claim:
@@ -662,6 +680,7 @@ fn open_v1(
         &original_source,
         &others,
         frame.descriptor_v1().native_config,
+        frame.descriptor_v1().native_clock,
         frame.descriptor_v1().native_custodian_upper,
         ctx.daa_score,
         funded,
@@ -702,9 +721,11 @@ fn apply_control_inner_v1(
     network_domain: Hash64,
     control: &crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1,
 ) -> Result<(), PalwStateV2Error> {
-    let frame = native_frame(b, control.claim, control.allocation_id, control.source_id)?;
+    use crate::palw_tir_public_carriage_v1::PalwTirPublicControlActionV1 as A;
+    let full = matches!(control.action, A::Open | A::Convict(_));
+    let frame = native_frame(b, control.claim, control.allocation_id, control.source_id, full)?;
     control.validate_native_signature_v1(network_domain, &b.state).map_err(refused)?;
-    apply_verified_control_v1(b, ctx, frame, control)
+    apply_verified_control_v1(b, ctx, &frame, control)
 }
 
 /// Everything a control does once its literal signer's ML-DSA signature verified under the native network domain: the frame is
@@ -713,7 +734,7 @@ fn apply_control_inner_v1(
 fn apply_verified_control_v1(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
-    frame: Frame,
+    frame: &Frame,
     control: &crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1,
 ) -> Result<(), PalwStateV2Error> {
     use crate::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
@@ -1163,7 +1184,9 @@ fn apply_grant_ready_inner_v1(
     network_domain: Hash64,
     movement: &crate::palw_tir_public_carriage_v1::PalwTirPublicGrantReadyV1,
 ) -> Result<(), PalwStateV2Error> {
-    let mut frame = native_frame(b, movement.claim, movement.allocation_id, movement.source_id)?;
+    // A custody write: the whole frame is checked (here and again before it is written back).
+    let shared = native_frame(b, movement.claim, movement.allocation_id, movement.source_id, true)?;
+    let mut frame: Frame = (*shared).clone();
     movement.validate_native_signature_v1(network_domain, &b.state).map_err(refused)?;
     if b.state.panel_duties_of(&movement.claim).and_then(|d| d.get(&movement.signer)).copied() != Some(0) {
         return Err(refused("TIR raw grant must carry the literal newly credited Valid in this same atomic object"));
@@ -1590,13 +1613,13 @@ mod conviction_e2e_tests {
         // Liable parties cannot file; nothing moves.
         for liable in std::iter::once(producer).chain(colluders()) {
             let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-            assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, liable, cone(&fx))).is_err());
+            assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, liable, cone(&fx))).is_err());
             assert_eq!(b.state.state_root(), root_before);
         }
 
         // One bond OUTSIDE the Panel convicts, with no Panel signature, vote or majority.
         let mut outside = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut outside, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).unwrap();
+        apply_verified_control_v1(&mut outside, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).unwrap();
         let (phase, collateral, consumed) = outcome(&outside.state, &frame);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
         assert!(collateral[0] < COLLATERAL, "the producer is actually debited (its reservation at least)");
@@ -1615,12 +1638,12 @@ mod conviction_e2e_tests {
         assert!(!matches!(outside.state.claims.get(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
 
         // Once only: the same or another filer, the same or another valid proof, finds the conviction recorded.
-        let again = apply_verified_control_v1(&mut outside, &at(&frame, 6), frame.clone(), &filing(&frame, honest_seat(), cone(&fx)));
+        let again = apply_verified_control_v1(&mut outside, &at(&frame, 6), &frame, &filing(&frame, honest_seat(), cone(&fx)));
         assert!(again.is_err());
 
         // The honest drawn seat files the SAME object and reaches the SAME verdict (the common filer).
         let mut seat = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut seat, &at(&frame, 5), frame.clone(), &filing(&frame, honest_seat(), cone(&fx))).unwrap();
+        apply_verified_control_v1(&mut seat, &at(&frame, 5), &frame, &filing(&frame, honest_seat(), cone(&fx))).unwrap();
         assert_eq!(outcome(&seat.state, &frame), outcome(&outside.state, &frame));
 
         // Reorg: reverting the block's journal restores the pre-verdict root exactly.
@@ -1634,7 +1657,7 @@ mod conviction_e2e_tests {
         let mut late = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         let door = terms.collect_until_daa - terms.accepted_daa;
         assert!(
-            apply_verified_control_v1(&mut late, &at(&frame, door), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err()
+            apply_verified_control_v1(&mut late, &at(&frame, door), &frame, &filing(&frame, outsider(), cone(&fx))).is_err()
         );
     }
 
@@ -1646,7 +1669,7 @@ mod conviction_e2e_tests {
         let (state, params, extras) = world(&fx, &frame);
         let root = state.state_root();
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).is_err());
         assert_eq!(b.state.state_root(), root);
         assert!(matches!(
             b.state.claims.get(&frame.plan_v1().original_claim).unwrap().phase,
@@ -1655,7 +1678,7 @@ mod conviction_e2e_tests {
         // A wrong burn is refused before adjudication (the frame's native terminal rent is exact).
         let mut cheap = filing(&frame, outsider(), cone(&fx));
         cheap.declared_rent_sompi = frame.conviction_rent_v1() - 1;
-        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &cheap).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &cheap).is_err());
     }
 
     #[test]
@@ -1673,7 +1696,7 @@ mod conviction_e2e_tests {
         let root = state.state_root();
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         assert!(
-            apply_verified_control_v1(&mut b, &at(&honest, 5), honest.clone(), &filing(&honest, outsider(), output(ids.clone())))
+            apply_verified_control_v1(&mut b, &at(&honest, 5), &honest, &filing(&honest, outsider(), output(ids.clone())))
                 .is_err()
         );
         // A truncated sequence authenticates nothing.
@@ -1681,7 +1704,7 @@ mod conviction_e2e_tests {
         short.pop();
         if !short.is_empty() {
             assert!(
-                apply_verified_control_v1(&mut b, &at(&honest, 5), honest.clone(), &filing(&honest, outsider(), output(short)))
+                apply_verified_control_v1(&mut b, &at(&honest, 5), &honest, &filing(&honest, outsider(), output(short)))
                     .is_err()
             );
         }
@@ -1691,7 +1714,7 @@ mod conviction_e2e_tests {
         let lying = credited_frame(&lying_fx);
         let (state, params, extras) = world(&lying_fx, &lying);
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &filing(&lying, outsider(), output(ids.clone()))).unwrap();
+        apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &filing(&lying, outsider(), output(ids.clone()))).unwrap();
         let (phase, collateral, consumed) = outcome(&b.state, &lying);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
         assert_eq!(collateral[3], COLLATERAL);
@@ -1700,7 +1723,7 @@ mod conviction_e2e_tests {
         let (mut state, params, extras) = world(&lying_fx, &lying);
         state.claims.get_mut(&lying.plan_v1().original_claim).unwrap().output_root = h(0xBAE);
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &filing(&lying, outsider(), output(ids))).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &filing(&lying, outsider(), output(ids))).is_err());
     }
 
     #[test]
@@ -1738,7 +1761,7 @@ mod conviction_e2e_tests {
                 signature: vec![5; SIG],
             };
             control.check_v1().unwrap();
-            let result = apply_verified_control_v1(&mut b, &at(&frame, offset), frame.clone(), &control);
+            let result = apply_verified_control_v1(&mut b, &at(&frame, offset), &frame, &control);
             (result, b)
         };
         // Before the producer's door closes nothing is owed.
@@ -1798,14 +1821,14 @@ mod conviction_e2e_tests {
         };
         let claim_id = lying.plan_v1().original_claim;
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(split, encoded.len())).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &part(split, encoded.len())).is_err());
         let mut free = part(0, split);
         free.declared_rent_sompi = 0;
-        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &free).is_err());
-        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(0, split)).unwrap();
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &free).is_err());
+        apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &part(0, split)).unwrap();
         assert!(b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())).is_some());
         assert!(matches!(b.state.claims.get(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
-        apply_verified_control_v1(&mut b, &at(&lying, 6), lying.clone(), &part(split, encoded.len())).unwrap();
+        apply_verified_control_v1(&mut b, &at(&lying, 6), &lying, &part(split, encoded.len())).unwrap();
         let (phase, _, consumed) = outcome(&b.state, &lying);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
         assert_eq!(consumed, vec![true, true, true, false]);
@@ -1852,7 +1875,7 @@ mod conviction_e2e_tests {
             }
         };
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(0, split)).unwrap();
+        apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &part(0, split)).unwrap();
         let archival = b.state.clone();
         let bytes = borsh::to_vec(&crate::palw_state_v2::PalwStateCarriageV2::from_state(&archival)).unwrap();
         let fresh = borsh::from_slice::<crate::palw_state_v2::PalwStateCarriageV2>(&bytes)
@@ -1878,7 +1901,7 @@ mod conviction_e2e_tests {
             .into_iter()
             .map(|node| {
                 let mut b = TransitionBuilder::new(node, &params, false, false, false, false, &extras);
-                apply_verified_control_v1(&mut b, &at(&lying, 6), lying.clone(), &part(split, encoded.len())).unwrap();
+                apply_verified_control_v1(&mut b, &at(&lying, 6), &lying, &part(split, encoded.len())).unwrap();
                 let (phase, _, consumed) = outcome(&b.state, &lying);
                 assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
                 assert_eq!(consumed, vec![true, true, true, false]);
@@ -1955,8 +1978,8 @@ mod conviction_e2e_tests {
             retained_bytes: 1,
         };
         let mut b = TransitionBuilder::new(state, params, false, false, false, false, extras);
-        apply_verified_control_v1(&mut b, &at(frame, 1), frame.clone(), &prep(Owned::WorkDebit(debit))).unwrap();
-        apply_verified_control_v1(&mut b, &at(frame, 2), frame.clone(), &prep(Owned::PreparationReady { descriptor })).unwrap();
+        apply_verified_control_v1(&mut b, &at(frame, 1), &frame, &prep(Owned::WorkDebit(debit))).unwrap();
+        apply_verified_control_v1(&mut b, &at(frame, 2), &frame, &prep(Owned::PreparationReady { descriptor })).unwrap();
         b.state.clone()
     }
 
@@ -2028,7 +2051,7 @@ mod conviction_e2e_tests {
             signature: vec![5; SIG],
         };
         let mut b = TransitionBuilder::new(state, params, false, false, false, false, extras);
-        apply_verified_control_v1(&mut b, &at(frame, offset), frame.clone(), &control).map(|()| b.state.clone())
+        apply_verified_control_v1(&mut b, &at(frame, offset), &frame, &control).map(|()| b.state.clone())
     }
 
     /// The owner's open demand on `frame`: `(demand, respond_until, turn, producer's finished body)`.
@@ -2333,7 +2356,7 @@ mod conviction_e2e_tests {
             let frame = credited_frame(&lying);
             let (state, params, extras) = world(&lying, &frame);
             let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-            apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), evidence))
+            apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), evidence))
                 .unwrap_or_else(|e| panic!("{name}: the selection filing convicts: {e:?}"));
             let (phase, collateral, consumed) = outcome(&b.state, &frame);
             assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{name}: {phase:?}");
@@ -2357,7 +2380,7 @@ mod conviction_e2e_tests {
             };
             let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
             assert!(
-                apply_verified_control_v1(&mut b, &at(&honest_frame, 5), honest_frame.clone(), &filing(&honest_frame, outsider(), evidence))
+                apply_verified_control_v1(&mut b, &at(&honest_frame, 5), &honest_frame, &filing(&honest_frame, outsider(), evidence))
                     .is_err(),
                 "{name}: another claim's pin does not authenticate against this claim"
             );
@@ -2380,7 +2403,7 @@ mod conviction_e2e_tests {
         let frame = credited_frame(&lying);
         let (state, params, extras) = world(&lying, &frame);
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), Evidence::Output { rows_root, ids }))
+        apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), Evidence::Output { rows_root, ids }))
             .expect("the stop-rule filing convicts");
         let (phase, collateral, consumed) = outcome(&b.state, &frame);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
@@ -2564,7 +2587,7 @@ mod conviction_e2e_tests {
             action: A::Open,
             signature: vec![5; SIG],
         };
-        apply_verified_control_v1(&mut b, &at(&frame, late), frame.clone(), &control).unwrap();
+        apply_verified_control_v1(&mut b, &at(&frame, late), &frame, &control).unwrap();
         let mut reverted = b.state.clone();
         for entry in b.entries.iter().rev() {
             apply_delta_entry(&mut reverted, entry, true).unwrap();
@@ -2682,13 +2705,13 @@ mod conviction_e2e_tests {
         lost.slashable_locks.remove(&(colluders()[1], claim_id));
         let root = lost.state_root();
         let mut b = TransitionBuilder::new(&lost, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).is_err());
         assert_eq!(b.state.state_root(), root);
         // Expired at this block: refused likewise.
         let mut expired = state.clone();
         expired.slashable_locks.get_mut(&(colluders()[0], claim_id)).unwrap().expiry_daa = now;
         let mut b = TransitionBuilder::new(&expired, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).is_err());
         // A seat whose false-Valid offence another route already consumed is not asked again (once across every route).
         let mut consumed = lost.clone();
         let offence = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&colluders()[1].0, &claim_id);
@@ -2696,11 +2719,11 @@ mod conviction_e2e_tests {
         if let Some(record) = any {
             consumed.consumed_offences.insert(offence, record);
             let mut b = TransitionBuilder::new(&consumed, &params, false, false, false, false, &extras);
-            assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_ok());
+            assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).is_ok());
         }
         // Every lock in place: each is taken and each seat debited at least its lock.
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).unwrap();
+        apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).unwrap();
         for seat in colluders() {
             assert!(!b.state.slashable_locks.contains_key(&(seat, claim_id)));
             assert!(b.state.bonds.get(&seat).unwrap().collateral <= COLLATERAL - LOCK as u64);
@@ -2772,7 +2795,7 @@ mod conviction_e2e_tests {
             for _ in 0..ROUNDS {
                 let mut b = TransitionBuilder::new(state, params, false, false, false, false, extras);
                 let start = Instant::now();
-                apply_verified_control_v1(&mut b, &at(frame, offset), frame.clone(), control).expect("the measured action applies");
+                apply_verified_control_v1(&mut b, &at(frame, offset), &frame, control).expect("the measured action applies");
                 samples.push(start.elapsed().as_nanos() as u64);
                 last = Some(b.state.clone());
             }
@@ -2920,6 +2943,41 @@ mod conviction_e2e_tests {
             eprintln!("[tir-fold-measure] {row}");
             rows.push(row);
         }
+        // One ML-DSA-87 verification (every control's native signature check), timed the same way.
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x3A; 32]);
+        let message = [0x5Au8; 64];
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, &message, b"misaka-measure", [0x11; 32]).unwrap();
+        let verify_ns = median(&mut || {
+            let start = Instant::now();
+            libcrux_ml_dsa::ml_dsa_87::verify(&kp.verification_key, &message, b"misaka-measure", &signature).unwrap();
+            start.elapsed().as_nanos() as u64
+        });
+        // **The cost units these measurements give** (audit §10), at the largest measured frame: the parse rate of one full-frame pass
+        // (`check_structure`, at the existing tariff of 32 parser steps a byte), the slowest read action plus one signature check in
+        // those steps, and the full-frame passes an Open or a filing costs. Recorded beside the raw times; never pinned here.
+        let (smallest, largest) = (rows.first().unwrap(), rows.last().unwrap());
+        let frame_bytes = largest["frame_bytes"].as_u64().unwrap();
+        let pass_ns = largest["full_frame_pass_ns"]["check_structure"].as_u64().unwrap().max(1);
+        let steps_per_ns = (32.0 * frame_bytes as f64) / pass_ns as f64;
+        let read = |row: &serde_json::Value| {
+            let ns = |k: &str| row["action_ns"][k].as_u64().unwrap();
+            ["demand", "begin", "finish"]
+                .into_iter()
+                .map(ns)
+                .chain(row["action_ns"]["part"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()))
+                .max()
+                .unwrap()
+        };
+        let (upper_lo, upper_hi) = (smallest["upper"].as_u64().unwrap(), largest["upper"].as_u64().unwrap());
+        let (read_lo, read_hi) = (read(smallest), read(largest));
+        // A read action's time fitted as `a + b × upper` through the smallest and largest uppers (b rounded up), plus one signature.
+        let per_custodian_ns = (read_hi.saturating_sub(read_lo) as f64 / (upper_hi - upper_lo) as f64).max(0.0);
+        let intercept_ns = (read_hi as f64 - per_custodian_ns * upper_hi as f64).max(read_lo as f64 - per_custodian_ns * upper_lo as f64);
+        let action_parser_steps = ((intercept_ns + verify_ns as f64) * steps_per_ns).ceil() as u64;
+        let action_parser_steps_per_custodian = (per_custodian_ns * steps_per_ns).ceil() as u64;
+        let read_ns = read_hi;
+        let ns = |k: &str| largest["action_ns"][k].as_u64().unwrap();
+        let frame_passes_per_check = ns("open").max(ns("filing")).div_ceil(pass_ns).max(1);
         let record = serde_json::json!({
             "record": "misaka-palw/tir-fold-measure/v1",
             "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
@@ -2928,7 +2986,16 @@ mod conviction_e2e_tests {
                       "label": std::env::var("MISAKA_MEASURE_HOST").unwrap_or_default() },
             "status": "not arming evidence: wall-clock of this host and build; the tiny court fixture's class",
             "uppers": rows,
+            "mldsa87_verify_ns": verify_ns,
+            "derived": {
+                "parser_steps_per_ns": steps_per_ns,
+                "slowest_read_action_ns": read_ns,
+                "action_parser_steps": action_parser_steps,
+                "action_parser_steps_per_custodian": action_parser_steps_per_custodian,
+                "frame_passes_per_check": frame_passes_per_check,
+            },
         });
+        eprintln!("[tir-fold-measure] derived {}", record["derived"]);
         if let Ok(out) = std::env::var("MISAKA_TIR_FOLD_MEASURE_OUT") {
             std::fs::write(out, serde_json::to_string(&record).unwrap()).unwrap();
         }

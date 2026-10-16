@@ -110,7 +110,7 @@ pub fn palw_tir_public_source_for_preparation_row_v1(
     }
     let source = PalwTirPublicSourceV1::new_v1(record, layout, header, original.execution_root, original.trace_root, maximum_leaves)?;
     let acquisition =
-        crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1::derive_v1(&source, d.native_custodian_upper, d.native_config)?;
+        crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1::derive_v1(&source, d.native_custodian_upper, d.native_config, d.native_clock)?;
     let allocation = crate::palw_tir_public_owned_v1::derive_tir_public_preparation_work_allocation_v1(
         record,
         layout,
@@ -199,6 +199,8 @@ pub struct PalwTirPublicSourceDescriptorV1 {
     pub source_id: Hash64,
     pub maximum_leaves: u64,
     pub native_config: PalwStagedPublicCourtConfigV1,
+    /// The frame's measured clock (audit §10), fixed with the config at the claim's acceptance.
+    pub native_clock: crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1,
     pub native_custodian_upper: u64,
     pub work_rules: Option<crate::palw_tir_public_owned_v1::PalwTirPublicWorkRulesV1>,
 }
@@ -381,7 +383,7 @@ fn source_for_frame(
     let record = state.tir_class_v1(&frame.descriptor_v1().class_id).ok_or("original TIR full frame lost registered class")?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id)
         .ok_or("original TIR full frame lost authenticated layout")?;
-    frame.source_v1(record, layout, maximum_leaves)
+    frame.source_identity_v1(record, layout, maximum_leaves)
 }
 
 fn check_source(row: &PalwTirPublicAcquisitionRowV1, source: &PalwTirPublicSourceV1) -> Result<(), String> {
@@ -393,7 +395,7 @@ fn check_source(row: &PalwTirPublicAcquisitionRowV1, source: &PalwTirPublicSourc
     {
         return Err("TIR sidecar source differs from immutable descriptor".into());
     }
-    row.owned.contract_v1().check_native_config_v1(source, d.native_config, d.native_custodian_upper)?;
+    row.owned.contract_v1().check_native_config_v1(source, d.native_config, d.native_clock, d.native_custodian_upper)?;
     row.owned.check_v1(source)
 }
 
@@ -1233,7 +1235,7 @@ mod tests {
         )
         .unwrap();
         let config = PalwStagedPublicCourtConfigV1::network_v1();
-        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config).unwrap();
+        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock).unwrap();
         let terms = PalwRenderingClaimTermsV1::derive(
             10,
             plan.envelope,
@@ -1255,7 +1257,7 @@ mod tests {
         };
         let capital = terms.plan.rent_sompi.checked_add(terms.plan.deposit_sompi).unwrap();
         let owned =
-            PalwTirPublicOwnedV1::admit_native_v1(contract, &source, &BTreeSet::from([bond(2), bond(3)]), config, 3, 11, capital)
+            PalwTirPublicOwnedV1::admit_native_v1(contract, &source, &BTreeSet::from([bond(2), bond(3)]), config, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock, 3, 11, capital)
                 .unwrap();
         let row = PalwTirPublicAcquisitionRowV1 {
             descriptor: PalwTirPublicSourceDescriptorV1 {
@@ -1265,6 +1267,7 @@ mod tests {
                 source_id: source.source_id_v1(),
                 maximum_leaves,
                 native_config: config,
+                native_clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
                 native_custodian_upper: 3,
                 work_rules: None,
             },

@@ -1084,6 +1084,7 @@ impl Params {
             palw_staged_public_court_v1,
             palw_staged_tir_route_v1,
             palw_tir_public_conviction_v1,
+            palw_tir_frame_cost_v1: _,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -1890,6 +1891,10 @@ impl Params {
         if let Some(at) = self.palw_tir_public_conviction_v1 {
             h.write(b"palw_tir_public_conviction_v1");
             h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(cost) = self.palw_tir_frame_cost_v1.as_ref() {
+            h.write(b"palw_tir_frame_cost_v1");
+            h.write(borsh::to_vec(cost).expect("PalwTirFrameCostV1 is borsh-serializable"));
         }
         if let Some(at) = self.palw_staged_float_constraint_v1 {
             h.write(b"palw_staged_float_constraint_v1");
@@ -2709,6 +2714,7 @@ impl Params {
             palw_staged_public_court_v1,
             palw_staged_tir_route_v1,
             palw_tir_public_conviction_v1,
+            palw_tir_frame_cost_v1: _,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -4218,6 +4224,7 @@ impl Params {
             palw_staged_public_court_v1,
             palw_staged_tir_route_v1,
             palw_tir_public_conviction_v1,
+            palw_tir_frame_cost_v1,
             palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
@@ -4931,6 +4938,12 @@ impl Params {
         if let Some(activation) = palw_tir_public_conviction_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_tir_public_conviction_v1");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // The TIR frame's measured cost model (audit §10): it fixes every frame's prices and doors, so it is a rule about blocks.
+        // Some-only: `None` on every shipped preset, whose identity is unchanged.
+        if let Some(cost) = palw_tir_frame_cost_v1 {
+            h.write(b"palw_tir_frame_cost_v1");
+            h.write(borsh::to_vec(cost).expect("PalwTirFrameCostV1 is borsh-serializable"));
         }
         if let Some(activation) = palw_staged_float_constraint_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_staged_float_constraint_v1");

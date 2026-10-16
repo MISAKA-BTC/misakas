@@ -67,7 +67,11 @@ impl Params {
     }
 
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(false, crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1)
+        self.validate_palw_v2_inner(
+            false,
+            crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1,
+            crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1,
+        )
     }
 
     /// **The whole V2 validation with `records` in place of the binary's pinned arm-readiness list**
@@ -80,7 +84,18 @@ impl Params {
         &self,
         records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
     ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(false, records)
+        self.validate_palw_v2_inner(false, records, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1)
+    }
+
+    /// [`Self::validate_palw_v2_with_arming_records_v1`] with `cost_records` in place of the binary's pinned TIR frame cost records
+    /// (`crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1`, audit §10): a test arms `palw_tir_public_conviction_v1` on a
+    /// ruleset whose frame cost model a record for its exact network and height names. The node never calls it.
+    pub fn validate_palw_v2_with_arming_and_cost_records_v1(
+        &self,
+        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
+        cost_records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
+    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        self.validate_palw_v2_inner(false, records, cost_records)
     }
 
     /// Feature-gated private factory exception for release heights only. All
@@ -99,13 +114,18 @@ impl Params {
                 "private Rule E factory requires Rule E and its commitment at DAA 1 and a finite retirement at or after them",
             ));
         }
-        self.validate_palw_v2_inner(true, crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1)
+        self.validate_palw_v2_inner(
+            true,
+            crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1,
+            crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1,
+        )
     }
 
     fn validate_palw_v2_inner(
         &self,
         private_rule_e: bool,
         records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
+        cost_records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
     ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         // The overlay's bond collateral has one gate left: the acceptance-time skip, in force from
         // `bond_spend_gate_mergeset_activation_daa_score`. The own-body gate that covered the blocks
@@ -283,6 +303,10 @@ impl Params {
         // **The cross-lane G14 gates** (`crate::palw_g14_gates_v1`): G-18's legacy-filer prerequisite of the staged court, and the
         // arm-readiness record of every gated fence (G-10, N4, G-01 option (b), the reward liability horizon).
         self.validate_palw_g14_gates_in_v1(records)?;
+        // **Audit §10: the TIR frame is priced and clocked only by a MEASURED cost model a pinned record names** (or, on an isolated
+        // G14 test genesis, any well-formed model): `palw_tir_public_conviction_v1` armed with no model, a malformed one, or one no
+        // record names for this network and height is refused.
+        self.validate_palw_tir_frame_cost_in_v1(cost_records)?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).
