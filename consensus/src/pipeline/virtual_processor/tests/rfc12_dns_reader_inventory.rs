@@ -22,6 +22,7 @@ const TOKENS: &[&str] = &[
     "dns_bft_confirmed_state(",
     "advance_dns_confirmation(",
     "dns_reorg_outcome(",
+    "dns_reorg_outcome_checked(",
     "bridge_finality_is_fresh(",
     "dns_coinbase_settlement_at(",
     "dns_bft_precommit_duty(",
@@ -50,9 +51,9 @@ fn inventory() -> BTreeMap<&'static str, Why> {
         // legacy arm below the fence only.
         ("update_evm_canonical_heads", Gated),
         // The sink search asks only the two gated entry points below.
-        ("sink_search_algorithm", Delegates(&["dns_stake_preferred_tip", "dns_reorg_outcome"])),
+        ("sink_search_algorithm", Delegates(&["dns_stake_preferred_tip", "dns_reorg_outcome_checked"])),
         // Rule E's search finish asks the reorg gate, which abstains from DNS past the retirement.
-        ("palw_rule_e_finish_search_v1", Delegates(&["dns_reorg_outcome"])),
+        ("palw_rule_e_finish_search_v1", Delegates(&["dns_reorg_outcome_checked"])),
         // ADR-0128 DNS-final anchor: called only from the gated recompute, which skips it past the retirement.
         ("dns_bft_confirmed_state", OnlyCalledFrom(&["update_dns_state"])),
         // ADR-0128 Decision 5 veto: abstains past the retirement at the incumbent sink (and its one caller skips it there).
@@ -60,7 +61,9 @@ fn inventory() -> BTreeMap<&'static str, Why> {
         // ADR-0128 Decision 6 duty read: `round_active: false` past the retirement.
         ("dns_bft_precommit_duty", Gated),
         // The deep-reorg gate: the BFT veto, stake fallback and Work/Stake dominance are all skipped past the retirement.
-        ("dns_reorg_outcome", Gated),
+        // (Its capacity-checked form since RFC-0008's native selection capacity; the old name is the tests' unwrapping wrapper.)
+        ("dns_reorg_outcome_checked", Gated),
+        ("dns_reorg_outcome", Delegates(&["dns_reorg_outcome_checked"])),
         // Coinbase settlement: the frozen DNS anchor no longer releases coinbases early past the retirement.
         ("dns_coinbase_settlement_at", Gated),
         ("dns_coinbase_settlement", Delegates(&["dns_coinbase_settlement_at"])),
@@ -251,6 +254,6 @@ fn rfc12_the_dns_bft_veto_is_asked_only_below_the_retirement() {
     let calls: Vec<&Hit> = hits.iter().filter(|h| h.token == "dns_bft_gate_refusal(").collect();
     assert_eq!(calls.len(), 1, "exactly one call site of the DNS BFT veto: {:?}", calls.iter().map(|h| &h.text).collect::<Vec<_>>());
     let call = calls[0];
-    assert_eq!(call.func, "dns_reorg_outcome", "the veto is asked by the reorg gate only");
+    assert_eq!(call.func, "dns_reorg_outcome_checked", "the veto is asked by the reorg gate only");
     assert!(call.text.contains("!dns_retired"), "the call is skipped past the retirement: {}", call.text);
 }

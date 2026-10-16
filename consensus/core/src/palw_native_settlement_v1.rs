@@ -137,7 +137,22 @@ pub struct NativeDeltaEvidenceV1 {
     pub certified_claims: Vec<Hash64>,
 }
 
+/// The evidence of a block that finalized, spent, voided or certified nothing: what a cached chain row without evidence reads (the row
+/// keeps no allocation for it).
+pub static NATIVE_DELTA_EVIDENCE_EMPTY_V1: NativeDeltaEvidenceV1 = NativeDeltaEvidenceV1 {
+    exec_liability_until: std::collections::BTreeMap::new(),
+    finalized_attempts: Vec::new(),
+    fp_spends: Vec::new(),
+    voided: Vec::new(),
+    certified_claims: Vec::new(),
+};
+
 impl NativeDeltaEvidenceV1 {
+    /// Nothing at all, the frozen liabilities included (`is_empty` asks only the four claim lists).
+    pub fn is_blank(&self) -> bool {
+        self.is_empty() && self.exec_liability_until.is_empty()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.finalized_attempts.is_empty() && self.fp_spends.is_empty() && self.voided.is_empty() && self.certified_claims.is_empty()
     }

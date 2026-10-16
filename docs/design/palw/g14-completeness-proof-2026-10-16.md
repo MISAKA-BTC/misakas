@@ -917,3 +917,180 @@ Free Prompt(§3.3)は option (b) により DAA 14,000 以後の新規 claim で�
 - 測定(V5): class ごとの hard-deadline envelope(GAP-07)、descent の round 数・answer bytes・34 session 予算、lock 延長下の Panel capacity、court 上限の競合。
 - drill(出荷 binary で 14,000 をまたぐ): D-02(legacy Attempt の 1 leaf 偽造を、genesis 後 bond の outsider が全 seat 共謀下で conviction・slash)、D-11(held unit の差し控え → DA default)、
   D-13(Sybil の予約・session・decoy court の先取り)、D-16(制裁前の退出: lock が責任期限まで残る)。14,000 前に受理された claim は旧規則で settle すること。
+
+## 8. 追補: IR class の Free Prompt lane(RFC-0002 Phase H、2026-10-16、branch `integ/rfc02-ir-free-prompt`)
+
+本文(§0〜§7)は書き換えない。この節は、§7.3 と §7.5 の 1(IR class の Free Prompt lane が無いので frame に claim が来ない)に対して入れた変更と、
+それで動く cell だけを記す。設計は [phase-f-integration §6](tir/phase-f-integration.md#6-phase-h--the-free-prompt-lane-of-an-ir-class-2026-10-16)。
+状態は「実装済み・fold 水準と node 側 unit の試験が通った」。node E2E(T-N1)と drill は未実施で、armable ではない。
+
+### 8.1 入れたもの
+
+- **fence は新設しない。** lane は `palw_tir_public_conviction_v1`(前提 fence を含めて解決した高さ)が効いている所でだけ開く。
+  G-03 により、開いた lane の IR FP claim はすべて TFP1 frame を持つ。fence 未満では従来どおり `FreePromptClassHasNoWorkProfile` で拒否する
+  (byte-identical。新しい object kind・state table・Params field・指紋の入力は無い)。
+- **work は admitted program から導く。** `tir_classes` の program と、frame が要求する `TirLayout` row から、step space の閉形式で leaves を数え、
+  新しい位置の構造的 work vector で compute を数える。compute 時代だけで値付けし、leaves 時代は名前付きで拒否する。
+- **lane の認証は被覆。** 到達する全 primitive を 1 つの認証済み family が覆う IR class だけが FP の認証 gate を通る(attempt lane と同じ規則)。
+- **node と producer。** TIR backend の FP 実行は integer engine を使い、選択には decode-token door と同じ規則(`select_v1`)を使い、decoder が止まる所まで回す。
+  drill の動詞は D-05 と D-06。header を export し、IR root で commitment を組み立てる。fence 以後、IR class の node 自身の claim は prompt ids を運ぶ。
+
+### 8.2 §3.7 の cell と §7.3 への影響
+
+- **§7.3 の consensus 側の閉塞は解消した(fold 水準)。** 実 ML-DSA-87 の source pledge を持つ TFP1 付き IR FP claim が、本番の transition
+  (`apply_palw_transition_v2_with_extras`)で値付けされて受理され、frame が設置される。そのとき lane が読む fence はすべて DAA 0。
+- **cell の判定は変えない。** frame lane の cell(§7.2)は frame が設置された claim についての判定で、その水準は fold のままである。
+  ただし、§3.7 の各 cell の前提であった「frame を持つ claim が存在し得る」が、fold と node unit の水準で成り立った。
+- **新しく見つけた GAP(frame lane の所有、未修正): frame の native allocation が、testnet-12 の Panel 規模で u64 の checked 算術を溢れる。**
+  network の staged config と ladder 2^22 のもとで、corpus の全 class(step leaf 52〜222、vocab 24)が frame を作れるのは custodian 上限 2〜4 までである。
+  上限 6(5 seat の Panel と producer)では `required-family sum overflows maximum_parser_steps` または
+  `native TIR allocation exceeds u64` で拒否される。G-03 があるので、このような class は fence 以後 FP claim を一切取れない。
+  実 model(leaf 数が桁違いに多い)では、なおさら frame を作れない見込みである。
+  試験 `tir_frame_allocation_overflows_at_testnet12s_panel_gap_pin` がこの gap を固定している(修正したら反転する)。
+  fold 試験が通るのは、court の tiny fixture(leaf 数がさらに小さい)だからである。
+
+### 8.3 実行した試験(この branch、実行済み)
+
+- `cargo test -p kaspa-consensus-core --lib -- tir_fp_lane`: `6 passed; 0 failed`(fold 3 本、unit 3 本)。
+- `cargo test -p kaspa-consensus-core --lib -- palw_tir_public fp_compute_pricing derived_work palw_fp_execution_v3 palw_fp_objects_v3 shipped_presets_have_pinned_fingerprints palw_tir_court_v1 free_prompt`:
+  `136 passed; 1 failed`。失敗した 1 本は §7.4 で既に失敗と記録された `flat_original_binding_does_not_acquire_tiled_trace_obligations`
+  (`job context shape`)で、この branch はその source を変えていない。base での再確認はしていない。
+  `shipped_presets_have_pinned_fingerprints`(t12 の指紋 pin)は ok で、testnet-12 の identity は変わらない。
+- `cargo test -p misaka-palw-tir-exec --features node --test free_prompt`: `5 passed; 0 failed`。内容は次のとおり。
+  - honest run(11 class): frame の完全な allocation が通り、derived leaves が capture と一致し、door は fault を出さない。
+  - drill: selection の嘘 11 件をすべて door が conviction した。
+  - V4 の stop: decoder が止まる位置まで回す。
+  - lane 外の job は拒否する。
+  - 上の gap pin。
+
+### 8.4 T-N1 の状態
+
+**T-N1 は未作成で、end-to-end では動いていない。** 残っている障害は次のとおり。
+
+1. 上の allocation の GAP。testnet-12 の Panel 規模では、corpus の class でも frame を作れない。
+2. 本番経路の harness。kaspad の `palw_service_public_e2e`(public bond service → PQ mempool → template → consensus)に、次を足す必要がある。
+   - IR class の登録(`ClassRegisteredTirV1`)と registry の lifecycle を `Active` まで進めること
+   - TIR family の認証(`FamilyCertified`)と `ClassLaneCertifiedTirV1`
+   - layout の公開(tag 169)
+   - frame とその前提 fence を test で武装すること(staged court が要求する legacy filer は検証で武装を拒否されるので、検証を迂回する)
+   - 共謀する seat の `TirPublicGrantReadyV1`
+   - 外部 owner と filer の service 実行
+3. Gate C の待機の観測。Gate C はこの binary では武装できない。
+
+### 8.5 DAA 14,000 で frame とこの lane を武装するのに残るもの
+
+- 8.2 の allocation GAP を frame lane が修正すること。
+- T-N1。
+- `palw_legacy_public_filer_v1` の武装可能化(G-18。frame の前提である staged court の前提)。
+- G-10 の記録 V1〜V7。この lane の evidence(上の fold 試験と node 試験、T-N1)を加える。
+- drill D-05、D-06、D-07、D-18。genesis 後に登録した IR class で、出荷 binary を使い、fence をまたいで行う。
+- 未測定の値(UNKNOWN): 最大 genesis profile での generic backend の FP 実行時間と bind window の比較、§7.5 の 2〜6。
+- node が class semantics の runtime id を chain から読むこと(`with_fp_class_facts_v1` は未接続)。
+
+## 9. 追補: frame allocation の u64 溢れの修正(2026-10-16、branch `integ/g14-tir-alloc`)
+
+§8.2 の GAP(frame の native allocation が testnet-12 の Panel 規模で u64 を溢れる)を直した。この branch は fence を武装しない。
+
+### 9.1 testnet-12 の custodian 上限は 6 ではなく 257
+
+testnet-12 は `palw_tir_shard_v1` を武装している(`PALW_T12_INT11_FENCES_V1`、DAA 5,300)。
+そのため、登録された TIR class について `staged_registered_tir_maximum_custodians_v1` が返す上限は
+max(seat 数, `MAX_STRATIFIED_SEATS_V1` = 256) + 1 = **257** である。V2 Panel の 5 seat と producer を足した 6 ではない。
+§8.2 の「上限 6」はこの点で過小だった。shard licensing(×1024、上限 5,121)は testnet-12 では休眠している。
+
+### 9.2 原因(`derive_tir_public_work_allocation_v1`)
+
+1. **custodian ごとの積が和であるべき所で積になっていた。**
+   全 lane を外部 owner の lane(全 slot の answer を読むので slot 数に比例する)で値付けし、claim 全体をその slot 倍にしていた。
+   正しくは、owner の lane 1 本と custodian ごとの lane(自分の slot の answer だけ)の和である。
+   claim 全体の cold preparation も owner の allocation を複製していた。preparer は他の slot の answer を読まない。
+2. lane の work に「全 actor の preparation 数」(`slots × passes`)を掛け、`maximum` でさらに slot 数を掛けていた。
+3. acquisition の `maximum_stream_bytes` を answer の byte として読んでいた。これは保管・運搬の envelope(生 copy 8 個、move ごとの row journal)である。
+   しかも turns に再取得が含まれているのに、さらに `passes` を掛けていた。
+4. 16 KiB の WorkDebit slice を、replay の RAM traffic を含む全 IO で数え、`passes` を二重に掛けていた。
+   node が WorkDebit を切る単位は、論理 unit(leaf、tile 行、1024 ID、replay 位置)と、durable byte の 16 KiB(読んだ answer、各 pass で公開する prepared generation)である。
+
+`original_controls` は accepting action ごとに frame 全体を検証し、その費用を frame(∝ 上限)× action 数で数える。
+action 数が上限の 2 乗に比例していたので、SUM は上限の 3 乗で増えていた。修正後は、`original_controls` の注記どおり 2 乗である。
+
+### 9.3 修正
+
+- `PalwTirPublicWorkAllocationV1` に 2 つの field を足した(generated の inventory 2 行を更新した)。
+  - `per_custodian`: literal custodian の lane。
+  - `prepared_bytes`: 1 pass の prepared generation の byte 数。`tir_public_prepared_bytes_v1` で求め、executor plan と共有する。
+- `maximum` は lane の和である(`per_actor + per_custodian × maximum_custodians`、`lanes_sum_v1`)。
+  owner の fold は、signer が owner なら `per_actor`、custodian なら `per_custodian` で上限を判定する。
+  したがって、共謀した custodian が owner の lane を使うことはできない(既存試験を強化した)。
+- claim 全体の preparation は `preparation_lanes_v1` を使う。全 preparer が custodian の lane を持つ。
+  preparation contract は `per_actor == per_custodian` と `maximum == lanes_sum` を検査する。
+- preparation の slice 数 = 論理 walk × passes + prepared generation の 16 KiB slice × passes × 2(書いて再度開く)。
+  preparation の締切は、preparer 1 人の直列時間(slice ごとに 1 inclusion margin、最後に Ready)である。
+  `capture_debit_v1` は `maximum_slices_per_actor` を超える grant を拒否する。
+- saturating 演算と u128 の切り詰めは使っていない。checked 算術のままで、項の数え方だけを直した。
+
+### 9.4 cell(`tir_frame_allocation_holds_at_testnet12s_custodian_upper`、gap pin を反転)
+
+上限は、出荷 bundle に対する fold 自身の resolver から取る(DAA 14,000 で 257 と assert)。条件は network の staged config と ladder 2^22。
+corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 で `Complete` になった。主な値(SUM、`accepted_daa` からの差):
+
+| class | n | 上限 | parser | rent(sompi) | preparation_until | collect_until |
+|---|---|---|---|---|---|---|
+| moe-top2-shared | 52 | 6 | 1.92e15 | 1.99e15 | +9.07e5 | +6.33e7 |
+| moe-top2-shared | 52 | 257 | 2.36e18 | 2.44e18 | +9.07e5 | +1.70e9 |
+| dense-gqa-2layer | 118 | 6 | 4.04e15 | 4.19e15 | +2.03e6 | +1.31e8 |
+| dense-gqa-2layer | 118 | 257 | 4.98e18 | 5.16e18 | +2.03e6 | +3.56e9 |
+| gdn-k2-v4-grouped | 222 | 6 | 7.39e15 | 7.65e15 | +3.80e6 | +2.39e8 |
+| gdn-k2-v4-grouped | 222 | 257 | 9.14e18 | 9.47e18 | +3.80e6 | +6.50e9 |
+
+- 上限 257 での最大は parser 9.14e18 で、u64 の上限 1.84e19 に対して約 2 倍の余裕しかない。
+  支配項は、accepting action ごとの全 frame 検証(`owner_validation` と、controls の preparation 検証)である。
+- 上限 1,025 と 5,121(shard licensing、testnet-12 では休眠)は依然 `native TIR allocation exceeds u64` になる(probe で確認した。assert はしていない)。
+- 実 model(leaf 数が桁違いに多い)は上限 257 で溢れる見込みである。owner の lane は turns に比例し、turns は leaf 数と tile 数で増えるため。未測定。
+
+### 9.5 新しい発見(設計判断が要る。未修正)
+
+**frame は構築できるが、network_v1 の価格と時計では払えず、Final に届かない。**
+
+- **rent。** `rent_per_parser_step` は 1 sompi なので、rent はほぼ parser step 数である。
+  - 原 FP carrier が払う最低 rent(`palw_tir_public_minimum_rent_v1`)は、上限 6 で 2e15〜8e15 sompi(2e7〜8e7 MSK)、上限 257 で 2.4e18〜9.5e18 sompi(2.4e10〜9.5e10 MSK)。
+  - 外部 owner の Open の rent(`owner_terms_v1`)は、corpus dense で上限 6 のとき約 2.2e15 sompi(2.2e7 MSK)。上限 257 では約 2.7e18 sompi。
+  - G14 の「外部の 1 人が conviction できる」は、この費用を払えることが前提である。
+- **時計。**
+  - preparation_until は +0.9e6〜3.8e6 DAA。外部 owner の Open は `reserved_daa ≥ preparation_until_daa` を要する。
+  - collect_until(Final の下限)は、上限 6 で +6e7〜2.4e8 DAA、上限 257 で +1.7e9〜6.5e9 DAA。
+  - 原因は、WorkDebit と move を 1 件ずつ `inclusion_margin_daa` = 4 で直列に積む時計のモデルである(R7、未測定)。
+- **preparer の負担。** 正直な preparer は、1 frame あたり 2.3e5〜9.5e5 件の WorkDebit を出す必要がある。
+  prepared generation(最大 tile 長 65,536 での leaf 形式の上限で、2.8e7〜1.2e8 byte)を 16 KiB に分け、65 pass 分、書いて再度開くため。
+- **帰結。**
+  - DAA 14,000 で `palw_tir_public_conviction_v1` を武装しても、IR class の FP claim は frame の rent を払えない。
+  - 払えたとしても、Final と決済に届かない。
+  - T-N1 も、network_v1 の時計では node E2E で走らせられない。Open までに 0.9e6 DAA 以上を採掘する必要がある。
+- **判断が要る点。**
+  - 価格(parser step 単価、frame 検証を action ごとに 32 回 × 32 step/byte と数える係数)。
+  - 時計(debit ごとに直列の inclusion margin を積むか)。
+  - restart の回数(`reorg_replay_moves` = 64)。
+  - いずれも未測定であり、この branch は値を作っていない。
+
+### 9.6 実行した試験(この branch)
+
+- `cargo test -p misaka-palw-tir-exec --features node --test free_prompt`: `5 passed; 0 failed`。
+  gap pin を反転した `tir_frame_allocation_holds_at_testnet12s_custodian_upper` を含む。honest run は上限 6 で完全な frame を作る。
+- `cargo test -p kaspa-consensus-core --lib -- palw_tir_public tir_fp_lane shipped_presets_have_pinned_fingerprints tir_preparation_is_claim_wide aux_registry_tests palw_native_resource`:
+  `126 passed; 2 failed`。
+  - 失敗 1: `flat_original_binding_does_not_acquire_tiled_trace_obligations`。§7.4 と §8.3 で既に失敗と記録されたもの。
+  - 失敗 2: `ledger_expansion::…::flat_seven_and_nine_use_actual_nested_program_and_metadata_inventories`(kernel の `KernelLedgerV1` codec、`invalid Borsh option`)。
+    この branch は kernel ledger の codec と table を変えていない。base での再確認はしていない。
+  - `shipped_presets_have_pinned_fingerprints`(t12 の指紋 pin)は ok で、testnet-12 の identity は変わらない。
+  - lane の試験 `protected_work_lane_exhaustion_does_not_spend_outside_owner_allocation` も ok。custodian が owner の lane 幅の debit を出すと拒否されることを、この試験に足した。
+  - `tir_preparation_is_claim_wide_retained_and_rebuilt_without_an_owner` と frame の fold 試験も ok。
+
+### 9.7 T-N1
+
+**未作成。** §8.4 の障害 1(allocation)は解消した。代わりに、§9.5 の時計が新しい障害になった。
+
+- network_v1 では、外部 owner が Open できるのは `preparation_until`(+0.9e6 DAA 以上)より後である。
+  そこまでに、各 preparer は 2.3e5 件以上の WorkDebit を出す必要がある。
+  これは node E2E(TestConsensus、PoW を省略、本番の template)で採掘できる量ではない。
+- 小さい fixture config(restart 0、margin 1 など)を使えば数千 DAA に縮む。
+  ただし、それは「preset の court 窓を保つ」という既存 harness の前提を外すことになり、測定値でもない。そのため、この branch では採らなかった。
+- harness の残り(§8.4 の 2)は変わっていない。
