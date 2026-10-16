@@ -2341,6 +2341,18 @@ impl PalwTirSelectionRuleV1 {
     pub fn is_greedy_v1(&self) -> bool {
         matches!(self, Self::Keyed { sampling } if sampling.is_greedy())
     }
+    /// **The lane this rule commits from `row` after the committed prefix `before`** — the best key among the lanes it does not
+    /// ban, ties to the lower index ([`crate::palw_decode_select_v2::decode_lane_beats_v2`]), exactly what the decode-token door
+    /// compares a committed token against. `exclude`: the best lane OTHER than that one (a drill's selection lie). `None` when no
+    /// lane is admissible. RFC-0002 Phase H: what an IR producer's run selects with, so the producer and the door are one rule.
+    pub fn select_v1(&self, before: &[u32], row: &[i32], exclude: Option<u32>) -> Option<u32> {
+        row.iter()
+            .enumerate()
+            .filter(|(lane, _)| Some(*lane as u32) != exclude)
+            .filter_map(|(lane, value)| self.key_v1(before, *value, lane).map(|key| (lane, key)))
+            .reduce(|a, b| if crate::palw_decode_select_v2::decode_lane_beats_v2(b.1, b.0, a.1, a.0) { b } else { a })
+            .map(|(lane, _)| lane as u32)
+    }
     /// The lane's key at `position = before.len()` after the committed prefix `before`; `None` for a lane the rule bans (it can
     /// never be committed).
     fn key_v1(&self, before: &[u32], value: i32, lane: usize) -> Option<i64> {

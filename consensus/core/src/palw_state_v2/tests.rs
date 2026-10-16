@@ -18,6 +18,8 @@ mod settlement_once_v1;
 mod settlement_liability_v1;
 // RFC-0007 §4.1 T6: paid-claim traps, the receipt signers' liability and held check fees (dormant; kernel route aux 142).
 mod paid_claim_trap_v1;
+// RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
+mod tir_fp_lane_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;
@@ -14114,6 +14116,7 @@ mod fp_compute_pricing {
                     canonical_work_daa: extras.canonical_work_daa,
                     daa_score: 103,
                     receipt_rights: None,
+                    tir_free_prompt_active: false,
                 };
                 let quoted = palw_fp_commitment_price_v1(
                     &s3,
@@ -14149,6 +14152,7 @@ mod fp_compute_pricing {
                     canonical_work_daa: extras.canonical_work_daa,
                     daa_score: 103,
                     receipt_rights: None,
+                    tir_free_prompt_active: false,
                 },
                 &h64(0xEF),
                 &plain,
@@ -14218,6 +14222,7 @@ mod fp_compute_pricing {
                 canonical_work_daa: extras.canonical_work_daa,
                 daa_score: 103,
                 receipt_rights: Some(rights_inputs),
+                tir_free_prompt_active: false,
             },
             &h64(0xE0),
             &plain,

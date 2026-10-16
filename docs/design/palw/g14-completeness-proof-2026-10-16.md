@@ -917,3 +917,72 @@ Free Prompt(§3.3)は option (b) により DAA 14,000 以後の新規 claim で�
 - 測定(V5): class ごとの hard-deadline envelope(GAP-07)、descent の round 数・answer bytes・34 session 予算、lock 延長下の Panel capacity、court 上限の競合。
 - drill(出荷 binary で 14,000 をまたぐ): D-02(legacy Attempt の 1 leaf 偽造を、genesis 後 bond の outsider が全 seat 共謀下で conviction・slash)、D-11(held unit の差し控え → DA default)、
   D-13(Sybil の予約・session・decoy court の先取り)、D-16(制裁前の退出: lock が責任期限まで残る)。14,000 前に受理された claim は旧規則で settle すること。
+
+## 8. 追補: IR class の Free Prompt lane(RFC-0002 Phase H、2026-10-16、branch `integ/rfc02-ir-free-prompt`)
+
+本文(§0〜§7)は書き換えない。この節は、§7.3 と §7.5 の 1(IR class の Free Prompt lane が無いので frame に claim が来ない)に対して入れた変更と、
+それで動く cell だけを記す。設計は [phase-f-integration §6](tir/phase-f-integration.md#6-phase-h--the-free-prompt-lane-of-an-ir-class-2026-10-16)。
+状態は「実装済み・fold 水準と node 側 unit の試験が通った」。node E2E(T-N1)と drill は未実施で、armable ではない。
+
+### 8.1 入れたもの
+
+- **fence は新設しない。** lane は `palw_tir_public_conviction_v1`(前提 fence を含めて解決した高さ)が効いている所でだけ開く。
+  G-03 により、開いた lane の IR FP claim はすべて TFP1 frame を持つ。fence 未満では従来どおり `FreePromptClassHasNoWorkProfile` で拒否する
+  (byte-identical。新しい object kind・state table・Params field・指紋の入力は無い)。
+- **work は admitted program から導く。** `tir_classes` の program と、frame が要求する `TirLayout` row から、step space の閉形式で leaves を数え、
+  新しい位置の構造的 work vector で compute を数える。compute 時代だけで値付けし、leaves 時代は名前付きで拒否する。
+- **lane の認証は被覆。** 到達する全 primitive を 1 つの認証済み family が覆う IR class だけが FP の認証 gate を通る(attempt lane と同じ規則)。
+- **node と producer。** TIR backend の FP 実行は integer engine を使い、選択には decode-token door と同じ規則(`select_v1`)を使い、decoder が止まる所まで回す。
+  drill の動詞は D-05 と D-06。header を export し、IR root で commitment を組み立てる。fence 以後、IR class の node 自身の claim は prompt ids を運ぶ。
+
+### 8.2 §3.7 の cell と §7.3 への影響
+
+- **§7.3 の consensus 側の閉塞は解消した(fold 水準)。** 実 ML-DSA-87 の source pledge を持つ TFP1 付き IR FP claim が、本番の transition
+  (`apply_palw_transition_v2_with_extras`)で値付けされて受理され、frame が設置される。そのとき lane が読む fence はすべて DAA 0。
+- **cell の判定は変えない。** frame lane の cell(§7.2)は frame が設置された claim についての判定で、その水準は fold のままである。
+  ただし、§3.7 の各 cell の前提であった「frame を持つ claim が存在し得る」が、fold と node unit の水準で成り立った。
+- **新しく見つけた GAP(frame lane の所有、未修正): frame の native allocation が、testnet-12 の Panel 規模で u64 の checked 算術を溢れる。**
+  network の staged config と ladder 2^22 のもとで、corpus の全 class(step leaf 52〜222、vocab 24)が frame を作れるのは custodian 上限 2〜4 までである。
+  上限 6(5 seat の Panel と producer)では `required-family sum overflows maximum_parser_steps` または
+  `native TIR allocation exceeds u64` で拒否される。G-03 があるので、このような class は fence 以後 FP claim を一切取れない。
+  実 model(leaf 数が桁違いに多い)では、なおさら frame を作れない見込みである。
+  試験 `tir_frame_allocation_overflows_at_testnet12s_panel_gap_pin` がこの gap を固定している(修正したら反転する)。
+  fold 試験が通るのは、court の tiny fixture(leaf 数がさらに小さい)だからである。
+
+### 8.3 実行した試験(この branch、実行済み)
+
+- `cargo test -p kaspa-consensus-core --lib -- tir_fp_lane`: `6 passed; 0 failed`(fold 3 本、unit 3 本)。
+- `cargo test -p kaspa-consensus-core --lib -- palw_tir_public fp_compute_pricing derived_work palw_fp_execution_v3 palw_fp_objects_v3 shipped_presets_have_pinned_fingerprints palw_tir_court_v1 free_prompt`:
+  `136 passed; 1 failed`。失敗した 1 本は §7.4 で既に失敗と記録された `flat_original_binding_does_not_acquire_tiled_trace_obligations`
+  (`job context shape`)で、この branch はその source を変えていない。base での再確認はしていない。
+  `shipped_presets_have_pinned_fingerprints`(t12 の指紋 pin)は ok で、testnet-12 の identity は変わらない。
+- `cargo test -p misaka-palw-tir-exec --features node --test free_prompt`: `5 passed; 0 failed`。内容は次のとおり。
+  - honest run(11 class): frame の完全な allocation が通り、derived leaves が capture と一致し、door は fault を出さない。
+  - drill: selection の嘘 11 件をすべて door が conviction した。
+  - V4 の stop: decoder が止まる位置まで回す。
+  - lane 外の job は拒否する。
+  - 上の gap pin。
+
+### 8.4 T-N1 の状態
+
+**T-N1 は未作成で、end-to-end では動いていない。** 残っている障害は次のとおり。
+
+1. 上の allocation の GAP。testnet-12 の Panel 規模では、corpus の class でも frame を作れない。
+2. 本番経路の harness。kaspad の `palw_service_public_e2e`(public bond service → PQ mempool → template → consensus)に、次を足す必要がある。
+   - IR class の登録(`ClassRegisteredTirV1`)と registry の lifecycle を `Active` まで進めること
+   - TIR family の認証(`FamilyCertified`)と `ClassLaneCertifiedTirV1`
+   - layout の公開(tag 169)
+   - frame とその前提 fence を test で武装すること(staged court が要求する legacy filer は検証で武装を拒否されるので、検証を迂回する)
+   - 共謀する seat の `TirPublicGrantReadyV1`
+   - 外部 owner と filer の service 実行
+3. Gate C の待機の観測。Gate C はこの binary では武装できない。
+
+### 8.5 DAA 14,000 で frame とこの lane を武装するのに残るもの
+
+- 8.2 の allocation GAP を frame lane が修正すること。
+- T-N1。
+- `palw_legacy_public_filer_v1` の武装可能化(G-18。frame の前提である staged court の前提)。
+- G-10 の記録 V1〜V7。この lane の evidence(上の fold 試験と node 試験、T-N1)を加える。
+- drill D-05、D-06、D-07、D-18。genesis 後に登録した IR class で、出荷 binary を使い、fence をまたいで行う。
+- 未測定の値(UNKNOWN): 最大 genesis profile での generic backend の FP 実行時間と bind window の比較、§7.5 の 2〜6。
+- node が class semantics の runtime id を chain から読むこと(`with_fp_class_facts_v1` は未接続)。
