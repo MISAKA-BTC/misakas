@@ -499,7 +499,7 @@ impl PalwBondBudgetPolicyV1 {
             (PALW_BOND_BUDGET_POLICY_VERSION_V3, Some(hold)) => {
                 hold.validate()?;
                 if self.window_daa != hold.window_daa(PalwHoldModeV1::PanelZero) {
-                    return Err("a V3 policy's window W is Panel=0's 7-day-equivalent span (panel_zero_days · daa_per_day)");
+                    return Err("a V3 policy's window W is Panel=0's hold span (panel_zero_days · daa_per_day; 1 day since 2026-10-16)");
                 }
             }
             (PALW_BOND_BUDGET_POLICY_VERSION_V2 | PALW_BOND_BUDGET_POLICY_VERSION_V3, _) => {
@@ -646,7 +646,7 @@ pub struct PalwModelAllocationPolicyV1 {
     pub curve: PalwAllocationCurveV1,
     /// Entries one assignment may name.
     pub max_models_per_bond: u16,
-    /// **User decision 2026-10-14 (RFC-0015 §8.5.5)** — the 30-day average of miner + claim-bound verifier capital, `P_m` applied to
+    /// **User decision 2026-10-14 (RFC-0015 §8.5.5)** — the 7-day average (2026-10-16; 30 days before) of miner + claim-bound verifier capital, `P_m` applied to
     /// block opportunity and coinbase ([`allocation_v3`]). `Some` exactly for a V3 policy; serialized only for V3, so every V2
     /// policy's bytes, digest and identity are unchanged.
     pub average: Option<PalwAllocationAverageV1>,
@@ -975,7 +975,7 @@ fn floor_mul_div(a: u128, b: u128, d: u128) -> u128 {
 /// **The caps of a bond with locked capital `capital`** (design §2.3): `⌊C·q·ρ/u⌋`, `⌊C·b/u⌋`, `⌊C·r/u⌋`, `⌊C·w/u⌋` — linear in `C`
 /// with floors, hence sub-additive over any split of `C`; `ρ` reaches `Q` only.
 pub fn palw_bond_budget_caps_v1(policy: &PalwBondBudgetPolicyV1, capital: u64) -> PalwBudgetVectorV1 {
-    // ユーザー方針 2026-10-15: under a V3 policy the window is Panel=0's 7-day span and its caps are 7 · daily(C) (the long view).
+    // ユーザー方針 2026-10-15: under a V3 policy the window is Panel=0's hold span — 1 day since 2026-10-16 — and its caps are panel_zero_days · daily(C).
     if let Some(hold) = policy.hold.as_ref() {
         return palw_bond_hold_period_caps_v1(policy, hold, capital, PalwHoldModeV1::PanelZero);
     }
