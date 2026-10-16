@@ -203,6 +203,8 @@ filed 以降の段(court の受理、有罪、default、徴収、失効)はま�
 
 ## 11. 実行した試験(この branch)
 
-- `cargo test -p kaspa-consensus-core --test g14_detection_policy`: 18 passed。
+- `cargo test -p kaspa-consensus-core --test g14_detection_policy`: 19 passed。
 - `cargo test -p kaspa-consensus-core --test g14_detection_corpus`: 5 passed。
-- kaspad の変更の確認と t12 の指紋 pin の結果は、commit message と §11 の追記に書く。
+- `cargo test -p kaspa-consensus-core --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test c4r3_fork_id_at_int13 --test rfc0012_fork_id_and_cost`: 9 + 5 + 1 + 1 passed(1 ignored)。t12 の params、identity、schedule の pin は動いていない。
+- `cargo test -p kaspa-consensus-core --lib -- shipped_presets_have_pinned_fingerprints fork_id palw_detection`: 23 passed。fork-id の probe に新しい fence を足したので、`the_fork_id_gate_names_every_scheduled_palw_fence` などは通る。
+- `cargo check -p kaspad`: 成功(新しい warning なし)。kaspad 側の変更(seat の draw、保持上限、funnel)を実行する試験はない。panel の経路は型検査だけで、node の実行では確かめていない。
