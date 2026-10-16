@@ -56,8 +56,9 @@ pub fn palw_r_cap_paid_subsidy_v1(covers: bool, escrowed: u64, worker_base: u64)
     (escrowed.min(worker_base), withheld.saturating_sub(escrowed))
 }
 
-/// **C2 (user decision 2026-10-15): the exit hold, in days** — the 7-day-equivalent common hold, for EVERY bond (a Panel=1-only bond
-/// too: shortening it to Panel=1's day would let exit → re-registration → Panel=0 use up to six more days of rate). It is the long
+/// **C2 (user decision 2026-10-15, hold revised 2026-10-16): the exit hold, in days** — the common hold for EVERY bond, now one day for
+/// both modes (2026-10-16), so exit → re-registration → another mode regains no rate. A claim's own liability locks (G-13: Valid
+/// locks to the liability horizon) still keep its collateral past this hold. It is the long
 /// view's span ([`PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1`]); the withdrawal gate is [`PalwBondBudgetStateV1::withdrawal_holds`].
 pub const PALW_BOND_EXIT_HOLD_DAYS_V1: u32 = PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1;
 
@@ -283,13 +284,14 @@ mod tests {
 
     #[test]
     fn c3_round_rights_are_rated_and_the_draw_reads_the_same_bound() {
-        // daily Round rights 1,000; burst ⌈1000 · 72 · 4000 / 720 000⌉ = 400; the 7-day total 7,000 (TEST values).
+        // daily Round rights 1,000; burst ⌈1000 · 72 · 4000 / 720 000⌉ = 400; the hold total 1,000 — the hold is one day for both
+        // modes since 2026-10-16 (TEST values).
         let p = v3();
         let mut s = PalwBondBudgetStateV1::new(0, &p);
         let mut j = Vec::new();
         s.release_due(10, &mut j);
         assert_eq!(s.round_rights_remaining_rated_v1(&p, CAPITAL, &bond(1)), 400);
-        assert_eq!(palw_round_rights_remaining_v1(&p, CAPITAL, s.bond_row(&bond(1))), 7_000, "the week alone would allow 7,000");
+        assert_eq!(palw_round_rights_remaining_v1(&p, CAPITAL, s.bond_row(&bond(1))), 1_000, "the 1-day hold alone would allow 1,000");
         assert_eq!(
             s.reserve_round_rights_v1(&p, CAPITAL, 1, bond(1), 10, 401, &mut j),
             Err(PalwBudgetRefusalV1::Burst { dim: PalwBudgetDimV1::RoundRights })
@@ -414,12 +416,14 @@ mod tests {
     }
 
     #[test]
-    fn c2_the_exit_hold_is_seven_days_for_every_mode() {
+    fn c2_the_exit_hold_is_one_day_for_every_mode() {
+        // User decision 2026-10-16: the hold is fixed at one day for Panel=0 and Panel=1 alike, so the exit hold — the long view's
+        // span — is one day and equals both modes' views (a mode switch cannot regain rate: both views are the same day).
         let hold = PalwBondHoldPolicyV1::baseline_unapproved_v1();
-        assert_eq!(PALW_BOND_EXIT_HOLD_DAYS_V1, 7);
-        assert_eq!(palw_bond_exit_hold_daa_v1(&hold), 7 * PALW_BOND_HOLD_DAA_PER_DAY_V1);
+        assert_eq!(PALW_BOND_EXIT_HOLD_DAYS_V1, 1);
+        assert_eq!(palw_bond_exit_hold_daa_v1(&hold), PALW_BOND_HOLD_DAA_PER_DAY_V1);
         assert_eq!(palw_bond_exit_hold_daa_v1(&hold), hold.window_daa(PalwHoldModeV1::PanelZero));
-        assert!(palw_bond_exit_hold_daa_v1(&hold) > hold.window_daa(PalwHoldModeV1::PanelOne), "never the 1-day view");
+        assert_eq!(palw_bond_exit_hold_daa_v1(&hold), hold.window_daa(PalwHoldModeV1::PanelOne), "both modes hold one day");
         // The V3 policy's long window IS the exit hold.
         assert_eq!(PalwBondBudgetPolicyV1::hold_baseline_unapproved_v1().window_daa, palw_bond_exit_hold_daa_v1(&hold));
     }
