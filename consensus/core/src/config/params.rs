@@ -3230,6 +3230,14 @@ pub struct Params {
     /// on every preset, Some-only in both fingerprints (lists and values beside the height), collapsed from `Some(never())`, refused
     /// when armed ([`Self::validate_palw_model_tier_v1`]).
     pub palw_model_tier_v1: Option<crate::palw_model_tier_v1::PalwModelTierFenceV1>,
+    /// **palw_detection_policy_v1** — G14 per-class detection policy ([`crate::palw_detection_policy_v1`]; external audit 2026-10-17
+    /// §7 P1): past it (keyed at the panel's bind DAA for a seat, the acceptance DAA for admission) a claim of a class is checked under
+    /// that class's policy — N from priced work, k from (ε, D_min) by the exact hypergeometric, the v2 post-commit draw distinct across
+    /// rounds, resources coupled to k — and refused when the class has none, when its collateral is below the deterrence bound or when
+    /// its draw does not fit the budgets. Below it the legacy `k = 4` draw is unchanged. **Dormant**: `None` on every preset, in no
+    /// flag-day list, Some-only in both fingerprints (each policy id beside the height), collapsed from `Some(never())`, refused when
+    /// armed ([`Self::validate_palw_detection_policy_v1`]).
+    pub palw_detection_policy_v1: Option<crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1>,
     /// **palw_dag_sibling_attribution_v1** — RFC-0018 §4 ([`crate::palw_rfc0018_v1`]): past it (the ACCEPTING block's DAA) the merged
     /// attempts of one chain block are admitted in a canonical order — a round robin over model classes, each class by
     /// `H(domain ‖ execution key)` — independent of GHOSTDAG colour and merge order, so which concurrent sibling wins a contended
@@ -6161,6 +6169,7 @@ impl Params {
             palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1: self.palw_model_eligibility_v1,
             palw_model_tier_v1: self.palw_model_tier_v1.clone(),
+            palw_detection_policy_v1: self.palw_detection_policy_v1.clone(),
             palw_dag_sibling_attribution_v1: self.palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1: self.palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2: self.palw_rule_e_participation_v2,
@@ -7320,6 +7329,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
     palw_model_tier_v1: None,
+    palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -7675,6 +7685,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
     palw_model_tier_v1: None,
+    palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -8012,6 +8023,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
     palw_model_tier_v1: None,
+    palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -13210,6 +13222,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_model_eligibility_v1();
     // ADR-0179's model tiers, likewise.
     params.sync_palw_model_tier_v1();
+    // G14's per-class detection policy, likewise.
+    params.sync_palw_detection_policy_v1();
     // RFC-0018's mirror (sibling attribution, permissionless anchor, rule E v2, Gate C), likewise.
     params.sync_palw_rfc0018_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
@@ -13542,6 +13556,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
     palw_model_tier_v1: None,
+    palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,

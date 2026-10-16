@@ -3490,3 +3490,6 @@ mod rfc17_eligibility;
 // G14 lane closure (2026-10-16): the kernel route's Valid signers answer for a conviction (G-K1, T-N11), over the production
 // onboarding path (no attestation hook): `g14_kernel_route_e2e/g14_lane_closure.rs`.
 mod g14_lane_closure;
+// G14 detection policy (2026-10-17): a checker under an armed policy finds a single-position lie at its hypergeometric rate with the
+// v2 draw, and its filing convicts on the real node: `g14_kernel_route_e2e/detection_policy.rs`.
+mod detection_policy;

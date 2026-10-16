@@ -1971,6 +1971,10 @@ pub struct PalwStateParamsV2 {
     /// `Params::sync_palw_court_capacity_v1`: its height and its policy. `None` on every shipped preset.
     #[borsh(skip)]
     court_capacity_v1: Option<crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1>,
+    /// **G14's per-class detection policy** (`crate::palw_detection_policy_v1`), written by `Params::sync_palw_detection_policy_v1`
+    /// (and by fixtures): the fence's height and policies, which the claim gates read. `None` on every shipped preset.
+    #[borsh(skip)]
+    detection_policy_v1: Option<crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1>,
     #[borsh(skip)]
     reward_liability_horizon_from_daa: Option<u64>,
     /// **RFC-0006 R6-CELL round 4: `Params::palw_cell_coverage_closure_v1`'s height**, mirrored by
@@ -21607,6 +21611,26 @@ fn apply_attempt(
         reserved,
         ctx.daa_score,
     );
+    // **G14 detection policy (`palw_detection_policy_v1`, keyed on this claim's acceptance DAA)**: past the fence an attempt of a
+    // class with no detection policy, whose collectable collateral (`min(reserved, the bond's collateral)`, what a conviction can
+    // take) is below the policy's deterrence bound, or that the policy cannot check within its resources, is refused as G-01 option
+    // (b) refuses — before any write, so a refused own attempt is skipped. `None` below the fence (every shipped network).
+    if builder.params.detection_policy_v1().is_some() {
+        let collectable = builder.state.bonds.get(&bond_key).map_or(0, |b| u128::from(b.collateral)).min(reserved);
+        let facts = crate::palw_detection_policy_v1::PalwDetectionClaimFactsV1 {
+            attempt_lane: true,
+            work_leaves: 0,
+            context_priced_leaves: None,
+            prompt_tokens: 0,
+            decode_tokens_executed: 0,
+            collateral_sompi: collectable,
+        };
+        if let Some((code, why)) =
+            crate::palw_detection_policy_v1::palw_detection_claim_refusal_v1(builder.params, &attempt.class_id, ctx.daa_score, &facts)
+        {
+            return Err(PalwStateV2Error::ClassNotRewardable { class: attempt.class_id, code, why });
+        }
+    }
     let claim = PalwClaimStateV2 {
         source: PalwClaimSourceV2::Attempt,
         class_id: attempt.class_id,

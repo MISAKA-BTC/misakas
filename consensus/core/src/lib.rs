@@ -549,6 +549,10 @@ pub mod palw_model_eligibility_v1;
 /// **ADR-0179 — model tiers** (user decision 2026-10-15, round 4; dormant fence `palw_model_tier_v1`): `ApprovedModels(h)` (genesis +
 /// annual fork lists, add-only) at 1.0, every other registered model permanently 0.3, applied once in the allocation weight.
 pub mod palw_model_tier_v1;
+/// **G14 — the per-class detection policy** (external audit 2026-10-17 §7 P1; dormant fence `palw_detection_policy_v1`): method, N
+/// from priced work, fault model, ε → k_min (exact hypergeometric, integer), the deterrence bound on collateral, resources coupled to
+/// k, the post-commit distinct-across-rounds draw (v2 domain; the legacy draw is unchanged) and the effective-rate funnel.
+pub mod palw_detection_policy_v1;
 /// **RFC-0019 — the annual model catalog** (the value of `palw_model_tier_v1`, dormant): `ApprovedModels(h)` is an add-only chain of
 /// catalogs (genesis = edition 0) chained by `previous_catalog_root`, each edition activating at its own DAA; canonical encoding and
 /// root, chain validation, `annual_catalog_active_at`, `model_tier_permille` and the node's catalog status.
