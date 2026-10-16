@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! S_m(k)  = C_miner_claim(m, k) + C_verifier_claim(m, k)        deduplicated per bond (the same funds counted once), Active bonds
-//! S̄_m(d)  = (1 / n) · Σ_{k = e−n+1}^{e} S_m(k)                  n = 30 day-equivalents / epoch length, e the current epoch
+//! S̄_m(d)  = (1 / n) · Σ_{k = e−n+1}^{e} S_m(k)                  n = 7 day-equivalents (2026-10-16; 30 before) / epoch length, e the current epoch
 //! P_m     = S̄_m^1.5 / Σ_j S̄_j^1.5                               (0 for every model when the denominator is 0)
 //! block opportunity   a model's reward-bearing block units this epoch ≤ ⌊accrued_blocks · A_m / Σ A⌋ (accrued: one block per DAA)
 //! coinbase            R_m = ⌊R_PALW · A_m / Σ A⌋ (the existing reward share; applied ONCE — never multiplied per block again)
@@ -18,7 +18,7 @@
 //! model row's reservation is at most one epoch's carve, far below either) and carrying the model id in `weight` — so they are rooted,
 //! carried, reverted and replayed exactly as every other row, and no table id, encoding or version changes.
 //!
-//! **Every number is POLICY; `α = 1.5`, the 30-day average and the per-model block opportunity are the user's decision (2026-10-14),
+//! **Every number is POLICY; `α = 1.5`, the 7-day average (2026-10-16) and the per-model block opportunity are the user's decision,
 //! the epoch length and seasoning are not, and the fence stays refused.** Required before activation (user): new models are not
 //! starved under `α = 1.5`; verifier participation, liability, hold and reward rules (including bond-without-checking) are defined.
 
@@ -28,8 +28,8 @@ use super::*;
 pub const PALW_MODEL_ALLOCATION_POLICY_VERSION_V3: u16 = 3;
 /// **User decision (2026-10-14): `α = 1.5`** in half steps (RFC-0015 §8.5.5).
 pub const PALW_ALLOCATION_ALPHA_HALVES_DECIDED_V1: u8 = 3;
-/// **User decision (2026-10-14): the averaging period, in day-equivalents** (30-day-equivalent DAA).
-pub const PALW_ALLOCATION_AVERAGE_DAYS_V1: u32 = 30;
+/// **User decision (2026-10-16, replacing 2026-10-14's 30 days): the averaging period, in day-equivalents** (7-day-equivalent DAA).
+pub const PALW_ALLOCATION_AVERAGE_DAYS_V1: u32 = 7;
 /// The most epochs one average may span (bounds the history rows a model keeps).
 pub const PALW_ALLOCATION_AVERAGE_EPOCHS_MAX_V1: u64 = 1_440;
 /// Marker of an epoch-snapshot history row in the `models` table.
@@ -95,13 +95,13 @@ impl PalwModelAllocationPolicyV1 {
             return Err("the allocation curve is alpha = 1.5 (user decision 2026-10-14)");
         }
         if average.average_days != PALW_ALLOCATION_AVERAGE_DAYS_V1 || average.daa_per_day != PALW_BOND_HOLD_DAA_PER_DAY_V1 {
-            return Err("the allocation averages over 30 day-equivalents of DAA (user decision 2026-10-14)");
+            return Err("the allocation averages over 7 day-equivalents of DAA (user decision 2026-10-16)");
         }
         if !average.verifier_capital || !average.block_opportunity {
             return Err("S_m counts miner + claim-bound verifier capital, and P_m applies to block opportunity and coinbase (2026-10-14)");
         }
         if average.span_daa() % self.epoch_daa != 0 {
-            return Err("the allocation epoch must divide the 30-day averaging span");
+            return Err("the allocation epoch must divide the averaging span");
         }
         if average.span_daa() / self.epoch_daa > PALW_ALLOCATION_AVERAGE_EPOCHS_MAX_V1 {
             return Err("the averaging span holds too many epochs");

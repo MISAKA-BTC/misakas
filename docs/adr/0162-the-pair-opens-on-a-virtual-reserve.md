@@ -401,3 +401,23 @@ Left, with the reason:
 
 0160 is resident on `rcore/cap-spec` and 0161 is held by the capacity lane's untracked "a claim is not
 an emission" (`wt-cap-s1`); this is ADR-0162.
+
+## 2026-10-16 改定(ユーザー決定)— genesis・年次フォークのモデルは Position 化できない
+
+**Model Position を持てるのは、追加モデル(add model)だけである。** 追加モデルとは、RFC-0004 以降の登録経路で後から登録されたモデル(ADR-0179 の登録階層、0.3)を指す。
+genesis のモデルと、年次フォークで指定されたモデル(`ApprovedModels`、ADR-0179 の 1.0 階層、RFC-0019 のカタログ)は、Position 化できない。
+
+**理由:先行者利益を生むため。** genesis とフォークのモデルは、誰かが競って勝ち取ったモデルではなく、プロトコルが正規モデルとして指定するものである。
+その Position を売ると、最初に買った者が、正規モデルの指定そのものから先行者利益を得る。これは、validator の先行者利益や運営母体を無くすという方針([ADR-0180](0180-palw-only-consensus-no-bft-validators.md))にも反する。
+
+**規則**(tier fence `palw_model_tier_v1` 以後のみ。fence より前と、登録モデルは従来どおり byte 同一)
+- `ApprovedModels` のモデル(genesis assembly、genesis カタログ、有効な年次 edition)への**買いを拒否する**:`ModelPositionOnApprovedModel`。
+- 同じモデルに**新しい line を作ることも拒否する**(line は Position の市場である)。
+- 既に保有している units の売却は止めない(拒否するのは新規の参加だけ)。
+
+**実装**
+- `TransitionBuilder::refuse_position_on_approved_model_v1`(`consensus/core/src/palw_state_v2/transition_builder.rs`)。
+- 呼び出しは `model_buy_v1`(carrier と EVM の両経路が通る唯一の買い)と `apply_model_line_founded`。
+- 試験:`palw_state_v2::tests::model_market_virtual::genesis_and_fork_models_cannot_be_positioned_only_added_models_can`
+  - fence 以後、genesis モデルの買いと line の新設は拒否され、追加モデルは取引できる。
+  - fence より前は、genesis モデルも従来どおり取引できる。
