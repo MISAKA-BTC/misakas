@@ -45,7 +45,15 @@ fn parts(sibling_fence: bool) -> Parts {
         params.palw_dag_sibling_attribution_v1 = Some(ForkActivation::always());
         params.sync_palw_rfc0018_v1();
     }
-    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    // `ConfigBuilder::build` runs `validate_palw_v2`, which refuses the sibling fence on every network ("implemented dormant, user
+    // decisions open", RFC-0018 §12): the armed fixture is constructed directly, as the other fence-bypassing harnesses do.
+    let config = if sibling_fence {
+        params.skip_proof_of_work = true;
+        assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
+        Config::new(params)
+    } else {
+        ConfigBuilder::new(params).skip_proof_of_work().build()
+    };
     let bundle = match &config.params.palw_consensus_mode {
         PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => unreachable!("testnet-12 is ConsensusV2"),

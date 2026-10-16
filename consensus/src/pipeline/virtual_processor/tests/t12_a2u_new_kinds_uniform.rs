@@ -354,6 +354,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_claim_challenge_v2"
             | "palw_panel_lifetime_v2"
             | "palw_monetary_material_v1"
+            | "palw_material_release_recovery_v2"
             | "palw_staged_tir_route_v1"
             | "palw_staged_float_constraint_v1"
             | "palw_exec_payload_v2"

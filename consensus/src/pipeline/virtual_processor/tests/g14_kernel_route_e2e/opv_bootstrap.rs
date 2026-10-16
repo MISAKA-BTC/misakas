@@ -1735,7 +1735,25 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
                 assert!(net.daa() < lock_deadline, "timely source Finals must reach their lock");
                 net.beat_to(net.daa() + 1).await;
             }
-            other => panic!("paid timely sources must lock: {other:?}"),
+            other => {
+                // What each source claim is, and whether the Final read exports an event for it: a source's `Final` fate comes only
+                // from that event (`beacon_opt_in_sources_v4`).
+                let ledger = net.ledger();
+                let claims: Vec<String> = ledger
+                    .claims
+                    .iter()
+                    .map(|(id, row)| format!("{:02x}{:02x}: {:?} convicted={}", id[0], id[1], row.life.state, row.convicted))
+                    .collect();
+                let finals: Vec<String> = net
+                    .api()
+                    .unwrap()
+                    .finals_read_v1()
+                    .unwrap()
+                    .iter()
+                    .map(|f| format!("{:02x}{:02x}: {} event={}", f.receipt.claim[0], f.receipt.claim[1], f.final_path, f.event.is_some()))
+                    .collect();
+                panic!("paid timely sources must lock: {other:?}; claims {claims:?}; finals {finals:?}")
+            }
         }
     }
     assert!(net.attempt(c.v2).open(), "post at the actual lock, within its evidence deadline");
