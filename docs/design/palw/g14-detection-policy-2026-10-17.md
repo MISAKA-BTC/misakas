@@ -187,24 +187,64 @@ grinding、選択的 abort、複数 bond、operator の相関は、anchor が co
 loss(capacity_refusal、fee_shortfall、missing_material、deadline_expiry、unassigned、policy_refused、geometry_mismatch)は段とは別に数え、抜き取りの見逃しに混ぜない。
 `is_consistent()` は段の順序(各段 ≤ 前段)を確かめる。`effective_rate_ppm()` は invalidated/eligible(監査 §5.3 の積を、仮定ではなく実測で出す)。
 
-seat は `palw_panel.rs` の区間 duty で eligible、checked、detected、localized(leaf または range が名指された Fault)、missing_material、policy_refused、geometry_mismatch を claim ごとに 1 回ずつ数える。
-保持上限で落ちた opening は capacity_refusal に数える。`PalwNodeTelemetryV1::detection_snapshot(class)` で読める。
-filed 以降の段(court の受理、有罪、default、徴収、失効)はまだ配線していない。RPC(op 185)にも出していない。RPC は wire 形式の変更が要り、安くないためである。
+node(`kaspad/src/palw_panel.rs`、`palw_economics.rs`)での記録。どれも claim ごとに 1 回だけ数える。
+
+- 区間 duty: eligible、checked、detected、localized(leaf または range が名指された Fault)、missing_material、policy_refused、geometry_mismatch。
+- capture arm が accusation を court queue に載せたとき: filed。
+- 保持上限で落ちた opening: capacity_refusal(claim に紐付かないので class 未指定で数える)。
+- detected になった claim は follow 対象になる(上限 4,096)。毎 tick、seat の claim 行(`palw_claim_rows_v1`)から phase を読み、`palw_detection_chain_outcome_v1` / `palw_detection_follow_v1` で後段を数える。
+  - DA 争議: accepted
+  - CourtFraud / CourtDefault / CourtHeldVerdict / 証明された work slice の偽り: convicted と invalidated
+  - ProducerWithholding / work slice の default: defaulted と invalidated
+  - 上の 2 つで `reserved > 0`: collected。行に slash 額がないので、fold の void-and-slash からの推定である。
+  - Final に到達: deadline_expiry
+  - BindTimeout / NoCapablePanel: unassigned
+- fee_shortfall は記録口だけある。court の carrier funding は court-capacity lane のコードなので、そこから呼ぶ(§10 の interface)。
+
+`PalwNodeTelemetryV1::detection_snapshot(class)` で読める。RPC(op 185)には出していない。`PalwClassNodeTelemetry` の wire 形式(rpc core / grpc / cli)の変更が要り、安くないためである。
 
 ## 10. 残り
 
-1. **状態遷移での claim 受理**: `palw_detection_admit_claim_v1` は純関数として入れた。palw_state_v2 の claim 受理(`reserved`、`work_leaves`、受理 DAA)には未配線。fence は武装を拒否するので、現状で効く経路はない。
-2. **複数 round の seat**: seat は round 0 だけを引く。`rounds > 1` の policy では、後の round の anchor を読む必要がある。それがない間は、引き足りないまま certify せず、duty を断る。public verifier の再検査・panel の redraw への round の割当も未配線。
-3. **kernel/TIR route での policy の利用**: `palw_kernel_verifier.rs` は claim を全数再実行する設計で、shadow 選択と被覆率 q の実測は入れていない。
-4. **court/DA の予算の実連動**: policy は宣言された `court_openings_per_claim`、`da_bytes_per_claim` を k と照合する。実際の court 容量コード(別 lane: G-07、owner admission)がこの値を読むようにする必要がある。
-5. **同時 claim 数の強制**: plan は `k·claims_in_flight ≤ retention` を示すが、seat の scheduler が `claims_in_flight` を超えて duty を取らないようにする配線はない(落ちた opening は数えられ、黙っては消えない)。
-6. **funnel の後段と RPC**: filed〜invalidated の計数(court lane、fold の結果)と RPC への公開。
-7. **実測**: §7 の未測定値をすべて実 artifact で測る。その後で、各 genesis class の policy 値(class id 付き)を決め、ユーザーが承認する。
+**閉じたもの(この branch の第 2 段)**
+
+1. **状態遷移での claim 受理**: fence より後では、attempt(`apply_attempt`、予約の確定直後、書き込みの前)と free-prompt commitment(価格の確定直後、書き込みの前)が `palw_detection_claim_refusal_v1` を通る。
+   拒否の形は G-01 option (b) と同じで、`ClassNotRewardable { code }` を返す。claim は作らず、報酬・weight・consensus credit を与えない。拒否された自分の attempt は skip され、FP の carrier は通常の手数料を払う。
+   - 担保は「回収可能な担保」`min(reserved, bond の collateral)` を使う。
+   - attempt の N は policy の `attempt_intervals`(class の正規 job の区間数)。
+   - FP の N は commitment 自身の数から導き、派生仕事の規則(graph から `work_leaves` を再計算する)が効いているときだけ価格に結び付いたとみなす。効いていなければ拒否する。
+   - mirror は `PalwStateParamsV2::detection_policy_v1`(`#[borsh(skip)]`)。`Params::sync_palw_detection_policy_v1` が書き、validation は一致を要求する。
+2. **複数 round の seat**: seat は duty の全 round を引く。round 0 は panel anchor、round r ≥ 1 は `H(domain ‖ panel_anchor ‖ r)` で、各 round は前の round と重ならない。
+   claim の commit は panel anchor より前に確定しており、seat に対して producer が round の間に送るものはないので、後の round も commit 後で予測できない。後で再検査する主体(panel の redraw、public verifier)には、`palw_detection_draw_rounds_v2` に後の chain anchor を渡す口がある。
+   plan の保持数は `K_tot · claims_in_flight`(全 round を同時に持つ)に変えた。
+3. **funnel の後段**: §9。
+
+**残るもの**
+
+1. **court/DA 予算の実連動(court-capacity lane へ渡す interface)**。この lane が必要とするもの:
+   - `fn palw_court_claim_budget_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, class_id: &Hash64, accepted_daa: u64) -> Option<PalwCourtClaimBudgetV1>`。
+     `PalwCourtClaimBudgetV1 { compellable_openings: u32, da_bytes: u64, first_move_by_daa: u64, reserved_sessions: u32 }` で、その claim の liability horizon の間、他の bond が埋められない claim 専用の予約として保証される量を返す。
+   - claim gate はこの値で policy の `court_openings_per_claim` / `da_bytes_per_claim` / `inspection_deadline_daa` を置き換える(宣言値でなく実際の予約)。`k_round > compellable_openings`、`k_round·opening_bytes > da_bytes`、`round_daa > first_move_by_daa − accepted_daa` のどれかなら拒否する(`DETECTION_COURT_BUDGET_BELOW_DRAW` / `DETECTION_DEADLINE_UNREACHABLE`)。
+   - 受理した claim について court lane は予約を書き、claim の終わり(Final + liability、または void)で解放する。予約が取れなければ claim gate が拒否する。
+   - court の carrier funding が手数料不足で止まったら、node の `PalwNodeTelemetryV1::detection_loss_once(class, claim, FeeShortfall)` を呼ぶ。
+2. **kernel route の admission**: kernel ledger の claim 受理は fence を読まない(policy は checker の draw だけを決める。§11 の node 試験)。kernel route の shadow 選択と被覆率 q の実測も未。
+3. **同時 claim 数の強制**: seat の scheduler が `claims_in_flight` を超えて duty を取らないようにする配線はない(落ちた opening は数えられ、黙っては消えない)。
+4. **producer の事前確認**: `palw_class_admits_claim_v1` は class 単位なので、claim 単位の policy 拒否を producer が inference 前に知る口はまだない(fold は拒否する)。
+5. **実測**: §7 の未測定値をすべて実 artifact で測る。その後で、各 genesis class の policy 値(class id、`attempt_intervals` 付き)を決め、ユーザーが承認する。
+6. **RPC への公開**: §9。
 
 ## 11. 実行した試験(この branch)
 
-- `cargo test -p kaspa-consensus-core --test g14_detection_policy`: 19 passed。
+- `cargo test -p kaspa-consensus-core --test g14_detection_policy`: 21 passed。
 - `cargo test -p kaspa-consensus-core --test g14_detection_corpus`: 5 passed。
-- `cargo test -p kaspa-consensus-core --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test c4r3_fork_id_at_int13 --test rfc0012_fork_id_and_cost`: 9 + 5 + 1 + 1 passed(1 ignored)。t12 の params、identity、schedule の pin は動いていない。
-- `cargo test -p kaspa-consensus-core --lib -- shipped_presets_have_pinned_fingerprints fork_id palw_detection`: 23 passed。fork-id の probe に新しい fence を足したので、`the_fork_id_gate_names_every_scheduled_palw_fence` などは通る。
-- `cargo check -p kaspad`: 成功(新しい warning なし)。kaspad 側の変更(seat の draw、保持上限、funnel)を実行する試験はない。panel の経路は型検査だけで、node の実行では確かめていない。
+- `cargo test -p kaspa-consensus-core --test g14_detection_gate`: 4 passed。t12 の fold fixture で、実際の `apply_palw_transition_v7` に mirror を載せて試した。
+  - attempt / FP: policy なし、担保不足、資源不足(保持 512)、attempt N なし、n_max 超過をそれぞれ名前付きで拒否する。十分な policy なら fence なしと同じ bytes で受理する。
+  - fence より前は、全拒否の mirror があっても byte 同一である。
+  - 同じ block の再 fold(restart)、兄弟 block を挟んだ再 fold(reorg)で、state も拒否も同じになる。
+- `cargo test -p kaspa-consensus-core --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test c4r3_fork_id_at_int13 --test rfc0012_fork_id_and_cost`: 9 + 5 + 1 + 1 passed(1 ignored)。t12 の params、identity、schedule の pin は動いていない(第 1 段で実行)。
+- `cargo test -p kaspa-consensus-core --lib -- shipped_presets_have_pinned_fingerprints fork_id palw_detection`: 23 passed(第 1 段で実行)。
+- `cargo check -p kaspad`: 成功。kaspad 側の変更(seat の draw、保持上限、funnel)は型検査だけで、node の panel 実行では確かめていない。
+- `cargo test -p kaspa-consensus --lib -- g14_kernel_route_e2e::detection_policy`: 1 passed(実ノード harness: 署名済み carrier、mempool、template、chain block の fold、read API)。
+  - 1 位置だけ偽った kernel claim(N = 5)を全 seat が覆う。
+  - 武装した policy(D_min 3、ε 1/10 → k = 2)の下で、外部の検査者が v2 draw で 400 個の anchor を引いた。検出率は実測 0.4300、解析値 k/N = 0.4000 で、4σ 以内だった。
+  - 検出した検査者が公開資料だけで告発すると、chain は有罪にする。producer の bond は予約額だけ減り、claim は Final にならず、producer に報酬は計上されない。replay も一致した。
+- 第 2 段の変更の後、`palw_the_release_did_not_move`(9)、`palw_activation_pool_is_t12_only`(5)、`c4r3_fork_id_at_int13`(1)を再実行して通った。`--lib` の指紋 pin は、disk 不足(18 GB)のため第 2 段では再実行していない。

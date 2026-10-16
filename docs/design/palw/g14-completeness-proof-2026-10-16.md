@@ -1105,4 +1105,5 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 - v2 draw: post-commit の anchor、claim・model・job・policy・checker への拘束、round をまたいで重複なし、anchor から再導出できる。
 - k と資源の連動: bytes、再実行、保持(legacy の 512 は k ≈ 44 × 32 claim を持てず拒否)、court/DA の opening、期限。node の opening 保持は policy の上限に従い、落ちた opening を capacity_refusal として数える。
 - fault corpus(fixture の整数 cache model、実際の seat seam)では、宣言した不正集合(D ≥ 10%)で 99% 以上を確認した。D = 1 系は解析値 k/N と一致した。正直な claim は 1 度も flag されず、誤実装の seat の局所 flag はすべて参照裁定が棄却した。
-- 未完(同文書 §10): 状態遷移での claim 受理への配線、複数 round の seat、kernel route の shadow と被覆率、court/DA 予算の実連動、同時 claim 数の強制、funnel の後段と RPC、実 artifact での値の測定。
+- 第 2 段: fence より後の claim gate(attempt と FP。option (b) と同じ形で拒否する)、複数 round の seat、funnel の後段(accepted〜invalidated、deadline / unassigned の loss)、実ノードの試験(1 位置の偽りを k/N の率で検出し、告発で有罪、slash、報酬なし)。
+- 未完(同文書 §10): court/DA 予算の実連動(interface は同文書に記載)、kernel route の admission と shadow、同時 claim 数の強制、producer の事前確認、RPC、実 artifact での値の測定。
