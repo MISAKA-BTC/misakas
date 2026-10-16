@@ -102,7 +102,8 @@ fn usize_ids(ids: &[u32]) -> Vec<usize> {
 }
 
 /// The frame's native rules at testnet-12's step ladder (`2^22`) and the network's staged config, for a native custodian upper of
-/// `custodians` (a network with the registry resolves it to its Panel's seat count plus the producer: 6 on testnet-12).
+/// `custodians` (a network resolves it from its Panel's seat count plus the producer; with `palw_tir_shard_v1` armed, as on
+/// testnet-12, a registered TIR class's is a stratified Panel's: 257 — `tir_frame_allocation_holds_at_testnet12s_custodian_upper`).
 fn rules(custodians: u64) -> PalwTirPublicAllocationRulesV1 {
     PalwTirPublicAllocationRulesV1 {
         maximum_leaves: 1 << 22,
@@ -158,9 +159,9 @@ fn tir_free_prompt_run_is_a_frame_original_whose_work_the_lane_derives() {
             job_identity: palw_fp_job_pin_v1(&commitment),
             accepted_daa: 100,
         };
-        // Two custodians (a producer and one seat): the frame's resource arithmetic holds there for every corpus class (it does not
-        // at testnet-12's six — `tir_frame_allocation_overflows_at_testnet12s_panel_gap_pin`).
-        let quote = derive_tir_public_allocation_v1(&geometry, &commitment, &header, &record, &backend.class().layout, None, None, rules(2))
+        // testnet-12's custodian upper (a five-seat Panel and the producer): the frame's resource arithmetic holds there for every
+        // corpus class (`tir_frame_allocation_holds_at_testnet12s_custodian_upper`, which also holds it at testnet-12's 257).
+        let quote = derive_tir_public_allocation_v1(&geometry, &commitment, &header, &record, &backend.class().layout, None, None, rules(6))
             .unwrap_or_else(|e| panic!("{name}: the frame's allocation: {e}"));
         assert!(matches!(quote, PalwTirPublicAllocationQuoteV1::Complete(_)), "{name}: a complete frame plan");
         framed.push(name.clone());
@@ -176,7 +177,7 @@ fn tir_free_prompt_run_is_a_frame_original_whose_work_the_lane_derives() {
             assert!(check_tir_decode_token_tiled_rule_v1(&capture.binding, &pin, &court, &rule).is_err(), "{name}: honest row {row}");
         }
     }
-    eprintln!("[tir-fp] complete frame originals (2 custodians): {framed:?}");
+    eprintln!("[tir-fp] complete frame originals (6 custodians): {framed:?}");
 }
 
 /// **The selection drill (D-06) is convicted by the door; the leaf drill (D-05) commits a self-consistent lie.** The committed
@@ -245,22 +246,57 @@ fn tir_free_prompt_v4_stop_runs_to_exactly_the_decoders_stop() {
     }
 }
 
-/// **GAP PIN (found by this lane, owned by the TIR frame lane): the frame's native allocation overflows its own checked `u64`
-/// arithmetic at testnet-12's Panel size.** With the network's staged config and ladder, every corpus class (about 100–220 step
-/// leaves, vocabulary 24) is a complete frame original at 1–2 custodians and is refused at 6 (a five-seat Panel plus the producer):
-/// `required-family sum overflows maximum_parser_steps` or `native TIR allocation exceeds u64`. With G-03, such a class takes no
-/// free-prompt claim past the fence at all. This test pins the gap; it must be inverted when the frame's resource accounting is
-/// fixed (it records, it does not endorse).
+/// **The frame's native allocation holds at testnet-12's custodian upper** (the gap this lane pinned, inverted by the TIR frame
+/// lane's fix of 2026-10-16). testnet-12 arms `palw_tir_shard_v1`, so the upper its registry fold resolves for a registered TIR
+/// class is a stratified Panel's — `MAX_STRATIFIED_SEATS_V1` (256) seats plus the producer, 257 — not its five-seat V2 Panel plus
+/// the producer (6). The upper is taken from the fold's own resolver over the shipped bundle, not restated. Under the network's
+/// staged config and ladder (`2^22`), every corpus class is a complete frame original at every upper from 1 to 6, at 33 and at 257.
+///
+/// The root cause was the work allocation (`derive_tir_public_work_allocation_v1`): every lane was priced as the outside owner's
+/// (which reads every slot's answers, so it grows with the slots) and the claim-wide total was that times the slots — a product
+/// that is a sum (one owner lane plus one literal custodian lane per custodian; the claim-wide preparation holds custodian lanes
+/// only); the per-lane work was multiplied by every actor's preparations (`slots × passes`) as well; the acquisition's storage
+/// envelope was re-read as answer bytes; and the 16 KiB WorkDebit slices were counted over the replay's RAM traffic and over the
+/// passes twice. With each full-frame validation (`frame ∝ custodians`) charged per accepting action, that made the SUM cubic in
+/// the upper; it is now quadratic, as `original_controls` states.
 #[test]
-fn tir_frame_allocation_overflows_at_testnet12s_panel_gap_pin() {
+fn tir_frame_allocation_holds_at_testnet12s_custodian_upper() {
+    use kaspa_consensus_core::network::{NetworkId, NetworkType};
+    use kaspa_consensus_core::palw_model_registry_v1::{PalwModelRegistryFoldV1, palw_registry_globals_of_bundle_v1};
+    use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, PalwTransitionExtrasV1};
+    let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+    assert_eq!(t12.net, NetworkId::with_suffix(NetworkType::Testnet, 12));
+    assert!(t12.palw_tir_shard_v1.is_some(), "testnet-12 arms the layer-sharded (stratified) Panel for IR classes");
+    assert!(t12.palw_shard_licensing.is_none(), "shard licensing (a ×1024 upper) is dormant on testnet-12");
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else {
+        panic!("testnet-12 is ConsensusV2")
+    };
+    let panel_upper = u64::from(bundle.panel.seat_count()) + 1;
+    assert_eq!(panel_upper, 6, "a five-seat V2 Panel and the producer");
+    // The production resolver (`palw_tir_public_allocation_rules_at` → `staged_registered_tir_maximum_custodians_v1`) over the
+    // shipped bundle's state params and a registry fold with the network's own globals, at the planned fence (DAA 14,000).
+    let registry = PalwModelRegistryFoldV1 {
+        globals: palw_registry_globals_of_bundle_v1(bundle),
+        span_daa: 1,
+        genesis_works: Default::default(),
+        grace_until_daa: 0,
+        admission_audit_period_daa: None,
+        readiness_v2_active: false,
+        bond_maturity: None,
+    };
+    let extras = PalwTransitionExtrasV1 { model_registry: Some(registry), ..Default::default() };
+    let t12_upper = PalwChainStateV2::staged_registered_tir_maximum_custodians_v1(14_000, &bundle.state, &extras).unwrap();
+    assert_eq!(t12_upper, 257, "a stratified Panel's 256 seats and the producer");
     let mut record_line = Vec::new();
-    for (k, (name, backend)) in backends("gap").into_iter().enumerate() {
+    let mut classes = 0usize;
+    for (k, (name, backend)) in backends("holds").into_iter().enumerate() {
         let prompt = prompt_of(&backend, k);
         let job = fp_job(&backend, &prompt, 2);
         let run = backend.execute_free_prompt(&job, &usize_ids(&prompt)).unwrap();
         let shape = backend.capture_shape(&run.outcome.material).unwrap();
         let commitment = palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, 999_999).unwrap();
-        let PalwPublicExecutionBindingHeaderV1::Tir(header) = backend.public_execution_binding_header_v1(&run.outcome.material).unwrap()
+        let PalwPublicExecutionBindingHeaderV1::Tir(header) =
+            backend.public_execution_binding_header_v1(&run.outcome.material).unwrap()
         else {
             panic!("{name}: an IR capture exports a TIR header");
         };
@@ -273,20 +309,40 @@ fn tir_frame_allocation_overflows_at_testnet12s_panel_gap_pin() {
             job_identity: palw_fp_job_pin_v1(&commitment),
             accepted_daa: 100,
         };
-        let largest = (1..=6u64)
-            .take_while(|c| {
-                derive_tir_public_allocation_v1(&geometry, &commitment, &header, &record, &backend.class().layout, None, None, rules(*c))
-                    .is_ok()
-            })
-            .last()
-            .unwrap_or(0);
-        let at_six = derive_tir_public_allocation_v1(&geometry, &commitment, &header, &record, &backend.class().layout, None, None, rules(6));
-        record_line.push(format!("{name}: n={} largest framable upper={largest}", commitment.work_leaves));
-        assert!(largest >= 2, "{name}: framable at two custodians");
-        let why = at_six.err().unwrap_or_else(|| panic!("{name}: framable at testnet-12's upper — invert this gap pin"));
-        assert!(why.contains("exceeds u64") || why.contains("overflows"), "{name}: {why}");
+        for custodians in (1..=panel_upper).chain([33, t12_upper]) {
+            match derive_tir_public_allocation_v1(
+                &geometry,
+                &commitment,
+                &header,
+                &record,
+                &backend.class().layout,
+                None,
+                None,
+                rules(custodians),
+            ) {
+                Ok(PalwTirPublicAllocationQuoteV1::Complete(plan)) => {
+                    assert_eq!(plan.acquisition.maximum_custodians, custodians, "{name}");
+                    // The claim-wide totals are the lanes' SUM; the preparation holds custodian lanes only.
+                    assert_eq!(plan.owner_work.maximum, plan.owner_work.lanes_sum_v1().unwrap(), "{name}");
+                    assert_eq!(plan.preparation_work.per_actor, plan.owner_work.per_custodian, "{name}");
+                    if custodians == panel_upper || custodians == t12_upper {
+                        record_line.push(format!(
+                            "{name}: n={} upper={custodians} parser={:.2e} rent={:.2e} preparation_until=+{:.2e} collect_until=+{:.2e}",
+                            commitment.work_leaves,
+                            plan.terms.plan.maximum_parser_steps as f64,
+                            plan.terms.plan.rent_sompi as f64,
+                            (plan.preparation_until_daa - 100) as f64,
+                            (plan.terms.collect_until_daa - 100) as f64
+                        ));
+                    }
+                }
+                other => panic!("{name}: no complete frame at custodian upper {custodians}: {other:?}"),
+            }
+        }
+        classes += 1;
     }
-    eprintln!("[tir-fp gap] {record_line:?}");
+    assert_eq!(classes, 11, "every corpus class");
+    eprintln!("[tir-fp frame at testnet-12's uppers] {record_line:#?}");
 }
 
 /// **What the lane does not judge, the backend does not run**: a backend with no network id, and a flat-scheme class.
@@ -302,3 +358,4 @@ fn tir_free_prompt_refuses_outside_the_lane() {
     other.class_id = Hash64::from_u64_word(1);
     assert!(backend.execute_free_prompt(&other, &usize_ids(&prompt)).is_err(), "another class's job");
 }
+

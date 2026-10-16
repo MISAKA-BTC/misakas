@@ -111,7 +111,7 @@ pub fn palw_tir_public_source_for_preparation_row_v1(
     let source = PalwTirPublicSourceV1::new_v1(record, layout, header, original.execution_root, original.trace_root, maximum_leaves)?;
     let acquisition =
         crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1::derive_v1(&source, d.native_custodian_upper, d.native_config)?;
-    let allocation = crate::palw_tir_public_owned_v1::derive_tir_public_work_allocation_v1(
+    let allocation = crate::palw_tir_public_owned_v1::derive_tir_public_preparation_work_allocation_v1(
         record,
         layout,
         header,

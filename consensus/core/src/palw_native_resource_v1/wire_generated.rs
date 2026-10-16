@@ -8058,7 +8058,7 @@ wire_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicPreparationV1; crate:
 wire_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicReadyV1; crate::palw_backend::PalwTirPublicPreparedDescriptorV1, u64, crate::Hash64);
 wire_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicSlotV1; crate::Hash64, u64, u64, crate::Hash64, Option<crate::palw_tir_public_owned_v1::PalwTirPublicAcceptedBodyRefV1>, crate::palw_rendering_stream_v1::LeafHashContinuationV1);
 wire_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicSpentV1; u64, u64, u64, u64, u64, u64);
-wire_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicWorkAllocationV1; crate::Hash64, crate::palw_tir_public_owned_v1::PalwTirPublicWorkRulesV1, crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1, crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1, u64, u64, crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1);
+wire_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicWorkAllocationV1; crate::Hash64, crate::palw_tir_public_owned_v1::PalwTirPublicWorkRulesV1, crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1, crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1, crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1, u64, u64, u64, crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1);
 wire_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicWorkDebitV1; u64, crate::Hash64, crate::palw_tir_public_owned_v1::PalwTirPublicWorkScopeV1, crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1, bool, Option<crate::palw_step_leg::PalwStepOpeningV1>);
 impl NativeWireScanV1 for crate::palw_tir_public_owned_v1::PalwTirPublicWorkPhaseV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
