@@ -1012,7 +1012,7 @@ mod tests {
                     claim_id: r.claim_id,
                     kernel_claim_id: Hash64::from_bytes([10; 64]),
                     sompi: 5,
-                    legs: vec![leg],
+                    legs: vec![leg.clone()],
                 },
             ),
             (10, PalwVestingNoteV1::UnservedBurned { claim_id: r.claim_id, sompi: 5, legs: vec![leg] }),
