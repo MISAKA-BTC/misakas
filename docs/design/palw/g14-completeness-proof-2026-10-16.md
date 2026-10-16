@@ -1094,3 +1094,157 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 - 小さい fixture config(restart 0、margin 1 など)を使えば数千 DAA に縮む。
   ただし、それは「preset の court 窓を保つ」という既存 harness の前提を外すことになり、測定値でもない。そのため、この branch では採らなかった。
 - harness の残り(§8.4 の 2)は変わっていない。
+
+## 10. 追補: TIR 公開 frame の価格と時計(§9.5)と T-N1(2026-10-17、branch `integ/g14-tir-pricing-r2`)
+
+本文と §7〜§9 は書き換えない。この節は §9.5 の価格・時計の問題と T-N1 について、この branch で変えたことと測った値を記す。
+外部監査(10-17)の §6.3 と §7 P0(3) の要求も扱う。要求は「受理した追及の最大時間を、Final・報酬の支払い・bond exit と lock の期限と整合させる」こと、
+そして「価格と時計は実測した parser work・資料の大きさ・replay 回数・同時追及数から導き、根拠のない短い timeout や安い料金で負荷上限を失わない」ことである。
+新しい規則はすべて休眠である。`palw_tir_frame_cost_v1` は全 preset で `None`、`PALW_TIR_FRAME_COST_RECORDS_V1` は空である。
+testnet-12 の identity と指紋は変わらない(`shipped_presets_have_pinned_fingerprints` は ok)。
+
+### 10.1 変えたこと
+
+1. **価格: 実測した cost unit(`palw_tir_frame_cost_v1`)。**
+   - 旧: 受理する action ごとに frame 全体を 32 回読むとし、1 byte あたり 32 parser step で数えていた。
+   - 新: read action(Demand / Begin / Part / Finish)は、fold で測った 1 action の時間を parser step に換算して課金する。
+     値は `action_parser_steps + action_parser_steps_per_custodian × 上限` である。
+   - frame 全体の pass を課金するのは、fold が実際に全体を検査する所だけにした。外部 owner の Open と conviction filing で、それぞれ `frame_passes_per_check` 回である。
+   - fold 側の対応: `native_frame` は Open と Convict のときだけ frame の全構造を検査する。それ以外の control は frame の不変 identity と自分の row を検査する。
+     rooted frame を書く install と custody 書き込みは、毎回全体を検査する。
+   - この変更で、read action は上限 257 で 2.3 ms から 0.31 ms になった(測定)。
+2. **時計: 直列の積み上げをやめた(`tir_public_turn_span_v1` / `tir_public_localization_path_v1` / `tir_public_preparation_door_v1`)。**
+   - 直列に待つのは、前の move が chain で受理されている必要がある move だけにした。
+     - Demand → 回答
+     - Begin → Part → Finish
+     - 1 turn の回答 → 次の Demand
+     - debit → Ready
+   - custodian は並列に回答する。全 actor が同時に chain に載せる量は、測定した包含容量 `parallel_bytes_per_daa` で割って時間に足す。
+     このとき K_owner = 8 の同時 owner を全員数える(同時追及数による負荷上限)。
+   - turn の数は、正直な owner の局所化 path の turn 数と `reorg_replay_moves` 回の再開 turn の和にした。turn 予算全体 × 65 の直列ではない。
+     局所化 path は IDs、step descent、leaf、cone を run で(安全側に全 leaf を run で)、trace、出力検査である。
+3. **preparer の WorkDebit は 1 pass に 1 件にした(consensus と node の両方)。**
+   - consensus: `maximum_slices_per_actor = passes`。debit の work は `tir_public_pass_budget_v1`(preparer の lane ÷ passes、grant 1 件)である。
+   - node: `palw_tir_public_custodian` は pass の最初の slice で debit を 1 件出す。受理された permit の下で、pass の全 slice(cold capture と publication)を chain を待たずに実行する。
+     permit の扱いは `OperationalLedgerV1::from_native_pass_permit_v1`、`require_preparation_v1` の pass mode で行う。
+   - write-ahead の物理 charge は pass 単位にした。
+4. **受理した追及の最大時間を liability horizon の内側に置いた(外部監査 §7 P0(3))。**
+   - `PalwTirFrameClockV1::maximum_door_daa` を新設した。conviction door(`collect_until − accepted`)がこれを超える frame は作らない(`DoorBeyondLiabilityHorizon`)。
+     G-03 により、そのような claim は受理されない。報酬経路を持たないので、Final が無期限に遅れることもない。
+   - 武装時の検証(`validate_palw_tir_frame_cost_in_v1`)は、`maximum_door_daa` > `window_challenge_at(fence) + window_court` を拒否する。
+     これは legacy route が Final を覆せた最後の日(`palw_legacy_fp_liability_floor_v1`)である。
+   - 既存の hold との整合:
+     - frame の claim の Final floor は `max(licence + window_challenge, collect_until)` である(`palw_claim_final_floor_v1`)。
+     - Gate C は door が閉じるまで待つ。
+     - credited seat の lock は `bond_exit_after_daa`(= material door ≥ collect door)まで延びる。
+     - したがって、受理された追及はすべて「Final・支払い・seat の exit/lock 期限」より前に終わる。
+5. **記録がなければ武装しない(G-10 と同じ形)。**
+   - `palw_tir_public_conviction_v1` を武装するには、次の 2 つが要る。
+     - well-formed な `palw_tir_frame_cost_v1`
+     - その network・高さ・値を名指す pinned record(version、source commit、measurement digest、review digest。`PalwTirFrameCostRecordV1`)
+   - isolated な G14 試験 genesis は record の pin を省略する。horizon 検査は省略しない。
+   - `palw_tir_frame_test_only_cost_v1` は試験専用で、測定値ではない。どの preset にもどの record にも入っていない。
+
+### 10.2 測った値(release、Apple M1 Max 10c、記録 `docs/design/palw/evidence/tir-frame-measure-2026-10-16/`)
+
+**fold action**(`fold-actions-after.json`、`tir_frame_accepting_actions_are_measured_across_custodian_uppers`):
+
+| 項目 | 上限 6 | 上限 257 |
+|---|---|---|
+| read action | 74〜217 µs | 302〜310 µs |
+| Open | 0.09 ms | 1.89 ms |
+| filing | 0.07 ms | 1.28 ms |
+
+- ML-DSA-87 の verify は 98 µs、frame 全体の 1 pass(上限 257、2.70 MB)は 1.73 ms だった。
+- 導いた候補値: `action_parser_steps` 15,625,804、`action_parser_steps_per_custodian` 18,575、`frame_passes_per_check` 2。
+- 同じ harness の前回の実行では 8,674,280 / 45,961 だった。小さい上限での host の揺れによる。武装には、最も遅い対応 node の記録が要る。
+
+**frame**(`frame-ops-after.json`、`frame_measure`、11 class)。候補 `candidate-t12-cost.json` の条件:
+- margin 4、acquisition 1、restart 1、collection 8、retention 256
+- control 14,320 B、包含容量 125,000 B/DAA(t12 の block mass 上限で、上限値。実網の観測値ではない)
+
+| 量 | §9.4 / §9.5 の値(network_v1) | この branch(候補、上限 6) | 上限 257 |
+|---|---|---|---|
+| claim の最低 rent | 2e7〜8e7 MSK | 1.1e4〜1.5e4 MSK | 3.9e5〜5.4e5 MSK |
+| 外部 owner の Open rent | 約 2.2e7 MSK | 5.2e3〜7.2e3 MSK | 1.9e5〜2.7e5 MSK |
+| preparation door | +0.9e6〜3.8e6 DAA | +16 DAA | +102 DAA |
+| owner の turn 数 | fresh × 65 | 11 | 11 |
+| preparer 1 人の WorkDebit | 2.3e5〜9.5e5 件 | 2 件(1 pass に 1 件 × 2 pass) | 2 件 |
+| conviction door(collect − accepted) | +6e7〜2.4e8 DAA | **+3,389〜12,507 DAA** | **+91,448〜353,906 DAA** |
+
+- 実際の 1 preparation pass(node と同じ手順: cold capture、次に publication)は 68〜241 slice で、budget の範囲に収まった。
+  pass の IO は 1 debit の budget の 0.9〜3.2 % だった。
+- rent の残りの大部分は、owner と preparer の work lane である。原因は、court の固定上限 `maximum_replay_io_bytes` × passes。
+- door の残りの大部分は、cone run の turn にかかる同時包含の項である。8 owner × slot 数 × 回答 body を 125 KB/DAA で割る。
+  回答 body の上限は 1 leaf = class layout の最大 tile × 4(16 KB)で数えている。実測の最大回答は 647 B だった。
+
+### 10.3 結果: testnet-12 で frame は「整合した拒否」になる
+
+- testnet-12 の liability horizon は、fence 16,000 で `120 + 3,000 = 3,120` DAA である。
+- 候補値のもとでは、corpus 11 class のどれも上限 6 と 257 の両方で door が horizon を超える(最小は moe n=52、上限 6 で 3,389)。
+- したがって、この候補で武装すると、IR class の FP claim は frame を作れず、G-03 で受理されない。
+  報酬は出ないが、Final が無期限に遅れることも、負荷上限が外れることもない。
+- **testnet-12 で正直な IR FP claim が支払いまで届くことは、この branch では示せていない。**
+  試験(10.4)が通るのは、試験専用の config のもとでだけである。
+
+### 10.4 T-N1(fold 水準、production transition)
+
+`consensus/core/src/palw_state_v2/tests/tir_fp_lane_v1.rs`。
+
+- 全 block を `apply_palw_transition_v2_with_extras` に通した(支払いは V7 の receipt spend)。全 control は実 ML-DSA-87 で署名し、fold で検証した。
+- frame の価格と時計は TEST-ONLY config による。offence attribution、panel economy、R-core+ は testnet-12 と同じく武装した。
+- 経路:
+  1. claim の受理と frame の設置
+  2. Panel(5 seat)の bind
+  3. producer の 1 pass 1 debit と Ready
+  4. 3 seat それぞれの pass debit と、atomic な Valid + raw custody grant + Ready
+  5. その 3 receipt による licence
+- `t_n1_an_honest_ir_fp_claim_reaches_final_and_payment_inside_the_liability_horizon`: ok。
+  - floor 266 = collect_until。horizon 627 の内側である。
+  - floor の前は Final ではなく、spend も拒否される。
+  - floor の後は Final になり、receipt quantum の spend で weight(支払い)が加わる。
+  - producer の担保は不変である。
+- `t_n1_a_forged_ir_fp_claim_is_convicted_by_one_outside_owner_and_never_paid`: ok。経路は次のとおり。
+  1. 1 leaf を偽った commitment を、Panel の 3 seat が Valid で license する。
+  2. Panel 外の bond 1 つが、preparation door の後に Open する。
+  3. その bond は、自分の再計算と比べて偽の leaf(1 つだけ)を局所化し、Demand する。
+  4. producer が Begin / Part / Finish で回答する(turn span 10 DAA の内側)。
+  5. その bond が、自分の再計算から作った cone refutation を filing する。
+
+  結果:
+  - claim は `Voided(CourtFraud)`。
+  - producer と Valid の 3 seat が slash され、それぞれの offence は 1 回だけ記録される。seat の lock は取られる。署名しなかった 2 seat は無傷である。
+  - 2 回目の filing は拒否される。
+  - claim は Final に届かず、receipt spend は拒否される。safe weight は 0 のままである。
+- **これは node E2E ではない。** carrier の fee と burn、PQ mempool、template、node service loop は通らない(§8.4 の harness)。
+
+### 10.5 実行した試験(この branch)
+
+- `cargo test -p kaspa-consensus-core --lib -- palw_tir_public tir_fp_lane t_n1 shipped_presets_have_pinned_fingerprints tir_preparation_is_claim_wide palw_tir_frame_cost palw_native_resource aux_registry_tests`:
+  `134 passed; 0 failed`。T-N1 の 2 本、door の上限試験 `a_frame_whose_door_exceeds_the_records_longest_pursuit_is_not_built`、
+  cost record の試験、`shipped_presets_have_pinned_fingerprints` を含む。§7.4 / §8.3 / §9.6 で失敗と記録された
+  `flat_original_binding_does_not_acquire_tiled_trace_obligations` も、この base では ok だった。
+- `cargo test --release -p misaka-palw-tir-exec --features node --test free_prompt`: `5 passed; 0 failed`。
+- `cargo test -p kaspa-consensus-core --test g14_close_legacy`: `8 passed; 0 failed`。
+  horizon を 1 DAA 超える `maximum_door_daa` は、武装時の検証で拒否される(追加した assert)。
+- `cargo test -p kaspad --lib -- tir_public_custodian tir_acquisition_driver tir_public_owner tir_public_filer palw_drill_tir_frame_tests`: `16 passed; 0 failed`。
+  1 pass 1 debit にした custodian の build と既存 unit を確認した。pass mode の node loop を通しで動かす試験は無い。
+- `cargo test --release -p misaka-palw-tir-exec --features node --test frame_measure`: `1 passed`。
+  11 class すべてで、node と同じ手順の 1 pass が 1 debit の budget に収まることを assert した。
+- `cargo test --release -p kaspa-consensus-core --lib -- tir_frame_accepting_actions_are_measured_across_custodian_uppers`: `1 passed`。
+
+### 10.6 残り(閉じていないもの)
+
+1. **testnet-12 の horizon に door を収めること。** 候補値では収まらない(10.3)。次のいずれかが要る。測定値を伴わずに値を短くすることはしない。
+   - (a) 回答 body の上限を、class の実際の leaf の大きさから導く。
+     window あたりの最大 leaf byte を、step space から決定的に数える。現在は 1 leaf を最大 tile × 4 で数えており、実測の約 27 倍である。
+   - (b) cone の turn の上限を、program の依存関係から導く。現在は安全側に、全 leaf を run で取る。
+   - (c) 同時追及の負荷モデルを見直す。K_owner × 全 custodian slot が毎 turn 全回答を chain に載せる前提である。owner 枠の lane と共同で扱う。
+   - (d) 上限 257(stratified seat)の frame の扱い。slot 数に比例する包含項のため、door は上限 6 の約 28 倍になる。
+   - (e) 包含容量 `parallel_bytes_per_daa` と `inclusion_margin_daa` を、testnet-12 で出荷 binary を使って観測すること(現在の値は上限値)。
+2. **rent の work lane。** court の固定上限 `maximum_replay_io_bytes` × passes が支配的である。実測の pass IO はその 1〜3 % だった。
+   class ごとの実測上限に置き換えるかは未決である。
+3. **T-N1 の node 水準。** kaspad の `palw_service_public_e2e` で、mempool と template を通す経路は未作成である(§8.4 の 2 は不変)。
+   pass mode の custodian loop を通しで動かす node 試験も無い。
+4. **記録。** `PALW_TIR_FRAME_COST_RECORDS_V1` は空のままである。武装には、最も遅い対応 node での測定、testnet-12 で観測した network input、review digest が要る。
+5. G-T1(能動的な slot 占有)と K_owner の扱いは、owner 枠の lane の担当である(この branch は `palw_tir_public_fold_v1.rs` の owner admission を変えていない)。

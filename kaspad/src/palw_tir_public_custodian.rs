@@ -50,7 +50,7 @@ use kaspa_consensus_core::{
         PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1, PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicControlV1,
     },
     palw_tir_public_claim_v1::{PalwTirPublicFrameViewV1, palw_tir_public_claim_v1},
-    palw_tir_public_owned_v1::{PalwTirPublicOwnedActionV1, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1, PalwTirPublicWorkV1},
+    palw_tir_public_owned_v1::{PalwTirPublicOwnedActionV1, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1},
     palw_tir_public_source_v1::PalwTirPublicRequestV1,
     palw_tir_public_state_v1::{
         PalwTirPublicPreparationSnapshotV1, PalwTirPublicWorkBookV1, PalwTirPublicWorkPermitV1,

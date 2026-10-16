@@ -1111,6 +1111,23 @@ mod tests {
             missing => panic!("native fixture lacks a complete resource derivation: {missing:?}"),
         }
     }
+    /// **External audit 10-17 §7 P0(3): an accepted pursuit ends inside the record's longest door.** A frame whose conviction door
+    /// is exactly the ceiling is built; one DAA less of ceiling and it is NOT built (named), so G-03 refuses the claim instead of
+    /// accepting it with a Final the frame would delay past the liability horizon.
+    #[test]
+    fn a_frame_whose_door_exceeds_the_records_longest_pursuit_is_not_built() {
+        let mut f = fixture(false, false);
+        let plan = complete(&f, false);
+        let door = plan.terms.collect_until_daa - plan.terms.accepted_daa;
+        f.rules.clock.maximum_door_daa = door;
+        assert!(matches!(quote(&f, false), PalwTirPublicAllocationQuoteV1::Complete(_)), "a door at the ceiling is built");
+        f.rules.clock.maximum_door_daa = door - 1;
+        assert!(matches!(
+            quote(&f, false),
+            PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. }
+                if missing == vec![PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon { required: door, allowed: door - 1 }]
+        ));
+    }
     #[test]
     fn generic_native_tir_gets_real_sum_without_a_fourth_semantic_family() {
         let f = fixture(false, false);
