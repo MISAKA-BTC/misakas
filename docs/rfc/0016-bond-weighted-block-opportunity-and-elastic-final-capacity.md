@@ -6,6 +6,17 @@
 > [RFC-0015 §8.3–8.5](0015-panel-free-permissionless-verification.md)（2026-10-14確定: `α = 1.5`、30日平均、Miner＋Verifier元本、ブロック機会にも適用）を前提とし、変更しない。
 > 本RFCは、bondの多いモデルが**物理的に**多くのブロック生成機会を得る設計と、人気モデルが検証容量の不足でFinal待ちにならない設計を扱う。
 
+> **改訂(2026-10-16 ユーザー決定)— 本文中の「30 日平均」「Panel=0 は 7 日、Panel=1 は 1 日」は、この改訂で置き換える。**
+>
+> 1. **平均期間を 30 日から 7 日に変更する。** モデル別配分 `A_m = c_m · S̄_m^1.5` の `S̄_m` は、Miner と claim に拘束された Verifier の元本の 7 日平均とする(コード `PALW_ALLOCATION_AVERAGE_DAYS_V1 = 7`)。
+> 2. **拘束期間は Panel=0・Panel=1 とも 1 日に固定する**(コード `PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1 = PALW_BOND_HOLD_PANEL_ONE_DAYS_V1 = 1`)。mode による差は無くなり、mode を切り替えて発行能力を取り戻すことはできない。
+> 3. **1 日あたりの上限で計算する。** miner bond から生じるブロックと報酬には上限がある。不正をして高速に claim しても、実際に計算して claim しても、どちらも上限に当たる。つまり bond が時間内にできる claim の量は変わらない。この前提の計算を 1 日単位に固定する(Q/B/R/F は 1 日あたりの `q, b, r, f`)。
+> 4. **RFC-0017 の階層係数との関係。** 追加モデル(add model)は 0.3 倍で不利になる、という前提は本 RFC の後にできた(RFC-0017 → [ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md))。
+>    上限が共通なので、0.3 倍の追加モデルで攻撃を成立させるには、より多くの bond が要る。本 RFC の bond 加重は、この前提と合わせて評価する。
+> 5. **肝心な条件。** claim を 1 回不正すれば slash される。その slash による損失が、不正によって得られる利益を上回ること。上限によって不正の速度の利点を消すことと、この損失条件の両方がそろって、初めて抑止が成り立つ。
+>
+> 下の表と節に残る「30 日平均」「Panel=0 の 7 日」「`7q, 7b, 7r, 7f`」は、改訂前の記録である。
+
 **トークンの表示名は Misaka、ticker は BILI。** 既存のprotocol/CLI/API識別子は維持する（[ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
 
 * **Status:** Accepted design (V+), values pending measurement — 2026-10-15。物理層の設計としてV+を採用した（第3回のユーザー判断）。

@@ -192,3 +192,11 @@ kernel-extension acceptanceとregistrationにpublic-verifier dispute completenes
 * 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
 
 本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。
+
+## 追記(2026-10-16 ユーザー決定):RFC-0005(PALW ML-VM)を採用しない理由
+
+**MISAKA は汎用 VM を採用しない。**
+- VM は、実行の正しさと安全性を保証するためのコストが大きい。任意の program を合意の対象にすると、その実行を検証・裁定するための仕様・実装・資源の上限・court の範囲が大きくなりすぎる。
+- そのため、誰でも参加できる(パーミッションレスな)検証には向かない。正直な外部の検証者 1 人が有罪まで進める G14 の要件を、汎用 VM の全範囲で満たすことは現実的でない。
+- モデルの拡張は、本 ADR のとおり、版付きの kernel と PALW-TIR の固定 primitive 集合で行う。
+- [RFC-0005](../rfc/0005-palw-ml-vm.md) は採用しない設計の記録として残す。
