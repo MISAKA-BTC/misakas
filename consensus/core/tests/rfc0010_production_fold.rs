@@ -1927,11 +1927,11 @@ fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_su
     let route = v.c.s.kernel_route().unwrap();
     let (contract, sources, promises) = route.paid_beacon_material_v5(&terms.source.context).unwrap().unwrap();
     let context = route.beacon_source_target_v4(&terms.source.context).unwrap().context;
-    let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) =
+    let state =
         misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&context, &contract, &sources, &promises, route.ledger().unwrap().daa)
-            .unwrap()
-    else {
-        panic!("actual source Finals must lock the paid Panel beacon");
+            .unwrap();
+    let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) = state else {
+        panic!("actual source Finals must lock the paid Panel beacon: {state:?} ({} sources)", sources.len());
     };
     let proof = BeaconProofV1 {
         epoch: seal.beacon_epoch,
