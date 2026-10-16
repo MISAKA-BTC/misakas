@@ -14,6 +14,7 @@
   3. 階層規則は `model_tier_permille(class_id, artifact_root, h) = 1000`(h で有効なカタログが `(class_id, artifact_root)` を含む)、それ以外は 300。登録 registry の `Active` 状態は 1.0 ではない。係数は配分重み `A_m = t_m · S̄_m^1.5` に一度だけ掛ける(§6)。
   4. 合意に入るのは、固定されたカタログ root、各 edition の有効化 DAA、有効化後の規則(配分 roll が読む階層)の三つだけである(§3)。
   5. 段階的展開では、有効化前に旧バイナリと新バイナリが同じブロック・state root・fork choice を出すこと、有効化時点で旧バイナリに残ったノードは分岐し得ること、その分岐を fork id が名前付きで検出することを要件とする。**rolling update は「決して fork しない」ことを意味しない**(§7、§10)。
+  6. **ローカル LLM の年次追加は、genesis モデル ID の上書きではない。** 既存 genesis の `class_id` / `artifact_root` と edition 0 を不変に保ち、別の新規モデル ID と固定 root を年次 edition に**追加のみ**で載せる。drill の主目的はバイナリのバージョン変更自体ではなく、Solana 型の事前展開・DAA 有効化によって追加が実際に認識され、旧モデル・新モデルのローカル推論がともに動くかの確認である(§11 R-7・R-8、§12.1)。
 * **Activation:** **新しい fence はない。** カタログ連鎖は ADR-0179 の fence `palw_model_tier_v1` の値そのものであり(`PalwModelTierFenceV1::catalogs`)、各 edition の有効化 DAA はその値の中の副 fence である。全 preset で `None`、flag-day リストに含めない、fingerprint は Some-only、`Some(never())` は `None` へ畳む、arm すると `validate_palw_model_tier_v1` が拒否する。**最初の実使用は testnet-12 の DAA 14,000 更新**(同じカタログ = edition 0、新モデルなし。§12)であり、その有効化はユーザーの承認による。
 * **Baseline:** 検証の基準は統合ブランチ `integ/rfc02-rfc06-12-g14` の `9fad35323`、ADR-0179 の階層実装は `8b58ae301`(`integ/decisions-1015` `6db8ee95a` から merge)。実装は `integ/rfc0019-annual-catalog`。本文の code 行番号はこの branch のもの。
 * **Not activated by:** 本RFCの merge、設計値表(§13)、試験 source の存在、driver の出力、readiness の数値、リリース manifest の署名。
@@ -134,6 +135,7 @@ borsh ではなく手書きの byte 列にしたのは、リリース道具(Pyth
 * **MUST NOT** 既存モデルを上書き・削除しない。既存モデルの root を変えない。同じ `class_id` は連鎖全体で一度だけ現れる(同じ root での再掲も、別 root での再掲も拒否)。
 * 過去の edition を書き換えると次の edition の `previous_catalog_root` が合わなくなる。
 * リリースをまたいでは、新しいリリースの連鎖が前のリリースの連鎖を**接頭辞として**含まなければならない(`PalwAnnualCatalogChainV1::extends`、`:234`。manifest の `--previous` 検査も同じ)。
+* **「genesis モデル ID の更新」は ID の置換・再割当てを意味しない。** genesis assembly の既存登録、edition 0、旧 `class_id`、旧 `artifact_root`、登録 ID / line / 経済履歴は変更しない。新しい重み・tokenizer・計算仕様等は、別の `class_id` と固定 `artifact_root` を持つ**独立したモデル**として登録し、edition 1 以降に追加する。`genesis_id`(genesis 8 テンプレートの番号)を振り直すことと、合意上のモデル追加を混同しない(ADR-0175)。旧 ID を別 root に向ける alias / 自動切替は認めない。
 
 ### 5.5 genesis = edition 0
 
@@ -224,6 +226,7 @@ registry の lifecycle(Registered … Active … Held)は階層と独立であ�
 * gRPC: `GetPalwModelRegistryResponseMessage` の message 内 field 41 と、新 message `RpcPalwAnnualCatalogStatus` / `RpcPalwAnnualCatalogEdition`(`rpc/grpc/core/proto/rpc.proto:2291-2363`)。`RpcRequest`/`RpcResponse` の oneof 番号(≤ 1307、1330–1331)は使わない。
 * service は Params と tip DAA から純粋に組み立てる(`rpc/service/src/service.rs:2402`)。
 * CLI: `misaka palw registry` が「annual catalog (RFC-0019)」の節を表示する(`misaka/apps/cli/src/palw_registry.rs:52`)。
+* **ローカル LLM の動作は別途 E2E が必要:** registry / catalog の RPC はモデルの追加・階層を示すだけで、実モデルのロードや推論成功を示さない。`misaka-palw-gateway` の loopback `GET /health`(`class_id`)、`GET /v1/models`、`POST /v1/chat/completions` と family worker / 固定 artifact を使い、旧・新 ID を別々に確かめる(§11 R-8)。モデル名の表示やカタログ root の一致だけを推論成功と扱わない。
 
 ## 8. リリース手順
 
@@ -314,10 +317,14 @@ T-30 で出荷したバイナリはすでに H で切り替わる(§4.2)。LOCKE
 | R-4 | DAG sibling / RED の境界保持、claim は一度だけ | driver `boundary` |
 | R-5 | 再起動・IBD・partition / rejoin・pruning の一貫性 | driver `restart` |
 | R-6 | カタログのモデルの miner なしで heartbeat / BASE-0 が切替を越える | driver `liveness` |
+| R-7 | **新規ローカル LLM の ID / root は追加のみ。** 旧 genesis / edition 0 と前 release の接頭辞は不変、新 `class_id` は未使用で root は固定。階層 fence が H 前から有効な年次追加試験では、新登録モデルは H 前 300‰、H 後 1000‰、旧 genesis は前後 1000‰。既存 ID / root の再利用・上書き・消失は FAIL。更新ノードで edition / root / tier / state が一致する | **追加予定:** 年次 edition 1 devnet の `model-add` drill。`getPalwModelRegistry`、manifest `--previous`、`palw-class inspect`、R-1〜R-5 の実ノード記録。現行 driver には未実装 |
+| R-8 | **実ローカル LLM 推論。** 旧 genesis モデルと追加モデルを別の固定 ID / artifact で起動し、H の前後で実際の text prompt を送る。`/health` の `class_id`、`/v1/models`、artifact root 検査と推論応答 / commitment を対応付ける。H 後も旧モデルは利用可能、新モデルは新 ID で回答し、他 ID への暗黙の fallback はしない。報酬対象を主張する場合は実 claim の受理・Gate C 認証も別途確認する。未起動・artifact 不在・ID 不一致・空回答・未観測なら PASS にしない | **追加予定:** `local-llm` E2E drill(実 gateway / worker + RPC / claim 記録)。現行 driver には未実装 |
 | M-1 | manifest: 署名・checksum・再現・指紋・カタログ・追加のみ・未署名は失敗 | `misaka-release-manifest.py self-test`(実行済み)と、使い捨て鍵による write → payload → sign → attach → verify と改竄 2 種の失敗(実行済み、§15.4) |
 | M-2 | readiness: M1–M5、void / 窓外の除外、到達不能を別計上、合意効果なし | `misaka-release-readiness.py --self-test`(実行済み) |
 
 driver は何も arm しない。切替高さを schedule しないバイナリでは BLOCKED になる。状態は `OBSERVED_CONSISTENT` / `BLOCKED` / `FAIL` だけで、承認ではない。
+
+**R-7 / R-8 は設計上の受入条件であり、driver と E2E 実行証拠を追加するまでは未検証(BLOCKED)。既存の `switch` だけを通してローカル LLM 追加を PASS としてはならない。**
 
 ## 12. 最初の開発段階 — 同じカタログでの rolling upgrade(testnet-12 DAA 14,000)
 
@@ -333,6 +340,19 @@ driver は何も arm しない。切替高さを schedule しないバイナリ�
 道具の対応: manifest と readiness は「カタログ edition の切替」と「flag day の fence 切替(カタログ不変)」の両方を同じ field で扱う(`switch_daa` は schedule 上の任意の fence 高さ、カタログ root の期待値は任意)。
 
 **期限(10-18)までに未完の項目:** §14 の判断待ちと、§15.5 の compile リスクの解消(validation lane の build)。drill の実行は計画の段階 3・4(10-18〜20)で、本 lane では行っていない。
+
+### 12.1 次の段階 — ローカル LLM のモデル ID を**追加のみ**で有効化する年次 edition drill(2026-10-16 追加)
+
+この段階の「更新」は、**旧 genesis モデルを新しい重みや ID で上書きすることではない**。edition 0 / 既存 genesis の登録・root / 過去の claim / position / 市場は不変とし、新モデルに新規 `class_id` と固定 `artifact_root` を与え、edition `e ≥ 1` に追加する(§5.4、ADR-0175)。利用者は新 ID を**明示的に選択**できるが、旧 ID を黙って新 ID へルーティングしない。
+
+1. **準備(H 前):** 旧 edition を接頭辞として固定し、別 ID / root の新モデルを登録・artifact / tokenizer / family worker のロードを準備する。drill 用 devnet では階層 fence を H より前に有効化し、新 ID が登録 tier 300‰、旧 genesis が 1000‰ であることを読む。新 kernel が必要なら対応コードの事前出荷と独立の協調 upgrade が必要で、カタログだけで未知の kernel は動かせない。
+2. **Solana 型の段階的展開:** edition と H を固定した schedule を持つリリースを事前配布し、H 前は旧・新ノードが同じブロック・state root・fork choice になることを R-1 で確かめる。**主な検査対象はモデル ID / catalog の有効化**だが、MISAKA の schedule はバイナリに固定されるため、事前のソフトウェア展開を省略することはできない。readiness は運用上の測定のみ。
+3. **有効化(H):** H 前は新 ID が年次掲載されたと誤認されず、H 後に edition `e` が ACTIVE となり、`ApprovedModels` に新 `(class_id, artifact_root)` が**増えるだけ**であることを全更新ノードで確認する。配分の 1000‰ は H 以後に初めて行う allocation roll から効く(§6.4)。旧 ID / root / 階層は保持される(R-7)。旧 schedule ノードの fork-id 拒否は R-3 で検証する。
+4. **ローカル LLM 実動:** 旧・新モデルを別個の固定 artifact と worker で実行し、H 前後に実際の prompt を投げる。gateway `GET /health` の `class_id`、`GET /v1/models`、`POST /v1/chat/completions` の非空回答 / commitment と、ノードの登録 `(class_id, artifact_root)` を照合する。H 後は**新モデルで回答でき、旧モデルも回答し続ける**。モデル名だけの表示・mock・別モデルへの fallback は合格にしない。報酬を伴う claim を検証するときは Gate C も別途確認する(R-8)。
+5. **再起動・再同期・リリース検査:** H 後の restart / IBD / reorg でも新旧両モデルの階層と旧状態が再現され、署名済み manifest のカタログが前版の接頭辞を保持することを確認する。root 不一致・再割当て・暗黙の ID 置換・新モデルが使えない場合は FAIL、実モデルの fixture が準備できない場合は BLOCKED と記録する。
+
+**区別:** testnet-12 DAA 14,000 の最初の drill は §12 のとおり **edition 0 のまま・新モデルなし**であり、R-7 / R-8 の合格証拠にはならない。R-7 / R-8 は**次の実モデル追加 edition から必須**。実施前に driver とモデル別の再現可能な fixture / 検査ログを実装する。
+
 
 ## 13. 本RFCで決めない値
 
@@ -383,6 +403,8 @@ driver は何も arm しない。切替高さを schedule しないバイナリ�
 
 `scripts/drills/rfc0019_rolling_upgrade_drill.py`: `rolling`(R-1)、`switch`(R-2)、`stale`(R-3)、`boundary`(R-4)、`restart`(R-5)、`liveness`(R-6)。plan は役ごとに `old_argv` と `new_argv`(同じ app dir)を持ち、P2P は driver 所有の loopback link(RFC-0018 drill の `DelayedLink` を import)、判定は全て安定した sink での公開 wRPC。`switch` と `restart` は readiness M3 の入力となる `misaka/interop-record/v1` を書く(`--interop-out`)。
 
+**2026-10-16 追加要求(未実装):** 年次モデル追加 drill は、R-7 の `model-add` と R-8 の `local-llm` を driver / fixture に実装してから行う。固定入力は新旧 `class_id` / `artifact_root`、対応する worker / artifact、edition / root / H、再現可能な prompt、RPC と gateway の loopback endpoint、期待 tier、実測ログ。現行コードの `rolling` / `switch` 成功を R-7 / R-8 の成功とみなさない。
+
 ### 15.4 本 lane が実行したもの
 
 * `python3 -I scripts/release/misaka-release-manifest.py self-test` と `python3 -I scripts/release/misaka-release-readiness.py --self-test`(標準ライブラリだけ、ネットワークなし)。
@@ -408,6 +430,8 @@ ACTIVATION_ALLOWED(palw_model_tier_v1 とその各 edition)
       AND 単体試験(§11 A〜E)を validation が実行して合格
       AND 出荷するバイナリそのもので rolling / switch / stale / restart / liveness を実行し、収束を記録(R-1〜R-3、R-5、R-6)
       AND 年次 edition(0.3→1.0 の掲載)を含む切替では boundary(R-4)も記録
+      AND 新規ローカル LLM を追加する edition では、新規 ID/root の追加のみ・旧 genesis 保持を実ノードで観測(R-7)
+      AND 同 edition では旧・新 ID の実ローカル推論/commitment を H 前後で検証し、必要な claim の安全性を確認(R-8)。未実装・未実行は BLOCKED
       AND 署名済み manifest が verify を通る(署名・checksum・再現・指紋・カタログ・追加のみ)
       AND readiness M1〜M5 をユーザーへ報告済み(目標は運用判断の材料であり、合意の条件ではない)
 ~~~
