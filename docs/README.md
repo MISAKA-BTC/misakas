@@ -62,3 +62,5 @@ What testnet-12 actually runs, and what is still dormant, is in [STATUS.md §1](
 - [2026-10-12 RFC/ADR review](design/palw/rfc-adr-review-resolution-2026-10-12.md) and the [Panel=1 / Bond-time / model-capital proposal](design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md)
 - [Round / EXEC additional acceptance conditions (2026-10-10)](design/palw/palw-round-exec-additional-acceptance-2026-10-10.md)
 - [Registry of numbers across the remaining RFCs](design/palw/remaining-rfc-integration-matrix.md)
+
+Checking the docs: `python3 -I scripts/docs/check_docs.py` reports broken relative links, ADR/RFC files missing from the number index, and duplicate numbers (report only). Known open items are listed in [history/MOVED.md](history/MOVED.md) and [adr/NUMBERING.md](adr/NUMBERING.md).

@@ -239,3 +239,18 @@ root に残るのは上の表のほか、`README.md`・`PRINCIPLES.md`・`STATUS
 | `wiki/EVM-Pruned-Node.md` | [`operations/evm/misaka-evm-flat-backend-runbook-v0.1.md`](../operations/evm/misaka-evm-flat-backend-runbook-v0.1.md) | 行は一致しないが、ページが runbook を正本として参照する要約 |
 
 `wiki/` は GitHub wiki の写し(`wiki/README.md` に同期方法がある)なので、重複の扱いは wiki 側の運用と合わせて決める必要があります。`getting-started/build.md`・`run-node.md`・`validator.md`・`testing.md` は旧 root README(2026-10-12 まで)から移した手順で、testnet-11 の例を含みます(各ファイルの冒頭に注記があります)。
+
+## リンク切れの現状(`python3 -I scripts/docs/check_docs.py`、2026-10-16)
+
+再編の前後でリンク切れは増えていません(再編前 75 件 → 再編後 75 件のうち、`docs/wiki/` の GitHub-wiki 形式リンク 31 件は「拡張子なしの link は `<name>.md`」という wiki の規則として checker が正しく扱うようにし、ADR の slug 違い 8 件は番号が一意なので path fix した。残り 36 件)。
+
+**path fix で直した 8 件(番号が一意の ADR への link):** ADR-0112(→0067)、ADR-0132(→0072、0071、0098、0107)、ADR-0133(→0112、0098、0071)。旧 draft の slug を指していたので、同じ番号の現行ファイルを指すようにした。
+
+**path fix では直せない 36 件(報告のみ):**
+
+| 件数 | 参照元 | 参照先 | 事情 |
+| --- | --- | --- | --- |
+| 33 | `adr/0152`(9)・`adr/0154`(4)・`adr/0155`(5)、`design/palw/archive/0152/*`(15) | `spec/palw/00-index.md`、`07-claim-lifecycle.md`、`08-verification.md`、`09-court-and-offences.md`、`10-collateral-and-economics.md`、`16-network-parameters-and-fences.md`、`divergences.md`、`design/palw/collateral.md`・`verification.md`・`lineage.md`、`adr/INVENTORY.md` | この系列に存在しない文書。`spec/palw/00–16` 章と `design/palw/` のメモは、未 merge の branch `docs/restructure` にあると [unmerged-inventory-2026-10-15](../design/palw/unmerged-inventory-2026-10-15.md) に記録されている(`adr/INVENTORY.md` の出所は未確認 — unknown, check)。その branch を取り込むか、link を外すかは決める人が決める |
+| 1 | `adr/0004-utxo-commitment64.md:26` | `consensus/core/src/utxo_commitment.rs` | この tree に無い。`UtxoCommitment64` の定義位置は未確認(unknown — check) |
+| 1 | `design/palw/palw-road-to-mainnet-2026-08-21.md:227` | `palw-rc-testnet12-launch-runbook.md` | 履歴上で削除されたファイル。`history/palw-rc-testnet11-launch-runbook.md` は別の系列で、同一の文書とは確認できていないので差し替えていない |
+| 1 | `spec/palw/04b-tensor-ir.md:14` | `04a-integer-arithmetic.md` | この tree に無い(ADR-0040 が BASE-0 の整数演算の仕様だが、同じ文書とは仮定していない) |
