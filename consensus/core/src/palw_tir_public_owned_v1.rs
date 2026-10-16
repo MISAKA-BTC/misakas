@@ -62,6 +62,33 @@ pub struct PalwTirPublicWorkV1 {
     pub target_requests: u64,
 }
 impl PalwTirPublicWorkV1 {
+    /// Every quantity divided by `count`, rounded down (a pass's share of a lane bought for `count` passes).
+    pub fn div_floor_v1(self, count: u64) -> Result<Self, String> {
+        if count == 0 {
+            return Err("TIR work division by zero".into());
+        }
+        let mut next = Self::default();
+        macro_rules! div { ($($f:ident),+ $(,)?) => { $(next.$f = self.$f / count;)+ }; }
+        div!(
+            attempts,
+            io_bytes,
+            hash_bytes,
+            copy_bytes,
+            parser_steps,
+            id_copy_words,
+            tree_hashes,
+            replay_leaves,
+            replay_positions,
+            replay_id_words,
+            eval_elements,
+            eval_terms,
+            source_reads,
+            target_requests
+        );
+        next.arithmetic_work = self.arithmetic_work / u128::from(count);
+        next.traffic_bytes = self.traffic_bytes / u128::from(count);
+        Ok(next)
+    }
     pub fn checked_mul_v1(self, count: u64) -> Result<Self, String> {
         let mut next = Self::default();
         macro_rules! mul { ($($f:ident),+ $(,)?) => { $(next.$f = self.$f.checked_mul(count).ok_or("TIR cumulative work multiplication overflow")?;)+ }; }

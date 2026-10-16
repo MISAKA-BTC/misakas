@@ -71,6 +71,13 @@ pub struct PalwTirFrameClockV1 {
     /// Bytes the network includes per DAA for ONE frame's actors moving at once: a lower bound observed on the network (or, as a
     /// ceiling before that observation, the shipped block's transient-mass byte budget at one block a DAA).
     pub parallel_bytes_per_daa: u64,
+    /// **The longest accepted pursuit, in DAA after the claim's acceptance** (external audit 10-17 §6.3 / §7 P0(3)): a frame whose
+    /// conviction door (`collect_until − accepted`) is longer is NOT built (`DoorBeyondLiabilityHorizon`), so under G-03 that
+    /// claim is not accepted at all — no reward route, no indefinitely delayed Final. Validation at arming refuses a value above
+    /// the network's liability horizon `window_challenge_at(fence) + window_court` (the window in which the legacy rule could
+    /// still reverse a Final, `palw_legacy_fp_liability_floor_v1`), so every accepted pursuit ends inside the horizon Final,
+    /// payment and the seat locks (`bond_exit_after_daa` = the frame's material door ≥ its collect door) are already held to.
+    pub maximum_door_daa: u64,
 }
 
 impl PalwTirFrameClockV1 {
@@ -87,6 +94,7 @@ impl PalwTirFrameClockV1 {
             || self.action_parser_steps == 0
             || self.frame_passes_per_check == 0
             || self.control_bytes == 0
+            || self.maximum_door_daa == 0
             || self.parallel_bytes_per_daa < self.control_bytes.saturating_add(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64)
         {
             return Err("TIR frame clock needs its version and positive measured cost units and inclusion capacity".into());
@@ -217,8 +225,67 @@ pub const fn palw_tir_frame_test_only_cost_v1() -> PalwTirFrameCostV1 {
             frame_passes_per_check: 1,
             control_bytes: 8_192,
             parallel_bytes_per_daa: 4 << 20,
+            // A test genesis's own horizon; the dedicated door test uses a smaller one.
+            maximum_door_daa: 1 << 40,
         },
     }
+}
+
+/// The fixed per-slice overhead a preparer's local ledger charges before each slice's own quoted work (the slice's metadata
+/// hashing and its parse), shared by the node's ledger and the measurement harness.
+pub const PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1: crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1 =
+    crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1 {
+        attempts: 1,
+        io_bytes: 0,
+        hash_bytes: 8192,
+        copy_bytes: 0,
+        parser_steps: 1024,
+        id_copy_words: 0,
+        tree_hashes: 0,
+        replay_leaves: 0,
+        replay_positions: 0,
+        replay_id_words: 0,
+        arithmetic_work: 0,
+        traffic_bytes: 0,
+        eval_elements: 0,
+        eval_terms: 0,
+        source_reads: 0,
+        target_requests: 0,
+    };
+
+/// **One preparation slice's work as a preparer's ledger counts it** (the backend's quote, 16 parser steps per IO byte), the
+/// overhead [`PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1`] excluded.
+pub fn tir_public_slice_work_v1(
+    q: &crate::palw_backend::PalwTirPublicCaptureSliceV1,
+) -> Result<crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1, String> {
+    Ok(crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1 {
+        attempts: 1,
+        io_bytes: q.work.io_bytes,
+        hash_bytes: q.work.hash_bytes,
+        parser_steps: q.work.io_bytes.checked_mul(16).ok_or("TIR preparation slice parser work overflow")?,
+        tree_hashes: q.work.tree_hashes,
+        replay_leaves: q.work.replay_leaves,
+        replay_positions: q.work.replay_positions,
+        replay_id_words: q.work.replay_id_words,
+        id_copy_words: q.work.replay_id_words,
+        arithmetic_work: q.work.arithmetic_work,
+        traffic_bytes: q.work.traffic_bytes,
+        ..Default::default()
+    })
+}
+
+/// **The ONE WorkDebit a preparer files for a whole pass** (audit §10): its lane (`per_actor`, bought for `passes` passes)
+/// divided by the passes, as ONE grant (`attempts = 1`). Every slice of the pass — the cold capture, then the prepared
+/// generation's publication — runs under that one permit, its local ledger charging each slice's quoted work and overhead
+/// against these quantities (the slice count is not a resource: the node's ledger does not count attempts within a pass).
+/// The measurement harness asserts a real pass fits it on every corpus class.
+pub fn tir_public_pass_budget_v1(
+    per_actor: crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1,
+    passes: u64,
+) -> Result<crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1, String> {
+    let mut budget = per_actor.div_floor_v1(passes)?;
+    budget.attempts = 1;
+    Ok(budget)
 }
 
 fn sum(values: &[u64]) -> Result<u64, String> {

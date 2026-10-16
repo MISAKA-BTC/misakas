@@ -98,10 +98,22 @@ fn candidate() -> kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCost
             frame_passes_per_check: u("clock", "frame_passes_per_check"),
             control_bytes: u("clock", "control_bytes"),
             parallel_bytes_per_daa: u("clock", "parallel_bytes_per_daa"),
+            // The harness MEASURES the door, so it does not refuse it here: each plan records its door beside testnet-12's
+            // liability horizon (`window_challenge_at + window_court`, the most validation admits — external audit 10-17 §7 P0(3)).
+            maximum_door_daa: u64::MAX,
         },
     };
     cost.check_v1().expect("a well-formed candidate");
     cost
+}
+
+/// The planned fence height the candidate prices (16,000 is the release plan's target, not fixed).
+const PLANNED_FENCE_DAA: u64 = 16_000;
+/// testnet-12's liability horizon at the planned fence: `window_challenge_at(fence) + window_court`.
+fn t12_horizon_daa() -> u64 {
+    let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else { unreachable!() };
+    bundle.state.window_challenge_at(PLANNED_FENCE_DAA) + bundle.state.window_court()
 }
 
 /// The frame's native rules at testnet-12's ladder, at a custodian upper of `custodians`, with `cost`.
@@ -229,10 +241,16 @@ fn bounds(plan: &kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPub
     // bounds relative to acceptance.
     let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else { unreachable!() };
-    let wc = bundle.state.window_challenge_at(14_000);
+    let wc = bundle.state.window_challenge_at(PLANNED_FENCE_DAA);
     let court = bundle.state.window_court();
     let collect = plan.terms.collect_until_daa - base;
     json!({
+        "door_daa": collect,
+        "liability_horizon_daa": t12_horizon_daa(),
+        "door_fits_horizon": collect <= t12_horizon_daa(),
+        "preparation_door_daa": plan.preparation_until_daa - base,
+        "stream_door_daa": plan.terms.stream_until_daa - plan.terms.open_until_daa,
+        "acquisition_inclusion_daa": plan.acquisition.envelope.inclusion_daa,
         "window_challenge": wc,
         "window_court": court,
         "final_floor": collect.max(wc),
@@ -388,6 +406,54 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
     let per_pass_slices = plan6.preparation.maximum_slices_per_actor / passes;
     assert_eq!(per_pass_slices, 1, "{name}: one debit per pass");
     assert!(publish_io <= plan6.preparation_work.per_actor.io_bytes, "{name}: the publication's IO within the preparer's lane");
+    // --- one custodian preparation PASS exactly as the node runs it (audit §10: ONE debit per pass) -------------------------------
+    // A fresh cold reader answers `StepLeaf { index: 0 }` until warm, then the prepared writer publishes; every slice's quoted work
+    // and the fixed per-slice overhead are charged to one ledger, which must fit the pass's budget (the preparer's lane / passes).
+    let pass = {
+        use kaspa_consensus_core::palw_tir_frame_cost_v1::{
+            PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1, tir_public_pass_budget_v1, tir_public_slice_work_v1,
+        };
+        let budget = tir_public_pass_budget_v1(plan6.preparation_work.per_actor, passes).unwrap();
+        let mut spent = kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicWorkV1::default();
+        let mut charge = |quote: &kaspa_consensus_core::palw_backend::PalwTirPublicCaptureSliceV1| {
+            spent = spent.checked_add_v1(PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1).unwrap().checked_add_v1(tir_public_slice_work_v1(quote).unwrap()).unwrap();
+        };
+        let scratch = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        let mut reader = backend.open_tir_public_capture_v1(&header, original.clone(), scratch.path()).unwrap();
+        let request = PalwTirPublicRequestV1::StepLeaf { index: 0 };
+        let mut capture_slices = 0u64;
+        loop {
+            let quote = reader.slice_quote_v1(&request).unwrap();
+            charge(&quote);
+            capture_slices += 1;
+            if reader.poll_quoted_v1(&request, &quote).unwrap().is_some() {
+                break;
+            }
+        }
+        let out = tempfile::tempdir().unwrap();
+        let mut writer = reader.begin_prepared_v1(out.path(), 100, 10).unwrap();
+        let mut publication_slices = 0u64;
+        loop {
+            let quote = writer.slice_quote_v1().unwrap();
+            charge(&quote);
+            publication_slices += 1;
+            if writer.poll_quoted_v1(&quote).unwrap().is_some() {
+                break;
+            }
+        }
+        let pass_ns = ns(start);
+        let mut fitted = spent;
+        fitted.attempts = budget.attempts;
+        assert!(budget.covers_v1(&fitted), "{name}: one preparation pass ({spent:?}) fits its one debit's budget ({budget:?})");
+        json!({
+            "capture_slices": capture_slices, "publication_slices": publication_slices, "pass_ns": pass_ns,
+            "pass_io_bytes": spent.io_bytes, "budget_io_bytes": budget.io_bytes,
+            "pass_hash_bytes": spent.hash_bytes, "budget_hash_bytes": budget.hash_bytes,
+            "pass_parser_steps": spent.parser_steps, "budget_parser_steps": budget.parser_steps,
+            "debits_per_pass": 1, "passes": passes,
+        })
+    };
     let start = Instant::now();
     let mut warm = backend.reopen_tir_prepared_capture_v1(&header, &descriptor, durable.path(), 100, 11).unwrap();
     let warm_open_ns = ns(start);
@@ -526,6 +592,7 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
             "requests": requests.len(), "open_ns": cold_open_ns, "slices": cold_slices, "ns": cold_ns, "slice_max_ns": cold_slice_max,
             "answer_bytes_max": answer_bytes_max, "authenticate_ns": auth_ns, "authenticate_max_ns": auth_max,
         },
+        "preparation_pass": pass,
         "preparation": {
             "publish_slices": publish_slices, "publish_ns": publish_ns, "publish_slice_max_ns": publish_slice_max,
             "publish_io_bytes": publish_io, "retained_bytes": descriptor.retained_bytes, "quoted_publish_slices": need.maximum_publish_slices,

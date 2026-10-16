@@ -73,26 +73,11 @@ const PALW_TIR_PUBLIC_CASES_V1: usize = 4;
 /// The journal's bound; a sealed entry leaves only once its files are retired past the IRREVERSIBLE material horizon.
 const PALW_TIR_PUBLIC_SEALED_MAX_V1: usize = 4096;
 const PALW_TIR_PUBLIC_JOURNAL_MAGIC_V2: &[u8] = b"misaka-node/tir-public-custodian/v2\n";
-/// The fixed per-slice overhead `OperationalLedgerV1::require_preparation_v1` debits before the slice's own quoted work, so
-/// the debit the chain accepts covers both (it never under-buys and then refuses its own slice).
-const PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1: PalwTirPublicWorkV1 = PalwTirPublicWorkV1 {
-    attempts: 1,
-    io_bytes: 0,
-    hash_bytes: 8192,
-    copy_bytes: 0,
-    parser_steps: 1024,
-    id_copy_words: 0,
-    tree_hashes: 0,
-    replay_leaves: 0,
-    replay_positions: 0,
-    replay_id_words: 0,
-    arithmetic_work: 0,
-    traffic_bytes: 0,
-    eval_elements: 0,
-    eval_terms: 0,
-    source_reads: 0,
-    target_requests: 0,
-};
+/// The fixed per-slice overhead `OperationalLedgerV1::require_preparation_v1` debits before the slice's own quoted work
+/// (consensus-core's one definition, shared with the measurement harness).
+use kaspa_consensus_core::palw_tir_frame_cost_v1::PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1;
+/// Slices one Run step executes under an accepted pass permit before yielding to the next tick (no chain wait between them).
+const PALW_TIR_PUBLIC_SLICES_PER_STEP_V1: usize = 64;
 
 /// One sealed prepared capture: what a restart needs to re-file Ready and to reopen the capture for answers.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -132,6 +117,9 @@ struct CaseV1 {
     /// The quote whose debit is queued or in flight, and the permit once that debit is accepted.
     quote: Option<PalwTirPublicCaptureSliceV1>,
     permit: Option<PalwTirPublicWorkPermitV1>,
+    /// **The accepted whole-pass permit's ledger** (audit §10): ONE debit per pass funds every slice of it (capture, then
+    /// publication); `None` until the pass's debit is accepted.
+    ledger: Option<OperationalLedgerV1>,
     failed: bool,
     _capture: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
     _publish: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
@@ -415,6 +403,7 @@ impl PalwPanelService {
                                     warm: false,
                                     quote: None,
                                     permit: None,
+                                    ledger: None,
                                     failed: false,
                                     _capture: None,
                                     _publish: None,
@@ -479,6 +468,15 @@ impl PalwPanelService {
                         }
                         continue;
                     }
+                    // An accepted pass permit: run the pass's next slices (and begin the writer once warm) with no new debit.
+                    if case.permit.is_some() || case.ledger.is_some() {
+                        if case.warm && case.writer.is_none() {
+                            steps.push(StepV1::Begin { key: *key, material_until_daa: c.material_until_daa, now });
+                        } else {
+                            steps.push(StepV1::Run { key: *key, snapshot: Box::new(snapshot) });
+                        }
+                        continue;
+                    }
                     if case.reader.is_none() {
                         steps.push(StepV1::Open {
                             key: *key,
@@ -492,7 +490,8 @@ impl PalwPanelService {
                         steps.push(StepV1::Begin { key: *key, material_until_daa: c.material_until_daa, now });
                         continue;
                     }
-                    // The next slice's quote, then its exact debit.
+                    // **Audit §10: ONE debit per pass.** The pass's first slice's quote binds the permit's scope; the debit buys the
+                    // pass's share of this preparer's lane (`tir_public_pass_budget_v1`), and every slice of the pass runs under it.
                     let quote = if case.warm {
                         case.writer.as_ref().map(|writer| writer.slice_quote_v1())
                     } else {
@@ -502,15 +501,25 @@ impl PalwPanelService {
                         case.failed = true;
                         continue;
                     };
-                    let work =
-                        match preparation_slice_work_v1(&quote).and_then(|w| PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1.checked_add_v1(w)) {
-                            Ok(work) => work,
-                            Err(why) => {
-                                debug!("[{PALW_PANEL}] TIR frame {}: slice work does not price: {why}", key.0);
-                                case.failed = true;
-                                continue;
-                            }
-                        };
+                    let lane = &snapshot.row.preparation.work_v1().allocation;
+                    let work = match kaspa_consensus_core::palw_tir_frame_cost_v1::tir_public_pass_budget_v1(
+                        lane.per_actor,
+                        lane.maximum_restarts.saturating_add(1),
+                    )
+                    .and_then(|budget| {
+                        // The pass must at least fund its first slice (else the plan cannot carry this class: never debit).
+                        let first = preparation_slice_work_v1(&quote).and_then(|w| PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1.checked_add_v1(w))?;
+                        let mut first_slice = first;
+                        first_slice.attempts = budget.attempts;
+                        if budget.covers_v1(&first_slice) { Ok(budget) } else { Err("the pass budget does not fund its first slice".into()) }
+                    }) {
+                        Ok(work) => work,
+                        Err(why) => {
+                            debug!("[{PALW_PANEL}] TIR frame {}: pass work does not price: {why}", key.0);
+                            case.failed = true;
+                            continue;
+                        }
+                    };
                     let scope = PalwTirPublicWorkScopeV1 {
                         claim: c.claim,
                         owner: c.producer,
@@ -643,53 +652,81 @@ impl PalwPanelService {
                     StepV1::Run { key, snapshot } => {
                         // The debit is accepted: its queued carrier (if still queued) is spent.
                         pending.retain(|(a, b, c, _)| (*a, *b, *c) != (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true));
-                        // G14 R8: write-ahead physical charge, against the lane's finite recovery allowance — BEFORE the slice runs,
-                        // so a crash mid-slice still counts it and a reorg that rolls the canonical counter back refills nothing.
-                        let lane = snapshot.row.preparation.contract_v1();
-                        let cap = lane.plan.maximum_slices_per_actor.saturating_mul(lane.plan.maximum_restarts.saturating_add(1));
-                        let until = lane.preparation_until_daa;
-                        if let Err(why) = book.charge_physical_slice_v1(key, cap, until) {
-                            if let Some(case) = book.cases.get_mut(&key) {
-                                case.failed = true;
+                        let arming = book.cases.get(&key).is_some_and(|case| case.ledger.is_none() && case.permit.is_some());
+                        if arming {
+                            // G14 R8: write-ahead physical charge of the PASS (one accepted debit), against the lane's finite recovery
+                            // allowance — BEFORE any of its slices runs, so a crash mid-pass still counts it and a reorg that rolls the
+                            // canonical counter back refills nothing.
+                            let lane = snapshot.row.preparation.contract_v1();
+                            let cap = lane.plan.maximum_slices_per_actor.saturating_mul(lane.plan.maximum_restarts.saturating_add(1));
+                            let until = lane.preparation_until_daa;
+                            if let Err(why) = book.charge_physical_slice_v1(key, cap, until) {
+                                if let Some(case) = book.cases.get_mut(&key) {
+                                    case.failed = true;
+                                }
+                                return Err(why);
                             }
-                            return Err(why);
                         }
                         let Some(case) = book.cases.get_mut(&key) else { return Ok(()) };
-                        let (Some(quote), Some(permit)) = (case.quote.take(), case.permit.take()) else {
-                            return Err("TIR custodian has no accepted permit for its quoted slice".into());
-                        };
-                        let expected = *permit.scope_v1();
-                        let mut ledger = OperationalLedgerV1::from_native_permit_v1(permit, expected)?;
-                        let warm = case.warm;
+                        if case.ledger.is_none() {
+                            let permit = case.permit.take().ok_or("TIR custodian has no accepted pass permit")?;
+                            let expected = *permit.scope_v1();
+                            case.ledger = Some(OperationalLedgerV1::from_native_pass_permit_v1(permit, expected)?);
+                            case.quote = None;
+                        }
+                        let mut ledger = case.ledger.take().ok_or("TIR custodian lost its pass ledger")?;
+                        let mut warm = case.warm;
                         let mut reader = case.reader.take();
                         let mut writer = case.writer.take();
                         let outcome = tokio::task::spawn_blocking(move || {
                             let borrowed = BorrowedPreparationSnapshotV1::from_native_v1(&snapshot);
-                            let result = if warm {
-                                match writer.as_mut() {
-                                    Some(writer) => {
-                                        prepare_claim_publication_slice_v1(&borrowed, writer.as_mut(), &quote, &mut ledger)
-                                            .map(|sealed| (true, sealed))
+                            let mut sealed = None;
+                            let mut result = Ok(());
+                            for _ in 0..PALW_TIR_PUBLIC_SLICES_PER_STEP_V1 {
+                                let step: Result<bool, String> = if warm {
+                                    match writer.as_mut() {
+                                        Some(writer) => writer.slice_quote_v1().and_then(|quote| {
+                                            prepare_claim_publication_slice_v1(&borrowed, writer.as_mut(), &quote, &mut ledger)
+                                        })
+                                        .map(|done| {
+                                            sealed = done;
+                                            sealed.is_some()
+                                        }),
+                                        // The reader warmed: the writer begins on the next tick (no new debit).
+                                        None => Ok(true),
                                     }
-                                    None => Err("TIR custodian lost its prepared writer".into()),
+                                } else {
+                                    match reader.as_mut() {
+                                        Some(reader) => reader
+                                            .slice_quote_v1(&PalwTirPublicRequestV1::StepLeaf { index: 0 })
+                                            .and_then(|quote| prepare_claim_capture_slice_v1(&borrowed, reader.as_mut(), &quote, &mut ledger))
+                                            .map(|warmed| {
+                                                warm |= warmed;
+                                                warmed
+                                            }),
+                                        None => Err("TIR custodian lost its capture reader".into()),
+                                    }
+                                };
+                                match step {
+                                    Ok(true) => break,
+                                    Ok(false) => {}
+                                    Err(why) => {
+                                        result = Err(why);
+                                        break;
+                                    }
                                 }
-                            } else {
-                                match reader.as_mut() {
-                                    Some(reader) => prepare_claim_capture_slice_v1(&borrowed, reader.as_mut(), &quote, &mut ledger)
-                                        .map(|warmed| (warmed, None)),
-                                    None => Err("TIR custodian lost its capture reader".into()),
-                                }
-                            };
-                            (reader, writer, result)
+                            }
+                            (reader, writer, ledger, warm, result.map(|()| sealed))
                         })
                         .await
                         .map_err(|e| format!("TIR custodian slice worker failed: {e}"))?;
-                        let (reader, writer, result) = outcome;
+                        let (reader, writer, ledger, warmed, result) = outcome;
                         case.reader = reader;
                         case.writer = writer;
+                        case.ledger = Some(ledger);
+                        case.warm |= warmed;
                         match result {
-                            Ok((warmed, sealed)) => {
-                                case.warm |= warmed;
+                            Ok(sealed) => {
                                 if let Some(descriptor) = sealed {
                                     let entry = PalwTirPublicSealedV1 {
                                         claim: key.0,

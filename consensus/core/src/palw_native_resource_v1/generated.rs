@@ -375,7 +375,7 @@ native_struct!(crate::palw_model_registry_v1::PalwModelRegistryFoldV1; globals, 
 native_struct!(crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1; rate_sompi_per_giga, panel_share_alpha_permille, panel_share_min_permille, panel_share_max_permille, cap_utilization_max_permille, block_bits);
 native_struct!(crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1; prices, acquisition_daa, collection_daa, reorg_retention_daa, maximum_owned_rows_per_reserver);
 native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1; maximum_leaves, maximum_custodians, court, dissection, prompt_form, config, clock);
-native_struct!(crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1; version, action_parser_steps, action_parser_steps_per_custodian, frame_passes_per_check, control_bytes, parallel_bytes_per_daa);
+native_struct!(crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1; version, action_parser_steps, action_parser_steps_per_custodian, frame_passes_per_check, control_bytes, parallel_bytes_per_daa, maximum_door_daa);
 native_struct!(crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1; version, declared_rent_sompi, original_payload, header, pledge, history_pledge);
 native_struct!(crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1; version, claim, producer, execution_root, job_identity, cu_ruleset_id, resource_plan_id, maximum_records, maximum_custodians, accept_until_daa, material_until_daa, signature);
 native_enum!(crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1; Legacy(f0), Tir(f0));

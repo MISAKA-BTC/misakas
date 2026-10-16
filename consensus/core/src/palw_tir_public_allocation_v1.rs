@@ -150,6 +150,9 @@ pub enum PalwTirPublicAllocationMissingV1 {
     NativeRootClaimCeiling { required: u64, native: u64 },
     PreparedPublicationBound { required: u64, allocated: u64 },
     PreparedSliceBound { required: u64, allocated: u64 },
+    /// The frame's conviction door (`collect_until − accepted`) exceeds the measured record's longest accepted pursuit
+    /// (`PalwTirFrameClockV1::maximum_door_daa`, at most the network's liability horizon): not built, so not accepted (G-03).
+    DoorBeyondLiabilityHorizon { required: u64, allowed: u64 },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwTirPublicAllocationQuoteV1 {
@@ -752,6 +755,15 @@ pub fn derive_tir_public_allocation_v1(
     // The collection door holds a filing that starts at the stream door: its witness parts and conviction at the measured capacity.
     let filing = crate::palw_tir_frame_cost_v1::tir_public_filing_daa_v1(terminal.envelope.maximum_moves, &rules.config, &rules.clock)?;
     let collect = add(stream, rules.config.collection_daa.max(filing))?;
+    // External audit 10-17 §7 P0(3): an accepted pursuit ends inside the liability horizon the record pins (validated at arming
+    // against `window_challenge + window_court`); a longer door is refused, never accepted with an unbounded Final delay.
+    let door = collect.checked_sub(geometry.accepted_daa).ok_or("native TIR door underflow")?;
+    if door > rules.clock.maximum_door_daa {
+        return incomplete(PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon {
+            required: door,
+            allowed: rules.clock.maximum_door_daa,
+        });
+    }
     let material = add(collect, rules.config.reorg_retention_daa)?;
     let terms = PalwRenderingClaimTermsV1 {
         accepted_daa: geometry.accepted_daa,
@@ -1177,7 +1189,9 @@ mod tests {
     fn native_rederive_rejects_self_consistent_underfunding_and_foreign_rules() {
         let f = fixture(false, false);
         let mut plan = *complete(&f, false);
-        plan.controls.maximum_stream_bytes -= 1;
+        // An underfunded component the structural checksum does not bound (audit §10: the controls' stream bytes are now exactly
+        // their structural lower bound, so the underfunding is taken from their hash blocks).
+        plan.controls.maximum_blake_blocks -= 1;
         plan.terms.plan = plan.summed_v1().unwrap();
         plan.resource_plan_id = plan.resource_id_v1().unwrap();
         plan.allocation_id = plan.accepted_id_v1().unwrap();

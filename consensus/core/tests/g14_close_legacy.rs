@@ -191,7 +191,36 @@ fn fp_recoverable_families_have_no_remaining_lg14a_dependency() {
     p.palw_staged_tir_route_v1 = at;
     p.palw_tir_public_conviction_v1 = at;
     // Audit §10: the frame needs a measured cost model a record names (here the TEST-ONLY config and a test record).
-    let cost = kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    let mut cost = kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    let PalwConsensusMode::ConsensusV2(t12_bundle) = &t12.palw_consensus_mode else { unreachable!() };
+    let horizon = t12_bundle.state.window_challenge_at(RELEASE) + t12_bundle.state.window_court();
+    // The longest accepted pursuit must end inside the liability horizon (external audit 10-17 §7 P0(3)): one DAA past it is refused.
+    cost.clock.maximum_door_daa = horizon + 1;
+    p.palw_tir_frame_cost_v1 = Some(cost);
+    let past = [kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1 {
+        version: kaspa_consensus_core::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
+        genesis: t12.genesis.hash,
+        activation_daa: RELEASE,
+        source_commit: [0x5C; 20],
+        measurement: [0x5D; 32],
+        review: [0x5E; 32],
+        cost,
+    }];
+    p.palw_g14_route_required_v1 = at;
+    p.sync_palw_g14_gates_v1();
+    let past_records: Vec<PalwG14ArmingRecordV1> = [
+        PalwG14GatedFenceV1::LegacyPublicFilerV1,
+        PalwG14GatedFenceV1::StagedPublicCourtV1,
+        PalwG14GatedFenceV1::StagedTirRouteV1,
+        PalwG14GatedFenceV1::TirPublicConvictionV1,
+        PalwG14GatedFenceV1::G14RouteRequiredV1,
+    ]
+    .into_iter()
+    .map(|fence| record(fence, t12.genesis.hash, RELEASE))
+    .collect();
+    let why = p.validate_palw_v2_with_arming_and_cost_records_v1(&past_records, &past).expect_err("door past the horizon");
+    assert!(format!("{why:?}").contains("liability horizon"), "{why:?}");
+    cost.clock.maximum_door_daa = horizon;
     p.palw_tir_frame_cost_v1 = Some(cost);
     let cost_records = [kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1 {
         version: kaspa_consensus_core::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
