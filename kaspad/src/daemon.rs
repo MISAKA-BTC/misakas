@@ -1577,7 +1577,11 @@ Do you confirm? (y/n)";
                             }
                             None => crate::palw_producer::PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1,
                         },
-                        drill_tamper_leaf: match args.palw_drill_tamper_leaf.or(args.palw_drill_tamper_boundary.as_ref().map(|_| 0)) {
+                        drill_tamper_leaf: match args
+                            .palw_drill_tamper_leaf
+                            .or(args.palw_drill_tamper_auto_leaf.then_some(crate::palw_producer::PALW_DRILL_TAMPER_AUTO_LEAF_V1))
+                            .or(args.palw_drill_tamper_boundary.as_ref().map(|_| 0))
+                        {
                             Some(leaf) if network.is_mainnet() => {
                                 panic!("--palw-drill-tamper-leaf={leaf} is a drill fault injector and is refused on mainnet")
                             }
@@ -2110,6 +2114,44 @@ Do you confirm? (y/n)";
                                 );
                             }
                             args.palw_drill_refuse_leaf_evidence
+                        },
+                        // The G14 collusion drill: the same private-chain rule as every drill fault.
+                        drill_collude_with: match args.palw_drill_collude_with.as_deref() {
+                            Some(spec) if !palw_private_drill => panic!(
+                                "--palw-drill-collude-with={spec} is a drill and is devnet/simnet (or a salted testnet-12 drill) only"
+                            ),
+                            Some(spec) => {
+                                let bonds: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> = spec
+                                    .split(',')
+                                    .map(str::trim)
+                                    .filter(|b| !b.is_empty())
+                                    .map(|b| {
+                                        crate::palw_producer::parse_outpoint(b)
+                                            .map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)
+                                            .unwrap_or_else(|e| panic!("--palw-drill-collude-with={spec}: {e}"))
+                                    })
+                                    .collect();
+                                if bonds.is_empty() {
+                                    panic!("--palw-drill-collude-with names no producer bond");
+                                }
+                                warn!(
+                                    "PALW DRILL: this seat COLLUDES with {} producer bond(s): it signs Valid on their claims without judging \
+                                     them and files nothing (the G14 collusion drill).",
+                                    bonds.len()
+                                );
+                                bonds
+                            }
+                            None => Vec::new(),
+                        },
+                        drill_withhold_held_da: match args.palw_drill_withhold_held_da {
+                            true if !palw_private_drill => {
+                                panic!("--palw-drill-withhold-held-da is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
+                            }
+                            true => {
+                                warn!("PALW DRILL: this producer withholds every legacy held DA unit (the G14 collusion drill D-11).");
+                                true
+                            }
+                            false => false,
                         },
                         drill_challenge_all: match args.palw_drill_challenge_all {
                             true if network.is_mainnet() => {

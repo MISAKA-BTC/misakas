@@ -4102,6 +4102,11 @@ pub struct PalwPanelConfig {
     pub drill_answer_only: bool,
     /// DRILL ONLY (devnet/simnet): refuse every leaf-evidence request, so the slow path runs.
     pub drill_refuse_leaf_evidence: bool,
+    /// **DRILL ONLY (the G14 collusion drill; the daemon refuses it off a private drill chain)**: the producer bonds this seat
+    /// colludes with (`--palw-drill-collude-with`). Empty: an honest node, as before.
+    pub drill_collude_with: Vec<PalwBondKeyV2>,
+    /// **DRILL ONLY (the G14 collusion drill D-11)**: never answer a legacy held DA unit (`--palw-drill-withhold-held-da`).
+    pub drill_withhold_held_da: bool,
     /// **RFC-0004 (A10): evaluate** (`--palw-improve-evaluate`): run the evaluation jobs of every governed
     /// line's open epoch whose subject class this node holds, and carry their claims.
     pub improve_evaluate: bool,
@@ -5957,6 +5962,16 @@ impl PalwPanelService {
     /// (RBF, `submit_rpc_transaction_replacement`), and the opening records it; every other carrier
     /// is submitted exactly as before. `Err` carries the pool's refusal for the site to log.
     async fn submit_carrier_v1(&self, session: &kaspa_consensusmanager::ConsensusProxy, tx: Transaction) -> Result<(), String> {
+        // DRILL ONLY (the G14 collusion drill): a colluding seat files nothing against its producer — no accusation, demand,
+        // disclosure or filing leaves this node; its receipts, readiness proofs and bond objects do.
+        if !self.config.drill_collude_with.is_empty()
+            && let Err(kind) = palw_drill_collusion_allows_v1(&tx)
+        {
+            crate::palw_backends::note_throttled_v1("drill-collusion-filter", || {
+                format!("[{PALW_PANEL}] PALW DRILL (G14 collusion): this colluding seat files no {kind}; the carrier is not submitted")
+            });
+            return Err(format!("PALW DRILL (G14 collusion): a colluding seat files no {kind}"));
+        }
         let opening = self.carrier_replacement.lock().unwrap().as_ref().filter(|opening| opening.is_replaced_by(&tx)).cloned();
         let Some(opening) = opening else {
             return self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await.map_err(|e| e.to_string());
@@ -11073,6 +11088,18 @@ impl PalwPanelService {
                     if !palw_disclosure_due_v1(duty, current_daa) {
                         continue;
                     }
+                    // DRILL ONLY (the G14 collusion drill D-11, `--palw-drill-withhold-held-da`): a legacy held unit is never answered.
+                    if self.config.drill_withhold_held_da
+                        && matches!(duty.unit, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(_))
+                    {
+                        crate::palw_backends::note_throttled_v1("drill-withhold-held-da", || {
+                            format!(
+                                "[{PALW_PANEL}] PALW DRILL (G14 D-11): withholding legacy held unit {:?} of claim {} (the demand runs to its deadline)",
+                                duty.unit, duty.claim_id
+                            )
+                        });
+                        continue;
+                    }
                     if flat_queued.contains(&duty.claim_id)
                         && kaspa_consensus_core::palw_da_rcore_v1::palw_da_flat_answers_unit_v1(&duty.unit, duty.in_run_rows)
                     {
@@ -11631,6 +11658,8 @@ impl PalwPanelService {
                 // and this seat files nothing), or nothing at all. Never `Valid`.
                 let duty_key = seat_duty_panel_key_v1(duty);
                 let mut sampled_now = false;
+                // DRILL ONLY (the G14 collusion drill): a seat colluding with this claim's producer signs Valid without judging it.
+                let colluding = self.config.drill_collude_with.contains(&duty.executor_bond);
                 if let Some(running) = s3_samplings.get(&duty_key) {
                     if !running.is_finished() {
                         continue;
@@ -11642,7 +11671,8 @@ impl PalwPanelService {
                         Ok(PalwSeatS3SampleV1::Faulted) => self.note_seat_fault_v1(duty.claim_id, 0, 0),
                         Ok(PalwSeatS3SampleV1::Unchecked) | Err(_) => {}
                     }
-                } else if !s3_sampled.contains(&duty_key)
+                } else if !colluding
+                    && !s3_sampled.contains(&duty_key)
                     && palw_seat_sampled_due_v1(
                         seat_r,
                         self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
@@ -11679,6 +11709,7 @@ impl PalwPanelService {
                 // segment but not the whole replay could never pass (the second pass, finding 4).
                 if !(seat_r && (seat_replays.holds_claim(&duty.claim_id) || seat_r_duty.role == PalwSeatRRoleV1::PartialResumes))
                     && !sampled_now
+                    && !colluding
                     && let Err(why) = self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))
                 {
                     crate::palw_backends::note_throttled_v1("panel-replay-budget", || {
@@ -11700,6 +11731,19 @@ impl PalwPanelService {
                     // Q-7: a finished S3 sampling is this duty's answer (above).
                     if sampled_now {
                         break 'verdict Some(PalwReceiptVerdictV2::Sampled);
+                    }
+                    // DRILL ONLY (the G14 collusion drill, `--palw-drill-collude-with`): every seat of this Panel is the producer's, so
+                    // the claim is signed Valid as a reproduced replay would sign it — the whole job (V2) and the seat's own mask (V3) —
+                    // and nothing about it is judged or filed. What the drill then shows is that one bond OUTSIDE the Panel still
+                    // convicts it from public material, and that each of these Valid signatures is charged.
+                    if colluding {
+                        licensed_by_replay = true;
+                        licensed_by_verified_resume = true;
+                        info!(
+                            "[{PALW_PANEL}] PALW DRILL (G14 collusion): claim {} of colluding producer {}:{} — signed Valid without judging it",
+                            duty.claim_id, duty.executor_bond.0.transaction_id, duty.executor_bond.0.index
+                        );
+                        break 'verdict Some(PalwReceiptVerdictV2::Valid);
                     }
                     // **Class capability is decided BEFORE looking at deliveries.** This resolve
                     // lived inside the per-material loop, so a seat that received NOTHING never
@@ -15274,6 +15318,39 @@ fn verdict_name(verdict: &PalwReceiptVerdictV2) -> &'static str {
 /// object for court session X round 0" is true of a challenger opening a case and of the accused
 /// answering it, and reading a fleet's court traffic meant guessing which. The catch-all is gone
 /// on purpose, so a new object cannot be added without deciding what it is called here.
+/// **DRILL ONLY (the G14 collusion drill): what a colluding seat may carry** — its seat receipts and licences, its readiness proofs,
+/// its bond objects and the binding of a Panel; `Err(kind)` names the first other object in `tx` (an accusation, demand, disclosure,
+/// filing, court move or chunk of one), which a seat that colludes with the producer never files.
+fn palw_drill_collusion_allows_v1(tx: &Transaction) -> Result<(), &'static str> {
+    const ALLOWED: &[&str] = &[
+        "SeatReadinessProved",
+        "SeatReadinessProvedV2",
+        "TirSeatReadinessProved",
+        "BondRegistered",
+        "BondCapabilityDeclared",
+        "BondShardsDeclared",
+        "BondRetireRequested",
+        "PanelBound",
+        "PanelBeaconProofV3",
+        "ReceiptLicensed",
+        "ReceiptLicensedV2",
+        "ReceiptLicensedBatchV1",
+        "ShardReceiptLicensed",
+        "TirShardReceiptLicensed",
+        "OptimisticLicensed",
+        "VerificationVertexV1",
+        "AttemptRidersV1",
+    ];
+    let extracted = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx));
+    for carried in &extracted.objects {
+        let kind = object_name(&carried.object);
+        if !ALLOWED.contains(&kind) {
+            return Err(kind);
+        }
+    }
+    Ok(())
+}
+
 fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
     match object {
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",

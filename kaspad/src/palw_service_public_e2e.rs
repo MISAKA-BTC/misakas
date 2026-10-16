@@ -517,6 +517,8 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         drill_challenge_all: false,
         drill_answer_only: false,
         drill_refuse_leaf_evidence: false,
+        drill_collude_with: Vec::new(),
+        drill_withhold_held_da: false,
         improve_evaluate: false,
         tir_shard_hold: vec![],
         tir_shard_declare: None,

@@ -660,6 +660,22 @@ pub struct Args {
     /// This node refuses every leaf-evidence request on the interval lane, so a seat that named a
     /// leaf must demand its evidence on chain (ADR-0111 Decision 3).
     pub palw_drill_refuse_leaf_evidence: bool,
+    /// **DRILL ONLY (the G14 collusion drill, `scripts/drills/g14_collusion_drill.py`; devnet/simnet or a salted testnet-12 drill):
+    /// this seat COLLUDES with these producer bonds** (`<txid>:<index>`, comma-separated) — every duty on a claim they produced is
+    /// signed `Valid` as if the replay had reproduced it, and this node submits no PALW object other than its seat receipts, readiness
+    /// proofs and bond registration, so it never accuses, demands or files anything. Models a Panel whose every seat is the
+    /// producer's. Command line only.
+    #[serde(skip)]
+    pub palw_drill_collude_with: Option<String>,
+    /// **DRILL ONLY (the G14 collusion drill D-11; devnet/simnet or a salted testnet-12 drill): this producer never answers a
+    /// legacy held data-availability unit** (LG14-B tag 157 → 158), so a public descent's demand runs to its deadline and the claim
+    /// ends in the objective DA default, never a presumed computation fault. Every other unit is answered as before. Command line only.
+    #[serde(skip)]
+    pub palw_drill_withhold_held_da: bool,
+    /// **DRILL ONLY (the G14 collusion drill): `--palw-drill-tamper-leaf` with the leaf chosen per draw** — the first held, openable,
+    /// non-fused leaf in the second half of the honest run (`palw_producer::PALW_DRILL_TAMPER_AUTO_LEAF_V1`). Refused on mainnet.
+    #[serde(skip)]
+    pub palw_drill_tamper_auto_leaf: bool,
     /// **DRILL ONLY (a salted testnet-12 drill: `palw_private_drill_network_v1`): this seat signs a SECOND vertex for one round** — once, at
     /// the first round at or past this DAA, with the first vertex's leaves' verdicts changed — so the drill can show RFC-0007's
     /// equivocation caught, slashed and ejected. Any node watching blocks files the evidence. Command line only.
@@ -990,6 +1006,9 @@ impl Default for Args {
             palw_drill_challenge_all: false,
             palw_drill_answer_only: false,
             palw_drill_refuse_leaf_evidence: false,
+            palw_drill_collude_with: None,
+            palw_drill_withhold_held_da: false,
+            palw_drill_tamper_auto_leaf: false,
             palw_drill_vertex_equivocate_at: None,
             palw_canonical_claims: false,
             palw_canonical_class: None,
@@ -2008,6 +2027,36 @@ pub fn cli() -> Command {
                     "PALW DRILL ONLY: this node refuses every leaf-evidence request on the interval lane, so a seat that \
                      named a leaf demands its evidence on chain through the held data-availability court (ADR-0111 \
                      Decision 3). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-collude-with")
+                .long("palw-drill-collude-with")
+                .require_equals(true)
+                .value_name("txid:index[,txid:index...]")
+                .help(
+                    "PALW DRILL ONLY (the G14 collusion drill): this seat colludes with these producer bonds — it signs Valid on every \
+                     claim they produced without judging it, and submits no PALW object but its receipts, readiness proofs and bond \
+                     registration (it never accuses, demands or files). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-tamper-auto-leaf")
+                .long("palw-drill-tamper-auto-leaf")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW DRILL ONLY (the G14 collusion drill): --palw-drill-tamper-leaf with the leaf chosen per draw — the first \
+                     held, openable, non-fused step leaf in the second half of the honest run. Refused on mainnet.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-withhold-held-da")
+                .long("palw-drill-withhold-held-da")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW DRILL ONLY (the G14 collusion drill D-11): this producer never answers a legacy held data-availability unit \
+                     (LG14-B), so a public descent's demand ends in the objective DA default. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL \
+                     ONLY.",
                 ),
         )
         .arg(
@@ -3955,6 +4004,9 @@ impl Args {
                 .copied()
                 .unwrap_or(defaults.palw_drill_refuse_leaf_evidence),
             palw_drill_vertex_equivocate_at: m.get_one::<u64>("palw-drill-vertex-equivocate-at").copied(),
+            palw_drill_collude_with: m.get_one::<String>("palw-drill-collude-with").cloned(),
+            palw_drill_withhold_held_da: m.get_one::<bool>("palw-drill-withhold-held-da").copied().unwrap_or(false),
+            palw_drill_tamper_auto_leaf: m.get_one::<bool>("palw-drill-tamper-auto-leaf").copied().unwrap_or(false),
             palw_canonical_claims: m.get_one::<bool>("palw-canonical-claims").copied().unwrap_or(defaults.palw_canonical_claims),
             palw_canonical_class: m.get_one::<String>("palw-canonical-class").cloned().or(defaults.palw_canonical_class),
             palw_canonical_interval_daa: m

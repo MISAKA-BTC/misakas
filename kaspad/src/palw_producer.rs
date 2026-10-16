@@ -58,6 +58,24 @@ use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
 
+/// **DRILL ONLY (`--palw-drill-tamper-auto-leaf`, the G14 collusion drill): the sentinel `drill_tamper_leaf` value that picks the
+/// lie's leaf per draw** — the first step leaf in the second half of the honest run that the capture holds, that has canonical step
+/// coordinates and that is not a fused-attention leaf (the in-process E2E's choice, `lg14a_legacy_filer_e2e::real_attempt`), so the
+/// public descent ends at a leaf recompute (LG14-B tag 159) rather than a held dissection.
+pub const PALW_DRILL_TAMPER_AUTO_LEAF_V1: u64 = u64::MAX;
+
+/// The leaf [`PALW_DRILL_TAMPER_AUTO_LEAF_V1`] names for one honest capture (`None` when the capture is not tile material or holds
+/// no such leaf).
+pub(crate) fn palw_drill_auto_lie_leaf_v1(material: &[u8]) -> Option<u64> {
+    let (binding, tiles, ..) = misaka_palw_base0::produce::base0_material_decode_v1(material).ok()?;
+    let held: std::collections::BTreeSet<u64> = tiles.iter().map(|(i, _)| *i).collect();
+    let n = binding.step_leaf_count;
+    held.range(n / 2..n).copied().find(|leaf| {
+        kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, *leaf).is_some()
+            && !kaspa_consensus_core::palw_da_rcore_v1::palw_da_step_leaf_is_fused_v1(&binding, *leaf)
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct PalwProducerConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed whose verification key the genesis bond registered.
@@ -1888,6 +1906,19 @@ impl PalwProducerService {
             tokio::task::spawn_blocking(move || {
                 let run = match tamper {
                     None => backend.execute(&job_for_blocking, &prompt_for_blocking),
+                    Some(PALW_DRILL_TAMPER_AUTO_LEAF_V1) => {
+                        let honest = backend.execute(&job_for_blocking, &prompt_for_blocking)?;
+                        let leaf = palw_drill_auto_lie_leaf_v1(&honest.material).ok_or_else(|| {
+                            "PALW DRILL: the honest capture holds no openable, non-fused leaf in its second half to lie at".to_string()
+                        })?;
+                        warn!(
+                            "PALW DRILL: this draw commits a lie at step leaf {leaf} of {} (auto: held, openable, non-fused)",
+                            misaka_palw_base0::produce::base0_material_decode_v1(&honest.material)
+                                .map(|(b, ..)| b.step_leaf_count)
+                                .unwrap_or_default()
+                        );
+                        backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf)
+                    }
                     Some(leaf) => backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf),
                 }?;
                 // The answer's ids, read back off the capture by the family that wrote it — for the
