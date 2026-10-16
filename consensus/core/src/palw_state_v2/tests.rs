@@ -26133,6 +26133,58 @@ mod model_market_virtual {
         );
     }
 
+    /// **ADR-0162 amendment (user decision 2026-10-16): a genesis or annual-fork model has no Model Position.** Past the tier fence
+    /// (`palw_model_tier_v1`), a model in `ApprovedModels` — here a genesis-assembly class (no registrant) — refuses a buy and a new
+    /// line; an added (registered) model still trades. Below the tier fence the same genesis class trades as before (byte-identical).
+    #[test]
+    fn genesis_and_fork_models_cannot_be_positioned_only_added_models_can() {
+        let lines = PalwTransitionExtrasV1 { model_lines_active: true, ..armed() };
+        let tiered = |mut p: PalwStateParamsV2| {
+            p.model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierMirrorV1 {
+                from_daa: 0,
+                catalogs: Default::default(),
+                registered_permille: 300,
+                registered_cap_permille: 1_000,
+            });
+            p
+        };
+        // A genesis-assembly class: the same registration with no registrant bond.
+        let genesis_class = h64(3);
+        let (p0, s1, added_class) = registered(&lines);
+        let mut genesis_reg = registration(genesis_class, 100, None);
+        if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, artifact_root, .. } = &mut genesis_reg {
+            *activation_daa = 200;
+            *slash_value_per_pwu = 5;
+            *artifact_root = h64(0xA3);
+        }
+        let s1 = fold_with(&s1, &p0, &ctx(2, 101, 2), &[genesis_reg], &lines).expect("the genesis-assembly class registers").0;
+        let s2 = fold_with(&s1, &p0, &ctx(3, 250, 3), &[], &lines).unwrap().0;
+        let p = tiered(p0.clone());
+        assert!(crate::palw_model_tier_v1::palw_model_tier_at_v1(&s2, &p, &genesis_class, 251).is_approved());
+        assert!(!crate::palw_model_tier_v1::palw_model_tier_at_v1(&s2, &p, &added_class, 251).is_approved());
+        // Past the tier fence: no buy and no new line on the genesis model.
+        assert!(matches!(
+            fold_with(&s2, &p, &ctx(4, 251, 4), &[buy(genesis_class, holder(1), 1_000 * MSK, 0)], &lines),
+            Err(PalwStateV2Error::ModelPositionOnApprovedModel(c)) if c == genesis_class
+        ));
+        let found = |class_id: Hash64| PalwConsensusObjectV2::ModelLineFounded {
+            class_id,
+            name: b"pos-line".to_vec(),
+            founder: bond_key(1),
+            root: h64(0xBEEF),
+            signature: Vec::new(),
+        };
+        assert!(matches!(
+            fold_with(&s2, &p, &ctx(4, 251, 4), &[found(genesis_class)], &lines),
+            Err(PalwStateV2Error::ModelPositionOnApprovedModel(_))
+        ));
+        // The added model still trades past the fence.
+        fold_with(&s2, &p, &ctx(4, 251, 4), &[buy(added_class, holder(1), 1_000 * MSK, 0)], &lines).expect("an added model trades");
+        // Below the tier fence nothing changes for the genesis model.
+        fold_with(&s2, &p0, &ctx(4, 251, 4), &[buy(genesis_class, holder(1), 1_000 * MSK, 0)], &lines)
+            .expect("below the tier fence the genesis model trades as before");
+    }
+
     /// **ADR-0162 Decision 3: a pledge still collecting ADR-0094's floor when the fence crosses
     /// opens on the virtual reserve, with the whole pledge as its seed** — every sompi of it was
     /// locked in the line's sink already. ADR-0120's floor is moot past the fence (the least seed

@@ -10737,6 +10737,22 @@ impl<'a> TransitionBuilder<'a> {
         Ok(line)
     }
 
+    /// **ADR-0162 amendment (user decision 2026-10-16): no Model Position on a genesis or annual-fork model.** Past the tier fence
+    /// (`palw_model_tier_v1`, ADR-0179), a model in `ApprovedModels` (genesis assembly, genesis catalog or an active annual edition,
+    /// tier 1.0) takes no buy and no new line: only an added (registered, 0.3) model — RFC-0004's add-model path — is positioned.
+    /// Positions on the canonical models would hand their earliest holders a first-mover gain on models nobody had to win. Below the
+    /// fence, and for a registered model, `Ok` — byte-identical. Existing units stay sellable (only entry is refused).
+    pub(super) fn refuse_position_on_approved_model_v1(&self, class_id: &Hash64, daa: u64) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.params.model_tier_v1() else { return Ok(()) };
+        if !mirror.active_at(daa) {
+            return Ok(());
+        }
+        if crate::palw_model_tier_v1::palw_model_tier_at_v1(&self.state, self.params, class_id, daa).is_approved() {
+            return Err(PalwStateV2Error::ModelPositionOnApprovedModel(*class_id));
+        }
+        Ok(())
+    }
+
     /// **ADR-0162: the market a seed or a buy past the virtual fence (in force from `fence_daa`) acts
     /// on** — [`PalwChainStateV2::model_market_in_force_v2`] at this block, which opens every line
     /// from its creation. Refused `ModelLineOnFloor` where it opens nothing (the floor class has no

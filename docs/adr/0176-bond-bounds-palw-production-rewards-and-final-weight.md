@@ -164,6 +164,7 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 **状態:** 方針は確定（ユーザー）。コードは休眠実装・未build・未検証（`palw_bond_budget_v1` V3 policy、全presetで`None`、有効化は拒否）。数値は本番定数ではない。
 
 - **主条件:** 同額の適格拘束元本・同じ検証mode・同じ期間で、計算を省略して高速にclaimする者が正直な計算より多いclaim枠・報酬ブロック・報酬・Final weightを得てはならない。**かつ**、参照用の正直なminerが実用的に使える上限にする。「上限が等しい」ことと「正直なminerが上限に届く」ことは別であり両方を試験する。需要・設備・検証がある間に上限不足だけでREAL生産が止まらないことも試験する。
+- **改訂(2026-10-16 ユーザー決定):** 拘束期間は Panel=0・Panel=1 とも **1 日相当 DAA に固定**する。下の「Panel=0 は 7 日」と、7 日単位の均等化は改訂前の記録である。上限の計算は 1 日単位で行い、不正で高速に claim しても正直に計算して claim しても、同じ上限に当たる。claim を 1 回不正すれば slash され、その損失が不正の利益を上回ることを条件とする([RFC-0016 冒頭の改訂](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)、[ADR-0179 追記](0179-model-tiers-genesis-annual-1-0-registered-0-3.md))。
 - **共通拘束期間（設計基準）:** Panel=1は1日相当DAA、Panel=0は7日相当DAA（1日 = 86,400 s / 120 s の時計slot = 720 DAA、名目換算。実測が遅いDAAでは実時間で1日より長くなり、短くはならない）。
 - **1日当たり最大発行の均等化:** 同じbondの1日当たり基準上限`q, b, r, f`に対し、Panel=1は1日で`(q, b, r, f)`、Panel=0は7日で`(7q, 7b, 7r, 7f)`。同じ件数を7倍速く回復させる方式は採らない。実装: V3 policyの単位当たりrateを「1日当たり」と読み、`daily(C) = ⌊C·rate/u⌋`、mode `M`の期間上限 = `daily(C) · days(M)`。
 - **一つの台帳、三つの見方:** 長期view（engineのwindow、全reservationを`d + 7日`まで保持、全claimを`7·daily`で検査）、日view（各claimのshadow行、`d + 1日`で解放、Panel=1 claimを`daily`で検査）、burst view（shadow行、`d + W_burst`で解放、全claimに追加の制限）。modeを切り替えても同じ元本の消費履歴・拘束・責任を引き継ぐ（Panel=0で消費→Panel=1で満額を再取得、またはその逆は不可）。受理済みclaimの期間・予約・責任は受理時に固定し、後のmode変更で短縮しない。

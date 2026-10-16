@@ -9710,6 +9710,10 @@ pub enum PalwStateV2Error {
     ModelLineNameLength(usize, usize),
     #[error("the floor has no artifact and no line")]
     ModelLineOnFloor,
+    /// ADR-0162 amendment (user decision 2026-10-16): a genesis or annual-fork model (`ApprovedModels`, tier 1.0) has no Model
+    /// Position — only an added (registered) model does.
+    #[error("model {0} is a genesis or annual-fork model and cannot have a Model Position")]
+    ModelPositionOnApprovedModel(Hash64),
     #[error("version {got} of line {line} is not the next one ({want})")]
     ModelVersionNotNext { line: Hash64, want: u32, got: u32 },
     #[error("version {1} of line {0} does not exist")]
@@ -20327,6 +20331,8 @@ fn model_buy_v1(
     }
     let line = builder.state.model_line_or_founding(line_id).ok_or(PalwStateV2Error::ModelLineMissing(*line_id))?;
     let class = builder.state.classes.get(&line.class_id).ok_or(PalwStateV2Error::MissingClass(line.class_id))?.clone();
+    // ADR-0162 amendment (2026-10-16): no position is bought in a genesis or annual-fork model (past the tier fence only).
+    builder.refuse_position_on_approved_model_v1(&line.class_id, ctx.daa_score)?;
     let market = match builder.extras.model_virtual_v1 {
         // **ADR-0162 Decision 5: the market is open from the line's creation, and it TRADES from the
         // class's approval.** The gate is the class's status and its lifecycle, both exactly
@@ -20710,6 +20716,8 @@ fn apply_model_line_founded(
     if *class_id == builder.params.base_class_id() {
         return Err(PalwStateV2Error::ModelLineOnFloor);
     }
+    // ADR-0162 amendment (2026-10-16): a genesis or annual-fork model takes no new line (a line is a Position market).
+    builder.refuse_position_on_approved_model_v1(class_id, ctx.daa_score)?;
     if !matches!(class.status, PalwClassStatusV2::Active) {
         return Err(PalwStateV2Error::ModelClassNotActive(*class_id));
     }

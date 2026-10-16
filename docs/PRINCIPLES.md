@@ -275,3 +275,32 @@ This appendix records where the principle already decides open work. It is a poi
 * **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
 * **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
 * 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
+
+## 10. PALW を成り立たせる前提 — bond が時間あたりの claim を制限する(2026-10-16 ユーザー決定)
+
+MISAKA は、確率的検証と経済によって PALW を実現する。この前提に加えて、次を設計の前提とする。
+
+### 10.1 Bond が採掘速度と報酬総額の上限を決める
+- **Bond が、採掘速度と報酬総額の上限を決める。** モデル計算は、その枠を使うために必要な正当な仕事である。
+- **不正をしても枠は増えない。反証されれば担保を失う。**
+- つまり、miner bond から生じるブロックと報酬は、不正をして高速に claim しても、実際に計算して claim しても、同じ上限に当たる。bond で時間内に出せる claim の量は変わらない。
+- 時間内に出せる claim を bond で制限することで、正しい計算を促し、PALW を成り立たせる([ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)、[RFC-0016](rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)。上限は 1 日単位で計算する)。
+
+### 10.2 モデルを公開しない自作自演への対処
+想定する攻撃:悪意あるユーザーがモデルを公開せず、miner・Panel・モデル登録をすべて自分で行い、計算をしないで claim を通す。
+
+これを、次の 2 つで抑える。
+- **モデル別配分に 1.5 乗をかける。** モデルの Panel と miner の claim bond の総額(検証されて Final になるまで返ってこない担保)に 1.5 乗をかけ、ブロック生成と報酬の配分に使う(`A_m = c_m · S̄_m^1.5`、[ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md))。
+  - 利用者が集まりにくいモデルには bond も集まりにくい。そのため、そうしたモデルは配分で不利になりやすい構造にする。
+- **genesis とフォークのモデルを正規モデル、追加モデルを非正規モデルとする。**
+  - 非正規モデルの報酬とブロック生成は、正規モデルの 0.3 倍程度にとどまる([ADR-0179](adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md)、§9)。
+  - これにより、モデルが共有されない攻撃のリスクを大幅に下げる。
+
+### 10.3 G14 によって正規モデルでの「計算しない提出」を防ぐ
+- **G14 の定義。** 計算をせずに claim を出す miner がいても、Panel に正しい Panel が 1 つでもいて、計算と一致しないことを確認できれば、その不正を客観的に証明できる。そして slash、ブロック生成の拒否、報酬の拒否まで持っていける。
+- この定義が満たされていれば、genesis・フォークのモデルに正しい Panel が 1 つでも立てば、計算しないで提出する不正を防げる。
+
+### 10.4 設計が満たすべき条件(肝心な点)
+本設計は、次の 2 つを満たすことを前提とする。
+1. **不正や DoS のように claim を出しても、bond の slash による損失が、想定される利益を上回ること。**
+2. **客観的な court を悪用して、正常に計算している miner・Panel を slash させる不正ができないこと。**

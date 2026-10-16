@@ -62,8 +62,9 @@ pub const PALW_BOND_HOLD_DAA_PER_DAY_V1: u64 = PALW_BOND_HOLD_DAY_MS_V1 / crate:
 
 /// **User decision (2026-10-14 / 2026-10-15): Panel=1's common hold, in days** (1-day-equivalent DAA).
 pub const PALW_BOND_HOLD_PANEL_ONE_DAYS_V1: u32 = 1;
-/// **User decision (2026-10-14 / 2026-10-15): Panel=0's common hold, in days** (7-day-equivalent DAA; RFC-0015 §8.5.5 `W`).
-pub const PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1: u32 = 7;
+/// **User decision (2026-10-16, replacing 2026-10-14/15's 7 days): Panel=0's common hold, in days** — fixed at 1, the same as
+/// Panel=1, so the per-day cap is the one calculation (a fast forged claim and an honestly computed one hit the same cap).
+pub const PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1: u32 = 1;
 
 /// **INTERIM, UNAPPROVED: the burst window**, DAA — one tenth of a day-equivalent (72 DAA, 2.4 h at the nominal slot). POLICY to be
 /// fixed from the measured submission pattern (plan §Stage 1); listed in the decision doc.
