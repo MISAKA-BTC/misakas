@@ -252,6 +252,9 @@ impl Params {
         self.validate_palw_model_eligibility_v1()?;
         // **ADR-0179's model tiers** (`crate::palw_model_tier_v1`): refused when armed; add-only lists; the mirror must agree.
         self.validate_palw_model_tier_v1()?;
+        // **G14's per-class detection policy** (`crate::palw_detection_policy_v1`): each policy armable at its own extremes; then
+        // refused when armed (design values without a measured record).
+        self.validate_palw_detection_policy_v1()?;
         // **RFC-0018's five fences** (`crate::palw_rfc0018_v1`): refused when armed; the mirror must agree.
         self.validate_palw_rfc0018_v1()?;
         self.validate_palw_permissionless_panel_v1()?;

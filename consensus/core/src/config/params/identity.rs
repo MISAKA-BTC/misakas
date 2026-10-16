@@ -670,6 +670,10 @@ impl Params {
         if self.palw_model_tier_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_model_tier_v1 = None;
         }
+        // G14's per-class detection policy, likewise.
+        if self.palw_detection_policy_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_detection_policy_v1 = None;
+        }
         // **RFC-0019 §7.2: an annual catalog edition not yet in force leaves the identity WITH ITS CONTENTS.** `for_each_fence` has
         // rewritten every edition's height to `u64::MAX` unless it is genesis-active; left in place, the edition's number, height and
         // root would be hashed by `write_value_into`, a build carrying the NEXT edition would differ from every build that does not,
@@ -1173,6 +1177,7 @@ impl Params {
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
             palw_model_tier_v1,
+            palw_detection_policy_v1,
             palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2,
@@ -1507,6 +1512,7 @@ impl Params {
             ("palw_elastic_final_capacity_v1", *palw_elastic_final_capacity_v1),
             ("palw_model_eligibility_v1", *palw_model_eligibility_v1),
             ("palw_model_tier_v1", palw_model_tier_v1.as_ref().map(|fence| fence.activation)),
+            ("palw_detection_policy_v1", palw_detection_policy_v1.as_ref().map(|fence| fence.activation)),
             ("palw_dag_sibling_attribution_v1", *palw_dag_sibling_attribution_v1),
             ("palw_panel_anchor_permissionless_v1", *palw_panel_anchor_permissionless_v1),
             ("palw_rule_e_participation_v2", *palw_rule_e_participation_v2),
@@ -2027,6 +2033,12 @@ impl Params {
         // none) read as different schedules in the handshake's warning before the edition activates. Some-only.
         if let Some(fence) = self.palw_model_tier_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_model_tier_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
+        // G14's per-class detection policy, NAMED with every policy's id. Some-only.
+        if let Some(fence) = self.palw_detection_policy_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_detection_policy_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
@@ -2798,6 +2810,7 @@ impl Params {
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
             palw_model_tier_v1,
+            palw_detection_policy_v1,
             palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2,
@@ -3744,6 +3757,10 @@ impl Params {
                 visit(&mut catalog.activation_daa);
             }
         }
+        // G14's per-class detection policy. Some-only.
+        if let Some(fence) = palw_detection_policy_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // RFC-0018's five fences. Some-only.
         if let Some(activation) = palw_dag_sibling_attribution_v1.as_mut() {
             fork(activation, visit);
@@ -4307,6 +4324,7 @@ impl Params {
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
             palw_model_tier_v1,
+            palw_detection_policy_v1,
             palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2,
@@ -5369,6 +5387,12 @@ impl Params {
         // ADR-0179's model tiers, Some-only for the same reason (lists and values beside the height).
         if let Some(fence) = palw_model_tier_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_model_tier_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
+        // G14's per-class detection policy, Some-only for the same reason (each policy id beside the height).
+        if let Some(fence) = palw_detection_policy_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_detection_policy_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }

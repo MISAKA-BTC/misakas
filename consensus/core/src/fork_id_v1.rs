@@ -985,6 +985,10 @@ mod tests {
             "palw_model_tier_v1" => {
                 params.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(at));
             }
+            // G14's per-class detection policy: the height with no policy, refused when armed by `validate_palw_v2`.
+            "palw_detection_policy_v1" => {
+                params.palw_detection_policy_v1 = Some(crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1::at(at));
+            }
             // RFC-0018's five dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_dag_sibling_attribution_v1" => params.palw_dag_sibling_attribution_v1 = Some(at),
             "palw_panel_anchor_permissionless_v1" => params.palw_panel_anchor_permissionless_v1 = Some(at),
