@@ -1,5 +1,5 @@
-//! **The TIR public frame's operations, measured on the corpus classes** (feature `node`; audit §10, the frame pricing proposal
-//! `docs/design/palw/tir-frame-pricing-proposal-2026-10-16.md`).
+//! **The TIR public frame's operations, measured on the corpus classes** (feature `node`; G14 audit §10,
+//! `docs/design/palw/g14-completeness-proof-2026-10-16.md`; records in `docs/design/palw/evidence/tir-frame-measure-2026-10-16/`).
 //!
 //! Each tiny tiled IR class is written as a PALWTIR1 container and served by [`TirBackendV1`] — the node's production backend — and
 //! each frame operation is run through the same API the node's services call:
@@ -145,12 +145,10 @@ fn answer(
 struct Court {
     space: PalwTirStepSpaceV1,
     plan: TirPlan,
-    tparams: TirParams,
     class: PalwTirClassV1,
     artifact_root: Hash64,
     ctx: kaspa_consensus_core::palw_v2::PalwJobContextV2,
     prompt: Vec<u32>,
-    inventory: TirHeldInventoryV1,
 }
 fn court(program: &TirProgramV1, params: &MapParams) -> Court {
     struct Map<'m>(&'m MapParams);
@@ -170,9 +168,42 @@ fn court(program: &TirProgramV1, params: &MapParams) -> Court {
     let space = PalwTirStepSpaceV1::new(&class).unwrap();
     let prompt: Vec<u32> = (0..4).map(|i| (i * 5 + 3) % program.token_bound).collect();
     let ctx = job(program, 4, 2, class.class_id(&artifact_root), &prompt, PalwPromptIdsFormV1::Flat);
-    let tparams = TirParams::from_map(&plan, params).unwrap();
-    let inventory = TirHeldInventoryV1::build(program, &TirParamsSourceV1(&tparams)).unwrap();
-    Court { space, plan, tparams, class, artifact_root, ctx, prompt, inventory }
+    Court { space, plan, class, artifact_root, ctx, prompt }
+}
+
+/// One component's rent / moves / inclusion clock.
+fn component(c: &kaspa_consensus_core::palw_rendering_resources_v1::PalwRenderingResourcePlanV1) -> Value {
+    json!({ "rent": c.rent_sompi, "parser": c.maximum_parser_steps, "moves": c.maximum_moves, "inclusion_daa": c.inclusion_daa })
+}
+
+/// The plan's prices and clocks (relative to `accepted_daa`) and each component's share — one row of the before/after table.
+fn bounds(plan: &kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1) -> Value {
+    let base = plan.terms.accepted_daa;
+    let owner = plan.owner_terms_v1().unwrap();
+    json!({
+        "upper": plan.acquisition.maximum_custodians,
+        "claim_rent_sompi": plan.terms.plan.rent_sompi,
+        "owner_open_rent_sompi": owner.plan.rent_sompi,
+        "owner_open_deposit_sompi": owner.plan.deposit_sompi,
+        "preparation_until": plan.preparation_until_daa - base,
+        "open_until": plan.terms.open_until_daa - base,
+        "stream_until": plan.terms.stream_until_daa - base,
+        "collect_until": plan.terms.collect_until_daa - base,
+        "frame_bytes": plan.control_footprint.maximum_frame_bytes,
+        "frame_writes": plan.control_footprint.maximum_frame_writes,
+        "owner_turns": plan.acquisition.maximum_turns,
+        "preparation_slices_per_actor": plan.preparation.maximum_slices_per_actor,
+        "components": {
+            "acquisition": component(&plan.acquisition.envelope),
+            "preparation_work": component(&plan.preparation_work.envelope),
+            "owner_work": component(&plan.owner_work.envelope),
+            "preparation": component(&plan.preparation.envelope),
+            "executor": component(&plan.executor.envelope),
+            "terminal": component(&plan.terminal.envelope),
+            "controls": component(&plan.controls),
+            "owner_validation": component(&plan.owner_validation),
+        },
+    })
 }
 
 /// The measurements of one class (deterministic counts and sizes, and this host's nanoseconds).
@@ -248,6 +279,7 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
     }
     let (mut cold_slices, mut cold_ns, mut cold_slice_max, mut answer_bytes_max, mut auth_ns, mut auth_max) = (0, 0, 0, 0u64, 0, 0);
     let mut ids = None;
+    let mut assembler = kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicIdsAssemblerV1::default();
     for request in &requests {
         let (response, slices, took, largest) = answer(reader.as_mut(), request);
         cold_slices += slices;
@@ -257,13 +289,17 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
         assert!(bytes <= unit, "{name}: an answer ({bytes} bytes) fits the frame's unit bound ({unit})");
         answer_bytes_max = answer_bytes_max.max(bytes);
         let start = Instant::now();
-        let unit_auth = source.authenticate_v1(request, &response, ids.as_ref()).unwrap();
+        if matches!(request, PalwTirPublicRequestV1::Ids { .. }) {
+            // IDs authenticate as an ordered stream against the original trace root (the owner's assembler).
+            if let Some(authenticated) = assembler.push_v1(&source, request, &response).unwrap() {
+                ids = Some(authenticated);
+            }
+        } else {
+            source.authenticate_v1(request, &response, ids.as_ref()).unwrap();
+        }
         let took = ns(start);
         auth_ns += took;
         auth_max = auth_max.max(took);
-        if let kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1::Ids(authenticated) = unit_auth {
-            ids = Some(authenticated);
-        }
     }
 
     // --- preparation: publish the prepared generation, reopen it, answer warm ---------------------------------------------------
@@ -307,7 +343,10 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
 
     // --- per-step check: the owner's replayed refutation and the court's check, every leaf --------------------------------------
     let c = court(program, params);
-    let runner = TirClassRunnerV1::new(&c.space, &c.plan, &c.tparams, c.class.class_id(&c.artifact_root)).unwrap();
+    let tparams = TirParams::from_map(&c.plan, params).unwrap();
+    let held_source = TirParamsSourceV1(&tparams);
+    let inventory = TirHeldInventoryV1::build(program, &held_source).unwrap();
+    let runner = TirClassRunnerV1::new(&c.space, &c.plan, &tparams, c.class.class_id(&c.artifact_root)).unwrap();
     let court_rules = PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
     let start = Instant::now();
     let honest = runner.retain(&c.class, c.artifact_root, &c.ctx, &c.prompt, LADDER).unwrap();
@@ -316,7 +355,7 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
     let start = Instant::now();
     runner.run(&c.ctx, &c.prompt, LADDER, true, &mut |l| dense.push(l.preimage.clone())).unwrap();
     let replay_pass_ns = ns(start);
-    let own = TirEvidenceV1::own(&runner, &honest, &c.inventory, PalwPromptIdsFormV1::Flat, LADDER).unwrap();
+    let own = TirEvidenceV1::own(&runner, &honest, &inventory, PalwPromptIdsFormV1::Flat, LADDER).unwrap();
     let court_n = honest.binding.step_leaf_count;
     let (mut build_max, mut build_total, mut check_max, mut check_total, mut refutation_bytes_max) = (0u64, 0u64, 0u64, 0u64, 0u64);
     for i in 0..court_n {
@@ -368,7 +407,7 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
             lie[i as usize].clone(),
             &honest.logits_rows,
             &honest.generated,
-            &c.inventory,
+            &inventory,
             PalwPromptIdsFormV1::Flat,
             LADDER,
         )
@@ -439,6 +478,7 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
         },
         "filing": filing,
         "frame": [frame(&plan6), frame(&plan257)],
+        "plans": [bounds(&plan6), bounds(&plan257)],
     })
 }
 
