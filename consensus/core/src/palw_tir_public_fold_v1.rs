@@ -1349,15 +1349,20 @@ mod conviction_e2e_tests {
 
     /// The frame with the WHOLE drawn Panel frozen and every colluder holding an exact credited Valid custody grant + Ready.
     fn credited_frame(fx: &PalwTirPublicFrameFixtureV1) -> Frame {
+        credited_frame_with(fx, &colluders(), &drawn())
+    }
+    /// [`credited_frame`] over `credited` seats (each with an exact credited Valid custody grant + Ready) of the drawn Panel `drawn`.
+    fn credited_frame_with(fx: &PalwTirPublicFrameFixtureV1, credited: &[PalwBondKeyV2], drawn: &[PalwBondKeyV2]) -> Frame {
         let frame = fx.frame.clone();
         let plan = frame.plan_v1().clone();
         let header = frame.header_v1().clone();
         let original = frame.original_v1().clone();
         let pledge = frame.custody_v1().pledge_v1().clone();
         let bound = plan.terms.accepted_daa;
-        let panel = PalwTirPublicOriginalPanelV1 { anchor: h(0xA0), bound_daa: bound, seats: drawn().into_iter().collect() };
-        let credited = colluders()
-            .into_iter()
+        let panel = PalwTirPublicOriginalPanelV1 { anchor: h(0xA0), bound_daa: bound, seats: drawn.iter().copied().collect() };
+        let credited = credited
+            .iter()
+            .copied()
             .map(|seat| {
                 let receipt = crate::palw_panel_v2::PalwSeatReceiptV2 {
                     claim: plan.original_claim,
@@ -1405,6 +1410,14 @@ mod conviction_e2e_tests {
     /// The accepted world the colluders built: the licensed claim, its drawn Panel, the colluders' native S4 locks, the registered
     /// class and the rooted frame (its indices — producer exposure and the liable signers' exit holds — rebuilt from the rows).
     fn world(fx: &PalwTirPublicFrameFixtureV1, frame: &Frame) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1) {
+        world_with(fx, frame, &drawn())
+    }
+    /// [`world`] with the drawn Panel `drawn`.
+    fn world_with(
+        fx: &PalwTirPublicFrameFixtureV1,
+        frame: &Frame,
+        drawn: &[PalwBondKeyV2],
+    ) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1) {
         // R-core+ in force from genesis: the route's fence requires it (the conviction tiers, the `CourtConviction` record and the
         // exit-lock lattice a collectible debit needs).
         let params = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 600)
@@ -1419,7 +1432,7 @@ mod conviction_e2e_tests {
         let claim_id = plan.original_claim;
         let producer = frame.custody_v1().pledge_v1().producer;
         let class_id = frame.descriptor_v1().class_id;
-        for (n, key) in std::iter::once(producer).chain(drawn()).chain(std::iter::once(outsider())).enumerate() {
+        for (n, key) in std::iter::once(producer).chain(drawn.iter().copied()).chain(std::iter::once(outsider())).enumerate() {
             state.bonds.insert(key, bond_state(n as u64));
         }
         state.set_class_for_tests(
@@ -1474,7 +1487,7 @@ mod conviction_e2e_tests {
         state.reserved_exposure.insert(producer, held);
         let panel = PalwPanelStateV2 {
             anchor: h(0xA0),
-            seats: drawn().into_iter().map(|seat| PalwPanelSeatV2 { bond: seat, operator_id: h(0x77) }).collect(),
+            seats: drawn.iter().map(|seat| PalwPanelSeatV2 { bond: *seat, operator_id: h(0x77) }).collect(),
             bound_daa: plan.terms.accepted_daa,
         };
         state.set_false_valid_rows_for_tests(claim_id, Some(claim), Some(panel), None, 0);
@@ -2730,5 +2743,194 @@ mod conviction_e2e_tests {
         assert!(convicted.bonds.get(&producer).unwrap().collateral < before);
         assert!(convicted.consumed_offences.contains_key(&palw_court_conviction_offence_id_v1(&producer.0, &claim_id)));
         assert!(convicted.legacy_disputes.is_empty(), "the conviction created no legacy-route state either");
+    }
+
+    /// **What each accepting frame action really does, measured** (the frame pricing proposal, 2026-10-16). For custodian uppers
+    /// 6, 33 and 257 — every seat of the drawn Panel holding an exact credited Valid custody grant, so the rooted frame is at its
+    /// largest — the outside owner's Open, Demand and the producer's Begin / Part / Finish answer, the producer's preparation debit
+    /// and Ready, and the conviction filing are applied through the verified native fold (`apply_verified_control_v1`), and each is
+    /// timed. Beside them: one full-frame pass (`check_structure_v1`, a deep clone, the Borsh encode) at the same size. If an
+    /// action's time grows with the frame, it re-reads the whole frame; if it stays flat, it touches only its own data.
+    ///
+    /// Timings are wall-clock on THIS host and build (recorded, never pinned). Set `MISAKA_TIR_FOLD_MEASURE_OUT=<file>` to write
+    /// the canonical JSON record. Counts and byte sizes are deterministic.
+    #[test]
+    fn tir_frame_accepting_actions_are_measured_across_custodian_uppers() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        use std::time::Instant;
+        const ROUNDS: usize = 5;
+        // The median of ROUNDS applications of `control` to `state` (each from the same pre-state).
+        let timed = |frame: &Frame,
+                     state: &PalwChainStateV2,
+                     params: &PalwStateParamsV2,
+                     extras: &PalwTransitionExtrasV1,
+                     offset: u64,
+                     control: &Control|
+         -> (u64, PalwChainStateV2) {
+            let mut samples = Vec::new();
+            let mut last = None;
+            for _ in 0..ROUNDS {
+                let mut b = TransitionBuilder::new(state, params, false, false, false, false, extras);
+                let start = Instant::now();
+                apply_verified_control_v1(&mut b, &at(frame, offset), frame.clone(), control).expect("the measured action applies");
+                samples.push(start.elapsed().as_nanos() as u64);
+                last = Some(b.state.clone());
+            }
+            samples.sort_unstable();
+            (samples[ROUNDS / 2], last.unwrap())
+        };
+        fn median(f: &mut dyn FnMut() -> u64) -> u64 {
+            let mut samples: Vec<u64> = (0..ROUNDS).map(|_| f()).collect();
+            samples.sort_unstable();
+            samples[ROUNDS / 2]
+        }
+        let control_of = |frame: &Frame, target: T, action: A, signer: PalwBondKeyV2, rent: u64, turn: u64| {
+            let plan = frame.plan_v1();
+            Control {
+                version: 1,
+                claim: plan.original_claim,
+                allocation_id: plan.allocation_id,
+                source_id: plan.source_id,
+                target,
+                expected_turn: turn,
+                declared_rent_sompi: rent,
+                signer,
+                action,
+                signature: vec![5; SIG],
+            }
+        };
+        let mut rows = Vec::new();
+        for upper in [6u64, 33, 257] {
+            let fx = palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF, 1)), upper);
+            let seats: Vec<PalwBondKeyV2> = (0..upper - 1).map(|i| bond(10_000 + i)).collect();
+            let frame = credited_frame_with(&fx, &seats, &seats);
+            let frame_bytes = borsh::to_vec(&frame).unwrap().len() as u64;
+            // One full-frame pass, by part.
+            let check_ns = median(&mut || {
+                let start = Instant::now();
+                frame.check_structure_v1(&frame.key_v1()).unwrap();
+                start.elapsed().as_nanos() as u64
+            });
+            let clone_ns = median(&mut || {
+                let start = Instant::now();
+                std::hint::black_box(frame.clone());
+                start.elapsed().as_nanos() as u64
+            });
+            let encode_ns = median(&mut || {
+                let start = Instant::now();
+                std::hint::black_box(borsh::to_vec(&frame).unwrap());
+                start.elapsed().as_nanos() as u64
+            });
+            // The accepted world: the credited frame installed at its acceptance, the producer prepared and Ready.
+            let (mut state, params, extras) = world_with(&fx, &frame, &seats);
+            state.staged_courts.remove(&frame.key_v1());
+            super::super::palw_staged_court_fold_v1::rebuild_indices(&mut state);
+            let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            install_original_v1(&mut b, &at(&frame, 0), frame.clone(), &prompt_row(&fx, &frame)).unwrap();
+            let installed = b.state.clone();
+            let ready = producer_ready(&frame, &installed, &params, &extras);
+            let plan = frame.plan_v1();
+            let base = plan.terms.accepted_daa;
+            let producer = frame.custody_v1().pledge_v1().producer;
+            let open_at = plan.preparation_until_daa - base;
+            let rent = owner_terms_v1(&frame).unwrap().plan.rent_sompi;
+            let (open_ns, opened) = timed(
+                &frame,
+                &ready,
+                &params,
+                &extras,
+                open_at,
+                &control_of(&frame, T::OwnerOpen { owner: outsider() }, A::Open, outsider(), rent, 0),
+            );
+            let target = T::Acquisition { owner: outsider(), reserved_daa: base + open_at };
+            let request = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: FORGED_LEAF as u64 };
+            let (demand_ns, demanded) = timed(
+                &frame,
+                &opened,
+                &params,
+                &extras,
+                open_at + 1,
+                &control_of(&frame, target, A::Acquisition(Owned::Demand { request }), outsider(), 0, 0),
+            );
+            let (demand_id, _, turn, _) = owner_pending(&frame, &demanded, target);
+            let body = borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+                preimage: fx.execution.preimages[FORGED_LEAF].clone(),
+                opening: crate::palw_step_leg::step_opening_v1(&fx.execution.hashes, FORGED_LEAF as u64).unwrap(),
+            })
+            .unwrap();
+            let begin = Owned::Begin {
+                demand_id,
+                answerer: producer,
+                total_bytes: body.len() as u64,
+                body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body),
+            };
+            let (begin_ns, mut answered) = timed(
+                &frame,
+                &demanded,
+                &params,
+                &extras,
+                open_at + 2,
+                &control_of(&frame, target, A::Acquisition(begin), producer, 0, turn),
+            );
+            let mut part_ns = Vec::new();
+            let mut offset = open_at + 3;
+            for (i, bytes) in body.chunks(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).enumerate() {
+                let part = Owned::Part {
+                    demand_id,
+                    answerer: producer,
+                    offset: (i * crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) as u64,
+                    bytes: bytes.to_vec(),
+                };
+                let (took, next) =
+                    timed(&frame, &answered, &params, &extras, offset, &control_of(&frame, target, A::Acquisition(part), producer, 0, turn));
+                part_ns.push(took);
+                answered = next;
+                offset += 1;
+            }
+            let finish = Owned::Finish { demand_id, answerer: producer };
+            let (finish_ns, answered) =
+                timed(&frame, &answered, &params, &extras, offset, &control_of(&frame, target, A::Acquisition(finish), producer, 0, turn));
+            let filing_control = filing(&frame, outsider(), cone(&fx));
+            let filing_bytes = borsh::to_vec(&filing_control).unwrap().len() as u64;
+            let (filing_ns, _) = timed(&frame, &answered, &params, &extras, offset + 1, &filing_control);
+            // The producer's preparation debit and Ready on the installed world, timed the same way.
+            let prep_ns = {
+                let mut samples = Vec::new();
+                for _ in 0..ROUNDS {
+                    let start = Instant::now();
+                    std::hint::black_box(producer_ready(&frame, &installed, &params, &extras));
+                    samples.push(start.elapsed().as_nanos() as u64);
+                }
+                samples.sort_unstable();
+                samples[ROUNDS / 2]
+            };
+            let row = serde_json::json!({
+                "upper": upper,
+                "credited_seats": seats.len(),
+                "frame_bytes": frame_bytes,
+                "charged_parser_steps_per_owner_action": frame_bytes.saturating_mul(32 * 32),
+                "full_frame_pass_ns": { "check_structure": check_ns, "deep_clone": clone_ns, "borsh_encode": encode_ns },
+                "action_ns": {
+                    "open": open_ns, "demand": demand_ns, "begin": begin_ns, "part": part_ns, "finish": finish_ns,
+                    "filing": filing_ns, "preparation_debit_and_ready_incl_state_clone": prep_ns,
+                },
+                "answer_body_bytes": body.len(),
+                "filing_control_bytes": filing_bytes,
+            });
+            eprintln!("[tir-fold-measure] {row}");
+            rows.push(row);
+        }
+        let record = serde_json::json!({
+            "record": "misaka-palw/tir-fold-measure/v1",
+            "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+            "host": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
+                      "threads": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+                      "label": std::env::var("MISAKA_MEASURE_HOST").unwrap_or_default() },
+            "status": "not arming evidence: wall-clock of this host and build; the tiny court fixture's class",
+            "uppers": rows,
+        });
+        if let Ok(out) = std::env::var("MISAKA_TIR_FOLD_MEASURE_OUT") {
+            std::fs::write(out, serde_json::to_string(&record).unwrap()).unwrap();
+        }
     }
 }
