@@ -655,6 +655,10 @@ impl Params {
         if self.palw_reward_liability_horizon_v1 == Some(ForkActivation::never()) {
             self.palw_reward_liability_horizon_v1 = None;
         }
+        // The court-capacity fence (`crate::palw_court_capacity_v1`), likewise.
+        if self.palw_court_capacity_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_court_capacity_v1 = None;
+        }
         // RFC-0016's two dormant fences, likewise.
         if self.palw_model_block_rights_v1 == Some(ForkActivation::never()) {
             self.palw_model_block_rights_v1 = None;
@@ -1169,6 +1173,7 @@ impl Params {
             palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1,
             palw_reward_liability_horizon_v1,
+            palw_court_capacity_v1,
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
@@ -1503,6 +1508,7 @@ impl Params {
             ("palw_cell_coverage_closure_v1", *palw_cell_coverage_closure_v1),
             ("palw_g14_route_required_v1", *palw_g14_route_required_v1),
             ("palw_reward_liability_horizon_v1", *palw_reward_liability_horizon_v1),
+            ("palw_court_capacity_v1", palw_court_capacity_v1.as_ref().map(|f| f.activation)),
             ("palw_model_block_rights_v1", *palw_model_block_rights_v1),
             ("palw_elastic_final_capacity_v1", *palw_elastic_final_capacity_v1),
             ("palw_model_eligibility_v1", *palw_model_eligibility_v1),
@@ -2007,6 +2013,12 @@ impl Params {
         if let Some(at) = self.palw_reward_liability_horizon_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_reward_liability_horizon_v1");
             h.write(at.daa_score().to_le_bytes());
+        }
+        // The court-capacity fence, NAMED likewise, with its policy. Some-only.
+        if let Some(f) = self.palw_court_capacity_v1.filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_court_capacity_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
         }
         // RFC-0016's two dormant fences, NAMED likewise. Some-only.
         if let Some(at) = self.palw_model_block_rights_v1.filter(|f| *f != ForkActivation::never()) {
@@ -2794,6 +2806,7 @@ impl Params {
             palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1,
             palw_reward_liability_horizon_v1,
+            palw_court_capacity_v1,
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
@@ -3725,6 +3738,10 @@ impl Params {
         if let Some(activation) = palw_reward_liability_horizon_v1.as_mut() {
             fork(activation, visit);
         }
+        // The court-capacity fence. Some-only.
+        if let Some(f) = palw_court_capacity_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
         // RFC-0016's two dormant fences. Some-only.
         if let Some(activation) = palw_model_block_rights_v1.as_mut() {
             fork(activation, visit);
@@ -4303,6 +4320,7 @@ impl Params {
             palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1,
             palw_reward_liability_horizon_v1,
+            palw_court_capacity_v1,
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
@@ -5351,6 +5369,12 @@ impl Params {
         if let Some(activation) = palw_reward_liability_horizon_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_reward_liability_horizon_v1");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // The court-capacity fence, Some-only for the same reason, with its policy.
+        if let Some(f) = palw_court_capacity_v1.filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_court_capacity_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
         }
         // RFC-0016's two dormant fences, Some-only for the same reason.
         if let Some(activation) = palw_model_block_rights_v1.filter(|f| *f != ForkActivation::never()) {

@@ -3196,6 +3196,13 @@ pub struct Params {
     /// still void the claim. Keyed on the claim's acceptance DAA. `None` on every preset; hashed Some-only; refused when armed until
     /// its arm-readiness record is pinned.
     pub palw_reward_liability_horizon_v1: Option<ForkActivation>,
+    /// **palw_court_capacity_v1** — the audit's G-07 court capacity (user direction 2026-10-16, [`crate::palw_court_capacity_v1`]):
+    /// past it court admission reads the challenger's LG14-A reservation, a block's court operations are bounded by a deterministic
+    /// cost-unit budget, occupancy is time-priced (ρ_court × occupied DAA × weight, escrowed up front) and a reserved prosecution
+    /// queues under a deadline-aware worst-case guarantee instead of being refused at a fixed concurrency cap. Its policy values are
+    /// measured values. `None` on every preset; hashed Some-only with its policy; refused when armed until an arm-readiness record is
+    /// pinned, and never armable with the placeholder policy.
+    pub palw_court_capacity_v1: Option<crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1>,
     /// **palw_model_block_rights_v1** — RFC-0016 V+ ([`crate::palw_rfc0016_v1`]): past it a model-class Attempt is admitted only
     /// when it consumes one of its model's pre-issued per-epoch block rights (`⌊P_m · N_exp⌋`, the entrant reserve deducted from
     /// the fixed total; σ-capped mid-epoch reissue). **Dormant, with no activation height**: `None` on every preset and in no
@@ -6149,6 +6156,7 @@ impl Params {
             palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1: self.palw_g14_route_required_v1,
             palw_reward_liability_horizon_v1: self.palw_reward_liability_horizon_v1,
+            palw_court_capacity_v1: self.palw_court_capacity_v1,
             palw_model_block_rights_v1: self.palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1: self.palw_model_eligibility_v1,
@@ -7307,6 +7315,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
+    palw_court_capacity_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
@@ -7661,6 +7670,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
+    palw_court_capacity_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
@@ -7997,6 +8007,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
+    palw_court_capacity_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
@@ -13183,6 +13194,8 @@ pub fn palw_v2_params_on_base(
     // RFC-0006 R6-CELL round 4's coverage closure, likewise.
     params.sync_palw_cell_coverage_closure_v1();
     // The cross-lane G14 gates' mirrors (option (b) and the reward liability horizon), likewise.
+    // The court-capacity fence's mirror (read by option (b)'s route mirror below), likewise.
+    params.sync_palw_court_capacity_v1();
     params.sync_palw_g14_gates_v1();
     // RFC-0006's memory/routing court consumer v2, likewise.
     params.sync_palw_memory_routing_court_v2();
@@ -13524,6 +13537,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
+    palw_court_capacity_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,

@@ -196,6 +196,8 @@ mod palw_provider_court_fold_v1;
 mod palw_legacy_answer_chunks_fold_v2;
 #[path = "palw_legacy_public_filer_fold_v1.rs"]
 mod palw_legacy_public_filer_fold_v1;
+#[path = "palw_court_capacity_fold_v1.rs"]
+mod palw_court_capacity_fold_v1;
 #[path = "palw_staged_court_fold_v1.rs"]
 mod palw_staged_court_fold_v1;
 #[path = "palw_tir_public_fold_v1.rs"]
@@ -1965,6 +1967,10 @@ pub struct PalwStateParamsV2 {
     /// preset, and validation refuses every armed one without a pinned arm-readiness record.
     #[borsh(skip)]
     g14_route_required_v1: Option<crate::palw_g14_gates_v1::PalwG14RouteMirrorV1>,
+    /// **The court-capacity fence's mirror** (`crate::palw_court_capacity_v1`, audit G-07), written by
+    /// `Params::sync_palw_court_capacity_v1`: its height and its policy. `None` on every shipped preset.
+    #[borsh(skip)]
+    court_capacity_v1: Option<crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1>,
     #[borsh(skip)]
     reward_liability_horizon_from_daa: Option<u64>,
     /// **RFC-0006 R6-CELL round 4: `Params::palw_cell_coverage_closure_v1`'s height**, mirrored by
@@ -10241,6 +10247,10 @@ pub enum PalwStateV2Error {
     /// drops it by name first; this is the second lock), or a rule of [`crate::palw_legacy_public_filer_v1`], by name.
     #[error("the legacy route's dispute reservation refuses this: {0}")]
     LegacyDisputeRefused(String),
+    /// **Court capacity refuses this** (lane g14-court-capacity, `crate::palw_court_capacity_v1`): the block's court budget, court
+    /// admission, or the deadline guarantee of the queue. Past `palw_court_capacity_v1` only.
+    #[error("court capacity refuses this: {0}")]
+    CourtCapacityRefused(String),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -13012,6 +13022,9 @@ struct TransitionBuilder<'a> {
     /// `(base claim, signed liability_until)`, set by the paid commit fold around its inner kernel commit only (the authority row
     /// that carries it is written after that commit). Never state; `None` outside that one call.
     paid_lifetime_admission_v1: Option<([u8; 64], u64)>,
+    /// **Lane g14-court-capacity: what this block's court operations have cost so far** (deterministic units), against the policy's
+    /// block budget past `palw_court_capacity_v1`. Not state: one builder is one block's fold; zero below the fence.
+    court_cost_spent: crate::palw_court_capacity_v1::PalwCourtCostV1,
 }
 
 /// **What the class gate counts as a class's claims in flight** (2026-09-24 DoS audit #11 and its

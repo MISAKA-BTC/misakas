@@ -7,6 +7,9 @@ pub(super) fn apply_object(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
+    // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` every court operation is charged its deterministic cost
+    // against the block's court budget before its arm runs. A no-op below the fence.
+    palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
     let paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
         if builder.extras.tir_public_originals.contains_key(claim));
     if !paired {
@@ -1999,15 +2002,26 @@ fn apply_object_inner(
             // as wide as it is, and this makes the promise it implies — every session reaches it
             // inside its own rung — true by construction. It is a pure state fact, so the fold,
             // the acceptance rehearsal and the sync walk all answer it the same way.
-            let open_sessions = builder.state.court_sessions.len() as u64;
-            let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
-            if open_sessions >= max_sessions {
-                return Err(PalwStateV2Error::CourtSessionsAtCapacity {
-                    open: open_sessions,
-                    max: max_sessions,
-                    turn_deadline_daa: builder.params.turn_deadline_daa(),
-                    per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
-                });
+            // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` court admission (the challenger's reservation, the
+            // escrow, the deadline-aware queue) replaces the fixed concurrency cap; below it, the cap as it always was.
+            let gated_claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
+            let gated_window =
+                builder.state.class_model_court_window_v1(&gated_claim.class_id).unwrap_or_else(|| builder.params.window_court());
+            match palw_court_capacity_fold_v1::court_admission_v1(builder, ctx, *claim_id, *challenger_bond, gated_window)? {
+                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(()),
+                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open => {}
+                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {
+                    let open_sessions = builder.state.court_sessions.len() as u64;
+                    let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
+                    if open_sessions >= max_sessions {
+                        return Err(PalwStateV2Error::CourtSessionsAtCapacity {
+                            open: open_sessions,
+                            max: max_sessions,
+                            turn_deadline_daa: builder.params.turn_deadline_daa(),
+                            per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+                        });
+                    }
+                }
             }
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
             if claim.phase.is_terminal() {
@@ -2172,6 +2186,7 @@ fn apply_object_inner(
             // write is one write.
             cap_session_rung_deadline_v2(&mut opened, builder.params);
             builder.write_court(*session_id, Some(opened))?;
+            palw_court_capacity_fold_v1::court_opened_v1(builder, ctx, *claim_id, *challenger_bond, *session_id)?;
             // An open court freezes the path to Final: the claim keeps no deadline while any
             // session is open (void-by-timeout of the COURT is PR-07's deadline system).
             //

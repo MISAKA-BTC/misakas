@@ -474,7 +474,9 @@ native_struct!(crate::palw_tir_shard_v1::PalwTirShardClaimV1; s_l, s_p, outsider
 native_struct!(crate::palw_real_share_v1::PalwFloorStateV1; mode, last_probe_end);
 native_struct!(crate::palw_seat_availability_v1::PalwSeatAvailabilityV1; first_credit_daa, epochs);
 native_struct!(crate::palw_model_registry_v1::PalwSeatReadinessRowV1; proved_daa, proved_span, leaf_index, proof_version, chunks);
-native_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; opened_daa, hard_deadline_daa, live, closed, dismissed_held, reacquiring);
+native_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; opened_daa, hard_deadline_daa, live, closed, dismissed_held, reacquiring, courts);
+native_struct!(crate::palw_court_capacity_v1::PalwReservedCourtV1; stage, escrow, rho_sompi, weight, service_daa);
+native_enum!(crate::palw_court_capacity_v1::PalwCourtStageV1; Queued { enqueued_daa }, Ticket { granted_daa, expires_daa }, Running { session, started_daa });
 native_struct!(crate::palw_class_semantics_v1::PalwClassSemanticsV1; version, class_id, artifact_root, bound_from_daa, model_profile_id, runtime_manifest_hash, runtime_class_id, tokenizer_id, cu_ruleset_id, token_table_root, rendering_rule, raw_tokenizer_bytes, tokenizer_key_events, prefix_state_relation);
 native_struct!(crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2; declaration, deadline_daa, parts);
 native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1));

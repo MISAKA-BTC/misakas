@@ -535,6 +535,9 @@ fn g07_a_coalition_cannot_spend_the_outsiders_budget() {
 /// the outsider's dissection on the lying claim is then refused for capacity — while its reservation still holds that claim's `Final`.
 /// A per-bond budget or a partition does not stop a multi-bond coalition, and lifting the cap breaks the slot guarantee that keeps an
 /// honest mover from defaulting; closing it needs a measured per-block court budget or a priced slot (audit appendix C).
+///
+/// This pins the behaviour BELOW `palw_court_capacity_v1` (lane g14-court-capacity): past that fence the same 43rd prosecution queues
+/// under its deadline guarantee and is granted the first freed slot (`g14_court_capacity.rs`).
 #[test]
 fn g07_residual_the_network_court_cap_is_shared() {
     let probe = bundle(&palw_t12_launch_params_v1()).state;

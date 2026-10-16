@@ -190,6 +190,12 @@ impl PalwChainStateV2 {
             if record.live.keys().any(|bond| *bond == claim.bond) {
                 return bad(format!("claim {claim_id}'s producer holds a reservation on it"));
             }
+            // Lane g14-court-capacity: a court row only beside its reserver's live reservation, and only past its fence.
+            if record.courts.keys().any(|bond| !record.live.contains_key(bond))
+                || (!record.courts.is_empty() && params.court_capacity_v1().is_none())
+            {
+                return bad(format!("claim {claim_id}'s court rows name no live reservation, or exist below palw_court_capacity_v1"));
+            }
             for bond in record.live.keys() {
                 *live_per_bond.entry(*bond).or_default() += 1;
             }
@@ -336,6 +342,12 @@ impl TransitionBuilder<'_> {
                 record.closed.insert(*bond);
                 record.dismissed_held.push((*bond, row.deposit));
             }
+            // Lane g14-court-capacity: its court row settles with it — an open session is charged to its backstop (the slot stays
+            // held for it), anything else to now. Empty below `palw_court_capacity_v1`.
+            if let Some(court) = record.courts.remove(bond) {
+                let until = super::palw_court_capacity_fold_v1::court_row_held_until_v1(&self.state, &court, now_daa);
+                super::palw_court_capacity_fold_v1::settle_court_row_v1(self, &claim_id, *bond, &court, until, false)?;
+            }
         }
         self.write_legacy_dispute(claim_id, Some(record))?;
         if held {
@@ -356,6 +368,12 @@ impl TransitionBuilder<'_> {
         let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
         let held = record.holds();
         let live: Vec<PalwBondKeyV2> = record.live.keys().copied().collect();
+        // Lane g14-court-capacity: every court row settles to now with the claim's outcome — on a conviction or a DA default the
+        // producer reimburses the prosecution's occupancy from its own collateral first. Empty below `palw_court_capacity_v1`.
+        let courts = std::mem::take(&mut record.courts);
+        for (reserver, court) in &courts {
+            super::palw_court_capacity_fold_v1::settle_court_row_v1(self, &claim_id, *reserver, court, now_daa, convicted)?;
+        }
         record.live.clear();
         record.reacquiring.clear();
         record.closed.extend(live);
@@ -664,6 +682,9 @@ pub(super) fn sweep_legacy_disputes(builder: &mut TransitionBuilder<'_>, ctx: &P
         }
         builder.legacy_dispute_dismiss_v1(claim_id, &live, ctx.daa_score)?;
     }
+    // Lane g14-court-capacity (audit G-07): ended sessions and expired tickets settle, then freed capacity is granted to the queue —
+    // before any object of the block. A no-op below `palw_court_capacity_v1`.
+    super::palw_court_capacity_fold_v1::sweep_court_capacity_v1(builder, ctx)?;
     Ok(())
 }
 

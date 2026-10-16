@@ -182,6 +182,7 @@ impl PalwStateParamsV2 {
             public_evidence_reward_from_daa: None,
             claim_hard_deadline_v1: None,
             g14_route_required_v1: None,
+            court_capacity_v1: None,
             reward_liability_horizon_from_daa: None,
             cell_coverage_closure_from_daa: None,
             memory_routing_court_from_daa: None,
@@ -666,6 +667,23 @@ impl PalwStateParamsV2 {
     pub fn with_g14_route_required_v1(mut self, mirror: Option<crate::palw_g14_gates_v1::PalwG14RouteMirrorV1>) -> Self {
         self.g14_route_required_v1 = mirror;
         self
+    }
+
+    /// **The court-capacity fence's mirror** (`crate::palw_court_capacity_v1`) — written by `Params::sync_palw_court_capacity_v1` and by
+    /// nothing else; `None` where the fence is not armed.
+    pub fn with_court_capacity_v1(mut self, mirror: Option<crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1>) -> Self {
+        self.court_capacity_v1 = mirror;
+        self
+    }
+
+    /// `Params::palw_court_capacity_v1`'s height and policy, if the network arms it.
+    pub fn court_capacity_v1(&self) -> Option<crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1> {
+        self.court_capacity_v1
+    }
+
+    /// The court-capacity policy in force at `daa_score`, if any.
+    pub fn court_capacity_at_v1(&self, daa_score: u64) -> Option<crate::palw_court_capacity_v1::PalwCourtCapacityPolicyV1> {
+        self.court_capacity_v1.filter(|m| m.active_at(daa_score)).map(|m| m.policy)
     }
 
     /// `Params::palw_g14_route_required_v1`'s height with the route fences it reads, if the network arms it.
