@@ -1627,7 +1627,7 @@ impl VirtualStateProcessor {
             let court_policy = state_params.court_capacity_at_v1(point.daa_score);
             let court_cost = court_policy
                 .as_ref()
-                .and_then(|policy| kaspa_consensus_core::palw_court_capacity_v1::palw_court_op_cost_v1(policy, &object));
+                .and_then(|policy| kaspa_consensus_core::palw_court_capacity_v1::palw_court_op_cost_v1(policy, &folded, &object));
             if let (Some(policy), Some(cost)) = (court_policy.as_ref(), court_cost)
                 && !court_cost_spent.saturating_add(cost).fits_within(&policy.block_budget)
             {

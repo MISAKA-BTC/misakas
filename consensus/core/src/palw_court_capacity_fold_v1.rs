@@ -33,7 +33,7 @@ pub(super) fn charge_court_op_v1(
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
     let Some(policy) = builder.params.court_capacity_at_v1(ctx.daa_score) else { return Ok(()) };
-    let Some(cost) = palw_court_op_cost_v1(&policy, object) else { return Ok(()) };
+    let Some(cost) = palw_court_op_cost_v1(&policy, &builder.state, object) else { return Ok(()) };
     let spent = builder.court_cost_spent.saturating_add(cost);
     if !spent.fits_within(&policy.block_budget) {
         return Err(refused(format!(

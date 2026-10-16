@@ -3116,10 +3116,19 @@ pub fn palw_bond_resolved_locks_v1(
         .take_while(|((holder, _), _)| holder == bond)
         .filter(|((_, claim_id), lock)| {
             state.claims.get(claim_id).is_none_or(|claim| claim.phase.is_terminal())
+                && !palw_claim_under_dispute_v1(state, claim_id)
                 && lock.is_live_v3(now_daa, settled_now, escaped_depth, window_court)
         })
         .map(|((_, claim_id), lock)| lock.amount.saturating_sub(palw_seat_duty_of_v1(state, claim_id, bond)))
         .fold(0u128, u128::saturating_add)
+}
+
+/// **G-13's capacity (user direction 2026-10-16 §2): is `claim_id` still under review?** A live LG14-A reservation on it — which holds
+/// a non-final claim's Final, or keeps a Final claim's post-Final stage in dispute — keeps every lock on it ACTIVE liability (on the
+/// work ceiling) even once the claim is terminal (`crate::palw_panel_liability_v1`). The dispute records exist only past
+/// `palw_legacy_public_filer_v1`, so below it this is `false` everywhere and the V02 split is the shipped one, byte for byte.
+pub fn palw_claim_under_dispute_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> bool {
+    state.legacy_disputes.get(claim_id).is_some_and(|record| record.holds())
 }
 
 /// **Lane V02: what the work ceiling does not carry for `bond` at `now_daa`** — its resolved locks

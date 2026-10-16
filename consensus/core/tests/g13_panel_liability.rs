@@ -192,6 +192,18 @@ fn licensed_floor(c: &mut Chain, seed: u64) -> (Hash64, u64) {
     (id, c.daa)
 }
 
+/// **A live network's second clock** — `n` further floor claims run to `Final` (each one a settled anchor). A lock past its DAA expiry
+/// stays live until testnet-12's anchor depth (30) has settled since its `Final`, for at most `2 × window_court`; on the live network
+/// anchors settle every few DAA, but this harness's chain is quiet, so without them every lock would outlive its DAA clock by up to
+/// `2 × window_court` under either rule. Returns the claims.
+fn settle_anchors(c: &mut Chain, n: u64, seed: u64) -> Vec<Hash64> {
+    let ids: Vec<Hash64> = (0..n).map(|i| licensed_floor(c, seed + i).0).collect();
+    let last = ids.iter().map(|id| c.s.deadline_of(id).expect("a licensed claim owes its Final")).max().expect("n > 0");
+    c.step_at(last + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(ids.iter().all(|id| matches!(c.claim(id).phase, PalwClaimPhaseV2::Final { .. })), "every anchor settled");
+    ids
+}
+
 fn final_daa(c: &Chain, id: &Hash64) -> u64 {
     match c.claim(id).phase {
         PalwClaimPhaseV2::Final { final_daa } => final_daa,
@@ -251,6 +263,9 @@ fn late_conviction_after_f_plus_1000_slashes_every_valid_signer_in_full() {
         let locks: Vec<u128> = seats.iter().map(|k| c.s.slashable_lock(*k, id).map_or(0, |l| l.amount)).collect();
         assert!(locks.iter().all(|l| *l > 0), "every Valid seat locked at Final");
         let late = f + short + (wc - short) / 2;
+        // The network keeps settling anchors after the Final (testnet-12's depth), so each lock is governed by its DAA clock.
+        let _ = settle_anchors(&mut c, kaspa_consensus_core::config::params::PALW_T12_SETTLED_ANCHOR_DEPTH, 0x13A0);
+        assert!(c.daa < f + short, "the anchors settled before the old rule's release");
         c.step_at(late - 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
         assert_split(&c, &seats, late - 1, "before the late conviction");
         let before: Vec<u128> = seats.iter().map(|k| collateral(&c, k)).collect();
@@ -353,14 +368,63 @@ fn active_plus_resolved_never_exceeds_collateral_and_simultaneous_frauds_each_co
     );
 }
 
+/// **A live reservation on a `Final` claim keeps its locks ACTIVE** (the user's table: Active liability includes "while an LG14-A
+/// reservation holds Final" — and a reservation on a `Final` claim's open post-Final stage). An outsider reserves a `Final` floor claim
+/// whose vesting row is still open: every seat's lock on it moves from Resolved to Active (on the work ceiling) with nothing else
+/// changed, the split still holds, and when the outsider releases its reservation the lock is Resolved again.
+#[test]
+fn a_live_reservation_keeps_a_final_claims_locks_active() {
+    let p = ruleset(Rule::New);
+    let mut c = Chain::new(p.clone());
+    let seats: Vec<PalwBondKeyV2> = c.floor_seats().iter().map(|(k, _)| *k).collect();
+    let (id, _) = licensed_floor(&mut c, 0x1360);
+    c.finalize(id);
+    let outsider = bond_key(0x1361_0001);
+    c.step(&[bond_obj(0x1361_0001, RICH)]);
+    let before: Vec<PalwPanelLiabilityV1> = seats.iter().map(|k| liability(&c, k, c.daa + 1)).collect();
+    assert!(before.iter().all(|l| l.resolved > 0), "a Final claim's locks are Resolved");
+    let record = c.claim(&id);
+    let reservation = PalwConsensusObjectV2::DisputeReservedV1 {
+        reservation: Box::new(kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReservationV1 {
+            version: kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_DISPUTE_RESERVATION_VERSION_V1,
+            claim: id,
+            execution_root: record.execution_root,
+            trace_root: record.trace_root,
+            reserver: outsider,
+        }),
+        signature: Vec::new(),
+    };
+    c.step(&[reservation]);
+    assert!(c.s.legacy_dispute_v1(&id).is_some_and(|r| r.holds()), "the outsider's reservation is live on the Final claim");
+    assert!(kaspa_consensus_core::palw_state_v2::palw_claim_under_dispute_v1(&c.s, &id));
+    let held: Vec<PalwPanelLiabilityV1> = seats.iter().map(|k| liability(&c, k, c.daa)).collect();
+    for (i, (b, h)) in before.iter().zip(&held).enumerate() {
+        assert_eq!(h.resolved, 0, "seat {i}: under review, nothing is Resolved");
+        assert_eq!(h.active, b.active + b.resolved, "seat {i}: the lock moved to Active, the ledger unchanged");
+    }
+    assert_split(&c, &seats, c.daa, "a reserved Final claim");
+    c.step(&[PalwConsensusObjectV2::DisputeReleasedV1 { claim: id, reserver: outsider, signature: Vec::new() }]);
+    assert!(!kaspa_consensus_core::palw_state_v2::palw_claim_under_dispute_v1(&c.s, &id), "released");
+    let after: Vec<PalwPanelLiabilityV1> = seats.iter().map(|k| liability(&c, k, c.daa)).collect();
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        assert_eq!((a.active, a.resolved), (b.active, b.resolved), "seat {i}: Resolved again once nobody holds it");
+    }
+    eprintln!(
+        "[G-13 review] seat 0: Final {:.2} MSK Resolved → reserved {:.2} MSK Active, 0 Resolved → released {:.2} MSK Resolved",
+        msk(before[0].resolved),
+        msk(held[0].active),
+        msk(after[0].resolved)
+    );
+}
+
 // ---- capital efficiency -----------------------------------------------------------------------------------------------------------
 
 /// What one run of the stream measured.
 #[derive(Debug, Default)]
 struct StreamV1 {
-    /// Cadence points sampled.
-    samples: u64,
-    /// Points at which the full Panel had room for one more claim (`work room ≥ eligibility` on every seat) — and so took one.
+    /// Floor claims offered (one every `cadence` DAA).
+    offered: u64,
+    /// Offers the full Panel took (`work room ≥ eligibility` on every seat): bound and licensed.
     bound: u64,
     /// ∫ L_active dt and ∫ L_resolved dt over the window for one seat (sompi · DAA).
     active_time: u128,
@@ -369,11 +433,13 @@ struct StreamV1 {
     min_room: u128,
 }
 
-/// **One run of the stream**: at every `cadence` DAA for `window` DAA, if every floor seat has room for a floor claim's eligibility
-/// `e` (the full Panel can take it), a floor attempt, its bind and its licence; the claims finalize on their own deadlines and their
-/// locks resolve and expire under `rule`. The floor seats' collateral is set to `seat_collateral` (a carriage edit; `None` keeps
-/// testnet-12's genesis collateral). Every point checks the split ([`assert_split`]).
+/// **One run of the stream**: every `cadence` DAA (at least 3: attempt, bind, licence are one block each) for `window` DAA a floor claim
+/// is offered; if every floor seat has room for its eligibility `e` the Panel takes it — the attempt, its bind and its licence — and
+/// otherwise the offer is not made (no attempt). Claims finalize on their own deadlines and their locks resolve and expire under `rule`;
+/// the stream's own Finals are the anchors the second clock counts. The floor seats' collateral is set to `seat_collateral` (a carriage
+/// edit; `None` keeps testnet-12's genesis collateral). Every point checks the split ([`assert_split`]).
 fn stream(rule: Rule, seat_collateral: Option<u64>, e: u128, cadence: u64, window: u64) -> StreamV1 {
+    assert!(cadence >= 3, "attempt, bind and licence take a block each");
     let p = ruleset(rule);
     let mut c = Chain::new(p);
     let seats: Vec<PalwBondKeyV2> = c.floor_seats().iter().map(|(k, _)| *k).collect();
@@ -391,7 +457,7 @@ fn stream(rule: Rule, seat_collateral: Option<u64>, e: u128, cadence: u64, windo
         let at = c.daa + 1;
         let rooms: Vec<u128> = seats.iter().map(|k| work_room(&c, k, at)).collect();
         out.min_room = out.min_room.min(*rooms.iter().min().unwrap());
-        out.samples += 1;
+        out.offered += 1;
         let l = liability(&c, &seats[0], at);
         out.active_time += l.active * u128::from(cadence);
         out.resolved_time += l.resolved * u128::from(cadence);
@@ -406,17 +472,24 @@ fn stream(rule: Rule, seat_collateral: Option<u64>, e: u128, cadence: u64, windo
             out.bound += 1;
         }
         assert_split(&c, &seats, c.daa, "the stream");
-        let next = (c.daa + 1).max(at - 1 + cadence);
-        c.step_at(next, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+        let next = at - 1 + cadence;
+        if next > c.daa {
+            c.step_at(next, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+        }
     }
     out
 }
 
 /// **Capital efficiency, measured on the fold**: the old rule (V02's `F + 1,000`), the new rule (G-13's horizon kept as Resolved
-/// liability) and the refused counterfactual (G-13 with no split). For the floor's measured lock and eligibility, a stream of floor
-/// claims at a fixed cadence over a fixed window, on the floor seats at testnet-12's genesis collateral and at two smaller collaterals
-/// near the point where the work ceiling binds. Printed: claims bound, collateral × lock time of the Resolved locks still standing,
-/// the minimum work room seen, and the share of blocks in which the full Panel could take one more claim.
+/// liability) and the refused counterfactual (G-13 with no split).
+///
+/// * Per claim (measured on the fold): the floor claim's eligibility `e`, its per-seat lock, licence → Final, the lock life after Final,
+///   and collateral × lock time.
+/// * Steady state (derived from those measured values and the fold's own room, `max(launch, split)`): the claim rate one seat sustains,
+///   against testnet-12's expected per-seat rate, healthy and at the 2026-10-01 peak; the smallest seat collateral that sustains it; and
+///   how many of testnet-12's genesis bonds (and a Panel-floor bond) meet that — the Panels able to participate.
+/// * The stream (the fold itself): one floor claim offered every 3 DAA (testnet-12's healthy per-seat rate) for 6,000 DAA, on the floor
+///   seats at genesis collateral and at the Panel floor (`10 × min_collateral`, the smallest bond the draw seats).
 #[test]
 fn capital_efficiency_against_the_old_rule() {
     // The per-claim measurements.
@@ -434,15 +507,17 @@ fn capital_efficiency_against_the_old_rule() {
     let l = liability(&probe, &seat, f);
     let wc = probe.sp.window_court();
     let short = probe.sp.final_lock_life_at(f);
+    let panel_floor = kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(probe.sp.min_collateral_sompi());
     println!(
-        "[G-13 capital] floor claim: eligibility {:.2} MSK, lock {:.2} MSK per Valid seat, licence→Final {} DAA, life after Final: old {short}, new {wc}; \
-         genesis seat C {:.0} MSK, C_work {:.0}, V02 reserve {:.0}",
+        "[G-13 capital] floor claim: eligibility {:.2} MSK, lock {:.2} MSK per Valid seat, bind→Final {} DAA, life after Final: old {short}, new {wc}; \
+         genesis seat C {:.0} MSK, C_work {:.0}, V02 reserve {:.0}; Panel floor {:.0} MSK",
         msk(e),
         msk(lock),
-        f - licensed,
+        f - bound,
         msk(l.collateral),
         msk(l.work_ceiling),
         msk(l.accuser_reserve),
+        msk(u128::from(panel_floor)),
     );
     println!(
         "[G-13 capital] collateral × lock time per claim per seat: old {:.0} MSK·DAA, new {:.0} MSK·DAA (×{:.2})",
@@ -451,41 +526,58 @@ fn capital_efficiency_against_the_old_rule() {
         (f - licensed + wc) as f64 / (f - licensed + short) as f64
     );
     // **Steady state** (derived from the measured per-claim values above): a seat backing λ claims per DAA holds λ·e·T_active of
-    // Active liability (bind → Final at the bind's eligibility e) and λ·ℓ·life of Resolved. Under the split the Active part must fit
-    // the work ceiling and the whole the collateral less the V02 reserve; without it, the whole must fit the ceiling.
+    // Active liability (bind → Final at the bind's eligibility e) and λ·ℓ·life of Resolved. The fold's room is max(launch, split):
+    // launch keeps the whole ledger under the work ceiling (λ ≤ C_work / (e·T_active + ℓ·life)); the split keeps the Active part under
+    // the ceiling and the whole under the collateral less the V02 reserve (λ ≤ min(C_work / (e·T_active), (C − reserve) / (e·T_active
+    // + ℓ·life))). The counterfactual has launch only.
     let t_active = (f - bound) as f64;
-    let (c, c_work, reserve_f) = (l.collateral as f64, l.work_ceiling as f64, l.accuser_reserve as f64);
-    let (e_f, lock_f) = (e as f64, lock as f64);
-    let split_max = |life: f64| (c_work / (e_f * t_active)).min((c - reserve_f) / (e_f * t_active + lock_f * life));
-    let no_split_max = |life: f64| c_work / (e_f * t_active + lock_f * life);
+    let (reserve_f, e_f, lock_f) = (l.accuser_reserve as f64, e as f64, lock as f64);
+    let ratio = l.work_ceiling as f64 / l.collateral as f64;
+    let sustained = |c: f64, life: f64, split: bool| -> f64 {
+        let launch = c * ratio / (e_f * t_active + lock_f * life);
+        if !split {
+            return launch;
+        }
+        launch.max((c * ratio / (e_f * t_active)).min((c - reserve_f) / (e_f * t_active + lock_f * life)))
+    };
+    // The smallest seat collateral that sustains λ (never below the Panel floor).
+    let c_min = |lambda: f64, life: f64, split: bool| -> f64 {
+        let ledger = e_f * t_active + lock_f * life;
+        let launch = lambda * ledger / ratio;
+        let need = if split { launch.min((lambda * e_f * t_active / ratio).max(reserve_f + lambda * ledger)) } else { launch };
+        need.max(panel_floor as f64)
+    };
     let rules = [
-        ("old (V02: F + 1,000, split)", split_max(short as f64)),
-        ("new (G-13: F + window_court, split)", split_max(wc as f64)),
-        ("counterfactual (F + window_court, no split)", no_split_max(wc as f64)),
+        ("old (V02: F + 1,000, split)", short as f64, true),
+        ("new (G-13: F + window_court, split)", wc as f64, true),
+        ("counterfactual (F + window_court, no split)", wc as f64, false),
     ];
+    let genesis_collaterals: Vec<u64> = genesis_bonds(&probe.p).iter().map(|(_, _, c)| *c).collect();
     // The expected rate: testnet-12's observed issuance, 0.6 claims/DAA healthy and 5.3 at the 2026-10-01 peak, each claim engaging 5
     // of 9 seats (`docs/design/palw/t12-panel-backlog-1001.md` §2.3, §3) — per seat 5/9 of it.
     let seats_per_claim = probe.floor_seats().len() as f64;
     for (network_rate, label) in [(0.6, "healthy"), (5.3, "2026-10-01 peak")] {
         let per_seat = network_rate * seats_per_claim / 9.0;
-        for (rule, max) in &rules {
+        for (rule, life, split) in &rules {
+            let at_genesis = sustained(l.collateral as f64, *life, *split);
+            let at_floor = sustained(panel_floor as f64, *life, *split);
+            let need = c_min(per_seat, *life, *split);
+            let able = genesis_collaterals.iter().filter(|c| **c as f64 >= need).count();
             println!(
-                "[G-13 capital] {label} issuance {network_rate} claims/DAA → {per_seat:.3} per seat per DAA; {rule}: a genesis seat sustains \
-                 {max:.3} per DAA ({:.1}× the expected rate){}",
-                max / per_seat,
-                if *max >= per_seat { "" } else { "  — BELOW the expected rate" }
+                "[G-13 capital] {label} {network_rate} claims/DAA → {per_seat:.3} per seat per DAA; {rule}: a genesis seat sustains {at_genesis:.3} \
+                 ({:.2}×), a Panel-floor seat {at_floor:.3} ({:.2}×); smallest seat that sustains it {:.0} MSK — {able} of {} genesis bonds{}",
+                at_genesis / per_seat,
+                at_floor / per_seat,
+                need / 1e8,
+                genesis_collaterals.len(),
+                if at_genesis >= per_seat { "" } else { "  — a genesis seat is BELOW the expected rate" }
             );
         }
     }
-    // The stream: one claim offered every `cadence` DAA for `window` DAA, taken whenever the full Panel has room.
-    let cadence = 50u64;
+    // The stream: one claim offered every 3 DAA (the healthy per-seat rate) for 6,000 DAA, taken whenever the full Panel has room.
+    let cadence = 3u64;
     let window = 6_000u64;
-    let reserve = l.accuser_reserve as u64;
-    let lock64 = lock as u64;
-    // Seat collateral: testnet-12's genesis seat, and two small seats sized in locks beyond the V02 reserve (at the old rule's
-    // steady state a seat carries about (licence→Final + 1,000) / cadence locks).
-    let steady_old = (f - licensed + short) / cadence;
-    let levels = [None, Some(reserve + lock64 * (2 * steady_old + 4)), Some(reserve + lock64 * (steady_old + 2))];
+    let levels = [None, Some(panel_floor)];
     let mut rows = Vec::new();
     for seat_collateral in levels {
         for rule in [Rule::Old, Rule::New, Rule::NoSplit] {
@@ -496,7 +588,7 @@ fn capital_efficiency_against_the_old_rule() {
                 format!("{rule:?}"),
                 seat_collateral.map_or("genesis".to_string(), |x| format!("{:.0} MSK", msk(u128::from(x)))),
                 run.bound,
-                run.samples,
+                run.offered,
                 msk(run.active_time),
                 msk(run.resolved_time),
                 msk(run.min_room),
@@ -506,12 +598,13 @@ fn capital_efficiency_against_the_old_rule() {
         }
     }
     // What the split buys: at every collateral the new rule takes at least what the counterfactual takes, and at genesis collateral
-    // the new rule takes every offered claim, as the old rule does.
+    // the new rule takes every offered claim at the healthy rate, as the old rule does.
     for level in levels {
         let of = |rule: Rule| rows.iter().find(|(c, r, _)| *c == level && *r == rule).map(|(_, _, run)| run.bound).unwrap();
         assert!(of(Rule::New) >= of(Rule::NoSplit), "{level:?}: the split never takes fewer claims");
+        assert!(of(Rule::Old) >= of(Rule::New), "{level:?}: the longer horizon never takes more claims");
     }
-    let genesis = |rule: Rule| rows.iter().find(|(c, r, _)| c.is_none() && *r == rule).map(|(_, _, run)| (run.bound, run.samples)).unwrap();
+    let genesis = |rule: Rule| rows.iter().find(|(c, r, _)| c.is_none() && *r == rule).map(|(_, _, run)| (run.bound, run.offered)).unwrap();
     assert_eq!(genesis(Rule::New).0, genesis(Rule::New).1, "at genesis collateral every offered claim is taken");
 }
 
@@ -551,12 +644,14 @@ fn restart_and_reorg_give_identical_liabilities_and_slashes() {
     tape.at(f + 2_000, convictions);
     assert!(seats.iter().all(|k| tape.c.s.slashable_lock(*k, fraud).is_none()), "the fraud's locks are taken");
     assert!(seats.iter().all(|k| tape.c.s.slashable_lock(*k, honest).is_some()), "the honest claim's Resolved locks stand");
-    tape.at(f + wc + 2, vec![]);
+    // Past the horizon (`F + window_court`) and the second clock's bound (`2 × window_court` more: this tape settles no further
+    // anchors), the honest claim's Resolved liability is released by expiry.
+    let gone = f + 3 * wc + 2;
+    tape.at(gone, vec![]);
     let released: Vec<bool> = seats
         .iter()
         .map(|k| {
-            let l = palw_panel_liability_v1(&tape.c.s, &tape.c.sp, k, f + wc + 2, tape.c.extras_at(f + wc + 2).settled_anchor_depth)
-                .unwrap();
+            let l = palw_panel_liability_v1(&tape.c.s, &tape.c.sp, k, gone, tape.c.extras_at(gone).settled_anchor_depth).unwrap();
             l.resolved == 0
         })
         .collect();

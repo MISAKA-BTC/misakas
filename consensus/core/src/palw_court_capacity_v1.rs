@@ -38,7 +38,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::Hash64;
 use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
-use crate::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwConsensusObjectV2};
 
 // =================================================================================================================================
 // 1. Deterministic cost units
@@ -85,42 +85,45 @@ pub enum PalwCourtOpClassV1 {
 /// The number of operation classes (`op_work`'s length).
 pub const PALW_COURT_OP_CLASSES_V1: usize = 4;
 
-/// **Which court operation `object` is**, or `None` for every object the court budget does not govern.
-pub fn palw_court_op_class_v1(object: &PalwConsensusObjectV2) -> Option<PalwCourtOpClassV1> {
+/// **Which court operation `object` is on `state`** (the state BEFORE it applies — the fold's builder state and the acceptance walk's
+/// folded state are the same), or `None` for every object the court budget does not govern. The one-move accusations (adjudicated
+/// whole at acceptance: a leaf recompute) and a court's opening are charged by variant; a dissection move, a split close and a terminal
+/// evidence part are charged exactly when the shipped slot rule says they spend the block's adjudication slot
+/// (`palw_court_move_spends_the_slot_v1`, `palw_court_close_completes_a_group_v1`) — so the work the slot bounded below the fence is the
+/// work the budget bounds past it, and nothing the slot rule charged goes free.
+pub fn palw_court_op_class_v1(state: &PalwChainStateV2, object: &PalwConsensusObjectV2) -> Option<PalwCourtOpClassV1> {
     use PalwConsensusObjectV2 as O;
-    Some(match object {
+    match object {
         O::ShardCourtAccused { .. }
         | O::CheckpointAccused { .. }
         | O::TirShardCourtAccused { .. }
         | O::GenShardCourtAccused { .. }
         | O::GdnStepAccusedV2 { .. }
-        | O::LegacyLeafRecomputedV2 { .. } => PalwCourtOpClassV1::OneMove,
-        O::CourtOpened { .. } => PalwCourtOpClassV1::Opening,
-        O::CourtAttnRootClaimed { .. }
-        | O::CourtAttnRootClaimedAnchored { .. }
-        | O::CourtAttnRootClaimedHeld { .. }
-        | O::CourtAttnDissected { .. }
-        | O::CourtAttnChildChosen { .. }
-        | O::CourtTirRootClaimed { .. }
-        | O::CourtTirDissected { .. }
-        | O::CourtTirChildChosen { .. }
-        | O::CourtGenRootClaimed { .. }
-        | O::CourtEvalRootClaimed { .. } => PalwCourtOpClassV1::DissectionMove,
-        O::CourtClosed { .. } => PalwCourtOpClassV1::Close,
-        _ => return None,
-    })
+        | O::LegacyLeafRecomputedV2 { .. } => Some(PalwCourtOpClassV1::OneMove),
+        O::CourtOpened { .. } => Some(PalwCourtOpClassV1::Opening),
+        O::CourtClosed { .. } => Some(PalwCourtOpClassV1::Close),
+        _ if crate::palw_state_v2::palw_court_close_completes_a_group_v1(state, object) => Some(PalwCourtOpClassV1::Close),
+        _ if crate::palw_state_v2::palw_court_move_spends_the_slot_v1(state, object) => Some(PalwCourtOpClassV1::DissectionMove),
+        _ => None,
+    }
 }
 
-/// **The deterministic cost of `object` under `policy`** — its class's work units, its encoded bytes, and its working set (encoded
+/// **The deterministic cost of `object` on `state` under `policy`** — its class's work units, the evidence bytes it makes a node
+/// process (its encoded size; for the chunk that completes a split close, the whole assembly it triggers), and its working set (those
 /// bytes × the policy's memory factor). `None` for an object the court budget does not govern.
-pub fn palw_court_op_cost_v1(policy: &PalwCourtCapacityPolicyV1, object: &PalwConsensusObjectV2) -> Option<PalwCourtCostV1> {
-    let class = palw_court_op_class_v1(object)?;
-    let bytes = borsh::to_vec(object).map(|b| b.len() as u64).unwrap_or(u64::MAX);
-    Some(PalwCourtCostV1 {
-        work: policy.op_work[class as usize],
-        bytes,
-        memory: bytes.saturating_mul(policy.memory_per_byte),
-    })
+pub fn palw_court_op_cost_v1(
+    policy: &PalwCourtCapacityPolicyV1,
+    state: &PalwChainStateV2,
+    object: &PalwConsensusObjectV2,
+) -> Option<PalwCourtCostV1> {
+    let class = palw_court_op_class_v1(state, object)?;
+    let mut bytes = borsh::to_vec(object).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+    if let PalwConsensusObjectV2::CourtCloseChunk { session_id, side, .. } = object
+        && let Some(group) = state.court_close_group(session_id, *side)
+    {
+        bytes = group.chunks.values().fold(bytes, |sum, chunk| sum.saturating_add(chunk.len() as u64));
+    }
+    Some(PalwCourtCostV1 { work: policy.op_work[class as usize], bytes, memory: bytes.saturating_mul(policy.memory_per_byte) })
 }
 
 // =================================================================================================================================

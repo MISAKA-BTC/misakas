@@ -286,6 +286,9 @@ impl Params {
         // **The court-capacity fence** (`crate::palw_court_capacity_v1`, audit G-07): LG14-A at or below it, a sound policy, and on a
         // real network a pinned record and a measured (non-placeholder) policy.
         self.validate_palw_court_capacity_in_v1(records)?;
+        // **G-13's capacity** (`crate::palw_panel_liability_v1`): LG14-A beside V02's short lock life needs V02's split at or below
+        // the later of the two, so the lock G-13 extends to the liability horizon is Resolved liability, never work capacity.
+        self.validate_palw_g13_liability_split_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).

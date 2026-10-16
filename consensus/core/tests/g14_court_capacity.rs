@@ -857,7 +857,7 @@ fn palw_court_op_timing_harness() {
     let empty = spread(time(&c, &[], Rule::Opening)).1;
     let one = vec![accusation_by(&c, &row, d1, sybil(0))];
     let bytes = borsh::to_vec(&one[0]).unwrap().len();
-    let cost = palw_court_op_cost_v1(&policy, &one[0]).expect("a court op");
+    let cost = palw_court_op_cost_v1(&policy, &c.s, &one[0]).expect("a court op");
     let (lo, mid, hi) = net(time(&c, &one, Rule::Opening), empty, 1);
     println!(
         "[palw_court_op_timing_harness] OneMove (held opening, ShardCourtAccused): {bytes} B (TEST cost {cost:?}); fold ns/op min {lo} median {mid} max {hi}"

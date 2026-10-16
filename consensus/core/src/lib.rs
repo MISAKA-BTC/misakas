@@ -653,6 +653,9 @@ pub mod palw_g14_gates_v1;
 /// Court capacity (audit G-07, user direction 2026-10-16): court admission through the LG14-A reservation, a deterministic per-block
 /// court budget, time-priced occupancy and a deadline-aware queue. Dormant behind `palw_court_capacity_v1` on every preset.
 pub mod palw_court_capacity_v1;
+/// Panel collateral (audit G-13's capacity, user direction 2026-10-16): Active and Resolved liability on one bond, `R_new`, and the
+/// validation that keeps G-13's extended lock Resolved (lane V02's split). Reads only; no new fence.
+pub mod palw_panel_liability_v1;
 /// MISAKA PALW challenge scheduling (ADR-0028): assignment tickets, DAA windows and the
 /// Stage-0 shadow ledger that measures `P_check`, no-show and replay cost. Land-stage,
 /// consensus-inert — computed and logged only; nothing consumes it.
