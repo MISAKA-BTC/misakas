@@ -110,18 +110,26 @@ impl SourceShardV39 {
         self.row.as_ref()
     }
     fn context(&self, p: &QuotaPolicyV11, e: &TrustedEpochV11) -> Result<(), String> {
+        if !self.context_at_or_after(p, e)? {
+            return Err("source39 original interval/clock/context differs".into());
+        }
+        Ok(())
+    }
+    /// The shared context check, also admitting a LATER interval than the subject's admitted one. `Ok(true)`: the subject's own
+    /// admitted interval is current.
+    fn context_at_or_after(&self, p: &QuotaPolicyV11, e: &TrustedEpochV11) -> Result<bool, String> {
         p.check()?;
         e.check(p)?;
         let old = &self.global.epoch;
         if self.global.policy_root != p.root()
             || e.block_daa < old.block_daa
             || e.network_interval != old.network_interval
-            || e.network_interval != self.subject.binding.admitted_interval
+            || e.network_interval < self.subject.binding.admitted_interval
             || e.block_hash == old.block_hash && e != old
         {
             return Err("source39 original interval/clock/context differs".into());
         }
-        Ok(())
+        Ok(e.network_interval == self.subject.binding.admitted_interval)
     }
     fn block(&self, e: &TrustedEpochV11) -> QuotaIntervalSummaryV11 {
         if e.block_hash == self.global.epoch.block_hash {
@@ -231,23 +239,33 @@ impl SourceShardV39 {
     }
     /// Final closes unanswered capacity only once every admitted native unit has
     /// actually settled. It burns unused credits, never returning interval room.
+    ///
+    /// Collection53 calls this only past the subject's admitted interval (the shared v11 `collect_closed_expired` requires an
+    /// EARLIER, expired interval), so it must accept a later interval: there the unused obligation's reservation expired with its
+    /// own interval's counters, nothing current is consumed or returned, and the row is retired exactly once. In the admitted
+    /// interval itself the remaining quantities are burned from the current counters as before. (Requiring the admitted interval
+    /// here made every collection of an unretired obligation unreachable: same interval refused by the v11 collection, a later
+    /// one by this check.)
     pub fn burn_closed(&mut self, p: &QuotaPolicyV11, e: &TrustedEpochV11, terminal: &CheckedQuotaTerminalV11) -> Result<(), String> {
-        self.context(p, e)?;
+        let current = self.context_at_or_after(p, e)?;
         let mut r = self.row.clone().ok_or("source39 obligation absent")?;
-        if r.retired || terminal.binding != self.subject.binding || !self.subject.closed {
+        if r.retired || terminal.binding != self.subject.binding || !self.subject.closed || r.interval != self.subject.binding.admitted_interval
+        {
             return Err("source39 requires genuine original terminal closure".into());
         }
-        let d = r.remaining.clone();
-        let block = self.block(e).consume(&d, &p.block)?;
-        let network = self.global.network.consume(&d, &p.network)?;
-        let actor = self.producer.interval.consume(&d, &p.actor)?;
+        if current {
+            let d = r.remaining.clone();
+            let block = self.block(e).consume(&d, &p.block)?;
+            let network = self.global.network.consume(&d, &p.network)?;
+            let actor = self.producer.interval.consume(&d, &p.actor)?;
+            self.global.block = block;
+            self.global.network = network;
+            self.global.epoch = e.clone();
+            self.producer.interval = actor;
+        }
         r.retired = true;
         r.consumed = r.committed.clone();
         r.remaining = QuotaQuantitiesV11::default();
-        self.global.block = block;
-        self.global.network = network;
-        self.global.epoch = e.clone();
-        self.producer.interval = actor;
         self.row = Some(r);
         Ok(())
     }
