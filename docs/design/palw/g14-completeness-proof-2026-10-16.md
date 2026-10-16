@@ -1094,3 +1094,15 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 - 小さい fixture config(restart 0、margin 1 など)を使えば数千 DAA に縮む。
   ただし、それは「preset の court 窓を保つ」という既存 harness の前提を外すことになり、測定値でもない。そのため、この branch では採らなかった。
 - harness の残り(§8.4 の 2)は変わっていない。
+
+## 追補: class 単位の検出率 policy(2026-10-17、branch `integ/g14-detection-policy`)
+
+外部監査(`g14-external-audit-2026-10-17/`)§7 P1 の 4 項への処置。詳細は [g14-detection-policy-2026-10-17.md](g14-detection-policy-2026-10-17.md)。
+
+- 休眠 fence `palw_detection_policy_v1`(全 preset で `None`、Some-only、武装を拒否)。fence より前の legacy draw(k = 4、domain、golden vector)は不変。
+- class・kernel 版に結び付く `PalwDetectionPolicyV1` を入れた。検査方式、chain の数を価格に照合して導く N、D_min、ε、k_max、round、shadow、経済値、資源、期限、局所化を持つ。k_min は厳密な超幾何を整数の固定小数で求め、厳密値を下回らない。
+- 経済的抑止: 利得が省いた区間に比例する場合、拘束は D = N にあり、`S ≥ margin·N·c/(q_eff·q_collect)` ですべての D が不利になる(全列挙で確認)。固定利得(選択出力)は D = 1 の `margin·G·N/K` で、宣言した policy だけが要求する。宣言しない場合の覆いは全再実行(seg_detect / palw_kernel_verifier / `--palw-challenge`)と court。
+- v2 draw: post-commit の anchor、claim・model・job・policy・checker への拘束、round をまたいで重複なし、anchor から再導出できる。
+- k と資源の連動: bytes、再実行、保持(legacy の 512 は k ≈ 44 × 32 claim を持てず拒否)、court/DA の opening、期限。node の opening 保持は policy の上限に従い、落ちた opening を capacity_refusal として数える。
+- fault corpus(fixture の整数 cache model、実際の seat seam)では、宣言した不正集合(D ≥ 10%)で 99% 以上を確認した。D = 1 系は解析値 k/N と一致した。正直な claim は 1 度も flag されず、誤実装の seat の局所 flag はすべて参照裁定が棄却した。
+- 未完(同文書 §10): 状態遷移での claim 受理への配線、複数 round の seat、kernel route の shadow と被覆率、court/DA 予算の実連動、同時 claim 数の強制、funnel の後段と RPC、実 artifact での値の測定。

@@ -754,6 +754,19 @@ impl PalwDetectionPolicyFenceV1 {
     }
 }
 
+/// The seat's opening retention before this policy: `k = 4` intervals for each of 128 claims in flight.
+pub const PALW_DETECTION_LEGACY_RETENTION_PAIRS_V1: u32 = 512;
+
+/// **The node's opening-retention ceiling**: the legacy 512 pairs, raised to the largest `retention_pairs_cap` any policy of the
+/// fence declares (each policy's plan already proved `k · claims_in_flight` fits its cap). Unchanged (512) with no fence.
+pub fn palw_detection_retention_pairs_v1(fence: Option<&PalwDetectionPolicyFenceV1>) -> u32 {
+    fence
+        .filter(|f| f.activation != ForkActivation::never())
+        .map(|f| f.policies.iter().map(|p| p.resources.retention_pairs_cap).max().unwrap_or(0))
+        .unwrap_or(0)
+        .max(PALW_DETECTION_LEGACY_RETENTION_PAIRS_V1)
+}
+
 /// **Which rule a claim is checked under.**
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwDetectionRegimeV1<'a> {

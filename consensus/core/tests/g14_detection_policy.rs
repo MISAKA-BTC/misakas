@@ -243,6 +243,24 @@ fn every_resource_is_coupled_to_k_and_refuses_rather_than_drops() {
     assert!(split.k_total >= plan.k_needed);
 }
 
+/// The node's opening retention is the legacy 512 without a fence (or with `never()`), and the largest policy cap with one.
+#[test]
+fn the_node_retention_ceiling_follows_the_armed_policies() {
+    assert_eq!(palw_detection_retention_pairs_v1(None), PALW_DETECTION_LEGACY_RETENTION_PAIRS_V1);
+    assert_eq!(PALW_DETECTION_LEGACY_RETENTION_PAIRS_V1, 512);
+    let mut big = base_policy();
+    big.resources.retention_pairs_cap = 4_096;
+    let mut small = base_policy();
+    small.class_id = h(0xBEE);
+    small.resources.retention_pairs_cap = 100;
+    let fence = PalwDetectionPolicyFenceV1 { activation: ForkActivation::new(16_000), policies: vec![big, small] };
+    assert_eq!(palw_detection_retention_pairs_v1(Some(&fence)), 4_096);
+    let only_small = PalwDetectionPolicyFenceV1 { activation: ForkActivation::new(16_000), policies: vec![small] };
+    assert_eq!(palw_detection_retention_pairs_v1(Some(&only_small)), 512, "never below the legacy pool");
+    let never = PalwDetectionPolicyFenceV1 { activation: ForkActivation::never(), policies: vec![big] };
+    assert_eq!(palw_detection_retention_pairs_v1(Some(&never)), 512);
+}
+
 /// The genesis design templates are armable at their own extremes; the target holds at every probe N.
 #[test]
 fn the_genesis_design_templates_are_armable_and_meet_the_target() {
