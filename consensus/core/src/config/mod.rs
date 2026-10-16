@@ -6,9 +6,6 @@ pub mod genesis;
 pub mod ibd_checkpoint;
 pub mod params;
 pub mod premine;
-/// The G14 collusion drill's private rulesets (test-only construction; never a preset).
-#[cfg(any(test, feature = "private-integration-config"))]
-pub mod private_g14_drill;
 #[cfg(feature = "private-integration-config")]
 pub mod private_population;
 pub mod trusted_checkpoint;
