@@ -256,6 +256,72 @@ impl PalwChainStateV2 {
     pub fn staged_tir_owner_count_v1(&self, claim: &Hash64) -> u64 {
         self.staged_tir_owner_rows_v1(claim).into_iter().filter(|(_, row)| row.owned.holds_owner_slot_v1()).count() as u64
     }
+    /// **Lane g14-court-capacity-r2 (past `palw_court_capacity_v1`): the owner queue of `claim`** — every row that still wants a slot
+    /// (`holds_owner_slot_v1`), in arrival order `(reserved_daa, key)` (one claim: one door, so arrival order is deadline order). The
+    /// first K_owner of it are ADMITTED (they may demand); the rest WAIT, imposing no custodian load, and are admitted in this order
+    /// as the rows ahead release their slots — so an Open filed later never starts before an Open filed earlier. Each entry carries the
+    /// DAA from which it holds its slot (`admitted_since`): its Open, or the latest release (`last_progress_daa` of a row ahead that
+    /// stopped wanting — its last move, or its reclamation) that let it in.
+    pub fn staged_tir_owner_queue_v1(&self, claim: &Hash64) -> Vec<(PalwStagedCourtKeyV1, PalwBondKeyV2, bool, u64)> {
+        let rows = self.staged_tir_owner_rows_v1(claim);
+        let mut wanting: Vec<(u64, PalwStagedCourtKeyV1, PalwBondKeyV2)> = rows
+            .iter()
+            .filter(|(_, row)| row.owned.holds_owner_slot_v1())
+            .map(|(key, row)| (row.owned.contract_v1().reserved_daa, *key, row.owned.contract_v1().owner))
+            .collect();
+        wanting.sort();
+        let mut released: Vec<u64> = rows
+            .iter()
+            .filter(|(_, row)| !row.owned.holds_owner_slot_v1())
+            .map(|(_, row)| row.owned.spent_v1().last_progress_daa)
+            .collect();
+        released.sort_unstable();
+        let cap = crate::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1 as usize;
+        wanting
+            .into_iter()
+            .enumerate()
+            .map(|(position, (reserved, key, owner))| {
+                // The j-th admitted row beyond the first K_owner needed the j-th release (in time) to get in.
+                let since = if position < cap {
+                    reserved
+                } else {
+                    released.get(position - cap).copied().unwrap_or(reserved).max(reserved)
+                };
+                (key, owner, position < cap, since)
+            })
+            .collect()
+    }
+    /// **Lane g14-court-capacity-r2: is the owner row `key` of `claim` admitted** (among the first K_owner of the owner queue)?
+    pub fn staged_tir_owner_admitted_v1(&self, claim: &Hash64, key: &PalwStagedCourtKeyV1) -> bool {
+        self.staged_tir_owner_queue_v1(claim).iter().any(|(k, _, admitted, _)| k == key && *admitted)
+    }
+    /// **Lane g14-court-capacity-r2: the admitted rows of `claim` idle at `now`**, idleness counted from the later of the row's own
+    /// last progress and the DAA it was admitted (a row that waited is never idle for the time it waited).
+    pub fn staged_tir_idle_admitted_owners_v1(&self, claim: &Hash64, now: u64) -> Vec<(PalwStagedCourtKeyV1, PalwBondKeyV2)> {
+        let queue = self.staged_tir_owner_queue_v1(claim);
+        self.staged_tir_owner_rows_v1(claim)
+            .into_iter()
+            .filter_map(|(key, row)| {
+                let (_, owner, admitted, since) = *queue.iter().find(|(k, ..)| *k == key)?;
+                let idle_since = row.owned.idle_since_v1().max(since);
+                (admitted && now >= idle_since.saturating_add(row.owned.owner_idle_grace_daa_v1())).then_some((key, owner))
+            })
+            .collect()
+    }
+    /// **Lane g14-court-capacity-r2: the admitted rows of `claim` past their tenure at `now`** — only while some row WAITS: an admitted
+    /// row holds its slot at most `tenure` DAA from its admission while another verifier waits, then yields it (retired in place,
+    /// its deposit NOT forfeited — it was active; its accepted answers stay rooted, and a conviction needs no slot).
+    pub fn staged_tir_overstayed_owners_v1(&self, claim: &Hash64, now: u64, tenure: u64) -> Vec<(PalwStagedCourtKeyV1, PalwBondKeyV2)> {
+        let queue = self.staged_tir_owner_queue_v1(claim);
+        if queue.iter().all(|(_, _, admitted, _)| *admitted) {
+            return Vec::new();
+        }
+        queue
+            .into_iter()
+            .filter(|(_, _, admitted, since)| *admitted && now >= since.saturating_add(tenure))
+            .map(|(key, owner, ..)| (key, owner))
+            .collect()
+    }
     /// **G14 R1 / G-T1: the slot an Open at DAA `now` reclaims when the frame is at K_owner** — the slot holder that has been idle
     /// longest ([`crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1::owner_idle_at_v1`]; ties by key), or `None` when every
     /// holder is still making progress.
