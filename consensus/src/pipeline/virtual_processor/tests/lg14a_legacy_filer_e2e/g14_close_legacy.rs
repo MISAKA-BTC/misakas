@@ -37,11 +37,12 @@ fn record(fence: PalwG14GatedFenceV1, genesis: Hash64, at: u64) -> PalwG14Arming
     }
 }
 
-/// **The court-capacity measurement record this suite arms with (lane g14-court-capacity)** — the format a network's record takes
-/// (`PalwCourtMeasurementV1`), its policy derived by `PalwCourtMeasurementV1::policy` exactly as validation re-derives it, its digest
-/// carried as the arm-readiness record's measured-values evidence. **The values are this branch's DEVELOPMENT-MACHINE measurements
-/// (macOS aarch64, debug build, 2026-10-16), not the slowest supported node's, and some classes are not measured at all** — so this is
-/// a measured CONFIG for the node test, never a network's record:
+/// **The court-capacity measurement record this suite arms with (lane g14-court-capacity) — a TEST-ONLY config, never a network's
+/// record.** It has the format a network's record takes (`PalwCourtMeasurementV1`), its policy derived by
+/// `PalwCourtMeasurementV1::policy` exactly as validation re-derives it, its digest carried as the TEST arm-readiness record's
+/// measured-values evidence. The one-move time and sizes are this branch's DEVELOPMENT-MACHINE timings (macOS aarch64, debug build,
+/// 2026-10-16; the `[court-op timing]` line of the run below re-prints them), not the slowest supported node's; the other classes are
+/// NOT measured at all:
 /// * one-move: the real floor leaf recompute of `legacy_v2_attempt_full_collusion_outside_bond_convicts` (`[court-op timing]`, its
 ///   object's encoded size);
 /// * opening, dissection move, close: not driven by any harness yet — each is given the block's whole allotment (one per block, today's
