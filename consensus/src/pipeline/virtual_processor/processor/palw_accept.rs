@@ -92,6 +92,20 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()
                 .map(|refusal| refusal.to_string());
+        // **Lane g14-court-capacity-r2: and the bounded court admission** (`palw_court_capacity_v1`, dormant): a fused-attention attempt
+        // whose hard-deadline bucket is full would be SKIPPED (no claim, no reward), so the producer holds instead of spending an
+        // inference. The retention is the one the attempt will carry (`candidate + min_trace_retention_daa`). `Ok` below the fence.
+        if facts.class_admission_refusal.is_none() {
+            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_court_claim_admission_v1(
+                &state,
+                state_params,
+                &class_id,
+                candidate_daa,
+                candidate_daa.saturating_add(facts.min_trace_retention_daa),
+            )
+            .err()
+            .map(|refusal| refusal.to_string());
+        }
         // **Lane PA, C-F2: what each rider of this lead is demanded** — at the rider's share of the lead's subsidy, as the fold admits it.
         // Past the canonical-work height and where riders are armed only; otherwise the producer keeps the lead's pwu as before.
         if state_params.capacity_riders_active_at(candidate_daa)

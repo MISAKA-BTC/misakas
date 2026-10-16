@@ -12462,6 +12462,11 @@ pub fn palw_class_admits_claim_v1(
 /// **Lane g14-court-capacity-r2: would the fold at `now_daa` admit a court-demanding attempt of `class_id` whose trace retention is
 /// `trace_retention_daa`** (the bounded admission, `palw_court_capacity_v1`; `Ok` below the fence and for a class with no fused leaf) —
 /// the producer's pre-check beside [`palw_class_admits_claim_v1`], so a producer does not spend an inference on a skipped attempt.
+pub use palw_court_capacity_fold_v1::{
+    PALW_COURT_REFUSAL_NO_RESERVATION_V1, PALW_COURT_REFUSAL_QUEUED_V1, PALW_COURT_REFUSAL_RUNNING_V1,
+    PALW_COURT_REFUSAL_TICKET_EXPIRED_V1, PalwCourtProsecutionStepV1, palw_court_prosecution_step_v1, palw_court_refusal_waits_v1,
+};
+
 pub fn palw_court_claim_admission_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,

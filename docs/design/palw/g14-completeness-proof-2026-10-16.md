@@ -1313,3 +1313,38 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 - **unserved rule の適用範囲。** Final 後の stage で予約された claim には適用しない。vesting 中の Final claim の扱いは未実装。
 - **同じ claim での decoy-first。** 連合の row が claim の reserve を取ると、正直な row は spare に回る。spare が W 以上飽和し続けた場合、結果は slash ではなく報酬なし(unserved rule)になる。連合が支払うのは C_spare · ρ · weight · W 以上の占有料。
 - **liveness の数値。** 11.1 のとおり、fused class の新規 claim の受理率は、測定された session 予算に比例する。
+
+### 11.7 追補(2026-10-17、同 branch):node 側の追随、post-Final の unserved、c4r3 の整合
+
+- **node 側(code のみ)。**
+  - TIR の owner worker(`kaspad/src/palw_tir_public_owner.rs`):
+    - fence 以後は、K_owner に達していても Open を控えない(`owner_slot_open_v1`)。
+    - 待機中の row の Demand は、fold と同じ述語 `staged_tir_owner_demand_admits_v1`(tenure は `palw_tir_owner_tenure_v1`)が admit を示すときだけ署名する。
+    - 述語が fold と一致すること(admit を示した block だけ Demand が通ること)は、core の TIR 試験が block ごとに assert している。
+  - held filer(`kaspad/src/palw_filer_held.rs`):court 容量の待機(queued、ticket 失効、reservation 未着地、block の予算切れ)を `palw_court_refusal_waits_v1` で Retry に分類する。案件を放棄しない。
+  - producer の事前確認(`palw_accept.rs`):`palw_court_claim_admission_v1` で bounded admission を確認し、skip される fused attempt に inference を使わない。
+  - decoy 価格は free half の escrow なので、従来どおり `AccusationExposureCeiling` の Retry に入る。
+- **post-Final の unserved。**
+  - 設計上の要件:G14 の目標は全経路で報酬を拒否すること。Final 後の stage で予約された claim も、hard deadline までに処理されなかった場合は報酬を得てはならない。reservation が vesting を未成熟のまま保持しているので、責任期間の内側に当たる。
+  - 実装:Final を反転(safe weight・Gate C credit・usage を戻し、`Voided { PanelUnavailable }`)、minted round rights を没収、未払いの vesting を burn(新しい note `UnservedBurned`、tag 10。誰も告発しない)。coinbase で支払い済みの分は戻さない。
+  - 試験:`g07r2_an_unserved_prosecution_means_the_claim_earns_nothing` の post-Final ケースが pass(void を確認)。vesting row が消えることの assert は追加したが、disk 不足で未実行。
+- **c4r3。**
+  - kernel route 自体が `palw_probabilistic_constraints_v1` の下にしか存在しない。
+  - fence あり:G-K1 により interim 席は lock 分だけ slash される。`c4r3.rs:128` の assert は G-K1 より前のもので、実行すると失敗した(差額 183,333,333 sompi = lock)。assert を G-K1(lock 額)に合わせた。
+  - fence なし:route も lock もないことを確かめる試験 `g14_c4r3_without_the_route_fence_no_kernel_seat_is_locked_or_charged` を追加した。
+  - 規則は変えていない。
+- **実行結果。**
+  - `cargo test -p kaspa-consensus --lib`(node E2E):
+    - `lg14a_legacy_filer_e2e::` 18 件中 17 件 pass(court 容量を武装した `..._with_court_capacity` を含む)。
+    - `legacy_v2_attempt_honest_claim_is_final_and_paid_under_full_g14` は失敗:「the row matures by its second clock's bound (9208)」。この試験は前の round の WIP commit `5b64cac9c`(unbuilt, untested)で追加され、一度も通ったことがない。vesting の第 2 clock の成熟(heartbeat だけの chain)の問題で、この lane の規則は dispute のない chain に何も書かない。未修正。
+    - `kernel_route_valid_signers_are_charged_on_conviction`(T-N11)pass。c4r3 の 2 件 pass。
+  - 実行していないもの(disk の空きが 21 GB で、規則の 25 GB を下回ったため build を停止):
+    - kaspad の unit test(`p2_8e_the_folds_answer_to_an_opening_as_a_step`、`g14_tir_seat_finding_reaches_the_filer_queue`)。
+    - core の更新した試験(post-Final の vesting assert、述語つきの TIR 試験)。
+    - kaspad crate の compile 自体。
+- **node 規模の飽和 E2E(依頼 2)は書いていない。理由は次のとおり。**
+  - t12 の規則では held regime が bisection を拒否する(`CourtOpened` は refuse)。court session を開けるのは、fused class の held dissection(`ShardCourtAccused`)だけである。
+  - その honest 側の node 経路は 8k 行で動かない(P2-8e:whole-capture cap、fold の prefix state、tile の開示)。node harness で連合が session 枠を埋める方法がない。
+  - TIR の node harness(T-N1)は未作成(§9.7)。
+  - node 上で確かめたこと:court 容量を武装した状態で、正直な outsider の one-move conviction が通る(別予算)。
+  - 飽和・補充・待機列・owner 8 本の adversarial 試験は fold 規模のまま。

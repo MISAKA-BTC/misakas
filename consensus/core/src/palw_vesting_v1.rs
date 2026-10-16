@@ -240,6 +240,14 @@ pub enum PalwVestingNoteV1 {
         sompi: u64,
         legs: Vec<PalwVestingLegV1>,
     },
+    /// **Lane g14-court-capacity-r2 (tag 10, appended): a Final claim's unpaid reward withheld because a prosecution the court had
+    /// time to serve was still waiting at the claim's hard deadline** (`palw_court_capacity_v1`'s unserved rule, post-Final branch).
+    /// Accuses nobody: no offence, no signer liability, no slash.
+    UnservedBurned {
+        claim_id: Hash64,
+        sompi: u64,
+        legs: Vec<PalwVestingLegV1>,
+    },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -842,7 +850,9 @@ pub fn palw_vesting_burned_by_delta_v1(delta: &PalwStateDeltaV2) -> u64 {
         PalwVestingNoteV1::Burned { sompi, .. }
         | PalwVestingNoteV1::ShareBurned { sompi, .. }
         | PalwVestingNoteV1::ProducerLegBurned { sompi, .. } => sum.saturating_add(*sompi),
-        PalwVestingNoteV1::ExecDependencyBurned { sompi, .. } => sum.saturating_add(*sompi),
+        PalwVestingNoteV1::ExecDependencyBurned { sompi, .. } | PalwVestingNoteV1::UnservedBurned { sompi, .. } => {
+            sum.saturating_add(*sompi)
+        }
         PalwVestingNoteV1::ExecReward {
             action:
                 crate::palw_work_slice_v2::PalwExecV2RewardActionV1::Burned
@@ -1005,6 +1015,7 @@ mod tests {
                     legs: vec![leg],
                 },
             ),
+            (10, PalwVestingNoteV1::UnservedBurned { claim_id: r.claim_id, sompi: 5, legs: vec![leg] }),
         ];
         for (tag, note) in notes {
             let bytes = borsh::to_vec(&note).unwrap();

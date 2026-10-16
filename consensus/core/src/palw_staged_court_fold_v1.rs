@@ -322,6 +322,22 @@ impl PalwChainStateV2 {
             .map(|(key, owner, ..)| (key, owner))
             .collect()
     }
+    /// **Lane g14-court-capacity-r2: would a Demand of the owner row `key` at `now` be admitted** — it is admitted already, or the
+    /// rotation that Demand triggers (overstayed rows past `tenure` yield, idle admitted rows are reclaimed) frees enough slots for
+    /// every waiting row ahead of it and itself. What a node's owner worker asks before it signs a Demand (a refused Demand is a
+    /// wasted carrier); the fold decides.
+    pub fn staged_tir_owner_demand_admits_v1(&self, claim: &Hash64, key: &PalwStagedCourtKeyV1, now: u64, tenure: u64) -> bool {
+        let queue = self.staged_tir_owner_queue_v1(claim);
+        let Some(position) = queue.iter().position(|(k, ..)| k == key) else { return false };
+        if queue[position].2 {
+            return true;
+        }
+        let mut freed: std::collections::BTreeSet<PalwStagedCourtKeyV1> =
+            self.staged_tir_idle_admitted_owners_v1(claim, now).into_iter().map(|(k, _)| k).collect();
+        freed.extend(self.staged_tir_overstayed_owners_v1(claim, now, tenure).into_iter().map(|(k, _)| k));
+        let cap = crate::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1 as usize;
+        position < cap + freed.len()
+    }
     /// **G14 R1 / G-T1: the slot an Open at DAA `now` reclaims when the frame is at K_owner** — the slot holder that has been idle
     /// longest ([`crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1::owner_idle_at_v1`]; ties by key), or `None` when every
     /// holder is still making progress.

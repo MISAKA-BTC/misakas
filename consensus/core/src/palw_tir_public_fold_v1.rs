@@ -622,13 +622,8 @@ fn reclaim_owner_slot_v1(
     Ok(())
 }
 
-/// **Lane g14-court-capacity-r2: an admitted owner's tenure while others wait** — the larger of the idle grace and the frame's own
-/// Open window (`open_until − preparation_until`) over `2 × K_owner`, so the queue turns over at least `2 × K_owner` times inside the
-/// window: a verifier with `q` rows ahead of it is admitted within `⌈(q + 1) / K_owner⌉` tenures of its Open.
 fn tir_owner_tenure_v1(frame: &Frame, grace: u64) -> u64 {
-    let plan = frame.plan_v1();
-    let window = plan.terms.open_until_daa.saturating_sub(plan.preparation_until_daa);
-    grace.max(window / (2 * Frame::MAXIMUM_OWNERS_V1)).max(1)
+    crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_v1(frame, grace)
 }
 
 /// **Lane g14-court-capacity-r2: rotate the owner queue at `now`** — every admitted row past its tenure while a row waits yields its
@@ -2738,12 +2733,20 @@ mod conviction_e2e_tests {
             }
             assert!(state.staged_tir_idle_admitted_owners_v1(&claim_id, base + offset).is_empty(), "the colluders are never idle");
             offset += 1;
+            // The node's owner worker asks this before it signs a Demand; it must agree with the fold, block by block.
+            let grace = owner_row(&state, &frame, outsider(), base + arrived).owner_idle_grace_daa_v1();
+            let tenure = crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_v1(&frame, grace);
+            let predicted = state.staged_tir_owner_demand_admits_v1(&claim_id, &mine_key, base + offset, tenure);
             match control_step(&frame, &state, &params, &extras, offset, outsider(), mine, A::Acquisition(Owned::Demand { request: forged }), 0, 0) {
                 Ok(next) => {
+                    assert!(predicted, "the worker's predicate admits exactly when the fold does");
                     state = next;
                     admitted_at = Some(offset);
                 }
-                Err(why) => assert!(format!("{why}").contains("waiting in the owner queue"), "{why}"),
+                Err(why) => {
+                    assert!(!predicted, "the worker would have wasted a Demand: {why}");
+                    assert!(format!("{why}").contains("waiting in the owner queue"), "{why}");
+                }
             }
             let open_demands = state
                 .staged_tir_owner_queue_v1(&claim_id)

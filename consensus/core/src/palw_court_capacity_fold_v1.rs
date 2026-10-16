@@ -13,6 +13,62 @@ fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CourtCapacityRefused(why.into())
 }
 
+/// Court admission's refusal while the prosecution's own row is QUEUED (it opens with its ticket).
+pub const PALW_COURT_REFUSAL_QUEUED_V1: &str = "the prosecution is queued: it opens with its ticket";
+/// Court admission's refusal when the challenger has no live dispute reservation on the claim yet.
+pub const PALW_COURT_REFUSAL_NO_RESERVATION_V1: &str =
+    "court admission past palw_court_capacity_v1 needs the challenger's own live dispute reservation on the claim (its claim-fixed \
+     hard deadline and Final hold)";
+/// Court admission's refusal when the challenger already runs a session on the claim.
+pub const PALW_COURT_REFUSAL_RUNNING_V1: &str = "the reserver already runs a court session on this claim";
+/// Court admission's refusal when the prosecution's ticket lapsed (its row is dropped at the next sweep; a later filing queues anew).
+pub const PALW_COURT_REFUSAL_TICKET_EXPIRED_V1: &str = "the prosecution's court ticket has expired";
+
+/// **Lane g14-court-capacity-r2: does a court-capacity refusal ask the filer to WAIT** (its row is queued, its ticket lapsed and
+/// will be dropped, its reservation is not landed yet, or this block's court budget is spent) rather than to give up? A filer that
+/// retries on these never files an object the fold refuses for good, and never abandons a prosecution the court will still serve.
+pub fn palw_court_refusal_waits_v1(error: &PalwStateV2Error) -> bool {
+    match error {
+        PalwStateV2Error::CourtCapacityRefused(why) => {
+            why.starts_with(PALW_COURT_REFUSAL_QUEUED_V1)
+                || why.starts_with(PALW_COURT_REFUSAL_TICKET_EXPIRED_V1)
+                || why.starts_with(PALW_COURT_REFUSAL_NO_RESERVATION_V1)
+                || why.starts_with("the block's court budget")
+        }
+        _ => false,
+    }
+}
+
+/// **Lane g14-court-capacity-r2: what `reserver`'s prosecution of `claim` should do now** — read off its court row, for a node's
+/// filer: `None` below the fence (int-12's cap decides); else whether to file the accusation now (no row yet: it opens or queues; or
+/// a live ticket), to wait (queued), or to stand aside (its session runs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwCourtProsecutionStepV1 {
+    /// File (or re-file) the accusation now.
+    File,
+    /// Queued: file nothing until the row holds a ticket.
+    Wait,
+    /// The session runs: the court's moves, not a filing.
+    Running,
+}
+
+pub fn palw_court_prosecution_step_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim: &Hash64,
+    reserver: &PalwBondKeyV2,
+    now: u64,
+) -> Option<PalwCourtProsecutionStepV1> {
+    params.court_capacity_at_v1(now)?;
+    let row = state.legacy_disputes.get(claim).and_then(|record| record.courts.get(reserver));
+    Some(match row.map(|row| row.stage) {
+        None => PalwCourtProsecutionStepV1::File,
+        Some(PalwCourtStageV1::Ticket { expires_daa, .. }) if now <= expires_daa => PalwCourtProsecutionStepV1::File,
+        Some(PalwCourtStageV1::Ticket { .. }) | Some(PalwCourtStageV1::Queued { .. }) => PalwCourtProsecutionStepV1::Wait,
+        Some(PalwCourtStageV1::Running { .. }) => PalwCourtProsecutionStepV1::Running,
+    })
+}
+
 /// What court admission decided for a session about to open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PalwCourtAdmissionV1 {
@@ -194,12 +250,7 @@ pub(super) fn court_admission_v1(
         .get(&claim_id)
         .filter(|record| record.live.contains_key(&challenger))
         .cloned()
-        .ok_or_else(|| {
-            refused(
-                "court admission past palw_court_capacity_v1 needs the challenger's own live dispute reservation on the claim (its \
-                 claim-fixed hard deadline and Final hold)",
-            )
-        })?;
+        .ok_or_else(|| refused(PALW_COURT_REFUSAL_NO_RESERVATION_V1))?;
     let bond = builder.state.bonds.get(&challenger).ok_or(PalwStateV2Error::MissingBond(challenger))?;
     if !matches!(bond.status, PalwBondStatusV2::Active) {
         return Err(PalwStateV2Error::BondNotActive(challenger));
@@ -214,9 +265,9 @@ pub(super) fn court_admission_v1(
     if let Some(row) = record.courts.get(&challenger) {
         return match row.stage {
             PalwCourtStageV1::Ticket { expires_daa, .. } if now <= expires_daa => Ok(PalwCourtAdmissionV1::Open),
-            PalwCourtStageV1::Ticket { .. } => Err(refused("the prosecution's court ticket has expired")),
-            PalwCourtStageV1::Queued { .. } => Err(refused("the prosecution is queued: it opens with its ticket")),
-            PalwCourtStageV1::Running { .. } => Err(refused("the reserver already runs a court session on this claim")),
+            PalwCourtStageV1::Ticket { .. } => Err(refused(PALW_COURT_REFUSAL_TICKET_EXPIRED_V1)),
+            PalwCourtStageV1::Queued { .. } => Err(refused(PALW_COURT_REFUSAL_QUEUED_V1)),
+            PalwCourtStageV1::Running { .. } => Err(refused(PALW_COURT_REFUSAL_RUNNING_V1)),
         };
     }
     if now.saturating_add(session_window) > record.hard_deadline_daa {

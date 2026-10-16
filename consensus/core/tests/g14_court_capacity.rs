@@ -1126,14 +1126,21 @@ fn g07r2_a_late_honest_reserve_row_is_never_refused_and_convicts() {
 #[test]
 fn g07r2_an_unserved_prosecution_means_the_claim_earns_nothing() {
     let policy = test_policy();
-    let run = |waited_a_window: bool| -> (PalwClaimPhaseV2, u64, u64, u64, u64, u128) {
+    let run = |waited_a_window: bool, post_final: bool| -> (PalwClaimPhaseV2, u64, u64, u64, u64, u128) {
         let (mut c, row, seats) = held_chain_at(Some(test_measurement()), 21, SPARE_ONLY_COURT_AT);
         let turn = c.sp.turn_deadline_daa();
         let (target, _) = licensed(&mut c, &row, &seats, EXECUTOR, 1);
         let (d1, _) = licensed(&mut c, &row, &seats, COALITION_PRODUCER, 11);
         let outsider = bond_key(OUTSIDER);
-        c.step(&[reservation(&c.s, target, outsider)], Rule::T12).expect("the outsider reserves");
         c.step(&(0..21).map(|n| reservation(&c.s, d1, sybil(n))).collect::<Vec<_>>(), Rule::T12).expect("reservations");
+        if post_final {
+            // The lying claim reaches Final unreserved; the outsider reserves it in its open post-Final stage (unmatured vesting).
+            while !matches!(c.s.claim(&target).unwrap().phase, PalwClaimPhaseV2::Final { .. }) {
+                c.beat();
+            }
+            assert!(c.s.vesting_row(&target).is_some(), "its reward is vesting");
+        }
+        c.step(&[reservation(&c.s, target, outsider)], Rule::T12).expect("the outsider reserves");
         // Past one service window of chain time, so the shifted deadline below can date the waiting row a window back.
         c.beat_to(SPARE_ONLY_COURT_AT + policy.ticket_window(turn) + c.sp.window_court());
         c.step(&(0..21).map(|n| accusation_by(&c, &row, d1, sybil(n))).collect::<Vec<_>>(), Rule::Opening).expect("spare saturated");
@@ -1156,6 +1163,9 @@ fn g07r2_an_unserved_prosecution_means_the_claim_earns_nothing() {
             c.beat();
         }
         assert!(c.s.court_sessions_iter().any(|(_, s)| s.claim == d1), "the coalition still holds the spare slots at the lapse");
+        if post_final && waited_a_window {
+            assert!(c.s.vesting_row(&target).is_none(), "post-Final: the unpaid vesting is withheld (burned, UnservedBurned)");
+        }
         let phase = c.s.claim(&target).unwrap().phase.clone();
         (
             phase,
@@ -1166,15 +1176,23 @@ fn g07r2_an_unserved_prosecution_means_the_claim_earns_nothing() {
             palw_accuser_exposure_v1(&c.s, &outsider),
         )
     };
-    let (phase, outsider_before, outsider_after, producer_before, producer_after, exposure) = run(true);
+    let (phase, outsider_before, outsider_after, producer_before, producer_after, exposure) = run(true, false);
     eprintln!("[G-07 r2 unserved] waited a service window: {phase:?}");
     assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PanelUnavailable, .. }), "{phase:?}");
     assert_eq!(outsider_after, outsider_before, "the honest prosecutor pays nothing");
     assert_eq!(exposure, 0, "its deposit and escrow are returned");
     assert_eq!(producer_after, producer_before, "nobody is slashed: unserved is not a conviction");
-    let (phase, ..) = run(false);
+    let (phase, ..) = run(false, false);
     eprintln!("[G-07 r2 unserved] filed late: {phase:?}");
     assert!(!matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PanelUnavailable, .. }), "{phase:?}");
+    // The post-Final branch: a reservation filed in the claim's open post-Final stage, unserved — the Final is reversed and the unpaid
+    // vesting withheld; nobody slashed.
+    let (phase, outsider_before, outsider_after, producer_before, producer_after, exposure) = run(true, true);
+    eprintln!("[G-07 r2 unserved] post-Final: {phase:?}");
+    assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PanelUnavailable, .. }), "{phase:?}");
+    assert_eq!(outsider_after, outsider_before);
+    assert_eq!(exposure, 0);
+    assert_eq!(producer_after, producer_before, "nobody is slashed");
 }
 
 /// **Limit 3 closed: one-move accusations have their own block budget.** A policy whose one-move class is heavier than the whole session

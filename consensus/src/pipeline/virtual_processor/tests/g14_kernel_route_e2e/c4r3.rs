@@ -124,11 +124,60 @@ async fn g14_c4r3_mandatory_3_a_relayed_lie_covered_by_every_seat_is_convicted_b
     assert!(w.net.ledger().claims[&lie.id].convicted, "convicted from public material alone");
     assert_eq!(w.net.collateral(0), before - pol.claim_collateral, "the real producer bond pays the whole reservation");
     assert_eq!(w.net.owed(outsider), pol.claim_collateral * u64::from(pol.accuser_reward_permille) / 1000);
+    // G14 lane closure G-K1 (2026-10-16, T-N11): wherever the kernel route exists — it exists only past
+    // `palw_probabilistic_constraints_v1`, the fence this harness arms — every counted passing receipt locked its signer's
+    // liability, and the conviction charges each interim seat exactly that lock (burned). This assert said the opposite ("the interim
+    // seats are not the route's to slash") and predates G-K1; the rule is G-K1's (g14-completeness-proof §1 I5, appendix C), the test
+    // follows it. Without the fence there is no kernel route, hence no seat to lock or charge:
+    // `g14_c4r3_without_the_route_fence_no_kernel_seat_is_locked_or_charged`.
+    let lock = kaspa_consensus_core::palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1(
+        pol.claim_reward,
+        kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1,
+    );
+    assert!(lock > 0);
     for (s, c) in seats.iter().zip(seat_collateral) {
-        assert_eq!(w.net.collateral(*s), c, "the interim seats are not the route's to slash (G14 does not rest on them)");
+        assert_eq!(w.net.collateral(*s), c - lock, "G-K1: each interim seat that passed the lie is charged its signer lock");
     }
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
+}
+
+/// **The other half of the reconciliation: below `palw_probabilistic_constraints_v1` the kernel route does not exist**, so no interim
+/// seat is drawn, locked or charged (and the G-K1 charge cannot reach anyone). testnet-12 as launched with the harness cards and the
+/// route's fence NOT armed: the class registration carrier lands nowhere — the route has no class, no claim, no receipt.
+#[tokio::test]
+async fn g14_c4r3_without_the_route_fence_no_kernel_seat_is_locked_or_charged() {
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let mut params = config.params.clone();
+    params.palw_probabilistic_constraints_v1 = None;
+    params.skip_proof_of_work = true;
+    let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
+    let fx = fixture();
+    let register = K::RegisterClass {
+        descriptor: k2_tir_v2_descriptor().digest(),
+        program_bytes: fx.program.encode(),
+        plan: fx.plan.clone(),
+        param_commitments: fx.pc.clone(),
+    };
+    let o = net.route(1, &register);
+    let tx = net.carrier(1, &o);
+    let ttpb = net.ttpb();
+    if net.mempool(&tx).is_ok() {
+        net.chain.heartbeat(ttpb, vec![tx]).await;
+        net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    let route = net.api();
+    assert!(
+        route.as_ref().and_then(|api| api.ledger().ok().map(|ledger| ledger.classes.is_empty())).unwrap_or(true),
+        "no kernel class below the fence"
+    );
+    assert!(
+        route.as_ref().is_none_or(|api| !api.aux.keys().any(|(table, _)| {
+            *table == kaspa_consensus_core::palw_g14_lane_closure_v1::PALW_G14_LANE_CLOSURE_TABLE_V1
+        })),
+        "no signer lock exists below the fence"
+    );
 }
 
 /// **Mandatory test 3, OPV (Panel = 0), node-less, before and after Final.** Two lies relayed by their producer: one is convicted

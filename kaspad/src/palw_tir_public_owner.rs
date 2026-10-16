@@ -125,6 +125,12 @@ pub(crate) fn owner_may_pursue_v1(
     !view.liable.contains(signer) && now >= preparation_until_daa && now < view.collect_until_daa && (slot_open || owns_here)
 }
 
+/// **Lane g14-court-capacity-r2: may this bond Open now as far as the K_owner cap goes** — always past `palw_court_capacity_v1`
+/// (`fair_start`: an Open at the cap waits in the owner queue instead of being refused), else only on a free or reclaimable slot.
+pub(crate) fn owner_slot_open_v1(fair_start: bool, slot_free_or_reclaimable: bool) -> bool {
+    fair_start || slot_free_or_reclaimable
+}
+
 /// **G14 G-T4: the order frames are considered in** — the claims this node's own seat found faulty first (its Panel replay
 /// already disagrees), then the page of accepted frames; each once.
 pub(crate) fn owner_discovery_order_v1(seat_faulted: &[Hash64], page: &[Hash64], is_frame: impl Fn(&Hash64) -> bool) -> Vec<Hash64> {
@@ -353,6 +359,9 @@ impl PalwPanelService {
             return;
         }
         let form = self.config.prompt_ids_form;
+        // Lane g14-court-capacity-r2: the owner fair start (`palw_court_capacity_v1`), read at the tick's clock below.
+        let court_capacity_from = self.consensus_config.params.palw_court_capacity_v1_fence().map(|f| f.activation.daa_score());
+        let mut fair_start = false;
         // G-T4: the claims this node's own seat found faulty are pursued first (process memory of the Panel replay).
         let seat_faulted: Vec<Hash64> = self.seat_faults.lock().unwrap().claims().collect();
         let court_limits = kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&self.config.court);
@@ -362,6 +371,7 @@ impl PalwPanelService {
             let mut read = |state: &PalwChainStateV2| -> Result<(), String> {
                 steps.clear();
                 now = state.last_point().ok_or("TIR owner snapshot has no accepted clock")?.daa_score;
+                fair_start = court_capacity_from.is_some_and(|from| now.saturating_add(1) >= from);
                 book.skipped.retain(|_, until| now < *until);
                 // Discover: the claims this node's seat found faulty first (G-T4), then one page of accepted frames per tick; a
                 // replay is started for a frame this bond may own.
@@ -380,7 +390,10 @@ impl PalwPanelService {
                     let view = frame.view_v1(state.staged_tir_owner_count_v1(&claim));
                     let plan = frame.plan_v1();
                     let owns_here = state.staged_tir_acquisitions_of_v1(&claim).iter().any(|(owner, _)| *owner == signer);
-                    let slot_open = state.staged_tir_owner_slot_open_v1(&claim, now.saturating_add(1));
+                    // Lane g14-court-capacity-r2: past `palw_court_capacity_v1` an Open is never refused for the K_owner cap (it
+                    // waits in the owner queue), so a free slot is not a precondition.
+                    let slot_open =
+                        owner_slot_open_v1(fair_start, state.staged_tir_owner_slot_open_v1(&claim, now.saturating_add(1)));
                     if !owner_may_pursue_v1(&view, plan.preparation_until_daa, &signer, now, slot_open, owns_here) {
                         continue;
                     }
@@ -657,6 +670,23 @@ impl PalwPanelService {
                             });
                         }
                         (Some(_), _) => {}
+                        // Lane g14-court-capacity-r2: a WAITING row's Demand is refused unless the rotation it triggers admits it —
+                        // ask the fold's own predicate first, so no refused carrier is signed.
+                        (None, Some(_))
+                            if fair_start
+                                && !state.staged_tir_owner_demand_admits_v1(
+                                    claim,
+                                    &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirAcquisition(
+                                        *claim,
+                                        signer,
+                                        acquisition,
+                                    ),
+                                    now.saturating_add(1),
+                                    kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_owner_tenure_v1(
+                                        &frame,
+                                        row.owned.owner_idle_grace_daa_v1(),
+                                    ),
+                                ) => {}
                         (None, Some(request)) if active.is_none_or(|p| p.collected || p.request != request) => {
                             steps.push(OwnerStepV1::Move {
                                 claim: *claim,
@@ -943,6 +973,14 @@ mod tests {
         assert!(owner_may_pursue_v1(&v, prepared, &bond(3), 150, false, true), "it already owns there");
         assert!(!owner_may_pursue_v1(&v, prepared, &bond(3), 110, true, false), "before the original preparation door");
         assert!(!owner_may_pursue_v1(&v, prepared, &bond(3), 200, true, false), "the conviction door closed");
+        // Lane g14-court-capacity-r2: past `palw_court_capacity_v1` a full frame does not stop an Open (it waits in the owner queue).
+        assert!(owner_slot_open_v1(true, false), "past the fence: an Open at K_owner waits, never refused");
+        assert!(!owner_slot_open_v1(false, false), "below the fence: no free or reclaimable slot, no Open");
+        assert!(owner_may_pursue_v1(&v, prepared, &bond(3), 150, owner_slot_open_v1(true, false), false), "the newcomer pursues");
+        assert!(
+            !owner_may_pursue_v1(&v, prepared, &bond(2), 150, owner_slot_open_v1(true, false), false),
+            "a liable seat still never owns, fence or not"
+        );
         // The seat's own faulty claims first (when they are frames), then the page, each once.
         let order = owner_discovery_order_v1(&[h(9), h(5)], &[h(4), h(5), h(6)], |claim| *claim != h(9));
         assert_eq!(order, vec![h(5), h(4), h(6)]);
