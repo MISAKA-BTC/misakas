@@ -1094,3 +1094,84 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 - 小さい fixture config(restart 0、margin 1 など)を使えば数千 DAA に縮む。
   ただし、それは「preset の court 窓を保つ」という既存 harness の前提を外すことになり、測定値でもない。そのため、この branch では採らなかった。
 - harness の残り(§8.4 の 2)は変わっていない。
+
+## 付録 E. 追記 — court 容量と Panel 担保の lane(2026-10-16、branch `integ/g14-court-capacity`)
+
+ユーザー方針([リリース計画](t12-daa14000-release-plan-2026-10-15.md)「court の全体容量と Panel 担保」)の実装。新しい fence は `palw_court_capacity_v1` の 1 つだけで、全 preset で `None`。testnet-12 の identity は変わらない。
+
+### E.1 court 容量(G-07)
+
+- **fence と記録。** `palw_court_capacity_v1`(`consensus/core/src/palw_court_capacity_v1.rs`)。policy は測定記録 `PalwCourtMeasurementV1` から決定的に導出する(最も安い class の時間を 1 work unit とする)。
+  - 武装の条件:LG14-A が同じ高さ以下、arm-readiness record(`PalwG14GatedFenceV1::CourtCapacityV1`)、その measured-values evidence が測定記録の digest であること。
+  - placeholder policy(今日の 1 block 1 court 操作、ρ = 0)では、実ネットワークは武装できない。
+- **admission。** court session を開くには次の 3 つを要する。
+  - challenger 自身の live な LG14-A reservation(claim 固有の hard deadline と Final 保留)
+  - Active で floor 以上の bond
+  - 占有 escrow `ρ × (ticket 窓 + 最大 session) × weight`(A-6 の free half に置く)
+- **block 予算。** 決定論的な cost unit(work・証拠 byte・working set)で数え、実行時の CPU 時間は使わない。
+  - 課金の対象:one-move の告発と `CourtOpened` は variant で、dissection move・分割 close の完成 chunk・terminal 証拠 part は既存の slot 規則の述語で判定する。slot 規則が数えていた work は、fence 以後も 1 つも無料にならない。
+  - 完成 chunk は、組み立てる close 全体の byte で課金する。
+  - 受理側(`palw_accept.rs`)が落とし、fold は第 2 の鍵として拒否する。
+- **時間料金。** 料金は `ρ × 占有 DAA × weight` で、admission 時に固定する。
+  - 精算は終了時の実占有分だけで、escrow の残りは返す。
+  - conviction・DA default の場合は、被告(producer)の担保から先に払う。正直な告発者の負担は 0。
+- **スケジューラ。** 待機中の entry がある間は、空き枠でも直接 open しない。
+  - 空いた容量は、block の先頭(どの object よりも前)で、claim の hard deadline が早い順に ticket として与える。
+  - 新しい entry は、最悪ケース計算(占有者は全員 backstop まで、前の entry は ticket + 最大 session)で、自分と既存の全 entry が期限内に裁定へ届く場合に限って受ける。
+- **option (b)。** WIP の方式を採った。family `LegacyFusedLeaf` は、`LegacyPanelAttempt` の条件に `palw_court_capacity_v1` の in force を加えたもの。
+  - `fused_attention` の class の V2 Attempt は、court 容量の fence までは報酬なし(`palw_g14_route_attempt_refusal_for_class_v1`)。
+  - 非 fused の class は、LG14-A と LG14-B だけで経路ありと数える(one-move で裁定でき、court 枠を使わないため)。
+- **残る限界(安全側の扱いは未実装)。**
+  1. 資金のある連合が、正直な追及が来る**前に**、待機列を claim の期限まで予約で埋められる。この場合、後から来た正直な追及は「保証なし」として admission で拒否される。待機中になった追及は守られるが、到着前の先取りを抑えるのは ρ の価格だけである。方針にある「新規の報酬対象 claim の受理量を制限する」は、まだ実装していない。
+  2. 同じ claim に多数の bond が decoy の予約を置ける。各 decoy は枠と料金を消費するが、数を制限するものは料金しかない。
+  3. one-move の告発は、session の move と同じ block 予算を使う。容量は「予算はすべて move に使える」と仮定して導出している。
+  4. miner による block 内の順序・検閲は、範囲外である。
+
+  このため、fused 経路は、drill の記録(V3 飽和・継続的な埋め直し)と上の 1 の扱いが揃うまで、「解決済み」としない。
+
+### E.2 Panel 担保(G-13 の効率)
+
+- `palw_panel_liability_v1.rs`:同じ bond の担保を `L_active` / `L_resolved` / accuser / V02 reserve に分けて読み、`R_new = max(0, min(C_work − L_active, C_total − L_active − L_resolved − R_other))` を計算する。
+  - fold の work room は、常に `R_new(accuser + reserve)` 以上、`R_new(accuser)` 以下である。二重の担保にはならない。
+- **規則の追加は 1 つ。** live な LG14-A reservation がある終端 claim の lock は Active に数える(`palw_claim_under_dispute_v1`)。
+  - LG14-A より前は `legacy_disputes` が空なので、t12 の V02 の分割は byte 単位で同じになる。
+- **validation。** LG14-A と `palw_final_lock_life` が両方ある場合、`palw_final_lock_full_collateral` を両者の遅い方の高さ以下で要する。
+- **測定**(fold、t12 の launch ruleset、floor claim)。
+  - floor claim 1 件:eligibility 640.17 MSK、Valid seat あたりの lock 160.09 MSK、bind → Final 122 DAA。
+  - 担保 × ロック時間(claim 1 件・seat 1 席あたり):旧 179,456 MSK·DAA、新 499,627 MSK·DAA(×2.78)。
+  - 定常で 1 席が支えられる claim 率(per DAA)。期待値は 1 席あたり、健全時 0.333(0.6 claims/DAA × 5/9)、10-01 のピーク時 2.944。
+
+    | 規則 | genesis 席(939,063 MSK) | Panel floor 席(130,000 MSK) | 健全時に必要な最小担保 | ピーク時に必要な最小担保 |
+    |---|---|---|---|---|
+    | 旧(V02:F + 1,000、分割あり) | 3.724 | 0.327 | 131,395 MSK | 753,326 MSK |
+    | 新(F + window_court、分割あり) | 1.589 | 0.140 | 238,119 MSK | 1,696,051 MSK |
+    | 反実仮想(分割なし、validation で拒否) | 0.841 | 0.116 | 372,238 MSK | 3,288,102 MSK |
+
+  - 実 fold の stream(3 DAA ごとに 1 件、6,000 DAA)で受理できた件数:
+
+    | 規則 | genesis 席 | Panel floor 席 |
+    |---|---|---|
+    | 旧 | 2000/2000 | 1946/2000 |
+    | 新 | 2000/2000 | 959/2000 |
+    | 反実仮想 | 2000/2000 | 802/2000 |
+
+  - **結論。**
+    - 健全時の率は、genesis 席なら新規則でも 4.8 倍の余裕で支えられる。
+    - 10-01 のピークは、新規則では genesis 席の 0.54 倍しかない。genesis bond 8 本のうち、ピーク率を支えられるものは 0 本である。
+    - Panel floor の席は、新規則では健全時の率にも届かない(0.42 倍)。
+    - 分割(Resolved を業務枠から外す)による処理量は、分割なしと比べて genesis 席で 1.9 倍、Panel floor 席で 1.2 倍になる。
+- **late conviction。** F + 2,000(責任期間 F + 3,000 の内側。その前に anchor を 30 件 settle 済み)で、新規則は Valid の 5 席それぞれから 160.09 MSK を全額 slash した。旧規則は 0 だった。
+
+### E.3 実行した試験(この branch)
+
+- `cargo test -p kaspa-consensus-core --test g13_panel_liability`:**5 passed**(validation、late conviction、Active + Resolved ≤ C と同時の 4 件の詐欺、資本効率、restart/reorg)。追加した `a_live_reservation_keeps_a_final_claims_locks_active` も **1 passed**。
+- `cargo test -p kaspa-consensus-core --test g14_court_capacity`:**10 passed、1 ignored**(timing harness)。
+  - 内訳:arming、飽和と継続的な埋め直し、期限の早い entry の洪水、scheduler、fence なしで 43 番目が拒否されること、bond 分割、最大負荷の予算、restart/reorg、fused 経路、t12 identity。
+  - 飽和の試験:連合が 42 枠を DAA 1,018 で占有し、最初の backstop は 4,018。正直な追及は 1,078 に ticket を得て、1,138 に裁定(hard deadline は 998,799)。
+  - bond 分割:4 session の料金は、1 bond でも 4 bond でも 504,000,000 sompi(session あたり 126,000,000)。
+- timing harness(`--ignored`、macOS aarch64 debug。**測定記録ではない**):
+  - held opening(`ShardCourtAccused`、10,218 B):fold 33–136 µs/op。
+  - 42 件の opening を入れた block:2.15–4.51 ms。
+  - 42 session の default sweep:0.68–0.73 ms(空の block は約 0.63 ms)。
+  - 部分記録の policy は、未測定の class があるため拒否される。
+- 実行していない:workspace 全体、clippy、release build での測定。

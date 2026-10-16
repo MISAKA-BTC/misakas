@@ -895,6 +895,25 @@ fn palw_court_op_timing_harness() {
          Opening (CourtOpened), DissectionMove, Close: UNMEASURED here; working sets: UNMEASURED; the real one-move leaf recompute: the \
          node E2E's [court-op timing]"
     );
+    // The run in the arm-readiness record's own format: what it measured, 0 for every class it did not, no block allotment and no ρ
+    // (those are the network's approved choices). The record's digest is what an arm-readiness record would carry as its
+    // measured-values evidence; its policy is refused (an unmeasured class) — so no run of this harness can arm the fence by itself.
+    let partial = PalwCourtMeasurementV1 {
+        version: PALW_COURT_MEASUREMENT_VERSION_V1,
+        class_ns: [u64::try_from(one_hi).unwrap_or(u64::MAX), 0, 0, 0],
+        class_bytes: [one_bytes as u64, 0, 0, 0],
+        class_memory: [0; 4],
+        block_court_ns: 0,
+        block_court_bytes: 0,
+        block_court_memory: 0,
+        rho_sompi: 0,
+        ticket_window_daa: 0,
+    };
+    let refused = partial.policy().expect_err("a partial record derives no policy");
+    println!(
+        "[palw_court_op_timing_harness] record (PalwCourtMeasurementV1, partial): {partial:?}; digest {}; policy: refused ({refused})",
+        partial.digest().iter().map(|b| format!("{b:02x}")).collect::<String>()
+    );
 }
 
 // ---- testnet-12's identity -------------------------------------------------------------------------------------------------------
