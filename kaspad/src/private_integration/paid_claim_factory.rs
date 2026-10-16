@@ -188,6 +188,11 @@ pub(super) fn validate_private_paid_claim_relations_v3(params: &Params) -> Resul
     checked.palw_provider_court_v1 = Some(ForkActivation::never());
     checked.palw_panel_lifetime_v2.as_mut().unwrap().activation = ForkActivation::never();
     checked.palw_paid_consumer_lifecycle_v1.as_mut().unwrap().activation = ForkActivation::never();
+    // The v4 profile's release recovery rides the monetary covenant, which this copy makes dormant: dormant with it (its own
+    // mechanics scope was checked by the v4 relations; production validation refuses recovery without the covenant first).
+    if let Some(recovery) = checked.palw_material_release_recovery_v2.as_mut() {
+        recovery.activation = ForkActivation::never();
+    }
     checked.sync_palw_bond_budget_v1();
     checked.sync_palw_claim_challenge_v2();
     checked.sync_palw_permissionless_panel_v1();

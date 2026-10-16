@@ -148,8 +148,42 @@ fn validate_private_native_relations(params: &kaspa_consensus_core::config::para
     }
     let mut checked = params.clone();
     checked.palw_probabilistic_constraints_v1 = None;
+    // The typed roots ride the kernel route this copy makes dormant (the paid-claim profiles arm them from DAA 0).
+    checked.palw_typed_roots_v1 = None;
     checked.palw_signed_registration_v1 = None;
     checked.palw_panel_free_v1 = None;
+    // A paid-claim profile (v3/v4): its explicitly unapproved release fences are validated by its own relations
+    // (`paid_claim_factory::validate_private_paid_claim_relations_v3` and the v4 scope check) and are dormant here as there,
+    // so the production validators below judge everything else, the retirement among it.
+    if checked.palw_claim_challenge_v2.is_some() {
+        let never = ForkActivation::never();
+        if let Some(f) = checked.palw_beacon_source_opt_in_v1.as_mut() {
+            f.activation = never;
+        }
+        if let Some(f) = checked.palw_beacon_source_fee_v1.as_mut() {
+            f.activation = never;
+        }
+        if let Some(f) = checked.palw_claim_challenge_v2.as_mut() {
+            f.activation = never;
+        }
+        if let Some(f) = checked.palw_monetary_material_v1.as_mut() {
+            f.activation = never;
+        }
+        if let Some(f) = checked.palw_material_release_recovery_v2.as_mut() {
+            f.activation = never;
+        }
+        if let Some(f) = checked.palw_panel_lifetime_v2.as_mut() {
+            f.activation = never;
+        }
+        if let Some(f) = checked.palw_paid_consumer_lifecycle_v1.as_mut() {
+            f.activation = never;
+        }
+        checked.palw_reporter_income_v2 = Some(never);
+        checked.palw_material_income_v3 = Some(never);
+        checked.palw_provider_court_v1 = Some(never);
+        checked.sync_palw_claim_challenge_v2();
+        checked.sync_palw_permissionless_panel_v1();
+    }
     // The OPV mechanics budget rides the Panel-free fence (RFC-0015 §8.3 lead default); its policy is checked here, its arming
     // refusal excepted like the fence's.
     if let Some(budget) = checked.palw_bond_budget_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
@@ -726,8 +760,21 @@ mod tests {
         assert!(validate_private_probe(&args, &changed).is_err(), "stale mirror/changed schedule is not an exception");
     }
 
+    /// The private profile's probe manifest and validators recurse deeper than a libtest thread's 2 MiB in a debug build: the
+    /// body runs on its own 64 MiB thread (what the node gives its own validation), its panic re-raised.
     #[test]
     fn private_late_retirement_moves_only_the_fence_and_keeps_the_daa1_profile() {
+        let worker = std::thread::Builder::new()
+            .name("private-late-retirement".into())
+            .stack_size(64 << 20)
+            .spawn(private_late_retirement_moves_only_the_fence_and_keeps_the_daa1_profile_body)
+            .expect("a test thread");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    fn private_late_retirement_moves_only_the_fence_and_keeps_the_daa1_profile_body() {
         use kaspa_consensus_core::config::params::ForkActivation;
         let salt = PalwDrillSaltV1::from_bytes([0x16; 32]).unwrap();
         let original = private_paid_claim_params_v4(&salt).unwrap();

@@ -904,7 +904,9 @@ mod tests {
         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
         let budget = Arc::new(Semaphore::new(1));
         let carriage = native_carriage();
-        let declarations = vec![(h(7), vec![0x31; 16])];
+        // No class declaration: the native preflight parses each one as its real admission carriage (16 junk bytes are an
+        // encoding error, not a capacity refusal), and this test is about the capacity cause.
+        let declarations = Vec::new();
         let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
         let profile = SnapshotCompressionV1 { nonce: [7; 32], decoded: raw.len() as u64 };
         let failure = NativeCoverageV1::unsupported::<SnapshotReceiver>("actual local request", "quota exhausted");
