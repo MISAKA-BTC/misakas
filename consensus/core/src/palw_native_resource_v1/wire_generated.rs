@@ -2833,8 +2833,8 @@ impl NativeWireScanV1 for crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2 {
     }
 }
 wire_struct!(crate::palw_legacy_held_da_v2::PalwLegacyLeafRecomputeV2; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_step_refute::PalwExecutionStepRefutationV1, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Option<crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>, Vec<u8>);
-wire_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; u64, u64, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_legacy_public_filer_v1::PalwDisputeReservationRowV1>, BTreeSet<crate::palw_state_v2::PalwBondKeyV2>, Vec<(crate::palw_state_v2::PalwBondKeyV2, u128)>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_da_rcore_v1::PalwDaUnitV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_court_capacity_v1::PalwReservedCourtV1>);
-wire_struct!(crate::palw_court_capacity_v1::PalwReservedCourtV1; crate::palw_court_capacity_v1::PalwCourtStageV1, u128, u64, u64, u64);
+wire_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; u64, u64, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_legacy_public_filer_v1::PalwDisputeReservationRowV1>, BTreeSet<crate::palw_state_v2::PalwBondKeyV2>, Vec<(crate::palw_state_v2::PalwBondKeyV2, u128)>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_da_rcore_v1::PalwDaUnitV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_court_capacity_v1::PalwReservedCourtV1>, bool);
+wire_struct!(crate::palw_court_capacity_v1::PalwReservedCourtV1; crate::palw_court_capacity_v1::PalwCourtStageV1, u128, u64, u64, u64, bool, bool, u64);
 impl NativeWireScanV1 for crate::palw_court_capacity_v1::PalwCourtStageV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;

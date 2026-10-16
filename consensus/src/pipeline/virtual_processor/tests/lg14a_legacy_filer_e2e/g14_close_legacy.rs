@@ -65,6 +65,10 @@ pub(super) fn measured_court() -> kaspa_consensus_core::palw_court_capacity_v1::
         block_court_memory: 42 * ONE_MOVE_BYTES.max(OPENING_BYTES),
         rho_sompi: 1_000,
         ticket_window_daa: 0,
+        // Round 2 (g14-court-capacity-r2): 42 one-move verdicts' time and bytes on their own budget; half the capacity reserved.
+        block_one_move_ns: block_court_ns,
+        block_one_move_bytes: 42 * ONE_MOVE_BYTES.max(OPENING_BYTES),
+        reserve_permille: 500,
     }
 }
 

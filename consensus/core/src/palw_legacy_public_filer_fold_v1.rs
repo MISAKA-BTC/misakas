@@ -664,6 +664,25 @@ pub(super) fn sweep_legacy_disputes(builder: &mut TransitionBuilder<'_>, ctx: &P
             builder.state.legacy_dispute_deadlines.remove(&(deadline, claim_id));
             continue;
         }
+        // **Lane g14-court-capacity-r2: unserved = unpaid.** A pre-Final claim whose live reservation still has a court row WAITING
+        // (queued or ticketed) though it was admitted a whole service window before the hard deadline is voided `PanelUnavailable`
+        // (no reward, weight or credit; nobody slashed; every deposit and escrow returned) instead of released toward Final — a court
+        // that could not serve a prosecution in time never lets the claim it accuses be paid. `false` below the fence.
+        let unserved = builder.state.legacy_disputes.get(&claim_id).is_some_and(|record| {
+            super::palw_court_capacity_fold_v1::court_unserved_at_lapse_v1(builder.params, record, ctx.daa_score)
+        });
+        if unserved
+            && let Some(claim) = builder.state.claims.get(&claim_id).cloned()
+            && matches!(
+                claim.phase,
+                PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. }
+            )
+        {
+            builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::PanelUnavailable)?;
+            if !builder.state.legacy_dispute_deadlines.contains(&(deadline, claim_id)) {
+                continue;
+            }
+        }
         let x3 = builder
             .state
             .claims

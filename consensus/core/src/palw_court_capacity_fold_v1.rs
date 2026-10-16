@@ -33,54 +33,151 @@ pub(super) fn charge_court_op_v1(
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
     let Some(policy) = builder.params.court_capacity_at_v1(ctx.daa_score) else { return Ok(()) };
+    let Some(class) = palw_court_op_class_v1(&builder.state, object) else { return Ok(()) };
     let Some(cost) = palw_court_op_cost_v1(&policy, &builder.state, object) else { return Ok(()) };
-    let spent = builder.court_cost_spent.saturating_add(cost);
-    if !spent.fits_within(&policy.block_budget) {
+    // Round 2 (limit 3): a one-move accusation spends its own budget, every session operation the session budget.
+    let one_move = class == PalwCourtOpClassV1::OneMove;
+    let budget = policy.budget_of(class);
+    let already = if one_move { builder.court_one_move_spent } else { builder.court_cost_spent };
+    let spent = already.saturating_add(cost);
+    if !spent.fits_within(&budget) {
         return Err(refused(format!(
-            "the block's court budget {:?} cannot take this operation ({cost:?}; {:?} already spent)",
-            policy.block_budget, builder.court_cost_spent
+            "the block's court budget {budget:?} ({}) cannot take this operation ({cost:?}; {already:?} already spent)",
+            if one_move { "one-move accusations" } else { "court sessions" }
         )));
     }
-    builder.court_cost_spent = spent;
+    if one_move {
+        builder.court_one_move_spent = spent;
+    } else {
+        builder.court_cost_spent = spent;
+    }
     Ok(())
 }
 
-/// **Every slot occupant's worst-case release, the tickets outstanding and the queue**, from state alone. Every open court session
-/// occupies a slot until its backstop (`deadline_daa`), whoever opened it; a ticket occupies one from its grant for its ticket window
-/// plus the session it may open.
-fn court_occupancy_v1(state: &PalwChainStateV2, ticket_window: u64) -> (Vec<u64>, u64, Vec<PalwCourtQueuedV1>) {
-    let mut releases: Vec<u64> = state.court_sessions.values().map(|session| session.deadline_daa).collect();
-    let mut tickets = 0u64;
-    let mut queue = Vec::new();
+// ---- round 2: court-demanding claims and the bounded admission -------------------------------------------------------------------
+
+/// **Is `claim` court-demanding** (lane g14-court-capacity-r2): a V2 Attempt of a class with fused-attention leaves (its lies are
+/// adjudicated only through a court session), accepted at or past the court-capacity fence. Its first court row is its reserve row,
+/// and the bounded admission counts it.
+pub(super) fn palw_court_demanding_claim_v1(state: &PalwChainStateV2, from_daa: u64, claim: &PalwClaimStateV2) -> bool {
+    matches!(claim.source, PalwClaimSourceV2::Attempt)
+        && claim.accepted_daa >= from_daa
+        && state.classes.get(&claim.class_id).is_some_and(|class| class.fused_attention)
+}
+
+/// **The bounded admission** (round 2): a new court-demanding claim (a fused-attention V2 Attempt whose trace retention is
+/// `trace_retention_daa`) is admitted at `now` only while its hard-deadline bucket (`⌊hard / W⌋`) holds fewer than `M` in-flight
+/// court-demanding claims — not voided, hard deadline not passed. `Ok` below the fence and for a class with no fused leaf. A pure read
+/// of state (the producer's pre-check asks the same function).
+pub(super) fn check_court_claim_admission_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    now: u64,
+    trace_retention_daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    let Some(mirror) = params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(()) };
+    if !state.classes.get(class_id).is_some_and(|class| class.fused_attention) {
+        return Ok(());
+    }
+    let policy = mirror.policy;
+    let turn = params.turn_deadline_daa();
+    let width = policy.admission_bucket_daa(turn, params.window_court());
+    let cap = policy.admission_claims_per_bucket(turn);
+    let w_disclose = palw_da_disclose_window_daa_v1(params);
+    let bucket = trace_retention_daa.saturating_sub(w_disclose) / width;
+    let admitted = state
+        .claims
+        .values()
+        .filter(|claim| {
+            palw_court_demanding_claim_v1(state, mirror.from_daa, claim)
+                && !matches!(claim.phase, PalwClaimPhaseV2::Voided { .. })
+                && {
+                    let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(claim, w_disclose);
+                    hard >= now && hard / width == bucket
+                }
+        })
+        .count() as u64;
+    if admitted >= cap {
+        return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: *class_id, bucket, admitted, cap });
+    }
+    Ok(())
+}
+
+/// **One pool's occupancy** (round 2): its occupants' worst-case releases, its outstanding tickets, its queue — guaranteed entries
+/// and best-effort ones apart.
+#[derive(Default)]
+struct PalwCourtPoolV1 {
+    releases: Vec<u64>,
+    running: u64,
+    tickets: u64,
+    guaranteed: Vec<PalwCourtQueuedV1>,
+    best_effort: Vec<PalwCourtQueuedV1>,
+}
+
+impl PalwCourtPoolV1 {
+    fn occupied(&self) -> u64 {
+        self.running + self.tickets
+    }
+    fn queued(&self) -> usize {
+        self.guaranteed.len() + self.best_effort.len()
+    }
+}
+
+/// **Both pools' occupancy, from state alone** (round 2): every open court session occupies a slot until its backstop
+/// (`deadline_daa`) — a reserve row's session on the reserve pool, every other session on the spare pool, whoever opened it; a ticket
+/// occupies one from its grant for its ticket window plus the session it may open, on its row's pool.
+fn court_pools_v1(state: &PalwChainStateV2, ticket_window: u64) -> (PalwCourtPoolV1, PalwCourtPoolV1) {
+    let mut reserve = PalwCourtPoolV1::default();
+    let mut spare = PalwCourtPoolV1::default();
+    let mut reserve_sessions = std::collections::BTreeSet::new();
     for (claim, record) in &state.legacy_disputes {
         for (reserver, row) in &record.courts {
+            let pool = if row.reserve { &mut reserve } else { &mut spare };
             match row.stage {
                 PalwCourtStageV1::Ticket { granted_daa, .. } => {
-                    tickets += 1;
-                    releases.push(granted_daa.saturating_add(ticket_window).saturating_add(row.service_daa));
+                    pool.tickets += 1;
+                    pool.releases.push(granted_daa.saturating_add(ticket_window).saturating_add(row.service_daa));
                 }
-                PalwCourtStageV1::Queued { enqueued_daa } => queue.push(PalwCourtQueuedV1 {
-                    key: PalwCourtQueueKeyV1 {
-                        deadline_daa: record.hard_deadline_daa,
-                        enqueued_daa,
-                        claim: *claim,
-                        reserver: *reserver,
-                    },
-                    service_daa: row.service_daa,
-                }),
-                PalwCourtStageV1::Running { .. } => {}
+                PalwCourtStageV1::Queued { enqueued_daa } => {
+                    let entry = PalwCourtQueuedV1 {
+                        key: PalwCourtQueueKeyV1 {
+                            deadline_daa: record.hard_deadline_daa,
+                            enqueued_daa,
+                            claim: *claim,
+                            reserver: *reserver,
+                        },
+                        service_daa: row.service_daa,
+                    };
+                    if row.guaranteed { pool.guaranteed.push(entry) } else { pool.best_effort.push(entry) }
+                }
+                PalwCourtStageV1::Running { session, .. } => {
+                    if row.reserve {
+                        reserve_sessions.insert(session);
+                    }
+                }
             }
         }
     }
-    (releases, tickets, queue)
+    for (id, session) in state.court_sessions.iter() {
+        let pool = if reserve_sessions.contains(id) { &mut reserve } else { &mut spare };
+        pool.running += 1;
+        pool.releases.push(session.deadline_daa);
+    }
+    (reserve, spare)
 }
 
 /// **Court admission** where a court session is about to open (`open_dissection_at_named_leaf_v1`, `CourtOpened`). Past the fence:
 /// the challenger's own live LG14-A reservation on the claim (its claim-fixed hard deadline, its Final hold), an Active bond at or
-/// above the floor, and the occupancy escrow (ρ × (ticket window + `session_window`) × weight) on its free half. Then: its own ticket
-/// opens (its guarantee was proven when it queued); free capacity with nobody queued opens — if a session opened now and held to
-/// `session_window` still ends by the claim's hard deadline; otherwise the prosecution QUEUES — only if the worst-case service
-/// accounting shows that its session, and that of every prosecution already queued, still ends by its claim's hard deadline.
+/// above the floor, and the occupancy escrow (ρ × (ticket window + `session_window`) × weight × the claim's row count, round 2) on its
+/// free half; a session opened now and held to `session_window` must still end by the claim's hard deadline (lateness, not capacity).
+/// Then (round 2):
+/// * its own ticket opens (its guarantee was proven, or its best effort granted, when it queued);
+/// * the claim's FIRST court row — on a court-demanding claim — is its reserve row: it opens on a free reserve slot when nobody waits
+///   for one, else it queues on the reserve pool; **never refused for capacity** (the bounded admission is its guarantee);
+/// * any other row is a spare row: it opens on a free spare slot when nobody waits for one; else it queues GUARANTEED when the
+///   worst-case service accounting shows that its session, and that of every guaranteed spare entry already queued, still ends by its
+///   claim's hard deadline — and otherwise BEST-EFFORT, behind every guaranteed entry. **Never refused for capacity.**
 pub(super) fn court_admission_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -89,7 +186,8 @@ pub(super) fn court_admission_v1(
     session_window: u64,
 ) -> Result<PalwCourtAdmissionV1, PalwStateV2Error> {
     let now = ctx.daa_score;
-    let Some(policy) = builder.params.court_capacity_at_v1(now) else { return Ok(PalwCourtAdmissionV1::Legacy) };
+    let Some(mirror) = builder.params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(PalwCourtAdmissionV1::Legacy) };
+    let policy = mirror.policy;
     let mut record = builder
         .state
         .legacy_disputes
@@ -112,7 +210,6 @@ pub(super) fn court_admission_v1(
     }
     let turn = builder.params.turn_deadline_daa();
     let ticket_window = policy.ticket_window(turn);
-    let capacity = policy.capacity_sessions(turn);
     // An existing row: its own ticket opens; a queued or running prosecution files nothing more on this claim.
     if let Some(row) = record.courts.get(&challenger) {
         return match row.stage {
@@ -128,33 +225,45 @@ pub(super) fn court_admission_v1(
              LG14-A's hard-deadline envelope)",
         ));
     }
-    let weight = policy.weight();
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
+    let reserve = !record.court_reserve_used && palw_court_demanding_claim_v1(&builder.state, mirror.from_daa, claim);
+    // Round 2 (limit 2): the j-th concurrent court row on one claim pays j × the occupancy rate.
+    let weight = policy.weight().saturating_mul(1 + record.courts.len() as u64);
     let escrow = policy.fee(ticket_window.saturating_add(session_window), weight);
     if escrow > 0 {
         builder.check_accuser_room(challenger, escrow, "court occupancy escrow", now)?;
     }
-    let (mut releases, tickets, mut queue) = court_occupancy_v1(&builder.state, ticket_window);
-    let occupied = builder.state.court_sessions.len() as u64 + tickets;
-    let row = |stage| PalwReservedCourtV1 { stage, escrow, rho_sompi: policy.rho_sompi, weight, service_daa: session_window };
-    if occupied < capacity && queue.is_empty() {
+    let (reserve_pool, spare_pool) = court_pools_v1(&builder.state, ticket_window);
+    let (pool, slots) =
+        if reserve { (reserve_pool, policy.reserve_slots(turn)) } else { (spare_pool, policy.spare_slots(turn)) };
+    let row = |stage, guaranteed| PalwReservedCourtV1 {
+        stage,
+        escrow,
+        rho_sompi: policy.rho_sompi,
+        weight,
+        service_daa: session_window,
+        reserve,
+        guaranteed,
+        admitted_daa: now,
+    };
+    record.court_reserve_used |= reserve;
+    if pool.occupied() < slots && pool.queued() == 0 {
         // The session opens in this object; `court_opened_v1` names it.
-        record.courts.insert(challenger, row(PalwCourtStageV1::Running { session: ZERO_HASH64, started_daa: now }));
+        record.courts.insert(challenger, row(PalwCourtStageV1::Running { session: ZERO_HASH64, started_daa: now }, true));
         builder.write_legacy_dispute(claim_id, Some(record))?;
         return Ok(PalwCourtAdmissionV1::Open);
     }
-    queue.push(PalwCourtQueuedV1 {
-        key: PalwCourtQueueKeyV1 { deadline_daa: record.hard_deadline_daa, enqueued_daa: now, claim: claim_id, reserver: challenger },
-        service_daa: session_window,
-    });
-    releases.sort_unstable();
-    if let Err(position) = palw_court_schedule_v1(now, capacity, &releases, &queue, ticket_window) {
-        return Err(refused(format!(
-            "no deadline guarantee: with {occupied} of {capacity} court slots held and {} queued, the prosecution at position \
-             {position} could not open before its claim's hard deadline",
-            queue.len() - 1
-        )));
-    }
-    record.courts.insert(challenger, row(PalwCourtStageV1::Queued { enqueued_daa: now }));
+    let guaranteed = reserve || {
+        let mut queue = pool.guaranteed.clone();
+        queue.push(PalwCourtQueuedV1 {
+            key: PalwCourtQueueKeyV1 { deadline_daa: record.hard_deadline_daa, enqueued_daa: now, claim: claim_id, reserver: challenger },
+            service_daa: session_window,
+        });
+        let mut releases = pool.releases.clone();
+        releases.sort_unstable();
+        palw_court_schedule_v1(now, slots, &releases, &queue, ticket_window).is_ok()
+    };
+    record.courts.insert(challenger, row(PalwCourtStageV1::Queued { enqueued_daa: now }, guaranteed));
     builder.write_legacy_dispute(claim_id, Some(record))?;
     Ok(PalwCourtAdmissionV1::Queued)
 }
@@ -229,7 +338,6 @@ pub(super) fn sweep_court_capacity_v1(builder: &mut TransitionBuilder<'_>, ctx: 
     let Some(policy) = builder.params.court_capacity_at_v1(now) else { return Ok(()) };
     let turn = builder.params.turn_deadline_daa();
     let ticket_window = policy.ticket_window(turn);
-    let capacity = policy.capacity_sessions(turn);
     // 1–2. Ended sessions and expired tickets.
     let mut ended: Vec<(Hash64, PalwBondKeyV2, PalwReservedCourtV1)> = Vec::new();
     for (claim, record) in &builder.state.legacy_disputes {
@@ -255,20 +363,40 @@ pub(super) fn sweep_court_capacity_v1(builder: &mut TransitionBuilder<'_>, ctx: 
             builder.write_legacy_dispute(claim, Some(record))?;
         }
     }
-    // 3. Grants, earliest claim deadline first.
-    let (_, tickets, mut queue) = court_occupancy_v1(&builder.state, ticket_window);
-    let occupied = builder.state.court_sessions.len() as u64 + tickets;
-    let mut free = capacity.saturating_sub(occupied);
-    queue.sort_by_key(|entry| entry.key);
-    for entry in queue {
-        if free == 0 {
-            break;
-        }
+    // 3. Grants (round 2): each pool's free slots, earliest claim deadline first — the reserve queue on the reserve slots; on the
+    //    spare slots every guaranteed entry before any best-effort one.
+    let (reserve, spare) = court_pools_v1(&builder.state, ticket_window);
+    let reserve_free = policy.reserve_slots(turn).saturating_sub(reserve.occupied());
+    let spare_free = policy.spare_slots(turn).saturating_sub(spare.occupied());
+    let mut grants: Vec<PalwCourtQueuedV1> = Vec::new();
+    let mut reserve_queue = reserve.guaranteed;
+    reserve_queue.extend(reserve.best_effort);
+    reserve_queue.sort_by_key(|entry| entry.key);
+    grants.extend(reserve_queue.into_iter().take(reserve_free as usize));
+    let mut guaranteed = spare.guaranteed;
+    guaranteed.sort_by_key(|entry| entry.key);
+    let mut best_effort = spare.best_effort;
+    best_effort.sort_by_key(|entry| entry.key);
+    grants.extend(guaranteed.into_iter().chain(best_effort).take(spare_free as usize));
+    for entry in grants {
         let Some(mut record) = builder.state.legacy_disputes.get(&entry.key.claim).cloned() else { continue };
         let Some(row) = record.courts.get_mut(&entry.key.reserver) else { continue };
         row.stage = PalwCourtStageV1::Ticket { granted_daa: now, expires_daa: now.saturating_add(ticket_window) };
         builder.write_legacy_dispute(entry.key.claim, Some(record))?;
-        free -= 1;
     }
     Ok(())
+}
+
+/// **The unserved-claim rule** (round 2): does `record` — a claim whose reservations lapse at `now` — hold a live reservation whose
+/// court row is still WAITING (queued or ticketed) though it was admitted at least one service window (ticket + session) before the
+/// hard deadline? Then the court did not serve a prosecution it had time to serve, and the claim (pre-Final) is voided
+/// `PanelUnavailable` instead of released: it earns nothing. `false` below the fence (no court row exists there).
+pub(super) fn court_unserved_at_lapse_v1(params: &PalwStateParamsV2, record: &crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1, now: u64) -> bool {
+    let Some(policy) = params.court_capacity_at_v1(now) else { return false };
+    let ticket_window = policy.ticket_window(params.turn_deadline_daa());
+    record.courts.iter().any(|(reserver, row)| {
+        record.live.contains_key(reserver)
+            && row.waiting()
+            && row.admitted_daa.saturating_add(ticket_window).saturating_add(row.service_daa) <= record.hard_deadline_daa
+    })
 }

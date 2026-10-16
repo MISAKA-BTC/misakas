@@ -688,6 +688,8 @@ impl VirtualStateProcessor {
         // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` the block's court operations are bounded by the policy's
         // deterministic cost-unit budget instead of the one-slot rule (the fold charges the same units as its second lock).
         let mut court_cost_spent = kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1::default();
+        // Lane g14-court-capacity-r2: the one-move accusations spend their own budget (the fold's second lock likewise).
+        let mut court_one_move_spent = kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1::default();
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
         // RFC-0002 Phase F: whether this block has handed an IR class registration to the gate
@@ -1628,15 +1630,23 @@ impl VirtualStateProcessor {
             let court_cost = court_policy
                 .as_ref()
                 .and_then(|policy| kaspa_consensus_core::palw_court_capacity_v1::palw_court_op_cost_v1(policy, &folded, &object));
-            if let (Some(policy), Some(cost)) = (court_policy.as_ref(), court_cost)
-                && !court_cost_spent.saturating_add(cost).fits_within(&policy.block_budget)
-            {
-                info!(
-                    "Block {block}: a court operation was dropped, and the block stands: the block's court budget {:?} is spent \
-                     ({court_cost_spent:?} of it; palw_court_capacity_v1)",
-                    policy.block_budget
-                );
-                continue;
+            let court_one_move = matches!(
+                kaspa_consensus_core::palw_court_capacity_v1::palw_court_op_class_v1(&folded, &object),
+                Some(kaspa_consensus_core::palw_court_capacity_v1::PalwCourtOpClassV1::OneMove)
+            );
+            if let (Some(policy), Some(cost)) = (court_policy.as_ref(), court_cost) {
+                let (spent, budget) = if court_one_move {
+                    (court_one_move_spent, policy.one_move_budget)
+                } else {
+                    (court_cost_spent, policy.block_budget)
+                };
+                if !spent.saturating_add(cost).fits_within(&budget) {
+                    info!(
+                        "Block {block}: a court operation was dropped, and the block stands: the block's court budget {budget:?} is \
+                         spent ({spent:?} of it; palw_court_capacity_v1)"
+                    );
+                    continue;
+                }
             }
             if court_policy.is_none()
                 && spends_the_court_slot
@@ -1798,7 +1808,11 @@ impl VirtualStateProcessor {
                     match applied {
                         Ok(next) => {
                             if let Some(cost) = court_cost {
-                                court_cost_spent = court_cost_spent.saturating_add(cost);
+                                if court_one_move {
+                                    court_one_move_spent = court_one_move_spent.saturating_add(cost);
+                                } else {
+                                    court_cost_spent = court_cost_spent.saturating_add(cost);
+                                }
                             }
                             // **AC-SLOT past the fence: the slot is spent only by a move that
                             // ACTUALLY APPLIES.** A move the fold refuses is dropped below and

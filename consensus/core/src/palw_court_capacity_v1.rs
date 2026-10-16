@@ -31,6 +31,32 @@
 //! **Fused leaves.** Until this fence is armed, the fused-leaf adjudication route (KernelWitness → ShardCourtAccused → held
 //! dissection) is not counted as a G14 route under option (b): `crate::palw_g14_gates_v1::PalwG14RouteFamilyV1::LegacyFusedLeaf`.
 //!
+//! **Round 2 (lane g14-court-capacity-r2, 2026-10-17; audit 2026-10-17 §6.1 / §7 P0(1), appendix E.1 limits 1–3).** Same fence:
+//!
+//! ```text
+//! one-move budget   a one-move accusation (OneMove class) is charged to its OWN per-block budget (`one_move_budget`), never to the
+//!                   session budget, and a session operation never to it: the session capacity is derived from a budget no one-move
+//!                   accusation can spend (limit 3)
+//! reserve pool      `reserve_permille` of the capacity is RESERVED for the first court row of each court-demanding claim (a
+//!                   fused-attention V2 Attempt accepted past the fence — its only adjudication route is a court session): its claim's
+//!                   reserve, one per claim over its life. A reserve row is never refused for capacity: it opens on a free reserve slot
+//!                   or queues, and the reserve queue is granted earliest hard deadline first. Every other row is a SPARE row on the
+//!                   rest of the capacity, with the round-1 deadline guarantee — and when that guarantee fails it is admitted
+//!                   BEST-EFFORT (queued behind every guaranteed row) instead of refused: no prosecution is refused for capacity
+//! bounded admission a new court-demanding claim is admitted only while its hard-deadline bucket (width W = ticket window + the network
+//!                   court window) holds fewer than M = ⌊reserve slots / 2⌋ in-flight court-demanding claims; otherwise its attempt is
+//!                   skipped (`CourtClaimAdmissionFull`: no claim, no reward — the reward's liveness degrades, safety does not). With
+//!                   it, every claim's reserve row filed by `hard − 4W` reaches its verdict by `hard` (EDF on the reserve slots; the
+//!                   demand-bound argument is in the design note, g14-completeness-proof §11) — whatever the coalition holds, queues
+//!                   or refills on other claims (limit 1)
+//! decoy price       the j-th concurrent court row on one claim escrows and pays j × the occupancy rate (limit 2: decoys on one claim
+//!                   are priced by their number; a conviction still reimburses the honest prosecutor from the producer first)
+//! unserved = unpaid a pre-Final claim whose live reservation still has a WAITING court row (queued or ticketed) at its lapse, admitted
+//!                   at least one service window (ticket + session) before the hard deadline, is voided `PanelUnavailable` instead of
+//!                   released toward Final: no reward, no weight, no credit, nobody slashed. A coalition that keeps an honest
+//!                   prosecution from its verdict therefore gets nothing for the claim, and pays the occupancy of every slot it held
+//! ```
+//!
 //! No cryptographic computation proof of any kind is used (PRINCIPLES §8): everything here is accounting over public state.
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -150,6 +176,10 @@ pub struct PalwCourtCapacityPolicyV1 {
     /// The window a granted ticket stays open for its prosecutor to file the accusation (DAA); 0 = the rung window
     /// (`turn_deadline_daa`, the time any mover has for one move).
     pub ticket_window_daa: u64,
+    /// **Round 2: the per-block budget of the one-move accusations** (`PalwCourtOpClassV1::OneMove`), separate from `block_budget`.
+    pub one_move_budget: PalwCourtCostV1,
+    /// **Round 2: the share of the session capacity reserved for each court-demanding claim's first row**, per mille (1..=1000).
+    pub reserve_permille: u16,
 }
 
 /// **The placeholder policy** — today's rule reproduced: one court operation a block whatever its size (`PALW_COURT_CLOSE_MAX_PER_BLOCK`,
@@ -164,6 +194,8 @@ pub fn palw_court_capacity_placeholder_policy_v1() -> PalwCourtCapacityPolicyV1 
         rho_sompi: 0,
         session_weight: 0,
         ticket_window_daa: 0,
+        one_move_budget: PalwCourtCostV1 { work: 1, bytes: u64::MAX, memory: u64::MAX },
+        reserve_permille: 500,
     }
 }
 
@@ -187,10 +219,57 @@ impl PalwCourtCapacityPolicyV1 {
         if self.op_work.contains(&0) || self.memory_per_byte == 0 {
             return Err("palw_court_capacity_v1: every operation class costs at least one work unit and memory scales with bytes");
         }
-        if self.block_budget.work < self.max_op_work() || self.block_budget.bytes == 0 || self.block_budget.memory == 0 {
+        if self.block_budget.work < self.session_op_work() || self.block_budget.bytes == 0 || self.block_budget.memory == 0 {
             return Err("palw_court_capacity_v1: the block budget must admit the heaviest single court operation");
         }
+        if self.one_move_budget.work < self.op_work[PalwCourtOpClassV1::OneMove as usize]
+            || self.one_move_budget.bytes == 0
+            || self.one_move_budget.memory == 0
+        {
+            return Err("palw_court_capacity_v1: the one-move budget must admit one one-move accusation");
+        }
+        if self.reserve_permille == 0 || self.reserve_permille > 1_000 {
+            return Err("palw_court_capacity_v1: the reserve share is 1..=1000 per mille");
+        }
         Ok(())
+    }
+
+    /// **The block budget `class` is charged to**: a one-move accusation its own budget, every session operation the session budget.
+    pub fn budget_of(&self, class: PalwCourtOpClassV1) -> PalwCourtCostV1 {
+        if class == PalwCourtOpClassV1::OneMove { self.one_move_budget } else { self.block_budget }
+    }
+
+    /// **The session operations' budget work**, the one the capacity is derived from (`max_op_work` over the session classes).
+    fn session_op_work(&self) -> u64 {
+        self.op_work[1..].iter().copied().max().unwrap_or(1).max(1)
+    }
+
+    /// **The reserve slots** (`reserve_permille` of the capacity, at least one) at rung window `turn_deadline_daa`.
+    pub fn reserve_slots(&self, turn_deadline_daa: u64) -> u64 {
+        let capacity = self.capacity_sessions(turn_deadline_daa);
+        (u128::from(capacity) * u128::from(self.reserve_permille) / 1_000).max(1).min(u128::from(capacity)) as u64
+    }
+
+    /// **The spare slots**: the capacity less the reserve.
+    pub fn spare_slots(&self, turn_deadline_daa: u64) -> u64 {
+        self.capacity_sessions(turn_deadline_daa).saturating_sub(self.reserve_slots(turn_deadline_daa))
+    }
+
+    /// **The bounded admission's bucket width W** (DAA): the ticket window plus the network court window — one reserve row's
+    /// worst-case service.
+    pub fn admission_bucket_daa(&self, turn_deadline_daa: u64, window_court: u64) -> u64 {
+        self.ticket_window(turn_deadline_daa).saturating_add(window_court).max(1)
+    }
+
+    /// **M: the court-demanding claims one hard-deadline bucket admits** — half the reserve slots (the factor 2 absorbs the bucket
+    /// alignment and the non-preemptive service; g14-completeness-proof §11).
+    pub fn admission_claims_per_bucket(&self, turn_deadline_daa: u64) -> u64 {
+        self.reserve_slots(turn_deadline_daa) / 2
+    }
+
+    /// **The lead a reserve row needs for the guarantee**: filed at or before `hard − 4W`, it reaches its verdict by `hard`.
+    pub fn reserve_lead_daa(&self, turn_deadline_daa: u64, window_court: u64) -> u64 {
+        self.admission_bucket_daa(turn_deadline_daa, window_court).saturating_mul(4)
     }
 
     /// The heaviest operation class's work units.
@@ -208,11 +287,12 @@ impl PalwCourtCapacityPolicyV1 {
         if self.ticket_window_daa == 0 { turn_deadline_daa.max(1) } else { self.ticket_window_daa }
     }
 
-    /// **The concurrent sessions the budget can serve**: every session needs at most one move of at most `max_op_work` units per rung
-    /// window, and a block admits `⌊budget.work / max_op_work⌋` of them — so `⌊budget.work / max_op_work⌋ × turn_deadline_daa` sessions
+    /// **The concurrent sessions the budget can serve**: every session needs at most one move of at most the heaviest session class's
+    /// units per rung window, and a block admits `⌊budget.work / that⌋` of them — so `⌊budget.work / max_op_work⌋ × turn_deadline_daa` sessions
     /// each get their move inside their rung (the derivation `palw_max_concurrent_court_sessions_v1` makes for one move a block).
     pub fn capacity_sessions(&self, turn_deadline_daa: u64) -> u64 {
-        (self.block_budget.work / self.max_op_work()).saturating_mul(turn_deadline_daa).max(1)
+        // Round 2: a one-move accusation never spends `block_budget` (it has its own), so the capacity is the session classes'.
+        (self.block_budget.work / self.session_op_work()).saturating_mul(turn_deadline_daa).max(1)
     }
 
     /// **The occupancy fee** for `occupied_daa` DAA at weight `weight`: ρ_court × occupied DAA × weight.
@@ -256,6 +336,12 @@ pub struct PalwCourtMeasurementV1 {
     pub rho_sompi: u64,
     /// The ticket window, DAA (0: the rung window).
     pub ticket_window_daa: u64,
+    /// **Round 2: the one-move accusations' verification time one block may take** (nanoseconds), separate from `block_court_ns`.
+    pub block_one_move_ns: u64,
+    /// **Round 2: the one-move accusations' evidence bytes one block may carry.**
+    pub block_one_move_bytes: u64,
+    /// **Round 2: the reserve share** (per mille of the capacity; the network's approved choice).
+    pub reserve_permille: u16,
 }
 
 impl PalwCourtMeasurementV1 {
@@ -267,7 +353,8 @@ impl PalwCourtMeasurementV1 {
     }
 
     /// **The policy this measurement derives**, deterministically: the work unit is the cheapest class's time; each class costs
-    /// `⌈its time / unit⌉` units; the block budget is `⌊block_court_ns / unit⌋` units, the block's byte and working-set allotments;
+    /// `⌈its time / unit⌉` units; the block budget is `⌊block_court_ns / unit⌋` units, the block's byte and working-set allotments
+    /// (the one-move budget likewise from `block_one_move_ns` / `block_one_move_bytes`, sharing the working-set allotment);
     /// the working set per encoded byte is the worst class's `⌈memory / bytes⌉`; the session weight is the heaviest class's units.
     /// Refused when a class is unmeasured (0) or the allotment cannot take the heaviest class once.
     pub fn policy(&self) -> Result<PalwCourtCapacityPolicyV1, &'static str> {
@@ -296,15 +383,23 @@ impl PalwCourtMeasurementV1 {
             rho_sompi: self.rho_sompi,
             session_weight: 0,
             ticket_window_daa: self.ticket_window_daa,
+            one_move_budget: PalwCourtCostV1 {
+                work: self.block_one_move_ns / unit,
+                bytes: self.block_one_move_bytes,
+                memory: self.block_court_memory,
+            },
+            reserve_permille: self.reserve_permille,
         };
         policy.validate()?;
-        let heaviest = (0..PALW_COURT_OP_CLASSES_V1)
-            .map(|class| PalwCourtCostV1 {
+        let heaviest = (0..PALW_COURT_OP_CLASSES_V1).all(|class| {
+            let cost = PalwCourtCostV1 {
                 work: op_work[class],
                 bytes: self.class_bytes[class],
                 memory: self.class_bytes[class].saturating_mul(memory_per_byte),
-            })
-            .all(|cost| cost.fits_within(&policy.block_budget));
+            };
+            let budget = if class == PalwCourtOpClassV1::OneMove as usize { policy.one_move_budget } else { policy.block_budget };
+            cost.fits_within(&budget)
+        });
         if !heaviest {
             return Err("palw_court_capacity_v1: the block allotments cannot take every operation class at its measured worst once");
         }
@@ -519,6 +614,13 @@ pub struct PalwReservedCourtV1 {
     pub weight: u64,
     /// The maximum session (DAA) the scheduler accounted for after the ticket window (the class's court window at admission).
     pub service_daa: u64,
+    /// **Round 2: the claim's reserve row** (its first court row, on the reserve slots) — else a spare row.
+    pub reserve: bool,
+    /// **Round 2: a spare row admitted under the worst-case deadline guarantee** (always `true` for a reserve row); `false` = admitted
+    /// best-effort, granted only behind every guaranteed spare row.
+    pub guaranteed: bool,
+    /// **Round 2: the DAA the row was admitted at** (the unserved-claim rule reads it).
+    pub admitted_daa: u64,
 }
 
 impl PalwReservedCourtV1 {
@@ -529,6 +631,11 @@ impl PalwReservedCourtV1 {
             PalwCourtStageV1::Ticket { granted_daa, .. } => Some(granted_daa),
             PalwCourtStageV1::Running { started_daa, .. } => Some(started_daa),
         }
+    }
+
+    /// **Round 2: is the row still waiting for its court** (queued, or holding an unused ticket)?
+    pub fn waiting(&self) -> bool {
+        matches!(self.stage, PalwCourtStageV1::Queued { .. } | PalwCourtStageV1::Ticket { .. })
     }
 
     /// The occupancy fee owed at `now`: ρ × occupied DAA × weight, never more than the escrow.

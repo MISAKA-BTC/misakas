@@ -70,6 +70,7 @@ impl<'a> TransitionBuilder<'a> {
             panel_v3_beacons: Vec::new(),
             paid_lifetime_admission_v1: None,
             court_cost_spent: Default::default(),
+            court_one_move_spent: Default::default(),
         })
     }
 

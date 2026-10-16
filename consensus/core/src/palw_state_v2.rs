@@ -10264,6 +10264,12 @@ pub enum PalwStateV2Error {
     /// admission, or the deadline guarantee of the queue. Past `palw_court_capacity_v1` only.
     #[error("court capacity refuses this: {0}")]
     CourtCapacityRefused(String),
+    /// **Bounded claim admission** (lane g14-court-capacity-r2, `crate::palw_court_capacity_v1`): a court-demanding claim (a
+    /// fused-attention V2 Attempt) whose hard-deadline bucket already holds as many in-flight court-demanding claims as the reserve
+    /// slots can serve before their deadlines. Checked before `apply_attempt`'s first write; the block's own attempt is skipped on it,
+    /// never the block refused (another block's claim may take the bucket's last place). Past `palw_court_capacity_v1` only.
+    #[error("court capacity admits no further court-demanding claim in hard-deadline bucket {bucket}: {admitted} of {cap} (class {class})")]
+    CourtClaimAdmissionFull { class: Hash64, bucket: u64, admitted: u64, cap: u64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -12453,6 +12459,19 @@ pub fn palw_class_admits_claim_v1(
     PalwFoldReadV1::outside(state, params, extras).check_class_admits_claim(class_id, now_daa, PalwGatedClaimV1::Attempt)
 }
 
+/// **Lane g14-court-capacity-r2: would the fold at `now_daa` admit a court-demanding attempt of `class_id` whose trace retention is
+/// `trace_retention_daa`** (the bounded admission, `palw_court_capacity_v1`; `Ok` below the fence and for a class with no fused leaf) —
+/// the producer's pre-check beside [`palw_class_admits_claim_v1`], so a producer does not spend an inference on a skipped attempt.
+pub fn palw_court_claim_admission_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    now_daa: u64,
+    trace_retention_daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    palw_court_capacity_fold_v1::check_court_claim_admission_v1(state, params, class_id, now_daa, trace_retention_daa)
+}
+
 /// **RFC-0002 Part II Proposal A: would the fold at a block with these `extras` find `class_id` seated for `executor`?**
 /// The fold's own seating door (`check_class_seated_v1`, past `Params::palw_class_seating`; `Ok` below it), for a producer's
 /// pre-check — asked beside [`palw_class_admits_claim_v1`], so a producer does not spend an inference on a claim the chain
@@ -13038,6 +13057,9 @@ struct TransitionBuilder<'a> {
     /// **Lane g14-court-capacity: what this block's court operations have cost so far** (deterministic units), against the policy's
     /// block budget past `palw_court_capacity_v1`. Not state: one builder is one block's fold; zero below the fence.
     court_cost_spent: crate::palw_court_capacity_v1::PalwCourtCostV1,
+    /// **Lane g14-court-capacity-r2: what this block's one-move accusations have cost so far**, against the policy's separate
+    /// one-move budget. Not state; zero below the fence.
+    court_one_move_spent: crate::palw_court_capacity_v1::PalwCourtCostV1,
 }
 
 /// **What the class gate counts as a class's claims in flight** (2026-09-24 DoS audit #11 and its
@@ -14817,7 +14839,10 @@ fn apply_palw_transition_v7_inner(
                     // RFC-0016 (dormant): V+ block rights and the pending queue's bond share — checked in the class gate and beside the
                     // per-bond share, before `apply_attempt`'s first write; another block may take the last right or queue slot.
                     | PalwStateV2Error::ModelBlockRightsRefused { .. }
-                    | PalwStateV2Error::FinalQueueRefused { .. }),
+                    | PalwStateV2Error::FinalQueueRefused { .. }
+                    // Lane g14-court-capacity-r2 (dormant): the bounded court admission — checked beside the class gate, before
+                    // `apply_attempt`'s first write; another block's court-demanding claim may take the bucket's last place.
+                    | PalwStateV2Error::CourtClaimAdmissionFull { .. }),
                 ) => {
                     builder.register_network_demand_on_v1(&refused, &envelope.attempt, ctx.daa_score)?;
                     merged_skips.push((ctx.block, refused.to_string()));
@@ -21520,6 +21545,15 @@ fn apply_attempt(
     // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
     // claim, and one at its inflight cap takes none until a claim leaves flight.
     builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score, PalwGatedClaimV1::Attempt)?;
+    // **Lane g14-court-capacity-r2 (`palw_court_capacity_v1`, dormant): bounded admission of court-demanding claims** — a
+    // fused-attention V2 Attempt is taken only while its hard-deadline bucket has room on the reserve slots. `Ok` below the fence.
+    palw_court_capacity_fold_v1::check_court_claim_admission_v1(
+        &builder.state,
+        builder.params,
+        &attempt.class_id,
+        ctx.daa_score,
+        attempt.trace_retention_daa,
+    )?;
     // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for this executor** — one function, the
     // same every other door asks; before the reservation is taken, so a class no panel can be drawn for voids nothing.
     // **Lane MU (ADR-0173, past `palw_audit_1004_v1`): over the seats that hold the root the attempt names**, and that root's own
