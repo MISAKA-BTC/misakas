@@ -446,7 +446,9 @@ fn tn1_licensed(forge: Option<(usize, usize)>) -> (Lane, PalwChainStateV2, crate
     // ADR-0152 v2 F2 as testnet-12 arms it at genesis: the claim records its job identity (the free-prompt job pin), the identity a
     // public conviction is judged against (`original_job_matches_v1`); without it no arithmetic refutation can name the claim.
     l.extras.offence_attribution_active = true;
-    for n in 0..5 {
+    // ADR-0124's panel economy, as on testnet-12: the bound seats go on duty (the duty row a seat's atomic Valid + grant credits).
+    l.extras.panel_economy_active = true;
+    for n in 3..5 {
         tn1_bond(&mut l.state, SEAT + n, vec![7; 4]);
     }
     let domain = l.extras.tir_public_network_domain_v1.unwrap();
@@ -471,34 +473,49 @@ fn tn1_licensed(forge: Option<(usize, usize)>) -> (Lane, PalwChainStateV2, crate
     let maximum = frame.descriptor_v1().maximum_leaves;
     let key = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirPreparation(plan.original_claim, plan.allocation_id);
 
-    // ---- the producer's preparation: ONE debit for the pass, then Ready ----
-    let mut book = crate::palw_tir_public_state_v1::palw_tir_public_work_book_v1(&s, key, producer, maximum).expect("a duty");
-    let snapshot = crate::palw_tir_public_state_v1::palw_tir_public_preparation_snapshot_v1(&s, key, maximum).unwrap().unwrap();
-    let lane = &snapshot.row.preparation.work_v1().allocation;
-    assert_eq!(snapshot.row.preparation.contract_v1().plan.maximum_slices_per_actor, lane.maximum_restarts + 1, "one debit a pass");
-    let work = crate::palw_tir_frame_cost_v1::tir_public_pass_budget_v1(lane.per_actor, lane.maximum_restarts + 1).unwrap();
-    let scope = PalwTirPublicWorkScopeV1 {
-        claim: plan.original_claim,
-        owner: producer,
-        reserved_daa: terms.accepted_daa,
-        bundle_id: plan.allocation_id,
-        source_id: plan.source_id,
-        turn: 0,
-        request: crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: 0 },
-        actor: producer,
-        phase: PalwTirPublicWorkPhaseV1::Capture,
-        input_head: plan.source_id,
-        input_offset: 0,
-        slice: 0,
-        cursor_id: h64(0xC0),
-    };
-    let debit = book.prepare_v1(&s, scope, work, None, maximum).expect("the pass's one debit prepares");
+    // ---- the Panel binds (five seats; three will sign Valid), and the producer files its ONE debit for the pass ----
+    let seat_kps: Vec<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair> =
+        (0..3u8).map(|n| libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x50 + n; 32])).collect();
+    let mut s = s;
+    for (n, kp) in seat_kps.iter().enumerate() {
+        tn1_bond(&mut s, SEAT + n as u64, kp.verification_key.as_ref().to_vec());
+    }
+    let seats: Vec<PalwPanelSeatV2> = (0..5).map(|n| PalwPanelSeatV2 { bond: bond_key(SEAT + n), operator_id: op_id(SEAT + n) }).collect();
     let preparation = T::Preparation { original_accepted_daa: terms.accepted_daa };
+    let debit_of = |s: &PalwChainStateV2, actor: PalwBondKeyV2| {
+        let mut book = crate::palw_tir_public_state_v1::palw_tir_public_work_book_v1(s, key, actor, maximum).expect("a duty");
+        let snapshot = crate::palw_tir_public_state_v1::palw_tir_public_preparation_snapshot_v1(s, key, maximum).unwrap().unwrap();
+        let lane = &snapshot.row.preparation.work_v1().allocation;
+        assert_eq!(snapshot.row.preparation.contract_v1().plan.maximum_slices_per_actor, lane.maximum_restarts + 1, "one debit a pass");
+        let work = crate::palw_tir_frame_cost_v1::tir_public_pass_budget_v1(lane.per_actor, lane.maximum_restarts + 1).unwrap();
+        let scope = PalwTirPublicWorkScopeV1 {
+            claim: plan.original_claim,
+            owner: producer,
+            reserved_daa: terms.accepted_daa,
+            bundle_id: plan.allocation_id,
+            source_id: plan.source_id,
+            turn: 0,
+            request: crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: 0 },
+            actor,
+            phase: PalwTirPublicWorkPhaseV1::Capture,
+            input_head: plan.source_id,
+            input_offset: 0,
+            slice: 0,
+            cursor_id: h64(0xC0),
+        };
+        (book.prepare_v1(s, scope, work, None, maximum).expect("the pass's one debit prepares"), book)
+    };
     let mut daa = AT_DAA + 1;
+    let bind = PalwConsensusObjectV2::PanelBound { claim: l.claim, anchor: h64(77), seats };
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[bind], &l.extras).expect("the Panel binds");
+    let (debit, mut producer_book) = debit_of(&s, producer);
     let object = tn1_control(&l.keypair, domain, &frame, producer, preparation, A::Preparation(debit), 0, 0);
-    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[object], &l.extras).expect("the pass's debit folds");
-    assert!(book.confirm_v1(&s, maximum).expect("confirms").is_some(), "the accepted debit mints the pass's permit");
     daa += 1;
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[object], &l.extras).expect("the pass's debit folds");
+    assert!(producer_book.confirm_v1(&s, maximum).expect("confirms").is_some(), "the accepted debit mints the pass's permit");
+    daa += 1;
+
+    // ---- the producer's Ready, and the three Valid seats' own pass debits (each prepares its own capture) ----
     let header = frame.header_v1();
     let original = frame.original_v1();
     let descriptor = crate::palw_backend::PalwTirPublicPreparedDescriptorV1 {
@@ -516,25 +533,63 @@ fn tn1_licensed(forge: Option<(usize, usize)>) -> (Lane, PalwChainStateV2, crate
         manifest_digest: h64(0xD1),
         retained_bytes: 1,
     };
-    let object = tn1_control(&l.keypair, domain, &frame, producer, preparation, A::Preparation(Owned::PreparationReady { descriptor }), 0, 0);
-    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[object], &l.extras).expect("Ready folds inside the preparation door");
-    assert!(daa < plan.preparation_until_daa, "Ready landed inside its door");
+    let mut objects = vec![tn1_control(&l.keypair, domain, &frame, producer, preparation, A::Preparation(Owned::PreparationReady { descriptor }), 0, 0)];
+    for (n, kp) in seat_kps.iter().enumerate() {
+        let seat = bond_key(SEAT + n as u64);
+        let (debit, _) = debit_of(&s, seat);
+        objects.push(tn1_control(kp, domain, &frame, seat, preparation, A::Preparation(debit), 0, 0));
+    }
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &objects, &l.extras).expect("Ready and the seats' debits fold");
     daa += 1;
 
-    // ---- a Panel of five seats binds; three sign Valid and license the claim (they sign whatever the producer committed) ----
-    let seats: Vec<PalwPanelSeatV2> = (0..5).map(|n| PalwPanelSeatV2 { bond: bond_key(SEAT + n), operator_id: op_id(SEAT + n) }).collect();
-    let bind = PalwConsensusObjectV2::PanelBound { claim: l.claim, anchor: h64(77), seats };
-    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[bind], &l.extras).expect("the Panel binds");
-    daa += 1;
-    let receipts = (0..3)
-        .map(|n| crate::palw_panel_v2::PalwSeatReceiptV2 {
+    // ---- each Valid seat's atomic Valid + raw custody grant + Ready (it becomes liable on the claim) ----
+    let mut receipts = Vec::new();
+    let mut grants = Vec::new();
+    for (n, kp) in seat_kps.iter().enumerate() {
+        let seat = bond_key(SEAT + n as u64);
+        let sign = |message: &[u8], context: &[u8]| {
+            libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0x5E; 32]).unwrap().as_ref().to_vec()
+        };
+        let message = crate::palw_panel_v2::palw_receipt_message_v2(domain, l.claim, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid, daa);
+        let receipt = crate::palw_panel_v2::PalwSeatReceiptV2 {
             claim: l.claim,
             verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
-            seat_bond: bond_key(SEAT + n),
+            seat_bond: seat,
             signed_daa: daa,
+            signature: sign(message.as_byte_slice(), crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT),
+        };
+        let mut grant = crate::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1 {
+            version: 1,
+            claim: l.claim,
+            seat,
+            signed_daa: daa,
+            pledge_id: frame.custody_v1().pledge_v1().id_v1(),
+            valid_receipt_digest: crate::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1::receipt_digest_v1(&receipt),
             signature: Vec::new(),
-        })
-        .collect();
+        };
+        grant.signature = sign(grant.id_v1().as_byte_slice(), crate::palw_tir_public_custody_v1::PALW_TIR_SOURCE_GRANT_CONTEXT_V1);
+        let mut movement = crate::palw_tir_public_carriage_v1::PalwTirPublicGrantReadyV1 {
+            version: 1,
+            claim: l.claim,
+            allocation_id: plan.allocation_id,
+            source_id: plan.source_id,
+            signer: seat,
+            receipt: receipt.clone(),
+            grant,
+            descriptor,
+            signature: Vec::new(),
+        };
+        let digest = movement.signing_message_v1(domain).unwrap();
+        movement.signature = sign(digest.as_byte_slice(), crate::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_GRANT_READY_CONTEXT_V1);
+        movement.check_v1().unwrap();
+        grants.push(PalwConsensusObjectV2::TirPublicGrantReadyV1 { grant: Box::new(movement) });
+        receipts.push(receipt);
+    }
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &grants, &l.extras).expect("the seats' atomic grants fold");
+    assert!(daa < plan.preparation_until_daa, "every Ready landed inside the preparation door");
+    daa += 1;
+
+    // ---- the claim is licensed on those exact credited receipts (the Panel signs whatever the producer committed) ----
     let licence = PalwConsensusObjectV2::ReceiptLicensed { claim: l.claim, receipts };
     let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[licence], &l.extras).expect("the claim is licensed");
     assert!(
@@ -724,7 +779,21 @@ fn t_n1_a_forged_ir_fp_claim_is_convicted_by_one_outside_owner_and_never_paid() 
         "the forged claim is voided"
     );
     assert!(convicted.bonds.get(&producer).unwrap().collateral < before, "the producer is slashed");
-    assert_eq!(convicted.consumed_offences.len(), state.consumed_offences.len() + 1, "the conviction is recorded, once");
+    // The producer's conviction and each credited false-Valid seat's offence, each recorded once.
+    assert_eq!(convicted.consumed_offences.len(), state.consumed_offences.len() + 4, "producer + the three Valid seats");
+    for n in 0..3 {
+        let seat = bond_key(SEAT + n);
+        assert!(
+            convicted.consumed_offences.contains_key(&crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &l.claim)),
+            "the Valid seat {n}'s false-Valid offence is consumed"
+        );
+        assert!(!convicted.slashable_locks.contains_key(&(seat, l.claim)), "its lock on the claim is taken");
+        assert!(convicted.bonds.get(&seat).unwrap().collateral < state.bonds.get(&seat).unwrap().collateral, "seat {n} is slashed");
+    }
+    for n in 3..5 {
+        let seat = bond_key(SEAT + n);
+        assert_eq!(convicted.bonds.get(&seat).unwrap().collateral, state.bonds.get(&seat).unwrap().collateral, "a silent seat is not");
+    }
     // Once only: the same filing again finds the offence consumed and the claim voided.
     let mut again = Control::conviction_unsigned_v1(
         plan.original_claim,
