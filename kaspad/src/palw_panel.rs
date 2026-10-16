@@ -4272,6 +4272,9 @@ enum CaptureSamplesV1 {
 
 pub struct PalwPanelService {
     worker_running: std::sync::atomic::AtomicBool,
+    /// **DRILL ONLY (`--palw-drill-extra-seat`)**: this service's own copy of the node's gossip inbox, fanned out by the daemon when
+    /// several seat identities share the process; `None` takes the node's inbox as before.
+    drill_inbox: std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<kaspa_p2p_flows::palw_gossip::PalwGossipEvent>>>,
     /// Read-only test observation of real completed replay verdicts; never drives the service.
     #[cfg(test)]
     fraud_filer_honest_replays: std::sync::Mutex<HashSet<Hash64>>,
@@ -4638,6 +4641,11 @@ impl PalwPanelService {
         }
     }
 
+    /// **DRILL ONLY**: hand this service its own copy of the gossip inbox (`--palw-drill-extra-seat`), before the worker starts.
+    pub(crate) fn drill_attach_inbox_v1(&self, inbox: tokio::sync::mpsc::Receiver<kaspa_p2p_flows::palw_gossip::PalwGossipEvent>) {
+        *self.drill_inbox.lock().unwrap() = Some(inbox);
+    }
+
     /// The configuration this service runs (`--palw-drill-extra-seat` clones it for another seat identity in the same process).
     pub(crate) fn drill_config_v1(&self) -> &PalwPanelConfig {
         &self.config
@@ -4712,6 +4720,7 @@ impl PalwPanelService {
         };
         Self {
             worker_running: std::sync::atomic::AtomicBool::new(false),
+            drill_inbox: std::sync::Mutex::new(None),
             #[cfg(test)]
             fraud_filer_honest_replays: std::sync::Mutex::new(HashSet::new()),
             config,
@@ -8606,7 +8615,8 @@ impl PalwPanelService {
             return;
         };
         let bond_key = PalwBondKeyV2(bond);
-        let Some(mut inbox) = self.flow_context.palw_gossip().take_inbox() else {
+        let drill_inbox = self.drill_inbox.lock().unwrap().take();
+        let Some(mut inbox) = drill_inbox.or_else(|| self.flow_context.palw_gossip().take_inbox()) else {
             warn!("[{PALW_PANEL}] the gossip inbox was already taken — panel service disabled");
             self.public_cache_retirement_worker_v1().await;
             return;

@@ -16,8 +16,9 @@
 //!   void (no vesting row, no payout, the root forfeited) long past its would-be Final floor; a replaying node reaches the same roots.
 //! * **F**: the same objective conviction when the outsider first acts at `Final − 1` (the last blocks before the floor) and when it
 //!   first acts after `Final` inside the liability; the producer's exit request raced against the pursuit does not escape the slash;
-//!   a liable seat cannot exit while its `Valid` lock is alive; after the liability horizon no new pursuit can be opened (the
-//!   boundary of the liability, stated, not a silent pass). Reorg, restart, full IBD and pruned import of the pursuit are the
+//!   a liable seat cannot exit while its `Valid` lock is alive; the post-Final pursuit is open up to the vesting row's DAA expiry and
+//!   the reward matures only past it (it also waits on the settlement clock) — the pursuit window and the payout never overlap (the
+//!   boundary, stated, not a silent pass). Reorg, restart, full IBD and pruned import of the pursuit are the
 //!   parent's `lg14a_*` / `g14r_resume` cases (same fold rules; their harness sets the fence on its mirror) plus the replay roots
 //!   asserted here.
 //! * **G**: on a network whose G14 set is armed at a height `H`, honest claims accepted at `H − 1`, exactly `H` and `H + 1` are each
@@ -487,12 +488,14 @@ async fn g14_accept_f_a_bond_exit_raced_against_the_pursuit_escapes_nothing() {
     assert!(lg.collateral(EXECUTOR) < producer_before, "the producer is slashed despite its exit request");
 }
 
-/// **F: after the liability horizon, no new pursuit opens** — the boundary stated as a test. A lying claim nobody pursued reaches
-/// `Final` and its vesting row matures at its liability expiry; a reservation built after that is refused by the node's own check and
-/// records nothing; the producer's collateral and the settled `Final` stand. (Already-paid rewards are settled; the audit's F asks
-/// that this boundary be specified and not confused with an unpaid cancellation.)
+/// **F: the pursuit window and the payout never overlap — the boundary stated as a test.** A lying claim nobody pursued reaches
+/// `Final`. Up to its vesting row's DAA expiry (`F + window_court`) the node still serves its dispute view and admits a reservation,
+/// and nothing of its reward is queued. Past the expiry the claim row retires: no dispute view, no reservation can be recorded, the
+/// producer's collateral is untouched — and the vesting row matures only then or later (it also waits on the settlement clock, V-4),
+/// so the reward is paid strictly after the last moment a pursuit could open. A paid reward is settled; an unpaid one inside the
+/// window is pursuable (the parent's after-Final conviction and `g14_accept_f_the_same_conviction_after_final_inside_the_liability`).
 #[tokio::test]
-async fn g14_accept_f_after_the_liability_horizon_no_pursuit_opens() {
+async fn g14_accept_f_the_pursuit_window_and_the_payout_never_overlap() {
     kaspa_core::log::try_init_logger("warn");
     let mut lg = g14_lg();
     let (produced, _, licensed) = licensed_claim(&mut lg, true).await;
@@ -500,29 +503,42 @@ async fn g14_accept_f_after_the_liability_horizon_no_pursuit_opens() {
     lg.beat_to(licensed + lg.bundle.state.window_challenge_at(licensed) + 2).await;
     assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::Final { .. }), "nobody looked: Final");
     let expiry = lg.chain.tip_state().1.vesting_row(&id).expect("its vesting row").expiry_daa;
-    eprintln!("[g14-accept F horizon] Final; liability expiry at DAA {expiry} (now {})", lg.daa());
-    lg.beat_to(expiry + 2).await;
-    let mut matured = false;
-    for _ in 0..256 {
-        if lg.chain.tip_state().1.vesting_row(&id).is_none_or(|r| r.matured_at.is_some()) {
-            matured = true;
-            break;
-        }
-        lg.beat(1).await;
-    }
-    assert!(matured, "the vesting row matures past its liability expiry");
-    let producer_before = lg.collateral(EXECUTOR);
+    // Inside the window: pursuable, nothing paid.
+    lg.beat_to(expiry.saturating_sub(6)).await;
+    let state = lg.chain.tip_state().1;
+    assert!(state.vesting_row(&id).is_some_and(|r| r.matured_at.is_none()), "unmatured inside the window");
+    assert!(state.pending_payout(&palw_vesting_payout_key_v1(&id)).is_none(), "nothing paid inside the window");
     let view = lg.view(id);
-    let reservation = palw_fraud_filer_reservation_v1(&view, lg.bond(NEWCOMER));
-    let check = lg.chain.ctx.consensus.palw_legacy_dispute_reservation_check_v1(reservation);
-    eprintln!("[g14-accept F horizon] the node's reservation check past the horizon: {check:?}");
-    assert!(!check.is_some_and(|r| r.is_ok()), "past the liability horizon the node refuses a new reservation");
-    let object = reserve_by_hand(&lg, id, 0x74);
+    let check = lg.chain.ctx.consensus.palw_legacy_dispute_reservation_check_v1(palw_fraud_filer_reservation_v1(&view, lg.bond(NEWCOMER)));
+    assert!(check.as_ref().is_some_and(|r| r.is_ok()), "just before the expiry the node still admits a reservation: {check:?}");
+    // Past the window: retired, not pursuable, untouched; the payout (if any yet) comes only now.
+    lg.beat_to(expiry + 2).await;
+    let producer_before = lg.collateral(EXECUTOR);
+    let state = lg.chain.tip_state().1;
+    let row = state.vesting_row(&id).cloned();
+    eprintln!(
+        "[g14-accept F horizon] past the DAA expiry {expiry} (now {}): claim row {:?}, vesting (final, expiry, settled, matured) {:?}",
+        lg.daa(),
+        state.claim(&id).map(|c| c.phase.clone()),
+        row.as_ref().map(|r| (r.final_daa, r.expiry_daa, r.settled_at_final, r.matured_at))
+    );
+    assert!(lg.chain.ctx.consensus.palw_legacy_dispute_v1(id).is_none(), "past the window the claim's dispute view is retired");
+    assert!(row.as_ref().is_none_or(|r| r.matured_at.is_none_or(|at| at >= expiry)), "the reward matures only past the window");
+    // The same reservation the node admitted inside the window (its roots from the view read then), sent now.
+    let reservation = PalwDisputeReservationV1 {
+        version: PALW_DISPUTE_RESERVATION_VERSION_V1,
+        claim: id,
+        execution_root: view.execution_root,
+        trace_root: view.trace_root,
+        reserver: lg.bond(NEWCOMER),
+    };
+    let object = palw_dispute_reserved_object_v1(lg.domain, reservation, |m| {
+        sign(NEWCOMER, m, kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1, 0x74)
+    });
     let outcome = try_send(&mut lg, NEWCOMER, &object).await;
-    eprintln!("[g14-accept F horizon] a reservation carrier anyway: {outcome:?}");
-    assert!(lg.view(id).record.is_none(), "no reservation is recorded past the horizon");
+    eprintln!("[g14-accept F horizon] a reservation carrier past the window: {outcome:?}");
+    assert!(lg.chain.tip_state().1.legacy_dispute_v1(&id).is_none(), "no reservation is recorded past the window");
     assert_eq!(lg.collateral(EXECUTOR), producer_before, "the settled claim's producer is untouched");
-    assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::Final { .. }), "the settled Final stands");
 }
 
 // ---- G ---------------------------------------------------------------------------------------------------------------------------

@@ -2428,8 +2428,43 @@ Do you confirm? (y/n)";
             Err(why) => warn!("[palw-class-carriage] refused the declaration for {class_id} from {path}: {why}"),
         }
     }
+    let palw_panel_service_for_drill = palw_panel_service.clone();
     if let Some(palw_panel_service) = palw_panel_service {
         async_runtime.register(palw_panel_service);
+    }
+    // The extra seats and this node's own seat share ONE gossip inbox: take it once and fan every event out to each service, and
+    // loop each service's own broadcast receipt back in so its siblings see it (they share no peer link to relay it).
+    if !palw_drill_extra_panel_services.is_empty()
+        && let Some(primary) = palw_panel_service_for_drill.as_ref()
+    {
+        use kaspa_p2p_flows::palw_gossip::PalwGossipEvent;
+        let gossip = flow_context.palw_gossip();
+        gossip.drill_enable_receipt_loopback();
+        let mut node_inbox = gossip.take_inbox().expect("no service has started: the node's gossip inbox is still here");
+        let mut senders = Vec::new();
+        for service in std::iter::once(primary).chain(palw_drill_extra_panel_services.iter()) {
+            let (tx, rx) = tokio::sync::mpsc::channel::<PalwGossipEvent>(4096);
+            service.drill_attach_inbox_v1(rx);
+            senders.push(tx);
+        }
+        std::thread::Builder::new()
+            .name("palw-drill-seat-fanout".into())
+            .spawn(move || {
+                while let Some(event) = node_inbox.blocking_recv() {
+                    for tx in &senders {
+                        let copy = match &event {
+                            PalwGossipEvent::Material { claim, bytes } => PalwGossipEvent::Material { claim: *claim, bytes: bytes.clone() },
+                            PalwGossipEvent::Receipt { bytes } => PalwGossipEvent::Receipt { bytes: bytes.clone() },
+                            PalwGossipEvent::IntervalOpening { claim, interval_index, bytes } => {
+                                PalwGossipEvent::IntervalOpening { claim: *claim, interval_index: *interval_index, bytes: bytes.clone() }
+                            }
+                        };
+                        let _ = tx.try_send(copy);
+                    }
+                }
+            })
+            .expect("the drill fan-out thread starts");
+        warn!("PALW DRILL: {} seat services share this node's gossip inbox (fan-out + receipt loopback)", palw_drill_extra_panel_services.len() + 1);
     }
     for extra in palw_drill_extra_panel_services {
         async_runtime.register(extra);

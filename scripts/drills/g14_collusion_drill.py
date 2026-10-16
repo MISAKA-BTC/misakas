@@ -374,7 +374,7 @@ class Drill:
         raise Blocked('%s: timed out after %d s (DAA %s; last error %s)' % (label, timeout_s, last_daa, last_err))
 
     def ref(self):
-        for role in ('O', 'P', 'P3', 'F'):
+        for role in ('O', 'P', 'R', 'P3', 'F'):
             n = self.nodes.get(role)
             if n and n.alive():
                 return n
@@ -464,6 +464,8 @@ class Drill:
         o.start()
         self.wait_rpc(o)
         self.peer_all()
+        if 'R' in self.nodes and self.nodes['R'].alive():
+            self.nodes['R'].stop()
         row = self.bond_row(bond)
         self.facts['outsider'] = {'bond': bond, 'address': o_key['address'], 'collateralSompi': int(m.group(3)),
                                   'registeredDaa': row.get('bondRegisteredDaa'), 'capableClasses': row.get('bondCapableClasses')}
@@ -852,6 +854,8 @@ class Drill:
     def start_core(self, canonical, inject=None):
         a = self.args
         self.add('P', 0, self.producer_flags(0, canonical=canonical, inject=inject, host_panel=True))
+        # The producer's mining gate needs one peer: a plain relay (no bond) until the outsider runs (three processes at most).
+        self.add('R', 6, [], bonded=False)
         for n in list(self.nodes.values()):
             n.start()
         for n in list(self.nodes.values()):
@@ -1263,7 +1267,7 @@ class Drill:
         ('F same conviction from Final-1', 'g14_accept_f_the_same_conviction_from_final_minus_one'),
         ('F same conviction after Final inside the liability', 'g14_accept_f_the_same_conviction_after_final_inside_the_liability'),
         ('F bond exit raced against the pursuit', 'g14_accept_f_a_bond_exit_raced_against_the_pursuit_escapes_nothing'),
-        ('F after the liability horizon no pursuit opens', 'g14_accept_f_after_the_liability_horizon_no_pursuit_opens'),
+        ('F the pursuit window and the payout never overlap', 'g14_accept_f_the_pursuit_window_and_the_payout_never_overlap'),
         ('F reorg / restart / IBD / pruned import (parent harness)', 'g14r_'),
         ('G honest claims before / at / after the fence settle', 'g14_accept_g_honest_claims_before_at_and_after_the_fence_settle'),
     ]
