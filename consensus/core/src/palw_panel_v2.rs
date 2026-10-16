@@ -762,7 +762,7 @@ impl PalwAnchorFactV2 {
 /// root is one BLAKE2b ticket, ~279 expected draws on the testnet-12 floor — so a new panel costs
 /// ~279 hashes, not an inference: in wall time about what a re-signature cost. The fence is the
 /// half of the fix that makes a re-roll cost a lottery WIN; only an inference-bound win (P0-10) makes
-/// that win expensive. docs/t12-panel-seed-2026-09-25.md states why no seed rule alone can close it.
+/// that win expensive. docs/history/testnet-12/t12-panel-seed-2026-09-25.md states why no seed rule alone can close it.
 pub fn palw_panel_draw_seed_v1(anchor_execution: &Hash64, claim_id: &Hash64) -> Hash64 {
     let mut seed = keyed(PALW_PANEL_V2_DOMAIN_DRAW_SEED_V1);
     seed.update(anchor_execution.as_byte_slice());

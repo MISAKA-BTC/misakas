@@ -29,7 +29,7 @@ trading model positions; and Hyperliquid's HyperEVM is the reference.
 devnet from genesis, inert on mainnet), ADR-0022 (the EVM snapshot at the pruning point),
 ADR-0023 (Lane 2; per-lane precompile profile; the frozen security labels), ADR-0087 (the market
 is a balance in the state fold; implemented behind `palw_model_market`), ADR-0088 (lines, versions,
-roles, usage; the market keyed by line), ADR-0059 (carve, never mint), `docs/misaka-evm-design-v0.4.md` §3.2 (system
+roles, usage; the market keyed by line), ADR-0059 (carve, never mint), `docs/design/evm/misaka-evm-design-v0.4.md` §3.2 (system
 ops), §8 (fees), §9 (the UTXO ⇄ EVM bridge), §17 (invariants).
 **Amends:** ADR-0087 Decision 3 (two more ways to make the same two moves — from the EVM),
 Decision 8 (what a participant reads gains the EVM's surfaces); design v0.4 §9.1's supply
@@ -389,7 +389,7 @@ no synchronous cross-lane call and adds none.
 the address constants — the `L1Read.sol` role; `eth_call` against the precompiles and facades
 works from any Shanghai toolchain at chain id `0x4D534B` with no MISAKA-specific RPC; receipts
 of the settling block carry the facade events under the standard log format
-(`docs/evm-differences-from-ethereum.md`'s rule: the receipts *root* is MISAKA's, the log
+(`docs/reference/evm/evm-differences-from-ethereum.md`'s rule: the receipts *root* is MISAKA's, the log
 fields are standard); `getPalwModelMarket` gains `evm_namespace_units`, `getPalwModelPositions`
 gains the label; `misaka palw model-buy|model-sell` gain `--via evm` for the operator's own
 account; the explorer's Model Market page shows one curve with two doors.

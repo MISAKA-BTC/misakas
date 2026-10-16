@@ -72,7 +72,7 @@ Each item names the rule family (0152's own labels, kept as sources) and where t
   execution-quantum maturity (F + 1,200) runs ahead of the row's F + 3,000.
 - **Amended after launch.**
   - 2026-09-25: SW-8's seed became the anchor attempt's execution commitment, and lane A anchored
-    panels on operator attempts ([t12-panel-seed-2026-09-25.md](../t12-panel-seed-2026-09-25.md)).
+    panels on operator attempts ([t12-panel-seed-2026-09-25.md](../history/testnet-12/t12-panel-seed-2026-09-25.md)).
   - [ADR-0154](0154-testnet-12-flag-day-daa-750.md) (DAA 750): both of the above, plus registry
     resilience, the anchor at the exposure ceiling, a resolved lock carried by the whole collateral,
     and the F + 1,000 lock life.

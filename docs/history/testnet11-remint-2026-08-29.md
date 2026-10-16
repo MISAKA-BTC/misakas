@@ -128,7 +128,7 @@ is being refused correctly, but it is a stale deployment that somebody should st
 
 ## What the re-mint carries
 
-Everything in `docs/palw-mainnet-audit3-2026-08-29.md`: four criticals, eleven highs, the M2-10
+Everything in `docs/audit/palw/palw-mainnet-audit3-2026-08-29.md`: four criticals, eleven highs, the M2-10
 producer gate, and the R-3 acceptance test made deterministic. Two items are explicitly recorded as
 fixed-but-untested, in the source rather than in a table — S-04's refusing half (needs a two-bond
 harness) and S-01's court round trip (needs a two-node one).

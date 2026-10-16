@@ -16,7 +16,7 @@
 //!             keyed_BLAKE2b-512("kaspa-pq-v2/address/mldsa87", verification_key))  // md2 §4.2 / ADR-0019 §8
 //! ```
 //!
-//! See docs/kaspa-pq-spec.md §8 for the normative spec. Phase 5 keeps the
+//! See docs/spec/kaspa-pq-spec.md §8 for the normative spec. Phase 5 keeps the
 //! derivation deterministic and side-effect free; persistent storage of
 //! the master seed and the wallet-CLI plumbing
 //! (`create`/`show-address`/`build-tx`/`sign-tx`/`submit-tx`) are

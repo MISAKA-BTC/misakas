@@ -135,6 +135,6 @@
 
 ## 5. 準備表の扱い
 
-- [mainnet-readiness.md](../../mainnet-readiness.md) の各行は「最終確認 2026-09-25 / `0e8ec984e`」のままで、冒頭の2026-10-10の設計注記は別基準である。これを単一の「現在のPASS表」として読まない。
+- [mainnet-readiness.md](../../operations/mainnet/mainnet-readiness.md) の各行は「最終確認 2026-09-25 / `0e8ec984e`」のままで、冒頭の2026-10-10の設計注記は別基準である。これを単一の「現在のPASS表」として読まない。
 - 今後は行ごとに **検証SHA** と **テスト実行への参照**（CI run または `cargo test` の対象とSHA）を付け、ページ全体の更新日だけで状態を表さない。
 - [activation-readiness-matrix.md](activation-readiness-matrix.md) の Implemented / Verified / Armable はこの台帳の 実装 / 検証 と同じ意味で使い、「実証」（本番条件での第三者による検証・訴追）を別の段として加える。

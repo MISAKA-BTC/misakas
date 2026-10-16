@@ -366,7 +366,7 @@ Until (1)–(3) land a seat replays whole and attests the full mask, and V2 is b
 
 ### 11.2 Readiness V2 (H-6), built 2026-09-18 — fenced at testnet-11's DAA 6,100
 
-The 2026-09-18 pre-arming audit (`docs/palw-audit-2026-09-18-6001.md`, finding H-6) put the
+The 2026-09-18 pre-arming audit (`docs/audit/palw/palw-audit-2026-09-18-6001.md`, finding H-6) put the
 possession proof's own words to the test: ADR-0135 Decision 4 calls readiness "evidence, not
 declaration", and V1's evidence is one leaf of a **contiguous eight-leaf window**
 (`PALW_READINESS_CHALLENGE_WIDTH_V1`), signed over the leaf's INDEX and not its bytes. A seat

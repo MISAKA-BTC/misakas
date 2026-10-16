@@ -507,14 +507,14 @@ KL median 1.4e-4 (max 0.012, Qwen3.5-MoE), |perplexity Δ| ≤ 2.1 %:
 
 **Qwen2.5-1.5B-Instruct** (the on-disk checkpoint, BF16 safetensors; no download). Calibration:
 8 sequences × 128 tokens of repository text (`docs/archival.md`, `docs/crescendo-guide.md`,
-`docs/connecting-ethereum-tooling.md`, `docs/node-liveness-probe.md`, two chunks each, tokenised
+`docs/operations/evm/connecting-ethereum-tooling.md`, `docs/operations/tools/node-liveness-probe.md`, two chunks each, tokenised
 offline by `tools/tokenize_docs.py`), streamed layer by layer: 300 s, 1.7 GB peak. Artifact:
 1,636 tensors, 1,527.9 MiB, a `PALWTIR1` container bound to the checkpoint's `tokenizer.json` (the
 legacy tokenizer commitment); `palw-class manifest` streams its inventory root over 1,445,615
 leaves in ~6 s. Residual scale 1.348e-5, logit scale 6.052e-8. Program:
 312 nodes, 13,903 bytes, one `attn+mlp` block of 270 nodes ×28, admitted (2.41e10 MACs a
 position at `W = 2^18`, 17 cones, the worst tile 0.57 Mi MACs). Evaluation on held-out text
-(the first 128 tokens of `docs/README.md` and of `docs/evm-differences-from-ethereum.md`), the
+(the first 128 tokens of `docs/README.md` and of `docs/reference/evm/evm-differences-from-ethereum.md`), the
 integer program on the reference evaluator against the f32 reference:
 
 | positions | top-1 | mean KL (max) | perplexity float → integer |

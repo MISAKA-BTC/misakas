@@ -10,7 +10,7 @@
 //! the chain draws from `PalwAnchorFactV2::panel_seed` — `H(anchor attempt's execution commitment ‖
 //! claim)` ([`chain_seed`]) — and each test asserts the identity grind now fails. What it does not
 //! close — a new lottery win is a new panel, and a win is cheap while P0-10 is open — a1 prints as the
-//! per-win pair rate (docs/t12-panel-seed-2026-09-25.md):
+//! per-win pair rate (docs/history/testnet-12/t12-panel-seed-2026-09-25.md):
 //!
 //! * `a1_…` — the ADR's own threat (§4.3 row 13, the undetectable coverage lie: the full seat AND the
 //!   partial holder of the lied segment are the attacker's), 1–3 Sybils at the panel floor: 6,000

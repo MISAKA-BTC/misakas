@@ -446,7 +446,7 @@ pub(crate) async fn model_status(ctx: &crate::node::Ctx, profile: Profile, selec
         println!("  {:<11}{:<72} {}", if i == 0 { "Next" } else { "" }, cmd, paint::dim(why));
     }
     if matches!(stage, ClassStage::Weightless) {
-        println!("  {:<11}{}", "", paint::dim("docs/palw-certify-a-new-model.md"));
+        println!("  {:<11}{}", "", paint::dim("docs/operations/models/palw-certify-a-new-model.md"));
     }
     Ok(())
 }

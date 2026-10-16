@@ -37,7 +37,7 @@ testnet-12 の genesis にある model class は 2 つです。
 | `Qwen/Qwen2.5-1.5B/graph-v7@8192`(8k) | `ebf44d0a…` | `Prefetching` から始まる。ready seat が 7 つ揃うと `Probation` に進む |
 | `Qwen/Qwen2.5-1.5B/graph-v7@2097152`(2M) | `74c67e63…` | **公開時点では規則で閉じている**(`ClassDeadlineUnmeasured`) |
 
-8k class には、chain が登録した root と一致する artifact(1,799,359,436 bytes、inventory root `88096dc1…`)と、3.5 GiB 以上の memory share が必要です。作り方は [参加手順 §6](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) を見てください。Qwen3.6 の hybrid 行は genesis に入っていません。
+8k class には、chain が登録した root と一致する artifact(1,799,359,436 bytes、inventory root `88096dc1…`)と、3.5 GiB 以上の memory share が必要です。作り方は [参加手順 §6](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md) を見てください。Qwen3.6 の hybrid 行は genesis に入っていません。
 
 class ID、状態、ready seat は、Wiki の値をコピーせずにチェーンで確認してください。
 
@@ -103,6 +103,6 @@ ADR-0123 の、使われていない class budget を解放する規則(`palw_ep
 ## 正本
 
 - [検証参加ガイド](Testnet-12-Verification-Participation-JA)
-- [Testnet-12 参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)
-- [testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)
+- [Testnet-12 参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md)
+- [testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/t12-launch-2026-09-25.md)
 - [ADR index](https://github.com/MISAKA-BTC/misakas/tree/main/docs/adr)

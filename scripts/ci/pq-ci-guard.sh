@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kaspa-pq PQ-only CI guard — ADR-0019 / docs/kaspa-pq-design-mldsa87.md §14.
+# kaspa-pq PQ-only CI guard — ADR-0019 / docs/design/consensus/kaspa-pq-design-mldsa87.md §14.
 #
 #   1) Advisory audit of dependencies (libcrux-ml-dsa et al.) — active now.
 #   2) secp256k1 MUST be absent from the kaspa-consensus dependency tree.
@@ -93,10 +93,10 @@ fi
 
 echo "== [4/6] normative spec must not carry stale ML-DSA-65 copy-paste hazards (audit M-03) =="
 # The current scheme is ML-DSA-87. Forbid the concrete WRONG values an external implementer could
-# copy from docs/kaspa-pq-spec.md (sizes / opcode / fn / struct / keygen-context). Generic historical
+# copy from docs/spec/kaspa-pq-spec.md (sizes / opcode / fn / struct / keygen-context). Generic historical
 # "ML-DSA-65" prose (clearly flagged in the spec header + the ADR-0002/0015 historical banners) is allowed.
-if grep -nE "3309|1952|OP_CHECKSIG_MLDSA65|OP_BLAKE2B_256|OP_DATA32|calc_mldsa65|Mldsa65SigCacheKey|mldsa65/keygen" docs/kaspa-pq-spec.md; then
-  echo "  -> FAIL: docs/kaspa-pq-spec.md contains a stale ML-DSA-65 concrete value (see matches above)."
+if grep -nE "3309|1952|OP_CHECKSIG_MLDSA65|OP_BLAKE2B_256|OP_DATA32|calc_mldsa65|Mldsa65SigCacheKey|mldsa65/keygen" docs/spec/kaspa-pq-spec.md; then
+  echo "  -> FAIL: docs/spec/kaspa-pq-spec.md contains a stale ML-DSA-65 concrete value (see matches above)."
   fail=1
 else
   echo "OK: spec is free of stale ML-DSA-65 sizes/opcodes/fns."

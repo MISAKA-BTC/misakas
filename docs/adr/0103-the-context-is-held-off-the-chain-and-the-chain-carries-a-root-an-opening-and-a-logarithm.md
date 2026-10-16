@@ -532,7 +532,7 @@ green); testnet-11 does not move. A network that wants this ADR mints with
 | **5** a fused leaf's dissection opens at the leaf | `open_at_named_leaf`, `worst_case_duration_held_daa`, `palw_court_arity_held_v1`, `palw_attn_court_admits_row_held_v1`, `palw_court_params_held_at_v2` | the fold tests; invariant 3 in `palw_adr0103_held_context.rs` |
 | **6** one position | closed-form coordinates and index; the per-position budget in `validate_geometry`/`validate_shape` for a held map | `the_registration_gate_visits_the_same_nodes_at_every_context` and D6's own tests |
 | **7** the plan prices the fetch | `PalwShardV1::fetch_bytes_at_v1`, `palw_shard_resume_ms_v1`, `palw_shard_plan_for_seat_within_window_v1`; `palw-shard-plan` prints the column | `the_shard_plan_prices_the_fetch_and_the_window_binds_the_shard_count` |
-| **8** every wall's order | `palw_model_fit_v1.rs` (`PalwFitOrderV1`, the held and held-network regimes, the held terms); `verify_class_admission_v8` (`HeldMapNeedsItsFence`, `LinearInTheContext`, `ChainWallOrderUnknown`); `palw-model-fit --preset held` (`docs/palw-model-fit-held-2026-09-11.md`) | `consensus/core/tests/palw_adr0103_held_context.rs` |
+| **8** every wall's order | `palw_model_fit_v1.rs` (`PalwFitOrderV1`, the held and held-network regimes, the held terms); `verify_class_admission_v8` (`HeldMapNeedsItsFence`, `LinearInTheContext`, `ChainWallOrderUnknown`); `palw-model-fit --preset held` (`docs/design/palw/palw-model-fit-held-2026-09-11.md`) | `consensus/core/tests/palw_adr0103_held_context.rs` |
 | **9** priced before armed | `palw-seat-coverage` §7 | `the_held_mint_moves_no_economics` |
 
 ### 10.2 The normative numbers (the generator's, replacing §1.2's and §3's arithmetic)

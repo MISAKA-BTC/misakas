@@ -17,7 +17,7 @@
   the real A16 artifact; licensing per shard is a consensus object behind its own fence
   (`Params::palw_shard_licensing`), with no state-version move (Decision 4, amended the same day).
   **Decisions 5, 7 and 8 are stated, not built**, each with the reason. Every number below is the generator's or
-  the tool's, recorded in `docs/palw-shard-plan-2026-09-10.md` and §1.3.
+  the tool's, recorded in `docs/design/palw/palw-shard-plan-2026-09-10.md` and §1.3.
 * Builds on: [0099](0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md)
   (Decision 5's fence and "the four"; §6 steps 2–4; Decision 4 named and not built),
   [0098](0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md)
@@ -95,7 +95,7 @@ is named by the class's `artifact_root` and a set of leaf indices under it — n
 ### 1.3 The held measurement, on the real artifact
 
 `palw-class measure --network testnet-11 qwen25-1.5b-a16.palwart` (this machine, 2026-09-10; the
-shipped A16 artifact, 1,795,427,276 bytes — the size `docs/model-requests.md` records):
+shipped A16 artifact, 1,795,427,276 bytes — the size `docs/operations/models/model-requests.md` records):
 
 | what | value |
 |---|---|
@@ -389,7 +389,7 @@ order is `main`'s to overwrite.
     `misaka/apps/cli/src/palw_shard_licensing.rs` — `palw shard-plan` and `palw bond-shards`;
     `kaspad/src/palw_panel.rs` — the seat files only where the chain's refutation ladder can try
     the claim, and its source pin reads the new arm.
-  * `docs/palw-shard-plan-2026-09-10.md` regenerated; this ADR; the README index.
+  * `docs/design/palw/palw-shard-plan-2026-09-10.md` regenerated; this ADR; the README index.
 * **2026-09-10, the drill (§6 step 2).** Three devnet nodes on this Mac, the floor class only,
   `--palw-shard-court-devnet=0` (the genesis states the COMPLETE_V3 set; the court armed from
   block one); node-0 produces canonical free-prompt claims whose capture is corrupted at step leaf

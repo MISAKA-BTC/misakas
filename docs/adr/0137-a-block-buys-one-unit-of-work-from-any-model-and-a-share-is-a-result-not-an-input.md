@@ -682,7 +682,7 @@ the delta reverts, and a quiet epoch returns W to the floor. testnet-11 arms S w
 
 ### 22.4 Audit finding (2026-09-18): the class target the fence retires still priced `pwu`
 
-The pre-arming audit (`docs/palw-audit-2026-09-18-6001.md`, finding C-2) found the rule this ADR
+The pre-arming audit (`docs/audit/palw/palw-audit-2026-09-18-6001.md`, finding C-2) found the rule this ADR
 retires still read one line away from the lottery it replaced. `check_palw_class_lottery_v4` priced
 the draw at `MAX · min(1, CCU/W)`, but the admission's `DerivedV1` arm still demanded
 `attempt.pwu == palw_pwu_v1(state.class_target, pwu_per_inference)` — a registrant-declared value no

@@ -1794,7 +1794,7 @@ immutable PQ Account / Factory / EntryPoint + `executeRoot`（F003 version 0x02 
 
 ### MISAKA source snapshot
 
-- `docs/misaka-evm-design-v0.4.md` — §9 deposit/withdraw、§20 PQ境界。
+- `docs/design/evm/misaka-evm-design-v0.4.md` — §9 deposit/withdraw、§20 PQ境界。
 - `crypto/txscript/src/script_class.rs` — current `EvmDepositLockFields`（strict `EvmPqDepositLockFields` は未実装）。
 - `consensus/src/processes/transaction_validator/tx_validation_in_utxo_context.rs` — refund timeout rule。
 - `consensus/src/processes/evm/mod.rs` — claim validationとduplicate防止。

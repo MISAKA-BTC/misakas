@@ -28,7 +28,7 @@ use kaspa_consensus_core::config::params::{
 /// the certified family set (`court_e2e_root`) sits inside every RC bundle, so both ids below move
 /// while the schedule id does not (no height was added). Deliberate, not dormant — testnet-11 is
 /// superseded by testnet-12 and its chain past DAA 7,219 is unsyncable by a correct validator
-/// (`docs/testnet-12-regenesis-2026-09-23.md`), so no node on this build is meant to rejoin it. The
+/// (`docs/history/testnet-12/testnet-12-regenesis-2026-09-23.md`), so no node on this build is meant to rejoin it. The
 /// params-id pin in `config::params` (`shipped_presets_have_pinned_fingerprints`) moved in the same
 /// commit; this file was missed then and caught by the KV track's full run.
 /// Previous: params `79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640`,

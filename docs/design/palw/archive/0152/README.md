@@ -35,7 +35,7 @@ These amendments are not in the text above. The Spec carries them.
    later at one inference per try. Neither held: the seed was the anchor block's identity, which the
    producer could re-sign for free. From DAA 750 the seed is the anchor attempt's execution
    commitment (`palw_panel_seed_execution`). The record is
-   [t12-panel-seed-2026-09-25.md](../../../../t12-panel-seed-2026-09-25.md), which also specifies
+   [t12-panel-seed-2026-09-25.md](../../../../history/testnet-12/t12-panel-seed-2026-09-25.md), which also specifies
    lane A, the operator-anchored panel (`palw_operator_anchor`, DAA 750). Spec: 07 §7.3, 08 §8.1.
 2. **The DAA-750 flag day** (ADR-0154). It adds registry resilience (a no-capable-panel claim retries
    until its bind window closes), bond maturity from 750 for non-genesis bonds, the model sink bound,

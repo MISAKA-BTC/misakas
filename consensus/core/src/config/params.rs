@@ -342,7 +342,7 @@ impl From<Params> for OverrideParams {
     }
 }
 
-/// kaspa-pq PQ-only enforcement mode (ADR-0019 / docs/kaspa-pq-design-mldsa87.md).
+/// kaspa-pq PQ-only enforcement mode (ADR-0019 / docs/design/consensus/kaspa-pq-design-mldsa87.md).
 /// Selects whether legacy secp256k1 signature paths are merely non-standard
 /// (mempool) or hard consensus failures. Every kaspa-pq network uses `Consensus`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1478,7 +1478,7 @@ pub struct Params {
     /// and folded. Without it the work target's expectation — 900 model blocks per 1,000-DAA epoch —
     /// is stated in a clock the model lane itself advances, and every DAA-denominated window
     /// (`t_leak_daa`, the receipt and challenge windows, a bond's withdrawal) runs ten times faster
-    /// than it was sized (`docs/palw-daa-clock-audit-2026-09-18.md`). `Some` on testnet-11 at
+    /// than it was sized (`docs/audit/palw/palw-daa-clock-audit-2026-09-18.md`). `Some` on testnet-11 at
     /// [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] with the single lottery (one setter) — a height past the
     /// live tip so already-committed `daaScore` values are not recomputed; `None` elsewhere; hashed
     /// Some-only.
@@ -3632,7 +3632,7 @@ pub struct Params {
     /// 2^22 bucket, none of which the class lottery prices, so one lottery win let the anchor
     /// producer redraw the panel privately for a re-signature. Past the fence every identity one win
     /// can take draws one panel; another panel is another lottery win (which, while audit P0-10 is
-    /// open, is still cheap — docs/t12-panel-seed-2026-09-25.md says what this does and does not
+    /// open, is still cheap — docs/history/testnet-12/t12-panel-seed-2026-09-25.md says what this does and does not
     /// close).
     ///
     /// Keyed on the ANCHOR's DAA score: a fact every node reads off the anchor header the processor's
@@ -4015,7 +4015,7 @@ pub struct Params {
     pub pow_palw_ollama_activation: ForkActivation,
 
     /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
-    /// docs/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
+    /// docs/design/consensus/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
     pub pq_enforcement: PqEnforcementMode,
 
     /// DAA score at/after which `PqEnforcementMode::Consensus` takes effect.
@@ -6736,7 +6736,7 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // Both this `0` and the re-pinned mainnet entry in `shipped_presets_have_pinned_fingerprints`
     // are legal ONLY IF mainnet has not launched. The whole justification above — "a network that
     // has not launched has no history to fork" — rests on it, and the only written statement of it
-    // anywhere in this tree is one sentence in `docs/palw-mainnet-audit-2026-08-28.md`. Two nearby
+    // anywhere in this tree is one sentence in `docs/audit/palw/palw-mainnet-audit-2026-08-28.md`. Two nearby
     // signals point the other way and are worth reading before trusting it: `genesis.rs` records
     // that this genesis differs from "the prior Argon2id-era mainnet genesis", and the 9B custody
     // ceremony is described there as complete.
@@ -9144,7 +9144,7 @@ pub const PALW_RC_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_byt
 /// Measured on the artifact converted from
 /// `Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf` (33.27 GiB of `int8` codes over 40 layers,
 /// GGUF SHA-256 `1dc49461…`, default flags). The conversion is deterministic — see
-/// `docs/palw-public-testnet-classes-runbook.md` for the recipe — so an operator may either
+/// `docs/operations/models/palw-public-testnet-classes-runbook.md` for the recipe — so an operator may either
 /// rebuild this file from the published GGUF or download it and let their node verify the root;
 /// both routes end at this constant.
 ///
@@ -10019,7 +10019,7 @@ fn mainnet_card_params_v1(
 /// moment the operator schedules any fence at a height. That is now automatic (the gate list is
 /// derived from [`Params::palw_fences_v1`]), where it used to require a per-fence edit to
 /// `fork_id_v1::fork_id_gate_fences_v1` that nobody's checklist named — see mainnet audit
-/// 2026-09-06, M-6, and `docs/mainnet-palw-certification-runbook.md` §0.
+/// 2026-09-06, M-6, and `docs/operations/mainnet/mainnet-palw-certification-runbook.md` §0.
 ///
 /// testnet-11 arms none of these from genesis; each is a scheduled height or a re-mint there,
 /// which is the operator's call and not this function's. Devnet arms the context ladder.

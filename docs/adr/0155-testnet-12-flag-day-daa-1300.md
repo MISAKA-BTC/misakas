@@ -43,6 +43,6 @@ uses that height. The next flag day's fixes are added to this list.
 - Spec: [16 network parameters and fences](../spec/palw/16-network-parameters-and-fences.md) §16.4 ·
   [07](../spec/palw/07-claim-lifecycle.md) §7.4 · [10](../spec/palw/10-collateral-and-economics.md) §10.3
 - Design: [design/palw/lineage.md](../design/palw/lineage.md) (flag days), [collateral.md](../design/palw/collateral.md) §6
-- Records: [launch note §000](../t12-launch-2026-09-25.md)
+- Records: [launch note §000](../operations/testnet-12/t12-launch-2026-09-25.md)
 - Code: `consensus/core/src/config/params.rs` (`PALW_T12_POST_LAUNCH_FENCES_V2`,
   `PALW_T12_POST_LAUNCH_FENCE_V2_DAA`, `palw_t12_arm_post_launch_fences_v2`)

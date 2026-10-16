@@ -3197,7 +3197,7 @@ async function pageAdd(arg) {
           <pre class="cmd"># 0. a bonded key with funds (docs/history/testnet11-join-mining.md, section 3); keep the outpoint the node prints
 kaspad --testnet --netsuffix=11 --appdir=~/.t11 --palw-register-bond --palw-producer-key=~/.misaka/miner.seed
 
-# 1. pair the artifact with a class and run the admission gate: no node, no key, no coin (docs/palw-model-onboarding-sdk.md)
+# 1. pair the artifact with a class and run the admission gate: no node, no key, no coin (docs/operations/models/palw-model-onboarding-sdk.md)
 palw-class inspect   --network ${CFG.NETWORK_NAME} /path/to/artifact.palwart
 palw-class preflight --network ${CFG.NETWORK_NAME} /path/to/artifact.palwart --model-id "&lt;model id&gt;"
 

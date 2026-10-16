@@ -102,7 +102,7 @@ The rows in §4 group refs; the counts above are per ref.
 | main = origin/main = codex/post-commit-challenge-policy = claude/native-redemption-impl-d36ce9 (`3408af2d5`, 2 docs commits) | ALREADY-IN | `51c94d36e` is in integ (`rfc-0008-v0-test-record.md`, later edits); `3408af2d5` content is in integ: ADR-0171 §7, ADR-0044/0074 notes, `docs/rfc/evidence/0007-post-commit-randomness-alignment-2026-10-08.md` | none |
 | 21 `worktree-agent-*` refs at `3408af2d5` | ALREADY-IN | same tip as main | delete when their worktrees are cleaned |
 | worktree-agent-a654091211fbc1daa, a66cc3dbfce9e6b30, a94a4a9854599c385, aa4e68d12b0016b5a, aba3d06634734aab8 | ALREADY-IN | ancestors of integ | none |
-| origin/codex/round-exec-acceptance-2026-10-10 | ALREADY-IN | `docs/palw-round-exec-additional-acceptance-2026-10-10.md` in integ (+5-line Lead note) | none |
+| origin/codex/round-exec-acceptance-2026-10-10 | ALREADY-IN | `docs/design/palw/palw-round-exec-additional-acceptance-2026-10-10.md` in integ (+5-line Lead note) | none |
 | codex/rfc8-exec-lane (`51c94d36e`) | ALREADY-IN | first `main` commit | none |
 | origin/claude/docs-cleanup (11) | SUPERSEDED | 10-02 docs reshuffle to `docs/archive`; integ uses `docs/history/` after the 10-12 reorg | none |
 | rfc/0002-tensor-ir, rfc/0003-image-generation, rfc/0004-0005-vm (local + origin) | SUPERSEDED | docs-only: the 09-27 restructure plus early RFC-0002..0005 text; integ's RFC texts are later revisions (RFC-0005 不採用). Their restructure part is the same as `docs/restructure`, see §4.4 | none |

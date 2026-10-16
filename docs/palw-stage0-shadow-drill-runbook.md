@@ -160,4 +160,4 @@ divergence is a watcher bug or a node disagreement, both worth knowing).
   notes). The binaries and the offline verification above are the deliverable here.
 * Replay-cost rows in the ledger (`replay_durations_ms`) — fed from `v2-replay-bench` runs,
   merged at report time in a later increment; the fleet numbers already exist in
-  `docs/palw-stage0-fleet-replay-bench-2026-08-16.md`.
+  `docs/evidence/palw/palw-stage0-fleet-replay-bench-2026-08-16.md`.

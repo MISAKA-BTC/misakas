@@ -502,7 +502,7 @@ async function renderFaucet(){
     <h2 class="sec">Then what?</h2>
     <div class="note">Running a node needs no funds. Producing blocks needs a registered bond (above) — the floor
       execution class needs no model at all. The walkthrough is
-      <a href="https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md" target="_blank" rel="noopener">docs/testnet12-join-mining.md</a>; the
+      <a href="https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md" target="_blank" rel="noopener">docs/operations/testnet-12/testnet12-join-mining.md</a>; the
       <a href="#/llm">LLM Jobs</a> page shows the classes and the verifier seats currently live.</div>`;
 
   const cards = document.getElementById("fcCards");
@@ -3861,7 +3861,7 @@ cargo build --release --bin qwen25-convert --bin palw-class
 #    expect class ebf44d0aa09ff7d1…, inventory root 88096dc177826d88…
 
 # the full path — conversion, memory, bond, panel duty:
-#    docs/testnet12-join-mining.md §6</pre>`;
+#    docs/operations/testnet-12/testnet12-join-mining.md §6</pre>`;
   const chips = document.getElementById("llmChips");
   if (chips) chips.addEventListener("click", e => {
     const b = e.target.closest("button"); if (!b) return;

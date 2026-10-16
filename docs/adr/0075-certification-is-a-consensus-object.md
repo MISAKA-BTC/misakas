@@ -225,7 +225,7 @@ this build's fingerprint), because `PalwStateCarriageV2::into_state` accepts onl
 and the P2P handshake already refuses the old fingerprint. No in-place migration exists and none
 is planned: a chain-certified set is chain history of one identity.
 
-**Deployment and verification.** `docs/mainnet-palw-certification-runbook.md`: the card, the
+**Deployment and verification.** `docs/operations/mainnet/mainnet-palw-certification-runbook.md`: the card, the
 build from the final RC tag, the simultaneous validator swap (every validator on one build —
 a mixed fleet forks at the first certification object), and the verification ladder (devnet
 rehearsal of the three transactions, the announce fingerprint, the first `FamilyCertified` on the

@@ -64,7 +64,7 @@ require_release() {
     for v in REV KASPAD_SHA256 MISAKA_SHA256 PALW_CLASS_SHA256 EXPECT_FP EXPECT_GENESIS PREMINE_TXID HB_ADDR; do
         if [ "${!v:-}" = "__FILL_ME__" ] || [ -z "${!v:-}" ]; then warn "fleet.env: $v is still a placeholder"; bad=1; fi
     done
-    [ "$bad" = 0 ] || die "fill fleet.env from the SHIPPING commit's release build first (PLAN.md §4; docs/t12-rcore-launch-checklist.md §4)"
+    [ "$bad" = 0 ] || die "fill fleet.env from the SHIPPING commit's release build first (PLAN.md §4; docs/operations/testnet-12/t12-rcore-launch-checklist.md §4)"
     [[ "$EXPECT_FP" =~ ^[0-9a-f]{64}$ ]] || die "fleet.env: EXPECT_FP must be 64 lowercase hex (the \"Consensus params fingerprint:\" line)"
     [[ "$EXPECT_GENESIS" =~ ^[0-9a-f]{128}$ ]] || die "fleet.env: EXPECT_GENESIS must be the full 128-hex genesis hash"
     [[ "$PREMINE_TXID" =~ ^[0-9a-f]{128}$ ]] || die "fleet.env: PREMINE_TXID must be the full 128-hex t12 premine txid"

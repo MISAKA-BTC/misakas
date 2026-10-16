@@ -4775,7 +4775,7 @@ fn shipped_presets_have_pinned_fingerprints() {
             // the certified family set is inside every RC bundle, so testnet-11's fingerprint AND
             // identity move: no node on this build can rejoin testnet-11, which is superseded by
             // testnet-12 and unsyncable past DAA 7,219 by a correct validator in any case
-            // (`docs/testnet-12-regenesis-2026-09-23.md`). The previous pin was not deployed.
+            // (`docs/history/testnet-12/testnet-12-regenesis-2026-09-23.md`). The previous pin was not deployed.
             // Previous: 79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640.
             // **And again the same day, for the economic audit's state schema v21**
             // (`PALW_STATE_V2_VERSION` 20 -> 21, hashed into the bundle; `palw_audit_2026_09_23`

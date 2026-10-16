@@ -489,7 +489,7 @@ anchored and refused `PredecessorMismatch`, crediting nothing.
 
 ## 11. The user's Round / EXEC additional acceptance conditions (2026-10-10) — the activation gates they add
 
-Source: `docs/palw-round-exec-additional-acceptance-2026-10-10.md` (adopted by the user; integrated at `f325d6696`). None of the eight
+Source: `docs/design/palw/palw-round-exec-additional-acceptance-2026-10-10.md` (adopted by the user; integrated at `f325d6696`). None of the eight
 gates passes today, and the unified EXEC stays unarmable (`PALW_EXEC_PAYLOAD_V2_ARMABLE = false`) until all eight and every earlier gate hold.
 
 | Gate | Owner | What this branch already shows (implemented; verified only where a run is named) | Open |

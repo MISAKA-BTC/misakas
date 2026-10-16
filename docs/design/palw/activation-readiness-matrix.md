@@ -220,7 +220,7 @@ in `docs/audit/g14-review-2026-10-10/implementation.md`. Fences remain dormant.
 
 ## 3e. Round / EXEC additional acceptance conditions (user, 2026-10-10)
 
-The user adopted `docs/palw-round-exec-additional-acceptance-2026-10-10.md`:
+The user adopted `docs/design/palw/palw-round-exec-additional-acceptance-2026-10-10.md`:
 - compute-proportional Round tickets from verified CanonicalWork and a shared window (120 is a window's capacity, not a per-claim grant);
 - the bond's remaining Round rights capped BEFORE the draw's candidate set (`T_candidate <= min(T_earned, BondRemainingRoundRights)`);
 - no amplification by bond/operator/claim splitting, resubmission or root/slice repackaging;

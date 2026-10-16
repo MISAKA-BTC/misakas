@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/release/t12-repin.sh — the testnet-12 re-pin, mechanical (docs/t12-rcore-launch-checklist.md §5).
+# scripts/release/t12-repin.sh — the testnet-12 re-pin, mechanical (docs/operations/testnet-12/t12-rcore-launch-checklist.md §5).
 #
 #   scripts/release/t12-repin.sh [--shipping]                     dry run: every pin, "pinned vs computed"
 #   scripts/release/t12-repin.sh --apply [--shipping] --reason "<one line>"

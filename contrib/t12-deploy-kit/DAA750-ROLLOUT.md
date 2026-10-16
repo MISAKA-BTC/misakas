@@ -62,7 +62,7 @@
 | **MTP collector**（.113 `/etc/misaka-mtp/chain.pin`） | `NETWORK=testnet-12`・`DB=kaspa_t12`・`RPC=127.0.0.1:26313`・`GENESIS=a27f8f44…`・`DB_ANCHOR_DAA=0`／`DB_ANCHOR_HASH=a27f8f44…`。`mtp-chain-fence.sh` は node の pruning point を `GENESIS` と比べるだけで、**fingerprint は見ない**（2026-09-26 20:00 JST 読み取りで確認） | **何もしない**（genesis 不変）。pruning point が genesis を離れる DAA ~75k までは今の pin のままでよい |
 | **deploy kit**（`fleet.env`） | `EXPECT_FP`（stage の IDENTITY 照合、`upgrade` の再起動後 gate、`check`、`t12check.py --expect-fp`）。`t12check.py` 自体は値を持たない | `REV`・`KASPAD_SHA256`・`MISAKA_SHA256`・`PALW_CLASS_SHA256` を新しい build の値に、`EXPECT_FP` を**再 pin 後の**新しい fp に、**`UPGRADE_FROM_FP=b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f`**（今 fleet が出している fp）。`EXPECT_GENESIS`・`PREMINE_TXID`・`SEEDER_SHA256=KEEP` はそのまま |
 | **`contrib/t12-monitor`**（panel-bias monitor） | `T12_FP`（`--expect-fp` の既定値）— 新しい値に更新済み（registry 登録済み）。fp が違うと DEGRADED になる | fleet 切替後、`--fence-daa 750` を付けて走らせる（母集団規則の切替。付けないと fence 後の anchor 規則が合わず DEGRADED）。切替前に走らせると fp 不一致で DEGRADED になる（仕様） |
-| **main の文書**（`origin/main`、切替と同時に更新する） | `README.md`（表の fingerprint と schedule id）、`release.json`（`consensus_params_fingerprint`・`consensus_schedule_id`）、`docs/testnet12-join-mining.md`（起動ログの例 2 行）、`docs/t12-rcore-launch-checklist.md` §3、`contrib/t12-deploy-kit/PLAN.md` §4、`contrib/misakascan-t12/index.html`・`DEPLOY.md`、wiki: `docs/wiki/Home.md`・`Operations-Notes.md`・`Quick-Start.md`・`Testnet-12-Verification-Participation-JA.md`、wiki staging の `docs/wiki/wiki-t12-sync.patch` | int-4 を main に反映するとき一緒に新しい値へ（int-4 側の README・join guide・checklist・PLAN・DEPLOY・index.html は更新済み）。`docs/t12-launch-2026-09-25.md` は launch の記録なので書き換えず、「DAA 750 の post-launch release で fp が変わった」注記を足す。告知は fleet 切替後 |
+| **main の文書**（`origin/main`、切替と同時に更新する） | `README.md`（表の fingerprint と schedule id）、`release.json`（`consensus_params_fingerprint`・`consensus_schedule_id`）、`docs/operations/testnet-12/testnet12-join-mining.md`（起動ログの例 2 行）、`docs/operations/testnet-12/t12-rcore-launch-checklist.md` §3、`contrib/t12-deploy-kit/PLAN.md` §4、`contrib/misakascan-t12/index.html`・`DEPLOY.md`、wiki: `docs/wiki/Home.md`・`Operations-Notes.md`・`Quick-Start.md`・`Testnet-12-Verification-Participation-JA.md`、wiki staging の `docs/wiki/wiki-t12-sync.patch` | int-4 を main に反映するとき一緒に新しい値へ（int-4 側の README・join guide・checklist・PLAN・DEPLOY・index.html は更新済み）。`docs/operations/testnet-12/t12-launch-2026-09-25.md` は launch の記録なので書き換えず、「DAA 750 の post-launch release で fp が変わった」注記を足す。告知は fleet 切替後 |
 
 ### fork id / handshake の前提（なぜ rolling upgrade ができるか）
 handshake が一致を求めるのは `consensus_identity_id`（変わらない）と fork id。fork id は fence の高さを見て、**DAA 750 より前は
@@ -143,7 +143,7 @@ PLAN.md §15 の表は ibm → .113 → 5.104 の順だが、今回は .113 → 
 ユーザー決定（2026-09-26）どおり、strict-win は **浅い同点規則**（incumbent 側の深さ 2 DAA tick 以下の同点は GHOSTDAG の順で
 決める。sink の DAA を下げる切替はしないので、同点の切替を連ねても 2 tick より深くは戻らない）と一緒に 750 で武装する（`19e732712`）。
 
-main の `docs/t12-launch-2026-09-25.md` §3「入金を確定とみなす基準」（と、それを写した README・wiki・告知）に、fleet 切替と同時に
+main の `docs/operations/testnet-12/t12-launch-2026-09-25.md` §3「入金を確定とみなす基準」（と、それを写した README・wiki・告知）に、fleet 切替と同時に
 **「経済的に同点の reorg は、2 DAA tick（約 4〜5 分）より深く埋まった取引を覆せない」**を加える。これは同点の reorg についての
 下限であって、既存の基準（少額: blue score 30 以上上の blue attempt、高額: finality depth 600 blue か Final anchor、
 heartbeat しか出ていない期間は確定とみなさない）を置き換えない。

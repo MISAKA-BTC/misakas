@@ -344,5 +344,5 @@ the SDK dispatches it; a Qwen3.6 container is never pinned), `the_pinners_readin
   order (`patch -p3`); p4 reproduces, byte for byte, the copy the kit's functions were exercised on (the pinner's launch script and
   unit, the seats' units on a pinner host and a plain one, `upgrade` → re-run → `check` → `upgrade` over an older pinner →
   `upgrade-rollback` twice → `DRY_RUN`, against stub `systemctl`/`journalctl`).
-* Join guide (`docs/testnet12-join-mining.md` §6): the pin and `RLIMIT_MEMLOCK`; several nodes on one host (the host ledger, the
+* Join guide (`docs/operations/testnet-12/testnet12-join-mining.md` §6): the pin and `RLIMIT_MEMLOCK`; several nodes on one host (the host ledger, the
   pinner as a unit of its own); what narrowing the prefill run costs.

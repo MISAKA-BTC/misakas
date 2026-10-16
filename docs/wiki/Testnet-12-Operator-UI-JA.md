@@ -13,7 +13,7 @@ misaka --network testnet-12 mining setup
 ウィザードは node、network、model、key、資金、Bond registry、artifact、capability、fee output を順に確認し、`~/.misaka/mining.toml` を作ります。途中で止まっても、同じコマンドを実行すればチェーンとローカルの状態から再開します。
 
 - 登録には `kaspad --palw-register-bond` を使います(operator-possession 署名つき)。
-- `--palw-bond-collateral` は渡しません。ノードが導出した既定の collateral を登録し、その額に合う資金を求めます(Floor で約 31,191 BILI、`--model` に 8k を指定すると約 2,000,332,625 BILI で調達できません)。額を自分で決めるとき、および model class のときは [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形を使います。
+- `--palw-bond-collateral` は渡しません。ノードが導出した既定の collateral を登録し、その額に合う資金を求めます(Floor で約 31,191 BILI、`--model` に 8k を指定すると約 2,000,332,625 BILI で調達できません)。額を自分で決めるとき、および model class のときは [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md) の手動の形を使います。
 - testnet-12 には faucet がまだないので、ウィザードは faucet の案内を出しません。
 
 ## 既存 Bond の確認
@@ -50,7 +50,7 @@ misaka --network testnet-12 mining setup --model <class-id> --artifact /path/qwe
 misaka --network testnet-12 mining start
 ```
 
-`mining start` は `--palw-host-memory-share` を渡しません。8k の seat には 3.5 GiB 以上(`--palw-host-memory-share=3758096384`)が要るので、`~/.misaka/mining.toml` の `[advanced] extra_kaspad_args` に書いてください。artifact の作り方は [参加手順 §6](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) にあります。
+`mining start` は `--palw-host-memory-share` を渡しません。8k の seat には 3.5 GiB 以上(`--palw-host-memory-share=3758096384`)が要るので、`~/.misaka/mining.toml` の `[advanced] extra_kaspad_args` に書いてください。artifact の作り方は [参加手順 §6](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md) にあります。
 
 ## Status
 
@@ -107,7 +107,7 @@ misaka --network testnet-12 mining stop --drain
 
 ## 正本
 
-- [Testnet-12 参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)
-- [testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)
+- [Testnet-12 参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md)
+- [testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/t12-launch-2026-09-25.md)
 - [ADR-0122](https://github.com/MISAKA-BTC/misakas/blob/main/docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md)
 - [ADR-0123](https://github.com/MISAKA-BTC/misakas/blob/main/docs/adr/0123-the-epoch-progressively-releases-unused-class-budget.md)

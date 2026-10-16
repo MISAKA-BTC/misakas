@@ -2,7 +2,7 @@
 
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
-対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-27 の 2 回目の post-launch flag day のリリース `587cab2b0` です。2 本の fence が DAA 1,300(2026-09-28 05:25 JST 前後)で有効になるので、それより前に動かしてください。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
+対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-27 の 2 回目の post-launch flag day のリリース `587cab2b0` です。2 本の fence が DAA 1,300(2026-09-28 05:25 JST 前後)で有効になるので、それより前に動かしてください。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md) です。
 
 ## 1. Build
 
@@ -96,7 +96,7 @@ misaka --network testnet-12 bond status --key-file ~/.misaka/miner.seed
 misaka --network testnet-12 mining setup
 ```
 
-ウィザードは `kaspad --palw-register-bond` で登録します。collateral にはノードが導出した既定値(Floor で約 31,191 BILI。`--model` に 8k を指定すると約 2,000,332,625 BILI と調達できない額)を使い、その額に合う資金を求めます。額を自分で決めたい場合と model class の場合は、[参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形で `--palw-bond-collateral=<sompi>` を明示してください。
+ウィザードは `kaspad --palw-register-bond` で登録します。collateral にはノードが導出した既定値(Floor で約 31,191 BILI。`--model` に 8k を指定すると約 2,000,332,625 BILI と調達できない額)を使い、その額に合う資金を求めます。額を自分で決めたい場合と model class の場合は、[参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md) の手動の形で `--palw-bond-collateral=<sompi>` を明示してください。
 
 既存の key と Bond を指定する場合:
 
@@ -143,4 +143,4 @@ misaka --network testnet-12 dashboard --listen 127.0.0.1:8791
 - app dir を消して再同期しない。最後に署名した round の記録(`palw-round-last-signed`)が消え、二重署名の原因になります。移すか復元してください。
 - Bond collateral と fee outpoint に同じ outpoint を使わない。
 - Floor に 8k artifact や `--palw-producer-class` を付けない。
-- block 数、blue score の深さ、DAA の差で入金を確定とみなさない([公開ノート §3](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md))。
+- block 数、blue score の深さ、DAA の差で入金を確定とみなさない([公開ノート §3](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/t12-launch-2026-09-25.md))。

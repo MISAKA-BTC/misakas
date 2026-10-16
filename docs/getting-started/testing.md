@@ -108,5 +108,5 @@ Logging in `kaspad` and `simpa` is [filtered](https://docs.rs/env_logger/0.10.0/
 <details>
 <summary>Override consensus parameters</summary>
 
-Experiment with non-standard consensus parameters in non-mainnet environments via `--override-params-file <path>`. See [docs/override-params.md](../override-params.md).
+Experiment with non-standard consensus parameters in non-mainnet environments via `--override-params-file <path>`. See [docs/operations/override-params.md](../operations/override-params.md).
 </details>

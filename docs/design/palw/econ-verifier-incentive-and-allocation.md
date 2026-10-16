@@ -1147,7 +1147,7 @@ loss under an expected break-even fee. It checks conditional funding on every po
 slots, collectible/rounded bounty bounds, missing inputs, one-sompi deficits and u64 overflow. These are financial model controls;
 they provide no node payout mechanism, measured class price, proven collection floor, external soundness approval or security PASS.
 
-## 5a. The Round/EXEC ECON gate (`docs/palw-round-exec-additional-acceptance-2026-10-10.md` §4–§5)
+## 5a. The Round/EXEC ECON gate (`docs/design/palw/palw-round-exec-additional-acceptance-2026-10-10.md` §4–§5)
 
 Model §9 compares small and large models on the same bond and period, before and after the cap, with the window unsaturated and
 saturated.

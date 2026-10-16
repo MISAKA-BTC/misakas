@@ -114,9 +114,9 @@ panel cannot say "the file says X, the engine holds Y".
 
 ### 1.5 Adding a model has a path and no door
 
-The path exists end to end — the SDK (`docs/palw-model-onboarding-sdk.md`), conversion,
+The path exists end to end — the SDK (`docs/operations/models/palw-model-onboarding-sdk.md`), conversion,
 `--palw-register-class` as a producer-start phase (the Studio's Network tab does this),
-certification as a consensus object (ADR-0075, `docs/palw-certify-a-new-model.md`), and a line
+certification as a consensus object (ADR-0075, `docs/operations/models/palw-certify-a-new-model.md`), and a line
 with an owner and versions (ADR-0088). What does not exist is the place a person who is not going
 to do any of that ASKS: `.github/ISSUE_TEMPLATE/` holds a bug report and a feature request. A
 model request is neither, and the questions it has to answer (weights, licence, architecture,
@@ -442,7 +442,7 @@ the everyday pipeline — task → shape → store → use — leaves a record a
 
 **Decision 13 — a model request has a door, and the door is not chain state.** A GitHub issue
 form (`.github/ISSUE_TEMPLATE/model-request.yml`) in the node repository asks the questions §1.5
-lists; `docs/model-requests.md` describes the pipeline a request goes through — conversion, a
+lists; `docs/operations/models/model-requests.md` describes the pipeline a request goes through — conversion, a
 class id, registration, certification, a line with an owner (ADR-0088), a seeded pair (ADR-0090)
 — and who does which step; the Studio's Network tab gets "Request a model", which opens the form
 prefilled with what the machine knows (RAM, accelerator, the classes it holds). Requests are
@@ -573,8 +573,8 @@ mapping is written down.
   round trips carry it and a version-6 writer reads as dormant (15 + 4 + 1 green). Nothing of
   Decisions 6, 7 or 9 exists yet: no v6 job, no automaton, no v3 refutation, no `render_answer_v2`.
 * **2026-09-10, Decision 13's door and Decision 10's node half** (`0de50b0f`):
-  `.github/ISSUE_TEMPLATE/model-request.yml`, `docs/model-requests.md` (the eight hands a request
-  passes through, each with its ADR), `docs/components-manifest.md` (schema `misaka/components/v1`;
+  `.github/ISSUE_TEMPLATE/model-request.yml`, `docs/operations/models/model-requests.md` (the eight hands a request
+  passes through, each with its ADR), `docs/reference/components-manifest.md` (schema `misaka/components/v1`;
   a row points at the platform archive the release publishes and names the member — a loose
   binary URL would point at nothing), `scripts/release/misaka-components-manifest.py` (write / `--check` /
   `--validate` / `--self-test`, 39 checks) and one deploy step per platform writing

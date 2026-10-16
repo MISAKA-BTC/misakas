@@ -4197,7 +4197,7 @@ mod cli_surface_tests {
     }
 
     /// **Every command defaults to testnet-12 through the one default the operator commands use,
-    /// and a named network still wins** (docs/testnet12-join-mining.md: `misaka bond`, `wallet` and
+    /// and a named network still wins** (docs/operations/testnet-12/testnet12-join-mining.md: `misaka bond`, `wallet` and
     /// `key` used to fall back to testnet-10 while `misaka mining` fell back to testnet-12).
     #[test]
     fn every_command_defaults_to_the_one_network_and_a_named_one_wins() {

@@ -127,7 +127,7 @@ jobs:
           echo "archive=${archive}" >> $GITHUB_ENV
 
       # **The release names what it built, with a digest per component** (ADR-0096 Decision 10,
-      # `docs/components-manifest.md`). Only the components the Studio spawns are rows — today
+      # `docs/reference/components-manifest.md`). Only the components the Studio spawns are rows — today
       # `kaspad` and `misaka`; the family workers, the gateway and the rail the day this job
       # builds them — and the script refuses any other name rather than guess a kind. A row
       # points at the zip this job uploads and names its member, because the zip is what the

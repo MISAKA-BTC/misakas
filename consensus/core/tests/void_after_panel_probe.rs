@@ -8,7 +8,7 @@
 //! assert the fenced behaviour (T2a also shows the released rule below the fence still draws on the
 //! identity), the rest hold what the void always did. **What stays open is printed, not hidden**: a new
 //! panel costs a new lottery win, and while P0-10 is open a win is ~279 junk BLAKE2b draws (T3a (b),
-//! T3b's per-win capture rate) — docs/t12-panel-seed-2026-09-25.md.
+//! T3b's per-win capture rate) — docs/history/testnet-12/t12-panel-seed-2026-09-25.md.
 //!
 //! Everything here is testnet-12's own `Params` (with the fence armed), its bundle's `PalwStateParamsV2`, its genesis state
 //! and the real fold (`apply_palw_transition_v7`, through `rcore_common`'s `Chain` extras, which are

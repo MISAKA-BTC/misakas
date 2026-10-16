@@ -26,3 +26,11 @@ Retained records of earlier networks and the pre-2026-10-12 root README. Their h
 - [testnet11-relaunch5e-runbook](testnet11-relaunch5e-runbook.md)
 - [testnet11-remint-2026-08-29](testnet11-remint-2026-08-29.md)
 - [testnet11-verification-participation-ja](testnet11-verification-participation-ja.md)
+
+## testnet-12 records and the reorganization map
+
+- [MOVED.md](MOVED.md) — where the docs/ root files went on 2026-10-16 (old path → new path), what was left in place, and wiki duplicates
+- [testnet-12/testnet-12-regenesis-2026-09-23](testnet-12/testnet-12-regenesis-2026-09-23.md)
+- [testnet-12/t12-panel-seed-2026-09-25](testnet-12/t12-panel-seed-2026-09-25.md)
+- [testnet-12/palw-rc-t12-seat-deadlock-2026-08-22](testnet-12/palw-rc-t12-seat-deadlock-2026-08-22.md)
+

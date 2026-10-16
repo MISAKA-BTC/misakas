@@ -32,7 +32,7 @@ pub use kaspa_hashes::EvmH256;
 // ---------------------------------------------------------------------
 // kaspa-pq Phase 9 (PR-9.5b): consensus-identity semantic aliases.
 //
-// The Hash → Hash64 cascade (ADR-0008 / docs/hash64-migration-inventory.md)
+// The Hash → Hash64 cascade (ADR-0008 / docs/design/consensus/hash64-migration-inventory.md)
 // stages width changes per identity. This module introduces NAMES for
 // each identity, all pointing at the upstream 32-byte `Hash` /
 // `kaspa_hashes::Hash32` today. PR-9.5c onward flips individual
@@ -764,7 +764,7 @@ pub mod palw_tokenizer_rendering_v1;
 pub mod palw_transcendental;
 /// RFC-0004 Part II: the typed-roots fence `palw_typed_roots_v1` — dormant, no height, refused when armed.
 pub mod palw_typed_roots_v1;
-/// MISAKA PALW full-logits trace scheme v2 (docs/palw-full-logits-trace-v2-design.md):
+/// MISAKA PALW full-logits trace scheme v2 (docs/design/palw/palw-full-logits-trace-v2-design.md):
 /// Land-stage types, domains and preimage layouts only. Consensus-inert by design —
 /// nothing in validation, fork choice or the header pipeline may consume it until the
 /// staged activations pass their gates. `palw_execution_algo_id = 2` in here is a

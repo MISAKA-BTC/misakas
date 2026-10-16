@@ -106,7 +106,7 @@ testnet-12 では、消えた producer は課金されます(`ProducerWithholdin
 
 ## 入金はいつ確定とみなせるか
 
-block 数、blue score の深さ、DAA の差、heartbeat の本数は使わないでください。どれも heartbeat で水増しできます。少額なら自分の node の selected chain で、取引を含む block より blue score が 30 以上高い位置に blue の attempt があり、その後も attempt が続いていること。高額なら finality depth 600 blue(約 4 時間)か、`misaka palw settlement` で Final の anchor に達していることを確認します。詳しくは [公開ノート §3](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md) を見てください。
+block 数、blue score の深さ、DAA の差、heartbeat の本数は使わないでください。どれも heartbeat で水増しできます。少額なら自分の node の selected chain で、取引を含む block より blue score が 30 以上高い位置に blue の attempt があり、その後も attempt が続いていること。高額なら finality depth 600 blue(約 4 時間)か、`misaka palw settlement` で Final の anchor に達していることを確認します。詳しくは [公開ノート §3](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/t12-launch-2026-09-25.md) を見てください。
 
 ## Faucet はあるか
 

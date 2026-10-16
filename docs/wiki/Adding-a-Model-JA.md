@@ -2,7 +2,7 @@
 
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
-「既存の class を使う」ことと「新しい class をチェーンに追加する」ことは別の作業です。詳しい手順の正本は [palw-add-a-model-runbook.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-add-a-model-runbook.md) です。
+「既存の class を使う」ことと「新しい class をチェーンに追加する」ことは別の作業です。詳しい手順の正本は [palw-add-a-model-runbook.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/models/palw-add-a-model-runbook.md) です。
 
 ## Existing class
 
@@ -80,7 +80,7 @@ catalog にないアーキテクチャは、ファイルを置くだけでは cl
 6. code review と PR
 7. チェーン上での class の登録と lane certification
 
-[model onboarding SDK](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-model-onboarding-sdk.md) と、現行の `misaka model add --help` を優先してください。
+[model onboarding SDK](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/models/palw-model-onboarding-sdk.md) と、現行の `misaka model add --help` を優先してください。
 
 ## Production and verification
 

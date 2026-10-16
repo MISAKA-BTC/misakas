@@ -29,28 +29,28 @@ The code, the current CLI `--help` and the ADR decisions are authoritative. This
 | --- | --- |
 | **Build** | [getting-started/build.md](getting-started/build.md) |
 | **Run a node** | [getting-started/run-node.md](getting-started/run-node.md) |
-| **Mine** (PALW producer) | [getting-started/mining.md](getting-started/mining.md) → [testnet12-join-mining.md](testnet12-join-mining.md) |
-| **Run a validator** | [getting-started/validator.md](getting-started/validator.md) → [validator-runbook.md](validator-runbook.md) |
+| **Mine** (PALW producer) | [getting-started/mining.md](getting-started/mining.md) → [testnet12-join-mining.md](operations/testnet-12/testnet12-join-mining.md) |
+| **Run a validator** | [getting-started/validator.md](getting-started/validator.md) → [validator-runbook.md](operations/validator/validator-runbook.md) |
 | **Test and benchmark** | [getting-started/testing.md](getting-started/testing.md), [testing/](testing/) |
 | **Operate** (models, EVM backend, PQ verification, release, mainnet readiness, liveness probe) | [operations/README.md](operations/README.md) |
 | **Understand the architecture** | [architecture/overview.md](architecture/overview.md) · [consensus](architecture/consensus.md) · [PALW](architecture/palw.md) · [post-quantum](architecture/pq.md) · [EVM](architecture/evm.md) · [what is different from Kaspa](architecture/differences-from-kaspa.md) |
-| **Read the specification** | [spec/README.md](spec/README.md) (PALW chapters in [spec/palw/](spec/palw/)), [kaspa-pq-spec.md](kaspa-pq-spec.md) |
+| **Read the specification** | [spec/README.md](spec/README.md) (PALW chapters in [spec/palw/](spec/palw/)), [kaspa-pq-spec.md](spec/kaspa-pq-spec.md) |
 | **Find a decision (ADR)** | [adr/README.md](adr/README.md) (number order) · [adr/INDEX-by-topic.md](adr/INDEX-by-topic.md) (**read first**: ADR-0175, 0176, 0177, 0179, 0180) · [adr/HISTORY.md](adr/HISTORY.md) (long per-ADR history) · [adr/NUMBERING.md](adr/NUMBERING.md) (duplicate numbers) |
 | **Read a proposal (RFC)** | [rfc/README.md](rfc/README.md) (RFC 0001–0020, number order) · [rfc/INDEX-by-topic.md](rfc/INDEX-by-topic.md) (**read first**: RFC-0016, 0017, 0018) · [rfc/HISTORY.md](rfc/HISTORY.md) |
 | **See what is done** (decision → implemented → verified → armable → activated) | [STATUS.md](STATUS.md), then [activation readiness matrix](design/palw/activation-readiness-matrix.md) and [remaining work (2026-10-16)](design/palw/remaining-work-2026-10-16.md) |
 | **Look up a registry, manifest or index** | [reference/README.md](reference/README.md) |
-| **Read a design record** | [design/palw/](design/palw/) (PALW lanes, matrices, user decisions) |
-| **Check an audit or its evidence** | [audit/](audit/), [evidence/](evidence/), [security/](security/), [testing/](testing/) — engineering evidence, not current defaults |
-| **Read history** (testnet-10 / testnet-11 runbooks, regenesis records, the pre-2026-10-12 root README) | [history/README.md](history/README.md) |
+| **Read a design record** | [design/README.md](design/README.md) — [design/palw/](design/palw/) (PALW lanes, matrices, user decisions), [design/evm/](design/evm/), [design/consensus/](design/consensus/) |
+| **Check an audit or its evidence** | [audit/](audit/README.md) · [evidence/](evidence/README.md) · [security/](security/README.md) · [testing/](testing/) — engineering evidence, not current defaults |
+| **Read history** (testnet-10 / testnet-11 runbooks, regenesis records, the pre-2026-10-12 root README) and **find a moved file** | [history/README.md](history/README.md), [history/MOVED.md](history/MOVED.md) |
 | **Read the design premise** | [PRINCIPLES.md](PRINCIPLES.md) (§8 no cryptographic computation proofs · §9 two model tiers · §10 the bond bounds mining speed and total reward) |
 | **Read the wiki mirror** | [wiki/README.md](wiki/README.md) |
 
 ## Current network — testnet-12
 
-- [testnet-12 launch note (2026-09-25)](t12-launch-2026-09-25.md) — the release, its known issues and when a payment is final
-- [Join testnet-12 as a PALW producer](testnet12-join-mining.md)
-- [testnet-12 regenesis record](testnet-12-regenesis-2026-09-23.md)
-- [Mainnet readiness](mainnet-readiness.md), [Release process](release-process.md)
+- [testnet-12 launch note (2026-09-25)](operations/testnet-12/t12-launch-2026-09-25.md) — the release, its known issues and when a payment is final
+- [Join testnet-12 as a PALW producer](operations/testnet-12/testnet12-join-mining.md)
+- [testnet-12 regenesis record](history/testnet-12/testnet-12-regenesis-2026-09-23.md)
+- [Mainnet readiness](operations/mainnet/mainnet-readiness.md), [Release process](operations/release-process.md)
 
 Invariants to check on testnet-12: consensus params fingerprint `5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6`,
 genesis `a27f8f44fe4d91a5…`, schedule id `1678e07359f6727e…` (`kaspad --testnet --netsuffix=12`, or `misaka --network testnet-12`).
@@ -60,5 +60,5 @@ What testnet-12 actually runs, and what is still dormant, is in [STATUS.md §1](
 ## Other design records worth knowing
 
 - [2026-10-12 RFC/ADR review](design/palw/rfc-adr-review-resolution-2026-10-12.md) and the [Panel=1 / Bond-time / model-capital proposal](design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md)
-- [Round / EXEC additional acceptance conditions (2026-10-10)](palw-round-exec-additional-acceptance-2026-10-10.md)
+- [Round / EXEC additional acceptance conditions (2026-10-10)](design/palw/palw-round-exec-additional-acceptance-2026-10-10.md)
 - [Registry of numbers across the remaining RFCs](design/palw/remaining-rfc-integration-matrix.md)

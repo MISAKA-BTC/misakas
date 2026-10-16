@@ -110,7 +110,7 @@ struct Cli {
 
     /// kaspa-pq network the address belongs to. Affects the address
     /// prefix and the kaspa-pq keygen-seed domain separation
-    /// (see docs/kaspa-pq-spec.md §8).
+    /// (see docs/spec/kaspa-pq-spec.md §8).
     #[arg(long, value_enum, default_value_t = NetworkFlag::Mainnet, global = true)]
     network: NetworkFlag,
 

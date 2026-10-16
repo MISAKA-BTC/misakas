@@ -14,7 +14,7 @@
 
 * Status: Revised Draft, 2026-10-10後続改定 — off-chain model acquisition; model-bond coinbase allocation and conditional prosecution; historical implementation/measurements retain scope; new economics/implementation/activation pending.
 * Scope: testnet-12 PALW claims, their Panel binding, verification and reward completion. An RFC merge does not change the live rules.
-* Related: [RFC-0009](0009-palw-remote-miner.md), [RFC-0007](0007-palw-verification-certificates-and-algebraic-checks.md), [RFC-0008](0008-palw-claim-backed-consensus-blocks.md), [ADR-0141](../adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md), and the [testnet-12 Panel-seed incident and lane A](../t12-panel-seed-2026-09-25.md).
+* Related: [RFC-0009](0009-palw-remote-miner.md), [RFC-0007](0007-palw-verification-certificates-and-algebraic-checks.md), [RFC-0008](0008-palw-claim-backed-consensus-blocks.md), [ADR-0141](../adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md), and the [testnet-12 Panel-seed incident and lane A](../history/testnet-12/t12-panel-seed-2026-09-25.md).
 
 ## 0. Decision proposed
 
@@ -67,7 +67,7 @@ non-interference、distinct-capital、三層予算、公開/閉鎖比較、回�
 
 ## 1. Current rule and trust boundary
 
-On testnet-12, lane F1 derives a Panel seed from `H(anchor attempt execution_commitment_v3 || claim_id)`. Lane A then lets only an attempt from one of the eight genesis operator bonds anchor a claim's Panel. A chain block that merges such an attempt may carry the bind, but the operator attempt supplies the seed. The [incident note](../t12-panel-seed-2026-09-25.md) explains the price: an attacker could obtain fresh valid attempt wins with cheap junk work while P0-10 remained open, preview the Panel, and publish a favourable candidate. Lane A prevents an untrusted participant from controlling that source by trusting the operator position instead.
+On testnet-12, lane F1 derives a Panel seed from `H(anchor attempt execution_commitment_v3 || claim_id)`. Lane A then lets only an attempt from one of the eight genesis operator bonds anchor a claim's Panel. A chain block that merges such an attempt may carry the bind, but the operator attempt supplies the seed. The [incident note](../history/testnet-12/t12-panel-seed-2026-09-25.md) explains the price: an attacker could obtain fresh valid attempt wins with cheap junk work while P0-10 remained open, preview the Panel, and publish a favourable candidate. Lane A prevents an untrusted participant from controlling that source by trusting the operator position instead.
 
 The privilege is consensus-visible in [`palw_operator_anchor_v1.rs`](../../consensus/core/src/palw_operator_anchor_v1.rs) and the post-launch testnet-12 fence in [`params.rs`](../../consensus/core/src/config/params.rs). [`VirtualStateProcessor::palw_chain_block_as_anchor_v1`](../../consensus/src/pipeline/virtual_processor/processor.rs), its anchor walk, SW-8 step 4c, the draw gate, and the one-state pre-check all consume that answer. If no operator attempt reaches a claim before its bind deadline, `BindTimeout` voids it. New public bonds do not become lane-A operators by maturing.
 
@@ -119,7 +119,7 @@ panel_seed_v3 = H(
 )
 ```
 
-These names describe the required binding; the exact encoding and hash function belong to a versioned wire specification. `anchor_slot` is derived by consensus at seal time. The beacon must not be selected *because* this seed yields a desired Panel. A last contributor's ability to suppress an output is part of the security budget, even when the output is unique if published. Hashing, a single VRF, unpenalized commit–reveal, a later raw block hash, or a VDF claim does not by itself establish the required property; the [incident analysis](../t12-panel-seed-2026-09-25.md) already identifies their relevant last-mover or claim-grinding failures.
+These names describe the required binding; the exact encoding and hash function belong to a versioned wire specification. `anchor_slot` is derived by consensus at seal time. The beacon must not be selected *because* this seed yields a desired Panel. A last contributor's ability to suppress an output is part of the security budget, even when the output is unique if published. Hashing, a single VRF, unpenalized commit–reveal, a later raw block hash, or a VDF claim does not by itself establish the required property; the [incident analysis](../history/testnet-12/t12-panel-seed-2026-09-25.md) already identifies their relevant last-mover or claim-grinding failures.
 
 Until a source meets these requirements, the new fence stays `None` and lane A continues under its existing rule. `BeaconUnavailable` after a bounded deadline ends a claim without a fraud slash; silently substituting a cheap seed is forbidden.
 

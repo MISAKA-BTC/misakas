@@ -407,7 +407,7 @@ the meaning `artifact.bytes` already had), and withholds it below the fence. Not
 own `--palw-register-class` route does not yet follow its registration with a manifest (the operator
 carries `<name>.class-manifest.borsh`).
 
-**Audit corrections (2026-09-18, `docs/palw-audit-2026-09-18-6001.md`).** The pre-arming audit
+**Audit corrections (2026-09-18, `docs/audit/palw/palw-audit-2026-09-18-6001.md`).** The pre-arming audit
 refused the bundle as it stood and four of its seven blockers were this ADR's: the registry fold's
 work map read the node's own carriage store, so a class without a lifecycle row could be rowed on one
 node and not on another (a rooted divergence — the map is now the chain and the build alone); the

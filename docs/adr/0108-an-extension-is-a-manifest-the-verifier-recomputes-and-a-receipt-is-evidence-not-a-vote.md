@@ -432,7 +432,7 @@ Implementation, 2026-09-11, on `feat/adr-0108-extension-envelope`, on top of `ma
 **What was built.** One crate, `misaka-palw-extension` (`manifest.rs`, `report.rs`, `verify.rs`,
 `kinds/{model_class,certification,derived_transformer,ruleset_candidate}.rs`, `receipt.rs`); one CLI
 module, `misaka/apps/cli/src/palw_extension.rs`, behind `misaka palw extension` with the five verbs of §4;
-one operator guide, [`docs/palw-extension-envelope.md`](../palw-extension-envelope.md), with a
+one operator guide, [`docs/operations/models/palw-extension-envelope.md`](../operations/models/palw-extension-envelope.md), with a
 runnable example manifest per kind in [`docs/extension-manifests/`](../extension-manifests/).
 Consensus-inert as promised: nothing under `consensus/`, `kaspad/`, `protocol/` or `rpc/` moved, and
 the only edit outside the new crate and its CLI module is one summary line in `palw_fp.rs`'s

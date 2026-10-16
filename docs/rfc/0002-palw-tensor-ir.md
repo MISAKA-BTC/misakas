@@ -154,7 +154,7 @@ The problem is how coarse the existing kernel relations are.
 | Kimi K3 | ≈1,700 | 4 fenced | none; no e2e certificate |
 
 Every family has needed a profile module, a court arm per kernel, an engine, a converter and an SDK
-lineage (`docs/palw-model-onboarding-sdk.md:80-82`). That is a release per family, and each release
+lineage (`docs/operations/models/palw-model-onboarding-sdk.md:80-82`). That is a release per family, and each release
 is a fence, a drill and a flag day. Adding `QWEN_GDN`, `MAMBA2` or `DEEPSEEK_MOE` as ops of a new IR
 would reproduce the same problem a few years later.
 

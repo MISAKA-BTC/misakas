@@ -4,7 +4,7 @@
 
 ## Running a validator (testnet)
 
-The `kaspa-pq-validator` sidecar connects to a local node over wRPC and attests while its ML-DSA-87 stake bond is active. See [docs/validator-runbook.md](../validator-runbook.md). Quickstart:
+The `kaspa-pq-validator` sidecar connects to a local node over wRPC and attests while its ML-DSA-87 stake bond is active. See [docs/operations/validator/validator-runbook.md](../operations/validator/validator-runbook.md). Quickstart:
 
 ```bash
 # 1. generate a validator key + print its funding address

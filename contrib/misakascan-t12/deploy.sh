@@ -25,7 +25,7 @@ STATE="$HERE/.last-deploy-ts"
 SITE_URL=${SITE_URL:-https://misakascan.com}
 
 # The chain: the release the fleet runs, read from the deploy kit's fleet.env (EXPECT_GENESIS /
-# EXPECT_FP, pinned from the SHIPPING commit's probe — docs/t12-rcore-launch-checklist.md §4) unless
+# EXPECT_FP, pinned from the SHIPPING commit's probe — docs/operations/testnet-12/t12-rcore-launch-checklist.md §4) unless
 # GENESIS / EXPECT_FP are given. There is no default genesis any more: the one this script used to
 # default to (f6cc9576…, the private t12's) is in FORBIDDEN_GENESIS, and so is every retired or drill
 # genesis — the script refuses them.

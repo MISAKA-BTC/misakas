@@ -1,4 +1,4 @@
-> **このファイルは旧 `docs/rfc/README.md` の本文を移したものです(2026-10-16、docs 再編)。** 変えたのは、存在しない `docs/INDEX.md` への参照 1 か所(旧「`INDEX.md` への link と §3 explains」を、「docs/README.md への link と the former `INDEX.md` §3 (never merged into this lineage) explained」に)だけで、それ以外は一字も変えていません。番号順の短い索引は [README.md](README.md)、トピック別は [INDEX-by-topic.md](INDEX-by-topic.md)、決定・実装・検証・有効化の現在地は [../STATUS.md](../STATUS.md) です。旧表には RFC-0016 の行が 2 つあります(上が新しい行、下が旧 Draft の行)。この注記より下は旧 README のままです。
+> **このファイルは旧 `docs/rfc/README.md` の本文を移したものです(2026-10-16、docs 再編)。** 変えたのは(1)存在しない `docs/INDEX.md` への参照 1 か所(旧「`INDEX.md` への link と §3 explains」を、「docs/README.md への link と the former `INDEX.md` §3 (never merged into this lineage) explained」に)と(2)docs/ root のファイル移動に伴うリンク先パスの更新だけで、それ以外は一字も変えていません。番号順の短い索引は [README.md](README.md)、トピック別は [INDEX-by-topic.md](INDEX-by-topic.md)、決定・実装・検証・有効化の現在地は [../STATUS.md](../STATUS.md) です。旧表には RFC-0016 の行が 2 つあります(上が新しい行、下が旧 Draft の行)。この注記より下は旧 README のままです(ほかに、docs/ root のファイルを移した再編に伴う**リンク先のパスだけ**を更新しました — [../history/MOVED.md](../history/MOVED.md))。
 
 ---
 

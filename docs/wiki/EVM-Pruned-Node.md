@@ -1,6 +1,6 @@
 # EVM Pruned Node（current main）
 
-EVM state の保持方法は current `kaspad --help` と [flat backend runbook](https://github.com/MISAKA-BTC/misakas/blob/main/docs/misaka-evm-flat-backend-runbook-v0.1.md) を正とします。旧 `--evm-storage-profile` / `--evm-node-role` 手順は現行 CLI ではありません。
+EVM state の保持方法は current `kaspad --help` と [flat backend runbook](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/evm/misaka-evm-flat-backend-runbook-v0.1.md) を正とします。旧 `--evm-storage-profile` / `--evm-node-role` 手順は現行 CLI ではありません。
 
 ## Current flags
 

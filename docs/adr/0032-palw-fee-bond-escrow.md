@@ -102,7 +102,7 @@ fixes the mechanisms and the flow of value; B15's simulation fixes the values.
 PALWの摘発報酬率を**10%から49%（4,900 bps）**へ改定する。Phase E1の式は
 `min(⌊49 × slashed / 100⌋, B_cap)`、残額はburnとする。`slashed`は実際の回収額であり、
 名目Slash額・未回収額を支払財源にしない。`B_cap`、返却条件、`slash_id`による重複排除は維持する。
-[2026-08-16の経済記録](../palw-economic-parameters-2026-08-16.md)の`B_cap = 2,000` coin候補も据え置く。
+[2026-08-16の経済記録](../evidence/palw/palw-economic-parameters-2026-08-16.md)の`B_cap = 2,000` coin候補も据え置く。
 率の変更を理由に上限を9,800 coinへ引き上げない。金額は整数sompiで切り捨てる。
 
 現行V2のR-core報酬は、上記の旧credit-overlayとは別の会計である。

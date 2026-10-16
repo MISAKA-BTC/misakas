@@ -894,7 +894,7 @@ What the implementation settled that the decisions above left open, and where it
 * **`misaka model status <model>`** shows one class's life on one screen: registered, active, the
   block lane weighted or not, the prompt lane, live. It also shows the class's artifact root and
   whether the file is on this host, the bond the class takes, its market, and the next command. For
-  a weightless class that is the certify/bind sequence from `docs/palw-certify-a-new-model.md`; for
+  a weightless class that is the certify/bind sequence from `docs/operations/models/palw-certify-a-new-model.md`; for
   a registered one, "nothing: the flip is a clock". A guided `model add` that runs `palw-certify`
   and the chunked submissions itself is still open.
 * **`misaka validator setup`** is the setup wizard's third purpose, on the same key, node, sync

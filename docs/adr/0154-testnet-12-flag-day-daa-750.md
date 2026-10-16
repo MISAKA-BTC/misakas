@@ -63,7 +63,7 @@ and never grows again. Each entry is hashed Some-only with the `never()` collaps
 
 - Spec: [16 network parameters and fences](../spec/palw/16-network-parameters-and-fences.md) §16.3, and the chapters above
 - Design: [design/palw/lineage.md](../design/palw/lineage.md) (flag days), [collateral.md](../design/palw/collateral.md) §6
-- Records: [launch note §00](../t12-launch-2026-09-25.md), [t12-panel-seed-2026-09-25.md](../t12-panel-seed-2026-09-25.md),
+- Records: [launch note §00](../operations/testnet-12/t12-launch-2026-09-25.md), [t12-panel-seed-2026-09-25.md](../history/testnet-12/t12-panel-seed-2026-09-25.md),
   `contrib/t12-deploy-kit/DAA750-ROLLOUT.md`
 - Code: `consensus/core/src/config/params.rs` (`PALW_T12_POST_LAUNCH_FENCES_V1`, `PALW_T12_POST_LAUNCH_FENCE_DAA`,
   `palw_t12_arm_post_launch_fences_v1`)

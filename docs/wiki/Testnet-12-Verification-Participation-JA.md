@@ -86,7 +86,7 @@ misaka --network testnet-12 verifier setup \
 
 `verifier setup` は途中で止めても、再実行すれば終わった項目を使って続きから進みます。Bond の登録や送金のように資金を使う操作は、`--yes` を付けない限り確認を求めます。
 
-setup は capability の宣言(`bond capability --declare`)も行います。何も宣言していない bond は panel に選ばれません。宣言は追加ではなく置き換えです。手動で宣言する場合は [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) を見てください。
+setup は capability の宣言(`bond capability --declare`)も行います。何も宣言していない bond は panel に選ばれません。宣言は追加ではなく置き換えです。手動で宣言する場合は [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md) を見てください。
 
 ### 5. 8k seat のメモリ
 
@@ -192,5 +192,5 @@ misaka --network testnet-12 verifier stop
 - [Testnet-12 Operator UI](Testnet-12-Operator-UI-JA)
 - [Quick Start](Quick-Start)
 - [FAQ / Troubleshooting](FAQ-Troubleshooting)
-- [Testnet-12 参加手順(リポジトリ)](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)
-- [testnet-12 公開ノート(リポジトリ)](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)
+- [Testnet-12 参加手順(リポジトリ)](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md)
+- [testnet-12 公開ノート(リポジトリ)](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/t12-launch-2026-09-25.md)

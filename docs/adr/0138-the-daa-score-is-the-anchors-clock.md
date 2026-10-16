@@ -9,7 +9,7 @@
 
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`; **built and fenced**
 (`Params::palw_anchor_clock`, `Some(6,001)` on testnet-11 — the single lottery's own day — `None`
-elsewhere). Found by the operator's DAA-clock audit (`docs/palw-daa-clock-audit-2026-09-18.md`),
+elsewhere). Found by the operator's DAA-clock audit (`docs/audit/palw/palw-daa-clock-audit-2026-09-18.md`),
 which held the rollout of main and testnet-11 until this was closed.
 
 ## 1. The defect
@@ -105,7 +105,7 @@ Past the fence `palw_lane_advances_daa_v1` is true only for a `bits`-priced lane
 that set is empty. The clock would fall from 275 s per DAA to the heartbeat's nominal 3,600 s — and
 to nothing across a stretch like the most recent 4.58 hours, which carried no beat — resting entirely
 on one unbonded producer on one host. The arithmetic and its consequences are in §2 of
-[the clock audit](../palw-daa-clock-audit-2026-09-18.md).
+[the clock audit](../audit/palw/palw-daa-clock-audit-2026-09-18.md).
 
 **The params in this tree still arm it.** `Params::set_palw_single_lottery` arms the lottery and the
 clock together at 6,001, and `validate_palw_v2` refuses the pair at two heights, so the clock cannot
@@ -129,7 +129,7 @@ unbonded lane. Neither is decided here.
   `a_silent_bond_is_leaked_whether_blue_runs_with_the_daa_clock_or_twice_as_fast` (ratios 1, 2, 4).
 
 **The blue axis this fence does NOT close**, and the operator accepted with the numbers in
-`docs/palw-daa-clock-audit-2026-09-18.md` §9: finality (360 blue), merge depth (30), pruning (~900)
+`docs/audit/palw/palw-daa-clock-audit-2026-09-18.md` §9: finality (360 blue), merge depth (30), pruning (~900)
 and the DNS attestation epoch (100) are counted in blue score, which the attempt lane still paces.
 None is a split risk — blue score is a deterministic function of the DAG — and the effects are
 liveness and availability, with finality moving in the safe direction.

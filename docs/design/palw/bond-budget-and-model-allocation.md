@@ -323,7 +323,7 @@ registration or per class.
 
 ## 3b. Round rights before the draw (additional acceptance 2026-10-10, readiness §3e)
 
-[`docs/palw-round-exec-additional-acceptance-2026-10-10.md`](../../palw-round-exec-additional-acceptance-2026-10-10.md) §2–§3.
+[`docs/design/palw/palw-round-exec-additional-acceptance-2026-10-10.md`](palw-round-exec-additional-acceptance-2026-10-10.md) §2–§3.
 The existing ticket code (`palw_execution_quanta_v1`, armed on testnet-12) is unchanged. Past `palw_bond_budget_v1` the span's
 schedule is minted by a **capped** variant, and below the fence it is minted exactly as before.
 

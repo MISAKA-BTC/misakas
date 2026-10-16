@@ -47,7 +47,7 @@ PostgreSQL 16（127.0.0.1:5432、所有者 `kaspa`）:
 
 既存のバックアップ（別 session が作成）: `app.js.bak-before-t12p-20260923T150853`、`index.html.bak-before-t12p-20260923T150853`、`/root/misakascan.nginx.bak-before-t12p-20260923T144704`、`/root/patch_app_t12p.py`。
 
-前回（旧 t12 `a8cabac4`）の再 genesis では explorer に何もしていない — `docs/testnet-12-regenesis-2026-09-23.md` に explorer の記述は無く、filler は `kaspa_t11` にそのまま t12 を書き足した。DB の回し方の前例は t11 5f（`docs/history/testnet11-relaunch-5f-genesis-card.md` の Explorer 節: 旧 DB を退避 → 新 DB → `vars.vspc_last_start_hash` に genesis を入れて block 0 から索引）。
+前回（旧 t12 `a8cabac4`）の再 genesis では explorer に何もしていない — `docs/history/testnet-12/testnet-12-regenesis-2026-09-23.md` に explorer の記述は無く、filler は `kaspa_t11` にそのまま t12 を書き足した。DB の回し方の前例は t11 5f（`docs/history/testnet11-relaunch-5f-genesis-card.md` の Explorer 節: 旧 DB を退避 → 新 DB → `vars.vspc_last_start_hash` に genesis を入れて block 0 から索引）。
 
 ## 2. app.js の中身（`app.js.orig` → scratch の `app.js`）
 
@@ -146,7 +146,7 @@ EXPECT_FP=<64hex> ./deploy.sh all           # 下の 1–6 を順に。途中で
 ## 9. R-core+ での変更と未決（2026-09-25）
 
 - **genesis と fp は deploy kit の `fleet.env` から読む**（`EXPECT_GENESIS` / `EXPECT_FP`、出荷 commit の probe で固定。
-  `docs/t12-rcore-launch-checklist.md` §4）。`deploy.sh` の既定 genesis（`f6cc9576…`）は削除し、`FORBIDDEN_GENESIS` と
+  `docs/operations/testnet-12/t12-rcore-launch-checklist.md` §4）。`deploy.sh` の既定 genesis（`f6cc9576…`）は削除し、`FORBIDDEN_GENESIS` と
   `DRILL_GENESES` にある genesis は拒否する。**出荷 commit（42452229 ＋ 再 pin）の値**: genesis `a27f8f44…`、fp `5ee7fd8e…`（`scripts/release/t12-repin.sh` が値と表示を書き換える）。
 - **`app.js` の `PANEL_BOND_TX`** を t12 固有の premine txid `5e0d5f1b…` にした（旧値は共有 sentinel `6d697361…` で、t12 の bond
   outpoint と一致しないため座席表の bond 列と receipt の突合が外れていた）。出荷 commit の probe の `PREMINE_TXID` と照合してから stage する。

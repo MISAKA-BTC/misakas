@@ -3,7 +3,7 @@
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **This page is a record, not an entry point.** testnet-11 (Relaunch 5f, 2026-09-03 → 2026-09-25)
-was the public network before [testnet-12](../t12-launch-2026-09-25.md). Current `main` no longer
+was the public network before [testnet-12](../operations/testnet-12/t12-launch-2026-09-25.md). Current `main` no longer
 builds a testnet-11 node: to run one, build commit **`1f98d3bf4`** (the last testnet-11 `main`) and
 select it with `--testnet --netsuffix=11` or `misaka --network testnet-11`.
 
@@ -68,7 +68,7 @@ scores, peers and commands describe testnet-11 at the time and are not current o
 > * **Validators vote BFT by bonded stake** (ADR-0128): an anchor is DNS-final when more than two thirds
 >   of the counted stake has attested and precommitted to it, and the DNS stake reorg gate refuses
 >   chains that abandon it. Validators restart on this build and precommit without new flags
->   ([docs/validator-runbook.md](../validator-runbook.md)). PALW production and settlement do not
+>   ([docs/operations/validator/validator-runbook.md](../operations/validator/validator-runbook.md)). PALW production and settlement do not
 >   depend on validators; the gate is a veto layered on top.
 >
 > **From DAA 7,200**, two more, both of ADR-0133: a receipt may attest the segments of a job rather
@@ -79,11 +79,11 @@ scores, peers and commands describe testnet-11 at the time and are not current o
 > from 7,100; its own 6,900 and 7,000 are never reached by it.
 >
 > **Before it was armed**, this bundle was audited twice against the code rather than the design:
-> a pre-arming security audit ([docs/palw-audit-2026-09-18-6001.md](../palw-audit-2026-09-18-6001.md),
+> a pre-arming security audit ([docs/audit/palw/palw-audit-2026-09-18-6001.md](../audit/palw/palw-audit-2026-09-18-6001.md),
 > two Critical and six High findings, all fixed) and a DAA-clock audit
-> ([docs/palw-daa-clock-audit-2026-09-18.md](../palw-daa-clock-audit-2026-09-18.md), which is why
+> ([docs/audit/palw/palw-daa-clock-audit-2026-09-18.md](../audit/palw/palw-daa-clock-audit-2026-09-18.md), which is why
 > ADR-0138 exists and what it deliberately does not close). The release report
-> ([docs/palw-release-6001-verdict-2026-09-18.md](../palw-release-6001-verdict-2026-09-18.md))
+> ([docs/audit/palw/palw-release-6001-verdict-2026-09-18.md](../audit/palw/palw-release-6001-verdict-2026-09-18.md))
 > records the gates on the frozen candidate, the three holes the bundle's own fixes opened, the
 > measured cost of a block at the 390,000,000 gas ceiling, and the drill that armed the verdict.
 
@@ -186,7 +186,7 @@ Running or verifying a node needs none of them for the floor; producing in a mod
 class's artifact. Both model artifacts derive deterministically from public weights on
 [Hugging Face — Misakachain/Qwen3.6-35B-A3B-PALW-runtime](https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime),
 and every panel seat re-derives the same bytes or the class does not license
-(see [docs/palw-public-testnet-classes-runbook.md](../palw-public-testnet-classes-runbook.md)).
+(see [docs/operations/models/palw-public-testnet-classes-runbook.md](../operations/models/palw-public-testnet-classes-runbook.md)).
 
 Since ADR-0058 a block does not need to win tip selection for its work to count: the whole
 mergeset — reds included, which at 120 s cadence and `ghostdag_k = 1` is every block of every
@@ -268,7 +268,7 @@ operational state and can change or be withdrawn.
 | run a node / verify the chain | [docs/history/testnet11-node-operator.md](testnet11-node-operator.md) |
 | join as a PALW verifier / panel seat | [docs/history/testnet11-verification-participation-ja.md](testnet11-verification-participation-ja.md) |
 | produce blocks (floor class, no model needed) | [docs/history/testnet11-join-mining.md](testnet11-join-mining.md) |
-| produce or verify with the LLM classes | [docs/palw-public-testnet-classes-runbook.md](../palw-public-testnet-classes-runbook.md) |
+| produce or verify with the LLM classes | [docs/operations/models/palw-public-testnet-classes-runbook.md](../operations/models/palw-public-testnet-classes-runbook.md) |
 
 ## Invariants (moved from docs/README.md on 2026-10-12; testnet-11, not current)
 

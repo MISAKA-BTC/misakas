@@ -2,12 +2,12 @@
 
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
-この Wiki は、**現行 `main` と公開テストネット `testnet-12`(R-core+、ADR-0152 v3.1)** を使う人向けのガイドです。testnet-12 は release commit `0e8ec984e` から 2026-09-25/26 JST に公開されました。内容は 2026-09-25 に [公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)、[参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)、`Params` と照合しました。
+この Wiki は、**現行 `main` と公開テストネット `testnet-12`(R-core+、ADR-0152 v3.1)** を使う人向けのガイドです。testnet-12 は release commit `0e8ec984e` から 2026-09-25/26 JST に公開されました。内容は 2026-09-25 に [公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/t12-launch-2026-09-25.md)、[参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md)、`Params` と照合しました。
 
 仕様の正本は [MISAKA-BTC/misakas](https://github.com/MISAKA-BTC/misakas) のコード、[docs](https://github.com/MISAKA-BTC/misakas/tree/main/docs)、各バイナリの `--help` です。この Wiki と食い違う場合は、node の表示と `misaka bond status` を正としてください。
 
 > [!IMPORTANT]
-> 公開前に、[testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md) を必ず読んでください。リリースの中身、既知の問題(CRITICAL が 2 件あり、公開後の fence で修正)、入金を確定とみなしてよい基準が書いてあります。**testnet-12 では、block 数・blue score の深さ・DAA の差で入金を確定とみなさないでください。**
+> 公開前に、[testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/t12-launch-2026-09-25.md) を必ず読んでください。リリースの中身、既知の問題(CRITICAL が 2 件あり、公開後の fence で修正)、入金を確定とみなしてよい基準が書いてあります。**testnet-12 では、block 数・blue score の深さ・DAA の差で入金を確定とみなさないでください。**
 
 ## まず読むページ
 
@@ -60,10 +60,10 @@ testnet-12 のルールは、DAA 750 で有効になった 13 本の post-launch
 ## 公式リンク
 
 - [Source](https://github.com/MISAKA-BTC/misakas)
-- [testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)
-- [Testnet-12 参加手順(producer)](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)
-- [testnet-12 regenesis の記録](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet-12-regenesis-2026-09-23.md)
-- [Validator runbook](https://github.com/MISAKA-BTC/misakas/blob/main/docs/validator-runbook.md)
+- [testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/t12-launch-2026-09-25.md)
+- [Testnet-12 参加手順(producer)](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/testnet-12/testnet12-join-mining.md)
+- [testnet-12 regenesis の記録](https://github.com/MISAKA-BTC/misakas/blob/main/docs/history/testnet-12/testnet-12-regenesis-2026-09-23.md)
+- [Validator runbook](https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/validator/validator-runbook.md)
 - [Explorer](https://misakascan.com/)
 - [Releases](https://github.com/MISAKA-BTC/misakas/releases)
 

@@ -256,4 +256,4 @@ DAA が fence 未満なら、その段階は動きません。S3 を 8,600 よ�
 
 - [Testnet-11 ノード運用](testnet11-node-operator.md)
 - [Testnet-11 参加・採掘](testnet11-join-mining.md)
-- [PALW public classes runbook](../palw-public-testnet-classes-runbook.md)
+- [PALW public classes runbook](../operations/models/palw-public-testnet-classes-runbook.md)
