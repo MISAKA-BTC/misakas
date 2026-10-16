@@ -2281,6 +2281,9 @@ Do you confirm? (y/n)";
     // a Panel service of its own (key, bond, fee float, state dir) cloned from this node's, with this node's collusion flags and nothing
     // of its own to produce, register, claim or file. Private drill chains only.
     let palw_drill_extra_panel_services: Vec<Arc<crate::palw_panel::PalwPanelService>> = if args.palw_drill_extra_seat.is_empty() {
+        if args.palw_drill_extra_seat_collude_with.is_some() {
+            panic!("--palw-drill-extra-seat-collude-with needs --palw-drill-extra-seat")
+        }
         Vec::new()
     } else if !palw_private_drill {
         panic!("--palw-drill-extra-seat is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
@@ -2288,6 +2291,18 @@ Do you confirm? (y/n)";
         let Some(primary) = palw_panel_service.as_ref() else {
             panic!("--palw-drill-extra-seat needs this node's own seat identity (--palw-producer-key and --palw-producer-bond)")
         };
+        let extra_collude: Option<Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>> =
+            args.palw_drill_extra_seat_collude_with.as_deref().map(|spec| {
+                spec.split(',')
+                    .map(str::trim)
+                    .filter(|b| !b.is_empty())
+                    .map(|b| {
+                        crate::palw_producer::parse_outpoint(b)
+                            .map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)
+                            .unwrap_or_else(|e| panic!("--palw-drill-extra-seat-collude-with={spec}: {e}"))
+                    })
+                    .collect()
+            });
         args.palw_drill_extra_seat
             .iter()
             .enumerate()
@@ -2320,6 +2335,9 @@ Do you confirm? (y/n)";
                 c.vertex_equivocate_at = None;
                 c.tir_shard_watch = false;
                 c.tir_shard_declare = None;
+                if let Some(bonds) = &extra_collude {
+                    c.drill_collude_with = bonds.clone();
+                }
                 warn!(
                     "PALW DRILL: extra seat {i} (bond {}) runs in this process{}",
                     seat.bond,

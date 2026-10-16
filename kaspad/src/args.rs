@@ -708,6 +708,11 @@ pub struct Args {
     /// (the host runs at most three nodes). Command line only.
     #[serde(skip)]
     pub palw_drill_extra_seat: Vec<String>,
+    /// **DRILL ONLY: the producer bonds the `--palw-drill-extra-seat` seats collude with** (`<txid:index>,...`), leaving this node's own
+    /// seat honest — so a producer and its colluding Panel share one process while the producer still answers what it owes (a node
+    /// given `--palw-drill-collude-with` submits no disclosure). Without it the extra seats take this node's own collusion list.
+    #[serde(skip)]
+    pub palw_drill_extra_seat_collude_with: Option<String>,
     /// **DRILL ONLY (a salted testnet-12 drill: `palw_private_drill_network_v1`): this seat signs a SECOND vertex for one round** — once, at
     /// the first round at or past this DAA, with the first vertex's leaves' verdicts changed — so the drill can show RFC-0007's
     /// equivocation caught, slashed and ejected. Any node watching blocks files the evidence. Command line only.
@@ -1046,6 +1051,7 @@ impl Default for Args {
             palw_drill_fp_fault: None,
             palw_drill_withhold_all_da: false,
             palw_drill_extra_seat: Vec::new(),
+            palw_drill_extra_seat_collude_with: None,
             palw_drill_vertex_equivocate_at: None,
             palw_canonical_claims: false,
             palw_canonical_class: None,
@@ -2140,6 +2146,16 @@ pub fn cli() -> Command {
                     "PALW DRILL ONLY (the G14 collusion drill on a small host): run another seat identity in this process — a Panel \
                      service of its own sharing this node's chain, with this node's drill-collusion flags and nothing of its own to \
                      produce or register. Repeatable. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-extra-seat-collude-with")
+                .long("palw-drill-extra-seat-collude-with")
+                .require_equals(true)
+                .value_name("txid:index[,txid:index...]")
+                .help(
+                    "PALW DRILL ONLY: the producer bonds the --palw-drill-extra-seat seats collude with (sign Valid without judging, \
+                     file nothing), leaving this node's own seat honest. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
                 ),
         )
         .arg(
@@ -4105,6 +4121,7 @@ impl Args {
             palw_drill_fp_fault: m.get_one::<String>("palw-drill-fp-fault").cloned(),
             palw_drill_withhold_all_da: m.get_one::<bool>("palw-drill-withhold-all-da").copied().unwrap_or(false),
             palw_drill_extra_seat: m.get_many::<String>("palw-drill-extra-seat").map(|v| v.cloned().collect()).unwrap_or_default(),
+            palw_drill_extra_seat_collude_with: m.get_one::<String>("palw-drill-extra-seat-collude-with").cloned(),
             palw_canonical_claims: m.get_one::<bool>("palw-canonical-claims").copied().unwrap_or(defaults.palw_canonical_claims),
             palw_canonical_class: m.get_one::<String>("palw-canonical-class").cloned().or(defaults.palw_canonical_class),
             palw_canonical_interval_daa: m

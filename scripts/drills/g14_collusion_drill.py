@@ -11,17 +11,32 @@ Roles (every role its own process, its own fresh app dir under --work; loopback 
 
   P    the colluding producer — genesis card 0 (judges nothing), `--palw-produce --palw-drill-tamper-leaf=L`: every attempt it makes
        commits an execution corrupted at one step leaf, its roots re-derived so the lie is self-consistent; heartbeat miner.
-  S1.. the colluding Panel — genesis cards 1..seats, `--palw-drill-collude-with=<P's bonds>`: every seat signs Valid on P's claims
-       without judging them and files nothing (no accusation, demand, disclosure or filing leaves the node). Three seats by default:
+  S1.. the colluding Panel — genesis cards 1..seats, run INSIDE P's process as extra seat identities (`--palw-drill-extra-seat`,
+       each its own Panel service, key, bond, fee float and state dir) with `--palw-drill-extra-seat-collude-with=<P's bonds>`: every
+       seat signs Valid on P's claims without judging them and files nothing, while P's own service still answers what P owes.
        testnet-12 arms R-core+ at genesis and `validate_palw_v2` fixes the panel quorum at its colluding quorum (3), so the smallest
-       Panel the shipped rules allow is 3-of-3 — five processes with P and O (one more than the host's guideline; RSS is recorded).
+       Panel the shipped rules allow is 3-of-3; co-hosting keeps the drill within the host's limit of THREE node processes at once
+       (P, O and one of P3 / F).
   O    the outside verifier — drill bond key 8, funded by the drill main wallet and registered by an ordinary BondRegistered AFTER
        genesis (`--palw-register-bond`), declaring no capability (never drawn as a seat); then started with that bond as an ordinary
        node. It runs only the node's own G14 automation (the common fraud filer, LG14-A/B) on public chain material and its own
        copy of the floor model.
   P3   (D-11) a second colluding producer — genesis card seats+1, `--palw-drill-tamper-auto-leaf --palw-drill-withhold-held-da`: it
-       never answers a legacy held DA unit, so the public descent's demand ends in the objective DA default (P stops first).
-  F    (IBD) a fresh relay with no bond, empty app dir, synced from the others.
+       never answers a legacy held DA unit, so the public descent's demand ends in the objective DA default (P keeps running: it
+       hosts the Panel).
+  F    (IBD) a fresh relay with no bond, empty app dir, synced from the others (P3 stops first: three processes at most).
+
+Injection phases (`--inject`, G14 audit G-17): P is restarted with one lie at a time — `--palw-drill-fault=<kind>` (output,
+selection:<pos>:<lane>, oov:<pos>, tokenizer, prompt-relabel, short-prefill:<n>, garbage-prompt, skip-all, activation, interval:<n>,
+bend:<row>[:same], leaf:<n>), `sparse:<seed>` (`--palw-drill-sparse-fault-seed`), or `withhold-all` (`--palw-drill-withhold-all-da`
+with the auto lie) — and every lying claim accepted in the phase is followed through the metric chain
+eligible → checked → detected → localized → filed → accepted → convicted / defaulted → collected → invalidated (audit §7), with
+capacity refusals, unjudged cases and fused-leaf hand-offs counted separately. A lying claim that reaches Final with its reward is a
+G14 miss and makes the phase FAIL.
+
+Acceptance tests (audit §8): A, D, E, F, G run as node-level Rust tests (`--run-acceptance` runs them with cargo, targeted, -j 3);
+B (per-family detection policy) and C (court capacity / TIR owner admission) are other lanes' — placeholder rows run their tests
+once the lane has landed in HEAD, else BLOCKED naming the lane.
 
 Rulesets (`misaka-rfc12-private-node --private-probe-profile=g14-v1`, feature `private-integration-config`; the shipped validation
 still refuses both, and every gated fence is armed through drill arming records naming THIS drill genesis and height, never pinned):
@@ -188,7 +203,7 @@ class Drill:
     # ---- bookkeeping -------------------------------------------------------------------------------------------------------------
 
     def row(self, scenario, status, evidence, note=''):
-        assert status in ('PASS', 'FAIL', 'BLOCKED', 'NOT-INJECTABLE', 'OBSERVED'), status
+        assert status in ('PASS', 'FAIL', 'BLOCKED', 'NOT-INJECTABLE', 'NOT-RUN', 'OBSERVED'), status
         r = {'scenario': scenario, 'status': status, 'evidence': evidence, 'note': note, 'at': now()}
         self.rows.append(r)
         log('ROW %s %s — %s' % (scenario, status, note or json.dumps(evidence)[:300]))
@@ -216,7 +231,9 @@ class Drill:
         if 'g14-v1' not in helptext:
             raise Blocked('this private node has no g14-v1 profile')
         khelp = subprocess.run([a.kaspad, '--help'], capture_output=True, text=True).stdout
-        for flag in ('--palw-drill-collude-with', '--palw-drill-withhold-held-da', '--palw-drill-tamper-leaf', '--palw-drill-tamper-auto-leaf'):
+        for flag in ('--palw-drill-collude-with', '--palw-drill-withhold-held-da', '--palw-drill-tamper-leaf', '--palw-drill-tamper-auto-leaf',
+                     '--palw-drill-extra-seat', '--palw-drill-extra-seat-collude-with', '--palw-drill-fault',
+                     '--palw-drill-sparse-fault-seed', '--palw-drill-withhold-all-da', '--palw-drill-fp-fault'):
             if flag not in khelp:
                 raise Blocked('this kaspad has no %s' % flag)
         self.facts['binaries'] = {str(b): hashlib.sha256(Path(b).read_bytes()).hexdigest() for b in (a.private_node, a.kaspad, a.cli)}
@@ -272,28 +289,39 @@ class Drill:
 
     # ---- node construction -------------------------------------------------------------------------------------------------------
 
-    def producer_flags(self, card, withhold=False, canonical=False):
+    def producer_flags(self, card, withhold=False, canonical=False, inject=None, host_panel=False):
         s = self.seat(card)
         flags = ['--palw-produce', '--palw-producer-key=%s' % self.key(s['seed_file']), '--palw-producer-bond=%s' % s['bond_outpoint'],
                  '--palw-producer-pay-address=%s' % s['address'], '--palw-fee-outpoint=%s' % s['fee_float_outpoint'],
                  '--palw-heartbeat-miner-address=%s' % self.keyring['heartbeat'][card]['address']]
         if self.args.family == 'collusion':
-            flags.append(('--palw-drill-tamper-leaf=%d' % self.args.tamper_leaf) if self.args.tamper_leaf is not None
-                         else '--palw-drill-tamper-auto-leaf')
+            if inject and inject.startswith('sparse:'):
+                flags.append('--palw-drill-sparse-fault-seed=%d' % int(inject.split(':', 1)[1]))
+            elif inject and inject != 'withhold-all':
+                flags.append('--palw-drill-fault=%s' % inject)
+            else:
+                flags.append(('--palw-drill-tamper-leaf=%d' % self.args.tamper_leaf) if self.args.tamper_leaf is not None
+                             else '--palw-drill-tamper-auto-leaf')
+            if inject == 'withhold-all':
+                flags.append('--palw-drill-withhold-all-da')
+        if host_panel:
+            flags += self.extra_seat_flags()
         if withhold:
             flags.append('--palw-drill-withhold-held-da')
         if canonical:
             flags += ['--palw-canonical-claims', '--palw-canonical-interval-daa=%d' % self.args.canonical_interval]
         return flags
 
-    def seat_flags(self, card):
-        s = self.seat(card)
-        colluders = ','.join(self.seat(c)['bond_outpoint'] for c in self.colluding_producers())
-        flags = ['--palw-producer-key=%s' % self.key(s['seed_file']), '--palw-producer-bond=%s' % s['bond_outpoint'],
-                 '--palw-producer-pay-address=%s' % s['address'], '--palw-fee-outpoint=%s' % s['fee_float_outpoint'],
-                 '--palw-heartbeat-miner-address=%s' % self.keyring['heartbeat'][card]['address']]
+    def extra_seat_flags(self):
+        """The Panel cards 1..seats as extra seat identities of P's process; colluding with P and P3 in the collusion family."""
+        flags = []
+        for card in range(1, self.args.seats + 1):
+            s = self.seat(card)
+            flags.append('--palw-drill-extra-seat=key=%s,bond=%s,fee=%s,pay=%s' % (
+                self.key(s['seed_file']), s['bond_outpoint'], s['fee_float_outpoint'], s['address']))
         if self.args.family == 'collusion':
-            flags.append('--palw-drill-collude-with=%s' % colluders)
+            flags.append('--palw-drill-extra-seat-collude-with=%s' % ','.join(
+                self.seat(c)['bond_outpoint'] for c in self.colluding_producers()))
         return flags
 
     def colluding_producers(self):
@@ -346,7 +374,7 @@ class Drill:
         raise Blocked('%s: timed out after %d s (DAA %s; last error %s)' % (label, timeout_s, last_daa, last_err))
 
     def ref(self):
-        for role in ('O', 'S1', 'P', 'S2', 'S3', 'P3', 'F'):
+        for role in ('O', 'P', 'P3', 'F'):
             n = self.nodes.get(role)
             if n and n.alive():
                 return n
@@ -619,8 +647,16 @@ class Drill:
                 failures.append('seats charged for a held unit they never owed: %s' % charged_seats)
         if not accusers:
             failures.append('no reservation or session of the outsider was observed')
+        elif norm(obond) not in accusers:
+            failures.append('the outsider never reserved / demanded: %s' % sorted(accusers))
         elif accusers != {norm(obond)}:
-            failures.append('a party other than the outsider reserved / demanded: %s' % sorted(accusers))
+            # P's own (honest-code) service may pursue P3's claims in D-11 (it shares no Panel seat with them); any other party fails.
+            others = accusers - {norm(obond)}
+            allowed = {norm(self.seat(0)['bond_outpoint'])} if scenario == 'D-11' else set()
+            if others - allowed:
+                failures.append('a party other than the outsider reserved / demanded: %s' % sorted(accusers))
+            else:
+                ev['alsoPursuedBy'] = sorted(others)
         if any(seat_filings.values()):
             failures.append('a colluding seat submitted a filing: %s' % seat_filings)
         if ev['slashedSompi']['outsiderSlashed'] > 0:
@@ -637,7 +673,8 @@ class Drill:
                             'convicted' if expect == 'court' else 'DA-defaulted', ev['slashedSompi']['producer'], ev['slashedSompi']['seats']))
 
     def seat_roles(self):
-        return ['S%d' % i for i in range(1, self.args.seats + 1)]
+        # The colluding seats run inside P's process (`--palw-drill-extra-seat`): their filter lines and any filing are in P's log.
+        return ['P']
 
     def d16_exit_attempt(self, scenario, who, card, bond, cid, pbond):
         """D-16: a liable bond asks to retire after the licence, before the sanction (CLI `bond retire`, salted)."""
@@ -718,25 +755,24 @@ class Drill:
 
     def restart_and_ibd(self, bonds, claims):
         out = {}
-        victim = self.nodes['S2'] if 'S2' in self.nodes else self.nodes['S1']
+        victim = self.nodes['O']
         victim.stop()
         time.sleep(5)
         victim.start()
         self.wait_rpc(victim)
         self.peer_all()
         out['restart'] = self.compare_nodes('restart of %s' % victim.role, [n for n in self.nodes.values() if n.alive()], bonds, claims)
-        # IBD: a fresh relay with no bond (one seat stops to keep the host within four light nodes).
-        s1 = self.nodes['S1']
-        s1.stop()
-        f = self.add('F', 9, [], bonded=False)
+        # IBD: a fresh relay with no bond as the third process (P3 stops first: the host runs three node processes at most).
+        if 'P3' in self.nodes and self.nodes['P3'].alive():
+            self.nodes['P3'].stop()
+        f = self.nodes.get('F') or self.add('F', 9, [], bonded=False)
+        if f.appdir.exists():
+            shutil.rmtree(f.appdir)
         f.start()
         self.wait_rpc(f)
         self.peer_all()
         out['ibd'] = self.compare_nodes('fresh IBD node F', [n for n in self.nodes.values() if n.alive()], bonds, claims)
         f.stop()
-        s1.start()
-        self.wait_rpc(s1)
-        self.peer_all()
         return out
 
     # ---- the scenario list ---------------------------------------------------------------------------------------------------------
@@ -755,9 +791,19 @@ class Drill:
                  '--palw-drill-tamper-eval exists, but an evaluation claim needs a governed model line with an open evaluation epoch '
                  '(RFC-0004: a founded line, a published candidate, its evaluation jobs and their artifacts); the drill has no line '
                  'fixture, so no evaluation claim exists to lie in')
-        self.row('D-08', 'NOT-INJECTABLE', {}, 'no prompt / input substitution injector exists (g14 proof §5.3 D-08)')
-        self.row('D-09', 'NOT-INJECTABLE', {}, 'no prefix-state / KV forgery injector exists (D-09)')
-        self.row('D-10', 'NOT-INJECTABLE', {}, 'no tokenizer mismatch injector exists (D-10)')
+        # G-17 (2026-10-17): these are injectable now; a phase runs only when named with --inject.
+        for d, kinds, what in (('D-06', ('selection',), 'selection violation (attempt lane: --palw-drill-fault=selection:<pos>:<lane>)'),
+                               ('D-07', ('output',), 'output substitution (attempt lane: --palw-drill-fault=output)'),
+                               ('D-08', ('prompt-relabel', 'short-prefill', 'garbage-prompt'),
+                                'prompt / input substitution (--palw-drill-fault=prompt-relabel | short-prefill:<n> | garbage-prompt)'),
+                               ('D-10', ('tokenizer',), 'tokenizer field in the context (--palw-drill-fault=tokenizer)'),
+                               ('sparse', ('sparse',), 'sparse single-interval fault (--palw-drill-sparse-fault-seed)'),
+                               ('skip-all', ('skip-all',), 'skip-all-compute (--palw-drill-fault=skip-all)')):
+            if not any(i.split(':', 1)[0] in kinds for i in self.args.inject):
+                self.row(d, 'NOT-RUN', {}, '%s is injectable; not selected in this run (--inject)' % what)
+        self.row('D-09', 'BLOCKED', {}, 'KV / prefix-state forgery is injectable on canonical FP claims (--palw-drill-fp-fault=kv:...) '
+                 'with a backend that has the FP drill verb (Qwen2.5 A16); frameless FP earns nothing past the fence under option (b) '
+                 'and the framed (TFP1) FP lane is the IR Free Prompt lane / frame pricing (integ/g14-tir-pricing)')
         self.row('D-12', 'NOT-INJECTABLE', {}, 'no tampered-carrier / borrowed-trace fixture exists (D-12)')
         self.row('D-13', 'NOT-INJECTABLE', {}, 'no Sybil slot-squatting fixture exists (reservation / session / decoy-court fill, D-13); '
                  'the per-reservation budget is covered by fold tests only (g07_a_coalition_cannot_spend_the_outsiders_budget)')
@@ -803,11 +849,9 @@ class Drill:
 
     # ---- modes ---------------------------------------------------------------------------------------------------------------------
 
-    def start_core(self, canonical):
+    def start_core(self, canonical, inject=None):
         a = self.args
-        self.add('P', 0, self.producer_flags(0, canonical=canonical))
-        for i in range(1, a.seats + 1):
-            self.add('S%d' % i, i, self.seat_flags(i))
+        self.add('P', 0, self.producer_flags(0, canonical=canonical, inject=inject, host_panel=True))
         for n in list(self.nodes.values()):
             n.start()
         for n in list(self.nodes.values()):
@@ -845,8 +889,12 @@ class Drill:
         obond = self.fund_and_register_outsider()
         o_daa = self.facts['outsider']['registeredDaa'] or 0
         # Past the compressed testnet-12 flag days (the freeze — ADR-0160 F-L — arms with them), and after the outsider exists.
+        before02 = self.bond_row(self.seat(0)['bond_outpoint'])['bondSlashed']
         d02 = self.run_conviction('D-02', 'P', 0, self.args.after_daa)
+        self.metric_chain('D-02 (auto lie leaf)', self.seat(0)['bond_outpoint'], self.args.after_daa, before02)
         self.d15_row(d02)
+        for inject in self.args.inject:
+            self.run_injection(inject, self.daa_quiet() or 0)
         self.fp_refusal_row('D-01', 'P', 0, governs_from=0)
         self.d17_row('P', 0, governs_from=0)
         self.fused_route_row('genesis: fused leaf is not a G14 route (10-16)', self.seat(0)['bond_outpoint'], 0)
@@ -856,9 +904,8 @@ class Drill:
         rs = self.restart_and_ibd(bonds, claims)
         self.row('restart+IBD (D-02)', 'PASS' if rs['restart']['same'] and rs['ibd']['same'] else 'FAIL', rs,
                  'restart same=%s, fresh IBD same=%s' % (rs['restart']['same'], rs['ibd']['same']))
-        # D-11: a second colluding producer that never answers a held unit.
+        # D-11: a second colluding producer that never answers a held unit (P keeps running: it hosts the colluding Panel).
         if self.args.d11:
-            self.nodes['P'].stop()
             p3 = self.add('P3', 8, self.producer_flags(self.args.seats + 1, withhold=True))
             p3.start()
             self.wait_rpc(p3)
@@ -1120,10 +1167,149 @@ class Drill:
                   'laneMixAtH': at_h, 'laneMixAfter': mix},
                  'DAA advanced %d past H with %d claims admitted (heartbeat lane carried the chain)' % (a.liveness_span, len(post)))
 
+
+    # ---- the metric chain (audit §7) and the G-17 injection phases ---------------------------------------------------------------
+
+    def metric_chain(self, label, pbond, after_daa, before_slashed, lane='attempt'):
+        """eligible → checked → detected → localized → filed → accepted → convicted / defaulted → collected → invalidated, per lying
+        claim of `pbond` accepted at or past `after_daa`, read from public RPC and the outside verifier's own log (its filer's lines);
+        capacity refusals, unjudged cases, fused-leaf hand-offs and claims that reached Final are counted apart."""
+        o = self.nodes['O']
+        olog = o.log_text()
+        rows = [r for r in self.claims(pbond).get('claims', [])
+                if r['acceptedDaa'] >= after_daa and (r['isFreePrompt'] if lane == 'fp' else not r['isFreePrompt'])]
+        chain = {k: 0 for k in ('eligible', 'checked', 'detected', 'localized', 'filed', 'accepted', 'convicted', 'defaulted',
+                                'collected', 'invalidated')}
+        apart = {k: 0 for k in ('capacityRefused', 'unjudged', 'fusedHandOff', 'neverLanded', 'reachedFinal', 'stillOpen')}
+        per = []
+        for r in rows:
+            cid = norm(r['claimId'])
+            mark = lambda pat: re.search(r'claim (0x)?%s: .*%s' % (cid, pat), olog) is not None  # noqa: E731
+            d = self.dispute(r['claimId']) or {}
+            row = {'claim': cid[:16], 'acceptedDaa': r['acceptedDaa'], 'phase': r['phase'], 'voidReason': r.get('voidReason')}
+            row['checked'] = mark(r'the fraud filer replays|native TIR replay finished')
+            row['detected'] = mark(r'queues Reserve') or bool(d.get('reservations'))
+            row['localized'] = mark(r'queues Terminal|first divergent leaf')
+            row['filed'] = mark(r'queues Terminal|public proof is filed')
+            row['convicted'] = bool(d.get('courtConvicted') or d.get('executorRefuted')) or (r.get('voidReason') or '').startswith('court')
+            row['defaulted'] = bool(d.get('daDefaulted')) or r.get('voidReason') == 'producer_withholding'
+            row['accepted'] = row['convicted'] or row['defaulted']
+            row['invalidated'] = r['phase'] == 'voided' and not (r.get('payoutPendingSompi') or r.get('vestingSompi'))
+            row['capacityRefused'] = mark(r'AtCapacity|at capacity')
+            row['unjudged'] = mark(r'cannot judge|ended without an objective outcome|cannot proceed')
+            row['fusedHandOff'] = mark(r'fused-attention site')
+            row['neverLanded'] = mark(r'never landed')
+            row['reachedFinal'] = r['phase'] == 'final'
+            chain['eligible'] += 1
+            for k in ('checked', 'detected', 'localized', 'filed', 'accepted', 'convicted', 'defaulted', 'invalidated'):
+                chain[k] += int(bool(row[k]))
+            for k in ('capacityRefused', 'unjudged', 'fusedHandOff', 'neverLanded', 'reachedFinal'):
+                apart[k] += int(bool(row[k]))
+            apart['stillOpen'] += int(r['phase'] not in ('voided', 'final'))
+            per.append(row)
+        slashed = self.bond_row(pbond)['bondSlashed'] - before_slashed
+        chain['collected'] = slashed
+        out = {'label': label, 'chain': chain, 'apart': apart, 'claims': per[:40], 'producerSlashedSompi': slashed}
+        self.observe('metric chain %s' % label, out)
+        return out
+
+    def run_injection(self, inject, after_daa):
+        """One G-17 injection phase: restart P with the lie, wait for lying claims accepted in the phase to end (or the window), and
+        follow each through the metric chain. PASS: every eligible claim that ended was convicted or defaulted, collected and
+        invalidated, and none reached Final with its reward; FAIL: a lying claim reached Final (a G14 miss); OBSERVED: no claim ended
+        in the window (the chain is recorded as is)."""
+        a = self.args
+        p = self.nodes['P']
+        pbond = self.seat(0)['bond_outpoint']
+        p.stop()
+        p.extra = self.producer_flags(0, canonical=True, inject=inject, host_panel=True)
+        p.start()
+        self.wait_rpc(p)
+        self.peer_all()
+        start = max(after_daa, self.daa_quiet() or 0)
+        before = self.bond_row(pbond)['bondSlashed']
+        label = 'G-17 %s' % inject
+        log('%s: phase from DAA %d' % (label, start))
+
+        def ended_enough():
+            rows = [r for r in self.claims(pbond).get('claims', []) if r['acceptedDaa'] >= start and not r['isFreePrompt']]
+            done = [r for r in rows if r['phase'] in ('voided', 'final')]
+            return (rows, done) if len(done) >= a.inject_claims else None
+        try:
+            self.wait('%s: %d lying claims end' % (label, a.inject_claims), ended_enough, a.inject_timeout, every=30)
+        except Blocked as e:
+            self.observe('%s window ended' % label, str(e))
+        m = self.metric_chain(label, pbond, start, before)
+        c, ap = m['chain'], m['apart']
+        ended = c['accepted'] + ap['reachedFinal']
+        if ap['reachedFinal']:
+            return self.row(label, 'FAIL', m, '%d lying claims reached Final (G14 miss) — chain %s' % (ap['reachedFinal'], c))
+        if not ended:
+            return self.row(label, 'OBSERVED', m, 'no lying claim ended in the window — chain %s, apart %s' % (c, ap))
+        if c['accepted'] and c['invalidated'] >= c['accepted'] and c['collected'] > 0:
+            return self.row(label, 'PASS', m, 'chain %s' % c)
+        return self.row(label, 'FAIL', m, 'ended without collection/invalidation — chain %s, apart %s' % (c, ap))
+
+    # ---- acceptance tests A–G (audit §8) ----------------------------------------------------------------------------------------
+
+    ACCEPTANCE = [
+        ('A all Panel collude, one outside bond convicts from public reads',
+         'legacy_v2_attempt_full_collusion_outside_bond_convicts'),
+        ('D withheld material ends in the DA default', 'legacy_v2_attempt_held_da_withholding_ends_in_da_default'),
+        ('D false accusation refused', 'g14_accept_d_a_false_accusation_of_an_honest_claim_is_refused'),
+        ('D verifier implementation difference is not producer fraud',
+         'g14_accept_d_a_verifier_implementation_difference_is_not_producer_fraud'),
+        ('E collected once, reporter from collected, rights void', 'g14_accept_e_collected_once_reporter_from_collected_and_rights_void'),
+        ('F same conviction from Final-1', 'g14_accept_f_the_same_conviction_from_final_minus_one'),
+        ('F same conviction after Final inside the liability', 'g14_accept_f_the_same_conviction_after_final_inside_the_liability'),
+        ('F bond exit raced against the pursuit', 'g14_accept_f_a_bond_exit_raced_against_the_pursuit_escapes_nothing'),
+        ('F after the liability horizon no pursuit opens', 'g14_accept_f_after_the_liability_horizon_no_pursuit_opens'),
+        ('F reorg / restart / IBD / pruned import (parent harness)', 'g14r_'),
+        ('G honest claims before / at / after the fence settle', 'g14_accept_g_honest_claims_before_at_and_after_the_fence_settle'),
+    ]
+    # Other lanes' acceptance tests: (row, branch, test filter). Run once the branch is an ancestor of HEAD, else BLOCKED.
+    OTHER_LANES = [
+        ('B per-family detection rates (single point / boundary / whole forgery)', 'integ/g14-detection-policy', 'g14_accept_b_'),
+        ('C court saturation, continuous refill and TIR owners all active', 'integ/g14-court-capacity', 'g14_accept_c_'),
+        ('C TIR frame price and clock (owner admission)', 'integ/g14-tir-pricing', 'g14_accept_c_tir_'),
+    ]
+
+    def cargo_test(self, filt):
+        cmd = ['cargo', 'test', '-j', '3', '-p', 'kaspa-consensus', '--lib', filt, '--', '--test-threads=1']
+        t0 = time.monotonic()
+        p = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=self.args.acceptance_timeout)
+        out = p.stdout + p.stderr
+        passed = [m for m in re.findall(r'test (\S+) \.\.\. ok', out)]
+        failed = [m for m in re.findall(r'test (\S+) \.\.\. FAILED', out)]
+        return {'cmd': ' '.join(cmd), 'rc': p.returncode, 'passed': passed, 'failed': failed, 'seconds': round(time.monotonic() - t0),
+                'tail': out[-3000:]}
+
+    def run_acceptance(self):
+        for name, filt in self.ACCEPTANCE:
+            r = self.cargo_test(filt)
+            status = 'PASS' if r['rc'] == 0 and r['passed'] and not r['failed'] else ('FAIL' if r['failed'] or r['passed'] else 'BLOCKED')
+            self.row('acceptance ' + name, status, r, '%d passed, %d failed (%s)' % (len(r['passed']), len(r['failed']), filt))
+        for name, branch, filt in self.OTHER_LANES:
+            ref = 'origin/' + branch
+            published = subprocess.run(['git', '-C', str(REPO), 'rev-parse', '--verify', '--quiet', ref], capture_output=True).returncode == 0
+            landed = published and subprocess.run(['git', '-C', str(REPO), 'merge-base', '--is-ancestor', ref, 'HEAD'],
+                                                  capture_output=True).returncode == 0
+            if not landed:
+                self.row('acceptance ' + name, 'BLOCKED', {'branch': branch, 'published': published, 'landedInHead': landed},
+                         'owned by lane %s, which has %s' % (branch, 'not landed in this build' if published else 'not been published'))
+                continue
+            r = self.cargo_test(filt)
+            status = 'PASS' if r['rc'] == 0 and r['passed'] else ('FAIL' if r['failed'] else 'BLOCKED')
+            self.row('acceptance ' + name, status, r, '%d passed, %d failed (%s)' % (len(r['passed']), len(r['failed']), filt))
+
     # ---- run -----------------------------------------------------------------------------------------------------------------------
 
     def run(self):
         try:
+            if self.args.acceptance_only:
+                self.run_acceptance()
+                self.facts['status'] = 'COMPLETED'
+                return
             self.preflight()
             self.write_keyring()
             if self.args.family == 'collusion':
@@ -1131,6 +1317,8 @@ class Drill:
                 self.court_capacity_rows()
             else:
                 self.court_capacity_landed()
+            if self.args.run_acceptance:
+                self.run_acceptance()
             if self.args.family == 'positive':
                 self.run_positive()
             elif self.args.mode == 'genesis':
@@ -1197,6 +1385,13 @@ def main():
     ap.add_argument('--frozen-timeout', type=int, default=3600)
     ap.add_argument('--no-d11', dest='d11', action='store_false')
     ap.add_argument('--no-d16', dest='d16', action='store_false')
+    ap.add_argument('--inject', action='append', default=[],
+                    help='G-17 injection phase after D-02 (repeatable): a --palw-drill-fault kind, sparse:<seed> or withhold-all')
+    ap.add_argument('--inject-claims', type=int, default=1, help='lying claims to follow to their end per injection phase')
+    ap.add_argument('--inject-timeout', type=int, default=3 * 3600)
+    ap.add_argument('--run-acceptance', action='store_true', help='run acceptance tests A-G (cargo, targeted, -j 3) before the drill')
+    ap.add_argument('--acceptance-only', action='store_true', help='only the acceptance tests; no nodes are started')
+    ap.add_argument('--acceptance-timeout', type=int, default=4 * 3600)
     args = ap.parse_args()
     if len(args.salt) != 64 or set(args.salt) == {'0'}:
         ap.error('--salt: 64 hex, not all zero')

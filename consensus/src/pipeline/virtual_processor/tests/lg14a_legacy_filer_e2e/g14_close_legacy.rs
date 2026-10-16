@@ -415,3 +415,6 @@ async fn legacy_v2_attempt_held_da_withholding_ends_in_da_default() {
     assert!(lg.view(id).record.is_none(), "the default released the reservation");
     assert_eq!(lg.exposure(NEWCOMER), 0, "the outsider is made whole");
 }
+
+// The external audit's acceptance tests D, E, F and G (2026-10-17, lane integ/g14-drill) over this module's validated network.
+mod g14_acceptance;
