@@ -4033,6 +4033,19 @@ pub enum PalwDrillTirFrameFaultV1 {
     NoTfp1,
 }
 
+/// **DRILL ONLY (G14 audit G-17): the lie this node's canonical free-prompt claims commit** (`--palw-drill-fp-fault`). `Backend` is one of
+/// the families' own free-prompt drill verbs (`execute_free_prompt_with_drill_fault_v2`: a forged KV cache row — the state fault — or a
+/// forged fused attention output, every root re-derived); `SkipAll` commits an execution root no computation reproduces, the claim
+/// of a producer that computed nothing. The daemon refuses the flag off a private drill chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillFpFaultV1 {
+    Backend(kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1),
+    SkipAll,
+}
+
+/// The execution root a [`PalwDrillFpFaultV1::SkipAll`] claim commits — a drill constant no run reproduces.
+pub const PALW_DRILL_SKIP_ALL_EXECUTION_ROOT_WORD_V1: u64 = 0x5C1F_A11C_0DE5_C1F0;
+
 #[derive(Clone)]
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
@@ -4107,6 +4120,13 @@ pub struct PalwPanelConfig {
     pub drill_collude_with: Vec<PalwBondKeyV2>,
     /// **DRILL ONLY (the G14 collusion drill D-11)**: never answer a legacy held DA unit (`--palw-drill-withhold-held-da`).
     pub drill_withhold_held_da: bool,
+    /// **DRILL ONLY (G14 audit G-17 / D-11)**: answer no DA unit of any kind (`--palw-drill-withhold-all-da`).
+    pub drill_withhold_all_da: bool,
+    /// **DRILL ONLY (G14 audit G-17)**: the canonical free-prompt claims' lie (`--palw-drill-fp-fault`). See [`PalwDrillFpFaultV1`].
+    pub drill_fp_fault: Option<PalwDrillFpFaultV1>,
+    /// **DRILL ONLY (G14 audit G-17, the sparse fault)**: canonical free-prompt claims lie at one leaf drawn from this seed and the
+    /// honest run (`--palw-drill-sparse-fault-seed`; `palw_producer::palw_drill_sparse_lie_leaf_v1`).
+    pub drill_sparse_fault_seed: Option<u64>,
     /// **RFC-0004 (A10): evaluate** (`--palw-improve-evaluate`): run the evaluation jobs of every governed
     /// line's open epoch whose subject class this node holds, and carry their claims.
     pub improve_evaluate: bool,
@@ -4616,6 +4636,11 @@ impl PalwPanelService {
             Some(class_id) => self.class_prompt_ids_form(class_id),
             None => self.config.prompt_ids_form,
         }
+    }
+
+    /// The configuration this service runs (`--palw-drill-extra-seat` clones it for another seat identity in the same process).
+    pub(crate) fn drill_config_v1(&self) -> &PalwPanelConfig {
+        &self.config
     }
 
     pub fn new(
@@ -7860,8 +7885,29 @@ impl PalwPanelService {
             Some(PalwDrillTirFrameFaultV1::Selection { position }) => Some(position),
             _ => None,
         };
+        // G14 audit G-17: the canonical claim's backend lie (KV / attention) and the sparse single-leaf lie.
+        let drill_fp_backend = match self.config.drill_fp_fault {
+            Some(PalwDrillFpFaultV1::Backend(fault)) => Some(fault),
+            _ => None,
+        };
+        let drill_sparse_seed = self.config.drill_sparse_fault_seed;
         let (_backend, executed) = offload(backend, move |b| {
-            let run = match drill_fault_leaf {
+            let sparse_leaf = match drill_sparse_seed {
+                Some(seed) => {
+                    let honest = b.execute_free_prompt(&job_for_run, &prompt_for_run)?;
+                    let (leaf, of) = crate::palw_producer::palw_drill_sparse_lie_leaf_v1(&honest.outcome.material, seed)
+                        .ok_or_else(|| "PALW DRILL: the honest free-prompt capture holds no openable, non-fused leaf to lie at".to_string())?;
+                    warn!("[{PALW_PANEL}] PALW DRILL (G-17 sparse): this canonical claim lies at step leaf {leaf}, one of {of} candidates");
+                    Some(leaf)
+                }
+                None => None,
+            };
+            let run = match drill_fault_leaf.or(sparse_leaf) {
+                None if drill_fp_backend.is_some() => b.execute_free_prompt_with_drill_fault_v2(
+                    &job_for_run,
+                    &prompt_for_run,
+                    drill_fp_backend.expect("checked"),
+                )?,
                 None if drill_selection.is_some() => b.execute_free_prompt_with_selection_fault_v1(
                     &job_for_run,
                     &prompt_for_run,
@@ -7895,7 +7941,12 @@ impl PalwPanelService {
         if let Some(position) = drill_selection {
             warn!("[{PALW_PANEL}] PALW DRILL (D-06): this canonical claim commits a token at decode position {position} its job's rule does not select");
         }
-        // G14 drill D-07: the commitment names an output root its own committed trace's ids do not reproduce.
+        // G14 audit G-17 (skip-all-compute): the commitment names an execution root no computation reproduces.
+        if self.config.drill_fp_fault == Some(PalwDrillFpFaultV1::SkipAll) {
+            commitment.execution_root = Hash64::from_u64_word(PALW_DRILL_SKIP_ALL_EXECUTION_ROOT_WORD_V1);
+            warn!("[{PALW_PANEL}] PALW DRILL (G-17 skip-all): this canonical claim commits an execution root no computation reproduces");
+        }
+                // G14 drill D-07: the commitment names an output root its own committed trace's ids do not reproduce.
         if tir_drill == Some(PalwDrillTirFrameFaultV1::Output) {
             commitment.output_root = Hash64::from_u64_word(0xD07D_07D0_7D07_D07D);
             warn!("[{PALW_PANEL}] PALW DRILL (D-07): this canonical claim commits a substituted output root");
@@ -11095,6 +11146,16 @@ impl PalwPanelService {
                 let mut by_claim: Vec<(Hash64, Vec<&kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1>)> = Vec::new();
                 for duty in &disclosure.duties {
                     if !palw_disclosure_due_v1(duty, current_daa) {
+                        continue;
+                    }
+                    // DRILL ONLY (G14 audit G-17 / D-11, `--palw-drill-withhold-all-da`): no unit of any kind is answered.
+                    if self.config.drill_withhold_all_da {
+                        crate::palw_backends::note_throttled_v1("drill-withhold-all-da", || {
+                            format!(
+                                "[{PALW_PANEL}] PALW DRILL (G14 D-11): withholding DA unit {:?} of claim {} (every demand runs to its deadline)",
+                                duty.unit, duty.claim_id
+                            )
+                        });
                         continue;
                     }
                     // DRILL ONLY (the G14 collusion drill D-11, `--palw-drill-withhold-held-da`): a legacy held unit is never answered.

@@ -676,6 +676,38 @@ pub struct Args {
     /// non-fused leaf in the second half of the honest run (`palw_producer::PALW_DRILL_TAMPER_AUTO_LEAF_V1`). Refused on mainnet.
     #[serde(skip)]
     pub palw_drill_tamper_auto_leaf: bool,
+    /// **DRILL ONLY (G14 audit G-17; devnet/simnet or a salted testnet-12 drill): the attempt-lane lie this producer commits** — one of
+    /// [`kaspa_consensus_core::palw_backend::PalwDrillFaultV1`]'s kinds, produced through the family's own drill path with every root
+    /// re-derived (`execute_with_drill_fault`): `output`, `selection:<pos>:<lane>`, `oov:<pos>`, `tokenizer`, `prompt-relabel`,
+    /// `short-prefill:<n>`, `garbage-prompt`, `skip-all`, `activation`, `interval:<n>`, `bend:<row>[:same]`, `leaf:<n>`. Parsed by
+    /// [`parse_palw_drill_fault_v1`]. Not with `--palw-drill-tamper-leaf` / `-auto-leaf` / `-sparse-fault-seed`. Command line only.
+    #[serde(skip)]
+    pub palw_drill_fault: Option<String>,
+    /// **DRILL ONLY (G14 audit G-17 / §5.1 "sparse fault"; devnet/simnet or a salted testnet-12 drill): a single-leaf lie whose leaf is
+    /// drawn uniformly, BEFORE any challenge is known, from this seed and the honest run** — over every held, openable, non-fused step
+    /// leaf of the capture (`palw_producer::palw_drill_sparse_lie_leaf_v1`), so exactly one interval is wrong and a sampled check finds
+    /// it with the probability the audit's hypergeometric formula gives. The attempt lane and this node's canonical free-prompt claims.
+    #[serde(skip)]
+    pub palw_drill_sparse_fault_seed: Option<u64>,
+    /// **DRILL ONLY (G14 audit G-17; devnet/simnet or a salted testnet-12 drill): the lie this node's canonical free-prompt claims
+    /// commit** — `kv:<call>:<layer>:<pos>:<k|v>:<lane>:<delta>` (a cache row forged: the state/KV fault, D-09),
+    /// `attn:<call>:<layer>:<pos>:<head>:<lane>:<delta>[:follow]` (a fused attention output forged, followed downstream or not), or
+    /// `skip-all` (the commitment names an execution root no computation reproduces: the skip-all-compute claim). Parsed by
+    /// [`parse_palw_drill_fp_fault_v1`]; a backend without the verb refuses the run. Command line only.
+    #[serde(skip)]
+    pub palw_drill_fp_fault: Option<String>,
+    /// **DRILL ONLY (G14 audit G-17 / D-11; devnet/simnet or a salted testnet-12 drill): this producer answers NO data-availability unit
+    /// it owes, of any kind** (the generalisation of `--palw-drill-withhold-held-da`), so every demand runs to its deadline and ends in
+    /// the objective DA default, never a presumed computation fault. Command line only.
+    #[serde(skip)]
+    pub palw_drill_withhold_all_da: bool,
+    /// **DRILL ONLY (the G14 collusion drill on a small host; devnet/simnet or a salted testnet-12 drill): run ANOTHER seat identity in
+    /// this process** — `key=<seed file>,bond=<txid:index>[,fee=<txid:index>][,pay=<address>]`, repeatable. Each is a full Panel service
+    /// of its own (its own key, bond, fee float and state dir) sharing this node's chain, with this node's drill-collusion flags and no
+    /// production, registration or canonical claims of its own. Lets a 3-of-3 colluding Panel and its producer live in one process
+    /// (the host runs at most three nodes). Command line only.
+    #[serde(skip)]
+    pub palw_drill_extra_seat: Vec<String>,
     /// **DRILL ONLY (a salted testnet-12 drill: `palw_private_drill_network_v1`): this seat signs a SECOND vertex for one round** — once, at
     /// the first round at or past this DAA, with the first vertex's leaves' verdicts changed — so the drill can show RFC-0007's
     /// equivocation caught, slashed and ejected. Any node watching blocks files the evidence. Command line only.
@@ -1009,6 +1041,11 @@ impl Default for Args {
             palw_drill_collude_with: None,
             palw_drill_withhold_held_da: false,
             palw_drill_tamper_auto_leaf: false,
+            palw_drill_fault: None,
+            palw_drill_sparse_fault_seed: None,
+            palw_drill_fp_fault: None,
+            palw_drill_withhold_all_da: false,
+            palw_drill_extra_seat: Vec::new(),
             palw_drill_vertex_equivocate_at: None,
             palw_canonical_claims: false,
             palw_canonical_class: None,
@@ -2047,6 +2084,62 @@ pub fn cli() -> Command {
                 .help(
                     "PALW DRILL ONLY (the G14 collusion drill): --palw-drill-tamper-leaf with the leaf chosen per draw — the first \
                      held, openable, non-fused step leaf in the second half of the honest run. Refused on mainnet.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-fault")
+                .long("palw-drill-fault")
+                .require_equals(true)
+                .value_name("output|selection:<pos>:<lane>|oov:<pos>|tokenizer|prompt-relabel|short-prefill:<n>|garbage-prompt|skip-all|activation|interval:<n>|bend:<row>[:same]|leaf:<n>")
+                .help(
+                    "PALW DRILL ONLY (G14 audit G-17): the attempt-lane lie this producer commits, through the family's own drill path \
+                     with every root re-derived — output root substituted, a token not the job's selection, an out-of-vocabulary token, \
+                     an instance tokenizer field in the context, another anchor's prompt, a cut prefill, a prompt root with no preimage, \
+                     an execution root no computation reproduces (skip-all), the activation root or checkpoint interval replaced, bent \
+                     logits, or one step leaf. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-sparse-fault-seed")
+                .long("palw-drill-sparse-fault-seed")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "PALW DRILL ONLY (G14 audit G-17, the sparse single-interval fault): every claim lies at ONE step leaf drawn \
+                     uniformly from this seed and the honest run, before any challenge exists, over the capture's held, openable, \
+                     non-fused leaves (attempt lane and canonical free-prompt claims). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-fp-fault")
+                .long("palw-drill-fp-fault")
+                .require_equals(true)
+                .value_name("kv:<call>:<layer>:<pos>:<k|v>:<lane>:<delta>|attn:<call>:<layer>:<pos>:<head>:<lane>:<delta>[:follow]|skip-all")
+                .help(
+                    "PALW DRILL ONLY (G14 audit G-17): the lie this node's canonical free-prompt claims commit — a forged KV cache row \
+                     (state fault), a forged fused attention output, or an execution root no computation reproduces (skip-all). A \
+                     backend without the verb refuses the run. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-withhold-all-da")
+                .long("palw-drill-withhold-all-da")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW DRILL ONLY (G14 audit G-17 / D-11): this producer answers no data-availability unit it owes, of any kind, \
+                     so every demand ends in the objective DA default. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-extra-seat")
+                .long("palw-drill-extra-seat")
+                .require_equals(true)
+                .action(clap::ArgAction::Append)
+                .value_name("key=<seed file>,bond=<txid:index>[,fee=<txid:index>][,pay=<address>]")
+                .help(
+                    "PALW DRILL ONLY (the G14 collusion drill on a small host): run another seat identity in this process — a Panel \
+                     service of its own sharing this node's chain, with this node's drill-collusion flags and nothing of its own to \
+                     produce or register. Repeatable. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
                 ),
         )
         .arg(
@@ -4007,6 +4100,11 @@ impl Args {
             palw_drill_collude_with: m.get_one::<String>("palw-drill-collude-with").cloned(),
             palw_drill_withhold_held_da: m.get_one::<bool>("palw-drill-withhold-held-da").copied().unwrap_or(false),
             palw_drill_tamper_auto_leaf: m.get_one::<bool>("palw-drill-tamper-auto-leaf").copied().unwrap_or(false),
+            palw_drill_fault: m.get_one::<String>("palw-drill-fault").cloned(),
+            palw_drill_sparse_fault_seed: m.get_one::<u64>("palw-drill-sparse-fault-seed").copied(),
+            palw_drill_fp_fault: m.get_one::<String>("palw-drill-fp-fault").cloned(),
+            palw_drill_withhold_all_da: m.get_one::<bool>("palw-drill-withhold-all-da").copied().unwrap_or(false),
+            palw_drill_extra_seat: m.get_many::<String>("palw-drill-extra-seat").map(|v| v.cloned().collect()).unwrap_or_default(),
             palw_canonical_claims: m.get_one::<bool>("palw-canonical-claims").copied().unwrap_or(defaults.palw_canonical_claims),
             palw_canonical_class: m.get_one::<String>("palw-canonical-class").cloned().or(defaults.palw_canonical_class),
             palw_canonical_interval_daa: m
@@ -4819,6 +4917,177 @@ pub fn parse_palw_drill_tamper_tir_frame_v1(spec: &str) -> Result<crate::palw_pa
         None if spec == "output" => Ok(F::Output),
         None if spec == "no-tfp1" => Ok(F::NoTfp1),
         _ => Err(format!("unknown TIR frame drill fault '{spec}': expected cone:<leaf>, selection:<position>, output or no-tfp1")),
+    }
+}
+
+/// **`--palw-drill-fault=<fault>`, parsed** (G14 audit G-17): the attempt-lane drill fault by name. The substituted roots are fixed
+/// drill constants (a lie, recognisable in a log); anything else is refused by name.
+pub fn parse_palw_drill_fault_v1(spec: &str) -> Result<kaspa_consensus_core::palw_backend::PalwDrillFaultV1, String> {
+    use kaspa_consensus_core::palw_backend::{PalwDrillBendV1, PalwDrillFaultV1 as F};
+    let num = |what: &str, v: Option<&str>| -> Result<u64, String> {
+        v.ok_or_else(|| format!("{spec}: needs {what}"))?.parse::<u64>().map_err(|_| format!("{spec}: {what} is not a number"))
+    };
+    let u32of = |what: &str, v: Option<&str>| -> Result<u32, String> {
+        u32::try_from(num(what, v)?).map_err(|_| format!("{spec}: {what} does not fit 32 bits"))
+    };
+    let mut it = spec.split(':');
+    let kind = it.next().unwrap_or_default();
+    let fault = match kind {
+        "output" => F::OutputRoot(kaspa_hashes::Hash64::from_u64_word(0xD07D_07D0_7D07_D07D)),
+        "selection" => F::TokenNotSelected { pos: u32of("<pos>", it.next())?, lane: u32of("<lane>", it.next())? },
+        "oov" => F::TokenOutOfVocab { pos: u32of("<pos>", it.next())? },
+        "tokenizer" => F::LegacyContextField,
+        "prompt-relabel" => F::RelabelPrompt { from: kaspa_hashes::Hash64::from_u64_word(0xD08D_08D0_8D08_D08D) },
+        "short-prefill" => F::ShortPrefill(u32of("<n>", it.next())?),
+        "garbage-prompt" => F::GarbagePromptRoot,
+        "skip-all" => F::UnboundExecutionRoot(kaspa_hashes::Hash64::from_u64_word(0x5C1F_A11C_0DE5_C1F0)),
+        "activation" => F::ActivationRoot(kaspa_hashes::Hash64::from_u64_word(0xAC71_AC71_AC71_AC71)),
+        "interval" => F::CheckpointInterval(u32of("<n>", it.next())?),
+        "bend" => {
+            let row = u32of("<row>", it.next())?;
+            let mode = match it.next() {
+                None => PalwDrillBendV1::NewArgmax,
+                Some("same") => PalwDrillBendV1::SameArgmax,
+                Some(other) => return Err(format!("{spec}: bend mode '{other}' is not 'same'")),
+            };
+            F::BendLogits { row, mode, lane: None }
+        }
+        "leaf" => F::StepLeaf(num("<n>", it.next())?),
+        _ => {
+            return Err(format!(
+                "unknown drill fault '{spec}': expected output, selection:<pos>:<lane>, oov:<pos>, tokenizer, prompt-relabel, \
+                 short-prefill:<n>, garbage-prompt, skip-all, activation, interval:<n>, bend:<row>[:same] or leaf:<n>"
+            ));
+        }
+    };
+    if it.next().is_some() {
+        return Err(format!("{spec}: too many fields for '{kind}'"));
+    }
+    Ok(fault)
+}
+
+/// **`--palw-drill-fp-fault=<fault>`, parsed** (G14 audit G-17): a canonical free-prompt claim's lie.
+pub fn parse_palw_drill_fp_fault_v1(spec: &str) -> Result<crate::palw_panel::PalwDrillFpFaultV1, String> {
+    use crate::palw_panel::PalwDrillFpFaultV1 as F;
+    use kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1 as B;
+    let fields: Vec<&str> = spec.split(':').collect();
+    let n = |i: usize| -> Result<i64, String> {
+        fields.get(i).ok_or_else(|| format!("{spec}: too few fields"))?.parse::<i64>().map_err(|_| format!("{spec}: field {i} is not a number"))
+    };
+    let fit = |v: i64, max: i64, what: &str| -> Result<i64, String> {
+        if (0..=max).contains(&v) { Ok(v) } else { Err(format!("{spec}: {what} out of range")) }
+    };
+    match fields.first().copied() {
+        Some("skip-all") if fields.len() == 1 => Ok(F::SkipAll),
+        Some("kv") if fields.len() == 7 => {
+            let kind = match fields[4] {
+                "k" => 0,
+                "v" => 1,
+                other => return Err(format!("{spec}: cache kind '{other}' is not k or v")),
+            };
+            Ok(F::Backend(B::CacheRow {
+                call: fit(n(1)?, u32::MAX as i64, "call")? as u32,
+                layer: fit(n(2)?, u16::MAX as i64, "layer")? as u16,
+                position: fit(n(3)?, u32::MAX as i64, "position")? as u32,
+                kind,
+                lane: fit(n(5)?, u16::MAX as i64, "lane")? as u16,
+                delta: i32::try_from(n(6)?).map_err(|_| format!("{spec}: delta does not fit 32 bits"))?,
+            }))
+        }
+        Some("attn") if fields.len() == 7 || (fields.len() == 8 && fields[7] == "follow") => Ok(F::Backend(B::AttnOutput {
+            call: fit(n(1)?, u32::MAX as i64, "call")? as u32,
+            layer: fit(n(2)?, u16::MAX as i64, "layer")? as u16,
+            position: fit(n(3)?, u32::MAX as i64, "position")? as u32,
+            head: fit(n(4)?, u16::MAX as i64, "head")? as u16,
+            lane: fit(n(5)?, u16::MAX as i64, "lane")? as u16,
+            delta: i32::try_from(n(6)?).map_err(|_| format!("{spec}: delta does not fit 32 bits"))?,
+            follow: fields.len() == 8,
+        })),
+        _ => Err(format!(
+            "unknown free-prompt drill fault '{spec}': expected kv:<call>:<layer>:<pos>:<k|v>:<lane>:<delta>, \
+             attn:<call>:<layer>:<pos>:<head>:<lane>:<delta>[:follow] or skip-all"
+        )),
+    }
+}
+
+/// One `--palw-drill-extra-seat` identity, parsed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwDrillExtraSeatV1 {
+    pub key_path: String,
+    pub bond: String,
+    pub fee_outpoint: Option<String>,
+    pub pay_address: Option<String>,
+}
+
+/// **`--palw-drill-extra-seat=key=<file>,bond=<txid:index>[,fee=<txid:index>][,pay=<address>]`, parsed.**
+pub fn parse_palw_drill_extra_seat_v1(spec: &str) -> Result<PalwDrillExtraSeatV1, String> {
+    let (mut key, mut bond, mut fee, mut pay) = (None, None, None, None);
+    for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (k, v) = part.split_once('=').ok_or_else(|| format!("{spec}: '{part}' is not name=value"))?;
+        let slot = match k {
+            "key" => &mut key,
+            "bond" => &mut bond,
+            "fee" => &mut fee,
+            "pay" => &mut pay,
+            other => return Err(format!("{spec}: unknown field '{other}' (key, bond, fee, pay)")),
+        };
+        if slot.replace(v.to_owned()).is_some() {
+            return Err(format!("{spec}: '{k}' given twice"));
+        }
+    }
+    let key_path = key.ok_or_else(|| format!("{spec}: needs key=<seed file>"))?;
+    let bond = bond.ok_or_else(|| format!("{spec}: needs bond=<txid:index>"))?;
+    crate::palw_producer::parse_outpoint(&bond).map_err(|e| format!("{spec}: bond {e}"))?;
+    if let Some(fee) = &fee {
+        crate::palw_producer::parse_outpoint(fee).map_err(|e| format!("{spec}: fee {e}"))?;
+    }
+    Ok(PalwDrillExtraSeatV1 { key_path, bond, fee_outpoint: fee, pay_address: pay })
+}
+
+#[cfg(test)]
+mod palw_drill_g17_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_backend::{PalwDrillBendV1, PalwDrillFaultV1 as F, PalwFreePromptDrillFaultV1 as B};
+    /// G-17: every new injection parses by name, and nothing else does.
+    #[test]
+    fn g17_drill_injections_parse_by_name() {
+        assert!(matches!(parse_palw_drill_fault_v1("output").unwrap(), F::OutputRoot(_)));
+        assert_eq!(parse_palw_drill_fault_v1("selection:3:17").unwrap(), F::TokenNotSelected { pos: 3, lane: 17 });
+        assert_eq!(parse_palw_drill_fault_v1("oov:2").unwrap(), F::TokenOutOfVocab { pos: 2 });
+        assert_eq!(parse_palw_drill_fault_v1("tokenizer").unwrap(), F::LegacyContextField);
+        assert!(matches!(parse_palw_drill_fault_v1("prompt-relabel").unwrap(), F::RelabelPrompt { .. }));
+        assert_eq!(parse_palw_drill_fault_v1("short-prefill:4").unwrap(), F::ShortPrefill(4));
+        assert_eq!(parse_palw_drill_fault_v1("garbage-prompt").unwrap(), F::GarbagePromptRoot);
+        assert!(matches!(parse_palw_drill_fault_v1("skip-all").unwrap(), F::UnboundExecutionRoot(_)));
+        assert!(matches!(parse_palw_drill_fault_v1("activation").unwrap(), F::ActivationRoot(_)));
+        assert_eq!(parse_palw_drill_fault_v1("interval:9").unwrap(), F::CheckpointInterval(9));
+        assert_eq!(
+            parse_palw_drill_fault_v1("bend:1:same").unwrap(),
+            F::BendLogits { row: 1, mode: PalwDrillBendV1::SameArgmax, lane: None }
+        );
+        assert_eq!(parse_palw_drill_fault_v1("leaf:5").unwrap(), F::StepLeaf(5));
+        for bad in ["", "outputs", "selection:1", "oov", "tokenizer:1", "leaf:x", "bend:1:new", "interval:-1", "short-prefill:1:2"] {
+            assert!(parse_palw_drill_fault_v1(bad).is_err(), "{bad}");
+        }
+        use crate::palw_panel::PalwDrillFpFaultV1 as P;
+        assert_eq!(parse_palw_drill_fp_fault_v1("skip-all").unwrap(), P::SkipAll);
+        assert_eq!(
+            parse_palw_drill_fp_fault_v1("kv:0:1:2:v:3:-4").unwrap(),
+            P::Backend(B::CacheRow { call: 0, layer: 1, position: 2, kind: 1, lane: 3, delta: -4 })
+        );
+        assert_eq!(
+            parse_palw_drill_fp_fault_v1("attn:1:0:0:2:5:7:follow").unwrap(),
+            P::Backend(B::AttnOutput { call: 1, layer: 0, position: 0, head: 2, lane: 5, delta: 7, follow: true })
+        );
+        for bad in ["", "kv:0:1:2:x:3:4", "kv:0:1:2:k:3", "attn:1:0:0:2:5:7:lead", "skip-all:1", "leaf:3"] {
+            assert!(parse_palw_drill_fp_fault_v1(bad).is_err(), "{bad}");
+        }
+        let txid = "00".repeat(64);
+        let seat = parse_palw_drill_extra_seat_v1(&format!("key=/k/1.hex,bond={txid}:1,fee={txid}:2")).unwrap();
+        assert_eq!((seat.key_path.as_str(), seat.fee_outpoint.is_some(), seat.pay_address), ("/k/1.hex", true, None));
+        for bad in ["", "key=/k", &format!("bond={txid}:1"), &format!("key=/k,bond={txid}:1,key=/j"), &format!("key=/k,bond=x,")] {
+            assert!(parse_palw_drill_extra_seat_v1(bad).is_err(), "{bad}");
+        }
     }
 }
 

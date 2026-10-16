@@ -1530,6 +1530,43 @@ Do you confirm? (y/n)";
                         // The panel's config refuses the flag off a private drill; the producer
                         // takes it only there too.
                         drill_answer_only: args.palw_drill_answer_only && palw_private_drill,
+                        // G14 audit G-17: the private-chain rule of every drill fault (devnet/simnet or a salted testnet-12 drill).
+                        drill_fault: match args.palw_drill_fault.as_deref() {
+                            Some(spec) if !palw_private_drill => panic!(
+                                "--palw-drill-fault={spec} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
+                            ),
+                            Some(_) if args.palw_drill_tamper_leaf.is_some()
+                                || args.palw_drill_tamper_auto_leaf
+                                || args.palw_drill_tamper_boundary.is_some()
+                                || args.palw_drill_sparse_fault_seed.is_some() =>
+                            {
+                                panic!("--palw-drill-fault is one lie: not with --palw-drill-tamper-leaf/-auto-leaf/-boundary/-sparse-fault-seed")
+                            }
+                            Some(spec) => match crate::args::parse_palw_drill_fault_v1(spec) {
+                                Ok(fault) => {
+                                    warn!("PALW DRILL (G-17): this producer commits the attempt-lane lie {fault:?} on every draw. Its claims are meant to be convicted or refused.");
+                                    Some(fault)
+                                }
+                                Err(why) => panic!("--palw-drill-fault={spec}: {why}"),
+                            },
+                            None => None,
+                        },
+                        drill_sparse_fault_seed: match args.palw_drill_sparse_fault_seed {
+                            Some(seed) if !palw_private_drill => panic!(
+                                "--palw-drill-sparse-fault-seed={seed} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
+                            ),
+                            Some(_) if args.palw_drill_tamper_leaf.is_some()
+                                || args.palw_drill_tamper_auto_leaf
+                                || args.palw_drill_tamper_boundary.is_some() =>
+                            {
+                                panic!("--palw-drill-sparse-fault-seed is one lie: not with --palw-drill-tamper-leaf/-auto-leaf/-boundary")
+                            }
+                            Some(seed) => {
+                                warn!("PALW DRILL (G-17 sparse): every draw lies at ONE step leaf drawn uniformly from seed {seed}");
+                                Some(seed)
+                            }
+                            None => None,
+                        },
                         // **DRILL ONLY** (`--palw-drill-real-submit-delay-s`): `validate_args` already refused it off a
                         // salted chain; refused again here, on the chain this node RUNS, so a lost params swap cannot
                         // arm it on public testnet-12.
@@ -2143,6 +2180,41 @@ Do you confirm? (y/n)";
                             }
                             None => Vec::new(),
                         },
+                        drill_withhold_all_da: match args.palw_drill_withhold_all_da {
+                            true if !palw_private_drill => {
+                                panic!("--palw-drill-withhold-all-da is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
+                            }
+                            true => {
+                                warn!("PALW DRILL: this producer withholds EVERY DA unit it owes (G14 audit G-17 / D-11).");
+                                true
+                            }
+                            false => false,
+                        },
+                        drill_fp_fault: match args.palw_drill_fp_fault.as_deref() {
+                            Some(spec) if !palw_private_drill => panic!(
+                                "--palw-drill-fp-fault={spec} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
+                            ),
+                            Some(_) if args.palw_drill_tamper_fp_leaf.is_some() || args.palw_drill_tamper_tir_frame.is_some() => {
+                                panic!("--palw-drill-fp-fault is one lie: not with --palw-drill-tamper-fp-leaf / -tamper-tir-frame")
+                            }
+                            Some(spec) => match crate::args::parse_palw_drill_fp_fault_v1(spec) {
+                                Ok(fault) => {
+                                    warn!("PALW DRILL (G-17): this node's canonical claims commit the lie {fault:?}. They are meant to be convicted.");
+                                    Some(fault)
+                                }
+                                Err(why) => panic!("--palw-drill-fp-fault={spec}: {why}"),
+                            },
+                            None => None,
+                        },
+                        drill_sparse_fault_seed: match args.palw_drill_sparse_fault_seed {
+                            Some(seed) if !palw_private_drill => {
+                                panic!("--palw-drill-sparse-fault-seed={seed} is devnet/simnet (or a salted testnet-12 drill) only")
+                            }
+                            Some(_) if args.palw_drill_tamper_fp_leaf.is_some() || args.palw_drill_tamper_tir_frame.is_some() || args.palw_drill_fp_fault.is_some() => {
+                                panic!("--palw-drill-sparse-fault-seed is one lie: not with --palw-drill-tamper-fp-leaf / -tamper-tir-frame / -fp-fault")
+                            }
+                            other => other,
+                        },
                         drill_withhold_held_da: match args.palw_drill_withhold_held_da {
                             true if !palw_private_drill => {
                                 panic!("--palw-drill-withhold-held-da is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
@@ -2204,6 +2276,63 @@ Do you confirm? (y/n)";
                 None
             }
         }
+    };
+    // **DRILL ONLY (`--palw-drill-extra-seat`, the G14 collusion drill on a small host)**: more seat identities in this process — each
+    // a Panel service of its own (key, bond, fee float, state dir) cloned from this node's, with this node's collusion flags and nothing
+    // of its own to produce, register, claim or file. Private drill chains only.
+    let palw_drill_extra_panel_services: Vec<Arc<crate::palw_panel::PalwPanelService>> = if args.palw_drill_extra_seat.is_empty() {
+        Vec::new()
+    } else if !palw_private_drill {
+        panic!("--palw-drill-extra-seat is a drill and is devnet/simnet (or a salted testnet-12 drill) only")
+    } else {
+        let Some(primary) = palw_panel_service.as_ref() else {
+            panic!("--palw-drill-extra-seat needs this node's own seat identity (--palw-producer-key and --palw-producer-bond)")
+        };
+        args.palw_drill_extra_seat
+            .iter()
+            .enumerate()
+            .map(|(i, spec)| {
+                let seat = crate::args::parse_palw_drill_extra_seat_v1(spec)
+                    .unwrap_or_else(|e| panic!("--palw-drill-extra-seat={spec}: {e}"));
+                let mut c = primary.drill_config_v1().clone();
+                c.key_path = seat.key_path;
+                c.bond = seat.bond.clone();
+                c.fee_outpoint = seat.fee_outpoint;
+                if seat.pay_address.is_some() {
+                    c.pay_address = seat.pay_address;
+                }
+                c.state_dir = c.state_dir.join(format!("drill-extra-seat-{i}"));
+                c.register_class = None;
+                c.register_bond = false;
+                c.canonical_claims = false;
+                c.challenge = false;
+                c.public_claims.clear();
+                c.drill_tamper_fp_leaf = None;
+                c.drill_tamper_tir_frame = None;
+                c.drill_challenge_all = false;
+                c.drill_answer_only = false;
+                c.drill_refuse_leaf_evidence = false;
+                c.drill_withhold_held_da = false;
+                c.drill_withhold_all_da = false;
+                c.drill_fp_fault = None;
+                c.drill_sparse_fault_seed = None;
+                c.improve_evaluate = false;
+                c.vertex_equivocate_at = None;
+                c.tir_shard_watch = false;
+                c.tir_shard_declare = None;
+                warn!(
+                    "PALW DRILL: extra seat {i} (bond {}) runs in this process{}",
+                    seat.bond,
+                    if c.drill_collude_with.is_empty() { "" } else { ", colluding like this node's own seat" }
+                );
+                Arc::new(crate::palw_panel::PalwPanelService::new(
+                    c,
+                    consensus_manager.clone(),
+                    flow_context_for_palw_panel.clone(),
+                    config_for_palw_panel.clone(),
+                ))
+            })
+            .collect()
     };
     // **The plan, corrected by what started** (`crate::palw_duties`): the summary line above is the plan,
     // printed before the services existed. A duty the plan put ON whose key file or bond then failed to
@@ -2283,6 +2412,9 @@ Do you confirm? (y/n)";
     }
     if let Some(palw_panel_service) = palw_panel_service {
         async_runtime.register(palw_panel_service);
+    }
+    for extra in palw_drill_extra_panel_services {
+        async_runtime.register(extra);
     }
     if let Some(palw_exec_slice_producer_service) = palw_exec_slice_producer_service {
         async_runtime.register(palw_exec_slice_producer_service);
