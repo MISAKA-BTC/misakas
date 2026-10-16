@@ -94,9 +94,9 @@ native_struct!(crate::palw_class_registration_origin_v1::PalwClassRegistrationOr
 native_struct!(crate::palw_settlement_once_v1::PalwSettlementOnceRowV1; version, obligation, consumer, amount, debit, settled_daa);
 native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1; version, base_claim, enrollment, accuser, convicted_daa, forget_after_daa);
 native_struct!(crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1; version, claim, verifier, slot, poster, fee, release_after_daa);
+native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1; version, enrollment, base_claim, producer, commitment, committed_daa, deposit, forget_after_daa);
 native_struct!(crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1; version, claim, seat, amount, locked_daa);
 native_struct!(crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1; version, claim, first_blue_score, first_daa);
-native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1; version, enrollment, base_claim, producer, commitment, committed_daa, deposit, forget_after_daa);
 native_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; reserved, filed_daa, serve_until_daa, charged);
 native_struct!(crate::palw_provider_court_v1::ProviderChallengeRowV1; challenger, bond, filed_daa, deadline_daa, answered);
 native_struct!(crate::palw_provider_court_v1::ProviderSubjectRowV1; transferred_daa, lapsed_daa, charged, requested);
@@ -1129,7 +1129,7 @@ native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicAcceptedRowsV1; bod
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicPreparationContractV1; claim, allocation_id, source_id, original_accepted_daa, preparation_until_daa, collect_until_daa, material_until_daa, producer, custodians, drawn_panel, plan);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicReadyV1; descriptor, accepted_daa, work_receipt);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1; source_id, maximum_custodians, maximum_fresh_logical_units, maximum_reacquire_logical_units, maximum_turns, maximum_unit_bytes, config, envelope);
-native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicWorkAllocationV1; source_id, rules, maximum, per_actor, maximum_custodians, maximum_restarts, envelope);
+native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicWorkAllocationV1; source_id, rules, maximum, per_actor, per_custodian, maximum_custodians, maximum_restarts, prepared_bytes, envelope);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicPreparationPlanV1; source_id, maximum_custodians, maximum_restarts, maximum_slices_per_actor, maximum_prepared_bytes, preparation_daa, envelope);
 native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicExecutorPlanV1; artifact_bytes, inventory_leaves, inventory_ram_bytes, step_tree_bytes, row_tree_bytes, tile_forest_bytes, original_capture_bytes, prepared_disk_bytes, own_disk_bytes, maximum_file_operations, working_ram_bytes, envelope);
 native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicTerminalPlanV1; maximum_witness_bytes, maximum_root_claim_bytes, maximum_dissection_rounds, sizing_work, envelope);

@@ -13584,7 +13584,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
         "evm_template_fields",
         "calculate_virtual_state",
         "palw_candidate_state_v2_checked",
-        "palw_weighing_point_v2",
+        "palw_weighing_point_v2_checked",
         "palw_pruning_point_allowed_v2",
         "capture_pruning_point_palw_state",
     ];
@@ -13601,7 +13601,9 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
         {
             enclosing = rest.split(['(', '<']).next().unwrap_or_default().to_string();
         }
-        if line.contains(".load_tip(") {
+        // `load_tip_retained_v1` is the same uncached owned materialization, returning its native allocation ticket with it
+        // (RFC-0008 retained ownership): the walk-or-write paths take it now.
+        if line.contains(".load_tip(") || line.contains(".load_tip_retained_v1(") {
             found.push(enclosing.clone());
         }
     }
@@ -13681,7 +13683,8 @@ fn h1_the_template_asks_the_carrier_gate_the_mempool_asks() {
     assert!(body_of("palw_mempool_h1_carrier_refusal_with").contains("self.palw_h1_carrier_refusal_on("));
     let on = body_of("palw_h1_carrier_refusal_on");
     assert!(on.contains("self.palw_v2_validate_objects("), "the acceptance layer");
-    assert!(on.contains("palw_v2_apply_one_object_v1("), "and the fold's own arm");
+    // The fold's arm returns its retained owner since RFC-0008's retained ownership (`_retained_v1`).
+    assert!(on.contains("palw_v2_apply_one_object_retained_v1("), "and the fold's own arm");
 }
 
 /// **`getPalwProducerFacts` answers from one tip materialization, not two per call** (mainnet

@@ -186,19 +186,118 @@ impl BorshDeserialize for PalwTirPublicWorkRulesV1 {
 pub struct PalwTirPublicWorkAllocationV1 {
     pub source_id: Hash64,
     pub rules: PalwTirPublicWorkRulesV1,
+    /// Claim-wide: the SUM of the lanes, `per_actor + per_custodian × maximum_custodians` ([`Self::lanes_sum_v1`]).
     pub maximum: PalwTirPublicWorkV1,
     /// Independent prepaid actor lanes. A colluding responder cannot spend the
     /// outside owner's preparation/probe allowance or another literal slot's.
+    /// In an owner's work this is the OUTSIDE OWNER's lane (it reads every slot's answers of every turn); in the claim-wide
+    /// cold preparation it is every preparer's lane and equals `per_custodian`.
     pub per_actor: PalwTirPublicWorkV1,
+    /// Each literal custodian's own lane: its own slot's answers, its own replays and restarts — not every slot's.
+    pub per_custodian: PalwTirPublicWorkV1,
     pub maximum_custodians: u64,
     pub maximum_restarts: u64,
+    /// The durable prepared generation one actor publishes per pass (`tir_public_prepared_bytes_v1`, the executor's own
+    /// derivation). A publication's 16 KiB WorkDebit slices are counted from these bytes, not from replay RAM traffic.
+    pub prepared_bytes: u64,
     /// ADDITIONAL work/carrier storage. Admission must buy acquisition + this
     /// envelope as a SUM, not reinterpret an old acquisition allocation.
     pub envelope: PalwRenderingResourcePlanV1,
 }
+impl PalwTirPublicWorkAllocationV1 {
+    /// The lane of one actor: the allocation's own actor (the outside owner, or any preparer) or a literal custodian.
+    pub fn lane_v1(&self, own_actor: bool) -> &PalwTirPublicWorkV1 {
+        if own_actor { &self.per_actor } else { &self.per_custodian }
+    }
+    /// What `maximum` must be: one own-actor lane and one lane per literal custodian, each prepaid on its own.
+    pub fn lanes_sum_v1(&self) -> Result<PalwTirPublicWorkV1, String> {
+        self.per_actor.checked_add_v1(self.per_custodian.checked_mul_v1(self.maximum_custodians)?)
+    }
+    /// **The claim-wide cold preparation's allocation** from an owner's: every preparer (the producer and each drawn seat) holds
+    /// one literal custodian's lane — a preparer publishes its own generation and reads no other slot's answers.
+    pub fn preparation_lanes_v1(&self, acquisition: &PalwTirPublicOwnedPlanV1) -> Result<Self, String> {
+        if acquisition.source_id != self.source_id
+            || acquisition.maximum_custodians != self.maximum_custodians
+            || acquisition.config.prices.reorg_replay_moves != self.maximum_restarts
+        {
+            return Err("TIR preparation lanes change the original source, custody upper or restart allowance".into());
+        }
+        work_allocation_from_lanes_v1(
+            self.source_id,
+            self.envelope.vocab,
+            self.rules,
+            acquisition,
+            self.per_custodian,
+            self.per_custodian,
+            self.prepared_bytes,
+        )
+    }
+}
+
+fn work_allocation_from_lanes_v1(
+    source_id: Hash64,
+    vocab: u32,
+    rules: PalwTirPublicWorkRulesV1,
+    plan: &PalwTirPublicOwnedPlanV1,
+    per_actor: PalwTirPublicWorkV1,
+    per_custodian: PalwTirPublicWorkV1,
+    prepared_bytes: u64,
+) -> Result<PalwTirPublicWorkAllocationV1, String> {
+    let slots = plan.maximum_custodians.checked_add(1).ok_or("TIR work slots overflow")?;
+    // The lanes' SUM (`lanes_sum_v1`): one own-actor lane and one lane per literal custodian.
+    let maximum = per_actor.checked_add_v1(per_custodian.checked_mul_v1(plan.maximum_custodians)?)?;
+    let parser = sum(&[
+        maximum.parser_steps,
+        maximum.io_bytes,
+        maximum.copy_bytes,
+        exact(maximum.arithmetic_work)?,
+        maximum.eval_elements,
+        maximum.eval_terms,
+        maximum.source_reads,
+        maximum.target_requests,
+        product(maximum.id_copy_words, 4)?,
+    ])?;
+    // One global last receipt plus allocation/aggregate fields, and one spent
+    // record + last receipt per protected actor. Each receipt may contain a full
+    // 64-sibling history path (>4KiB); 512-byte actor estimates are insufficient.
+    let row = sum(&[8192, product(slots, 8192)?])?;
+    let bytes = product(maximum.attempts, sum(&[16_384, product(row, 8)?])?)?;
+    let envelope = PalwRenderingResourcePlanV1 {
+        prefix_tokens: 0,
+        vocab,
+        maximum_stream_bytes: bytes,
+        maximum_stream_leaves: maximum.attempts,
+        maximum_eog_bytes: 0,
+        maximum_moves: maximum.attempts,
+        maximum_parser_steps: parser,
+        maximum_blake_blocks: maximum.hash_bytes.div_ceil(128),
+        inclusion_daa: product(maximum.attempts, plan.config.prices.inclusion_margin_daa)?,
+        rent_sompi: sum(&[
+            product(bytes, plan.config.prices.rent_per_stream_byte)?,
+            product(row, plan.config.prices.rent_per_row_byte)?,
+            product(parser, plan.config.prices.rent_per_parser_step)?,
+        ])?,
+        deposit_sompi: product(maximum.attempts, plan.config.prices.deposit_per_move)?,
+        row_bytes: row,
+        resident_ram_bytes: sum(&[product(row, 8)?, product(rules.maximum_probe_copy_bytes, 2)?])?,
+    };
+    Ok(PalwTirPublicWorkAllocationV1 {
+        source_id,
+        rules,
+        maximum,
+        per_actor,
+        per_custodian,
+        maximum_custodians: plan.maximum_custodians,
+        maximum_restarts: plan.config.prices.reorg_replay_moves,
+        prepared_bytes,
+        envelope,
+    })
+}
 
 /// Registered-program/source-derived quote component only. It does not admit a
 /// sidecar, obtain custody grants or establish the full semantic/terminal SUM.
+/// This is an OWNER's work allocation (its `per_actor` is the outside owner's lane); the claim-wide cold preparation's is
+/// [`derive_tir_public_preparation_work_allocation_v1`].
 pub fn derive_tir_public_work_allocation_v1(
     record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
     layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
@@ -223,102 +322,91 @@ pub fn derive_tir_public_work_allocation_v1(
         header.job_context.exact_decode_tokens,
     );
     let model = shape.work_v1(&facts).map_err(|e| e.to_string())?;
+    // **G14 frame allocation fix (2026-10-16, the IR FP lane's gap pin): each lane counted once, and the claim-wide total is
+    // the SUM of the lanes.** Before this fix the plan overflowed `u64` at testnet-12's Panel (custodian upper 6) for every
+    // corpus class, and at the upper testnet-12 actually resolves for a registered TIR class (257: `palw_tir_shard_v1` is
+    // armed, so a stratified Panel of up to 256 seats plus the producer) it overflowed by orders of magnitude:
+    //   1. the per-actor work was multiplied by `slots × passes` (every actor's preparations) and then again by `slots` in
+    //      `maximum` — a lane's quantity is `passes` (its own replay and its restarts), not every actor's;
+    //   2. every lane was priced as the outside owner's (which reads every slot's answers, so it grows with the slots) and
+    //      the total was that times the slots — a per-custodian PRODUCT that is a SUM: one owner lane plus one literal
+    //      custodian lane (its own slot's answers) per custodian. The claim-wide preparation, whose preparers read no
+    //      other slot's answers, holds custodian lanes only (`preparation_lanes_v1`);
+    //   3. the acquisition's `maximum_stream_bytes` — a STORAGE/carriage envelope (eight raw copies, a row journal per move, the
+    //      carrier framing) — was read as the bytes of answers to re-read, and multiplied by `passes` although the acquisition's
+    //      turns already include every reacquisition (`maximum_turns = fresh × (restarts + 1)`). The answers' bytes are the raw
+    //      bodies: every turn × every answering slot × one unit;
+    //   4. the 16 KiB WorkDebit slices were counted over ALL IO — the replay's RAM traffic included — and then multiplied by
+    //      `passes` again. A WorkDebit is one logical unit (a leaf, a tile row, a 1024-ID chunk, a replay position: the walk
+    //      below) or one 16 KiB slice of DURABLE bytes (the answers read, the prepared generation published each pass);
+    //      RAM traffic is debited in the IO budget, not sliced (the node's readers and writers debit exactly so).
+    // Then the full-frame validation per accepting action (`original_controls`: frame ∝ custodians, actions ∝ the lanes) is
+    // quadratic in the custodian upper, as its own comment states, instead of cubic.
     let passes = plan.config.prices.reorg_replay_moves.checked_add(1).ok_or("TIR restart allowance overflow")?;
     let slots = plan.maximum_custodians.checked_add(1).ok_or("TIR work slots overflow")?;
-    let preparations = product(slots, passes)?;
     let n = source.leaf_count_v1();
     let d = u64::from(source.decode_count_v1());
     let p = u64::from(header.job_context.declared_prefill_tokens);
     let positions = p.checked_add(d).and_then(|v| v.checked_sub(1)).ok_or("TIR work positions overflow")?;
     let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
     let probes = product(n.checked_add(1).ok_or("TIR work probes overflow")?, passes)?;
-    let body_records = plan.envelope.maximum_stream_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64);
-    let attempts = product(
-        16,
-        sum(&[
-            plan.envelope.maximum_moves,
-            product(preparations, sum(&[n, product(d, tiles)?, positions, d, 32])?)?,
-            product(body_records, passes)?,
-            product(probes, 4)?,
-        ])?,
-    )?;
-    let arithmetic_work = model.arithmetic_mac_eq().checked_mul(u128::from(preparations)).ok_or("TIR arithmetic work overflow")?;
-    let traffic_bytes = model.traffic_bytes().checked_mul(u128::from(preparations)).ok_or("TIR traffic work overflow")?;
-    let io = sum(&[
-        product(plan.envelope.maximum_stream_bytes, passes)?,
-        exact(traffic_bytes)?,
-        product(rules.maximum_replay_io_bytes, passes)?,
-    ])?;
-    // Durable publication/reopen may use 16KiB slices even when a native leaf
-    // or a registered model cell is much larger. Pre-debit and local validation
-    // attempts must cover those slices too, not only logical source responses.
-    let attempts = sum(&[attempts, product(io.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), product(passes, 4)?)?, 32])?;
+    let unit = plan.unit_bytes_v1(source)?;
+    let (_, prepared_bytes) = crate::palw_tir_public_allocation_v1::tir_public_prepared_bytes_v1(record, source)?;
+    let walk = product(passes, sum(&[n, product(d, tiles)?, positions, d, 32])?)?;
+    let arithmetic_work = model.arithmetic_mac_eq().checked_mul(u128::from(passes)).ok_or("TIR arithmetic work overflow")?;
+    let traffic_bytes = model.traffic_bytes().checked_mul(u128::from(passes)).ok_or("TIR traffic work overflow")?;
+    let replay_io = sum(&[exact(traffic_bytes)?, product(rules.maximum_replay_io_bytes, passes)?])?;
     let program_parse = product(probes, record.program.len() as u64)?;
-    let copy = sum(&[product(io, 8)?, product(product(probes, rules.maximum_probe_copy_bytes)?, 2)?, product(program_parse, 8)?])?;
-    let replay_id_words = product(product(positions, p.checked_add(d).ok_or("TIR replay IDs overflow")?)?, preparations)?;
-    let per_actor = PalwTirPublicWorkV1 {
-        attempts,
-        io_bytes: io,
-        copy_bytes: copy,
-        hash_bytes: sum(&[product(io, 16)?, product(program_parse, 16)?])?,
-        parser_steps: sum(&[product(io, 16)?, product(attempts, 65_536)?, product(program_parse, 16)?])?,
-        id_copy_words: sum(&[product(product(d, plan.maximum_turns)?, product(slots, 8)?)?, product(replay_id_words, 4)?])?,
-        tree_hashes: io.div_ceil(64),
-        replay_leaves: product(n, preparations)?,
-        replay_positions: product(positions, preparations)?,
-        replay_id_words,
-        arithmetic_work,
-        traffic_bytes,
-        eval_elements: product(probes, rules.max_eval_elements)?,
-        eval_terms: product(probes, rules.max_eval_terms)?,
-        source_reads: product(probes, rules.max_source_reads)?,
-        target_requests: product(probes, rules.max_target_requests)?,
+    let replay_id_words = product(product(positions, p.checked_add(d).ok_or("TIR replay IDs overflow")?)?, passes)?;
+    // One lane that reads `answering` slots' answers of every turn and carries `moves` acquisition moves.
+    let lane = |answering: u64, moves: u64| -> Result<PalwTirPublicWorkV1, String> {
+        let answer_bytes = product(product(plan.maximum_turns, answering)?, unit)?;
+        let durable = sum(&[answer_bytes, product(prepared_bytes, passes)?])?;
+        let attempts = sum(&[
+            product(16, sum(&[moves, walk, answer_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), product(probes, 4)?])?)?,
+            product(durable.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), 4)?,
+            32,
+        ])?;
+        let io = sum(&[answer_bytes, replay_io])?;
+        let copy = sum(&[product(io, 8)?, product(product(probes, rules.maximum_probe_copy_bytes)?, 2)?, product(program_parse, 8)?])?;
+        Ok(PalwTirPublicWorkV1 {
+            attempts,
+            io_bytes: io,
+            copy_bytes: copy,
+            hash_bytes: sum(&[product(io, 16)?, product(program_parse, 16)?])?,
+            parser_steps: sum(&[product(io, 16)?, product(attempts, 65_536)?, product(program_parse, 16)?])?,
+            // The answering slots' IDs of every turn, plus the lane's own replays.
+            id_copy_words: sum(&[product(product(d, plan.maximum_turns)?, product(answering, 8)?)?, product(replay_id_words, 4)?])?,
+            tree_hashes: io.div_ceil(64),
+            replay_leaves: product(n, passes)?,
+            replay_positions: product(positions, passes)?,
+            replay_id_words,
+            arithmetic_work,
+            traffic_bytes,
+            eval_elements: product(probes, rules.max_eval_elements)?,
+            eval_terms: product(probes, rules.max_eval_terms)?,
+            source_reads: product(probes, rules.max_source_reads)?,
+            target_requests: product(probes, rules.max_target_requests)?,
+        })
     };
-    let maximum = per_actor.checked_mul_v1(slots)?;
-    let parser = sum(&[
-        maximum.parser_steps,
-        maximum.io_bytes,
-        maximum.copy_bytes,
-        exact(maximum.arithmetic_work)?,
-        maximum.eval_elements,
-        maximum.eval_terms,
-        maximum.source_reads,
-        maximum.target_requests,
-        product(maximum.id_copy_words, 4)?,
-    ])?;
-    // One global last receipt plus allocation/aggregate fields, and one spent
-    // record + last receipt per protected actor. Each receipt may contain a full
-    // 64-sibling history path (>4KiB); 512-byte actor estimates are insufficient.
-    let row = sum(&[8192, product(slots, 8192)?])?;
-    let bytes = product(maximum.attempts, sum(&[16_384, product(row, 8)?])?)?;
-    let envelope = PalwRenderingResourcePlanV1 {
-        prefix_tokens: 0,
-        vocab: source.vocab_v1(),
-        maximum_stream_bytes: bytes,
-        maximum_stream_leaves: maximum.attempts,
-        maximum_eog_bytes: 0,
-        maximum_moves: maximum.attempts,
-        maximum_parser_steps: parser,
-        maximum_blake_blocks: maximum.hash_bytes.div_ceil(128),
-        inclusion_daa: product(maximum.attempts, plan.config.prices.inclusion_margin_daa)?,
-        rent_sompi: sum(&[
-            product(bytes, plan.config.prices.rent_per_stream_byte)?,
-            product(row, plan.config.prices.rent_per_row_byte)?,
-            product(parser, plan.config.prices.rent_per_parser_step)?,
-        ])?,
-        deposit_sompi: product(maximum.attempts, plan.config.prices.deposit_per_move)?,
-        row_bytes: row,
-        resident_ram_bytes: sum(&[product(row, 8)?, product(rules.maximum_probe_copy_bytes, 2)?])?,
-    };
-    Ok(PalwTirPublicWorkAllocationV1 {
-        source_id: source.source_id_v1(),
-        rules,
-        maximum,
-        per_actor,
-        maximum_custodians: plan.maximum_custodians,
-        maximum_restarts: plan.config.prices.reorg_replay_moves,
-        envelope,
-    })
+    // The outside owner reads every slot's answers and carries the whole acquisition; a literal custodian answers its own slot
+    // and carries its share of the acquisition's moves.
+    let owner = lane(slots, plan.envelope.maximum_moves)?;
+    let custodian = lane(1, plan.envelope.maximum_moves.div_ceil(slots))?;
+    work_allocation_from_lanes_v1(source.source_id_v1(), source.vocab_v1(), rules, plan, owner, custodian, prepared_bytes)
+}
+
+/// The claim-wide cold preparation's work allocation: the owner quote's custodian lane for every preparer
+/// ([`PalwTirPublicWorkAllocationV1::preparation_lanes_v1`]).
+pub fn derive_tir_public_preparation_work_allocation_v1(
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    source: &PalwTirPublicSourceV1,
+    plan: &PalwTirPublicOwnedPlanV1,
+    rules: PalwTirPublicWorkRulesV1,
+) -> Result<PalwTirPublicWorkAllocationV1, String> {
+    derive_tir_public_work_allocation_v1(record, layout, header, source, plan, rules)?.preparation_lanes_v1(plan)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -491,9 +579,11 @@ pub fn derive_tir_public_preparation_plan_v1(
     let positions = p.checked_add(d).and_then(|n| n.checked_sub(1)).ok_or("TIR preparation position overflow")?;
     let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
     let one_pass = sum(&[source.leaf_count_v1().max(positions), product(d, tiles)?, p.div_ceil(1024), d.div_ceil(1024), 32])?;
-    let durable_slices = product(work.per_actor.io_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), 2)?;
-    let maximum_slices_per_actor =
-        product(sum(&[one_pass, durable_slices])?, work.maximum_restarts.checked_add(1).ok_or("TIR preparation retries overflow")?)?;
+    // A preparer's slices: its logical walk and its prepared generation's 16 KiB slices (written, then reopened), once per
+    // pass. Replay RAM traffic is debited in the IO budget, not sliced (the frame allocation fix of 2026-10-16).
+    let passes = work.maximum_restarts.checked_add(1).ok_or("TIR preparation retries overflow")?;
+    let durable_slices = product(product(work.prepared_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), passes)?, 2)?;
+    let maximum_slices_per_actor = sum(&[product(one_pass, passes)?, durable_slices])?;
     if product(maximum_slices_per_actor, 2)? > work.per_actor.attempts {
         return Err("TIR work quote does not cover cold/publication pre-debits and validation slices".into());
     }
@@ -504,7 +594,13 @@ pub fn derive_tir_public_preparation_plan_v1(
     let bytes = product(moves, sum(&[16_384, product(row, 8)?])?)?;
     let parser = product(bytes, 32)?;
     let margin = acquisition.config.prices.inclusion_margin_daa;
-    let preparation_daa = sum(&[acquisition.config.acquisition_daa, work.envelope.inclusion_daa, product(prep_moves, margin)?])?;
+    // **The preparation door is one preparer's serial time**: each of its slices is one WorkDebit (`capture_debit_v1` refuses
+    // a grant past `maximum_slices_per_actor`), then its Ready, one inclusion margin each. The preparers work at once, each on
+    // its own lane; the door does not add every actor's carriers end to end (that sum is what the SUM's rent pays for).
+    let preparation_daa = sum(&[
+        acquisition.config.acquisition_daa,
+        product(maximum_slices_per_actor.checked_add(1).ok_or("TIR Ready moves overflow")?, margin)?,
+    ])?;
     let envelope = PalwRenderingResourcePlanV1 {
         prefix_tokens: 0,
         vocab: source.vocab_v1(),
@@ -666,6 +762,8 @@ impl PalwTirPublicPreparationV1 {
             || contract.allocation_id == Hash64::default()
             || contract.source_id != source.source_id_v1()
             || contract.plan != derive_tir_public_preparation_plan_v1(source, &allocation, acquisition)?
+            || allocation.per_actor != allocation.per_custodian
+            || allocation.maximum != allocation.lanes_sum_v1()?
             || contract.original_accepted_daa.checked_add(contract.plan.preparation_daa) != Some(contract.preparation_until_daa)
             || contract.preparation_until_daa >= contract.collect_until_daa
             || contract.collect_until_daa > contract.material_until_daa
@@ -717,12 +815,8 @@ impl PalwTirPublicPreparationV1 {
             || self.work.allocation.maximum_custodians != c.plan.maximum_custodians
             || self.work.allocation.maximum_restarts != c.plan.maximum_restarts
             || self.work.allocation.source_id != c.source_id
-            || self.work.allocation.maximum
-                != self
-                    .work
-                    .allocation
-                    .per_actor
-                    .checked_mul_v1(c.plan.maximum_custodians.checked_add(1).ok_or("TIR preparation work slots overflow")?)?
+            || self.work.allocation.per_actor != self.work.allocation.per_custodian
+            || self.work.allocation.maximum != self.work.allocation.lanes_sum_v1()?
             || self.work.nonce > self.work.allocation.envelope.maximum_moves
             || self.ready.keys().chain(self.defaulted.iter()).any(|a| !c.custodians.contains(a))
             || self.defaulted.iter().any(|a| self.ready.contains_key(a))
@@ -979,6 +1073,17 @@ pub struct PalwTirPublicOwnedPlanV1 {
     pub maximum_unit_bytes: u64,
     pub config: PalwStagedPublicCourtConfigV1,
     pub envelope: PalwRenderingResourcePlanV1,
+}
+impl PalwTirPublicOwnedPlanV1 {
+    /// **The largest single answer body this plan prices** (the `atom` of [`Self::derive_v1`]): `maximum_unit_bytes` is that atom
+    /// times `min(N, 256)`, so the division is exact for a plan `derive_v1` produced (refused otherwise).
+    pub fn unit_bytes_v1(&self, source: &PalwTirPublicSourceV1) -> Result<u64, String> {
+        let run = source.leaf_count_v1().clamp(1, 256);
+        if self.maximum_unit_bytes % run != 0 {
+            return Err("TIR acquisition unit bound is not the native atom times its run".into());
+        }
+        Ok(self.maximum_unit_bytes / run)
+    }
 }
 pub fn request_body_bound_v1(source: &PalwTirPublicSourceV1, request: PalwTirPublicRequestV1) -> Result<(u64, u64), String> {
     source.check_request_v1(&request)?;
@@ -1631,6 +1736,8 @@ impl PalwTirPublicOwnedV1 {
         let cumulative = state.spent.checked_add_v1(debit.work)?;
         let nonce = state.nonce.checked_add(1).ok_or("TIR work nonce overflow")?;
         let restarts = state.restarts.checked_add(u64::from(debit.restart)).ok_or("TIR work restart overflow")?;
+        // The outside owner's lane, or a literal custodian's own (smaller) lane: a colluding custodian cannot spend the owner's.
+        let lane = *state.allocation.lane_v1(signer == self.contract.owner);
         let mut actor = PalwTirPublicActorWorkV1 {
             spent: actor.spent.checked_add_v1(debit.work)?,
             grants: actor.grants.checked_add(1).ok_or("TIR actor work nonce overflow")?,
@@ -1644,8 +1751,8 @@ impl PalwTirPublicOwnedV1 {
                     state.allocation.maximum_restarts,
                     state.allocation.maximum_custodians.checked_add(1).ok_or("TIR work slots overflow")?,
                 )?
-            || !state.allocation.per_actor.covers_v1(&actor.spent)
-            || actor.grants > state.allocation.per_actor.attempts
+            || !lane.covers_v1(&actor.spent)
+            || actor.grants > lane.attempts
             || actor.restarts > state.allocation.maximum_restarts
         {
             return Err("TIR original cumulative native work/restart allocation is exhausted".into());
@@ -1916,11 +2023,7 @@ impl PalwTirPublicOwnedV1 {
                 || !work.allocation.maximum.covers_v1(&work.spent)
                 || work.nonce > work.allocation.envelope.maximum_moves
                 || work.allocation.maximum_custodians != self.contract.plan.maximum_custodians
-                || work.allocation.maximum
-                    != work
-                        .allocation
-                        .per_actor
-                        .checked_mul_v1(work.allocation.maximum_custodians.checked_add(1).ok_or("TIR work slot overflow")?)?
+                || work.allocation.maximum != work.allocation.lanes_sum_v1()?
                 || work.restarts
                     > product(
                         work.allocation.maximum_restarts,
@@ -1936,9 +2039,10 @@ impl PalwTirPublicOwnedV1 {
             let mut grants = 0u64;
             let mut restarts = 0u64;
             for (actor, paid) in &work.actors {
+                let lane = work.allocation.lane_v1(*actor == self.contract.owner);
                 if (*actor != self.contract.owner && !self.contract.custodians.contains(actor))
-                    || !work.allocation.per_actor.covers_v1(&paid.spent)
-                    || paid.grants > work.allocation.per_actor.attempts
+                    || !lane.covers_v1(&paid.spent)
+                    || paid.grants > lane.attempts
                     || paid.restarts > work.allocation.maximum_restarts
                     || paid.last.as_ref().is_none_or(|last| {
                         last.debit.scope.actor != *actor
@@ -2400,12 +2504,14 @@ mod tests {
         // Structural/source kernel fixture, not a native full-SUM acceptance.
         let (source, owner, _) = work_fixture();
         let c = owner.contract_v1();
-        let work = owner.work_v1().unwrap().allocation.clone();
+        // The owner's work and the claim-wide preparation's custodian lanes are two separately prepaid components.
+        let owner_work = owner.work_v1().unwrap().allocation.clone();
+        let work = owner_work.preparation_lanes_v1(&c.plan).unwrap();
         let plan = derive_tir_public_preparation_plan_v1(&source, &work, &c.plan).unwrap();
         let total = c
             .plan
             .envelope
-            .checked_sum_v1(work.envelope)
+            .checked_sum_v1(owner_work.envelope)
             .unwrap()
             .checked_sum_v1(work.envelope)
             .unwrap()
@@ -2603,7 +2709,7 @@ mod tests {
             .envelope
             .checked_sum_v1(work.envelope)
             .unwrap()
-            .checked_sum_v1(work.envelope)
+            .checked_sum_v1(prep.work.allocation.envelope)
             .unwrap()
             .checked_sum_v1(prep.contract.plan.envelope)
             .unwrap();
@@ -2762,8 +2868,17 @@ mod tests {
         let (source, mut row, request) = work_fixture();
         let owner = row.contract.owner;
         row.demand_v1(&source, owner, 12, request).unwrap();
+        // A literal custodian holds its own slot's lane, not the outside owner's (the frame allocation fix of 2026-10-16).
+        let allocation = row.work_v1().unwrap().allocation.clone();
+        assert!(!allocation.per_custodian.covers_v1(&allocation.per_actor));
+        assert_eq!(allocation.maximum, allocation.lanes_sum_v1().unwrap());
+        let mut oversized = work_debit(&row, &source, bond(1), request, PalwTirPublicWorkPhaseV1::Response);
+        oversized.work = allocation.per_actor;
+        let snapshot = row.clone();
+        assert!(row.work_debit_v1(&source, bond(1), 13, &oversized).is_err());
+        assert_eq!(row, snapshot);
         let mut responder = work_debit(&row, &source, bond(1), request, PalwTirPublicWorkPhaseV1::Response);
-        responder.work = row.work_v1().unwrap().allocation.per_actor;
+        responder.work = allocation.per_custodian;
         row.work_debit_v1(&source, bond(1), 13, &responder).unwrap();
         let next = work_debit(&row, &source, bond(1), request, PalwTirPublicWorkPhaseV1::Response);
         let snapshot = row.clone();

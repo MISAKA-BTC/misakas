@@ -25467,7 +25467,7 @@ mod staged_court_state_tests_v1 {
     fn tir_preparation_is_claim_wide_retained_and_rebuilt_without_an_owner() {
         use crate::palw_tir_public_owned_v1::{
             PalwTirPublicPreparationContractV1, PalwTirPublicPreparationV1, PalwTirPublicWorkRulesV1,
-            derive_tir_public_preparation_plan_v1, derive_tir_public_work_allocation_v1,
+            derive_tir_public_preparation_plan_v1, derive_tir_public_preparation_work_allocation_v1,
         };
         // A structural lifecycle fixture, not full-SUM payment, native grant
         // authentication or a computation-correctness credential.
@@ -25485,7 +25485,7 @@ mod staged_court_state_tests_v1 {
             maximum_replay_io_bytes: 0,
         };
         let original = template.owned.contract_v1();
-        let work = derive_tir_public_work_allocation_v1(
+        let work = derive_tir_public_preparation_work_allocation_v1(
             &record, &x.binding.class.layout, source.header_v1(), &source, &original.plan, rules,
         ).unwrap();
         let plan = derive_tir_public_preparation_plan_v1(&source, &work, &original.plan).unwrap();

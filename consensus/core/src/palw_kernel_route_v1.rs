@@ -780,7 +780,8 @@ pub struct KernelFinalReadV1 {
     /// timeout has no randomly selected verifier approval and exports no beacon event.
     pub final_path: &'static str,
     /// Borsh of `misaka_palw_challenge::AttributedWorkV1` (the event, then producer and recorded job payer; `Absent` only for a
-    /// historical job without a payer row). `None` unless an authenticated selected-approval adapter supplies an event.
+    /// historical job without a payer row). `Some` only for a `PaidClaimV2` Final with authenticated selected approval (the RFC07
+    /// adapter, `selected_approval_event_v1`); `None` for an optimistic timeout, a Panel-licensed Final, or an unapproved paid claim.
     pub event: Option<Vec<u8>>,
     pub statement: &'static str,
     /// **RFC-0015 §9 (GAP-B3)**: the claim's standing under the one kernel settlement predicate
@@ -788,6 +789,55 @@ pub struct KernelFinalReadV1 {
     /// beacon event's `claim_final` / `da_satisfied` are derived from it, so RFC-0010 V3 (`ChainPanelBeaconHistoryV1`), the v3
     /// sealed sources and every other reader see exactly what the EXEC slice and the RPC see.
     pub settlement: &'static str,
+}
+
+/// The beacon event of a selected-approved Final (RFC07 adapter): the kernel's `WorkFinalEventV1`, read through the ONE kernel
+/// settlement predicate (RFC-0015 §9, GAP-B3) — a conviction withdraws the fact (`claim_final = false`), a default withdraws its
+/// availability (`da_satisfied = false`) — and attributed from authenticated ledger rows (producer, and the job's permanent payer, so
+/// one payer cannot fill the distinct-consumer quorum through several producers). No weight or reward: kernel claims reserve
+/// B = F = 0; the event is a beacon fact only.
+fn selected_approval_event_v1(
+    ledger: &KernelLedgerV1,
+    receipt: &misaka_palw_kernel::opv::FinalReceiptV1,
+    settlement: crate::palw_kernel_settlement_v1::PalwKernelSettlementV1,
+) -> Result<Vec<u8>, String> {
+    use crate::palw_kernel_settlement_v1::PalwKernelSettlementV1 as S;
+    use misaka_palw_kernel::opv::WorkFinalContextV1;
+    let work = ledger.claims.get(&receipt.claim).map(|r| (r.class_binding_id, r.job_id));
+    // The earliest acceptance of the work identity: the earliest commitment of any claim of the same job (a convicted or defaulted
+    // earlier holder counts).
+    let earliest = ledger
+        .claims
+        .values()
+        .filter(|row| Some((row.class_binding_id, row.job_id)) == work)
+        .map(|row| row.committed_daa)
+        .min()
+        .unwrap_or(receipt.accepted_daa);
+    let ctx = WorkFinalContextV1 {
+        accepted_position: earliest,
+        settlement_position: receipt.final_daa,
+        occurrence_index: 0,
+        // Selected checkers are drawn independently of any Panel.
+        validity_independent: true,
+        depends_on_profiles: Vec::new(),
+        panel: None,
+    };
+    let mut event = receipt.to_work_final_event(&ctx)?;
+    match settlement {
+        S::Convicted => event.claim_final = false,
+        S::Defaulted => event.da_satisfied = false,
+        S::FinalRevocable { .. } | S::Settled { .. } => {}
+        S::Pending => event.claim_final = false,
+    }
+    let producer = ledger.claims.get(&receipt.claim).map(|r| r.producer).unwrap_or([0u8; 64]);
+    let consumer = work
+        .and_then(|(_, job)| ledger.job_poster(&job))
+        .map_or(misaka_palw_challenge::RootV1::Absent, misaka_palw_challenge::RootV1::Present);
+    let attributed = misaka_palw_challenge::AttributedWorkV1 {
+        event,
+        attribution: misaka_palw_challenge::SourceAttributionV1 { producer_id: producer, consumer_id: consumer },
+    };
+    borsh::to_vec(&attributed).map_err(|e| e.to_string())
 }
 
 impl PalwKernelRouteStateV1 {
@@ -805,11 +855,22 @@ impl PalwKernelRouteStateV1 {
             // the selected-validator approval required for entropy/consensus credit.
             // Keep the receipt and settlement available for payment/history readers;
             // do not manufacture PanelIndependent identity from lifecycle state.
-            let (final_path, event) = match (receipt.mode, ledger.paid_claim_consumers_v2.contains_key(&receipt.claim)) {
-                (_, true) => ("PaidClaimV2", None),
-                (VerificationModeV1::OptimisticPublicVerification, false) => ("OptimisticUnapproved", None),
-                (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", None),
+            //
+            // **RFC07 selected-approval adapter.** The one authenticated source of a beacon event is a paid claim whose canonical
+            // paid Final the native acceptance/restore checks admitted with the ASSIGNED positive quorum — randomly selected
+            // checkers, a bound source and completed rounds (`palw_exec_v2_selected_approval_v1`, the same gate EXEC credit
+            // uses). That approval rests on the selection rule and its explicit honest-fraction premise, never on a timeout, a
+            // zero payout, a matching replay or an operator identity. A Panel-licensed Final still exports nothing: the route
+            // does not know the licensing Panel's seed and epoch.
+            let (final_path, approved) = match (receipt.mode, ledger.paid_claim_consumers_v2.contains_key(&receipt.claim)) {
+                (_, true) => (
+                    "PaidClaimV2",
+                    crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(self, &Hash64::from_bytes(receipt.claim)),
+                ),
+                (VerificationModeV1::OptimisticPublicVerification, false) => ("OptimisticUnapproved", false),
+                (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", false),
             };
+            let event = if approved { Some(selected_approval_event_v1(&ledger, &receipt, settlement)?) } else { None };
             let statement = receipt.assurance.statement();
             out.push(KernelFinalReadV1 { receipt, final_path, event, statement, settlement: settlement.label() });
         }
