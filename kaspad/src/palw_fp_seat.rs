@@ -292,6 +292,55 @@ pub fn palw_fp_seat_draw_at_the_claims_price_v1(
     palw_fp_seat_draw_v1(backend, network_domain, duty, counts)
 }
 
+/// **The draw past `palw_detection_policy_v1`, under the class's policy** (G14 detection policy; dormant).
+///
+/// `k` is the policy's plan for this claim's `N` (the target ε on the declared fault set, not the legacy four), the draw is the v2
+/// domain bound to network, claim, class, job, policy and seat, from the same post-commit beacon the legacy draw reads (the panel
+/// anchor — no new beacon). `N` is the policy's rule over the same chain counts, re-priced against the claim exactly as
+/// [`palw_fp_seat_draw_at_the_claims_price_v1`] re-prices it, and it must equal this backend's own interval count: a seat whose
+/// family geometry disagrees with the class's policy refuses the duty (`GeometryMismatch`) rather than drawing in either space.
+///
+/// The seat does not re-judge admission (the chain did), so the plan is asked with unbounded collateral. A multi-round policy needs
+/// the later rounds' anchors, which this path does not read: it refuses rather than under-sampling.
+pub fn palw_fp_seat_draw_under_policy_v2(
+    backend: &dyn PalwExecutionBackendV1,
+    network_domain: Hash64,
+    duty: &PalwSeatDutyV2,
+    counts: PalwFpChainCountsV1,
+    context_leaves: Option<u64>,
+    policy: &kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1,
+) -> Result<(PalwFpSeatDrawV1, kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPlanV1), kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionRefusalV1>
+{
+    use kaspa_consensus_core::palw_detection_policy_v1::{
+        PalwDetectionCheckerV1, PalwDetectionClaimFactsV1, PalwDetectionDrawBindingV2, PalwDetectionRefusalV1, palw_detection_draw_round_v2,
+    };
+    if policy.deadlines.rounds != 1 {
+        return Err(PalwDetectionRefusalV1::Malformed("the seat path draws one round; a multi-round policy needs its round anchors"));
+    }
+    let plan = policy.plan_v1(&PalwDetectionClaimFactsV1 {
+        work_leaves: duty.work_leaves,
+        context_priced_leaves: context_leaves,
+        prompt_tokens: counts.prompt_tokens,
+        decode_tokens_executed: counts.decode_tokens_executed,
+        collateral_sompi: u128::MAX,
+    })?;
+    let backend_n = backend.fp_interval_count_for(counts.prompt_tokens, counts.decode_tokens_executed).unwrap_or(0);
+    if backend_n != plan.n {
+        return Err(PalwDetectionRefusalV1::GeometryMismatch { backend: backend_n, policy: plan.n });
+    }
+    let binding = PalwDetectionDrawBindingV2 {
+        network_domain,
+        claim_id: duty.claim_id,
+        class_id: duty.class_id,
+        job_id: duty.job_identity,
+        policy_id: policy.id(),
+        checker: PalwDetectionCheckerV1::Seat(duty.seat_index),
+    };
+    let intervals = palw_detection_draw_round_v2(&binding, 0, &duty.panel_anchor, plan.k_round, plan.n, &Default::default())
+        .map_err(|_| PalwDetectionRefusalV1::Malformed("the challenge stream refused the draw"))?;
+    Ok((PalwFpSeatDrawV1 { intervals, interval_count: plan.n }, plan))
+}
+
 // ---------------------------------------------------------------------------------------------
 // W10: the bytes a seat fetches per claim, bounded
 // ---------------------------------------------------------------------------------------------
