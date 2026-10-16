@@ -182,6 +182,7 @@ impl PalwStateParamsV2 {
             public_evidence_reward_from_daa: None,
             claim_hard_deadline_v1: None,
             g14_route_required_v1: None,
+            detection_policy_v1: None,
             reward_liability_horizon_from_daa: None,
             cell_coverage_closure_from_daa: None,
             memory_routing_court_from_daa: None,
@@ -671,6 +672,18 @@ impl PalwStateParamsV2 {
     /// `Params::palw_g14_route_required_v1`'s height with the route fences it reads, if the network arms it.
     pub fn g14_route_required_v1(&self) -> Option<crate::palw_g14_gates_v1::PalwG14RouteMirrorV1> {
         self.g14_route_required_v1
+    }
+
+    /// **G14's detection-policy mirror** (`crate::palw_detection_policy_v1`) — written by `Params::sync_palw_detection_policy_v1` and
+    /// by fixtures; `None` where the fence is not armed.
+    pub fn with_detection_policy_v1(mut self, mirror: Option<crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1>) -> Self {
+        self.detection_policy_v1 = mirror;
+        self
+    }
+
+    /// `Params::palw_detection_policy_v1`, if the network arms it (`never()` collapses to `None`).
+    pub fn detection_policy_v1(&self) -> Option<&crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1> {
+        self.detection_policy_v1.as_ref()
     }
 
     /// **The reward liability horizon's mirror** (G-08 / G-15, `crate::palw_g14_gates_v1`), written likewise.

@@ -3464,6 +3464,28 @@ fn apply_object_inner(
                 builder.check_class_admits_claim(class_id, ctx.daa_score, PalwGatedClaimV1::FreePrompt { quanta: quanta as u64 })?;
             }
             let derived = price.derived_work;
+            // **G14 detection policy (`palw_detection_policy_v1`, keyed on the acceptance DAA)**: past the fence a commitment whose class
+            // has no detection policy, whose N is not bound to its priced work (the derived-work rule re-prices `work_leaves` from the
+            // class's graph and the two committed counts — without it the counts are the producer's word and the claim is refused),
+            // whose collectable collateral is below the deterrence bound, or that the policy cannot check within its resources, is not
+            // taken — option (b)'s refusal: no reward, weight or credit; its carrier pays the ordinary fee. Before any write. `None`
+            // below the fence.
+            if builder.params.detection_policy_v1().is_some() {
+                let collectable = builder.state.bonds.get(bond).map_or(0, |b| u128::from(b.collateral)).min(reserved);
+                let facts = crate::palw_detection_policy_v1::PalwDetectionClaimFactsV1 {
+                    attempt_lane: false,
+                    work_leaves: *work_leaves,
+                    context_priced_leaves: derived.is_some().then_some(*work_leaves),
+                    prompt_tokens: *prompt_tokens,
+                    decode_tokens_executed: *decode_tokens_executed,
+                    collateral_sompi: collectable,
+                };
+                if let Some((code, why)) =
+                    crate::palw_detection_policy_v1::palw_detection_claim_refusal_v1(builder.params, class_id, ctx.daa_score, &facts)
+                {
+                    return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
+                }
+            }
             // **Fail-closed on the one field the court cannot do without (audit C3).** A claim
             // carrying no execution root has nothing a refutation's binding can be tested
             // against; the shipped worker commits the binding's own root, so what this refuses

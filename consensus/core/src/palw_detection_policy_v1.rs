@@ -199,6 +199,10 @@ pub struct PalwDetectionPolicyV1 {
     pub n_rule: PalwIntervalCountRuleV1,
     /// The largest `N` a claim of the class may have; above it the claim is refused (the checks below are proved up to here).
     pub n_max: u32,
+    /// **The attempt lane's `N`**: an attempt claim answers the class's canonical job (it prices no leaves of its own), so its
+    /// interval count is a class constant. `0`: this policy checks no attempt claim, and past the fence the class's attempts are
+    /// refused.
+    pub attempt_intervals: u32,
     pub fault_model: PalwFaultModelV1,
     /// The miss the policy allows on its fault set (the user's 1–10%).
     pub epsilon: PalwRatioV1,
@@ -215,6 +219,8 @@ pub struct PalwDetectionPolicyV1 {
 /// **What one claim presents to the policy** — all of it chain facts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwDetectionClaimFactsV1 {
+    /// An attempt claim (the class's canonical job, `N = attempt_intervals`); `false` for a free-prompt or kernel claim.
+    pub attempt_lane: bool,
     /// The claim's priced leaves (`0`: an attempt claim, priced by the class).
     pub work_leaves: u64,
     /// What the class prices the context carrying the two counts at (`fp_context_work_leaves_v1`); must equal `work_leaves` when the
@@ -423,6 +429,7 @@ impl PalwDetectionPolicyV1 {
         }
         for v in [
             u64::from(self.n_max),
+            u64::from(self.attempt_intervals),
             u64::from(self.fault_model.d_min_abs),
             u64::from(self.fault_model.d_min_ppm),
             self.epsilon.num,
@@ -543,11 +550,18 @@ impl PalwDetectionPolicyV1 {
     pub fn plan_v1(&self, facts: &PalwDetectionClaimFactsV1) -> Result<PalwDetectionPlanV1, PalwDetectionRefusalV1> {
         use PalwDetectionRefusalV1 as R;
         self.validate_shape_v1()?;
-        // **N from priced work** (ADR-0074 Decision 5): the counts are believed only when they re-price to the claim.
-        if crate::palw_backend::palw_claim_prices_work_v1(facts.work_leaves) && facts.context_priced_leaves != Some(facts.work_leaves) {
-            return Err(R::NotAtTheClaimsPrice { priced: facts.context_priced_leaves, claim: facts.work_leaves });
-        }
-        let n = self.n_rule.interval_count_v1(facts).ok_or(R::NoIntervals)?;
+        // **N from priced work** (ADR-0074 Decision 5): the counts are believed only when they re-price to the claim. An attempt
+        // answers the class's canonical job, whose N is the policy's class constant.
+        let n = if facts.attempt_lane {
+            self.attempt_intervals
+        } else {
+            if crate::palw_backend::palw_claim_prices_work_v1(facts.work_leaves)
+                && facts.context_priced_leaves != Some(facts.work_leaves)
+            {
+                return Err(R::NotAtTheClaimsPrice { priced: facts.context_priced_leaves, claim: facts.work_leaves });
+            }
+            self.n_rule.interval_count_v1(facts).ok_or(R::NoIntervals)?
+        };
         if n == 0 {
             return Err(R::NoIntervals);
         }
@@ -619,8 +633,9 @@ impl PalwDetectionPolicyV1 {
         if replay_units > u128::from(r.max_claim_replay_units) {
             return Err(R::ReplayUnitsOverBudget { need: replay_units, cap: r.max_claim_replay_units });
         }
+        // A seat draws every round of its duty at once (`palw_detection_seat_rounds_v2`), so it holds `K_tot` pairs per claim.
         let retention_pairs = match self.method {
-            PalwInspectionMethodV1::IntervalReplay => u64::from(k_round) * u64::from(r.claims_in_flight),
+            PalwInspectionMethodV1::IntervalReplay => u64::from(k_total) * u64::from(r.claims_in_flight),
             PalwInspectionMethodV1::FullReexecution => 0,
         };
         if retention_pairs > u64::from(r.retention_pairs_cap) {
@@ -677,7 +692,22 @@ impl PalwDetectionPolicyV1 {
             let facts = self.synthetic_facts_v1(n).ok_or(PalwDetectionRefusalV1::Malformed("the N rule cannot reach a probe N"))?;
             self.plan_v1(&facts)?;
         }
+        if self.attempt_intervals > 0 {
+            self.plan_v1(&self.synthetic_attempt_facts_v1())?;
+        }
         Ok(())
+    }
+
+    /// An attempt claim at the class's own collateral rule (`collateral_per_interval · attempt_intervals`).
+    pub fn synthetic_attempt_facts_v1(&self) -> PalwDetectionClaimFactsV1 {
+        PalwDetectionClaimFactsV1 {
+            attempt_lane: true,
+            work_leaves: 0,
+            context_priced_leaves: None,
+            prompt_tokens: 0,
+            decode_tokens_executed: 0,
+            collateral_sompi: u128::from(self.attempt_intervals) * u128::from(self.economics.collateral_per_interval_sompi),
+        }
     }
 
     /// Chain counts that give exactly `n` intervals under the rule, with the class's own collateral (`collateral_per_interval · n`).
@@ -685,6 +715,7 @@ impl PalwDetectionPolicyV1 {
         let collateral = u128::from(n) * u128::from(self.economics.collateral_per_interval_sompi);
         let facts = match self.n_rule {
             PalwIntervalCountRuleV1::DecodeCalls { checkpoint_interval } => PalwDetectionClaimFactsV1 {
+                attempt_lane: false,
                 work_leaves: 0,
                 context_priced_leaves: None,
                 prompt_tokens: 1,
@@ -692,6 +723,7 @@ impl PalwDetectionPolicyV1 {
                 collateral_sompi: collateral,
             },
             PalwIntervalCountRuleV1::HeldPositions { width } => PalwDetectionClaimFactsV1 {
+                attempt_lane: false,
                 work_leaves: 0,
                 context_priced_leaves: None,
                 prompt_tokens: n.checked_mul(width)?,
@@ -701,6 +733,7 @@ impl PalwDetectionPolicyV1 {
             PalwIntervalCountRuleV1::PricedLeaves { leaves_per_interval } => {
                 let leaves = u64::from(n).checked_mul(leaves_per_interval)?;
                 PalwDetectionClaimFactsV1 {
+                    attempt_lane: false,
                     work_leaves: leaves,
                     context_priced_leaves: Some(leaves),
                     prompt_tokens: 0,
@@ -958,6 +991,142 @@ pub fn palw_detection_is_shadowed_v2(policy: &PalwDetectionPolicyV1, network_dom
     ChallengeStreamV1::new(&seed, &label).index_below(PPM).is_ok_and(|x| x < u64::from(policy.shadow_rate_ppm))
 }
 
+/// The seat-round anchor domain.
+pub const PALW_DETECTION_SEAT_ROUND_DOMAIN_V2: &[u8] = b"misaka-palw/detection/seat-round-anchor/v2";
+
+/// **A seat's round-`r` anchor**: round 0 is the panel anchor itself (the block at the claim's anchor slot, ADR-0044 F4/F5); round
+/// `r ≥ 1` is `H(domain ‖ panel_anchor ‖ r)`. Every round is therefore post-commit — the claim's commitment is fixed before the panel
+/// anchor exists, and the producer speaks no further message a later round could be adapted to — and no new beacon is introduced.
+/// (A party that re-checks LATER, after the producer has served or withheld — a redrawn panel, a public verifier — passes real later
+/// chain anchors to [`palw_detection_draw_rounds_v2`] instead.)
+pub fn palw_detection_seat_round_anchor_v2(panel_anchor: &Hash64, round: u32) -> Hash64 {
+    if round == 0 {
+        return *panel_anchor;
+    }
+    let mut s = keyed(PALW_DETECTION_SEAT_ROUND_DOMAIN_V2);
+    s.update(panel_anchor.as_byte_slice());
+    s.update(&round.to_le_bytes());
+    Hash64::from_bytes(finish(s))
+}
+
+/// **A seat's whole duty under a multi-round policy**: rounds `0..rounds` of `k_round` each, every round distinct from the earlier
+/// ones (the v2 exclusion), from the seat-round anchors. Re-derivable from the panel anchor alone.
+pub fn palw_detection_seat_rounds_v2(
+    binding: &PalwDetectionDrawBindingV2,
+    panel_anchor: &Hash64,
+    k_round: u32,
+    rounds: u32,
+    n: u32,
+) -> Result<(Vec<Vec<u32>>, BTreeSet<u32>), PalwDetectionDrawRefusalV2> {
+    let mut inspected = BTreeSet::new();
+    let mut out = Vec::with_capacity(rounds as usize);
+    for r in 0..rounds {
+        let drawn = palw_detection_draw_round_v2(binding, r, &palw_detection_seat_round_anchor_v2(panel_anchor, r), k_round, n, &inspected)?;
+        inspected.extend(drawn.iter().copied());
+        out.push(drawn);
+    }
+    Ok((out, inspected))
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The claim gate (state transition) and the mirror
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/// **The detection policy at the claim gate** (`palw_detection_policy_v1`, keyed on the claim's acceptance DAA): `None` below the
+/// fence or when the class's policy admits the claim; else `Some((code, why))`, refused exactly as G-01 option (b) refuses — no claim,
+/// no reward, weight or consensus credit; a refused own attempt is skipped, a free-prompt carrier pays its ordinary fee. Refused: a
+/// class with no policy, a claim whose collectable collateral is below the deterrence bound, a claim the policy cannot check within
+/// its resources. The kernel version is the class's own registered binding (0) on the V2 lanes.
+pub fn palw_detection_claim_refusal_v1(
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    class_id: &Hash64,
+    accepted_daa: u64,
+    facts: &PalwDetectionClaimFactsV1,
+) -> Option<(&'static str, String)> {
+    let regime = palw_detection_regime_v1(params.detection_policy_v1(), class_id, 0, accepted_daa);
+    match palw_detection_admit_claim_v1(regime, facts) {
+        Ok(_) => None,
+        Err(e) => Some((e.code(), format!("palw_detection_policy_v1: {e} — no reward, weight or consensus credit"))),
+    }
+}
+
+/// What a detected claim became on chain, for the funnel's later stages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDetectionChainOutcomeV1 {
+    InFlight,
+    /// A data-availability dispute is open over it (accepted, undecided).
+    Disputed,
+    /// Voided on a proven fraud (court verdict / default charged as fraud / a work slice proven false).
+    Convicted,
+    /// Voided on the producer's confirmed withholding (or a defaulted work slice).
+    Defaulted,
+    /// It reached `Final` — after a detection, a deadline loss.
+    Final,
+    /// Voided because no panel was ever bound or capable — unassigned.
+    Unassigned,
+    /// Voided for another reason (timeouts, quorum): no reward, but no conviction either.
+    OtherVoid,
+}
+
+/// The chain outcome of a claim phase.
+pub fn palw_detection_chain_outcome_v1(phase: &crate::palw_state_v2::PalwClaimPhaseV2) -> PalwDetectionChainOutcomeV1 {
+    use crate::palw_state_v2::{PalwClaimPhaseV2 as P, PalwVoidReasonV2 as V};
+    use PalwDetectionChainOutcomeV1 as O;
+    match phase {
+        P::Voided { reason, .. } => match reason {
+            V::CourtFraud | V::CourtDefault | V::CourtHeldVerdict | V::WorkSliceProvenFalse => O::Convicted,
+            V::ProducerWithholding | V::WorkSliceDefaulted => O::Defaulted,
+            V::BindTimeout | V::NoCapablePanel | V::PermissionlessNoCapablePanel => O::Unassigned,
+            _ => O::OtherVoid,
+        },
+        P::DefaultDisputed { .. } => O::Disputed,
+        P::Final { .. } => O::Final,
+        _ => O::InFlight,
+    }
+}
+
+/// **The stages (and loss) a detected claim's chain outcome implies**: a dispute or a conviction implies the fault was localised and
+/// filed by someone and the filing accepted; a conviction or default invalidates the claim's reward and rights; `collected` needs the
+/// producer bond's `slashed` to have risen since the detection. A detected claim that reached `Final` is a deadline loss; one that was
+/// never assigned, an unassigned loss.
+pub fn palw_detection_follow_v1(
+    outcome: PalwDetectionChainOutcomeV1,
+    slashed_since_detection: bool,
+) -> (Vec<PalwDetectionStageV1>, Option<PalwDetectionLossV1>) {
+    use PalwDetectionChainOutcomeV1 as O;
+    use PalwDetectionStageV1::*;
+    let decided = |verdict: PalwDetectionStageV1| {
+        let mut v = vec![Localized, Filed, Accepted, verdict, Invalidated];
+        if slashed_since_detection {
+            v.push(Collected);
+        }
+        v
+    };
+    match outcome {
+        O::InFlight | O::OtherVoid => (Vec::new(), None),
+        O::Disputed => (vec![Localized, Filed, Accepted], None),
+        O::Convicted => (decided(Convicted), None),
+        O::Defaulted => (decided(Defaulted), None),
+        O::Final => (Vec::new(), Some(PalwDetectionLossV1::DeadlineExpiry)),
+        O::Unassigned => (Vec::new(), Some(PalwDetectionLossV1::Unassigned)),
+    }
+}
+
+impl crate::config::params::Params {
+    /// The fence's mirror for the V2 bundle's state params (`never()` collapses to `None`).
+    pub fn palw_detection_policy_v1_mirror(&self) -> Option<PalwDetectionPolicyFenceV1> {
+        self.palw_detection_policy_v1.clone().filter(|f| f.activation != ForkActivation::never())
+    }
+
+    /// Writes the mirror onto the V2 bundle's state params (the claim gates read it there).
+    pub fn sync_palw_detection_policy_v1(&mut self) {
+        let mirror = self.palw_detection_policy_v1_mirror();
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_detection_policy_v1(mirror);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // The inspection (v2): the seat's replay over the policy's draw
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -1124,6 +1293,8 @@ pub fn palw_detection_genesis_design_v1(class_id: Hash64, route: PalwDetectionRo
         method: if interval { PalwInspectionMethodV1::IntervalReplay } else { PalwInspectionMethodV1::FullReexecution },
         n_rule,
         n_max: 32_768,
+        // DESIGN: the canonical job's interval count is the class's (unmeasured here); 64 is a shape value.
+        attempt_intervals: 64,
         // 99% on faults that make at least 10% of the intervals detectably wrong; below that, the deterrence bound and full
         // re-execution are the cover (stated, not claimed by sampling).
         fault_model: PalwFaultModelV1 { d_min_abs: 1, d_min_ppm: 100_000 },
@@ -1183,7 +1354,14 @@ impl crate::config::params::Params {
     /// plan at `N = 1`, the powers of two and `n_max` with the class's own collateral rule); then any armed height is refused — the
     /// per-class costs, replay units, bytes and throughputs are design values without a measured record on the real artifacts.
     pub fn validate_palw_detection_policy_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        use crate::palw_mode_v2::PalwModeV2Error;
+        use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
+        if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.detection_policy_v1().cloned() != self.palw_detection_policy_v1_mirror()
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_detection_policy_v1 disagrees with the V2 bundle's mirror: Params::sync_palw_detection_policy_v1",
+            ));
+        }
         let Some(fence) = self.palw_detection_policy_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) else {
             return Ok(());
         };

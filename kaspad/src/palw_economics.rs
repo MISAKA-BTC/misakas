@@ -58,10 +58,13 @@ pub struct PalwNodeTelemetryV1 {
 struct PalwDetectionRecorderV1 {
     funnels: BTreeMap<Hash64, kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionFunnelV1>,
     seen: std::collections::HashSet<(Hash64, u8, u8)>,
+    /// Claims this node detected, followed to their chain outcome: claim → class.
+    watched: BTreeMap<Hash64, Hash64>,
 }
 
 impl PalwDetectionRecorderV1 {
     const SEEN_CAP: usize = 1 << 16;
+    const WATCH_CAP: usize = 4_096;
 
     fn first(&mut self, claim: Hash64, kind: u8, index: u8) -> bool {
         if self.seen.len() >= Self::SEEN_CAP {
@@ -150,6 +153,48 @@ impl PalwNodeTelemetryV1 {
     pub fn detection_loss(&self, class: Hash64, loss: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1) {
         if let Ok(mut book) = self.detection.lock() {
             book.funnels.entry(class).or_default().record_loss(loss);
+        }
+    }
+
+    /// G14 funnel: follow a claim this node detected to its chain outcome (bounded; the oldest-keyed entry gives way).
+    pub fn detection_watch(&self, class: Hash64, claim: Hash64) {
+        if let Ok(mut book) = self.detection.lock() {
+            if book.watched.len() >= PalwDetectionRecorderV1::WATCH_CAP && !book.watched.contains_key(&claim) {
+                let first = book.watched.keys().next().copied();
+                if let Some(first) = first {
+                    book.watched.remove(&first);
+                }
+            }
+            book.watched.insert(claim, class);
+        }
+    }
+
+    /// The claims being followed.
+    pub fn detection_watched(&self) -> Vec<Hash64> {
+        self.detection.lock().map(|book| book.watched.keys().copied().collect()).unwrap_or_default()
+    }
+
+    /// G14 funnel: a followed claim's chain outcome, as stages (filed → accepted → convicted/defaulted → collected → invalidated) and
+    /// losses (deadline, unassigned) — each once; a terminal outcome stops the follow.
+    pub fn detection_follow(
+        &self,
+        claim: Hash64,
+        outcome: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionChainOutcomeV1,
+        slashed: bool,
+    ) {
+        use kaspa_consensus_core::palw_detection_policy_v1::{PalwDetectionChainOutcomeV1 as O, palw_detection_follow_v1};
+        let Some(class) = self.detection.lock().ok().and_then(|book| book.watched.get(&claim).copied()) else { return };
+        let (stages, loss) = palw_detection_follow_v1(outcome, slashed);
+        for stage in stages {
+            self.detection_stage_once(class, claim, stage);
+        }
+        if let Some(loss) = loss {
+            self.detection_loss_once(class, claim, loss);
+        }
+        if !matches!(outcome, O::InFlight | O::Disputed)
+            && let Ok(mut book) = self.detection.lock()
+        {
+            book.watched.remove(&claim);
         }
     }
 

@@ -13209,6 +13209,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_model_eligibility_v1();
     // ADR-0179's model tiers, likewise.
     params.sync_palw_model_tier_v1();
+    // G14's per-class detection policy, likewise.
+    params.sync_palw_detection_policy_v1();
     // RFC-0018's mirror (sibling attribution, permissionless anchor, rule E v2, Gate C), likewise.
     params.sync_palw_rfc0018_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.

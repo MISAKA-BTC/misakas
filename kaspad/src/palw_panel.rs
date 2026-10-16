@@ -12545,6 +12545,14 @@ impl PalwPanelService {
                                         // P2-8: kind 4 through the reporter filer first, the accusation
                                         // kept as its fallback; else the accusation, as below the fence.
                                         let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));
+                                        if court_key.is_some() {
+                                            use kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionStageV1 as St;
+                                            // G14 funnel: this seat localised a leaf and queued its accusation.
+                                            for stage in [St::Eligible, St::Checked, St::Detected, St::Localized, St::Filed] {
+                                                self.config.telemetry.detection_stage_once(duty.class_id, duty.claim_id, stage);
+                                            }
+                                            self.config.telemetry.detection_watch(duty.class_id, duty.claim_id);
+                                        }
                                         self.capture_arm_files_v1(
                                             &session,
                                             &mut reporter_filer,
@@ -14946,6 +14954,29 @@ impl PalwPanelService {
                     }
                 }
             }
+            // **G14 funnel: follow every claim this node detected to its chain outcome** (accepted, convicted / defaulted, collected,
+            // invalidated; deadline and unassigned losses). One read of this seat's rows, only while something is followed.
+            // `collected` is inferred from the fold's void-and-slash of a claim that reserved collateral (the row carries no slash
+            // amount); a node-local metric, never a consensus input.
+            let watched = self.config.telemetry.detection_watched();
+            if !watched.is_empty() {
+                let rows = self
+                    .consensus_manager
+                    .consensus()
+                    .unguarded_session()
+                    .spawn_blocking(move |c| {
+                        c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat, true, 4_096)
+                    })
+                    .await
+                    .map(|read| read.rows)
+                    .unwrap_or_default();
+                for claim in watched {
+                    if let Some(row) = rows.iter().find(|row| row.claim_id == claim) {
+                        let outcome = kaspa_consensus_core::palw_detection_policy_v1::palw_detection_chain_outcome_v1(&row.phase);
+                        self.config.telemetry.detection_follow(claim, outcome, row.reserved > 0);
+                    }
+                }
+            }
             // The foreign retention keeps what a live claim may still ask for: a C7 claim's window
             // (13,995 DAA on testnet-12 past §4-quater, once the 2M row opens) outlives the directory's
             // age bound.
@@ -17060,6 +17091,7 @@ impl PalwPanelService {
                         self.note_seat_fault_v1(duty.claim_id, 0, 0);
                         telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Checked);
                         telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Detected);
+                        telemetry.detection_watch(duty.class_id, duty.claim_id);
                         return None;
                     }
                 }
@@ -17110,6 +17142,7 @@ impl PalwPanelService {
                         for stage in [PalwDetectionStageV1::Checked, PalwDetectionStageV1::Detected, PalwDetectionStageV1::Localized] {
                             telemetry.detection_stage_once(duty.class_id, duty.claim_id, stage);
                         }
+                        telemetry.detection_watch(duty.class_id, duty.claim_id);
                         return None;
                     }
                     PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {
@@ -17122,6 +17155,7 @@ impl PalwPanelService {
                         for stage in [PalwDetectionStageV1::Checked, PalwDetectionStageV1::Detected, PalwDetectionStageV1::Localized] {
                             telemetry.detection_stage_once(duty.class_id, duty.claim_id, stage);
                         }
+                        telemetry.detection_watch(duty.class_id, duty.claim_id);
                         // ADR-0086 Decision 6: ask for the block's leaves on the same lane, and name
                         // the leaf from them once they are held — the fault at leaf granularity is
                         // what a court narrows to. The level is the one the opening this seat just

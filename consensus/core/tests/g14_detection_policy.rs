@@ -193,7 +193,7 @@ fn n_comes_from_chain_counts_that_reprice_to_the_claim() {
     // Held and call geometries are base0's chain arithmetic.
     let held = PalwIntervalCountRuleV1::HeldPositions { width: 4 };
     let calls = PalwIntervalCountRuleV1::DecodeCalls { checkpoint_interval: 1 };
-    let f = PalwDetectionClaimFactsV1 { work_leaves: 0, context_priced_leaves: None, prompt_tokens: 40, decode_tokens_executed: 217, collateral_sompi: 0 };
+    let f = PalwDetectionClaimFactsV1 { attempt_lane: false, work_leaves: 0, context_priced_leaves: None, prompt_tokens: 40, decode_tokens_executed: 217, collateral_sompi: 0 };
     assert_eq!(held.interval_count_v1(&f), Some(64));
     assert_eq!(calls.interval_count_v1(&f), Some(216));
     let mut big = base_policy();
@@ -369,6 +369,58 @@ fn rounds_are_distinct_rederivable_and_never_double_count() {
     assert!(matches!(palw_detection_draw_rounds_v2(&binding(3), 9, &stale, 6, 40), Err(PalwDetectionDrawRefusalV2::AnchorNotPostCommit { round: 3, .. })));
 }
 
+/// **A seat's multi-round duty**: round 0 is the panel anchor's draw, later rounds keyed on the panel anchor and the round index;
+/// every round distinct, the union exactly R·k, re-derivable from the panel anchor alone; a multi-round plan holds K_tot pairs.
+#[test]
+fn a_seat_draws_every_round_distinctly_from_the_panel_anchor() {
+    let anchor = h(0x5EA7);
+    assert_eq!(palw_detection_seat_round_anchor_v2(&anchor, 0), anchor);
+    assert_ne!(palw_detection_seat_round_anchor_v2(&anchor, 1), palw_detection_seat_round_anchor_v2(&anchor, 2));
+    let (rounds, union) = palw_detection_seat_rounds_v2(&binding(4), &anchor, 11, 4, 1_000).unwrap();
+    assert_eq!(rounds.len(), 4);
+    assert_eq!(union.len(), 44);
+    assert_eq!(rounds[0], palw_detection_draw_round_v2(&binding(4), 0, &anchor, 11, 1_000, &BTreeSet::new()).unwrap());
+    assert_eq!(palw_detection_seat_rounds_v2(&binding(4), &anchor, 11, 4, 1_000).unwrap(), (rounds.clone(), union));
+    let mut p = base_policy();
+    p.deadlines.rounds = 4;
+    p.deadlines.round_spacing_daa = 100;
+    let plan = p.plan_v1(&facts_for(&p, 32_768, u128::MAX)).unwrap();
+    assert_eq!(plan.retention_pairs, u64::from(plan.k_total) * 32, "a seat holds every round of its duty");
+}
+
+/// **The funnel's later stages follow the chain outcome**: a conviction implies localised → filed → accepted → convicted →
+/// invalidated (→ collected when the bond's slash rose); a default likewise; a detected claim that reached Final is a deadline loss,
+/// one never assigned an unassigned loss; the funnel stays consistent.
+#[test]
+fn the_funnel_follows_a_detected_claim_to_its_chain_outcome() {
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwVoidReasonV2 as V};
+    use PalwDetectionStageV1::*;
+    assert_eq!(palw_detection_chain_outcome_v1(&P::Voided { voided_daa: 1, reason: V::CourtFraud }), PalwDetectionChainOutcomeV1::Convicted);
+    assert_eq!(
+        palw_detection_chain_outcome_v1(&P::Voided { voided_daa: 1, reason: V::ProducerWithholding }),
+        PalwDetectionChainOutcomeV1::Defaulted
+    );
+    assert_eq!(palw_detection_chain_outcome_v1(&P::Voided { voided_daa: 1, reason: V::BindTimeout }), PalwDetectionChainOutcomeV1::Unassigned);
+    assert_eq!(palw_detection_chain_outcome_v1(&P::Final { final_daa: 1 }), PalwDetectionChainOutcomeV1::Final);
+    assert_eq!(palw_detection_chain_outcome_v1(&P::Provisional), PalwDetectionChainOutcomeV1::InFlight);
+    let mut f = PalwDetectionFunnelV1::default();
+    for s in [Eligible, Checked, Detected] {
+        f.record(s);
+    }
+    let (stages, loss) = palw_detection_follow_v1(PalwDetectionChainOutcomeV1::Convicted, true);
+    assert_eq!(stages, vec![Localized, Filed, Accepted, Convicted, Invalidated, Collected]);
+    assert!(loss.is_none());
+    for s in stages {
+        f.record(s);
+    }
+    assert!(f.is_consistent());
+    assert_eq!(f.effective_rate_ppm(), 1_000_000);
+    let (stages, _) = palw_detection_follow_v1(PalwDetectionChainOutcomeV1::Defaulted, false);
+    assert!(stages.contains(&Defaulted) && !stages.contains(&Collected));
+    assert_eq!(palw_detection_follow_v1(PalwDetectionChainOutcomeV1::Final, false), (vec![], Some(PalwDetectionLossV1::DeadlineExpiry)));
+    assert_eq!(palw_detection_follow_v1(PalwDetectionChainOutcomeV1::Unassigned, false), (vec![], Some(PalwDetectionLossV1::Unassigned)));
+}
+
 /// Over many anchors every interval is drawn at the uniform rate k/N (chi-square-free check: each count within 5σ).
 #[test]
 fn the_v2_draw_is_uniform_over_intervals() {
@@ -431,21 +483,25 @@ fn the_fence_is_some_only_collapses_from_never_and_is_refused_when_armed() {
 
     let mut armed: Params = base.clone();
     armed.palw_detection_policy_v1 = Some(PalwDetectionPolicyFenceV1 { activation: ForkActivation::new(16_000), policies: vec![base_policy()] });
+    armed.sync_palw_detection_policy_v1();
     assert_ne!(armed.consensus_params_id(), base.consensus_params_id(), "Some-only: the armed value is in the ruleset");
     let refusal = armed.validate_palw_detection_policy_v1().unwrap_err().to_string();
     assert!(refusal.contains("cannot be armed"), "{refusal}");
     // Two different policy values are two different ids.
     let mut other = armed.clone();
     other.palw_detection_policy_v1.as_mut().unwrap().policies[0].epsilon = PalwRatioV1::new(1, 20);
+    other.sync_palw_detection_policy_v1();
     assert_ne!(other.consensus_params_id(), armed.consensus_params_id());
     // A malformed or un-armable value is named before the blanket refusal.
     let mut bad = armed.clone();
     bad.palw_detection_policy_v1.as_mut().unwrap().policies[0].economics.collateral_per_interval_sompi = 1;
+    bad.sync_palw_detection_policy_v1();
     let named = bad.validate_palw_detection_policy_v1().unwrap_err().to_string();
     assert!(named.contains("DETECTION_COLLATERAL_BELOW_DETERRENCE_BOUND"), "{named}");
     let mut dup = armed.clone();
     let p0 = dup.palw_detection_policy_v1.as_ref().unwrap().policies[0];
     dup.palw_detection_policy_v1.as_mut().unwrap().policies.push(p0);
+    dup.sync_palw_detection_policy_v1();
     assert!(dup.validate_palw_detection_policy_v1().unwrap_err().to_string().contains("two policies"));
 }
 

@@ -446,6 +446,7 @@ fn policy() -> PalwDetectionPolicyV1 {
 
 fn plan(p: &PalwDetectionPolicyV1) -> PalwDetectionPlanV1 {
     p.plan_v1(&PalwDetectionClaimFactsV1 {
+        attempt_lane: false,
         work_leaves: 0,
         context_priced_leaves: None,
         prompt_tokens: PROMPT as u32,

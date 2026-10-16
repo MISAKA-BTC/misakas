@@ -300,8 +300,9 @@ pub fn palw_fp_seat_draw_at_the_claims_price_v1(
 /// [`palw_fp_seat_draw_at_the_claims_price_v1`] re-prices it, and it must equal this backend's own interval count: a seat whose
 /// family geometry disagrees with the class's policy refuses the duty (`GeometryMismatch`) rather than drawing in either space.
 ///
-/// The seat does not re-judge admission (the chain did), so the plan is asked with unbounded collateral. A multi-round policy needs
-/// the later rounds' anchors, which this path does not read: it refuses rather than under-sampling.
+/// The seat does not re-judge admission (the chain did), so the plan is asked with unbounded collateral. A multi-round policy draws
+/// every round of the duty (`palw_detection_seat_rounds_v2`: round `r`'s anchor is the panel anchor's round-`r` derivation, each
+/// round distinct from the earlier ones), returned in round order; the plan's retention already counts all of them.
 pub fn palw_fp_seat_draw_under_policy_v2(
     backend: &dyn PalwExecutionBackendV1,
     network_domain: Hash64,
@@ -312,12 +313,10 @@ pub fn palw_fp_seat_draw_under_policy_v2(
 ) -> Result<(PalwFpSeatDrawV1, kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPlanV1), kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionRefusalV1>
 {
     use kaspa_consensus_core::palw_detection_policy_v1::{
-        PalwDetectionCheckerV1, PalwDetectionClaimFactsV1, PalwDetectionDrawBindingV2, PalwDetectionRefusalV1, palw_detection_draw_round_v2,
+        PalwDetectionCheckerV1, PalwDetectionClaimFactsV1, PalwDetectionDrawBindingV2, PalwDetectionRefusalV1, palw_detection_seat_rounds_v2,
     };
-    if policy.deadlines.rounds != 1 {
-        return Err(PalwDetectionRefusalV1::Malformed("the seat path draws one round; a multi-round policy needs its round anchors"));
-    }
     let plan = policy.plan_v1(&PalwDetectionClaimFactsV1 {
+        attempt_lane: !duty.free_prompt,
         work_leaves: duty.work_leaves,
         context_priced_leaves: context_leaves,
         prompt_tokens: counts.prompt_tokens,
@@ -336,8 +335,9 @@ pub fn palw_fp_seat_draw_under_policy_v2(
         policy_id: policy.id(),
         checker: PalwDetectionCheckerV1::Seat(duty.seat_index),
     };
-    let intervals = palw_detection_draw_round_v2(&binding, 0, &duty.panel_anchor, plan.k_round, plan.n, &Default::default())
+    let (rounds, _) = palw_detection_seat_rounds_v2(&binding, &duty.panel_anchor, plan.k_round, plan.rounds, plan.n)
         .map_err(|_| PalwDetectionRefusalV1::Malformed("the challenge stream refused the draw"))?;
+    let intervals: Vec<u32> = rounds.into_iter().flatten().collect();
     Ok((PalwFpSeatDrawV1 { intervals, interval_count: plan.n }, plan))
 }
 
