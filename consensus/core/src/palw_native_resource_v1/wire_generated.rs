@@ -1669,6 +1669,8 @@ impl NativeWireScanV1 for crate::palw_freeprompt_v3::PalwFpStopReasonV3 {
 }
 wire_struct!(crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3; crate::palw_freeprompt_v3::PalwFreePromptJobV3, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, u32, crate::palw_freeprompt_v3::PalwFpStopReasonV3, u64, crate::Hash64, u32, u64);
 wire_struct!(crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11; crate::config::params::ForkActivation, crate::palw_flat_execution_v11::NativeExecutionPoliciesV11);
+wire_struct!(crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1; u8, [u8; 64], crate::palw_state_v2::PalwBondKeyV2, u64, u64);
+wire_struct!(crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1; u8, [u8; 64], u64, u64);
 wire_struct!(crate::palw_gdn_court_v2::PalwGdnCourtAccusationV2; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_step_refute::memory_v2::PalwGdnStepRefutationV2, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Vec<u8>);
 wire_struct!(crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2; u64, u64);
 wire_struct!(crate::palw_gen_claim_v1::PalwGenJobTailV1; [u8; 32], crate::palw_gen_job_v1::PalwGenBodyV1);
@@ -3636,8 +3638,6 @@ wire_struct!(crate::palw_opv_bootstrap_v1::CompleteCheckPostV1; u16, [u8;64], Ve
 wire_struct!(crate::palw_opv_bootstrap_v1::CompleteRootsV1; [u8;64], [u8;64], [u8;64]);
 wire_struct!(crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1; u8, [u8; 64], [u8; 64], u64, [u8; 64], u64, u64);
 wire_struct!(crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1; u8, [u8; 64], [u8; 64], [u8; 64], u64, u64);
-wire_struct!(crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1; u8, [u8; 64], crate::palw_state_v2::PalwBondKeyV2, u64, u64);
-wire_struct!(crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1; u8, [u8; 64], u64, u64);
 wire_struct!(crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1; u8, [u8; 64], [u8; 64], crate::palw_state_v2::PalwBondKeyV2, [u8; 64], u64, u64, u64);
 wire_struct!(crate::palw_panel_economy_v1::PalwSeatEconomyV1; u64, u32, u32);
 wire_struct!(crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2; misaka_palw_kernel::panel_lifetime_v2::PanelLifetimeAuthorizationV2, crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::Hash64, Option<crate::Hash64>);
