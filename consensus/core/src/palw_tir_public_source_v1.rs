@@ -800,7 +800,10 @@ mod tests {
         let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&class, &x.binding.artifact_root).unwrap();
         let mut header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&x.binding);
         header.job_context.shape_profile_id = record.facts.class_id;
-        header.job_context.trace_scheme_id = crate::palw_step_refute::flat_logits_scheme_id_v1();
+        // A flat class's job context carries the v2 trace scheme (`palw_tir_attempt_v1`'s rule: tiled classes the tiled scheme,
+        // every other the v2 one); the FLAT logits scheme is the class program's `logits_scheme_id`, never a job context's (the
+        // context shape check admits only the v2 and tiled schemes).
+        header.job_context.trace_scheme_id = crate::palw_v2::trace_scheme_id_v2();
         header.committed_execution_root = crate::palw_tir_step_v1::palw_tir_execution_root_v1(
             &header.job_context.context_hash(),
             &header.full_logits_trace_root,

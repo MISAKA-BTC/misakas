@@ -94,9 +94,9 @@ native_struct!(crate::palw_class_registration_origin_v1::PalwClassRegistrationOr
 native_struct!(crate::palw_settlement_once_v1::PalwSettlementOnceRowV1; version, obligation, consumer, amount, debit, settled_daa);
 native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1; version, base_claim, enrollment, accuser, convicted_daa, forget_after_daa);
 native_struct!(crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1; version, claim, verifier, slot, poster, fee, release_after_daa);
+native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1; version, enrollment, base_claim, producer, commitment, committed_daa, deposit, forget_after_daa);
 native_struct!(crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1; version, claim, seat, amount, locked_daa);
 native_struct!(crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1; version, claim, first_blue_score, first_daa);
-native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1; version, enrollment, base_claim, producer, commitment, committed_daa, deposit, forget_after_daa);
 native_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; reserved, filed_daa, serve_until_daa, charged);
 native_struct!(crate::palw_provider_court_v1::ProviderChallengeRowV1; challenger, bond, filed_daa, deadline_daa, answered);
 native_struct!(crate::palw_provider_court_v1::ProviderSubjectRowV1; transferred_daa, lapsed_daa, charged, requested);

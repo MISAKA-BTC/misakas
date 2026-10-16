@@ -233,9 +233,11 @@ async fn v01_the_sweep_judges_only_what_the_virtual_can_spend_on_the_virtuals_ow
     assert!(swept[0].is_some(), "every input the virtual holds (none): judged, and refused");
     assert_eq!(swept[1], None, "an input the virtual has spent: not the sweep's to judge");
 
-    // The tip row a block away from the virtual's sink: nothing is judged.
+    // The tip row a block away from the virtual's sink: nothing is judged. The gate reads the state the native reader authenticates
+    // FROM the sink (RFC-0008 retained reader: the stored tip is walked to the sink, `palw_v2_reader_state`); a stored tip with no
+    // chain path to the sink is not read, so the gate abstains exactly as the sweep does (it read "whatever tip is stored" before).
     vp.palw_state_v2_store.write().set_tip_for_tests(Hash64::from_u64_word(0x39BB), &g.state).unwrap();
-    assert!(vp.palw_mempool_h1_carrier_refusal(&unfunded, daa).is_some(), "the gate reads whatever tip is stored");
+    assert!(vp.palw_mempool_h1_carrier_refusal(&unfunded, daa).is_none(), "an unauthenticated stored tip is not read");
     assert_eq!(g.ctx.consensus.palw_h1_carrier_refusals_v1(&[unfunded]), vec![None], "the sweep waits for the virtual's own tip");
 }
 

@@ -250,16 +250,19 @@ fn main_impl(mut args: Args) {
         };
         let (dummy_notification_sender, _) = unbounded();
         let notification_root = Arc::new(ConsensusNotificationRoot::new(dummy_notification_sender));
-        let consensus = Arc::new(Consensus::new(
-            db,
-            config.clone(),
-            Default::default(),
-            notification_root,
-            Default::default(),
-            Default::default(),
-            unix_now(),
-            Arc::new(MiningRules::default()),
-        ));
+        let consensus = Arc::new(
+            Consensus::new(
+                db,
+                config.clone(),
+                Default::default(),
+                notification_root,
+                Default::default(),
+                Default::default(),
+                unix_now(),
+                Arc::new(MiningRules::default()),
+            )
+            .expect("the simulation has native capacity"),
+        );
         (consensus, lifetime)
     } else {
         let until = if args.target_blocks.is_none() { config.genesis.timestamp + args.sim_time * 1000 } else { u64::MAX }; // milliseconds
@@ -332,16 +335,19 @@ fn main_impl(mut args: Args) {
     let (_lifetime2, db2) = create_temp_db!(ConnBuilder::default().with_parallelism(num_cpus::get()).with_files_limit(default_fd));
     let (dummy_notification_sender, _) = unbounded();
     let notification_root = Arc::new(ConsensusNotificationRoot::new(dummy_notification_sender));
-    let consensus2 = Arc::new(Consensus::new(
-        db2,
-        config.clone(),
-        Default::default(),
-        notification_root,
-        Default::default(),
-        Default::default(),
-        unix_now(),
-        Arc::new(MiningRules::default()),
-    ));
+    let consensus2 = Arc::new(
+        Consensus::new(
+            db2,
+            config.clone(),
+            Default::default(),
+            notification_root,
+            Default::default(),
+            Default::default(),
+            unix_now(),
+            Arc::new(MiningRules::default()),
+        )
+        .expect("the simulation has native capacity"),
+    );
     let handles2 = consensus2.run_processors();
     if args.headers_first {
         rt.block_on(validate(&consensus, &consensus2, &config, args.delay, args.bps, true));
