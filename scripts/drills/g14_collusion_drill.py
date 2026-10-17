@@ -338,9 +338,11 @@ class Drill:
 
     def peer_all(self):
         live = [n for n in self.nodes.values() if n.alive()]
-        for a in live:
-            for b in live:
-                if a is not b:
+        # One direction per pair: a pair dialling each other at once races the hub's duplicate-key removal and can leave one side
+        # believing it is connected while the other has no peer (run 9: the producer then never mines).
+        for i, a in enumerate(live):
+            for b in live[i + 1:]:
+                if True:
                     try:
                         a.rpc('addPeer', {'peerAddress': {'ip': '127.0.0.1', 'port': b.p2p}, 'isPermanent': True})
                     except Exception as e:  # noqa: BLE001 — a refused duplicate is fine
