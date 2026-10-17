@@ -101,6 +101,7 @@
 - [ADR-0173 — MISAKA's purpose: public-verifier dispute completeness](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)
 - [ADR-0180 — PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md)
 - [ADR-0185 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に](0185-paid-lock-randomness-bootstrap-and-paid-sources.md)
+- [ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md)
 
 ## EVM / wallet
 

@@ -8,6 +8,7 @@
 - [RFC-0005 — PALW VM（不採用）](0005-palw-ml-vm.md)
 - [RFC-0008 — PALW EXEC lane — claim-backed work slices and transaction execution](0008-palw-claim-backed-consensus-blocks.md)
 - [RFC-0013 — Reproducible layouts and resource-bounded model onboarding tools](0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md)
+- [RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0023-unresolved-claim-liability-and-independent-progress.md)
 
 ## EVM / wallet
 
