@@ -327,7 +327,8 @@ class Drill:
         return flags
 
     def colluding_producers(self):
-        return [0, self.args.seats + 1]
+        # P (card 0), P3 (D-11, card seats+1) and the injection producers (cards seats+2..): every card outside the Panel.
+        return [0] + list(range(self.args.seats + 1, len(self.keyring['seats'])))
 
     def add(self, role, index, flags, bonded=True):
         n = Node(self, role, index, flags, bonded)
@@ -899,11 +900,13 @@ class Drill:
         # Past the compressed testnet-12 flag days (the freeze — ADR-0160 F-L — arms with them), and after the outsider exists.
         before02 = self.bond_row(self.seat(0)['bond_outpoint'])['bondSlashed']
         cut02 = None
-        if self.args.lie_claims:
-            _, cut02 = self.stop_lying_after(self.args.lie_claims, self.args.after_daa, 'D-02')
-        d02 = self.run_conviction('D-02', 'P', 0, self.args.after_daa)
-        self.metric_chain('D-02 (auto lie leaf)', self.seat(0)['bond_outpoint'], self.args.after_daa, before02, until_daa=cut02)
-        self.d15_row(d02)
+        d02 = {'evidence': {}}
+        if not self.args.skip_d02:
+            if self.args.lie_claims:
+                _, cut02 = self.stop_lying_after(self.args.lie_claims, self.args.after_daa, 'D-02')
+            d02 = self.run_conviction('D-02', 'P', 0, self.args.after_daa)
+            self.metric_chain('D-02 (auto lie leaf)', self.seat(0)['bond_outpoint'], self.args.after_daa, before02, until_daa=cut02)
+            self.d15_row(d02)
         for inject in self.args.inject:
             self.run_injection(inject, self.daa_quiet() or 0)
         self.fp_refusal_row('D-01', 'P', 0, governs_from=0)
@@ -1225,19 +1228,19 @@ class Drill:
         self.observe('metric chain %s' % label, out)
         return out
 
-    def stop_lying_after(self, n, since_daa, label, inject=None):
+    def stop_lying_after(self, n, since_daa, label, inject=None, role='P', card=0):
         """Bound the lie: once `n` lying attempt claims of P are accepted at or past `since_daa`, restart P honest (same bond, same
         retention, the colluding Panel still in its process). One public bond carries one object per block (its carrier chain), so a
         producer lying on EVERY draw outruns its pursuit (run 3, 2026-10-17: 41 reservations, 0 demands landed in 38 DAA)."""
-        pbond = self.seat(0)['bond_outpoint']
+        pbond = self.seat(card)['bond_outpoint']
         # The compressed flag days (DAA 6..28) each break the peers' fork-id handshake for a while, the nodes mine apart and the
         # reorg on reconnect can drop a carried reservation (run 4). Lie only past them.
         quiet = max(since_daa, PRIVATE_G14_LAST_FLAG_DAY + 2)
         self.wait('%s: the chain passes the compressed flag days (DAA %d)' % (label, quiet),
                   lambda: (self.daa_quiet() or 0) >= quiet, self.args.step_timeout, every=20)
-        p = self.nodes['P']
+        p = self.nodes[role]
         p.stop()
-        p.extra = self.producer_flags(0, canonical=False, inject=inject, host_panel=True)
+        p.extra = self.producer_flags(card, canonical=False, inject=inject, host_panel=(role == 'P'))
         p.start()
         self.wait_rpc(p)
         self.peer_all()
@@ -1246,7 +1249,7 @@ class Drill:
             [x for x in self.claims(pbond).get('claims', []) if x['acceptedDaa'] >= since_daa and not x['isFreePrompt']]),
             self.args.step_timeout, every=15)
         p.stop()
-        p.extra = self.producer_flags(0, canonical=False, host_panel=True, honest=True)
+        p.extra = self.producer_flags(card, canonical=False, host_panel=(role == 'P'), honest=True)
         p.start()
         self.wait_rpc(p)
         self.peer_all()
@@ -1260,19 +1263,26 @@ class Drill:
         invalidated, and none reached Final with its reward; FAIL: a lying claim reached Final (a G14 miss); OBSERVED: no claim ended
         in the window (the chain is recorded as is)."""
         a = self.args
-        p = self.nodes['P']
-        pbond = self.seat(0)['bond_outpoint']
-        p.stop()
-        p.extra = self.producer_flags(0, canonical=True, inject=inject, host_panel=True)
+        # A producer of its own per phase (D-02 may have taken card 0's whole collateral): card seats+2+i, the third process.
+        idx = a.inject.index(inject)
+        card = a.seats + 2 + idx
+        if card >= len(self.keyring['seats']):
+            return self.row('G-17 %s' % inject, 'NOT-RUN', {}, 'no genesis card left for this phase\'s producer')
+        for role in ('P3', 'F') + tuple('PI%d' % j for j in range(idx)):
+            if role in self.nodes and self.nodes[role].alive():
+                self.nodes[role].stop()
+        role = 'PI%d' % idx
+        p = self.add(role, 8, self.producer_flags(card, canonical=False, inject=inject))
         p.start()
         self.wait_rpc(p)
         self.peer_all()
+        pbond = self.seat(card)['bond_outpoint']
         start = max(after_daa, self.daa_quiet() or 0)
         before = self.bond_row(pbond)['bondSlashed']
         label = 'G-17 %s' % inject
         log('%s: phase from DAA %d' % (label, start))
         if a.lie_claims:
-            lying, cut = self.stop_lying_after(a.inject_claims, start, label, inject)
+            lying, cut = self.stop_lying_after(a.inject_claims, start, label, inject, role=role, card=card)
             start = min(r['acceptedDaa'] for r in lying)
 
         def ended_enough():
@@ -1433,6 +1443,7 @@ def main():
     ap.add_argument('--inject', action='append', default=[],
                     help='G-17 injection phase after D-02 (repeatable): a --palw-drill-fault kind, sparse:<seed> or withhold-all')
     ap.add_argument('--inject-claims', type=int, default=1, help='lying claims to follow to their end per injection phase')
+    ap.add_argument('--skip-d02', action='store_true', help='skip the D-02 phase (run the injections, restart/IBD and D-11 only)')
     ap.add_argument('--lie-claims', type=int, default=0,
                     help='bound the lie: restart P honest after this many lying claims (0: lie on every draw, as before)')
     ap.add_argument('--inject-timeout', type=int, default=3 * 3600)
