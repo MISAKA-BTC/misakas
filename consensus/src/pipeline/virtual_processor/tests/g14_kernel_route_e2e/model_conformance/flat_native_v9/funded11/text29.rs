@@ -6,7 +6,7 @@ use kaspa_consensus_core::palw_native_final_v27::{NativeFinalCalibrationV27, Pal
 use kaspa_consensus_core::palw_native_text_stop_v29::*;
 
 /// Final27 armed with a calibration for `profile`, the funded horizons widened as in `public_filing`.
-fn text_config(profile: Digest) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+pub(super) fn text_config(profile: Digest) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (mut cfg, b, p, f) = native_config();
     let domain = cfg.params.palw_funded_execution_v11.as_ref().unwrap().policies.execution.network_domain;
     let pol = &mut cfg.params.palw_funded_execution_v11.as_mut().unwrap().policies;

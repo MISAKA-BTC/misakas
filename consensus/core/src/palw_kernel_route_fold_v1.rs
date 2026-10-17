@@ -1474,7 +1474,13 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         }
         Ok(Some(a)) if a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => {
             if (41..=80).contains(&a.action) {
-                return super::palw_native_job_fold_v39::apply(builder, ctx, signer, a.action, a.body);
+                let r = super::palw_native_job_fold_v39::apply(builder, ctx, signer, a.action, a.body);
+                if let Err(e) = &r
+                    && std::env::var_os("PALW_NATIVE_DEBUG_TMP").is_some()
+                {
+                    eprintln!("[native v39 action {} refused] {e:?}", a.action);
+                }
+                return r;
             }
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, a.action, a.body);
         }
