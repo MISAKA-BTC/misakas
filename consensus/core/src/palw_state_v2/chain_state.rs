@@ -1449,7 +1449,7 @@ impl PalwChainStateV2 {
         })
     }
 
-    /// **RFC-0010 × G14 — is an accusation pending on this claim?** (agent SHARD, `docs/design/palw/shard-rfc6-10.md` §2.) A
+    /// **RFC-0010 × G14 — is an accusation pending on this claim?** (agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md` §2.) A
     /// data-availability session (a seat's or a non-seat's) is open on it, a court session (bisection or dissection) is open on
     /// it, or it is `DefaultDisputed`. THE one predicate every V3 non-fraud end reads: while it holds, no expiry, redraw or
     /// seal/beacon absence closes the claim — the engine's receipt clock pauses, the engine's own end is deferred (the V2 void

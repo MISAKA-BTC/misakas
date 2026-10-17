@@ -781,7 +781,7 @@ pub(crate) fn seat_funds_refusal(class: &str, collateral: u64, have: u64, addres
         "or send the missing {} and merge the outputs first: misaka --network {network} wallet utxo consolidate --key-file {key} --yes",
         catalog::msk(need.saturating_sub(have) as u128)
     ))
-    .docs("docs/testnet12-join-mining.md#4-funds")
+    .docs("docs/operations/mining/testnet12-join-mining.md#4-funds")
 }
 
 /// What setup's own node registers: `kaspad --palw-register-bond` for this key, the class it names
@@ -1165,7 +1165,7 @@ impl<'a> Wizard<'a> {
                     )
                     .reason("a validator stakes a bond and attests finality epochs, and only a network with the overlay has them")
                     .fix("misaka --network testnet-10 validator setup")
-                    .docs("docs/validator-runbook.md"),
+                    .docs("docs/history/operations/dns-validator/validator-runbook.md"),
                 ));
             }
             (Purpose::Validate, Some(_)) => {}
@@ -1658,7 +1658,7 @@ impl<'a> Wizard<'a> {
                     .reason("a retiring bond takes no new work, and the registry refuses a second bond from any key it has held (DuplicateBondKey)")
                     .current(format!("{} · retiring since DAA {}", b.outpoint, status::group(since)))
                     .fix("misaka key gen --out <a NEW seed file>, fund it, and re-run setup with --key-file <it>")
-                    .docs("docs/history/testnet11-join-mining.md#3-register-a-bond"),
+                    .docs("docs/history/networks/testnet-11/testnet11-join-mining.md#3-register-a-bond"),
             ));
         }
         let role = BondRole::of(self.purpose);
@@ -1695,7 +1695,7 @@ impl<'a> Wizard<'a> {
                      misaka verifier setup --key-file <new seed>",
                     catalog::msk(need.saturating_add(REGISTRATION_MARGIN_SOMPI) as u128)
                 ))
-                .docs("docs/testnet12-join-mining.md#4-funds"),
+                .docs("docs/operations/mining/testnet12-join-mining.md#4-funds"),
             ));
         }
         let recommended = self.class.as_ref().and_then(|class| class.lock(role).sompi());
@@ -2523,7 +2523,7 @@ impl<'a> Wizard<'a> {
                 Finding::error("E-MODEL-ARTIFACT-MISSING", exit::MODEL, format!("{} needs its artifact, and none is here", class.label()))
                     .reason("a node mines and judges a model class by running it, from the class's .palwart file")
                     .current("no --artifact, no [advanced] artifact, no MISAKA_PALW_ARTIFACT, and no artifact in the configured search directories")
-                    .fix("get the class's artifact (docs/history/testnet11-free-prompt-mining.md#2-the-artifact-bound-and-the-same-file-everywhere)")
+                    .fix("get the class's artifact (docs/history/networks/testnet-11/testnet11-free-prompt-mining.md#2-the-artifact-bound-and-the-same-file-everywhere)")
                     .fix("then: set MISAKA_PALW_ARTIFACT=/path/to/file or pass --artifact <file>")
             } else {
                 Finding::error("E-MODEL-ARTIFACT-ROOT", exit::MODEL, format!("No artifact here is {}'s", class.label()))
@@ -3224,7 +3224,7 @@ mod tests {
     fn the_confirmation_says_the_role_the_amount_the_one_bond_rule_and_the_way_out() {
         let t12 = t12();
         let delay = withdrawal_delay_daa(&t12, 750).expect("testnet-12 is ConsensusV2");
-        assert_eq!(delay, 12_900, "docs/testnet12-join-mining.md §9 says 12,900 DAA");
+        assert_eq!(delay, 12_900, "docs/operations/mining/testnet12-join-mining.md §9 says 12,900 DAA");
         let seat_floor = seat_requirement(&t12, 750, true, Some(TB_W1_FLOOR));
         let terms = |role: BondRole, collateral: u64| RegistrationTerms {
             role,
@@ -3317,7 +3317,7 @@ from      2eca7516…:0 (400,000.00 BILI)
   Required  one ordinary output of at least 130,000.10 BILI — 130,000.00 BILI of collateral for base (the floor), and 0.10 BILI for the carrier's fee and change
   Fix       send 130,000.10 BILI or more to misakatest:qz in one transfer, then run misaka verifier setup again
             or send the missing 30,000.10 BILI and merge the outputs first: misaka --network testnet-12 wallet utxo consolidate --key-file ~/.misaka/miner.seed --yes
-  Docs      docs/testnet12-join-mining.md#4-funds"
+  Docs      docs/operations/mining/testnet12-join-mining.md#4-funds"
         );
     }
 

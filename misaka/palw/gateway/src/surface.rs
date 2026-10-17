@@ -2058,14 +2058,14 @@ mod tests {
     /// and §9 of the ADR records it; a corpus edit is a change to this constant in BOTH trees.
     const OPENAI_SURFACE_V1_CORPUS_SHA256: &str = "5cdf928859dccdc7e841b6f4f9b01dc75a1080f3705e515ef1793cf6d08d72b9";
 
-    /// **ADR-0096 invariant 7.** Every file in `docs/openai-surface/v1/` is one request and the
+    /// **ADR-0096 invariant 7.** Every file in `docs/reference/api/openai-compatible/v1/` is one request and the
     /// verdict this surface must give it, decided by the SAME function the route calls — with
     /// dormant chain facts, the state of every shipped network — and the directory's digest is
     /// what the Studio's copy must match.
     #[test]
     fn the_conformance_corpus_passes_on_this_gateway() {
         use sha2::Digest as _;
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/openai-surface/v1");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/reference/api/openai-compatible/v1");
         let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
             .map(|entry| entry.unwrap())

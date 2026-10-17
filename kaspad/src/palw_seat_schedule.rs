@@ -1,5 +1,5 @@
 //! **Which claim a seat replays next** — node policy, never validity (the 2026-10-01 panel backlog,
-//! `docs/design/palw/t12-panel-backlog-1001.md`, F2).
+//! `docs/design/palw/verification/t12-panel-backlog-1001.md`, F2).
 //!
 //! # What it fixes
 //!

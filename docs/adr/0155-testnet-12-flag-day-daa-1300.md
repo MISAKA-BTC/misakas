@@ -1,5 +1,7 @@
 # ADR-0155 — testnet-12's second post-launch flag day: two fences at DAA 1,300
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 * Status: **Accepted, armed at DAA 1,300.** Release `587cab2b0`, params fingerprint `24e1aec3…`. The
   public fleet was upgraded one node at a time on 2026-09-27 between 19:10 and 19:37 JST.
 * Date: 2026-09-27
@@ -43,6 +45,6 @@ uses that height. The next flag day's fixes are added to this list.
 - Spec: [16 network parameters and fences](../spec/palw/16-network-parameters-and-fences.md) §16.4 ·
   [07](../spec/palw/07-claim-lifecycle.md) §7.4 · [10](../spec/palw/10-collateral-and-economics.md) §10.3
 - Design: [design/palw/lineage.md](../design/palw/lineage.md) (flag days), [collateral.md](../design/palw/collateral.md) §6
-- Records: [launch note §000](../t12-launch-2026-09-25.md)
+- Records: [launch note §000](../history/networks/testnet-12/t12-launch-2026-09-25.md)
 - Code: `consensus/core/src/config/params.rs` (`PALW_T12_POST_LAUNCH_FENCES_V2`,
   `PALW_T12_POST_LAUNCH_FENCE_V2_DAA`, `palw_t12_arm_post_launch_fences_v2`)

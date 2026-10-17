@@ -52,7 +52,7 @@ pub const TAG_REGISTER_PIPELINE_CLASS_V2: u8 = 14;
 /// GAP-R7: an accuser's seal of its proof (seal, then reveal; the earliest seal of the convicting bytes is paid the bounty).
 pub const TAG_SEAL_PROOF_V1: u8 = 15;
 // 16–18: K2-TIR-v4 (lane K2S, allocated 2026-10-08).
-/// K2-TIR-v4: a segmented claim (`docs/design/palw/k2-real-scale.md`).
+/// K2-TIR-v4: a segmented claim (`docs/design/palw/models/k2-real-scale.md`).
 pub const TAG_COMMIT_SEGMENTED_CLAIM_V1: u8 = 16;
 /// K2-TIR-v4: a job whose prompt is posted in tiles.
 pub const TAG_POST_TILED_JOB_V1: u8 = 17;

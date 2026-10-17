@@ -33,7 +33,7 @@ A normal full node needs no model artifact or Bond. PALW production is configure
 ## Documentation
 
 - [Root README](../README.md)
-- [Node operator guide](../docs/history/testnet11-node-operator.md)
-- [PALW producer guide](../docs/history/testnet11-join-mining.md)
+- [Node operator guide](../docs/history/networks/testnet-11/testnet11-node-operator.md)
+- [PALW producer guide](../docs/history/networks/testnet-11/testnet11-join-mining.md)
 - [Documentation map](../docs/README.md)
 - [Upstream rusty-kaspa](https://github.com/kaspanet/rusty-kaspa)

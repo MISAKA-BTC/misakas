@@ -20,7 +20,7 @@
 //!   leaves when the fold shows the conviction (the preflight refuses it as already convicted), when the door closed, when the
 //!   frame left the accepted state, or after its sends.
 //!
-//! **Not covered here (recorded in docs/design/palw/g14-objective-conviction-remaining-2026-10-15.md):** the producers of
+//! **Not covered here (recorded in docs/design/palw/integration/g14-objective-conviction-remaining-2026-10-15.md):** the producers of
 //! findings — an outside owner's acquisition driving (Open → Demand → Collect) and the arithmetic scheduler's localization to a
 //! Ready primitive (`palw_tir_arithmetic_scheduler`) are not yet called from the panel loop.
 #![allow(dead_code)] // `queue_finding_v1` is the hook the finding producers call once they are wired; the tick runs every panel tick.

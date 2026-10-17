@@ -1,4 +1,4 @@
-//! **The three fences of the user's 2026-10-12 rulings** (docs/design/palw/mainnet-spec-register-2026-10-12.md §3):
+//! **The three fences of the user's 2026-10-12 rulings** (docs/design/palw/integration/mainnet-spec-register-2026-10-12.md §3):
 //! `palw_court_model_scope_v1` (D2: no court route compels model bytes), `palw_public_evidence_reward_v1` (N4: a claim whose
 //! evidence cannot be published earns no new reward or weight) and `palw_claim_hard_deadline_v1` (X3: a claim's dispute hard
 //! deadline is fixed at acceptance and never extended).

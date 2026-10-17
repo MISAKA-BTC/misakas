@@ -1,4 +1,4 @@
-//! **RFC-0010 × G14: no non-fraud end pre-empts an accusation** (agent SHARD, `docs/design/palw/shard-rfc6-10.md` §2), through
+//! **RFC-0010 × G14: no non-fraud end pre-empts an accusation** (agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md` §2), through
 //! testnet-12's own fold with the permissionless Panel armed on a copy of the params (`rfc0010_production_fold.rs`'s fixture; these
 //! tests bypass `validate_palw_v2`, and say so — the fence is refused at every real height).
 //!

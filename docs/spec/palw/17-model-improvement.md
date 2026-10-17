@@ -1,5 +1,7 @@
 # PALW spec — 17. The Model Improvement Protocol
 
+> **適用時期の現行方針（2026-10-17 文書化）:** 本章の RFC-0003 画像・動画経路と RFC-0004 モデル改善は **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。
+
 ## 17.0 Immutable registrations — 2026-10-09 amendment
 
 [ADR-0175](../../adr/0175-registered-models-are-permanently-immutable.md) governs past the independent `palw_model_immutable_v1` fence. Training, datasets, bounded evaluation and settlement may continue. **No epoch decision or rollback may replace an existing registered model, its lineage head, its version/root or its Position/AMM binding.** Improved artifacts are independently registered models with their own admission and eligibility. Parent references record provenance only.

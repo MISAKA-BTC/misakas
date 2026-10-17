@@ -1,4 +1,4 @@
-//! **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, agent SHARD, `docs/design/palw/shard-rfc6-10.md` §3).
+//! **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md` §3).
 //!
 //! G14 for a sharded claim: one bonded verifier OUTSIDE the seats, with public material only, reaches a conviction or a correctly
 //! classified default. Consensus already admits it — `TirShardCourtAccused` takes any Active bond at the floor; a `TirStepRun` unit

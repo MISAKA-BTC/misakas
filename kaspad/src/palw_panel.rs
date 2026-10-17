@@ -779,7 +779,7 @@ pub(crate) fn palw_supplementary_idle_v1(last_none: Option<&(u64, u64)>, fingerp
 }
 
 /// **How long a licence collector leaves a claim alone after its candidates came to no object** (the 2026-10-03 panel
-/// starvation, `docs/design/palw/t12-panel-backlog-1003.md` §7). Every tick the collector asked every pooled claim for a
+/// starvation, `docs/design/palw/verification/t12-panel-backlog-1003.md` §7). Every tick the collector asked every pooled claim for a
 /// coverage set, a V1 quorum and an optimistic set; each ask is an ML-DSA-87 check per candidate and up to a few folds, and a
 /// fold clones the whole ~57 MB PALW state (`TransitionBuilder::new` and `checkpoint`). With ~90-250 claims pooled, most of
 /// them one or two `Valid`s short of any door, that was ~200 s of a 5.104 seat's 280 s tick — and it was asked again, for the
@@ -1185,7 +1185,7 @@ pub(crate) struct PalwSeatSlotsV1 {
 }
 
 /// **How long the panel's loop takes per iteration, and where** (the 2026-10-03 panel starvation,
-/// `docs/design/palw/t12-panel-backlog-1003.md` §3).
+/// `docs/design/palw/verification/t12-panel-backlog-1003.md` §3).
 ///
 /// A seat starts at most its slots' worth of replays per iteration and files a finished one only when an iteration
 /// polls it, so its receipts per hour are `slots × 3600 / iteration seconds`. On testnet-12 that period was never

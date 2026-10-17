@@ -1,7 +1,7 @@
 //! **Lane G14-L (user decision 2026-10-11, option (a)): parallel reserved sessions and the k-ary authenticated descent on the legacy
 //! held route** — behind the two dormant, never-armed legacy fences together (`palw_legacy_public_filer_v1`: reserved sessions exist
 //! only there; `palw_legacy_held_da_v2`: tag 157 exists only there). No new wire type, tag, table or registry number: a reserver's
-//! further tag-157 demands JOIN its open reserved session as LANES. Design: `docs/design/palw/g14-completion-matrix.md` §2h.
+//! further tag-157 demands JOIN its open reserved session as LANES. Design: `docs/design/palw/integration/g14-completion-matrix.md` §2h.
 //!
 //! **Why.** G14-B derived (§2c) that a stalling producer answers every reserved session on the last DAA of its `W_disclose` (1,200 on
 //! testnet-12, kept: SA-3 asks `W_disclose ≥ 2 ×` finality), and the claim's hard deadline (`trace_retention − W_disclose`, 4,200 after

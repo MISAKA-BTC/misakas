@@ -1,5 +1,7 @@
 # MISAKAの設計前提 — 不可侵原則
 
+> **現在の変更管理:** [§11 設計凍結](#design-freeze)。**初期 mainnet の対象範囲:** [§12 画像・動画・改善の延期](#post-mainnet-scope)。既存技術の再採択・有効化を意味しない。
+
 **確率的検証・経済的抑止・公開証拠による独立客観裁定**
 *Probabilistic Verification, Economic Deterrence, and Independent Objective Adjudication*
 
@@ -8,7 +10,7 @@
 - この文書は MISAKA の**設計前提**であり、すべての ADR・RFC・Spec・設計文書・実装レーン・有効化判断の**上位**に置く。
   - ADR・RFC・Spec はこの前提の下で書かれ、判断される。
   - 下位の文書がこの前提と衝突する場合は、前提が優先する。衝突する記述は改定対象になる。
-- この前提そのものは ADR や RFC では変更できない。変更はユーザーの明示的な決定だけで行う。
+- この前提を含む採用済み設計は原則凍結する。重大問題時の変更は [§11](#design-freeze) に従い、新規 RFC と新規 ADR の両方の採択、および設計責任者（現行のユーザー承認主体）の明示的承認を必要とする。
 - この前提は wire id、合意 fingerprint、有効化の高さ、パラメータ値のいずれも割り当てない。
 - 現在のコードがすべての条件を満たしたと宣言するものでもない。§6 は、報酬と consensus work weight を与える前に満たすべき条件である。
 
@@ -19,7 +21,7 @@
 - [ADR-0172](adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md): versioned kernel。
 - [RFC-0007 Part VI](rfc/0007-palw-verification-certificates-and-algebraic-checks.md): commit 後 challenge。
 - [RFC-0014](rfc/0014-panel-independent-fraud-prosecution.md) と [RFC-0015](rfc/0015-panel-free-permissionless-verification.md): Panel 非依存の訴追と Panel=0。
-- 有効化判断の照合先: [全面有効化の readiness matrix](design/palw/activation-readiness-matrix.md)。
+- 有効化判断の照合先: [全面有効化の readiness matrix](design/palw/integration/activation-readiness-matrix.md)。
 
 > **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、被害をbondで有界化する。モデルの非公開は経済的に不利にする。」**
 > *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
@@ -218,6 +220,7 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 > *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
 
 
+<a id="8-llm計算の暗号学的証明を使用しない--2026-10-15ユーザー決定"></a>
 ## 8. モデル計算の暗号学的証明を使用しない（2026-10-15、ユーザー恒久決定）
 
 **MISAKA は LLM・モデル計算の正しさを暗号学的に証明する仕組みを一切使用せず、今後も使用しない。**
@@ -239,7 +242,7 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 
 ## 9. モデルの二階層とモデル単位の検証の不採用 — 2026-10-15 ユーザー決定(凍結前提)
 
-**本節は凍結した前提である。** ADR・RFC・設計・実装・将来計画は本節に従い、本節を再審しない。変更には、ユーザーの明示的な決定による本節自体の改定を要する。
+**本節は原則凍結した前提である。** 通常は再審・変更しない。変数・パラメーター調整と重大問題時の例外変更は [§11](#design-freeze) に従う。例外では新規 RFC と新規 ADR の両方の採択、設計責任者の明示的承認、対象節の改定を要する。今回、階層規則や数値は変更しない。
 
 1. **genesis と年次フォークで指定されたモデルは 1.0 である。** 年 1 回程度のソフトフォークまたはハードフォークで、モデル ID と固定 artifact root の組を承認リスト(ApprovedModels)に追加する。追加のみで、既存モデルは上書きしない(ADR-0175)。リストへの指定は政策的決定であり、「公開されている」「独立検証可能である」ことの技術的証明ではない。
 2. **後から登録したモデルは、登録した時点から審査なしで 0.3 に固定する。** 昇格・更新・失効・試行手数料はない。何年経っても、どれだけ使われても 0.3 のままである。**1.0 になる経路は、年次フォークでの指定だけである。**
@@ -304,3 +307,26 @@ MISAKA は、確率的検証と経済によって PALW を実現する。この�
 本設計は、次の 2 つを満たすことを前提とする。
 1. **不正や DoS のように claim を出しても、bond の slash による損失が、想定される利益を上回ること。**
 2. **客観的な court を悪用して、正常に計算している miner・Panel を slash させる不正ができないこと。**
+
+
+<a id="design-freeze"></a>
+## 11. 採用済み設計の原則凍結と例外変更
+
+**今回のユーザー指示を文書化（整理日 2026-10-17）。** 設計の変数・パラメーター以外は原則凍結し、通常変更禁止とする。重大な問題が確認された場合は、新規 RFC と新規 ADR の両方、レビュー、明示的採択によって変更できる。
+
+変数・パラメーターの調整も、構造と不変条件を維持し、旧新値・根拠・影響・試験・承認を [台帳](governance/parameter-register.md) に残す。数値で認証や責任を外す変更を通常調整としない。
+
+本書の「恒久」「再審しない」「変更不可」は通常の変更禁止として維持し、重大問題の例外手続きは本節に統一する。本書自体の改定にも設計責任者の明示的承認を要する。意味不変の実装・修正・最適化・試験・文書整備は継続できる。未採択 Draft の採用・技術方式の撤回・稼働有効化は今回行わない。
+
+正本: [設計凍結](governance/design-freeze.md)。[ADR-0181](adr/0181-design-freeze-and-controlled-change.md) / [RFC-0021](rfc/0021-design-freeze-and-documentation-governance.md)。
+
+<a id="post-mainnet-scope"></a>
+## 12. 初期 mainnet の対象範囲 — 画像・動画・モデル改善の延期
+
+**追加のユーザー指示を文書化（整理日 2026-10-17）。** RFC-0003 の画像・動画の経路と RFC-0004 のモデル改善は、mainnet 稼働開始後に取り組む機能として延期し、当面無効とする。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始後も自動有効化しない。
+
+必要なテキスト・TIR・固定登録・claim 認証・court・bond 予算は維持する。共有機能からの迂回的な有効化を許可せず、延期経路が閉じていることと共通経路の回帰を確認する。旧履歴・既存責任を遡及的に消さず、過去の実装・試験記録を今後の有効化承認にしない。
+
+mainnet 後に、機能別の実装・試験・影響・互換性・移行とレビューを確認し、明示的な提供・有効化承認で再開する。構造変更は §11 に従う。文書への反映と runtime の無効化実施は別である。
+
+正本: [延期・無効化方針](governance/post-mainnet-scope.md)。[ADR-0182](adr/0182-defer-media-and-model-improvement-until-post-mainnet.md) / [RFC-0022](rfc/0022-post-mainnet-media-and-model-improvement-scope.md)。

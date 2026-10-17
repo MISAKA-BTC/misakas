@@ -1,5 +1,7 @@
 # RFC-0016 — bond加重のブロック生成機会と弾力的Final容量: 物理ブロック機会をbondへ接続する
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **設計前提:** [PRINCIPLES](../PRINCIPLES.md) §0（2026-10-14、モデルの非公開を経済的に不利にする。不正は排除ではなく有界化）を最上位とする。
 > [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)（bond単位のQ/B/R/F上限と共通拘束）、
 > [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)（モデル入手への合意不介入とモデル別配分）、
@@ -551,7 +553,7 @@ ACTIVATION_ALLOWED
 
 ### 14.2 ユーザー判断 2026-10-15（V2〜V11）の実装状況
 
-数値は校正・受入試験の出発点で本番値ではない。休眠・未build・未試験（PASSではない）。行番号は[実装状況](../design/palw/rfc-0016-implementation-status-2026-10-15.md) §8。
+数値は校正・受入試験の出発点で本番値ではない。休眠・未build・未試験（PASSではない）。行番号は[実装状況](../design/palw/integration/rfc-0016-implementation-status-2026-10-15.md) §8。
 
 | ID | 状態 |
 | --- | --- |
@@ -569,7 +571,7 @@ ACTIVATION_ALLOWED
 
 ## 16. 実装（休眠、未有効化、未build）
 
-実装は採用・有効化を意味しない。行ごとのfile:lineと試験IDの対応は、[実装状況](../design/palw/rfc-0016-implementation-status-2026-10-15.md)にある。
+実装は採用・有効化を意味しない。行ごとのfile:lineと試験IDの対応は、[実装状況](../design/palw/integration/rfc-0016-implementation-status-2026-10-15.md)にある。
 すべての行は、実装済み、test source作成済み、evidence-onlyのどれかである。
 
 ### 16.1 lead decision（2026-10-15、ユーザーreview待ち）
@@ -634,9 +636,9 @@ ACTIVATION_ALLOWED
   [0165](../adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md)、[0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)、
   [0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)
 * RFC: [0008](0008-palw-claim-backed-consensus-blocks.md) R8-BUDGET・L134、[0015](0015-panel-free-permissionless-verification.md) §8.3–8.5.5
-* 設計: [bond-budget-and-model-allocation](../design/palw/bond-budget-and-model-allocation.md) §3.4–3.6、
-  [rfc-0015-implementation-status-2026-10-15](../design/palw/rfc-0015-implementation-status-2026-10-15.md)、
-  [activation-readiness-matrix](../design/palw/activation-readiness-matrix.md) §3f・§3g・§3k
+* 設計: [bond-budget-and-model-allocation](../design/palw/economics/bond-budget-and-model-allocation.md) §3.4–3.6、
+  [rfc-0015-implementation-status-2026-10-15](../design/palw/integration/rfc-0015-implementation-status-2026-10-15.md)、
+  [activation-readiness-matrix](../design/palw/integration/activation-readiness-matrix.md) §3f・§3g・§3k
 * code: [`palw_admission_v2.rs`](../../consensus/core/src/palw_admission_v2.rs)、[`palw_work_target_v1.rs`](../../consensus/core/src/palw_work_target_v1.rs)、
   [`fold_read.rs`](../../consensus/core/src/palw_state_v2/fold_read.rs)、[`palw_bond_budget_v1.rs`](../../consensus/core/src/palw_bond_budget_v1.rs)、
   [`palw_bond_budget_fold_v1.rs`](../../consensus/core/src/palw_bond_budget_fold_v1.rs)、[`palw_kernel_route_fold_v1.rs`](../../consensus/core/src/palw_kernel_route_fold_v1.rs)、
@@ -650,7 +652,7 @@ ACTIVATION_ALLOWED
 
 **ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
 
-* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
+* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
 * **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
 * **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
 * **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**

@@ -55,7 +55,7 @@ APACHE_NOTE = "Apache License 2.0 (the full text ships in the artifact: scripts/
 GENESIS_CONTEXT = 32768
 CALIB_POSITIONS_DEFAULT = GENESIS_CONTEXT
 RECURRENT_CALIB = {"kind": "recurrent", "docs": ["docs/rfc/0002-palw-tensor-ir.md"], "len": CALIB_POSITIONS_DEFAULT, "chunks": 1}
-DENSE_CALIB = {"kind": "dense", "docs": ["docs/archival.md", "docs/crescendo-guide.md", "CONTRIBUTING.md", "SECURITY.md"], "len": 512,
+DENSE_CALIB = {"kind": "dense", "docs": ["docs/operations/node/archival.md", "docs/history/upstream/crescendo-guide.md", "CONTRIBUTING.md", "SECURITY.md"], "len": 512,
                "chunks": 1}
 # The texts, pinned by git blob at one commit of this repository: a document edited later does not move a conversion's tokens.
 # The pipeline extracts each blob (`git cat-file blob`), checks the id, and tokenises the extracted copy. `evaluation` is the
@@ -66,8 +66,8 @@ CALIB_TEXTS = {
     "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
     "blobs": {
         "docs/rfc/0002-palw-tensor-ir.md": "7bb6e09f61b27775a9fa467e83f019aee371948a",
-        "docs/archival.md": "2bb5730da32226843407b3036c40ed001b26804b",
-        "docs/crescendo-guide.md": "9cad9e256809f5e893ce2ec69bde1efae4ae74be",
+        "docs/operations/node/archival.md": "2bb5730da32226843407b3036c40ed001b26804b",
+        "docs/history/upstream/crescendo-guide.md": "9cad9e256809f5e893ce2ec69bde1efae4ae74be",
         "CONTRIBUTING.md": "9b7e5e85eb2e049679cd7ed1bcc46e9b18849047",
         "SECURITY.md": "d75fe2b3c7c52f9a1019a7999a472d64c4ce00d2",
         "README.md": "a3166dc2f915782ccea239f919ddd5aed5c5e7dd",

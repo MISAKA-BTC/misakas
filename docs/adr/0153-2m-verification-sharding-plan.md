@@ -1,5 +1,7 @@
 # ADR-0153 (draft) — 2M verification by shards: the implementation plan
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 * Status: **Draft plan** (rcore/cap-s1, stage 7 of the user's capacity plan, 2026-09-27). **Decides
   nothing and arms nothing**: the 2M class stays capped — `c_2M = 1` held to `Final` (its row's static
   `max_inflight_claims`, which no ρ scales), on the C7 list (ADR-0152 D7, ADR-0160 D-13), uncredited:

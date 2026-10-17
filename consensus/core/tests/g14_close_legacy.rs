@@ -1,5 +1,5 @@
 //! **Lane g14-close-legacy (2026-10-16): the legacy V2 Panel route made G14-complete behind LG14-A / LG14-B** — the fold half
-//! (audit `docs/design/palw/g14-completeness-proof-2026-10-16.md` §3.2, §4.1 G-06 / G-07 / G-13, appendix C).
+//! (audit `docs/audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md` §3.2, §4.1 G-06 / G-07 / G-13, appendix C).
 //!
 //! * **Arming** — LG14-A (`palw_legacy_public_filer_v1`) and LG14-B (`palw_legacy_held_da_v2`) ride the arm-readiness record gate
 //!   (`kaspa_consensus_core::palw_g14_gates_v1`); every ruleset here that arms a fence PASSES the whole validation

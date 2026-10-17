@@ -5,7 +5,7 @@
 //! proposal: RFC-0016's values are placeholders until the three-stage derivation (RFC-0016 §8.6) pins a measured record.
 //!
 //! The RFC-0016 §12 ids each test covers are in its name; ids that need a real node, the ADR-0176 lane's engine or RFC-0017's gates
-//! are mapped in `docs/design/palw/rfc-0016-implementation-status-2026-10-15.md` (with the file that covers them, or "not written").
+//! are mapped in `docs/design/palw/integration/rfc-0016-implementation-status-2026-10-15.md` (with the file that covers them, or "not written").
 //!
 //! Run (validation phase): `cargo test -p kaspa-consensus-core --test rfc0016_v1`
 

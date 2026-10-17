@@ -1,5 +1,7 @@
 # ADR-0160 — Claim capacity is separated from collateral price (v3): the bond is one shared guarantee split four ways — liability, issuance, fork-choice cap, network share — ρ is a risk tier, and a credited claim is paid only after an independent audit
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 * Status: **PROPOSED v3 (2026-09-26 night).** Amends v2 (`93395bafa`, same file) in place, answering the
   second review of v2 (twelve findings; each is fixed or rebutted with evidence, Appendix D). The
   v2 → v3 and v1 → v2 changelogs are Appendix B; v1's summary is Appendix C. **Nothing in v3 rides the

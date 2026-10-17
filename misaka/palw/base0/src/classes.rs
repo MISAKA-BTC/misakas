@@ -237,7 +237,7 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
     // **The corrected A16 graph rides here too, as a class of its own.**
     //
     // The v1 rows carry `qwen25_a16_profile_v1`, which two measurements show does not describe the
-    // engine it runs (`docs/palw-fp-on-registered-classes.md`): its pre table omits the embed-lift
+    // engine it runs (`docs/reference/palw/palw-fp-on-registered-classes.md`): its pre table omits the embed-lift
     // requant the engine performs, and its state chunk map is one byte per element over an `i32`
     // cache. Either defect alone makes a step leg uncommittable, so no v1 class can serve the
     // free-prompt lane.
@@ -388,7 +388,7 @@ pub fn a16_graph_v7_row_v1(n_ctx: u32, model_id: &'static str) -> Option<Canonic
 }
 
 /// **The graph-v5 dense row at the artifact's own width** (ADR-0082 Decisions 1 and 4;
-/// `docs/history/testnet11-relaunch-5f-genesis-card.md` §2).
+/// `docs/history/networks/testnet-11/testnet11-relaunch-5f-genesis-card.md` §2).
 ///
 /// [`a16_artifact_row_v1`]'s doc says the obvious repair — a fourth fixed-width row — is the one
 /// thing that must not be done, and that argument is about a DIFFERENT question: which class a

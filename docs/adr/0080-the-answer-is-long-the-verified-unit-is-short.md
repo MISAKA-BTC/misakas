@@ -1,5 +1,7 @@
 # ADR-0080: The answer is long; the verified unit is short
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 **Status:** Superseded in part — 分割 claim 案は 2026-09-03 に撤回。
 
 一つの回答を複数 claim に分割する方式は実装しない。claim をまたぐ出力の連結を認証できず、同じ prompt の後続 claim は DuplicateWork になり、分割で receipt 負担と報酬・weight の歪みが増えるため。後継は [ADR-0082](0082-the-close-is-flat-in-the-context.md) の有界 court。

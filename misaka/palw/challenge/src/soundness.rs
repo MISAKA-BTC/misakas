@@ -12,7 +12,7 @@
 //!   union bound over families is charged;
 //! * `R` — the policy's `retry_limit`: `R + 1` attempts, each a fresh beacon and seed;
 //! * `G` — the grinding choices per beacon (beacon outputs an adversary can select among: output selection, withholding, timing,
-//!   fork choice, concentration, last-contributor grinding — `docs/design/palw/opv-beacon-bootstrap.md` §6), `β` the beacons one
+//!   fork choice, concentration, last-contributor grinding — `docs/design/palw/verification/opv-beacon-bootstrap.md` §6), `β` the beacons one
 //!   attempt draws (1 non-interactive; the rounds of a staged beacon);
 //! * `Q` — adaptive statements: the subjects an adversary may commit against the same policy over its life (Sybil classes of one
 //!   model, claims of one class).
@@ -195,7 +195,7 @@ pub fn competing_works_bound_v1(live_cap: u32, window_slots: u64, refill_daa: u6
 ///
 /// This bounds output selection, withholding before the lock, Final timing and concentration. It does NOT bound a last contributor
 /// who grinds a free input (a job nonce) offline before committing: that adversary's choices are its offline work, which the
-/// accounting must state instead (`docs/design/palw/opv-beacon-bootstrap.md` §6.2).
+/// accounting must state instead (`docs/design/palw/verification/opv-beacon-bootstrap.md` §6.2).
 pub fn beacon_grinding_choices_bound_v1(k: u32, live_cap: u32, fork_alternatives: u128) -> u128 {
     let take = k.min(live_cap);
     let mut lists: u128 = 1;

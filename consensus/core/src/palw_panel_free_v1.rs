@@ -28,7 +28,7 @@ pub const PALW_OPV_MIN_EFFECTIVE_BITS_V1: u16 = misaka_palw_challenge::APPROVAL_
 
 /// **`Params::palw_panel_free_v1`'s value (RFC-0015): the fence and everything the network's OPV policy is** — the activation, the
 /// policy's terms (a genesis constant of the kernel route, [`OpvPolicyV1`]) and the two network-side knobs of the DERIVED eligibility
-/// (`docs/design/palw/opv-beacon-bootstrap.md` §5): a deny-list and the effective-bits floor.
+/// (`docs/design/palw/verification/opv-beacon-bootstrap.md` §5): a deny-list and the effective-bits floor.
 ///
 /// **OPV eligibility is never read from this value.** A class may use `OptimisticPublicVerification` only while
 /// `opv_eligibility_v1` derives it from chain state (Active kernel, conformance passed, G14-complete, live public DA, bounded

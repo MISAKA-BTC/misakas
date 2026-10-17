@@ -1618,7 +1618,7 @@ async fn certify(
                     .reason(
                         "a certificate is about kernels the court implements; a new architecture needs a build whose court serves it",
                     )
-                    .docs("docs/palw-certify-a-new-model.md"),
+                    .docs("docs/history/operations/model-certification/palw-certify-a-new-model.md"),
             )
         })?;
         flow.ui.mark(
@@ -1674,7 +1674,7 @@ async fn certify(
             Finding::error("E-MODEL-SEAT-WINDOW", exit::MODEL, "No seat can recompute this row inside the receipt window")
                 .current(format!("n_ctx {} against n_max {n_max} at {ms} ms per position", profile.n_ctx))
                 .fix("re-measure with --seat-ms-per-position from the slowest fleet host, or register a narrower row")
-                .docs("docs/palw-certify-a-new-model.md"),
+                .docs("docs/history/operations/model-certification/palw-certify-a-new-model.md"),
         ));
     }
     let binding = PalwConsensusObjectV2::ClassLaneCertified { class_id, lane, profile: Box::new(profile.clone()) };

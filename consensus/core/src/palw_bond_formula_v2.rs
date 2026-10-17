@@ -45,7 +45,7 @@
 //! (`palw_rcore_supplementary_flips_v1`) and an issuance slot is held until `d + W_M` (`palw_issuance_holds_slot_v1`).
 //!
 //! **Every value is POLICY and UNAPPROVED** (`PalwBondFormulaPolicyV2::unapproved_probe_v2` is not a proposal). The values come from
-//! the measurement procedure (`docs/design/palw/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md`).
+//! the measurement procedure (`docs/design/palw/economics/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md`).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 

@@ -2229,7 +2229,7 @@ pub enum PalwA2SlotV1 {
     /// form at isolation only where the ruleset carries the fence, and the header-context door below its height.
     FpJobForm { what: &'static str },
     /// A formula a header commits (e.g. `palw_state_root`): below the fence every header's bytes and hash are int-12's, which the
-    /// replay through int-12 itself checks block by block (`docs/design/palw/a2-uniformity-new-kinds.md` §5).
+    /// replay through int-12 itself checks block by block (`docs/design/palw/integration/a2-uniformity-new-kinds.md` §5).
     HeaderFormula { what: &'static str },
     /// State, delta, carriage-tail or engine encodings — never a block's carriage. Below the fence the fold must be byte-identical to
     /// int-12's (the same PALW state root at every block), which the int-12 replay checks.
@@ -4222,7 +4222,7 @@ pub(crate) mod tests {
                     1,
                     "PalwConsensusObjectV2::{name} (tag {tag}) needs exactly one owner: a kind added after the live testnet-12 build \
                      goes in PALW_LIFECYCLE_NEW_KINDS_V1 with the fence that owns it, and rides unjudged below that fence (A-2 \
-                     uniformity, docs/design/palw/a2-uniformity-new-kinds.md)"
+                     uniformity, docs/design/palw/integration/a2-uniformity-new-kinds.md)"
                 );
             }
             let mut tags: Vec<u8> = kinds.iter().map(|(_, t)| *t).collect();

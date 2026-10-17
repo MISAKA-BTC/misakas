@@ -1,5 +1,7 @@
 # RFC-0018 — DAGを最大限に活用する設計変更: 多モデル並行生成、特権なきPanel anchor、SecurityCertified(Gate C)とDNS廃止後の収束
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **設計前提(ADR・RFC より上位)— [MISAKAの不可侵原則](../PRINCIPLES.md):** 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。本RFCはこの前提の下にあり、衝突する場合は前提が優先する。
 > **暗号学的な計算証明を使わない — [PRINCIPLES §8](../PRINCIPLES.md)(2026-10-15 ユーザー決定、恒久):** 本RFCはZK・succinct argument・validity proof 等を、必須条件・代替経路・将来・研究のいずれとしても挙げない。使う暗号はハッシュ、署名、Merkle commitment/opening、乱数(beacon)だけであり、計算の正しさは決定論的再計算・サンプリング再実行・代数的スポットチェック・抽選検証者の承認(明示的前提の下)で扱う。
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)のbond当たりQ/B/R/F上限と共通DAA拘束を適用する。[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)のモデル入手不介入は維持するが、§7.9のとおり **合意creditについては改定** する(ユーザー方針 2026-10-15)。
@@ -419,5 +421,5 @@ ACTIVATION_ALLOWED(各fence)
 
 * [PRINCIPLES](../PRINCIPLES.md)(§0、§8)、[ADR-0058](../adr/README.md)、[ADR-0105](../adr/README.md)、[ADR-0130](../adr/README.md)、[ADR-0170](../adr/0170-the-seed-anchor-is-a-window-not-a-span.md)、[ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)、[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)、[ADR-0178](../adr/0178-fork-choice-heals-a-partition-on-bonded-participation.md)
 * [RFC-0012](0012-palw-only-consensus-and-native-evm-settlement.md)、[RFC-0016](0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)、[RFC-0017](0017-model-eligibility-examination-and-renewal.md)
-* [ユーザー判断 2026-10-15 §6](../design/palw/user-decisions-2026-10-15-adr-rfc16-rfc17.md)
-* [実装状況](../design/palw/rfc-0018-implementation-status-2026-10-15.md)
+* [ユーザー判断 2026-10-15 §6](../history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md)
+* [実装状況](../design/palw/integration/rfc-0018-implementation-status-2026-10-15.md)

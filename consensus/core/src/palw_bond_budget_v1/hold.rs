@@ -43,7 +43,7 @@
 //!
 //! **Every number here is POLICY and UNAPPROVED.** The 1 / 7 day spans are the user's design baseline; the per-day rates, the burst
 //! window and factor and the concurrent-liability fraction come from the measurement procedure in
-//! `docs/design/palw/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md` — never from current code values or past examples.
+//! `docs/design/palw/economics/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md` — never from current code values or past examples.
 
 use super::*;
 use crate::tx::TransactionOutpoint;

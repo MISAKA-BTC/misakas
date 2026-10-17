@@ -1,7 +1,7 @@
 //! **FINX (2026-10-08) — P0: is the GHOSTDAG finality guard consistent with the PALW fork choice?
 //! Multi-node adversarial runs through the real pipeline.** A probe: no rule is changed.
 //!
-//! Record: `docs/design/palw/finality-palw-consistency.md`. The model that compares the change
+//! Record: `docs/design/palw/consensus/finality-palw-consistency.md`. The model that compares the change
 //! candidates is `consensus/core/tests/finality_palw_consistency_model.rs`.
 //!
 //! The property tested, in two halves:
