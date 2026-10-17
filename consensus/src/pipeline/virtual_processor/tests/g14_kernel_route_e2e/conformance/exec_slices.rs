@@ -1512,12 +1512,12 @@ async fn x8_g14_completed_worker_claims_earn_nothing_when_the_root_expires_on_th
         .slices
         .iter()
         .chain(std::iter::once(&s.prefix))
-        .map(|claim| kernel_final_bound(&api, &claim.claim.id))
+        .map(|claim| kernel_final_due(&api, &claim.claim.id))
         .max()
         .unwrap();
     let expiry = cw.net.chain.tip_state().1.exec_v2_root_v1(&native).unwrap().expiry_daa;
     assert!(last_final + 1 < expiry, "the signed expiry must allow all worker computations to finalize");
-    beat_until(&mut cw, last_final, "every worker computation's paid Final", |cw| {
+    beat_until(&mut cw, expiry - 1, "every worker computation's paid Final before the root expiry", |cw| {
         cw.net.chain.tip_state().1.exec_v2_root_v1(&native).unwrap().ready_for_final()
     })
     .await;
