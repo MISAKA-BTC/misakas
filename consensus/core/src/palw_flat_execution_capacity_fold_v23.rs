@@ -340,6 +340,18 @@ pub(super) fn check_fresh_start(builder: &TransitionBuilder<'_>, job: Digest, no
     Ok(())
 }
 
+/// G14 lane closure G-N1: the physical place of a lapsed owner that compelled nothing ([`NativePhysicalSlotsV22::release_lapsed_owner_v41`]).
+pub(super) fn plan_release_lapsed_owner(
+    builder: &TransitionBuilder<'_>,
+    job: Digest,
+    owner: Digest,
+) -> Result<Option<NativePhysicalSlotsV22>, PalwStateV2Error> {
+    let mut slots = slots(builder, job)?;
+    if let Some(s) = &mut slots {
+        s.release_lapsed_owner_v41(owner).map_err(refused)?;
+    }
+    Ok(slots)
+}
 pub(super) fn plan_retire_owner(
     builder: &TransitionBuilder<'_>,
     job: Digest,

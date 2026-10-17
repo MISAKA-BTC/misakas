@@ -1363,6 +1363,51 @@ pub(super) fn reveal_paged(
     seal: &NativePagedSealV29,
     file: &[u8],
 ) -> Result<(), PalwStateV2Error> {
+    court(builder, ctx, signer, seal.job, Some(seal), file)
+}
+/// **G14 lane closure G-N1 (text29): a self-contained public filing needs no paid owner.** `job ‖ u32 n ‖ filing` (the paged
+/// court's filing grammar: v25 kinds 0 / 1 / 2, or a window-bound job's v37 envelope) from any Active bond whose operator is not
+/// the producer's, while the book is Challengeable. The lifetime owner catalogue (≤ 4) bounds the producer's prepaid answers to
+/// owners — material an owner may compel; a filer that already holds the material (every public answer is on chain) compels
+/// nothing, so it takes no owner place and adds no producer obligation, and four colluding owners that never reveal cannot lock it
+/// out. It pays its restoration up front (kept if the filing is wrong) and runs exactly the paged court's verification and
+/// conviction. In force where the text29 actions are (`palw_funded_execution_v11` + Final27; dormant on every preset).
+pub(super) fn public_file(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV11,
+    raw: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    if raw.len() < 68 || u32::from_le_bytes(raw[64..68].try_into().unwrap()) as usize != raw.len() - 68 {
+        return Err(refused("text29 public filing exact job and count"));
+    }
+    if !builder.extras.kernel_route.as_ref().and_then(|e| e.native_final.as_ref()).is_some_and(|f| f.activation.is_active(ctx.daa_score))
+    {
+        return Err(refused("text29 public filing is below Final27"));
+    }
+    let job: Digest = raw[..64].try_into().unwrap();
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let h = original_header(r, job)?;
+    let bond = builder.state.bonds.get(signer).ok_or_else(|| refused("text29 public filer bond absent"))?;
+    if !matches!(bond.status, PalwBondStatusV2::Active) || *signer == h.producer {
+        return Err(refused("text29 public filer is not an Active bond other than the producer"));
+    }
+    if !paid_restore(builder, ctx, signer, p, Some(h.class), raw.len() + h.book_bytes as usize)? {
+        return Ok(());
+    }
+    court(builder, ctx, signer, job, None, raw)
+}
+/// The paged court a paid owner's reveal and a public filing share: the owner's checks (`seal`), the filing's verification against
+/// the committed post, the conviction (G-14: never refused for short collateral) and the settlement.
+fn court(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    job: Digest,
+    seal: Option<&NativePagedSealV29>,
+    file: &[u8],
+) -> Result<(), PalwStateV2Error> {
     use crate::palw_native_source_proof_v25::*;
     use misaka_palw_kernel::{
         element::SegClaimContextV1,
@@ -1372,11 +1417,24 @@ pub(super) fn reveal_paged(
     };
     let p = policies(builder, ctx)?;
     let r = builder.state.kernel_route.as_ref().unwrap();
-    let mut h = original_header(r, seal.job)?;
+    let mut h = original_header(r, job)?;
     let mut b = original_book(r, &h)?;
     let f = b.funding().clone();
     let claim = b.claim().ok_or_else(|| refused("text29 court original claim absent"))?.clone();
-    if seal.namespace != 29
+    if b.terminal() != NativeTextTerminalV29::Challengeable {
+        return Err(refused("text29 court original book is not challengeable"));
+    }
+    let filer_operator = builder.state.bonds.get(signer).ok_or_else(|| refused("text29 court filer bond absent"))?.operator_id.as_bytes();
+    let (proof_root, finder, finder_operator) = match seal {
+        Some(seal) => (seal.proof_root, seal.actor, seal.operator),
+        None => (
+            object_id(b"misaka-palw/native/g14-public-filing/v29", &(job, &file[68..])),
+            palw_kernel_bond_id_v1(signer),
+            filer_operator,
+        ),
+    };
+    if let Some(seal) = seal
+        && (seal.namespace != 29
         || seal.spent
         || seal.retired
         || seal.discovery
@@ -1392,8 +1450,7 @@ pub(super) fn reveal_paged(
         || seal.producer_operator != f.request.producer_operator
         || ctx.daa_score < seal.matures
         || ctx.daa_score >= seal.reveal_until
-        || b.terminal() != NativeTextTerminalV29::Challengeable
-        || builder.state.bonds.get(signer).is_none_or(|v| v.operator_id.as_bytes() != seal.operator)
+        || builder.state.bonds.get(signer).is_none_or(|v| v.operator_id.as_bytes() != seal.operator))
     {
         return Err(refused("text29 original paid court source/scope/operator/claim/time differs"));
     }
@@ -1502,16 +1559,18 @@ pub(super) fn reveal_paged(
         builder.state.bonds.get(&h.producer).map(|v| v.collateral),
         f.maximum.producer_reserve,
     );
-    let settlement = b.convict(seal.proof_root, seal.actor, seal.operator, collectible, ctx.daa_score).map_err(refused)?;
+    let settlement = b.convict(proof_root, finder, finder_operator, collectible, ctx.daa_score).map_err(refused)?;
     settle(builder, ctx, &p, &mut h, &b, &settlement, Some(signer))?;
-    let mut paid = seal.clone();
-    paid.spent = true;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, paid.id())), Some(key(&(paid.root(), paid))))?;
+    if let Some(seal) = seal {
+        let mut paid = seal.clone();
+        paid.spent = true;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, paid.id())), Some(key(&(paid.root(), paid))))?;
+    }
     if refutes_source {
         builder.write_kernel_row(
             EXECUTION_SOURCE_FACT_TABLE_V11,
             k(0, &source_relation(&ch.class)),
-            Some(key(&(h.job, seal.proof_root, ctx.daa_score))),
+            Some(key(&(h.job, proof_root, ctx.daa_score))),
         )?;
     }
     Ok(())

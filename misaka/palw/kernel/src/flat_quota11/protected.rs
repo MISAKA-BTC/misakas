@@ -640,6 +640,49 @@ impl QuotaStateV11 {
         progress.accepted_bytes += paid.bytes;
         Ok(())
     }
+    /// **G14 lane closure G-N1: a LAPSED paid seal leaves the job's retained catalogue before the job is terminal.** Native
+    /// authenticates from its own seal row that the seal was never revealed and its reveal window has closed (`now ≥ reveal_until`:
+    /// it can no longer be revealed) — this method cannot see `reveal_until`. Only a seal that compelled NO protected answer may
+    /// leave (`action_attempts_used[DARequest] == 0`): the per-job count `retained_protected_seals ≤ 4` bounds the producer's
+    /// prepaid protected answers (`2 × 4`), so every seal still counted holds at most its two, every released seal held none, and
+    /// the bound is unchanged. Nothing is refunded: the seal's unused guarantee in this interval is consumed (spent, as every
+    /// failed attempt is), never returned as fresh capacity. An earlier-interval seal's reservation is already dead.
+    pub fn release_lapsed_protected_seal_v41(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        key: &Digest,
+    ) -> Result<ProtectedSealSummaryV11, String> {
+        let (new_block, new_interval) = self.check_context(policy, epoch)?;
+        let seal = self.protected_seals.get(key).ok_or("lapsed protected seal absent")?.clone();
+        let subject = self.subjects.get(&seal.key.job_id).ok_or("lapsed protected seal lost its original subject")?;
+        if seal.action_attempts_used[ProtectedActionKindV11::DARequest.index()] != 0
+            || subject.retained_protected_seals == 0
+            || subject.closed
+            || seal.subject_binding_root != subject.binding.root()
+        {
+            return Err("a seal that compelled protected answers keeps its slot; a lapse needs its open original subject".into());
+        }
+        if !new_interval && seal.admitted_interval == epoch.network_interval {
+            let spent = seal.guarantee_remaining.clone();
+            let block_old = if new_block {
+                QuotaIntervalSummaryV11 { consumed: QuotaQuantitiesV11::default(), reserved: self.block.reserved.clone() }
+            } else {
+                self.block.clone()
+            };
+            let block = block_old.consume(&spent, &policy.block)?;
+            let network = self.network.consume(&spent, &policy.network)?;
+            let actor =
+                self.actors.get(&seal.key.seal_actor).ok_or("lapsed seal owner aggregate is absent")?.consume(&spent, &policy.actor)?;
+            self.block = block;
+            self.network = network;
+            self.actors.insert(seal.key.seal_actor, actor);
+        }
+        self.protected_seals.remove(key);
+        self.subjects.get_mut(&seal.key.job_id).expect("original subject checked").retained_protected_seals -= 1;
+        self.epoch = epoch.clone();
+        Ok(seal)
+    }
     /// One expired earlier-interval seal row, after authenticating the genuine
     /// original terminal book/counter. No current or original allowance refund.
     /// A job close alone cannot collect a still-live protected horizon.
