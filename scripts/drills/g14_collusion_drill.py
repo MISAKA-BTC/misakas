@@ -201,6 +201,7 @@ class Drill:
         self.facts = {'startedAt': now(), 'mode': args.mode, 'atDaa': self.at_daa, 'set': args.set, 'seats': args.seats,
                       'tamperLeaf': args.tamper_leaf, 'observations': []}
         self.keyring = None
+        self.lying_ids = set()
 
     # ---- bookkeeping -------------------------------------------------------------------------------------------------------------
 
@@ -1184,7 +1185,7 @@ class Drill:
 
     # ---- the metric chain (audit §7) and the G-17 injection phases ---------------------------------------------------------------
 
-    def metric_chain(self, label, pbond, after_daa, before_slashed, lane='attempt', until_daa=None):
+    def metric_chain(self, label, pbond, after_daa, before_slashed, lane='attempt', until_daa=None, only_ids=None):
         """eligible → checked → detected → localized → filed → accepted → convicted / defaulted → collected → invalidated, per lying
         claim of `pbond` accepted at or past `after_daa`, read from public RPC and the outside verifier's own log (its filer's lines);
         capacity refusals, unjudged cases, fused-leaf hand-offs and claims that reached Final are counted apart."""
@@ -1192,6 +1193,7 @@ class Drill:
         olog = o.log_text()
         rows = [r for r in self.claims(pbond).get('claims', [])
                 if r['acceptedDaa'] >= after_daa and (until_daa is None or r['acceptedDaa'] < until_daa)
+                and (only_ids is None or norm(r['claimId']) in only_ids)
                 and (r['isFreePrompt'] if lane == 'fp' else not r['isFreePrompt'])]
         chain = {k: 0 for k in ('eligible', 'checked', 'detected', 'localized', 'filed', 'accepted', 'convicted', 'defaulted',
                                 'collected', 'invalidated')}
@@ -1210,6 +1212,10 @@ class Drill:
             row['defaulted'] = bool(d.get('daDefaulted')) or r.get('voidReason') == 'producer_withholding'
             row['accepted'] = row['convicted'] or row['defaulted']
             row['invalidated'] = r['phase'] == 'voided' and not (r.get('payoutPendingSompi') or r.get('vestingSompi'))
+            # ADR-0160 aggregate liability: one conviction of the bond forfeits every open claim of it (counted apart).
+            row['aggregateForfeit'] = r.get('voidReason') == 'aggregate_forfeit'
+            if row['aggregateForfeit']:
+                apart['aggregateForfeit'] = apart.get('aggregateForfeit', 0) + 1
             row['capacityRefused'] = mark(r'AtCapacity|at capacity')
             row['unjudged'] = mark(r'cannot judge|ended without an objective outcome|cannot proceed')
             row['fusedHandOff'] = mark(r'fused-attention site')
@@ -1249,6 +1255,9 @@ class Drill:
             [x for x in self.claims(pbond).get('claims', []) if x['acceptedDaa'] >= since_daa and not x['isFreePrompt']]),
             self.args.step_timeout, every=15)
         p.stop()
+        # Every claim the lying producer had accepted when it stopped is a lie: that exact set is followed.
+        rows = [x for x in self.claims(pbond).get('claims', []) if x['acceptedDaa'] >= since_daa and not x['isFreePrompt']]
+        self.lying_ids = {norm(x['claimId']) for x in rows}
         p.extra = self.producer_flags(card, canonical=False, host_panel=(role == 'P'), honest=True)
         p.start()
         self.wait_rpc(p)
@@ -1272,7 +1281,7 @@ class Drill:
             if role in self.nodes and self.nodes[role].alive():
                 self.nodes[role].stop()
         role = 'PI%d' % idx
-        p = self.add(role, 8, self.producer_flags(card, canonical=False, inject=inject))
+        p = self.add(role, 8, self.producer_flags(card, canonical=False, inject=inject, honest=bool(a.lie_claims)))
         p.start()
         self.wait_rpc(p)
         self.peer_all()
@@ -1287,20 +1296,23 @@ class Drill:
 
         def ended_enough():
             rows = [r for r in self.claims(pbond).get('claims', []) if r['acceptedDaa'] >= start and not r['isFreePrompt']
-                    and (not a.lie_claims or r['acceptedDaa'] < cut)]
+                    and (not a.lie_claims or norm(r['claimId']) in self.lying_ids)]
             done = [r for r in rows if r['phase'] in ('voided', 'final')]
             return (rows, done) if len(done) >= a.inject_claims else None
         try:
             self.wait('%s: %d lying claims end' % (label, a.inject_claims), ended_enough, a.inject_timeout, every=30)
         except Blocked as e:
             self.observe('%s window ended' % label, str(e))
-        m = self.metric_chain(label, pbond, start, before, until_daa=cut if a.lie_claims else None)
+        m = self.metric_chain(label, pbond, start, before, only_ids=self.lying_ids if a.lie_claims else None)
         c, ap = m['chain'], m['apart']
-        ended = c['accepted'] + ap['reachedFinal']
+        ended = c['accepted'] + ap['reachedFinal'] + ap.get('aggregateForfeit', 0)
         if ap['reachedFinal']:
             return self.row(label, 'FAIL', m, '%d lying claims reached Final (G14 miss) — chain %s' % (ap['reachedFinal'], c))
         if not ended:
             return self.row(label, 'OBSERVED', m, 'no lying claim ended in the window — chain %s, apart %s' % (c, ap))
+        if ap.get('aggregateForfeit') and c['collected'] > 0 and c['invalidated'] == c['eligible']:
+            return self.row(label, 'PASS', m, 'the bond was convicted and every lying claim of the phase forfeited (aggregate) — chain %s, '
+                            'apart %s' % (c, ap))
         if c['accepted'] and c['invalidated'] >= c['accepted'] and c['collected'] > 0:
             return self.row(label, 'PASS', m, 'chain %s' % c)
         return self.row(label, 'FAIL', m, 'ended without collection/invalidation — chain %s, apart %s' % (c, ap))
