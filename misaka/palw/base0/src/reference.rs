@@ -794,3 +794,120 @@ mod tests {
         assert!((ms - 1.0).abs() < 1e-4, "root-mean-square {ms}");
     }
 }
+
+/// **RFC-0013 audit 13-A: the float reference over a LONG sequence, keeping logits only at chosen absolute positions.**
+///
+/// The same arithmetic as [`reference_forward_full`] with every measurement knob off (no probes, statistics or fake
+/// quantisation): every position of `prompt` is carried through every layer — the whole prefix state, never a truncated
+/// context — and the unembedding is evaluated only where `keep(position)` holds. Memory is the stream, the layer's q/k/v rows
+/// and one layer's weights (`O(t · d)`), not `O(t · vocab)`; attention is causal and exact (`O(t²)` per layer), computed over
+/// positions in parallel. Returns `(position, logits)` in ascending position order.
+pub fn reference_forward_windows_v1(
+    blob: &[u8],
+    cfg: &RefConfigV1,
+    prompt: &[usize],
+    keep: &(dyn Fn(usize) -> bool + Sync),
+) -> Result<Vec<(usize, Vec<f32>)>, ConvertError> {
+    use rayon::prelude::*;
+    if prompt.is_empty() {
+        return Err(ConvertError::BadContainer("the reference needs at least one token"));
+    }
+    let index = parse_safetensors_header(blob)?;
+    let d = cfg.hidden();
+    let embed = read_bf16_tensor(blob, &index, "model.embed_tokens.weight", &[cfg.vocab, d])?;
+    let mut x: Vec<Vec<f32>> = prompt
+        .iter()
+        .map(|tok| {
+            if *tok >= cfg.vocab {
+                return Err(ConvertError::BadContainer("a prompt token is outside the vocabulary"));
+            }
+            Ok(embed[tok * d..(tok + 1) * d].to_vec())
+        })
+        .collect::<Result<_, _>>()?;
+    drop(embed);
+    let group = cfg.n_heads / cfg.n_kv_heads.max(1);
+    let scale = 1.0f32 / (cfg.d_head as f32).sqrt();
+    let ones = vec![1f32; d];
+    for li in 0..cfg.n_layers {
+        let l = read_layer(blob, &index, cfg, li)?;
+        let qkv: Vec<(Vec<f32>, Vec<f32>, Vec<f32>)> = x
+            .par_iter()
+            .enumerate()
+            .map(|(pos, xi)| {
+                let unit = rms_norm(xi, &ones, cfg.rms_eps);
+                let h: Vec<f32> = unit.iter().zip(&l.in_ln).map(|(v, g)| v * g).collect();
+                let mut q = matvec(&l.wq, &h, d, Some(&l.bq));
+                let mut k = matvec(&l.wk, &h, cfg.kv_dim(), Some(&l.bk));
+                let v = matvec(&l.wv, &h, cfg.kv_dim(), Some(&l.bv));
+                for head in 0..cfg.n_heads {
+                    rope_head(&mut q[head * cfg.d_head..(head + 1) * cfg.d_head], pos, cfg.rope_theta);
+                }
+                for head in 0..cfg.n_kv_heads {
+                    rope_head(&mut k[head * cfg.d_head..(head + 1) * cfg.d_head], pos, cfg.rope_theta);
+                }
+                (q, k, v)
+            })
+            .collect();
+        let deltas: Vec<Vec<f32>> = (0..x.len())
+            .into_par_iter()
+            .map(|pos| {
+                let mut attn = vec![0f32; d];
+                for head in 0..cfg.n_heads {
+                    let off = head * cfg.d_head;
+                    let kv_off = (head / group) * cfg.d_head;
+                    let qh = &qkv[pos].0[off..off + cfg.d_head];
+                    let logits: Vec<f32> = (0..=pos)
+                        .map(|j| qh.iter().zip(&qkv[j].1[kv_off..kv_off + cfg.d_head]).map(|(a, b)| a * b).sum::<f32>() * scale)
+                        .collect();
+                    let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                    let exps: Vec<f32> = logits.iter().map(|v| (v - max).exp()).collect();
+                    let sum: f32 = exps.iter().sum();
+                    for (j, e) in exps.iter().enumerate() {
+                        let p = e / sum;
+                        let vh = &qkv[j].2[kv_off..kv_off + cfg.d_head];
+                        for i in 0..cfg.d_head {
+                            attn[off + i] += p * vh[i];
+                        }
+                    }
+                }
+                matvec(&l.wo, &attn, d, None)
+            })
+            .collect();
+        drop(qkv);
+        x.par_iter_mut().zip(deltas.par_iter()).for_each(|(xi, delta)| {
+            for i in 0..d {
+                xi[i] += delta[i];
+            }
+            let unit = rms_norm(xi, &ones, cfg.rms_eps);
+            let h: Vec<f32> = unit.iter().zip(&l.post_ln).map(|(v, g)| v * g).collect();
+            let gate = matvec(&l.w_gate, &h, cfg.d_ff, None);
+            let up = matvec(&l.w_up, &h, cfg.d_ff, None);
+            let act: Vec<f32> = gate.iter().zip(&up).map(|(g, u)| g / (1.0 + (-g).exp()) * u).collect();
+            let down = matvec(&l.w_down, &act, d, None);
+            for i in 0..d {
+                xi[i] += down[i];
+            }
+        });
+    }
+    let final_gain = read_bf16_tensor(blob, &index, "model.norm.weight", &[d])?;
+    let kept: Vec<(usize, Vec<f32>)> =
+        x.iter().enumerate().filter(|(pos, _)| keep(*pos)).map(|(pos, xi)| (pos, rms_norm(xi, &final_gain, cfg.rms_eps))).collect();
+    drop(x);
+    let span = index
+        .tensors
+        .get("model.embed_tokens.weight")
+        .ok_or_else(|| ConvertError::MissingTensor("model.embed_tokens.weight".into()))?;
+    let bytes = &blob[index.data_offset + span.begin..index.data_offset + span.end];
+    Ok(kept
+        .into_par_iter()
+        .map(|(pos, n)| {
+            let logits = (0..cfg.vocab)
+                .map(|token| {
+                    let row = &bytes[token * d * 2..(token + 1) * d * 2];
+                    row.chunks_exact(2).zip(&n).map(|(c, b)| f32::from_bits(u32::from(u16::from_le_bytes([c[0], c[1]])) << 16) * b).sum()
+                })
+                .collect();
+            (pos, logits)
+        })
+        .collect())
+}
