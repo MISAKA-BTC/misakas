@@ -777,3 +777,176 @@ fn rfc23s1_a_continuous_hand_over_lags_the_frontier_by_at_most_one_bound() {
     assert!(worst_armed <= l + gap + finality + 1, "past the fence the lag is one bound plus one gap ({worst_armed})");
     assert!(worst_old > horizon - 2 * gap, "below the fence the first attacker claim holds the frontier for the whole run ({worst_old})");
 }
+
+/// **RFC-0023 §3.4 per cause** (stage 1, dormant `palw_unresolved_bound_v1`): the steady-state frontier lag when a stream of claims
+/// (one every `gap` DAA) is each held open by one cause for `hold` DAA before it resolves (a conviction or a settled Final), beside an
+/// honest claim certified `finality` later. Hold times are testnet-12's values for each cause (W = 3,042, W_disclose = 1,200, the
+/// design attest window 2 days = 1,440 DAA at 120 s, L = 14,568): slow material response (licence then one full answer window),
+/// a legitimate court (W_disclose + 4W), false accusations re-filed every W (unbounded without stage 1: a new accusation never
+/// restarts the clock), Gate C redraws (unbounded chain of attest windows), court capacity saturation (admitted rows decided by
+/// L − W_disclose), and continuous slow claims at the bound. The lag is read from the real `palw_resolved_through_v1` /
+/// `palw_gate_c_frontier_v1`; it is a simulation over the state rows, not a node measurement.
+#[test]
+fn rfc23s1_per_cause_steady_state_lag_is_bounded_by_min_hold_and_l_plus_gap() {
+    use crate::palw_unresolved_bound_v1::*;
+    let armed = stage1(with_mirror(PalwGateCRuleV1::SecurityCertifiedV1));
+    let gate_c = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
+    let (w, w_disclose, attest, l) = (3_042u64, 1_200u64, 1_440u64, 14_568u64);
+    let (gap, finality, horizon) = (600u64, 120u64, 90_000u64);
+    let causes: [(&str, u64); 6] = [
+        ("slow material response", w_disclose + w),
+        ("legitimate court", w_disclose + 4 * w),
+        ("false accusation (re-filed every W)", u64::MAX),
+        ("Gate C redraw chain", u64::MAX),
+        ("court capacity saturation", l - w_disclose),
+        ("continuous slow claims at the bound", l),
+    ];
+    let _ = attest;
+    let mut table = Vec::new();
+    for (cause, hold) in causes {
+        let mut state = PalwChainStateV2::genesis();
+        let mut open: Vec<(u64, u64, Hash64)> = Vec::new(); // (resolve_at, blue, id)
+        let (mut worst_armed, mut worst_old, mut n, mut now) = (0u64, 0u64, 0u64, FENCE + 1);
+        while now < FENCE + horizon {
+            n += 1;
+            let id = claim_id(2 * n);
+            state.set_false_valid_rows_for_tests(id, Some(open_attempt(now, now, l)), None, None, 0);
+            state.set_unresolved_for_tests(now, id, true);
+            open.push((now.saturating_add(hold), now, id));
+            certified_final(&mut state, 2 * n + 1, now, now + 1, now + finality, l);
+            now += gap;
+            // Resolution by the cause's own end (a conviction voids the attacker claim, which leaves the unresolved set).
+            open.retain(|(at, blue, id)| {
+                if *at <= now {
+                    let mut c = open_attempt(*blue, *blue, l);
+                    c.phase = PalwClaimPhaseV2::Voided { voided_daa: *at, reason: PalwVoidReasonV2::BindTimeout };
+                    state.set_false_valid_rows_for_tests(*id, Some(c), None, None, 0);
+                    state.set_unresolved_for_tests(*blue, *id, false);
+                    false
+                } else {
+                    true
+                }
+            });
+            let frontier = |p: &PalwStateParamsV2| palw_gate_c_frontier_v1(&state, p, palw_resolved_through_v1(&state, p, now)).0;
+            if now > FENCE + 2 * l {
+                worst_armed = worst_armed.max(now.saturating_sub(frontier(&armed)));
+                worst_old = worst_old.max(now.saturating_sub(frontier(&gate_c)));
+            }
+        }
+        let cap = hold.min(l) + gap + finality + 1;
+        println!("RFC-0023 §3.4 cause '{cause}': hold {} DAA → lag {worst_armed} DAA past the fence (cap {cap}), {worst_old} DAA below it",
+            if hold == u64::MAX { "unbounded".to_string() } else { hold.to_string() });
+        assert!(worst_armed <= cap, "{cause}: lag {worst_armed} exceeds min(hold, L) + gap + finality = {cap}");
+        if hold == u64::MAX {
+            assert!(worst_old > horizon - 2 * gap, "{cause}: below the fence the first held claim stops the frontier for the whole run");
+        }
+        table.push((cause, worst_armed, worst_old));
+    }
+    // Bounded causes resolve by themselves at or below L; the unbounded ones are cut at L by stage 1 only.
+    assert!(table.iter().all(|(_, a, _)| *a <= l + gap + finality + 1));
+}
+
+/// The pre-2026-10-18 class order (classes ranked by their FIRST member's priority) — the reference the fairness test measures.
+fn first_member_order(works: &[PalwSiblingKeyV1]) -> Vec<usize> {
+    let mut by_class: BTreeMap<Hash64, Vec<(Hash64, usize)>> = BTreeMap::new();
+    for (i, w) in works.iter().enumerate() {
+        by_class.entry(w.class_id.unwrap()).or_default().push((palw_sibling_priority_v1(&w.execution_key), i));
+    }
+    let mut classes: Vec<Vec<(Hash64, usize)>> = by_class.into_values().map(|mut m| { m.sort(); m }).collect();
+    classes.sort_by(|a, b| a[0].cmp(&b[0]));
+    let mut out = Vec::new();
+    let mut round = 0;
+    while out.len() < works.len() {
+        for c in &classes {
+            if let Some((_, i)) = c.get(round) {
+                out.push(*i);
+            }
+        }
+        round += 1;
+    }
+    out
+}
+
+/// **RFC-0018 (ii) long-run cross-model fairness under the 16-carve emission budget** (ADR-0164 F-EM: at most 16 claim-bearing carves
+/// per accepting DAA) and the mergeset round robin. Twenty models share each accepting block; model 0 contributes ONE attempt, the
+/// nineteen others flood 32 each. Ranked by their first member, the floods' minima always precede model 0's single priority, so the
+/// 16 round-0 slots go to floods and model 0 starves (measured: admitted in 121 of 2,000 blocks, 6 % against a fair 80 %). Ranked by `H(set seed ‖ class)`
+/// model 0 is admitted in about 16/20 of the blocks, as every other model. Structural simulation over the real order function; no
+/// economics value changes (the 16-carve budget, the round robin and per-class order are unchanged).
+#[test]
+fn rfc18_long_run_fairness_a_one_attempt_model_is_not_starved_by_flooding_models_under_the_16_carve_budget() {
+    const CAP: usize = 16;
+    let (blocks, models, flood) = (2_000u64, 20u64, 32u64);
+    let mut key = 0u64;
+    let mut next = || {
+        key += 1;
+        let mut h = blake2b_simd::Params::new().hash_length(64).to_state();
+        h.update(&key.to_le_bytes());
+        Hash64::from_bytes(h.finalize().as_bytes().try_into().unwrap())
+    };
+    let (mut old_hits, mut new_hits) = (0u64, 0u64);
+    let mut new_per_model = vec![0u64; models as usize];
+    for _ in 0..blocks {
+        let mut works = vec![PalwSiblingKeyV1 { class_id: Some(class(1_000)), execution_key: next() }];
+        for m in 1..models {
+            for _ in 0..flood {
+                works.push(PalwSiblingKeyV1 { class_id: Some(class(1_000 + m)), execution_key: next() });
+            }
+        }
+        let admitted = |order: Vec<usize>| order.into_iter().take(CAP).map(|i| works[i].class_id.unwrap()).collect::<Vec<_>>();
+        let old = admitted(first_member_order(&works));
+        let new = admitted(palw_sibling_canonical_order_v1(&works));
+        old_hits += old.contains(&class(1_000)) as u64;
+        new_hits += new.contains(&class(1_000)) as u64;
+        for m in 0..models {
+            new_per_model[m as usize] += new.contains(&class(1_000 + m)) as u64;
+        }
+    }
+    let (min, max) = (*new_per_model.iter().min().unwrap(), *new_per_model.iter().max().unwrap());
+    println!(
+        "RFC-0018 (ii) fairness: one-attempt model admitted in {old_hits}/{blocks} blocks by first-member rank, {new_hits}/{blocks} by set-seed rank; \
+         per-model admissions under the set-seed rank {min}..{max} (expected {} each)",
+        blocks * CAP as u64 / models
+    );
+    assert!(old_hits * 5 < expect_share(blocks, CAP as u64, models), "the first-member rank starves the one-attempt model below a fifth of its share");
+    let expect = blocks * CAP as u64 / models;
+    assert!(new_hits * 10 >= expect * 9 && new_hits * 10 <= expect * 11, "the one-attempt model gets its share ({new_hits} vs {expect})");
+    assert!(min * 10 >= expect * 9 && max * 10 <= expect * 11, "every model within ±10% of its share ({min}..{max})");
+}
+
+/// **RFC-0018 (iii): a slow model-A claim stops only the shared frontier** (bounded by RFC-0023 stage 1), never model B's own
+/// progress. A (class 1) stays open — material slow, court pending — from FENCE + 1 to its bound; B (class 2), accepted later,
+/// reaches Final and its Gate C certification while A is open. B's certification, B's receipt clock (the certified-payment gate)
+/// and B's eligibility to stand as frontier are read with A open; only the resolved prefix waits for A, and past A's bound it no
+/// longer does.
+#[test]
+fn rfc18_a_slow_model_a_claim_stops_only_the_shared_frontier_not_model_b_final_certification_or_payment() {
+    use crate::palw_unresolved_bound_v1::*;
+    let armed = stage1(with_mirror(PalwGateCRuleV1::SecurityCertifiedV1));
+    let l = 14_568u64;
+    let mut state = PalwChainStateV2::genesis();
+    // Model A: open at blue 10 (its material answers slowly), bound FENCE + 1 + L.
+    state.set_false_valid_rows_for_tests(claim_id(1), Some(open_attempt(FENCE + 1, 10, l)), None, None, 0);
+    state.set_unresolved_for_tests(10, claim_id(1), true);
+    // Model B: accepted at FENCE + 2 (blue 20), Final at FENCE + 200 and certified.
+    certified_final(&mut state, 2, FENCE + 2, 20, FENCE + 200, l);
+    let mut b = state.claim(&claim_id(2)).unwrap().clone();
+    b.class_id = class(2);
+    state.set_false_valid_rows_for_tests(claim_id(2), Some(b.clone()), None, None, 0);
+    let view = PalwGateCViewV1::of(&armed, &state);
+    // B's own progress does not read A: certified, its receipt/payment clock runs, it is frontier-eligible by itself.
+    assert!(palw_independently_work_certified_v1(&claim_id(2), &b, &view), "B is SecurityCertified while A is open");
+    assert!(palw_fp_receipt_clock_v1(&armed, &state, &claim_id(2), &b, FENCE + 200).is_ok(), "B's certified payment gate opens");
+    assert!(palw_gate_c_advances_frontier_v1(&armed, &state, &claim_id(2), &b), "B may stand as frontier on its own");
+    // Only the shared frontier waits for A — within A's bound.
+    let frontier = |now: u64| palw_gate_c_frontier_v1(&state, &armed, palw_resolved_through_v1(&state, &armed, now)).0;
+    assert_eq!(frontier(FENCE + 300), 0, "the shared frontier waits for A while A is within its bound");
+    assert_eq!(frontier(FENCE + 1 + l), 0, "at A's bound it still waits");
+    assert_eq!(frontier(FENCE + 2 + l), 20, "past A's bound B is the frontier without A resolving");
+    // A keeps its liability (still open, never certified credit): stage 1 cuts the wait, not the accusation.
+    assert_eq!(state.unresolved_first_blue_score_v1(), Some(10));
+}
+
+fn expect_share(blocks: u64, cap: u64, models: u64) -> u64 {
+    blocks * cap / models
+}

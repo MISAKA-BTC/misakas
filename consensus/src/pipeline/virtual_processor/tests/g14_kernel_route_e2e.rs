@@ -3529,3 +3529,5 @@ mod g14_lane_closure;
 // G14 detection policy (2026-10-17): a checker under an armed policy finds a single-position lie at its hypergeometric rate with the
 // v2 draw, and its filing convicts on the real node: `g14_kernel_route_e2e/detection_policy.rs`.
 mod detection_policy;
+// RFC-0023 stage 1 (2026-10-18): restart and genesis replay agree on the resolved prefix across the fence.
+mod rfc23_stage1_node;

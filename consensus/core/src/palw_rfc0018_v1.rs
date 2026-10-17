@@ -37,6 +37,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The canonical sibling order's key domain.
 pub const PALW_RFC0018_SIBLING_ORDER_DOMAIN_V1: &[u8] = b"misaka-palw/rfc0018/sibling-order/v1";
+/// The class rank of the canonical merged-attempt order (long-run fairness, 2026-10-18; dormant with the sibling fence).
+pub const PALW_RFC0018_SIBLING_CLASS_ORDER_DOMAIN_V1: &[u8] = b"misaka-palw/rfc0018/sibling-class-order/v1";
 /// The permissionless anchor's aggregate-seed domain.
 pub const PALW_RFC0018_ANCHOR_AGGREGATE_DOMAIN_V1: &[u8] = b"misaka-palw/rfc0018/anchor-aggregate/v1";
 /// The DAG width schedule's id domain.
@@ -383,8 +385,8 @@ pub fn palw_sibling_priority_v1(execution_key: &Hash64) -> Hash64 {
 /// **The canonical order of one accepting block's merged works** — a permutation of `0..works.len()`.
 ///
 /// Non-attempt works keep their positions (their order is the consensus order, as before). The attempt positions are refilled in a
-/// round robin over model classes: classes ordered by their first member's priority, each class's attempts by priority, one attempt per
-/// class per round. The result depends only on the SET of `(class, execution key)` pairs at the attempt positions — not on GHOSTDAG
+/// round robin over model classes: classes ordered by `H(domain ‖ set seed ‖ class)` (the set seed hashes the mergeset's sorted
+/// attempt priorities), each class's attempts by priority, one attempt per class per round. The result depends only on the SET of `(class, execution key)` pairs at the attempt positions — not on GHOSTDAG
 /// colour, blue work or merge order — so concurrent siblings of different models share a contended per-block cap round by round, and
 /// the same mergeset yields the same admitted set on every node and every arrival order. Ties (equal priority: the same execution key,
 /// which the fold dedups anyway) fall back to the original index.
@@ -395,14 +397,35 @@ pub fn palw_sibling_canonical_order_v1(works: &[PalwSiblingKeyV1]) -> Vec<usize>
         let w = works[i];
         by_class.entry(w.class_id.expect("attempt slot")).or_default().push((palw_sibling_priority_v1(&w.execution_key), i));
     }
-    let mut classes: Vec<Vec<(Hash64, usize)>> = by_class
+    let by_class_ids: Vec<Hash64> = by_class.keys().copied().collect();
+    let classes: Vec<Vec<(Hash64, usize)>> = by_class
         .into_values()
         .map(|mut members| {
             members.sort();
             members
         })
         .collect();
-    classes.sort_by(|a, b| a[0].cmp(&b[0]));
+    // Long-run fairness (2026-10-18): the class order is `H(domain ‖ set seed ‖ class)`, never the class's best member. Ranked by its
+    // first member, a class with more attempts in the mergeset has a smaller minimum and comes first more often, so with more classes
+    // than a contended cap admits (the 16-carve emission budget) a flooding set of models starves a one-attempt model outright
+    // (`rfc18_long_run_fairness_*`). The set seed is the hash of the mergeset's sorted attempt priorities: still a function of the
+    // SET only, and no class's attempt count moves its own rank in expectation.
+    let mut seed = keyed(PALW_RFC0018_SIBLING_CLASS_ORDER_DOMAIN_V1);
+    let mut all: Vec<Hash64> = classes.iter().flat_map(|c| c.iter().map(|(p, _)| *p)).collect();
+    all.sort();
+    for p in &all {
+        seed.update(p.as_byte_slice());
+    }
+    let seed = finish(seed);
+    let rank = |class: &Hash64| {
+        let mut h = keyed(PALW_RFC0018_SIBLING_CLASS_ORDER_DOMAIN_V1);
+        h.update(seed.as_byte_slice());
+        h.update(class.as_byte_slice());
+        finish(h)
+    };
+    let mut classes: Vec<(Hash64, Vec<(Hash64, usize)>)> = by_class_ids.into_iter().zip(classes).map(|(c, m)| (rank(&c), m)).collect();
+    classes.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1[0].cmp(&b.1[0])));
+    let classes: Vec<Vec<(Hash64, usize)>> = classes.into_iter().map(|(_, m)| m).collect();
     let mut ordered = Vec::with_capacity(attempt_slots.len());
     let mut round = 0usize;
     while ordered.len() < attempt_slots.len() {
