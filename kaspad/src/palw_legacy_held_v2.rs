@@ -1,5 +1,5 @@
 //! **Lane LG14-B: the legacy V2 route's public localizer and the producer's responder** (node policy; consensus-inert). Design:
-//! `docs/design/palw/legacy-route-g14-held-da.md`; the rules are [`kaspa_consensus_core::palw_legacy_held_da_v2`]'s.
+//! `docs/design/palw/verification/legacy-route-g14-held-da.md`; the rules are [`kaspa_consensus_core::palw_legacy_held_da_v2`]'s.
 //!
 //! **The verifier's half** — a bonded verifier OUTSIDE the claim's Panel, with its own copy of the registered model (ADR-0177: G14 is
 //! conditional on it), reading only the chain:

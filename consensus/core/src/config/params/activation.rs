@@ -272,7 +272,7 @@ impl Params {
     /// kaspa-pq: `true` when PQ-only enforcement is active at `daa_score`.
     /// In `Consensus` mode this gates legacy secp256k1 signature opcodes,
     /// P2SH, and non-ML-DSA-87 script classes at the consensus and script-
-    /// engine level. See ADR-0019 / docs/kaspa-pq-design-mldsa87.md.
+    /// engine level. See ADR-0019 / docs/design/pq/kaspa-pq-design-mldsa87.md.
     #[inline]
     #[must_use]
     pub fn is_pq_active(&self, daa_score: u64) -> bool {

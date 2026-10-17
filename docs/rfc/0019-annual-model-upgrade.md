@@ -1,5 +1,7 @@
 # RFC-0019 — 年次モデル追加フォーク: 段階的ソフトウェア展開・年次モデルカタログ・合意は不変
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **設計前提(ADR・RFC より上位)— [MISAKAの不可侵原則](../PRINCIPLES.md):** 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。本RFCはこの前提の下にあり、衝突する場合は前提が優先する。
 > **凍結前提 — [PRINCIPLES §9](../PRINCIPLES.md)(2026-10-15 ユーザー決定):** genesis と年次フォークで指定されたモデルは 1.0、後から登録したモデルは登録時点から審査なしで 0.3 に固定する。モデル単位の検証・審査は不採用(何を信頼するかの問題が解決しないため)。claim 単位の検証(court、Gate C / `SecurityCertified`、claim ごとの抽選検証者認証)は全モデルで維持する。本RFCは §9 を再審しない。§9 の「年次フォーク」を、ソフトウェア展開と合意規則の切替を分けた手順として具体化するだけである。
 > **暗号学的な計算証明を使わない — [PRINCIPLES §8](../PRINCIPLES.md)(恒久):** 本RFCが使う暗号はハッシュ(カタログ root、成果物の sha256)と署名(リリース manifest の署名)だけであり、計算の正しさの証明には使わない。カタログへの掲載は「公開されている」「独立検証可能である」ことの技術的証明ではない(§9.1)。
@@ -28,7 +30,7 @@
 4. **過去を再評価しない:** 有効化前に受理された claim は旧規則で完結する。有効化をまたいで merge される RED ブロックについて「受理 DAA」を一様に定義し、権利を二重に発行しない。
 5. **階層は経済だけ:** 年次掲載モデルにも safe_frontier・settlement 上の特権はない。claim 単位の Gate C / `SecurityCertified` は全モデルに適用する。
 6. **最初の開発段階:** testnet で**同じカタログのまま**「rolling でノード更新 → 指定 DAA で切替 → 全ノード収束」を再現する。その後で初めて 0.3→1.0 の年次掲載と kernel 更新を加える。
-7. **時期(2026-10-15 追加):** 稼働中の testnet-12 を統合実装へ更新し、新 fence を DAA 14,000(10-22 22:00 JST 頃)で有効化する([リリース計画](../design/palw/t12-daa14000-release-plan-2026-10-15.md))。これが本RFCの段階的展開の最初の実使用である(同じカタログ = edition 0、新モデルなし、rolling 更新、DAA 14,000 で切替)。順序は「全部完了 → 一括検証 → 実ノード検証・測定 → 出荷バイナリで fence をまたぐ drill → 承認後に配備」で固定。
+7. **時期(2026-10-15 追加):** 稼働中の testnet-12 を統合実装へ更新し、新 fence を DAA 14,000(10-22 22:00 JST 頃)で有効化する([リリース計画](../design/palw/integration/t12-daa14000-release-plan-2026-10-15.md))。これが本RFCの段階的展開の最初の実使用である(同じカタログ = edition 0、新モデルなし、rolling 更新、DAA 14,000 で切替)。順序は「全部完了 → 一括検証 → 実ノード検証・測定 → 出荷バイナリで fence をまたぐ drill → 承認後に配備」で固定。
 
 ## 0. 要約
 
@@ -438,7 +440,7 @@ ACTIVATION_ALLOWED(palw_model_tier_v1 とその各 edition)
 
 ## 17. 参照
 
-* [PRINCIPLES](../PRINCIPLES.md)(§8、§9、§0 の 2026-10-15 改定)、[ユーザー判断 2026-10-15 §7b・§7c](../design/palw/user-decisions-2026-10-15-adr-rfc16-rfc17.md)、[testnet-12 DAA 14,000 リリース計画](../design/palw/t12-daa14000-release-plan-2026-10-15.md)
+* [PRINCIPLES](../PRINCIPLES.md)(§8、§9、§0 の 2026-10-15 改定)、[ユーザー判断 2026-10-15 §7b・§7c](../history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md)、[testnet-12 DAA 14,000 リリース計画](../design/palw/integration/t12-daa14000-release-plan-2026-10-15.md)
 * [ADR-0172 §3](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)、[ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md)、[ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)、[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)、[ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
 * [RFC-0016](0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)、[RFC-0017](0017-model-eligibility-examination-and-renewal.md)、[RFC-0018](0018-dag-parallel-multi-model-consensus.md)
 * Agave(参照のみ、複写・実行なし): [feature-set](https://raw.githubusercontent.com/anza-xyz/agave/master/feature-set/src/lib.rs)、[runtime bank](https://raw.githubusercontent.com/anza-xyz/agave/master/runtime/src/bank.rs)、[cli feature](https://raw.githubusercontent.com/anza-xyz/agave/master/cli/src/feature.rs)、[RELEASE.md](https://raw.githubusercontent.com/anza-xyz/agave/master/RELEASE.md)、[Feature Gate Activation Guidelines](https://github.com/anza-xyz/agave/wiki/Feature-Gate-Activation-Guidelines)、[Backward compatibility policy](https://docs.anza.xyz/backwards-compatibility)

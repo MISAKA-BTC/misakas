@@ -3,7 +3,7 @@
 
 Both generators import this module: `gen_rfc06_native_inventory.py` roots every value type named here (so the structural
 `NativeWireScanV1` impls exist) and `gen_rfc06_native_wire.py` emits one `scan_native_aux_row_v1` arm per namespace. Running it
-directly writes the inventory document (`docs/design/palw/native-resource-aux-inventory-2026-10-15.md`) and cross-checks that every
+directly writes the inventory document (`docs/design/palw/execution/native-resource-aux-inventory-2026-10-15.md`) and cross-checks that every
 `write_kernel_row(..., Some(..))` site into tables 42–112 is claimed by exactly one namespace below (it exits non-zero otherwise).
 
 A namespace is (table, key condition, value codec):
@@ -589,7 +589,7 @@ def doc(claimed, nsites=0):
 if __name__ == '__main__':
     sites = write_sites()
     claimed, unclaimed = classify(sites)
-    path = ROOT / 'docs/design/palw/native-resource-aux-inventory-2026-10-15.md'
+    path = ROOT / 'docs/design/palw/execution/native-resource-aux-inventory-2026-10-15.md'
     path.write_text(doc(claimed, len(sites)))
     empty = [n for i, n in enumerate(NS) if not claimed[i]]
     print(f'{len(sites)} write sites, {len(NS)} namespaces, {len(unclaimed)} unclaimed, {len(empty)} namespaces without a site')

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ECON lane — the executable model behind docs/design/palw/econ-verifier-incentive-and-allocation.md.
+"""ECON lane — the executable model behind docs/design/palw/economics/econ-verifier-incentive-and-allocation.md.
 
 Run:  python3 -I scripts/sim/misaka-palw-econ-verifier-model.py            (every section; exit 1 on a failed check)
       python3 -I scripts/sim/misaka-palw-econ-verifier-model.py --section 9  (one section)
@@ -778,7 +778,7 @@ def section8() -> None:
 
 
 # =====================================================================================================================================
-# §9 The ECON gate of docs/palw-round-exec-additional-acceptance-2026-10-10.md §4–§5: small vs large models, same bond and period
+# §9 The ECON gate of docs/testing/palw/palw-round-exec-additional-acceptance-2026-10-10.md §4–§5: small vs large models, same bond and period
 # =====================================================================================================================================
 
 TICKET_PWU = 100_000  # MEASURED: PALW_EXECUTION_QUANTUM_V1 (one ticket per 100,000 pwu of verified CanonicalWork)

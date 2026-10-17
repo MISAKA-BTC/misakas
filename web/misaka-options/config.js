@@ -37,7 +37,7 @@ window.MISAKA_CONFIG = {
   // name comes back empty and a row reads as its own id twice. This catalogue is the fallback,
   // and the site LABELS it as one: a title from here is this site's word, never the chain's.
   // Keyed by class id (a class's founding line has the class's id) or by any line id.
-  // testnet-12's genesis classes (docs/testnet-12-regenesis-2026-09-23.md, and getPalwClasses).
+  // testnet-12's genesis classes (docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md, and getPalwClasses).
   MODELS: {
     "b4a2ba784ae3d2680b7770a01fac46bbcde51ff401248e5b44c55fdc24f65f4c8f585edad1ce442b7d4e524159d318a0e8415f1a1a4f9a5ed27a2969fa67c97b": {
       title: "Llama-3.2-3B-Instruct Uncensored · 512 ctx",

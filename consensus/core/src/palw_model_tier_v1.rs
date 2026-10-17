@@ -1,5 +1,5 @@
 //! **ADR-0179 — model tiers: genesis / annual-fork 1.0, on-chain registered 0.3** (user decisions 2026-10-15, rounds 4 and 5;
-//! `docs/design/palw/user-decisions-2026-10-15-adr-rfc16-rfc17.md` §7b–§7c). **DORMANT**: the fence `palw_model_tier_v1` is `None` on every
+//! `docs/history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md` §7b–§7c). **DORMANT**: the fence `palw_model_tier_v1` is `None` on every
 //! preset, hashed Some-only in both fingerprints (its lists and values beside its height), collapsed from `Some(never())`, and refused
 //! when armed ([`Params::validate_palw_model_tier_v1`]). Nothing here is built or run by the lane that wrote it; no line is a PASS.
 //!

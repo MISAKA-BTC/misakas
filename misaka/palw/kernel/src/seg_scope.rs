@@ -1,4 +1,4 @@
-//! **K2-TIR-v4/v5 under DA16b's court scope** (`crate::scope`; `docs/design/palw/k2-real-scale.md` §4.2) — every model-dependent value
+//! **K2-TIR-v4/v5 under DA16b's court scope** (`crate::scope`; `docs/design/palw/models/k2-real-scale.md` §4.2) — every model-dependent value
 //! (DA16b Level 2, which contains Level 1's model bytes) is owed only as commitment structure, never in the clear. A committed value has
 //! one of three modes ([`SegValueModeV1`]), a pure function of the program, so the ledger's DA layout, the gate's price, the courts and
 //! every verifier agree on it without any declaration:

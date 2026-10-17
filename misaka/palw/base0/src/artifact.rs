@@ -361,7 +361,7 @@ pub struct Base0LayerWeightsV1 {
 }
 
 /// **`artifact_digest()` of a held artifact, computed once** (the 2026-10-03 panel starvation,
-/// `docs/design/palw/t12-panel-backlog-1003.md` §6). The digest streams the embedding and unembedding slabs
+/// `docs/design/palw/verification/t12-panel-backlog-1003.md` §6). The digest streams the embedding and unembedding slabs
 /// (~1 GB of a 1.5B class) through BLAKE2b, and the panel's duty sweep resolves a backend for every duty every
 /// tick (`dense_artifact_by_digest` compares each holding's digest with the class's root, and the backend
 /// constructors derive their shape id from it): 2 s a duty on a 5.104 seat, ~240 duties, nine minutes a tick.

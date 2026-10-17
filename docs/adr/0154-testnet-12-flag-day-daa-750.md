@@ -1,5 +1,7 @@
 # ADR-0154 — testnet-12's first post-launch flag day: thirteen fences at DAA 750
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 * Status: **Accepted and armed.** The fences activated on public testnet-12 at DAA 750 on 2026-09-27
   (about 07:29 JST), with release `c3dbaee3c` and params fingerprint `dbbc9104…`.
 * Date: 2026-09-26 (decided), 2026-09-27 (armed)
@@ -63,7 +65,7 @@ and never grows again. Each entry is hashed Some-only with the `never()` collaps
 
 - Spec: [16 network parameters and fences](../spec/palw/16-network-parameters-and-fences.md) §16.3, and the chapters above
 - Design: [design/palw/lineage.md](../design/palw/lineage.md) (flag days), [collateral.md](../design/palw/collateral.md) §6
-- Records: [launch note §00](../t12-launch-2026-09-25.md), [t12-panel-seed-2026-09-25.md](../t12-panel-seed-2026-09-25.md),
+- Records: [launch note §00](../history/networks/testnet-12/t12-launch-2026-09-25.md), [t12-panel-seed-2026-09-25.md](../history/networks/testnet-12/t12-panel-seed-2026-09-25.md),
   `contrib/t12-deploy-kit/DAA750-ROLLOUT.md`
 - Code: `consensus/core/src/config/params.rs` (`PALW_T12_POST_LAUNCH_FENCES_V1`, `PALW_T12_POST_LAUNCH_FENCE_DAA`,
   `palw_t12_arm_post_launch_fences_v1`)

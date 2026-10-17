@@ -1,4 +1,4 @@
-//! **RFC-0004 Part II — computation specifications with typed roots** (`docs/design/palw/rfc-0004-part2-typed-roots.md`).
+//! **RFC-0004 Part II — computation specifications with typed roots** (`docs/design/palw/models/rfc-0004-part2-typed-roots.md`).
 //!
 //! A class binds a versioned [`ComputationSpecV1`]: its verification mode and a list of [`TypedRootV1`]s. MISAKA registers, executes
 //! and settles independently verifiable useful AI computation, not weight files; the kinds are

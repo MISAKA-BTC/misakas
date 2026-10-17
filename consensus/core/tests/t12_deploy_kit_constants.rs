@@ -8,7 +8,7 @@
 //! row, a re-ordered card list, a new held row — would pass `stage` and `switch` and fail later and
 //! quietly: a producer idling on a class the registry does not hold, a seat carrying with another
 //! card's float. This reads those files and fails, naming the file and the constant, when they
-//! disagree with this build. Run it at the re-pin (`docs/t12-rcore-launch-checklist.md` §5):
+//! disagree with this build. Run it at the re-pin (`docs/history/networks/testnet-12/t12-rcore-launch-checklist.md` §5):
 //!
 //! ```text
 //! cargo test --locked -p kaspa-consensus-core --test t12_deploy_kit_constants -- --nocapture

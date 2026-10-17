@@ -1,4 +1,6 @@
 # RFC-0007: PALW probabilistic detection — direct checks, authenticated receipts, and deterministic court
+
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
 > **2026-10-15 恒久改定 — [PRINCIPLES §8](../PRINCIPLES.md#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定):** MISAKA はモデル計算の正しさの暗号学的証明を使用せず、将来の採用・研究候補にも置かない。ZK/SNARK/STARK/zkVM/zkML、PCS に基づく succinct validity argument、GKR、producer 送信の sum-check validity transcript、再帰・proof aggregation の方向は撤回する。以下の既存 wire 名・過去の測定は履歴であり、禁止方式の採用根拠にならない。
 >
 > 許容するのは認証済み operand を検証者が実際に読む直接 Freivalds・代数的スポットチェック、サンプリング再実行、決定論的再計算、公開証拠の局所化と exact court である。合意 credit は抽選された検証者の承認を使い、正直な割合・重み・相関・実参加・資料取得・期限の前提を明示する。署名・quorum・hash/Merkle は対象と承認者の認証であり、算術真実を証明しない。128-bit 等の条件付き検査誤差を全モデルの暗号学的健全性へ拡大しない。未知の参加率・検出率・市場数値は UNKNOWN、数値は検証後に決める。
@@ -28,7 +30,7 @@
 > **Revision precedence:** Part VI owns new post-commit source eligibility, ordering, seed derivation, sampling, interactive-round timing and recovery; other RFCs reference it instead of defining competing seeds. Part V owns checker/receipt coverage. Part II's private sketches and Parts III/IV's older assignment/audit sources are historical or legacy protocols, not substitutions for the new public challenge source. Existing consensus is governed by [spec 18](../spec/palw/18-verification-certificates.md), not retroactively changed by this RFC.
 
 > **Kernel-only boundary (2026-10-06):** [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
-> and [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) govern Part V. Checkers are approved versioned kernel
+> and [Kernel design §§K.0–K.8](../design/palw/models/versioned-kernels.md) govern Part V. Checkers are approved versioned kernel
 > relations; registration, claims, receipts and transcripts bind descriptor/plan identity. Direct checks do not authorize arbitrary uploaded guests or universal CPU circuits.
 > Missing relations require a coordinated kernel upgrade and matching bounded court, not a VM
 > fallback. Part V's probabilistic Final policy is unchanged.
@@ -1272,7 +1274,7 @@ G7およびPart IV/Vの外部監査主体を、Panelに選ばれたseatから普
 
 ## 改定 — 2026-10-12（Work Beaconの独立bootstrap：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §6と[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md) N3。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §6と[RFC/ADRレビューの整理（2026-10-12）](../audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md) N3。
 
 §VI.3の「既存の独立して有効なPALW workをsourceにする」規則に、自己依存しない根を追加する候補を設計する。`BootstrapExact`（仮称）は、小さく資源有界な実際のモデル/kernel計算を検証するsource専用経路で、全validatorが明示された入力・実行規則から厳密に検証でき、通常のWork Beacon・そのBeaconによるPanel選出・候補model自身のconformance・将来のPALW Finalを要求しない。source-only経路はoptimisticなPanel=0 modeではなく別の明示的exact-validation種別とし、初期案では追加の報酬・ブロック権・Final weightを発生させない。
 §VI.8: `IndependentValidityVerified` と `EntropyEligibilityVerified` を別の判定にする。後者にはtargetのcommit後の予測困難性、候補の自由な選別、withholding、private fork、複数bond、隠れた未公表試行、reorg、source ID再包装への耐性が必要で、正しい確定的な計算でも事前計算可能なら不適格である。依存グラフは型付きの有向非循環グラフとし、candidateのsourceに自身やその新しいsemanticsに依存するworkを含めない（Final・settlement・Panel assignmentまで含めて検査）。既存block hash・管理者seed・heartbeat・BASE-0・委員会seed・local RNGへの隠れたfallbackは追加しない。十分なbootstrap sourceが設計・検証されない場合、新しい報酬profileはDormantに維持する（既存チェーンの通常動作は止めない）。
@@ -1283,15 +1285,15 @@ G7およびPart IV/Vの外部監査主体を、Panelに選ばれたseatから普
 
 **Scope and reading rule.** This section closes specification gaps for R7-SUBJECT, R7-SOURCE, R7-RANDOM,
 R7-RELATION and R7-ECON of the
-[design audit's requirement index](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引).
+[design audit's requirement index](../audit/palw/design-reviews/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引).
 It states, as normative text, rules that the later design records implement but this RFC never stated, and
 reconciles contradictions in favour of [PRINCIPLES](../PRINCIPLES.md), ADR-0173/0176/0177/0178 and later user
 rulings. Superseded body text is annotated, not deleted. Detail lives in
-[the paid consumer contract](../design/palw/rfc07-paid-consumer-contract-2026-10-13.md),
-[full approval accounting](../design/palw/rfc07-full-approval-accounting-2026-10-13.md),
-[the Panel paid consumer](../design/palw/rfc07-panel-paid-consumer-2026-10-13.md),
-[the ClaimVerification migration design](../design/palw/rfc07-claim-paid-v2-migration-design-2026-10-13.md) and
-[the paid ClaimVerification V2 checkpoint](../design/palw/rfc07-claim-paid-v2-implementation-2026-10-14.md).
+[the paid consumer contract](../design/palw/execution/rfc07-paid-consumer-contract-2026-10-13.md),
+[full approval accounting](../design/palw/execution/rfc07-full-approval-accounting-2026-10-13.md),
+[the Panel paid consumer](../design/palw/verification/rfc07-panel-paid-consumer-2026-10-13.md),
+[the ClaimVerification migration design](../design/palw/execution/rfc07-claim-paid-v2-migration-design-2026-10-13.md) and
+[the paid ClaimVerification V2 checkpoint](../design/palw/execution/rfc07-claim-paid-v2-implementation-2026-10-14.md).
 Nothing here is an implementation PASS, external 128-bit review, source-independence evidence, economic approval
 or activation. Both approval registries stay empty; every new fence stays absent on public presets.
 "USER DECISION REQUIRED" marks a named parameter whose value needs the user's decision; a recommendation appears

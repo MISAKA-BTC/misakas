@@ -7,7 +7,7 @@
 //! a conviction rent the fold would refuse for a reason it could have read; they are never a substitute for the fold's verdict,
 //! and a primitive that HOLDS is never filed (it would be refused, and it certifies nothing).
 //!
-//! Remaining node integration (recorded in docs/design/palw/g14-objective-conviction-remaining-2026-10-15.md): the scheduler that
+//! Remaining node integration (recorded in docs/design/palw/integration/g14-objective-conviction-remaining-2026-10-15.md): the scheduler that
 //! decides WHEN to file, its queue lane and restart journal, and funding the carrier — this module only builds and signs.
 #![allow(dead_code)] // wired by the filer scheduler once its queue lane lands; exercised by the tests below.
 

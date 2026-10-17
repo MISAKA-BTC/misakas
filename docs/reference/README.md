@@ -1,9 +1,12 @@
-# Reference
+# リファレンス
 
-- **Design premise:** [PRINCIPLES.md](../PRINCIPLES.md)
-- **ADRs (decisions, including reversed ones):** [adr/](../adr/README.md)
-- **RFCs 0001–0015:** [rfc/](../rfc/)
-- **Specifications:** [spec/](../spec/)
-- **Design and lane records:** [design/](../design/) — PALW: [design/palw/](../design/palw/), registry of numbers: [remaining-rfc-integration-matrix.md](../design/palw/remaining-rfc-integration-matrix.md)
-- **Registries and manifests:** [palw-registry-map.md](../palw-registry-map.md), [components-manifest.md](../components-manifest.md), [model-manifests/](../model-manifests/), [extension-manifests/](../extension-manifests/)
-- **OpenAI-compatible surface:** [openai-surface/](../openai-surface/)
+| 分類 | 参照 |
+| --- | --- |
+| API・推論surface | [OpenAI互換](api/openai-compatible/README.md) / [FP Job V4](api/fp-job-v4/README.md) |
+| EVM・wallet | [evm](evm/README.md) |
+| 設定・設計値 | [configuration](configuration/README.md) / [台帳](../governance/parameter-register.md) |
+| manifest・モデル登録 | [manifests](manifests/README.md) / [PALW](palw/README.md) |
+| artifact | [models](models/README.md) |
+| explorer | [explorer](explorer/README.md) |
+
+各資料の版と適用対象を確認します。画像・動画APIや改善経路が文書に登場しても、当面の提供は [無効](../governance/post-mainnet-scope.md)。採用理由は[ADR](../adr/README.md)、技術検討は[RFC](../rfc/README.md)。

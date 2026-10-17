@@ -12,7 +12,7 @@
 //!   issuance and the consumer's external `sync_bond`.
 //!
 //! Cases are named for the attack. `#[ignore = "FAIL F-C4-n …"]` marks a proven defect: the test asserts the SAFE property and
-//! fails today; run `-- --ignored` to see the failure. Verdicts are recorded in `docs/design/palw/adversarial-e2e-record.md`.
+//! fails today; run `-- --ignored` to see the failure. Verdicts are recorded in `docs/evidence/palw/implementation-records/adversarial-e2e-record.md`.
 
 mod common;
 

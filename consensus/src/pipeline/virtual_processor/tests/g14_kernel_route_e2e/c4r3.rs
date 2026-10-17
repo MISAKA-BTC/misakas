@@ -3,7 +3,7 @@
 //! Everything here runs through the same harness as the lane's own E2E (the parent module): signed `0x4b` carriers, the mempool,
 //! the node's template, the chain block's fold, the read API. A test whose name says `observation` pins behaviour that is by design
 //! or already a named GAP, quantified; a test `#[ignore = "FAIL F-C4R3-nn …"]` asserts the SAFE property and fails on this
-//! revision (run it with `-- --ignored`). Findings and numbers: `docs/design/palw/adversarial-e2e-record.md`, round 3.
+//! revision (run it with `-- --ignored`). Findings and numbers: `docs/evidence/palw/implementation-records/adversarial-e2e-record.md`, round 3.
 //!
 //! **The node-less path.** The user's mandatory test 3 asks that the false claim arrive as a signed object relayed by a third party
 //! (`misaka-palw-remote`), not only from inside the producer's process. [`relay`] builds the producer's carrier with the producer's

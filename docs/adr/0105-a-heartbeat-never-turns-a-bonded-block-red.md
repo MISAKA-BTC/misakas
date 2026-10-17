@@ -1,5 +1,7 @@
 # ADR-0105 — A heartbeat never turns a bonded block red, and the clock steps aside for a draw that has landed
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -12,7 +14,7 @@
   preset** — no fingerprint, identity, schedule or fork id moves on any network, and arming it on
   testnet-11 is a flag day (§7). **Decision 2 IMPLEMENTED in the heartbeat miner** — node policy,
   no rule, safe to roll out host by host today. **Decision 3** is operator guidance, written into
-  [`testnet11-node-operator.md`](../history/testnet11-node-operator.md) §7a.
+  [`testnet11-node-operator.md`](../history/networks/testnet-11/testnet11-node-operator.md) §7a.
 * **Amended 2026-09-25 — F1 (§11), a post-launch flag day**: past
   `Params::palw_heartbeat_transparent_same_chain` transparency stops at the merging block's own
   selected chain; the rule as written (and as testnet-12 launched with it, from genesis) lets a
@@ -265,7 +267,7 @@ as before, and such a miner can keep the chain heartbeat-led (Decision 1 is what
 
 ### 5.3 Decision 3 (operators)
 
-[`testnet11-node-operator.md`](../history/testnet11-node-operator.md) §7a: how to recognise the mode (every
+[`testnet11-node-operator.md`](../history/networks/testnet-11/testnet11-node-operator.md) §7a: how to recognise the mode (every
 block algo-8; `getDnsConfirmation` with `pow_confirmed = false` and `workDepth` below
 `requiredWorkDepth`), how to escape it on a build without Decision 2 (stop every heartbeat miner for
 one draw), and how not to enter it (check the last bonded chain block's TIMESTAMP before restarting

@@ -1,6 +1,6 @@
 //! **Lane LG14-B (RFC-0014 §4–§5; user decision GAP-80, 2026-10-10): the legacy V2 Panel route's public descent and its held/fused
 //! DA units** — behind the dormant fence `Params::palw_legacy_held_da_v2` (object tags 157–159). Design:
-//! `docs/design/palw/legacy-route-g14-held-da.md`.
+//! `docs/design/palw/verification/legacy-route-g14-held-da.md`.
 //!
 //! **What is missing on the V2 route, and what this adds.** Every terminal a lie on the V2 route needs already exists and is armed on
 //! testnet-12 (the one-move court, `ExecutorRefuted`'s contradictions, `CheckpointAccused`, the held dissection). What a public

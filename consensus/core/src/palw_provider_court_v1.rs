@@ -67,7 +67,7 @@ pub const PALW_PROVIDER_ANSWER_TAG_V1: u8 = 152;
 pub const PALW_DA_TRANSFER_TAG_V1: u8 = 153;
 
 /// **INTERIM terms** — consensus constants of the (never-armed) fence, drill values, not security values (module doc of the design:
-/// `docs/design/palw/da16-transport-and-provider-court.md` §2.6).
+/// `docs/design/palw/verification/da16-transport-and-provider-court.md` §2.6).
 pub const PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1: u64 = 100 * SOMPI_PER_KASPA;
 pub const PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1: u64 = 10 * SOMPI_PER_KASPA;
 /// What a challenge the provider answered costs its challenger (burned from the bond): challenges are not free court work.

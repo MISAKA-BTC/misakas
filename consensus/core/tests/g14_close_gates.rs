@@ -1,4 +1,4 @@
-//! **The cross-lane G14 gates** (`kaspa_consensus_core::palw_g14_gates_v1`; audit `docs/design/palw/g14-completeness-proof-2026-10-16.md`
+//! **The cross-lane G14 gates** (`kaspa_consensus_core::palw_g14_gates_v1`; audit `docs/audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md`
 //! §4.1 / §5.2): T-N17 (G-10), T-N16 (G-18), T-N9 (G-02 / N4), T-N8 and T-N10 (G-01 option (b) / G-05), T-N15 (G-08 / G-15), the X3
 //! candidate (G-09), Kimi (G-16), "G14 from genesis" (the test-only g14-genesis ruleset) and testnet-12's pinned identity.
 //!

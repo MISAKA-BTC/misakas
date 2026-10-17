@@ -1,4 +1,4 @@
-//! **Encoders and heads under K2-TIR-v5's element courts** (lane K2S, `docs/design/palw/k2-real-scale.md` §12; the finding is HFX m3:
+//! **Encoders and heads under K2-TIR-v5's element courts** (lane K2S, `docs/design/palw/models/k2-real-scale.md` §12; the finding is HFX m3:
 //! with testnet-12's ceilings the generative route admits no encoder or head class).
 //!
 //! A bidirectional encoder is lowered as ONE position over a padded token axis (`lower::bidir`): every value is a `[L, …]` tensor of all

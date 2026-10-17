@@ -1,4 +1,4 @@
-//! **RFC-0006 × G14: the non-seat cell watcher's targets** (agent SHARD, `docs/design/palw/shard-rfc6-10.md` §3) — pure over the
+//! **RFC-0006 × G14: the non-seat cell watcher's targets** (agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md` §3) — pure over the
 //! tip state; node policy, nothing folds.
 //!
 //! G14 for a sharded claim is one bonded verifier OUTSIDE the seats reaching a conviction (or a correctly classified default) from

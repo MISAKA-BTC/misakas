@@ -212,7 +212,7 @@ impl BlockrateParams {
     }
 
     /// Blockrate params for the **120 s/block** PALW public testnet (decided 2026-08-12 from
-    /// fleet measurements; see docs/history/testnet10-palw-rollout-runbook.md §"Why 120 s").
+    /// fleet measurements; see docs/history/networks/testnet-10/testnet10-palw-rollout-runbook.md §"Why 120 s").
     ///
     /// The block interval on a network whose PoW is an LLM inference is not a UX preference: a
     /// validator replays every OTHER miner's winning attempt, so its steady-state load is
@@ -342,7 +342,7 @@ impl From<Params> for OverrideParams {
     }
 }
 
-/// kaspa-pq PQ-only enforcement mode (ADR-0019 / docs/kaspa-pq-design-mldsa87.md).
+/// kaspa-pq PQ-only enforcement mode (ADR-0019 / docs/design/pq/kaspa-pq-design-mldsa87.md).
 /// Selects whether legacy secp256k1 signature paths are merely non-standard
 /// (mempool) or hard consensus failures. Every kaspa-pq network uses `Consensus`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1478,7 +1478,7 @@ pub struct Params {
     /// and folded. Without it the work target's expectation — 900 model blocks per 1,000-DAA epoch —
     /// is stated in a clock the model lane itself advances, and every DAA-denominated window
     /// (`t_leak_daa`, the receipt and challenge windows, a bond's withdrawal) runs ten times faster
-    /// than it was sized (`docs/palw-daa-clock-audit-2026-09-18.md`). `Some` on testnet-11 at
+    /// than it was sized (`docs/audit/palw/palw-daa-clock-audit-2026-09-18.md`). `Some` on testnet-11 at
     /// [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] with the single lottery (one setter) — a height past the
     /// live tip so already-committed `daaScore` values are not recomputed; `None` elsewhere; hashed
     /// Some-only.
@@ -3060,7 +3060,7 @@ pub struct Params {
     /// hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
     /// ([`Self::validate_palw_signed_registration_v1`]) with the kernel route it ships beside.
     pub palw_signed_registration_v1: Option<ForkActivation>,
-    /// **RFC-0006 per-segment pricing** (agent SHARD, [`crate::palw_tir_shard_segment_v2`], `docs/design/palw/shard-rfc6-10.md` §4):
+    /// **RFC-0006 per-segment pricing** (agent SHARD, [`crate::palw_tir_shard_segment_v2`], `docs/design/palw/verification/shard-rfc6-10.md` §4):
     /// past this height a claim drawn per shard prices each seat's lock and pay by `max(work share, resident share)` of its cells
     /// (the resident share counts the K/V history up to the segment's end), keyed on the claim's panel bind. **Dormant, with no
     /// activation height**: `None` on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from
@@ -3161,15 +3161,15 @@ pub struct Params {
     pub palw_legacy_public_filer_v1: Option<ForkActivation>,
     /// **palw_court_model_scope_v1** — ADR-0177 D2 / RFC-0014 §16.4 (register D2): past it no court route compels model bytes. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
-    /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/mainnet-spec-register-2026-10-12.md).
+    /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/integration/mainnet-spec-register-2026-10-12.md).
     pub palw_court_model_scope_v1: Option<ForkActivation>,
     /// **palw_public_evidence_reward_v1** — register N4: past it a claim whose evidence cannot be published earns no new reward or weight. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
-    /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/mainnet-spec-register-2026-10-12.md).
+    /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/integration/mainnet-spec-register-2026-10-12.md).
     pub palw_public_evidence_reward_v1: Option<ForkActivation>,
     /// **palw_claim_hard_deadline_v1** — register X3: past it a claim's dispute hard deadline is fixed at acceptance and never extended. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
-    /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/mainnet-spec-register-2026-10-12.md).
+    /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/integration/mainnet-spec-register-2026-10-12.md).
     /// The value carries X3's policy (`T_prepare`, `T_observe`, `T_resolve` and the `B_*` start-budget terms with no existing
     /// source — [`crate::palw_ruling_fences_v1`]), hashed Some-only by its id beside the height; no value is approved.
     pub palw_claim_hard_deadline_v1: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1>,
@@ -3420,7 +3420,7 @@ pub struct Params {
     /// Claims whose panels bound below the height license on the receipt path until they are licensed or void (spec 18 §18.6).
     pub palw_verification_vertex_v1: Option<ForkActivation>,
 
-    /// **RFC-0008 v2 (EXEC lane, `docs/design/palw/rfc-0008-implementation-spec.md`): the unified EXEC payload** ([`crate::palw_exec_v2`],
+    /// **RFC-0008 v2 (EXEC lane, `docs/design/palw/execution/rfc-0008-implementation-spec.md`): the unified EXEC payload** ([`crate::palw_exec_v2`],
     /// [`crate::palw_work_slice_v2`]) — one versioned envelope (`PXE2`) carrying `EXEC_TX` or `EXEC_SLICE`, the root/slice ledgers, and
     /// the weightless closure carriage (EXEC is never a selected parent and adds no raw work, PALW weight, blue score, DAA tick or
     /// k-anticone term). A bare height; `None` on every preset, testnet-12 included; Some-only in every hash with the `never()`
@@ -3632,7 +3632,7 @@ pub struct Params {
     /// 2^22 bucket, none of which the class lottery prices, so one lottery win let the anchor
     /// producer redraw the panel privately for a re-signature. Past the fence every identity one win
     /// can take draws one panel; another panel is another lottery win (which, while audit P0-10 is
-    /// open, is still cheap — docs/t12-panel-seed-2026-09-25.md says what this does and does not
+    /// open, is still cheap — docs/history/networks/testnet-12/t12-panel-seed-2026-09-25.md says what this does and does not
     /// close).
     ///
     /// Keyed on the ANCHOR's DAA score: a fact every node reads off the anchor header the processor's
@@ -4015,7 +4015,7 @@ pub struct Params {
     pub pow_palw_ollama_activation: ForkActivation,
 
     /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
-    /// docs/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
+    /// docs/design/pq/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
     pub pq_enforcement: PqEnforcementMode,
 
     /// DAA score at/after which `PqEnforcementMode::Consensus` takes effect.
@@ -6736,7 +6736,7 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // Both this `0` and the re-pinned mainnet entry in `shipped_presets_have_pinned_fingerprints`
     // are legal ONLY IF mainnet has not launched. The whole justification above — "a network that
     // has not launched has no history to fork" — rests on it, and the only written statement of it
-    // anywhere in this tree is one sentence in `docs/palw-mainnet-audit-2026-08-28.md`. Two nearby
+    // anywhere in this tree is one sentence in `docs/audit/palw/palw-mainnet-audit-2026-08-28.md`. Two nearby
     // signals point the other way and are worth reading before trusting it: `genesis.rs` records
     // that this genesis differs from "the prior Argon2id-era mainnet genesis", and the 9B custody
     // ceremony is described there as complete.
@@ -9144,7 +9144,7 @@ pub const PALW_RC_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_byt
 /// Measured on the artifact converted from
 /// `Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf` (33.27 GiB of `int8` codes over 40 layers,
 /// GGUF SHA-256 `1dc49461…`, default flags). The conversion is deterministic — see
-/// `docs/palw-public-testnet-classes-runbook.md` for the recipe — so an operator may either
+/// `docs/history/operations/model-certification/palw-public-testnet-classes-runbook.md` for the recipe — so an operator may either
 /// rebuild this file from the published GGUF or download it and let their node verify the root;
 /// both routes end at this constant.
 ///
@@ -10019,7 +10019,7 @@ fn mainnet_card_params_v1(
 /// moment the operator schedules any fence at a height. That is now automatic (the gate list is
 /// derived from [`Params::palw_fences_v1`]), where it used to require a per-fence edit to
 /// `fork_id_v1::fork_id_gate_fences_v1` that nobody's checklist named — see mainnet audit
-/// 2026-09-06, M-6, and `docs/mainnet-palw-certification-runbook.md` §0.
+/// 2026-09-06, M-6, and `docs/history/operations/model-certification/mainnet-palw-certification-runbook.md` §0.
 ///
 /// testnet-11 arms none of these from genesis; each is a scheduled height or a re-mint there,
 /// which is the operator's call and not this function's. Devnet arms the context ladder.
@@ -11567,7 +11567,7 @@ fn palw_t12_arm_model_court_window_v1(params: &mut Params) {
 /// decided), the P0a list. Lane F's class-seating fence joins the list when it lands.
 ///
 /// * a drill's `--palw-drill-int11-at=<DAA>` moves exactly these to a low height H' (ρ = 100 to H' + 95) on a salted drill chain, so a
-///   drill rehearses the real combined crossing besides the per-fence flags of rows 12–17 of `docs/design/palw/int-11-drill-flags.md`;
+///   drill rehearses the real combined crossing besides the per-fence flags of rows 12–17 of `docs/design/palw/integration/int-11-drill-flags.md`;
 /// * every entry is hashed Some-only with the `never()` collapse, so while the height is `None` the list is dormant and every
 ///   shipped id is the DAA-3,600 release's ([`palw_t12_release_v5_params`]), byte for byte.
 pub const PALW_T12_INT11_FENCES_V1: &[PalwPostLaunchFenceV1] = &[

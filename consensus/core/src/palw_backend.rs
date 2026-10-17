@@ -542,7 +542,7 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     fn set_held_answerability_v1(&mut self, _armed: bool) {}
 
     /// **The prefill run width this instance executes at** (ADR-0117 Decision 2; the 2026-10-01
-    /// replay-memory note, `docs/design/palw/t12-replay-memory-1001.md`): how many prompt positions a
+    /// replay-memory note, `docs/design/palw/consensus/t12-replay-memory-1001.md`): how many prompt positions a
     /// family that walks its prefill a layer at a time runs together, holding their committed traces
     /// until they are captured. A NODE-LOCAL choice, like the cache's runtime profile: every width
     /// commits the same rows and the same roots, and nothing the chain reads depends on it — it sizes

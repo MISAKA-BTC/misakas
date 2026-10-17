@@ -1,5 +1,5 @@
 //! **G14-B: maximum-profile budgets and deadlines — can a public prosecution FINISH?** (lane G14-B, 2026-10-11;
-//! `docs/design/palw/g14-completion-matrix.md` §2c).
+//! `docs/design/palw/integration/g14-completion-matrix.md` §2c).
 //!
 //! [`crate::gate`] bounds what ONE prosecution reads, opens and holds (bytes, court work, RAM, retained state, sessions). It does not
 //! bound WHEN it ends. This module derives that, as code, from the route's carriage and the network's clock:

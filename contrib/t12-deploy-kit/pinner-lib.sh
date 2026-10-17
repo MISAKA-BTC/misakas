@@ -6,7 +6,7 @@
 # before the seats start (Type=notify: systemd hears READY once every file is locked, and every seat's unit Wants= it
 # and is ordered After= it). A page-cache page is charged to the cgroup that first faults it in, so the artifacts'
 # 1.7-3.4 GiB are then the pinner's, not whichever seat loaded first: the seats keep their MemoryMax and share as
-# they are, and their ledgers' cgroup terms carry no artifact (docs/design/palw/t12-replay-memory-1001.md §5).
+# they are, and their ledgers' cgroup terms carry no artifact (docs/design/palw/consensus/t12-replay-memory-1001.md §5).
 #
 # The pinner is never a dependency. Each seat still locks the same files itself (its own pin; free — the pages are
 # resident), a seat starts without a pinner (Wants=, not Requires=), and stopping the pinner changes nothing for a

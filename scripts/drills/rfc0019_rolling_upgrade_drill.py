@@ -18,7 +18,7 @@ stays on the old rules, the switch at a designated DAA, and what must hold on ea
   liveness  (§11 R-6) no miner of any catalog model runs: heartbeat / BASE-0 fixtures alone carry the DAA across the switch on
             every upgraded node.
 
-The testnet-12 DAA 14,000 upgrade (docs/design/palw/t12-daa14000-release-plan-2026-10-15.md) is the first use: the SAME catalog
+The testnet-12 DAA 14,000 upgrade (docs/design/palw/integration/t12-daa14000-release-plan-2026-10-15.md) is the first use: the SAME catalog
 (edition 0, no new model), a rolling binary upgrade, the switch at the flag-day height. Run it with `switch_daa` = the plan's
 calibration height on a local devnet built from the shipped binary, then `rolling`, `switch`, `stale`, `restart`, `liveness`.
 

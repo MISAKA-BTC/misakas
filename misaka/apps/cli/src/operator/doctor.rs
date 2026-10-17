@@ -418,7 +418,7 @@ fn model_checks(snap: &Snapshot, out: &mut Vec<Check>) {
                     Finding::error("E-PROMPT-CLASS-UNCERTIFIED", crate::exit::MODEL, "This class has no certified prompt lane")
                         .reason("a free-prompt claim on an uncertified class enters no state: the gateway refuses to commit it")
                         .current(format!("class {}… · fp_certified false", short(class)))
-                        .fix("mine the prompt lane on a certified class, or certify this one (docs/palw-certify-a-new-model.md)"),
+                        .fix("mine the prompt lane on a certified class, or certify this one (docs/history/operations/model-certification/palw-certify-a-new-model.md)"),
                 ));
             }
         }

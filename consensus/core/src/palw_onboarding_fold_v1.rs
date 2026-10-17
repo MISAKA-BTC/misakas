@@ -392,7 +392,7 @@ pub(super) fn apply_conformance_committed_v1(
     // The beacon's sources, frozen now (RFC-0007 §VI.3): the OPV classes ELIGIBLE at the commitment (derived — Active kernel,
     // conformance passed, G14-complete, live DA, bounded, a verified policy, not denied: `opv_eligible_set_v1`), never the candidate
     // under any mode. A complete check draws no beacon, so it freezes none. From genesis the only eligible classes are complete-check
-    // ones: they are the bootstrap of every sampled beacon (`docs/design/palw/opv-beacon-bootstrap.md` §4).
+    // ones: they are the bootstrap of every sampled beacon (`docs/design/palw/verification/opv-beacon-bootstrap.md` §4).
     let ledger = route
         .ledger_native_projection_checked_v9()
         .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;

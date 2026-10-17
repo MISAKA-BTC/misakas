@@ -486,7 +486,7 @@ pub fn trace_v1(program: &TirProgramV1, params: &dyn ParamSource, tokens: &[u32]
 /// **An honest producer's trace, streamed** (lane K2S, GAP-31): exactly [`trace_v1`]'s values, handed to `visit` one position at a
 /// time and then dropped. Only the previous position is held: every value a position reads is at that position or the one before
 /// (a `Fixed` state, a `Hist` window and its views), so a producer commits a long claim — every committed value of every position,
-/// derived windows included — without holding the claim (`docs/design/palw/k2-real-scale.md` §1.3). A source older than the previous
+/// derived windows included — without holding the claim (`docs/design/palw/models/k2-real-scale.md` §1.3). A source older than the previous
 /// position is refused, by name.
 pub fn trace_streaming_v1(
     program: &TirProgramV1,

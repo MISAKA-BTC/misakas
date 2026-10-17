@@ -52,7 +52,7 @@ pub const PALW_MATERIAL_MAX_BYTES: usize = 16 << 20;
 /// chunking does not make a larger native carriage importable. Both modes account for
 /// the same canonical state/declaration envelope, including every class id and length.
 /// Native 100k/four-population carriage and decoded RSS still require measured headroom;
-/// see `docs/design/palw/pruned-ibd-palw-state-chunked-transport.md`.
+/// see `docs/design/palw/consensus/pruned-ibd-palw-state-chunked-transport.md`.
 pub const PALW_PRUNING_STATE_MAX_BYTES: usize = 384 << 20;
 
 /// Lane PA, B-F2: the size at which a serving node says, loudly, that the single-message transport is nearing its cap (half of it).

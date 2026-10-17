@@ -3,7 +3,7 @@
 //! the provider court's folds are, so it reads the builder and writes the state only through the journaled writers: the engine's
 //! journal ([`crate::palw_bond_budget_v1::PalwBudgetWriteV1`]) becomes deltas 190 (rows) and 191 (the header).
 //!
-//! # Where it runs (design `docs/design/palw/bond-budget-and-model-allocation.md` §4)
+//! # Where it runs (design `docs/design/palw/economics/bond-budget-and-model-allocation.md` §4)
 //!
 //! ```text
 //! step 1f      tick: create the engine at the fence's first block (seeding the old live claims, §2.9), release every reservation
