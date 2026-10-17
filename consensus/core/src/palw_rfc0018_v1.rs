@@ -235,6 +235,48 @@ pub fn palw_gate_c_advances_frontier_v1(
     crate::palw_security_certification_v1::palw_consensus_credit_anchor_v1(governs, certified, &claim.source, &claim.phase)
 }
 
+/// **Gate C's receipt-lane refusal** (RFC-0018 18-A): a governed free-prompt claim that is `Final` but not `SecurityCertified` licenses no
+/// receipt block. `status` is the RPC's certification state (`pending`, `no-population`, `not-certified`, `vetoed`, `expired`,
+/// `withdrawn`, `revoked`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("free-prompt claim {claim} is Final but not SecurityCertified ({status}): Gate C licenses no receipt block before certification")]
+pub struct PalwFpReceiptUncertifiedV1 {
+    pub claim: Hash64,
+    pub status: &'static str,
+}
+
+/// **The receipt lane's clock under Gate C** (RFC-0018 18-A) — the ONE predicate the receipt pre-check (own block and merged
+/// entitlement, so the coinbase worker share), the stateless-admission items, the spendable RPC (the producer's template source) and the
+/// fold read for a `Final` free-prompt claim at `final_daa`:
+///
+/// * not governed (no mirror, or the claim accepted below Gate C's fence — every claim on every shipped network): `Ok(final_daa)`, the
+///   released draw slot `final + receipt_maturity`, byte for byte;
+/// * governed and `SecurityCertified` ([`palw_independently_work_certified_v1`]): `Ok(max(final_daa, certified_daa))` — the lane opens at
+///   certification, so its draw beacon lies after the decision and the use window is not consumed while certification is pending (an
+///   honest claim is paid in full once certified);
+/// * governed and not certified (pending, no population, rejected, voided — a late conviction voids the claim, so its later quanta
+///   are refused here too): `Err` — no receipt block, no coinbase worker share. Weight 0 alone was not enough: the block right and the
+///   worker share are paid outside the weight.
+///
+/// The answer is read from the chain state at the candidate's point, so siblings and reorgs read the certification their own chain holds.
+pub fn palw_fp_receipt_clock_v1(
+    params: &PalwStateParamsV2,
+    chain: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    final_daa: u64,
+) -> Result<u64, PalwFpReceiptUncertifiedV1> {
+    if !palw_gate_c_governs_v1(params, claim) {
+        return Ok(final_daa);
+    }
+    if !palw_independently_work_certified_v1(claim_id, claim, &PalwGateCViewV1::of(params, chain)) {
+        let status = crate::palw_security_certification_v1::palw_claim_certification_status_v1(chain, params, claim_id, claim);
+        return Err(PalwFpReceiptUncertifiedV1 { claim: *claim_id, status });
+    }
+    let certified_daa = crate::palw_security_certification_v1::palw_claim_certified_daa_v1(chain, claim_id).unwrap_or(final_daa);
+    Ok(final_daa.max(certified_daa))
+}
+
 // -------------------------------------------------------------------------------------------------
 // Rule E participation v2 (RFC-0018 §6)
 // -------------------------------------------------------------------------------------------------

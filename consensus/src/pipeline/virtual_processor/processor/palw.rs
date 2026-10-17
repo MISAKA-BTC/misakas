@@ -3594,6 +3594,13 @@ impl VirtualStateProcessor {
             if forfeited.as_ref().is_some_and(|roots| roots.contains(&claim.execution_root)) {
                 continue;
             }
+            // RFC-0018 18-A (Gate C): an uncertified governed claim is not spendable (the admission refuses it), and a certified one's
+            // draw slot counts from its certification — the same predicate the admission and the fold read.
+            let Ok(final_daa) =
+                kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(state_params, &state, claim_id, claim, final_daa)
+            else {
+                continue;
+            };
             // ADR-0148: the admission's own target expression for the claim's era — the pooled
             // target scaled by the compute a quantum carries, or the class's target below the fence.
             let target = match pricing.as_ref() {
@@ -9990,6 +9997,13 @@ impl VirtualStateProcessor {
         let kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
             return Err(format!("claim {} is not certified at this chain point", envelope.spend.claim_id));
         };
+        // **RFC-0018 18-A (Gate C)**: a governed free-prompt claim licenses no receipt block until `SecurityCertified`, and its lane's
+        // clock starts at certification — the ONE predicate the fold, the admission items and the spendable RPC read, asked here against
+        // the PARENT state so an own block is disqualified and a merged one unentitled (no coinbase worker share) for the reason the
+        // fold would refuse it. Below Gate C's fence (every shipped network): `final_daa`, unchanged.
+        let final_daa =
+            kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(state_params, state, &envelope.spend.claim_id, claim, final_daa)
+                .map_err(|e| e.to_string())?;
         // 2026-09-24 DoS audit #5: the fold's own refusal (`ReceiptRightsForfeited`), asked here at
         // the same fence against the PARENT state, so an own block is disqualified — and a merged one
         // unentitled — for the reason the fold would refuse it. A conviction carried by this very
@@ -10055,6 +10069,7 @@ impl VirtualStateProcessor {
                 v4,
                 |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
                 self.palw_fp_pricing().as_ref(),
+                Some(state_params),
             )
             .map_err(|e| e.to_string())?;
             let _ = state_params;
@@ -10074,6 +10089,7 @@ impl VirtualStateProcessor {
             |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
             // ADR-0148: a compute-era claim draws against the lane's pooled target.
             self.palw_fp_pricing().as_ref(),
+            Some(state_params),
         )
         .map_err(|e| e.to_string())?;
         let _ = state_params;

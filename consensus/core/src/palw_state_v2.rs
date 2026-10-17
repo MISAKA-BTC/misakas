@@ -9947,6 +9947,10 @@ pub enum PalwStateV2Error {
     /// receipt-spend arm of the fold's step 4.
     #[error("claim {claim}'s receipt rights are forfeit: its execution {execution_root} was convicted")]
     ReceiptRightsForfeited { claim: Hash64, execution_root: Hash64 },
+    /// **RFC-0018 18-A (Gate C)**: a governed free-prompt claim that is `Final` but not `SecurityCertified` licenses no receipt block —
+    /// the spend is refused (the block disqualified), never folded at weight 0 with its worker share paid.
+    #[error("{0}")]
+    ReceiptUncertified(crate::palw_rfc0018_v1::PalwFpReceiptUncertifiedV1),
     /// **2026-09-24 DoS audit #12 (b): a fifth bought registration in one block.** The acceptance
     /// walk drops it with the block standing; this is the fold's second lock on the same number,
     /// [`PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`].
@@ -19552,6 +19556,12 @@ fn apply_receipt_spend(
     // network's spends fold exactly as they did.
     if builder.extras.audit_2026_09_23_active && builder.state.palw_execution_root_is_forfeited_v1(&claim.execution_root) {
         return Err(PalwStateV2Error::ReceiptRightsForfeited { claim: claim_id, execution_root: claim.execution_root });
+    }
+    // **RFC-0018 18-A (Gate C)**: the one receipt predicate (`palw_fp_receipt_clock_v1`) the processor's pre-check, the admission items
+    // and the spendable RPC read. Below Gate C's fence it answers `Ok` for every claim (the released fold, byte for byte).
+    if let PalwClaimPhaseV2::Final { final_daa } = claim.phase {
+        crate::palw_rfc0018_v1::palw_fp_receipt_clock_v1(builder.params, &builder.state, &claim_id, &claim, final_daa)
+            .map_err(PalwStateV2Error::ReceiptUncertified)?;
     }
     if spend.quantum_index >= *quanta {
         return Err(PalwStateV2Error::QuantumOutOfRange { claim: claim_id, index: spend.quantum_index, quanta: *quanta });
