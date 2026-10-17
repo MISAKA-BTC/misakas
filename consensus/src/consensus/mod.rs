@@ -3015,6 +3015,10 @@ impl ConsensusApi for Consensus {
         iter.map(|item| item.unwrap()).collect()
     }
 
+    fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
+        self.storage.reserve_balance_store.get(block).ok()
+    }
+
     fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
         // Seek to the first entry at-or-after `outpoint`; it is the requested
         // entry iff the key matches exactly (the outpoint is unspent).

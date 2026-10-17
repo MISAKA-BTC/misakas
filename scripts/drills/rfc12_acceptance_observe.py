@@ -26,6 +26,7 @@ CHECKER_OUTBOX = 'kernel-paid-checker-v4'
 PROVIDER_STORE_DIR = 'palw-native-provider-v3'
 # Read-only op 247 (rpc/service get_palw_paid_claim_call, consensus/core palw_paid_claim_read_v1): see paid_claim_read_spec().
 PAID_CLAIM_METHOD = 'getPalwPaidClaim'
+ACCEPTANCE_READS_METHOD = 'getPalwAcceptanceReads'
 LOG_PATTERNS = (
     ('enrollment-accepted', re.compile(r'private kernel paid enrollment accepted: ([0-9a-f]{128})')),
     ('receipt-accepted', re.compile(r'private selected checker receipt accepted: ([0-9a-f]{128}) round (\d+)')),
@@ -180,6 +181,28 @@ def paid_claim_value(rpc, base_claim, round_number):
     if not isinstance(answer, dict):
         raise NotObservable('the paid-claim read returned no object')
     return answer
+
+
+def acceptance_reads(rpc, reserve_blocks=(), outpoints=()):
+    """Op 246: the DNS security reserve balance per block and the virtual UTXO point read by outpoint (`txid:index`). A node built
+    before it makes the dependent predicates BLOCKED, never inferred."""
+    reserve_blocks, outpoints = list(reserve_blocks), list(outpoints)
+    if len(reserve_blocks) > 64 or len(outpoints) > 64:
+        raise NotObservable('op 246 reads at most 64 blocks and 64 outpoints a call')
+    try:
+        answer = rpc.call(ACCEPTANCE_READS_METHOD, {'reserveBlocks': reserve_blocks, 'outpoints': outpoints})
+    except RuntimeError as error:
+        text = str(error).lower()
+        if 'unknown' in text or 'not found' in text or 'method' in text or 'unsupported' in text:
+            raise NotObservable('the node serves no acceptance reads (%s); it predates read-only op 246' % ACCEPTANCE_READS_METHOD)
+        raise
+    if not isinstance(answer, dict) or not answer.get('available'):
+        raise NotObservable('the acceptance reads are not available on this node')
+    return dict(sink=norm(answer['sink']), virtualDaa=answer['virtualDaa'],
+                reserve={norm(r['blockHash']): (r['balanceSompi'] if r['known'] else None) for r in answer['reserveBalances']},
+                outpoints={o['outpoint']: (dict(amount=o['amount'], blockDaaScore=o['blockDaaScore'], isCoinbase=o['isCoinbase'],
+                                                scriptPublicKey='%04x' % o['scriptVersion'] + norm(o['scriptHex']))
+                                           if o['present'] else None) for o in answer['outpoints']})
 
 
 def utxo_entries(rpc, addresses, maximum):

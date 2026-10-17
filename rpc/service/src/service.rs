@@ -3827,6 +3827,68 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_palw_acceptance_reads_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwAcceptanceReadsRequest,
+    ) -> RpcResult<GetPalwAcceptanceReadsResponse> {
+        // Bounded and parsed before any read: at most 64 of each, 128-hex block hashes and `txid:index` outpoints.
+        if request.reserve_blocks.len() > 64 || request.outpoints.len() > 64 {
+            return Err(RpcError::General("at most 64 reserve blocks and 64 outpoints per request".into()));
+        }
+        let blocks = request.reserve_blocks.iter().map(|t| parse_hash64(t.trim(), "reserveBlocks")).collect::<RpcResult<Vec<_>>>()?;
+        let outpoints = request
+            .outpoints
+            .iter()
+            .map(|text| {
+                let (txid, index) = text.trim().rsplit_once(':').ok_or_else(|| RpcError::General(format!("outpoint {text}: not txid:index")))?;
+                let txid = <kaspa_consensus_core::tx::TransactionId as std::str::FromStr>::from_str(txid)
+                    .map_err(|e| RpcError::General(format!("outpoint {text}: {e}")))?;
+                let index = index.parse::<u32>().map_err(|e| RpcError::General(format!("outpoint {text}: {e}")))?;
+                Ok((text.trim().to_string(), kaspa_consensus_core::tx::TransactionOutpoint::new(txid, index)))
+            })
+            .collect::<RpcResult<Vec<_>>>()?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session
+            .spawn_blocking(move |c| {
+                let sink = c.get_sink();
+                let virtual_daa = c.get_virtual_daa_score();
+                let reserves: Vec<_> = blocks.iter().map(|b| (*b, c.get_dns_reserve_balance(*b))).collect();
+                let utxos: Vec<_> = outpoints.into_iter().map(|(text, o)| (text, c.get_virtual_utxo_entry(o))).collect();
+                (sink, virtual_daa, reserves, utxos)
+            })
+            .await;
+        let (sink, virtual_daa, reserves, utxos) = answer;
+        Ok(GetPalwAcceptanceReadsResponse {
+            available: true,
+            sink: sink.to_string(),
+            virtual_daa,
+            reserve_balances: reserves
+                .into_iter()
+                .map(|(b, balance)| RpcPalwReserveBalance {
+                    block_hash: b.to_string(),
+                    known: balance.is_some(),
+                    balance_sompi: balance.unwrap_or(0),
+                })
+                .collect(),
+            outpoints: utxos
+                .into_iter()
+                .map(|(outpoint, entry)| match entry {
+                    Some(e) => RpcPalwOutpointEntry {
+                        outpoint,
+                        present: true,
+                        amount: e.amount,
+                        script_version: e.script_public_key.version(),
+                        script_hex: faster_hex::hex_string(e.script_public_key.script()),
+                        block_daa_score: e.block_daa_score,
+                        is_coinbase: e.is_coinbase,
+                    },
+                    None => RpcPalwOutpointEntry { outpoint, ..Default::default() },
+                })
+                .collect(),
+        })
+    }
+
     async fn get_palw_paid_claim_call(
         &self,
         _connection: Option<&DynRpcConnection>,

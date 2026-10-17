@@ -1985,6 +1985,38 @@ impl ValidatorKey {
         Ok(tx)
     }
 
+    /// **RFC-0012 acceptance (EVM lane §9.2): the signed refund of an unclaimed `EVM_DEPOSIT_LOCK`.** Spends `lock` (its outpoint and
+    /// the virtual UTXO entry read by outpoint) to its own embedded refund script, less `fee`. Refused unless the lock parses, its
+    /// refund script is this key's own ML-DSA P2PKH (the only key that can sign it), and `pov_daa >= timeout` — the node refuses an
+    /// earlier spend (`EvmDepositLockNotRefundableYet`: until then the lock is claimable and not spendable). The signature script is
+    /// the refund P2PKH's (the lock-data prefix is a push-and-drop no-op).
+    pub fn build_deposit_lock_refund_tx(
+        &self,
+        lock: (TransactionOutpoint, UtxoEntry),
+        prefix: Prefix,
+        pov_daa: u64,
+        fee: u64,
+        storage_mass_parameter: u64,
+    ) -> Result<Transaction, String> {
+        let fields = kaspa_txscript::script_class::parse_evm_deposit_lock(&lock.1.script_public_key)
+            .ok_or_else(|| "the outpoint is not an EVM deposit lock".to_string())?;
+        let own = pay_to_address_script(&self.funding_address(prefix));
+        if fields.refund_script_public_key.script() != own.script() {
+            return Err("the lock's refund script is not this key's funding script".to_string());
+        }
+        if pov_daa < fields.timeout_daa_score {
+            return Err(format!(
+                "the lock is not refundable yet: DAA {pov_daa} < refund timeout {} (it is claimable until then)",
+                fields.timeout_daa_score
+            ));
+        }
+        if lock.1.amount <= fee {
+            return Err(format!("the lock's {} sompi does not cover the fee {fee}", lock.1.amount));
+        }
+        let outputs = vec![TransactionOutput::new(lock.1.amount - fee, own)];
+        self.sign_native_multi(std::slice::from_ref(&lock), outputs, storage_mass_parameter)
+    }
+
     /// Mass-based fee (sompi) for an `n_inputs`-funded deposit-lock tx — the
     /// same dummy-shape approach as [`Self::estimate_bond_fee_for_inputs`].
     pub fn estimate_deposit_lock_fee_for_inputs(&self, mass_calculator: &MassCalculator, prefix: Prefix, n_inputs: usize) -> u64 {

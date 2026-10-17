@@ -334,6 +334,9 @@ pub enum RpcApiOps {
     /// RFC-0012 acceptance: one paid claim (enrollment, round seats/quorum/receipts, Final) at the tip. Read-only, no authority.
     /// Op 247 is the RFC-0012 harness's reservation (`scripts/drills/rfc12_acceptance_observe.py`).
     GetPalwPaidClaim = 247,
+    /// RFC-0012 acceptance: the DNS security reserve balance per block and virtual UTXO point reads by outpoint. Read-only.
+    /// Op 246 (free per the 2026-10-15 number inventory; proto 1310/1311).
+    GetPalwAcceptanceReads = 246,
     /// RFC-0016: the per-model report (targets apart from outcomes; node-local observations labelled) and the pre-lottery quote.
     /// Read-only. Op 255 (245–254 are reserved by other lanes).
     GetPalwRfc0016Report = 255,

@@ -984,6 +984,13 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// **RFC-0012 acceptance (op 246)**: the DNS security reserve balance `block`'s post-state holds (`reserve_balance_store`);
+    /// `None` where this node holds no reserve row for the block. Read-only.
+    fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
+        let _ = block;
+        None
+    }
+
     fn get_tips(&self) -> Vec<BlockHash> {
         unimplemented!()
     }

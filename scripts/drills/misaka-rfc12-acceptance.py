@@ -66,15 +66,19 @@ MARKER = 'rfc12-private-probe-v1.json'
 # RFC-0012 §4.4 (2026-10-16): the per-coinbase DNS share is classified from coinbase outputs and the bonds' own
 # StakeBond transactions (rfc12_retirement_reconciliation), and --private-probe-retirement-daa gives pre-fence DNS
 # history, so those two gaps are closed. The reserve balance itself still has no read.
+# Op 246 (getPalwAcceptanceReads, 2026-10-18) serves the reserve balance per block and the virtual UTXO point read by outpoint
+# (rfc12_acceptance_observe.acceptance_reads); a node built before it still makes the predicates that need them BLOCKED. The
+# private-integration build carries exact pruning-import crash points between the WAL barriers (MISAKA_RFC12_IMPORT_CRASH_STAGE /
+# MISAKA_RFC12_IMPORT_CRASH_DIRECTORY rendezvous: utxo-before-clear, utxo-after-clear, utxo-before-virtual-copy,
+# utxo-after-virtual-clear, utxo-mid-virtual-copy, utxo-after-virtual-copy, import-before-complete); this harness does not arm
+# them yet. The reserve reconciliation formula across the retirement boundary is not wired: the balance is read, not judged.
 NODE_GAPS = [
-    dict(read='DNS security reserve balance per block (reserve_balance_store)', proposed=None,
-         consumers=['reserve reconciliation across the retirement boundary (checkbox 7); drip outputs are classified']),
-    dict(read='in-process crash failpoints between import WAL barriers', proposed=None,
-         consumers=['exact crash points; this harness kills at observed phases/files only (checkbox 3)']),
     dict(read='a first-party generator of the paid-work request from a live authenticated snapshot', proposed=None,
          consumers=['usefulWork.requestCommand stays an operator input']),
-    dict(read='virtual UTXO point read by outpoint (deposit lock / synthetic withdrawal outpoint)', proposed=None,
-         consumers=['bridge exactly-once is judged by effects at dedicated addresses instead']),
+    dict(read='reserve reconciliation across the retirement boundary from the served balances', proposed='op 246 reserveBalances',
+         consumers=['checkbox 7: the balance is read (op 246), the reconciliation rule is not wired']),
+    dict(read='harness arming of the private-build import crash points', proposed='MISAKA_RFC12_IMPORT_CRASH_STAGE',
+         consumers=['checkbox 3: exact crash points exist in the private-integration build; the harness still kills at phases']),
 ]
 
 

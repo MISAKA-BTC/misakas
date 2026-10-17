@@ -6441,3 +6441,65 @@ mod monetary_material_grpc_tests {
         assert_eq!((back.available, back.total_bytes, back.offset, back.bytes), (true, 9000, 4096, vec![5; 7]));
     }
 }
+
+// RFC-0012 acceptance (op 246).
+from!(item: &kaspa_rpc_core::GetPalwAcceptanceReadsRequest, protowire::GetPalwAcceptanceReadsRequestMessage, {
+    Self { reserve_blocks: item.reserve_blocks.clone(), outpoints: item.outpoints.clone() }
+});
+try_from!(item: &protowire::GetPalwAcceptanceReadsRequestMessage, kaspa_rpc_core::GetPalwAcceptanceReadsRequest, {
+    Self { reserve_blocks: item.reserve_blocks.clone(), outpoints: item.outpoints.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwAcceptanceReadsResponse>, protowire::GetPalwAcceptanceReadsResponseMessage, {
+    Self {
+        available: item.available,
+        sink: item.sink.clone(),
+        virtual_daa: item.virtual_daa,
+        reserve_balances: item
+            .reserve_balances
+            .iter()
+            .map(|r| protowire::RpcPalwReserveBalance { block_hash: r.block_hash.clone(), known: r.known, balance_sompi: r.balance_sompi })
+            .collect(),
+        outpoints: item
+            .outpoints
+            .iter()
+            .map(|o| protowire::RpcPalwOutpointEntry {
+                outpoint: o.outpoint.clone(),
+                present: o.present,
+                amount: o.amount,
+                script_version: o.script_version as u32,
+                script_hex: o.script_hex.clone(),
+                block_daa_score: o.block_daa_score,
+                is_coinbase: o.is_coinbase,
+            })
+            .collect(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwAcceptanceReadsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwAcceptanceReadsResponse>, {
+    Self {
+        available: item.available,
+        sink: item.sink.clone(),
+        virtual_daa: item.virtual_daa,
+        reserve_balances: item
+            .reserve_balances
+            .iter()
+            .map(|r| kaspa_rpc_core::RpcPalwReserveBalance { block_hash: r.block_hash.clone(), known: r.known, balance_sompi: r.balance_sompi })
+            .collect(),
+        outpoints: item
+            .outpoints
+            .iter()
+            .map(|o| {
+                Ok(kaspa_rpc_core::RpcPalwOutpointEntry {
+                    outpoint: o.outpoint.clone(),
+                    present: o.present,
+                    amount: o.amount,
+                    script_version: u16::try_from(o.script_version)
+                        .map_err(|_| kaspa_rpc_core::RpcError::General("script version out of range".into()))?,
+                    script_hex: o.script_hex.clone(),
+                    block_daa_score: o.block_daa_score,
+                    is_coinbase: o.is_coinbase,
+                })
+            })
+            .collect::<RpcResult<Vec<_>>>()?,
+    }
+});
