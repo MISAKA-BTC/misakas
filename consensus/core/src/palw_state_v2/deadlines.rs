@@ -503,6 +503,7 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     &claim,
                     Some(ctx.daa_score),
                     effective,
+                    true,
                 );
                 if let Some(at) = effective.filter(|at| *at >= ctx.daa_score) {
                     builder.arm_deadline(at, claim_id)?;
