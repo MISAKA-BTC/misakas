@@ -289,12 +289,12 @@ class Drill:
 
     # ---- node construction -------------------------------------------------------------------------------------------------------
 
-    def producer_flags(self, card, withhold=False, canonical=False, inject=None, host_panel=False):
+    def producer_flags(self, card, withhold=False, canonical=False, inject=None, host_panel=False, honest=False):
         s = self.seat(card)
         flags = ['--palw-produce', '--palw-producer-key=%s' % self.key(s['seed_file']), '--palw-producer-bond=%s' % s['bond_outpoint'],
                  '--palw-producer-pay-address=%s' % s['address'], '--palw-fee-outpoint=%s' % s['fee_float_outpoint'],
                  '--palw-heartbeat-miner-address=%s' % self.keyring['heartbeat'][card]['address']]
-        if self.args.family == 'collusion':
+        if self.args.family == 'collusion' and not honest:
             if inject and inject.startswith('sparse:'):
                 flags.append('--palw-drill-sparse-fault-seed=%d' % int(inject.split(':', 1)[1]))
             elif inject and inject != 'withhold-all':
@@ -894,8 +894,11 @@ class Drill:
         o_daa = self.facts['outsider']['registeredDaa'] or 0
         # Past the compressed testnet-12 flag days (the freeze — ADR-0160 F-L — arms with them), and after the outsider exists.
         before02 = self.bond_row(self.seat(0)['bond_outpoint'])['bondSlashed']
+        cut02 = None
+        if self.args.lie_claims:
+            _, cut02 = self.stop_lying_after(self.args.lie_claims, self.args.after_daa, 'D-02')
         d02 = self.run_conviction('D-02', 'P', 0, self.args.after_daa)
-        self.metric_chain('D-02 (auto lie leaf)', self.seat(0)['bond_outpoint'], self.args.after_daa, before02)
+        self.metric_chain('D-02 (auto lie leaf)', self.seat(0)['bond_outpoint'], self.args.after_daa, before02, until_daa=cut02)
         self.d15_row(d02)
         for inject in self.args.inject:
             self.run_injection(inject, self.daa_quiet() or 0)
@@ -1174,14 +1177,15 @@ class Drill:
 
     # ---- the metric chain (audit §7) and the G-17 injection phases ---------------------------------------------------------------
 
-    def metric_chain(self, label, pbond, after_daa, before_slashed, lane='attempt'):
+    def metric_chain(self, label, pbond, after_daa, before_slashed, lane='attempt', until_daa=None):
         """eligible → checked → detected → localized → filed → accepted → convicted / defaulted → collected → invalidated, per lying
         claim of `pbond` accepted at or past `after_daa`, read from public RPC and the outside verifier's own log (its filer's lines);
         capacity refusals, unjudged cases, fused-leaf hand-offs and claims that reached Final are counted apart."""
         o = self.nodes['O']
         olog = o.log_text()
         rows = [r for r in self.claims(pbond).get('claims', [])
-                if r['acceptedDaa'] >= after_daa and (r['isFreePrompt'] if lane == 'fp' else not r['isFreePrompt'])]
+                if r['acceptedDaa'] >= after_daa and (until_daa is None or r['acceptedDaa'] < until_daa)
+                and (r['isFreePrompt'] if lane == 'fp' else not r['isFreePrompt'])]
         chain = {k: 0 for k in ('eligible', 'checked', 'detected', 'localized', 'filed', 'accepted', 'convicted', 'defaulted',
                                 'collected', 'invalidated')}
         apart = {k: 0 for k in ('capacityRefused', 'unjudged', 'fusedHandOff', 'neverLanded', 'reachedFinal', 'stillOpen')}
@@ -1217,6 +1221,24 @@ class Drill:
         self.observe('metric chain %s' % label, out)
         return out
 
+    def stop_lying_after(self, n, since_daa, label, inject=None):
+        """Bound the lie: once `n` lying attempt claims of P are accepted at or past `since_daa`, restart P honest (same bond, same
+        retention, the colluding Panel still in its process). One public bond carries one object per block (its carrier chain), so a
+        producer lying on EVERY draw outruns its pursuit (run 3, 2026-10-17: 41 reservations, 0 demands landed in 38 DAA)."""
+        pbond = self.seat(0)['bond_outpoint']
+        rows = self.wait('%s: %d lying claims accepted' % (label, n), lambda: (lambda r: r if len(r) >= n else None)(
+            [x for x in self.claims(pbond).get('claims', []) if x['acceptedDaa'] >= since_daa and not x['isFreePrompt']]),
+            self.args.step_timeout, every=15)
+        p = self.nodes['P']
+        p.stop()
+        p.extra = self.producer_flags(0, canonical=False, host_panel=True, honest=True)
+        p.start()
+        self.wait_rpc(p)
+        self.peer_all()
+        cut = self.daa_quiet() or 0
+        self.observe('%s: P restarted honest' % label, {'lyingClaims': [r['claimId'][:16] for r in rows], 'atDaa': cut, 'inject': inject})
+        return rows, cut
+
     def run_injection(self, inject, after_daa):
         """One G-17 injection phase: restart P with the lie, wait for lying claims accepted in the phase to end (or the window), and
         follow each through the metric chain. PASS: every eligible claim that ended was convicted or defaulted, collected and
@@ -1234,16 +1256,19 @@ class Drill:
         before = self.bond_row(pbond)['bondSlashed']
         label = 'G-17 %s' % inject
         log('%s: phase from DAA %d' % (label, start))
+        if a.lie_claims:
+            lying, cut = self.stop_lying_after(a.inject_claims, start, label, inject)
 
         def ended_enough():
-            rows = [r for r in self.claims(pbond).get('claims', []) if r['acceptedDaa'] >= start and not r['isFreePrompt']]
+            rows = [r for r in self.claims(pbond).get('claims', []) if r['acceptedDaa'] >= start and not r['isFreePrompt']
+                    and (not a.lie_claims or r['acceptedDaa'] < cut)]
             done = [r for r in rows if r['phase'] in ('voided', 'final')]
             return (rows, done) if len(done) >= a.inject_claims else None
         try:
             self.wait('%s: %d lying claims end' % (label, a.inject_claims), ended_enough, a.inject_timeout, every=30)
         except Blocked as e:
             self.observe('%s window ended' % label, str(e))
-        m = self.metric_chain(label, pbond, start, before)
+        m = self.metric_chain(label, pbond, start, before, until_daa=cut if a.lie_claims else None)
         c, ap = m['chain'], m['apart']
         ended = c['accepted'] + ap['reachedFinal']
         if ap['reachedFinal']:
@@ -1392,6 +1417,8 @@ def main():
     ap.add_argument('--inject', action='append', default=[],
                     help='G-17 injection phase after D-02 (repeatable): a --palw-drill-fault kind, sparse:<seed> or withhold-all')
     ap.add_argument('--inject-claims', type=int, default=1, help='lying claims to follow to their end per injection phase')
+    ap.add_argument('--lie-claims', type=int, default=0,
+                    help='bound the lie: restart P honest after this many lying claims (0: lie on every draw, as before)')
     ap.add_argument('--inject-timeout', type=int, default=3 * 3600)
     ap.add_argument('--run-acceptance', action='store_true', help='run acceptance tests A-G (cargo, targeted, -j 3) before the drill')
     ap.add_argument('--acceptance-only', action='store_true', help='only the acceptance tests; no nodes are started')
