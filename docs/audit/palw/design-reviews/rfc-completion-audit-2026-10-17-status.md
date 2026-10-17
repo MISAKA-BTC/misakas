@@ -75,3 +75,16 @@ today (reserve balance store has no RPC; no failpoints; no paid-request generato
 the op registry pattern (`rpc/core/src/api/ops.rs`, message types, service handler, gRPC and wRPC routes). No deposit-refund CLI
 exists (`misaka/apps/cli` has `evm deposit-lock` / `claim`); the refund spend needs the lock outpoint (by-outpoint read), the
 timeout rule (`EvmDepositLockNotRefundableYet`) and an ML-DSA P2PKH signature script as in `validator-core` funding.
+
+## Progress 2026-10-18, second pass (`8be23fcdf`)
+
+User decisions of 10-18 implemented behind dormant fences (ADR-0185 / ADR-0184 notes): v4/v5 and Panel v5 beacons read opted-in
+sources by seal-reveal (`collect_opt_in_seal_reveal_beacon_v6`, node / Panel history / SDK read the same rule); the onboarding binding
+liability is derived (1,208 DAA); RFC08 08-A — the four native admissions are sourced with the derived horizon bound (signed
+deadline + `window_court`), `refuse_unsourced_admission_v1` is gone. Verified: `opv_bootstrap` 20/20 (was 13/20, including v4, v5 ×2,
+eligibility-lost), pruned-import, `rfc0010_production_fold` 26/26, `rfc0010_beacon_adapter` 9/9, the challenge crate.
+
+Still open: x8 assertion rewrites (≈ 10, see validation record §8); RFC08 08-B (hold the native fee at Final to the horizon,
+release / refund / slash — needs each family's terminal state machine to stay convictable after Final) and 08-C (the no-seam EXEC
+fixture); RFC07 `panel_record` has no dedicated test yet (every Final read in the suites passes with it `None`); RFC09, RFC10, RFC12
+not started.
