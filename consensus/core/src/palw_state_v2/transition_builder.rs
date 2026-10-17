@@ -8840,7 +8840,18 @@ impl<'a> TransitionBuilder<'a> {
     // ---- deadline index (never in the delta: rebuilt facts, not primary data) ----
 
     pub(super) fn arm_deadline(&mut self, deadline: u64, claim: Hash64) -> Result<(), PalwStateV2Error> {
-        let deadline = self.state.staged_retirement_floor_v1(&claim, deadline);
+        // The staged material horizon floors a terminal claim's RETIREMENT, never its operational release (the abandon hold or the
+        // obligation release: a collateral clock) — exactly `terminal_deadline_with_material_v1`, the form DL-1 rebuilds. Flooring
+        // the release here armed a free-prompt `BindTimeout` of a TIR-framed claim at its frame's material horizon while DL-1
+        // rebuilt it at `voided + fp_abandon_hold` (the DL-1 drift the node T-N1 harness hit, 2026-10-17).
+        let operational = self
+            .state
+            .claims
+            .get(&claim)
+            .map(|c| super::terminal_operational_release_at_v1(c, self.params, None))
+            .transpose()?
+            .flatten();
+        let deadline = if operational == Some(deadline) { deadline } else { self.state.staged_retirement_floor_v1(&claim, deadline) };
         // **ADR-0152 DL-1's DA rows (M3), at the one primitive every arm site calls**: a live claim a
         // seat session pauses owes no deadline, a terminal claim with a session open owes none (its
         // retirement waits), and a retirement arms no earlier than one DAA after the last close —
