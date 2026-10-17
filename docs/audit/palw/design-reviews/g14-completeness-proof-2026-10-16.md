@@ -1097,7 +1097,7 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 
 ## 付録 E. 追記 — court 容量と Panel 担保の lane(2026-10-16、branch `integ/g14-court-capacity`)
 
-ユーザー方針([リリース計画](t12-daa14000-release-plan-2026-10-15.md)「court の全体容量と Panel 担保」)の実装。新しい fence は `palw_court_capacity_v1` の 1 つだけで、全 preset で `None`。testnet-12 の identity は変わらない。
+ユーザー方針([リリース計画](../../../design/palw/integration/t12-daa14000-release-plan-2026-10-15.md)「court の全体容量と Panel 担保」)の実装。新しい fence は `palw_court_capacity_v1` の 1 つだけで、全 preset で `None`。testnet-12 の identity は変わらない。
 
 ### E.1 court 容量(G-07)
 
@@ -1351,7 +1351,7 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 
 ## 追補: class 単位の検出率 policy(2026-10-17、branch `integ/g14-detection-policy`)
 
-外部監査(`g14-external-audit-2026-10-17/`)§7 P1 の 4 項への処置。詳細は [g14-detection-policy-2026-10-17.md](g14-detection-policy-2026-10-17.md)。
+外部監査(`g14-external-audit-2026-10-17/`)§7 P1 の 4 項への処置。詳細は [g14-detection-policy-2026-10-17.md](../../../design/palw/g14-detection-policy-2026-10-17.md)。
 
 - 休眠 fence `palw_detection_policy_v1`(全 preset で `None`、Some-only、武装を拒否)。fence より前の legacy draw(k = 4、domain、golden vector)は不変。
 - class・kernel 版に結び付く `PalwDetectionPolicyV1` を入れた。検査方式、chain の数を価格に照合して導く N、D_min、ε、k_max、round、shadow、経済値、資源、期限、局所化を持つ。k_min は厳密な超幾何を整数の固定小数で求め、厳密値を下回らない。
