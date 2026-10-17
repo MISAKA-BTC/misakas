@@ -333,6 +333,10 @@ pub(super) fn collect(
     {
         return Err(bad("native39 collection requires a genuine settled single credit past the complete original retention"));
     }
+    // G14 lane closure G-N2: a component a live mining claim credits keeps its material through that claim's liability.
+    if super::mining_court::job_held(r, &id, ctx.daa_score) {
+        return Err(bad("native39 collection: a mining claim crediting this job is still accusable (material held)"));
+    }
     let st = protected::status(r, &h)?;
     if !st.pending.is_empty() || st.owners.iter().any(|o| *o != [0; 64]) {
         return Err(bad("native39 collection: original paid streams or open public units remain"));

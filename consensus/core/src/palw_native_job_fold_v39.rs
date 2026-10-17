@@ -3,6 +3,7 @@
 use super::*;
 use crate::{
     palw_flat_execution_capacity_v22::*,
+    palw_native_mining_v39::ACCUSE_MINING_ACTION_V39,
     palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1},
     palw_native_execution_v39::*,
     palw_native_job_v39::*,
@@ -771,11 +772,28 @@ pub(super) fn apply(
         65..=70 => super::palw_native_master_fold_v39::apply(builder, ctx, signer, action, body),
         61..=64 => material::apply(builder, ctx, signer, &p, action, body),
         73..=79 => super::palw_native_mining_fold_v39::apply(builder, ctx, signer, &p, action, body),
+        ACCUSE_MINING_ACTION_V39 => {
+            super::palw_native_mining_fold_v39::policy(builder, ctx)?;
+            mining_court::apply(builder, ctx, signer, &p, body)
+        }
         _ => Err(bad("native39 action has no implemented current native transition")),
     }
 }
 #[path = "palw_native_collect_fold_v39.rs"]
 pub(super) mod collect;
+/// G14 lane closure G-N2: the post-Final accusation of a mining claim (stage action 80).
+#[path = "palw_native_mining_court_fold_v39.rs"]
+mod mining_court;
+/// Has the job's collection (53) run (its material detached)?
+pub(super) fn native_job_collected_v39(r: &PalwKernelRouteStateV1, job: Digest) -> Result<bool, PalwStateV2Error> {
+    Ok(collect::collected(r, job)?.is_some())
+}
+pub(super) fn release_mining_holds_v39(
+    builder: &mut TransitionBuilder<'_>,
+    c: &crate::palw_native_mining_v39::NativeMiningClaimRecordV39,
+) -> Result<(), PalwStateV2Error> {
+    mining_court::release_holds(builder, c)
+}
 #[path = "palw_native_job_audit_fold_v39.rs"]
 mod audit;
 pub(super) use audit::audit_policies_v39;

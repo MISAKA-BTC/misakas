@@ -162,6 +162,8 @@ async fn pursue(net: &mut Net, f: &Sparse9, id: Digest, outsider: usize, server:
             lane: 0,
             entitlement: [0; 64],
         };
+        let before: Option<Hash64> =
+            net.api().unwrap().aux_row(EXECUTION_DEMAND_SLOT_TABLE_V11, &borsh::to_vec(&(net.bond(outsider), 0u8)).unwrap());
         action(net, outsider, EXECUTION_ACTION_DEMAND_V11, borsh::to_vec(&request).unwrap()).await;
         used += 1;
         let demand: Hash64 = net
@@ -169,6 +171,7 @@ async fn pursue(net: &mut Net, f: &Sparse9, id: Digest, outsider: usize, server:
             .unwrap()
             .aux_row(EXECUTION_DEMAND_SLOT_TABLE_V11, &borsh::to_vec(&(net.bond(outsider), 0u8)).unwrap())
             .expect("the outsider's ordinary demand is admitted");
+        assert_ne!(Some(demand), before, "demand {used} for {unit:?} was refused at DAA {} (pursuit {:?})", net.daa(), pursuit(net, id));
         let answer = server.answer(&unit).to_bytes().unwrap();
         let mut body = demand.as_bytes().to_vec();
         body.extend_from_slice(&(answer.len() as u32).to_le_bytes());

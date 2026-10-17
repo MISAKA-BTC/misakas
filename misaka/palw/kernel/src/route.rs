@@ -186,6 +186,8 @@ fn stage_action_cap(action: u8) -> usize {
         74 | 76 | 77 | 79 => 67 + 7,
         75 => 138 + 7,
         78 => 74 + 7,
+        // G14 lane closure G-N2: the post-Final mining accusation (a filing, a demand, or a 32-KiB answer part).
+        80 => (32 << 10) + 256 + 7,
         50 => (32 << 10) + 143 + 7,
         58 | 68 => (32 << 10) + 72 + 7,
         59 | 60 | 66 | 69 | 70 => 64 + 7,
@@ -838,7 +840,7 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
     };
     let (cap, last) = match tag {
         TAG_FUNDED_EXECUTION_V11 => (MAX_FUNDED_EXECUTION_BYTES_V11, 46),
-        TAG_STAGE_EXECUTION_V14 => (stage_action_cap(bytes.get(2).copied().unwrap_or(0)), 79),
+        TAG_STAGE_EXECUTION_V14 => (stage_action_cap(bytes.get(2).copied().unwrap_or(0)), 80),
         _ => return Ok(None),
     };
     let bad = |why: &str| KernelRefusalV1::new("NativeAction", RefusalKindV1::Malformed, why);

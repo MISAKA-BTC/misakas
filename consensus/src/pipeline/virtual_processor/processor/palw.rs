@@ -6463,7 +6463,7 @@ impl VirtualStateProcessor {
                 Some(0..=18) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::StageExecutionV14, daa),
                 Some(19..=40) => self.palw_stage_execution_v28.as_ref().is_some_and(|f| active(f.activation)) && final27(),
                 // Owning39 mining needs its own fence besides native39 (RFC-0002 §II.14, dormant).
-                Some(73..=79) => {
+                Some(73..=80) => {
                     self.palw_native_mining_v39.as_ref().is_some_and(|f| active(f.activation))
                         && self.palw_native_execution_v39.as_ref().is_some_and(|f| active(f.activation))
                         && final27()
@@ -6519,6 +6519,7 @@ impl VirtualStateProcessor {
                         .as_ref()
                         .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
                     // Mining actions 73–79 also ride unjudged below their own fence (mirrors the fold's early return).
+                    // G-N2's action 80 is not unjudged: below the mining fence it stays refused exactly as before (A-2).
                     || matches!(bytes.get(2), Some(73..=79))
                         && !self
                             .palw_native_mining_v39

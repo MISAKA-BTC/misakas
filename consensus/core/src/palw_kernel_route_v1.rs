@@ -607,12 +607,20 @@ impl PalwKernelRouteStateV1 {
     /// ledger, so the bond cannot exit while one is held. 0 below the route's fence (no row is ever written there).
     pub fn signer_locks_of_v1(&self, bond: &PalwBondKeyV2) -> u64 {
         use crate::palw_g14_lane_closure_v1::*;
-        let prefix = palw_kernel_signer_lock_seat_prefix_v1(&palw_kernel_bond_id_v1(bond));
-        self.aux
-            .range((PALW_G14_LANE_CLOSURE_TABLE_V1, prefix.clone())..)
-            .take_while(|((table, key), _)| *table == PALW_G14_LANE_CLOSURE_TABLE_V1 && key.starts_with(&prefix))
-            .filter_map(|(_, bytes)| borsh::from_slice::<PalwKernelSignerLockRowV1>(bytes).ok())
-            .map(|row| row.amount)
+        let id = palw_kernel_bond_id_v1(bond);
+        // G-K1 seat locks (`0x01`) and G-N2 native attestor locks (`0x03`): no `0x03` row exists below the mining fence.
+        let mut attestor = vec![PALW_NATIVE_ATTESTOR_LOCK_PREFIX_V1];
+        attestor.extend_from_slice(&id);
+        [palw_kernel_signer_lock_seat_prefix_v1(&id), attestor]
+            .into_iter()
+            .map(|prefix| {
+                self.aux
+                    .range((PALW_G14_LANE_CLOSURE_TABLE_V1, prefix.clone())..)
+                    .take_while(|((table, key), _)| *table == PALW_G14_LANE_CLOSURE_TABLE_V1 && key.starts_with(&prefix))
+                    .filter_map(|(_, bytes)| borsh::from_slice::<PalwKernelSignerLockRowV1>(bytes).ok())
+                    .map(|row| row.amount)
+                    .fold(0u64, u64::saturating_add)
+            })
             .fold(0u64, u64::saturating_add)
     }
 

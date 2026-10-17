@@ -211,6 +211,12 @@ pub(super) fn try_attest_claim_certification_v1(
         if positive && attestation.transcript == [0u8; 64] {
             return Err(refuse("a positive certification attestation commits a transcript"));
         }
+        // G14 lane closure G-N2: a Reproduced attestor of an owning39 mining claim answers for it — a lock on its free collateral
+        // (the seat-lock relation over the claim's reserved exposure and the k-of-m quorum) through the claim's liability; a
+        // conviction charges it. An attestor that cannot back it is not counted.
+        if positive && key.first().copied() == Some(CERTIFICATION_NATIVE_MINING_PREFIX_V39) {
+            native_attestor_lock_v39(builder, ctx, signer, &Hash64::from_bytes(row.claim))?;
+        }
         row.attestations.push(PalwEligibilityAttestationRowV1 {
             verifier: attestation.verifier,
             verdict: attestation.verdict,
@@ -220,6 +226,81 @@ pub(super) fn try_attest_claim_certification_v1(
         write_row(builder, key.clone(), Some(&row))?;
         Ok(())
     })())
+}
+
+/// **G-N2: the lock a Reproduced attestor of a native mining claim holds** (aux 143, `0x03 ‖ attestor ‖ claim`, counted in the
+/// committed ledger with the kernel signer locks).
+fn native_attestor_lock_v39(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    claim: &Hash64,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_g14_lane_closure_v1::*;
+    let mirror = builder.params.rfc0018_v1().copied().ok_or_else(|| refuse("native attestor lock requires RFC-0018"))?;
+    let exposure = super::palw_native_mining_fold_v39::claim(builder.state.kernel_route.as_ref().unwrap(), &claim.as_bytes())?
+        .price
+        .reserved_exposure;
+    let amount = palw_kernel_signer_lock_amount_v1(u64::try_from(exposure).unwrap_or(u64::MAX), mirror.certification.k.min(255) as u8);
+    let record = builder.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
+    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < amount as u128 {
+        return Err(refuse("the attestor cannot back its lock on the native mining claim (G-N2)"));
+    }
+    let key = palw_native_attestor_lock_key_v1(&palw_kernel_bond_id_v1(signer), &claim.as_bytes());
+    let row = PalwKernelSignerLockRowV1 {
+        version: PALW_G14_LANE_CLOSURE_ROW_VERSION_V1,
+        claim: claim.as_bytes(),
+        seat: *signer,
+        amount,
+        locked_daa: ctx.daa_score,
+    };
+    builder.write_kernel_row(PALW_G14_LANE_CLOSURE_TABLE_V1, key, Some(borsh::to_vec(&row).expect("fixed lock row")))?;
+    builder.note_kernel_bond(signer)?;
+    Ok(())
+}
+fn native_attestor_locks_v39(builder: &TransitionBuilder<'_>, claim: &Hash64) -> Vec<(Vec<u8>, crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1)> {
+    use crate::palw_g14_lane_closure_v1::*;
+    let Some(route) = builder.state.kernel_route.as_ref() else { return Vec::new() };
+    let Some(row) = row_of::<PalwClaimCertificationRowV1>(&builder.state, &certification_native_key_v39(&palw_native_certification_id_v39(claim)))
+    else {
+        return Vec::new();
+    };
+    row.attestations
+        .iter()
+        .filter_map(|a| {
+            let key = palw_native_attestor_lock_key_v1(&a.verifier, &claim.as_bytes());
+            let lock: PalwKernelSignerLockRowV1 = borsh::from_slice(route.aux.get(&(PALW_G14_LANE_CLOSURE_TABLE_V1, key.clone()))?).ok()?;
+            Some((key, lock))
+        })
+        .collect()
+}
+/// **G-N2: a conviction charges every Reproduced attestor's lock** (what each bond still holds of it; burned). Returns the total.
+pub(super) fn charge_native_attestor_locks_v39(builder: &mut TransitionBuilder<'_>, claim: &Hash64) -> Result<u64, PalwStateV2Error> {
+    let mut total = 0u64;
+    for (key, lock) in native_attestor_locks_v39(builder, claim) {
+        builder.write_kernel_row(crate::palw_g14_lane_closure_v1::PALW_G14_LANE_CLOSURE_TABLE_V1, key, None)?;
+        let held = builder.state.bonds.get(&lock.seat).map(|b| b.collateral).unwrap_or(0).min(lock.amount);
+        if held > 0 {
+            total = total.saturating_add(builder.slash_bond(lock.seat, held as u128)?);
+        }
+    }
+    Ok(total)
+}
+/// G-N2: the claim left its liability uncharged — its attestors' locks are released.
+pub(super) fn release_native_attestor_locks_v39(builder: &mut TransitionBuilder<'_>, claim: &Hash64) -> Result<(), PalwStateV2Error> {
+    for (key, _) in native_attestor_locks_v39(builder, claim) {
+        builder.write_kernel_row(crate::palw_g14_lane_closure_v1::PALW_G14_LANE_CLOSURE_TABLE_V1, key, None)?;
+    }
+    Ok(())
+}
+/// G-N2: a convicted mining claim's certification is withdrawn — decided or not, it never certifies again.
+pub(super) fn withdraw_native_mining_v39(builder: &mut TransitionBuilder<'_>, claim: &Hash64, now: u64) -> Result<(), PalwStateV2Error> {
+    let key = certification_native_key_v39(&palw_native_certification_id_v39(claim));
+    if let Some(mut row) = row_of::<PalwClaimCertificationRowV1>(&builder.state, &key) {
+        row.outcome = Some((PalwCertificationOutcomeV1::Withdrawn, now));
+        write_row(builder, key, Some(&row))?;
+    }
+    Ok(())
 }
 
 /// The global verifier pool at the commit's cut: every Active bond matured before the commit, never the producer's operator. NOT
@@ -489,7 +570,11 @@ pub(super) fn sweep_security_certification_v1(
             let facts = if native {
                 // Native courts settle inside the component jobs before their escrow Final; the Master Final row's presence is
                 // the standing fact, and no chain accusation can name a native mining claim.
-                PalwCertificationClaimFactsV1 { still_final: native_live, accusation_pending: false }
+                // G14 lane closure G-N2: an open post-Final accusation of the mining claim is pending; a convicted claim is not live.
+                PalwCertificationClaimFactsV1 {
+                    still_final: native_live && !crate::palw_native_receipt_v39::native_mining_convicted_v39(&builder.state, &claim_id),
+                    accusation_pending: crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&builder.state, &claim_id),
+                }
             } else {
                 PalwCertificationClaimFactsV1 {
                     still_final: claim.as_ref().is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. })),
