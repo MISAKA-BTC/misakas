@@ -1,6 +1,6 @@
 # ADR-0187 — native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及
 
-- **Decision:** Proposed — G14 完成(ユーザー最優先、2026-10-10)の実装記録。ADR-0181 の手続きによる設計変更の記録で、値の承認は未了。
+- **Decision:** Accepted — ユーザー決定 2026-10-17:G-N2 の実装値(Final 後の demand は生涯 8・同時 2、attestor の lock は seat-lock 関係を claim の reserved exposure に当てた額、責任期間は他 lane と同じ式)をそのまま採用する。最終の drill・測定で問題が出た場合は見直す。
 - **Scope:** native funded v11・text29 の告発枠(G-N1)、owning39 mining claim の Final 後の追及(G-N2)、担保不足での有罪(G-14 / T-N13)。
 - **Implementation:** branch `integ/g14-court-capacity-r2`。各 native lane の既存の休眠 fence の下(全 preset で `None`)。testnet-12 の identity は不変。
 - **Verification:** v11 の node 試験 5 件、v39 mining court の fold 試験 4 件(G14 完全性証明 §13)。text29 と v39 の実 job の試験は harness が無く未実行。
@@ -26,13 +26,13 @@
 - producer の前払い回答上限(`check_native_protected_capacity`)は変えていない。生涯の上限を外す案は、producer の義務を無限にするので採らなかった。
 - G-N2 の監査は「negative veto の人数で客観裁定を代用しない」としている。veto 0 で、verified filing と default だけで裁く。
 
-## 値(承認されていないもの)
+## 値(2026-10-17 ユーザー採用。drill・測定で問題が出れば見直す)
 
 | 値 | 現状 | 根拠 |
 |---|---|---|
-| Final 後の demand 数(8 / 同時 2) | 実装の固定値 | protected seal の 2 × 4 に合わせた。測定していない |
-| attestor の lock 額 | seat-lock 関係 × reserved exposure | 既存の関係の適用。gain の代わりに exposure を使っている |
-| 責任期間 | 既存の値の和 | 新しい値は導入していない |
+| Final 後の demand 数(8 / 同時 2) | 採用 | protected seal の 2 × 4 に合わせた。測定していない |
+| attestor の lock 額 | 採用(seat-lock 関係 × reserved exposure) | 既存の関係の適用。gain の代わりに exposure を使っている |
+| 責任期間 | 採用(既存の値の和) | 新しい値は導入していない |
 | 試験の horizon(challenge 300 など) | 試験だけ | probe の値は node 試験に短すぎる |
 
 ## 帰結
