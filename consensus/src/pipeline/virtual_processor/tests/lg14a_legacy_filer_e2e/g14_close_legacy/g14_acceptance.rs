@@ -541,6 +541,45 @@ async fn g14_accept_f_the_pursuit_window_and_the_payout_never_overlap() {
     assert_eq!(lg.collateral(EXECUTOR), producer_before, "the settled claim's producer is untouched");
 }
 
+/// **F, closed under the full G14 set (G-15 `palw_reward_liability_horizon_v1` armed): every unpaid reward stays prosecutable.** The
+/// same lying claim nobody pursued, past its vesting row's DAA expiry with the settlement clock not yet met: the claim is NOT retired,
+/// its dispute view is still served, the node admits a reservation, and the outsider's pursuit convicts it — the reward never pays.
+#[tokio::test]
+async fn g14_accept_f_under_g15_an_unpaid_reward_past_its_expiry_is_still_prosecuted() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut lg = g14_lg_on(true);
+    let (produced, _, licensed) = licensed_claim(&mut lg, true).await;
+    let id = produced.claim_id;
+    lg.beat_to(licensed + lg.bundle.state.window_challenge_at(licensed) + 2).await;
+    assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::Final { .. }), "nobody looked: Final");
+    let expiry = lg.chain.tip_state().1.vesting_row(&id).expect("its vesting row").expiry_daa;
+    lg.beat_to(expiry + 25).await;
+    let state = lg.chain.tip_state().1;
+    let row = state.vesting_row(&id).cloned();
+    eprintln!(
+        "[g14-accept F G-15] past the DAA expiry {expiry} (now {}): claim row {:?}, vesting matured {:?}",
+        lg.daa(),
+        state.claim(&id).map(|c| c.phase.clone()),
+        row.as_ref().map(|r| r.matured_at)
+    );
+    assert!(row.as_ref().is_some_and(|r| r.matured_at.is_none()), "unmatured: the settlement clock is not met in this harness");
+    assert!(state.pending_payout(&palw_vesting_payout_key_v1(&id)).is_none(), "unpaid");
+    assert!(lg.chain.ctx.consensus.palw_legacy_dispute_v1(id).is_some(), "G-15: the unpaid claim is not retired");
+    let mut v = Verifier::check(&lg, NEWCOMER, id);
+    assert_eq!(v.step(&mut lg, &produced, &|_| false).await, None, "the engine reserves past the DAA expiry");
+    assert!(lg.view(id).record.is_some(), "the reservation landed");
+    let producer_before = lg.collateral(EXECUTOR);
+    let lie = pursue_to_terminal(&mut v, &mut lg, &produced, 400).await;
+    let object = v.demand(&mut lg, PalwLegacyProbeV1::Terminal { leaf: lie });
+    lg.send(vec![(NEWCOMER, object)]).await;
+    assert!(producer_answers_d2(&mut lg, &produced).await);
+    let (accusation, ..) = one_move_accusation(&mut lg, id, lie, NEWCOMER);
+    lg.send(vec![(NEWCOMER, accusation)]).await;
+    assert!(lg.view(id).court_convicted, "convicted past the DAA expiry, before the reward matured");
+    assert!(lg.collateral(EXECUTOR) < producer_before, "the producer is slashed");
+    assert!(lg.chain.tip_state().1.pending_payout(&palw_vesting_payout_key_v1(&id)).is_none(), "the reward never pays");
+}
+
 // ---- G ---------------------------------------------------------------------------------------------------------------------------
 
 /// The parent's network with the G14 set (LG14-A, LG14-B, option (b)) armed at `at` instead of genesis — validated with records at
