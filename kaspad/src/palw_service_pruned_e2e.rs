@@ -106,6 +106,12 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
     );
     assert!(fresh.tc.palw_state_v2_store.read().load_tip(&fresh.bundle.state).unwrap().is_none());
     fresh.tc.import_pruning_point_palw_state(point, carriage).expect("the normal carriage installs against the committed root");
+    assert!(fresh.tc.is_consensus_in_transitional_ibd_state(), "the sidecar install leaves the durable incomplete-import marker");
+    // This node validated the whole prefix, so its UTXO set is already the canonical one: there is no UTXO step to run. Without
+    // completing, the node stays in the transitional IBD state and the verifier's loop idles (validation 2026-10-17: no session in
+    // 1,600 DAA after the install).
+    fresh.tc.mark_pruning_utxoset_stable_for_tests();
+    assert!(!fresh.tc.is_consensus_in_transitional_ibd_state());
     let (installed_at, installed) = fresh.tc.palw_state_v2_store.read().load_tip(&fresh.bundle.state).unwrap().unwrap();
     assert_eq!(installed_at, point);
     assert_eq!(installed.state_root(), expected);

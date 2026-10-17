@@ -985,6 +985,21 @@ fn large_constraint_transaction(
 /// The producer executes a real registered model under FP job B, then claims the roots
 /// for user-prompt job A when identity_fault is requested. Otherwise the commitment is honest.
 /// Only requested signed public Event/input answers are shared with the outsider.
+/// The producer's class backend for the public FP fixtures (the one `public_fp_job` executes with).
+fn public_fp_backend(chain: &Chain) -> misaka_palw_base0::backend::Base0Backend {
+    misaka_palw_base0::backend::Base0Backend::new(
+        misaka_palw_base0::classes::resolve_class_v1(
+            &chain.bundle.court,
+            chain.bundle.base_class_id,
+            misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().unwrap(),
+            &[],
+        )
+        .unwrap(),
+    )
+    .with_step_ladder_cap(chain.bundle.court.max_step_leaf_count())
+    .with_prompt_ids_form(chain.config.params.palw_prompt_ids_form_v1())
+}
+
 fn public_fp_job(
     chain: &Chain,
     identity_fault: bool,
@@ -1231,9 +1246,18 @@ async fn carry_fp_commitment(
     chain.tc.validate_mempool_transaction(&mut validated, &Default::default()).unwrap();
     let tx = validated.tx.as_ref().clone();
     let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment);
+    // What the fold makes of the carried object at the tip (a node-policy read): named when the job is not admitted.
+    let rehearsal = borsh::from_slice::<kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2>(&tx.payload)
+        .ok()
+        .and_then(|payload| chain.tc.palw_object_rehearsal_v1(&payload.object));
     let block = chain.heartbeat(vec![tx.clone()]).await;
     assert!(block.transactions.iter().any(|t| t.id() == tx.id()));
     chain.heartbeat(vec![]).await;
+    assert!(
+        chain.tc.palw_legacy_dispute_v1(claim).is_some(),
+        "the ordinary FP job {claim} was carried but not admitted (block status {:?}); the fold's rehearsal at the tip: {rehearsal:?}",
+        chain.tc.get_block_status(block.header.hash)
+    );
     let output = tx.outputs.last().unwrap();
     floats[0] = (
         TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
@@ -1692,6 +1716,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
     let mut selected_tiles_submitted = BTreeSet::new();
     let mut bootstrap_tiles_submitted = BTreeSet::new();
     let mut prefix_tiles_submitted = BTreeSet::new();
+    let mut held_lanes_submitted = BTreeSet::new();
     loop {
         assert!(
             running.task.as_ref().is_some_and(|task| !task.is_finished())
@@ -2220,6 +2245,67 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                 assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)));
                 prefix_tiles_submitted.insert(unit);
                 eprintln!("[service-prefix] canonical public CKW {unit:?} authenticated through ordinary H1/PQ");
+            }
+        }
+        // **The honest producer answers every demanded held lane** (G14-L, k-ary descent): a production producer answers each
+        // tag-157 unit of its claim from its retained capture through the one legacy held builder (`palw_da_legacy_answer_v2` ->
+        // `palw_legacy_held_capture_answer_v2`, tag 158). Before G14-L the filer replayed as soon as the input was public and
+        // demanded nothing else; since the parallel-lane descent it may demand a whole round of StepNode lanes of an honest claim,
+        // and a harness producer that answered only the input chunks was voided `ProducerWithholding` (validation 2026-10-17). The
+        // answers are the production builder's, signed by the producer and carried through ordinary H1/PQ admission.
+        if case.reacquire_honest() && !automatic_recovery {
+            use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+            use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
+            let requested: Vec<_> = chain
+                .view(claim)
+                .sessions
+                .iter()
+                .filter(|(who, _)| *who == bond)
+                .flat_map(|(_, session)| session.units.iter())
+                .filter_map(|unit| match unit {
+                    // The input and the job preimage keep their own handlers above (with their refused-forgery checks).
+                    PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { .. } | PalwLegacyHeldUnitV2::FpJob) => None,
+                    PalwDaUnitV1::LegacyHeldV2(u) => Some(*u),
+                    _ => None,
+                })
+                .collect();
+            for unit in requested {
+                if held_lanes_submitted.contains(&unit) || chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)) {
+                    continue;
+                }
+                let Some((outcome, _, Some((commitment, ids)))) = foreign.as_ref() else { unreachable!("an honest FP job") };
+                let view = chain.view(claim);
+                let roots = kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
+                    execution_root: view.execution_root,
+                    trace_root: view.trace_root,
+                    anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&commitment.job),
+                    attempt_draw: None,
+                    output_root: None,
+                    job_pin: Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment)),
+                };
+                let backend = public_fp_backend(&chain);
+                let (binding, answer) = crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(
+                    &backend,
+                    &outcome.material,
+                    ids,
+                    roots,
+                    chain.config.params.palw_prompt_ids_form_v1(),
+                    &unit,
+                )
+                .unwrap_or_else(|why| panic!("the honest producer answers {unit:?} from its capture: {why}"));
+                let object = crate::palw_legacy_held_v2::palw_legacy_held_answer_object_v2(
+                    &chain.network_domain,
+                    claim,
+                    unit,
+                    binding,
+                    answer,
+                    chain.bonds[0],
+                    |message, context| Some(signed(0, message, context)),
+                )
+                .unwrap();
+                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[0]).await;
+                assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)), "the lane {unit:?} is answered");
+                held_lanes_submitted.insert(unit);
             }
         }
         if case.reacquire_honest() {

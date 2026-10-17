@@ -641,6 +641,17 @@ impl TestConsensus {
         self.consensus.headers_store.clone()
     }
 
+    /// **Fixture-only stand-in for IBD's UTXO step**: mark the pruning UTXO set stable again. `import_pruning_point_palw_state`
+    /// clears the marker because production installs the PALW sidecar BEFORE the UTXO set replaces the node's own and completes
+    /// with `complete_pruning_point_import`. A fixture that installs only the sidecar on a node that already validated the whole
+    /// prefix (so its UTXO set is the canonical one) has no UTXO step to run; without this its node stays in the transitional IBD
+    /// state and every service loop that asks `is_consensus_in_transitional_ibd_state` idles.
+    pub fn mark_pruning_utxoset_stable_for_tests(&self) {
+        let mut batch = rocksdb::WriteBatch::default();
+        self.consensus.storage.pruning_meta_stores.write().set_pruning_utxoset_stable_flag(&mut batch, true).unwrap();
+        self.consensus.db.write(batch).unwrap();
+    }
+
     /// The pruning sample this node recorded from `hash`'s point of view (`None` where it recorded none) — so a fixture can name the
     /// pruning-point history the node already derived when it establishes a sidecar import target (`import_pruning_points`).
     pub fn pruning_sample_from_pov_for_tests(&self, hash: BlockHash) -> Option<BlockHash> {
