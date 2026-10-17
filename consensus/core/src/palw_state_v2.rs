@@ -7468,6 +7468,14 @@ pub enum PalwConsensusObjectV2 {
     TirPublicGrantReadyV1 {
         grant: Box<crate::palw_tir_public_carriage_v1::PalwTirPublicGrantCarriageV1>,
     } = 171,
+    /// **(tag 175): a registered TIR class bound to its `PALWART3` container** (RFC-0002 / genesis 8 audit 02-A,
+    /// [`crate::palw_tir_container_v1`]) — the container root, and the opening that recomputes it and commits the class's
+    /// inventory root and program; signed by the class's original registrant. Owned by `palw_tir_container_identity_v1` (below it
+    /// the live build's undecodable payload, riding unjudged). **Tag 175.**
+    TirClassContainerBoundV1 {
+        binding: Box<crate::palw_tir_container_v1::PalwTirContainerBindingV1>,
+        signature: Vec<u8>,
+    } = 175,
     /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
@@ -18883,6 +18891,7 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::StagedFloatConstraintV1) => {
             builder.extras.staged_public_court.is_some() && builder.extras.staged_float_constraint_active
         }
+        K::Fence(F::TirContainerIdentityV1) => builder.extras.tir_container_identity_active,
     }
 }
 
@@ -20105,6 +20114,9 @@ pub struct PalwTransitionExtrasV1 {
     /// is admitted only WITH its transaction-paired `TFP1` ORIGINAL frame: a frameless one is refused at acceptance, so it earns
     /// no reward, weight or credit. `false` by `Default` and below the fence — byte-identical to before it.
     pub tir_public_conviction_active: bool,
+    /// `palw_tir_container_identity_v1` at this block (RFC-0002 02-A): a TIR class's `PALWART3` container binding folds, and a
+    /// TIR original of an unbound class is refused. False below it (every shipped preset).
+    pub tir_container_identity_active: bool,
     /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
     /// admitted with the rooted f32 row court. False below it: refused.
     pub staged_float_constraint_active: bool,

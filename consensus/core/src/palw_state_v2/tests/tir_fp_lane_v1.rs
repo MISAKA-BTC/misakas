@@ -331,6 +331,69 @@ fn tir_fp_lane_is_closed_below_the_fence_and_frameless_past_it() {
     ));
 }
 
+/// **RFC-0002 02-A: past `palw_tir_container_identity_v1` the lane takes only a class bound to its `PALWART3` container.** The framed
+/// original of an unbound class is refused at G-03's door (`TIR_CLASS_CONTAINER_UNBOUND`); the registrant's binding (tag 175) folds,
+/// folds again as nothing, and a binding to another container is refused (immutable); the same original is then admitted. Below the
+/// fence the binding kind is refused by the fold (it rides unjudged at acceptance) and the original is taken as before.
+#[test]
+fn tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3_container() {
+    use crate::palw_tir_container_v1::{PALW_TIR_UNBOUND_CONTAINER_CODE_V1, palw_tir_bound_container_v1, test_binding_v1};
+    let mut l = lane(false);
+    let mut class = l.state.class(&l.class_id).unwrap().clone();
+    class.registrant_bond = Some(bond_key(PRODUCER));
+    l.state.set_class_for_tests(l.class_id, class);
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
+    let bind = |manifest: &[u8]| PalwConsensusObjectV2::TirClassContainerBoundV1 {
+        binding: Box::new(test_binding_v1(&record, artifact_root, manifest)),
+        signature: Vec::new(),
+    };
+    let bound = bind(b"{\"model\":\"tiny\"}");
+    // Below the fence: the binding does not fold, and the unbound original is taken exactly as before.
+    assert!(apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &l.extras).is_err());
+    assert!(apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).is_ok());
+    // Past it: the unbound class's original is refused at the door.
+    let mut past = l.extras.clone();
+    past.tir_container_identity_active = true;
+    assert!(matches!(
+        apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &past).unwrap_err(),
+        PalwStateV2Error::ClassNotRewardable { code, .. } if code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1
+    ));
+    // The registrant binds the class; again is nothing; another container is refused.
+    let (bound_state, _) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).expect("the binding folds");
+    let PalwConsensusObjectV2::TirClassContainerBoundV1 { binding, .. } = &bound else { unreachable!() };
+    assert_eq!(palw_tir_bound_container_v1(&bound_state, l.class_id).map(|row| row.container_root), Some(binding.container_root));
+    let next = ctx(4, AT_DAA + 1, 4);
+    let (again, _) = apply_derived(&bound_state, &l.p, &next, std::slice::from_ref(&bound), &past).expect("the same binding again");
+    assert_eq!(
+        palw_tir_bound_container_v1(&again, l.class_id),
+        palw_tir_bound_container_v1(&bound_state, l.class_id),
+        "the same container again folds to nothing (the row, its bound DAA included, is unchanged)"
+    );
+    assert_eq!(
+        apply_derived(&bound_state, &l.p, &next, std::slice::from_ref(&bind(b"{}")), &past).unwrap_err(),
+        PalwStateV2Error::ImmutableModelUpdate("a TIR class's bound container is immutable")
+    );
+    // A binding whose inner root is another inventory is refused by the chain's own check.
+    let mut stray = test_binding_v1(&record, Hash64::from_u64_word(0xBAD), b"{}");
+    stray.class_id = l.class_id;
+    assert_eq!(
+        apply_derived(
+            &l.state,
+            &l.p,
+            &at(),
+            &[PalwConsensusObjectV2::TirClassContainerBoundV1 { binding: Box::new(stray), signature: Vec::new() }],
+            &past
+        )
+        .unwrap_err(),
+        PalwStateV2Error::ImmutableModelUpdate("the bound container's inner inventory root is not the class's registered artifact root")
+    );
+    // Bound (the binding and the original in one block): the same original is admitted.
+    let (admitted, _) =
+        apply_derived(&l.state, &l.p, &at(), &[bound.clone(), l.object.clone()], &past).expect("the bound class's original");
+    assert!(admitted.claim(&l.claim).is_some());
+}
+
 /// **The lane's authentication on a gated network**: an IR class passes the free-prompt certification gate past the fence only
 /// when one certified family covers every primitive its program reaches; below the fence the gate is the legacy one.
 #[test]

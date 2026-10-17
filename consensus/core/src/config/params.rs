@@ -2430,6 +2430,10 @@ pub struct Params {
     /// Original paid TIR public-conviction allocations and signed controls.
     /// Independent and dormant on every shipped preset; never reprices old claims.
     pub palw_tir_public_conviction_v1: Option<ForkActivation>,
+    /// **RFC-0002 / genesis 8 audit 02-A: a TIR class's `PALWART3` container identity** ([`crate::palw_tir_container_v1`]): past it
+    /// the registrant binds the class to the container whose root commits its inventory root and program (tag 175), and a framed
+    /// TIR claim of an unbound class is refused. Dormant (None) on every shipped preset; hashed Some-only.
+    pub palw_tir_container_identity_v1: Option<ForkActivation>,
     /// **The TIR public frame's measured cost model** (G14 audit §10, [`crate::palw_tir_frame_cost_v1`]): the court config (windows,
     /// margin, restarts, prices) and the measured clock (cost units per accepting action, full-frame passes, parallel inclusion
     /// capacity) every frame of `palw_tir_public_conviction_v1` is priced and clocked with. `None` on every shipped preset; hashed
@@ -5020,6 +5024,16 @@ impl Params {
     /// R-core+ (the conviction tiers, vesting and the exit-lock lattice a collectible debit needs) and ADR-0160's aggregate
     /// liability (the intent-class forfeiture and freeze that take a convicted producer's block opportunity, so admission and the
     /// producer's readiness refuse it). `None` on every shipped preset (the field is `None` there).
+    /// **The TIR container identity's effective fence** (02-A): the field on a `ConsensusV2` network whose TIR lane is armed,
+    /// `never()` read as absence. `None` on every shipped preset.
+    pub fn palw_tir_container_identity_v1_fence(&self) -> Option<ForkActivation> {
+        let never = ForkActivation::never();
+        match (&self.palw_consensus_mode, self.palw_tir_container_identity_v1.filter(|f| *f != never), self.palw_tir_v1.as_ref()) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(at), Some(_)) => Some(at),
+            _ => None,
+        }
+    }
+
     pub fn palw_tir_public_conviction_v1_fence(&self) -> Option<ForkActivation> {
         let never = ForkActivation::never();
         match (
@@ -6083,6 +6097,7 @@ impl Params {
             palw_staged_public_court_v1: self.palw_staged_public_court_v1,
             palw_staged_tir_route_v1: self.palw_staged_tir_route_v1,
             palw_tir_public_conviction_v1: self.palw_tir_public_conviction_v1,
+            palw_tir_container_identity_v1: self.palw_tir_container_identity_v1,
             palw_tir_frame_cost_v1: self.palw_tir_frame_cost_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
@@ -7248,6 +7263,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
@@ -7605,6 +7621,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
@@ -7944,6 +7961,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
@@ -13460,6 +13478,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,

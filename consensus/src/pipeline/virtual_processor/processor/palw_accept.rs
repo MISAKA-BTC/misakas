@@ -1991,6 +1991,8 @@ impl VirtualStateProcessor {
             tir_public_originals: Default::default(),
             // G14 G-03: the route's own fence (not whether its rules resolved), so a frameless TIR original is refused past it.
             tir_public_conviction_active: self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa_score)),
+            // RFC-0002 02-A: the TIR container identity's own fence.
+            tir_container_identity_active: self.palw_tir_container_identity_v1.is_some_and(|f| f.is_active(daa_score)),
             staged_float_constraint_active: self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(daa_score)),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),

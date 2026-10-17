@@ -1516,6 +1516,11 @@ impl TirBackendV1 {
 }
 
 impl PalwExecutionBackendV1 for TirBackendV1 {
+    /// Audit 02-B: the chain's registered semantics replace the defaults (`shape_profile_id` stays this class's id).
+    fn set_registered_class_facts_v1(&mut self, facts: kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3) {
+        self.fp_class = kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 { shape_profile_id: self.class_id, ..facts };
+    }
+
     fn tir_public_capture_need_v1(
         &self,
         header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,

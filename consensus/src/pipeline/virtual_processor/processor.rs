@@ -545,6 +545,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_staged_public_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_staged_tir_route_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_tir_public_conviction_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// RFC-0002 02-A: the TIR container identity's effective fence; `None` on every shipped preset.
+    pub(super) palw_tir_container_identity_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The TIR frame's measured cost model (G14 audit §10); `None` on every shipped preset, so the frame route resolves no rules.
     pub(super) palw_tir_frame_cost_v1: Option<kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
     pub(super) palw_staged_float_constraint_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1399,6 +1401,7 @@ impl VirtualStateProcessor {
             palw_staged_public_court_v1: params.palw_staged_public_court_v1_fence(),
             palw_staged_tir_route_v1: params.palw_staged_tir_route_v1_fence(),
             palw_tir_public_conviction_v1: params.palw_tir_public_conviction_v1_fence(),
+            palw_tir_container_identity_v1: params.palw_tir_container_identity_v1_fence(),
             palw_tir_frame_cost_v1: params.palw_tir_frame_cost_v1,
             palw_staged_float_constraint_v1: params.palw_staged_float_constraint_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
@@ -7218,6 +7221,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
         O::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
         O::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
+        O::TirClassContainerBoundV1 { .. } => "TirClassContainerBoundV1",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::MonetaryMaterialEnrolledV1 { .. } => "MonetaryMaterialEnrolledV1",

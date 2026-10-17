@@ -4608,6 +4608,11 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV
                 sum = sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            11 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4731,11 +4736,20 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV
                 > as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            17 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<Box<crate::palw_tir_container_v1::PalwTirContainerRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
 }
 wire_struct!(crate::palw_state_v2::PalwBlockContextV2; crate::BlockHash, u64, u64, u64);
+wire_struct!(crate::palw_tir_container_v1::PalwArtSectionOpeningV1; u16, u16, String, u16, crate::Hash64, u64, crate::Hash64);
+wire_struct!(crate::palw_tir_container_v1::PalwArtRootOpeningV1; u16, crate::Hash64, u16, Vec<u8>, crate::Hash64, u16, crate::Hash64, Vec<crate::palw_tir_container_v1::PalwArtSectionOpeningV1>);
+wire_struct!(crate::palw_tir_container_v1::PalwTirContainerBindingV1; u16, crate::Hash64, crate::Hash64, crate::palw_tir_container_v1::PalwArtRootOpeningV1);
+wire_struct!(crate::palw_tir_container_v1::PalwTirContainerRowV1; crate::Hash64, crate::Hash64, u16, u64, u64);
 wire_struct!(crate::palw_state_v2::PalwBondKeyV2; crate::tx::TransactionOutpoint);
 wire_struct!(crate::palw_state_v2::PalwBondStateV2; Vec<u8>, crate::Hash64, u64, u64, crate::palw_state_v2::PalwBondStatusV2, u64, crate::Hash64, std::collections::BTreeSet<crate::Hash64>);
 impl NativeWireScanV1 for crate::palw_state_v2::PalwBondStatusV2 {
@@ -6037,6 +6051,14 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwConsensusObjectV2 {
                         reader,
                     )?,
                 )?;
+                Ok(sum)
+            }
+            175 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_tir_container_v1::PalwTirContainerBindingV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
             159 => {

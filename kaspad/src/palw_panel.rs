@@ -4441,7 +4441,38 @@ impl PalwPanelService {
         class_id: Hash64,
         artifact_root: Hash64,
     ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String> {
-        self.backends().resolve_or_chain(class_id, artifact_root, |id| self.chain_carriage_v1(session, id))
+        let mut backend = self.backends().resolve_or_chain(class_id, artifact_root, |id| self.chain_carriage_v1(session, id))?;
+        // **Audit 02-B (RFC-0002 Phase H): the class's registered runtime semantics, read off this node's accepted state**, on every
+        // backend this door resolves — so a free-prompt context this node builds (producer and seat alike) carries the chain's
+        // statement, never the backend's defaults. Absent a statement (every shipped chain: the semantics fence is dormant, and the
+        // read answers only past the TIR frame's fence) nothing is set and the backend is what it was.
+        if let Some(facts) = Self::registered_class_facts_v1(session, class_id, artifact_root) {
+            backend.set_registered_class_facts_v1(facts);
+        }
+        Ok(backend)
+    }
+
+    /// The registered semantics of `class_id` over `artifact_root` as free-prompt class facts (`None`: no statement, or the read
+    /// is not in force).
+    fn registered_class_facts_v1(
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+    ) -> Option<kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3> {
+        let mut facts = None;
+        let read = session.palw_tir_public_read_v1(&mut |state| {
+            facts = state.class_semantics_v1(&class_id).filter(|s| s.artifact_root == artifact_root).map(|s| {
+                kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
+                    model_profile_id: s.model_profile_id,
+                    runtime_manifest_hash: s.runtime_manifest_hash,
+                    runtime_class_id: s.runtime_class_id,
+                    shape_profile_id: class_id,
+                    cu_ruleset_id: s.cu_ruleset_id,
+                }
+            });
+            Ok(())
+        });
+        read.ok().filter(|in_force| *in_force).and(facts)
     }
 
     /// **The executor's backend for a class** (ADR-0110 §9.5): the kept instance when it was
@@ -15360,6 +15391,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => "PublicCourtStreamMoveV1",
         PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
         PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
+        PalwConsensusObjectV2::TirClassContainerBoundV1 { .. } => "TirClassContainerBoundV1",
         PalwConsensusObjectV2::TirPublicControlV1 { .. } => "TirPublicControlV1",
         PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. } => "TirPublicGrantReadyV1",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",

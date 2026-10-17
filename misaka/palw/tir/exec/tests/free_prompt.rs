@@ -366,3 +366,48 @@ fn tir_free_prompt_refuses_outside_the_lane() {
     assert!(backend.execute_free_prompt(&other, &usize_ids(&prompt)).is_err(), "another class's job");
 }
 
+
+/// **Audit 02-B: the registered runtime semantics reach the run.** A class registered with a non-default model profile, runtime
+/// manifest and class, and CU ruleset (`PalwClassSemanticsV1`): a backend left at its defaults builds a context the registered
+/// statement does not match (the frame refuses it: `matches_context`), and the same backend after the node's
+/// `set_registered_class_facts_v1` builds one it does — in the run's own capture shape AND its exported public header — while
+/// the class id stays the class's whatever is passed.
+#[test]
+fn tir_free_prompt_contexts_carry_the_registered_semantics_the_node_sets() {
+    use kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1;
+    use kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3;
+    let (name, mut backend) = backends("semantics").into_iter().next().unwrap();
+    let mut semantics = PalwClassSemanticsV1::of_registration(backend.class_id(), backend.artifact_root(), backend.canonical(), 0);
+    semantics.model_profile_id = Hash64::from_u64_word(0x3D01);
+    semantics.runtime_manifest_hash = Hash64::from_u64_word(0x3D02);
+    semantics.runtime_class_id = Hash64::from_u64_word(0x3D03);
+    semantics.cu_ruleset_id = Hash64::from_u64_word(0x3D04);
+    semantics.tokenizer_id = backend.class().tokenizer_id;
+    let prompt = prompt_of(&backend, 0);
+    let job = fp_job(&backend, &prompt, 2);
+    let context_of = |b: &TirBackendV1| {
+        let run = b.execute_free_prompt(&job, &usize_ids(&prompt)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let shape = b.capture_shape(&run.outcome.material).expect("an IR capture has a shape");
+        let PalwPublicExecutionBindingHeaderV1::Tir(header) = b.public_execution_binding_header_v1(&run.outcome.material).unwrap() else {
+            panic!("{name}: an IR capture exports a TIR header");
+        };
+        (shape.job_context, header.job_context)
+    };
+    let (default_shape, default_header) = context_of(&backend);
+    assert!(!semantics.matches_context(&default_shape) && !semantics.matches_context(&default_header), "the defaults are not the statement");
+    backend.set_registered_class_facts_v1(PalwFpClassFactsV3 {
+        model_profile_id: semantics.model_profile_id,
+        runtime_manifest_hash: semantics.runtime_manifest_hash,
+        runtime_class_id: semantics.runtime_class_id,
+        shape_profile_id: Hash64::from_u64_word(0xBAD),
+        cu_ruleset_id: semantics.cu_ruleset_id,
+    });
+    let (shape, header) = context_of(&backend);
+    assert!(semantics.matches_context(&shape), "{name}: the run is performed under the registered statement");
+    assert!(semantics.matches_context(&header), "{name}: and its public header carries it");
+    assert_eq!(shape.shape_profile_id, backend.class_id(), "the class id is never the caller's");
+    // One field off is refused by the same predicate the frame applies.
+    let mut off = semantics.clone();
+    off.cu_ruleset_id = Hash64::from_u64_word(0x3D05);
+    assert!(!off.matches_context(&header));
+}
