@@ -257,3 +257,21 @@ native-Final assertions (F1) must be decided first; for the 7 opt-in tests (F2).
   `PALW_ONBOARDING_POLICY_WINDOW_DAA_V1` = 120 DAA (INTERIM). No paid source can be Final inside that window, so the beacon reports
   UNAVAILABLE. Either the onboarding window grows to the paid lifetime, or the paid lifetime of a source class shrinks (its windows
   are interim values too); both are design values under ADR-0181.
+
+### 7. Window widened (user decision 10-17) and the migration run
+
+`PALW_ONBOARDING_POLICY_WINDOW_DAA_V1` 120 → 1,024 (ADR-0183 §4). The `Cw` harness now uses approved paid sources by default.
+`g14_kernel_route_e2e::{conformance, opv_bootstrap}`: **25 / 54 PASS** (16 before), including
+`g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_class_activates` (beacon locked on two bootstrap-locked
+paid Finals, evidence passed; its state assertion now also accepts a direct ACTIVE_REWARDABLE when the binding is already Final).
+
+Remaining 29, by cause:
+
+| cause | tests | next step |
+| --- | --- | --- |
+| x8 REAL attempt is not the sink — the paid path arms `palw_monetary_material_v1`, past which only the PAV3 native custody attempt form is admitted; the x8 harness builds PAV2 | 15 x8 + 3 native_final | build the REAL attempt as PAV3 with a provider exchange in the x8 harness |
+| a SECOND beacon in one test: after the first approved paid Final the bootstrap window is closed, and the next paid lock needs the seal-reveal seed, i.e. funded sources that opted in after it | 3 conformance (another-policy / forged-evidence / hostile) | fund each later paid source claim (FundBeaconSourceFee) and have other producers opt in their seals (F2 allows paid jobs) |
+| native_final covenant "signed material window differs from the physical monetary window" | 1 | that test arms its own monetary policy; align `arm_paid_sources` with it |
+| x8 kernel claim not committed | 1 | not investigated |
+| pruned import history mismatch (consensus `conformance_rows_survive_reorg_restart_and_pruned_import`) | 1 | same fix as the kaspad fixture (history from the node's own pruning samples) |
+| opt-in source tests (v3 / v4 / v5 and `from_zero` / `eligibility_lost`) still use OPV sources | 6 | move their sources to paid claims (F2) |
