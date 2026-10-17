@@ -28,3 +28,4 @@
 | RFC-0020 | [長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない](0020-long-context-calibration-memory.md) | Draft / 部分実装 |
 | RFC-0021 | [設計凍結・例外変更手続きと文書の役割分離](0021-design-freeze-and-documentation-governance.md) | Accepted / 文書管理 |
 | RFC-0022 | [初期 mainnet から画像・動画・モデル改善を外す適用範囲](0022-post-mainnet-media-and-model-improvement-scope.md) | Accepted / 延期・無効化方針 |
+| RFC-0023 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0023-unresolved-claim-liability-and-independent-progress.md) | 原文と後続改定を参照 |
