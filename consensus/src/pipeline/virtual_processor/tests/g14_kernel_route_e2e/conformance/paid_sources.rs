@@ -264,15 +264,9 @@ impl Cw {
         // its source jobs, posted by payers other than the sealers, then the seals inside the window.
         let source_class = self.kernel_class;
         assert!(target.context.eligible_profiles.contains(&source_class), "the kernel class is an eligible source profile");
-        // RFC07-3 seal-before-commit: a producer seals as a source only before the commitment of every live paid target of its own,
-        // so the sealers are producers with no paid claim on this chain (the route's enrollments name every paid producer).
-        let paid_producers: std::collections::BTreeSet<Digest> = route
-            .aux
-            .iter()
-            .filter(|((table, key), _)| *table == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2 && key.len() == 64)
-            .filter_map(|(_, bytes)| borsh::from_slice::<PalwPaidClaimAuthorityV2>(bytes).ok())
-            .map(|a| a.enrollment.producer)
-            .collect();
+        // RFC07-3 seal-before-commit: a producer seals as a source only before the commitment of every live source target of its
+        // own, so the sealers are no live source target's producer.
+        let paid_producers = self.net.live_target_producers();
         let sealers: Vec<usize> = PRODUCERS
             .iter()
             .copied()

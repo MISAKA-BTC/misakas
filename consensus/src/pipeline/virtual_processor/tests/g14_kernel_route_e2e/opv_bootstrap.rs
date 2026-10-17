@@ -435,7 +435,8 @@ async fn claims(net: &mut Net, fx: &Fixture, class: Digest, jobs: &[KernelJobV1]
 async fn until_locked(net: &mut Net, o: &Onb) -> u64 {
     let ttpb = net.ttpb();
     let policy = palw_onboarding_challenge_policy_v1();
-    for _ in 0..400 {
+    // Paid sources reach Final only after their signed lifetime (≈ 444 DAA, ADR-0185).
+    for _ in 0..2_500 {
         let state = collect_attributed_work_beacon_v1(&net.attempt(o.v2).beacon_context(&policy), &net.attributed_events(), net.daa());
         if let Ok(WorkBeaconStateV1::Locked(b)) = state {
             return b.lock_position;
@@ -469,7 +470,7 @@ async fn until_final(net: &mut Net, claim: &Digest) -> u64 {
 #[tokio::test]
 async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_and_a_sampled_class_becomes_eligible() {
     kaspa_core::log::try_init_logger("warn");
-    let mut net = Net::over_cfg(boot_config(0, Vec::new()), TestConsensus::new);
+    let mut net = Net::over_cfg(paid_boot_config(), TestConsensus::new);
     net.beat_to(1).await;
     let mut onbs = onboard_all(&mut net, vec![Spec::honest(31, BOOT, true), Spec::honest(32, CAND, false)]).await;
     let c = onbs.pop().unwrap();
@@ -521,9 +522,8 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
         "before the lock: the latest lock the window allows, plus the evidence deadline"
     );
 
-    // ---- B's OPV claims reach Final with no Panel and lock C's beacon ----
-    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x10).await;
-    let ids = claims(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
+    // ---- B's approved paid claims reach paid Final (ADR-0185: the one source of an event) and lock C's beacon ----
+    let ids = net.paid_claims(BOOT, &b.kfx(), b.opv, &PRODUCERS[..2], &PRODUCERS[2..4], 0x10, None).await;
     for id in &ids {
         assert!(net.ledger().claims.contains_key(id), "an eligible OPV class's claim commits");
     }
@@ -545,7 +545,14 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     assert_eq!(chunk_target(&net, c.v2), Some(posted.window_end_daa - 1), "a Refute: the window's last DAA");
     net.beat_to(posted.window_end_daa + 1).await;
     assert_eq!(chunk_target(&net, c.v2), None, "a closed attempt takes no part");
-    assert_eq!(net.attempt(c.v2).record.state, S::G14Eligible, "C passed with the bootstrap's beacon");
+    // Passed: G14_ELIGIBLE, or already ACTIVE_REWARDABLE — the paid sources' lifetimes (≈ 444 DAA) outlast C's artifact binding's
+    // refutation horizon, after which `activate_due_classes` may activate C; legitimate only past that horizon, never by the beacon.
+    let state = net.attempt(c.v2).record.state;
+    assert!(matches!(state, S::G14Eligible | S::ActiveRewardable), "C passed with the bootstrap's beacon: {state:?}");
+    if state == S::ActiveRewardable {
+        let binding = net.api().unwrap().artifact_binding_v1(&c.v2, &Hash64::from_bytes(c.kernel.pc.root())).expect("C's binding");
+        assert_eq!(binding.state_at(net.daa()), ArtifactBindingStateV1::Final, "activated only past the binding's horizon");
+    }
 
     // ---- C is eligible by the derived rule (the drill floor), not under the ruled 128 ----
     assert_eq!(eligibility_drill(&net, &c), Ok(OpvEligibleV1::Derived { v2_class: c.v2 }));
@@ -559,11 +566,16 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     );
     assert!(register_opv(&mut net, CAND, &c).await, "C's OPV class registers: derived-eligible");
 
-    // ---- C's own claim reaches OPV Final ----
-    let jobs = post_jobs(&mut net, CAND, c.opv, 1, 0x40).await;
-    let id = claims(&mut net, &c.kfx(), c.opv, &jobs, &PRODUCERS[2..3]).await[0];
+    // ---- C's own approved paid claim reaches paid Final: a beacon fact attributed to its producer ----
+    let id = net.paid_claims(CAND, &c.kfx(), c.opv, &[OUTSIDER], &PRODUCERS[2..3], 0x40, Some((&b.kfx(), b.opv))).await[0];
     assert!(net.ledger().claims.contains_key(&id), "C's claim commits");
-    until_final(&mut net, &id).await;
+    let ttpb = net.ttpb();
+    for _ in 0..2_000 {
+        if net.attributed_events().iter().any(|w| w.event.source_profile_id == c.opv) {
+            break;
+        }
+        net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
     let mine: Vec<AttributedWorkV1> = net.attributed_events().into_iter().filter(|w| w.event.source_profile_id == c.opv).collect();
     assert_eq!(mine.len(), 1);
     assert_eq!(mine[0].event.final_path, FinalPathV1::PanelIndependent);
@@ -868,7 +880,7 @@ async fn g14_opv_bootstrap_a_block_of_hostile_complete_checks_spends_budget_and_
 #[tokio::test]
 async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refuted() {
     kaspa_core::log::try_init_logger("warn");
-    let mut net = Net::over_cfg(boot_config(0, Vec::new()), TestConsensus::new);
+    let mut net = Net::over_cfg(paid_boot_config(), TestConsensus::new);
     net.beat_to(1).await;
     let b = onboard_all(&mut net, vec![Spec::honest(36, BOOT, true)]).await.pop().unwrap();
     commit(&mut net, &b, 0x22).await;
@@ -876,8 +888,6 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     let o = net.evidence(BOOT, b.v2, ConformanceEvidenceActionV1::PostComplete(Box::new(p)));
     net.send(vec![(BOOT, o)]).await;
     assert!(register_opv(&mut net, BOOT, &b).await);
-    // The bootstrap's jobs wait posted (a job is no source; its claim, after C's start, is).
-    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x50).await;
     // A false binding: the V2 artifact is seed 37's weights, the kernel class runs seed 38's (the same program).
     let c = onboard_all(
         &mut net,
@@ -896,7 +906,8 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     .unwrap();
     commit(&mut net, &c, 0x22).await;
     assert_eq!(net.attempt(c.v2).eligible_profiles, vec![Hash64::from_bytes(b.opv)]);
-    claims(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
+    // ADR-0185: the sources are the bootstrap's approved paid claims, sealed after C's start.
+    net.paid_claims(BOOT, &b.kfx(), b.opv, &PRODUCERS[..2], &PRODUCERS[2..4], 0x50, None).await;
     until_locked(&mut net, &c).await;
     let post = sampled_post(&net, &c);
     let o = net.evidence(CAND, c.v2, ConformanceEvidenceActionV1::Post(Box::new(post)));
@@ -917,7 +928,19 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     assert_eq!(eligibility_drill(&net, &c), Err(OpvIneligibleV1::BindingNotStanding), "eligibility lost");
     assert_eq!(eligibility_drill(&net, &b), Ok(OpvEligibleV1::Derived { v2_class: b.v2 }), "the bootstrap's proven binding stands");
     let jobs = post_jobs(&mut net, CAND, c.opv, 1, 0x60).await;
-    let id = claims(&mut net, &c.kfx(), c.opv, &jobs, &PRODUCERS[2..3]).await[0];
+    // The claim carries everything else a commit needs past the monetary fence (its producer's signed covenant over the complete
+    // served material), so the door that drops it is the lost eligibility.
+    let producer = PRODUCERS[2];
+    let ledger = net.ledger();
+    let generated = greedy(&c.kfx(), &ledger, &c.opv, &jobs[0].prompt, jobs[0].max_new_tokens as usize);
+    let produced = produce(&c.kfx(), &ledger, &c.opv, &jobs[0], net.kid(producer), generated, |_| {});
+    let id = produced.claim.id();
+    let (seal, reveal) = seal_and_reveal(&ledger, net.kid(producer), &produced.object);
+    let o = net.route(producer, &seal);
+    net.send(vec![(producer, o)]).await;
+    net.kernel_covenant(producer, id, &produced.trace, &reveal).await;
+    let o = net.route(producer, &reveal);
+    net.send(vec![(producer, o)]).await;
     assert!(!net.ledger().claims.contains_key(&id), "a claim of a class that lost eligibility is dropped at the door");
     // Another plan of the same program (and the same artifact) is another class: no conformance, never eligible.
     let d = k2_tir_v2_descriptor();

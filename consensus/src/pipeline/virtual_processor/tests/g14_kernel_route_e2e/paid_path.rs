@@ -302,4 +302,161 @@ impl Net {
             );
         }
     }
+
+    /// **Approved paid claims of `class`, end to end**: each payer posts and enrolls a job (under the registrant's paid class over
+    /// `class`, registered once per call), the matching producer seals an honest claim of it and reveals it as its paid commit under its
+    /// signed covenant, and the lock and the drawn seats' receipts follow. Returns the base claim ids; they reach paid Final on their
+    /// own clock (≈ 444 DAA under the probe policies) and only then export a beacon event.
+    pub(super) async fn paid_claims(
+        &mut self,
+        registrant: usize,
+        fx: &Fixture,
+        class: Digest,
+        payers: &[usize],
+        producers: &[usize],
+        nonce: u8,
+        source: Option<(&Fixture, Digest)>,
+    ) -> Vec<Digest> {
+        assert_eq!(payers.len(), producers.len());
+        let jobs: Vec<KernelJobV1> = (0..payers.len())
+            .map(|i| KernelJobV1 {
+                class_binding_id: class,
+                prompt: vec![3, 17, 9],
+                max_new_tokens: 3,
+                decode: DecodeRuleV1::Greedy,
+                nonce: [nonce.wrapping_add(i as u8); 64],
+            })
+            .collect();
+        let posts: Vec<(usize, Obj)> =
+            jobs.iter().zip(payers).map(|(j, &payer)| (payer, self.route(payer, &K::PostJob { job: j.clone() }))).collect();
+        self.send(posts).await;
+        let paid_class = self.paid_class_over(registrant, class).await;
+        let pairs: Vec<(usize, Digest)> = payers.iter().copied().zip(jobs.iter().map(|j| j.id())).collect();
+        let paid_jobs = self.enroll_paid_jobs(paid_class, &pairs).await;
+        let sealed = self.seal_paid(fx, class, &jobs, &paid_jobs, producers).await;
+        let paid = self.reveal_paid(paid_class, &sealed).await;
+        // ADR-0185: once an approved paid Final exists the pinned bootstrap draw is closed; each later target locks on the seal-reveal
+        // seed of sources sealed after its commitment (the caller names the eligible source class and its weights).
+        if self.api().unwrap().paid_claim_approved_final_exists_v2() {
+            let (fx, source_class) = source.expect("a later paid claim needs seal-reveal sources of an eligible class");
+            for ((base, enrollment), (payer, producer)) in paid.iter().zip(payers.iter().zip(producers)) {
+                self.seal_reveal_sources(*base, *enrollment, *payer, *producer, fx, source_class, nonce.wrapping_add(0x80)).await;
+            }
+        }
+        self.lock_and_receipt(registrant, &paid).await;
+        paid.into_iter().map(|(base, _)| base).collect()
+    }
+
+    /// The producers that are a live source target's producer (RFC07-3: such a producer seals as a source only before that
+    /// target's commitment): every paid target with a beacon source row inside its signed horizon.
+    pub(super) fn live_target_producers(&self) -> std::collections::BTreeSet<Digest> {
+        let route = self.api().unwrap();
+        let ledger = self.ledger();
+        let now = self.daa();
+        ledger
+            .beacon_sources
+            .iter()
+            .filter(|(_, row)| now <= row.terms.hold_until)
+            .filter_map(|((context, _), _)| route.paid_claim_authority_v2(context).ok().map(|a| a.enrollment.producer))
+            .collect()
+    }
+
+    /// **The seal-reveal seed of a later paid target** (ADR-0185 F1, once an approved paid Final exists): the payer `sponsor` funds
+    /// the target's future source fee before its seal window; `k` bonds other than the target's producer, the sponsor and any live
+    /// source target's producer seal honest claims of fresh jobs of the eligible `source_class` inside the window and opt them in as
+    /// paid sources; after the seal window each reveals under its signed covenant; returns at the reveal window's end (the lock then
+    /// takes the seal-reveal draw). Nothing here is Final.
+    pub(super) async fn seal_reveal_sources(
+        &mut self,
+        base: Digest,
+        enrollment: Digest,
+        sponsor: usize,
+        target_producer: usize,
+        source_fx: &Fixture,
+        source_class: Digest,
+        nonce: u8,
+    ) {
+        use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1;
+        let fee_policy = self.config.params.palw_beacon_source_fee_v1.expect("the source fee fence").policy;
+        let route = self.api().unwrap();
+        let authority: PalwPaidClaimAuthorityV2 = route.paid_claim_authority_for_base_unchecked_v2(&base).expect("the paid authority");
+        let target = authority.source_target;
+        assert!(target.context.eligible_profiles.contains(&source_class), "the source class is an eligible source profile");
+        let fee = fee_policy.minimum_fee_for(&target).expect("the frozen source target's fee floor");
+        let k = authority.class.source_policy.work_count_k;
+        let fund =
+            misaka_palw_sdk::claim_paid_v2::paid_claim_funding_object_v2(&route, enrollment, self.kid(sponsor), fee, k, &fee_policy)
+                .unwrap_or_else(|e| panic!("the payer funds the future sources: {e:?}"));
+        let o = self.route(sponsor, &fund);
+        self.send(vec![(sponsor, o)]).await;
+        let terms = BeaconSourceFeeTermsV1 { source: target.terms, sponsor: self.kid(sponsor), fee_per_source: fee, max_sources: k };
+        assert!(self.ledger().beacon_source_fees.contains_key(&terms.source.context), "the future source fee is funded");
+        let barred = self.live_target_producers();
+        let target_kid = self.kid(target_producer);
+        let sealers: Vec<usize> = (0..self.chain.bonds.len())
+            .filter(|c| *c != target_producer && *c != sponsor && !barred.contains(&self.kid(*c)) && self.kid(*c) != target_kid)
+            .take(k as usize)
+            .collect();
+        assert_eq!(sealers.len(), k as usize, "enough bonds that are no live source target's producer");
+        let payers: Vec<usize> = (0..self.chain.bonds.len()).filter(|c| !sealers.contains(c)).take(k as usize).collect();
+        let mut jobs = Vec::new();
+        for (i, payer) in payers.iter().enumerate() {
+            let job = KernelJobV1 {
+                class_binding_id: source_class,
+                prompt: vec![5, 11, 2],
+                max_new_tokens: 3,
+                decode: DecodeRuleV1::Greedy,
+                nonce: [nonce.wrapping_add(i as u8); 64],
+            };
+            let o = self.route(*payer, &K::PostJob { job: job.clone() });
+            self.send(vec![(*payer, o)]).await;
+            jobs.push(job);
+        }
+        if self.daa() < terms.source.seal_start {
+            self.beat_to(terms.source.seal_start).await;
+        }
+        let ledger = self.ledger();
+        let mut seals = Vec::new();
+        let mut reveals = Vec::new();
+        for (job, p) in jobs.iter().zip(&sealers) {
+            let generated = greedy(source_fx, &ledger, &source_class, &job.prompt, job.max_new_tokens as usize);
+            let produced = produce(source_fx, &ledger, &source_class, job, self.kid(*p), generated, |_| {});
+            let (seal, reveal) = seal_and_reveal(&ledger, self.kid(*p), &produced.object);
+            seals.push((*p, self.route(*p, &seal)));
+            reveals.push((*p, produced.claim.id(), produced.trace, reveal));
+        }
+        self.send(seals).await;
+        let sealed = self.ledger();
+        let mut opt_ins = Vec::new();
+        for (job, p) in jobs.iter().zip(&sealers) {
+            let producer = self.kid(*p);
+            let seal = sealed.seals[&(job.id(), producer)].seal;
+            let object = K::OptInPaidBeaconSource {
+                producer,
+                job: job.id(),
+                seal,
+                context: terms.source.context,
+                source_terms: terms.source.id(),
+                fee_terms: terms.id(),
+            };
+            opt_ins.push((*p, self.route(*p, &object)));
+        }
+        self.send(opt_ins).await;
+        for p in &sealers {
+            assert!(
+                self.ledger().beacon_source_fee_promises.contains_key(&(terms.source.context, self.kid(*p))),
+                "the sealed source opted in with its prepaid fee promise"
+            );
+        }
+        self.beat_to(terms.source.seal_end).await;
+        for (p, id, trace, reveal) in &reveals {
+            self.kernel_covenant(*p, *id, trace, reveal).await;
+        }
+        let carriers: Vec<_> = reveals.iter().map(|(p, _, _, r)| (*p, self.route(*p, r))).collect();
+        self.send(carriers).await;
+        for (_, id, _, _) in &reveals {
+            assert!(self.ledger().claims.contains_key(id), "the opted-in source revealed inside its window");
+        }
+        self.beat_to(terms.source.reveal_end).await;
+    }
 }

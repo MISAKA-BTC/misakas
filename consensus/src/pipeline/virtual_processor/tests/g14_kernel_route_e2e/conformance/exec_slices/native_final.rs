@@ -126,7 +126,12 @@ async fn finalize_native_root(cw: &mut Cw, s: &Session) -> (u64, Obj) {
     let licence = license_native_root(cw, s.real.claim).await;
     let end = cw.net.daa() + cw.net.bundle.state.window_challenge() + 1_000;
     while !matches!(cw.net.chain.tip_state().1.claim(&s.real.claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }) {
-        assert!(cw.net.daa() < end, "native Final must be reachable before the signed root expiry");
+        assert!(
+            cw.net.daa() < end,
+            "native Final must be reachable before the signed root expiry: claim {:?}, root {:?}",
+            cw.net.chain.tip_state().1.claim(&s.real.claim).map(|c| c.phase.clone()),
+            cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).map(|r| r.phase.clone())
+        );
         cw.net.beat_to(cw.net.daa() + 1).await;
     }
     let state = cw.net.chain.tip_state().1;

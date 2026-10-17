@@ -171,7 +171,12 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
         let params = cw.net.chain.vp().palw_state_params_v2.clone().expect("V2 state params");
         kaspa_consensus_core::palw_attempt_material_v3::palw_native_custody_required_v3(&params, &class, cw.net.daa() + 1)
     };
-    if custody {
+    // One unbound prior session admits one claim; a test may have enrolled it already (to fold against the state that holds it).
+    let unbound = cw.net.chain.tip_state().1.monetary_material_rows_v1().into_iter().any(|row| {
+        row.native_binding.is_none()
+            && row.terms.native_session.as_ref().is_some_and(|s| s.class_id == class && s.executor == cw.net.bond(card))
+    });
+    if custody && !unbound {
         enroll_native_session(cw, card, class, nonce).await;
     }
     let step = cw.net.ttpb();
@@ -692,6 +697,11 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
     let mut cw = active_world().await;
     exec_v2_test_admit_class_v1(cw.v2_class, 0);
     let class = cw.v2_class;
+    // Past the monetary fence the attempt is admitted against its executor's prior native session: enroll it first, so the
+    // control below re-folds the attempt on the state that holds it.
+    if cw.net.config.params.palw_monetary_material_v1.is_some() {
+        enroll_native_session(&mut cw, ROOT_CARD, class, 0xA77E).await;
+    }
     let before_real = cw.net.chain.tip_state().1;
     let real = real_attempt(&mut cw, ROOT_CARD, class, 0xA77E).await;
     // Re-fold this actually admitted, signed header with EXEC dormant: native data is identical and the clock is absent.
@@ -701,7 +711,7 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
         let row = native.claim(&real.claim).unwrap();
         let vp = cw.net.chain.vp();
         let header = vp.headers_store.get_header(row.accepted_block).unwrap();
-        let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).unwrap();
+        let envelope = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment).unwrap();
         let point = PalwBlockContextV2 {
             block: row.accepted_block,
             daa_score: row.accepted_daa,

@@ -328,11 +328,17 @@ impl Cw {
             let id = produced.claim.id();
             let (seal, reveal) = seal_and_reveal(&ledger, self.net.kid(producer), &produced.object);
             seals.push((producer, self.net.route(producer, &seal)));
-            reveals.push((producer, reveal));
+            reveals.push((producer, reveal, produced.trace));
             ids.push(id);
         }
         self.net.send(seals).await;
-        let reveals: Vec<(usize, Obj)> = reveals.into_iter().map(|(p, o)| (p, self.net.route(p, &o))).collect();
+        // RFC08 F3: past `palw_monetary_material_v1` a kernel claim commits only under its producer's signed covenant.
+        if self.net.config.params.palw_monetary_material_v1.is_some() {
+            for ((p, reveal, trace), id) in reveals.iter().zip(&ids) {
+                self.kernel_covenant(*p, *id, trace, reveal).await;
+            }
+        }
+        let reveals: Vec<(usize, Obj)> = reveals.into_iter().map(|(p, o, _)| (p, self.net.route(p, &o))).collect();
         self.net.send(reveals).await;
         let ledger = self.net.ledger();
         for id in &ids {
@@ -925,7 +931,13 @@ async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_a
     }
     assert!(blue > 0);
     cw.net.beat_to(posted.evidence.unwrap().window_end_daa + 1).await;
-    assert_eq!(state(&cw).0, S::G14Eligible, "the honest evidence passed through the junk");
+    // As in the pass flow: past the artifact binding's horizon the pass goes straight on to ACTIVE_REWARDABLE (ADR-0185 lifetimes).
+    let binding_final = cw.net.api().unwrap().artifact_binding_v1(&cw.v2_class, &cw.kernel_root).unwrap().final_daa;
+    let passed = state(&cw).0;
+    assert!(
+        passed == S::G14Eligible || (cw.net.daa() >= binding_final && passed == S::ActiveRewardable),
+        "the honest evidence passed through the junk: {passed:?}"
+    );
     let z = cw.net.replay().await;
     cw.net.assert_same(&z, "replay");
 }
@@ -1072,7 +1084,13 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
     assert_eq!((cw.net.chain.sink(), cw.net.chain.tip_state().1.state_root()), (sink, root), "the same tip off disk");
     assert_eq!(cw.attempt().evidence, Some(posted), "the attempt row off disk");
     cw.net.beat_to(posted.window_end_daa + 1).await;
-    assert_eq!(cw.attempt().record.state, S::G14Eligible, "the restarted node passes the window");
+    // As in the pass flow: past the artifact binding's horizon the pass goes straight on to ACTIVE_REWARDABLE (ADR-0185 lifetimes).
+    let binding_final = cw.net.api().unwrap().artifact_binding_v1(&cw.v2_class, &cw.kernel_root).unwrap().final_daa;
+    let passed = cw.attempt().record.state;
+    assert!(
+        passed == S::G14Eligible || (cw.net.daa() >= binding_final && passed == S::ActiveRewardable),
+        "the restarted node passes the window: {passed:?}"
+    );
     let all = chain_blocks(&cw.net.chain, cw.net.chain.sink());
     for blk in &all[k + 1..] {
         arrive(&importer, blk.clone(), "A's block after P").await;
