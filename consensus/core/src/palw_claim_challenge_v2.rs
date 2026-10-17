@@ -431,6 +431,14 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     /// **Whether any approved paid Final exists** — a canonical paid Final row with receipts and a completed round (the rows the
     /// projection writes only for a Final the assigned quorum approved). The bootstrap window of
     /// [`PalwClaimChallengePolicyV2::bootstrap_seed`] is open exactly while this is `false`.
+    /// **Whether the v4/v5 opt-in beacons (and the Panel v5 beacon) read their sources by seal-reveal** (user decision 2026-10-18,
+    /// ADR-0185 note): always on a chain route. Those collectors exist only past their own dormant fences
+    /// (`palw_beacon_source_opt_in_v1`, `palw_beacon_source_fee_v1`); since the RFC07 adapter the one source of a Final event is an
+    /// approved paid claim, which is never Final by a target's `final_by`, so the Final-based reading could never lock there.
+    pub fn opt_in_seal_reveal_v6(&self) -> bool {
+        true
+    }
+
     pub fn paid_claim_approved_final_exists_v2(&self) -> bool {
         self.aux
             .range((PAID_CLAIM_FINALS_V2, Vec::new())..(PAID_CLAIM_FINALS_V2 + 1, Vec::new()))

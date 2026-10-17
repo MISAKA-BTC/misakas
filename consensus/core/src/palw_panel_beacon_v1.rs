@@ -92,6 +92,50 @@ pub trait PanelBeaconHistoryV1 {
     fn paid_material(&self, _context: &Digest) -> Result<crate::palw_beacon_source_fee_v1::PaidBeaconMaterialV5, String> {
         Err("the authenticated Panel prepaid source contract is unavailable".into())
     }
+    /// Whether the v4/v5 collectors read their sources by seal-reveal (user decision 2026-10-18; the chain history answers
+    /// `PalwKernelRouteStateV1::opt_in_seal_reveal_v6`). `false`: the Final-based collectors, as before.
+    fn opt_in_seal_reveal_v6(&self) -> bool {
+        false
+    }
+}
+
+fn collect_opt_in_v6_or_v4(
+    history: &impl PanelBeaconHistoryV1,
+    ctx: &challenge::BeaconContextV1,
+    contract: &challenge::OptInContractV4,
+    sources: &[challenge::OptInSourceV4],
+    tip: u64,
+) -> Result<challenge::SealedBeaconStateV3, PolicyRefusalV1> {
+    if history.opt_in_seal_reveal_v6() {
+        challenge::collect_opt_in_seal_reveal_beacon_v6(ctx, contract, sources, None, tip)
+    } else {
+        challenge::collect_opt_in_work_beacon_v4(ctx, contract, sources, tip)
+    }
+}
+
+fn collect_paid_v6_or_v5(
+    history: &impl PanelBeaconHistoryV1,
+    ctx: &challenge::BeaconContextV1,
+    contract: &challenge::PaidOptInContractV5,
+    sources: &[challenge::OptInSourceV4],
+    promises: &[challenge::PaidSourcePromiseV5],
+    tip: u64,
+) -> Result<challenge::SealedBeaconStateV3, PolicyRefusalV1> {
+    if history.opt_in_seal_reveal_v6() {
+        challenge::collect_opt_in_seal_reveal_beacon_v6(ctx, &contract.source, sources, Some((contract, promises)), tip)
+    } else {
+        challenge::collect_paid_opt_in_work_beacon_v5(ctx, contract, sources, promises, tip)
+    }
+}
+
+fn verify_collected_v1(
+    state: Result<challenge::SealedBeaconStateV3, PolicyRefusalV1>,
+    presented: &WorkBeaconV1,
+) -> Result<challenge::beacon::VerifiedWorkBeaconV1, PolicyRefusalV1> {
+    match state? {
+        challenge::SealedBeaconStateV3::Locked(beacon) if beacon.beacon() == presented => Ok(beacon),
+        _ => Err(PolicyRefusalV1::Missing("re-derived locked opt-in source beacon")),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -267,12 +311,20 @@ pub fn verify_panel_beacon_v1(
             Collector::OptIn => {
                 let (contract, sources) = history.opt_in_material(&ctx.id()).map_err(PanelBeaconRefusalV1::SourceContract)?;
                 refuse_assigned_sources(&sources, &assigned)?;
-                challenge::verify_opt_in_work_beacon_v4(&ctx, &contract, &sources, tip, &presented)
+                if history.opt_in_seal_reveal_v6() {
+                    verify_collected_v1(collect_opt_in_v6_or_v4(history, &ctx, &contract, &sources, tip), &presented)
+                } else {
+                    challenge::verify_opt_in_work_beacon_v4(&ctx, &contract, &sources, tip, &presented)
+                }
             }
             Collector::Paid => {
                 let (contract, sources, promises) = history.paid_material(&ctx.id()).map_err(PanelBeaconRefusalV1::SourceContract)?;
                 refuse_assigned_sources(&sources, &assigned)?;
-                challenge::verify_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, tip, &presented)
+                if history.opt_in_seal_reveal_v6() {
+                    verify_collected_v1(collect_paid_v6_or_v5(history, &ctx, &contract, &sources, &promises, tip), &presented)
+                } else {
+                    challenge::verify_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, tip, &presented)
+                }
             }
             _ => unreachable!(),
         };
@@ -317,12 +369,12 @@ pub fn panel_beacon_state_v1(
             Collector::OptIn => {
                 let (contract, sources) = history.opt_in_material(&ctx.id()).map_err(PanelBeaconRefusalV1::SourceContract)?;
                 refuse_assigned_sources(&sources, &assigned)?;
-                challenge::collect_opt_in_work_beacon_v4(&ctx, &contract, &sources, tip_position)
+                collect_opt_in_v6_or_v4(history, &ctx, &contract, &sources, tip_position)
             }
             Collector::Paid => {
                 let (contract, sources, promises) = history.paid_material(&ctx.id()).map_err(PanelBeaconRefusalV1::SourceContract)?;
                 refuse_assigned_sources(&sources, &assigned)?;
-                challenge::collect_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, tip_position)
+                collect_paid_v6_or_v5(history, &ctx, &contract, &sources, &promises, tip_position)
             }
             _ => unreachable!(),
         };

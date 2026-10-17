@@ -155,3 +155,82 @@ pub fn verify_paid_opt_in_work_beacon_v5(
         _ => Err(PolicyRefusalV1::Missing("re-derived locked paid source beacon")),
     }
 }
+
+const OPT_IN_SEAL_INITIAL: &[u8] = b"MISAKA/PALW/WORK-BEACON/OPT-IN-SEAL-REVEAL/V6";
+const OPT_IN_SEAL_MIX: &[u8] = b"MISAKA/PALW/WORK-BEACON/OPT-IN-SEAL-REVEAL/MIX/V6";
+
+/// **The v4 / v5 opt-in beacon read by seal-reveal** (user decision 2026-10-18, ADR-0185 note; dormant with the paid-claim bootstrap
+/// policy): the sources' content is the salted commitments of opted-in claims SEALED AFTER the target's commitment and opened after
+/// the seal window — the same method as the paid lock's F1 seed (`collect_paid_seal_reveal_seed_v6`). No source need be Final: an
+/// approved paid source's own lifetime outlasts any `final_by` of the same policy by construction. `paid` = the v5 fee inventory
+/// (validated complete exactly as v5 does); `None` = v4. A withheld or forfeited mixed source vetoes; fewer than `k` sealed sources is
+/// UNAVAILABLE. Honest-fraction premise as F1: at least one mixed source is honest (unknown to the others at seal).
+pub fn collect_opt_in_seal_reveal_beacon_v6(
+    ctx: &BeaconContextV1,
+    contract: &OptInContractV4,
+    sources: &[OptInSourceV4],
+    paid: Option<(&PaidOptInContractV5, &[PaidSourcePromiseV5])>,
+    tip: u64,
+) -> Result<SealedBeaconStateV3, PolicyRefusalV1> {
+    ctx.policy.validate()?;
+    if let Some((paid_contract, promises)) = paid {
+        // The complete prepaid inventory (policy, fee bindings); its Final-based verdict is not read.
+        collect_paid_opt_in_work_beacon_v5(ctx, paid_contract, sources, promises, tip)?;
+    } else if !ctx.policy.is_opt_in_source() || ctx.policy.is_paid_opt_in_source() {
+        return Err(PolicyRefusalV1::WrongCollector("opt-in v4 requires its own policy"));
+    }
+    let facts = opt_in_source_facts(ctx, contract, sources, tip)?;
+    let need = ctx.policy.work_count_k;
+    let start = ctx.commitment_position.saturating_add(ctx.policy.anchor_delay_slots);
+    let seal_end = crate::sealed::seal_window_end_v3(ctx);
+    let reveal_end = crate::sealed::reveal_window_end_v3(ctx);
+    let mixed: Vec<&crate::SealedSourceV3> =
+        facts.iter().filter(|s| s.seal_position >= start && s.seal_position < seal_end).collect();
+    let n = mixed.len() as u32;
+    if tip < seal_end {
+        return Ok(SealedBeaconStateV3::Sealing { sealed: n, need });
+    }
+    if n < need {
+        return Ok(SealedBeaconStateV3::Unavailable { mixed: n, need });
+    }
+    let in_time = |s: &crate::SealedSourceV3| s.reveal.as_ref().filter(|r| r.reveal_position < reveal_end && r.reveal_position <= tip).cloned();
+    if tip < reveal_end {
+        let revealed = mixed.iter().filter(|s| in_time(s).is_some()).count() as u32;
+        return Ok(SealedBeaconStateV3::Revealing { mixed: n, revealed });
+    }
+    let forfeited = sources
+        .iter()
+        .filter(|s| s.context_id == contract.context_id && s.forfeited_position.is_some_and(|at| at <= tip))
+        .count() as u32;
+    let withheld = mixed.iter().filter(|s| in_time(s).is_none()).count() as u32;
+    if withheld > 0 || forfeited > 0 {
+        return Ok(SealedBeaconStateV3::Vetoed { withheld, failed: forfeited });
+    }
+    let mut items: Vec<(Digest, u64, Digest, Digest, u64)> = mixed
+        .iter()
+        .map(|s| {
+            let r = in_time(s).expect("checked");
+            (s.seal, s.seal_position, r.salt, s.source_profile_id, r.reveal_position)
+        })
+        .collect();
+    items.sort();
+    let initial = object_id(OPT_IN_SEAL_INITIAL, &(ctx.id(), contract));
+    let output = object_id(OPT_IN_SEAL_MIX, &(initial, &items));
+    let beacon_sources: Vec<crate::beacon::BeaconSourceV1> = items
+        .iter()
+        .enumerate()
+        .map(|(i, (seal, _, _, profile, revealed))| crate::beacon::BeaconSourceV1 {
+            source_profile_id: *profile,
+            canonical_work_id: *seal,
+            execution_commitment: *seal,
+            accepted_position: *revealed,
+            settlement_position: *revealed,
+            occurrence_index: i as u32,
+        })
+        .collect();
+    let challenge_anchor = crate::beacon::challenge_anchor_v1(ctx, &beacon_sources);
+    Ok(SealedBeaconStateV3::Locked(VerifiedWorkBeaconV1::derived(
+        WorkBeaconV1 { sources: beacon_sources, accumulators: vec![initial, output], output, challenge_anchor, lock_position: reveal_end },
+        ctx.id(),
+    )))
+}

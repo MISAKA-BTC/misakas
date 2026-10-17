@@ -26,3 +26,8 @@ RFC07 adapter 以降、beacon event を出せるのは選ばれた checker が�
 ## 帰結
 
 pin する seed の値は network ごとのユーザー決定。fence 有効化は ADR-0181 の手続きに従う。
+
+## 追記 2026-10-18(ユーザー決定)
+
+1. **v4/v5 opt-in beacon と Panel v5 beacon も seal-reveal で読む。** 承認済み paid source の自身の lifetime には同じ policy の source window と審査期間が含まれるため、target の `final_by` までに Final になることは構造上ない。そこで F1 と同じ方法 — target の commitment 後に seal された opt-in source の salted commitment を seal window 後に開き、source の Final を待たない — で beacon を導出する(`collect_opt_in_seal_reveal_beacon_v6`)。withheld / forfeited の mixed source は veto、`k` 未満は UNAVAILABLE。適用は chain の route 上の v4/v5 collector すべて(`opt_in_seal_reveal_v6`)。v4/v5 自体が dormant な `palw_beacon_source_opt_in_v1` / `palw_beacon_source_fee_v1` の後にしか存在しない。node・Panel history・SDK の fresh verifier は同じ述語を読む。
+2. **`PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1` を導出値にする**(200 → binding window + 遅延 + 収集 window(≥ paid source lifetime)+ depth + evidence deadline + challenge window = 1,208 DAA)。pass 後の DA 喪失による eligibility 喪失の規則はそのまま有効になる。

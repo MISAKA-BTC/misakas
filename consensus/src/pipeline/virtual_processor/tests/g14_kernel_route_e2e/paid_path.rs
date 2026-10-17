@@ -85,12 +85,13 @@ impl Net {
             ids.push(paid_job.id());
             objects.push((*payer, self.route(*payer, &enroll)));
         }
+        let rehearsals: Vec<_> = objects.iter().map(|(_, o)| self.chain.ctx.consensus.palw_object_rehearsal_v1(o)).collect();
         self.send(objects).await;
         for id in &ids {
             assert!(
                 self.api().unwrap().aux.keys().any(|(t, k)| *t == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2
                     && *k == borsh::to_vec(id).unwrap()),
-                "the payer's job enrollment landed"
+                "the payer's job enrollment landed (rehearsals {rehearsals:?})"
             );
         }
         ids

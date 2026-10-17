@@ -998,8 +998,23 @@ pub fn fresh_verify_v4(
     contract: &misaka_palw_challenge::OptInContractV4,
     sources: &[misaka_palw_challenge::OptInSourceV4],
 ) -> FreshVerdictV1 {
+    fresh_verify_v4_with(input, contract, sources, false)
+}
+
+/// [`fresh_verify_v4`] with the route's seal-reveal rule (`PalwKernelRouteStateV1::opt_in_seal_reveal_v6`).
+pub fn fresh_verify_v4_with(
+    input: &FreshInputV1<'_>,
+    contract: &misaka_palw_challenge::OptInContractV4,
+    sources: &[misaka_palw_challenge::OptInSourceV4],
+    seal_reveal: bool,
+) -> FreshVerdictV1 {
     use misaka_palw_challenge::SealedBeaconStateV3 as S;
-    let derived = match misaka_palw_challenge::collect_opt_in_work_beacon_v4(input.ctx, contract, sources, input.tip_daa) {
+    let collected = if seal_reveal {
+        misaka_palw_challenge::collect_opt_in_seal_reveal_beacon_v6(input.ctx, contract, sources, None, input.tip_daa)
+    } else {
+        misaka_palw_challenge::collect_opt_in_work_beacon_v4(input.ctx, contract, sources, input.tip_daa)
+    };
+    let derived = match collected {
         Ok(S::Locked(b)) => Ok(b),
         Ok(state) => Err(format!("{state:?}")),
         Err(e) => Err(format!("POLICY_INVALID {e}")),
@@ -1013,9 +1028,31 @@ pub fn fresh_verify_v5(
     sources: &[misaka_palw_challenge::OptInSourceV4],
     promises: &[misaka_palw_challenge::PaidSourcePromiseV5],
 ) -> FreshVerdictV1 {
+    fresh_verify_v5_with(input, contract, sources, promises, false)
+}
+
+/// [`fresh_verify_v5`] with the route's seal-reveal rule (`PalwKernelRouteStateV1::opt_in_seal_reveal_v6`).
+pub fn fresh_verify_v5_with(
+    input: &FreshInputV1<'_>,
+    contract: &misaka_palw_challenge::PaidOptInContractV5,
+    sources: &[misaka_palw_challenge::OptInSourceV4],
+    promises: &[misaka_palw_challenge::PaidSourcePromiseV5],
+    seal_reveal: bool,
+) -> FreshVerdictV1 {
     use misaka_palw_challenge::SealedBeaconStateV3 as S;
+    let collected = if seal_reveal {
+        misaka_palw_challenge::collect_opt_in_seal_reveal_beacon_v6(
+            input.ctx,
+            &contract.source,
+            sources,
+            Some((contract, promises)),
+            input.tip_daa,
+        )
+    } else {
+        misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(input.ctx, contract, sources, promises, input.tip_daa)
+    };
     let derived =
-        match misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(input.ctx, contract, sources, promises, input.tip_daa) {
+        match collected {
             Ok(S::Locked(b)) => Ok(b),
             Ok(state) => Err(format!("{state:?}")),
             Err(e) => Err(format!("POLICY_INVALID {e}")),
@@ -1123,7 +1160,7 @@ mod tests {
         p.validate().expect("structurally valid");
         assert_eq!(
             (p.work_count_k, p.anchor_delay_slots, p.beacon_window_slots, p.settlement_depth_d, p.repetition_count, p.security_bits),
-            (2, 2, 120, 2, 1, 2)
+            (2, 2, 1_024, 2, 1, 2), // the window: user decision 2026-10-17 (ADR-0185 §4)
         );
         assert_eq!(p.retry_limit, 2, "three counted attempts");
         assert!(approved_fault_model_v1(&p).is_some(), "the unreviewed test soundness id has its fault model");
