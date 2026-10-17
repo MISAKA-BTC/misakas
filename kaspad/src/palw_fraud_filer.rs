@@ -1185,6 +1185,40 @@ pub(super) struct PalwFraudFilerBookV1 {
     /// This bond's role (an operator's genesis bond, or any other) — read once per refresh.
     role: Option<PalwFilerRoleV1>,
     network_form: Option<kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1>,
+    /// **G14 (G-D02a): the step refutation each public legacy terminal carried**, kept until the pursuit ends. When the chain
+    /// convicts the producer on it, the same refutation proves every liable `Valid` signer false, and is handed to the false-Valid
+    /// filer (`palw_filer_false_valid.rs`) so the kind-3 filings follow without anyone filing by hand.
+    pub(super) terminal_proofs: BTreeMap<Hash64, PalwFraudFilerTerminalProofV1>,
+}
+
+/// One public terminal's refutation (the producer's committed half, the verifier's own model rows, the prompt carriage).
+#[derive(Clone, Debug)]
+pub(super) struct PalwFraudFilerTerminalProofV1 {
+    pub(super) leaf: u64,
+    pub(super) refutation: kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1,
+    pub(super) operand_openings: Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>,
+    pub(super) prompt_ids_opening: Option<kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+}
+
+impl PalwFraudFilerTerminalProofV1 {
+    /// The refutation a public terminal object carries (`None` for any other object).
+    pub(super) fn of_terminal_v1(object: &PalwConsensusObjectV2) -> Option<Self> {
+        match object {
+            PalwConsensusObjectV2::LegacyLeafRecomputedV2 { accusation } => Some(Self {
+                leaf: accusation.leaf_index,
+                refutation: accusation.refutation.clone(),
+                operand_openings: accusation.artifact_openings.clone(),
+                prompt_ids_opening: accusation.prompt_ids_opening.clone(),
+            }),
+            PalwConsensusObjectV2::ShardCourtAccused { accusation } => Some(Self {
+                leaf: accusation.leaf_index,
+                refutation: accusation.refutation.clone(),
+                operand_openings: accusation.artifact_openings.clone(),
+                prompt_ids_opening: accusation.prompt_ids_opening.clone(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 impl PalwFraudFilerBookV1 {
@@ -4190,6 +4224,28 @@ impl PalwPanelService {
                         })
                         .await
                         .unwrap_or_else(|e| Err(format!("the public terminal task did not finish: {e}")));
+                        if let Ok(object) = &terminal
+                            && let Some(proof) = PalwFraudFilerTerminalProofV1::of_terminal_v1(object)
+                        {
+                            // G14 (G-D02a): the terminal's refutation is objective evidence against every liable Valid signer
+                            // too; the false-Valid filer files only what the chain's own check accepts, so noting it now (and
+                            // again at the conviction, see below) never pays for a filing the fold refuses.
+                            false_valid.note_step_refutation_v1(
+                                crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                    params,
+                                    self.config.fee_outpoint.is_some(),
+                                    current_daa,
+                                ),
+                                claim,
+                                &proof.refutation,
+                                &proof.operand_openings,
+                                proof.prompt_ids_opening.as_ref(),
+                                crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: proof.leaf },
+                                Some(case.candidate.accepted_daa),
+                                current_daa,
+                            );
+                            book.terminal_proofs.insert(claim, proof);
+                        }
                         self.fraud_filer_queue_v1(book, claim, item, current_daa, court_pending, court_due, || {
                             palw_fraud_filer_sign_terminal_v2(
                                 terminal?,
@@ -4208,6 +4264,33 @@ impl PalwPanelService {
                             _ => warn!(
                                 "[{PALW_PANEL}] claim {claim}: the pursuit ended without an objective outcome — {phase:?} (LG14-A)"
                             ),
+                        }
+                        // G14 (G-D02a): a conviction on our own terminal proves every liable Valid signer false as well.
+                        if phase == PalwFilerPhaseV1::Convicted
+                            && let Some(proof) = book.terminal_proofs.remove(&claim)
+                        {
+                            let bound = view.as_ref().map(|v| v.accepted_daa);
+                            if false_valid.note_step_refutation_v1(
+                                crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                    params,
+                                    self.config.fee_outpoint.is_some(),
+                                    current_daa,
+                                ),
+                                claim,
+                                &proof.refutation,
+                                &proof.operand_openings,
+                                proof.prompt_ids_opening.as_ref(),
+                                crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: proof.leaf },
+                                bound,
+                                current_daa,
+                            ) {
+                                info!(
+                                    "[{PALW_PANEL}] claim {claim}: the public conviction at leaf {} is handed to the false-Valid filer (G14 G-D02a)",
+                                    proof.leaf
+                                );
+                            }
+                        } else if phase != PalwFilerPhaseV1::Convicted {
+                            book.terminal_proofs.remove(&claim);
                         }
                         book.settle(&claim, PalwFraudFilerVerdictV1::Settled(phase));
                         break;
