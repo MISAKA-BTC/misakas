@@ -495,20 +495,17 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     terminal_deadline_at_v1(&claim, builder.params, Some(ctx.daa_score))?,
                     &claim,
                 )?;
+                // G-15: an unpaid Final is not retired (`palw_unpaid_reward_retirement_floor_v1`, the same floor DL-1 derives).
+                let effective = super::palw_unpaid_reward_retirement_floor_v1(
+                    &builder.state,
+                    builder.params,
+                    &claim_id,
+                    &claim,
+                    Some(ctx.daa_score),
+                    effective,
+                );
                 if let Some(at) = effective.filter(|at| *at >= ctx.daa_score) {
                     builder.arm_deadline(at, claim_id)?;
-                    continue;
-                }
-                // **G-15 (`palw_reward_liability_horizon_v1`, dormant): the liability window covers every unpaid reward.** A `Final`
-                // claim whose vesting row has not matured (its DAA expiry passed, its settlement clock not yet, V-4) is not retired: the
-                // post-Final public dispute stays open on it (`palw_final_public_dispute_open_v1`) until the reward is paid, so no
-                // reward is ever unpaid AND unprosecutable. Rechecked every `PALW_UNPAID_RETIREMENT_RECHECK_DAA_V1`; a no-op below the
-                // fence, for a voided claim and once the row matured or left.
-                if builder.params.reward_liability_horizon_governs_v1(claim.accepted_daa)
-                    && matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
-                    && builder.state.vesting_row(&claim_id).is_some_and(|row| row.matured_at.is_none())
-                {
-                    builder.arm_deadline(ctx.daa_score.saturating_add(PALW_UNPAID_RETIREMENT_RECHECK_DAA_V1), claim_id)?;
                     continue;
                 }
                 // G-15 (`palw_reward_liability_horizon_v1`, dormant): a certified reward still deferred to the liability horizon is
@@ -530,6 +527,3 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
     }
     Ok(())
 }
-
-/// G-15: how often a `Final` claim held past its retirement for an unmatured vesting row is rechecked (DAA).
-pub(crate) const PALW_UNPAID_RETIREMENT_RECHECK_DAA_V1: u64 = 10;
