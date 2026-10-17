@@ -75,6 +75,9 @@ pub struct PalwRfc0018MirrorV1 {
     pub gate_c_from_daa: Option<u64>,
     pub gate_c_rule: PalwGateCRuleV1,
     pub certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+    /// **The free-prompt receipt lane's tail** past certification (`receipt_maturity + receipt_use_window` of the network's FP bundle):
+    /// a governed FP claim must still exist that long after its certification can be decided (RFC-0018 18-A; user decision 10-17).
+    pub fp_receipt_tail_daa: u64,
 }
 
 impl PalwRfc0018MirrorV1 {
@@ -109,6 +112,20 @@ impl PalwRfc0018MirrorV1 {
 /// The mirror's readers on the state params (`None`: every shipped preset).
 pub fn palw_rfc0018_mirror_v1(params: &PalwStateParamsV2) -> Option<&PalwRfc0018MirrorV1> {
     params.rfc0018_v1()
+}
+
+/// **Gate C's retirement floor** (user decision 2026-10-17): a governed claim does not retire before its certification can be decided
+/// and, for a free-prompt claim, its receipt lane run: `final + certification lifetime (certify_by + attest window, at least the
+/// prosecution window) + the FP receipt tail`. `retire_at` unchanged for a claim Gate C does not govern (every shipped network), and
+/// for a claim that is not `Final` (a void retires as before: it earns nothing).
+pub fn palw_gate_c_retirement_floor_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, retire_at: u64) -> u64 {
+    let Some(mirror) = palw_rfc0018_mirror_v1(params).filter(|m| m.gate_c_governs(claim.accepted_daa)) else { return retire_at };
+    let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { return retire_at };
+    let tail = match claim.source {
+        PalwClaimSourceV2::FreePrompt { .. } => mirror.fp_receipt_tail_daa,
+        PalwClaimSourceV2::Attempt => 0,
+    };
+    retire_at.max(final_daa.saturating_add(mirror.certification.lifetime_daa()).saturating_add(tail))
 }
 
 /// Whether Gate C governs `claim` (its acceptance DAA past the fence).
@@ -603,6 +620,12 @@ impl Params {
             certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(
                 (86_400_000u64 / self.target_time_per_block().max(1)).max(1),
             ),
+            fp_receipt_tail_daa: match &self.palw_consensus_mode {
+                PalwConsensusMode::ConsensusV2(bundle) => {
+                    bundle.freeprompt.receipt_maturity_daa().saturating_add(bundle.freeprompt.receipt_use_window_daa())
+                }
+                _ => 0,
+            },
         };
         (!mirror.is_empty()).then_some(mirror)
     }

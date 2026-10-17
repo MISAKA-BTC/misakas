@@ -11194,7 +11194,10 @@ fn terminal_deadline_at_v1(
     if params.claim_retirement_daa == 0 {
         return Ok(None);
     }
-    Ok(Some(terminal_daa.checked_add(params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?))
+    let retire_at = terminal_daa.checked_add(params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?;
+    // RFC-0018 Gate C (user decision 2026-10-17): a governed Final claim is kept until its certification can be decided and its
+    // receipt lane run (the identity for every claim Gate C does not govern — every claim on every shipped network).
+    Ok(Some(crate::palw_rfc0018_v1::palw_gate_c_retirement_floor_v1(params, claim, retire_at)))
 }
 
 /// Placeholder anchor for the shape-level count (the parameterless check counts entries; the

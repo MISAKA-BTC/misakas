@@ -120,8 +120,9 @@ pub const PALW_RFC0016_ENTRANT_MAX_PER_MODEL_CALIBRATION_PERMILLE_V1: u32 = 2;
 /// **V5: the calibration epoch, in DAA** — 720 DAA = ONE epoch (the nominal day at the 120 s clock slot). It is a DAA count: its
 /// wall-clock span is MEASURED and reported (the report's epoch clock, the harness's drift), never labelled "24 h".
 pub const PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1: u64 = 720;
-/// **V5: the 30-day average's nominal window, in DAA** — 30 calibration epochs (21,600 DAA); a DAA count, not a wall-clock month.
-pub const PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1: u64 = 30 * PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1;
+/// **V5: the S̄_m average's nominal window, in DAA** — 7 calibration epochs (5,040 DAA; user decision 2026-10-16, was 30 / 21,600); a DAA
+/// count, not a wall-clock week.
+pub const PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1: u64 = 7 * PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1;
 
 /// **V9: the verifier share's calibration baseline** — 20 % (200 ‰), inside ADR-0132 C's 10–30 % clamp which the slope never leaves.
 /// A split of the SAME claim pay: no new issuance pays verifiers.
@@ -544,12 +545,12 @@ mod tests {
         assert!(palw_rfc0016_calibration_conforms_v1(&tilted).is_err(), "k stays 1");
     }
 
-    /// V5 (user decision 2026-10-15): one calibration epoch is 720 DAA and the 30-day window 21,600 DAA — the same DAA counts the
-    /// ADR-0177 allocation's decided policy uses (one day-equivalent epoch, 30 of them per average).
+    /// V5 (user decision 2026-10-15): one calibration epoch is 720 DAA and the average window 5,040 DAA (7 epochs, 10-16) — the same DAA counts the
+    /// ADR-0177 allocation's decided policy uses (one day-equivalent epoch, 7 of them per average).
     #[test]
-    fn v5_one_epoch_is_720_daa_and_the_window_21_600() {
+    fn v5_one_epoch_is_720_daa_and_the_window_5_040() {
         assert_eq!(PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1, 720);
-        assert_eq!(PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1, 21_600);
+        assert_eq!(PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1, 5_040);
         let decided = crate::palw_bond_budget_v1::PalwModelAllocationPolicyV1::decided_unapproved_v3();
         assert_eq!(decided.epoch_daa, PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1);
         assert_eq!(decided.average.unwrap().span_daa(), PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1);

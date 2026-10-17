@@ -1131,4 +1131,34 @@ mod tests {
         voided.phase = PalwClaimPhaseV2::Voided { reason: crate::palw_state_v2::PalwVoidReasonV2::CourtFraud, voided_daa: 160 };
         assert_eq!(palw_fp_receipt_clock_v1(&gc, &certified, &h64(0xFC), &voided, 124).map_err(|e| e.status), Err("revoked"));
     }
+
+    /// **User decision 2026-10-17 (Gate C retirement)**: a governed Final free-prompt claim is not retired before its certification can
+    /// be decided and its receipt lane run: the deadline the sweep reads is at least `final + certification lifetime + receipt tail`, so
+    /// an honest claim certified at the latest possible DAA is still present for its whole use window. Below Gate C: unchanged.
+    #[test]
+    fn rfc18_a_an_honest_claim_is_certified_and_receipted_before_it_retires() {
+        use crate::palw_rfc0018_v1::{PalwGateCRuleV1, PalwRfc0018MirrorV1};
+        let tail = MATURITY + USE_WINDOW;
+        let policy = crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(720);
+        let base = params().with_claim_retirement_daa(3_000).unwrap();
+        let gc = base.clone().with_rfc0018_v1(Some(PalwRfc0018MirrorV1 {
+            gate_c_from_daa: Some(100),
+            gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
+            certification: policy,
+            fp_receipt_tail_daa: tail,
+            ..Default::default()
+        }));
+        let state = certified_state(u128::MAX);
+        let claim = state.claim(&h64(0xFC)).unwrap().clone();
+        let final_daa = 124;
+        let old = crate::palw_state_v2::palw_rcore_deadline_v1(&state, &base, &h64(0xFC), &claim, Some(final_daa)).unwrap().unwrap();
+        let new = crate::palw_state_v2::palw_rcore_deadline_v1(&state, &gc, &h64(0xFC), &claim, Some(final_daa)).unwrap().unwrap();
+        assert_eq!(old, final_daa + 3_000, "below Gate C: the released retirement");
+        assert!(policy.lifetime_daa() >= policy.prosecution_window_daa && policy.prosecution_window_daa == 5_040);
+        assert_eq!(new, final_daa + policy.lifetime_daa() + tail, "governed: kept past the latest certification and its receipt lane");
+        // The latest certification decision, then the draw slot, the beacon and the whole use window, all before retirement.
+        let latest_certified = final_daa + policy.lifetime_daa();
+        let last_spend = latest_certified + MATURITY + USE_WINDOW;
+        assert!(last_spend <= new, "{last_spend} <= {new}");
+    }
 }
