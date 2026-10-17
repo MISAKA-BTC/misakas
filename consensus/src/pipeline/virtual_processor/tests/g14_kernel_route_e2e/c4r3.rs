@@ -617,3 +617,28 @@ async fn g14_c4r3_control_a_chunked_proof_convicts_when_the_chunk_lane_is_free()
     w.net.send(chunks.into_iter().map(|c| (outsider, c)).collect()).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "a chunked proof convicts when the lane is free");
 }
+
+/// **Lane g14-court-capacity-r2: the kernel route's claim door reads `palw_detection_policy_v1`** (g14-detection-policy §10 item 2).
+/// The route's harness with the detection fence armed at genesis and NO policy for the class (armed without its validation, as the
+/// route's own fence): the class registers and its job posts, but a claim's sealed reveal is dropped at the route's door — no claim,
+/// so no reward, weight or consensus credit, and nothing for a seat to sign. Below the fence (every other test here) claims commit.
+#[tokio::test]
+async fn g14r2_a_kernel_claim_of_a_class_without_a_detection_policy_is_dropped() {
+    kaspa_core::log::try_init_logger("warn");
+    let (config, _, premine, floats) = kernel_config();
+    let mut params = config.params.clone();
+    params.palw_detection_policy_v1 = Some(kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyFenceV1 {
+        activation: ForkActivation::new(0),
+        policies: Vec::new(),
+    });
+    params.sync_palw_detection_policy_v1();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        unreachable!("testnet-12 is ConsensusV2")
+    };
+    let bundle = bundle.clone();
+    assert!(bundle.state.detection_policy_v1().is_some(), "the fold reads the mirror");
+    let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
+    let job = w.job().await;
+    let claim = w.claim_with(0, &job, false, Delivery::Direct).await;
+    assert!(!w.net.ledger().claims.contains_key(&claim.id), "past the detection fence a class with no policy takes no kernel claim");
+}

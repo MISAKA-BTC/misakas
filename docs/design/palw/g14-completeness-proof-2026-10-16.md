@@ -1361,3 +1361,39 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 - fault corpus(fixture の整数 cache model、実際の seat seam)では、宣言した不正集合(D ≥ 10%)で 99% 以上を確認した。D = 1 系は解析値 k/N と一致した。正直な claim は 1 度も flag されず、誤実装の seat の局所 flag はすべて参照裁定が棄却した。
 - 第 2 段: fence より後の claim gate(attempt と FP。option (b) と同じ形で拒否する)、複数 round の seat、funnel の後段(accepted〜invalidated、deadline / unassigned の loss)、実ノードの試験(1 位置の偽りを k/N の率で検出し、告発で有罪、slash、報酬なし)。
 - 未完(同文書 §10): court/DA 予算の実連動(interface は同文書に記載)、kernel route の admission と shadow、同時 claim 数の強制、producer の事前確認、RPC、実 artifact での値の測定。
+
+### 11.8 追補(2026-10-17、`integ/g14-detection-policy` の merge 後):未実行だった試験、受入 G、detection policy との接続
+
+- **未実行だった試験を実行した。**
+  - kaspad の unit test 3 件 pass:`p2_8e_the_folds_answer_to_an_opening_as_a_step`(court 容量の待機は Retry)、`g14_tir_seat_finding_reaches_the_filer_queue`(fence 以後の Open)、新規 `g14r2_the_seat_takes_no_duty_beyond_claims_in_flight`。
+  - core の TIR 試験(worker の述語が block ごとに fold と一致する assert を含む)2 件 pass。
+  - post-Final の vesting が burn されることの assert は pass(`g07r2_an_unserved_…`)。
+- **受入 G(`legacy_v2_attempt_honest_claim_is_final_and_paid_under_full_g14`)は pass。期待値の側が誤っていた。**
+  - 原因:V-4(b) の licence halt。`palw_second_clock_depth_v1` は、2 × window_court の間に settled anchor が 1 つもなければ `None` を返す。vesting はそれを halt と読み、何も成熟させない。
+  - これは設計どおりで、`PALW_T12_SETTLED_ANCHOR_DEPTH` の文書にあるとおり、heartbeat だけの履歴では経済的な締めは何も起きない。
+  - 試験は heartbeat だけで F + 3 × window_court を待っていたので、一度も支払われなかった。この試験は前の round の未 build の WIP で追加され、一度も通っていなかった。
+  - 修正:正直な producer が 2,000 DAA ごとに licensed claim を出し、chain を live に保つようにした。row は second clock の bound までに成熟し、producer の leg は coinbase で mint された。
+  - 規則は変えていない。
+- **detection policy への interface(§10 の 1)。**
+  - `palw_court_claim_budget_v1(state, params, class, accepted_daa)` を追加した(producer の最小 retention を下限として使う)。実際の retention を渡す版 `palw_court_claim_budget_for_retention_v1` もある。返す値は `PalwCourtClaimBudgetV1`。
+    - `compellable_openings`:reservation 1 つが自分の予算で強制できる unit 数。DA session 34(LG14-B が in force なら lane 128 を加える)。
+    - `da_bytes`:その数 × 1 object の最大 carriage(16 × 100,000 B)。
+    - `first_move_by_daa`:hard deadline から、fused なら 4W、one-move なら W を引いた値。
+    - `reserved_sessions`:court-demanding な claim なら 1。
+  - 他の bond がこの予算を埋められない理由:reservation は 1 bond 1 claim につき 1 つで、予算はその reservation に属する。reserve row は bounded admission が保証する。
+  - claim gate:V2 の attempt と FP の gate は `palw_detection_claim_refusal_with_budget_v1` を通る。policy が宣言した court / DA の値と inspection 期限を、実際の予約で置き換えて plan を作る。
+    - 試験 `the_claim_gate_checks_the_policys_needs_against_the_courts_per_claim_reservation`:k_round = 53 の policy は、court fence 未満では受理され、以後は `DETECTION_COURT_BUDGET_BELOW_DRAW` で拒否された(fold の attempt gate でも同じ)。retention が短い claim は `DETECTION_DEADLINE_UNREACHABLE` で拒否された。
+    - g14_detection_gate は 5 passed、g14_detection_policy は全件 pass。
+  - **数値(利用者の判断に関わる)。**
+    - producer の最小 trace retention(bind + receipt + challenge + court)で受理された claim の場合、one-move class でも「最後の保証つき first move」は受理の 1,158 DAA 後(DAA 1,001 → 2,159)。
+    - fused class では hard − 4W が受理より前になり、保証が成立しない。
+    - court を要する class に報酬を出すには、producer が約束する retention を最小値より長く(少なくとも 4W + W_disclose 以上)する必要がある。retention 規則の変更は判断事項で、変えていない。
+  - fee 不足:court の carrier(`carry_priority_v1`)は、funding の走査がその object の最低額で失敗したとき、node が detect して追っている claim について `detection_loss_once(class, claim, FeeShortfall)` を記録する。claim の取り出しは `palw_court_object_claim_v1`、class は funnel の watched から取る。
+- **kernel route(§10 の 2・3)。**
+  - kernel の claim commit(plain / pipeline / segmented / salted)は、`palw_detection_policy_v1` 以後、class に policy がなければ drop する(何も書かない。OPV gate の drop と同じ形)。
+  - plain な single-program claim は、job と生成 token から N を出し(位置数 = prompt + generated − 1)、collateral は policy の claim_collateral として、policy の plan も通す。
+  - pipeline・segmented・typed の claim は、policy の有無だけを見る(N が plain の stream と違うため)。
+  - kernel route の court は自前の ledger court なので、V2 の予約予算は使わず、policy の宣言値を使う。
+  - 試験 `g14r2_a_kernel_claim_of_a_class_without_a_detection_policy_is_dropped`(node):1 passed。
+  - seat が claims_in_flight を超えて duty を取らないこと:interval seat(`palw_panel.rs`)が `detection_take_duty_v1` で、class ごとの in-flight を inspection 期限まで数える。超えた duty は取らず、`CapacityRefusal` に記録する。kernel route の seat receipt には node 側の scheduler が存在しない(test harness だけが署名する)ので、配線する場所がない。
+- **node の回帰。** c4r3 2 件、T-N11、`..._with_court_capacity`、受入 G、kernel gate の node 試験、いずれも pass。
