@@ -168,6 +168,76 @@ impl Cw {
             .consent
     }
 
+    /// **RFC08 F3: the producer's signed covenant over a kernel claim's complete served material** — every committed position, as
+    /// served, verified against the ledger that admits the claim (`PalwKernelMaterialBundleV1::verify`), so the scope is the body's
+    /// commitment. Past `palw_monetary_material_v1` no kernel claim commits without it. `reveal` is the exact commit object.
+    pub(super) async fn kernel_covenant(&mut self, producer: usize, base: Digest, trace: &TraceV1, reveal: &K) -> Hash64 {
+            let manifest = {
+            let route = self.net.api().unwrap();
+            let mut admitted: misaka_palw_kernel::ledger::KernelLedgerV1 = (*route.ledger().expect("the route's ledger")).clone();
+            admitted.daa = self.net.daa() + 1;
+            admitted
+                .apply_object(reveal, &misaka_palw_kernel::ledger::AuthV1 { signer_bond: self.net.kid(producer) })
+                .unwrap_or_else(|e| panic!("the claim is admissible: {e:?}"));
+            // The ledger's own mask: under the commitment-only route model-dependent values are withheld too.
+            let mask = admitted.derived_mask(&admitted.claims[&base], 0);
+            let positions: Vec<(u8, u32, Vec<u8>)> = trace
+                .values
+                .iter()
+                .enumerate()
+                .map(|(p, stages)| {
+                    let values = stages
+                        .iter()
+                        .enumerate()
+                        .map(|(st, o)| {
+                            o.iter()
+                                .enumerate()
+                                .map(|(n, t)| {
+                                    if mask[st][n] {
+                                        MaterialResponseV1::Omitted
+                                    } else {
+                                        MaterialResponseV1::Whole(TensorWireV1::of(t))
+                                    }
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    let inputs = trace
+                        .inputs
+                        .get(p)
+                        .map(|row| row.iter().map(|t| MaterialResponseV1::Whole(TensorWireV1::of(t))).collect())
+                        .unwrap_or_default();
+                    (0u8, p as u32, borsh::to_vec(&PositionResponseV1 { values, inputs }).unwrap())
+                })
+                .collect();
+            let bundle = kaspa_consensus_core::palw_material_capacity_v1::PalwKernelMaterialBundleV1 {
+                claim: Hash64::from_bytes(base),
+                positions,
+            };
+            let row = &admitted.claims[&base];
+            let shape = |p: u32| {
+                row.body.position(0, p).map(|(v, i)| (v.iter().map(|o| o.len()).collect::<Vec<_>>(), i.len()))
+            };
+            let served = |p: usize| {
+                (trace.values[p].iter().map(|o| o.len()).collect::<Vec<_>>(), trace.inputs.get(p).map_or(0, |i| i.len()))
+            };
+            let scope = bundle.verify(&admitted, u64::MAX).unwrap_or_else(|e| {
+                panic!(
+                    "the complete served material verifies: {e:?}; stages {:?}; committed p0 {:?} served p0 {:?}; positions {} vs trace {}",
+                    row.body.stages(),
+                    shape(0),
+                    served(0),
+                    bundle.positions.len(),
+                    trace.values.len()
+                )
+            });
+            kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1 { root: Hash64::from_bytes(base), scopes: vec![scope] }
+        };
+        // The signed byte cap covers the bundle plus the manifest and its provider framing (`PalwMaterialManifestV1::validate`).
+        let bytes = manifest.scopes[0].bytes + 4_096;
+        self.covenant(producer, Hash64::from_bytes(base), Some(manifest), bytes).await
+    }
+
     /// **`n` approved paid source claims of the SOURCE class** (the real path — see the module doc): each job funded by a distinct
     /// consumer, enrolled by it, committed under its producer's signed covenant, locked (the bootstrap draw while no approved paid
     /// Final exists), receipted by the drawn seats. They reach their canonical paid Final on their own clock. Returns the base ids.
@@ -229,75 +299,7 @@ impl Cw {
             self.net.send(vec![(producer, o)]).await;
             // RFC08 F3: the covenant carries the claim body's complete material — every committed position, as served — verified
             // against the ledger that admits the claim (`PalwKernelMaterialBundleV1::verify`), so its scope is the body's commitment.
-            let manifest = {
-                let route = self.net.api().unwrap();
-                let mut admitted: misaka_palw_kernel::ledger::KernelLedgerV1 = (*route.ledger().expect("the route's ledger")).clone();
-                admitted.daa = self.net.daa() + 1;
-                admitted
-                    .apply_object(
-                        &K::CommitClaimSalted { commit: commit.clone(), salt },
-                        &misaka_palw_kernel::ledger::AuthV1 { signer_bond: self.net.kid(producer) },
-                    )
-                    .expect("the base claim is admissible");
-                // The ledger's own mask: under the commitment-only route model-dependent values are withheld too.
-                let mask = admitted.derived_mask(&admitted.claims[&base], 0);
-                let positions: Vec<(u8, u32, Vec<u8>)> = produced
-                    .trace
-                    .values
-                    .iter()
-                    .enumerate()
-                    .map(|(p, stages)| {
-                        let values = stages
-                            .iter()
-                            .enumerate()
-                            .map(|(st, o)| {
-                                o.iter()
-                                    .enumerate()
-                                    .map(|(n, t)| {
-                                        if mask[st][n] {
-                                            MaterialResponseV1::Omitted
-                                        } else {
-                                            MaterialResponseV1::Whole(TensorWireV1::of(t))
-                                        }
-                                    })
-                                    .collect()
-                            })
-                            .collect();
-                        let inputs = produced
-                            .trace
-                            .inputs
-                            .get(p)
-                            .map(|row| row.iter().map(|t| MaterialResponseV1::Whole(TensorWireV1::of(t))).collect())
-                            .unwrap_or_default();
-                        (0u8, p as u32, borsh::to_vec(&PositionResponseV1 { values, inputs }).unwrap())
-                    })
-                    .collect();
-                let bundle = kaspa_consensus_core::palw_material_capacity_v1::PalwKernelMaterialBundleV1 {
-                    claim: Hash64::from_bytes(base),
-                    positions,
-                };
-                let row = &admitted.claims[&base];
-                let shape = |p: u32| {
-                    row.body.position(0, p).map(|(v, i)| (v.iter().map(|o| o.len()).collect::<Vec<_>>(), i.len()))
-                };
-                let served = |p: usize| {
-                    (produced.trace.values[p].iter().map(|o| o.len()).collect::<Vec<_>>(), produced.trace.inputs.get(p).map_or(0, |i| i.len()))
-                };
-                let scope = bundle.verify(&admitted, u64::MAX).unwrap_or_else(|e| {
-                    panic!(
-                        "the complete served material verifies: {e:?}; stages {:?}; committed p0 {:?} served p0 {:?}; positions {} vs trace {}",
-                        row.body.stages(),
-                        shape(0),
-                        served(0),
-                        bundle.positions.len(),
-                        produced.trace.values.len()
-                    )
-                });
-                kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1 { root: Hash64::from_bytes(base), scopes: vec![scope] }
-            };
-            // The signed byte cap covers the bundle plus the manifest and its provider framing (`PalwMaterialManifestV1::validate`).
-            let bytes = manifest.scopes[0].bytes + 4_096;
-            let consent = self.covenant(producer, Hash64::from_bytes(base), Some(manifest), bytes).await;
+            let consent = self.kernel_covenant(producer, base, &produced.trace, &K::CommitClaimSalted { commit: commit.clone(), salt }).await;
             let route = self.net.api().unwrap();
             let replays: Vec<String> = (0..2u64)
                 .map(|d| {
