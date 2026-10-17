@@ -1208,6 +1208,30 @@ pub(super) struct PalwFraudFilerBookV1 {
     /// convicts the producer on it, the same refutation proves every liable `Valid` signer false, and is handed to the false-Valid
     /// filer (`palw_filer_false_valid.rs`) so the kind-3 filings follow without anyone filing by hand.
     pub(super) terminal_proofs: BTreeMap<Hash64, PalwFraudFilerTerminalProofV1>,
+    /// **G14 (G-D02c): the one claim per producer this filer drives to conviction first.** One outside bond carries one object a
+    /// block, and a producer lying on every draw makes a claim a block, so reserving every claim as it arrives starves the pursuit
+    /// that would end them all (ADR-0160: one conviction forfeits every open claim of the bond and takes its collateral). While a
+    /// producer's focus is pursued, its other claims are reserved only once their Final deadline comes within
+    /// [`PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1`] — so none reaches Final unheld, and the carrier goes to the focus's descent first.
+    pub(super) focus: BTreeMap<PalwBondKeyV2, Hash64>,
+}
+
+/// G-D02c: a non-focus claim of a producer under pursuit is reserved once its Final deadline is this near (DAA). Generous against the
+/// pursuit's length so a deferred claim is never left unheld at its floor; a claim with no Final deadline yet (unbound, unlicensed)
+/// waits.
+pub(super) const PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1: u64 = 60;
+
+/// G-D02c: should the filer defer reserving `claim` of `producer` now? Only while another claim of the same producer is the focus and
+/// `claim`'s Final deadline (if any) is farther than the margin.
+pub(super) fn palw_fraud_filer_defer_reservation_v1(
+    focus: &BTreeMap<PalwBondKeyV2, Hash64>,
+    producer: &PalwBondKeyV2,
+    claim: &Hash64,
+    final_deadline_daa: Option<u64>,
+    current_daa: u64,
+) -> bool {
+    focus.get(producer).is_some_and(|f| f != claim)
+        && final_deadline_daa.is_none_or(|d| d > current_daa.saturating_add(PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1))
 }
 
 /// One public terminal's refutation (the producer's committed half, the verifier's own model rows, the prompt carriage).
@@ -1734,6 +1758,7 @@ impl PalwFraudFilerBookV1 {
     /// Settle a case: its run (and the capture's reservation) and cached answers are let go.
     pub(super) fn settle(&mut self, claim: &Hash64, verdict: PalwFraudFilerVerdictV1) {
         self.answers.retain(|(held, _), _| held != claim);
+        self.focus.retain(|_, focused| focused != claim);
         if let Some(case) = self.cases.get_mut(claim) {
             case.verdict = verdict;
             case.deferred_public = None;
@@ -2564,6 +2589,23 @@ pub(super) fn palw_fraud_filer_item_round_v1(item: PalwFraudFilerSentV1) -> u32 
 #[cfg(test)]
 mod g_d02b_tests {
     use super::*;
+
+    /// G-D02c: while one claim of a producer is the focus, its other claims are deferred until their Final deadline is near; claims of
+    /// other producers, and the focus itself, never are.
+    #[test]
+    fn a_producers_other_claims_wait_for_the_focus_until_their_deadline_is_near() {
+        let p = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Default::default(), 0));
+        let q = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Default::default(), 1));
+        let (focus_claim, other) = (Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let mut focus = BTreeMap::new();
+        assert!(!palw_fraud_filer_defer_reservation_v1(&focus, &p, &other, None, 10), "no focus: reserve");
+        focus.insert(p, focus_claim);
+        assert!(!palw_fraud_filer_defer_reservation_v1(&focus, &p, &focus_claim, None, 10), "the focus itself");
+        assert!(palw_fraud_filer_defer_reservation_v1(&focus, &p, &other, None, 10), "no Final deadline yet: wait");
+        assert!(palw_fraud_filer_defer_reservation_v1(&focus, &p, &other, Some(10 + PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1 + 1), 10));
+        assert!(!palw_fraud_filer_defer_reservation_v1(&focus, &p, &other, Some(10 + PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1), 10), "near: reserve");
+        assert!(!palw_fraud_filer_defer_reservation_v1(&focus, &q, &other, None, 10), "another producer");
+    }
 
     /// G-D02b: an item carried and then asked for again (its block reorged out) is resent at once and does not spend the retry
     /// budget; an item never carried keeps the normal spacing and budget.
@@ -4369,6 +4411,17 @@ impl PalwPanelService {
                     }
                     PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve) => {
                         let Some(view) = view.as_ref() else { break };
+                        let producer = case.candidate.producer;
+                        if palw_fraud_filer_defer_reservation_v1(&book.focus, &producer, &claim, view.deadline_daa, current_daa) {
+                            crate::palw_backends::note_throttled_v1("fraud-filer-focus", || {
+                                format!(
+                                    "[{PALW_PANEL}] claim {claim}: reservation deferred — producer's claim {} is pursued first (G14 G-D02c)",
+                                    book.focus[&producer]
+                                )
+                            });
+                            break;
+                        }
+                        book.focus.entry(producer).or_insert(claim);
                         self.fraud_filer_queue_v1(
                             book,
                             claim,
