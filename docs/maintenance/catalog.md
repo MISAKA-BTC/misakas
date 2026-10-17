@@ -244,6 +244,7 @@
 - [audit/palw/design-reviews/kernel-public-prosecution-audit.md](../audit/palw/design-reviews/kernel-public-prosecution-audit.md)
 - [audit/palw/design-reviews/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md](../audit/palw/design-reviews/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md)
 - [audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md](../audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md)
+- [audit/palw/design-reviews/rfc-completion-audit-2026-10-17-status.md](../audit/palw/design-reviews/rfc-completion-audit-2026-10-17-status.md)
 - [audit/palw/design-reviews/rfc08-settlement-and-provider-gc-source-audit-2026-10-15.md](../audit/palw/design-reviews/rfc08-settlement-and-provider-gc-source-audit-2026-10-15.md)
 - [audit/palw/design-reviews/t12-bond-reuse-audit-2026-10-10.md](../audit/palw/design-reviews/t12-bond-reuse-audit-2026-10-10.md)
 - [audit/palw/palw-algo4-forgery-audit-2026-08-16.md](../audit/palw/palw-algo4-forgery-audit-2026-08-16.md)
