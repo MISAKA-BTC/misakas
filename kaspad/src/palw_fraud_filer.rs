@@ -4412,7 +4412,13 @@ impl PalwPanelService {
                     PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve) => {
                         let Some(view) = view.as_ref() else { break };
                         let producer = case.candidate.producer;
-                        if palw_fraud_filer_defer_reservation_v1(&book.focus, &producer, &claim, view.deadline_daa, current_daa) {
+                        // Only a licensed claim's deadline is its Final deadline (a provisional / bound claim's is its bind deadline,
+                        // and its Final is at least a challenge window past its licence).
+                        let final_deadline = match view.phase {
+                            kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { .. } => view.deadline_daa,
+                            _ => None,
+                        };
+                        if palw_fraud_filer_defer_reservation_v1(&book.focus, &producer, &claim, final_deadline, current_daa) {
                             crate::palw_backends::note_throttled_v1("fraud-filer-focus", || {
                                 format!(
                                     "[{PALW_PANEL}] claim {claim}: reservation deferred — producer's claim {} is pursued first (G14 G-D02c)",
