@@ -452,6 +452,12 @@ impl PalwPanelService {
                             .map(|(row, allocation)| (row.owned.contract_v1().reserved_daa, allocation));
                     }
                     let Some((reserved_daa, acquisition)) = case.acquisition else {
+                        // An Open is admitted only before the frame's owner-open door (`reserved_daa < open_until_daa`, the
+                        // contract's own check): past it nothing can open, so the case ends instead of re-sending a refused Open.
+                        if now.saturating_add(1) >= terms.open_until_daa {
+                            ended.push(*claim);
+                            continue;
+                        }
                         let rent = frame.plan_v1().owner_terms_v1()?.plan.rent_sompi;
                         steps.push(OwnerStepV1::Move {
                             claim: *claim,
@@ -467,7 +473,10 @@ impl PalwPanelService {
                                 action: PalwTirPublicControlActionV1::Open,
                                 signature: Vec::new(),
                             }),
-                            due: queue_due,
+                            // Its own door, not the collection's: the court lane orders moves by due, and an Open scheduled at
+                            // `collect_until − 1` waited behind every earlier-due move on the lane until its door had closed (node
+                            // T-N1 harness, 2026-10-17: queued behind the fraud filer's demands, carried 70+ DAA after the door).
+                            due: terms.open_until_daa.saturating_sub(1),
                         });
                         continue;
                     };

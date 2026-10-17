@@ -331,8 +331,9 @@ fn descent(count: u64) -> u64 {
 /// * the complete committed IDs (one demand; its 1,024-ID chunks are the answer's parts) — the owner compares them with its own
 ///   replay first (G-T2);
 /// * the step-tree descent to the first differing leaf ([`PalwTirPublicSourceV1::step_descent_units_v1`]), the leaf itself;
-/// * the leaf's cone, in runs of `PALW_TIR_STEP_RUN_MAX_LEAVES_V1` leaves. Bounded SAFELY by every leaf of the claim in runs (an owner
-///   that needs all of them still finishes); a tighter per-program cone bound is a later refinement, never assumed here;
+/// * the leaf's cone, in full runs of `PALW_TIR_STEP_RUN_MAX_LEAVES_V1` leaves: [`PalwTirPublicSourceV1::cone_runs_v1`], derived from
+///   the program's dependency structure (checkpoint distance for state, the history tile and the attention window), never more than
+///   every leaf of the claim in runs (G14 audit §11 (b));
 /// * a decode-selection fault's trace path: the rows descent, the tiles descent and every tile of one row;
 /// * one turn for the output / stop-rule check.
 pub fn tir_public_localization_turns_v1(source: &PalwTirPublicSourceV1) -> Result<u64, String> {
@@ -346,7 +347,8 @@ pub fn tir_public_localization_turns_v1(source: &PalwTirPublicSourceV1) -> Resul
     } else {
         (0, 0)
     };
-    sum(&[ids, source.step_descent_units_v1(), 1, n.div_ceil(run), trace, 1])
+    let _ = (n, run);
+    sum(&[ids, source.step_descent_units_v1(), 1, source.cone_runs_v1(), trace, 1])
 }
 
 /// **One turn's span for a request whose answer body is `body_bytes`** (`slots` answering literal custodians and the owner):
@@ -409,7 +411,9 @@ pub fn tir_public_localization_path_v1(
     let run = u32::try_from(n.clamp(1, u64::from(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)))
         .map_err(|_| "TIR run overflow")?;
     let cone = if run > 1 { span(R::StepRun { first: 0, count: run })? } else { leaf };
-    add(&mut path, n.div_ceil(u64::from(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)), cone)?;
+    // §11 (b): the cone's runs from the program's dependency structure (checkpoint distance, history tile and attention window),
+    // never more than every leaf in runs.
+    add(&mut path, source.cone_runs_v1(), cone)?;
     if tiled {
         let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
         let tile = span(R::TraceTile { row: 0, tile: 0 })?;

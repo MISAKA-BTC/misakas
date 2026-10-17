@@ -7861,9 +7861,13 @@ impl PalwPanelService {
         // states the anchor's prompt as its own (`USER` mode, the same ids) and the original rides its `TFP1` frame below (G-03).
         // Below the fence, and for every legacy class, the canonical job is what it was.
         if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_some_and(|f| f.is_active(current_daa))
-            && session.palw_tir_class_record_v1(class_id).is_some()
+            && let Some(record) = session.palw_tir_class_record_v1(class_id)
         {
             job.prompt_mode = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER;
+            // The registered class's own tokenizer (its record binds it): the frame's source resolution refuses a job context whose
+            // tokenizer is not the record's (`resolve_registered_layout_v1`), so a default id here made every IR canonical claim
+            // unbuildable (T-N1 node harness, 2026-10-17).
+            job.tokenizer_id = record.tokenizer_id;
         }
         // The anchor is a function of the job's own facts, not of its prompt — so the prompt
         // can be derived from it and then written into the job.
