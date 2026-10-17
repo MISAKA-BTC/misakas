@@ -38,7 +38,7 @@ async fn x8_g14_opv_settlement_never_substitutes_for_selected_exec_approval() {
         .slices
         .iter()
         .chain(std::iter::once(&s.prefix))
-        .map(|k| api.claim_read_v1(&k.claim.id).unwrap().unwrap().opv.expect("an OPV claim").final_floor_daa)
+        .map(|k| kernel_final_due(&api, &k.claim.id))
         .max()
         .unwrap();
     cw.net.beat_to(floor + 1).await;

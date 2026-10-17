@@ -225,6 +225,20 @@ impl Net {
         for s in sealed {
             consents.push(self.kernel_covenant(s.card, s.id, &s.trace, &s.reveal).await);
         }
+        self.paid_commits(paid_class, sealed, consents).await
+    }
+
+    /// [`Self::reveal_paid`] for claims whose producers' covenants are already enrolled (keyed by the claim id).
+    pub(super) async fn reveal_paid_covenanted(&mut self, paid_class: Digest, sealed: &[SealedPaid]) -> Vec<(Digest, Digest)> {
+        let state = self.chain.tip_state().1;
+        let consents = sealed
+            .iter()
+            .map(|s| state.monetary_material_row_v1(Hash64::from_bytes(s.id)).expect("the producer's covenant").consent)
+            .collect();
+        self.paid_commits(paid_class, sealed, consents).await
+    }
+
+    async fn paid_commits(&mut self, paid_class: Digest, sealed: &[SealedPaid], consents: Vec<Hash64>) -> Vec<(Digest, Digest)> {
         let route = self.api().unwrap();
         let mut objects = Vec::new();
         let mut out = Vec::new();
@@ -361,11 +375,8 @@ impl Net {
             .collect()
     }
 
-    /// **The seal-reveal seed of a later paid target** (ADR-0185 F1, once an approved paid Final exists): the payer `sponsor` funds
-    /// the target's future source fee before its seal window; `k` bonds other than the target's producer, the sponsor and any live
-    /// source target's producer seal honest claims of fresh jobs of the eligible `source_class` inside the window and opt them in as
-    /// paid sources; after the seal window each reveals under its signed covenant; returns at the reveal window's end (the lock then
-    /// takes the seal-reveal draw). Nothing here is Final.
+    /// **The seal-reveal seed of a later paid target** (ADR-0185 F1, once an approved paid Final exists) — one target.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn seal_reveal_sources(
         &mut self,
         base: Digest,
@@ -376,28 +387,59 @@ impl Net {
         source_class: Digest,
         nonce: u8,
     ) {
+        self.seal_reveal_sources_many(&[(base, enrollment, sponsor, target_producer)], source_fx, source_class, nonce).await
+    }
+
+    /// **The seal-reveal seeds of later paid targets, sharing their sources** (ADR-0185 F1): each payer funds its target's future
+    /// source fee before the seal window; `k` bonds that are no target's producer, no payer and no live source target's producer seal
+    /// one honest claim each of a fresh job of the eligible `source_class` inside every target's seal window and opt it in to every
+    /// target (one sealed commitment may seed several targets: the kernel keeps their common reveal window); after the last seal
+    /// window each reveals once under its signed covenant; returns at the last reveal window's end. Nothing here is Final.
+    pub(super) async fn seal_reveal_sources_many(
+        &mut self,
+        targets: &[(Digest, Digest, usize, usize)],
+        source_fx: &Fixture,
+        source_class: Digest,
+        nonce: u8,
+    ) {
         use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1;
         let fee_policy = self.config.params.palw_beacon_source_fee_v1.expect("the source fee fence").policy;
-        let route = self.api().unwrap();
-        let authority: PalwPaidClaimAuthorityV2 = route.paid_claim_authority_for_base_unchecked_v2(&base).expect("the paid authority");
-        let target = authority.source_target;
-        assert!(target.context.eligible_profiles.contains(&source_class), "the source class is an eligible source profile");
-        let fee = fee_policy.minimum_fee_for(&target).expect("the frozen source target's fee floor");
-        let k = authority.class.source_policy.work_count_k;
-        let fund =
-            misaka_palw_sdk::claim_paid_v2::paid_claim_funding_object_v2(&route, enrollment, self.kid(sponsor), fee, k, &fee_policy)
+        let mut all_terms = Vec::new();
+        let mut k = 0;
+        for (base, enrollment, sponsor, _) in targets {
+            let route = self.api().unwrap();
+            let authority: PalwPaidClaimAuthorityV2 =
+                route.paid_claim_authority_for_base_unchecked_v2(base).expect("the paid authority");
+            let target = authority.source_target;
+            assert!(target.context.eligible_profiles.contains(&source_class), "the source class is an eligible source profile");
+            let fee = fee_policy.minimum_fee_for(&target).expect("the frozen source target's fee floor");
+            k = authority.class.source_policy.work_count_k;
+            // A target funded right after its commit (the caller's choice when several targets commit in a row) is not refunded.
+            if !self.ledger().beacon_source_fees.contains_key(&target.terms.context) {
+                let fund = misaka_palw_sdk::claim_paid_v2::paid_claim_funding_object_v2(
+                    &route,
+                    *enrollment,
+                    self.kid(*sponsor),
+                    fee,
+                    k,
+                    &fee_policy,
+                )
                 .unwrap_or_else(|e| panic!("the payer funds the future sources: {e:?}"));
-        let o = self.route(sponsor, &fund);
-        self.send(vec![(sponsor, o)]).await;
-        let terms = BeaconSourceFeeTermsV1 { source: target.terms, sponsor: self.kid(sponsor), fee_per_source: fee, max_sources: k };
-        assert!(self.ledger().beacon_source_fees.contains_key(&terms.source.context), "the future source fee is funded");
+                let o = self.route(*sponsor, &fund);
+                self.send(vec![(*sponsor, o)]).await;
+            }
+            let terms =
+                BeaconSourceFeeTermsV1 { source: target.terms, sponsor: self.kid(*sponsor), fee_per_source: fee, max_sources: k };
+            assert!(self.ledger().beacon_source_fees.contains_key(&terms.source.context), "the future source fee is funded");
+            all_terms.push(terms);
+        }
         let barred = self.live_target_producers();
-        let target_kid = self.kid(target_producer);
+        let excluded: Vec<usize> = targets.iter().flat_map(|(_, _, sponsor, producer)| [*sponsor, *producer]).collect();
         let sealers: Vec<usize> = (0..self.chain.bonds.len())
-            .filter(|c| *c != target_producer && *c != sponsor && !barred.contains(&self.kid(*c)) && self.kid(*c) != target_kid)
+            .filter(|c| !excluded.contains(c) && !barred.contains(&self.kid(*c)))
             .take(k as usize)
             .collect();
-        assert_eq!(sealers.len(), k as usize, "enough bonds that are no live source target's producer");
+        assert_eq!(sealers.len(), k as usize, "enough bonds that are no target's producer, no payer and no live source target's producer");
         let payers: Vec<usize> = (0..self.chain.bonds.len()).filter(|c| !sealers.contains(c)).take(k as usize).collect();
         let mut jobs = Vec::new();
         for (i, payer) in payers.iter().enumerate() {
@@ -412,8 +454,11 @@ impl Net {
             self.send(vec![(*payer, o)]).await;
             jobs.push(job);
         }
-        if self.daa() < terms.source.seal_start {
-            self.beat_to(terms.source.seal_start).await;
+        let seal_start = all_terms.iter().map(|t| t.source.seal_start).max().unwrap();
+        let seal_end = all_terms.iter().map(|t| t.source.seal_end).max().unwrap();
+        let reveal_end = all_terms.iter().map(|t| t.source.reveal_end).max().unwrap();
+        if self.daa() < seal_start {
+            self.beat_to(seal_start).await;
         }
         let ledger = self.ledger();
         let mut seals = Vec::new();
@@ -428,35 +473,72 @@ impl Net {
         self.send(seals).await;
         let sealed = self.ledger();
         let mut opt_ins = Vec::new();
-        for (job, p) in jobs.iter().zip(&sealers) {
-            let producer = self.kid(*p);
-            let seal = sealed.seals[&(job.id(), producer)].seal;
-            let object = K::OptInPaidBeaconSource {
-                producer,
-                job: job.id(),
-                seal,
-                context: terms.source.context,
-                source_terms: terms.source.id(),
-                fee_terms: terms.id(),
-            };
-            opt_ins.push((*p, self.route(*p, &object)));
+        for terms in &all_terms {
+            for (job, p) in jobs.iter().zip(&sealers) {
+                let producer = self.kid(*p);
+                let seal = sealed.seals[&(job.id(), producer)].seal;
+                let object = K::OptInPaidBeaconSource {
+                    producer,
+                    job: job.id(),
+                    seal,
+                    context: terms.source.context,
+                    source_terms: terms.source.id(),
+                    fee_terms: terms.id(),
+                };
+                opt_ins.push((*p, self.route(*p, &object)));
+            }
         }
         self.send(opt_ins).await;
-        for p in &sealers {
-            assert!(
-                self.ledger().beacon_source_fee_promises.contains_key(&(terms.source.context, self.kid(*p))),
-                "the sealed source opted in with its prepaid fee promise"
-            );
+        for terms in &all_terms {
+            for p in &sealers {
+                assert!(
+                    self.ledger().beacon_source_fee_promises.contains_key(&(terms.source.context, self.kid(*p))),
+                    "the sealed source opted in to every target with its prepaid fee promise (daa {}, window {}..{})",
+                    self.daa(),
+                    terms.source.seal_start,
+                    terms.source.seal_end
+                );
+            }
         }
-        self.beat_to(terms.source.seal_end).await;
+        self.beat_to(seal_end).await;
         for (p, id, trace, reveal) in &reveals {
             self.kernel_covenant(*p, *id, trace, reveal).await;
         }
         let carriers: Vec<_> = reveals.iter().map(|(p, _, _, r)| (*p, self.route(*p, r))).collect();
         self.send(carriers).await;
         for (_, id, _, _) in &reveals {
-            assert!(self.ledger().claims.contains_key(id), "the opted-in source revealed inside its window");
+            assert!(self.ledger().claims.contains_key(id), "the opted-in source revealed inside every reveal window");
         }
-        self.beat_to(terms.source.reveal_end).await;
+        self.beat_to(reveal_end).await;
+    }
+
+    /// The registrant's paid class over `base_class`, registered once (an existing one is reused).
+    pub(super) async fn paid_class_for(&mut self, registrant: usize, base_class: Digest) -> Digest {
+        let route = self.api().unwrap();
+        let existing = route
+            .aux
+            .iter()
+            .filter(|((t, _), _)| *t == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_CLASSES_V2)
+            .filter_map(|(_, bytes)| borsh::from_slice::<misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2>(bytes).ok())
+            .find(|c| c.base_class == base_class)
+            .map(|c| c.id());
+        match existing {
+            Some(id) => id,
+            None => self.paid_class_over(registrant, base_class).await,
+        }
+    }
+
+    /// The payer `sponsor` funds a paid target's future source fee (before its seal window opens: right after the commit).
+    pub(super) async fn fund_future_sources(&mut self, base: Digest, enrollment: Digest, sponsor: usize) {
+        let fee_policy = self.config.params.palw_beacon_source_fee_v1.expect("the source fee fence").policy;
+        let route = self.api().unwrap();
+        let authority: PalwPaidClaimAuthorityV2 = route.paid_claim_authority_for_base_unchecked_v2(&base).expect("the paid authority");
+        let fee = fee_policy.minimum_fee_for(&authority.source_target).expect("the frozen source target's fee floor");
+        let k = authority.class.source_policy.work_count_k;
+        let fund = misaka_palw_sdk::claim_paid_v2::paid_claim_funding_object_v2(&route, enrollment, self.kid(sponsor), fee, k, &fee_policy)
+            .unwrap_or_else(|e| panic!("the payer funds the future sources: {e:?}"));
+        let o = self.route(sponsor, &fund);
+        self.send(vec![(sponsor, o)]).await;
+        assert!(self.ledger().beacon_source_fees.contains_key(&authority.source_target.terms.context), "the future source fee is funded");
     }
 }

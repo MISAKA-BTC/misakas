@@ -104,7 +104,7 @@ async fn active_world_over_with_params(
     make: impl FnOnce(&Config) -> TestConsensus,
     modify: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
 ) -> Cw {
-    kaspa_core::log::try_init_logger("warn");
+    kaspa_core::log::try_init_logger(&std::env::var("G14_LOG").unwrap_or_else(|_| "warn".into()));
     let mut cw = Cw::over_with_floor_and_kernel_mode(
         SEED,
         |params| {
@@ -443,6 +443,14 @@ fn provisional_v3(
     }
 }
 
+/// **When a prefix/slice kernel claim is due Final**: its OPV floor, or — for a paid claim (the real path since the RFC07 adapter) —
+/// the end of its signed challenge window, whichever is later.
+fn kernel_final_due(api: &kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1, id: &Digest) -> u64 {
+    let floor = api.claim_read_v1(id).unwrap().unwrap().opv.expect("an OPV claim").final_floor_daa;
+    let paid = api.paid_claim_authority_for_base_unchecked_v2(id).map_or(0, |a| a.enrollment.lifetime.challenge_until + 1);
+    floor.max(paid)
+}
+
 /// The session one REAL claim opens: three `RUN`-token slices with registered IR costs, the binding's kernel plan, the
 /// prefix claim `prefix` and the initial boundary `initial` (GAP-62: `token_state(prompt ‖ REAL run)`, unless a test lies), executors
 /// `EXECUTORS`. Unsigned and uncarried: [`send_root`] carries it.
@@ -585,6 +593,19 @@ async fn kernel_claims(
     for (_, job, _, _) in &planned {
         assert!(posted.jobs.contains_key(&job.id()), "the prefix/slice job was posted");
     }
+    // RFC07 (adapter): a slice verifies only through an APPROVED paid Final of its kernel claim (`palw_exec_v2_selected_approval_v1`),
+    // and a bootstrap-locked one earns no EXEC credit — so each prefix/slice job is enrolled by its payer before any seal, committed
+    // as a paid claim and locked on the seal-reveal seed (ADR-0185); the drawn seats approve the honest ones.
+    let paid = cw.net.config.params.palw_claim_challenge_v2.is_some();
+    let paid_class = if paid { Some(cw.net.paid_class_for(REGISTRANT, kernel_class).await) } else { None };
+    let paid_jobs = match paid_class {
+        Some(class) => {
+            let pairs: Vec<(usize, Digest)> = planned.iter().map(|(_, job, _, _)| (REGISTRANT, job.id())).collect();
+            cw.net.enroll_paid_jobs(class, &pairs).await
+        }
+        None => Vec::new(),
+    };
+    let lies: Vec<bool> = planned.iter().map(|(_, _, _, lying)| *lying).collect();
     let mut seals = Vec::new();
     let mut reveals = Vec::new();
     let mut out = Vec::new();
@@ -621,13 +642,54 @@ async fn kernel_claims(
             cw.kernel_covenant(*producer, slice.claim.id, &slice.claim.trace, reveal).await;
         }
     }
-    // The node's small test budget reserves half of its adjudications for prosecutions.
-    // Four (or five) reveals cannot all fit in one block; respect the remaining admission room.
-    let reveal_capacity = (sealed.policy.max_adjudications_per_block - sealed.policy.prosecution_reserved_runs()) as usize;
-    assert!(reveal_capacity > 0, "the policy leaves admission room");
-    for batch in reveals.chunks(reveal_capacity) {
-        let carriers = batch.iter().map(|(p, o)| (*p, cw.net.route(*p, o))).collect();
-        cw.net.send(carriers).await;
+    if let Some(paid_class) = paid_class {
+        // Each salted reveal is its paid commit (one a block); then the future sources of every target, shared, and the locks.
+        let sealed: Vec<super::super::paid_path::SealedPaid> = reveals
+            .iter()
+            .zip(&out)
+            .zip(&paid_jobs)
+            .map(|(((producer, reveal), slice), paid_job)| super::super::paid_path::SealedPaid {
+                card: *producer,
+                reveal: reveal.clone(),
+                id: slice.claim.id,
+                trace: slice.claim.trace.clone(),
+                paid_job: *paid_job,
+            })
+            .collect();
+        // Commit, then (an approved paid Final exists: the bootstrap draw is closed) fund each honest target's future sources at
+        // once, before its seal window opens.
+        let later = cw.net.api().unwrap().paid_claim_approved_final_exists_v2();
+        let mut committed = Vec::new();
+        for (s, lying) in sealed.iter().zip(&lies) {
+            let c = cw.net.reveal_paid_covenanted(paid_class, std::slice::from_ref(s)).await[0];
+            if later && !*lying {
+                cw.net.fund_future_sources(c.0, c.1, REGISTRANT).await;
+            }
+            committed.push(c);
+        }
+        let honest: Vec<(Digest, Digest)> =
+            committed.iter().zip(&lies).filter(|(_, lying)| !**lying).map(|(c, _)| *c).collect();
+        let targets: Vec<(Digest, Digest, usize, usize)> = committed
+            .iter()
+            .zip(&lies)
+            .zip(&sealed)
+            .filter(|((_, lying), _)| !**lying)
+            .map(|((c, _), s)| (c.0, c.1, REGISTRANT, s.card))
+            .collect();
+        if later && !targets.is_empty() {
+            let src = cw.src.clone_fixture();
+            cw.net.seal_reveal_sources_many(&targets, &src, cw.src_class, cw.jobs.wrapping_add(0xA0)).await;
+        }
+        cw.net.lock_and_receipt(REGISTRANT, &honest).await;
+    } else {
+        // The node's small test budget reserves half of its adjudications for prosecutions.
+        // Four (or five) reveals cannot all fit in one block; respect the remaining admission room.
+        let reveal_capacity = (sealed.policy.max_adjudications_per_block - sealed.policy.prosecution_reserved_runs()) as usize;
+        assert!(reveal_capacity > 0, "the policy leaves admission room");
+        for batch in reveals.chunks(reveal_capacity) {
+            let carriers = batch.iter().map(|(p, o)| (*p, cw.net.route(*p, o))).collect();
+            cw.net.send(carriers).await;
+        }
     }
     let ledger = cw.net.ledger();
     for s in &out {
@@ -1395,7 +1457,7 @@ async fn x8_g14_completed_worker_claims_earn_nothing_when_the_root_expires_on_th
         .slices
         .iter()
         .chain(std::iter::once(&s.prefix))
-        .map(|claim| api.claim_read_v1(&claim.claim.id).unwrap().unwrap().opv.unwrap().final_floor_daa)
+        .map(|claim| kernel_final_due(&api, &claim.claim.id))
         .max()
         .unwrap();
     let expiry = cw.net.chain.tip_state().1.exec_v2_root_v1(&native).unwrap().expiry_daa;
@@ -1502,7 +1564,7 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
         .slices
         .iter()
         .chain(std::iter::once(&s.prefix))
-        .map(|k| api.claim_read_v1(&k.claim.id).unwrap().unwrap().opv.expect("an OPV claim").final_floor_daa)
+        .map(|k| kernel_final_due(&api, &k.claim.id))
         .collect();
     cw.net.beat_to(ends.iter().copied().max().unwrap() + 1).await;
     for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
@@ -1605,7 +1667,7 @@ async fn x8_g14_kernel_finals_holds_and_credit_survive_restart_and_two_actual_re
         .slices
         .iter()
         .chain(std::iter::once(&s.prefix))
-        .map(|k| api.claim_read_v1(&k.claim.id).unwrap().unwrap().opv.unwrap().final_floor_daa)
+        .map(|k| kernel_final_due(&api, &k.claim.id))
         .max()
         .unwrap();
     let poster = cw.net.collateral(REGISTRANT);
