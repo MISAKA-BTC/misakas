@@ -746,20 +746,31 @@ impl Deserializer for GetPalwStateProofResponse {
 pub struct GetPalwForkChoiceOpeningRequest {
     /// 128 hex each, at most 16. Empty: the sink and every tip.
     pub block_hashes: Vec<String>,
+    /// **RFC09 (v2):** open each entry's v3 rule-E window above this blue score (the fork point's), for the rule-E comparator.
+    #[serde(default)]
+    pub rule_e_window_above_blue: Option<u64>,
+    /// **RFC09 (v2):** the bonds (hex of the borsh `PalwBondKeyV2`) whose v3 registry openings each entry carries (at most 64).
+    #[serde(default)]
+    pub registry_bonds: Vec<String>,
 }
 
 impl Serializer for GetPalwForkChoiceOpeningRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(Vec<String>, &self.block_hashes, writer)?;
+        store!(Option<u64>, &self.rule_e_window_above_blue, writer)?;
+        store!(Vec<String>, &self.registry_bonds, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwForkChoiceOpeningRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
-        Ok(Self { block_hashes: load!(Vec<String>, reader)? })
+        let version = load!(u16, reader)?;
+        let block_hashes = load!(Vec<String>, reader)?;
+        let (rule_e_window_above_blue, registry_bonds) =
+            if version >= 2 { (load!(Option<u64>, reader)?, load!(Vec<String>, reader)?) } else { (None, Vec::new()) };
+        Ok(Self { block_hashes, rule_e_window_above_blue, registry_bonds })
     }
 }
 
@@ -779,11 +790,21 @@ pub struct RpcPalwForkChoiceEntry {
     pub committed_root: String,
     /// True past the fence (the committed root is the envelope).
     pub committed_form: bool,
+    /// **RFC09 (v2):** the committed leaf in the form the post-state's point selects (v1, rule-E v2 or v3); empty when flat. Verify it
+    /// with `palw_verify_committed_leaf_v2` against the committed root — the full node's own reader.
+    #[serde(default)]
+    pub committed_leaf: Vec<u8>,
+    /// **RFC09 (v2):** borsh `PalwRuleEWindowOpeningV1` above the asked blue score (v3 only; empty: not asked or not v3).
+    #[serde(default)]
+    pub rule_e_window: Vec<u8>,
+    /// **RFC09 (v2):** borsh `PalwRuleERegistryOpeningV3` of each asked bond, in the asked order (v3 only).
+    #[serde(default)]
+    pub registry_openings: Vec<Vec<u8>>,
 }
 
 impl Serializer for RpcPalwForkChoiceEntry {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.block_hash, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.reason, writer)?;
@@ -792,14 +813,17 @@ impl Serializer for RpcPalwForkChoiceEntry {
         store!(String, &self.inner_root, writer)?;
         store!(String, &self.committed_root, writer)?;
         store!(bool, &self.committed_form, writer)?;
+        store!(Vec<u8>, &self.committed_leaf, writer)?;
+        store!(Vec<u8>, &self.rule_e_window, writer)?;
+        store!(Vec<Vec<u8>>, &self.registry_openings, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for RpcPalwForkChoiceEntry {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
-        Ok(Self {
+        let version = load!(u16, reader)?;
+        let mut entry = Self {
             block_hash: load!(String, reader)?,
             available: load!(bool, reader)?,
             reason: load!(String, reader)?,
@@ -808,7 +832,14 @@ impl Deserializer for RpcPalwForkChoiceEntry {
             inner_root: load!(String, reader)?,
             committed_root: load!(String, reader)?,
             committed_form: load!(bool, reader)?,
-        })
+            ..Default::default()
+        };
+        if version >= 2 {
+            entry.committed_leaf = load!(Vec<u8>, reader)?;
+            entry.rule_e_window = load!(Vec<u8>, reader)?;
+            entry.registry_openings = load!(Vec<Vec<u8>>, reader)?;
+        }
+        Ok(entry)
     }
 }
 

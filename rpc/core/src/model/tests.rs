@@ -2681,7 +2681,11 @@ mod mockery {
     // RFC-0009 L2: op 203 and its parts round-trip.
     impl Mock for GetPalwForkChoiceOpeningRequest {
         fn mock() -> Self {
-            GetPalwForkChoiceOpeningRequest { block_hashes: vec![mock_hex(), mock_hex()] }
+            GetPalwForkChoiceOpeningRequest {
+                block_hashes: vec![mock_hex(), mock_hex()],
+                rule_e_window_above_blue: Some(77),
+                registry_bonds: vec!["ab".repeat(68)],
+            }
         }
     }
     test!(GetPalwForkChoiceOpeningRequest);
@@ -2697,6 +2701,9 @@ mod mockery {
                 inner_root: mock_hex(),
                 committed_root: mock_hex(),
                 committed_form: mock(),
+                committed_leaf: vec![3; 300],
+                rule_e_window: vec![4; 20],
+                registry_openings: vec![vec![5; 9], vec![6; 2]],
             }
         }
     }

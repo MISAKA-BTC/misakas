@@ -93,7 +93,7 @@ impl ForkChoiceRulesV1 {
         }
     }
 
-    fn active(fence: Option<ForkActivation>, daa: u64) -> bool {
+    pub fn active(fence: Option<ForkActivation>, daa: u64) -> bool {
         fence.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa))
     }
 
@@ -569,6 +569,9 @@ pub enum L2StopV1 {
     SelectedChainUnverified { tip: Hash64, why: String },
     #[error("the peers show competing tips while a comparator whose inputs the v1 leaf does not carry may be in force: {0}")]
     LeafV1Insufficient(&'static str),
+    /// RFC09: under rule E a committed leaf, window or registry opening is missing, does not verify, or is tampered.
+    #[error("rule-E fork-choice evidence: {0}")]
+    RuleEEvidence(String),
     #[error("the peers show competing tips while the DNS BFT gate may run, and {0}")]
     DnsGateMayDecide(&'static str),
     #[error("the competing tips part {depth} blue below {tip}, at or past the finality depth {finality}: a sealed split")]

@@ -92,6 +92,18 @@ pub trait RemoteNode {
         let _ = blocks;
         Err("this node serves no fork-choice opening".into())
     }
+    /// **RFC09: op 203 v2** — the committed leaves of `blocks` in their own form, each with its v3 rule-E window above
+    /// `window_above_blue` and its v3 registry openings of `bonds` (as asked). Never trusted: `crate::l2_rule_e` verifies every byte
+    /// with the full node's own readers. The default serves none (a rule-E conflict then STOPs).
+    fn fork_choice_committed_v2(
+        &self,
+        blocks: &[Hash64],
+        window_above_blue: Option<u64>,
+        bonds: &[PalwBondKeyV2],
+    ) -> Result<Vec<crate::l2_rule_e::CommittedServedV2>, String> {
+        let _ = (blocks, window_above_blue, bonds);
+        Err("this node serves no committed fork-choice leaf".into())
+    }
     /// The ruleset the node says it runs (network, genesis, params id, schedule id).
     fn ruleset(&self) -> Result<NodeRulesetV1, String> {
         Err("this node does not say which ruleset it runs".into())
@@ -173,6 +185,9 @@ pub struct RemoteForkChoiceV1 {
     pub attestations: std::sync::Arc<dyn Fn(&[Hash64]) -> Result<Vec<ForkChoiceAttestationV1>, String> + Send + Sync>,
     /// The signature primitive (ML-DSA-87 in the binaries): `(public key, message, signature)`.
     pub verify_signature: fn(&[u8], &[u8], &[u8]) -> bool,
+    /// **RFC09: the client's own consensus parameters**, which the rule-E path reads the committed form, rule E, rule E v2 and
+    /// Gate C from. `None`: a rule-E conflict STOPs (as before this path existed).
+    pub params: Option<std::sync::Arc<kaspa_consensus_core::config::params::Params>>,
 }
 
 impl std::fmt::Debug for RemoteForkChoiceV1 {
@@ -519,6 +534,10 @@ fn attested_mode_v1(
 ) -> Result<RemoteModeV1, MinerHalt> {
     let v = trust.verification.as_ref().expect("called with a verification config");
     let candidates = candidate_chains_v1(peers)?;
+    // RFC09: a conflict where rule E may be in force is weighed from op 203 v2 committed leaves by the full node's own readers.
+    if candidates.len() > 1 && candidates.iter().any(|c| ForkChoiceRulesV1::active(fc.rules.rule_e, c.tip.daa_score)) {
+        return rule_e_mode_v2(nodes, trust, fc, peers, &candidates, template, job);
+    }
     let mut openings: Vec<PalwForkChoiceOpeningV1> = Vec::new();
     let wanted = openings_wanted_v1(&candidates);
     for node in nodes {
@@ -588,6 +607,86 @@ fn attested_mode_v1(
     };
     check_job_facts_v1(job, &class, &bond)?;
     Ok(RemoteModeV1 { label: mode_label_v1(trust.own_full_node, true, true, &verdict.status()), l2_line: Some(verdict.trust_line()) })
+}
+
+/// **RFC09: [`attested_mode_v1`] for a conflict under rule E (+ Gate C)** — the remote's choice is the full node's, from op 203 v2
+/// committed leaves, each tip's v3 window above the fork and the fork's v3 registry openings, all verified with the node's own
+/// readers (`crate::l2_rule_e`). Anything missing, unverifiable or tampered is a STOP: nothing is signed. One conflict pair at a time
+/// (more competing tips STOP). Established: the template must stand on the chosen tip, and the bond and the class are proven under
+/// the verified root (`l3_root_under_rule_e_v2`).
+fn rule_e_mode_v2(
+    nodes: &[&dyn RemoteNode],
+    trust: &MinerTrustV1,
+    fc: &RemoteForkChoiceV1,
+    peers: &[PeerViewV1],
+    candidates: &[VerifiedChainV1],
+    template: &Header,
+    job: &NodeJobFactsV1,
+) -> Result<RemoteModeV1, MinerHalt> {
+    use crate::l2_rule_e::{
+        CommittedServedV2, RuleEEvidenceV2, RuleEInputV2, l3_root_under_rule_e_v2, verify_fork_choice_rule_e_v2, window_bonds_v2,
+    };
+    let v = trust.verification.as_ref().expect("called with a verification config");
+    let params = fc.params.as_deref().ok_or(L2StopV1::LeafV1Insufficient("rule E needs the client's own consensus parameters"))?;
+    let [a, b] = candidates else {
+        return Err(L2StopV1::RuleEEvidence(format!("{} competing tips: rule E is weighed one conflict pair at a time", candidates.len())).into());
+    };
+    let fi = (0..a.hashes.len()).rev().find(|&i| b.contains(&a.hashes[i])).unwrap_or(0);
+    let fork = a.points[fi];
+    let tips = [a.tip_hash(), b.tip_hash()];
+    let wanted = openings_wanted_v1(candidates);
+    let mut served: Vec<CommittedServedV2> = Vec::new();
+    for node in nodes {
+        for chunk in wanted.chunks(PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1) {
+            if let Ok(got) = node.fork_choice_committed_v2(chunk, Some(fork.blue_score), &[]) {
+                served.extend(got);
+            }
+        }
+    }
+    // The fork's registry openings of every bond the tips' windows name (asked once the windows are known).
+    let bonds = window_bonds_v2(&served, &tips);
+    if !bonds.is_empty() {
+        for node in nodes {
+            if let Ok(got) = node.fork_choice_committed_v2(&[fork.hash], None, &bonds) {
+                for entry in got {
+                    if let Some(existing) = served.iter_mut().find(|s| s.block == entry.block && s.leaf == entry.leaf && s.registry.is_empty()) {
+                        existing.registry = entry.registry;
+                    } else {
+                        served.push(entry);
+                    }
+                }
+            }
+        }
+    }
+    let evidence: Vec<RuleEEvidenceV2> =
+        (fc.attestations)(&tips).unwrap_or_default().into_iter().map(|attestation| RuleEEvidenceV2 { attestation }).collect();
+    let input = RuleEInputV2 {
+        views: peers,
+        evidence: &evidence,
+        served: &served,
+        trusted: &fc.issuers,
+        ruleset: &v.ruleset,
+        params,
+        limits: &fc.limits,
+    };
+    let est = verify_fork_choice_rule_e_v2(&input, &fc.verify_signature)?;
+    check_template_v1(template, &est.chosen)?;
+    let node = nodes.first().ok_or(VerifyErrorV1::Empty)?;
+    let tip = est.chosen.tip_hash();
+    let (bh, bonds_proof) = node.state_proof(tip, "bonds").map_err(VerifyErrorV1::Proof)?;
+    let (ch, classes) = node.state_proof(tip, "classes").map_err(VerifyErrorV1::Proof)?;
+    let under = |h: &Header| l3_root_under_rule_e_v2(&est, h, &served, params).map_err(VerifyErrorV1::Proof);
+    let bond = bond_on_chain_under_v1(&est.chosen, &bh, under(&bh)?, &bonds_proof, &job.bond)?;
+    let class = class_on_chain_under_v1(&est.chosen, &ch, under(&ch)?, &classes, &job.class_id)?;
+    check_job_facts_v1(job, &class, &bond)?;
+    let line = format!(
+        "L2 fork choice: VERIFIED under rule E (+ Gate C) from committed leaves read by the full node's own functions (tip {tip}, \
+         attested block {}); {} competing tip(s) refused",
+        est.attested,
+        est.refused.len()
+    );
+    let status = L2StatusV1::EstablishedByAttestation { trust: line.clone() };
+    Ok(RemoteModeV1 { label: mode_label_v1(trust.own_full_node, true, true, &status), l2_line: Some(line) })
 }
 
 /// Give `block` to every node, idempotently: the hash is the miner's own, a node answering with another never counts, "already known" is
@@ -1373,6 +1472,7 @@ mod tests {
                 attestations.clone().ok_or_else(|| "the issuer is unreachable".into())
             }),
             verify_signature: toy,
+            params: None,
         });
         c
     }

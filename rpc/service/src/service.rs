@@ -3371,12 +3371,32 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         }
         let blocks =
             request.block_hashes.iter().map(|text| parse_hash64(text.trim(), "blockHashes")).collect::<RpcResult<Vec<_>>>()?;
+        // RFC09 (v2): the bonds whose v3 registry openings each entry carries, hex of the borsh bond key; malformed is an error.
+        use kaspa_consensus_core::palw_fork_choice_commitment_v1::{PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2, PalwForkChoiceExtrasRequestV2};
+        if request.registry_bonds.len() > PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2 {
+            return Err(RpcError::General(format!(
+                "at most {PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2} registry bonds per request (got {})",
+                request.registry_bonds.len()
+            )));
+        }
+        let registry_bonds = request
+            .registry_bonds
+            .iter()
+            .map(|text| {
+                let mut bytes = vec![0u8; text.trim().len() / 2];
+                faster_hex::hex_decode(text.trim().as_bytes(), &mut bytes)
+                    .ok()
+                    .and_then(|_| borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>(&bytes).ok())
+                    .ok_or_else(|| RpcError::General(format!("registryBonds: {text} is not a hex borsh bond key")))
+            })
+            .collect::<RpcResult<Vec<_>>>()?;
+        let extras = PalwForkChoiceExtrasRequestV2 { rule_e_window_above_blue: request.rule_e_window_above_blue, registry_bonds };
         let unavailable = |reason: String| GetPalwForkChoiceOpeningResponse { available: false, reason, ..Default::default() };
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(unavailable("this network has no PALW V2 state".to_string()));
         }
         let session = self.consensus_manager.consensus().unguarded_session();
-        match session.spawn_blocking(move |c| c.palw_fork_choice_openings_v1(&blocks)).await {
+        match session.spawn_blocking(move |c| c.palw_fork_choice_openings_v2(&blocks, &extras)).await {
             Err(reason) => Ok(unavailable(reason)),
             Ok(served) => Ok(GetPalwForkChoiceOpeningResponse {
                 available: true,
@@ -3396,6 +3416,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                             inner_root: e.opening.inner_root.to_string(),
                             committed_root: e.committed_root.to_string(),
                             committed_form: e.committed_form,
+                            committed_leaf: e.committed_leaf,
+                            rule_e_window: e.rule_e_window.unwrap_or_default(),
+                            registry_openings: e.registry_openings,
                         },
                         Err(reason) => RpcPalwForkChoiceEntry { block_hash: block.to_string(), reason, ..Default::default() },
                     })

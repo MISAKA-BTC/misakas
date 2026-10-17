@@ -4194,7 +4194,18 @@ impl ConsensusApi for Consensus {
         let sink = self.get_sink();
         let mut tips = self.get_tips();
         tips.sort();
-        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips)
+        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips, &Default::default())
+    }
+
+    fn palw_fork_choice_openings_v2(
+        &self,
+        blocks: &[BlockHash],
+        extras: &kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2,
+    ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let sink = self.get_sink();
+        let mut tips = self.get_tips();
+        tips.sort();
+        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips, extras)
     }
 
     fn import_pruning_point_overlay_snapshot(

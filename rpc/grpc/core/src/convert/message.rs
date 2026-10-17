@@ -1873,7 +1873,11 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, protowire::GetPalwForkChoiceOpeningRequestMessage, {
-    Self { block_hashes: item.block_hashes.clone() }
+    Self {
+        block_hashes: item.block_hashes.clone(),
+        rule_e_window_above_blue: item.rule_e_window_above_blue,
+        registry_bonds: item.registry_bonds.clone(),
+    }
 });
 from!(item: &kaspa_rpc_core::RpcPalwForkChoiceEntry, protowire::RpcPalwForkChoiceEntry, {
     Self {
@@ -1885,6 +1889,9 @@ from!(item: &kaspa_rpc_core::RpcPalwForkChoiceEntry, protowire::RpcPalwForkChoic
         inner_root: item.inner_root.clone(),
         committed_root: item.committed_root.clone(),
         committed_form: item.committed_form,
+        committed_leaf: item.committed_leaf.clone(),
+        rule_e_window: item.rule_e_window.clone(),
+        registry_openings: item.registry_openings.clone(),
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, protowire::GetPalwForkChoiceOpeningResponseMessage, {
@@ -4394,7 +4401,11 @@ try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kasp
     }
 });
 try_from!(item: &protowire::GetPalwForkChoiceOpeningRequestMessage, kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, {
-    Self { block_hashes: item.block_hashes.clone() }
+    Self {
+        block_hashes: item.block_hashes.clone(),
+        rule_e_window_above_blue: item.rule_e_window_above_blue,
+        registry_bonds: item.registry_bonds.clone(),
+    }
 });
 try_from!(item: &protowire::RpcPalwForkChoiceEntry, kaspa_rpc_core::RpcPalwForkChoiceEntry, {
     Self {
@@ -4406,6 +4417,9 @@ try_from!(item: &protowire::RpcPalwForkChoiceEntry, kaspa_rpc_core::RpcPalwForkC
         inner_root: item.inner_root.clone(),
         committed_root: item.committed_root.clone(),
         committed_form: item.committed_form,
+        committed_leaf: item.committed_leaf.clone(),
+        rule_e_window: item.rule_e_window.clone(),
+        registry_openings: item.registry_openings.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwForkChoiceOpeningResponseMessage, RpcResult<kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, {

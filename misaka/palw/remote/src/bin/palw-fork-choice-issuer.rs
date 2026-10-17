@@ -206,7 +206,7 @@ fn main() {
             }
         };
         let served = match runtime.block_on(
-            client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest { block_hashes: Vec::new() }),
+            client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest::default()),
         ) {
             Ok(r) => r,
             Err(e) => {

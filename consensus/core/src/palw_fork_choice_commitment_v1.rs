@@ -399,7 +399,27 @@ pub struct PalwForkChoiceServedEntryV1 {
     /// True when the committed root is the envelope (the fence is in force at the post-state's point); false: the flat ADR-0043 root,
     /// and the opening proves nothing about it.
     pub committed_form: bool,
+    /// **RFC09 (op 203 v2): the committed leaf in the form the post-state's point selects** (`palw_committed_leaf_bytes_v2`: v1,
+    /// rule-E v2 or rule-E v3; empty below the commitment fence). A client verifies it with `palw_verify_committed_leaf_v2` against
+    /// the root a header or an attestation commits — the full node's own reader.
+    pub committed_leaf: Vec<u8>,
+    /// **RFC09: the v3 rule-E window opened above the asked blue score** (borsh `PalwRuleEWindowOpeningV1`, `prove_window_suffix_v3`)
+    /// — the claim records above a fork point with their Gate C certification state. `None` where not asked or not the v3 form.
+    pub rule_e_window: Option<Vec<u8>>,
+    /// **RFC09: the v3 registry opening of each asked bond** (borsh `PalwRuleERegistryOpeningV3`) — the fork point's capital per bond.
+    pub registry_openings: Vec<Vec<u8>>,
 }
+
+/// **What an op 203 v2 request asks beyond the openings** (RFC09): the blue score above which each entry's v3 rule-E window is opened,
+/// and the bonds whose v3 registry openings each entry carries. Both empty: an op 203 v1 answer plus the committed leaf.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwForkChoiceExtrasRequestV2 {
+    pub rule_e_window_above_blue: Option<u64>,
+    pub registry_bonds: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+}
+
+/// The most registry openings one entry may carry (a structural bound on the answer, not an economic value).
+pub const PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2: usize = 64;
 
 /// **A node's fork-choice view** (op 203): its sink and DAG tips — a peer that hides a tip is caught when another peer shows it — and the
 /// openings of the blocks asked for (or of the sink and the tips).

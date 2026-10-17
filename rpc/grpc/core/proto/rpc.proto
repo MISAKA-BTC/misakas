@@ -3412,6 +3412,9 @@ message GetPalwStateProofResponseMessage {
 // RFC-0009 L2: the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203).
 message GetPalwForkChoiceOpeningRequestMessage {
   repeated string blockHashes = 1;
+  // RFC09 (v2): open each entry's v3 rule-E window above this blue score; the bonds (hex borsh) whose registry openings it carries.
+  optional uint64 ruleEWindowAboveBlue = 2;
+  repeated string registryBonds = 3;
 }
 
 message RpcPalwForkChoiceEntry {
@@ -3423,6 +3426,10 @@ message RpcPalwForkChoiceEntry {
   string innerRoot = 6;
   string committedRoot = 7;
   bool committedForm = 8;
+  // RFC09 (v2): the committed leaf in its own form, the v3 rule-E window, the v3 registry openings.
+  bytes committedLeaf = 9;
+  bytes ruleEWindow = 10;
+  repeated bytes registryOpenings = 11;
 }
 
 message GetPalwForkChoiceOpeningResponseMessage {

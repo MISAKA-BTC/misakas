@@ -2378,6 +2378,18 @@ pub trait ConsensusApi: Send + Sync {
         Err("this consensus serves no fork-choice opening".to_string())
     }
 
+    /// **RFC09: op 203 v2** — [`Self::palw_fork_choice_openings_v1`] with each entry's committed leaf in its own form, and (as asked)
+    /// its v3 rule-E window above a blue score and its v3 registry openings of some bonds: the inputs the full node's rule-E comparator
+    /// reads, for a remote client to evaluate with the node's own functions. Untrusted as served.
+    fn palw_fork_choice_openings_v2(
+        &self,
+        blocks: &[BlockHash],
+        extras: &crate::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2,
+    ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let _ = (blocks, extras);
+        Err("this consensus serves no fork-choice opening".to_string())
+    }
+
     /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
     fn import_pruning_point_overlay_snapshot(
         &self,
