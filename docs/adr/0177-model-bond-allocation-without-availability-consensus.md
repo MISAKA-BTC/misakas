@@ -1,5 +1,7 @@
 # ADR-0177 — Model-bond coinbase allocation without model-availability consensus
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 * **Status:** Accepted design direction at the user's request, 2026-10-10, after the Seeder/FPR amendments. Allocation parameters, economic validation, implementation and activation remain pending.
 * **Scope:** Future PALW model distribution and model-specific coinbase allocation, with Panels or the separately gated Panel=0 mode.
 * **Supersedes:** MISAKA Torrent adoption/integration, dedicated Bonded Seeder roles/rewards, and the model-availability parts of [ADR173 D9–D11](0173-public-verifier-dispute-completeness-is-misaka-purpose.md), [RFC14 §16](../rfc/0014-panel-independent-fraud-prosecution.md), RFC15 and their related amendments. Mandatory Torrent, independent Bonded Seeder requirements, PoR/Full Fetch leases, TRDC/FPR model-disclosure gates and availability-based reward/weight suspension are withdrawn.
@@ -47,7 +49,7 @@ D1は**モデルの配布**を合意の管理対象から外す決定であり�
 モデルへのアクセス結果、peerの接続状態、配布者の応答状況を、合意判定への暗黙の入力としてはならない。Miner・Panelの資格は、適用rulesetで定義された認証済みの状態・証拠によって判定する。
 仕様上は「**第三者がモデルを取得できなかった場合**（登録者の義務違反でも不正でもない）」と「**必要なPanelが成立しなかった場合**（そのclaimは検証条件を満たさないため受理・Finalされない。非不正の終了）」を区別して扱う。
 RFC-0002 Proposal Aの `class_seated`（executor以外のモデル保有operatorを `seat_count` 以上、registrant・executorを除いた独立operatorの下限）は、この保有義務と両立し、claim受理・報酬資格・登録者の責任の関係を同時に満たすよう検証する。
-詳細は[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md)。
+詳細は[RFC/ADRレビューの整理（2026-10-12）](../audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md)。
 
 ### D2 — 入手性と登録モデルの同一性を分離する
 
@@ -198,10 +200,11 @@ DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実�
   bond集約倍率をblock発行数・beacon・Final weight・fork-choiceへ掛けることは含めない。
 - **検証承認gate（ECON round 2の設計）の位置づけ:** 補助金を検証承認に条件付ける機構として休眠実装を続けてよいが、`p=0`の解消証拠には数えない。
 
+<a id="改定--2026-10-12minerpanelのclaim-bond合算と1320倍の配分係数提案"></a>
 ## 改定 — 2026-10-12（Miner＋Panelのclaim bond合算と1.3〜2倍の配分係数：提案）
 
 **状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。
-ユーザーの追加方針として、**モデルに実際に拘束されたMinerおよびPanelの適格claim bond元本の和**に応じた**1.3〜2倍の配分係数**を、モデル別の報酬配分（とブロック生成機会の配分）に反映する設計を提案として採録する。全文と攻撃試験C01〜C18は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3A。
+ユーザーの追加方針として、**モデルに実際に拘束されたMinerおよびPanelの適格claim bond元本の和**に応じた**1.3〜2倍の配分係数**を、モデル別の報酬配分（とブロック生成機会の配分）に反映する設計を提案として採録する。全文と攻撃試験C01〜C18は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3A。
 
 > モデル別のブロック生成機会と報酬配分には、そのモデルに実際に拘束されたMinerおよびPanelの適格claim bond元本の和を使用する（MUST）。同じ実元本を複数claim・role・modelで重複計上してはならない（MUST NOT）。
 >

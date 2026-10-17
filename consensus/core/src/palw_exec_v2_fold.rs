@@ -2,7 +2,7 @@
 //! dormant behind `Params::palw_exec_payload_v2`. A child module of `palw_state_v2`, as the vertex and held-close folds are, so it
 //! reads the builder, the bond registry, the claims and the exposure ledger directly and writes the three work-slice tables only
 //! through their one journaled writer. The wire types are [`crate::palw_exec_v2`]'s; the ledgers and pure rules are
-//! [`crate::palw_work_slice_v2`]'s; `docs/design/palw/rfc-0008-implementation-spec.md` is normative.
+//! [`crate::palw_work_slice_v2`]'s; `docs/design/palw/execution/rfc-0008-implementation-spec.md` is normative.
 //!
 //! # What this module does and what it deliberately cannot do
 //!

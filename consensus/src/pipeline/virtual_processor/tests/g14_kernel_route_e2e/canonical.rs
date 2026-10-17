@@ -1,4 +1,4 @@
-//! **The canonical G14 node harness (lane G14C, milestone 2: GAP-01 to GAP-04 of `docs/design/palw/g14-completion-matrix.md`).**
+//! **The canonical G14 node harness (lane G14C, milestone 2: GAP-01 to GAP-04 of `docs/design/palw/integration/g14-completion-matrix.md`).**
 //!
 //! The property (RFC-0015 §1.1): the producer and EVERY Panel seat collude; ONE public bonded verifier outside the Panel carries the
 //! case to an objective outcome — a conviction before Final, a conviction after Final inside the liability horizon, the correct DA

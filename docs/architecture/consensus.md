@@ -1,9 +1,7 @@
-# Consensus
+# 合意・DAG・認証の責任分界
 
-MISAKA keeps rusty-kaspa's blockDAG (GHOSTDAG ordering, DAA difficulty) and adds PALW production, PQ-only authorization and
-PALW-based settlement. Start with the [architecture overview](overview.md) and [what is different from Kaspa](differences-from-kaspa.md).
+[ADR-0180](../adr/0180-palw-only-consensus-no-bft-validators.md) は PALW のみの合意と BFT validator 不使用の採用理由を記録します。DNS退役・legacy reader・移行は [RFC-0012](../rfc/0012-palw-only-consensus-and-native-evm-settlement.md) を参照します。
 
-- **PALW consensus and Final:** [RFC-0008](../rfc/0008-palw-claim-backed-consensus-blocks.md) (claim-backed blocks, EXEC v2), [RFC-0010](../rfc/0010-permissionless-palw-panel-and-claim-completion.md) (permissionless Panel), [RFC-0014](../rfc/0014-panel-independent-fraud-prosecution.md) (public prosecution), [RFC-0015](../rfc/0015-panel-free-permissionless-verification.md) (Panel-free, not activated).
-- **Finality and DNS retirement:** [RFC-0012](../rfc/0012-palw-only-consensus-and-native-evm-settlement.md) and its [dormant implementation note](../rfc/0012-dormant-implementation.md); fork choice rule E in ADR-0178 (see the [ADR index](../adr/README.md)).
-- **Bond/time budgets:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md).
-- **Activation status:** [activation-readiness-matrix.md](../design/palw/activation-readiness-matrix.md) — nothing new is armed until the user's single full-activation release.
+[RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) の `Final` と `SecurityCertified` を区別し、claim ごとの認証と固定のBFT validator集合を同一視しません。Rule Eは [ADR-0178](../adr/0178-fork-choice-heals-a-partition-on-bonded-participation.md)、物理生成機会は [RFC-0016](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)、予算は [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)。
+
+延期した画像・動画・改善が共通経路から開かないことと、残すテキスト・認証・会計の回帰は別途確認します。[延期方針](../governance/post-mainnet-scope.md) / [状態](../STATUS.md)。

@@ -4354,7 +4354,7 @@ fn shipped_presets_have_pinned_fingerprints() {
         // the blockrate, the DAA window duration and every VLT window are in the hash.
         // Moved before that by the t10 PALW re-genesis ("-palw" marker + trivial bits + 0.1-bps
         // blockrate + palw activation + the wall-clock-preserving DnsParams re-sizing) —
-        // see docs/history/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
+        // see docs/history/networks/testnet-10/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
         // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
         // `d07cb673…` shadow-materialized) were both superseded by that merge.
         ("testnet", TESTNET_PARAMS, "0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88"),
@@ -4775,7 +4775,7 @@ fn shipped_presets_have_pinned_fingerprints() {
             // the certified family set is inside every RC bundle, so testnet-11's fingerprint AND
             // identity move: no node on this build can rejoin testnet-11, which is superseded by
             // testnet-12 and unsyncable past DAA 7,219 by a correct validator in any case
-            // (`docs/testnet-12-regenesis-2026-09-23.md`). The previous pin was not deployed.
+            // (`docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md`). The previous pin was not deployed.
             // Previous: 79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640.
             // **And again the same day, for the economic audit's state schema v21**
             // (`PALW_STATE_V2_VERSION` 20 -> 21, hashed into the bundle; `palw_audit_2026_09_23`

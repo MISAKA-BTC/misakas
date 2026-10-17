@@ -1,4 +1,4 @@
-//! **Element courts (K2-TIR-v4)** — `docs/design/palw/k2-real-scale.md` §3.
+//! **Element courts (K2-TIR-v4)** — `docs/design/palw/models/k2-real-scale.md` §3.
 //!
 //! A fault names ONE output element of one committed value of a segmented claim. The filing opens one leaf of the output holding it
 //! and, per input, the leaves covering the element's **dependency line** (one element for an elementwise or structure primitive, the

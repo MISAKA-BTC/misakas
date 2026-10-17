@@ -1,4 +1,4 @@
-//! **Per-position DA for segmented claims (K2-TIR-v4)** — `docs/design/palw/k2-real-scale.md` §4.
+//! **Per-position DA for segmented claims (K2-TIR-v4)** — `docs/design/palw/models/k2-real-scale.md` §4.
 //!
 //! A demand on a segmented claim names a POSITION and asks for **everything committed at it** — every value, derived windows included,
 //! each authenticated through its node commitment and the position root against the claim's on-chain segment root. The material is

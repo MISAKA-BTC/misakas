@@ -1,4 +1,4 @@
-//! **The cross-lane G14 gates** (`docs/design/palw/g14-completeness-proof-2026-10-16.md` §4.1, the cross-lane lane): the arming rules
+//! **The cross-lane G14 gates** (`docs/audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md` §4.1, the cross-lane lane): the arming rules
 //! and the claim / reward gates that decide whether a reward-bearing claim can exist without a G14 public-conviction route.
 //!
 //! ```text

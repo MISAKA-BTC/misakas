@@ -13,8 +13,8 @@ marketplace pattern. The contracts have **no external imports** so `forge create
 | `contracts/Marketplace.sol` | fixed-price NFT marketplace (`list` / `cancel` / `buy`), pays the seller in native MSK |
 
 Compiled with `evmVersion = "shanghai"` (see `foundry.toml`). MISAKA EVM chain id = `0x4D534B`
-(5067595). See `../../docs/connecting-ethereum-tooling.md` for the RPC setup (MetaMask/Hardhat/ethers/viem)
-and `../../docs/evm-differences-from-ethereum.md` for the compat profile.
+(5067595). See `../../docs/operations/evm/connecting-ethereum-tooling.md` for the RPC setup (MetaMask/Hardhat/ethers/viem)
+and `../../docs/reference/evm/evm-differences-from-ethereum.md` for the compat profile.
 
 ## Deploy + interact (Foundry)
 
@@ -56,12 +56,12 @@ cast send $MKT "buy(uint256)" 1 --value 1000000000000000 --rpc-url $RPC --privat
 
 Fund an EVM address by bridging from the UTXO side:
 `misaka evm deposit-lock --key-file <seed> --evm-address 0x… --amount <sompi> --yes` → `misaka evm claim --outpoint <txid>:0`
-(the claim credits `amount` sompi × 1e10 wei). See `../../docs/misaka-evm-wallet-profile-v1.md`.
+(the claim credits `amount` sompi × 1e10 wei). See `../../docs/reference/evm/misaka-evm-wallet-profile-v1.md`.
 
 ## Hardhat / ethers / viem
 
 Same contracts; point the network at `http://<node-host>:8545`, `chainId: 0x4d534b`,
-`evmVersion: "shanghai"`. Snippets in `../../docs/connecting-ethereum-tooling.md`.
+`evmVersion: "shanghai"`. Snippets in `../../docs/operations/evm/connecting-ethereum-tooling.md`.
 
 ## Verified live (testnet, 2026-06-20, unmodified Foundry 1.7.1)
 
@@ -78,4 +78,4 @@ Marketplace `0x7f1C87Bd3a22159b8a2E5D195B1a3283D10ea895`.)
 
 Do **not** use `block.timestamp` / `blockhash` / `prevrandao` for gacha / loot / lottery on a
 BlockDAG — use commit-reveal, a VRF, an oracle, or server-signed reveals. See
-`../../docs/evm-differences-from-ethereum.md`.
+`../../docs/reference/evm/evm-differences-from-ethereum.md`.

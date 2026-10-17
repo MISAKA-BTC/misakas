@@ -369,7 +369,7 @@ jobs:
 
       # **The numbers come from the run, never from a README.** Tests and failures by area from the
       # JUnit report, the declared network and fingerprint from release.json, and the
-      # readiness tally from docs/mainnet-readiness.md. It runs when the tests fail too.
+      # readiness tally from docs/operations/releases/mainnet-readiness.md. It runs when the tests fail too.
       - name: Write the CI summary
         if: always()
         run: |

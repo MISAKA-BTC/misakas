@@ -536,7 +536,7 @@ enum OpvGateV1 {
     Drop,
 }
 
-/// **The derived OPV eligibility at the kernel route's door** (`docs/design/palw/opv-beacon-bootstrap.md` §5.3): a registration under
+/// **The derived OPV eligibility at the kernel route's door** (`docs/design/palw/verification/opv-beacon-bootstrap.md` §5.3): a registration under
 /// `OptimisticPublicVerification` is admitted only for a class `opv_eligibility_v1` derives eligible now (or that the test seam names),
 /// and every claim of an OPV class commits only while its class is eligible. A claim keeps what it was admitted with; a class that
 /// loses eligibility (its binding refuted, its kernel retired, the network's deny-list) takes no new claim.

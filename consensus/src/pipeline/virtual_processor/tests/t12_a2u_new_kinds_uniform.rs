@@ -27,7 +27,7 @@
 //!
 //! `A2U_INT12_REPLAY_OUT=<dir>` also writes each ruleset's chain (`<dir>/a2u-<ruleset>.borsh`: the headers, transactions, refusals,
 //! per-block roots and the view) for the replay through the live release itself (`a2u_int12_replay.rs.int12`,
-//! `scripts/verify/a2u-int12-replay.sh`; `docs/design/palw/a2-uniformity-new-kinds.md` §5).
+//! `scripts/verify/a2u-int12-replay.sh`; `docs/design/palw/integration/a2-uniformity-new-kinds.md` §5).
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
 };

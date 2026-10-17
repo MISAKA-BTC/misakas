@@ -1,0 +1,47 @@
+# RFC トピック別索引
+
+[番号順](INDEX.md) / [入口](README.md)。分類は探索用で、採用状態・権威の順位ではありません。
+
+## Consensus / architecture
+
+- [RFC-0001 — PALW 推論サーフェスの欠落機能 — 決定論的な生成制御・サービング・入力拡張の設計](0001-palw-inference-surface-gaps.md)
+- [RFC-0005 — PALW VM（不採用）](0005-palw-ml-vm.md)
+- [RFC-0008 — PALW EXEC lane — claim-backed work slices and transaction execution](0008-palw-claim-backed-consensus-blocks.md)
+- [RFC-0013 — Reproducible layouts and resource-bounded model onboarding tools](0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md)
+
+## EVM / wallet
+
+- [RFC-0012 — PALW-only consensus and native EVM settlement: retire DNS validators and their reorg veto](0012-palw-only-consensus-and-native-evm-settlement.md)
+
+## Economics / budgets
+
+- [RFC-0016 — bond加重のブロック生成機会と弾力的Final容量: 物理ブロック機会をbondへ接続する](0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)
+
+## Governance / release scope
+
+- [RFC-0021 — 設計凍結・例外変更手続きと文書の役割分離](0021-design-freeze-and-documentation-governance.md)
+- [RFC-0022 — 初期 mainnet から画像・動画・モデル改善を外す適用範囲](0022-post-mainnet-media-and-model-improvement-scope.md)
+
+## Models / execution / onboarding
+
+- [RFC-0002 — PALW Canonical Tensor IR v1 (PALW-TIR) — a bounded, deterministic integer tensor program as the cons](0002-palw-tensor-ir.md)
+- [RFC-0003 — PALW Generative Model Classes — one job, determinism and output layer, and the class profiles on top](0003-palw-generative-model-classes.md)
+- [RFC-0004 — PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR](0004-palw-model-improvement.md)
+- [RFC-0011 — Permissionless model onboarding with probabilistic constraint verification and court on dispute](0011-permissionless-model-and-long-context-onboarding.md)
+- [RFC-0017 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3(モデル単位の審査は廃止)](0017-model-eligibility-examination-and-renewal.md)
+- [RFC-0018 — DAGを最大限に活用する設計変更: 多モデル並行生成、特権なきPanel anchor、SecurityCertified(Gate C)とDNS廃止後の収束](0018-dag-parallel-multi-model-consensus.md)
+- [RFC-0019 — 年次モデル追加フォーク: 段階的ソフトウェア展開・年次モデルカタログ・合意は不変](0019-annual-model-upgrade.md)
+- [RFC-0020 — 長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない](0020-long-context-calibration-memory.md)
+
+## Operations / interfaces / recovery
+
+- [RFC-0009 — PALW Remote Client — node を持たないモデル登録・claim・非保管型の報酬回収](0009-palw-remote-miner.md)
+
+## Verification / court
+
+- [RFC-0006 — PALW layer-sharded panels — bounded cell verification from authenticated boundaries, with independen](0006-palw-layer-sharded-panels.md)
+- [RFC-0007 — PALW probabilistic detection — direct checks, authenticated receipts, and deterministic court](0007-palw-verification-certificates-and-algebraic-checks.md)
+- [RFC-0010 — Permissionless PALW Panel binding and claim completion](0010-permissionless-palw-panel-and-claim-completion.md)
+- [RFC-0014 — Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ](0014-panel-independent-fraud-prosecution.md)
+- [RFC-0015 — Panel=0: 固定Panelからpermissionless verifierとobjective fraud proofへ移行する](0015-panel-free-permissionless-verification.md)
+

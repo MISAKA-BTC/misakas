@@ -2,7 +2,7 @@
 //!
 //! The builder and the relay are hostile; the signer and the submitter see only JSON files. Every JSON leaf of the unsigned bundle and of
 //! the signed registration is mutated, every byte of the carrier is flipped, and the multi-RPC quote agreement is perturbed field by
-//! field. Expected results are stated before each run (and recorded in `docs/design/palw/adversarial-e2e-record.md`).
+//! field. Expected results are stated before each run (and recorded in `docs/evidence/palw/implementation-records/adversarial-e2e-record.md`).
 
 use std::collections::BTreeSet;
 

@@ -1,8 +1,10 @@
 # ADR-0152 — A bond is standing stake, a claim reserves until its licence, and a reward vests until its conviction window closes (R-core+)
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **Body moved (2026-09-27).** This file first reached `main` in its short form. The full v3.1 text
 > (469 KB: rules, analysis, tests, reviews) is kept verbatim in
-> [design/palw/archive/0152/](../design/palw/archive/0152/README.md), from branch
+> [design/palw/archive/0152/](../history/design/palw/0152/README.md), from branch
 > `docs/adr-0152-v31-postedits` at `9ed1adced`. The normative rules are in
 > [spec/palw](../spec/palw/00-index.md) chapters 07–10, 13 and 16. The reasoning is summarised in
 > [design/palw/collateral.md](../design/palw/collateral.md).
@@ -15,7 +17,7 @@
 * Date: 2026-09-24
 * Decided by: the operator. The binding decisions (v1, v2, v3, v3.1, the post-edits and the decisions
   after v3.1) are listed in the archive's
-  [§1.5](../design/palw/archive/0152/02-motivation-and-overview.md).
+  [§1.5](../history/design/palw/0152/02-motivation-and-overview.md).
 * Supersedes / amends: on testnet-12 only, ADR-0061's collateral model (with ADR-0151) and ADR-0124 D5
   with ADR-0130's one-ticket-per-operator panel lottery (by SW). ADR-0062 is amended by DA.
 
@@ -85,7 +87,7 @@ Each item names the rule family (0152's own labels, kept as sources) and where t
   [09 court and offences](../spec/palw/09-court-and-offences.md) · [10 collateral and economics](../spec/palw/10-collateral-and-economics.md) ·
   [16 network parameters and fences](../spec/palw/16-network-parameters-and-fences.md)
 - Design: [collateral.md](../design/palw/collateral.md), [verification.md](../design/palw/verification.md)
-- Full text: [design/palw/archive/0152/](../design/palw/archive/0152/README.md)
+- Full text: [design/palw/archive/0152/](../history/design/palw/0152/README.md)
 - Code: `consensus/core/src/palw_state_v2.rs` (`palw_claim_commitment_v1`, `palw_bond_committed_v1`,
   `palw_rcore_lock_v1`, `palw_rcore_deadline_v1`), `palw_panel_v2.rs` (the stake draw),
   `palw_offence_attribution_v1.rs`, `palw_da_rcore_v1.rs`, `palw_vesting_v1.rs`;

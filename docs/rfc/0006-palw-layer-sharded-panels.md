@@ -1,9 +1,11 @@
 # RFC-0006: PALW layer-sharded panels — bounded cell verification from authenticated boundaries, with independent public-verifier localization and exact court on dispute
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **Status update 2026-10-08 (supersedes every "dormant" / "None on every preset" wording below that predates it):** `palw_tir_shard_v1` is **ARMED on testnet-12 at the int-11/12 flag day, DAA 5,300** (`PALW_T12_INT11_FENCES_V1`); it stays dormant on every other preset. Fold, cells, receipts by parts, the exact court (`TirShardCourtAccused`, any Active bond) and the kaspad e2e are IMPLEMENTED_AND_TESTED; per-segment resource pricing, a non-seat public cell watcher, a processor-level reorg/duplicate-receipt test, the V3 per-shard draw and the D-S1…D-S6 drill evidence are open (`docs/design/palw/remaining-rfc-integration-matrix.md`). Any change to an armed rule needs a new versioned fence.
 >
 
-> **Implementation update 2026-10-11:** The non-seat watcher, dormant segment-resident pricing and per-shard V3 engine are implemented; their implementation is not activation approval. V3 restore now derives its seal/entropy commitments and retains the verified output after shared-epoch pruning under explicit engine carriage version 2. Live shard v1 at DAA 5,300 is preserved. See [SHARD §1.4](../design/palw/shard-rfc6-10.md#14-restore-time-seal-and-entropy-provenance-2026-10-11) and the [four-RFC audit](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md). D-S drill, public source/soundness, economic and worst-resource approvals remain open.
+> **Implementation update 2026-10-11:** The non-seat watcher, dormant segment-resident pricing and per-shard V3 engine are implemented; their implementation is not activation approval. V3 restore now derives its seal/entropy commitments and retains the verified output after shared-epoch pruning under explicit engine carriage version 2. Live shard v1 at DAA 5,300 is preserved. See [SHARD §1.4](../design/palw/verification/shard-rfc6-10.md#14-restore-time-seal-and-entropy-provenance-2026-10-11) and the [four-RFC audit](../audit/palw/design-reviews/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md). D-S drill, public source/soundness, economic and worst-resource approvals remain open.
 >
 
 > **Spec closures 2026-10-15:** normative rules and named parameters for R6-CELL/DRAW/OUTSIDE/PRICE/MIGRATION and ALL-MODEL are in [Spec closures — 2026-10-15](#spec-closure-2026-10-15). No PASS, activation or change to live v1 is implied.
@@ -920,10 +922,10 @@ minimum shard count with at most twice the minimum; and the original measured-sp
 `palw_tir_shard_plan_shape_v1` enforces the offered position counts, 2..64 shards, the layer-count bound
 and the derived under/over-sharding limits. These choices describe the existing implementation.
 
-The v1 fence is live on testnet-12 at DAA 5,300. The later [RFC6/10 implementation record](../design/palw/shard-rfc6-10.md)
+The v1 fence is live on testnet-12 at DAA 5,300. The later [RFC6/10 implementation record](../design/palw/verification/shard-rfc6-10.md)
 adds V3 per-shard draws and non-seat watchers behind the permissionless-panel fence, and resident-aware
 pricing behind the separate dormant `palw_tir_shard_segment_v2` fence. Live v1 work pricing is preserved.
-The [four-RFC design audit](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md) tracks the remaining
+The [four-RFC design audit](../audit/palw/design-reviews/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md) tracks the remaining
 coverage / public-court / worst-cell capacity / fee evidence. Model acquisition follows ADR-0177 and
 the later §3.1 amendment; historical readiness is not approval of a new acquisition-based earning gate.
 
@@ -996,7 +998,7 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 
 ## 改定 — 2026-10-12（shardとPanel=1：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
 
 Panel=1暫定modeでは、単一seatで全shard・全検証scopeを覆える経路だけを対象にする。shard outsider、segment mask、`seats-1` 等の複数seat前提を一括定数置換しない（RFC-0010 2026-10-12改定の1-seat移行監査）。
 
@@ -1006,8 +1008,8 @@ Panel=1暫定modeでは、単一seatで全shard・全検証scopeを覆える経�
 
 **Scope and reading rule.** This section closes specification gaps for R6-CELL, R6-DRAW, R6-OUTSIDE, R6-PRICE,
 R6-MIGRATION and the cross-cutting ALL-MODEL group of the
-[design audit's requirement index](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引).
-It states rules that the [RFC6/10 implementation record](../design/palw/shard-rfc6-10.md) and the 2026-10-13/14 RFC06
+[design audit's requirement index](../audit/palw/design-reviews/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引).
+It states rules that the [RFC6/10 implementation record](../design/palw/verification/shard-rfc6-10.md) and the 2026-10-13/14 RFC06
 records implement but this RFC never stated, and marks stale text. [PRINCIPLES](../PRINCIPLES.md) and
 ADR-0173/0176/0177/0178 rank above it; later user rulings prevail over older RFC text. Nothing here changes live
 shard v1 at DAA 5,300, arms a fence, assigns a height or records a PASS. Mechanics or private-process results are not

@@ -2,7 +2,7 @@
 //! filer, gated by the operator's own replay** (node policy; a child module of `palw_panel`, whose
 //! loop holds its one book and calls [`PalwPanelService::operator_da_tick_v1`] once a tick).
 //!
-//! **Why.** The panel-seed CRITICAL (`docs/t12-panel-seed-2026-09-25.md`): while audit P0-10 is
+//! **Why.** The panel-seed CRITICAL (`docs/history/networks/testnet-12/t12-panel-seed-2026-09-25.md`): while audit P0-10 is
 //! open a lottery win costs ~279 junk BLAKE2b draws, so an attacker re-rolls a claim's panel until
 //! its own Sybil seats cover it, and a coverage lie reaches `Final` with 0 slash. The user's decision
 //! of 2026-09-26 01:00 pairs fence F1 and the operator-anchor fence (lane A) with this node duty:

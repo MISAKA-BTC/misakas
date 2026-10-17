@@ -338,7 +338,7 @@ pub fn palw_kernel_route_template_typed_v1(policy: LedgerPolicyV1, opv: Option<O
 /// The ledger configuration the fold starts every block from (policy, the schedule that arms the K2 descriptors, the descriptors
 /// this binary implements). Rows are loaded over it.
 pub fn palw_kernel_route_template_v1(policy: LedgerPolicyV1) -> KernelLedgerV1 {
-    // K2-TIR-v4 (lane K2S, `docs/design/palw/k2-real-scale.md`): the real-scale suite — segmented claims, element courts, per-position
+    // K2-TIR-v4 (lane K2S, `docs/design/palw/models/k2-real-scale.md`): the real-scale suite — segmented claims, element courts, per-position
     // DA, prompt tiles; its classes register only under OptimisticPublicVerification. Like v1–v3 it is armed here and nowhere else:
     // the fence refuses every real height.
     // K2-TIR-v5 (§12 of the same design): K2-TIR-v4 for encoders and heads, ONE position whose ids are the job's; armed here only.

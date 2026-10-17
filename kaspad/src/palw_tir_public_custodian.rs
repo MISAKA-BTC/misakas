@@ -26,7 +26,7 @@
 //! restart nor a reorg that rolls the canonical counter back refills it. An unsealed preparation restarts from its first slice
 //! on a fresh reader; the work book marks the first debit after a restart (`restart: true`).
 //!
-//! **Not covered here (recorded in docs/design/palw/g14-objective-conviction-remaining-2026-10-15.md):** answering outside owners'
+//! **Not covered here (recorded in docs/design/palw/integration/g14-objective-conviction-remaining-2026-10-15.md):** answering outside owners'
 //! demands from the prepared capture (the Begin/Part/Finish responder), measured completion within the fixed preparation clock at
 //! the largest profile, sweeping orphan `prepared-*` directories the journal never recorded, and re-sealing a corrupted capture.
 #![allow(dead_code)] // the panel loop calls the tick; the journal helpers are exercised by the tests below.

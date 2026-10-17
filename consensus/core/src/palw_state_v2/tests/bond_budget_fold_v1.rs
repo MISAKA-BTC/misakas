@@ -1,4 +1,4 @@
-//! **Lane BUDGET (ADR-0176 / ADR-0177): the bond budget through the fold** (design `docs/design/palw/bond-budget-and-model-allocation.md`).
+//! **Lane BUDGET (ADR-0176 / ADR-0177): the bond budget through the fold** (design `docs/design/palw/economics/bond-budget-and-model-allocation.md`).
 //!
 //! Milestone 2 pins the dormant layout: the unarmed fold byte for byte (fence absent, or scheduled ahead), the engine created by the fence's
 //! first block and carried by delta, root and carriage, the old live claims seeded into the window, and the capital assignment (tag 140).

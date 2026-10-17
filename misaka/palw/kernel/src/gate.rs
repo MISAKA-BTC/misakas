@@ -455,7 +455,7 @@ pub fn public_pipeline_prosecution_complete_v1(
     if gaps.is_empty() { Ok(total) } else { Err(gaps) }
 }
 
-/// **K2-TIR-v4's per-prosecution quantities** beside [`ProsecutionBoundsV1`] (`docs/design/palw/k2-real-scale.md` §6): what one position's
+/// **K2-TIR-v4's per-prosecution quantities** beside [`ProsecutionBoundsV1`] (`docs/design/palw/models/k2-real-scale.md` §6): what one position's
 /// material is, how many parts it is served in, the committed values a position, and the whole claim's material — the producer's DA
 /// obligation, reported and bounded by the descriptor, never what a prosecution reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

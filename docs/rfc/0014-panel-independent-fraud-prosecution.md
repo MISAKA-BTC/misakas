@@ -1,5 +1,7 @@
 # RFC-0014 — Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -799,7 +801,7 @@ court が全域で裁定する、G14C GAP-52）。verifier が自分の copy か
 V2 `artifact_root`）に対して `palw_verify_verifier_model_operand_v1` で認証する。node 単位の model-bytes mask（K2S が v4/v5 の owed set で
 呼ぶ）、活性値から関係を復元しうる残余（Level 2 は利用者判断）、t12 で武装済みのモデル bytes を compel する route（held `StepLeaf`、
 dissection の root claim、readiness）と新しい休眠 fence の提案、各 unit class の G14 到達性は
-[DA16 design](../design/palw/da16-transport-and-provider-court.md) §7。状態は implemented（armable ではない）。
+[DA16 design](../design/palw/verification/da16-transport-and-provider-court.md) §7。状態は implemented（armable ではない）。
 
 ### 16.5 重複しないモデル別miner元本
 
@@ -905,7 +907,7 @@ public challengerの別責任・資源枠をproducer採掘capと同一視しな�
 
 ## 改定 — 2026-10-12（固定期限と有限終了、共通経済会計：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §5・§3A。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §5・§3A。
 
 - **§7.2補足（X3）:** 経済的なclaim受理時点 `d0` で、rulesetに基づく最大の準備期間・観測期間・裁定期間と絶対deadlineを固定する。最初のcourt session受理時まで先延ばししない。
 

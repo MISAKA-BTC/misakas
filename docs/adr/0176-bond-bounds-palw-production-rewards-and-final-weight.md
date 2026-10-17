@@ -1,5 +1,7 @@
 # ADR-0176 — Bond bounds PALW claim capacity, blocks, rewards and Final weight
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 * **Status:** Accepted as a design premise at the user's request, 2026-10-10. Specification details, implementation, economic measurements and activation remain pending.
 * **Scope:** All future PALW reward-bearing producer paths, including Attempt, Free Prompt, claim-backed blocks, receipt rights, slices/riders/batches, unpaid escrow and settlement readers. Applies with existing Panels and with the separately gated Panel=0 mode.
 * **Complements:** [ADR-0171](0171-probabilistic-constraint-checks-and-court-on-dispute.md), [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md), [RFC14](../rfc/0014-panel-independent-fraud-prosecution.md) and [RFC15 §8](../rfc/0015-panel-free-permissionless-verification.md).
@@ -109,7 +111,7 @@ admission数を増やしても未払の全rewardや共有担保を架空の追�
 ×1000 packageはDAA全体のemission budget、rider分配、breakerも含むが、この決定の全上限ではない。
 モデルclassの[escrow割引](../../consensus/core/src/palw_audit_door_v1.rs)には対象制限があり、
 現在の[Final weight](../../consensus/core/src/palw_weight_cap_v1.rs)はρだけで一律に縮小されない。
-[t12確認記録](../design/palw/t12-bond-reuse-audit-2026-10-10.md)は現行コード観測として保持し、
+[t12確認記録](../audit/palw/design-reviews/t12-bond-reuse-audit-2026-10-10.md)は現行コード観測として保持し、
 class/work依存の拘束期間という旧提案は本決定の共通期間へ改定する。
 これらの既存機能をD1–D6達成の証拠に流用しない。
 
@@ -151,7 +153,7 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 
 ## 改定 — 2026-10-12（共通原則の正本化、Bond/time台帳の具体化：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §1・§3・§3A。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §1・§3・§3A。
 
 - **§1の正本:** 本ADRの§1を共通原則の正本とし、RFC索引と関連RFC（RFC-0010/0014/0015）から参照する。同額の適格拘束元本・同一期間・同一ruleset・容量倍率に対して、正直に計算するminerと計算省略で高速にclaimを出すminerに与える上限を同一にする。計算省略、即時Valid、再提出、取消、失効、鍵・bond・modelの分割や移動で、同じ元本の枠を増加・早期回復させない（MUST NOT）。枠を確保しただけでは支払わず、正当なclaim・検証証拠・裁定・Final条件を満たした範囲でだけ報酬・確定creditを付与する。Panel人数や計算速度を増やしても同じproducer元本の絶対上限は増えない。
 - **D1/D3/D4補足:** 長さW DAAのrolling会計を基準案とする。claim受理時に、そのclaimが派生させ得るclaim枠・ブロック権・報酬・Final weightの最大権利を同一の元本・予約へ原子的に帰属させる。受理DAA `d` の消費済み枠を `d + W` より前に再利用しない（Valid、Final、PanelUnavailable、取消、court終了は早期回復理由ではない）。失効額を新claimの予算へ早期に戻さない。採掘枠の回復、資金の送金可能性、court/retention責任からの解放を別々に検査し、同じ元本を新しいbond/鍵へ移して消費履歴を消さない。rhoを増やしても総量は増えず、端数・最小支払・複数leg・root/slice/rider/batchで増幅させない。network/model/bondの三層予算を受理・ブロック権行使・支払・Finalおよび全reader/undoで共通に検査する。期間内総量capと短時間のburst capを区別する。
@@ -172,7 +174,7 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 - **burst:** 週の総量だけでは初日に全量を使い6日以上休む使い方が残るため、短期のrate/burst上限を**追加の制限としてのみ**置く（消費済み7日枠を早く返さず、短期bucketと長期台帳の両方から権利を発行しない）。burst許容量はDAG並列度と実測した提出パターンから導く名前付き定数。
 - **担保規模:** 同時に予約される元本 ≈ `λ·a·H`（1日の受理数 × 1 claimの責任額 × 実際の平均保持時間）＋余裕＋他の責任。保持が長いほど同時担保が増えるため、1 claimの権利・予約・報酬を一体で調整する（D5）。架空担保・二重予約は不可。
 - **heartbeat:** heartbeat 0を目標にせず、数値改善のためにheartbeatの時計・fallback規則を弱めない。floor状態を動かすREALは、検査を通過しclaimを書いたAttempt laneのblock（`palw_real_share_v1`）であり、riderは同じに数えない。各段（計算→抽選当選→claim受理→採用REAL block→検証/Final→清算→bond枠回復）を分けて測り、計算と提出が可能なのにbond枠不足だけでREALが止まった時間、heartbeat依存時間、回復後の採用を記録する。heartbeatだけの期間からREALへ戻る回復は独立の必須試験とする。
-- **導出手順:** [cap derivation and measurement plan](../design/palw/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md)（Stage 1 実測 → Stage 2 sweep → Stage 3 敵対/境界試験）。該当範囲が無ければ数値を作らず、衝突する制約を報告する。現行コード値や「100件/7日」等の過去例を正式値にしない。
+- **導出手順:** [cap derivation and measurement plan](../design/palw/economics/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md)（Stage 1 実測 → Stage 2 sweep → Stage 3 敵対/境界試験）。該当範囲が無ければ数値を作らず、衝突する制約を報告する。現行コード値や「100件/7日」等の過去例を正式値にしない。
 - **実装の所在:** `consensus/core/src/palw_bond_budget_v1/hold.rs`（`PalwBondHoldPolicyV1`、`PalwHoldModeV1`、日/burst view、`hold_admit_v1`）、`palw_bond_budget_fold_v1.rs`（planがmodeを運ぶ）、`palw_bond_cap_sweep_v1.rs`（Stage 2/3 simulator）、`scripts/drills/adr0176_stage1_measure.py`（Stage 1 driver）、試験source `consensus/core/tests/adr0176_mode_hold_v1.rs` / `adr0176_cap_sweep.rs`（未実行）。
 
 ## 改定 — 2026-10-15（ユーザー判断 2026-10-15: bond式の再設計）

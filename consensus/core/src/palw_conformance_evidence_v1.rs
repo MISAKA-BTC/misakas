@@ -624,7 +624,7 @@ pub const PALW_ONBOARDING_SEALED_ADVERSARY_NEG_LOG2_MILLIBITS_V1: u64 = 1_000;
 /// distinctness.
 pub const PALW_ONBOARDING_SEALED_PARTICIPATION_BITS_V1: u16 = 0;
 
-/// **The network's sealed-source (v3) onboarding policy** (`docs/design/palw/opv-beacon-bootstrap.md` §6.3): the sampled policy's
+/// **The network's sealed-source (v3) onboarding policy** (`docs/design/palw/verification/opv-beacon-bootstrap.md` §6.3): the sampled policy's
 /// numbers under `palw-work-beacon/sealed-source/v3` — commit-reveal over salted claim seals, every qualifying seal of the window
 /// mixed, a withheld or abandoned mixed seal a counted veto. INTERIM like the v2 one (2 bits, a drill), and a different id.
 /// Unapproved v4 policy; ordinary job-race seals have no contribution or veto.
@@ -662,7 +662,7 @@ pub fn palw_onboarding_sealed_policy_v1() -> PostCommitChallengePolicyV1 {
 /// number a drill can reach with a handful of checks, NOT a security value. An activation replaces it by a reviewed, approved tuple
 /// (RFC-0007 §VI.8). Its id is what tag 106 binds a class to and tag 107's commitment names.
 ///
-/// Its sources follow the DISTINCT rule (`docs/design/palw/opv-beacon-bootstrap.md` §6): the `k` works come from distinct producer
+/// Its sources follow the DISTINCT rule (`docs/design/palw/verification/opv-beacon-bootstrap.md` §6): the `k` works come from distinct producer
 /// bonds (and distinct consumers once the route records a job's payer), so one bond cannot fill every position. The network's other
 /// onboarding policy is the complete check ([`crate::palw_opv_bootstrap_v1::palw_onboarding_complete_check_policy_v1`]).
 pub fn palw_onboarding_challenge_policy_v1() -> PostCommitChallengePolicyV1 {

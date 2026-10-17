@@ -1,5 +1,7 @@
 # ADR-0161 — A claim is not an emission: multi-claim carriage under a fixed per-DAA reward budget
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 * Status: **Proposed** (rcore/cap-s1, stage 5 of the user's capacity plan). Implemented behind the dormant
   fence F-M1 `palw_capacity_multi_claim` (testnet-12 only); armed nowhere.
 * Date: 2026-09-27

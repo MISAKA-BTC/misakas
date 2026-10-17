@@ -7,7 +7,7 @@ Offline only: reads a local tokenizer.json with the `tokenizers` library, never 
 chunks of `--len` tokens from its start; the text is used as is (no chat template, no BOS).
 
     HF_HUB_OFFLINE=1 python tools/tokenize_docs.py --tokenizer DIR/tokenizer.json \
-        --len 128 --chunks 1 --out eval.json docs/README.md docs/model-requests.md
+        --len 128 --chunks 1 --out eval.json docs/README.md docs/operations/models/model-requests.md
 """
 import argparse
 import hashlib
