@@ -141,7 +141,7 @@ fn request(
         return Err(bad("native39 public request nested extent"));
     }
     let h = header(builder.state.kernel_route.as_ref().unwrap(), job)?;
-    if h.terminal != NativeJobTerminalV39::Challengeable {
+    if !super::accusable_v39(builder, &h, ctx.daa_score) {
         return Err(bad("native39 public request original claim not open"));
     }
     let actor = builder.state.bonds.get(signer).ok_or_else(|| bad("native39 public requester absent"))?;
@@ -176,8 +176,9 @@ fn request(
         return Ok(());
     }
     let ordinary_pending = st.pending.iter().filter_map(|id| pending(r, *id).ok()).filter(|p| p.owner == [0; 64]).count();
-    let latest = claim
-        .challenge_end
+    // RFC08 08-B: past a held Final requests run to the liability horizon.
+    let horizon = super::accusation_horizon_v39(builder, &h);
+    let latest = if h.terminal == NativeJobTerminalV39::Final { horizon } else { claim.challenge_end }
         .checked_sub(max.record().temporal.acquisition)
         .ok_or_else(|| bad("native39 complete public cutoff absent"))?;
     if st.pending.len() >= 11
@@ -197,7 +198,7 @@ fn request(
     }
     let until =
         ctx.daa_score.checked_add(max.record().temporal.answer_window).ok_or_else(|| bad("native39 public answer clock overflow"))?;
-    if until >= h.original.deadline || owner.as_ref().is_some_and(|o| until >= o.until) {
+    if until >= horizon || owner.as_ref().is_some_and(|o| until >= o.until) {
         return Err(bad("native39 original answer availability horizon exhausted"));
     }
     let id =
@@ -297,7 +298,7 @@ fn answer(
     let n = u32::from_le_bytes(raw[139..143].try_into().unwrap()) as usize;
     let mut v = pending(builder.state.kernel_route.as_ref().unwrap(), id)?;
     let h = header(builder.state.kernel_route.as_ref().unwrap(), v.job)?;
-    if h.terminal != NativeJobTerminalV39::Challengeable
+    if !super::accusable_v39(builder, &h, ctx.daa_score)
         || h.original.producer != *signer
         || v.settled
         || ctx.daa_score > v.until
@@ -382,9 +383,9 @@ fn default(
     let mut h = header(builder.state.kernel_route.as_ref().unwrap(), v.job)?;
     let caller = builder.state.bonds.get(signer).ok_or_else(|| bad("native39 public default caller absent"))?;
     if v.settled
-        || h.terminal != NativeJobTerminalV39::Challengeable
+        || !super::accusable_v39(builder, &h, ctx.daa_score)
         || ctx.daa_score <= v.until
-        || ctx.daa_score > h.original.deadline
+        || ctx.daa_score > super::accusation_horizon_v39(builder, &h)
         || caller.operator_id.as_bytes() == h.original.producer_operator
     {
         return Err(bad("native39 DAdefault lacks original unanswered unit/deadline/independence"));
@@ -402,8 +403,18 @@ fn default(
         builder.state.bonds.get(&h.original.producer).map(|b| b.collateral),
         h.original.reserve,
     );
-    let s = book.convict(ctx.daa_score, proof, collectible, v.operator).map_err(bad)?;
+    // RFC08 08-B: a held Final's objective default inside its liability horizon refunds the fee and collects the reserve.
+    let after_final = h.terminal == NativeJobTerminalV39::Final;
+    let s = if after_final {
+        let horizon = super::accusation_horizon_v39(builder, &h);
+        book.convict_after_final(ctx.daa_score, horizon, proof, collectible, v.operator).map_err(bad)?
+    } else {
+        book.convict(ctx.daa_score, proof, collectible, v.operator).map_err(bad)?
+    };
     settle_pending(builder, &h, &mut v, false)?;
+    if after_final {
+        return super::credit_after_final_conviction(builder, ctx, &mut h, &book, &s, v.requester);
+    }
     super::credit(builder, ctx, p, &mut h, &book, &s, Some(v.requester))
 }
 pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128 {

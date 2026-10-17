@@ -171,6 +171,7 @@ impl PalwStateParamsV2 {
             material_income_from_daa: None,
             settlement_once_from_daa: None,
             paid_claim_trap_from_daa: None,
+            native_liability_horizon_from_daa: None,
             monetary_material: None,
             material_release_recovery_v2: None,
             econ_contracts_v1: Default::default(),
@@ -822,6 +823,14 @@ impl PalwStateParamsV2 {
     }
 
     /// RFC-0007 §4.1 paid-claim trap mirror (`Params::palw_paid_claim_trap_v1`).
+    /// RFC08 08-B (ADR-0184 §1) mirror (`Params::palw_native_liability_horizon_v1`).
+    pub fn with_native_liability_horizon_from(mut self, from: Option<u64>) -> Self {
+        self.native_liability_horizon_from_daa = from;
+        self
+    }
+    pub fn native_liability_horizon_active_at(&self, daa: u64) -> bool {
+        self.native_liability_horizon_from_daa.is_some_and(|from| daa >= from)
+    }
     pub fn with_paid_claim_trap_from(mut self, from: Option<u64>) -> Self {
         self.paid_claim_trap_from_daa = from;
         self

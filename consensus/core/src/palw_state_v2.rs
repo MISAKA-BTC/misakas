@@ -254,6 +254,10 @@ mod palw_settlement_liability_fold_v1;
 // `palw_paid_claim_trap_v1`; kernel route aux 142; reuses the mesh's trap objects, tags 102/103).
 #[path = "palw_paid_claim_trap_fold_v1.rs"]
 mod palw_paid_claim_trap_fold_v1;
+// RFC08 08-B (ADR-0184 §1): native claim fees held from Final to the liability horizon (dormant
+// `palw_native_liability_horizon_v1`; kernel route aux 144).
+#[path = "palw_native_liability_hold_fold_v1.rs"]
+mod palw_native_liability_hold_fold_v1;
 // G14 lane closure (2026-10-16): kernel route signer liability locks (aux 143) and the EXEC REAL root's V2 signer charge.
 #[path = "palw_g14_lane_closure_fold_v1.rs"]
 mod palw_g14_lane_closure_fold_v1;
@@ -1925,6 +1929,9 @@ pub struct PalwStateParamsV2 {
     /// RFC-0007 §4.1 `palw_paid_claim_trap_v1` mirror (dormant; `None` everywhere).
     #[borsh(skip)]
     paid_claim_trap_from_daa: Option<u64>,
+    /// RFC08 08-B `palw_native_liability_horizon_v1` mirror (dormant; `None` everywhere).
+    #[borsh(skip)]
+    native_liability_horizon_from_daa: Option<u64>,
     #[borsh(skip)]
     monetary_material: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>,
     #[borsh(skip)]

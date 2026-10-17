@@ -1070,6 +1070,10 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1::scan_native_wire_v1(frame)?
         }
         143 => return Err(wire::wire_bad("unallocated G14 lane-closure row namespace")),
+        144 if key_bytes == 66 && prefix == crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_PREFIX_V1 => {
+            crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1::scan_native_wire_v1(frame)?
+        }
+        144 => return Err(wire::wire_bad("unallocated native liability hold row namespace")),
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,

@@ -3097,6 +3097,10 @@ pub struct Params {
     /// ([`crate::palw_paid_claim_trap_v1`], kernel route aux 142). Dormant: `None` on every preset; under the measured-value gate;
     /// requires `palw_claim_challenge_v2`, `palw_audit_mesh_v1` and `palw_settlement_once_v1` at or below it.
     pub palw_paid_claim_trap_v1: Option<ForkActivation>,
+    /// **RFC08 08-B / ADR-0184 §1: native claim fees held from Final to the liability horizon** (Final floor + `window_court`,
+    /// derived from the producer-signed commit inputs), accusable through it ([`crate::palw_native_liability_hold_v1`], kernel
+    /// route aux 144). Dormant: `None` on every preset; requires `palw_settlement_once_v1` at or below it.
+    pub palw_native_liability_horizon_v1: Option<ForkActivation>,
     /// Prospective producer-signed absolute Panel service lifetime. Dormant.
     pub palw_panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2>,
     /// Signed Claim V2 seed/checker/lifetime contract; dormant without scoped review.
@@ -6130,6 +6134,7 @@ impl Params {
             palw_material_income_v3: self.palw_material_income_v3,
             palw_settlement_once_v1: self.palw_settlement_once_v1,
             palw_paid_claim_trap_v1: self.palw_paid_claim_trap_v1,
+            palw_native_liability_horizon_v1: self.palw_native_liability_horizon_v1,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
             palw_claim_challenge_v2: self.palw_claim_challenge_v2,
             palw_claim_compact_v4: self.palw_claim_compact_v4.clone(),
@@ -7288,6 +7293,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_material_income_v3: None,
     palw_settlement_once_v1: None,
     palw_paid_claim_trap_v1: None,
+    palw_native_liability_horizon_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -7642,6 +7648,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_material_income_v3: None,
     palw_settlement_once_v1: None,
     palw_paid_claim_trap_v1: None,
+    palw_native_liability_horizon_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -7978,6 +7985,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_material_income_v3: None,
     palw_settlement_once_v1: None,
     palw_paid_claim_trap_v1: None,
+    palw_native_liability_horizon_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -13191,6 +13199,7 @@ pub fn palw_v2_params_on_base(
     // RFC-0008's once-only settlement registry and RFC-0007 §4.1's paid-claim trap, likewise.
     params.sync_palw_settlement_once_v1();
     params.sync_palw_paid_claim_trap_v1();
+    params.sync_palw_native_liability_horizon_v1();
     // RFC-0016's two dormant fences (V+ block rights, elastic Final capacity), likewise.
     params.sync_palw_rfc0016_v1();
     // RFC-0017's model eligibility, likewise.
@@ -13505,6 +13514,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_material_income_v3: None,
     palw_settlement_once_v1: None,
     palw_paid_claim_trap_v1: None,
+    palw_native_liability_horizon_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,

@@ -220,6 +220,7 @@ impl Params {
         self.validate_palw_material_income_v3()?;
         self.validate_palw_settlement_once_v1()?;
         self.validate_palw_paid_claim_trap_v1()?;
+        self.validate_palw_native_liability_horizon_v1()?;
         self.validate_palw_panel_lifetime_v2()?;
         self.validate_palw_claim_challenge_v2()?;
         self.validate_palw_claim_compact_v4()?;
