@@ -853,7 +853,9 @@ class Drill:
 
     def start_core(self, canonical, inject=None):
         a = self.args
-        self.add('P', 0, self.producer_flags(0, canonical=canonical, inject=inject, host_panel=True))
+        # With --lie-claims, P starts honest and lies only once the outside verifier exists (stop_lying_after).
+        self.add('P', 0, self.producer_flags(0, canonical=canonical, inject=inject, host_panel=True,
+                                             honest=bool(self.args.lie_claims)))
         # The producer's mining gate needs one peer: a plain relay (no bond) until the outsider runs (three processes at most).
         self.add('R', 6, [], bonded=False)
         for n in list(self.nodes.values()):
@@ -1226,10 +1228,16 @@ class Drill:
         retention, the colluding Panel still in its process). One public bond carries one object per block (its carrier chain), so a
         producer lying on EVERY draw outruns its pursuit (run 3, 2026-10-17: 41 reservations, 0 demands landed in 38 DAA)."""
         pbond = self.seat(0)['bond_outpoint']
+        p = self.nodes['P']
+        p.stop()
+        p.extra = self.producer_flags(0, canonical=False, inject=inject, host_panel=True)
+        p.start()
+        self.wait_rpc(p)
+        self.peer_all()
+        since_daa = max(since_daa, self.daa_quiet() or 0)
         rows = self.wait('%s: %d lying claims accepted' % (label, n), lambda: (lambda r: r if len(r) >= n else None)(
             [x for x in self.claims(pbond).get('claims', []) if x['acceptedDaa'] >= since_daa and not x['isFreePrompt']]),
             self.args.step_timeout, every=15)
-        p = self.nodes['P']
         p.stop()
         p.extra = self.producer_flags(0, canonical=False, host_panel=True, honest=True)
         p.start()
@@ -1258,6 +1266,7 @@ class Drill:
         log('%s: phase from DAA %d' % (label, start))
         if a.lie_claims:
             lying, cut = self.stop_lying_after(a.inject_claims, start, label, inject)
+            start = min(r['acceptedDaa'] for r in lying)
 
         def ended_enough():
             rows = [r for r in self.claims(pbond).get('claims', []) if r['acceptedDaa'] >= start and not r['isFreePrompt']
