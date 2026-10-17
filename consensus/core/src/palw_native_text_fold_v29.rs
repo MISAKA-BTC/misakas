@@ -136,11 +136,11 @@ fn paid_restore(
     };
     let bytes =
         wire.checked_add(body as u64).and_then(|n| n.checked_add(32768)).ok_or_else(|| refused("text29 restore extent overflow"))?;
-    let work = bytes
-        .checked_mul(bytes)
-        .and_then(|n| n.checked_mul(64))
-        .and_then(|n| n.checked_add(bytes * 1024))
-        .ok_or_else(|| refused("text29 original restore tariff overflow"))?;
+    // G14 lane closure (2026-10-17, defect found by the text29 harness): the quadratic tariff `bytes² · 64 + bytes · 1024` with its
+    // 32-KiB floor is at least 6.9e10 work, above the route's whole per-block court-work limit (2^30), so NO text29 action could
+    // ever be carried — the lane was unreachable, its courts included. The restore is a bounded linear decode of `bytes`; it is
+    // charged linearly at the same per-byte rates (64 + 1024). Dormant lane; recorded in ADR-0187.
+    let work = bytes.checked_mul(64 + 1024).ok_or_else(|| refused("text29 original restore tariff overflow"))?;
     if !prepay(builder, ctx, signer, work)? {
         return Ok(false);
     }

@@ -1528,3 +1528,19 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
   - 同時に回した `t12_a2u_new_kinds_uniform` の 2 件は失敗した。原因は別 lane の fence `palw_material_release_recovery_v2`(RFC08)が harness で武装されていないことで、この lane の変更ではない。そのため、新しい action(v11 の 19〜21、stage の 80)を A-2 の一様試験が見る段まで進んでいない。未確認。
 - core の identity:`--test g14_court_capacity`(`testnet12_identity_did_not_move` を含む)15 passed / 1 ignored。`g14_close_gates` 12、`g14_close_legacy` 8、fork-id・identity の lib 試験 103 passed。
 - 実行していないもの:workspace 全体、clippy、kaspad、text29 の公開告発。
+
+### 13.5 追補(2026-10-18):text29 の job harness で分かった到達不能
+
+text29 の実 job を node 上で作る harness(`funded11/text29.rs`)を書いた。分かったことは次の 2 点。
+
+1. **text29 の全 action が block に入らなかった(修正済み)。**
+   - `paid_restore` の料金式は `bytes² · 64 + bytes · 1024` で、32 KiB の下限があるため最小でも約 6.9e10 work になる。kernel route の block あたりの court work 上限(2^30)を常に超える。
+   - そのため登録・court・告発を含め、text29 の action は 1 件も運ばれなかった。
+   - 料金を同じ byte 単価の線形(`bytes · (64 + 1024)`)に直した。lane は休眠中で、ADR-0187 に記録した。
+   - これで登録・prepare・producer の consent までは node 上で通った。
+2. **Fund が成立しない(未解決、値の判断が要る)。**
+   - paged29 の同時義務は、試験 class で約 72 packet(period 2 DAA)になる。一方、締切は proof window − maturity = 97 DAA で、`seal_ttl = 100` に固定されている(horizon の check が固定値を要求する)。
+   - 密度は 1.48 × SCALE となり、物理 service を超える。DA 回答窓をどれだけ広げても、締切は 97 DAA のままである。
+   - 公開告発(action 21)の試験と text29 の T-N13 は書いた。ただし Fund の先へ進めないので、`#[ignore]` で理由を付けて残した。
+   - 解決には、`seal_ttl` の固定値、carriage の period、paged の packet 数のどれかを変える判断が要る。
+   - 試験で使った horizon(interval 100,000、challenge 30,000、DA 回答 200、retention 300、requests_per_session 128、producer の reserve 1e13 sompi、Final27 の試験 calibration)は、到達性を調べるための値で、測定値ではない。

@@ -3,6 +3,7 @@
 use super::*;
 mod chunks;
 mod public_filing;
+mod text29;
 mod real_checkpoint;
 mod source16;
 use kaspa_consensus_core::palw_flat_execution_v11::*;
