@@ -12484,8 +12484,9 @@ pub fn palw_court_claim_admission_v1(
     class_id: &Hash64,
     now_daa: u64,
     trace_retention_daa: u64,
+    span_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
-    palw_court_capacity_fold_v1::check_court_claim_admission_v1(state, params, class_id, now_daa, trace_retention_daa)
+    palw_court_capacity_fold_v1::check_court_claim_admission_v1(state, params, class_id, now_daa, trace_retention_daa, span_daa)
 }
 
 /// **RFC-0002 Part II Proposal A: would the fold at a block with these `extras` find `class_id` seated for `executor`?**
@@ -21575,6 +21576,7 @@ fn apply_attempt(
         &attempt.class_id,
         ctx.daa_score,
         attempt.trace_retention_daa,
+        builder.extras.model_registry.as_ref().map_or(0, |fold| fold.span_daa),
     )?;
     // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for this executor** — one function, the
     // same every other door asks; before the reservation is taken, so a class no panel can be drawn for voids nothing.

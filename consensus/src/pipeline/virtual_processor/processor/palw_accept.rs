@@ -102,6 +102,7 @@ impl VirtualStateProcessor {
                 &class_id,
                 candidate_daa,
                 candidate_daa.saturating_add(facts.min_trace_retention_daa),
+                extras.model_registry.as_ref().map_or(0, |fold| fold.span_daa),
             )
             .err()
             .map(|refusal| refusal.to_string());

@@ -3606,7 +3606,10 @@ fn apply_object_inner(
                     *trace_chunk_count
                 },
                 trace_retention_daa: if builder.extras.fp_da_pins_active {
-                    ctx.daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(builder.params))
+                    // RFC-0018 Gate C (user decision 2026-10-17): plus the certification extension (0 below its fence).
+                    ctx.daa_score
+                        .saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(builder.params))
+                        .saturating_add(crate::palw_rfc0018_v1::palw_gate_c_retention_extension_daa_v1(builder.params, ctx.daa_score))
                 } else {
                     *trace_retention_daa
                 },

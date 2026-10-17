@@ -7,8 +7,8 @@
 //! Every value here is a TEST fixture (the measured per-claim load included), never a proposal.
 use super::*;
 use crate::palw_kernel_route_v1::palw_kernel_bond_id_v1;
-use crate::palw_rfc0016_v1::values::{PalwRfc0016ClaimLoadV1, PalwRfc0016MirrorV1, PalwRfc0016ValuesV1};
-use crate::palw_state_v2::palw_rfc0016_fold_v1::palw_rfc0016_attested_capacity_v1;
+use crate::palw_rfc0016_v1::values::{PalwRfc0016ClassLoadV1, PalwRfc0016MirrorV1, PalwRfc0016ValuesV1};
+use crate::palw_state_v2::palw_rfc0016_fold_v1::{palw_rfc0016_attested_capacity_v1, palw_rfc0016_court_bucket_bound_v1};
 use misaka_palw_kernel::capacity_attestation_v1::{CAPACITY_ATTESTATION_VERSION_V1, CapacityAttestationV1};
 use misaka_palw_kernel::route::KernelRouteObjectV1;
 
@@ -19,19 +19,37 @@ const MODEL_B: u64 = 3;
 /// The reference seat in the demand terms' unit (a fixture figure).
 const SEAT: u128 = 1_000 << 32;
 
-fn load() -> PalwRfc0016ClaimLoadV1 {
-    PalwRfc0016ClaimLoadV1 { da_bytes_per_claim: 1_000, court_permille_per_claim: 100 }
+/// The per-class measured loads (TEST fixture): both classes 1,000 DA bytes and 100 court units per claim.
+static LOADS: [PalwRfc0016ClassLoadV1; 2] = [
+    PalwRfc0016ClassLoadV1 { class_id: word(MODEL_A), da_bytes_per_claim: 1_000, court_units_per_claim: 100 },
+    PalwRfc0016ClassLoadV1 { class_id: word(MODEL_B), da_bytes_per_claim: 1_000, court_units_per_claim: 100 },
+];
+
+/// `h64(v).as_bytes()` as a const (the word is the last eight bytes, little-endian).
+const fn word(v: u64) -> [u8; 64] {
+    let b = v.to_le_bytes();
+    let mut out = [0u8; 64];
+    let mut i = 0;
+    while i < 8 {
+        out[56 + i] = b[i];
+        i += 1;
+    }
+    out
 }
 
-fn armed(claim_load: Option<PalwRfc0016ClaimLoadV1>) -> PalwStateParamsV2 {
+fn load() -> &'static [PalwRfc0016ClassLoadV1] {
+    &LOADS
+}
+
+fn armed(claim_loads: &'static [PalwRfc0016ClassLoadV1]) -> PalwStateParamsV2 {
     params().with_rfc0016_v1(Some(
         PalwRfc0016MirrorV1 {
             rights_from_daa: None,
             capacity_from_daa: Some(FENCE),
             values: PalwRfc0016ValuesV1::default(),
-            claim_load: None,
+            claim_loads: &[],
         }
-        .with_claim_load(claim_load),
+        .with_claim_loads(claim_loads),
     ))
 }
 
@@ -134,7 +152,7 @@ fn world(p: &PalwStateParamsV2) -> PalwChainStateV2 {
 
 /// `(capacity, demand, ready)` of `class` under `terms`, every verifier ready.
 fn read(s: &PalwChainStateV2, p: &PalwStateParamsV2, class: u64, now: u64, terms: &BTreeMap<Hash64, u128>) -> (u128, u128, u32) {
-    palw_rfc0016_attested_capacity_v1(s, &h64(class), now, terms, SEAT, p.rfc0016_v1().and_then(|m| m.claim_load), |_, _| true)
+    palw_rfc0016_attested_capacity_v1(s, &h64(class), now, terms, SEAT, &p.rfc0016_v1().expect("armed"), |_, _| true)
 }
 
 /// Demand of `claims` claims of `class` (one seat), in the terms' unit.
@@ -145,7 +163,7 @@ fn demand(s: &PalwChainStateV2, class: u64, claims: u128) -> u128 {
 
 #[test]
 fn rfc16_v8_attestation_folds_replaces_revokes_and_is_refused_where_it_must_be() {
-    let p = armed(Some(load()));
+    let p = armed(load());
     let s = world(&p);
     let now = FENCE + 10;
     // Refusals: below the fence, a verifier that is not the signer, no evidence, an open window, an unregistered class, a revocation
@@ -187,7 +205,7 @@ fn rfc16_v8_attestation_folds_replaces_revokes_and_is_refused_where_it_must_be()
 
 #[test]
 fn rfc16_v8_the_capacity_read_follows_the_attestations() {
-    let p = armed(Some(load()));
+    let p = armed(load());
     let s = world(&p);
     let now = FENCE + 10;
     let terms: BTreeMap<Hash64, u128> = [(h64(MODEL_A), demand(&s, MODEL_A, 50))].into_iter().collect();
@@ -233,6 +251,32 @@ fn rfc16_v8_the_capacity_read_follows_the_attestations() {
     assert_eq!(ready2, 2);
     assert!(more > alone);
     // Unmeasured per-claim load (the binary's value): nothing is credited, however rich the attestation.
-    let unmeasured = armed(None);
+    let unmeasured = armed(&[]);
     assert_eq!(read(&rich, &unmeasured, MODEL_A, now, &terms).0, 0);
+}
+
+/// User decision 2026-10-17: the court admission bound past the fence is DERIVED — `claims_per_span = Σ court_units_per_span /
+/// court_units_per_claim` over the class's attested machines, times `bucket / span` — and an unmeasured class's bound is 0.
+#[test]
+fn rfc16_v8_the_court_bucket_bound_is_derived_from_the_attested_court_units() {
+    let p = armed(load());
+    let s = world(&p);
+    let now = FENCE + 10;
+    assert_eq!(palw_rfc0016_court_bucket_bound_v1(&s, &params(), &h64(MODEL_A), now, 300, 10), None, "below the fence: no bound");
+    assert_eq!(palw_rfc0016_court_bucket_bound_v1(&s, &p, &h64(MODEL_A), now, 300, 10), Some(0), "no attestation");
+    let s = step(
+        &s,
+        &p,
+        now,
+        &[
+            attest(1, attestation(1, MODEL_A, 100, 1 << 40, 1_050, 1_000)),
+            attest(2, attestation(2, MODEL_A, 100, 1 << 40, 500, 1_000)),
+            attest(3, attestation(3, MODEL_B, 100, 1 << 40, 10_000, 1_000)),
+        ],
+    )
+    .expect("folds");
+    // (1,050/100) + (500/100) = 10 + 5 = 15 claims per span; × 300 / 10 = 450 per bucket. Bond 3 attests only B.
+    assert_eq!(palw_rfc0016_court_bucket_bound_v1(&s, &p, &h64(MODEL_A), now, 300, 10), Some(450));
+    assert_eq!(palw_rfc0016_court_bucket_bound_v1(&s, &p, &h64(MODEL_A), now, 300, 0), Some(0), "no span clock: fail closed");
+    assert_eq!(palw_rfc0016_court_bucket_bound_v1(&s, &armed(&[]), &h64(MODEL_A), now, 300, 10), Some(0), "unmeasured class");
 }

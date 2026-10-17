@@ -1161,4 +1161,40 @@ mod tests {
         let last_spend = latest_certified + MATURITY + USE_WINDOW;
         assert!(last_spend <= new, "{last_spend} <= {new}");
     }
+
+    /// **User decision 2026-10-17 (Gate C retention)**: past Gate C a claim promises its trace through the latest certification and its
+    /// receipt lane — the producer's retention (the facts the kaspad producer and FP worker read) and both canonical pins carry the
+    /// extension, so the material is still fetchable at the latest certification point and to the end of the use window; below Gate C
+    /// the released value, byte for byte.
+    #[test]
+    fn rfc18_a_material_is_fetchable_at_the_latest_certification_point() {
+        use crate::palw_rfc0018_v1::{PalwGateCRuleV1, PalwRfc0018MirrorV1, palw_gate_c_retention_extension_daa_v1};
+        let tail = MATURITY + USE_WINDOW;
+        let policy = crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(720);
+        let base = params().with_claim_retirement_daa(3_000).unwrap();
+        let gc = base.clone().with_rfc0018_v1(Some(PalwRfc0018MirrorV1 {
+            gate_c_from_daa: Some(100),
+            gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
+            certification: policy,
+            fp_receipt_tail_daa: tail,
+            ..Default::default()
+        }));
+        let state = certified_state(u128::MAX);
+        let accepted = 101;
+        assert_eq!(palw_gate_c_retention_extension_daa_v1(&base, accepted), 0, "below Gate C: nothing added");
+        assert_eq!(palw_gate_c_retention_extension_daa_v1(&gc, accepted), policy.lifetime_daa() + tail);
+        let min = crate::palw_producer_v2::palw_min_trace_retention_daa_v1(&gc);
+        let promised =
+            accepted + crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(&state, &gc, &h64(1), accepted);
+        assert_eq!(promised, accepted + min + policy.lifetime_daa() + tail, "the producer's retention carries the extension");
+        // The fixture's Final (124) is within the released minimum of its acceptance, so the material outlives the latest
+        // certification decision and the whole receipt lane, and the claim's retirement.
+        let final_daa = 124;
+        assert!(final_daa <= accepted + min);
+        let latest_certification = final_daa + policy.lifetime_daa();
+        assert!(promised >= latest_certification + tail, "{promised} >= {}", latest_certification + tail);
+        let claim = state.claim(&h64(0xFC)).unwrap().clone();
+        let retire = crate::palw_state_v2::palw_rcore_deadline_v1(&state, &gc, &h64(0xFC), &claim, Some(final_daa)).unwrap().unwrap();
+        assert!(promised >= retire, "material is kept at least as long as the claim: {promised} >= {retire}");
+    }
 }

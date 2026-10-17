@@ -252,31 +252,38 @@ pub struct PalwRfc0016MirrorV1 {
     pub rights_from_daa: Option<u64>,
     pub capacity_from_daa: Option<u64>,
     pub values: PalwRfc0016ValuesV1,
-    /// **V8's measured per-claim DA and court load** ([`PALW_RFC0016_CLAIM_LOAD_V1`]; `None`: unmeasured). Past the capacity fence an
-    /// attested verifier is credited for a class only where this is `Some` — an unmeasured load credits NOTHING (fail closed), never
-    /// a compute-only figure.
-    pub claim_load: Option<PalwRfc0016ClaimLoadV1>,
+    /// **V8's measured per-class claim loads** ([`PALW_RFC0016_CLAIM_LOADS_V1`]; empty: unmeasured). Past the capacity fence an attested
+    /// verifier is credited for a class only where the class has a record — an unmeasured class credits NOTHING (fail closed), never
+    /// a compute-only figure; the court admission bound of such a class is 0 too.
+    pub claim_loads: &'static [PalwRfc0016ClassLoadV1],
 }
 
-/// **V8: one claim's DA and court load on one verifier**, network-wide (audit 16-A). Compute and memory are the model's own registry
-/// facts (`economic_ccu_per_claim`, `working_set_bytes`); these two have no per-model chain fact, so they are measured values.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PalwRfc0016ClaimLoadV1 {
+/// **V8: one class's measured per-claim DA and court load on one verifier** (audit 16-A, user decision 2026-10-17: measured per
+/// class/model with the release binary as part of the measurement records). Compute and memory are the model's own registry facts
+/// (`economic_ccu_per_claim`, `working_set_bytes`); these two have no chain fact, so they are measured values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRfc0016ClassLoadV1 {
+    pub class_id: [u8; 64],
     /// DA bytes one verifier fetches and retains for one claim over its verification window.
     pub da_bytes_per_claim: u64,
-    /// Court load (permille of a session) one verifier carries for one claim over its verification window.
-    pub court_permille_per_claim: u64,
+    /// Court units one verifier carries for one claim (the unit the attestations' court figure is per span in).
+    pub court_units_per_claim: u64,
 }
 
-/// **The binary's V8 per-claim load — UNMEASURED (`None`)** (audit 16-A/16-C, user decision pending): until a measured record fixes
-/// it, past the capacity fence no attested verifier is credited (capacity 0 admits nothing), and validation refuses the fence anyway.
-pub const PALW_RFC0016_CLAIM_LOAD_V1: Option<PalwRfc0016ClaimLoadV1> = None;
+/// **The binary's V8 per-class loads — UNMEASURED (empty)**: until the release-phase measurement records fix them, past the capacity
+/// fence no attested verifier is credited and no court-demanding claim fits the derived court bound; validation refuses the fence anyway.
+pub const PALW_RFC0016_CLAIM_LOADS_V1: &[PalwRfc0016ClassLoadV1] = &[];
 
 impl PalwRfc0016MirrorV1 {
-    /// A fixture's measured load (the binary's is [`PALW_RFC0016_CLAIM_LOAD_V1`]).
-    pub fn with_claim_load(mut self, claim_load: Option<PalwRfc0016ClaimLoadV1>) -> Self {
-        self.claim_load = claim_load;
+    /// A fixture's measured loads (the binary's are [`PALW_RFC0016_CLAIM_LOADS_V1`]).
+    pub fn with_claim_loads(mut self, claim_loads: &'static [PalwRfc0016ClassLoadV1]) -> Self {
+        self.claim_loads = claim_loads;
         self
+    }
+
+    /// The measured load of `class`, if it has a record.
+    pub fn claim_load_of(&self, class: &crate::Hash64) -> Option<PalwRfc0016ClassLoadV1> {
+        self.claim_loads.iter().find(|l| l.class_id == class.as_bytes()).copied()
     }
 }
 
@@ -329,7 +336,7 @@ impl Params {
             rights_from_daa,
             capacity_from_daa,
             values,
-            claim_load: PALW_RFC0016_CLAIM_LOAD_V1,
+            claim_loads: PALW_RFC0016_CLAIM_LOADS_V1,
         })
     }
 

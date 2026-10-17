@@ -134,14 +134,17 @@ pub(super) fn check_court_claim_admission_v1(
     class_id: &Hash64,
     now: u64,
     trace_retention_daa: u64,
+    span_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     let Some(mirror) = params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(()) };
     // **The retention a court-demanding claim promises** (user decision 2026-10-17): a fused-attention attempt must promise at least
     // the court-demanding retention, or it is not reward-bearing (option (b)'s refusal); a class that is not court-demanding may not
     // take the longer canonical value (one value per class: no second lottery draw).
     let fused = state.classes.get(class_id).is_some_and(|class| class.fused_attention);
-    let court_retention = palw_court_demanding_retention_daa_v1(params, now).unwrap_or(0);
-    let min_retention = crate::palw_producer_v2::palw_min_trace_retention_daa_v1(params);
+    // RFC-0018 Gate C (user decision 2026-10-17): both canonical values carry the same certification extension (0 below its fence).
+    let gate_c = crate::palw_rfc0018_v1::palw_gate_c_retention_extension_daa_v1(params, now);
+    let court_retention = palw_court_demanding_retention_daa_v1(params, now).map_or(0, |r| r.saturating_add(gate_c));
+    let min_retention = crate::palw_producer_v2::palw_min_trace_retention_daa_v1(params).saturating_add(gate_c);
     let promised = trace_retention_daa.saturating_sub(now);
     if fused && promised < court_retention {
         return Err(PalwStateV2Error::ClassNotRewardable {
@@ -167,7 +170,12 @@ pub(super) fn check_court_claim_admission_v1(
     let policy = mirror.policy;
     let turn = params.turn_deadline_daa();
     let width = policy.admission_bucket_daa(turn, params.window_court());
-    let cap = policy.admission_claims_per_bucket(turn);
+    // RFC-0016 V8 (user decision 2026-10-17): past the elastic-capacity fence the bound is also the attested court capacity, derived
+    // per class (`claims_per_span × bucket / span`), the minimum of the two.
+    let cap = match super::palw_rfc0016_fold_v1::palw_rfc0016_court_bucket_bound_v1(state, params, class_id, now, width, span_daa) {
+        Some(attested) => policy.admission_claims_per_bucket(turn).min(attested),
+        None => policy.admission_claims_per_bucket(turn),
+    };
     let w_disclose = palw_da_disclose_window_daa_v1(params);
     let bucket = trace_retention_daa.saturating_sub(w_disclose) / width;
     let admitted = state

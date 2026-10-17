@@ -328,7 +328,7 @@ impl PalwFoldReadV1<'_> {
         if let Some(mirror) = self.params.rfc0016_v1()
             && self.params.rfc0016_capacity_active_at(now_daa)
         {
-            return self.rfc0016_attested_capacity_v1(class_id, fold, now_daa, &terms, seat, mirror.claim_load);
+            return self.rfc0016_attested_capacity_v1(class_id, fold, now_daa, &terms, seat, mirror);
         }
         let capacity = palw_waterfill_capacity_v1(&verifiers, &terms);
         (capacity.get(class_id).copied().unwrap_or(0), terms.get(class_id).copied().unwrap_or(0), ready_here)
@@ -348,9 +348,9 @@ impl PalwFoldReadV1<'_> {
         now_daa: u64,
         terms: &BTreeMap<Hash64, u128>,
         seat: u128,
-        claim_load: Option<crate::palw_rfc0016_v1::values::PalwRfc0016ClaimLoadV1>,
+        mirror: crate::palw_rfc0016_v1::values::PalwRfc0016MirrorV1,
     ) -> (u128, u128, u32) {
-        palw_rfc0016_attested_capacity_v1(self.state, class_id, now_daa, terms, seat, claim_load, |bond_key, class| {
+        palw_rfc0016_attested_capacity_v1(self.state, class_id, now_daa, terms, seat, &mirror, |bond_key, class| {
             self.state.bonds.get(bond_key).is_some_and(|bond| self.model_registry_seat_is_ready(bond_key, bond, class, now_daa, fold))
         })
     }
@@ -997,11 +997,13 @@ pub(super) fn palw_rfc0016_attested_capacity_v1(
     now_daa: u64,
     terms: &BTreeMap<Hash64, u128>,
     seat: u128,
-    claim_load: Option<crate::palw_rfc0016_v1::values::PalwRfc0016ClaimLoadV1>,
+    mirror: &crate::palw_rfc0016_v1::values::PalwRfc0016MirrorV1,
     ready: impl Fn(&PalwBondKeyV2, &Hash64) -> bool,
 ) -> (u128, u128, u32) {
     let demand = terms.get(class_id).copied().unwrap_or(0);
-    let Some(claim_load) = claim_load else { return (0, demand, 0) };
+    if mirror.claim_load_of(class_id).is_none() {
+        return (0, demand, 0);
+    }
     let scale = crate::palw_work_target_v1::PALW_PANEL_DEMAND_SCALE_V1;
     let attestations: Vec<PalwCapacityAttestationV1> = state
         .rfc0016_capacity_attestations_v1()
@@ -1014,16 +1016,62 @@ pub(super) fn palw_rfc0016_attested_capacity_v1(
         .collect();
     let load_of = |class: &Hash64| -> Option<PalwClaimLoadV1> {
         let row = state.model_lifecycles.get(class)?;
+        let claim_load = mirror.claim_load_of(class)?;
         let window = (row.profile.verification_window_spans as u64).max(1);
         Some(PalwClaimLoadV1 {
             compute_ccu: crate::palw_work_target_v1::palw_panel_demand_term_v1(1, row.work.economic_ccu_per_claim, window),
             memory_bytes: row.work.working_set_bytes,
             da_bytes: claim_load.da_bytes_per_claim.div_ceil(window),
-            court_permille: claim_load.court_permille_per_claim.div_ceil(window),
+            court_permille: claim_load.court_units_per_claim.div_ceil(window),
         })
     };
     let supply = palw_capacity_resource_supply_from_attestations_v1(&attestations, now_daa, load_of);
     let ready_here = supply.iter().filter(|v| v.loads.contains_key(class_id)).count() as u32;
     let capacity = palw_waterfill_resources_v1(&supply, terms);
     (capacity.get(class_id).copied().unwrap_or(0), demand, ready_here)
+}
+
+/// **V8 → the court admission bound** (user decision 2026-10-17: a derivation, not a new value): past `palw_elastic_final_capacity_v1`,
+/// `claims_per_span = Σ_machines court_units_per_span / court_units_per_claim(class)` over the Active bonds' valid attestations for
+/// `class_id` (one machine per bond: the minimum of its own valid attestations), and the court admission bucket bound is
+/// `claims_per_span × bucket_daa / span_daa`. `None` below the fence (the court-capacity bound alone); `Some(0)` for a class without a
+/// measured load record or with no span clock (fail closed).
+pub fn palw_rfc0016_court_bucket_bound_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    now_daa: u64,
+    bucket_daa: u64,
+    span_daa: u64,
+) -> Option<u64> {
+    if !params.rfc0016_capacity_active_at(now_daa) {
+        return None;
+    }
+    let mirror = params.rfc0016_v1()?;
+    let Some(load) = mirror.claim_load_of(class_id).filter(|l| l.court_units_per_claim > 0) else { return Some(0) };
+    if span_daa == 0 {
+        return Some(0);
+    }
+    let mut machines: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+    for a in state.rfc0016_capacity_attestations_v1() {
+        if palw_capacity_attestation_check_v1(&a, now_daa).is_err()
+            || !state.bonds.get(&a.verifier).is_some_and(|b| matches!(b.status, PalwBondStatusV2::Active))
+        {
+            continue;
+        }
+        let court = a.capability.court_permille_per_span;
+        machines.entry(a.verifier).and_modify(|c| *c = (*c).min(court)).or_insert(court);
+    }
+    let holders: BTreeSet<PalwBondKeyV2> = state
+        .rfc0016_capacity_attestations_v1()
+        .into_iter()
+        .filter(|a| a.model == *class_id && palw_capacity_attestation_check_v1(a, now_daa).is_ok())
+        .map(|a| a.verifier)
+        .collect();
+    let per_span: u128 = machines
+        .iter()
+        .filter(|(bond, _)| holders.contains(bond))
+        .map(|(_, court)| (*court / load.court_units_per_claim) as u128)
+        .sum();
+    Some((per_span.saturating_mul(bucket_daa as u128) / span_daa as u128).min(u64::MAX as u128) as u64)
 }

@@ -1032,7 +1032,7 @@ fn g07r2_a_late_honest_reserve_row_is_never_refused_and_convicts() {
     let hard = c.s.claim(&target).unwrap().trace_retention_daa - kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&c.sp);
     // Bounded admission: the bucket is full — the eleventh court-demanding attempt is skipped, the block stands, no claim exists.
     let (env, key, id) = attempt_with_retention(&c, &row, COALITION_PRODUCER, 40, 999_999);
-    let pre = kaspa_consensus_core::palw_state_v2::palw_court_claim_admission_v1(&c.s, &c.sp, &row.id, c.daa + 1, 999_999);
+    let pre = kaspa_consensus_core::palw_state_v2::palw_court_claim_admission_v1(&c.s, &c.sp, &row.id, c.daa + 1, 999_999, 0);
     assert!(matches!(pre, Err(PalwStateV2Error::CourtClaimAdmissionFull { admitted: 4, cap: 4, .. })), "{pre:?}");
     let skips = c.fold_skipping(PalwBlockWorkV3::Attempt(&env), key);
     assert!(skips.iter().any(|why| why.contains("court capacity admits no further court-demanding claim")), "{skips:?}");

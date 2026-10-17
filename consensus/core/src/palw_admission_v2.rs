@@ -973,12 +973,14 @@ pub fn check_palw_attempt_da_pins_v1(
                 PalwAdmissionV2Error::TraceManifestNotDerived { claimed, derived }
             }
         })?;
-        let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params));
+        let gate_c = crate::palw_rfc0018_v1::palw_gate_c_retention_extension_daa_v1(state_params, daa_score);
+        let derived =
+            daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params)).saturating_add(gate_c);
         // Lane g14-court-capacity-r2: past `palw_court_capacity_v1` a court-demanding class's attempt promises the longer canonical
         // retention (`palw_court_demanding_retention_daa_v1`); which of the two a class owes is the fold's stateful pin
         // (`check_court_claim_admission_v1`), so no producer chooses between them (no second lottery draw).
         let court = crate::palw_court_capacity_v1::palw_court_demanding_retention_daa_v1(state_params, daa_score)
-            .map(|r| daa_score.saturating_add(r));
+            .map(|r| daa_score.saturating_add(r).saturating_add(gate_c));
         if attempt.trace_retention_daa != derived && Some(attempt.trace_retention_daa) != court {
             return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
         }
@@ -992,12 +994,13 @@ pub fn check_palw_attempt_da_pins_v1(
     if attempt.trace_manifest_root != derived {
         return Err(PalwAdmissionV2Error::TraceManifestNotDerived { claimed: attempt.trace_manifest_root, derived });
     }
-    let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params));
+    let gate_c = crate::palw_rfc0018_v1::palw_gate_c_retention_extension_daa_v1(state_params, daa_score);
+    let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params)).saturating_add(gate_c);
     // Lane g14-court-capacity-r2: past `palw_court_capacity_v1` a court-demanding class's attempt promises the longer canonical
     // retention (`palw_court_demanding_retention_daa_v1`); which of the two a class owes is the fold's stateful pin
     // (`check_court_claim_admission_v1`), so no producer chooses between them (no second lottery draw).
     let court = crate::palw_court_capacity_v1::palw_court_demanding_retention_daa_v1(state_params, daa_score)
-        .map(|r| daa_score.saturating_add(r));
+        .map(|r| daa_score.saturating_add(r).saturating_add(gate_c));
     if attempt.trace_retention_daa != derived && Some(attempt.trace_retention_daa) != court {
         return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
     }

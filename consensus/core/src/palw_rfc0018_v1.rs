@@ -128,6 +128,18 @@ pub fn palw_gate_c_retirement_floor_v1(params: &PalwStateParamsV2, claim: &PalwC
     retire_at.max(final_daa.saturating_add(mirror.certification.lifetime_daa()).saturating_add(tail))
 }
 
+/// **Gate C's trace-retention extension** (user decision 2026-10-17): past Gate C's fence a claim accepted at `daa` promises its trace
+/// for the released minimum PLUS the certification lifetime and the FP receipt tail, so its material is still fetchable when its
+/// certification is decided at the latest and through its receipt lane — the same span its retirement floor
+/// ([`palw_gate_c_retirement_floor_v1`]) keeps the claim. The released minimum already reaches the claim's latest Final plus its court
+/// window, so `acceptance + minimum + extension ≥ final + lifetime + tail`. One value for both lanes (no second canonical value);
+/// `0` below the fence and on every shipped network.
+pub fn palw_gate_c_retention_extension_daa_v1(params: &PalwStateParamsV2, daa: u64) -> u64 {
+    palw_rfc0018_mirror_v1(params)
+        .filter(|m| m.gate_c_governs(daa))
+        .map_or(0, |m| m.certification.lifetime_daa().saturating_add(m.fp_receipt_tail_daa))
+}
+
 /// Whether Gate C governs `claim` (its acceptance DAA past the fence).
 pub fn palw_gate_c_governs_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
     palw_rfc0018_mirror_v1(params).is_some_and(|mirror| mirror.gate_c_governs(claim.accepted_daa))
