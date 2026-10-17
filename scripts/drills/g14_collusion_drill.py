@@ -84,6 +84,8 @@ SOMPI = 100_000_000
 PUBLIC_T12_PORTS = {26311, 26210, 27210, 28210, 8545, 26312, 26313, 26314, 26321, 26323, 26324, 26331, 26333, 26334, 26341,
                     26343, 26344, 26351, 26353, 26354}
 TIR_FP_CLOSED_SENTINEL = 'TIR_FREE_PROMPT_CLOSED_V1'
+# kaspad::private_integration::g14_drill_factory::PRIVATE_G14_DRILL_FLAG_DAYS_V1's last entry.
+PRIVATE_G14_LAST_FLAG_DAY = 28
 
 
 class Blocked(RuntimeError):
@@ -1228,6 +1230,11 @@ class Drill:
         retention, the colluding Panel still in its process). One public bond carries one object per block (its carrier chain), so a
         producer lying on EVERY draw outruns its pursuit (run 3, 2026-10-17: 41 reservations, 0 demands landed in 38 DAA)."""
         pbond = self.seat(0)['bond_outpoint']
+        # The compressed flag days (DAA 6..28) each break the peers' fork-id handshake for a while, the nodes mine apart and the
+        # reorg on reconnect can drop a carried reservation (run 4). Lie only past them.
+        quiet = max(since_daa, PRIVATE_G14_LAST_FLAG_DAY + 2)
+        self.wait('%s: the chain passes the compressed flag days (DAA %d)' % (label, quiet),
+                  lambda: (self.daa_quiet() or 0) >= quiet, self.args.step_timeout, every=20)
         p = self.nodes['P']
         p.stop()
         p.extra = self.producer_flags(0, canonical=False, inject=inject, host_panel=True)
