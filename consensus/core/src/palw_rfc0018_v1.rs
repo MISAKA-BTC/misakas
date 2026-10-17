@@ -75,6 +75,9 @@ pub struct PalwRfc0018MirrorV1 {
     pub gate_c_from_daa: Option<u64>,
     pub gate_c_rule: PalwGateCRuleV1,
     pub certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+    /// **The free-prompt receipt lane's tail** past certification (`receipt_maturity + receipt_use_window` of the network's FP bundle):
+    /// a governed FP claim must still exist that long after its certification can be decided (RFC-0018 18-A; user decision 10-17).
+    pub fp_receipt_tail_daa: u64,
 }
 
 impl PalwRfc0018MirrorV1 {
@@ -109,6 +112,32 @@ impl PalwRfc0018MirrorV1 {
 /// The mirror's readers on the state params (`None`: every shipped preset).
 pub fn palw_rfc0018_mirror_v1(params: &PalwStateParamsV2) -> Option<&PalwRfc0018MirrorV1> {
     params.rfc0018_v1()
+}
+
+/// **Gate C's retirement floor** (user decision 2026-10-17): a governed claim does not retire before its certification can be decided
+/// and, for a free-prompt claim, its receipt lane run: `final + certification lifetime (certify_by + attest window, at least the
+/// prosecution window) + the FP receipt tail`. `retire_at` unchanged for a claim Gate C does not govern (every shipped network), and
+/// for a claim that is not `Final` (a void retires as before: it earns nothing).
+pub fn palw_gate_c_retirement_floor_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, retire_at: u64) -> u64 {
+    let Some(mirror) = palw_rfc0018_mirror_v1(params).filter(|m| m.gate_c_governs(claim.accepted_daa)) else { return retire_at };
+    let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { return retire_at };
+    let tail = match claim.source {
+        PalwClaimSourceV2::FreePrompt { .. } => mirror.fp_receipt_tail_daa,
+        PalwClaimSourceV2::Attempt => 0,
+    };
+    retire_at.max(final_daa.saturating_add(mirror.certification.lifetime_daa()).saturating_add(tail))
+}
+
+/// **Gate C's trace-retention extension** (user decision 2026-10-17): past Gate C's fence a claim accepted at `daa` promises its trace
+/// for the released minimum PLUS the certification lifetime and the FP receipt tail, so its material is still fetchable when its
+/// certification is decided at the latest and through its receipt lane — the same span its retirement floor
+/// ([`palw_gate_c_retirement_floor_v1`]) keeps the claim. The released minimum already reaches the claim's latest Final plus its court
+/// window, so `acceptance + minimum + extension ≥ final + lifetime + tail`. One value for both lanes (no second canonical value);
+/// `0` below the fence and on every shipped network.
+pub fn palw_gate_c_retention_extension_daa_v1(params: &PalwStateParamsV2, daa: u64) -> u64 {
+    palw_rfc0018_mirror_v1(params)
+        .filter(|m| m.gate_c_governs(daa))
+        .map_or(0, |m| m.certification.lifetime_daa().saturating_add(m.fp_receipt_tail_daa))
 }
 
 /// Whether Gate C governs `claim` (its acceptance DAA past the fence).
@@ -233,6 +262,48 @@ pub fn palw_gate_c_advances_frontier_v1(
     let governs = palw_gate_c_governs_v1(params, claim);
     let certified = governs && palw_independently_work_certified_v1(claim_id, claim, &PalwGateCViewV1::of(params, chain));
     crate::palw_security_certification_v1::palw_consensus_credit_anchor_v1(governs, certified, &claim.source, &claim.phase)
+}
+
+/// **Gate C's receipt-lane refusal** (RFC-0018 18-A): a governed free-prompt claim that is `Final` but not `SecurityCertified` licenses no
+/// receipt block. `status` is the RPC's certification state (`pending`, `no-population`, `not-certified`, `vetoed`, `expired`,
+/// `withdrawn`, `revoked`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("free-prompt claim {claim} is Final but not SecurityCertified ({status}): Gate C licenses no receipt block before certification")]
+pub struct PalwFpReceiptUncertifiedV1 {
+    pub claim: Hash64,
+    pub status: &'static str,
+}
+
+/// **The receipt lane's clock under Gate C** (RFC-0018 18-A) — the ONE predicate the receipt pre-check (own block and merged
+/// entitlement, so the coinbase worker share), the stateless-admission items, the spendable RPC (the producer's template source) and the
+/// fold read for a `Final` free-prompt claim at `final_daa`:
+///
+/// * not governed (no mirror, or the claim accepted below Gate C's fence — every claim on every shipped network): `Ok(final_daa)`, the
+///   released draw slot `final + receipt_maturity`, byte for byte;
+/// * governed and `SecurityCertified` ([`palw_independently_work_certified_v1`]): `Ok(max(final_daa, certified_daa))` — the lane opens at
+///   certification, so its draw beacon lies after the decision and the use window is not consumed while certification is pending (an
+///   honest claim is paid in full once certified);
+/// * governed and not certified (pending, no population, rejected, voided — a late conviction voids the claim, so its later quanta
+///   are refused here too): `Err` — no receipt block, no coinbase worker share. Weight 0 alone was not enough: the block right and the
+///   worker share are paid outside the weight.
+///
+/// The answer is read from the chain state at the candidate's point, so siblings and reorgs read the certification their own chain holds.
+pub fn palw_fp_receipt_clock_v1(
+    params: &PalwStateParamsV2,
+    chain: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    final_daa: u64,
+) -> Result<u64, PalwFpReceiptUncertifiedV1> {
+    if !palw_gate_c_governs_v1(params, claim) {
+        return Ok(final_daa);
+    }
+    if !palw_independently_work_certified_v1(claim_id, claim, &PalwGateCViewV1::of(params, chain)) {
+        let status = crate::palw_security_certification_v1::palw_claim_certification_status_v1(chain, params, claim_id, claim);
+        return Err(PalwFpReceiptUncertifiedV1 { claim: *claim_id, status });
+    }
+    let certified_daa = crate::palw_security_certification_v1::palw_claim_certified_daa_v1(chain, claim_id).unwrap_or(final_daa);
+    Ok(final_daa.max(certified_daa))
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -561,6 +632,12 @@ impl Params {
             certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(
                 (86_400_000u64 / self.target_time_per_block().max(1)).max(1),
             ),
+            fp_receipt_tail_daa: match &self.palw_consensus_mode {
+                PalwConsensusMode::ConsensusV2(bundle) => {
+                    bundle.freeprompt.receipt_maturity_daa().saturating_add(bundle.freeprompt.receipt_use_window_daa())
+                }
+                _ => 0,
+            },
         };
         (!mirror.is_empty()).then_some(mirror)
     }

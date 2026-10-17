@@ -714,7 +714,7 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     ladder: u64,
     opening_turn: u64,
     published: crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1<'_>,
-) -> Result<Hash64, PalwStateV2Error> {
+) -> Result<Option<Hash64>, PalwStateV2Error> {
     let refused = |why: String| PalwStateV2Error::HeldDissectionRefused { claim: claim_id, leaf: leaf_index, why };
     // **D2 (REQ-T6-3 restricted, REQ-T6-4 replaced; `palw_court_model_scope_v1`)**: every dissection opened at a named leaf is
     // answered by the producer's root claim, whose object carries model operands (`AttnRootClaimOperands`: an attention site's
@@ -749,15 +749,26 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     // the claim's open cutoff and only if `start + B_remaining <= hard`. `Ok` below the fence.
     crate::palw_ruling_fences_v1::palw_claim_pursuit_may_start_v1(builder.params, claim, ctx.daa_score)
         .map_err(|why| refused(why.to_string()))?;
-    let open_sessions = builder.state.court_sessions.len() as u64;
-    let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
-    if open_sessions >= max_sessions {
-        return Err(PalwStateV2Error::CourtSessionsAtCapacity {
-            open: open_sessions,
-            max: max_sessions,
-            turn_deadline_daa: builder.params.turn_deadline_daa(),
-            per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
-        });
+    // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` court admission (the challenger's reservation, the escrow,
+    // the deadline-aware queue) replaces the fixed concurrency cap — a queued prosecution opens nothing now (`Ok(None)`); below the
+    // fence, the cap as it always was.
+    let admission_window =
+        builder.state.class_model_court_window_v1(&claim.class_id).unwrap_or_else(|| builder.params.window_court());
+    match super::palw_court_capacity_fold_v1::court_admission_v1(builder, ctx, claim_id, challenger_bond, admission_window)? {
+        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(None),
+        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open => {}
+        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {
+            let open_sessions = builder.state.court_sessions.len() as u64;
+            let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
+            if open_sessions >= max_sessions {
+                return Err(PalwStateV2Error::CourtSessionsAtCapacity {
+                    open: open_sessions,
+                    max: max_sessions,
+                    turn_deadline_daa: builder.params.turn_deadline_daa(),
+                    per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+                });
+            }
+        }
     }
     let challenger_collateral =
         builder.state.bonds.get(&challenger_bond).ok_or(PalwStateV2Error::MissingBond(challenger_bond))?.collateral;
@@ -848,9 +859,11 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     };
     cap_session_rung_deadline_v2(&mut opened, builder.params);
     builder.write_court(session_id, Some(opened))?;
+    super::palw_court_capacity_fold_v1::court_opened_v1(builder, ctx, claim_id, challenger_bond, session_id)?;
     if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
         builder.disarm_deadline(claim_id);
     }
-    // The session's id, for a caller that keys something to it (the held leaf challenge's close group).
-    Ok(session_id)
+    // The session's id, for a caller that keys something to it (the held leaf challenge's close group); `None` when the prosecution
+    // was queued past `palw_court_capacity_v1`.
+    Ok(Some(session_id))
 }

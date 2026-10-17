@@ -82,6 +82,42 @@ fn opv_test_eligible(classes: &[Hash64]) {
     }
 }
 
+/// **Lane g14-court-capacity-r2: `parts` with `palw_detection_policy_v1` armed at genesis carrying `policies`** — armed WITHOUT its
+/// validation (which refuses every height), its mirror synced by the Params' own sync and the bundle re-read from the Params.
+pub(super) fn with_detection_policies(
+    parts: (Config, PalwConsensusParamsV2, Premine, Premine),
+    policies: Vec<kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1>,
+) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (config, _, premine, floats) = parts;
+    let mut params = config.params.clone();
+    params.palw_detection_policy_v1 =
+        Some(kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyFenceV1 { activation: ForkActivation::new(0), policies });
+    params.sync_palw_detection_policy_v1();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        unreachable!("testnet-12 is ConsensusV2")
+    };
+    let bundle = bundle.clone();
+    assert!(bundle.state.detection_policy_v1().is_some(), "the fold reads the mirror");
+    (Config::new(params), bundle, premine, floats)
+}
+
+/// **A kernel-route detection policy for `class`** (full re-execution over the claim's evaluated positions, one position an interval),
+/// its honest cost per position `cost`, its declared resources wide enough that only the deterrence bound and the plan's own checks
+/// decide.
+pub(super) fn kernel_detection_policy(class: Hash64, cost: u64) -> kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1 {
+    use kaspa_consensus_core::palw_detection_policy_v1::*;
+    let mut p = palw_detection_genesis_design_v1(class, PalwDetectionRouteV1::Kernel, PalwIntervalCountRuleV1::PricedLeaves { leaves_per_interval: 1 });
+    p.economics.cost_per_interval_sompi = cost;
+    p.economics.collateral_per_interval_sompi = cost.saturating_mul(2);
+    p.resources.retention_pairs_cap = u32::MAX;
+    p.resources.max_claim_fetch_bytes = u64::MAX / 4;
+    p.resources.max_claim_replay_units = u64::MAX / 4;
+    p.resources.court_openings_per_claim = u32::MAX;
+    p.resources.da_bytes_per_claim = u64::MAX / 4;
+    p.deadlines.inspection_deadline_daa = u64::MAX / 4;
+    p
+}
+
 fn kernel_config_with(opv: Option<PalwPanelFreeFenceV1>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     kernel_config_with_budget(opv, true)
 }
@@ -3490,3 +3526,6 @@ mod rfc17_eligibility;
 // G14 lane closure (2026-10-16): the kernel route's Valid signers answer for a conviction (G-K1, T-N11), over the production
 // onboarding path (no attestation hook): `g14_kernel_route_e2e/g14_lane_closure.rs`.
 mod g14_lane_closure;
+// G14 detection policy (2026-10-17): a checker under an armed policy finds a single-position lie at its hypergeometric rate with the
+// v2 draw, and its filing convicts on the real node: `g14_kernel_route_e2e/detection_policy.rs`.
+mod detection_policy;

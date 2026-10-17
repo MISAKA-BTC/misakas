@@ -33,6 +33,7 @@ fn with_mirror(rule: PalwGateCRuleV1) -> PalwStateParamsV2 {
         gate_c_from_daa: Some(FENCE),
         gate_c_rule: rule,
         certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(720),
+        fp_receipt_tail_daa: 0,
     }))
 }
 

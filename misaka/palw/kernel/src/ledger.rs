@@ -1424,6 +1424,10 @@ impl KernelLedgerV1 {
             KernelRouteObjectV1::CommitEligibilityExamV1 { .. } | KernelRouteObjectV1::AttestEligibilityExamV1 { .. } => {
                 return Err(KernelRefusalV1::rule(name, "eligibility exams must be interpreted by the authenticated native consumer"));
             }
+            // RFC-0016 V8 (inner 76): a capacity attestation is judged only by the native consumer past `palw_capacity_attestation_v1`.
+            KernelRouteObjectV1::AttestCapacityV1 { .. } => {
+                return Err(KernelRefusalV1::rule(name, "capacity attestations must be interpreted by the authenticated native consumer"));
+            }
             // M*-49 (`palw_verifier_pay_v1`): the signer is the drawn slot holder (`authorize`); below the consumer's fence no draw
             // exists, so the attestation is refused by its own rule.
             KernelRouteObjectV1::AttestDrawnCheckV1 { verifier, claim } => {

@@ -120,8 +120,9 @@ pub const PALW_RFC0016_ENTRANT_MAX_PER_MODEL_CALIBRATION_PERMILLE_V1: u32 = 2;
 /// **V5: the calibration epoch, in DAA** — 720 DAA = ONE epoch (the nominal day at the 120 s clock slot). It is a DAA count: its
 /// wall-clock span is MEASURED and reported (the report's epoch clock, the harness's drift), never labelled "24 h".
 pub const PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1: u64 = 720;
-/// **V5: the 30-day average's nominal window, in DAA** — 30 calibration epochs (21,600 DAA); a DAA count, not a wall-clock month.
-pub const PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1: u64 = 30 * PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1;
+/// **V5: the S̄_m average's nominal window, in DAA** — 7 calibration epochs (5,040 DAA; user decision 2026-10-16, was 30 / 21,600); a DAA
+/// count, not a wall-clock week.
+pub const PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1: u64 = 7 * PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1;
 
 /// **V9: the verifier share's calibration baseline** — 20 % (200 ‰), inside ADR-0132 C's 10–30 % clamp which the slope never leaves.
 /// A split of the SAME claim pay: no new issuance pays verifiers.
@@ -251,6 +252,39 @@ pub struct PalwRfc0016MirrorV1 {
     pub rights_from_daa: Option<u64>,
     pub capacity_from_daa: Option<u64>,
     pub values: PalwRfc0016ValuesV1,
+    /// **V8's measured per-class claim loads** ([`PALW_RFC0016_CLAIM_LOADS_V1`]; empty: unmeasured). Past the capacity fence an attested
+    /// verifier is credited for a class only where the class has a record — an unmeasured class credits NOTHING (fail closed), never
+    /// a compute-only figure; the court admission bound of such a class is 0 too.
+    pub claim_loads: &'static [PalwRfc0016ClassLoadV1],
+}
+
+/// **V8: one class's measured per-claim DA and court load on one verifier** (audit 16-A, user decision 2026-10-17: measured per
+/// class/model with the release binary as part of the measurement records). Compute and memory are the model's own registry facts
+/// (`economic_ccu_per_claim`, `working_set_bytes`); these two have no chain fact, so they are measured values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRfc0016ClassLoadV1 {
+    pub class_id: [u8; 64],
+    /// DA bytes one verifier fetches and retains for one claim over its verification window.
+    pub da_bytes_per_claim: u64,
+    /// Court units one verifier carries for one claim (the unit the attestations' court figure is per span in).
+    pub court_units_per_claim: u64,
+}
+
+/// **The binary's V8 per-class loads — UNMEASURED (empty)**: until the release-phase measurement records fix them, past the capacity
+/// fence no attested verifier is credited and no court-demanding claim fits the derived court bound; validation refuses the fence anyway.
+pub const PALW_RFC0016_CLAIM_LOADS_V1: &[PalwRfc0016ClassLoadV1] = &[];
+
+impl PalwRfc0016MirrorV1 {
+    /// A fixture's measured loads (the binary's are [`PALW_RFC0016_CLAIM_LOADS_V1`]).
+    pub fn with_claim_loads(mut self, claim_loads: &'static [PalwRfc0016ClassLoadV1]) -> Self {
+        self.claim_loads = claim_loads;
+        self
+    }
+
+    /// The measured load of `class`, if it has a record.
+    pub fn claim_load_of(&self, class: &crate::Hash64) -> Option<PalwRfc0016ClassLoadV1> {
+        self.claim_loads.iter().find(|l| l.class_id == class.as_bytes()).copied()
+    }
 }
 
 impl PalwStateParamsV2 {
@@ -302,6 +336,7 @@ impl Params {
             rights_from_daa,
             capacity_from_daa,
             values,
+            claim_loads: PALW_RFC0016_CLAIM_LOADS_V1,
         })
     }
 
@@ -517,12 +552,12 @@ mod tests {
         assert!(palw_rfc0016_calibration_conforms_v1(&tilted).is_err(), "k stays 1");
     }
 
-    /// V5 (user decision 2026-10-15): one calibration epoch is 720 DAA and the 30-day window 21,600 DAA — the same DAA counts the
-    /// ADR-0177 allocation's decided policy uses (one day-equivalent epoch, 30 of them per average).
+    /// V5 (user decision 2026-10-15): one calibration epoch is 720 DAA and the average window 5,040 DAA (7 epochs, 10-16) — the same DAA counts the
+    /// ADR-0177 allocation's decided policy uses (one day-equivalent epoch, 7 of them per average).
     #[test]
-    fn v5_one_epoch_is_720_daa_and_the_window_21_600() {
+    fn v5_one_epoch_is_720_daa_and_the_window_5_040() {
         assert_eq!(PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1, 720);
-        assert_eq!(PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1, 21_600);
+        assert_eq!(PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1, 5_040);
         let decided = crate::palw_bond_budget_v1::PalwModelAllocationPolicyV1::decided_unapproved_v3();
         assert_eq!(decided.epoch_daa, PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1);
         assert_eq!(decided.average.unwrap().span_daa(), PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1);

@@ -202,6 +202,9 @@ pub mod beacon_bootstrap_v1;
 /// RFC-0017 (2026-10-15): model eligibility exam commits and attestations (inner 74/75), consumer-owned past
 /// `palw_model_eligibility_v1`; dormant.
 pub mod model_eligibility_v1;
+/// RFC-0016 V8 (inner 76): a verifier's capacity attestation, judged by the native consumer past `palw_capacity_attestation_v1`;
+/// dormant.
+pub mod capacity_attestation_v1;
 /// R7-RELATION (2026-10-15 round 3): compact relation proof compilers under the dormant ClaimV2 contract; unreviewed.
 pub mod claim_compact_v1;
 pub mod claim_interactive_v3;

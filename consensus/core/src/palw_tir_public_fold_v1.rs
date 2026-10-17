@@ -607,12 +607,64 @@ fn reclaim_owner_slot_v1(
     let mut row = old.as_ref().clone();
     let deposit = row.owned.contract_v1().terms.plan.deposit_sompi;
     let mut owned = row.owned.as_ref().clone();
-    owned.retire_idle_v1(ctx.daa_score).map_err(refused)?;
+    if tir_owner_fair_start_v1(b, ctx) {
+        // Round 2: an admitted row's idleness counts from its admission (`staged_tir_idle_admitted_owners_v1` chose it), and the
+        // reclamation is stamped as its release so the next waiting row is admitted from now.
+        owned.retire_admitted_idle_v1().map_err(refused)?;
+        owned.stamp_release_v1(ctx.daa_score);
+    } else {
+        owned.retire_idle_v1(ctx.daa_score).map_err(refused)?;
+    }
     row.owned = Box::new(owned).into();
     row.check_structure_v1(&key).map_err(refused)?;
     b.write_staged_row_v1(key, Some(Row::TirAcquisition(Box::new(row).into())))?;
     b.slash_bond(owner, u128::from(deposit))?;
     Ok(())
+}
+
+fn tir_owner_tenure_v1(frame: &Frame, grace: u64) -> u64 {
+    crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_v1(frame, grace)
+}
+
+/// **Lane g14-court-capacity-r2: rotate the owner queue at `now`** — every admitted row past its tenure while a row waits yields its
+/// slot (no forfeit), and every idle admitted row is reclaimed (its deposit burned) when some row waits. Called by an Open and by a
+/// waiting row's Demand, before admission is read.
+fn rotate_owner_queue_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, frame: &Frame) -> Result<(), PalwStateV2Error> {
+    let claim = frame.plan_v1().original_claim;
+    let now = ctx.daa_score;
+    let waiting = b.state.staged_tir_owner_queue_v1(&claim).iter().any(|(_, _, admitted, _)| !admitted);
+    if !waiting {
+        return Ok(());
+    }
+    for (idle_key, idle_owner) in b.state.staged_tir_idle_admitted_owners_v1(&claim, now) {
+        reclaim_owner_slot_v1(b, ctx, idle_key, idle_owner)?;
+    }
+    let grace = b
+        .state
+        .staged_tir_owner_queue_v1(&claim)
+        .first()
+        .and_then(|(key, ..)| match b.state.staged_court_row_v1(key) {
+            Some(Row::TirAcquisition(row)) => Some(row.owned.owner_idle_grace_daa_v1()),
+            _ => None,
+        })
+        .unwrap_or(1);
+    for (key, _) in b.state.staged_tir_overstayed_owners_v1(&claim, now, tir_owner_tenure_v1(frame, grace)) {
+        let Some(Row::TirAcquisition(old)) = b.state.staged_court_row_v1(&key) else { continue };
+        let mut row = old.as_ref().clone();
+        let mut owned = row.owned.as_ref().clone();
+        owned.retire_admitted_idle_v1().map_err(refused)?;
+        owned.stamp_release_v1(now);
+        row.owned = Box::new(owned).into();
+        row.check_structure_v1(&key).map_err(refused)?;
+        b.write_staged_row_v1(key, Some(Row::TirAcquisition(Box::new(row).into())))?;
+    }
+    Ok(())
+}
+
+/// **Lane g14-court-capacity-r2: the owner fair start is in force** — past `palw_court_capacity_v1` (dormant; `false` on every
+/// shipped network, where `open_v1` refuses an Open at K_owner exactly as before).
+fn tir_owner_fair_start_v1(b: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> bool {
+    b.params.court_capacity_at_v1(ctx.daa_score).is_some()
 }
 
 fn open_v1(
@@ -622,6 +674,21 @@ fn open_v1(
     owner: PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
     independent(b, frame, owner)?;
+    // **Lane g14-court-capacity-r2 (past `palw_court_capacity_v1`): the owner fair start.** An Open is never refused for the K_owner
+    // cap: past the cap it WAITS in the claim's owner queue (arrival order; `staged_tir_owner_queue_v1`), imposes no custodian load,
+    // and is admitted — may demand — as the rows ahead release their slots (turns spent, or an idle admitted row reclaimed: its
+    // deposit burned, as below). The concurrent custodian load stays K_owner; an Open filed later never starts before this one.
+    let claim = frame.plan_v1().original_claim;
+    let fair_start = tir_owner_fair_start_v1(b, ctx);
+    if fair_start && b.state.staged_tir_owner_count_v1(&claim) >= Frame::MAXIMUM_OWNERS_V1 {
+        // Every admitted idle row is reclaimed (deposit burned) when the new row would wait.
+        for (idle_key, idle_owner) in b.state.staged_tir_idle_admitted_owners_v1(&claim, ctx.daa_score) {
+            reclaim_owner_slot_v1(b, ctx, idle_key, idle_owner)?;
+        }
+    }
+    if fair_start {
+        rotate_owner_queue_v1(b, ctx, frame)?;
+    }
     // **K_owner (Lead default, pending user review): refuse an excess owner before ANY custodian duty is created.** The frame's
     // liable custodians answer at most `custodian_load_bound_v1` across the owners holding slots at once; each owner below pays
     // only its own rent and deposit (`owner_terms_v1`), never the producer's prepaid preparation pool.
@@ -631,8 +698,7 @@ fn open_v1(
     // last progress, `owner_idle_at_v1`): that row is retired (its open demand closed, its turns spent — it can never demand again),
     // and its deposit is forfeited (burned through `slash_bond`, credited to nobody, so reclaiming pays no one). Only when every
     // holder is still making progress is the Open refused. Atomic with the Open (the caller's checkpoint).
-    let claim = frame.plan_v1().original_claim;
-    if b.state.staged_tir_owner_count_v1(&claim) >= Frame::MAXIMUM_OWNERS_V1 {
+    if !fair_start && b.state.staged_tir_owner_count_v1(&claim) >= Frame::MAXIMUM_OWNERS_V1 {
         let Some((idle_key, idle_owner)) = b.state.staged_tir_idle_owner_v1(&claim, ctx.daa_score) else {
             return Err(refused("TIR original frame already carries its K_owner outside owners, all still active; custodian load is bounded"));
         };
@@ -764,6 +830,19 @@ fn apply_verified_control_v1(
             control.check_owned_scope_v1(&row.owned).map_err(refused)?;
             if matches!(action, Action::Demand { .. } | Action::Reacquire { .. } | Action::Collect { .. }) {
                 independent(b, &frame, control.signer)?;
+            }
+            // Lane g14-court-capacity-r2: a WAITING owner row (beyond the first K_owner of the owner queue) demands nothing until the
+            // rows ahead release their slots — the queue is rotated first (overstayed rows yield, idle ones are reclaimed).
+            if matches!(action, Action::Demand { .. } | Action::Reacquire { .. }) && tir_owner_fair_start_v1(b, ctx) {
+                let claim = frame.plan_v1().original_claim;
+                if !b.state.staged_tir_owner_admitted_v1(&claim, &key) {
+                    rotate_owner_queue_v1(b, ctx, &frame)?;
+                }
+                if !b.state.staged_tir_owner_admitted_v1(&claim, &key) {
+                    return Err(refused(
+                        "TIR owner row is waiting in the owner queue: it demands once the rows ahead release their slots",
+                    ));
+                }
             }
             crate::palw_tir_public_state_v1::palw_tir_public_transition_v1(
                 &b.state,
@@ -2557,6 +2636,162 @@ mod conviction_e2e_tests {
             apply_delta_entry(&mut reverted, entry, true).unwrap();
         }
         assert_eq!(reverted.state_root(), state.state_root());
+    }
+
+    /// **Lane g14-court-capacity-r2 (audit 2026-10-17 §6.2 / §7 P0(2)): eight colluding ACTIVE owners cannot lock an honest newcomer
+    /// out, and the newcomer convicts in time.** Past `palw_court_capacity_v1` (the owner fair start): eight colluding bonds take every
+    /// owner slot the moment the frame opens and keep them ACTIVE (each demand answered inside its clock by the colluding producer, the
+    /// next demand at once — never idle, so idle reclamation never fires). An honest outsider's Open is NOT refused: it waits in the
+    /// claim's owner queue, imposes no custodian load (its Demand is refused while it waits), and eight more coalition Opens filed after
+    /// it queue BEHIND it (the refill). When the first colluder has spent its prepaid turns its slot passes to the outsider — never to a
+    /// later coalition row — and the outsider demands the leaf its replay disagrees with, reads the producer's accepted answer and files
+    /// the conviction: `CourtFraud`, the producer debited, inside the frame's collection door. Custodian load never exceeds K_owner.
+    /// Below the fence the same Open at K_owner is refused (T-N4's world).
+    #[test]
+    fn g14r2_eight_active_colluding_owners_cannot_lock_out_a_newcomer_who_convicts_in_time() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx = palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF, 1)), 4);
+        let frame = fx.frame.clone();
+        let colluders = squatters(Frame::MAXIMUM_OWNERS_V1);
+        let late_coalition: Vec<PalwBondKeyV2> = (0..Frame::MAXIMUM_OWNERS_V1).map(|i| bond(500 + i)).collect();
+        let mut extra = colluders.clone();
+        extra.extend(late_coalition.iter().copied());
+        let (mut state, params, extras, open_at) = open_world(&fx, &frame, &extra);
+        // Below the fence (T-N4's world) the outsider is refused at K_owner; past it, the fair start.
+        let below = params.clone();
+        let params = params.with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 {
+            from_daa: 0,
+            policy: crate::palw_court_capacity_v1::palw_court_capacity_placeholder_policy_v1(),
+        }));
+        let claim_id = frame.plan_v1().original_claim;
+        let base = frame.plan_v1().terms.accepted_daa;
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let terms = frame.plan_v1().terms;
+        for owner in &colluders {
+            state = open(&frame, &state, &params, &extras, open_at, *owner).expect("a colluder takes a slot");
+        }
+        let max_turns = owner_row(&state, &frame, colluders[0], base + open_at).contract_v1().plan.maximum_turns;
+        eprintln!(
+            "[G14 r2 TIR] open_at {open_at}, open_until {}, collect_until {}, maximum_turns {max_turns}",
+            terms.open_until_daa - base,
+            terms.collect_until_daa - base
+        );
+        assert_eq!(state.staged_tir_owner_count_v1(&claim_id), Frame::MAXIMUM_OWNERS_V1);
+        assert!(open(&frame, &state, &below, &extras, open_at + 1, outsider()).is_err(), "below the fence: refused at K_owner");
+        // The colluders go active: each demands at once (the producer answers inside the clock below).
+        let mut offset = open_at + 1;
+        let leaf_of = |_: usize| FORGED_LEAF as u64;
+        for (i, owner) in colluders.iter().enumerate() {
+            let target = T::Acquisition { owner: *owner, reserved_daa: base + open_at };
+            let request = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: leaf_of(i) };
+            state = control_step(&frame, &state, &params, &extras, offset, *owner, target, A::Acquisition(Owned::Demand { request }), 0, 0)
+                .expect("a colluder demands");
+        }
+        // The honest newcomer: not refused — it waits; its Demand is refused while it waits.
+        offset += 1;
+        let arrived = offset;
+        state = open(&frame, &state, &params, &extras, offset, outsider()).expect("never refused for the K_owner cap past the fence");
+        let mine = T::Acquisition { owner: outsider(), reserved_daa: base + arrived };
+        let mine_key = owner_key(&frame, outsider(), base + arrived).unwrap();
+        assert!(!state.staged_tir_owner_admitted_v1(&claim_id, &mine_key), "it waits behind the eight");
+        let forged = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: FORGED_LEAF as u64 };
+        let refused =
+            control_step(&frame, &state, &params, &extras, offset + 1, outsider(), mine, A::Acquisition(Owned::Demand { request: forged }), 0, 0)
+                .expect_err("a waiting row demands nothing");
+        assert!(format!("{refused}").contains("waiting in the owner queue"), "{refused}");
+        // The refill: eight more coalition Opens AFTER the newcomer queue behind it.
+        offset += 1;
+        for owner in &late_coalition {
+            state = open(&frame, &state, &params, &extras, offset, *owner).expect("the coalition queues too");
+        }
+        // Keep the colluders active (every open demand answered inside its clock, the next demand at once); every block the newcomer
+        // tries its Demand, which rotates the queue: no colluder is ever idle, but an admitted row past its tenure yields to it.
+        // Custodian load (demands open at once) never exceeds K_owner.
+        offset += 1;
+        let mut turns = vec![1u64; colluders.len()];
+        let mut admitted_at = None;
+        while admitted_at.is_none() {
+            assert!(base + offset < terms.open_until_daa, "the newcomer must get its slot inside the open window");
+            for (i, owner) in colluders.iter().enumerate() {
+                let target = T::Acquisition { owner: *owner, reserved_daa: base + open_at };
+                let key = owner_key(&frame, *owner, base + open_at).unwrap();
+                let Some(Row::TirAcquisition(row)) = state.staged_court_row_v1(&key) else { panic!("colluder row") };
+                if !row.owned.holds_owner_slot_v1() {
+                    continue;
+                }
+                if row.owned.active_v1().is_some_and(|p| p.slots.get(&producer).and_then(|s| s.finished.as_ref()).is_none()) {
+                    let (answered, next) = producer_answers(&fx, &frame, &state, &params, &extras, target, leaf_of(i) as usize, offset);
+                    state = answered;
+                    offset = offset.max(next);
+                }
+                if turns[i] < max_turns {
+                    let request = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: leaf_of(i) };
+                    state = control_step(&frame, &state, &params, &extras, offset, *owner, target, A::Acquisition(Owned::Demand { request }), 0, turns[i])
+                        .expect("the colluder stays active");
+                    turns[i] += 1;
+                }
+            }
+            assert!(state.staged_tir_idle_admitted_owners_v1(&claim_id, base + offset).is_empty(), "the colluders are never idle");
+            offset += 1;
+            // The node's owner worker asks this before it signs a Demand; it must agree with the fold, block by block.
+            let grace = owner_row(&state, &frame, outsider(), base + arrived).owner_idle_grace_daa_v1();
+            let tenure = crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_v1(&frame, grace);
+            let predicted = state.staged_tir_owner_demand_admits_v1(&claim_id, &mine_key, base + offset, tenure);
+            match control_step(&frame, &state, &params, &extras, offset, outsider(), mine, A::Acquisition(Owned::Demand { request: forged }), 0, 0) {
+                Ok(next) => {
+                    assert!(predicted, "the worker's predicate admits exactly when the fold does");
+                    state = next;
+                    admitted_at = Some(offset);
+                }
+                Err(why) => {
+                    assert!(!predicted, "the worker would have wasted a Demand: {why}");
+                    assert!(format!("{why}").contains("waiting in the owner queue"), "{why}");
+                }
+            }
+            let open_demands = state
+                .staged_tir_owner_queue_v1(&claim_id)
+                .iter()
+                .filter(|(key, ..)| matches!(state.staged_court_row_v1(key), Some(Row::TirAcquisition(r)) if r.owned.active_v1().is_some()))
+                .count() as u64;
+            assert!(open_demands <= Frame::MAXIMUM_OWNERS_V1, "custodian load bounded by K_owner: {open_demands}");
+        }
+        let admitted_at = admitted_at.unwrap();
+        // Every colluder past its tenure yielded, with no forfeit (they were active); the slots went in arrival order — the newcomer
+        // first — and the last of the later coalition Opens still waits.
+        let yielded: Vec<_> = colluders
+            .iter()
+            .filter(|o| !owner_row(&state, &frame, **o, base + open_at).holds_owner_slot_v1())
+            .collect();
+        assert!(!yielded.is_empty(), "slots rotated");
+        assert!(yielded.iter().all(|o| state.bonds.get(*o).unwrap().slashed == 0), "an active owner yields without forfeit");
+        let queue = state.staged_tir_owner_queue_v1(&claim_id);
+        let position = queue.iter().position(|(k, ..)| *k == mine_key).expect("the newcomer is queued");
+        assert!(queue[..position].iter().all(|(_, owner, ..)| colluders.contains(owner)), "nobody filed later is ahead of it");
+        eprintln!("[G14 r2 TIR] {} colluders yielded at the tenure; queue position {position} of {}", yielded.len(), queue.len());
+        // The newcomer's demand of the forged leaf is in; the producer answers, and the newcomer files the conviction.
+        let (mut answered, next) = producer_answers(&fx, &frame, &state, &params, &extras, mine, FORGED_LEAF, admitted_at + 1);
+        answered.last_point = Some(at(&frame, next - 1));
+        let reference = owner_pending(&frame, &answered, mine).3.expect("the producer's finished body");
+        assert!(
+            crate::palw_tir_public_state_v1::palw_tir_public_finished_material_v1(&answered, &reference, frame.descriptor_v1().maximum_leaves)
+                .unwrap()
+                .is_some(),
+            "the newcomer's own authenticated material"
+        );
+        let before = answered.bonds.get(&producer).unwrap().collateral;
+        assert!(base + next < terms.collect_until_daa, "inside the collection door");
+        let convicted = control_step(&frame, &answered, &params, &extras, next, outsider(), T::Conviction, A::Convict(cone(&fx)), frame.conviction_rent_v1(), 0)
+            .expect("the newcomer's filing convicts");
+        eprintln!(
+            "[G14 r2 TIR] newcomer arrived at +{arrived}, admitted at +{admitted_at}, convicted at +{next} (open_until +{}, collect_until +{})",
+            terms.open_until_daa - base,
+            terms.collect_until_daa - base
+        );
+        assert!(matches!(
+            convicted.claims.get(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+        ));
+        assert!(convicted.bonds.get(&producer).unwrap().collateral < before, "the producer is slashed");
     }
 
     /// **T-N5 `g14_tir_frame_replays_without_derived_work_prompt_ids`** (G-T3). On a ruleset where `palw_fp_derived_work` priced

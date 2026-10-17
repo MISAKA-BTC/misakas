@@ -227,6 +227,14 @@ pub struct PalwDisputeClaimV1 {
     /// Open explicit reacquisitions. Historical `da_claims.answered` is never cleared: old accusation signatures remain refused.
     /// A fresh authenticated answer closes all reacquisitions of its unit. At most one per reserver (and one DA session per bond).
     pub reacquiring: BTreeMap<PalwBondKeyV2, crate::palw_da_rcore_v1::PalwDaUnitV1>,
+    /// **Lane g14-court-capacity (audit G-07): each live reserver's court-capacity row** — queued, holding a ticket, or running a
+    /// session — written only past `palw_court_capacity_v1` (`crate::palw_court_capacity_v1`). A row exists only beside its reserver's
+    /// live reservation and is settled (occupancy fee charged, escrow released) when that reservation or its session ends.
+    pub courts: BTreeMap<PalwBondKeyV2, crate::palw_court_capacity_v1::PalwReservedCourtV1>,
+    /// **Lane g14-court-capacity-r2: the claim's court reserve has been taken** (by its first court row, whoever filed it) — one
+    /// reserve per claim over its life, so no claim spends more than one reserve session (the bounded admission's demand is one per
+    /// claim). Written only past `palw_court_capacity_v1`.
+    pub court_reserve_used: bool,
 }
 
 impl PalwDisputeClaimV1 {
@@ -247,7 +255,9 @@ impl PalwDisputeClaimV1 {
 
     /// What `bond` holds through this record: its live deposit and its dismissed ones.
     pub fn exposure_of(&self, bond: &PalwBondKeyV2) -> u128 {
-        let live = self.live.get(bond).map(|row| row.deposit).unwrap_or(0);
+        // The court-capacity occupancy escrow rides the same A-6 ledger (zero below `palw_court_capacity_v1`).
+        let court = self.courts.get(bond).map_or(0, |row| row.escrow);
+        let live = self.live.get(bond).map(|row| row.deposit).unwrap_or(0).saturating_add(court);
         self.dismissed_held.iter().filter(|(held, _)| held == bond).fold(live, |sum, (_, amount)| sum.saturating_add(*amount))
     }
 }

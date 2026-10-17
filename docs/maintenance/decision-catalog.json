@@ -1411,6 +1411,14 @@
     },
     {
       "kind": "adr",
+      "number": "0183",
+      "path": "docs/adr/0183-g14-court-capacity-panel-floor-retention-detection.md",
+      "title": "ADR-0183 — G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
       "number": "0186",
       "path": "docs/adr/0186-hold-unresolved-liability-advance-independent-claims.md",
       "title": "ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める",

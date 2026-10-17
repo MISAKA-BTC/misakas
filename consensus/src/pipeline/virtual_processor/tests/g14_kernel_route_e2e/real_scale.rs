@@ -341,6 +341,26 @@ impl SegWorld {
         edit: &dyn Fn(&mut Vec<Vec<Vec<Tensor>>>),
         wrong_last: bool,
     ) -> SegClaim {
+        let (claim, committed) = self.claim_over_try(producer, job, bound, traced, edit, wrong_last).await;
+        assert!(committed, "the segmented claim committed over its seal");
+        claim
+    }
+
+    /// An honest segmented claim of `prompt`, sealed and revealed; whether it committed (a gate may drop it).
+    async fn claim_try(&mut self, producer: usize, job: Digest, prompt: &[u32]) -> bool {
+        self.claim_over_try(producer, job, prompt, prompt, &|_| {}, false).await.1
+    }
+
+    /// [`Self::claim_over`] without the commit assertion: the claim and whether the ledger holds it.
+    async fn claim_over_try(
+        &mut self,
+        producer: usize,
+        job: Digest,
+        bound: &[u32],
+        traced: &[u32],
+        edit: &dyn Fn(&mut Vec<Vec<Vec<Tensor>>>),
+        wrong_last: bool,
+    ) -> (SegClaim, bool) {
         assert_eq!(bound.len(), traced.len());
         let prompt = bound;
         let post = self.f.program.occurrences().len() - 1;
@@ -373,8 +393,8 @@ impl SegWorld {
         let claim = KernelClaimV1 { job_id: job, producer_bond: kid, generated: vec![g0, g1], evidence_root: evidence.root() };
         let id = claim.id();
         self.seal_and_commit(producer, claim, evidence, c.segment_roots()).await;
-        assert!(self.net.ledger().claims.contains_key(&id), "the segmented claim committed over its seal");
-        SegClaim { id, values, c, tokens }
+        let committed = self.net.ledger().claims.contains_key(&id);
+        (SegClaim { id, values, c, tokens }, committed)
     }
 
     /// **The outsider's verifier, from the read API alone**: the segmented record and the class header op 210 serves, checked
@@ -1807,3 +1827,31 @@ mod g14r_seg;
 // Lane G14-K: kaspad's kernel-route verifier's segmented pipeline (the same `pursuit` functions the service calls), driven on the
 // canonical harness — a v4 class cannot be registered on kaspad's test network (derived OPV eligibility is codex's).
 mod g14k_service_core;
+
+/// **Lane g14-court-capacity-r2: a SEGMENTED kernel claim meets the policy's full plan too**, its N from its tiled job's stream
+/// (`prompt_len + generated − 1` evaluated positions — 4,501 here, five segments): an adequate policy admits it; a policy whose
+/// `n_max` is below its N, or whose deterrence bound its collateral does not meet, drops it (no claim, no reward).
+#[tokio::test]
+async fn g14r2_a_segmented_kernel_claim_meets_its_policys_full_plan() {
+    kaspa_core::log::try_init_logger("warn");
+    let f = seg_fixture();
+    let class = seg_class_id(&f);
+    let run = |policy: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1| async move {
+        let parts = with_detection_policies(kernel_config_opv(vec![class]), vec![policy]);
+        let mut w = SegWorld::register(Net::over_cfg(parts, TestConsensus::new), seg_fixture()).await;
+        let collateral = w.net.ledger().policy.claim_collateral;
+        let prompt: Vec<u32> = (0..4500u32).map(|i| (i * 13 + 5) % 32).collect();
+        let job = w.tiled_job(&prompt).await;
+        let committed = w.claim_try(0, job, &prompt).await;
+        (committed, collateral)
+    };
+    let (committed, collateral) = run(kernel_detection_policy(class, 1)).await;
+    assert!(committed, "an adequate policy admits the segmented claim");
+    let mut narrow = kernel_detection_policy(class, 1);
+    narrow.n_max = 4_500;
+    let (committed, _) = run(narrow).await;
+    assert!(!committed, "N = 4,501 above n_max: dropped");
+    let (committed, _) = run(kernel_detection_policy(class, collateral)).await;
+    assert!(!committed, "collateral below the deterrence bound: dropped");
+}
+
