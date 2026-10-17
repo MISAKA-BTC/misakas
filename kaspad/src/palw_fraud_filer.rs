@@ -1139,7 +1139,7 @@ impl PalwFraudFilerCaseV1 {
 
     /// May `item` be sent now? A different item always; the same item has a bounded retry interval and count.
     fn may_send(&self, item: PalwFraudFilerSentV1, now_daa: u64) -> Result<bool, ()> {
-        if self.reorged_out_v1(item) {
+        if self.reorged_out_v1(item, now_daa) {
             return Ok(true);
         }
         match self.sent {
@@ -1157,13 +1157,18 @@ impl PalwFraudFilerCaseV1 {
     }
 
     /// The item was carried after it was last sent and the engine asks for it again: the carrying block was reorged out.
-    fn reorged_out_v1(&self, item: PalwFraudFilerSentV1) -> bool {
+    /// Only once the carrying block had time to be folded (the engine reads the fold, a block after the carrier), so an item asked
+    /// for again in the very next blocks is not mistaken for a reorged one.
+    fn reorged_out_v1(&self, item: PalwFraudFilerSentV1, now_daa: u64) -> bool {
         matches!((self.sent, self.carried), (Some((last, sent_at, _)), Some((round, carried_at)))
-            if last == item && round == palw_fraud_filer_item_round_v1(item) && carried_at >= sent_at)
+            if last == item
+                && round == palw_fraud_filer_item_round_v1(item)
+                && carried_at >= sent_at
+                && now_daa >= carried_at.saturating_add(PALW_FRAUD_FILER_REORG_CONFIRM_DAA_V1))
     }
 
     fn note_sent(&mut self, item: PalwFraudFilerSentV1, now_daa: u64) {
-        let reorged = self.reorged_out_v1(item);
+        let reorged = self.reorged_out_v1(item, now_daa);
         let sends = match self.sent {
             _ if reorged => 1,
             Some((last, _, sends)) if last == item => sends.saturating_add(1),
@@ -2576,6 +2581,10 @@ pub(super) fn palw_fraud_filer_public_filing_with_budget_v3(
     Ok(Some(filing))
 }
 
+/// G-D02b: DAA after an item's carriage before the engine asking for it again is read as a reorg (the fold lands a block after the
+/// carrier; the margin covers that and a merge).
+pub(super) const PALW_FRAUD_FILER_REORG_CONFIRM_DAA_V1: u64 = 4;
+
 /// The court round a filer item rides (`court_due` / `court_moved` key).
 pub(super) fn palw_fraud_filer_item_round_v1(item: PalwFraudFilerSentV1) -> u32 {
     match item {
@@ -2617,17 +2626,19 @@ mod g_d02b_tests {
         case.note_sent(item, 10);
         assert_eq!(case.may_send(item, 11), Ok(false), "spacing before any carriage");
         case.carried = Some((palw_fraud_filer_item_round_v1(item), 12));
-        assert_eq!(case.may_send(item, 13), Ok(true), "carried, then asked again: reorged out, resend at once");
-        case.note_sent(item, 13);
+        assert_eq!(case.may_send(item, 13), Ok(false), "asked again right after its carriage: the fold has not landed yet");
+        let later = 12 + PALW_FRAUD_FILER_REORG_CONFIRM_DAA_V1;
+        assert_eq!(case.may_send(item, later), Ok(true), "carried, then still asked past the margin: reorged out, resend at once");
+        case.note_sent(item, later);
         assert_eq!(case.sent.map(|s| s.2), Some(1), "the reorged resend does not spend the retry budget");
         assert_eq!(case.carried, None);
-        assert_eq!(case.may_send(item, 14), Ok(false), "normal spacing again");
+        assert_eq!(case.may_send(item, later + 1), Ok(false), "normal spacing again");
         for _ in 0..PALW_FRAUD_FILER_SENDS_V1 {
-            case.note_sent(item, 14);
+            case.note_sent(item, later + 1);
         }
-        assert_eq!(case.may_send(item, 14 + PALW_FRAUD_FILER_RESEND_DAA_V1), Err(()), "the budget still bounds plain retries");
+        assert_eq!(case.may_send(item, later + 1 + PALW_FRAUD_FILER_RESEND_DAA_V1), Err(()), "the budget still bounds plain retries");
         case.carried = Some((PALW_FRAUD_FILER_DEMAND_ROUND_V1, 20));
-        assert!(!case.reorged_out_v1(item), "another round's carriage says nothing about this item");
+        assert!(!case.reorged_out_v1(item, 100), "another round's carriage says nothing about this item");
     }
 }
 
@@ -6792,7 +6803,7 @@ impl PalwPanelService {
         match build() {
             Ok(object) => {
                 let round = palw_fraud_filer_item_round_v1(item);
-                if case.reorged_out_v1(item) {
+                if case.reorged_out_v1(item, current_daa) {
                     warn!(
                         "[{PALW_PANEL}] claim {claim}: the fraud filer's {item:?} was carried but is no longer on the selected chain (reorg) — resending (G14 G-D02b)"
                     );
