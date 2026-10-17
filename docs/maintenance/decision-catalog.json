@@ -1410,6 +1410,14 @@
       "status": "Accepted / 延期・無効化方針"
     },
     {
+      "kind": "adr",
+      "number": "0183",
+      "path": "docs/adr/0183-paid-lock-randomness-bootstrap-and-paid-sources.md",
+      "title": "ADR-0183 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
