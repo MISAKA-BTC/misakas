@@ -423,3 +423,7 @@ ACTIVATION_ALLOWED(各fence)
 * [RFC-0012](0012-palw-only-consensus-and-native-evm-settlement.md)、[RFC-0016](0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)、[RFC-0017](0017-model-eligibility-examination-and-renewal.md)
 * [ユーザー判断 2026-10-15 §6](../history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md)
 * [実装状況](../design/palw/integration/rfc-0018-implementation-status-2026-10-15.md)
+
+## 改訂(2026-10-17)— 共有 frontier と独立な進行
+
+共有 safe frontier の依存を「本当に依存している責任」に限る方針は [RFC-0023](0023-unresolved-claim-liability-and-independent-progress.md) / [ADR-0186](../adr/0186-hold-unresolved-liability-advance-independent-claims.md) に記録した:未解決 claim の責任を保持し、それに依存しない claim を進める。

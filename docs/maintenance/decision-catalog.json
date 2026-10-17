@@ -1410,6 +1410,14 @@
       "status": "Accepted / 延期・無効化方針"
     },
     {
+      "kind": "adr",
+      "number": "0186",
+      "path": "docs/adr/0186-hold-unresolved-liability-advance-independent-claims.md",
+      "title": "ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1584,6 +1592,14 @@
       "title": "RFC-0022 — 初期 mainnet から画像・動画・モデル改善を外す適用範囲",
       "topic": "Governance / release scope",
       "status": "Accepted / 延期・無効化方針"
+    },
+    {
+      "kind": "rfc",
+      "number": "0023",
+      "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "title": "RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
     }
   ]
 }
