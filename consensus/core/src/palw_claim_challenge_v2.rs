@@ -373,7 +373,25 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         context: &Digest,
         now: u64,
     ) -> Result<misaka_palw_kernel::claim_paid_v2::PaidClaimCheckAuthorityV2, String> {
-        let a = self.paid_claim_authority_v2(context)?;
+        // A seeded lock needs no funded source target (an unfunded target is what the bootstrap draw locks): read the authority
+        // row and validate it against the ledger without the target check.
+        let raw: Option<PalwPaidClaimAuthorityV2> = self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap());
+        let seeded = raw.as_ref().and_then(|a| {
+            self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
+        });
+        let a = match (&raw, &seeded) {
+            (Some(a), Some(lock))
+                if lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2()
+                    || lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2() =>
+            {
+                a.validate(&*self.ledger()?)?;
+                if a.context.id() != *context {
+                    return Err("paid claim context mismatch".into());
+                }
+                a.clone()
+            }
+            _ => self.paid_claim_authority_v2(context)?,
+        };
         // A bootstrap lock (user decision 2026-10-17, dormant): the lock row names the bootstrap anchor and holds the draw's seed;
         // the authority is re-derived from that authenticated row, never from a beacon that cannot exist yet.
         if let Some(lock) = self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())

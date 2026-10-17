@@ -291,6 +291,9 @@ impl Cw {
         // RFC07 adapter (74921a40a): an OPV timeout Final exports no event, so these sources no longer lock the beacon (the 37
         // blocked tests). The real path is `paid_sources::paid_source_claims` (bootstrap seed, user decision 2026-10-17); it is not
         // wired here yet — its next requirement is the RFC08 kernel material manifest (validation 2026-10-17, see that module).
+        if std::env::var("PALW_PAID_SOURCES").is_ok() {
+            return self.paid_source_claims(n).await;
+        }
         self.opv_source_claims(n).await
     }
 

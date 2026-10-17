@@ -239,3 +239,21 @@ native-Final assertions (F1) must be decided first; for the 7 opt-in tests (F2).
 * **F2.** Under the same policy a paid-enrolled job may opt in as a source, and a live source opt-in no longer blocks a paid commit
   (fold); the SDK pre-checks defer to the fold. With `bootstrap_seed` `None` both refusals hold byte for byte.
 * **F3** (RFC08 material manifest on the covenant) and the migration of the 37 tests: not done yet.
+
+### 6. F3 and the paid-source migration (2026-10-17, continued)
+
+* Unit tests: seal-reveal seed (challenge `paid_opt_in_beacon` 6/6, incl. veto on withheld/forfeited and the k floor), core paid /
+  source / route suites 41/41.
+* F3 built in the harness on the real path: the covenant carries a `PalwMaterialManifestV1` whose scope is the verified
+  `PalwKernelMaterialBundleV1` of every committed position (the ledger's own derived mask, which under the commitment-only route
+  also withholds model-dependent values), signed byte cap = bundle + manifest framing. Fold fixes found on the way (dormant path):
+  a seeded (bootstrap / seal-reveal) lock tolerates an unfunded source target, `refresh_pending_paid_source_locks_v2` no longer
+  re-judges a seeded lock against a v5 beacon (it disqualified the block), and the check authority of a seeded lock no longer needs a
+  funded target.
+* Result (`PALW_PAID_SOURCES=1`, first conformance test): paid class, job enrollment, covenant with manifest, seal, paid commit,
+  bootstrap lock and the three drawn seats' receipts all land; the paid claims are complete. **Blocked next by a parameter
+  mismatch (user decision):** a paid class's signed lifetime must cover its source windows (`PaidClaimClassV2::validate`; checking
+  until commit + 364, Final ≈ commit + 444 here), while the conformance attempt's DISTINCT beacon accepts Finals only inside
+  `PALW_ONBOARDING_POLICY_WINDOW_DAA_V1` = 120 DAA (INTERIM). No paid source can be Final inside that window, so the beacon reports
+  UNAVAILABLE. Either the onboarding window grows to the paid lifetime, or the paid lifetime of a source class shrinks (its windows
+  are interim values too); both are design values under ADR-0181.

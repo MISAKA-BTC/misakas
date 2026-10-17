@@ -600,7 +600,8 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
         Ok((check, anchor))
     };
     let seal_seed = match policy.bootstrap_seed {
-        Some(_) => match r.paid_beacon_material_v5(&a.context.id()).map_err(refused)? {
+        // An unfunded source target (no `Fund`) has no seal-reveal seed: only the bootstrap draw can lock it.
+        Some(_) => match r.paid_beacon_material_v5(&a.context.id()).ok().flatten() {
             Some((contract, sources, promises)) => misaka_palw_challenge::paid_opt_in::collect_paid_seal_reveal_seed_v6(
                 &a.context,
                 &contract,
@@ -906,6 +907,11 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
     for ((_, key), bytes) in r.aux.range((PAID_CLAIM_LOCKS_V2, Vec::new())..(PAID_CLAIM_LOCKS_V2 + 1, Vec::new())) {
         let mut lock: PalwPaidClaimLockV2 = borsh::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
         if !lock.source_valid {
+            continue;
+        }
+        // A bootstrap or seal-reveal lock (ADR-0183) did not draw from a locked v5 beacon: its seed was fixed at the lock from the
+        // pinned seed or from sources that had all revealed, so there is no beacon whose later state could withdraw it.
+        if lock.anchor == paid_claim_bootstrap_anchor_v2() || lock.anchor == paid_claim_seal_anchor_v2() {
             continue;
         }
         let a = r.paid_claim_authority_v2(&lock.context).map_err(refused)?;

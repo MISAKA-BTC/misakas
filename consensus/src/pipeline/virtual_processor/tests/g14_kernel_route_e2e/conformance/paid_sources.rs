@@ -158,14 +158,22 @@ impl Cw {
             enrollment: Box::new(enrollment),
             signature: card_sign(producer, message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, 0xD2),
         };
+        let rehearsal = self.net.chain.ctx.consensus.palw_object_rehearsal_v1(&object);
         self.net.send(vec![(producer, object)]).await;
-        self.net.chain.tip_state().1.monetary_material_row_v1(root).expect("the producer's signed covenant is enrolled").consent
+        self.net
+            .chain
+            .tip_state()
+            .1
+            .monetary_material_row_v1(root)
+            .unwrap_or_else(|| panic!("the producer's signed covenant is enrolled (rehearsal: {rehearsal:?})"))
+            .consent
     }
 
     /// **`n` approved paid source claims of the SOURCE class** (the real path — see the module doc): each job funded by a distinct
     /// consumer, enrolled by it, committed under its producer's signed covenant, locked (the bootstrap draw while no approved paid
     /// Final exists), receipted by the drawn seats. They reach their canonical paid Final on their own clock. Returns the base ids.
     pub(super) async fn paid_source_claims(&mut self, n: usize) -> Vec<Digest> {
+        kaspa_core::log::try_init_logger("warn,kaspa_consensus::pipeline::virtual_processor=info");
         let paid_class = self.paid_source_class().await;
         let consumers = [REGISTRANT, OUTSIDER, 0, 2, 4, 5, 6, 7];
         assert!(n <= consumers.len(), "the fixture must fund independent source consumers");
@@ -232,7 +240,8 @@ impl Cw {
                         &misaka_palw_kernel::ledger::AuthV1 { signer_bond: self.net.kid(producer) },
                     )
                     .expect("the base claim is admissible");
-                let mask = derived_mask_v1(&src.program);
+                // The ledger's own mask: under the commitment-only route model-dependent values are withheld too.
+                let mask = admitted.derived_mask(&admitted.claims[&base], 0);
                 let positions: Vec<(u8, u32, Vec<u8>)> = produced
                     .trace
                     .values
@@ -255,17 +264,40 @@ impl Cw {
                                     .collect()
                             })
                             .collect();
-                        (0u8, p as u32, borsh::to_vec(&PositionResponseV1 { values, inputs: vec![] }).unwrap())
+                        let inputs = produced
+                            .trace
+                            .inputs
+                            .get(p)
+                            .map(|row| row.iter().map(|t| MaterialResponseV1::Whole(TensorWireV1::of(t))).collect())
+                            .unwrap_or_default();
+                        (0u8, p as u32, borsh::to_vec(&PositionResponseV1 { values, inputs }).unwrap())
                     })
                     .collect();
                 let bundle = kaspa_consensus_core::palw_material_capacity_v1::PalwKernelMaterialBundleV1 {
                     claim: Hash64::from_bytes(base),
                     positions,
                 };
-                let scope = bundle.verify(&admitted, u64::MAX).unwrap_or_else(|e| panic!("the complete served material verifies: {e:?}"));
+                let row = &admitted.claims[&base];
+                let shape = |p: u32| {
+                    row.body.position(0, p).map(|(v, i)| (v.iter().map(|o| o.len()).collect::<Vec<_>>(), i.len()))
+                };
+                let served = |p: usize| {
+                    (produced.trace.values[p].iter().map(|o| o.len()).collect::<Vec<_>>(), produced.trace.inputs.get(p).map_or(0, |i| i.len()))
+                };
+                let scope = bundle.verify(&admitted, u64::MAX).unwrap_or_else(|e| {
+                    panic!(
+                        "the complete served material verifies: {e:?}; stages {:?}; committed p0 {:?} served p0 {:?}; positions {} vs trace {}",
+                        row.body.stages(),
+                        shape(0),
+                        served(0),
+                        bundle.positions.len(),
+                        produced.trace.values.len()
+                    )
+                });
                 kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1 { root: Hash64::from_bytes(base), scopes: vec![scope] }
             };
-            let bytes = manifest.scopes[0].bytes;
+            // The signed byte cap covers the bundle plus the manifest and its provider framing (`PalwMaterialManifestV1::validate`).
+            let bytes = manifest.scopes[0].bytes + 4_096;
             let consent = self.covenant(producer, Hash64::from_bytes(base), Some(manifest), bytes).await;
             let route = self.net.api().unwrap();
             let replays: Vec<String> = (0..2u64)
@@ -321,7 +353,13 @@ impl Cw {
         for (_, enrollment) in &enrollments {
             let lock = K::PaidClaimV2 { object: PaidClaimObjectV2::Lock { enrollment: *enrollment } };
             let o = self.net.route(REGISTRANT, &lock);
+            let rehearsal = self.net.chain.ctx.consensus.palw_object_rehearsal_v1(&o);
+            eprintln!("[paid-sources] lock rehearsal: {rehearsal:?}");
             self.net.send(vec![(REGISTRANT, o)]).await;
+            assert!(
+                self.net.api().unwrap().aux.contains_key(&(PAID_CLAIM_LOCKS_V2, borsh::to_vec(enrollment).unwrap())),
+                "the lock is taken (rehearsal: {rehearsal:?})"
+            );
         }
         for (base, enrollment) in &enrollments {
             let route = self.net.api().unwrap();
@@ -344,7 +382,7 @@ impl Cw {
                     evidence_root: authority.enrollment.commit_root,
                     transcript_root: authority.enrollment.prior_transcript,
                     signer: self.net.kid(card),
-                    signed_daa: self.net.daa() + 1,
+                    signed_daa: self.net.daa(),
                     complete: true,
                     round: 0,
                     message_root: [0; 64],
@@ -352,10 +390,20 @@ impl Cw {
                 let o = self.net.route(card, &K::PaidClaimV2 { object: PaidClaimObjectV2::Receipt { receipt } });
                 items.push((card, o));
             }
-            self.net.send(items).await;
+            let rehearsals: Vec<_> = items.iter().map(|(_, o)| self.net.chain.ctx.consensus.palw_object_rehearsal_v1(o)).collect();
+            // One receipt a block (validation 2026-10-17: three in one block landed two).
+            for item in items {
+                self.net.send(vec![item]).await;
+            }
             assert!(
                 self.net.ledger().paid_claim_consumers_v2.get(base).is_some_and(|c| c.complete),
-                "the assigned quorum's receipts complete the paid claim"
+                "the assigned quorum's receipts complete the paid claim (seats {}, rehearsals {rehearsals:?}, consumer {:?})",
+                lock.seats.len(),
+                (
+                    self.net.ledger().paid_claim_consumers_v2.get(base).cloned(),
+                    self.net.api().unwrap().aux.keys().filter(|(t, _)| *t == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_RECEIPTS_V2).count(),
+                    self.net.api().unwrap().aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(enrollment).unwrap()).map(|l| l.source_valid)
+                )
             );
         }
         enrollments.into_iter().map(|(base, _)| base).collect()
