@@ -377,7 +377,8 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         // A bootstrap lock (user decision 2026-10-17, dormant): the lock row names the bootstrap anchor and holds the draw's seed;
         // the authority is re-derived from that authenticated row, never from a beacon that cannot exist yet.
         if let Some(lock) = self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
-            && lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2()
+            && (lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2()
+                || lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2())
         {
             let base = self.ledger()?.claim_challenge_subject(&a.enrollment.base_claim).ok_or("base statement missing")?;
             return PaidClaimCheckAuthorityV2::verify_bootstrap_v2(

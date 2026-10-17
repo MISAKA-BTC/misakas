@@ -89,6 +89,59 @@ pub fn collect_paid_opt_in_work_beacon_v5(
     collect_sealed_inner(ctx, &facts, tip, ITEM, MIX, initial)
 }
 
+const SEAL_SEED: &[u8] = b"MISAKA/PALW/PAID-CLAIM/SEAL-REVEAL-SEED/V6";
+
+/// **The paid lock's seal-reveal seed** (user decision 2026-10-17 on F1; dormant behind the paid-claim fence): the checker draw of a
+/// paid target is seeded by the commitments of claims SEALED AFTER the target's commitment — each source's content is fixed at its
+/// seal and opened only after the seal window closes — and the sources need NOT be Final (an approved Final is required only on the
+/// reward/credit side). `Ok(Some(seed))` once the reveal window closed with at least `work_count_k` opted-in, prepaid sources all
+/// revealed in time; `Ok(None)` before that, or for good when a mixed source withheld its reveal or forfeited (a veto: the target
+/// takes no lock and times out — it never gets a redraw).
+///
+/// **No grinding.** (1) The target commits first: every source seal is accepted at or after `commitment + anchor_delay`, so nothing
+/// the target fixed can depend on them, and the seed mixes the target's context. (2) A seal binds a salted claim commitment (content
+/// and salt fixed at seal); the salt is public only from the reveal, after the seal window closes, so no sealer knows the mix when it
+/// seals. (3) The source set is closed at the seal window's end (the prepaid inventory is checked complete, and the route refuses the
+/// target's own producer, its own base job, and mutual producer pairs as sources). (4) The only lever left is the last revealer's
+/// abort: withholding vetoes the whole attempt (deposit forfeited), it never selects among outcomes, so a coalition can deny a lock but
+/// cannot choose the checkers. Honest-fraction premise: at least one source in the mix is honest (unknown to the others at seal).
+pub fn collect_paid_seal_reveal_seed_v6(
+    ctx: &BeaconContextV1,
+    contract: &PaidOptInContractV5,
+    sources: &[OptInSourceV4],
+    promises: &[PaidSourcePromiseV5],
+    tip: u64,
+) -> Result<Option<Digest>, PolicyRefusalV1> {
+    // The same complete prepaid inventory as v5 (this call also validates the policy and the fee bindings); its Final-based verdict
+    // is not read.
+    collect_paid_opt_in_work_beacon_v5(ctx, contract, sources, promises, tip)?;
+    let seal_end = crate::sealed::seal_window_end_v3(ctx);
+    let reveal_end = crate::sealed::reveal_window_end_v3(ctx);
+    if tip < reveal_end {
+        return Ok(None);
+    }
+    let mut mixed: Vec<(Digest, u64, Digest)> = Vec::new();
+    for s in sources.iter().filter(|s| s.context_id == contract.source.context_id && s.opted_in_position <= tip) {
+        if s.source.seal_position < ctx.commitment_position.saturating_add(ctx.policy.anchor_delay_slots)
+            || s.source.seal_position >= seal_end
+        {
+            continue;
+        }
+        if s.forfeited_position.is_some_and(|at| at <= tip) {
+            return Ok(None);
+        }
+        let Some(reveal) = s.source.reveal.as_ref().filter(|r| r.reveal_position < reveal_end) else {
+            return Ok(None);
+        };
+        mixed.push((s.source.seal, s.source.seal_position, reveal.salt));
+    }
+    if (mixed.len() as u32) < ctx.policy.work_count_k {
+        return Ok(None);
+    }
+    mixed.sort();
+    Ok(Some(object_id(SEAL_SEED, &(ctx.id(), contract, &mixed))))
+}
+
 pub fn verify_paid_opt_in_work_beacon_v5(
     ctx: &BeaconContextV1,
     contract: &PaidOptInContractV5,

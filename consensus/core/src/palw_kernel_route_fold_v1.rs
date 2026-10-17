@@ -1666,8 +1666,16 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         }
         OpvGateV1::Pass => {}
     }
+    // User decision 2026-10-17 (F2): a paid-enrolled job MAY be a beacon source — an approved paid claim is the one source of an event,
+    // and the paid lock reads only its sources' sealed commitments. The acyclicity rules below still refuse a target's own producer
+    // and base job and mutual producer pairs. Below the paid-claim challenge's bootstrap policy (`bootstrap_seed` `None`, the probe and
+    // every preset) the earlier exclusion holds byte for byte.
     if let KernelRouteObjectV1::OptInBeaconSource { job, .. } | KernelRouteObjectV1::OptInPaidBeaconSource { job, .. } = object {
-        if builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_job_is_enrolled_v3(job).unwrap_or(true)) {
+        let sources_admit_paid =
+            builder.params.palw_claim_challenge_v2.is_some_and(|f| f.activation.is_active(ctx.daa_score) && f.policy.bootstrap_seed.is_some());
+        if !sources_admit_paid
+            && builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_job_is_enrolled_v3(job).unwrap_or(true))
+        {
             return Err(refused("paid checker-enrolled jobs cannot be Panel-independent beacon sources"));
         }
     }

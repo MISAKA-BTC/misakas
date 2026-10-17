@@ -334,6 +334,12 @@ pub struct PaidClaimCheckAuthorityV2 {
 pub fn paid_claim_bootstrap_anchor_v2() -> Digest {
     object_id(b"MISAKA/PALW/PAID-CLAIM-BOOTSTRAP-ANCHOR/V2", &())
 }
+/// **The seal-reveal lock's marker anchor** (user decision 2026-10-17 on F1, dormant): a paid lock seeded by the commitments of claims
+/// sealed after the target (`misaka_palw_challenge::paid_opt_in::collect_paid_seal_reveal_seed_v6`) carries this anchor; readers
+/// re-derive the authority from the lock row, as for a bootstrap lock.
+pub fn paid_claim_seal_anchor_v2() -> Digest {
+    object_id(b"MISAKA/PALW/PAID-CLAIM-SEAL-REVEAL-ANCHOR/V2", &())
+}
 /// **The bootstrap checker-draw seed** of one paid claim: the network's pinned bootstrap seed (genesis / annual-fork params), bound
 /// to the claim's beacon context and its signed statement. PREDICTABLE by construction — anyone can compute the draw before the
 /// claim commits; that is why the window ends at the first approved paid Final and its claims earn the reduced reward.

@@ -225,3 +225,17 @@ caused by it, not investigated.
 
 For the 29 `Cw` tests (conformance, c4r4, exec_slices) the remaining work is (F3c) plus the paid-source switch; for the EXEC and
 native-Final assertions (F1) must be decided first; for the 7 opt-in tests (F2).
+
+### 5. User decision 10-17 on F1/F2 (implemented, dormant; type-checked, not yet run)
+
+* **F1 — lock randomness from later seals.** With `bootstrap_seed` set (the same dormant policy), a paid lock is seeded by
+  `misaka_palw_challenge::paid_opt_in::collect_paid_seal_reveal_seed_v6`: the commitments of the opted-in, prepaid sources sealed
+  after the target's commitment, mixed once every one revealed inside the reveal window; sources need NOT be Final. Lock anchor
+  `paid_claim_seal_anchor_v2`; readers re-derive from the row. The fixed seed remains only for a lock with no seal-reveal seed while no
+  approved paid Final exists. An approved Final is still required on the credit side (selected approval reads the canonical paid
+  Final row). No-grinding argument (in the function's doc): the target commits before every source seal; a seal fixes content and
+  salt, opened only after the seal window; the source set closes at the seal window and excludes the target's producer, its base job
+  and mutual pairs; the only remaining lever, a withheld reveal, vetoes the attempt (deposit forfeited) and never selects an outcome.
+* **F2.** Under the same policy a paid-enrolled job may opt in as a source, and a live source opt-in no longer blocks a paid commit
+  (fold); the SDK pre-checks defer to the fold. With `bootstrap_seed` `None` both refusals hold byte for byte.
+* **F3** (RFC08 material manifest on the covenant) and the migration of the 37 tests: not done yet.
