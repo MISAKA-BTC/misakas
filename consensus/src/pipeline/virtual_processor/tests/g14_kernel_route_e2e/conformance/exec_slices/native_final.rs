@@ -560,6 +560,11 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             policy.max_open_claims_per_bond = 1_000;
             policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 };
             params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy });
+            // The signed covenant policy's window is the physical monetary window (`palw_monetary_material_fold_v1::policy`):
+            // the paid-source arming of the world follows this test's W.
+            if let Some(material) = params.palw_monetary_material_v1.as_mut() {
+                material.policy.window_daa = W;
+            }
             params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
             params.palw_material_income_v3 = Some(ForkActivation::new(1));
             params.sync_palw_bond_budget_v1();

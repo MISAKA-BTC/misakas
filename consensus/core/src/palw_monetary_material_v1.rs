@@ -433,9 +433,18 @@ impl PalwChainStateV2 {
         {
             return Ok(());
         }
-        let row = self.monetary_material_row_v1(root).ok_or_else(|| {
-            crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("new paid material has no explicit signed monetary covenant".into())
-        })?;
+        // A native PAV3 claim's covenant is its prior signed session, bound to the claim at acceptance (`native_binding`) and keyed
+        // by the session root — the claim id cannot exist before the attempt is mined. Read it exactly as
+        // `require_native_monetary_material_scope_v1` does (validation 2026-10-17: the root-only lookup refused every PAV3 claim's
+        // own budget commit).
+        let row = self
+            .monetary_material_row_v1(root)
+            .or_else(|| {
+                self.monetary_material_rows_v1().into_iter().find(|r| r.native_binding.as_ref().is_some_and(|b| b.claim == root))
+            })
+            .ok_or_else(|| {
+                crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("new paid material has no explicit signed monetary covenant".into())
+            })?;
         if row.terms.policy != policy.id()
             || (!row.root_seen && accepted_daa > row.terms.enrollment_until_daa)
             || dependencies.is_some_and(|ids| ids != row.terms.dependencies.as_slice())
