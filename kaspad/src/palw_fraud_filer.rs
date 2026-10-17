@@ -641,6 +641,10 @@ pub(super) struct PalwFraudFilerCaseV1 {
     awaiting_public: Option<(PalwLegacyProbeV1, u64)>,
     /// The last item sent, when, and how many times.
     pub(super) sent: Option<(PalwFraudFilerSentV1, u64, u8)>,
+    /// **G14 (G-D02b): the court round of this case's last item the priority lane reported carried, and when.** The engine reads the
+    /// chain, so if it asks for the very item again after it was carried, the carrying block left the selected chain (a reorg — e.g.
+    /// the nodes mining apart across a fork-id switch) and the item is resent at once, without spending its retry budget.
+    pub(super) carried: Option<(u32, u64)>,
     /// Reporter-door handoffs of the claim's direct proof, bounded like the replay lane's.
     direct_handed: u8,
     direct_asked_at: Option<u64>,
@@ -697,6 +701,7 @@ impl PalwFraudFilerCaseV1 {
             release_pending: false,
             awaiting_public: None,
             sent: None,
+            carried: None,
             direct_handed: 0,
             direct_asked_at: None,
             tir: None,
@@ -1134,6 +1139,9 @@ impl PalwFraudFilerCaseV1 {
 
     /// May `item` be sent now? A different item always; the same item has a bounded retry interval and count.
     fn may_send(&self, item: PalwFraudFilerSentV1, now_daa: u64) -> Result<bool, ()> {
+        if self.reorged_out_v1(item) {
+            return Ok(true);
+        }
         match self.sent {
             Some((last, at, sends)) if last == item => {
                 if now_daa.saturating_sub(at) < PALW_FRAUD_FILER_RESEND_DAA_V1 {
@@ -1148,11 +1156,22 @@ impl PalwFraudFilerCaseV1 {
         }
     }
 
+    /// The item was carried after it was last sent and the engine asks for it again: the carrying block was reorged out.
+    fn reorged_out_v1(&self, item: PalwFraudFilerSentV1) -> bool {
+        matches!((self.sent, self.carried), (Some((last, sent_at, _)), Some((round, carried_at)))
+            if last == item && round == palw_fraud_filer_item_round_v1(item) && carried_at >= sent_at)
+    }
+
     fn note_sent(&mut self, item: PalwFraudFilerSentV1, now_daa: u64) {
+        let reorged = self.reorged_out_v1(item);
         let sends = match self.sent {
+            _ if reorged => 1,
             Some((last, _, sends)) if last == item => sends.saturating_add(1),
             _ => 1,
         };
+        if reorged {
+            self.carried = None;
+        }
         self.sent = Some((item, now_daa, sends));
     }
 }
@@ -2532,6 +2551,44 @@ pub(super) fn palw_fraud_filer_public_filing_with_budget_v3(
     Ok(Some(filing))
 }
 
+/// The court round a filer item rides (`court_due` / `court_moved` key).
+pub(super) fn palw_fraud_filer_item_round_v1(item: PalwFraudFilerSentV1) -> u32 {
+    match item {
+        PalwFraudFilerSentV1::Reserve => PALW_FRAUD_FILER_RESERVE_ROUND_V1,
+        PalwFraudFilerSentV1::Release => PALW_FRAUD_FILER_RELEASE_ROUND_V1,
+        PalwFraudFilerSentV1::Demand(_) | PalwFraudFilerSentV1::Reacquire { .. } => PALW_FRAUD_FILER_DEMAND_ROUND_V1,
+        PalwFraudFilerSentV1::Terminal { .. } => PALW_FRAUD_FILER_TERMINAL_ROUND_V2,
+    }
+}
+
+#[cfg(test)]
+mod g_d02b_tests {
+    use super::*;
+
+    /// G-D02b: an item carried and then asked for again (its block reorged out) is resent at once and does not spend the retry
+    /// budget; an item never carried keeps the normal spacing and budget.
+    #[test]
+    fn a_reorged_out_item_is_resent_at_once_without_spending_its_budget() {
+        let mut case = PalwFraudFilerCaseV1::new(super::tests::candidate_for_input_test());
+        let item = PalwFraudFilerSentV1::Reserve;
+        assert_eq!(case.may_send(item, 10), Ok(true));
+        case.note_sent(item, 10);
+        assert_eq!(case.may_send(item, 11), Ok(false), "spacing before any carriage");
+        case.carried = Some((palw_fraud_filer_item_round_v1(item), 12));
+        assert_eq!(case.may_send(item, 13), Ok(true), "carried, then asked again: reorged out, resend at once");
+        case.note_sent(item, 13);
+        assert_eq!(case.sent.map(|s| s.2), Some(1), "the reorged resend does not spend the retry budget");
+        assert_eq!(case.carried, None);
+        assert_eq!(case.may_send(item, 14), Ok(false), "normal spacing again");
+        for _ in 0..PALW_FRAUD_FILER_SENDS_V1 {
+            case.note_sent(item, 14);
+        }
+        assert_eq!(case.may_send(item, 14 + PALW_FRAUD_FILER_RESEND_DAA_V1), Err(()), "the budget still bounds plain retries");
+        case.carried = Some((PALW_FRAUD_FILER_DEMAND_ROUND_V1, 20));
+        assert!(!case.reorged_out_v1(item), "another round's carriage says nothing about this item");
+    }
+}
+
 pub(super) fn palw_fraud_filer_sign_terminal_v2(
     object: PalwConsensusObjectV2,
     domain: &Hash64,
@@ -2673,13 +2730,20 @@ impl PalwPanelService {
     ) {
         // What the priority lane carried of this filer's items since the last tick, said and forgotten here: the filer keeps its own
         // spacing (`sent`), never `court_moved`'s debounce.
+        let mut carried = Vec::new();
         court_moved.retain(|(claim, round, responder), at| {
             if !palw_fraud_filer_queued_v1(*round, *responder) {
                 return true;
             }
             info!("[{PALW_PANEL}] claim {claim}: the fraud filer's item (round {round}) was carried at DAA {at} (LG14-A)");
+            carried.push((*claim, *round, *at));
             false
         });
+        for (claim, round, at) in carried {
+            if let Some(case) = book.cases.get_mut(&claim) {
+                case.carried = Some((round, at));
+            }
+        }
         let params = &self.consensus_config.params;
         if !(params.palw_legacy_public_filer_active_at(current_daa) && self.config.fee_outpoint.is_some()) {
             if book.running.as_ref().is_some_and(|replay| replay.handle.is_finished()) {
@@ -6668,12 +6732,12 @@ impl PalwPanelService {
         }
         match build() {
             Ok(object) => {
-                let round = match item {
-                    PalwFraudFilerSentV1::Reserve => PALW_FRAUD_FILER_RESERVE_ROUND_V1,
-                    PalwFraudFilerSentV1::Release => PALW_FRAUD_FILER_RELEASE_ROUND_V1,
-                    PalwFraudFilerSentV1::Demand(_) | PalwFraudFilerSentV1::Reacquire { .. } => PALW_FRAUD_FILER_DEMAND_ROUND_V1,
-                    PalwFraudFilerSentV1::Terminal { .. } => PALW_FRAUD_FILER_TERMINAL_ROUND_V2,
-                };
+                let round = palw_fraud_filer_item_round_v1(item);
+                if case.reorged_out_v1(item) {
+                    warn!(
+                        "[{PALW_PANEL}] claim {claim}: the fraud filer's {item:?} was carried but is no longer on the selected chain (reorg) — resending (G14 G-D02b)"
+                    );
+                }
                 info!("[{PALW_PANEL}] claim {claim}: the fraud filer queues {item:?} (LG14-A, RFC-0014 §6–§7)");
                 court_due.insert((claim, round, false), current_daa);
                 court_pending.push((claim, round, false, object));
