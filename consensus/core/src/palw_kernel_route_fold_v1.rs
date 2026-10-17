@@ -636,6 +636,76 @@ fn opv_gate_v1(
     }
 }
 
+/// **The detection policy at the kernel route's claim door** (`palw_detection_policy_v1`, lane g14-court-capacity-r2; g14-detection-
+/// policy §10 item 2): past the fence a kernel claim commit is DROPPED (nothing written, as `opv_gate_v1` drops an ineligible class's
+/// claim: no claim, no reward, weight or consensus credit) when its class has no armed policy, or — for a plain single-program claim,
+/// whose interval count the chain reads off the job and the delivered tokens — when the policy refuses it (collateral below the
+/// deterrence bound, a draw its declared resources cannot carry). `false` below the fence and for
+/// every other object. Pipeline, segmented and typed claims are gated on the policy's existence only (their counts are not the
+/// plain stream's; named in §11).
+fn detection_drops_kernel_claim_v1(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    ledger: &KernelLedgerV1,
+    object: &KernelRouteObjectV1,
+) -> bool {
+    use crate::palw_detection_policy_v1::{PalwDetectionClaimFactsV1, PalwDetectionRegimeV1, palw_detection_regime_v1};
+    use misaka_palw_kernel::route::SaltedCommitV1 as C;
+    let Some(fence) = builder.params.detection_policy_v1() else { return false };
+    // (class, Some(plain claim)) for every claim commit kind.
+    let (class, plain) = match object {
+        KernelRouteObjectV1::CommitClaim { claim, .. } | KernelRouteObjectV1::CommitClaimSalted { commit: C::Claim { claim, .. }, .. } => {
+            match ledger.jobs.get(&claim.job_id) {
+                Some(job) => (job.class_binding_id, Some((claim, job))),
+                None => return false, // an unknown job: the kernel refuses the claim by its own rule
+            }
+        }
+        KernelRouteObjectV1::CommitPipelineClaim { claim, .. }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Pipeline { claim, .. }, .. } => {
+            match ledger.pipeline_jobs.get(&claim.job_id) {
+                Some(job) => (job.class_binding_id, None),
+                None => return false,
+            }
+        }
+        KernelRouteObjectV1::CommitSegmentedClaim { claim, .. }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Segmented { claim, .. }, .. } => {
+            match ledger.tiled_jobs.get(&claim.job_id) {
+                Some(job) => (job.job.class_binding_id, None),
+                None => return false,
+            }
+        }
+        _ => return false,
+    };
+    let class_id = Hash64::from_bytes(class);
+    match palw_detection_regime_v1(Some(fence), &class_id, 0, ctx.daa_score) {
+        PalwDetectionRegimeV1::LegacyV1 => false,
+        PalwDetectionRegimeV1::NoPolicy => true,
+        PalwDetectionRegimeV1::Policy(_) => {
+            let Some((claim, job)) = plain else { return false };
+            let positions = (job.prompt.len() as u64 + claim.generated.len() as u64).saturating_sub(1);
+            let facts = PalwDetectionClaimFactsV1 {
+                attempt_lane: false,
+                work_leaves: positions,
+                context_priced_leaves: Some(positions),
+                prompt_tokens: u32::try_from(job.prompt.len()).unwrap_or(u32::MAX),
+                decode_tokens_executed: u32::try_from(claim.generated.len()).unwrap_or(u32::MAX),
+                collateral_sompi: u128::from(ledger.policy.claim_collateral),
+            };
+            crate::palw_detection_policy_v1::palw_detection_claim_refusal_with_budget_v1(
+                builder.params,
+                &class_id,
+                ctx.daa_score,
+                &facts,
+                // The kernel route adjudicates in its own ledger court (scope, demand windows, horizons), not through the V2
+                // route's reservations, so the policy's declared court/DA needs stand here (`palw_court_claim_budget_v1` is the V2
+                // route's reservation).
+                None,
+            )
+            .is_some()
+        }
+    }
+}
+
 /// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them. The ledger is then
 /// cached on the route state (GAP 8) as the rows' own ledger, so the next object of the chain loads it without rebuilding it.
 pub(super) fn flush(
@@ -1655,6 +1725,10 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         return Ok(());
     }
     let before = loaded_rows(builder, &ledger)?;
+    // Lane g14-court-capacity-r2: the detection policy's claim door (dormant `palw_detection_policy_v1`).
+    if detection_drops_kernel_claim_v1(builder, ctx, &ledger, object) {
+        return Ok(());
+    }
     match opv_gate_v1(builder, ctx, &ledger, object) {
         OpvGateV1::Drop => return Ok(()),
         OpvGateV1::Admit(classes) => {

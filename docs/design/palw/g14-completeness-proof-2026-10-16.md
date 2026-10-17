@@ -1338,3 +1338,269 @@ door は `collect_until − accepted`、horizon は testnet-12 の fence 16,000 
   4. 正直な seat の grant+Ready、owner、filer を service loop で回すこと
 
   fold 水準の T-N1(§10.4)は、2〜4 の consensus 側を production transition で通している。
+## 付録 E. 追記 — court 容量と Panel 担保の lane(2026-10-16、branch `integ/g14-court-capacity`)
+
+ユーザー方針([リリース計画](t12-daa14000-release-plan-2026-10-15.md)「court の全体容量と Panel 担保」)の実装。新しい fence は `palw_court_capacity_v1` の 1 つだけで、全 preset で `None`。testnet-12 の identity は変わらない。
+
+### E.1 court 容量(G-07)
+
+- **fence と記録。** `palw_court_capacity_v1`(`consensus/core/src/palw_court_capacity_v1.rs`)。policy は測定記録 `PalwCourtMeasurementV1` から決定的に導出する(最も安い class の時間を 1 work unit とする)。
+  - 武装の条件:LG14-A が同じ高さ以下、arm-readiness record(`PalwG14GatedFenceV1::CourtCapacityV1`)、その measured-values evidence が測定記録の digest であること。
+  - placeholder policy(今日の 1 block 1 court 操作、ρ = 0)では、実ネットワークは武装できない。
+- **admission。** court session を開くには次の 3 つを要する。
+  - challenger 自身の live な LG14-A reservation(claim 固有の hard deadline と Final 保留)
+  - Active で floor 以上の bond
+  - 占有 escrow `ρ × (ticket 窓 + 最大 session) × weight`(A-6 の free half に置く)
+- **block 予算。** 決定論的な cost unit(work・証拠 byte・working set)で数え、実行時の CPU 時間は使わない。
+  - 課金の対象:one-move の告発と `CourtOpened` は variant で、dissection move・分割 close の完成 chunk・terminal 証拠 part は既存の slot 規則の述語で判定する。slot 規則が数えていた work は、fence 以後も 1 つも無料にならない。
+  - 完成 chunk は、組み立てる close 全体の byte で課金する。
+  - 受理側(`palw_accept.rs`)が落とし、fold は第 2 の鍵として拒否する。
+- **時間料金。** 料金は `ρ × 占有 DAA × weight` で、admission 時に固定する。
+  - 精算は終了時の実占有分だけで、escrow の残りは返す。
+  - conviction・DA default の場合は、被告(producer)の担保から先に払う。正直な告発者の負担は 0。
+- **スケジューラ。** 待機中の entry がある間は、空き枠でも直接 open しない。
+  - 空いた容量は、block の先頭(どの object よりも前)で、claim の hard deadline が早い順に ticket として与える。
+  - 新しい entry は、最悪ケース計算(占有者は全員 backstop まで、前の entry は ticket + 最大 session)で、自分と既存の全 entry が期限内に裁定へ届く場合に限って受ける。
+- **option (b)。** WIP の方式を採った。family `LegacyFusedLeaf` は、`LegacyPanelAttempt` の条件に `palw_court_capacity_v1` の in force を加えたもの。
+  - `fused_attention` の class の V2 Attempt は、court 容量の fence までは報酬なし(`palw_g14_route_attempt_refusal_for_class_v1`)。
+  - 非 fused の class は、LG14-A と LG14-B だけで経路ありと数える(one-move で裁定でき、court 枠を使わないため)。
+- **残る限界(安全側の扱いは未実装)。**
+  1. 資金のある連合が、正直な追及が来る**前に**、待機列を claim の期限まで予約で埋められる。この場合、後から来た正直な追及は「保証なし」として admission で拒否される。待機中になった追及は守られるが、到着前の先取りを抑えるのは ρ の価格だけである。方針にある「新規の報酬対象 claim の受理量を制限する」は、まだ実装していない。
+  2. 同じ claim に多数の bond が decoy の予約を置ける。各 decoy は枠と料金を消費するが、数を制限するものは料金しかない。
+  3. one-move の告発は、session の move と同じ block 予算を使う。容量は「予算はすべて move に使える」と仮定して導出している。
+  4. miner による block 内の順序・検閲は、範囲外である。
+
+  このため、fused 経路は、drill の記録(V3 飽和・継続的な埋め直し)と上の 1 の扱いが揃うまで、「解決済み」としない。
+
+### E.2 Panel 担保(G-13 の効率)
+
+- `palw_panel_liability_v1.rs`:同じ bond の担保を `L_active` / `L_resolved` / accuser / V02 reserve に分けて読み、`R_new = max(0, min(C_work − L_active, C_total − L_active − L_resolved − R_other))` を計算する。
+  - fold の work room は、常に `R_new(accuser + reserve)` 以上、`R_new(accuser)` 以下である。二重の担保にはならない。
+- **規則の追加は 1 つ。** live な LG14-A reservation がある終端 claim の lock は Active に数える(`palw_claim_under_dispute_v1`)。
+  - LG14-A より前は `legacy_disputes` が空なので、t12 の V02 の分割は byte 単位で同じになる。
+- **validation。** LG14-A と `palw_final_lock_life` が両方ある場合、`palw_final_lock_full_collateral` を両者の遅い方の高さ以下で要する。
+- **測定**(fold、t12 の launch ruleset、floor claim)。
+  - floor claim 1 件:eligibility 640.17 MSK、Valid seat あたりの lock 160.09 MSK、bind → Final 122 DAA。
+  - 担保 × ロック時間(claim 1 件・seat 1 席あたり):旧 179,456 MSK·DAA、新 499,627 MSK·DAA(×2.78)。
+  - 定常で 1 席が支えられる claim 率(per DAA)。期待値は 1 席あたり、健全時 0.333(0.6 claims/DAA × 5/9)、10-01 のピーク時 2.944。
+
+    | 規則 | genesis 席(939,063 MSK) | Panel floor 席(130,000 MSK) | 健全時に必要な最小担保 | ピーク時に必要な最小担保 |
+    |---|---|---|---|---|
+    | 旧(V02:F + 1,000、分割あり) | 3.724 | 0.327 | 131,395 MSK | 753,326 MSK |
+    | 新(F + window_court、分割あり) | 1.589 | 0.140 | 238,119 MSK | 1,696,051 MSK |
+    | 反実仮想(分割なし、validation で拒否) | 0.841 | 0.116 | 372,238 MSK | 3,288,102 MSK |
+
+  - 実 fold の stream(3 DAA ごとに 1 件、6,000 DAA)で受理できた件数:
+
+    | 規則 | genesis 席 | Panel floor 席 |
+    |---|---|---|
+    | 旧 | 2000/2000 | 1946/2000 |
+    | 新 | 2000/2000 | 959/2000 |
+    | 反実仮想 | 2000/2000 | 802/2000 |
+
+  - **結論。**
+    - 健全時の率は、genesis 席なら新規則でも 4.8 倍の余裕で支えられる。
+    - 10-01 のピークは、新規則では genesis 席の 0.54 倍しかない。genesis bond 8 本のうち、ピーク率を支えられるものは 0 本である。
+    - Panel floor の席は、新規則では健全時の率にも届かない(0.42 倍)。
+    - 分割(Resolved を業務枠から外す)による処理量は、分割なしと比べて genesis 席で 1.9 倍、Panel floor 席で 1.2 倍になる。
+- **late conviction。** F + 2,000(責任期間 F + 3,000 の内側。その前に anchor を 30 件 settle 済み)で、新規則は Valid の 5 席それぞれから 160.09 MSK を全額 slash した。旧規則は 0 だった。
+
+### E.3 実行した試験(この branch)
+
+- `cargo test -p kaspa-consensus-core --test g13_panel_liability`:**5 passed**(validation、late conviction、Active + Resolved ≤ C と同時の 4 件の詐欺、資本効率、restart/reorg)。追加した `a_live_reservation_keeps_a_final_claims_locks_active` も **1 passed**。
+- `cargo test -p kaspa-consensus-core --test g14_court_capacity`:**10 passed、1 ignored**(timing harness)。
+  - 内訳:arming、飽和と継続的な埋め直し、期限の早い entry の洪水、scheduler、fence なしで 43 番目が拒否されること、bond 分割、最大負荷の予算、restart/reorg、fused 経路、t12 identity。
+  - 飽和の試験:連合が 42 枠を DAA 1,018 で占有し、最初の backstop は 4,018。正直な追及は 1,078 に ticket を得て、1,138 に裁定(hard deadline は 998,799)。
+  - bond 分割:4 session の料金は、1 bond でも 4 bond でも 504,000,000 sompi(session あたり 126,000,000)。
+- timing harness(`--ignored`、macOS aarch64 debug。**測定記録ではない**):
+  - held opening(`ShardCourtAccused`、10,218 B):fold 33–136 µs/op。
+  - 42 件の opening を入れた block:2.15–4.51 ms。
+  - 42 session の default sweep:0.68–0.73 ms(空の block は約 0.63 ms)。
+  - 部分記録の policy は、未測定の class があるため拒否される。
+- 実行していない:workspace 全体、clippy、release build での測定。
+
+## 11. 追補: P0 容量 — court 共有枠の飽和(G-07)と TIR owner 枠(2026-10-17、branch `integ/g14-court-capacity-r2`)
+
+外部監査(`g14-external-audit-2026-10-17/rfc1_20_audit_ja.md` §6.1・§6.2・§7 P0(1)(2)・§8 C)と付録 E.1 の残る限界 1〜3 への対応。本文と付録 A〜E は書き換えない。
+
+- 新しい規則はすべて既存の休眠 fence `palw_court_capacity_v1` の下にある(全 preset で `None`、記録は binary に pin されていない)。
+- testnet-12 の ids は変わらない(`testnet12_identity_did_not_move`:launch `b8564b88…` / `5de80e64…` / `93da24cc…`、shipped `5ee7fd8e…` / `5de80e64…` / `1678e073…`)。
+- 状態は「実装済み・fold 試験が通った」。測定記録・fence をまたぐ drill・node E2E の再実行は未実施で、armable ではない。
+
+### 11.1 court 容量 round 2(E.1 の限界 1〜3)
+
+| 限界 | 処置(code) | 試験 |
+|---|---|---|
+| 3. one-move の告発が session の move と同じ予算を使う | policy に `one_move_budget` を追加(測定記録の `block_one_move_ns` / `block_one_move_bytes` から導出)。one-move class はこの予算だけ、session の操作は `block_budget` だけを使う。容量は session class の work だけから導出する。受理側(`palw_accept.rs`)も同じ 2 本の累計で落とす | `g07r2_one_move_accusations_have_their_own_budget` |
+| 1. 正直な追及の到着前に、連合が待機列を期限まで埋める | **reserve pool。** 容量の `reserve_permille` を、court-demanding claim(fence 以後に受理された fused-attention の V2 Attempt)の最初の court row 専用にする。claim ごとに一生で 1 回(`PalwDisputeClaimV1::court_reserve_used`)。reserve row は容量を理由に拒否されず、空いていれば開き、そうでなければ reserve の列(期限の早い順)に並ぶ。<br>**bounded admission。** 幅 W = ticket window + court window の hard-deadline bucket ごとに、in-flight の court-demanding claim を M = ⌊reserve 枠 / 2⌋ 件までしか受理しない。超える attempt は `CourtClaimAdmissionFull` で skip される(claim なし・報酬なし、block は有効)。producer の事前確認は `palw_court_claim_admission_v1`。<br>**spare 側。** それ以外の row は spare pool に入る(round 1 の保証つき scheduler)。保証が成り立たなければ拒否ではなく best-effort で受理し、保証つきの全 entry の後ろで ticket を与える | `g07r2_a_late_honest_reserve_row_is_never_refused_and_convicts`、`g07r2_the_reserve_bound_serves_every_first_row_by_its_deadline`、round 1 の 3 試験(spare pool に移した) |
+| 2. 1 つの claim に多数の decoy 予約 | **価格。** 同じ claim の j 番目の同時 court row は、escrow と料金が j 倍になる。conviction 時は従来どおり producer の担保から先に払い戻す | `g07r2_a_late_honest_reserve_row_…` 内の assert(row 2・6・35 が base の 2・6・35 倍) |
+| (安全側の締め) 処理されなかった追及 | **unserved = unpaid。** lapse の時点で、live reservation の court row がまだ待機中(queued または ticket)であり、その row が hard deadline の 1 service window(ticket + session)以上前に受理されていた場合、pre-Final の claim は `PanelUnavailable` で void になる。報酬・weight・credit なし、slash なし、deposit と escrow は返す。1 window より後に出された row は対象外で、griefing に使えない | `g07r2_an_unserved_prosecution_means_the_claim_earns_nothing` |
+
+**保証の主張と、その根拠。**
+- reserve row について。
+  - 前提:bucket ごとに M = C_res/2 件以下、各 row の service は W 以下、非 preemptive、EDF、row は `hard − 4W` までに出される。
+  - 主張:どの row も `hard` までに裁定に届く。
+  - 需要と供給:幅 x の窓に期限を持つ claim は M·(⌈x/W⌉+1) 件以下で、供給は C_res·(x − W)/W 以上。x ≥ 4W − L、L = 4W で成り立つ。
+  - 連合が他の claim の上で何を占有・予約・補充していても、reserve の枠には届かない(spare 側で起きることは reserve に影響しない)。
+  - 試験:離散事象 simulation(C = 2 / 7 / 21 / 64、bucket 境界をまたぐ配置など 3 パターン)で遅延 0。最悪で `hard − 3W` に完了した(lead 4W のうち 1W しか使っていない)。負荷を 4M に増やすと遅延が出ることも確認し、simulation が失敗を検出できることを示した。
+  - これは simulation による確認で、形式証明ではない。
+- spare row について。
+  - 拒否されない。
+  - 保証つきの row は round 1 の最悪ケース会計で守られる。best-effort の row は守られない。
+  - best-effort の row が 1 window 以上前に出され、それでも処理されないまま lapse に達した場合、その claim は報酬を得ない。
+
+**fold 試験の数値(TEST policy。測定値ではない)。**
+- 容量:42 枠(reserve 21 / spare 21)、W = 3,042 DAA、M = 10、L = 12,168。
+- 8k 行の in-flight 上限 5 のため、late-honest の試験では 200 ‰(reserve 8、spare 34、M = 4)を使った。
+- late-honest の試験:
+  - 連合は bucket を埋め、5 件目の attempt は skip された。別 bucket の attempt は受理された。
+  - 連合は reserve 3 件と spare 34 件を占有し、68 件を事前に積み、30 block の間、継続的に補充した。
+  - 正直な outsider は DAA 1,055 に到着し、reserve row として即時に開いた。DAA 1,114 に conviction(hard deadline は 998,799)。正直な追及者の収支は 0 で、producer は slash された。
+- spare pool(round 1 の試験を移したもの):
+  - 飽和:DAA 1,100 に 21 枠が飽和し、正直な追及は 1,160 に ticket を得て、1,220 に裁定。
+  - flood:20 件が先行し、21 件目は best-effort で受理された(拒否されない)。正直な追及は保証を保ち、1,160 に ticket、1,220 に裁定。
+- 料金:session あたり 126,000,000 sompi(bond 分割の試験は不変)。
+
+**reward の liveness(利用者の判断に関わる数値)。**
+- bounded admission により、court-demanding claim の持続的な受理率は λ ≤ M / W = p·n·turn / (2W) に抑えられる。p = reserve 割合、n = block あたりの session 操作数、turn = 42。
+- TEST / placeholder 相当(n = 1、p = 0.5):λ ≤ 0.0033 claims/DAA。これは健全時の 0.6 claims/DAA の 1/182。
+- 健全時の 0.6 を fused class だけで受けるには n ≥ 174 session 操作/block(p = 0.5)が要る。
+  - dissection move 1 回を node E2E の one-move と同じ 213 µs(開発機・debug)と仮定すると、block あたり約 37 ms。
+  - **session 操作の class は未測定**であり、測定記録がない限り武装できない。
+- 安全側には影響しない。足りない間に止まるのは新規の fused claim の報酬だけ。
+
+### 11.2 TIR owner 枠(K_owner = 8、監査 §6.2)
+
+- **変更した関数。** owner admission に限る(frame pricing・clock には触れていない)。
+  - `palw_tir_public_fold_v1.rs`:`open_v1`、`reclaim_owner_slot_v1`、`apply_verified_control_v1` の Acquisition arm(待機中の row の Demand / Reacquire を拒否)、新規 `tir_owner_fair_start_v1`。
+  - `palw_staged_court_fold_v1.rs`:新規 `staged_tir_owner_queue_v1`、`staged_tir_owner_admitted_v1`、`staged_tir_idle_admitted_owners_v1`。
+  - `palw_tir_public_owned_v1.rs`:新規 `retire_admitted_idle_v1`、`stamp_release_v1`。
+- **規則(fence 以後)。**
+  - K_owner に達していても Open は拒否されない。claim の owner queue に到着順 `(reserved_daa, key)` で並ぶ。claim が 1 つなら door も 1 つなので、到着順は期限順と同じ。
+  - 先頭の K_owner 件だけが demand できる。待機中の row は custodian に負荷をかけない。
+  - 前の row が枠を手放すと、その順に admit される。手放す契機は、turn を使い切ること、または admit 済みの idle row が reclaim されること(deposit は burn)。
+  - idle は、自分の最後の進捗と admit された時刻のうち遅い方から数える。待っていた時間は idle に数えない。reclaim は release として記録される。
+  - **tenure。** 待機中の row がある間、admit 済みの row が枠を保てるのは admit から tenure = max(idle grace, open window / (2·K_owner)) DAA まで。それを過ぎた row は枠を譲る(retire。active だったので deposit は没収しない。取得済みの資料は horizon まで root に残り、conviction に枠は要らない)。
+    - 理由:fixture では maximum_turns が 1,625 で、open window(4,096 DAA)を超える。active を保つ owner は、turn を使い切るまで枠を手放さない。到着順の列だけでは open window 内の開始を保証できなかった。
+    - 列の回転は、Open と、待機中の row の Demand の時点で行う。
+  - 保証:q 件が前にいる verifier は、Open から ⌈(q + 1) / K_owner⌉ tenure 以内に admit される。
+  - 同時の custodian 負荷は K_owner のまま。後から出た Open が先に始まることはない。
+- **公開資料からの直接の告発。** TIR の conviction(`T::Conviction`)は、もともと owner 枠を要しない(`conviction_filer_v1`:責任のない Active で floor 以上の bond なら誰でもよい)。証拠をすでに持つ者は、枠がなくても告発できる。枠が要るのは、custodian から資料を取得する場合だけである。
+- **試験** `g14r2_eight_active_colluding_owners_cannot_lock_out_a_newcomer_who_convicts_in_time`:
+  - 8 本の共謀 owner が、producer の期限内の回答で active を保つ(idle reclaim は起きない)。
+  - 正直な newcomer の Open は fence 未満では拒否、fence 以後は待機になる。待機中の Demand は拒否される。
+  - newcomer の後に出た連合の 8 本の Open は、その後ろに並ぶ。
+  - tenure(fixture では 256 DAA)を過ぎた 8 本の共謀 owner は、deposit を没収されずに枠を譲る。列の先頭は newcomer で、後発の連合 8 本のうち最後の 1 本はまだ待機している。
+  - newcomer は偽造 leaf を demand し、認証済みの資料を得て、collection door 内に告発し `CourtFraud` で producer を slash した。
+  - 同時 demand は常に K_owner 以下だった。
+  - 数値(frame の accepted DAA からの offset):open +219,900、open_until +223,996、collect_until +17,528,156。newcomer は +219,902 に到着、+220,179 に admit(277 DAA 後)、+220,183 に conviction。open window の終わりまで 3,813 DAA の余裕。
+- **残り。**
+  - 連合が newcomer より**前に**待機列を積む場合、待ち時間は ⌈(q + 1) / 8⌉ × tenure になる。open window 1 つの中で列が回るのは 2·K_owner = 16 回なので、q ≥ 128 件(open window の先頭で到着した場合。遅く到着すればそれより少ない件数)を先に積まれると、newcomer は open window 内に始められない。抑えるのは、row ごとの rent(burn)・deposit・bond ごとの row allowance の価格だけ。
+  - tenure の値(open window / 16)が、正直な owner が局所化と取得を終えるのに足りるかは未測定(fixture では 1 回の demand に十分)。足りない場合でも、取得済みの資料は残り、再度 Open できる(列の後ろに付く)。
+  - 同じ block の中での順序と検閲は範囲外。
+  - node の owner worker(`kaspad/src/palw_tir_public_owner.rs` の `staged_tir_owner_slot_open_v1`)は、fence 以後も「枠なし」と読んで Open を控える。node 側は未対応。
+
+### 11.3 Panel floor 席の容量(付録 E.2)— 利用者の判断事項(経済値は変えていない)
+
+- 新しい lock 規則(F + window_court、分割あり)では、Panel floor 席(130,000 MSK)が支えられる claim 率は 0.140 claims/DAA。健全時に必要な 0.333 の 0.42 倍である。
+  - 健全時の率を 1 席で支えるのに必要な最小担保:238,119 MSK(floor の 1.83 倍)。
+  - 10-01 のピーク時:1,696,051 MSK(13.0 倍)。
+  - 旧規則(F + 1,000)なら健全時 131,395 MSK で足りるが、F + 1,000 より後の conviction で Valid 席を slash できない(E.2 の late-conviction 試験では、旧規則で 0、新規則で 5 席 × 160.09 MSK)。
+- 判断の選択肢(この lane では実装しない)。
+  - (a) Panel floor を ≥ 238,119 MSK に上げる(ピーク時まで支えるなら 1.70M)。
+  - (b) claim あたりの Valid lock(160.09 MSK)の式を見直す(bond 式 v2 / G-12 の値)。
+  - (c) floor 席が担える件数を健全時の率より下に抑え、残りを genesis 席に任せる(genesis 席は新規則で 1.589、4.8 倍の余裕)。
+  - (d) 責任期間 window_court を短くする(late conviction の slash 範囲が狭まる。G-13 とのトレードオフ)。
+- どれも、bond の経済値か責任期間の変更になる。
+
+### 11.4 signing scope ごとの責任(監査 §3.4 / §8 E)— 規則は変えていない
+
+| 経路(void 理由) | producer | full-mask の Valid / Pass 署名者 | partial-mask の署名者 | kernel の interim 席 | TIR custodian | 報告者 |
+|---|---|---|---|---|---|---|
+| court verdict / LG14-B one-move(`CourtFraud`) | slash(`void_and_slash_at`) | verdict では slash されない。別に kind-3 の filing(S4 = lock + action)が要る | kind-3 は site の mask 内の leaf に限る(F-1 / F-4) | — | — | `CourtVerdict` の報酬。偽の告発は告発者が slash される |
+| `CourtDefault` | `CourtFraud` と同じ扱い | なし(kind-3 が名指しで拒否) | なし | — | — | 報酬なし |
+| `CourtHeldVerdict` | `CourtFraud` と同じ扱い | なし(名指しで拒否) | なし | — | — | 報酬あり |
+| DA default(`ProducerWithholding`) | forfeit と strike | covering signer は S4(Licensed / FinalRow の段)。ただし `LegacyHeldV2` の unit では課されない | なし(`is_full` のみ) | — | — | `DaDefault` |
+| kernel route(ledger `Convicted`) | `reserved.min(collateral)` | 数えられた Pass のすべて | scope を問わない | **G-K1 で slash**(lock 行、休眠 fence `palw_probabilistic_constraints_v1` の下。T-N11 が assert) | — | 49 % |
+| RFC-0007 paid-claim trap | kernel conviction の経由 | Clean receipt の署名者(fence 以後) | — | Clean のみ | — | 記録される |
+| TIR public frame | slash | — | — | — | credited exact Valid custodian に S4。lock か exit hold がなければ refuse | `CourtVerdict` |
+
+- **監査 §3.4 の所見。**
+  - kernel の interim 席が slash されないのは、G-K1 の fence(`palw_probabilistic_constraints_v1`)が武装されていない ruleset での挙動である。
+  - 設計文書(本書 §1 I5、§4.2 G-K1、付録 C の G-K1 COVERED)は、slash すべきだとしており、code は G-K1 で実装済み(休眠)。
+  - したがって規則は変えていない。必要なのは G-K1 の fence の武装。
+- **整合しない古い記述(訂正の候補)。**
+  - `consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/c4r3.rs:128` が「interim 席は slash しない」と assert している。G-K1 の fence なしでは今も成り立つと思われるが、実行していない。
+  - `g14-completion-matrix.md:576`。
+  - `archive/0152/00-header-and-changelogs.md:240`(DA の signer flag を `false` としているが、code は `true`)。
+
+### 11.5 実行した試験(2026-10-17、この branch、targeted のみ)
+
+- `cargo test -p kaspa-consensus-core --test g14_court_capacity`:**14 passed、1 ignored**(timing harness)。
+  - round 2 の新規 4 件:`g07r2_a_late_honest_reserve_row_is_never_refused_and_convicts`、`g07r2_an_unserved_prosecution_means_the_claim_earns_nothing`、`g07r2_one_move_accusations_have_their_own_budget`、`g07r2_the_reserve_bound_serves_every_first_row_by_its_deadline`。
+  - round 1 の 10 件(飽和・flood・restart の 3 件は spare pool に移した)。
+- `cargo test -p kaspa-consensus-core --lib -- g14_tir_owner_slots g14r2_eight_active g14_an_outsider_detects g14_tir_frame_convicts_with_the_fence_at_genesis`:**4 passed**(新規 `g14r2_eight_active_colluding_owners_cannot_lock_out_a_newcomer_who_convicts_in_time` を含む)。
+- `cargo test -p kaspa-consensus-core --lib -- palw_tir_public legacy_public_filer court_capacity tir_public_owned staged_court`:**95 passed**。
+- `--test g13_panel_liability`:**6 passed**。`--test g14_close_gates`:**12 passed**。`--test lg14a_legacy_dispute_fold`:**9 passed**。`--test t12_aheld_same_leaf_decoy`:**1 passed**。
+- `--test g14_close_legacy`:**8 passed**。
+  - 付録 E の validation(LG14-A と `palw_final_lock_life` が並ぶ場合、`palw_final_lock_full_collateral` を要する)のため、2 件が失敗していた。前の round からの失敗。
+  - test fixture で full-collateral fence を同じ高さに付けて直した。
+- `cargo check -p kaspa-consensus --lib --tests`:**compile のみ成功**(acceptance walk の one-move 予算と、node E2E の `measured_court` の round 2 field。実行はしていない)。
+- 実行していない:workspace 全体、clippy、`kaspa-consensus` の lib test(node E2E の `lg14a_legacy_filer_e2e::`、kernel の `c4r3`)、kaspad。
+
+### 11.6 閉じていないもの
+
+- **測定記録。** `block_one_move_*`、session class(Opening / DissectionMove / Close)の時間・bytes・working set、`reserve_permille` の承認値は未測定である。武装は拒否されたまま。
+- **fence をまたぐ drill。** D-13(Sybil の予約・session・decoy court の先取り)、飽和と継続補充、bucket 満杯時の skip、`PanelUnavailable` の unserved void を、出荷 binary で実行していない。
+- **node E2E。** `lg14a_legacy_filer_e2e`(measured_court に round 2 の field を追加しただけ)、kaspad の owner worker、producer の事前確認(`palw_court_claim_admission_v1` を miner がまだ呼んでいない)。
+- **unserved rule の適用範囲。** Final 後の stage で予約された claim には適用しない。vesting 中の Final claim の扱いは未実装。
+- **同じ claim での decoy-first。** 連合の row が claim の reserve を取ると、正直な row は spare に回る。spare が W 以上飽和し続けた場合、結果は slash ではなく報酬なし(unserved rule)になる。連合が支払うのは C_spare · ρ · weight · W 以上の占有料。
+- **liveness の数値。** 11.1 のとおり、fused class の新規 claim の受理率は、測定された session 予算に比例する。
+
+### 11.7 追補(2026-10-17、同 branch):node 側の追随、post-Final の unserved、c4r3 の整合
+
+- **node 側(code のみ)。**
+  - TIR の owner worker(`kaspad/src/palw_tir_public_owner.rs`):
+    - fence 以後は、K_owner に達していても Open を控えない(`owner_slot_open_v1`)。
+    - 待機中の row の Demand は、fold と同じ述語 `staged_tir_owner_demand_admits_v1`(tenure は `palw_tir_owner_tenure_v1`)が admit を示すときだけ署名する。
+    - 述語が fold と一致すること(admit を示した block だけ Demand が通ること)は、core の TIR 試験が block ごとに assert している。
+  - held filer(`kaspad/src/palw_filer_held.rs`):court 容量の待機(queued、ticket 失効、reservation 未着地、block の予算切れ)を `palw_court_refusal_waits_v1` で Retry に分類する。案件を放棄しない。
+  - producer の事前確認(`palw_accept.rs`):`palw_court_claim_admission_v1` で bounded admission を確認し、skip される fused attempt に inference を使わない。
+  - decoy 価格は free half の escrow なので、従来どおり `AccusationExposureCeiling` の Retry に入る。
+- **post-Final の unserved。**
+  - 設計上の要件:G14 の目標は全経路で報酬を拒否すること。Final 後の stage で予約された claim も、hard deadline までに処理されなかった場合は報酬を得てはならない。reservation が vesting を未成熟のまま保持しているので、責任期間の内側に当たる。
+  - 実装:Final を反転(safe weight・Gate C credit・usage を戻し、`Voided { PanelUnavailable }`)、minted round rights を没収、未払いの vesting を burn(新しい note `UnservedBurned`、tag 10。誰も告発しない)。coinbase で支払い済みの分は戻さない。
+  - 試験:`g07r2_an_unserved_prosecution_means_the_claim_earns_nothing` の post-Final ケースが pass(void を確認)。vesting row が消えることの assert は追加したが、disk 不足で未実行。
+- **c4r3。**
+  - kernel route 自体が `palw_probabilistic_constraints_v1` の下にしか存在しない。
+  - fence あり:G-K1 により interim 席は lock 分だけ slash される。`c4r3.rs:128` の assert は G-K1 より前のもので、実行すると失敗した(差額 183,333,333 sompi = lock)。assert を G-K1(lock 額)に合わせた。
+  - fence なし:route も lock もないことを確かめる試験 `g14_c4r3_without_the_route_fence_no_kernel_seat_is_locked_or_charged` を追加した。
+  - 規則は変えていない。
+- **実行結果。**
+  - `cargo test -p kaspa-consensus --lib`(node E2E):
+    - `lg14a_legacy_filer_e2e::` 18 件中 17 件 pass(court 容量を武装した `..._with_court_capacity` を含む)。
+    - `legacy_v2_attempt_honest_claim_is_final_and_paid_under_full_g14` は失敗:「the row matures by its second clock's bound (9208)」。この試験は前の round の WIP commit `5b64cac9c`(unbuilt, untested)で追加され、一度も通ったことがない。vesting の第 2 clock の成熟(heartbeat だけの chain)の問題で、この lane の規則は dispute のない chain に何も書かない。未修正。
+    - `kernel_route_valid_signers_are_charged_on_conviction`(T-N11)pass。c4r3 の 2 件 pass。
+  - 実行していないもの(disk の空きが 21 GB で、規則の 25 GB を下回ったため build を停止):
+    - kaspad の unit test(`p2_8e_the_folds_answer_to_an_opening_as_a_step`、`g14_tir_seat_finding_reaches_the_filer_queue`)。
+    - core の更新した試験(post-Final の vesting assert、述語つきの TIR 試験)。
+    - kaspad crate の compile 自体。
+- **node 規模の飽和 E2E(依頼 2)は書いていない。理由は次のとおり。**
+  - t12 の規則では held regime が bisection を拒否する(`CourtOpened` は refuse)。court session を開けるのは、fused class の held dissection(`ShardCourtAccused`)だけである。
+  - その honest 側の node 経路は 8k 行で動かない(P2-8e:whole-capture cap、fold の prefix state、tile の開示)。node harness で連合が session 枠を埋める方法がない。
+  - TIR の node harness(T-N1)は未作成(§9.7)。
+  - node 上で確かめたこと:court 容量を武装した状態で、正直な outsider の one-move conviction が通る(別予算)。
+  - 飽和・補充・待機列・owner 8 本の adversarial 試験は fold 規模のまま。
+
+## 追補: class 単位の検出率 policy(2026-10-17、branch `integ/g14-detection-policy`)
+
+外部監査(`g14-external-audit-2026-10-17/`)§7 P1 の 4 項への処置。詳細は [g14-detection-policy-2026-10-17.md](g14-detection-policy-2026-10-17.md)。
+
+- 休眠 fence `palw_detection_policy_v1`(全 preset で `None`、Some-only、武装を拒否)。fence より前の legacy draw(k = 4、domain、golden vector)は不変。
+- class・kernel 版に結び付く `PalwDetectionPolicyV1` を入れた。検査方式、chain の数を価格に照合して導く N、D_min、ε、k_max、round、shadow、経済値、資源、期限、局所化を持つ。k_min は厳密な超幾何を整数の固定小数で求め、厳密値を下回らない。
+- 経済的抑止: 利得が省いた区間に比例する場合、拘束は D = N にあり、`S ≥ margin·N·c/(q_eff·q_collect)` ですべての D が不利になる(全列挙で確認)。固定利得(選択出力)は D = 1 の `margin·G·N/K` で、宣言した policy だけが要求する。宣言しない場合の覆いは全再実行(seg_detect / palw_kernel_verifier / `--palw-challenge`)と court。
+- v2 draw: post-commit の anchor、claim・model・job・policy・checker への拘束、round をまたいで重複なし、anchor から再導出できる。
+- k と資源の連動: bytes、再実行、保持(legacy の 512 は k ≈ 44 × 32 claim を持てず拒否)、court/DA の opening、期限。node の opening 保持は policy の上限に従い、落ちた opening を capacity_refusal として数える。
+- fault corpus(fixture の整数 cache model、実際の seat seam)では、宣言した不正集合(D ≥ 10%)で 99% 以上を確認した。D = 1 系は解析値 k/N と一致した。正直な claim は 1 度も flag されず、誤実装の seat の局所 flag はすべて参照裁定が棄却した。
+- 第 2 段: fence より後の claim gate(attempt と FP。option (b) と同じ形で拒否する)、複数 round の seat、funnel の後段(accepted〜invalidated、deadline / unassigned の loss)、実ノードの試験(1 位置の偽りを k/N の率で検出し、告発で有罪、slash、報酬なし)。
+- 未完(同文書 §10): court/DA 予算の実連動(interface は同文書に記載)、kernel route の admission と shadow、同時 claim 数の強制、producer の事前確認、RPC、実 artifact での値の測定。

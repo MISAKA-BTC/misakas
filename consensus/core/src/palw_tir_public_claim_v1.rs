@@ -290,6 +290,21 @@ impl PalwTirPublicClaimV1 {
 /// follow-up decision (recorded in the remaining-work document).
 pub const PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1: u64 = 8;
 
+/// **Lane g14-court-capacity-r2: an admitted owner's tenure while others wait** — the larger of the idle grace and the frame's own
+/// Open window (`open_until − preparation_until`) over `2 × K_owner`, so the owner queue turns over at least `2 × K_owner` times
+/// inside the window: a verifier with `q` rows ahead of it is admitted within `⌈(q + 1) / K_owner⌉` tenures of its Open. Past
+/// `palw_court_capacity_v1` only (the fold's `rotate_owner_queue_v1`; a node's owner worker reads the same number).
+pub fn palw_tir_owner_tenure_v1(frame: &PalwTirPublicClaimV1, grace: u64) -> u64 {
+    let plan = frame.plan_v1();
+    palw_tir_owner_tenure_of_window_v1(plan.terms.open_until_daa.saturating_sub(plan.preparation_until_daa), grace)
+}
+
+/// [`palw_tir_owner_tenure_v1`] of an Open window — the ONE tenure rule: the fold's queue rotation reads it through the frame, and the
+/// frame's own door (`palw_tir_frame_cost_v1::tir_public_owner_queue_wait_v1`) reads it before the frame exists.
+pub fn palw_tir_owner_tenure_of_window_v1(open_window: u64, grace: u64) -> u64 {
+    grace.max(open_window / (2 * PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1)).max(1)
+}
+
 /// The bound on what one liable custodian of a frame can be asked to answer (see [`PalwTirPublicClaimV1::custodian_load_bound_v1`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwTirPublicCustodianLoadV1 {

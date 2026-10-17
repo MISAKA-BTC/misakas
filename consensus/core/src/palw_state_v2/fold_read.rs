@@ -944,8 +944,14 @@ impl PalwFoldReadV1<'_> {
         // producer's pre-check answers this before an inference). Read from the fence state: the route's arming restores the reward.
         // `None` below the fence (every shipped network). The free-prompt lane asks its own question with the job in hand
         // (`palw_g14_route_fp_refusal_v1`, the commitment arm).
+        // Lane g14-court-capacity (user direction 2026-10-16): a class with fused-attention leaves also needs the court-capacity
+        // guarantee (`palw_court_capacity_v1`) before its fused-leaf route counts.
         if incoming == PalwGatedClaimV1::Attempt
-            && let Some(why) = crate::palw_g14_gates_v1::palw_g14_route_attempt_refusal_v1(self.params, now_daa)
+            && let Some(why) = crate::palw_g14_gates_v1::palw_g14_route_attempt_refusal_for_class_v1(
+                self.params,
+                now_daa,
+                self.state.classes.get(class_id).is_some_and(|class| class.fused_attention),
+            )
         {
             return Err(PalwStateV2Error::ClassNotRewardable {
                 class: *class_id,

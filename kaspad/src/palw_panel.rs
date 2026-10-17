@@ -6913,6 +6913,18 @@ impl PalwPanelService {
                 failed_minimum = Some(failed);
             }
             let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| *inflight < MAX_INFLIGHT_CARRIERS) else {
+                // Lane g14-court-capacity-r2: the funding scan failed at this object's minimum — a FEE SHORTFALL, not a busy UTXO:
+                // the G14 funnel counts it against the claim this node detected (`detection_loss_once(.., FeeShortfall)`).
+                if failed_minimum.is_some_and(|failed| minimum >= failed)
+                    && let Some(claim) = palw_court_object_claim_v1(&object)
+                    && let Some(class) = self.config.telemetry.detection_watched_class(&claim)
+                {
+                    self.config.telemetry.detection_loss_once(
+                        class,
+                        claim,
+                        kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1::FeeShortfall,
+                    );
+                }
                 // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
                 // dropped here is a dispute that never happens.
                 unsent.push((session_id, round, mine_is_responder, object));
@@ -8958,7 +8970,17 @@ impl PalwPanelService {
                     // ADR-0077 Decision 8. Held, not judged: the seat binds an opening to the
                     // claim's roots and replays the interval before believing anything in it.
                     PalwGossipEvent::IntervalOpening { claim, interval_index, bytes } => {
-                        Self::pool_interval_opening(&mut interval_openings, claim, interval_index, bytes);
+                        // G14 detection policy: the pair ceiling follows the largest k the armed policies draw (512 without one).
+                        let pairs = kaspa_consensus_core::palw_detection_policy_v1::palw_detection_retention_pairs_v1(
+                            self.consensus_config.params.palw_detection_policy_v1.as_ref(),
+                        ) as usize;
+                        if !Self::pool_interval_opening(&mut interval_openings, claim, interval_index, bytes, pairs) {
+                            // Counted, never silent: a dropped opening the seat drew is a capacity refusal, not a sampling miss.
+                            self.config.telemetry.detection_loss(
+                                Hash64::default(),
+                                kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1::CapacityRefusal,
+                            );
+                        }
                     }
                 }
             }
@@ -12535,6 +12557,14 @@ impl PalwPanelService {
                                         // P2-8: kind 4 through the reporter filer first, the accusation
                                         // kept as its fallback; else the accusation, as below the fence.
                                         let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));
+                                        if court_key.is_some() {
+                                            use kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionStageV1 as St;
+                                            // G14 funnel: this seat localised a leaf and queued its accusation.
+                                            for stage in [St::Eligible, St::Checked, St::Detected, St::Localized, St::Filed] {
+                                                self.config.telemetry.detection_stage_once(duty.class_id, duty.claim_id, stage);
+                                            }
+                                            self.config.telemetry.detection_watch(duty.class_id, duty.claim_id);
+                                        }
                                         self.capture_arm_files_v1(
                                             &session,
                                             &mut reporter_filer,
@@ -14936,6 +14966,29 @@ impl PalwPanelService {
                     }
                 }
             }
+            // **G14 funnel: follow every claim this node detected to its chain outcome** (accepted, convicted / defaulted, collected,
+            // invalidated; deadline and unassigned losses). One read of this seat's rows, only while something is followed.
+            // `collected` is inferred from the fold's void-and-slash of a claim that reserved collateral (the row carries no slash
+            // amount); a node-local metric, never a consensus input.
+            let watched = self.config.telemetry.detection_watched();
+            if !watched.is_empty() {
+                let rows = self
+                    .consensus_manager
+                    .consensus()
+                    .unguarded_session()
+                    .spawn_blocking(move |c| {
+                        c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat, true, 4_096)
+                    })
+                    .await
+                    .map(|read| read.rows)
+                    .unwrap_or_default();
+                for claim in watched {
+                    if let Some(row) = rows.iter().find(|row| row.claim_id == claim) {
+                        let outcome = kaspa_consensus_core::palw_detection_policy_v1::palw_detection_chain_outcome_v1(&row.phase);
+                        self.config.telemetry.detection_follow(claim, outcome, row.reserved > 0);
+                    }
+                }
+            }
             // The foreign retention keeps what a live claim may still ask for: a C7 claim's window
             // (13,995 DAA on testnet-12 past §4-quater, once the 2M row opens) outlives the directory's
             // age bound.
@@ -15244,6 +15297,17 @@ enum CarrierFate {
 }
 
 /// The verdict, from the three facts the node already holds.
+/// **Lane g14-court-capacity-r2: the claim a prosecution object pursues** (for the G14 funnel's fee-shortfall count): the one-move
+/// and held accusations, a court opening, a DA accusation and a dispute reservation; `None` for any other court-lane object.
+pub(crate) fn palw_court_object_claim_v1(object: &PalwConsensusObjectV2) -> Option<Hash64> {
+    match object {
+        PalwConsensusObjectV2::ShardCourtAccused { accusation } => Some(accusation.claim),
+        PalwConsensusObjectV2::CourtOpened { claim, .. } | PalwConsensusObjectV2::DefaultAccused { claim, .. } => Some(*claim),
+        PalwConsensusObjectV2::DisputeReservedV1 { reservation, .. } => Some(reservation.claim),
+        _ => None,
+    }
+}
+
 fn carrier_fate(mined: bool, in_mempool: bool, funding_unspent: bool) -> CarrierFate {
     match (mined, in_mempool, funding_unspent) {
         // Mined wins: a mempool copy alongside a mined transaction is incidental.
@@ -16425,22 +16489,35 @@ impl PalwPanelService {
     /// right way round here, unlike the material pool: the seat asked for these, it re-asks on its
     /// own cadence, and evicting an older pair would discard an answer to a request that is still
     /// open.
-    fn pool_interval_opening(pool: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>, claim: Hash64, interval_index: u32, bytes: Vec<u8>) {
-        /// `PALW_FP_SEAT_INTERVAL_SAMPLES_V1` intervals for each of 128 claims in flight.
-        const PAIRS: usize = 512;
+    ///
+    /// `pairs` is the pair ceiling: [`kaspa_consensus_core::palw_detection_policy_v1::palw_detection_retention_pairs_v1`] — the
+    /// legacy 512 (`PALW_FP_SEAT_INTERVAL_SAMPLES_V1` intervals for each of 128 claims in flight) unless an armed detection policy
+    /// draws more. Returns `false` when a NEW pair was refused for want of room (the caller counts it as a capacity refusal); a
+    /// full per-pair slot is not a refusal — that pair is already held.
+    fn pool_interval_opening(
+        pool: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        claim: Hash64,
+        interval_index: u32,
+        bytes: Vec<u8>,
+        pairs: usize,
+    ) -> bool {
         /// The lane's own per-pair slot ceiling, mirrored so this map cannot outgrow it if the
         /// transport's changes.
         const PER_PAIR: usize = 4;
         let key = (claim, interval_index);
-        if !pool.contains_key(&key) && pool.len() >= PAIRS {
-            return;
+        if !pool.contains_key(&key) && pool.len() >= pairs {
+            warn!(
+                "[{PALW_PANEL}] claim {claim}: no room to hold an opening of interval {interval_index} ({pairs} pairs held) — counted as a capacity refusal"
+            );
+            return false;
         }
         let slot = pool.entry(key).or_default();
         if slot.len() >= PER_PAIR {
-            return;
+            return true;
         }
         info!("[{PALW_PANEL}] claim {claim}: holding a served opening of interval {interval_index} ({} bytes)", bytes.len());
         slot.push(bytes);
+        true
     }
 
     /// **The answer's ids, as the claim committed them, bound to the chain** — what ADR-0082
@@ -16782,20 +16859,87 @@ impl PalwPanelService {
         let counts =
             PalwFpChainCountsV1 { prompt_tokens: ctx.declared_prefill_tokens, decode_tokens_executed: ctx.exact_decode_tokens };
         let priced = backend.fp_context_work_leaves_v1(ctx);
-        let Some(draw) =
-            crate::palw_fp_seat::palw_fp_seat_draw_at_the_claims_price_v1(backend.as_ref(), network_domain, duty, counts, priced)
-        else {
-            if kaspa_consensus_core::palw_backend::palw_claim_prices_work_v1(duty.work_leaves)
-                && priced.is_some_and(|leaves| leaves != duty.work_leaves)
-            {
-                warn!(
-                    "[{PALW_PANEL}] claim {}: the served job's context prices at {:?} leaves and the chain priced this claim at {} — \
-                     this is not the claim's job, and no interval of it is drawn (ADR-0074 Decision 5)",
-                    duty.claim_id, priced, duty.work_leaves
-                );
-            }
-            return None;
+        // **G14 detection policy** (`palw_detection_policy_v1`, dormant; keyed at the panel's bind DAA): below the fence the legacy
+        // draw, unchanged; past it the class's policy draws its k in the v2 domain, and a class with no policy has no interval duty.
+        use kaspa_consensus_core::palw_detection_policy_v1::{
+            PalwDetectionLossV1, PalwDetectionRefusalV1, PalwDetectionRegimeV1, PalwDetectionStageV1, palw_detection_regime_v1,
         };
+        let telemetry = self.config.telemetry.clone();
+        let regime =
+            palw_detection_regime_v1(self.consensus_config.params.palw_detection_policy_v1.as_ref(), &duty.class_id, 0, duty.bound_daa);
+        let draw = match regime {
+            PalwDetectionRegimeV1::LegacyV1 => {
+                let Some(draw) =
+                    crate::palw_fp_seat::palw_fp_seat_draw_at_the_claims_price_v1(backend.as_ref(), network_domain, duty, counts, priced)
+                else {
+                    if kaspa_consensus_core::palw_backend::palw_claim_prices_work_v1(duty.work_leaves)
+                        && priced.is_some_and(|leaves| leaves != duty.work_leaves)
+                    {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: the served job's context prices at {:?} leaves and the chain priced this claim at {} — \
+                             this is not the claim's job, and no interval of it is drawn (ADR-0074 Decision 5)",
+                            duty.claim_id, priced, duty.work_leaves
+                        );
+                    }
+                    return None;
+                };
+                draw
+            }
+            PalwDetectionRegimeV1::NoPolicy => {
+                telemetry.detection_loss_once(duty.class_id, duty.claim_id, PalwDetectionLossV1::PolicyRefused);
+                info!(
+                    "[{PALW_PANEL}] claim {}: past palw_detection_policy_v1 the class has no detection policy — no interval duty",
+                    duty.claim_id
+                );
+                return None;
+            }
+            PalwDetectionRegimeV1::Policy(policy) => {
+                match crate::palw_fp_seat::palw_fp_seat_draw_under_policy_v2(backend.as_ref(), network_domain, duty, counts, priced, policy) {
+                    Ok((draw, plan))
+                        if !telemetry.detection_take_duty_v1(
+                            duty.class_id,
+                            duty.claim_id,
+                            duty.bound_daa,
+                            policy.resources.claims_in_flight,
+                            duty.bound_daa.saturating_add(policy.deadlines.inspection_deadline_daa),
+                        ) =>
+                    {
+                        // Lane g14-court-capacity-r2: the policy's `claims_in_flight` bounds what this seat holds at once (its
+                        // retention was sized for that many); a duty past it is refused and counted, never silently dropped.
+                        let _ = (draw, plan);
+                        telemetry.detection_loss_once(duty.class_id, duty.claim_id, PalwDetectionLossV1::CapacityRefusal);
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: the seat already holds {} interval duties of this class (its policy's \
+                             claims_in_flight) — no duty taken",
+                            duty.claim_id, policy.resources.claims_in_flight
+                        );
+                        return None;
+                    }
+                    Ok((draw, plan)) => {
+                        info!(
+                            "[{PALW_PANEL}] claim {}: detection policy {} — N {}, D_min {}, k {} (miss at D_min <= {} ppm)",
+                            duty.claim_id,
+                            policy.id(),
+                            plan.n,
+                            plan.d_min,
+                            plan.k_round,
+                            plan.miss_at_d_min_ppm_ceil
+                        );
+                        draw
+                    }
+                    Err(refusal) => {
+                        let loss = match refusal {
+                            PalwDetectionRefusalV1::GeometryMismatch { .. } => PalwDetectionLossV1::GeometryMismatch,
+                            _ => PalwDetectionLossV1::PolicyRefused,
+                        };
+                        telemetry.detection_loss_once(duty.class_id, duty.claim_id, loss);
+                        warn!("[{PALW_PANEL}] claim {}: the detection policy draws nothing here: {refusal}", duty.claim_id);
+                        return None;
+                    }
+                }
+            }
+        };
+        telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Eligible);
         let roots = PalwClaimRootsV1 {
             execution_root: duty.execution_root,
             trace_root: duty.trace_root,
@@ -16988,6 +17132,9 @@ impl PalwPanelService {
                         // it the seat's strongest detector — and it was being thrown away. `(0, 0)`
                         // is a fault with no leaf address; the court's bisection finds the leaf.
                         self.note_seat_fault_v1(duty.claim_id, 0, 0);
+                        telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Checked);
+                        telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Detected);
+                        telemetry.detection_watch(duty.class_id, duty.claim_id);
                         return None;
                     }
                 }
@@ -17035,6 +17182,10 @@ impl PalwPanelService {
                             duty.claim_id
                         );
                         self.note_seat_fault_v1(duty.claim_id, leaf_index, 1);
+                        for stage in [PalwDetectionStageV1::Checked, PalwDetectionStageV1::Detected, PalwDetectionStageV1::Localized] {
+                            telemetry.detection_stage_once(duty.class_id, duty.claim_id, stage);
+                        }
+                        telemetry.detection_watch(duty.class_id, duty.claim_id);
                         return None;
                     }
                     PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {
@@ -17044,6 +17195,10 @@ impl PalwPanelService {
                             duty.claim_id
                         );
                         self.note_seat_fault_v1(duty.claim_id, first_leaf_index, leaf_count);
+                        for stage in [PalwDetectionStageV1::Checked, PalwDetectionStageV1::Detected, PalwDetectionStageV1::Localized] {
+                            telemetry.detection_stage_once(duty.class_id, duty.claim_id, stage);
+                        }
+                        telemetry.detection_watch(duty.class_id, duty.claim_id);
                         // ADR-0086 Decision 6: ask for the block's leaves on the same lane, and name
                         // the leaf from them once they are held — the fault at leaf granularity is
                         // what a court narrows to. The level is the one the opening this seat just
@@ -17220,8 +17375,10 @@ impl PalwPanelService {
                     draw.intervals.len()
                 );
             }
+            telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Checked);
             return Some(PalwReceiptVerdictV2::Valid);
         }
+        telemetry.detection_loss_once(duty.class_id, duty.claim_id, PalwDetectionLossV1::MissingMaterial);
         // Ask for what is missing and conclude nothing this round. The caller's tail is unchanged:
         // an interval that never arrives ends in the two-sided quorum's `Unavailable` arm at the
         // half-window, exactly as capture withholding does today.

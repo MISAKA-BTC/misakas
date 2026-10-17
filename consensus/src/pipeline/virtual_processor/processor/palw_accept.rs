@@ -92,6 +92,20 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()
                 .map(|refusal| refusal.to_string());
+        // **Lane g14-court-capacity-r2: and the bounded court admission** (`palw_court_capacity_v1`, dormant): a fused-attention attempt
+        // whose hard-deadline bucket is full would be SKIPPED (no claim, no reward), so the producer holds instead of spending an
+        // inference. The retention is the one the attempt will carry (`candidate + min_trace_retention_daa`). `Ok` below the fence.
+        if facts.class_admission_refusal.is_none() {
+            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_court_claim_admission_v1(
+                &state,
+                state_params,
+                &class_id,
+                candidate_daa,
+                candidate_daa.saturating_add(facts.min_trace_retention_daa),
+            )
+            .err()
+            .map(|refusal| refusal.to_string());
+        }
         // **Lane PA, C-F2: what each rider of this lead is demanded** — at the rider's share of the lead's subsidy, as the fold admits it.
         // Past the canonical-work height and where riders are armed only; otherwise the producer keeps the lead's pwu as before.
         if state_params.capacity_riders_active_at(candidate_daa)
@@ -685,6 +699,11 @@ impl VirtualStateProcessor {
         let mut exec_origin_budget = kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginBudgetV1::default();
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
         let mut court_closes_completed = 0usize;
+        // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` the block's court operations are bounded by the policy's
+        // deterministic cost-unit budget instead of the one-slot rule (the fold charges the same units as its second lock).
+        let mut court_cost_spent = kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1::default();
+        // Lane g14-court-capacity-r2: the one-move accusations spend their own budget (the fold's second lock likewise).
+        let mut court_one_move_spent = kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1::default();
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
         // RFC-0002 Phase F: whether this block has handed an IR class registration to the gate
@@ -1621,7 +1640,32 @@ impl VirtualStateProcessor {
             }
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
                 || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
-            if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
+            let court_policy = state_params.court_capacity_at_v1(point.daa_score);
+            let court_cost = court_policy
+                .as_ref()
+                .and_then(|policy| kaspa_consensus_core::palw_court_capacity_v1::palw_court_op_cost_v1(policy, &folded, &object));
+            let court_one_move = matches!(
+                kaspa_consensus_core::palw_court_capacity_v1::palw_court_op_class_v1(&folded, &object),
+                Some(kaspa_consensus_core::palw_court_capacity_v1::PalwCourtOpClassV1::OneMove)
+            );
+            if let (Some(policy), Some(cost)) = (court_policy.as_ref(), court_cost) {
+                let (spent, budget) = if court_one_move {
+                    (court_one_move_spent, policy.one_move_budget)
+                } else {
+                    (court_cost_spent, policy.block_budget)
+                };
+                if !spent.saturating_add(cost).fits_within(&budget) {
+                    info!(
+                        "Block {block}: a court operation was dropped, and the block stands: the block's court budget {budget:?} is \
+                         spent ({spent:?} of it; palw_court_capacity_v1)"
+                    );
+                    continue;
+                }
+            }
+            if court_policy.is_none()
+                && spends_the_court_slot
+                && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
+            {
                 info!(
                     "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
                      stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
@@ -1777,6 +1821,13 @@ impl VirtualStateProcessor {
                     };
                     match applied {
                         Ok(next) => {
+                            if let Some(cost) = court_cost {
+                                if court_one_move {
+                                    court_one_move_spent = court_one_move_spent.saturating_add(cost);
+                                } else {
+                                    court_cost_spent = court_cost_spent.saturating_add(cost);
+                                }
+                            }
                             // **AC-SLOT past the fence: the slot is spent only by a move that
                             // ACTUALLY APPLIES.** A move the fold refuses is dropped below and
                             // leaves the slot for the next.

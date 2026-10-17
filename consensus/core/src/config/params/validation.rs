@@ -272,6 +272,9 @@ impl Params {
         self.validate_palw_model_eligibility_v1()?;
         // **ADR-0179's model tiers** (`crate::palw_model_tier_v1`): refused when armed; add-only lists; the mirror must agree.
         self.validate_palw_model_tier_v1()?;
+        // **G14's per-class detection policy** (`crate::palw_detection_policy_v1`): each policy armable at its own extremes; then
+        // refused when armed (design values without a measured record).
+        self.validate_palw_detection_policy_v1()?;
         // **RFC-0018's five fences** (`crate::palw_rfc0018_v1`): refused when armed; the mirror must agree.
         self.validate_palw_rfc0018_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
@@ -307,6 +310,12 @@ impl Params {
         // G14 test genesis, any well-formed model): `palw_tir_public_conviction_v1` armed with no model, a malformed one, or one no
         // record names for this network and height is refused.
         self.validate_palw_tir_frame_cost_in_v1(cost_records)?;
+        // **The court-capacity fence** (`crate::palw_court_capacity_v1`, audit G-07): LG14-A at or below it, a sound policy, and on a
+        // real network a pinned record and a measured (non-placeholder) policy.
+        self.validate_palw_court_capacity_in_v1(records)?;
+        // **G-13's capacity** (`crate::palw_panel_liability_v1`): LG14-A beside V02's short lock life needs V02's split at or below
+        // the later of the two, so the lock G-13 extends to the liability horizon is Resolved liability, never work capacity.
+        self.validate_palw_g13_liability_split_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).

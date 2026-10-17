@@ -49,7 +49,7 @@ pub const PALW_TIR_FRAME_RESPONSE_DEBITS_PER_TURN_V1: u64 = 1;
 pub const PALW_TIR_FRAME_OWNER_DEBITS_PER_TURN_V1: u64 = 1;
 /// Concurrent outside owners a frame admits (K_owner, `PalwTirPublicClaimV1::MAXIMUM_OWNERS_V1`): each custodian may answer this many
 /// owners' turns at once, so the parallel inclusion term counts them.
-pub const PALW_TIR_FRAME_CONCURRENT_OWNERS_V1: u64 = 8;
+pub const PALW_TIR_FRAME_CONCURRENT_OWNERS_V1: u64 = crate::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1;
 
 /// **The measured per-frame cost units and network inclusion capacity** — with the frame's court config (windows, margin, restarts,
 /// prices) they make the frame's prices and clocks. Carried in the acquisition plan and the source descriptor so every re-derivation
@@ -456,8 +456,9 @@ pub fn tir_public_owner_queue_wait_v1(
 ) -> Result<u64, String> {
     clock.check_v1()?;
     let k = PALW_TIR_FRAME_CONCURRENT_OWNERS_V1;
-    let grace = config.reorg_retention_daa.max(config.prices.inclusion_margin_daa);
-    let tenure = grace.max(open_window / product(2, k)?).max(1);
+    // The court-capacity lane's own rules (single source): its idle grace and its tenure.
+    let grace = crate::palw_tir_public_owned_v1::palw_tir_owner_idle_grace_v1(config);
+    let tenure = crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_of_window_v1(open_window, grace);
     let ahead = product(open_window, clock.parallel_bytes_per_daa / clock.control_bytes)?;
     product(sum(&[ahead, 1])?.div_ceil(k), tenure)
 }

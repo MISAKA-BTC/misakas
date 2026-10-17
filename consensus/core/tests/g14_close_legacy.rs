@@ -62,6 +62,18 @@ fn record(fence: PalwG14GatedFenceV1, genesis: Hash64, at: u64) -> PalwG14Arming
     }
 }
 
+/// Lane g14-court-capacity's validation (appendix E.2): with LG14-A beside `palw_final_lock_life`, lane V02's full-collateral fence
+/// must be in force at or below the later of the two — armed here at that height when the ruleset has a lock-life fence.
+fn full_collateral_beside_lock_life(p: &mut Params, filer_at: u64) {
+    if let Some(life) = p.palw_final_lock_life.filter(|f| *f != ForkActivation::never()) {
+        let later = life.daa_score().max(filer_at);
+        if p.palw_final_lock_full_collateral.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > later) {
+            p.palw_final_lock_full_collateral = Some(ForkActivation::new(later));
+            p.sync_palw_final_lock_full_collateral();
+        }
+    }
+}
+
 /// `p` with LG14-A (and, with `held`, LG14-B; with `route`, option (b)) armed at `at`, every mirror synced, and the records the
 /// arming needs. The ruleset is asserted to pass the whole validation with them and to be refused without them.
 fn arm_legacy(mut p: Params, at: u64, held: bool, route: bool) -> (Params, Vec<PalwG14ArmingRecordV1>) {
@@ -69,6 +81,7 @@ fn arm_legacy(mut p: Params, at: u64, held: bool, route: bool) -> (Params, Vec<P
     let mut records = vec![record(PalwG14GatedFenceV1::LegacyPublicFilerV1, p.genesis.hash, at)];
     p.palw_legacy_public_filer_v1 = fence;
     p.sync_palw_legacy_public_filer_v1();
+    full_collateral_beside_lock_life(&mut p, at);
     if held {
         p.palw_legacy_held_da_v2 = fence;
         records.push(record(PalwG14GatedFenceV1::LegacyHeldDaV2, p.genesis.hash, at));
@@ -579,6 +592,9 @@ fn g07_a_coalition_cannot_spend_the_outsiders_budget() {
 /// the outsider's dissection on the lying claim is then refused for capacity — while its reservation still holds that claim's `Final`.
 /// A per-bond budget or a partition does not stop a multi-bond coalition, and lifting the cap breaks the slot guarantee that keeps an
 /// honest mover from defaulting; closing it needs a measured per-block court budget or a priced slot (audit appendix C).
+///
+/// This pins the behaviour BELOW `palw_court_capacity_v1` (lane g14-court-capacity): past that fence the same 43rd prosecution queues
+/// under its deadline guarantee and is granted the first freed slot (`g14_court_capacity.rs`).
 #[test]
 fn g07_residual_the_network_court_cap_is_shared() {
     let probe = bundle(&palw_t12_launch_params_v1()).state;
@@ -695,6 +711,7 @@ fn genesis_ruleset(held: bool) -> Params {
     p.sync_palw_final_lock_life();
     p.palw_legacy_public_filer_v1 = at;
     p.sync_palw_legacy_public_filer_v1();
+    full_collateral_beside_lock_life(&mut p, 0);
     if held {
         p.palw_legacy_held_da_v2 = at;
     }

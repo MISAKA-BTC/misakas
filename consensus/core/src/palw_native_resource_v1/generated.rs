@@ -475,7 +475,9 @@ native_struct!(crate::palw_tir_shard_v1::PalwTirShardClaimV1; s_l, s_p, outsider
 native_struct!(crate::palw_real_share_v1::PalwFloorStateV1; mode, last_probe_end);
 native_struct!(crate::palw_seat_availability_v1::PalwSeatAvailabilityV1; first_credit_daa, epochs);
 native_struct!(crate::palw_model_registry_v1::PalwSeatReadinessRowV1; proved_daa, proved_span, leaf_index, proof_version, chunks);
-native_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; opened_daa, hard_deadline_daa, live, closed, dismissed_held, reacquiring);
+native_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; opened_daa, hard_deadline_daa, live, closed, dismissed_held, reacquiring, courts, court_reserve_used);
+native_struct!(crate::palw_court_capacity_v1::PalwReservedCourtV1; stage, escrow, rho_sompi, weight, service_daa, reserve, guaranteed, admitted_daa);
+native_enum!(crate::palw_court_capacity_v1::PalwCourtStageV1; Queued { enqueued_daa }, Ticket { granted_daa, expires_daa }, Running { session, started_daa });
 native_struct!(crate::palw_class_semantics_v1::PalwClassSemanticsV1; version, class_id, artifact_root, bound_from_daa, model_profile_id, runtime_manifest_hash, runtime_class_id, tokenizer_id, cu_ruleset_id, token_table_root, rendering_rule, raw_tokenizer_bytes, tokenizer_key_events, prefix_state_relation);
 native_struct!(crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2; declaration, deadline_daa, parts);
 native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1));
@@ -770,7 +772,7 @@ native_struct!(misaka_palw_kernel::claim_compact_v1::native_v2::NativeCompactCov
 native_struct!(misaka_palw_kernel::claim_compact_v1::native_v4::CompactAdversaryBudgetV4; retry_limit, grinding_bits_per_beacon, beacons_per_attempt, adaptive_statements);
 native_struct!(misaka_palw_kernel::claim_compact_v1::native_v4::LocatedCompactProofV4; instance, proof);
 native_struct!(crate::palw_material_release_recovery_v2::PalwMaterialRecoveryGenerationV2; consent, providers);
-native_enum!(crate::palw_vesting_v1::PalwVestingNoteV1; Latched { claim_id, matured_at }, Moved { source, legs }, Burned { claim_id, offence_id, kind, sompi, legs }, ShareBurned { claim_id, seat, offence_id, sompi }, ReporterAwarded { offence_id, reporter, payload, sompi }, BuybackAtFinal { claim_id, sompi }, ReserveCredited { claim_id, sompi }, ProducerLegBurned { claim_id, producer, offence_id, kind, sompi }, ExecReward { claim_id, bond, fund, action, payout }, ExecDependencyBurned { claim_id, kernel_claim_id, sompi, legs });
+native_enum!(crate::palw_vesting_v1::PalwVestingNoteV1; Latched { claim_id, matured_at }, Moved { source, legs }, Burned { claim_id, offence_id, kind, sompi, legs }, ShareBurned { claim_id, seat, offence_id, sompi }, ReporterAwarded { offence_id, reporter, payload, sompi }, BuybackAtFinal { claim_id, sompi }, ReserveCredited { claim_id, sompi }, ProducerLegBurned { claim_id, producer, offence_id, kind, sompi }, ExecReward { claim_id, bond, fund, action, payout }, ExecDependencyBurned { claim_id, kernel_claim_id, sompi, legs }, UnservedBurned { claim_id, sompi, legs });
 native_struct!(misaka_palw_panel::PanelCursorV1; version, network, ruleset, policy, tip, height, daa, next_order);
 native_enum!(crate::palw_staged_court_state_v1::PalwStagedCheckpointV1; Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), Bundle(f0), TirPrefix(f0));
 native_struct!(crate::palw_bond_budget_v1::PalwBondBudgetHeaderV1; version, created_daa, policy_digest, allocation);
