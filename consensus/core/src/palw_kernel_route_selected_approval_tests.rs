@@ -466,3 +466,35 @@ fn bootstrap_seed_is_per_claim_and_the_probe_policy_has_none() {
     assert_ne!(seed(&[9; 64], &ctx(3), &[3; 64]), seed(&[9; 64], &ctx(3), &[5; 64]), "bound to the statement");
     assert_ne!(seed(&[9; 64], &ctx(3), &[3; 64]), seed(&[8; 64], &ctx(3), &[3; 64]), "bound to the network's pinned seed");
 }
+
+/// **RFC07 record-only event (ADR-0184 §2).** A Panel-licensed Final emits `panel_record` — the receipt, its settlement label, the
+/// producer and the job payer read from the rooted ledger rows — and still no beacon `event`, so no collector (they read `event`
+/// only) counts it as a source and the EXEC credit gate never sees it. Every other path emits no record.
+#[test]
+fn panel_record_is_emitted_only_for_a_panel_licensed_final_and_never_as_a_beacon_event() {
+    let mut w = World::new();
+    let panel = w.add(7, PANEL_CLASS, None, 10, false);
+    let timeout = w.add(8, OPV_CLASS, None, 10, false);
+    let approved = w.add(9, OPV_CLASS, Some(true), 10, false);
+    let paid_over_panel = w.add(10, PANEL_CLASS, Some(true), 10, false);
+
+    let (receipt, settlement, path, event) = w.export(&panel, 70);
+    assert_eq!(path, "PanelLicensed");
+    assert!(event.is_none(), "a Panel-licensed Final is never a beacon source");
+    let record = panel_record_v1(&w.ledger, &receipt, path, settlement).expect("the record-only event");
+    let (r, label, producer, payer): (FinalReceiptV1, String, Option<Digest>, Option<Digest>) =
+        borsh::from_slice(&record).expect("the record decodes");
+    assert_eq!((r, label.as_str(), producer, payer), (receipt, settlement.label(), Some(PRODUCER), Some(PAYER)));
+    // The record follows the settlement predicate (a conviction is visible in it) and still exports no event.
+    let convicted = w.add(11, PANEL_CLASS, None, 10, true);
+    let (receipt, settlement, path, event) = w.export(&convicted, 70);
+    assert!(event.is_none());
+    let (_, label, _, _): (FinalReceiptV1, String, Option<Digest>, Option<Digest>) =
+        borsh::from_slice(&panel_record_v1(&w.ledger, &receipt, path, settlement).unwrap()).unwrap();
+    assert_eq!(label, settlement.label());
+
+    for claim in [timeout, approved, paid_over_panel] {
+        let (receipt, settlement, path, _) = w.export(&claim, 70);
+        assert!(panel_record_v1(&w.ledger, &receipt, path, settlement).is_none(), "{path}: no Panel record");
+    }
+}
