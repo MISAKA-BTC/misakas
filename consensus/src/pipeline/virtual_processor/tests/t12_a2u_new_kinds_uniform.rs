@@ -333,6 +333,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     params.sync_palw_claim_challenge_v2();
     params.sync_palw_econ_contracts_v1();
     params.sync_palw_permissionless_panel_v1();
+    params.sync_palw_memory_routing_court_v2();
     // Every other fence a LANDED row of the central table names (formulas, state encodings, the live build's kinds judged anew):
     // a row that lands with a fence this harness does not arm fails here, so node C judges every block with it far above.
     for row in PALW_A2_KIND_FENCE_TABLE_V1.iter().filter(|row| row.landed) {
@@ -355,6 +356,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_panel_lifetime_v2"
             | "palw_monetary_material_v1"
             | "palw_material_release_recovery_v2"
+            | "palw_memory_routing_court_v2"
             | "palw_staged_tir_route_v1"
             | "palw_staged_float_constraint_v1"
             | "palw_exec_payload_v2"

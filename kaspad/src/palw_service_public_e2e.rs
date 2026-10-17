@@ -2224,7 +2224,14 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         }
         if case.reacquire_honest() {
             let honest = chain.view(claim);
-            assert!(!honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted);
+            assert!(
+                !honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted,
+                "an honest reacquired job is never refuted, convicted or defaulted: refuted={} convicted={} defaulted={} at DAA {}: {honest:?}",
+                honest.executor_refuted,
+                honest.court_convicted,
+                honest.da_defaulted,
+                chain.daa()
+            );
             if honest.record.as_ref().is_some_and(|record| record.closed.contains(&bond)) {
                 assert!(!input_chunks.is_empty(), "the full input was reacquired through real public carriers");
                 if case.unretained_fp() {

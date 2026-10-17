@@ -1443,7 +1443,14 @@ async fn g14_conformance_candidate_grants_no_rights_then_promotes_only_after_a_r
     let id = claims(&mut net, &o.kfx(), o.opv, &jobs, &PRODUCERS[..1]).await[0];
     assert!(net.ledger().claims.contains_key(&id));
     until_final(&mut net, &id).await;
-    assert_eq!(net.attributed_events().iter().filter(|w| w.event.source_profile_id == o.opv).count(), 1);
+    // RFC07 selected-approval adapter (74921a40a): an optimistic-timeout Final has no randomly selected verifier approval and
+    // exports NO beacon event (`final_path` "OptimisticUnapproved"); before the adapter this asserted one event. The Final itself
+    // and its reward are unchanged (below).
+    assert_eq!(net.attributed_events().iter().filter(|w| w.event.source_profile_id == o.opv).count(), 0);
+    assert!(
+        net.api().unwrap().finals_read_v1().unwrap().iter().any(|f| f.receipt.claim == id && f.final_path == "OptimisticUnapproved"),
+        "the promoted class's claim is Final through the optimistic timeout"
+    );
     let paid = minted_and_owed(&net, &net.chain, PRODUCERS[0]);
     assert_eq!(paid.0 + paid.1 - before.0 - before.1, reward);
     net.beat_to(net.daa() + 2).await;
