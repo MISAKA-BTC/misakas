@@ -8,6 +8,11 @@ use misaka_palw_kernel::flat_job39::CheckedJobMaximumV39;
 use misaka_palw_tir::{ConstDecl, DType, Prim, Ref, Schedule, program_v2::OutputDecl, program_v39::*};
 
 fn source_wire() -> FlatSourceWireV39 {
+    source_wire_at(32)
+}
+
+/// The fixture source with original context `context` (a Master component's class must cover the whole original context).
+fn source_wire_at(context: u32) -> FlatSourceWireV39 {
     let out = TensorTypeV39::scalar(DType::I16);
     let p = TirProgramV39 {
         version: 39,
@@ -41,7 +46,7 @@ fn source_wire() -> FlatSourceWireV39 {
         program_bytes: p.encode(),
         inventory_root: derive_inventory_root_v39(&p, [9; 64], &[]).unwrap(),
         real_parameters: misaka_palw_kernel::trace::ParamCommitmentsV1::default(),
-        original_context_max: 32,
+        original_context_max: context,
         original_task_metadata: [9; 64],
         original_inventory: vec![],
     }
@@ -49,6 +54,11 @@ fn source_wire() -> FlatSourceWireV39 {
 
 /// text29's config plus native39, its policies bound to the funded policies, the Final27 policy and the physical service.
 fn owning_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    owning_config_with(None)
+}
+
+/// `owning_config`, optionally with a shorter challenge window (a job that must reach Final unaccused in the test).
+fn owning_config_with(challenge: Option<u64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let f = sparse9(false);
     let (mut cfg, b, p, fl) = super::text29::text_config(misaka_palw_kernel::flat_resources29::derive_flat_resources_v29(&f.p, &f.pc, 3, None).unwrap().court.court_set);
     let domain = cfg.params.palw_funded_execution_v11.as_ref().unwrap().policies.execution.network_domain;
@@ -63,6 +73,9 @@ fn owning_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     // v39's commit-transport window bounds its paged obligations' deadline (5 DAA in the probe: ~88 packets in 5 DAA at one slot per
     // DAA is 17.6× the physical service). A test horizon, not a measurement.
     cfg.params.palw_funded_execution_v11.as_mut().unwrap().policies.execution.horizons.commit_window = 200;
+    if let Some(c) = challenge {
+        cfg.params.palw_funded_execution_v11.as_mut().unwrap().policies.execution.horizons.challenge_window = c;
+    }
     let mut fence = PalwNativeExecutionFenceV39::unapproved_probe_at(ForkActivation::new(0), domain);
     let final_policy = cfg.params.palw_native_final_v27.as_ref().unwrap().policy.clone();
     let mass = kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(&cfg.params);
@@ -77,6 +90,8 @@ fn owning_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     cfg.params.palw_native_execution_v39 = Some(fence);
     (cfg, b, p, fl)
 }
+
+mod master;
 
 fn stage(net: &mut Net, card: usize, action: u8, body: Vec<u8>) -> Obj {
     net.route(card, &K::StageExecutionV14 { action, body })
