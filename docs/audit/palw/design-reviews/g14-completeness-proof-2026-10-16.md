@@ -1094,3 +1094,125 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 - 小さい fixture config(restart 0、margin 1 など)を使えば数千 DAA に縮む。
   ただし、それは「preset の court 窓を保つ」という既存 harness の前提を外すことになり、測定値でもない。そのため、この branch では採らなかった。
 - harness の残り(§8.4 の 2)は変わっていない。
+
+## 12. 追補: 共謀 drill の driver と受入試験 A〜G(2026-10-17、branch `integ/g14-drill`)
+
+外部監査(external audit `rfc1_20_audit_ja.md` §8 の受入試験 A〜G、§7 の指標)と、本書 §5.3(D-01〜D-18)・§4 G-17 に対する、この lane の作業と結果を記録する。
+暗号学的な計算証明は使わない(PRINCIPLES §8)。conviction は出荷している one-move court と公開 material、検証者自身の replay による。
+
+### 12.1 入れたもの
+
+**G-17 の注入手段(drill 専用。private drill chain 以外では daemon が起動を拒否する)**
+
+| flag | 注入する不正 | 経路 |
+|---|---|---|
+| `--palw-drill-fault=<kind>` | `output`(output root の差し替え)、`selection:<pos>:<lane>`(選択違反)、`oov:<pos>`、`tokenizer`(context の tokenizer field)、`prompt-relabel` / `short-prefill:<n>` / `garbage-prompt`(入力の差し替え)、`skip-all`(どの計算も再現しない execution root = 計算をしない claim)、`activation`、`interval:<n>`、`bend:<row>[:same]`、`leaf:<n>` | V2 Attempt。family 自身の drill 経路(`execute_with_drill_fault`)で、root は全部再導出 |
+| `--palw-drill-sparse-fault-seed=<seed>` | 疎な単一区間の不正。challenge が決まる前に、seed と honest run から、開ける・fused でない leaf を一様に 1 つ選んで偽造する(監査 §5.1 の D = 1) | V2 Attempt と canonical FP |
+| `--palw-drill-fp-fault=<spec>` | `kv:…`(KV cache 行の偽造 = state 不正、D-09)、`attn:…[:follow]`(fused attention 出力の偽造)、`skip-all` | canonical FP。verb のない backend は拒否する(現状 Qwen2.5 A16 のみ) |
+| `--palw-drill-withhold-all-da` | 負っている DA unit を種類を問わず全部出さない(D-11 の一般化) | 全 lane |
+| `--palw-drill-extra-seat=key=…,bond=…[,fee=…][,pay=…]`(繰り返し)と `--palw-drill-extra-seat-collude-with=<bonds>` | 共謀 Panel の全 seat を producer と同じ process に置く。各 seat は独立した Panel service(鍵・bond・fee・state dir)。producer 自身の seat は honest のまま、負っている answer を出す | drill の host 制約(node は同時 3 process まで) |
+
+既存の TIR frame 注入(`--palw-drill-tamper-tir-frame`: cone / selection / output / no-tfp1)と共謀 seat(`--palw-drill-collude-with`)、held DA の差し控えはそのまま使う。
+
+同じ process に複数の seat を置くために、gossip の inbox を daemon が 1 回だけ取り、各 seat service に複製して配る。自分が broadcast した receipt も inbox に戻す(drill 時だけ有効、`PalwGossipCenter::drill_enable_receipt_loopback`)。
+これがないと 2 つ目以降の seat は「gossip inbox が既に取られている」として停止する(run 2 で観測)。
+
+**受入試験(node 水準、`consensus/src/pipeline/virtual_processor/tests/lg14a_legacy_filer_e2e/g14_close_legacy/g14_acceptance.rs`)**
+
+network は親 module の `g14_close_config`。LG14-A・LG14-B・option (b) を `Params` に置き、試験用の arm-readiness record を付けて全体の validation を通す(mirror だけの迂回はしない)。出荷の `validate_palw_v2` は拒否したまま。
+
+**drill driver(`scripts/drills/g14_collusion_drill.py`)**
+
+- 3 process 構成。P(producer card 0 と、同じ process の共謀 seat card 1..3)、O(genesis 後に登録した外部 bond)、もう 1 つは P3(D-11)か F(IBD)。起動時は P の採掘条件(peer 1 つ)のために bond なしの relay R を置き、O が動いたら止める。
+- `--inject` で G-17 の注入 phase を順に実行する。phase ごとに、その間に受理された嘘の claim を指標の連鎖 eligible → checked → detected → localized → filed → accepted → convicted / defaulted → collected → invalidated で追う(監査 §7)。capacity 拒否・判定不能・fused leaf への引き渡し・未着地・Final 到達は別に数える。嘘の claim が報酬付きで Final に届いたら、その phase は FAIL(G14 の見逃し)。
+- `--run-acceptance` / `--acceptance-only` で A〜G の Rust 試験を対象を絞って実行する(cargo、`-j 3`)。B と C は他 lane の担当で、branch(`integ/g14-detection-policy`・`integ/g14-court-capacity`・`integ/g14-tir-pricing`)が HEAD の祖先になった時だけ、その試験を実行する。それまでは担当 lane を名指しして BLOCKED にする。
+
+### 12.2 受入試験の結果(実行済み、この branch、debug build)
+
+| 監査 §8 | 試験 | 結果 |
+|---|---|---|
+| A | `legacy_v2_attempt_full_collusion_outside_bond_convicts`(既存。全 seat が Valid、Panel の外にある genesis 後の bond 1 つが、read API と accepted block と自分の model copy だけで conviction する) | ok |
+| D 開示 → 算術裁定 | 同上(D2: producer は committed half のみ、行は検証者の model copy) | ok |
+| D 差し控え → DA default | `legacy_v2_attempt_held_da_withholding_ends_in_da_default`(既存) | ok |
+| D 偽告発 → 棄却 | `g14_accept_d_a_false_accusation_of_an_honest_claim_is_refused` | ok |
+| D 検証者の実装差 ≠ producer の不正 | `g14_accept_d_a_verifier_implementation_difference_is_not_producer_fraud`(検証者自身の run が 1 leaf で誤る。localizer はその leaf に着くが、court が producer の committed tile を登録 model の行から再計算して告発を拒否する) | ok |
+| E | `g14_accept_e_collected_once_reporter_from_collected_and_rights_void`(各 bond の担保の減少 = その罪の `collected` の合計。reporter 側の credit は各段階で罪ごとの `collected` 以下。同じ告発と kind-3 を再送しても徴収 0・offence 行の追加 0。void claim は vesting 行なし・payout なし・root は forfeited。replay node の root は block ごとに一致) | ok |
+| F Final − 1 | `g14_accept_f_the_same_conviction_from_final_minus_one` | ok |
+| F Final 後、liability 内 | `g14_accept_f_the_same_conviction_after_final_inside_the_liability` | ok |
+| F bond exit との競合 | `g14_accept_f_a_bond_exit_raced_against_the_pursuit_escapes_nothing`(Valid lock が生きている seat は exit を始められない。producer の exit 要求は追及中の担保を解放しない。conviction は slash する) | ok |
+| F liability 後 | `g14_accept_f_the_pursuit_window_and_the_payout_never_overlap` | ok(下の発見を参照) |
+| F reorg / restart / IBD / pruned import | 親 suite の `lg14a_*` 8 件と `g14r_resume` 4 件(fold の規則は同じ。harness が fence を mirror に置く点だけが違う) | ok |
+| G | `g14_accept_g_honest_claims_before_at_and_after_the_fence_settle`(H = 40 で武装。honest claim を DAA 39・40・41 にちょうど受理する。3 件とも Final・vesting 行(報酬)・selected chain 上の block に届く) | ok |
+| B | 他 lane(class ごとの検出率 policy) | BLOCKED。branch 未公開 |
+| C | 他 lane(court 容量 `integ/g14-court-capacity`、TIR frame の価格と時計 `integ/g14-tir-pricing`) | BLOCKED。HEAD に未着地 |
+
+`lg14a_legacy_filer_e2e` 全体: 22 件(新規 8 件、親の `g14_close_legacy` 2 件、`g14r_resume` 4 件、`lg14a_*` 8 件)。一括の実行では 21 passed、1 failed。失敗した 1 件は F の liability 後の試験の初版で、下の境界に合わせて書き直し、単独で再実行して ok。
+
+**F で見つけた境界(仕様として明記が要る)。**
+
+- V2 Attempt の post-Final 追及は、vesting 行の DAA expiry(`F + window_court`、t12 で 3,000)まで開いている。
+- expiry を過ぎると claim 行が退役し、dispute view も消える。reservation の carrier は block に載るが、fold は記録しない。
+- vesting 行が成熟するのは、DAA expiry と settlement の時計(V-4)の両方を満たした後である。harness では settlement が進まないため、expiry を過ぎても未成熟のまま残った。
+- 結論: 追及の窓と報酬の支払いは重ならない。expiry より前は支払いなし・追及可能。expiry より後は追及不能で、支払いはその後になる。
+- ただし、expiry から成熟までの間は「未払いだが追及できない」状態になる。これを「既払の扱い」と「未払の取消」のどちらとして仕様化するかは決まっていない。監査 F の「既払報酬の扱いは別途仕様化」に当たる。
+
+### 12.3 実 process の drill(この branch の release build、ローカルの private drill chain)
+
+(下の §12.4 に記録する)
+
+### 12.4 実 process drill の結果
+
+構成: この branch の release build(`misaka-rfc12-private-node`, profile `g14-v1`, genesis mode = G14 の全 fence を DAA 0 で武装し、drill の arm-readiness record を使う)。salted な testnet-12 drill chain、loopback のみ、同時に動く node は 3 process まで。
+P = producer card 0 と、同じ process にいる共謀 seat card 1〜3(3-of-3、全員が Valid)。O = genesis 後に通常の `BondRegistered` で登録した外部 bond(capability なし、Panel に入らない)。
+block 間隔は約 1 分、DAA の進みは 0.2〜0.4 / 分(PALW 1 slot = 1 DAA)。
+
+| run | 内容 | 観測 |
+|---|---|---|
+| 1, 2 | 起動 | P は peer が 0 だと採掘しない。同じ process の追加 seat は、gossip inbox が単一 consumer のため停止した。どちらも driver と daemon を直した(relay R、inbox の fan-out) |
+| 3 | P が毎回の draw で嘘をつく | DAA 38 までに claim 70 件、うち 28 件が共謀 Panel の 126 署名で license。O は 41 件を予約し、Final は全部保留(報酬 0)。ただし demand は 33 件 queue されたが、1 件も chain に載らなかった。**外部 bond 1 つの carrier chain は 1 block に 1 object なので、毎 draw の嘘に追い付けない。** 予約は claim を trace retention(約 1.17e8 DAA)まで保留し続けるので、報酬は出ないが conviction にも届かない |
+| 4 | 嘘を 2 件に限定(DAA 5) | 圧縮した flag day(DAA 6/10/14/20/24/28)を越えるたびに peer の fork-id handshake が切れた。node は別々に採掘し、再接続の reorg で O の予約(DAA 6 で carried)が消えた。O の filer は「carried」と記録したまま再提出せず、2 件とも予約なしで license。Final(DAA 145)に向かった。**live filer は、reorg で消えた自分の予約を再導出しない**(in-process の `g14r_*` は新しい verifier で再導出するので、この経路を試していない) |
+| 5 | flag day の後(DAA 30)に嘘を 2 件 | **D-02 の conviction が成立した。** claim(accepted DAA 30)は 3-of-3 の共謀 Panel が license(licensed 50 前後)。O だけが予約 → binding → 11 lane の k-ary descent → `Terminal{leaf 2780}`(auto lie leaf そのもの)→ `LegacyLeafRecomputedV2` と進み、DAA 58 で `Voided{CourtFraud}`、`courtConvicted = true`。producer は 93,906,321,001,040 sompi(担保の全額)を slash された。void claim の vesting と payout は 0。告発者は O だけで、共謀 seat の提出は 0(filter の行のみ)。外部 bond は課金なし。**FAIL の理由は 2 つ。** (1) Valid 署名をした 3 seat は slash されていない(各 87 lock が生存)。(2) `ProducerFrozen` は観測されなかった。担保 0 で producer floor を下回り、producer は holding になった(後続の claim は 0) |
+| 6 | G-17 注入 phase(sparse:7、skip-all)、restart+IBD、D-11 | §12.5 |
+
+**D-02 で見つけた gap(node の自動化。規則は fold 試験で成立している)**
+
+- **G-D02a: LG14-A/B の公開追及で conviction が確定しても、Valid 署名者への kind-3 filing が自動で起きない。**
+  - `kaspad/src/palw_filer_false_valid.rs` の proof を記録する経路(`note_proof_v1`)は 3 つだけである。FP capture の sample、court close の challenger、replay の ExecutorRefuted。
+  - legacy の terminal(`LegacyLeafRecomputedV2` → CourtFraud)は、この経路につながっていない。
+  - in-process の `legacy_v2_attempt_full_collusion_outside_bond_convicts` は kind-3 を手で提出しており、全 seat が slash される。
+  - 修正: legacy filer の Convicted で、chain 上の disclosure(committed half)と自分の model の行から `StepArithmetic` の proof を組み、`note_proof_v1` に渡す。担当: legacy route / court lane。
+- **G-D02b: 圧縮した flag day ごとの fork-id 切断と、その後の reorg で消えた予約を、live filer が再提出しない(run 4)。**
+  - DAA 16,000 の fence でも、1 回は同じ handshake 切断が起きる。
+  - 修正: filer の book が「carried」を chain 上の reservation record と照合し直し、消えていれば再提出する。
+- **G-D02c(容量): 外部 bond 1 つの直列な carrier では、producer の嘘の頻度に追い付けない(run 3)。**
+  - 報酬は出ない(保留は効いている)。しかし conviction と担保の徴収に届かない。
+  - 監査 C(court 容量と admission)と同じ問題で、担当は court-capacity lane。
+
+### 12.5 G-17 の注入 phase(run 6・7、注入ごとに producer の card を分ける)
+
+| 注入 | 結果 | 指標の連鎖 |
+|---|---|---|
+| `sparse:7`(card 5) | PASS 相当(phase の行は driver の bug で出ず、chain を直接読んで判定した。bug は直した) | draw ごとに 5,560 候補から 1 leaf を選んだ(実測で 4,583 種類の leaf、一様)。外部 bond は job を全部 replay して root の不一致を検出する。k-ary descent で各 claim の leaf まで局所化した(例: leaf 4123・3927・3184、Terminal)。DAA 4 の claim で `court_fraud`、担保の全額を slash。同じ bond の残り 62 件は ADR-0160 の aggregate forfeit で void(報酬 0)。**LG14-A の追及は区間の抜き取りではなく全 replay と二分探索なので、D = 1 の疎な不正でも見逃しは構造的に 0。** 費用は claim ごとの全 replay(監査 §5.1 の k = 4 の表は、この経路には当てはまらない) |
+| `skip-all`(card 5、`UnboundExecutionRoot`) | OBSERVED(未完了) | 検出(replay の不一致)→ 予約 → binding demand の session が開いた(DAA 50。告発者 2 者)。producer はどの root にも対応する material を持たないため、答えられない。claim は licensed のまま保留され、報酬 0。session の期限は DAA 1,250 で、今の block 速度(0.3 DAA/分)では約 57 時間かかるため、DA default までは観測していない。結末は in-process の `legacy_v2_attempt_held_da_withholding_ends_in_da_default` と同じ経路の予定 |
+| その他(`output`、`selection`、`tokenizer`、`prompt-relabel`、`withhold-all`、FP の `kv` / `attn`) | NOT-RUN | 注入手段はある(`palw_drill_g17_tests`)。1 phase に 3〜4 時間かかるため、この回は実行していない |
+
+**未実行**
+
+- restart+IBD(live)と D-11(live)は、run 5〜7 では D-02 と注入を優先したため実行していない。
+- in-process では、`g14r_*` 4 件(reorg・IBD・socket・pruned import)、`lg14a_the_pursuit_survives_a_node_restart`、`legacy_v2_attempt_held_da_withholding_ends_in_da_default` が ok。
+
+### 12.6 判定と担当 lane
+
+| 項目 | 状態 | 残り / 担当 |
+|---|---|---|
+| A、D、E、F、G(node 水準) | 成立(試験 22 件) | — |
+| D-02 live の producer conviction | 成立 | — |
+| D-02 live の Valid 署名者 slash | **不成立(G-D02a)** | legacy filer → `note_proof_v1` の接続。legacy route / court lane |
+| live filer の reorg 後の再提出 | **不成立(G-D02b)** | filer の book を chain と照合し直す。legacy route lane |
+| 外部 bond 1 つの追及処理量 | **不成立(G-D02c)** | court-capacity lane(監査 C) |
+| B(class ごとの検出率) | BLOCKED | detection-policy lane(branch 未公開) |
+| C(court 容量、TIR owner、frame の価格と時計) | BLOCKED | `integ/g14-court-capacity`、`integ/g14-tir-pricing` |
+| D-03 / D-04 / D-05 / D-06 / D-07 / D-18(TIR・eval) | BLOCKED | IR FP lane、shard fence、model line の fixture |
+| D-12 / D-13 / D-14 | NOT-INJECTABLE | fixture がない |
+
+drill の記録(run 3〜7 の JSON と、O の filer の log 抜粋)は、作業 scratchpad の `g14drill/keep/` にある(repository には入れない)。
