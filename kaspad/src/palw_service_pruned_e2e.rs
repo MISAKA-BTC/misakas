@@ -83,12 +83,20 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
     // Every IBD caller establishes the sidecar import target through its pruning history first (761dcb1f3: a valid historic root
     // is not permission to replace the live PALW tip). Without this, both imports below were refused for the target alone
     // (`ImportedPalwPruningPointMismatch(point, genesis)`), so the forged-claim refusal proved nothing.
+    // The history is the one this node derived itself while validating the prefix: `point`'s pruning samples back to genesis.
+    let genesis = fresh.config.params.genesis.hash;
+    let mut history = vec![point];
+    while let Some(sample) = fresh.tc.pruning_sample_from_pov_for_tests(*history.last().unwrap()) {
+        if sample == genesis {
+            break;
+        }
+        history.push(sample);
+    }
+    history.push(genesis);
+    history.reverse();
     fresh
         .tc
-        .import_pruning_points(vec![
-            fresh.tc.get_header(fresh.config.params.genesis.hash).unwrap(),
-            fresh.tc.get_header(point).unwrap(),
-        ])
+        .import_pruning_points(history.iter().map(|hash| fresh.tc.get_header(*hash).unwrap()).collect())
         .expect("the verified local headers establish the sidecar import target");
     let mut forged = carriage.clone();
     forged.claims.get_mut(&claim).unwrap().execution_root = Hash64::from_bytes([0xED; 64]);

@@ -641,6 +641,14 @@ impl TestConsensus {
         self.consensus.headers_store.clone()
     }
 
+    /// The pruning sample this node recorded from `hash`'s point of view (`None` where it recorded none) — so a fixture can name the
+    /// pruning-point history the node already derived when it establishes a sidecar import target (`import_pruning_points`).
+    pub fn pruning_sample_from_pov_for_tests(&self, hash: BlockHash) -> Option<BlockHash> {
+        use crate::model::stores::pruning_samples::PruningSamplesStoreReader;
+        use kaspa_database::prelude::StoreResultExt;
+        self.consensus.storage.pruning_samples_store.pruning_sample_from_pov(hash).optional().unwrap()
+    }
+
     pub fn virtual_stores(&self) -> Arc<RwLock<VirtualStores>> {
         self.consensus.virtual_stores.clone()
     }
