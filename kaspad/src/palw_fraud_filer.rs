@@ -3025,6 +3025,60 @@ impl PalwPanelService {
             )
             .await;
         }
+        // **G14 (G-D02a): our public terminals that the chain convicted on** — a voided claim leaves the candidate list before its case
+        // reaches `Done`, so the conviction is read here, per terminal we sent. The terminal's own refutation was offered to the
+        // false-Valid filer when it was built; a proof too large for its book (`note_proof_v1` refuses it) is replaced by the
+        // chain's rooted `CourtFraud` contradiction, the small continuation the scan already accepts for such proofs.
+        if !book.terminal_proofs.is_empty() {
+            let claims: Vec<Hash64> = book.terminal_proofs.keys().copied().collect();
+            let phases = session
+                .clone()
+                .spawn_blocking(move |c| claims.into_iter().map(|claim| (claim, c.palw_legacy_dispute_v1(claim).map(|v| (v.phase, v.accepted_daa)))).collect::<Vec<_>>())
+                .await;
+            for (claim, phase) in phases {
+                match phase {
+                    Some((kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Voided { voided_daa, reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::CourtFraud }, accepted_daa)) => {
+                        let proof = book.terminal_proofs.remove(&claim).expect("listed above");
+                        let armed = crate::palw_filer_false_valid::palw_false_valid_armed_v1(params, self.config.fee_outpoint.is_some(), current_daa);
+                        let mut noted = false_valid.holds(&claim);
+                        if !noted {
+                            noted = false_valid.note_step_refutation_v1(
+                                armed,
+                                claim,
+                                &proof.refutation,
+                                &proof.operand_openings,
+                                proof.prompt_ids_opening.as_ref(),
+                                crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: proof.leaf },
+                                Some(accepted_daa),
+                                current_daa,
+                            );
+                        }
+                        if !noted && armed {
+                            noted = false_valid.note_proof_v1(
+                                kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidProofV1 {
+                                    claim_id: claim,
+                                    contradiction: kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud { voided_daa },
+                                    prompt_ids_opening: None,
+                                },
+                                crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: proof.leaf },
+                                Some(accepted_daa),
+                                current_daa,
+                            );
+                        }
+                        info!(
+                            "[{PALW_PANEL}] claim {claim}: convicted (CourtFraud at DAA {voided_daa}) on our public terminal at leaf {} — \
+                             every liable Valid signer is handed to the false-Valid filer: {noted} (G14 G-D02a)",
+                            proof.leaf
+                        );
+                    }
+                    // Still open: keep watching. Gone, or ended otherwise: nothing to file.
+                    Some((phase, _)) if !phase.is_terminal() => {}
+                    _ => {
+                        book.terminal_proofs.remove(&claim);
+                    }
+                }
+            }
+        }
         // Every pursued case, one engine step each (a step that reads an answer runs on to the next).
         let role = book.role.unwrap_or(PalwFilerRoleV1::PublicBond);
         let form = params.palw_prompt_ids_form_at(current_daa);
