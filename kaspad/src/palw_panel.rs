@@ -263,6 +263,9 @@ mod tir_dissect;
 mod tir_shard;
 #[cfg(test)]
 mod tir_shard_e2e;
+/// RFC-0018 (iv): the single in-flight carrier's wait across many classes.
+#[cfg(test)]
+mod carrier_wait_many_classes;
 
 /// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
 /// phase differs from the one `seen` last recorded, in the operator's stage names. A claim seen for
@@ -3092,6 +3095,22 @@ pub(crate) const PALW_READINESS_LANE_INFLIGHT_V1: usize = 1;
 /// were whenever its chain is free.
 pub(crate) fn palw_readiness_lane_takes_v1(main_takes: bool, lane_inflight: usize) -> bool {
     !main_takes && lane_inflight < PALW_READINESS_LANE_INFLIGHT_V1
+}
+
+/// **RFC-0018 (iv), 2026-10-18: how many per-class receipt lanes a seat runs at most.** Each needs its own spare output under the
+/// seat's script (scanned at most once a DAA per lane); the bound keeps a seat on many classes from scanning without end.
+pub(crate) const PALW_RECEIPT_LANES_MAX_V1: usize = 16;
+
+/// **Does an own receipt the main slot cannot take ride its class's lane?** One in flight per lane, as the readiness lane (V07):
+/// each lane spends its own CONFIRMED output — never a child of another chain's carrier, which relay drops (why the main cap is
+/// one). A class with no lane yet opens one only while fewer than [`PALW_RECEIPT_LANES_MAX_V1`] exist. Measured by
+/// `carrier_wait_many_classes`: behind a court queue that never empties the main slot never reaches the OwnReceipts site, so
+/// without a lane a seat's own receipts miss their window at any class count.
+pub(crate) fn palw_receipt_lane_takes_v1(lane_inflight: Option<usize>, lanes: usize) -> bool {
+    match lane_inflight {
+        Some(inflight) => inflight < PALW_READINESS_LANE_INFLIGHT_V1,
+        None => lanes < PALW_RECEIPT_LANES_MAX_V1,
+    }
 }
 
 /// **The readiness lane's funding chain** (V07), carried across ticks like the main chain's: a
@@ -8857,6 +8876,10 @@ impl PalwPanelService {
         let mut inflight: usize = 0;
         // V07: the readiness lane's own funding chain — possession proofs the main slot cannot take.
         let mut readiness_lane = PalwReadinessLaneV1::default();
+        // RFC-0018 (iv), 2026-10-18: the per-class receipt lanes — a seat's own supplementary receipt the main slot cannot take
+        // rides its class's lane (its own confirmed output, one in flight; `palw_receipt_lane_takes_v1`).
+        let mut receipt_lanes: BTreeMap<Hash64, PalwReadinessLaneV1> = BTreeMap::new();
+        let mut own_receipt_class: HashMap<Hash64, Hash64> = HashMap::new();
         // ADR-0135: a possession proof that found no carrier slot waits for the next one, and the
         // receipts yield until it lands — a seat whose proofs starve behind its own receipt traffic
         // counts as no seat at all (measured on the devnet: receipts filled the eight-carrier chain
@@ -13365,6 +13388,7 @@ impl PalwPanelService {
                 // deadline the chain takes it by.
                 if valid && let Some(carried) = whole.clone().or_else(|| segmented.as_ref().map(|r| r.receipt.clone())) {
                     own_receipts.insert(duty.claim_id, (carried, deadline));
+                    own_receipt_class.insert(duty.claim_id, duty.class_id);
                 }
                 let beside = segmented.is_some();
                 if let Some(receipt) = segmented {
@@ -13909,6 +13933,24 @@ impl PalwPanelService {
                 } else {
                     readiness_lane.settle(false, false, false);
                 }
+                // RFC-0018 (iv): every receipt lane's funding, read the same way.
+                for lane in receipt_lanes.values_mut() {
+                    if let Some((lane_tip, _)) = lane.funding.clone() {
+                        let pool = self.flow_context.mining_manager().clone();
+                        let confirmed = session.get_virtual_utxo_entry(lane_tip).is_some();
+                        let spent_in_pool = confirmed && pool.outpoint_is_spent_in_mempool(&lane_tip);
+                        let kept = confirmed
+                            || pool
+                                .has_transaction(
+                                    lane_tip.transaction_id,
+                                    kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly,
+                                )
+                                .await;
+                        lane.settle(confirmed, spent_in_pool, kept);
+                    } else {
+                        lane.settle(false, false, false);
+                    }
+                }
                 let mut held = inflight >= MAX_INFLIGHT_CARRIERS;
                 // **Our own tip carrier, unconfirmed since it was sent, and for how long** (the pre-t12
                 // drill of 2026-09-25). Held means the checks above found it neither mined nor gone:
@@ -14055,7 +14097,12 @@ impl PalwPanelService {
                         // ordinary proofs rode the lane while the one about to lapse waited (the int-4
                         // audit of 2026-09-26, the n1 x n2 composition).
                         let main: Vec<TransactionOutpoint> =
-                            funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();
+                            funding
+                            .iter()
+                            .chain(chained_funding.iter())
+                            .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
+                            .map(|(outpoint, _)| *outpoint)
+                            .collect();
                         readiness_waiting =
                             !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;
                     }
@@ -14074,7 +14121,12 @@ impl PalwPanelService {
                 {
                     // V07: the main slot cannot take the escalated proof this tick — the lane can.
                     let main: Vec<TransactionOutpoint> =
-                        funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();
+                        funding
+                            .iter()
+                            .chain(chained_funding.iter())
+                            .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
+                            .map(|(outpoint, _)| *outpoint)
+                            .collect();
                     if self.carry_on_readiness_lane_v1(&session, &duties[at], current_daa, &mut readiness_lane, &main).await {
                         duties.remove(at);
                         readiness_waiting = false;
@@ -14299,7 +14351,12 @@ impl PalwPanelService {
                     if funding.is_none() || !slots.offers(PalwCarrierSiteV1::Own, inflight) {
                         // V07: the main slot cannot take it this tick — the readiness lane can, past R-core+.
                         let main: Vec<TransactionOutpoint> =
-                            funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();
+                            funding
+                            .iter()
+                            .chain(chained_funding.iter())
+                            .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
+                            .map(|(outpoint, _)| *outpoint)
+                            .collect();
                         if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)
                             && self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await
                         {
@@ -14755,15 +14812,71 @@ impl PalwPanelService {
                     own_receipts.iter().map(|(claim, (receipt, _))| (*claim, receipt.clone())).collect();
                 own.sort_by_key(|(claim, _)| *claim);
                 for (claim, receipt) in own {
-                    if !slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight) || readiness_waiting {
-                        break;
-                    }
-                    let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
                     if let Some(at) = supplementary_submitted.get(&claim)
                         && current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA)
                     {
                         continue;
                     }
+                    let main_takes = slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight) && !readiness_waiting && funding.is_some();
+                    if !main_takes {
+                        // RFC-0018 (iv): the main slot is taken (one carrier in flight, a court storm, a waiting possession proof):
+                        // the receipt rides its class's lane, if this seat holds a spare output for it.
+                        let Some(class) = own_receipt_class.get(&claim).copied() else { continue };
+                        if !palw_receipt_lane_takes_v1(receipt_lanes.get(&class).map(|l| l.inflight), receipt_lanes.len()) {
+                            continue;
+                        }
+                        let held: Vec<TransactionOutpoint> = funding
+                            .iter()
+                            .chain(chained_funding.iter())
+                            .chain(readiness_lane.funding.iter())
+                            .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
+                            .map(|(outpoint, _)| *outpoint)
+                            .collect();
+                        let lane = receipt_lanes.entry(class).or_default();
+                        if lane.funding.is_none() {
+                            if lane.unfunded_at == Some(current_daa) {
+                                continue;
+                            }
+                            lane.funding = self.resolve_readiness_lane_funding_v1(&session, &held).await;
+                            if lane.funding.is_none() {
+                                lane.unfunded_at = Some(current_daa);
+                                continue;
+                            }
+                        }
+                        let Some(object) = session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt]) else { continue };
+                        let Some((lane_outpoint, lane_entry)) = lane.funding.clone() else { continue };
+                        match self.build_lifecycle_tx(&object, lane_outpoint, &lane_entry) {
+                            Ok(tx) => {
+                                let txid = tx.id();
+                                let change = tx.outputs[0].clone();
+                                match self.submit_carrier_v1(&session, tx).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[{PALW_PANEL}] submitted this seat's own receipt for claim {claim} on class {class}'s lane in tx {txid}"
+                                        );
+                                        lane.funding = Some((
+                                            TransactionOutpoint::new(txid, 0),
+                                            UtxoEntry {
+                                                amount: change.value,
+                                                script_public_key: change.script_public_key,
+                                                block_daa_score: current_daa,
+                                                is_coinbase: false,
+                                            },
+                                        ));
+                                        lane.inflight = 1;
+                                        supplementary_submitted.insert(claim, current_daa);
+                                    }
+                                    Err(e) => {
+                                        warn!("[{PALW_PANEL}] the mempool refused the lane receipt for claim {claim}: {e}");
+                                        lane.funding = None;
+                                    }
+                                }
+                            }
+                            Err(e) => warn!("[{PALW_PANEL}] cannot build the lane carrier for claim {claim}: {e}"),
+                        }
+                        continue;
+                    }
+                    let Some((funding_outpoint, funding_entry)) = funding.clone() else { continue };
                     let Some(object) = session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt]) else { continue };
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
@@ -15028,6 +15141,8 @@ impl PalwPanelService {
             // ADR-0124 Decision 2: a receipt this seat may still carry itself lives exactly as long
             // as its window; the chain refuses anything past `receipt_deadline` regardless.
             own_receipts.retain(|_, (_, deadline)| current_daa <= *deadline);
+            own_receipt_class.retain(|claim, _| own_receipts.contains_key(claim));
+            receipt_lanes.retain(|class, lane| lane.funding.is_some() || own_receipt_class.values().any(|c| c == class));
             supplementary_submitted.retain(|claim, _| own_receipts.contains_key(claim));
             supplementary_v3_submitted
                 .retain(|claim, _| receipt_pool_v3.contains_claim(claim) || receipt_pool_v2.contains_claim(claim));
