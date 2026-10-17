@@ -69,9 +69,7 @@ fn conformance_config(eligible: Vec<Hash64>, floor: u16) -> (Config, PalwConsens
     let bundle = with_opv_budget(&mut params, bundle);
     // RFC07 (validation 2026-10-17): the paid-source path (`paid_sources::arm_paid_sources`) is armed only by the worlds that
     // drive it (the `PALW_PAID_SOURCES` probe of this round), so the existing worlds keep their fences.
-    if std::env::var("PALW_PAID_SOURCES").is_ok() {
-        paid_sources::arm_paid_sources(&mut params);
-    }
+    paid_sources::arm_paid_sources(&mut params);
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
 }
@@ -288,16 +286,13 @@ impl Cw {
     /// consumers and sealed/revealed by rotating producers. The DISTINCT beacon authenticates both identities from ledger rows.
     /// They reach Final with no Panel when their window closes.
     async fn source_claims(&mut self, n: usize) -> Vec<Digest> {
-        // RFC07 adapter (74921a40a): an OPV timeout Final exports no event, so these sources no longer lock the beacon (the 37
-        // blocked tests). The real path is `paid_sources::paid_source_claims` (bootstrap seed, user decision 2026-10-17); it is not
-        // wired here yet — its next requirement is the RFC08 kernel material manifest (validation 2026-10-17, see that module).
-        if std::env::var("PALW_PAID_SOURCES").is_ok() {
-            return self.paid_source_claims(n).await;
-        }
-        self.opv_source_claims(n).await
+        // RFC07 adapter (74921a40a): an OPV timeout Final exports no event; the sources are approved paid claims on the real path
+        // (`paid_sources`, ADR-0183).
+        self.paid_source_claims(n).await
     }
 
     /// The pre-adapter sources: OPV claims reaching Final by timeout (they export no beacon event since the adapter).
+    #[allow(dead_code)]
     async fn opv_source_claims(&mut self, n: usize) -> Vec<Digest> {
         let mut jobs = Vec::new();
         for _ in 0..n {
@@ -349,7 +344,8 @@ impl Cw {
     /// Beat until the attempt's beacon locks (k = 2 future Panel-independent Finals, then depth D).
     async fn until_locked(&mut self) -> u64 {
         let ttpb = self.net.ttpb();
-        for _ in 0..400 {
+        // Paid sources reach Final only after their signed lifetime (≈ 444 DAA, ADR-0183): bounded by the widened window.
+        for _ in 0..(kaspa_consensus_core::palw_conformance_evidence_v1::PALW_ONBOARDING_POLICY_WINDOW_DAA_V1 * 2) {
             let read = self.read();
             // Locked at the sink (what the next block's fold sees), not only at the virtual's DAA the read is taken at.
             let policy = palw_onboarding_challenge_policy_v1();
@@ -644,7 +640,14 @@ async fn g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_
     assert_eq!(state(&cw).0, S::ChallengePending, "nothing passes before the window closes");
     cw.net.beat_to(posted.window_end_daa + 1).await;
     let a = cw.attempt();
-    assert_eq!(a.record.state, S::G14Eligible, "CONFORMANCE_PASSED, then the kernel class's public-prosecution step");
+    // With paid sources the beacon locks after their signed lifetime (ADR-0183), by which time the artifact binding may already be
+    // Final: the pass then goes straight on to ACTIVE_REWARDABLE.
+    let binding_final = cw.net.api().unwrap().artifact_binding_v1(&cw.v2_class, &cw.kernel_root).unwrap().final_daa;
+    assert!(
+        a.record.state == S::G14Eligible || (cw.net.daa() >= binding_final && a.record.state == S::ActiveRewardable),
+        "CONFORMANCE_PASSED, then the kernel class's public-prosecution step: {:?}",
+        a.record.state
+    );
     assert_eq!(a.record.conformance_evidence_id, Some(evidence_id.as_bytes()));
     let (fresh, agrees) = cw.fresh();
     assert_eq!(fresh.posted, Some(Ok(())));

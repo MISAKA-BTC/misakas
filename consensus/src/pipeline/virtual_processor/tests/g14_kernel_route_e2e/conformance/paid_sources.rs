@@ -68,7 +68,6 @@ fn card_sign(card: usize, message: &[u8], context: &[u8], rnd: u8) -> Vec<u8> {
     libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, message, context, [rnd; 32]).expect("ML-DSA-87 signs").as_ref().to_vec()
 }
 
-#[allow(dead_code)] // the paid-source path is wired by the `PALW_PAID_SOURCES` probe only (see the module doc)
 impl Cw {
     fn paid_policy(&self) -> kaspa_consensus_core::palw_claim_challenge_v2::PalwClaimChallengePolicyV2 {
         self.net.config.params.palw_claim_challenge_v2.expect("the paid path is armed").policy

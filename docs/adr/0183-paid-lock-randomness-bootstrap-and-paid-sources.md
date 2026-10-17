@@ -17,6 +17,8 @@ RFC07 adapter 以降、beacon event を出せるのは選ばれた checker が�
 2. seal 由来の seed が得られず、承認済み paid Final もまだ無い最初の lock に限り、genesis / 年次フォークで pin した固定 seed を使う。固定 seed で lock した claim は抽選が予測可能なため EXEC credit を得ない(event は出す)。
 3. 承認済み paid claim を beacon source に含め、paid job の opt-in source 登録を許す(同じ policy 下のみ)。
 
+4. onboarding / conformance beacon の窓(`PALW_ONBOARDING_POLICY_WINDOW_DAA_V1`)を、paid source claim の署名済み寿命(source 窓を含む)以上に広げる。120 → 1,024 DAA(暫定値)。120 では paid source の Final が窓に入らず beacon が UNAVAILABLE になった(検証記録 §6)。ユーザー決定 2026-10-17。
+
 ## grinding が効かない理由
 
 対象は全 source の seal より先に commit する。seal は内容と salt を固定し、公開は seal 期間後。source 集合は seal 期間の終わりで閉じ、対象自身の producer・base job・相互 source 組は除外される。残る手段は reveal の保留だけで、それは attempt 全体の veto(deposit 没収)になり、結果の選択にはならない。前提:混ぜた source のうち少なくとも 1 つが正直。
