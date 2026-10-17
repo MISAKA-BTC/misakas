@@ -672,3 +672,108 @@ fn rfc18_dag_width_estimate_is_monotone_and_the_schedule_is_structurally_checked
     assert!(bad.refusal().is_some());
     assert_ne!(probe.schedule.id(), bad.id());
 }
+
+// =================================================================================================================================
+// RFC-0023 / ADR-0186 stage 1: an open claim ends the resolved prefix only within its own liability bound
+// =================================================================================================================================
+
+fn stage1(p: PalwStateParamsV2) -> PalwStateParamsV2 {
+    p.with_unresolved_bound_from_daa(Some(FENCE))
+}
+
+/// An open (licensed, undecided) attempt accepted at `daa` / `blue` whose unresolved bound is `daa + l`.
+fn open_attempt(daa: u64, blue: u64, l: u64) -> PalwClaimStateV2 {
+    let mut c = claim_at(daa, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa + 1 });
+    c.accepted_blue_score = blue;
+    c.accepted_block = Hash64::from_u64_word(0xB10C_0000 + blue);
+    c.trace_retention_daa = daa + l;
+    c
+}
+
+fn certified_final(state: &mut PalwChainStateV2, n: u64, daa: u64, blue: u64, final_daa: u64, l: u64) {
+    let mut c = claim_at(daa, PalwClaimPhaseV2::Final { final_daa });
+    c.accepted_blue_score = blue;
+    c.accepted_block = Hash64::from_u64_word(0xB10C_0000 + blue);
+    c.trace_retention_daa = daa + l;
+    state.set_false_valid_rows_for_tests(claim_id(n), Some(c), None, None, 0);
+    certify(state, &claim_id(n), Some(PalwCertificationOutcomeV1::Certified));
+}
+
+#[test]
+fn rfc23s1_the_resolved_prefix_skips_only_open_claims_past_their_own_bound_and_is_the_identity_below_the_fence() {
+    use crate::palw_unresolved_bound_v1::*;
+    let gate_c = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
+    let armed = stage1(gate_c.clone());
+    let mut state = PalwChainStateV2::genesis();
+    // A: open at blue 10, accepted at FENCE + 1, bound FENCE + 1 + 1_000. B: certified Final at blue 20.
+    state.set_false_valid_rows_for_tests(claim_id(1), Some(open_attempt(FENCE + 1, 10, 1_000)), None, None, 0);
+    state.set_unresolved_for_tests(10, claim_id(1), true);
+    certified_final(&mut state, 2, FENCE + 2, 20, FENCE + 50, 1_000);
+    for now in [FENCE + 10, FENCE + 1_001] {
+        assert_eq!(palw_resolved_through_v1(&state, &gate_c, now), 9, "below the fence the oldest open claim always ends the prefix");
+    }
+    assert_eq!(palw_resolved_through_v1(&state, &armed, FENCE + 1_001), 9, "at its bound A still holds the prefix");
+    assert_eq!(palw_resolved_through_v1(&state, &armed, FENCE + 1_002), u64::MAX, "past its bound A no longer does");
+    // The frontier formula is unchanged: the deepest frontier-eligible Final inside the prefix.
+    assert_eq!(palw_gate_c_frontier_v1(&state, &armed, palw_resolved_through_v1(&state, &armed, FENCE + 500)).0, 0);
+    assert_eq!(palw_gate_c_frontier_v1(&state, &armed, palw_resolved_through_v1(&state, &armed, FENCE + 1_002)).0, 20);
+    // A past its bound keeps its liability: still open in the index (pruning's first bound stays at it), never certified credit.
+    assert_eq!(state.unresolved_first_blue_score_v1(), Some(10));
+    assert!(palw_claim_lapsed_bound_v1(&armed, state.claim(&claim_id(1)).unwrap(), FENCE + 1_002));
+    // A claim accepted below the fence is never governed (byte-identical behaviour for every pre-fence claim).
+    let mut old = open_attempt(FENCE - 5, 5, 10);
+    old.accepted_daa = FENCE - 5;
+    assert!(!palw_claim_lapsed_bound_v1(&armed, &old, u64::MAX));
+}
+
+#[test]
+fn rfc23s1_a_claim_final_only_after_its_bound_earns_no_frontier_credit() {
+    use crate::palw_unresolved_bound_v1::*;
+    let armed = stage1(with_mirror(PalwGateCRuleV1::SecurityCertifiedV1));
+    let mut state = PalwChainStateV2::genesis();
+    // Final within the bound: frontier-eligible. Final past the bound: never (even certified).
+    certified_final(&mut state, 1, FENCE + 1, 10, FENCE + 900, 1_000);
+    certified_final(&mut state, 2, FENCE + 2, 20, FENCE + 1_100, 1_000);
+    assert!(palw_gate_c_advances_frontier_v1(&armed, &state, &claim_id(1), state.claim(&claim_id(1)).unwrap()));
+    assert!(!palw_gate_c_advances_frontier_v1(&armed, &state, &claim_id(2), state.claim(&claim_id(2)).unwrap()));
+    assert_eq!(palw_gate_c_frontier_v1(&state, &armed, u64::MAX).0, 10);
+    // Below the fence the late Final is an ordinary certified Final.
+    let gate_c = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
+    assert_eq!(palw_gate_c_frontier_v1(&state, &gate_c, u64::MAX).0, 20);
+}
+
+/// **The continuous hand-over attack** (RFC-0023 §3.4): every `gap` DAA the attacker opens a claim and keeps it open to its bound;
+/// honest certified claims finalize meanwhile. Past the fence the frontier lag (now − accepted DAA of the frontier claim) stays
+/// within `L + gap + finality` in steady state — each old claim releases the prefix at its own bound and no successor can restart
+/// it; below the fence the attacker holds the frontier for the whole run. Measured per cause.
+#[test]
+fn rfc23s1_a_continuous_hand_over_lags_the_frontier_by_at_most_one_bound() {
+    use crate::palw_unresolved_bound_v1::*;
+    let armed = stage1(with_mirror(PalwGateCRuleV1::SecurityCertifiedV1));
+    let gate_c = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
+    // L_class: testnet-12's court-demanding retention (4W + W_disclose + bind + receipt = 14,568 DAA, §11.11) — the slow cause.
+    let l = 14_568u64;
+    let (gap, finality, horizon) = (600u64, 120u64, 120_000u64);
+    let mut state = PalwChainStateV2::genesis();
+    let (mut worst_armed, mut worst_old) = (0u64, 0u64);
+    let mut n = 0u64;
+    let mut now = FENCE + 1;
+    while now < FENCE + horizon {
+        // The attacker's open claim (held to its bound) and one honest claim certified `finality` later.
+        n += 1;
+        state.set_false_valid_rows_for_tests(claim_id(2 * n), Some(open_attempt(now, now, l)), None, None, 0);
+        state.set_unresolved_for_tests(now, claim_id(2 * n), true);
+        certified_final(&mut state, 2 * n + 1, now, now + 1, now + finality, l);
+        // Past its bound an attacker claim is still open (no slash, collateral held) but lapsed.
+        now += gap;
+        let frontier = |p: &PalwStateParamsV2| palw_gate_c_frontier_v1(&state, p, palw_resolved_through_v1(&state, p, now)).0;
+        let (fa, fo) = (frontier(&armed), frontier(&gate_c));
+        if now > FENCE + 2 * l {
+            worst_armed = worst_armed.max(now.saturating_sub(fa));
+            worst_old = worst_old.max(now.saturating_sub(fo));
+        }
+    }
+    println!("RFC-0023 stage 1 hand-over: L = {l}, gap = {gap}, finality = {finality}: steady-state lag {worst_armed} DAA past the fence, {worst_old} DAA below it");
+    assert!(worst_armed <= l + gap + finality + 1, "past the fence the lag is one bound plus one gap ({worst_armed})");
+    assert!(worst_old > horizon - 2 * gap, "below the fence the first attacker claim holds the frontier for the whole run ({worst_old})");
+}

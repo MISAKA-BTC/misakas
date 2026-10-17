@@ -366,7 +366,41 @@ pub(super) fn note_retirement_frontier_floor_v1(
         return Ok(());
     }
     let raised = PalwCertifiedFrontierFloorV1 { blue_score: claim.accepted_blue_score, block: claim.accepted_block.as_bytes() };
+    // **RFC-0023 stage 1** (audit F05: the floor update never re-checked the oldest open claim): past the fence the floor rises only
+    // through the resolved prefix; a retirement above it is deferred (the highest one kept) and applied when the prefix reaches it.
+    if let Some(last) = builder.state.last_point().map(|p| p.daa_score)
+        && builder.params.unresolved_bound_active_at(last)
+    {
+        let through = crate::palw_unresolved_bound_v1::palw_resolved_through_v1(&builder.state, builder.params, last);
+        if raised.blue_score > through {
+            let key = certification_deferred_floor_key_v1();
+            let pending = row_of::<PalwCertifiedFrontierFloorV1>(&builder.state, &key);
+            if pending.is_none_or(|p| p.blue_score < raised.blue_score) {
+                write_row(builder, key, Some(&raised))?;
+            }
+            return Ok(());
+        }
+    }
     write_row(builder, certification_frontier_floor_key_v1(), Some(&raised))?;
+    Ok(())
+}
+
+/// RFC-0023 stage 1: the key of the deferred floor (`'f'`), the highest retirement not yet inside the resolved prefix.
+pub fn certification_deferred_floor_key_v1() -> Vec<u8> {
+    vec![b'f']
+}
+
+/// RFC-0023 stage 1: apply the deferred floor once the resolved prefix reaches it.
+pub(super) fn apply_deferred_frontier_floor_v1(builder: &mut TransitionBuilder<'_>, resolved_through: u64) -> Result<(), PalwStateV2Error> {
+    let key = certification_deferred_floor_key_v1();
+    let Some(pending) = row_of::<PalwCertifiedFrontierFloorV1>(&builder.state, &key) else { return Ok(()) };
+    if pending.blue_score > resolved_through {
+        return Ok(());
+    }
+    if palw_certified_frontier_floor_v1(&builder.state).is_none_or(|f| f.blue_score < pending.blue_score) {
+        write_row(builder, certification_frontier_floor_key_v1(), Some(&pending))?;
+    }
+    write_row::<PalwCertifiedFrontierFloorV1>(builder, key, None)?;
     Ok(())
 }
 
@@ -577,7 +611,11 @@ pub(super) fn sweep_security_certification_v1(
                 }
             } else {
                 PalwCertificationClaimFactsV1 {
-                    still_final: claim.as_ref().is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. })),
+                    // RFC-0023 stage 1: a governed claim whose `Final` came only after its unresolved bound is withdrawn (no credit).
+                    still_final: claim.as_ref().is_some_and(|c| {
+                        matches!(c.phase, PalwClaimPhaseV2::Final { .. })
+                            && !crate::palw_unresolved_bound_v1::palw_claim_lapsed_bound_v1(builder.params, c, now)
+                    }),
                     // G14 R6: an ORIGINAL TIR frame's conviction door is a pending prosecution for Gate C until it closes — the
                     // decision waits (never a deadline failure), so no SecurityCertified credit precedes the last possible verdict.
                     accusation_pending: builder.state.palw_accusation_pending_v1(&claim_id)

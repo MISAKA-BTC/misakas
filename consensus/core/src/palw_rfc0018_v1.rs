@@ -261,6 +261,11 @@ pub fn palw_gate_c_advances_frontier_v1(
 ) -> bool {
     let governs = palw_gate_c_governs_v1(params, claim);
     let certified = governs && palw_independently_work_certified_v1(claim_id, claim, &PalwGateCViewV1::of(params, chain));
+    // RFC-0023 stage 1: a claim Final only after its unresolved bound never stands as the frontier (the `now` is irrelevant for a
+    // Final claim; the predicate reads its own `final_daa`).
+    if crate::palw_unresolved_bound_v1::palw_claim_lapsed_bound_v1(params, claim, 0) {
+        return false;
+    }
     crate::palw_security_certification_v1::palw_consensus_credit_anchor_v1(governs, certified, &claim.source, &claim.phase)
 }
 

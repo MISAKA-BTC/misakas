@@ -1645,6 +1645,11 @@ pub struct PalwStateParamsV2 {
     /// hashes (Some-only), and `validate_palw_v2` refuses a bundle whose copy disagrees with it.
     #[borsh(skip)]
     final_lock_full_collateral_from_daa: Option<u64>,
+    /// **RFC-0023 stage 1: `Params::palw_unresolved_bound_v1`'s height** ([`crate::palw_unresolved_bound_v1`]), mirrored by
+    /// `Params::sync_palw_unresolved_bound_v1`. `None` on every preset. Skipped by borsh for the fence lane V02's reason: the fence
+    /// is what the params identity hashes (Some-only) and validation refuses a disagreeing copy.
+    #[borsh(skip)]
+    unresolved_bound_from_daa: Option<u64>,
     // ---- end lane V02 ----
     /// **ADR-0160 F-R: `Params::palw_capacity_verify_room`'s height** (lane verify V2), mirrored here
     /// by `Params::sync_palw_capacity_verify` because the room is read by the fold, by the producer's
@@ -15105,12 +15110,18 @@ fn apply_palw_transition_v7_inner(
     // on however long it grows. `Voided` claims are resolved (they do not hold the prefix back)
     // but confer no frontier: a block whose work was thrown out matured nothing.
     let old_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
-    let resolved_through = match builder.state.unresolved.iter().next() {
-        // Nothing open anywhere: the whole chain including this block is a resolved prefix.
-        None => u64::MAX,
-        // Everything strictly below the oldest open claim is resolved. Its own point is not —
-        // pruning there would delete history a live claim still needs.
-        Some((oldest_open, _)) => oldest_open.saturating_sub(1),
+    let resolved_through = if builder.params.unresolved_bound_active_at(ctx.daa_score) {
+        // **RFC-0023 stage 1** (`palw_unresolved_bound_v1`): the oldest open claim still within its own liability bound ends the
+        // prefix; one past it keeps its liability (it stays in `unresolved`) but no longer holds the frontier, and earns no credit.
+        crate::palw_unresolved_bound_v1::palw_resolved_through_v1(&builder.state, builder.params, ctx.daa_score)
+    } else {
+        match builder.state.unresolved.iter().next() {
+            // Nothing open anywhere: the whole chain including this block is a resolved prefix.
+            None => u64::MAX,
+            // Everything strictly below the oldest open claim is resolved. Its own point is not —
+            // pruning there would delete history a live claim still needs.
+            Some((oldest_open, _)) => oldest_open.saturating_sub(1),
+        }
     };
     // **RFC-0018 Gate C's frontier site** (adopted 2026-10-15): past the fence the frontier is the deepest SecurityCertified ATTEMPT in
     // the resolved prefix — the one consensus-credit rule settlement depth shares (`palw_consensus_credit_anchor_v1`). A `Final`
@@ -15147,6 +15158,10 @@ fn apply_palw_transition_v7_inner(
     if builder.params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(ctx.daa_score)) {
         let seeded = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
         palw_security_certification_fold_v1::ensure_frontier_floor_v1(&mut builder, ctx, seeded)?;
+        // RFC-0023 stage 1: a retirement above the prefix raised no floor; it is applied once the prefix reaches it.
+        if builder.params.unresolved_bound_active_at(ctx.daa_score) {
+            palw_security_certification_fold_v1::apply_deferred_frontier_floor_v1(&mut builder, resolved_through)?;
+        }
         let (blue_score, block) =
             crate::palw_security_certification_v1::palw_gate_c_frontier_v1(&builder.state, builder.params, resolved_through);
         builder.state.safe_frontier_blue_score = blue_score;

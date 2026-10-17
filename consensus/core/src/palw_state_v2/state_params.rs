@@ -114,6 +114,7 @@ impl PalwStateParamsV2 {
             capacity_escrow_from_daa: None,
             rcore_conservative_classes: Vec::new(),
             final_lock_full_collateral_from_daa: None,
+            unresolved_bound_from_daa: None,
             capacity_room_from_daa: None,
             capacity_batch_from_daa: None,
             capacity_audit_from_daa: None,
@@ -1662,6 +1663,20 @@ impl PalwStateParamsV2 {
     pub fn with_final_lock_full_collateral_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.final_lock_full_collateral_from_daa = from_daa;
         self
+    }
+
+    /// RFC-0023 stage 1: the mirror's setter (`Params::sync_palw_unresolved_bound_v1` only, and fixtures).
+    pub fn with_unresolved_bound_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.unresolved_bound_from_daa = from_daa;
+        self
+    }
+    /// RFC-0023 stage 1: `Params::palw_unresolved_bound_v1`'s height, if armed.
+    pub fn unresolved_bound_from_daa(&self) -> Option<u64> {
+        self.unresolved_bound_from_daa
+    }
+    /// RFC-0023 stage 1 in force at `daa_score`?
+    pub fn unresolved_bound_active_at(&self, daa_score: u64) -> bool {
+        self.unresolved_bound_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// Lane V02: `Params::palw_final_lock_full_collateral`'s height, if the network arms it.

@@ -190,6 +190,7 @@
 - [adr/0182-defer-media-and-model-improvement-until-post-mainnet.md](../adr/0182-defer-media-and-model-improvement-until-post-mainnet.md)
 - [adr/0183-g14-court-capacity-panel-floor-retention-detection.md](../adr/0183-g14-court-capacity-panel-floor-retention-detection.md)
 - [adr/0186-hold-unresolved-liability-advance-independent-claims.md](../adr/0186-hold-unresolved-liability-advance-independent-claims.md)
+- [adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md](../adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md)
 - [adr/INDEX.md](../adr/INDEX.md)
 - [adr/README.md](../adr/README.md)
 - [adr/TOPICS.md](../adr/TOPICS.md)

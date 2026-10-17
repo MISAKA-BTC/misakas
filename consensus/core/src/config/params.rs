@@ -3203,6 +3203,10 @@ pub struct Params {
     /// measured values. `None` on every preset; hashed Some-only with its policy; refused when armed until an arm-readiness record is
     /// pinned, and never armable with the placeholder policy.
     pub palw_court_capacity_v1: Option<crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1>,
+    /// **palw_unresolved_bound_v1** — RFC-0023 / ADR-0186 stage 1 ([`crate::palw_unresolved_bound_v1`]): an open claim ends the
+    /// resolved prefix only within its own liability bound; past it the claim keeps its liability, earns no credit, and no longer
+    /// holds the shared frontier. `None` on every preset; refused when armed.
+    pub palw_unresolved_bound_v1: Option<ForkActivation>,
     /// **palw_model_block_rights_v1** — RFC-0016 V+ ([`crate::palw_rfc0016_v1`]): past it a model-class Attempt is admitted only
     /// when it consumes one of its model's pre-issued per-epoch block rights (`⌊P_m · N_exp⌋`, the entrant reserve deducted from
     /// the fixed total; σ-capped mid-epoch reissue). **Dormant, with no activation height**: `None` on every preset and in no
@@ -6168,6 +6172,7 @@ impl Params {
             palw_g14_route_required_v1: self.palw_g14_route_required_v1,
             palw_reward_liability_horizon_v1: self.palw_reward_liability_horizon_v1,
             palw_court_capacity_v1: self.palw_court_capacity_v1,
+            palw_unresolved_bound_v1: self.palw_unresolved_bound_v1,
             palw_model_block_rights_v1: self.palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1: self.palw_model_eligibility_v1,
@@ -7328,6 +7333,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
     palw_court_capacity_v1: None,
+    palw_unresolved_bound_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
@@ -7684,6 +7690,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
     palw_court_capacity_v1: None,
+    palw_unresolved_bound_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
@@ -8022,6 +8029,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
     palw_court_capacity_v1: None,
+    palw_unresolved_bound_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
@@ -13211,6 +13219,7 @@ pub fn palw_v2_params_on_base(
     // The cross-lane G14 gates' mirrors (option (b) and the reward liability horizon), likewise.
     // The court-capacity fence's mirror (read by option (b)'s route mirror below), likewise.
     params.sync_palw_court_capacity_v1();
+    params.sync_palw_unresolved_bound_v1();
     params.sync_palw_g14_gates_v1();
     // RFC-0006's memory/routing court consumer v2, likewise.
     params.sync_palw_memory_routing_court_v2();
@@ -13555,6 +13564,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
     palw_court_capacity_v1: None,
+    palw_unresolved_bound_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,

@@ -1426,6 +1426,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0187",
+      "path": "docs/adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md",
+      "title": "ADR-0187 — native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",

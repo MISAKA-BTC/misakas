@@ -1469,3 +1469,59 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 - 試験:`g07r2_a_court_demanding_claim_promises_the_retention_its_guarantee_needs` pass。g14_court_capacity は 15 passed / 1 ignored。
 - 回帰:g14_close_legacy 8、g14_close_gates 12、lg14a_legacy_dispute_fold 9、g14_detection_gate 5、すべて pass。kaspa-consensus と kaspad の check も通った。
 - 残り:rider は lead の retention を運ぶ。lead と class が違う rider の扱いは、試験していない。
+
+## 13. 追補: native 経路の G14(G-N1・G-N2・T-N13)(2026-10-17、branch `integ/g14-court-capacity-r2`)
+
+外部監査(`docs/design/palw/rfc-completion-audit-2026-10-17/report_ja.md` の RFC14 14-C・14-F)と本書 §4.2 の G-N1・G-N2・G-14 への対応。本文と §11 までは書き換えない。
+
+- 新しい規則は、それぞれの native lane の既存 fence の下にある(v11 と text29 は `palw_funded_execution_v11`(text29 は加えて Final27)、v39 mining は `palw_native_mining_v39`)。いずれも全 preset で `None`、validation が武装を拒否する。G14 lane closure(`palw_g14_lane_closure_v1`)と同じ扱いで、`Params` の新 field は無く、testnet-12 の identity は動かない。
+- 状態は「実装済み・下記の試験が通った」。武装は拒否のまま。設計上の値の扱いは [ADR-0187](../../../adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md) に記録した。
+
+### 13.1 G-N1(告発枠の先取り)
+
+| lane | 処置(code) | 試験 |
+|---|---|---|
+| v11 | **枠なしの公開告発** `EXECUTION_ACTION_PUBLIC_FILING_V11`(19)。`job ‖ u32 n ‖ filing`(reveal と同じ文法、kind 0/1/2)。producer の operator 以外の Active bond なら誰でもよい。作業料を前払い(誤りなら没収)、Court の envelope は自分の公開 pool から払う(`debit_public_action`)。producer の予約も、保持 ticket も使わない。検証と有罪は reveal と同じ関数(`convict`)を通る | node:`g14n1_four_colluding_owners_cannot_lock_out_an_honest_outsider_who_convicts_in_time`、`g14n1_a_public_filing_cannot_convict_an_honest_job` |
+| v11 | **期限切れの未 reveal seal の解放** `EXECUTION_ACTION_RELEASE_LAPSED_SEAL_V11`(20)。`now ≥ reveal_until`(もう reveal できない)で、protected DA を 1 度も強制していない seal は、job が terminal になる前に、pursuit の 4 ticket、kernel の subject・owner・global の計数、trace supplement、physical owner の席から外れる。未使用の guarantee は消費扱い(返還しない)。protected DA を強制した seal は席を保つので、job あたりの protected 回答は 2 × 4 のまま(producer の前払い上限は不変) | node:`g14n1_a_lapsed_seal_gives_its_ticket_back_but_one_that_compelled_answers_keeps_it` |
+| text29 | **枠なしの公開告発** `EXECUTION_ACTION_TEXT_PUBLIC_FILING_V29`(21)。paged court の検証(v25 kind 0/1/2 と window37)を、paid owner なしで通す共通関数 `court` に分けた。生涯 owner 目録(4)は変えていない(producer の回答上限のため) | 未実行(text29 の job を作る harness が無い) |
+
+- **数値(v11 node 試験、test horizon)。** commit 48、challenge_end 348。共謀 4 bond が 4 ticket を取った後も、outsider は ordinary lane で 17 回の要求で資料を得て、DAA 89 に告発で有罪にした。collected 130(reserve の全額)、finder 63(490‰ 以内)、requester への返金 20、producer credit 0。2 回目の告発は何も変えない。独立 replay が一致した。
+- **lapse 試験。** reveal 窓は DAA 152 までに閉じ、protected DA を強制した 1 本は席を保ち、他の 3 本は解放された。outsider の seal は DAA 157 に解放された席へ入った。
+- **試験 horizon について。** probe policy の challenge window は 4 DAA、retention は 2 DAA で、node の carrier で追及できない。試験では challenge 300・retention 300・DA 回答 20 に広げた(測定値ではない)。
+- **残る限界。** ordinary lane の生涯要求数(probe 32、開放 3)と discovery ticket(horizon は challenge_end)は、共謀者が要求で使い切れる。回答の料金は producer に支払われるので、共謀側の費用は小さい。公開告発は「資料が公開されていれば」枠を要しないが、資料の取得経路そのものの先取りは、価格(要求ごとの bond と作業料)でしか抑えていない。
+
+### 13.2 G-N2(v39 mining claim の Final 後の追及)
+
+`palw_native_mining_court_fold_v39.rs`(stage action 80 `ACCUSE_MINING_ACTION_V39`、native39 job fold の子 module)。
+
+- **認証された連結。** mining claim → (Master, stage) → Master Final の component job(header の producer bond が claim の producer と一致し、Final)→ その committed post・consent・class・material。restore はすべて job fold の `restore_job` を通る。
+- **資料の保持。** commit 75 が credited component ごとに hold 行を書く。claim の責任期間 `palw_native_mining_liability_until_v39` = 受理 + 認証の全寿命 + receipt の寿命 + prosecution window の 1 回分。その間 collection 53 を拒否する。すでに collection された component は commit で拒否する。
+- **告発の種類。** kind 0 は自己完結の filing(job court と同じ `check_flat_filing_v39`)。kind 1 は Final 後の demand(公開 lane と同じ `check_flat_demand_v39`)。claim あたり生涯 8 件、同時 2 件まで。告発者の bond を即時に引き落とし、回答期限は `now + da_answer`。kind 2 は producer の回答(32 KiB × 64 part まで、`check_flat_reply_v39`)で、回答は公開資料になり、bond は producer に支払われる。kind 3 は期限切れの demand の default で有罪とし、bond は告発者に返す。告発の搬送は job の quota interval と独立である。
+- **Gate C pending。** demand が開いている間、certification sweep の `accusation_pending` が true になり、決定は待つ。receipt の quantum も使えない(fold と validator の gate の両方)。
+- **有罪の効果。**
+  - producer の reserved exposure を、bond に残っている分だけ徴収する(G-14)。finder には 490‰、残りは burn。
+  - claim は報酬なしで close し、ADR-0176 の予約も close する。
+  - receipt を消し、spend で与えた safe weight を全部戻す(spend ごとに累計行を記録)。
+  - certification 行を `Withdrawn` にする(決定済みでも Gate C credit を失う)。
+  - Reproduced と署名した attestor の lock を charge する。
+- **attestor の責任。** native mining claim に Reproduced と attest した bond は、claim の reserved exposure と quorum k に seat-lock 関係(ADR-0151 D1/D4)を当てた額を、自由担保に lock する(aux 143 の `0x03`、committed ledger に数える)。担保が足りなければ attestation は数えられない。collection で解放、有罪で charge する。
+- **veto。** RFC-0018 U-6 は採用しない。`veto` は設計値 `PALW_CERT_VETO_DESIGN_V1 = 0` のまま、parameter として残る。有罪は検証済みの filing か default だけで決まり、否定 attestation の数では決まらない。
+- **試験(fold、TransitionBuilder 上の実際の行)。** 4 件 pass。
+  - `g14n2_a_post_final_conviction_slashes_revokes_the_receipt_weight_and_certification_and_charges_attestors`:collected 4,000、finder 1,960、safe weight 1,000 → 700、attestor 2 本 × 600。
+  - `g14n2_a_mining_conviction_is_not_refused_for_short_collateral`:担保 1,000 で 1,000 を徴収、finder 490。
+  - `g14n2_an_open_demand_is_gate_c_pending_and_a_hold_keeps_the_component_material`。
+  - `g14n2_the_liability_horizon_spans_certification_receipt_and_one_prosecution_window`。
+- **未実行。** filing・demand・answer の検証そのもの(job court と公開 lane の関数)を v39 の実 job で通す試験。repository に v39 の job fixture(source upload、class、consent、Master、mining の登録)が無い。
+
+### 13.3 T-N13(担保不足で native の有罪を拒否しない)
+
+- **v11、node の状態の上の fold。** `g14n13_v11_native_conviction_is_not_refused_for_short_collateral_on_the_nodes_state`:node が作った job・book・class・quota の行の上で、processor 自身の block fold(`palw_v2_fold_accepted_for_tests`)に公開告発を通した。producer の担保を reserve の 1/3 と 0 に減らした場合(他 lane の slash を模擬)も、有罪・返金・あるだけの徴収・finder の比例が成り立ち、全額の場合は reserve の全額を徴収した。
+- **v39 mining。** 13.2 の fold 試験。
+- **v29 と v39 の job。** book 水準(既存)のまま。fold・node 水準は harness が無く未作成。
+- **node 水準の担保不足。** 全 lane の予約が committed ledger に数えられる(`palw_bond_committed_v1`)ので、正規の経路で担保を reserve 未満にできない。clamp の経路だけが残り、node 試験では作れなかった。
+
+### 13.4 実行した試験(2026-10-17、targeted のみ)
+
+- `cargo test -p kaspa-consensus --lib -- funded11::public_filing`:**5 passed**(13.1 と 13.3 の node・fold 試験)。
+- `cargo test -p kaspa-consensus-core --lib -- g14n2`:**4 passed**。
+- 実行していないもの:workspace 全体、clippy、既存の `flat_native_v9`・`funded11` の回帰(reveal を共通関数に分けた影響)、kaspad、text29 の公開告発。

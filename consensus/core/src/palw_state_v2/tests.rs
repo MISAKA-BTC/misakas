@@ -30641,6 +30641,8 @@ mod anchor_window_v1;
 // Lane BUDGET (ADR-0176 / ADR-0177): the bond budget through the fold — the unarmed fold byte for byte, the engine's creation,
 // its deltas and carriage, the capital assignment, and (milestone 3) every reward path's reservation and consumption.
 mod bond_budget_fold_v1;
+// RFC-0023 stage 1: the unresolved bound through the fold's floor rows.
+mod unresolved_bound_v1;
 
 /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
 /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's
