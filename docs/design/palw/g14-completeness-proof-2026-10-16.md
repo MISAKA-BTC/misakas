@@ -1397,3 +1397,29 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
   - 試験 `g14r2_a_kernel_claim_of_a_class_without_a_detection_policy_is_dropped`(node):1 passed。
   - seat が claims_in_flight を超えて duty を取らないこと:interval seat(`palw_panel.rs`)が `detection_take_duty_v1` で、class ごとの in-flight を inspection 期限まで数える。超えた duty は取らず、`CapacityRefusal` に記録する。kernel route の seat receipt には node 側の scheduler が存在しない(test harness だけが署名する)ので、配線する場所がない。
 - **node の回帰。** c4r3 2 件、T-N11、`..._with_court_capacity`、受入 G、kernel gate の node 試験、いずれも pass。
+
+### 11.9 追補(2026-10-17):kernel route の全 claim 種別の plan と、node の公開検証
+
+- **N を、claim の価格付けされた構造から導出する**(`kernel_claim_detection_facts_v1`)。単位は評価位置。
+  - 単一 program(plain / salted):`commitments.len()`。job の stream(prompt + generated − 1)と一致しなければ `NotAtTheClaimsPrice`。
+  - segmented:tiled job の `prompt_len + generated − 1`。
+  - pipeline:各 stage の `commitments.len()` の和。
+  - typed Memory:chunk 長の和。
+  - typed Retrieval:`max(1, result 数)`。
+  - typed Composite:model stage の `commitments.len()` と retrieval stage の result 数の和。
+  - 担保は route の `claim_collateral` とする。detection の gate は、これで policy の plan 全体(抑止条件・n_max・資源・価格)を検査する。
+- **node は kernel route の claim を検証しているか。**
+  - 検証している。公開 verifier `kaspad/src/palw_kernel_verifier.rs` は、fee 用の bond と kernel model を持つ node で `palw_probabilistic_constraints_v1` または `palw_panel_free_v1` 以後に動く。開いている claim を自分の model で独立に再実行し、filing または demand を court lane に流す。
+  - 対象は単一 program・segmented・typed Memory である。pipeline・typed Composite・typed Retrieval は、複数 model や snapshot を要するので対象外。
+  - この 3 種別のうち、pipeline には onboarding 経路がない(GAP-B4)。Retrieval class は OPV eligible にならない。ところが、model stage だけの Composite は eligible になり得る。つまり、報酬が付くのに node が検査しない claim があり得た。これは G14 の gap である。
+  - **処置:** fence 以後、これら 3 種別の claim は、policy が十分でも drop する(`kernel_claim_kind_publicly_checked_v1`)。公開 conviction 経路のない route に報酬を出さないという option (b) の規則と同じ扱いで、checker ができるまで報酬は付かない。
+  - Panel 認可の kernel claim について:node は interim 席の receipt に署名しない(harness だけが署名する)。正直な claim は認可されず、報酬に届かない(liveness の問題)。共謀した席が署名した claim は、上の公開 verifier が検査する。
+- **verifier の claims_in_flight。** `palw_kernel_verifier_admit_v1` で、class ごとに policy の `claims_in_flight` 件まで(commit の古い順)を同時に扱う。超えた分は待機させ、`CapacityRefusal` に数える。
+- **試験(node、実 fold)。** 9 passed。
+  - plain:N = 5。十分な policy なら commit、担保不足なら drop、n_max 超過なら drop。
+  - segmented:N = 4,501。十分なら commit、n_max = 4,500 なら drop、担保不足なら drop。
+  - typed Memory:N = 5 で同じ 3 通り。
+  - Composite:policy が十分でも drop(fence 未満の既存 composite 試験は不変で pass)。
+  - 回帰:policy なしの drop、c4r3、K2S の多 segment、Memory の E2E。
+  - kaspad:`g14r2_the_kernel_verifier_respects_claims_in_flight`、`g14r2_the_seat_takes_no_duty_beyond_claims_in_flight` が pass。
+  - pipeline の claim には node harness がない(onboarding 経路がない)。facts の導出式は上のとおりで、gate は drop する。

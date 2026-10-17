@@ -267,6 +267,34 @@ impl PalwPanelService {
             })
             .map(|(id, _)| *id)
             .collect();
+        // Lane g14-court-capacity-r2 (`palw_detection_policy_v1`, dormant): the verifier holds at most its class policy's
+        // `claims_in_flight` claims of a class at once — the oldest commits first (closest to their horizons); a claim past the cap
+        // waits for a slot and is counted (`CapacityRefusal`), never dropped silently.
+        let candidates = palw_kernel_verifier_admit_v1(
+            candidates,
+            |id| {
+                let row = &ledger.claims[id];
+                (Hash64::from_bytes(row.class_binding_id), row.committed_daa)
+            },
+            |class| {
+                match kaspa_consensus_core::palw_detection_policy_v1::palw_detection_regime_v1(
+                    params.palw_detection_policy_v1.as_ref(),
+                    class,
+                    0,
+                    next,
+                ) {
+                    kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionRegimeV1::Policy(p) => Some(p.resources.claims_in_flight),
+                    _ => None,
+                }
+            },
+            |class, id| {
+                self.config.telemetry.detection_loss_once(
+                    class,
+                    Hash64::from_bytes(id),
+                    kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1::CapacityRefusal,
+                )
+            },
+        );
         book.cases.retain(|id, _| ledger.claims.contains_key(id));
         if candidates.is_empty() {
             return;
@@ -489,6 +517,34 @@ impl PalwPanelService {
 }
 
 /// The DAA a step's objects must land by (the planner's deadline), for the court lane's EDF.
+/// **Lane g14-court-capacity-r2: the claims the kernel verifier takes this tick** — per class with a detection policy, the
+/// `claims_in_flight` oldest (by commit DAA, then id); the rest are reported through `refused`. A class with no policy (below the
+/// fence) is not capped. Pure.
+pub(crate) fn palw_kernel_verifier_admit_v1(
+    mut candidates: Vec<Digest>,
+    facts: impl Fn(&Digest) -> (Hash64, u64),
+    cap_of: impl Fn(&Hash64) -> Option<u32>,
+    mut refused: impl FnMut(Hash64, Digest),
+) -> Vec<Digest> {
+    candidates.sort_by_key(|id| (facts(id).1, *id));
+    let mut taken: std::collections::BTreeMap<Hash64, u32> = std::collections::BTreeMap::new();
+    candidates
+        .into_iter()
+        .filter(|id| {
+            let (class, _) = facts(id);
+            let Some(cap) = cap_of(&class) else { return true };
+            let n = taken.entry(class).or_default();
+            if *n < cap {
+                *n += 1;
+                true
+            } else {
+                refused(class, *id);
+                false
+            }
+        })
+        .collect()
+}
+
 pub(super) fn palw_kernel_step_due_v1(step: &KernelPursuitStepV1) -> Option<u64> {
     match step {
         KernelPursuitStepV1::Seal { by_daa, .. }
@@ -507,5 +563,34 @@ pub(super) fn palw_kernel_object_name_v1(object: &PalwConsensusObjectV2) -> Stri
         }
         PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, .. } => format!("KernelRouteChunkV1 {}/{}", chunk.index + 1, chunk.count),
         other => object_name(other).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod claims_in_flight_tests {
+    use super::*;
+
+    /// **The kernel verifier takes no more claims of a class than its policy's `claims_in_flight`**, oldest commits first; the rest are
+    /// reported (counted as `CapacityRefusal`); a class with no policy is not capped.
+    #[test]
+    fn g14r2_the_kernel_verifier_respects_claims_in_flight() {
+        let d = |n: u8| [n; 64];
+        let capped = Hash64::from_u64_word(1);
+        let free = Hash64::from_u64_word(2);
+        let facts = |id: &Digest| match id[0] {
+            1 => (capped, 30),
+            2 => (capped, 10),
+            3 => (capped, 20),
+            _ => (free, 5),
+        };
+        let mut refused = Vec::new();
+        let taken = palw_kernel_verifier_admit_v1(
+            vec![d(1), d(2), d(3), d(4), d(5)],
+            facts,
+            |class| (*class == capped).then_some(2),
+            |class, id| refused.push((class, id)),
+        );
+        assert_eq!(taken, vec![d(4), d(5), d(2), d(3)], "the two oldest of the capped class, every claim of the free one");
+        assert_eq!(refused, vec![(capped, d(1))], "the newest capped claim waits and is counted");
     }
 }

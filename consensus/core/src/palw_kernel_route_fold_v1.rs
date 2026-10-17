@@ -636,73 +636,132 @@ fn opv_gate_v1(
     }
 }
 
+/// **The detection facts of a kernel claim commit** (lane g14-court-capacity-r2): its class and the facts its policy plans on, for
+/// EVERY claim kind, N from the claim's priced structure — its evaluated positions:
+///
+/// | kind | `work_leaves` (what the claim commits) | `context_priced_leaves` (what its job prices) |
+/// |---|---|---|
+/// | single-program (plain, salted) | `commitments.len()` (one entry per evaluated position) | `prompt + generated − 1` (the job's stream) |
+/// | segmented (K2-TIR v4/v5) | `prompt_len + generated − 1` | the same (the tiled job's stream; its evidence carries segment roots) |
+/// | pipeline | `Σ` stages `commitments.len()` | the same (each stage's evaluated positions) |
+/// | typed `Memory` | `Σ` chunk lengths (every step runs over its chunk) | the same |
+/// | typed `Retrieval` | `max(1, result.len())` (one scored entry each) | the same |
+/// | typed `Composite` | `Σ` model stages' `commitments.len()` + `Σ` retrieval stages' `result.len()` | the same |
+///
+/// A plain claim whose committed positions are not its job's stream is refused by the policy's price check (`NotAtTheClaimsPrice`),
+/// as a free-prompt claim's is. The collateral is the route's per-claim reservation (`claim_collateral`, what a conviction slashes).
+/// `None` for an object that commits no claim, or one whose job the ledger does not know (the kernel refuses it by its own rule).
+fn kernel_claim_detection_facts_v1(
+    ledger: &KernelLedgerV1,
+    object: &KernelRouteObjectV1,
+) -> Option<(misaka_palw_kernel::hash::Digest, crate::palw_detection_policy_v1::PalwDetectionClaimFactsV1)> {
+    use misaka_palw_kernel::route::SaltedCommitV1 as C;
+    use misaka_palw_kernel::spec::{SpecClaimV1 as SC, SpecJobV1 as SJ};
+    let u32_of = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let facts = |work: u64, context: u64, prompt: usize, decode: usize| crate::palw_detection_policy_v1::PalwDetectionClaimFactsV1 {
+        attempt_lane: false,
+        work_leaves: work,
+        context_priced_leaves: Some(context),
+        prompt_tokens: u32_of(prompt),
+        decode_tokens_executed: u32_of(decode),
+        collateral_sompi: u128::from(ledger.policy.claim_collateral),
+    };
+    let stream = |prompt: usize, generated: usize| (prompt as u64 + generated as u64).saturating_sub(1);
+    match object {
+        KernelRouteObjectV1::CommitClaim { claim, commitments, .. }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Claim { claim, commitments, .. }, .. } => {
+            let job = ledger.jobs.get(&claim.job_id)?;
+            let context = stream(job.prompt.len(), claim.generated.len());
+            Some((job.class_binding_id, facts(commitments.len() as u64, context, job.prompt.len(), claim.generated.len())))
+        }
+        KernelRouteObjectV1::CommitSegmentedClaim { claim, .. }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Segmented { claim, .. }, .. } => {
+            let row = ledger.tiled_jobs.get(&claim.job_id)?;
+            let positions = stream(row.job.prompt_len as usize, claim.generated.len());
+            Some((row.job.class_binding_id, facts(positions, positions, row.job.prompt_len as usize, claim.generated.len())))
+        }
+        KernelRouteObjectV1::CommitPipelineClaim { claim, stages, .. }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Pipeline { claim, stages, .. }, .. } => {
+            let job = ledger.pipeline_jobs.get(&claim.job_id)?;
+            let positions: u64 = stages.iter().map(|s| s.commitments.len() as u64).sum();
+            Some((job.class_binding_id, facts(positions, positions, job.facts.prompt.len(), claim.generated.len())))
+        }
+        KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Spec { claim }, .. } => {
+            let job = ledger.typed.jobs.get(&claim.job_id())?;
+            let (class, positions, prompt, decode) = match (job, claim) {
+                (SJ::Memory(j), SC::Memory(c)) => {
+                    (j.class, j.chunks.iter().map(|c| c.len() as u64).sum::<u64>(), 0, c.generated.len())
+                }
+                (SJ::Retrieval(j), SC::Retrieval(c)) => (j.class, (c.result.len() as u64).max(1), 0, 0),
+                (SJ::Composite(j), SC::Composite(c)) => {
+                    use misaka_palw_kernel::spec::composite::StageClaimV1 as S;
+                    let units = c
+                        .stages
+                        .iter()
+                        .map(|s| match s {
+                            S::Model { commitments, .. } => commitments.len() as u64,
+                            S::Retrieval { result, .. } => result.len() as u64,
+                        })
+                        .sum::<u64>();
+                    (j.class, units, j.prompt.len(), 0)
+                }
+                // A claim of another kind than its job: the kernel refuses it by its own rule.
+                _ => return None,
+            };
+            Some((class, facts(positions, positions, prompt, decode)))
+        }
+        _ => None,
+    }
+}
+
 /// **The detection policy at the kernel route's claim door** (`palw_detection_policy_v1`, lane g14-court-capacity-r2; g14-detection-
-/// policy §10 item 2): past the fence a kernel claim commit is DROPPED (nothing written, as `opv_gate_v1` drops an ineligible class's
-/// claim: no claim, no reward, weight or consensus credit) when its class has no armed policy, or — for a plain single-program claim,
-/// whose interval count the chain reads off the job and the delivered tokens — when the policy refuses it (collateral below the
-/// deterrence bound, a draw its declared resources cannot carry). `false` below the fence and for
-/// every other object. Pipeline, segmented and typed claims are gated on the policy's existence only (their counts are not the
-/// plain stream's; named in §11).
+/// policy §10 item 2): past the fence a kernel claim commit of ANY kind is DROPPED (nothing written, as `opv_gate_v1` drops an
+/// ineligible class's claim: no claim, no reward, weight or consensus credit) when its class has no armed policy, or when the
+/// policy's full plan refuses it on the facts its priced structure gives ([`kernel_claim_detection_facts_v1`]): collateral below the
+/// deterrence bound, N above `n_max`, a draw its declared resources cannot carry, committed positions not at its job's price. `false`
+/// below the fence and for every other object. The kernel route adjudicates in its own ledger court, so the policy's declared court
+/// / DA needs stand (`palw_court_claim_budget_v1` is the V2 route's reservation).
 fn detection_drops_kernel_claim_v1(
     builder: &TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     ledger: &KernelLedgerV1,
     object: &KernelRouteObjectV1,
 ) -> bool {
-    use crate::palw_detection_policy_v1::{PalwDetectionClaimFactsV1, PalwDetectionRegimeV1, palw_detection_regime_v1};
-    use misaka_palw_kernel::route::SaltedCommitV1 as C;
     let Some(fence) = builder.params.detection_policy_v1() else { return false };
-    // (class, Some(plain claim)) for every claim commit kind.
-    let (class, plain) = match object {
-        KernelRouteObjectV1::CommitClaim { claim, .. } | KernelRouteObjectV1::CommitClaimSalted { commit: C::Claim { claim, .. }, .. } => {
-            match ledger.jobs.get(&claim.job_id) {
-                Some(job) => (job.class_binding_id, Some((claim, job))),
-                None => return false, // an unknown job: the kernel refuses the claim by its own rule
-            }
-        }
-        KernelRouteObjectV1::CommitPipelineClaim { claim, .. }
-        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Pipeline { claim, .. }, .. } => {
-            match ledger.pipeline_jobs.get(&claim.job_id) {
-                Some(job) => (job.class_binding_id, None),
-                None => return false,
-            }
-        }
-        KernelRouteObjectV1::CommitSegmentedClaim { claim, .. }
-        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Segmented { claim, .. }, .. } => {
-            match ledger.tiled_jobs.get(&claim.job_id) {
-                Some(job) => (job.job.class_binding_id, None),
-                None => return false,
-            }
-        }
-        _ => return false,
-    };
-    let class_id = Hash64::from_bytes(class);
-    match palw_detection_regime_v1(Some(fence), &class_id, 0, ctx.daa_score) {
-        PalwDetectionRegimeV1::LegacyV1 => false,
-        PalwDetectionRegimeV1::NoPolicy => true,
-        PalwDetectionRegimeV1::Policy(_) => {
-            let Some((claim, job)) = plain else { return false };
-            let positions = (job.prompt.len() as u64 + claim.generated.len() as u64).saturating_sub(1);
-            let facts = PalwDetectionClaimFactsV1 {
-                attempt_lane: false,
-                work_leaves: positions,
-                context_priced_leaves: Some(positions),
-                prompt_tokens: u32::try_from(job.prompt.len()).unwrap_or(u32::MAX),
-                decode_tokens_executed: u32::try_from(claim.generated.len()).unwrap_or(u32::MAX),
-                collateral_sompi: u128::from(ledger.policy.claim_collateral),
-            };
-            crate::palw_detection_policy_v1::palw_detection_claim_refusal_with_budget_v1(
-                builder.params,
-                &class_id,
-                ctx.daa_score,
-                &facts,
-                // The kernel route adjudicates in its own ledger court (scope, demand windows, horizons), not through the V2
-                // route's reservations, so the policy's declared court/DA needs stand here (`palw_court_claim_budget_v1` is the V2
-                // route's reservation).
-                None,
-            )
-            .is_some()
-        }
+    if !fence.activation.is_active(ctx.daa_score) {
+        return false;
+    }
+    let Some((class, facts)) = kernel_claim_detection_facts_v1(ledger, object) else { return false };
+    if crate::palw_detection_policy_v1::palw_detection_claim_refusal_with_budget_v1(
+        builder.params,
+        &Hash64::from_bytes(class),
+        ctx.daa_score,
+        &facts,
+        None,
+    )
+    .is_some()
+    {
+        return true;
+    }
+    // **No public checker, no reward** (G14, lane g14-court-capacity-r2): the node's public kernel verifier
+    // (`kaspad::palw_kernel_verifier`) re-executes single-program, segmented and typed `Memory` claims; a pipeline, a typed
+    // `Composite` or a typed `Retrieval` claim needs more than one model (or a snapshot) and no node service checks or files on it.
+    // Past the fence such a claim is not reward-bearing until a checker exists — the option (b) rule for a route with no public
+    // conviction path.
+    !kernel_claim_kind_publicly_checked_v1(object)
+}
+
+/// **Does a node's public kernel verifier check this claim kind?** Single-program (plain, salted), segmented and typed `Memory`:
+/// yes; pipeline, typed `Composite` and typed `Retrieval`: no (`kaspad::palw_kernel_verifier`'s module doc).
+fn kernel_claim_kind_publicly_checked_v1(object: &KernelRouteObjectV1) -> bool {
+    use misaka_palw_kernel::route::SaltedCommitV1 as C;
+    use misaka_palw_kernel::spec::SpecClaimV1 as SC;
+    match object {
+        KernelRouteObjectV1::CommitPipelineClaim { .. } | KernelRouteObjectV1::CommitClaimSalted { commit: C::Pipeline { .. }, .. } => false,
+        KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Spec { claim }, .. } => matches!(claim, SC::Memory(_)),
+        _ => true,
     }
 }
 

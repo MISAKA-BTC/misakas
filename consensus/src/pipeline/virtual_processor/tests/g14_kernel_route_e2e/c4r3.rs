@@ -642,3 +642,34 @@ async fn g14r2_a_kernel_claim_of_a_class_without_a_detection_policy_is_dropped()
     let claim = w.claim_with(0, &job, false, Delivery::Direct).await;
     assert!(!w.net.ledger().claims.contains_key(&claim.id), "past the detection fence a class with no policy takes no kernel claim");
 }
+
+/// **Lane g14-court-capacity-r2: a plain kernel claim meets the policy's FULL plan, its N from its priced structure** (its evaluated
+/// positions: `commitments.len()`, at its job's stream `prompt + generated − 1`). The same job and claim, three networks: a policy
+/// whose honest cost the route's per-claim collateral covers — the claim commits; a policy whose deterrence bound the collateral does
+/// not meet — dropped (no claim); a policy whose `n_max` is below the claim's N — dropped.
+#[tokio::test]
+async fn g14r2_a_plain_kernel_claim_meets_its_policys_full_plan() {
+    kaspa_core::log::try_init_logger("warn");
+    // The class id and the claim's facts on a network without the fence (the fixture is deterministic).
+    let probe = World::new().await;
+    let class = Hash64::from_bytes(probe.class);
+    let collateral = probe.policy().claim_collateral;
+    drop(probe);
+    let run = |policy: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1| async move {
+        let mut w = World::on(Net::over_cfg(with_detection_policies(kernel_config(), vec![policy]), TestConsensus::new)).await;
+        let job = w.job().await;
+        let claim = w.claim_with(0, &job, false, Delivery::Direct).await;
+        let positions = (job.prompt.len() + job.max_new_tokens as usize).saturating_sub(1);
+        (w.net.ledger().claims.contains_key(&claim.id), positions)
+    };
+    let (committed, n) = run(kernel_detection_policy(class, 1)).await;
+    eprintln!("[g14r2 kernel] plain claim: N = {n} positions, route collateral {collateral}");
+    assert!(committed, "a policy the collateral meets admits the claim");
+    let (committed, _) = run(kernel_detection_policy(class, collateral)).await;
+    assert!(!committed, "collateral below the deterrence bound: dropped");
+    let mut narrow = kernel_detection_policy(class, 1);
+    narrow.n_max = u32::try_from(n).unwrap() - 1;
+    let (committed, _) = run(narrow).await;
+    assert!(!committed, "N above n_max: dropped");
+}
+
