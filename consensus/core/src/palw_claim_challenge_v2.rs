@@ -76,6 +76,13 @@ pub struct PalwClaimChallengePolicyV2 {
     pub lifetime_review_scope: Digest,
     pub source_independence_evidence: Digest,
     pub economic_evidence: Digest,
+    /// **The bootstrap checker-draw seed** (user decision 2026-10-17; dormant with this fence, `None` in the probe): pinned per
+    /// network in params at genesis or by an annual fork. While NO approved paid Final exists, a non-interactive paid claim's
+    /// lock draws its checkers from `paid_claim_bootstrap_seed_v2(seed, context, statement)` instead of a locked work beacon —
+    /// the beacon cannot start without an approved Final (every event source is one). The draw is predictable; such a claim earns
+    /// no EXEC credit ([`crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1`]'s `credit` reading). The first approved
+    /// paid Final closes the window for every later lock. `None`: locks need the beacon (the behaviour before this field).
+    pub bootstrap_seed: Option<Digest>,
 }
 impl PalwClaimChallengePolicyV2 {
     pub fn id(&self) -> Digest {
@@ -96,6 +103,7 @@ impl PalwClaimChallengePolicyV2 {
             || self.maximum_live_claims > 65_536
             || self.maximum_enrollments_per_job > 1024
             || u64::from(self.maximum_jobs) * u64::from(self.maximum_enrollments_per_job) > 1_000_000
+            || self.bootstrap_seed == Some([0; 64])
         {
             return Err("paid claim policy has unsupported checker or unbounded resource/lifetime limits".into());
         }
@@ -125,6 +133,7 @@ impl PalwClaimChallengeFenceV2 {
                 lifetime_review_scope: [0; 64],
                 source_independence_evidence: [0; 64],
                 economic_evidence: [0; 64],
+                bootstrap_seed: None,
             },
         }
     }
@@ -365,6 +374,22 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         now: u64,
     ) -> Result<misaka_palw_kernel::claim_paid_v2::PaidClaimCheckAuthorityV2, String> {
         let a = self.paid_claim_authority_v2(context)?;
+        // A bootstrap lock (user decision 2026-10-17, dormant): the lock row names the bootstrap anchor and holds the draw's seed;
+        // the authority is re-derived from that authenticated row, never from a beacon that cannot exist yet.
+        if let Some(lock) = self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
+            && lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2()
+        {
+            let base = self.ledger()?.claim_challenge_subject(&a.enrollment.base_claim).ok_or("base statement missing")?;
+            return PaidClaimCheckAuthorityV2::verify_bootstrap_v2(
+                &a.class,
+                &a.enrollment,
+                &base,
+                &a.context,
+                now,
+                paid_checker_snapshot_root_v2(&a.checker_candidates),
+                lock.seed,
+            );
+        }
         let (contract, sources, promises) = self.paid_beacon_material_v5(context)?.ok_or("paid claim source funding missing")?;
         let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, &contract, &sources, &promises, now)
             .map_err(|e| e.to_string())?;
@@ -384,6 +409,39 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     }
 }
 impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+    /// **Whether any approved paid Final exists** — a canonical paid Final row with receipts and a completed round (the rows the
+    /// projection writes only for a Final the assigned quorum approved). The bootstrap window of
+    /// [`PalwClaimChallengePolicyV2::bootstrap_seed`] is open exactly while this is `false`.
+    pub fn paid_claim_approved_final_exists_v2(&self) -> bool {
+        self.aux
+            .range((PAID_CLAIM_FINALS_V2, Vec::new())..(PAID_CLAIM_FINALS_V2 + 1, Vec::new()))
+            .filter_map(|(_, bytes)| borsh::from_slice::<PalwPaidClaimFinalV2>(bytes).ok())
+            .any(|row| row.complete_receipts > 0 && row.completed_rounds > 0)
+    }
+
+    /// Whether `claim`'s paid lock was a bootstrap lock (its draw predictable): such a claim's Final may seed the beacon but earns
+    /// no EXEC credit.
+    /// Read structurally, as `palw_exec_v2_selected_approval_v1` reads the same rows: the base index, the authority's leading
+    /// enrollment, that enrollment's lock row.
+    pub fn paid_claim_bootstrap_locked_v2(&self, claim: &Digest) -> bool {
+        use borsh::BorshDeserialize;
+        let Some(raw) = self.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, claim))) else {
+            return false;
+        };
+        let Ok(index) = borsh::from_slice::<PalwPaidClaimIndexV3>(raw) else { return false };
+        if index.kind != PalwPaidClaimIndexKindV3::BaseClaim || index.owner != *claim {
+            return false;
+        }
+        let Some(raw_authority) = self.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, index.target.to_vec())) else { return false };
+        let mut reader = raw_authority.as_slice();
+        let Ok(2u16) = u16::deserialize(&mut reader) else { return false };
+        let Ok(enrollment) = misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2::deserialize(&mut reader) else {
+            return false;
+        };
+        self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&enrollment.id()).unwrap())
+            .is_some_and(|lock| lock.anchor == misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2())
+    }
+
     /// Used by both native fold loads and fresh SDK/root readers. Consumer state
     /// cannot be omitted from a cold restart merely because V1 rows still decode.
     pub fn apply_paid_claim_consumer_inputs_v2(&self, ledger: &mut misaka_palw_kernel::ledger::KernelLedgerV1) -> Result<(), String> {

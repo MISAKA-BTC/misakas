@@ -384,3 +384,85 @@ fn approved_paid_claim_exports_an_event_that_follows_the_settlement_predicate() 
     assert_eq!(s, S::Defaulted);
     assert!(!event.expect("it reads").event.da_satisfied);
 }
+
+// ---- the bootstrap window (user decision 2026-10-17, dormant) -------------------------------------------------------------
+
+fn lock_row(e: &PaidClaimEnrollmentV2, anchor: Digest) -> PalwPaidClaimLockV2 {
+    PalwPaidClaimLockV2 {
+        enrollment: e.id(),
+        context: context_of(&e.base_claim),
+        anchor,
+        seed: [0x51; 64],
+        locked_daa: 30,
+        assignment: [0x53; 64],
+        seats: Vec::new(),
+        quorum: 3,
+        source_valid: true,
+    }
+}
+
+fn put_lock(route: &mut PalwKernelRouteStateV1, row: &PalwPaidClaimLockV2) {
+    route.aux.insert((PAID_CLAIM_LOCKS_V2, row.enrollment.to_vec()), borsh::to_vec(row).unwrap());
+}
+
+/// The window is open exactly while no APPROVED paid Final exists: a Final row without receipts or rounds does not close it.
+#[test]
+fn bootstrap_window_closes_at_the_first_approved_paid_final() {
+    let (claim, job) = ([0x31; 64], [0x32; 64]);
+    let e = enrollment(claim, job);
+    let mut route = empty_route();
+    assert!(!route.paid_claim_approved_final_exists_v2(), "a fresh chain has no approved paid Final");
+    put_final(&mut route, &PalwPaidClaimFinalV2 { complete_receipts: 0, ..final_row(&e) });
+    assert!(!route.paid_claim_approved_final_exists_v2(), "a Final the quorum did not approve keeps the window open");
+    put_final(&mut route, &final_row(&e));
+    assert!(route.paid_claim_approved_final_exists_v2(), "the first approved paid Final closes the window");
+}
+
+/// A bootstrap-locked claim (its draw predictable) seeds the beacon — its approved Final exports the event — but earns no EXEC
+/// credit; the same claim under a beacon lock earns it. Readers tell the two apart from the lock row's anchor alone.
+#[test]
+fn bootstrap_locked_claim_exports_its_event_but_earns_no_exec_credit() {
+    let (claim, job) = ([0x41; 64], [0x42; 64]);
+    let e = enrollment(claim, job);
+    let mut route = empty_route();
+    route_with_claim(claim, OPV_CLASS, true, &mut route);
+    paid_enrollment_rows(&mut route, &e);
+    put_final(&mut route, &final_row(&e));
+    let bootstrap = misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2();
+    put_lock(&mut route, &lock_row(&e, bootstrap));
+    assert!(route.paid_claim_bootstrap_locked_v2(&claim));
+    assert!(gate(&route, claim), "the approval itself stands: the assigned quorum signed");
+    assert!(
+        !crate::palw_exec_v2_verify::palw_exec_v2_credit_approval_v1(&route, &Hash64::from_bytes(claim)),
+        "a predictable draw earns no EXEC credit"
+    );
+    put_lock(&mut route, &lock_row(&e, [0x77; 64]));
+    assert!(!route.paid_claim_bootstrap_locked_v2(&claim), "a beacon anchor is not the bootstrap marker");
+    assert!(crate::palw_exec_v2_verify::palw_exec_v2_credit_approval_v1(&route, &Hash64::from_bytes(claim)));
+}
+
+/// The bootstrap seed is bound to the claim's context and statement, and the probe policy carries none (the old behaviour).
+#[test]
+fn bootstrap_seed_is_per_claim_and_the_probe_policy_has_none() {
+    let probe = PalwClaimChallengeFenceV2::unapproved_probe_at(crate::config::params::ForkActivation::new(1));
+    assert_eq!(probe.policy.bootstrap_seed, None, "the probe keeps locks on the beacon");
+    probe.policy.validate().unwrap();
+    let zero = PalwClaimChallengePolicyV2 { bootstrap_seed: Some([0; 64]), ..probe.policy };
+    assert!(zero.validate().is_err(), "an all-zero bootstrap seed is refused");
+    let ctx = |root: u8| misaka_palw_challenge::BeaconContextV1 {
+        chain_genesis: [1; 64],
+        ruleset_id: [2; 64],
+        policy: misaka_palw_challenge::paid_opt_in_source_policy_v5(2, 2, 20, 2, 1),
+        subject_kind: misaka_palw_challenge::SubjectKindV1::ClaimVerification,
+        commitment_root: [root; 64],
+        commitment_position: 10,
+        challenge_epoch: 0,
+        eligible_profiles: Default::default(),
+        excluded_profiles: Default::default(),
+        candidate_profile_id: misaka_palw_challenge::RootV1::Absent,
+    };
+    use misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_seed_v2 as seed;
+    assert_ne!(seed(&[9; 64], &ctx(3), &[3; 64]), seed(&[9; 64], &ctx(4), &[3; 64]), "bound to the context");
+    assert_ne!(seed(&[9; 64], &ctx(3), &[3; 64]), seed(&[9; 64], &ctx(3), &[5; 64]), "bound to the statement");
+    assert_ne!(seed(&[9; 64], &ctx(3), &[3; 64]), seed(&[8; 64], &ctx(3), &[3; 64]), "bound to the network's pinned seed");
+}

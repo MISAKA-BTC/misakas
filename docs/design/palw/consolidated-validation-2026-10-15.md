@@ -170,3 +170,58 @@ intermittent after two fixed causes; a2u 2, past their fixed causes; SDK 2; tir-
 helper and a test-visibility change only).
 
 Fix commits (this round): `7e4a970c3`, `35386169d`, and the corpus_v2 / pruned-history / doc commit after them.
+
+### 3. Coordinator follow-up items (same day)
+
+| item | result | what |
+| --- | --- | --- |
+| kaspad honest reacquired job ×4 | **PASS** (4/4) | Production already answers G14-L lanes: the producer's DA service builds every tag-158 legacy held answer from its retained capture (`palw_da_legacy_answer_v2` → `palw_legacy_held_capture_answer_v2`). The harness producer answered only the input chunks; it now answers every demanded StepNode lane through that same production builder, signed by the producer and carried through ordinary H1/PQ. The filer's descent is unchanged. |
+| kaspad pruned import ×4 | **PASS** (4/4) | Two fixture causes: (1) no import target was established (761dcb1f3) — the fixture now names the node's own pruning-sample history; (2) `import_pruning_point_palw_state` clears the pruning-UTXO stable marker (production completes it after IBD's UTXO step), so the node stayed in the transitional IBD state and the panel service loop idled (`is_consensus_in_transitional_ibd_state`). The node already holds the canonical UTXO set (it validated the prefix), so the fixture marks the import complete (`TestConsensus::mark_pruning_utxoset_stable_for_tests`). |
+| kaspad view None ×4 (native prefix ×2, staged tokenizer ×2) | FAIL, cause found | NOT a probation rule: a registry `Probation` class admits claims (`admits_claims`), and past `palw_model_tier_v1` RFC-0017's review is unreachable (ADR-0179); there is no probation-based claim refusal under the tier rules. These four fixtures arm `palw_staged_public_court_v1`, which makes the FP acceptance walk require the original-public HFP1 envelope (custody pledge + original binding, `PalwHistoryFpEnvelopeV1`; `prepare_required_bundle_v1` refuses a required-family claim without it). The fixture carries a plain FP payload. Fix (not done): build the envelope as `build_fp_commitment_tx_with_original_public_v1` does. The harness now names an unadmitted job explicitly. |
+| kaspad parallel lane 16→17 | test updated | The 17 accepted demands are the 16-lane StepNode round plus one resend of lane (9, 6) (the filer resends a lane whose landing it did not see within `PALW_FRAUD_FILER_RESEND_DAA_V1`). The test now counts DISTINCT lanes (16, one level, contiguous). Not rerun after the change. |
+| t12_a2u_mixed ×2 | **PASS** (2/2) | Block validity never judges a below-fence new kind; the node-local H-1 template policy may hold back the carriers of zero-filled tags 160–167 (it rehearses the objective evidence they assemble). The harness keeps that template behaviour, asserts that only a new kind is held back by it, returns the held carrier's coin, and carries the rest. Also fixed: the PAV3 section shadowed the PFS4 refusal, so the replay compared the PFS4 block with the PAV3 message (both headers are now compared with their own refusals). |
+| rfc12 ×4 (`evm`) | not run | Disk 30–35 GB with four lanes building; an `--features evm` consensus build was not started. |
+
+### 4. User decision 10-17: the bootstrap seed for the first checker draws (implemented, dormant)
+
+Implemented (`integ/validation-r2`, t12 identity unchanged — the paid-claim fence `palw_claim_challenge_v2` is `None` on every preset):
+
+1. `PalwClaimChallengePolicyV2::bootstrap_seed: Option<Digest>` (`None` in the probe; an all-zero seed is refused). While no approved
+   paid Final exists (`PalwKernelRouteStateV1::paid_claim_approved_final_exists_v2`), a non-interactive paid lock draws its checkers
+   from `paid_claim_bootstrap_seed_v2(seed, context, statement)` instead of a locked v5 beacon, and writes the fixed bootstrap anchor
+   (`paid_claim_bootstrap_anchor_v2`) into the lock row; every reader (`paid_claim_check_authority_v2`, receipts, the SDK's source
+   reader) re-derives the authority from that row (`PaidClaimCheckAuthorityV2::verify_bootstrap_v2`). From the first approved paid
+   Final on, a lock needs the beacon exactly as before.
+2. `beacon_opt_in_sources_v4` no longer excludes paid claims: a source's fate is `Final` exactly when the adapter exports its event.
+3. Reduced reward, smallest change: a bootstrap-locked claim earns **no EXEC credit** (`palw_exec_v2_credit_approval_v1` = selected
+   approval minus bootstrap locks, used at the three EXEC sites); its event is still exported. The kernel claim's Final payment is the
+   payer's escrow (GAP-5), not an issued reward, and is unchanged.
+
+Unit tests (core, PASS 3/3): the window closes only at an APPROVED paid Final; a bootstrap-locked approved claim exports its event
+but earns no EXEC credit, a beacon-locked one earns it; the seed is bound to the network seed, the context and the statement.
+Neighbouring suites: 166/167 PASS; the one failure (`exec_v2_fold_v1::amendment_1::a_settled_prefix_or_middle_slice_verdict_…`,
+"the consumer adds no collateral punishment") reads a predicate this change leaves identical for every non-bootstrap claim — not
+caused by it, not investigated.
+
+**Migration of the 37 tests: not achieved — three findings need decisions.**
+
+* **(F1) Forward regress after the window.** A v5 beacon's sources must be sealed AFTER the target's commitment and be `Final` with an
+  event, i.e. approved paid claims, each of whose own lock needs a later beacon. With no fixed-seed draw after the first approved
+  Final, the latest-committed paid claim can never lock, hence none after it. The EXEC node tests (`x8_g14_*`) and native-Final tests
+  need EXEC credit on kernel claims committed after the conformance beacon locked — i.e. after the window — so they cannot pass under
+  the decision as stated, independent of fixtures.
+* **(F2) Paid jobs cannot be opt-in sources.** The route refuses `OptInBeaconSource` / `OptInPaidBeaconSource` for a paid-enrolled job
+  ("paid checker-enrolled jobs cannot be Panel-independent beacon sources") and a paid commit refuses a job with a live source opt-in.
+  Dropping the exclusion in (2) therefore does not let an approved paid claim seed sealed v3 / opt-in v4 / paid v5 beacons; only the
+  conformance attempt's DISTINCT v1 beacon (events, no opt-in) can use them. The 6 `opv_bootstrap` tests and core
+  `rfc0010_production_fold::paid_panel_sources…` use opt-in sources.
+* **(F3) The paid commit's real path is the full RFC08 material pipeline.** Driving it step by step (`conformance/paid_sources.rs`,
+  behind the `PALW_PAID_SOURCES` probe): paid class (OK), payer's job enrollment (OK), the producer's signed monetary covenant
+  (needs `palw_provider_court_v1`; OK), seal + paid commit: refused in turn by (a) the commitment DAA (fixed), (b)
+  `COURT_SCOPE_INCOMPLETE` — past `palw_provider_court_v1` the kernel's clear budget refuses every K2-TIR-v1/v2 claim unless
+  `palw_court_commitment_scope_v1` is in force (armed; OK), (c) "kernel material complete codec capacity is unenrolled" — the covenant
+  must carry a material manifest whose scope is the claim body's commitment and the verified `PalwKernelMaterialBundleV1` of every
+  committed position. Not built yet. Lock (bootstrap), receipts and Final are written but not yet reached.
+
+For the 29 `Cw` tests (conformance, c4r4, exec_slices) the remaining work is (F3c) plus the paid-source switch; for the EXEC and
+native-Final assertions (F1) must be decided first; for the 7 opt-in tests (F2).

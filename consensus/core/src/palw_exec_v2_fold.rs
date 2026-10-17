@@ -29,7 +29,7 @@ use crate::palw_exec_v2::PalwWorkRangeV1;
 use crate::palw_exec_v2_verify::{
     PalwExecV2PrefixInputsV1, PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1,
     palw_exec_v2_leg_cap_v1, palw_exec_v2_prefix_binding_v1, palw_exec_v2_real_job_v1, palw_exec_v2_retention_terms_v1,
-    palw_exec_v2_root_slice_job_nonce_v2, palw_exec_v2_route_reward_v1, palw_exec_v2_selected_approval_v1,
+    palw_exec_v2_credit_approval_v1, palw_exec_v2_root_slice_job_nonce_v2, palw_exec_v2_route_reward_v1,
     palw_exec_v2_verification_binding_v2,
 };
 use crate::palw_work_slice_v2::{
@@ -161,12 +161,12 @@ impl PalwChainStateV2 {
 
     fn exec_v2_selected_approvals_v1(&self, claim_id: &Hash64, root: &PalwWorkRootV2) -> bool {
         let Some(route) = self.kernel_route.as_ref() else { return true };
-        palw_exec_v2_selected_approval_v1(route, &root.prefix_claim)
+        palw_exec_v2_credit_approval_v1(route, &root.prefix_claim)
             && self
                 .exec_v2
                 .slices
                 .range((*claim_id, 0)..=(*claim_id, u32::MAX))
-                .all(|(_, slice)| palw_exec_v2_selected_approval_v1(route, &slice.evidence_root))
+                .all(|(_, slice)| palw_exec_v2_credit_approval_v1(route, &slice.evidence_root))
     }
 
     /// An allow-list is not the listed workers' consent. An extra executor becomes
@@ -1418,7 +1418,7 @@ fn dependency_outcome(
     if outcome != PalwSliceVerificationV1::ProvenFalse && super::palw_kernel_route_fold_v1::exec_provider_lapsed_v1(state, id, row) {
         PalwSliceVerificationV1::Defaulted
     } else if matches!(outcome, PalwSliceVerificationV1::Verified { .. })
-        && state.kernel_route.as_ref().is_none_or(|route| !palw_exec_v2_selected_approval_v1(route, id))
+        && state.kernel_route.as_ref().is_none_or(|route| !palw_exec_v2_credit_approval_v1(route, id))
     {
         PalwSliceVerificationV1::Pending
     } else {

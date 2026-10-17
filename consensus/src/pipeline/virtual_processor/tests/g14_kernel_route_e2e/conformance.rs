@@ -67,6 +67,11 @@ fn conformance_config(eligible: Vec<Hash64>, floor: u16) -> (Config, PalwConsens
     fence.sampled_conformance_gates_reward = floor == 0;
     params.palw_panel_free_v1 = Some(fence);
     let bundle = with_opv_budget(&mut params, bundle);
+    // RFC07 (validation 2026-10-17): the paid-source path (`paid_sources::arm_paid_sources`) is armed only by the worlds that
+    // drive it (the `PALW_PAID_SOURCES` probe of this round), so the existing worlds keep their fences.
+    if std::env::var("PALW_PAID_SOURCES").is_ok() {
+        paid_sources::arm_paid_sources(&mut params);
+    }
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
 }
@@ -109,6 +114,8 @@ struct Cw {
     ops: Vec<PalwArtifactOperandV1>,
     jobs: u8,
     turn: usize,
+    /// The paid verification class over the source class (RFC07 sources), once registered.
+    paid_class: Option<Digest>,
 }
 
 impl Cw {
@@ -187,13 +194,15 @@ impl Cw {
         let Obj::ClassRegisteredTirV1 { class_id: v2_class, .. } = &class_obj else { unreachable!() };
         let v2_class = *v2_class;
         let now = net.daa();
+        let inner_rehearsal = net.chain.ctx.consensus.palw_object_rehearsal_v1(&class_obj);
         let request = SignedRegistrationRequestV1::for_network(class_obj, net.bond(REGISTRANT), now, now + 200, &net.config.params)
             .expect("a registration");
         let envelope = request.sign(&net.signer(REGISTRANT)).expect("the SDK signs the envelope");
+        let rehearsal = net.chain.ctx.consensus.palw_object_rehearsal_v1(&envelope);
         net.send(vec![(REGISTRANT, envelope)]).await;
         assert!(
             matches!(net.chain.tip_state().1.class(&v2_class).map(|c| &c.status), Some(PalwClassStatusV2::Registered { .. })),
-            "the node accepted the SDK-signed envelope and registered the class it wraps"
+            "the node accepted the SDK-signed envelope and registered the class it wraps (the fold's rehearsal: {rehearsal:?}; of the class it wraps: {inner_rehearsal:?})"
         );
         // ---- bind (104), mature, the candidate's OPV kernel class, kernel-bind (106) ----
         let kernel_root = Hash64::from_bytes(f.pc.root());
@@ -225,7 +234,7 @@ impl Cw {
         let tensors = f.params.tensors.iter().map(|(k, t)| (*k, t.to_le_bytes())).collect();
         let ops = palw_tir_inventory_operands_v1(&f.program, &Tensors(tensors)).expect("the inventory");
         let cand = Fixture { program: f.program.clone(), params: f.params.clone(), plan: f.plan.clone(), pc: f.pc.clone() };
-        Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs: 0, turn: 0 }
+        Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs: 0, turn: 0, paid_class: None }
     }
 
     fn producer(&mut self) -> usize {
@@ -279,6 +288,14 @@ impl Cw {
     /// consumers and sealed/revealed by rotating producers. The DISTINCT beacon authenticates both identities from ledger rows.
     /// They reach Final with no Panel when their window closes.
     async fn source_claims(&mut self, n: usize) -> Vec<Digest> {
+        // RFC07 adapter (74921a40a): an OPV timeout Final exports no event, so these sources no longer lock the beacon (the 37
+        // blocked tests). The real path is `paid_sources::paid_source_claims` (bootstrap seed, user decision 2026-10-17); it is not
+        // wired here yet — its next requirement is the RFC08 kernel material manifest (validation 2026-10-17, see that module).
+        self.opv_source_claims(n).await
+    }
+
+    /// The pre-adapter sources: OPV claims reaching Final by timeout (they export no beacon event since the adapter).
+    async fn opv_source_claims(&mut self, n: usize) -> Vec<Digest> {
         let mut jobs = Vec::new();
         for _ in 0..n {
             self.jobs += 1;
@@ -1043,9 +1060,9 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
 
     // ---- a real restart, then the window closes on the restarted node and on the importer alike ----
     let (sink, root) = (cw.net.chain.sink(), cw.net.chain.tip_state().1.state_root());
-    let Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn } = cw;
+    let Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class } = cw;
     let net = net.restart(db.clone());
-    let mut cw = Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn };
+    let mut cw = Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class };
     assert_eq!((cw.net.chain.sink(), cw.net.chain.tip_state().1.state_root()), (sink, root), "the same tip off disk");
     assert_eq!(cw.attempt().evidence, Some(posted), "the attempt row off disk");
     cw.net.beat_to(posted.window_end_daa + 1).await;
@@ -1062,6 +1079,7 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
 
 // RFC-0008 v2 (X8R): the composed run — a REAL root on this world's kernel-bound class, its slices verified through the route.
 mod exec_slices;
+mod paid_sources;
 /// **G14C (GAP-03): ops 231 and 212, served by a node started after the evidence was posted, carry everything the SDK's fresh
 /// verifier needs.** The attempt row, the evidence row and the program arrive as op 231 serves them, the Final facts as op 212 serves
 /// them — each op's own builder over a node that synced by IBD, through the RPC's JSON wire form (`canonical.rs`'s [`Rpc`]) — and
