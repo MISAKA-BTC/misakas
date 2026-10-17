@@ -88,4 +88,7 @@
   - fence 以後は deferred になり、A の期限を過ぎてから適用される。
   - その後の C の late conviction で、frontier は floor まで戻る。
   - carriage は open claim と floor の行を運ぶ。
-- **未実施。** node 上の drill(fence をまたぐもの)、IBD・restart の node replay、`settled`・native safe の段階別の実測(§3.3)、段階 2(別 fence)の全部。
+- **追補(2026-10-18)。**
+  - 原因別の定常遅れを測った(`rfc23s1_per_cause_steady_state_lag_is_bounded_by_min_hold_and_l_plus_gap`)。6 原因とも min(保持時間, L) + 間隔 + 認証時間 以内。上限のない虚偽告発と再抽選の連鎖は、段階 1 が L で切る(fence 未満では 140,001 DAA 止まる)。数値は [G14 完全性証明 §13.8](../audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md)。
+  - node の restart と genesis からの replay(IBD の経路)が、fence をまたいで resolved prefix まで一致した(`rfc23s1_node_restart_and_genesis_replay_agree_on_the_resolved_prefix_across_the_fence`)。
+- **未実施。** node 上の drill(fence をまたぐ出荷 binary)、`settled`・native safe の段階別の実測(§3.3)、段階 2(別 fence)の全部。

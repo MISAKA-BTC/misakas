@@ -1559,3 +1559,86 @@ text29 の実 job を node 上で作る harness(`funded11/text29.rs`)を書い�
   - **固定値の衝突ではなかったもの。** Fund の同時義務の締切は v39 では commit window で決まる。probe の 5 DAA では、約 88 packet が period 1 で service の 17.6 倍になる。これは policy の horizon で、固定定数ではない。試験では 200 DAA にした(負荷 0.45)。
   - **未了。** Master の登録(65〜70)、Master Final、mining の登録・seat・commit(73〜75)、認証、receipt。G-N2 の action 80 を、この job の Final 後に node 上で走らせるところまでは届いていない。
 - 試験の horizon(interval 100,000、challenge 30,000、DA 回答 200、commit window 200、Final27 の試験 calibration など)は到達性のための値で、測定値ではない。
+
+### 13.7 追補(2026-10-18):v39 の Master・mining は block に入らない(値の衝突、未解決)
+
+13.6 の owning39 fixture を Master(65)まで延ばした。Master の登録は block に運ばれるが、何も書かれない。
+
+- **原因。** owning39 の Master と mining の metadata prepay は、kernel route の block あたり court work を使う(`charge(…, court = false)`)。
+  - 上限は `max_court_work_per_block = 2^30`、`prosecution_reserve_permille = 500`。通常の admission に使えるのは 2^29 = 536,870,912 work。
+  - Master 65/66 と component の invocation restore は `bytes × 16,384 + 2^20`。mining 73/75 は `bytes × 8,192 + 65,536`。どの action も固定の 65,536 byte 以上の envelope を restore する。
+  - fold は `prepay` が `Ok(false)` を返した時点で何も書かずに戻る。action は運ばれ、料金は取られず、状態は変わらない。
+- **数値(node 試験、fixture の 1 段 Master)。**
+
+  | action | restore extent | work | 上限 |
+  |---|---|---|---|
+  | Master 65 | 71,413 byte(登録 1,400 + source 381 + 固定 65,536 + 4,096) | 1,171,079,168 | 通常 536,870,912、block 全体 1,073,741,824 |
+  | mining 73 | 65,612 byte(固定 65,536 + body 76) | 537,559,040 | 536,870,912(688,128 超過) |
+  | mining 75、Master 66、component の Fund | 65,536 byte 以上 + source / book | 上と同じ形で超過 | 同上 |
+
+- **帰結。** v39 の mining claim は node 上で作れない。G-N2 の action 80 を、実 mining claim に対して Final 後に走らせることもできない。G-N2 の fold 試験(13.2)は変わらない。
+- **判断が要る値。** 料金の単価、固定の envelope、kernel route の block 上限のどれか。text29 の二次式(13.5)と違い、ここは式の形ではなく値の大きさの問題なので、値を変えずに記録した。
+- **試験。**
+  - `owning39_master_registration_is_refused_by_the_block_work_budget`(pass):上の数値を出し、Master 65 が node 上で何も書かないことを確かめる。
+  - Master → component job の Final(51、challenge 300 の試験 horizon)→ Master Final(66)→ 73/74/75 → 偽造 claim への action 80(producer の徴収、報酬なしの close、certification の撤回、hold の解放)、正直な claim は不変、までの node 試験 2 件を書いた。値が決まるまで `#[ignore]` にしてある。
+- **Gate C の draw(参考)。** 設計値 m = 47 は harness の bond 数より大きい。node 上の native mining claim の draw は `NoPopulation` になる。receipt と attestor の charge は、node 上では fold 試験(13.2)以上に進められない。
+
+### 13.8 追補(2026-10-18):RFC-0023 段階 1 の残り(休眠 `palw_unresolved_bound_v1`)
+
+- **原因別の定常遅れ(core、模擬)。** `rfc23s1_per_cause_steady_state_lag_is_bounded_by_min_hold_and_l_plus_gap`。
+  - 600 DAA ごとに 1 件の claim を、原因ごとの時間だけ未解決のまま保つ。正直な claim は 120 DAA 後に認証される。遅れは実関数 `palw_resolved_through_v1` / `palw_gate_c_frontier_v1` で読む。
+  - 保持時間は testnet-12 の値(W = 3,042、W_disclose = 1,200、L = 14,568)。
+
+  | 原因 | 保持時間(DAA) | fence 以後の遅れ | fence 未満 |
+  |---|---|---|---|
+  | 資料応答の遅延(licence + 回答窓 1 つ) | 4,242 | 4,799 | 4,799 |
+  | 正当な court(W_disclose + 4W) | 13,368 | 13,799 | 13,799 |
+  | 虚偽告発(W ごとに再告発、上限なし) | 無制限 | 14,999 | 140,001 |
+  | Gate C の再抽選の連鎖 | 無制限 | 14,999 | 140,001 |
+  | court 容量の飽和(L − W_disclose で裁定) | 13,368 | 13,799 | 13,799 |
+  | 遅延 claim の継続投入(期限まで) | 14,568 | 14,999 | 14,999 |
+
+  - どの原因も min(保持時間, L) + 間隔 + 認証時間 以内。上限のない 2 原因だけが段階 1 で L に切られる。
+- **node の restart と IBD の一致。** `rfc23s1_node_restart_and_genesis_replay_agree_on_the_resolved_prefix_across_the_fence`(consensus、pass)。
+  - fence を DAA 20 に置き、fence の前後で attempt claim を作った(未解決集合に入る)。DAA 160 で resolved prefix 17、最古の未解決は blue 18。
+  - 同じ DB での restart と genesis からの replay が、sink、state root、kernel 行、block ごとの delta root、resolved prefix で一致した。
+- 残り:§3.3 の段階別の実測(`settled`、native safe)、fence をまたぐ出荷 binary の drill。
+
+### 13.9 追補(2026-10-18):RFC-0018 (ii)(iii)(iv)
+
+- **(ii) 長期の公平性。** 16 carve の emission 予算(ADR-0164 F-EM)と mergeset の round robin の組合せで、model が飢えることを確かめた。
+  - 旧規則は class を最初の member の priority で並べた。attempt の多い class ほど最小値が小さく、毎回先頭に来る。
+  - 20 model、model 0 は 1 attempt、他の 19 model は各 32 attempt、2,000 block。model 0 が入ったのは 121 block(6 %、公平なら 80 %)。
+  - **修正(休眠の sibling fence の中だけ)。** class の順を `H(domain ‖ set seed ‖ class)` にした。set seed は mergeset の attempt priority を並べた hash で、SET の関数のままである。model 0 は 1,618 block、全 model が 1,570〜1,634(期待 1,600)。round robin、class 内の順、16 carve、経済値は変えていない。
+  - 試験:`rfc18_long_run_fairness_a_one_attempt_model_is_not_starved_by_flooding_models_under_the_16_carve_budget`。既存の sibling 順の 3 試験も pass。
+- **(iii) 遅い model A は共有 frontier だけを止める。** `rfc18_a_slow_model_a_claim_stops_only_the_shared_frontier_not_model_b_final_certification_or_payment`(core、pass)。
+  - A は未解決のまま(期限 L)。後から来た B は Final になり、A が開いている間に SecurityCertified、receipt clock(認証済みの支払い gate)が開き、frontier の資格も持つ。
+  - 共有 frontier だけが A の期限まで待ち、期限を過ぎると A の解決なしに B が frontier になる。A の責任(未解決集合の行)は残る。
+- **(iv) Panel の 1 本の in-flight carrier。** 13.10 に記す。
+
+### 13.10 追補(2026-10-18):Panel の carrier 待ちと RFC06 の held-GDN filer
+
+**(iv) Panel の carrier 待ち(kaspad、出荷の scheduler で模擬)。** `rfc18_iv_one_inflight_carrier_wait_across_many_classes_against_the_receipt_window`。
+- 条件:出荷の `PalwCarrierSlotsV1` と `TICK_ORDER`、`MAX_INFLIGHT_CARRIERS = 1`、testnet-12 の `window_receipt` = 600 DAA。class ごとに 30 DAA に 1 duty、その 7 件に 1 件で licence(collector)、別の 7 件に 1 件で supplementary の own receipt、120 DAA に 1 本の possession proof(main が空かなければ V07 の readiness lane)。carrier は送信から 1 または 2 DAA で着地する。負荷は試験値で、測定値ではない。
+- **結果(lane なし)。**
+  - court の queue が空なら、窓を外し始めるのは 96 class(着地 1 DAA)と 48 class(着地 2 DAA)。genesis の 8 model は外さない(最悪の待ち 1〜3 DAA)。
+  - court の queue が空にならない間(DA storm)は、OwnReceipts の site に slot が回らない。own receipt は 1 class でも窓を外した(8 class で 206 件)。licence と proof は外さなかった。
+- **変更(node policy、consensus の変更なし)。** own receipt の class lane(`palw_receipt_lane_takes_v1`、1 seat あたり最大 16 本)。main slot が取れないときだけ、receipt はその class の lane に乗る。lane は自分の確認済み output を使い、1 本ずつ in flight。他の chain の carrier の子は作らない(V07 と同じ)。readiness lane の funding の走査は、receipt lane の output も除く。
+- **結果(lane あり)。** storm の下でも 16 class まで own receipt は外さない。24 class からは lane の上限(16)を超えた class が外す。licence は main slot のままで、storm では 48〜64 class から外す。残る限界として記録する。
+
+**RFC06 06-A:held-GDN の自動 filer(kaspad `palw_gdn_held_filer`)。**
+- 流れ:producer の heap を使わず、自分の recompute で最初の偽 checkpoint を見つける → その transition が読む `StateChunk` を held DA court に 1 件ずつ要求(署名した `DefaultAccusedHeld`)→ chain 上の回答を held DA court と同じ hash 検査で確かめる → transition の evidence を作り、court と同じ terminal(`check_gdn_transition_refutation_v2`)で有罪になることを確かめてから署名 → tag 244 `MemoryRoutingV2::Accused`(`GdnTransition`)。回答された bytes が正直な候補(node slot, head)は飛ばして次へ進む。沈黙は DA-7 の default(fold の sweep が有罪にする)に任せ、filer は何も出さない。
+- 試験(genesis hybrid の dev fixture、graph-v8 held v5、n_ctx 160、6 件 pass)。偽 checkpoint は leg と binding を再 commit してあり、chain が持つ hash はすべて整合する。
+  - 回答する producer:1 単位を要求・回答、court の terminal が `DeltaState { head: 0 }` で有罪。
+  - head 1 だけを偽造:head 0 の回答は正直なので飛ばし、2 単位目で告発。
+  - 沈黙する producer:要求は 1 件だけ開き、窓を過ぎると default。
+  - 正直な producer:case を開かず、何も要求しない。
+  - tick(host の seam 経由):要求 → 回答 → 告発の 2 object を運んで `accused` で閉じる。沈黙は `defaulted`、正直は `honest` で object 0 件。
+- **未了。** service の tick への接続(held hybrid の claim の列挙、公開 served material の取得、priority lane への queue)と、node 上の E2E(全 seat 共謀、外部 bond 1 本、cold cache、担保の実際の減額)。告発の fold の効果は既存の tag 244 の arm(`convict_by_court_verdict_v1`)で、ここでは node 上で確かめていない。
+
+**実行した試験(2026-10-18、targeted)。**
+- kaspa-consensus:`owning39` 2 passed / 2 ignored(13.7)、`rfc23s1_node` 1 passed。
+- kaspa-consensus-core:`rfc23s1`・`rfc18_` 42 passed(修正後の fairness 試験を含む)。
+- kaspad:`carrier_wait_many_classes`・`rfc06_held_gdn_filer` 8 passed。
+- core の identity:`--test g14_court_capacity`(`testnet12_identity_did_not_move` を含む)15 passed / 1 ignored。
+- `rfc0018_dag_siblings` の node 試験 3 件は失敗した。fence ありの 1 件は config の validation が RFC-0018 fence の武装を拒否して起動しない。fence なしの 2 件は sibling が merger の past に入らない。どちらも sibling の順の変更(fence の中だけ)を通らない経路で、RFC18 監査 D16 が記録した既存の失敗と同じ症状である。未解決。
