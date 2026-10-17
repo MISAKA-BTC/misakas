@@ -859,7 +859,7 @@ class Drill:
         a = self.args
         # With --lie-claims, P starts honest and lies only once the outside verifier exists (stop_lying_after).
         self.add('P', 0, self.producer_flags(0, canonical=canonical, inject=inject, host_panel=True,
-                                             honest=bool(self.args.lie_claims)))
+                                             honest=bool(self.args.lie_claims) or self.args.lie_from_daa is not None))
         # The producer's mining gate needs one peer: a plain relay (no bond) until the outsider runs (three processes at most).
         self.add('R', 6, [], bonded=False)
         for n in list(self.nodes.values()):
@@ -903,7 +903,7 @@ class Drill:
         cut02 = None
         d02 = {'evidence': {}}
         if not self.args.skip_d02:
-            if self.args.lie_claims:
+            if self.args.lie_claims or self.args.lie_from_daa is not None:
                 _, cut02 = self.stop_lying_after(self.args.lie_claims, self.args.after_daa, 'D-02')
             d02 = self.run_conviction('D-02', 'P', 0, self.args.after_daa)
             self.metric_chain('D-02 (auto lie leaf)', self.seat(0)['bond_outpoint'], self.args.after_daa, before02, until_daa=cut02)
@@ -1241,7 +1241,7 @@ class Drill:
         pbond = self.seat(card)['bond_outpoint']
         # The compressed flag days (DAA 6..28) each break the peers' fork-id handshake for a while, the nodes mine apart and the
         # reorg on reconnect can drop a carried reservation (run 4). Lie only past them.
-        quiet = max(since_daa, PRIVATE_G14_LAST_FLAG_DAY + 2)
+        quiet = max(since_daa, PRIVATE_G14_LAST_FLAG_DAY + 2 if self.args.lie_from_daa is None else self.args.lie_from_daa)
         self.wait('%s: the chain passes the compressed flag days (DAA %d)' % (label, quiet),
                   lambda: (self.daa_quiet() or 0) >= quiet, self.args.step_timeout, every=20)
         p = self.nodes[role]
@@ -1251,6 +1251,10 @@ class Drill:
         self.wait_rpc(p)
         self.peer_all()
         since_daa = max(since_daa, self.daa_quiet() or 0)
+        if n <= 0:
+            # Lie on every draw for the rest of the phase (G-D02c): nothing to bound.
+            self.lying_ids = set()
+            return [], None
         rows = self.wait('%s: %d lying claims accepted' % (label, n), lambda: (lambda r: r if len(r) >= n else None)(
             [x for x in self.claims(pbond).get('claims', []) if x['acceptedDaa'] >= since_daa and not x['isFreePrompt']]),
             self.args.step_timeout, every=15)
@@ -1455,6 +1459,9 @@ def main():
     ap.add_argument('--inject', action='append', default=[],
                     help='G-17 injection phase after D-02 (repeatable): a --palw-drill-fault kind, sparse:<seed> or withhold-all')
     ap.add_argument('--inject-claims', type=int, default=1, help='lying claims to follow to their end per injection phase')
+    ap.add_argument('--lie-from-daa', type=int, default=None,
+                    help='D-02 / injections: start lying at this DAA (default: past the compressed flag days; small = across them, '
+                         'G-D02b); with --lie-claims 0 the producer lies on every draw from then on (G-D02c)')
     ap.add_argument('--skip-d02', action='store_true', help='skip the D-02 phase (run the injections, restart/IBD and D-11 only)')
     ap.add_argument('--lie-claims', type=int, default=0,
                     help='bound the lie: restart P honest after this many lying claims (0: lie on every draw, as before)')
