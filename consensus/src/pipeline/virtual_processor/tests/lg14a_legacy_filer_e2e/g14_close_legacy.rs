@@ -537,6 +537,13 @@ async fn legacy_v2_attempt_held_da_withholding_ends_in_da_default() {
 /// licensed by every seat, and reaches `Final` at its own deadline with safe weight; its vesting row holds the reward to
 /// `F + window_court` (the liability horizon) — nothing moves before — and once both clocks are met the row matures and the producer's
 /// leg is minted by a real coinbase; blocks keep coming throughout.
+/// One more honest licensed claim (its Final settles an anchor): the chain is live, not heartbeat-only.
+async fn keep_live(lg: &mut Lg) {
+    let produced = lg.real_attempt(EXECUTOR, false).await;
+    let seats = lg.bind(produced.claim_id).await;
+    lg.license(produced.claim_id, &seats).await;
+}
+
 #[tokio::test]
 async fn legacy_v2_attempt_honest_claim_is_final_and_paid_under_full_g14() {
     kaspa_core::log::try_init_logger("warn");
@@ -578,8 +585,21 @@ async fn legacy_v2_attempt_honest_claim_is_final_and_paid_under_full_g14() {
     assert!(row.matured_at.is_none());
     let key = kaspa_consensus_core::palw_vesting_v1::palw_vesting_payout_key_v1(&id);
     let moved_before = state.vesting_counters().moved;
+    // The chain stays LIVE (acceptance test G): an honest producer keeps licensing claims, so a settled anchor lands well inside every
+    // `2 × window_court` and the second clock is not in a licence halt (V-4(b): on heartbeat-only history nothing economic concludes —
+    // `PALW_T12_SETTLED_ANCHOR_DEPTH`'s rule — so a heartbeat-only wait never pays any reward, honest or not).
+    let live_every = wc * 2 / 3;
+    let stop_live = row.expiry_daa + 2 * wc - live_every / 2;
+    let mut next_live = lg.daa() + live_every;
     // Nothing moves before the horizon.
-    lg.beat_to(final_daa + wc - 1).await;
+    while lg.daa() < final_daa + wc - 1 {
+        if lg.daa() >= next_live {
+            keep_live(&mut lg).await;
+            next_live = lg.daa() + live_every;
+        } else {
+            lg.beat(1).await;
+        }
+    }
     let (_, state) = lg.chain.tip_state();
     assert!(state.vesting_row(&id).is_some_and(|r| r.matured_at.is_none()), "held until F + window_court");
     assert!(state.pending_payout(&key).is_none());
@@ -594,6 +614,11 @@ async fn legacy_v2_attempt_honest_claim_is_final_and_paid_under_full_g14() {
     let mut paid_at = None;
     while paid_at.is_none() {
         assert!(lg.daa() <= bound, "the row matures by its second clock's bound ({bound})");
+        if moved_at.is_none() && lg.daa() >= next_live && lg.daa() < stop_live {
+            keep_live(&mut lg).await;
+            next_live = lg.daa() + live_every;
+            continue;
+        }
         let block = lg.chain.heartbeat(ttpb, Vec::new()).await;
         let (_, state) = lg.chain.tip_state();
         if moved_at.is_none() && state.vesting_row(&id).is_none() {

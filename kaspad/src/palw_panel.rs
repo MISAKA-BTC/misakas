@@ -6913,6 +6913,18 @@ impl PalwPanelService {
                 failed_minimum = Some(failed);
             }
             let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| *inflight < MAX_INFLIGHT_CARRIERS) else {
+                // Lane g14-court-capacity-r2: the funding scan failed at this object's minimum — a FEE SHORTFALL, not a busy UTXO:
+                // the G14 funnel counts it against the claim this node detected (`detection_loss_once(.., FeeShortfall)`).
+                if failed_minimum.is_some_and(|failed| minimum >= failed)
+                    && let Some(claim) = palw_court_object_claim_v1(&object)
+                    && let Some(class) = self.config.telemetry.detection_watched_class(&claim)
+                {
+                    self.config.telemetry.detection_loss_once(
+                        class,
+                        claim,
+                        kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1::FeeShortfall,
+                    );
+                }
                 // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
                 // dropped here is a dispute that never happens.
                 unsent.push((session_id, round, mine_is_responder, object));
@@ -15285,6 +15297,17 @@ enum CarrierFate {
 }
 
 /// The verdict, from the three facts the node already holds.
+/// **Lane g14-court-capacity-r2: the claim a prosecution object pursues** (for the G14 funnel's fee-shortfall count): the one-move
+/// and held accusations, a court opening, a DA accusation and a dispute reservation; `None` for any other court-lane object.
+pub(crate) fn palw_court_object_claim_v1(object: &PalwConsensusObjectV2) -> Option<Hash64> {
+    match object {
+        PalwConsensusObjectV2::ShardCourtAccused { accusation } => Some(accusation.claim),
+        PalwConsensusObjectV2::CourtOpened { claim, .. } | PalwConsensusObjectV2::DefaultAccused { claim, .. } => Some(*claim),
+        PalwConsensusObjectV2::DisputeReservedV1 { reservation, .. } => Some(reservation.claim),
+        _ => None,
+    }
+}
+
 fn carrier_fate(mined: bool, in_mempool: bool, funding_unspent: bool) -> CarrierFate {
     match (mined, in_mempool, funding_unspent) {
         // Mined wins: a mempool copy alongside a mined transaction is incidental.
@@ -16872,6 +16895,26 @@ impl PalwPanelService {
             }
             PalwDetectionRegimeV1::Policy(policy) => {
                 match crate::palw_fp_seat::palw_fp_seat_draw_under_policy_v2(backend.as_ref(), network_domain, duty, counts, priced, policy) {
+                    Ok((draw, plan))
+                        if !telemetry.detection_take_duty_v1(
+                            duty.class_id,
+                            duty.claim_id,
+                            duty.bound_daa,
+                            policy.resources.claims_in_flight,
+                            duty.bound_daa.saturating_add(policy.deadlines.inspection_deadline_daa),
+                        ) =>
+                    {
+                        // Lane g14-court-capacity-r2: the policy's `claims_in_flight` bounds what this seat holds at once (its
+                        // retention was sized for that many); a duty past it is refused and counted, never silently dropped.
+                        let _ = (draw, plan);
+                        telemetry.detection_loss_once(duty.class_id, duty.claim_id, PalwDetectionLossV1::CapacityRefusal);
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: the seat already holds {} interval duties of this class (its policy's \
+                             claims_in_flight) — no duty taken",
+                            duty.claim_id, policy.resources.claims_in_flight
+                        );
+                        return None;
+                    }
                     Ok((draw, plan)) => {
                         info!(
                             "[{PALW_PANEL}] claim {}: detection policy {} — N {}, D_min {}, k {} (miss at D_min <= {} ppm)",

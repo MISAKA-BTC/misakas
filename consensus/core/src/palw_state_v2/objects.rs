@@ -3496,7 +3496,19 @@ fn apply_object_inner(
                     collateral_sompi: collectable,
                 };
                 if let Some((code, why)) =
-                    crate::palw_detection_policy_v1::palw_detection_claim_refusal_v1(builder.params, class_id, ctx.daa_score, &facts)
+                    crate::palw_detection_policy_v1::palw_detection_claim_refusal_with_budget_v1(
+                        builder.params,
+                        class_id,
+                        ctx.daa_score,
+                        &facts,
+                        crate::palw_court_capacity_v1::palw_court_claim_budget_for_retention_v1(
+                            &builder.state,
+                            builder.params,
+                            class_id,
+                            ctx.daa_score,
+                            *trace_retention_daa,
+                        ),
+                    )
                 {
                     return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
                 }

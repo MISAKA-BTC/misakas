@@ -21626,7 +21626,20 @@ fn apply_attempt(
             collateral_sompi: collectable,
         };
         if let Some((code, why)) =
-            crate::palw_detection_policy_v1::palw_detection_claim_refusal_v1(builder.params, &attempt.class_id, ctx.daa_score, &facts)
+            crate::palw_detection_policy_v1::palw_detection_claim_refusal_with_budget_v1(
+                builder.params,
+                &attempt.class_id,
+                ctx.daa_score,
+                &facts,
+                // Lane g14-court-capacity-r2: the court's actual per-claim reservation (None below its fence).
+                crate::palw_court_capacity_v1::palw_court_claim_budget_for_retention_v1(
+                    &builder.state,
+                    builder.params,
+                    &attempt.class_id,
+                    ctx.daa_score,
+                    attempt.trace_retention_daa,
+                ),
+            )
         {
             return Err(PalwStateV2Error::ClassNotRewardable { class: attempt.class_id, code, why });
         }

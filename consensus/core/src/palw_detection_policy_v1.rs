@@ -1043,8 +1043,35 @@ pub fn palw_detection_claim_refusal_v1(
     accepted_daa: u64,
     facts: &PalwDetectionClaimFactsV1,
 ) -> Option<(&'static str, String)> {
+    palw_detection_claim_refusal_with_budget_v1(params, class_id, accepted_daa, facts, None)
+}
+
+/// **The claim gate against the court's ACTUAL per-claim reservation** (lane g14-court-capacity-r2, the interface of §10 item 1):
+/// with `budget` (`crate::palw_court_capacity_v1::palw_court_claim_budget_v1`, past `palw_court_capacity_v1`), the policy's
+/// declared `court_openings_per_claim` / `da_bytes_per_claim` are replaced by what one reservation can actually compel on the claim,
+/// and its inspection deadline by `min(declared, first_move_by_daa − accepted_daa)` — so a policy whose draw the court cannot compel,
+/// or whose rounds cannot finish before the last guaranteed first move, refuses the claim (`DETECTION_COURT_BUDGET_BELOW_DRAW` /
+/// `DETECTION_DEADLINE_UNREACHABLE`). `None`: the declared values, as before (the court-capacity fence not in force).
+pub fn palw_detection_claim_refusal_with_budget_v1(
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    class_id: &Hash64,
+    accepted_daa: u64,
+    facts: &PalwDetectionClaimFactsV1,
+    budget: Option<crate::palw_court_capacity_v1::PalwCourtClaimBudgetV1>,
+) -> Option<(&'static str, String)> {
     let regime = palw_detection_regime_v1(params.detection_policy_v1(), class_id, 0, accepted_daa);
-    match palw_detection_admit_claim_v1(regime, facts) {
+    let result = match (regime, budget) {
+        (PalwDetectionRegimeV1::Policy(policy), Some(budget)) => {
+            let mut bound = policy.clone();
+            bound.resources.court_openings_per_claim = budget.compellable_openings;
+            bound.resources.da_bytes_per_claim = budget.da_bytes;
+            bound.deadlines.inspection_deadline_daa =
+                bound.deadlines.inspection_deadline_daa.min(budget.first_move_by_daa.saturating_sub(accepted_daa));
+            bound.plan_v1(facts).map(Some)
+        }
+        (regime, _) => palw_detection_admit_claim_v1(regime, facts),
+    };
+    match result {
         Ok(_) => None,
         Err(e) => Some((e.code(), format!("palw_detection_policy_v1: {e} — no reward, weight or consensus credit"))),
     }

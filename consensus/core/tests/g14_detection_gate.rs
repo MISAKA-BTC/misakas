@@ -317,3 +317,82 @@ fn a_free_prompt_commitment_past_the_fence_obeys_the_same_gate() {
     let below_none = fold_at(&sp_of(&p), FENCE - 1).expect("no mirror");
     assert_eq!(carriage(&below), carriage(&below_none));
 }
+
+// ---- lane g14-court-capacity-r2: the court's per-claim reservation at the claim gate (detection-policy §10 item 1) ----------------
+
+/// **The claim gate checks the policy's declared court/DA needs against what the court actually reserves for the claim**
+/// (`palw_court_claim_budget_v1`, past `palw_court_capacity_v1`): the draw must be compellable on ONE reservation's own budget
+/// (34 reserved DA sessions here), and the rounds must finish before the last guaranteed first move (`hard − W` for a one-move
+/// class). A policy that declares more than that is admitted below the court fence (its declared values) and refused past it
+/// (`DETECTION_COURT_BUDGET_BELOW_DRAW`); a claim whose retention leaves no guaranteed first move is refused
+/// (`DETECTION_DEADLINE_UNREACHABLE`). The fold's attempt gate reads the same budget.
+#[test]
+fn the_claim_gate_checks_the_policys_needs_against_the_courts_per_claim_reservation() {
+    use kaspa_consensus_core::palw_court_capacity_v1::*;
+    let r = attempt_rig();
+    let affordable = u64::try_from(r.reserved / (64 * 2)).unwrap().max(1);
+    let court = PalwCourtCapacityMirrorV1 { from_daa: 0, policy: palw_court_capacity_placeholder_policy_v1() };
+    let facts = PalwDetectionClaimFactsV1 {
+        attempt_lane: true,
+        work_leaves: 0,
+        context_priced_leaves: None,
+        prompt_tokens: 0,
+        decode_tokens_executed: 0,
+        collateral_sompi: r.reserved,
+    };
+    // A policy whose draw needs more openings than one reservation compels: a tight ε, a raised k ceiling, and declared resources
+    // (court openings, bytes, retention, fetch, replay) large enough that only the court's actual reservation binds.
+    let mut wide = floor_policy(r.floor, affordable);
+    wide.epsilon = PalwRatioV1 { num: 1, den: 1_000_000 };
+    wide.k_max = 64;
+    wide.resources.court_openings_per_claim = 64;
+    wide.resources.da_bytes_per_claim = u64::MAX / 4;
+    wide.resources.retention_pairs_cap = u32::MAX;
+    wide.resources.max_claim_fetch_bytes = u64::MAX / 4;
+    wide.resources.max_claim_replay_units = u64::MAX / 4;
+    let plan = wide.plan_v1(&facts).expect("the declared values admit the wide draw");
+    eprintln!("[court budget] wide policy: N {}, k_round {}, rounds {}", plan.n, plan.k_round, plan.rounds);
+    let sp = armed(&r.p, vec![wide]);
+    let with_court = sp.clone().with_court_capacity_v1(Some(court));
+    // The budget: below the court fence none; past it, one reservation's own sessions and the claim's own hard deadline.
+    assert_eq!(palw_court_claim_budget_for_retention_v1(&r.s, &sp, &r.floor, FENCE, 999_999), None);
+    let budget = palw_court_claim_budget_for_retention_v1(&r.s, &with_court, &r.floor, FENCE, 999_999).expect("a budget");
+    let fused = r.s.class(&r.floor).is_some_and(|c| c.fused_attention);
+    let w = court.policy.admission_bucket_daa(with_court.turn_deadline_daa(), with_court.window_court());
+    let hard = 999_999 - kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&with_court);
+    assert_eq!(budget.compellable_openings, 34, "one reservation's own reserved DA sessions");
+    assert_eq!(budget.reserved_sessions, u32::from(fused));
+    assert_eq!(budget.first_move_by_daa, hard - if fused { 4 * w } else { w });
+    let producer_default = palw_court_claim_budget_v1(&r.s, &with_court, &r.floor, FENCE).expect("a budget");
+    eprintln!(
+        "[court budget] floor class (fused {fused}): {budget:?}; at the producer's minimum retention the last guaranteed first move is \
+         DAA {} (accepted {FENCE})",
+        producer_default.first_move_by_daa
+    );
+    let gate = |sp: &PalwStateParamsV2, retention: u64| {
+        palw_detection_claim_refusal_with_budget_v1(
+            sp,
+            &r.floor,
+            FENCE,
+            &facts,
+            palw_court_claim_budget_for_retention_v1(&r.s, sp, &r.floor, FENCE, retention),
+        )
+        .map(|(code, _)| code)
+    };
+    if plan.k_round > budget.compellable_openings {
+        assert_eq!(gate(&sp, 999_999), None, "below the court fence: the declared values admit it");
+        assert_eq!(gate(&with_court, 999_999), Some("DETECTION_COURT_BUDGET_BELOW_DRAW"), "past it: the reservation cannot compel the draw");
+        // The fold's attempt gate reads the same budget.
+        let e = r.attempt(&with_court, FENCE, 0xDE00_0002).expect_err("the attempt gate refuses it too");
+        assert_eq!(code(&e), Some("DETECTION_COURT_BUDGET_BELOW_DRAW"), "{e:?}");
+        r.attempt(&sp, FENCE, 0xDE00_0002).expect("admitted on the declared values below the court fence");
+    } else {
+        panic!("the fixture's wide policy draws only {} per round; it must exceed one reservation's 34 sessions", plan.k_round);
+    }
+    // A policy within the reservation is admitted past the court fence on a retention that leaves its rounds time …
+    let fits = armed(&r.p, vec![floor_policy(r.floor, affordable)]).with_court_capacity_v1(Some(court));
+    assert_eq!(gate(&fits, 999_999), None, "within one reservation's budget, before the last guaranteed first move");
+    // … and refused when the claim's retention leaves no guaranteed first move after its acceptance.
+    let short = FENCE + kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&fits) + w / 2;
+    assert_eq!(gate(&fits, short), Some("DETECTION_DEADLINE_UNREACHABLE"), "no time to prosecute: not reward-bearing");
+}

@@ -644,3 +644,77 @@ impl PalwReservedCourtV1 {
         u128::from(self.rho_sompi).saturating_mul(u128::from(occupied)).saturating_mul(u128::from(self.weight)).min(self.escrow)
     }
 }
+
+// =================================================================================================================================
+// 5. The per-claim court / DA budget (the detection-policy lane's interface, g14-detection-policy §10)
+// =================================================================================================================================
+
+/// **What the court and the data-availability route reserve for ONE claim for its liability horizon — capacity no other bond can
+/// fill** (`palw_court_claim_budget_v1`):
+///
+/// * `compellable_openings`: the units ONE honest reservation can compel on the claim on its own budget — its reserved DA sessions
+///   ([`crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1`]) and, where LG14-B is in force at the claim's
+///   acceptance, its extra parallel lanes ([`crate::palw_legacy_parallel_v1::PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1`]). Another
+///   bond's reservation spends its OWN budget (one reservation per bond per claim), never this one.
+/// * `da_bytes`: those units at the largest answer the chain carries (`PALW_OBJECT_CHUNK_MAX_COUNT × PALW_OBJECT_CHUNK_MAX_BYTES`).
+/// * `first_move_by_daa`: the last DAA a prosecution may start and still be guaranteed its verdict — the claim's hard deadline
+///   (acceptance + the producer's minimum trace retention − the disclosure window; a longer promised retention only moves it later)
+///   less the guarantee's lead: `4W` on the reserve pool for a court-demanding claim (`PalwCourtCapacityPolicyV1::reserve_lead_daa`),
+///   one service window `W` otherwise.
+/// * `reserved_sessions`: court sessions reserved to the claim — 1 for a court-demanding claim (its reserve row, guaranteed by the
+///   bounded admission), 0 for a claim adjudicated in one move (the one-move budget is per block, not per claim).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwCourtClaimBudgetV1 {
+    pub compellable_openings: u32,
+    pub da_bytes: u64,
+    pub first_move_by_daa: u64,
+    pub reserved_sessions: u32,
+}
+
+/// **The per-claim budget of a claim of `class_id` accepted at `accepted_daa`** — `None` below `palw_court_capacity_v1` (nothing is
+/// reserved per claim there). A pure read of state and params; the claim gate (`palw_detection_policy_v1`) checks a policy's declared
+/// needs against it.
+pub fn palw_court_claim_budget_v1(
+    state: &PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    class_id: &Hash64,
+    accepted_daa: u64,
+) -> Option<PalwCourtClaimBudgetV1> {
+    let retention = accepted_daa.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(params));
+    palw_court_claim_budget_for_retention_v1(state, params, class_id, accepted_daa, retention)
+}
+
+/// [`palw_court_claim_budget_v1`] for a claim whose promised trace retention is known (`trace_retention_daa`, the attempt's or the
+/// commitment's own field): the hard deadline is the claim's own (`retention − W_disclose`), not the producer minimum's lower bound.
+pub fn palw_court_claim_budget_for_retention_v1(
+    state: &PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    class_id: &Hash64,
+    accepted_daa: u64,
+    trace_retention_daa: u64,
+) -> Option<PalwCourtClaimBudgetV1> {
+    let mirror = params.court_capacity_v1().filter(|m| m.active_at(accepted_daa))?;
+    let policy = mirror.policy;
+    let fused = state.class(class_id).is_some_and(|class| class.fused_attention);
+    let held_da = params.g14_route_required_v1().and_then(|m| m.legacy_held_da_from).is_some_and(|from| accepted_daa >= from);
+    let mut compellable = u32::from(crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1);
+    if held_da {
+        compellable = compellable.saturating_add(u32::from(crate::palw_legacy_parallel_v1::PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1));
+    }
+    let unit_bytes =
+        (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64).saturating_mul(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+    let turn = params.turn_deadline_daa();
+    let hard = trace_retention_daa.saturating_sub(crate::palw_state_v2::palw_da_disclose_window_daa_v1(params));
+    let lead = if fused {
+        policy.reserve_lead_daa(turn, params.window_court())
+    } else {
+        policy.admission_bucket_daa(turn, params.window_court())
+    };
+    Some(PalwCourtClaimBudgetV1 {
+        compellable_openings: compellable,
+        da_bytes: u64::from(compellable).saturating_mul(unit_bytes),
+        first_move_by_daa: hard.saturating_sub(lead),
+        reserved_sessions: u32::from(fused),
+    })
+}
+
