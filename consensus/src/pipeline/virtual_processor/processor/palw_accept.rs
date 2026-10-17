@@ -2183,10 +2183,9 @@ impl VirtualStateProcessor {
         if !params.panel_v3_rule_at(daa_score) && extras.model_registry.is_none() {
             return None;
         }
-        let maximum_custodians = kaspa_consensus_core::palw_state_v2::PalwChainStateV2::staged_registered_tir_maximum_custodians_v1(
-            daa_score, params, extras,
-        )
-        .ok()?;
+        // G14 audit §11 (d): the frame's own upper (the flat Panel's credited seats and the producer), not the typed routes' 257.
+        let maximum_custodians =
+            kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(daa_score, params, extras).ok()?;
         let maximum_leaves = self.palw_court_step_ladder_at(daa_score, &court);
         if maximum_custodians == 0 || maximum_leaves == 0 {
             return None;

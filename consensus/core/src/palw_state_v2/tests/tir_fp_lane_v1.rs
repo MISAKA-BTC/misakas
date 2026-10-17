@@ -242,7 +242,7 @@ fn lane_with(
         }),
         ..Default::default()
     };
-    let upper = state.staged_maximum_custodians_v1(class_id, AT_DAA, &p, &extras).expect("the native custodian upper");
+    let upper = crate::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(AT_DAA, &p, &extras).expect("the frame's upper");
     extras.tir_public_allocation_rules_v1 = Some(PalwTirPublicAllocationRulesV1 {
         maximum_leaves: 1 << 40,
         maximum_custodians: upper,

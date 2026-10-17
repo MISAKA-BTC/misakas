@@ -281,6 +281,44 @@ enum StepV1 {
 
 /// The literal preparation duty `signer` has on `(claim, allocation)` at the accepted snapshot: `Some(is_producer)` while it is
 /// pending (the producer as a d0 custodian; a drawn seat that signed Valid and holds no grant yet), `None` otherwise.
+/// **One Run step of an accepted preparation pass** (audit §10/§11: ONE debit per pass): up to `limit` slices, no chain wait between
+/// them — the cold capture's `StepLeaf { index: 0 }` slices until the reader warms (then the step ends: the writer begins on the next
+/// tick, still under the same permit), then the prepared generation's publication slices until it seals. `capture` / `publish` run
+/// one quoted slice under the pass's ledger (production: `prepare_claim_capture_slice_v1` / `prepare_claim_publication_slice_v1`,
+/// which charge the slice's quoted work and overhead against the permit). `Some(descriptor)` once sealed; an error fails the case.
+pub(super) fn run_pass_slices_v1<L>(
+    warm: &mut bool,
+    mut reader: Option<&mut (dyn PalwTirPublicCaptureReaderV1 + 'static)>,
+    mut writer: Option<&mut (dyn PalwTirPublicPreparedWriterV1 + 'static)>,
+    limit: usize,
+    ledger: &mut L,
+    capture: impl Fn(&mut L, &mut dyn PalwTirPublicCaptureReaderV1, &PalwTirPublicCaptureSliceV1) -> Result<bool, String>,
+    publish: impl Fn(
+        &mut L,
+        &mut dyn PalwTirPublicPreparedWriterV1,
+        &PalwTirPublicCaptureSliceV1,
+    ) -> Result<Option<PalwTirPublicPreparedDescriptorV1>, String>,
+) -> Result<Option<PalwTirPublicPreparedDescriptorV1>, String> {
+    for _ in 0..limit {
+        if *warm {
+            // The reader warmed: the writer begins on the next tick (no new debit).
+            let Some(writer) = writer.as_deref_mut() else { return Ok(None) };
+            let quote = writer.slice_quote_v1()?;
+            if let Some(descriptor) = publish(ledger, writer, &quote)? {
+                return Ok(Some(descriptor));
+            }
+        } else {
+            let reader = reader.as_deref_mut().ok_or("TIR custodian lost its capture reader")?;
+            let quote = reader.slice_quote_v1(&PalwTirPublicRequestV1::StepLeaf { index: 0 })?;
+            if capture(ledger, reader, &quote)? {
+                *warm = true;
+                return Ok(None);
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn preparation_duty_v1(
     state: &PalwChainStateV2,
     now: u64,
@@ -680,43 +718,16 @@ impl PalwPanelService {
                         let mut writer = case.writer.take();
                         let outcome = tokio::task::spawn_blocking(move || {
                             let borrowed = BorrowedPreparationSnapshotV1::from_native_v1(&snapshot);
-                            let mut sealed = None;
-                            let mut result = Ok(());
-                            for _ in 0..PALW_TIR_PUBLIC_SLICES_PER_STEP_V1 {
-                                let step: Result<bool, String> = if warm {
-                                    match writer.as_mut() {
-                                        Some(writer) => writer.slice_quote_v1().and_then(|quote| {
-                                            prepare_claim_publication_slice_v1(&borrowed, writer.as_mut(), &quote, &mut ledger)
-                                        })
-                                        .map(|done| {
-                                            sealed = done;
-                                            sealed.is_some()
-                                        }),
-                                        // The reader warmed: the writer begins on the next tick (no new debit).
-                                        None => Ok(true),
-                                    }
-                                } else {
-                                    match reader.as_mut() {
-                                        Some(reader) => reader
-                                            .slice_quote_v1(&PalwTirPublicRequestV1::StepLeaf { index: 0 })
-                                            .and_then(|quote| prepare_claim_capture_slice_v1(&borrowed, reader.as_mut(), &quote, &mut ledger))
-                                            .map(|warmed| {
-                                                warm |= warmed;
-                                                warmed
-                                            }),
-                                        None => Err("TIR custodian lost its capture reader".into()),
-                                    }
-                                };
-                                match step {
-                                    Ok(true) => break,
-                                    Ok(false) => {}
-                                    Err(why) => {
-                                        result = Err(why);
-                                        break;
-                                    }
-                                }
-                            }
-                            (reader, writer, ledger, warm, result.map(|()| sealed))
+                            let result = run_pass_slices_v1(
+                                &mut warm,
+                                reader.as_deref_mut(),
+                                writer.as_deref_mut(),
+                                PALW_TIR_PUBLIC_SLICES_PER_STEP_V1,
+                                &mut ledger,
+                                |ledger, reader, quote| prepare_claim_capture_slice_v1(&borrowed, reader, quote, ledger),
+                                |ledger, writer, quote| prepare_claim_publication_slice_v1(&borrowed, writer, quote, ledger),
+                            );
+                            (reader, writer, ledger, warm, result)
                         })
                         .await
                         .map_err(|e| format!("TIR custodian slice worker failed: {e}"))?;
@@ -1341,5 +1352,157 @@ mod tests {
         assert!(third.physical.contains_key(&key), "the door at 700 is not irreversibly past at 700");
         third.retired_v1((Hash64::from_u64_word(9), Hash64::from_u64_word(9)), 701);
         assert!(!third.physical.contains_key(&key));
+    }
+
+    /// A cold reader that warms after `slices` quoted slices, and a writer that seals after `slices`; each slice quotes `io` bytes.
+    struct FakeReader {
+        slices: u64,
+        polled: u64,
+        io: u64,
+    }
+    struct FakeWriter {
+        slices: u64,
+        polled: u64,
+        io: u64,
+    }
+    fn quote(sequence: u64, io: u64, phase: u8) -> PalwTirPublicCaptureSliceV1 {
+        PalwTirPublicCaptureSliceV1 {
+            source_id: Hash64::from_u64_word(1),
+            request_id: Hash64::default(),
+            sequence,
+            phase,
+            cursor_id: Hash64::from_u64_word(100 + sequence),
+            work: kaspa_consensus_core::palw_backend::PalwTirPublicCaptureWorkV1 { io_bytes: io, hash_bytes: io, ..Default::default() },
+            resident_ram_bytes: 0,
+        }
+    }
+    impl PalwTirPublicCaptureReaderV1 for FakeReader {
+        fn prepared_descriptor_v1(&self) -> Option<&PalwTirPublicPreparedDescriptorV1> {
+            None
+        }
+        fn prepared_need_v1(&self) -> Result<kaspa_consensus_core::palw_backend::PalwTirPublicPreparedNeedV1, String> {
+            Err("unused".into())
+        }
+        fn begin_prepared_v1(&self, _: &Path, _: u64, _: u64) -> Result<Box<dyn PalwTirPublicPreparedWriterV1>, String> {
+            Err("unused".into())
+        }
+        fn slice_quote_v1(&self, _: &PalwTirPublicRequestV1) -> Result<PalwTirPublicCaptureSliceV1, String> {
+            Ok(quote(self.polled, self.io, 1))
+        }
+        fn progress_v1(&self) -> kaspa_consensus_core::palw_backend::PalwTirPublicCaptureProgressV1 {
+            Default::default()
+        }
+        fn poll_quoted_v1(
+            &mut self,
+            _: &PalwTirPublicRequestV1,
+            q: &PalwTirPublicCaptureSliceV1,
+        ) -> Result<Option<kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicResponseV1>, String> {
+            assert_eq!(q.sequence, self.polled, "slices run in order");
+            self.polled += 1;
+            Ok((self.polled == self.slices).then(|| kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicResponseV1::Ids {
+                rows_root: Hash64::default(),
+                ids: vec![],
+            }))
+        }
+        fn poll_v1(
+            &mut self,
+            _: &PalwTirPublicRequestV1,
+        ) -> Result<Option<kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicResponseV1>, String> {
+            Err("unused".into())
+        }
+    }
+    impl PalwTirPublicPreparedWriterV1 for FakeWriter {
+        fn slice_quote_v1(&self) -> Result<PalwTirPublicCaptureSliceV1, String> {
+            Ok(quote(self.polled, self.io, 12))
+        }
+        fn progress_v1(&self) -> kaspa_consensus_core::palw_backend::PalwTirPublicCaptureProgressV1 {
+            Default::default()
+        }
+        fn poll_quoted_v1(&mut self, q: &PalwTirPublicCaptureSliceV1) -> Result<Option<PalwTirPublicPreparedDescriptorV1>, String> {
+            assert_eq!(q.sequence, self.polled);
+            self.polled += 1;
+            Ok((self.polled == self.slices).then(|| descriptor(1)))
+        }
+    }
+
+    /// **The custodian's pass loop runs a whole preparation pass under ONE accepted permit** (audit §10/§11): the cold capture's
+    /// slices until the reader warms (the step then yields, the writer begins next tick with no new debit), then the publication's
+    /// slices until it seals — `PALW_TIR_PUBLIC_SLICES_PER_STEP_V1` slices a step, every slice charged (quoted work + the fixed
+    /// overhead) to the pass's one budget, and a budget the pass outruns fails closed (no slice runs uncharged).
+    #[test]
+    fn one_permit_funds_a_whole_preparation_pass_across_run_steps_and_fails_closed_past_its_budget() {
+        use kaspa_consensus_core::palw_tir_frame_cost_v1::{tir_public_pass_budget_v1, tir_public_slice_work_v1};
+        let charge = |ledger: &mut (PalwTirPublicWorkV1, PalwTirPublicWorkV1, u64), q: &PalwTirPublicCaptureSliceV1| {
+            let next = ledger.1.checked_add_v1(PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1)?.checked_add_v1(tir_public_slice_work_v1(q)?)?;
+            let mut fit = next;
+            fit.attempts = ledger.0.attempts;
+            if !ledger.0.covers_v1(&fit) {
+                return Err("TIR cumulative local operational work is exhausted".to_string());
+            }
+            ledger.1 = next;
+            ledger.2 += 1;
+            Ok(())
+        };
+        let run = |budget: PalwTirPublicWorkV1, capture: u64, publication: u64| {
+            let mut reader = FakeReader { slices: capture, polled: 0, io: 4_096 };
+            let mut writer = FakeWriter { slices: publication, polled: 0, io: 16_384 };
+            let mut ledger = (budget, PalwTirPublicWorkV1::default(), 0u64);
+            let mut warm = false;
+            let mut steps = 0u64;
+            let mut writer_open = false;
+            loop {
+                steps += 1;
+                assert!(steps < 1_000, "the pass ends");
+                let w: Option<&mut (dyn PalwTirPublicPreparedWriterV1 + 'static)> =
+                    if writer_open { Some(&mut writer) } else { None };
+                let r: Option<&mut (dyn PalwTirPublicCaptureReaderV1 + 'static)> = Some(&mut reader);
+                match run_pass_slices_v1(
+                    &mut warm,
+                    r,
+                    w,
+                    PALW_TIR_PUBLIC_SLICES_PER_STEP_V1,
+                    &mut ledger,
+                    |l, reader, q| {
+                        charge(l, q)?;
+                        Ok(reader.poll_quoted_v1(&PalwTirPublicRequestV1::StepLeaf { index: 0 }, q)?.is_some())
+                    },
+                    |l, writer, q| {
+                        charge(l, q)?;
+                        writer.poll_quoted_v1(q)
+                    },
+                ) {
+                    Ok(Some(descriptor)) => return Ok((descriptor, ledger.2, steps)),
+                    Ok(None) => {
+                        // The tick's Begin step: once warm, the writer opens (no debit).
+                        if warm {
+                            writer_open = true;
+                        }
+                    }
+                    Err(why) => return Err((why, ledger.2)),
+                }
+            }
+        };
+        // A lane bought for two passes; the pass's ONE debit is half of it.
+        let lane = PalwTirPublicWorkV1 {
+            attempts: 4,
+            io_bytes: 2 * (300 * 4_096 + 20 * 16_384),
+            hash_bytes: 2 * (300 * (4_096 + 8_192) + 20 * (16_384 + 8_192)),
+            parser_steps: 2 * (300 * (16 * 4_096 + 1_024) + 20 * (16 * 16_384 + 1_024)),
+            ..Default::default()
+        };
+        let budget = tir_public_pass_budget_v1(lane, 2).unwrap();
+        assert_eq!(budget.attempts, 1, "one grant");
+        // 300 capture slices + 20 publication slices: five Run steps of the capture (the last ends at the warm), one of the publication.
+        let (descriptor, slices, steps) = run(budget, 300, 20).expect("the pass seals under its one permit");
+        assert_eq!(descriptor, descriptor_v1_seal());
+        assert_eq!(slices, 320, "every slice charged once");
+        assert_eq!(steps, 300u64.div_ceil(PALW_TIR_PUBLIC_SLICES_PER_STEP_V1 as u64) + 1, "steps of at most the per-step slices");
+        // A pass that outruns its debit fails closed at the first uncovered slice — it never runs uncharged.
+        let (why, slices) = run(budget, 301, 20).expect_err("past the budget");
+        assert!(why.contains("exhausted"), "{why}");
+        assert_eq!(slices, 301 + 19, "the slices before the uncovered one ran, charged; the uncovered one never ran");
+    }
+    fn descriptor_v1_seal() -> PalwTirPublicPreparedDescriptorV1 {
+        descriptor(1)
     }
 }

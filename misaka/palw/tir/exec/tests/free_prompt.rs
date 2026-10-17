@@ -289,6 +289,11 @@ fn tir_frame_allocation_holds_at_testnet12s_custodian_upper() {
     let extras = PalwTransitionExtrasV1 { model_registry: Some(registry), ..Default::default() };
     let t12_upper = PalwChainStateV2::staged_registered_tir_maximum_custodians_v1(14_000, &bundle.state, &extras).unwrap();
     assert_eq!(t12_upper, 257, "a stratified Panel's 256 seats and the producer");
+    // G14 audit §11 (d): a FRAME's custodians are only its flat Panel's credited seats and the producer (no typed licence reaches a
+    // frame), so the frame route is priced and clocked at 6 on testnet-12, not at the typed routes' 257.
+    let frame_upper =
+        kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(14_000, &bundle.state, &extras).unwrap();
+    assert_eq!(frame_upper, panel_upper, "the frame's upper is the flat Panel and the producer");
     let mut record_line = Vec::new();
     let mut classes = 0usize;
     for (k, (name, backend)) in backends("holds").into_iter().enumerate() {

@@ -378,6 +378,23 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
         auth_max = auth_max.max(took);
     }
 
+    // --- §11 (a): a full step run answered cold fits the per-class window bound (the job's actual leaves, not tile × 4) ---------
+    let run_count = (n.min(u64::from(kaspa_consensus_core::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1))) as u32;
+    let mut run_answer_max = 0u64;
+    let mut run_bound = 0u64;
+    if run_count > 1 {
+        for first in [0, n - u64::from(run_count)] {
+            let request = PalwTirPublicRequestV1::StepRun { first, count: run_count };
+            let (response, _, _, _) = answer(reader.as_mut(), &request);
+            source.authenticate_v1(&request, &response, ids.as_ref()).unwrap();
+            let bytes = borsh::to_vec(&response).unwrap().len() as u64;
+            let (bound, _) = kaspa_consensus_core::palw_tir_public_owned_v1::request_body_bound_v1(&source, request).unwrap();
+            assert!(bytes <= bound, "{name}: a {run_count}-leaf run ({bytes} B) fits its per-class bound ({bound} B)");
+            run_answer_max = run_answer_max.max(bytes);
+            run_bound = run_bound.max(bound);
+        }
+    }
+
     // --- preparation: publish the prepared generation, reopen it, answer warm ---------------------------------------------------
     let durable = tempfile::tempdir().unwrap();
     let need = reader.prepared_need_v1().unwrap();
@@ -593,6 +610,8 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
             "answer_bytes_max": answer_bytes_max, "authenticate_ns": auth_ns, "authenticate_max_ns": auth_max,
         },
         "preparation_pass": pass,
+        "step_run": { "count": run_count, "answer_bytes_max": run_answer_max, "bound_bytes": run_bound,
+                      "widest_leaf_value_bytes": source.widest_leaf_value_bytes_v1(), "layout_leaf_bytes": source.maximum_leaf_bytes_v1() },
         "preparation": {
             "publish_slices": publish_slices, "publish_ns": publish_ns, "publish_slice_max_ns": publish_slice_max,
             "publish_io_bytes": publish_io, "retained_bytes": descriptor.retained_bytes, "quoted_publish_slices": need.maximum_publish_slices,

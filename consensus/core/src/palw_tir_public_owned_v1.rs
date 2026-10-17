@@ -2570,7 +2570,7 @@ mod tests {
             drawn_panel: BTreeSet::from([bond(2), bond(3)]),
             plan,
         };
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let (x, _) = crate::palw_tir_court_v1::test_support::tiny_execution_wide();
         let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
         let descriptor = crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1 {
             class_id: record.facts.class_id,
@@ -2785,7 +2785,7 @@ mod tests {
     fn work_fixture() -> (PalwTirPublicSourceV1, PalwTirPublicOwnedV1, PalwTirPublicRequestV1) {
         // Pure preadmitted kernel fixture, not a full native admission test.
         let (source, old, request, _) = fixture();
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let (x, _) = crate::palw_tir_court_v1::test_support::tiny_execution_wide();
         let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
         let rules = PalwTirPublicWorkRulesV1 {
             max_step_leaf_count: 1 << 40,
@@ -2951,26 +2951,15 @@ mod tests {
         row.check_v1(&source).unwrap();
     }
     fn fixture() -> (PalwTirPublicSourceV1, PalwTirPublicOwnedV1, PalwTirPublicRequestV1, Vec<u8>) {
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        // A genuinely computed 4,096-lane logits leaf (the wide tiny class): enough bytes to require two parts. G14 audit §11 (a)
+        // bounds every answer by the job's actual leaves, so the part-spanning leaf is a real one (no longer an oversized
+        // structurally invalid leaf — a body the job's geometry cannot hold is refused at Begin).
+        let (x, wide) = crate::palw_tir_court_v1::test_support::tiny_execution_wide();
         let (registered, _) =
             crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
-        let mut header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&x.binding);
-        // A genuinely committed but structurally invalid native-format leaf:
-        // enough bytes to require two parts, no dense model allocation. The
-        // acquisition only authenticates it; a semantic court is still required.
-        let mut preimage = x.preimages[0].clone();
-        preimage.values_le = vec![0xA5; 16_384];
-        let mut hashes = x.hashes.clone();
-        hashes[0] =
-            crate::palw_step_leg::step_tile_leaf_hash_v1(&header.job_context.context_hash(), &registered.facts.class_id, &preimage);
-        header.step_merkle_root = step_merkle_root_v1(&hashes).unwrap();
-        header.committed_execution_root = crate::palw_tir_step_v1::palw_tir_execution_root_v1(
-            &header.job_context.context_hash(),
-            &header.full_logits_trace_root,
-            &registered.facts.class_id,
-            header.step_leaf_count,
-            &header.step_merkle_root,
-        );
+        let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&x.binding);
+        let preimage = x.preimages[wide as usize].clone();
+        let hashes = x.hashes.clone();
         let source = PalwTirPublicSourceV1::new_v1(
             &registered,
             &x.binding.class.layout,
@@ -3002,8 +2991,8 @@ mod tests {
         };
         let capital = terms.plan.rent_sompi.checked_add(terms.plan.deposit_sompi).unwrap();
         let row = PalwTirPublicOwnedV1::admit_v1(contract, &source, &BTreeSet::from([bond(2), bond(3)]), 11, capital).unwrap();
-        let response = PalwTirPublicResponseV1::StepLeaf { preimage, opening: step_opening_v1(&hashes, 0).unwrap() };
-        (source, row, PalwTirPublicRequestV1::StepLeaf { index: 0 }, borsh::to_vec(&response).unwrap())
+        let response = PalwTirPublicResponseV1::StepLeaf { preimage, opening: step_opening_v1(&hashes, wide).unwrap() };
+        (source, row, PalwTirPublicRequestV1::StepLeaf { index: wide }, borsh::to_vec(&response).unwrap())
     }
     fn upload(
         row: &mut PalwTirPublicOwnedV1,
@@ -3196,7 +3185,7 @@ mod tests {
     #[test]
     fn original_ids_only_become_answered_at_complete_outer_authentication_and_run_rounding_is_prepaid() {
         let (source, mut row, _, _) = fixture();
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let (x, _) = crate::palw_tir_court_v1::test_support::tiny_execution_wide();
         let root = crate::palw_step_refute::tiled_logits_rows_root_v1(&x.binding.job_context, &x.rows).unwrap();
         let request = PalwTirPublicRequestV1::Ids { offset: 0 };
         let body = palw_tir_public_ids_body_v1(&source, root, &x.generated).unwrap();

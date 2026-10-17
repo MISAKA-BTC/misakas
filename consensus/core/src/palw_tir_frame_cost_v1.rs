@@ -118,6 +118,29 @@ impl PalwTirFrameCostV1 {
     }
 }
 
+/// **The custodian upper of an ORIGINAL TIR frame** (G14 audit §11 (d)): the flat Panel's seats and the producer.
+///
+/// A frame's custodians are the producer and the drawn seats that file the atomic Valid + raw custody grant + Ready
+/// (`apply_grant_ready_inner_v1`); a frame claim licenses ONLY on those exact credited V1 receipts (`require_qualified_receipts_v1`),
+/// while every typed segmented / shard licence is refused for it (`require_qualified_typed_receipts_v1`). So no stratified (×256)
+/// or shard-licensing (×1,024) Panel can ever add a custodian beyond the flat Panel's seat count; a grant past this upper is refused by
+/// the contract's own `custodians ≤ maximum_custodians`. The general staged upper (`staged_registered_tir_maximum_custodians_v1`,
+/// 257 on testnet-12) is the ceiling of routes that DO take those typed licences; pricing a frame at it made every turn's
+/// all-custodian inclusion term ~43× what any frame can reach. If a typed raw-grant path is ever wired for frames, this upper must
+/// follow it.
+pub fn palw_tir_frame_custodian_upper_v1(
+    now: u64,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
+) -> Result<u64, crate::palw_state_v2::PalwStateV2Error> {
+    let flat = if params.panel_v3_rule_at(now) {
+        u64::from(params.panel_v3().ok_or(crate::palw_state_v2::PalwStateV2Error::ObjectiveOffenceDormant)?.policy.seat_count)
+    } else {
+        u64::from(extras.model_registry.as_ref().map_or(u16::MAX, |r| r.globals.seat_count))
+    };
+    flat.checked_add(1).ok_or(crate::palw_state_v2::PalwStateV2Error::Overflow("TIR frame custodians"))
+}
+
 /// The record format's version.
 pub const PALW_TIR_FRAME_COST_RECORD_VERSION_V1: u16 = 1;
 
@@ -224,7 +247,8 @@ pub const fn palw_tir_frame_test_only_cost_v1() -> PalwTirFrameCostV1 {
             action_parser_steps_per_custodian: 8,
             frame_passes_per_check: 1,
             control_bytes: 8_192,
-            parallel_bytes_per_daa: 4 << 20,
+            // Eight controls a DAA: the owner queue's worst wait stays a few DAA in tests.
+            parallel_bytes_per_daa: 64 << 10,
             // A test genesis's own horizon; the dedicated door test uses a smaller one.
             maximum_door_daa: 1 << 40,
         },
@@ -418,6 +442,26 @@ pub fn tir_public_preparation_door_v1(
     sum(&[config.acquisition_daa, product(serial, config.prices.inclusion_margin_daa)?, parallel])
 }
 
+/// **The owner queue's worst wait** (G14 audit §11 (c), with the owner fair start of lane g14-court-capacity-r2): an Open past
+/// K_owner waits in the claim's owner queue (arrival order) and is admitted within `⌈(q + 1) / K_owner⌉` tenures, a tenure being
+/// `max(idle grace, open window / 2·K_owner)` (`tir_owner_tenure_v1` there; the grace is `max(reorg_retention, inclusion margin)`,
+/// `owner_idle_grace_daa_v1`). Opens are accepted only inside the Open window, and the network includes at most
+/// `⌊parallel_bytes_per_daa / control_bytes⌋` controls a DAA, so at most `q = open window × that` rows can be ahead of an honest
+/// Open. The stream door holds this wait before the honest owner's localization path, so a newcomer admitted last still finishes.
+/// Waiting rows demand nothing: the custodian load stays K_owner (the turn span's concurrency term).
+pub fn tir_public_owner_queue_wait_v1(
+    open_window: u64,
+    config: &PalwStagedPublicCourtConfigV1,
+    clock: &PalwTirFrameClockV1,
+) -> Result<u64, String> {
+    clock.check_v1()?;
+    let k = PALW_TIR_FRAME_CONCURRENT_OWNERS_V1;
+    let grace = config.reorg_retention_daa.max(config.prices.inclusion_margin_daa);
+    let tenure = grace.max(open_window / product(2, k)?).max(1);
+    let ahead = product(open_window, clock.parallel_bytes_per_daa / clock.control_bytes)?;
+    product(sum(&[ahead, 1])?.div_ceil(k), tenure)
+}
+
 /// **The filing allowance** after the stream door: the filer's witness parts (in order) and its conviction, at the measured capacity.
 pub fn tir_public_filing_daa_v1(
     witness_moves: u64,
@@ -481,9 +525,9 @@ mod tests {
         let six = tir_public_turn_span_v1(700, 7, &cost.config, &cost.clock).unwrap();
         let wide = tir_public_turn_span_v1(700, 258, &cost.config, &cost.clock).unwrap();
         // Serial: owner (Demand + debit) and ONE custodian chain (debit, Begin, 1 part, Finish) at margin 1, window 2.
-        assert_eq!(six, 2 + 6 + (7 * 8 * (4 * 8_192 + 700u64)).div_ceil(4 << 20));
+        assert_eq!(six, 2 + 6 + (7 * 8 * (4 * 8_192 + 700u64)).div_ceil(64 << 10));
         // 257 custodians add only their inclusion at the parallel capacity, not 257 serial chains.
-        assert_eq!(wide, 2 + 6 + (258 * 8 * (4 * 8_192 + 700u64)).div_ceil(4 << 20));
-        assert!(wide < 258 * 4, "not end to end");
+        assert_eq!(wide, 2 + 6 + (258 * 8 * (4 * 8_192 + 700u64)).div_ceil(64 << 10));
+        assert!(wide < 258 * 4 * 8, "not end to end");
     }
 }

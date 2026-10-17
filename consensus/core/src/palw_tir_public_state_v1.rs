@@ -1198,7 +1198,7 @@ fn check_work_input<'a>(
 mod tests {
     use super::*;
     use crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1;
-    use crate::palw_step_leg::{step_merkle_root_v1, step_opening_v1};
+    use crate::palw_step_leg::step_opening_v1;
     use crate::palw_tir_public_owned_v1::{PalwTirPublicOwnedPlanV1, palw_tir_public_body_hash_v1};
     use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1, PalwTirPublicResponseV1};
     use std::collections::BTreeSet;
@@ -1209,21 +1209,12 @@ mod tests {
     // Preadmitted kernel fixture only: it is NOT a native paid-claim acceptance
     // test. Full SUM, literal grants, admission and holds are still unconnected.
     fn fixture() -> (PalwTirPublicSourceV1, BTreeMap<Key, Row>, Key, Vec<u8>) {
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        // A genuinely computed 4,096-lane logits leaf (two parts): G14 audit §11 (a) bounds answers by the job's actual leaves.
+        let (x, wide) = crate::palw_tir_court_v1::test_support::tiny_execution_wide();
         let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
-        let mut header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&x.binding);
-        let mut leaf = x.preimages[0].clone();
-        leaf.values_le = vec![0xA5; 16_384];
-        let mut hashes = x.hashes.clone();
-        hashes[0] = crate::palw_step_leg::step_tile_leaf_hash_v1(&header.job_context.context_hash(), &record.facts.class_id, &leaf);
-        header.step_merkle_root = step_merkle_root_v1(&hashes).unwrap();
-        header.committed_execution_root = crate::palw_tir_step_v1::palw_tir_execution_root_v1(
-            &header.job_context.context_hash(),
-            &header.full_logits_trace_root,
-            &record.facts.class_id,
-            header.step_leaf_count,
-            &header.step_merkle_root,
-        );
+        let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&x.binding);
+        let leaf = x.preimages[wide as usize].clone();
+        let hashes = x.hashes.clone();
         let maximum_leaves = 1 << 40;
         let source = PalwTirPublicSourceV1::new_v1(
             &record,
@@ -1274,9 +1265,12 @@ mod tests {
             owned: Box::new(owned).into(),
         };
         let key = row.key_v1().unwrap();
-        let body = borsh::to_vec(&PalwTirPublicResponseV1::StepLeaf { preimage: leaf, opening: step_opening_v1(&hashes, 0).unwrap() })
+        let body = borsh::to_vec(&PalwTirPublicResponseV1::StepLeaf { preimage: leaf, opening: step_opening_v1(&hashes, wide).unwrap() })
             .unwrap();
         (source, BTreeMap::from([(key, Row::TirAcquisition(Box::new(row).into()))]), key, body)
+    }
+    fn wide_leaf() -> u64 {
+        crate::palw_tir_court_v1::test_support::tiny_execution_wide().1
     }
     fn owned(rows: &BTreeMap<Key, Row>, key: Key) -> &PalwSharedCourtV1<PalwTirPublicAcquisitionRowV1> {
         let Row::TirAcquisition(row) = rows.get(&key).unwrap() else { panic!("metadata") };
@@ -1315,7 +1309,7 @@ mod tests {
             rows,
             key,
             bond(7),
-            &PalwTirPublicOwnedActionV1::Demand { request: PalwTirPublicRequestV1::StepLeaf { index: 0 } },
+            &PalwTirPublicOwnedActionV1::Demand { request: PalwTirPublicRequestV1::StepLeaf { index: wide_leaf() } },
         );
         let demand_id = owned(rows, key).owned.active_v1().unwrap().demand_id;
         commit(

@@ -199,7 +199,11 @@ fn original_plan_v1(
     if b.state.claim(&claim).is_some() || b.state.staged_court_row_v1(&Key::TirClaim(claim)).is_some() {
         return Err(refused("TIR original allocation cannot be attached to an existing claim"));
     }
-    let upper = b.state.staged_maximum_custodians_v1(original.job.class_id, now_daa, b.params, b.extras)?;
+    // G14 audit §11 (d): a frame's custodians are the flat Panel's credited seats and the producer (no typed licence reaches it).
+    if b.state.tir_class_v1(&original.job.class_id).is_none() {
+        return Err(refused("TIR original class is not registered"));
+    }
+    let upper = crate::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(now_daa, b.params, b.extras)?;
     if native.maximum_custodians != upper {
         return Err(refused("TIR original quote does not use the actual native custodian upper"));
     }

@@ -439,6 +439,63 @@ impl PalwTirStepSpaceV1 {
         n
     }
 
+    /// **The widest leaf of `job`, in lanes** (G14 audit §11 (a)): every leaf holds at most this many four-byte lanes — a committed
+    /// node's tile is `min(tile_len, elements at the job's widest H)` (H never shrinks with the position), a checkpoint tile
+    /// `min(tile_lanes, elements)`, a history tile `h_tile` rows of `min(tile_lanes, elements)` lanes. Exact for the class and the job,
+    /// unlike the layout's widest tile (a 4,096-lane logits tile over an 8-word vocabulary holds 8 lanes).
+    pub fn maximum_leaf_lanes_v1(&self, job: &PalwTirJobShapeV1) -> u64 {
+        let last = job.positions.saturating_sub(1);
+        let mut widest = 0u64;
+        for (block, _) in &self.occurrences {
+            let h = self.h_of(*block, last);
+            for c in &self.blocks[*block as usize].commits {
+                widest = widest.max(c.elements(h).min(u64::from(c.tile_len)));
+            }
+        }
+        for s in &self.fixed {
+            widest = widest.max(s.elements.min(u64::from(s.tile_lanes)));
+        }
+        for s in &self.hist {
+            widest = widest.max(s.elements.min(u64::from(s.tile_lanes)).saturating_mul(u64::from(self.layout.h_tile)));
+        }
+        widest
+    }
+
+    /// **The most four-byte lanes `count` consecutive leaves of `job` can hold** (G14 audit §11 (a)): the smaller of `count` widest
+    /// leaves and the positions such a window can touch — a position has at least `L_min` leaves (its non-post commits at `H = 1`,
+    /// every position has them), so `count` consecutive leaves span at most `⌈(count − 1) / L_min⌉ + 1` positions — each at the most
+    /// lanes any position emits (its commits at the widest `H` with the post block, a checkpoint and a history tile).
+    pub fn maximum_window_lanes_v1(&self, job: &PalwTirJobShapeV1, count: u64) -> u128 {
+        let per_leaf = u128::from(count).saturating_mul(u128::from(self.maximum_leaf_lanes_v1(job)));
+        let post = self.occurrences.len() - 1;
+        let minimum: u64 = self
+            .occurrences
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != post)
+            .map(|(_, (b, _))| self.block_leaves_at(*b, 0))
+            .fold(0u64, |acc, n| acc.saturating_add(n));
+        if minimum == 0 || count == 0 {
+            return per_leaf;
+        }
+        let last = job.positions.saturating_sub(1);
+        let mut position = 0u128;
+        for (block, _) in &self.occurrences {
+            let h = self.h_of(*block, last);
+            for c in &self.blocks[*block as usize].commits {
+                position = position.saturating_add(u128::from(c.elements(h)));
+            }
+        }
+        for s in &self.fixed {
+            position = position.saturating_add(u128::from(s.elements));
+        }
+        for s in &self.hist {
+            position = position.saturating_add(u128::from(s.elements).saturating_mul(u128::from(self.layout.h_tile)));
+        }
+        let spans = u128::from((count - 1).div_ceil(minimum)) + 1;
+        per_leaf.min(spans.saturating_mul(position))
+    }
+
     /// Canonical four-byte lanes emitted at one position, without constructing its leaf
     /// metadata. Node replay admission pairs this with `leaves_at_position` to account
     /// preimage buffers before enumeration/allocation. Saturation refuses on conversion

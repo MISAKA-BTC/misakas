@@ -69,8 +69,11 @@ pub fn tir_public_prepared_bytes_v1(
     let tile_forest_bytes = mul(d, tir_public_tree_disk_bytes_v1(tiles)?)?;
     // Audit §10: a leaf is at most the class layout's widest committed tile (`maximum_leaf_bytes_v1`, the bound every leaf is
     // decoded under), not the format's 65,536-lane tile — measured: 13–60 KB generations against 28–118 MB bounds before.
-    let raw_format_leaf =
-        add(source.maximum_leaf_bytes_v1().min(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?), 26)?;
+    // §11 (a): at most the job's actual widest leaf (the class's step space), never above the layout's decode bound.
+    let raw_format_leaf = add(
+        source.widest_leaf_value_bytes_v1().min(source.maximum_leaf_bytes_v1()).min(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?),
+        26,
+    )?;
     let capture_payload = add(add(mul(prefill, 4)?, mul(d, add(mul(vocab, 4)?, 8)?)?)?, mul(n, raw_format_leaf)?)?;
     let original_capture_bytes = add(capture_payload, add(mul(u64::from(record.program_bytes), 64)?, 65_536)?)?;
     let original_indexes = add(add(add(step_tree_bytes, mul(n, 8)?)?, tile_forest_bytes)?, mul(row_tree_bytes, 2)?)?;
@@ -736,13 +739,21 @@ pub fn derive_tir_public_allocation_v1(
     let semantic_resource_plan_id = semantic.as_ref().map(|quote| quote.resource_plan_id);
     let maximum_semantic_history_records = semantic.as_ref().map_or(0, |quote| quote.maximum_records);
     let preparation_until_daa = add(geometry.accepted_daa, preparation.preparation_daa)?;
-    let open = add(preparation_until_daa, rules.config.acquisition_daa)?;
+    // §11: the Open window holds one response window AND the Open's own inclusion (an Open sent at the preparation door must be
+    // includable before the window closes; the candidate's 1-DAA window was shorter than one inclusion margin).
+    let open = add(preparation_until_daa, add(rules.config.acquisition_daa, rules.config.prices.inclusion_margin_daa)?)?;
     // **Audit §10 (the frame pricing fix): the stream door is the honest owner's critical path** — its localization turns plus
     // the restart turns, each at the span of the largest unit (`acquisition.envelope.inclusion_daa`); its own debits and the
     // custodians' ride inside those spans. Before the fix the door was every component's inclusion summed end to end (each
     // WorkDebit and each move one margin, each turn one `acquisition_daa`, the controls' writes and the executor's carriers after
     // Open too): 6e7–2.4e8 DAA at 6 custodians. Cold work and Ready stay before Open (the preparation door).
-    let post_inclusion = acquisition.envelope.inclusion_daa;
+    // §11 (c): the owner queue's worst wait (the fair start admits a newcomer within ⌈(q + 1) / K_owner⌉ tenures) precedes it.
+    let queue_wait = crate::palw_tir_frame_cost_v1::tir_public_owner_queue_wait_v1(
+        add(rules.config.acquisition_daa, rules.config.prices.inclusion_margin_daa)?,
+        &rules.config,
+        &rules.clock,
+    )?;
+    let post_inclusion = add(acquisition.envelope.inclusion_daa, queue_wait)?;
     let generic_end = add(open, post_inclusion.max(1))?;
     let stream = if let Some(quote) = &mut semantic {
         let shift = generic_end.checked_sub(geometry.accepted_daa).ok_or("native semantic offset underflow")?;
@@ -890,7 +901,11 @@ impl PalwTirPublicAllocationPlanV1 {
             || self.resource_plan_id != self.resource_id_v1()?
             || self.allocation_id != self.accepted_id_v1()?
             || self.preparation_until_daa != add(self.terms.accepted_daa, self.preparation.preparation_daa)?
-            || self.terms.open_until_daa != add(self.preparation_until_daa, self.acquisition.config.acquisition_daa)?
+            || self.terms.open_until_daa
+                != add(
+                    self.preparation_until_daa,
+                    add(self.acquisition.config.acquisition_daa, self.acquisition.config.prices.inclusion_margin_daa)?,
+                )?
             || self.terms.open_until_daa >= self.terms.stream_until_daa
             || self.terms.stream_until_daa >= self.terms.collect_until_daa
             || self.terms.collect_until_daa > self.terms.material_until_daa
