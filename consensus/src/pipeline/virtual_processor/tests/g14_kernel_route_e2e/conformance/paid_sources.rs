@@ -111,7 +111,13 @@ impl Cw {
     }
 
     /// The producer's signed monetary covenant for `root` (the base claim), two providers' offers.
-    async fn covenant(&mut self, producer: usize, root: Hash64) -> Hash64 {
+    async fn covenant(
+        &mut self,
+        producer: usize,
+        root: Hash64,
+        manifest: Option<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1>,
+        max_material_bytes: u64,
+    ) -> Hash64 {
         let policy = self.net.config.params.palw_monetary_material_v1.as_ref().expect("the covenant fence").policy.clone();
         let providers: Vec<usize> = PRODUCERS.iter().copied().filter(|c| *c != producer).take(2).collect();
         let mut enrollment = PalwMonetaryMaterialEnrollmentV1 {
@@ -123,8 +129,8 @@ impl Cw {
                 sponsor: self.net.bond(producer),
                 nonce: Hash64::from_bytes([self.jobs; 64]),
                 policy: policy.id(),
-                max_material_bytes: 1_000,
-                material_manifest: None,
+                max_material_bytes,
+                material_manifest: manifest,
                 native_session: None,
                 window_daa: policy.window_daa,
                 enrollment_until_daa: self.net.daa() + 100,
@@ -214,7 +220,53 @@ impl Cw {
             let K::CommitClaimSalted { salt, commit } = reveal else { panic!("salted seals are in force on this network") };
             let o = self.net.route(producer, &seal);
             self.net.send(vec![(producer, o)]).await;
-            let consent = self.covenant(producer, Hash64::from_bytes(base)).await;
+            // RFC08 F3: the covenant carries the claim body's complete material — every committed position, as served — verified
+            // against the ledger that admits the claim (`PalwKernelMaterialBundleV1::verify`), so its scope is the body's commitment.
+            let manifest = {
+                let route = self.net.api().unwrap();
+                let mut admitted: misaka_palw_kernel::ledger::KernelLedgerV1 = (*route.ledger().expect("the route's ledger")).clone();
+                admitted.daa = self.net.daa() + 1;
+                admitted
+                    .apply_object(
+                        &K::CommitClaimSalted { commit: commit.clone(), salt },
+                        &misaka_palw_kernel::ledger::AuthV1 { signer_bond: self.net.kid(producer) },
+                    )
+                    .expect("the base claim is admissible");
+                let mask = derived_mask_v1(&src.program);
+                let positions: Vec<(u8, u32, Vec<u8>)> = produced
+                    .trace
+                    .values
+                    .iter()
+                    .enumerate()
+                    .map(|(p, stages)| {
+                        let values = stages
+                            .iter()
+                            .enumerate()
+                            .map(|(st, o)| {
+                                o.iter()
+                                    .enumerate()
+                                    .map(|(n, t)| {
+                                        if mask[st][n] {
+                                            MaterialResponseV1::Omitted
+                                        } else {
+                                            MaterialResponseV1::Whole(TensorWireV1::of(t))
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .collect();
+                        (0u8, p as u32, borsh::to_vec(&PositionResponseV1 { values, inputs: vec![] }).unwrap())
+                    })
+                    .collect();
+                let bundle = kaspa_consensus_core::palw_material_capacity_v1::PalwKernelMaterialBundleV1 {
+                    claim: Hash64::from_bytes(base),
+                    positions,
+                };
+                let scope = bundle.verify(&admitted, u64::MAX).unwrap_or_else(|e| panic!("the complete served material verifies: {e:?}"));
+                kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1 { root: Hash64::from_bytes(base), scopes: vec![scope] }
+            };
+            let bytes = manifest.scopes[0].bytes;
+            let consent = self.covenant(producer, Hash64::from_bytes(base), Some(manifest), bytes).await;
             let route = self.net.api().unwrap();
             let replays: Vec<String> = (0..2u64)
                 .map(|d| {
