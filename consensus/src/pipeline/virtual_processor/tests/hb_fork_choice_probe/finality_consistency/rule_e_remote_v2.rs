@@ -102,7 +102,7 @@ fn attest(ruleset: &ClientRulesetV1, block: BlockHash, daa: u64, committed_root:
 
 #[tokio::test]
 async fn rfc09_remote_rule_e_gate_c_choice_is_the_full_nodes_and_refuses_missing_or_tampered_evidence() {
-    kaspa_core::log::try_init_logger("warn");
+    kaspa_core::log::try_init_logger(&std::env::var("G14_LOG").unwrap_or_else(|_| "warn".into()));
     let mut n = net_rule_e_gate_c();
     let fork = shared_prefix(&mut n).await;
     let (mut hb, mut lb) = (Vec::new(), Vec::new());

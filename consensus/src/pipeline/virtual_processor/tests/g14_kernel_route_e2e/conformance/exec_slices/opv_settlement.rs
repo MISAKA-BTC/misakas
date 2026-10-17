@@ -54,6 +54,22 @@ async fn x8_g14_opv_settlement_never_substitutes_for_selected_exec_approval() {
         cw.net.chain.heartbeat(ttpb, Vec::new()).await;
     }
     let (label, from) = settlement_of(&cw, &k0);
+    // Past the paid path an unapproved paid claim reaches no Final at all: its locked round without receipts defaults (the stronger
+    // property — no lifecycle settlement exists to substitute for the selected approval).
+    if label == "defaulted" {
+        assert!(beacon_fact_of(&cw, &k0).is_none(), "a defaulted unapproved claim exports no beacon fact");
+        assert!(
+            !matches!(
+                cw.net.chain.tip_state().1.exec_v2_slice_v1(&root_claim, 0).unwrap().stage,
+                PalwWorkSliceStageV2::Verified { .. }
+            ),
+            "an unapproved dependency never verifies its slice"
+        );
+        assert!(cw.net.chain.tip_state().1.exec_v2_holds_final_v1(&root_claim), "unapproved work cannot release root Final");
+        let z = replay_with_lane(&cw.net, &s.lane).await;
+        cw.net.assert_same(&z, "replay");
+        return;
+    }
     assert_eq!(label, "final-revocable", "Final within liability is revocable, never safe");
     let liability = cw.net.ledger().claims[&k0].liability_until.expect("a Final claim's horizon");
     assert_eq!(from, Some(liability + 1));

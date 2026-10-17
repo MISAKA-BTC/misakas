@@ -366,7 +366,11 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
         receipt.legs.iter().filter(|((_, fund), _)| *fund == PalwExecV2RewardFundV1::KernelFee).map(|(_, leg)| leg.amount).sum();
     assert!(fee_total > 0, "fixture must exercise actual funded fees");
     assert_eq!(fees_held, fee_total);
-    assert_eq!(poster_before - cw.net.collateral(REGISTRANT), fee_total, "every fee has the actual poster debit");
+    // Past the paid path the poster also pays the escrows it posted for other paid work (source claims), recomputed from the rows,
+    // and any recorded slash (none here); the session's fees are exactly the route rewards.
+    let session_jobs: Vec<Digest> = std::iter::once(&s.prefix).chain(s.slices.iter()).map(|k| k.job.id()).collect();
+    let others = other_paid_escrows(&before_final, &ledger, cw.net.kid(REGISTRANT), &session_jobs);
+    assert_eq!(poster_before - cw.net.collateral(REGISTRANT), fee_total + others, "every fee has the actual poster debit");
     assert_eq!(receipt.total_sompi_u128() + u128::from(native.producer.amount), u128::from(receipt.allocation_sompi));
     let counters = state.vesting_counters();
     let final_root = state.state_root();
@@ -389,7 +393,7 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
     let repeated = cw.net.chain.tip_state().1;
     assert_eq!(repeated.exec_v2_reward_vesting_v1(&s.real.claim), Some(&receipt));
     assert_eq!(repeated.vesting_counters(), counters, "replayed native licence funds no second allocation");
-    assert_eq!(cw.net.collateral(REGISTRANT), poster_before - fee_total);
+    assert_eq!(cw.net.collateral(REGISTRANT), poster_before - fee_total - others);
     let replay = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&replay, "native funded-Final replay");
 
@@ -459,6 +463,7 @@ async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_r
     let counters = funded.vesting_counters();
     let funded_ledger = cw.net.ledger().to_rows();
     let poster = cw.net.collateral(REGISTRANT);
+    let poster_slashed = cw.net.slashed(REGISTRANT);
     let root_money = (cw.net.collateral(ROOT_CARD), cw.net.slashed(ROOT_CARD));
     let fork = cw.net.chain.sink();
     let fork_daa = cw.net.daa();
@@ -538,7 +543,9 @@ async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_r
     assert!(failed_again.exec_v2_reward_vesting_v1(&s.real.claim).is_none());
     assert_eq!(failed_again.vesting_counters().created, counters.created);
     assert_eq!(failed_again.vesting_counters().moved, counters.moved);
-    assert_eq!(cw.net.collateral(REGISTRANT), poster);
+    // The poster is neither refunded nor charged twice; a collusive Clean signer of the convicted prefix (the poster may be a drawn
+    // seat) is charged exactly what its recorded slash says, once.
+    assert_eq!(cw.net.collateral(REGISTRANT) + (cw.net.slashed(REGISTRANT) - poster_slashed), poster);
 }
 
 /// Full positive native/Panel/EXEC funds through actual signed Final, second

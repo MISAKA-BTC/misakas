@@ -459,6 +459,24 @@ fn kernel_final_bound(api: &kaspa_consensus_core::palw_kernel_route_v1::PalwKern
     floor.max(paid)
 }
 
+/// **The other obligations a bond actually paid between two ledgers** (x8, recomputed from the rows past the paid path): the job
+/// escrows it posted outside `session_jobs` that left the ledger with a rewarded claim (a source or another paid job paid its
+/// producer). Every other collateral change of the bond is a recorded slash (`slashed`).
+fn other_paid_escrows(
+    before: &misaka_palw_kernel::ledger::KernelLedgerV1,
+    after: &misaka_palw_kernel::ledger::KernelLedgerV1,
+    poster: Digest,
+    session_jobs: &[Digest],
+) -> u64 {
+    before
+        .job_escrows
+        .iter()
+        .filter(|(job, escrow)| escrow.poster == poster && !session_jobs.contains(job) && !after.job_escrows.contains_key(*job))
+        .filter(|(job, _)| after.claims.values().any(|c| c.job_id == **job && c.rewarded))
+        .map(|(_, escrow)| escrow.amount)
+        .sum()
+}
+
 /// Beat one DAA at a time until `done` holds, at the latest by `bound` (then the test fails, naming `what`).
 async fn beat_until(cw: &mut Cw, bound: u64, what: &str, done: impl Fn(&Cw) -> bool) {
     while !done(cw) {
@@ -1291,19 +1309,30 @@ async fn opened_with_lifetime(
     Session { real, prefix, slices, extras, lane: Vec::new() }
 }
 
-/// **RFC08 08-C: the class admitted by the registry's own rules** — signed capability declarations and readiness proofs of the
-/// real inventory for every bond ([`native_final::ready_native_seats`]), then heartbeats until the node's own producer pre-check
-/// (`palw_producer_facts_v2`) names no class-admission refusal for the root card. No lifecycle, seating or share setter is used.
+/// **RFC08 08-C: the class admitted by the registry's own rules** — no lifecycle, seating or share setter. Each span: every bond
+/// declares the class and proves readiness over the real inventory ([`native_final::ready_native_seats`]), and one floor attempt
+/// lands so the span has the execution-lane seed anchor the next audit's jury is drawn from (ADR-0147: a class leaves `Candidate`
+/// only when a network-drawn jury holds it; then `Prefetching` → `Probation` once its seats are ready). Heartbeats until the node's
+/// own producer pre-check (`palw_producer_facts_v2`) names no class-admission refusal for the root card.
 async fn admit_class_without_seam(cw: &mut Cw) {
-    native_final::ready_native_seats(cw).await;
     let bond = cw.net.bond(ROOT_CARD);
-    let bound = cw.net.daa() + 4_000;
+    let bound = cw.net.daa() + 12_000;
+    let mut last_span = None;
     loop {
         let facts = cw.net.chain.ctx.consensus.palw_producer_facts_v2(cw.v2_class, Some(bond.0)).expect("the node answers for the class");
         if facts.class_admission_refusal.is_none() {
             break;
         }
         assert!(cw.net.daa() < bound, "the registry never admitted the class without the seam: {:?}", facts.class_admission_refusal);
+        let fold = cw.net.chain.vp().palw_model_registry_fold_at(cw.net.daa()).expect("native registry");
+        let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(cw.net.daa(), fold.span_daa);
+        if last_span != Some(span) {
+            eprintln!("[x8-no-seam] span {span} at DAA {}: {:?}", cw.net.daa(), facts.class_admission_refusal);
+            native_final::ready_native_seats(cw).await;
+            let ttpb = cw.net.config.params.target_time_per_block();
+            cw.net.chain.attempt(REGISTRANT, ttpb, Vec::new(), &|_| true).await;
+            last_span = Some(span);
+        }
         let next = cw.net.daa() + 1;
         cw.net.beat_to(next).await;
     }
@@ -1761,12 +1790,14 @@ async fn x8_g14_kernel_finals_holds_and_credit_survive_restart_and_two_actual_re
         .max()
         .unwrap();
     let bound = s.slices.iter().chain(std::iter::once(&s.prefix)).map(|k| kernel_final_bound(&api, &k.claim.id)).max().unwrap();
-    let poster = cw.net.collateral(REGISTRANT);
     cw.net.beat_to(floor + 1).await;
     beat_until(&mut cw, bound, "the root ready for Final (every kernel claim's paid Final)", |cw| {
         cw.net.chain.tip_state().1.exec_v2_root_v1(&claim).unwrap().ready_for_final()
     })
     .await;
+    // The poster's collateral at the unrefuted point (past the paid path it also paid escrows it posted for source claims on the
+    // way): restart and both reorgs must leave exactly this.
+    let poster = cw.net.collateral(REGISTRANT);
     let unrefuted = cw.net.chain.tip_state().1;
     assert!(unrefuted.exec_v2_root_v1(&claim).unwrap().ready_for_final());
     assert!(!unrefuted.claim(&claim).unwrap().phase.is_terminal());
@@ -1947,23 +1978,10 @@ async fn x8_g14_a_competing_claim_cannot_spend_a_bound_jobs_escrow_before_native
     cw.net.send(vec![(ACCUSER, reveal)]).await;
     assert!(!cw.net.ledger().claims.contains_key(&competitor), "the competing claim is never included");
     assert!(!cw.net.ledger().exec_reward_holds.contains_key(&competitor));
-    // The truthful siblings win their own Panel coverage; the bound slice's EXEC dependency is still pending, and nothing
-    // authorizes an early debit of its job.
-    let mut end = 0;
-    for claim in [&s.prefix.claim, &s.slices[0].claim, &s.slices[1].claim] {
-        let daa = cw.net.daa();
-        let receipts = colluding_receipts(&mut cw.net, claim.id, daa);
-        cw.net.send(receipts).await;
-        let ClaimStateV1::ProbabilisticPass { window_end_daa, .. } = cw.net.claim_state(&claim.id) else {
-            panic!("the truthful sibling has actual signed Panel coverage");
-        };
-        end = end.max(window_end_daa);
-    }
+    // The bound job's escrow stays held: nothing was debited, no producer was rewarded, and the root is not ready.
     let poster_collateral = cw.net.collateral(REGISTRANT);
-    cw.net.beat_to(end + 1).await;
     let ledger = cw.net.ledger();
-    assert!(!ledger.claims[&s.slices[2].claim.id].life.state.is_terminal());
-    assert!(!ledger.claims.contains_key(&competitor));
+    assert!(!ledger.claims[&s.slices[2].claim.id].rewarded, "the bound job's claim earns nothing before root Final");
     assert_eq!(ledger.job_escrows.get(&job.id()), Some(&escrow));
     assert_eq!(cw.net.collateral(REGISTRANT), poster_collateral, "no early debit of the held job escrow");
     let native = cw.net.chain.tip_state().1;
@@ -1988,7 +2006,11 @@ async fn x8_g14_a_competing_claim_cannot_spend_a_bound_jobs_escrow_before_native
     assert!(ledger.claims[&control.claim.id].rewarded);
     assert!(!ledger.job_escrows.contains_key(&control_job.id()));
     assert_eq!(cw.net.collateral(REGISTRANT), control_poster - control_escrow.amount);
-    assert!(!ledger.job_escrows.contains_key(&job.id()), "the pending EXEC dependency times out and cancellation refunds its escrow");
+    // The root never settles (no native licence here): at its signed expiry it voids and the cancellation refunds the held escrow.
+    let expiry = cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).unwrap().expiry_daa;
+    cw.net.beat_to(expiry + 1).await;
+    let ledger = cw.net.ledger();
+    assert!(!ledger.job_escrows.contains_key(&job.id()), "the EXEC root expires and cancellation refunds its escrow");
     assert!(matches!(cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
     assert!(!ledger.claims.contains_key(&competitor));
     let replay = replay_with_lane(&cw.net, &s.lane).await;
@@ -2068,6 +2090,8 @@ async fn x8_g14_a_withheld_slice_is_demanded_by_an_outsider_and_defaults_its_suf
     let withheld = &s.slices[1].claim;
     let executor_before = cw.net.collateral(withheld.producer);
     let root_bond_collateral = cw.net.collateral(ROOT_CARD);
+    let root_bond_slashed = cw.net.slashed(ROOT_CARD);
+    let before_default_ledger = cw.net.ledger();
     let api = cw.net.api().expect("the read API serves the route");
     let fresh = Fresh::from_api(&api, api.ledger_root(), 0x6D);
     let finding = fresh.check(withheld.id, &withheld.published(&cw.cand, &[withheld.at]), &cw.cand.params);
@@ -2112,7 +2136,13 @@ async fn x8_g14_a_withheld_slice_is_demanded_by_an_outsider_and_defaults_its_suf
         "{:?}",
         state.claim(&root_claim).unwrap().phase
     );
-    assert_eq!(cw.net.collateral(ROOT_CARD), root_bond_collateral, "the root bond is not charged for another bond's default");
+    // Past the paid path the root card's collateral may pay escrows it posted for other paid work (recomputed from the rows); it is
+    // never charged for another bond's default: no slash is recorded against it.
+    let after_ledger = cw.net.ledger();
+    let session_jobs: Vec<Digest> = std::iter::once(&s.prefix).chain(s.slices.iter()).map(|k| k.job.id()).collect();
+    let others = other_paid_escrows(&before_default_ledger, &after_ledger, cw.net.kid(ROOT_CARD), &session_jobs);
+    assert_eq!(cw.net.slashed(ROOT_CARD), root_bond_slashed, "the root bond is not charged for another bond's default");
+    assert_eq!(cw.net.collateral(ROOT_CARD) + others, root_bond_collateral, "only its own posted escrows left the root bond");
     let z = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&z, "replay");
 }
