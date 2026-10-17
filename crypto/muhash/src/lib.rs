@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_constants_match_spec() {
-        // Locked by docs/kaspa-pq-spec.md §2.
+        // Locked by docs/spec/pq/kaspa-pq-spec.md §2.
         assert_eq!(LTHASH_LANES, 1024);
         assert_eq!(LTHASH_STATE_BYTES, 4096);
         assert_eq!(SERIALIZED_MUHASH_SIZE, LTHASH_STATE_BYTES);

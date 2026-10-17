@@ -1,12 +1,7 @@
-# Mining (PALW producer)
+# PALW producer として参加する
 
-MISAKA blocks are produced by **PALW** (proof of AI work): a producer bonds collateral, runs a registered model on a job, and the
-chain pays a claim only after it reaches `Final` under the rules in force. Read the [design premise](../PRINCIPLES.md) first.
+[ビルド](build.md)と[接続](run-node.md)を確認した上で、[testnet-12参加資料](../operations/mining/testnet12-join-mining.md)を読みます。旧担保額・旧資格を新規則へ流用しません。
 
-- **Join testnet-12 as a producer:** [testnet12-join-mining.md](../testnet12-join-mining.md) — the current, maintained guide.
-- **Launch note and finality:** [t12-launch-2026-09-25.md](../t12-launch-2026-09-25.md) — never count blocks or DAA as finality on testnet-12.
-- **Add or certify a model:** [palw-add-a-model-runbook.md](../palw-add-a-model-runbook.md), [palw-certify-a-new-model.md](../palw-certify-a-new-model.md), [palw-model-onboarding-sdk.md](../palw-model-onboarding-sdk.md).
-- **Remote (node-less) mining:** [RFC-0009](../rfc/0009-palw-remote-miner.md) and its [implementation record](../design/palw/rfc-0009-remote-record.md).
-- **Bond and reward limits:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md); model allocation [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md).
+モデル登録、運用状態、claimの認証、支払は別です。[モデル階層](../spec/palw/model-tiers.md) / [bond予算](../spec/palw/bond-budgets.md) / [claim認証](../spec/palw/claim-certification.md)。
 
-Testnet-11 mining guides are kept in [history/](../history/README.md) and are not current instructions.
+画像・動画生成とモデル改善は [当面無効](../governance/post-mainnet-scope.md)で、初期mainnetの採掘・提供対象へ加えません。モデル登録の作業資料は [operations/models](../operations/models/README.md)。

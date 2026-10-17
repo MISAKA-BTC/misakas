@@ -1,4 +1,4 @@
-//! **K2-TIR-v4 on the real node (lane K2S, `docs/design/palw/k2-real-scale.md`)**: segmented claims through the mempool, the node's
+//! **K2-TIR-v4 on the real node (lane K2S, `docs/design/palw/models/k2-real-scale.md`)**: segmented claims through the mempool, the node's
 //! template, the chain block's fold, the persisted tip and the read API — a tiled prompt past 4,096 ids as a multi-segment claim (an
 //! honest element filed against it dismissed), a lie in one segment localized to one element and convicted with bounded bytes, a
 //! withheld segment demanded and defaulted, a demanded position served on chain and convicted from the blocks' bytes, the mempool's

@@ -201,7 +201,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             (64, _) => crate::palw_panel_lifetime_v2::PalwPanelLifetimeEnrollmentV2::scan_native_wire_v1(frame)?,
             _ => return Err(wire::wire_bad("unallocated Panel lifetime row namespace")),
         },
-        // Tables 42–106 and 112 (rfc06_native_aux_spec.py; inventory: docs/design/palw/native-resource-aux-inventory-2026-10-15.md).
+        // Tables 42–106 and 112 (rfc06_native_aux_spec.py; inventory: docs/design/palw/execution/native-resource-aux-inventory-2026-10-15.md).
         43 => <crate::palw_provider_court_v1::ProviderLeaseRowV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         44 => <crate::palw_provider_court_v1::ProviderChallengeRowV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         45 => <crate::palw_provider_court_v1::ProviderSubjectRowV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?,

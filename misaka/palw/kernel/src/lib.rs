@@ -1,10 +1,10 @@
 //! **ADR-0172 — model extensibility through versioned kernels, not a universal VM.**
 //!
-//! This crate is the reference implementation of the route `docs/design/palw/versioned-kernels.md` §§K.0–K.8, RFC-0011 §§15–16 and
+//! This crate is the reference implementation of the route `docs/design/palw/models/versioned-kernels.md` §§K.0–K.8, RFC-0011 §§15–16 and
 //! RFC-0004 §0 specify, for the semantics MISAKA already has: PALW-TIR v1 programs and RFC-0003 pipelines of TIR v2 programs.
 //! Three descriptors of one kernel line: K2-TIR-v1 (every TIR v1 family up to an `i64` accumulator), K2-TIR-v2 (the
 //! multi-modulus dense relation for `i128` accumulators) and K2-TIR-v3 (the media-pipeline family). The completion matrix is
-//! `docs/design/palw/kernel-k2-tir-v1.md`.
+//! `docs/design/palw/models/kernel-k2-tir-v1.md`.
 //!
 //! ```text
 //!   pinned model → active kernel + declarative VerificationPlan → committed node values →
@@ -51,7 +51,7 @@
 //!   validated policy, job holding from the first reveal, Final receipts for RFC-0010's Panel-independent beacon sources, and a
 //!   state root that stays the historical one until an OPV policy is set.
 //! * [`merkle3`], [`seg`], [`element`], [`seg_da`], [`seg_ledger`] — **K2-TIR-v4, the real-scale suite**
-//!   (`docs/design/palw/k2-real-scale.md`): tiled dual-root commitments, position / segment / claim roots with only the segment roots on
+//!   (`docs/design/palw/models/k2-real-scale.md`): tiled dual-root commitments, position / segment / claim roots with only the segment roots on
 //!   chain, element courts bounded by the tile, per-position demands served in parts, prompts posted in tiles, and the per-prosecution
 //!   bounds of `PUBLIC_PROSECUTION_COMPLETE`. [`seg_detect`] is the detector that pairs with them at real scale: re-execute the claim,
 //!   compare roots, descend the first divergent segment and check two positions. [`seg_encoder`] is K2-TIR-v5: an encoder or a head

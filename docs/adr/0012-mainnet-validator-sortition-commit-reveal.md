@@ -1,5 +1,7 @@
 # ADR-0012: Mainnet Validator Sortition via On-Chain Commit-Reveal
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 **Status:** Superseded — commit-reveal 案は 2026-05-30 に ADR-0017 で撤回。
 
 commit-reveal による validator 委員会選出は実装しない。委員会をなくして全 active bond が参加する [ADR-0017](0017-all-active-staker-attestation.md) に置き換えられ、その DNS validator 自体も [RFC-0012](../rfc/0012-palw-only-consensus-and-native-evm-settlement.md) で廃止するため。

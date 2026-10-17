@@ -3685,7 +3685,7 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help("RocksDB configuration preset: 'default' (SSD/NVMe) or 'hdd' (optimized for hard disk drives with BlobDB, compression, rate limiting). \
-                       HDD preset recommended for archival nodes on HDD storage (see docs/archival.md).")
+                       HDD preset recommended for archival nodes on HDD storage (see docs/operations/node/archival.md).")
         )
         .arg(
             Arg::new("rocksdb-wal-dir")

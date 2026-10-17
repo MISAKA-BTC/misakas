@@ -1,6 +1,6 @@
 #!/bin/bash
 # deploy-t12/move-nodes.sh — WHERE a moved seat runs. Sourced by move-host.sh (on a host) and move-seat.sh
-# (on the Mac); never executed. The 2026-10-01 migration: docs/design/palw/t12-panel-backlog-1001.md §7.
+# (on the Mac); never executed. The 2026-10-01 migration: docs/design/palw/verification/t12-panel-backlog-1001.md §7.
 #
 # The five seats on 5.104 (8 cores, 24 GiB: load 35-40, swap 13-17 GiB) gate 65 % of all panels and replayed 100x
 # slower than the same code on ibm/.113. Two of them move: b7 to .113 (b6's host: 83 % idle, no swap) and b3 to ibm

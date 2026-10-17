@@ -3494,7 +3494,7 @@ mod c4r3;
 // Onboarding P0 (OB-P0): conformance evidence on chain (tag 109) — the beacon from FUTURE Panel-independent Finals, the evidence judged
 // in the fold, an optimistic window with outsider refutations, the lifecycle to ACTIVE_REWARDABLE: `g14_kernel_route_e2e/conformance.rs`.
 mod conformance;
-// Lane K2S (K2-TIR-v4, `docs/design/palw/k2-real-scale.md`): segmented claims, element courts, per-position DA, prompt tiles, the
+// Lane K2S (K2-TIR-v4, `docs/design/palw/models/k2-real-scale.md`): segmented claims, element courts, per-position DA, prompt tiles, the
 // mempool's acceptance gate (GAP 10) and the cached ledger (GAP 8): `g14_kernel_route_e2e/real_scale.rs`.
 mod artifact_tile;
 mod model_artifact;

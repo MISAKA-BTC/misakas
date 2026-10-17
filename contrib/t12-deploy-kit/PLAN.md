@@ -5,7 +5,7 @@
 （この更新で実行したのは Mac 上の `bash -n`・launch script の生成と `--check`・`probe-identity-local.sh` だけ）。
 リリース固有値（binary sha256・fingerprint・genesis・premine txid）は **出荷する commit からだけ** 取る。`fleet.env`
 （`fleet.env.example` の写し。`*.env` は gitignore）では `__FILL_ME__` で、これが残っている限り `stage` / `switch` は動かない。
-公開までの順序・gate の証拠・再 pin の手順は `docs/t12-rcore-launch-checklist.md`（この kit と同じ commit）。
+公開までの順序・gate の証拠・再 pin の手順は `docs/history/networks/testnet-12/t12-rcore-launch-checklist.md`（この kit と同じ commit）。
 
 ---
 
@@ -245,7 +245,7 @@ schedule id `1678e073…`、rule manifest digest `9def81a1…`。
 
 **【確認】** の付いた step は、実行の前に **ユーザーの明示の確認** を取る（公開 node の停止・置換、配備、告知、premine や運用者の鍵
 を使う操作、公開ホストでの長いビルド）。kit のどの script もリモートで勝手には走らない。全体の順序（gate → 再 pin → battery 2 回 →
-release build → fleet.env → 確認 → 配備 → explorer → seeder → 公開後の観測）は `docs/t12-rcore-launch-checklist.md` §4。
+release build → fleet.env → 確認 → 配備 → explorer → seeder → 公開後の観測）は `docs/history/networks/testnet-12/t12-rcore-launch-checklist.md` §4。
 
 ### Phase A — 準備（公開 chain は止まらない）
 | step | 誰 | 何を |
@@ -555,7 +555,7 @@ colima.yaml の `rosetta` が true になる = 設定の変更。Rosetta はこ�
   まだ動いている場合）はすべて「2 つ目」にあたる。round の署名記録（`palw-round-last-signed`）は appdir にあるので、appdir は消さずに移す。
   node は起動時に `PALW bond …: run it in exactly ONE process …` を出す（通常は INFO、`--palw-register-class` のときは WARN）。登録は
   `misaka model add`（稼働中の node の RPC に送るだけ）か、稼働中の node 自身に flag を足して再起動する形にする
-  （`docs/palw-add-a-model-runbook.md` §5・`docs/palw-certify-a-new-model.md`・`docs/model-requests.md` を直した）。kit は 1 bond 1 node。
+  （`docs/operations/models/palw-add-a-model-runbook.md` §5・`docs/history/operations/model-certification/palw-certify-a-new-model.md`・`docs/operations/models/model-requests.md` を直した）。kit は 1 bond 1 node。
 - **drill**（`scripts/drills/misaka-palw-t12-rcore-drill.sh`）: seat の起動から `--palw-panel` を外し、header に「round lane も常に動く・1 bond 1 process」、
   d6（heartbeat だけの区間）に「permit が切れるまで待つか bond 鍵なしで再起動」、d7 の fresh node に「bond 鍵を持たない relay で」と書いた。
 - ローカルで確認: 生成した launch script の `--check` が新 binary で OK、`ALWAYS-ON DUTY` を持たない binary（旧 binary の模擬）で

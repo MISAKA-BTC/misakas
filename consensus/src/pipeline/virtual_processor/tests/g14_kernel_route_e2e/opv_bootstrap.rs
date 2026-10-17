@@ -1,4 +1,4 @@
-//! **OPV-BOOT on the real node: the startup cycle closed, from zero Finals** (`docs/design/palw/opv-beacon-bootstrap.md`).
+//! **OPV-BOOT on the real node: the startup cycle closed, from zero Finals** (`docs/design/palw/verification/opv-beacon-bootstrap.md`).
 //!
 //! ```text
 //! zero Finals ── bootstrap class B: 104 bind → kernel class → 106 (COMPLETE-CHECK policy) → 107 → 109 PostComplete

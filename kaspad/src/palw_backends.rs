@@ -1732,7 +1732,7 @@ pub fn palw_class_default_residency_v1(available: Option<u64>) -> misaka_palw_sd
 /// less what it holds, not 8. `None` off Linux.
 ///
 /// **The cgroup's headroom counts what the kernel can give back as free** (the 2026-10-01 backlog,
-/// `docs/design/palw/t12-panel-backlog-1001.md`): kaspad runs mimalloc with `purge_decommits = false`
+/// `docs/design/palw/verification/t12-panel-backlog-1001.md`): kaspad runs mimalloc with `purge_decommits = false`
 /// (`utils/alloc`), so memory the process has freed is handed back with `MADV_FREE` — still mapped,
 /// still charged to the cgroup, and dropped by the kernel without I/O the moment it needs the room.
 /// On b6 that was 9.3 of 17.1 GiB of anonymous memory; `memory.current` sat at 98.5 % of

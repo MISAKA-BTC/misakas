@@ -1,4 +1,4 @@
-//! **The example manifests under `docs/extension-manifests/` verify as the guide says they do.**
+//! **The example manifests under `docs/reference/manifests/extensions/` verify as the guide says they do.**
 //! A document nobody runs drifts; these are run. Each example is copied into a temporary
 //! directory beside whatever file it names, so the copy in `docs/` stays exactly what a reader
 //! downloads.
@@ -13,7 +13,7 @@ use misaka_palw_derive::registry::{grammar_by_name, transformer_by_name};
 use misaka_palw_extension::{PalwExtensionClassificationV1 as C, PalwExtensionDepthV1 as D, PalwExtensionEnvV1, verify_extension_v1};
 
 fn docs_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..").join("docs").join("extension-manifests")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..").join("docs").join("reference").join("manifests").join("extensions")
 }
 
 fn env() -> PalwExtensionEnvV1 {
@@ -48,7 +48,7 @@ fn values() -> String {
 }
 
 fn example(name: &str) -> Vec<u8> {
-    std::fs::read(docs_dir().join(name)).unwrap_or_else(|e| panic!("docs/extension-manifests/{name}: {e}\n{}", values()))
+    std::fs::read(docs_dir().join(name)).unwrap_or_else(|e| panic!("docs/reference/manifests/extensions/{name}: {e}\n{}", values()))
 }
 
 fn stage(names: &[&str]) -> tempfile::TempDir {

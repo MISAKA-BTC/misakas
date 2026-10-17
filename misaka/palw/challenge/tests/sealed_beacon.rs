@@ -1,4 +1,4 @@
-//! **The sealed-source beacon v3** (`docs/design/palw/opv-beacon-bootstrap.md` §6.3) against the attacks that break v2 (SOUND SG-01,
+//! **The sealed-source beacon v3** (`docs/design/palw/verification/opv-beacon-bootstrap.md` §6.3) against the attacks that break v2 (SOUND SG-01,
 //! SG-01a): the last contributor, first-`k` capture, withholding, abandonment after the reveal, censorship of a reveal, early
 //! reveals, fork choice — and its accounting (`G = F`, `ε_src`).
 

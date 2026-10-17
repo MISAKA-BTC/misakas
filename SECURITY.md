@@ -85,7 +85,7 @@ observe whether a host ran confined, and a court that cannot compute a verdict i
 hash, the runtime registry, the input canonicalization, the receipt, the output root, the
 verification, the metering, the capability profile, the sandbox, the secrets rule, the egress rule
 and the posture report — is one table in
-[`docs/palw-registry-map.md`](docs/palw-registry-map.md), with the field, the file and the ADR for
+[`docs/reference/palw/palw-registry-map.md`](docs/reference/palw/palw-registry-map.md), with the field, the file and the ADR for
 each, and the reason for each of the five layers that are refused.
 
 **The model process starts with nothing.** `misaka-palw-agent` and `misaka-palw-gateway` spawn every

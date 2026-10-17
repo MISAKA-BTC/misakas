@@ -16,7 +16,7 @@ What it does (and what it does not):
   select     Over the summaries of every run: the region where EVERY scenario passes every condition. Where none does, it prints the
              conflicting constraints and exits non-zero. It never proposes a value outside the measured points and never invents one.
 
-Prerequisites the operator owns (see docs/design/palw/rfc-0016-implementation-status-2026-10-15.md §7):
+Prerequisites the operator owns (see docs/design/palw/integration/rfc-0016-implementation-status-2026-10-15.md §7):
   * an isolated calibration network (Params::has_isolated_native_calibration_v34) with palw_probabilistic_constraints_v1,
     palw_bond_budget_v1 and — for V+ — palw_model_bond_allocation_v1 armed (the last is the ADR-0177 lane's to make armable in
     calibration; without it ΣA = 0 and V+ issues no right, which is scenario H1, not a σ/k measurement);

@@ -1,4 +1,4 @@
-//! **The sealed-source PALW Work Beacon v3** (`docs/design/palw/opv-beacon-bootstrap.md` §6.3): commit–reveal over bonded claim
+//! **The sealed-source PALW Work Beacon v3** (`docs/design/palw/verification/opv-beacon-bootstrap.md` §6.3): commit–reveal over bonded claim
 //! seals, mixing **every** qualifying seal of the window, with withholding and abandonment turned into a counted veto.
 //!
 //! ```text

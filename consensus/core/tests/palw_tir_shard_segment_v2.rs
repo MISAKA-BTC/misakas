@@ -1,5 +1,5 @@
 //! **RFC-0006 per-segment pricing — the dormant fence `palw_tir_shard_segment_v2`** (agent SHARD,
-//! `docs/design/palw/shard-rfc6-10.md` §4).
+//! `docs/design/palw/verification/shard-rfc6-10.md` §4).
 //!
 //! * **The fence**: `None` on every preset, invisible to the handshake identity while `None` or `Some(never())`, committed to both
 //!   fingerprints once it carries a height, and refused when armed — by name for a missing mirror, a missing `palw_tir_shard_v1`

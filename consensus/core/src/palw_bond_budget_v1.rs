@@ -1,5 +1,5 @@
 //! **ADR-0176 / ADR-0177: the bond budget and the model-bond allocation** — `palw_bond_budget_v1` and
-//! `palw_model_bond_allocation_v1` (lane BUDGET; **dormant, no height**; design `docs/design/palw/bond-budget-and-model-allocation.md`).
+//! `palw_model_bond_allocation_v1` (lane BUDGET; **dormant, no height**; design `docs/design/palw/economics/bond-budget-and-model-allocation.md`).
 //!
 //! ```text
 //! acceptance   reservation = ask (Q 1, B blocks, R reward, F Final weight), clipped by the per-claim ceilings when the policy slices
@@ -833,7 +833,7 @@ impl Params {
         }
         // RFC-0015 §8.3 (lead default 2026-10-15, pending user review): an isolated calibration genesis carries the mechanics budget
         // (every Panel-free claim budgeted there too). Its two economic prerequisites below are NOT required there (calibration
-        // deviation, recorded in docs/design/palw/rfc-0015-implementation-status-2026-10-15.md): `palw_audit_2026_09_23` is
+        // deviation, recorded in docs/design/palw/integration/rfc-0015-implementation-status-2026-10-15.md): `palw_audit_2026_09_23` is
         // genesis-only and `palw_economic_safety` brings the windowed mint, neither of which the calibration devnet base carries.
         if self.has_isolated_native_calibration_v34() {
             return if fence.activation == ForkActivation::always() && fence.policy == PalwBondBudgetPolicyV1::opv_mechanics_probe_v1() {

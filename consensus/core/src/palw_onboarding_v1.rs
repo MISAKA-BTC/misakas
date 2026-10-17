@@ -469,7 +469,7 @@ impl PalwKernelRouteStateV1 {
     /// **The onboarding gate's IDENTITY part** — everything [`Self::onboarding_gate_v1`] asks except DA16's artifact-lapse hold: kernel
     /// bound, the kernel class standing, the binding past its refutation horizon and unrefuted (a clock and proofs, never whether the
     /// bytes are served — the historical code `AVAILABILITY_REQUIRED` of a binding inside its horizon means only that), and the
-    /// conformance record. What the G14-for-rewards gate reads (ADR-0177; `docs/design/palw/opv-beacon-bootstrap.md` §14.1).
+    /// conformance record. What the G14-for-rewards gate reads (ADR-0177; `docs/design/palw/verification/opv-beacon-bootstrap.md` §14.1).
     pub fn onboarding_identity_gate_v1(&self, class: &Hash64, artifact_root: &Hash64, daa: u64) -> PalwOnboardingGateV1 {
         let Some(binding) = self.kernel_binding_v1(class) else {
             // A class with an artifact binding (live or refuted) has begun onboarding: it is held until it is kernel-bound. Only a class

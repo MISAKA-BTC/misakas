@@ -448,7 +448,7 @@ fn the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap() {
     // **The drill class's sizing work and its headroom under the cap are PINNED.** The generative cap is the IR's own (`2^26`, the
     // gate is no looser than the IR one) and this class sits 0.35 % under it: 237,358 steps. A lowering change that moves the work
     // fails HERE, by name, with the headroom it leaves — before the gate refuses the drill class at the cap — and the pin is
-    // moved on purpose, with the class id (a lowering change moves that too: `docs/design/palw/rfc3-gen-drill-inputs.md`).
+    // moved on purpose, with the class id (a lowering change moves that too: `docs/design/palw/execution/rfc3-gen-drill-inputs.md`).
     assert!(
         work <= PALW_GEN_CLOSE_SIZING_WORK_CAP_V1,
         "the SD3 drill class's close sizing needs {work} steps and the gate's cap is {PALW_GEN_CLOSE_SIZING_WORK_CAP_V1}: the class is refused"

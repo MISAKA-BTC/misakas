@@ -1,6 +1,6 @@
 //! **Lane LG14-A (RFC-0014 §6–§8 on the legacy V2 Panel route): one fraud filer for every role, a non-seat reservation that holds a
 //! claim's ends to the claim's own hard deadline, and direct proofs no open session pre-empts** — dormant behind
-//! `Params::palw_legacy_public_filer_v1`, which no network can arm. Design: `docs/design/palw/legacy-route-g14-filer.md`.
+//! `Params::palw_legacy_public_filer_v1`, which no network can arm. Design: `docs/design/palw/verification/legacy-route-g14-filer.md`.
 //!
 //! ```text
 //! 154 DisputeReservedV1  (any Active bond at or above the floor, not the claim's executor)

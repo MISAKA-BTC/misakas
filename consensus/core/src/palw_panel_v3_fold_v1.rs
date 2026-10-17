@@ -26,7 +26,7 @@
 //! V2 door — receipts, the coverage and S2 licences, DA accusations (a bound panel is what `DaClaimNotAccusable` asks for), the
 //! court — works for a V3 claim exactly as for a V2 one, by any ordinary public bond.
 //!
-//! **RFC-0006 × RFC-0010: the per-shard V3 draw** (agent SHARD, `docs/design/palw/shard-rfc6-10.md` §1). A V3-rule claim of a
+//! **RFC-0006 × RFC-0010: the per-shard V3 draw** (agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md` §1). A V3-rule claim of a
 //! class with a layer-shard plan (past `palw_tir_shard_v1`) is admitted with the engine's strata — one stratum a shard,
 //! `[outsider?] ++ 3 class seats` each, the class seats from the bonds that proved the shard's readiness, the outsider from the
 //! base class — and its binding writes, beside the V2 panel record (shard-major), RFC-0006's per-shard record: the armed

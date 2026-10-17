@@ -1,4 +1,4 @@
-//! **RFC-0006 × RFC-0010: a sharded IR class under the permissionless Panel** (agent SHARD, `docs/design/palw/shard-rfc6-10.md`
+//! **RFC-0006 × RFC-0010: a sharded IR class under the permissionless Panel** (agent SHARD, `docs/design/palw/verification/shard-rfc6-10.md`
 //! §1 and §3). Before this lane a V3-rule claim of a class with a shard plan ended at admission (`PermissionlessNoCapablePanel`):
 //! the engine drew one flat Panel, and a flat Panel cannot license by parts. Now the engine draws in strata:
 //!
