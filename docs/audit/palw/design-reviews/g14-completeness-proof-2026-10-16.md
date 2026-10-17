@@ -1524,4 +1524,7 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
 
 - `cargo test -p kaspa-consensus --lib -- funded11::public_filing`:**5 passed**(13.1 と 13.3 の node・fold 試験)。
 - `cargo test -p kaspa-consensus-core --lib -- g14n2`:**4 passed**。
-- 実行していないもの:workspace 全体、clippy、既存の `flat_native_v9`・`funded11` の回帰(reveal を共通関数に分けた影響)、kaspad、text29 の公開告発。
+- 回帰:`cargo test -p kaspa-consensus --lib -- flat_native_v9`(reveal を共通関数に分けた影響を含む)は全件 pass。
+  - 同時に回した `t12_a2u_new_kinds_uniform` の 2 件は失敗した。原因は別 lane の fence `palw_material_release_recovery_v2`(RFC08)が harness で武装されていないことで、この lane の変更ではない。そのため、新しい action(v11 の 19〜21、stage の 80)を A-2 の一様試験が見る段まで進んでいない。未確認。
+- core の identity:`--test g14_court_capacity`(`testnet12_identity_did_not_move` を含む)15 passed / 1 ignored。`g14_close_gates` 12、`g14_close_legacy` 8、fork-id・identity の lib 試験 103 passed。
+- 実行していないもの:workspace 全体、clippy、kaspad、text29 の公開告発。
