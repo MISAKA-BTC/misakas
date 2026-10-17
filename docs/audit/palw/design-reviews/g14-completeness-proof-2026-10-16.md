@@ -1340,7 +1340,7 @@ door は `collect_until − accepted`、horizon は testnet-12 の fence 16,000 
   fold 水準の T-N1(§10.4)は、2〜4 の consensus 側を production transition で通している。
 ## 付録 E. 追記 — court 容量と Panel 担保の lane(2026-10-16、branch `integ/g14-court-capacity`)
 
-ユーザー方針([リリース計画](t12-daa14000-release-plan-2026-10-15.md)「court の全体容量と Panel 担保」)の実装。新しい fence は `palw_court_capacity_v1` の 1 つだけで、全 preset で `None`。testnet-12 の identity は変わらない。
+ユーザー方針([リリース計画](../../../design/palw/integration/t12-daa14000-release-plan-2026-10-15.md)「court の全体容量と Panel 担保」)の実装。新しい fence は `palw_court_capacity_v1` の 1 つだけで、全 preset で `None`。testnet-12 の identity は変わらない。
 
 ### E.1 court 容量(G-07)
 
@@ -1594,7 +1594,7 @@ door は `collect_until − accepted`、horizon は testnet-12 の fence 16,000 
 
 ## 追補: class 単位の検出率 policy(2026-10-17、branch `integ/g14-detection-policy`)
 
-外部監査(`g14-external-audit-2026-10-17/`)§7 P1 の 4 項への処置。詳細は [g14-detection-policy-2026-10-17.md](g14-detection-policy-2026-10-17.md)。
+外部監査(`g14-external-audit-2026-10-17/`)§7 P1 の 4 項への処置。詳細は [g14-detection-policy-2026-10-17.md](../../../design/palw/g14-detection-policy-2026-10-17.md)。
 
 - 休眠 fence `palw_detection_policy_v1`(全 preset で `None`、Some-only、武装を拒否)。fence より前の legacy draw(k = 4、domain、golden vector)は不変。
 - class・kernel 版に結び付く `PalwDetectionPolicyV1` を入れた。検査方式、chain の数を価格に照合して導く N、D_min、ε、k_max、round、shadow、経済値、資源、期限、局所化を持つ。k_min は厳密な超幾何を整数の固定小数で求め、厳密値を下回らない。
@@ -1604,3 +1604,34 @@ door は `collect_until − accepted`、horizon は testnet-12 の fence 16,000 
 - fault corpus(fixture の整数 cache model、実際の seat seam)では、宣言した不正集合(D ≥ 10%)で 99% 以上を確認した。D = 1 系は解析値 k/N と一致した。正直な claim は 1 度も flag されず、誤実装の seat の局所 flag はすべて参照裁定が棄却した。
 - 第 2 段: fence より後の claim gate(attempt と FP。option (b) と同じ形で拒否する)、複数 round の seat、funnel の後段(accepted〜invalidated、deadline / unassigned の loss)、実ノードの試験(1 位置の偽りを k/N の率で検出し、告発で有罪、slash、報酬なし)。
 - 未完(同文書 §10): court/DA 予算の実連動(interface は同文書に記載)、kernel route の admission と shadow、同時 claim 数の強制、producer の事前確認、RPC、実 artifact での値の測定。
+
+## 12. 追補: T-N1 をノード段で通す(受入試験 A、2026-10-18、branch `integ/g14-tir-pricing-r2`)
+
+**12.1 結果(実行・合格)。** どちらも PQ mempool → production template → 実サービス(socket P2P で接続)を通る。
+
+| 試験 | 時間 | 示したこと |
+|---|---|---|
+| `tir_frame_node_an_ir_class_walks_to_active_through_the_mempool`(piece 1+2) | 533 s | SDK 登録 → family 認証 → lane 認証 → layout 公開 → readiness jury → probation 10 → Active |
+| `tir_frame_node_tn1_an_honest_framed_claim_is_final_with_its_payment_right`(piece 3+4) | 1,955 s | producer サービスが TFP1 付き canonical IR claim を出し、5 seat サービスが P2P で material を取得・再実行・Valid・license → Final。未使用の価格付き quantum 1、producer 担保は不変 |
+| `tir_frame_node_tn1_a_forged_framed_claim_is_convicted_by_one_outside_service` | 1,775 s | producer サービスが cone 偽造(D-05)。producer の custodian が準備・封印、外部 bond のサービスが再実行で不一致 → owner 取得 → 局所化 → arithmetic finding → 公開 filer → DAA 1,808 で `Voided{CourtFraud}`、producer slash、quantum は使えない |
+
+**12.2 示していないこと。** (a) 誠実 claim の quantum の**当選**(この run では当たらず。spend 自体は fold 段 T-N1)。(b) 共謀 seat の
+slash(脚本の共謀 Panel の licence が有罪確定より前に届かなかったので、課金できる Valid がない。seat slash 枝は fold 段 T-N1)。
+
+**12.3 見つけて直したもの(本番コード、休眠 fence の下)。**
+1. **DL-1 の index ずれ(consensus)。** `TransitionBuilder::arm_deadline` が終端 claim の operational release(abandon hold)にも staged
+   material horizon の floor を掛け、DL-1 の再構築は掛けない → debug assert で virtual processor が停止。arm 側を DL-1 に合わせた
+   (`4a713ecee`)。staged court の行がある所でだけ起き、t12 の fold は不変。
+2. **IR canonical claim の tokenizer。** `build_canonical_claim` が job の `tokenizer_id` を既定値のままにし、frame の source 解決で
+   全 IR canonical claim が作れなかった。class record の tokenizer を入れる。
+3. **owner Open の期限。** Open を `collect_until − 1` の期限で court lane(EDF、1 件 in-flight)に積んでいたため、先に期限が来る
+   手に負けて open door を過ぎた。期限を `open_until − 1` にし、door を過ぎた case は終える。
+
+**12.4 harness だけの設定(出荷しない)。** 512 quanta / canonical job、payout rate を t12 の 2.5×10^6 倍(W₀ ≈ 1.4×10^5 CCU、
+小さな class を正直に引けるように)、acquisition 4 DAA、owner の open 窓は 90 s/DAA・回収 door は 2 s/DAA で時間を刻む(debug build の
+サービスは 1 手に数秒〜数分、試験の 1 block は 60 ms。t12 の 1 DAA は 120 s heartbeat)。probe は正直な実行(捏造 root の probe は
+全公開 bond の fraud filer が正しく追い、1 件 in-flight の court lane を塞いだ)。
+
+**12.5 cone 上限(監査 (b))。** `cone_runs_bound_v1` を frame の局所化項に入れた。horizon を超える door の frame は従来どおり
+`DoorBeyondLiabilityHorizon` で作らない。test-only 時計の corpus(n ≤ 256)で拒否される class はない。実測時計での class 別の
+可否は測定記録(`PALW_TIR_FRAME_COST_RECORDS_V1`、空)が入るまで出せない。
