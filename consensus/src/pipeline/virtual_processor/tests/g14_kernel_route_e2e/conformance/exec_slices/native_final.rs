@@ -18,7 +18,7 @@ use kaspa_consensus_core::palw_work_slice_v2::PalwExecV2RewardFundV1;
 
 /// Prove the actual native inventory at this span. No cached readiness row or
 /// lifecycle/Panel/Final setter is used. Each proof is authenticated at acceptance.
-async fn ready_native_seats(cw: &mut Cw) {
+pub(super) async fn ready_native_seats(cw: &mut Cw) {
     use crate::pipeline::virtual_processor::tests::g14_registration_e2e::Tensors;
     let tensors = cw.f.params.tensors.iter().map(|(key, tensor)| (*key, tensor.to_le_bytes())).collect();
     let operands = palw_tir_inventory_operands_v1(&cw.f.program, &Tensors(tensors)).expect("native inventory");
@@ -206,6 +206,8 @@ async fn x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_acce
     )
     .await;
     let class = cw.v2_class;
+    // RFC08 08-C: no seam — the registry's own rules admit the class before its REAL attempt.
+    admit_class_without_seam(&mut cw).await;
     let real = real_attempt(&mut cw, ROOT_CARD, class, 0xA7E5).await;
     let terms = cw.net.chain.tip_state().1.paid_consumer_terms_v1(&real.claim).expect("actual native accepted terms");
     let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
@@ -897,4 +899,58 @@ async fn x8_g14_native_signed_monetary_covenant_funds_exact_fee_once_and_recover
     assert_eq!(restored.consent, row.consent);
     assert_eq!(restored.last_payment, row.last_payment);
     assert_eq!(recovered.chain.ctx.consensus.palw_material_income_hold_until_v1(root), Some(u64::MAX));
+}
+
+/// **RFC08 08-C: EXEC without the `cfg(test)` admission seam** (`exec_v2_test_admit_class_v1` is never called): the class is
+/// admitted by the registry's own rules (signed capability declarations, readiness proofs of the real inventory, the lifecycle and
+/// room the chain derives), the honest session's kernel claims reach their approved paid Finals, the native root is licensed by the
+/// chain-drawn Panel's signed receipts and reaches Final with its funded vesting rows.
+#[tokio::test]
+async fn x8_g14_no_seam_honest_root_reaches_final_and_is_funded() {
+    let mut cw = active_world().await;
+    cw.no_seam = true;
+    let mut s = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 2_048).await;
+    for (index, slice) in s.slices.iter().enumerate() {
+        s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
+    }
+    let (final_daa, _) = finalize_native_root(&mut cw, &s).await;
+    let state = cw.net.chain.tip_state().1;
+    let receipt = state.exec_v2_reward_vesting_v1(&s.real.claim).expect("the funded EXEC receipt").clone();
+    let native = state.vesting_row(&s.real.claim).expect("the native vesting row").clone();
+    assert_eq!(receipt.final_daa, final_daa);
+    assert!(receipt.total_sompi_u128() + u128::from(native.producer.amount) > 0, "the honest root is paid");
+    let replay = replay_with_lane(&cw.net, &s.lane).await;
+    cw.net.assert_same(&replay, "no-seam honest native Final replay");
+}
+
+/// **RFC08 08-C: a forged prefix without the seam is really slashed**: the root bond's prefix claim lies (its drawn seats collude,
+/// so it reaches its paid Final unrefuted), the root reaches Final, and an outsider's public proof from the read API alone
+/// convicts the prefix after Final: the prefix producer's collateral is actually slashed, the root voids and its funded rows burn.
+#[tokio::test]
+async fn x8_g14_no_seam_forged_prefix_is_convicted_and_slashed_after_final() {
+    let mut cw = active_world().await;
+    cw.no_seam = true;
+    cw.collude_lies = true;
+    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 2_048).await;
+    for (index, slice) in s.slices.iter().enumerate() {
+        s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
+    }
+    finalize_native_root(&mut cw, &s).await;
+    assert!(cw.net.chain.tip_state().1.vesting_row(&s.real.claim).is_some(), "the forged root was funded at Final");
+    let before = cw.net.collateral(s.prefix.claim.producer);
+    let api = cw.net.api().unwrap();
+    let fresh = Fresh::from_api(&api, api.ledger_root(), 0x95);
+    let proof = match fresh.check(s.prefix.claim.id, &s.prefix.claim.published(&cw.cand, &[]), &cw.cand.params) {
+        OutsiderFindingV1::Prosecute(proof) => proof,
+        other => panic!("the public read finds the forged prefix: {other:?}"),
+    };
+    let objection = cw.net.route(ACCUSER, &K::FileProof { accuser: cw.net.kid(ACCUSER), claim: s.prefix.claim.id, proof });
+    cw.net.send(vec![(ACCUSER, objection)]).await;
+    let failed = cw.net.chain.tip_state().1;
+    assert!(cw.net.ledger().claims[&s.prefix.claim.id].convicted);
+    assert!(cw.net.collateral(s.prefix.claim.producer) < before, "a real slash of the forging producer's collateral");
+    assert!(matches!(failed.exec_v2_root_v1(&s.real.claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
+    assert!(failed.vesting_row(&s.real.claim).is_none() && failed.exec_v2_reward_vesting_v1(&s.real.claim).is_none());
+    let replay = replay_with_lane(&cw.net, &s.lane).await;
+    cw.net.assert_same(&replay, "no-seam forged prefix conviction replay");
 }

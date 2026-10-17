@@ -1263,8 +1263,13 @@ async fn opened_with_lifetime(
     lifetime_daa: u64,
 ) -> Session {
     // The seam (module doc): the onboarded class takes REAL work from here. Residual: the legacy channel's Panel admission of a V2 root
-    // (GAP-81), which this harness cannot prove.
-    exec_v2_test_admit_class_v1(cw.v2_class, 0);
+    // (GAP-81), which this harness cannot prove. RFC08 08-C (`no_seam`): no seam — every bond declares the class and proves
+    // readiness over the real inventory, and the session waits until the registry itself admits the class.
+    if cw.no_seam {
+        admit_class_without_seam(cw).await;
+    } else {
+        exec_v2_test_admit_class_v1(cw.v2_class, 0);
+    }
     let class = cw.v2_class;
     let real = real_attempt(cw, ROOT_CARD, class, 0xA77E).await;
     let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
@@ -1284,6 +1289,24 @@ async fn opened_with_lifetime(
     assert_eq!(root.prefix, PalwWorkPrefixStageV2::Pending, "the prefix claim is live, not yet Final");
     assert_eq!(root.last_state_root, initial, "slice 0 continues the REAL claim's run");
     Session { real, prefix, slices, extras, lane: Vec::new() }
+}
+
+/// **RFC08 08-C: the class admitted by the registry's own rules** — signed capability declarations and readiness proofs of the
+/// real inventory for every bond ([`native_final::ready_native_seats`]), then heartbeats until the node's own producer pre-check
+/// (`palw_producer_facts_v2`) names no class-admission refusal for the root card. No lifecycle, seating or share setter is used.
+async fn admit_class_without_seam(cw: &mut Cw) {
+    native_final::ready_native_seats(cw).await;
+    let bond = cw.net.bond(ROOT_CARD);
+    let bound = cw.net.daa() + 4_000;
+    loop {
+        let facts = cw.net.chain.ctx.consensus.palw_producer_facts_v2(cw.v2_class, Some(bond.0)).expect("the node answers for the class");
+        if facts.class_admission_refusal.is_none() {
+            break;
+        }
+        assert!(cw.net.daa() < bound, "the registry never admitted the class without the seam: {:?}", facts.class_admission_refusal);
+        let next = cw.net.daa() + 1;
+        cw.net.beat_to(next).await;
+    }
 }
 
 /// The REAL claim, the root and the three kernel-claimed slices, all carried and admitted (none verified yet).
