@@ -1248,3 +1248,93 @@ testnet-12 の identity と指紋は変わらない(`shipped_presets_have_pinned
    pass mode の custodian loop を通しで動かす node 試験も無い。
 4. **記録。** `PALW_TIR_FRAME_COST_RECORDS_V1` は空のままである。武装には、最も遅い対応 node での測定、testnet-12 で観測した network input、review digest が要る。
 5. G-T1(能動的な slot 占有)と K_owner の扱いは、owner 枠の lane の担当である(この branch は `palw_tir_public_fold_v1.rs` の owner admission を変えていない)。
+
+## 11. 追補: conviction door を導出して horizon に収める(2026-10-17、branch `integ/g14-tir-pricing-r2`)
+
+§10.6 の 1 の続きである。値を短くするのではなく、各項を導出し直した。新しい規則はすべて休眠のままで、testnet-12 の指紋は変わらない。
+door は `collect_until − accepted`、horizon は testnet-12 の fence 16,000 で `120 + 3,000 = 3,120` DAA である。
+測定条件は §10.2 の候補と同じで、記録は `frame-ops-after.json` にある。
+
+### 11.1 各項の導出と、適用後の door(corpus 11 class、frame の上限で測定)
+
+| 段階 | 変更 | door(最小〜最大) | horizon 内か |
+|---|---|---|---|
+| §10(出発点) | — | 3,389〜12,507(上限 6) | 否 |
+| (a) 回答 body の上限 | class の step space から導く(下記) | 609〜727(上限 6) | 可 |
+| Open 窓の修正 | `acquisition_daa + inclusion_margin`(下記) | (a) に含む | — |
+| (d) frame の custodian 上限 | 6(flat Panel 5 seat と producer) | 上限は 257 → 6 | — |
+| (c) owner queue の待ち | door に含める(下記) | **2,145〜2,263** | **可** |
+
+(a) **回答 body の上限は class の実際の leaf から導く。**
+- `PalwTirStepSpaceV1::maximum_leaf_lanes_v1` は、job の最も広い leaf を数える。committed node では `min(tile, その job の最大 H での要素数)`、checkpoint と history の tile も同様に数える。
+- `maximum_window_lanes_v1` は、連続する c 個の leaf が保持できる lane を数える。
+  値は `min(c × 最大 leaf, (⌈(c−1)/L_min⌉ + 1) × 1 position の最大 lane)` である。
+- source の `unit_bound_v1`(StepLeaf / StepRun)と prepared bytes はこの値を使う。decode の上限は従来どおり layout の値である。
+- 実測と上限:
+
+  | 量 | 値 |
+  |---|---|
+  | 最大 leaf | 96 B(従来の上限 16,384 B) |
+  | n leaf の run の実回答 | 5.9〜25.0 KB |
+  | 同じ run の上限 | 7.6〜42.3 KB |
+
+  `frame_measure` は、11 class すべてで「実回答 ≤ 上限」を assert した。
+- job の geometry が保持できない body は Begin で拒否される。
+  - その場合、producer は回答できず、default される(DA conviction)。
+  - それを Valid とした seat も default される。正直な seat は自分の replay が一致しないので Valid を出さない。
+  - このため multi-part の fixture は、実際に計算した 4,096 lane の logits leaf(`test_support::tiny_execution_wide`)に替えた。
+
+**Open 窓の修正。** 窓は `acquisition_daa + inclusion_margin` にした。候補値の窓は 1 DAA で、Open 自身の inclusion margin(4 DAA)より短かった。
+
+(d) **frame の custodian 上限は flat Panel の seat と producer(`palw_tir_frame_custodian_upper_v1`、testnet-12 では 6)である。**
+- frame の claim は、atomic な Valid + grant + Ready で credit された V1 receipt でしか license されない(`require_qualified_receipts_v1`)。
+- frame の claim に対して、typed / segmented / shard の licence はすべて拒否される(`require_qualified_typed_receipts_v1`)。
+- したがって、stratified(×256)や shard licensing(×1,024)の seat は frame の custodian になれない。上限を超える grant は、契約の `custodians ≤ maximum_custodians` で拒否される。
+- typed の raw-grant 経路を将来 frame に配線する場合は、この上限も追従させる必要がある。
+- 試験 `free_prompt` で、t12 の frame 上限が 6 であることを assert した。参考値として、上限 257 で数えた door は 12,871〜16,399 である。
+
+(c) **owner queue の待ちを door に含めた(`tir_public_owner_queue_wait_v1`)。**
+- lane g14-court-capacity-r2 の fair start(`1e566221e`)では、K_owner 枠が埋まっている間の Open は queue で待ち、`⌈(q+1)/K⌉` tenure 以内に入る。
+  tenure は `max(grace, Open 窓 / 2K)` である。
+- q(前に並べる Open の数)は、Open 窓の間に包含できる control の数で抑えられる: `窓 × ⌊parallel / control_bytes⌋` = 5 × 8 = 40。
+- grace は 256 なので、待ちは `⌈41/8⌉ × 256 = 1,536` DAA である。
+- 待っている row は demand しないので、custodian の負荷は K_owner 本のままである。turn span の同時性の項は従来どおりである。
+- **lane 間の注意:** tenure の式は court-capacity lane の `tir_owner_tenure_v1` と同じでなければならない。merge のときに、片方がもう片方を呼ぶ形に統一する必要がある。
+
+(b) **cone の turn 数の上限は導出できていない。**
+- cone がどこまで遡るかは demand engine の再帰で決まる。state は直前の checkpoint まで再構成し、attention の history は窓全体を読む。
+- 健全な静的上限を出すには、demand engine を対象にした静的解析が要る。安全側の `⌈n/256⌉` turn のままにした。
+- corpus は n ≤ 256 なので cone の turn は 1 回で、door には影響しない。実 model(n が桁違いに大きい)では、この項が支配的になる見込みである(未測定)。
+
+### 11.2 残っている支配項と、必要な判断
+
+- corpus では、door 2,145〜2,263 のうち **1,536 が owner queue の待ち**(6 tenure × grace 256)である。残りの約 610〜730 が局所化 path(11 turn)と preparation(16)である。
+  1 turn の span は約 50 DAA で、内訳は inclusion margin 4 × 6 move と、8 owner の同時包含である。
+- door は horizon 3,120 に収まるので、この候補では window の判断は要らない。
+- 実 model については (b) が残る。n/256 個の cone turn が door を horizon の外に押し出すかどうかは、実 model で測るまで分からない(未測定)。
+  外に出る class は、§10.1 の 4 により frame を作れず、受理されない。
+
+### 11.3 試験(この branch、targeted のみ)
+
+- `cargo test -p kaspa-consensus-core --lib -- palw_tir_public tir_fp_lane t_n1 shipped_presets_have_pinned_fingerprints tir_preparation_is_claim_wide palw_tir_frame_cost palw_native_resource aux_registry_tests palw_tir_court palw_tir_step`:
+  `143 passed; 0 failed`。T-N1 の 2 本と、wide leaf に替えた acquisition fixture を含む。
+- `cargo test -p kaspa-consensus-core --test g14_close_legacy`: `8 passed`。
+- `cargo test --release -p misaka-palw-tir-exec --features node --test frame_measure --test free_prompt`: `1 + 5 passed`。
+- `cargo test -p kaspad --lib -- tir_public_custodian tir_acquisition_driver tir_public_owner tir_public_filer palw_drill_tir_frame_tests`: `17 passed; 0 failed`。
+  これは consensus crate(`palw_accept` の frame 上限)の build も兼ねる。
+
+### 11.4 node 水準(§10.6 の 3)
+
+- **custodian loop。** 1 permit で pass 全体を回す loop を、純関数 `run_pass_slices_v1` に切り出した。production の Run step はこの関数を呼ぶ。
+  試験 `one_permit_funds_a_whole_preparation_pass_across_run_steps_and_fails_closed_past_its_budget` が確かめること:
+  - 1 permit が、capture 300 slice と publication 20 slice を、1 step 64 slice ずつ 6 step で賄う。
+  - 全 slice が 1 回ずつ charge される。
+  - budget を 1 slice 超える pass は、超える slice を実行する前に fail closed する。
+  - 実 backend の reader ではなく fake を使った試験で、consensus の snapshot の検査は通らない。
+- **mempool / template を通す node 水準の T-N1 は未作成。** 既存の harness(`palw_service_public_e2e`、`palw_service_kernel_e2e`)に次が無い:
+  1. IR class を `Active` まで進める lifecycle(kernel e2e は登録まで)
+  2. TIR attempt family の認証と layout 公開(tag 169)を mempool に通すこと
+  3. 試験で frame の fence と cost model を武装したときの producer の TFP1 carriage
+  4. 正直な seat の grant+Ready、owner、filer を service loop で回すこと
+
+  fold 水準の T-N1(§10.4)は、2〜4 の consensus 側を production transition で通している。

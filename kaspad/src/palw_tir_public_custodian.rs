@@ -1260,6 +1260,7 @@ impl PalwPanelService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicWorkV1;
 
     fn descriptor(n: u64) -> PalwTirPublicPreparedDescriptorV1 {
         PalwTirPublicPreparedDescriptorV1 {
@@ -1498,7 +1499,7 @@ mod tests {
         assert_eq!(slices, 320, "every slice charged once");
         assert_eq!(steps, 300u64.div_ceil(PALW_TIR_PUBLIC_SLICES_PER_STEP_V1 as u64) + 1, "steps of at most the per-step slices");
         // A pass that outruns its debit fails closed at the first uncovered slice — it never runs uncharged.
-        let (why, slices) = run(budget, 301, 20).expect_err("past the budget");
+        let (why, slices): (String, u64) = run(budget, 301, 20).expect_err("past the budget");
         assert!(why.contains("exhausted"), "{why}");
         assert_eq!(slices, 301 + 19, "the slices before the uncovered one ran, charged; the uncovered one never ran");
     }

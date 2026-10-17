@@ -71,7 +71,7 @@
     },
     "maximum_door_daa": {
       "value": 3120,
-      "source": "network parameter, not measured: testnet-12's liability horizon window_challenge_at(16,000) 120 + window_court 3,000 — the most validation admits (external audit 10-17 §7 P0(3)); every corpus frame's door exceeds it under this candidate (frame-ops-after.json door_daa), so this candidate admits no IR FP frame on testnet-12"
+      "source": "network parameter, not measured: testnet-12's liability horizon window_challenge_at(16,000) 120 + window_court 3,000 — the most validation admits (external audit 10-17 §7 P0(3)). With §11's derivation (actual leaf bounds, the frame's custodian upper 6, the owner-queue wait, an Open window holding its inclusion) every corpus frame's door is 2,145–2,263 DAA (frame-ops-after.json door_daa)"
     }
   }
 }
