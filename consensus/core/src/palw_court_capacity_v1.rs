@@ -658,7 +658,7 @@ impl PalwReservedCourtV1 {
 ///   bond's reservation spends its OWN budget (one reservation per bond per claim), never this one.
 /// * `da_bytes`: those units at the largest answer the chain carries (`PALW_OBJECT_CHUNK_MAX_COUNT × PALW_OBJECT_CHUNK_MAX_BYTES`).
 /// * `first_move_by_daa`: the last DAA a prosecution may start and still be guaranteed its verdict — the claim's hard deadline
-///   (acceptance + the producer's minimum trace retention − the disclosure window; a longer promised retention only moves it later)
+///   (acceptance + the class's promised trace retention, `palw_attempt_trace_retention_daa_v1`, − the disclosure window)
 ///   less the guarantee's lead: `4W` on the reserve pool for a court-demanding claim (`PalwCourtCapacityPolicyV1::reserve_lead_daa`),
 ///   one service window `W` otherwise.
 /// * `reserved_sessions`: court sessions reserved to the claim — 1 for a court-demanding claim (its reserve row, guaranteed by the
@@ -680,7 +680,7 @@ pub fn palw_court_claim_budget_v1(
     class_id: &Hash64,
     accepted_daa: u64,
 ) -> Option<PalwCourtClaimBudgetV1> {
-    let retention = accepted_daa.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(params));
+    let retention = accepted_daa.saturating_add(palw_attempt_trace_retention_daa_v1(state, params, class_id, accepted_daa));
     palw_court_claim_budget_for_retention_v1(state, params, class_id, accepted_daa, retention)
 }
 
@@ -716,5 +716,39 @@ pub fn palw_court_claim_budget_for_retention_v1(
         first_move_by_daa: hard.saturating_sub(lead),
         reserved_sessions: u32::from(fused),
     })
+}
+
+// =================================================================================================================================
+// 6. The court-demanding claim's retention (user decision 2026-10-17)
+// =================================================================================================================================
+
+/// **The trace retention a court-demanding claim promises past `palw_court_capacity_v1`** (user decision 2026-10-17), from its
+/// acceptance: at least `4W + W_disclose` (the reserve guarantee's lead plus the disclosure window) — and counted from the claim's
+/// licence (`window_bind + window_receipt` after acceptance), so the last guaranteed first move `hard − 4W` falls no earlier than the
+/// licence, when a seat or an outside verifier can first know the claim is worth prosecuting. Never below the producer minimum
+/// (`palw_min_trace_retention_daa_v1`). `None` below the fence (the minimum alone).
+pub fn palw_court_demanding_retention_daa_v1(params: &crate::palw_state_v2::PalwStateParamsV2, daa: u64) -> Option<u64> {
+    let policy = params.court_capacity_at_v1(daa)?;
+    let lead = policy.reserve_lead_daa(params.turn_deadline_daa(), params.window_court());
+    let need = lead
+        .saturating_add(crate::palw_state_v2::palw_da_disclose_window_daa_v1(params))
+        .saturating_add(params.window_bind())
+        .saturating_add(params.window_receipt());
+    Some(need.max(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(params)))
+}
+
+/// **The retention a V2 Attempt of `class_id` must promise at `daa`** (the producer's derivation and the fold's per-class pin): the
+/// court-demanding retention for a fused-attention class past the fence, the producer minimum otherwise.
+pub fn palw_attempt_trace_retention_daa_v1(
+    state: &PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    class_id: &Hash64,
+    daa: u64,
+) -> u64 {
+    let fused = state.class(class_id).is_some_and(|class| class.fused_attention);
+    match palw_court_demanding_retention_daa_v1(params, daa) {
+        Some(court) if fused => court,
+        _ => crate::palw_producer_v2::palw_min_trace_retention_daa_v1(params),
+    }
 }
 

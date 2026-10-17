@@ -1296,6 +1296,65 @@ fn g07r2_the_reserve_bound_serves_every_first_row_by_its_deadline() {
     }
 }
 
+/// **User decision 2026-10-17: a court-demanding claim promises the retention its court guarantee needs** (`4W + W_disclose`, counted
+/// from the claim's licence). Past the fence the producer's derivation and the fold's per-class pin agree: a fused-attention attempt
+/// promising only the producer minimum is not reward-bearing (`COURT_RETENTION_BELOW_GUARANTEE`), one promising the court retention
+/// is taken, and a class that is not court-demanding may not take the longer value. The guaranteed first move now precedes the hard
+/// deadline and falls at or after the licence. Below the fence the minimum alone.
+#[test]
+fn g07r2_a_court_demanding_claim_promises_the_retention_its_guarantee_needs() {
+    use kaspa_consensus_core::palw_court_capacity_v1::*;
+    let policy = test_policy();
+    let (mut c, row, _) = held_chain(Some(test_measurement()), 2);
+    let turn = c.sp.turn_deadline_daa();
+    let w = policy.admission_bucket_daa(turn, c.sp.window_court());
+    let w_disclose = kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&c.sp);
+    let min = kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_v1(&c.sp);
+    let court = palw_court_demanding_retention_daa_v1(&c.sp, c.daa + 1).expect("past the fence");
+    let licence = c.sp.window_bind() + c.sp.window_receipt();
+    assert_eq!(court, (4 * w + w_disclose + licence).max(min));
+    assert!(court >= 4 * w + w_disclose, "at least 4W + W_disclose");
+    // The producer's derivation, per class.
+    let floor_class = genesis_classes(&c.p)[0].0;
+    assert_eq!(palw_attempt_trace_retention_daa_v1(&c.s, &c.sp, &row.id, c.daa + 1), court, "the fused 8k row: the court retention");
+    if !c.s.class(&floor_class).is_some_and(|k| k.fused_attention) {
+        assert_eq!(palw_attempt_trace_retention_daa_v1(&c.s, &c.sp, &floor_class, c.daa + 1), min, "a one-move class: the minimum");
+    }
+    // The guaranteed first move: at or after the licence, before the hard deadline.
+    let accepted = c.daa + 1;
+    let budget = palw_court_claim_budget_v1(&c.s, &c.sp, &row.id, accepted).expect("a budget");
+    let hard = accepted + court - w_disclose;
+    eprintln!(
+        "[G-07 r2 retention] W {w}, W_disclose {w_disclose}, minimum {min}, court retention {court}: accepted {accepted}, licence by {}, \
+         last guaranteed first move {}, hard deadline {hard}",
+        accepted + licence,
+        budget.first_move_by_daa
+    );
+    assert!(budget.first_move_by_daa >= accepted + licence, "the guarantee covers a prosecution filed after the licence");
+    assert!(budget.first_move_by_daa < hard, "and precedes the hard deadline");
+    let below = c.daa;
+    // The fold's pin: a fused attempt at the minimum is refused, at the court retention admitted.
+    let (env, key, short) = attempt_with_retention(&c, &row, EXECUTOR, 71, accepted + min);
+    let e = c.try_fold(accepted, &[], PalwBlockWorkV3::Attempt(&env), key, Rule::T12).map(|_| ()).expect_err("below the guarantee");
+    assert!(refused_with(&e, "COURT_RETENTION_BELOW_GUARANTEE"), "{e:?}");
+    assert!(c.s.claim(&short).is_none());
+    let (env, key, ok) = attempt_with_retention(&c, &row, EXECUTOR, 72, accepted + court);
+    c.step_work(&[], PalwBlockWorkV3::Attempt(&env), key, Rule::T12).expect("the court retention is admitted");
+    assert!(c.s.claim(&ok).is_some());
+    // The stateless pin accepts exactly the two canonical values past the fence.
+    let pin = |retention: u64| {
+        let mut a = env.attempt.clone();
+        a.trace_retention_daa = retention;
+        kaspa_consensus_core::palw_admission_v2::check_palw_attempt_da_pins_v1(&c.sp, &a, below + 5)
+    };
+    assert!(pin(below + 5 + min).is_ok() && pin(below + 5 + court).is_ok(), "the two canonical values");
+    assert!(pin(below + 5 + court + 1).is_err() && pin(below + 5 + min + 1).is_err(), "nothing else");
+    // Below the fence: the minimum alone.
+    let (unarmed, _, _) = held_chain(None, 0);
+    assert_eq!(palw_court_demanding_retention_daa_v1(&unarmed.sp, 2_000), None);
+    assert_eq!(palw_attempt_trace_retention_daa_v1(&unarmed.s, &unarmed.sp, &row.id, 2_000), min);
+}
+
 // ---- testnet-12's identity -------------------------------------------------------------------------------------------------------
 
 #[test]

@@ -1437,3 +1437,35 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
   - 偽造(MatMul):どの席も receipt を出さず、同じサービスの verifier が conviction し、producer の bond は claim_collateral 分 slash された。
 - **既存試験の修正。** `g14k_the_kernel_service_convicts_covered_lies_…` の producer の担保の期待値に、G-K1 の lock を加えた。producer が他の producer の偽造を cover した席でもある場合、その分の lock も引かれる。修正後 pass。restart の試験も pass。
 - 対象外:segmented・typed Memory の claim の席の receipt。fold の receipt arm(`apply_kernel_receipt_v1`)が `ClaimBodyV1::Program` だけを数えるので、Panel 認可の席 receipt は単一 program に限られる。segmented と Memory は OPV 専用で、公開 verifier が検査する。
+
+### 11.11 追補(2026-10-17、利用者の判断):Panel floor の引き上げと、court を要する claim の retention
+
+**1. Panel floor = 240,000 MSK。** G-13 の lock 規則が効く間、すなわち `palw_legacy_public_filer_v1` 以後に限る。この fence は休眠しており、全 preset で `None`。
+- **導出。** `PALW_PANEL_FLOOR_UNDER_G13_SOMPI_V1` の文書に式を残した。`g13_panel_liability::capital_efficiency_against_the_old_rule` が、測定した claim あたりの値から最小値を毎回導き直し、floor がそれ以上であることを assert する。
+  - λ_seat = 0.6 × 5/9。e = 640.17 MSK、ℓ = 160.09 MSK、T_active = 122 DAA、life = window_court。
+  - 健全時の最小 238,119 MSK を切り上げて 240,000 MSK とした。
+- **既存の floor の型に従った。** `palw_panel_collateral_floor_at_v1(min_collateral, g13_in_force)` が `10 × min_collateral` と 240,000 MSK の大きい方を返す。draw、bind、floor room、activation の席、class seating、processor の draw policy、`Params::palw_seat_economy_at` はすべてこの 1 つの関数を読む。
+  - floor 未満の既存 bond は Active のまま(保有物は何も変わらない)。fence 以後は `palw_bond_may_take_work_v2` に落ち、Panel 席に選ばれない(ADR-0124 D4 と同じ型)。
+- **再測定(fold、t12 launch ruleset、新規則 + 分割)。**
+
+  | 席の担保 | 1 席が支える claim 率 | 健全時 0.333/DAA に対して | 10-01 のピーク 2.944/DAA に対して | stream(3 DAA ごと、6,000 DAA) |
+  |---|---|---|---|---|
+  | 240,000 MSK(新 floor) | 0.337 | **1.01×** | 0.11× | 2000/2000 |
+  | 130,000 MSK(旧 floor) | 0.140 | 0.42× | 0.05× | fence 以後は席に選ばれない(0/2000) |
+  | genesis 席(939,063 MSK) | 1.589 | 4.77× | 0.54× | 2000/2000 |
+
+  - ピーク時を支えるには 1,696,051 MSK が要り、genesis bond 8 本のうち 0 本しか届かない。ピーク時の容量は未解決のまま残る。
+- 試験:`capital_efficiency_against_the_old_rule` pass。stream は実効 floor を読むように直した。
+
+**2. court を要する claim の retention。**
+- `palw_court_demanding_retention_daa_v1` = max(最小 retention, 4W + W_disclose + window_bind + window_receipt)。数え始めを licence にしたのは、席や外部 verifier が追及を始められるのが licence 以後だからである。
+- testnet-12 の数値:W = 3,042、W_disclose = 1,200、最小 retention は 5,400 DAA、court 用 retention は 14,568 DAA。
+- **規則(`palw_court_capacity_v1` 以後)。**
+  - fused-attention の V2 Attempt は court 用 retention を約束する。それ未満は `ClassNotRewardable { COURT_RETENTION_BELOW_GUARANTEE }` で、option (b) と同じ拒否になる。
+  - court を要しない class が長い方の値を使うことも拒否する。class ごとに正規値を 1 つに保ち、lottery の 2 回目の draw を許さないためである。
+  - stateless な DA pin(`check_palw_attempt_da_pins_v1`)は、fence 以後この 2 つの正規値だけを受ける。どちらを要するかは fold が class ごとに決める。
+- **正直な producer。** `palw_producer_facts_v2` の `min_trace_retention_daa` を `palw_attempt_trace_retention_daa_v1`(class ごと)にした。kaspad の producer(`palw_attempt_from_execution_v1`)と事前確認(`palw_accept.rs` の court admission)は、この値をそのまま使う。正直な producer は、その期間 trace を保持すると約束する。
+- **保証の再確認。** 受理 1,001、licence は 2,201 まで、最後の保証つき first move は 2,201、hard deadline は 14,369。first move は licence 以後に来て、hard より前にある。
+- 試験:`g07r2_a_court_demanding_claim_promises_the_retention_its_guarantee_needs` pass。g14_court_capacity は 15 passed / 1 ignored。
+- 回帰:g14_close_legacy 8、g14_close_gates 12、lg14a_legacy_dispute_fold 9、g14_detection_gate 5、すべて pass。kaspa-consensus と kaspad の check も通った。
+- 残り:rider は lead の retention を運ぶ。lead と class が違う rider の扱いは、試験していない。

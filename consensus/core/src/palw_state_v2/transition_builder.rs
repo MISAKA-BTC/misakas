@@ -4293,7 +4293,10 @@ impl<'a> TransitionBuilder<'a> {
         if self.params.rcore_plus_active_at(now_daa) {
             let distinct: BTreeSet<PalwBondKeyV2> = seats.iter().map(|seat| seat.bond).collect();
             let prices = self.read().rcore_bind_prices(&claim_id, claim, distinct.len(), now_daa);
-            let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi());
+            let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+                self.params.min_collateral_sompi(),
+                self.params.legacy_public_filer_active_at(now_daa),
+            );
             for seat in &distinct {
                 // ADR-0160 lane liab (AG-3): a frozen bond is not a seat (the draw never seats one; the
                 // map is empty below the fence).
@@ -6707,7 +6710,10 @@ impl<'a> TransitionBuilder<'a> {
         if a == 0 {
             return Ok(());
         }
-        let panel_floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi());
+        let panel_floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+            self.params.min_collateral_sompi(),
+            self.params.legacy_public_filer_active_at(ctx.daa_score),
+        );
         let slots = (terms.prep_payee_cap as usize).saturating_sub(pool.prep_paid.len()).min((pool.prep_sompi / a) as usize);
         let mut payees: Vec<(Hash64, Hash64)> = Vec::new();
         for (operator, bonds) in &jury.drawn {

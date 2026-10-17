@@ -7937,8 +7937,9 @@ impl VirtualStateProcessor {
     ) -> kaspa_consensus_core::palw_panel_v2::PalwPanelDrawPolicyV1 {
         let economy = if self.palw_panel_economy_active_at(anchor_daa) {
             self.palw_state_params_v2.as_ref().map(|state| kaspa_consensus_core::palw_panel_economy_v1::PalwSeatEconomyV1 {
-                panel_floor_sompi: kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(
+                panel_floor_sompi: kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
                     state.min_collateral_sompi(),
+                    state.legacy_public_filer_active_at(anchor_daa),
                 ),
                 max_exposure_ratio_permille: state.fp_max_exposure_ratio_permille(),
                 // ADR-0130: the floor at the same anchor, so the headroom the draw checks is the

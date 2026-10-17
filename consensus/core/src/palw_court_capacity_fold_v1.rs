@@ -13,6 +13,9 @@ fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CourtCapacityRefused(why.into())
 }
 
+/// The refusal code of a court-demanding claim whose promised retention is below its court guarantee's.
+pub const PALW_COURT_RETENTION_BELOW_GUARANTEE_CODE_V1: &str = "COURT_RETENTION_BELOW_GUARANTEE";
+
 /// Court admission's refusal while the prosecution's own row is QUEUED (it opens with its ticket).
 pub const PALW_COURT_REFUSAL_QUEUED_V1: &str = "the prosecution is queued: it opens with its ticket";
 /// Court admission's refusal when the challenger has no live dispute reservation on the claim yet.
@@ -133,7 +136,32 @@ pub(super) fn check_court_claim_admission_v1(
     trace_retention_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     let Some(mirror) = params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(()) };
-    if !state.classes.get(class_id).is_some_and(|class| class.fused_attention) {
+    // **The retention a court-demanding claim promises** (user decision 2026-10-17): a fused-attention attempt must promise at least
+    // the court-demanding retention, or it is not reward-bearing (option (b)'s refusal); a class that is not court-demanding may not
+    // take the longer canonical value (one value per class: no second lottery draw).
+    let fused = state.classes.get(class_id).is_some_and(|class| class.fused_attention);
+    let court_retention = palw_court_demanding_retention_daa_v1(params, now).unwrap_or(0);
+    let min_retention = crate::palw_producer_v2::palw_min_trace_retention_daa_v1(params);
+    let promised = trace_retention_daa.saturating_sub(now);
+    if fused && promised < court_retention {
+        return Err(PalwStateV2Error::ClassNotRewardable {
+            class: *class_id,
+            code: PALW_COURT_RETENTION_BELOW_GUARANTEE_CODE_V1,
+            why: format!(
+                "palw_court_capacity_v1: a court-demanding (fused-attention) claim promises {promised} DAA of trace retention, below the \
+                 {court_retention} its court guarantee needs (4W + W_disclose from its licence): no reward, weight or consensus credit"
+            ),
+        });
+    }
+    if !fused && court_retention > min_retention && promised == court_retention {
+        return Err(PalwStateV2Error::ClassNotRewardable {
+            class: *class_id,
+            code: PALW_COURT_RETENTION_BELOW_GUARANTEE_CODE_V1,
+            why: "palw_court_capacity_v1: only a court-demanding class promises the court retention (one canonical value per class)"
+                .to_string(),
+        });
+    }
+    if !fused {
         return Ok(());
     }
     let policy = mirror.policy;

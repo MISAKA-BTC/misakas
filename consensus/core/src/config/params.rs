@@ -5395,7 +5395,10 @@ impl Params {
         }
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return None };
         Some(crate::palw_panel_economy_v1::PalwSeatEconomyV1 {
-            panel_floor_sompi: crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(bundle.state.min_collateral_sompi()),
+            panel_floor_sompi: crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+                bundle.state.min_collateral_sompi(),
+                self.palw_legacy_public_filer_active_at(daa_score),
+            ),
             max_exposure_ratio_permille: bundle.state.fp_max_exposure_ratio_permille(),
             // ADR-0130: the floor where it is in force at the same score.
             reward_multiple_permille: self.palw_panel_reward_multiple_permille_at(daa_score),

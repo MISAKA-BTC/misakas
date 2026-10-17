@@ -447,7 +447,10 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
     fn available_collateral(&self, bond: &BondIdV1) -> u128 {
         let key = panel_bond_key_v1(*bond);
         let state = &self.builder.state;
-        let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.builder.params.min_collateral_sompi());
+        let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+            self.builder.params.min_collateral_sompi(),
+            self.builder.params.legacy_public_filer_active_at(self.ctx.daa_score),
+        );
         let may_work = state.bonds.get(&key).is_some_and(|record| palw_bond_may_take_work_v2(record, floor))
             && !crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, &key);
         if !may_work {

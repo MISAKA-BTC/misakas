@@ -1658,7 +1658,10 @@ impl PalwFoldReadV1<'_> {
             .unwrap_or(u128::MAX)
             .saturating_mul(crate::palw_verify_capacity_v1::PALW_FLOOR_ROOM_ANCHOR_RESERVE_V1 as u128);
         let floor = if self.extras.panel_economy_active {
-            crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi)
+            crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+                self.params.min_collateral_sompi,
+                self.params.legacy_public_filer_active_at(now_daa),
+            )
         } else {
             self.params.min_collateral_sompi
         };

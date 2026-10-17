@@ -461,7 +461,14 @@ fn stream(rule: Rule, seat_collateral: Option<u64>, e: u128, cadence: u64, windo
         let l = liability(&c, &seats[0], at);
         out.active_time += l.active * u128::from(cadence);
         out.resolved_time += l.resolved * u128::from(cadence);
-        if rooms.iter().all(|r| *r >= e) {
+        // The Panel floor at `at` (user decision 2026-10-17: raised to 240,000 MSK where G-13's lock rule is in force): a seat below it
+        // is not drawn, so no Panel binds.
+        let floor = kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+            c.sp.min_collateral_sompi(),
+            c.sp.legacy_public_filer_active_at(at),
+        );
+        let drawable = seats.iter().all(|k| c.s.bond(k).is_some_and(|b| b.collateral >= floor));
+        if drawable && rooms.iter().all(|r| *r >= e) {
             let id = c.floor_claim(seed);
             seed += 1;
             c.step(&[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&c.floor_seats()) }]);
@@ -606,6 +613,34 @@ fn capital_efficiency_against_the_old_rule() {
     }
     let genesis = |rule: Rule| rows.iter().find(|(c, r, _)| c.is_none() && *r == rule).map(|(_, _, run)| (run.bound, run.offered)).unwrap();
     assert_eq!(genesis(Rule::New).0, genesis(Rule::New).1, "at genesis collateral every offered claim is taken");
+    // **User decision 2026-10-17: the Panel floor under G-13's lock rule is 240,000 MSK** (`PALW_PANEL_FLOOR_UNDER_G13_SOMPI_V1`). It is
+    // re-derived here from the measured per-claim values: the smallest seat that sustains the healthy per-seat rate under the new rule
+    // must not exceed it, and a seat AT it sustains the healthy rate (coverage ≥ 1); the peak is reported.
+    let new_floor = kaspa_consensus_core::palw_panel_economy_v1::PALW_PANEL_FLOOR_UNDER_G13_SOMPI_V1;
+    let healthy = 0.6 * seats_per_claim / 9.0;
+    let peak = 5.3 * seats_per_claim / 9.0;
+    let (_, wc_life, _) = rules[1];
+    let need_healthy = c_min(healthy, wc_life, true);
+    let need_peak = c_min(peak, wc_life, true);
+    let at_new_floor = sustained(new_floor as f64, wc_life, true);
+    println!(
+        "[G-13 floor] new Panel floor {:.0} MSK: sustains {at_new_floor:.3} claims/DAA per seat — healthy {healthy:.3} ({:.2}×), peak {peak:.3} \
+         ({:.2}×); re-derived minimum: healthy {:.0} MSK, peak {:.0} MSK",
+        msk(u128::from(new_floor)),
+        at_new_floor / healthy,
+        at_new_floor / peak,
+        need_healthy / 1e8,
+        need_peak / 1e8
+    );
+    assert!(need_healthy <= new_floor as f64, "the floor covers the re-derived healthy minimum ({:.0} MSK)", need_healthy / 1e8);
+    assert!(at_new_floor >= healthy, "a seat at the new floor sustains the healthy rate");
+    let run = stream(Rule::New, Some(new_floor), e, cadence, window);
+    println!("[G-13 floor] stream at the new floor (new rule): {}/{} offered claims taken in {window} DAA", run.bound, run.offered);
+    assert_eq!(run.bound, run.offered, "at the new floor the stream takes every offered claim at the healthy rate");
+    // The floor is the draw's: past LG14-A (G-13's lock rule) the panel floor is raised; below it, ten producer floors.
+    let min = probe.sp.min_collateral_sompi();
+    assert_eq!(kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(min, false), panel_floor);
+    assert_eq!(kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(min, true), new_floor.max(panel_floor));
 }
 
 // ---- restart and reorg ------------------------------------------------------------------------------------------------------------
