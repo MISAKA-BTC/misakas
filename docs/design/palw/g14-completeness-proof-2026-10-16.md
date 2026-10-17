@@ -1423,3 +1423,17 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
   - 回帰:policy なしの drop、c4r3、K2S の多 segment、Memory の E2E。
   - kaspad:`g14r2_the_kernel_verifier_respects_claims_in_flight`、`g14r2_the_seat_takes_no_duty_beyond_claims_in_flight` が pass。
   - pipeline の claim には node harness がない(onboarding 経路がない)。facts の導出式は上のとおりで、gate は drop する。
+
+### 11.10 追補(2026-10-17):kernel route の interim 席を node のサービスとして実装
+
+- **実装**(`kaspad/src/palw_kernel_verifier.rs` の `kernel_seat_receipt_v1`。公開 verifier の tick の中で動く)。Panel の割当でこの bond が席に指名されていて、期限内で、まだ receipt を出していない単一 program の claim について、次を行う。
+  1. claim を公開 commitment と登録 model で再実行する。公開 verifier と同じ replay を使い、cache を共有する。
+  2. 自分に割り当てられた scope を、自分が再実行した trace に対して `FreshVerifierV1::check` で検査する。値はすべて claim の commitment で認証され、challenge は claim の公開 binding のものを使う。
+  3. 両方が通ったときだけ、passing receipt(`receipt_for_v1`、文脈は `CONSTRAINT_RECEIPT_MLDSA87_CONTEXT_V1`。harness と同じ署名)を court lane(round u32::MAX − 20)に載せる。
+  4. どちらかが通らなければ何も署名しない。その claim は、同じ tick の公開 verifier が seal と filing まで持っていく。
+  - policy の `claims_in_flight` を class ごとに守る。超えた duty は取らず `CapacityRefusal` に記録する。
+- **試験** `g14r2_kernel_interim_seats_run_as_services_pay_the_honest_claim_and_refuse_the_lie`(kaspad、実サービス 6 本・各 mempool・各鍵):pass。
+  - 正直な claim:席 3 本がそれぞれ自分で receipt を出し、ProbabilisticPass、Final に至った。job の escrow から claim reward が支払われた。
+  - 偽造(MatMul):どの席も receipt を出さず、同じサービスの verifier が conviction し、producer の bond は claim_collateral 分 slash された。
+- **既存試験の修正。** `g14k_the_kernel_service_convicts_covered_lies_…` の producer の担保の期待値に、G-K1 の lock を加えた。producer が他の producer の偽造を cover した席でもある場合、その分の lock も引かれる。修正後 pass。restart の試験も pass。
+- 対象外:segmented・typed Memory の claim の席の receipt。fold の receipt arm(`apply_kernel_receipt_v1`)が `ClaimBodyV1::Program` だけを数えるので、Panel 認可の席 receipt は単一 program に限られる。segmented と Memory は OPV 専用で、公開 verifier が検査する。
