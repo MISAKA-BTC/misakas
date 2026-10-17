@@ -812,12 +812,7 @@ pub(super) fn apply(
     // A dismissed expensive body preserves its prior native predebit. Every
     // business transition preflights all fallible checks before money/writes.
     match result {
-        Err(PalwStateV2Error::KernelRouteRefused(why)) => {
-            if std::env::var_os("PALW_NATIVE_DEBUG_TMP").is_some() {
-                eprintln!("[native v11 action {action} refused] {why}");
-            }
-            Ok(())
-        }
+        Err(PalwStateV2Error::KernelRouteRefused(_)) => Ok(()),
         other => other,
     }
 }

@@ -11,14 +11,19 @@
 //! modelled) and shows the conviction is not refused: void, refund, collect what the bond holds, finder scaled.
 use super::*;
 use kaspa_consensus_core::palw_flat_model_vector_da_v9::{FlatVectorAnswerV9, decode_flat_vector_answer_v9};
-use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwChainStateV2, PalwStateCarriageV2, apply_palw_transition_v3};
+use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwChainStateV2, PalwStateCarriageV2};
 use misaka_palw_kernel::flat_detect5::{FlatPublicReadsV5, FlatReadV5};
 use misaka_palw_kernel::flat_detect9::{FlatHeaderReadV9, FlatPublicReadsV9, FlatValueReadV9};
 
 /// The DA window short enough for the node's carriers (as `source16`'s config): the answer and its proof grace fit the claim.
 fn config_public() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (mut cfg, b, p, f) = native_config();
-    cfg.params.palw_funded_execution_v11.as_mut().unwrap().policies.execution.horizons.da_answer = 20;
+    // The probe's 4-DAA challenge window and 2-DAA retention fit no node-carried pursuit: widen them (and the DA answer window, as
+    // `source16` does) inside the probe's 1,000-DAA quota interval. These are test horizons, not measured values.
+    let horizons = &mut cfg.params.palw_funded_execution_v11.as_mut().unwrap().policies.execution.horizons;
+    horizons.da_answer = 20;
+    horizons.challenge_window = 300;
+    horizons.retention = 300;
     (cfg, b, p, f)
 }
 
@@ -205,7 +210,7 @@ async fn squat(net: &mut Net, id: Digest) {
     assert_eq!(pursuit(net, id).retained_seal_keys.len(), 4, "the colluders hold every retained job ticket");
 }
 
-/// **One object folded on the node's own tip state** with the processor's own fold params (`mutate` edits that state first).
+/// **One object folded on the node's own tip state** with the processor's own block fold (`mutate` edits that state first).
 fn fold_on_tip(net: &mut Net, card: usize, object: &K, mutate: impl FnOnce(&mut PalwStateCarriageV2)) -> PalwChainStateV2 {
     let (_, tip) = net.chain.tip_state();
     let params = net.chain.vp().palw_state_params_v2.clone().expect("testnet-12 is ConsensusV2");
@@ -221,15 +226,15 @@ fn fold_on_tip(net: &mut Net, card: usize, object: &K, mutate: impl FnOnce(&mut 
         )
         .expect("the edited carriage rebuilds");
     let signed = net.route(card, object);
+    let last = state.last_point().expect("the node's tip folded a block");
     let ctx = PalwBlockContextV2 {
         block: Hash64::from_u64_word(0x6E_1400 + net.daa()),
-        daa_score: net.daa() + 1,
-        blue_score: net.daa() + 1,
+        daa_score: last.daa_score + 1,
+        blue_score: last.blue_score + 1,
         subsidy: 0,
     };
-    apply_palw_transition_v3(&state, &params, &ctx, &[signed], kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None)
-        .expect("the fold applies the object")
-        .0
+    // The processor's own block fold (its admission params, fences and per-object extras), not a test transition.
+    net.chain.vp().palw_v2_fold_accepted_for_tests(&state, &params, &ctx, &[signed]).expect("the fold applies the object")
 }
 
 #[tokio::test]
