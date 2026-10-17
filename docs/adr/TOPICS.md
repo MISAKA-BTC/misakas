@@ -100,6 +100,7 @@
 - [ADR-0170 — The seed anchor is a window, not a span: a merged attempt anchors, the anchor survives span boundari](0170-the-seed-anchor-is-a-window-not-a-span.md)
 - [ADR-0173 — MISAKA's purpose: public-verifier dispute completeness](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)
 - [ADR-0180 — PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md)
+- [ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md)
 
 ## EVM / wallet
 
