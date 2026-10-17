@@ -6,6 +6,7 @@
 //! tip's v3 window above the fork, the fork's v3 registry openings) and an issuer's attestation of each tip's committed root; it
 //! verifies every byte with the node's own readers and must choose exactly the node's sink. Missing or tampered evidence STOPs.
 use super::*;
+use super::rule_e::{free_attempt, free_slot};
 use kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2;
 use misaka_palw_remote::l2::{ForkChoiceAttestationV1, L2LimitsV1, L2StopV1, PeerViewV1};
 use misaka_palw_remote::l2_rule_e::{
