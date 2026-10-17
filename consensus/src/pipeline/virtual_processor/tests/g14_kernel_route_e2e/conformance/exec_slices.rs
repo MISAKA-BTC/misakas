@@ -1365,6 +1365,9 @@ async fn x8_g14_a_second_real_root_cannot_reuse_the_first_roots_prefix_claim() {
     let mut cw = active_world().await;
     let first = opened(&mut cw, false, |_| false, |_, _, _| Vec::new()).await;
     let class = cw.v2_class;
+    // The second REAL attempt is the first attempt past the first REAL claim's anchor slot (the paid session took that long): its
+    // block draws the first claim's Panel, which needs ready seats or the first claim (and its root) voids (ADR-0152 SW-8).
+    native_final::ready_native_seats(&mut cw).await;
     let second = real_attempt(&mut cw, ROOT_CARD, class, 0xA77F).await;
     assert_ne!(first.real.claim, second.claim);
     let initial = palw_exec_v2_token_state_root_v1(&[&second.stream()]);
@@ -1606,8 +1609,12 @@ async fn x8_g14_completed_worker_claims_earn_nothing_when_the_root_expires_on_th
     // that route; its agreed expiry is the real cancellation transition.
     cw.net.beat_to(expiry).await;
     let after = cw.net.chain.tip_state().1;
-    assert!(matches!(after.exec_v2_root_v1(&native).unwrap().phase,
-        PalwWorkRootPhaseV2::Voided { voided_daa, .. } if voided_daa == expiry));
+    assert!(
+        matches!(after.exec_v2_root_v1(&native).unwrap().phase,
+            PalwWorkRootPhaseV2::Voided { voided_daa, .. } if voided_daa == expiry),
+        "the root voids at its signed expiry {expiry}: {:?}",
+        after.exec_v2_root_v1(&native).unwrap().phase
+    );
     assert!(matches!(after.claim(&native).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkRootExpired, .. }));
     assert!(after.vesting_row(&native).is_none() && after.exec_v2_reward_vesting_v1(&native).is_none());
     let ledger = cw.net.ledger();
@@ -1669,6 +1676,7 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
     let state = cw.net.chain.tip_state().1;
     assert!(state.exec_v2_holds_final_v1(&root_claim), "the root holds its claim's Final while its slices are unverified");
     let poster_collateral = cw.net.collateral(REGISTRANT);
+    let poster_ledger = cw.net.ledger();
     let api = cw.net.api().unwrap();
     let ends: Vec<u64> = s
         .slices
@@ -1689,7 +1697,9 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
     }
     let state = cw.net.chain.tip_state().1;
     let ledger = cw.net.ledger();
-    assert_eq!(cw.net.collateral(REGISTRANT), poster_collateral, "kernel Finals cannot debit EXEC fees before root Final");
+    let session_jobs: Vec<Digest> = s.slices.iter().chain(std::iter::once(&s.prefix)).map(|k| k.job.id()).collect();
+    let others = other_paid_escrows(&poster_ledger, &ledger, cw.net.kid(REGISTRANT), &session_jobs);
+    assert_eq!(cw.net.collateral(REGISTRANT) + others, poster_collateral, "kernel Finals cannot debit EXEC fees before root Final");
     for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
         assert!(!ledger.claims[&k.claim.id].rewarded, "EXEC producer has no early reward");
         assert!(ledger.job_escrows.contains_key(&k.job.id()), "poster escrow remains reserved");
