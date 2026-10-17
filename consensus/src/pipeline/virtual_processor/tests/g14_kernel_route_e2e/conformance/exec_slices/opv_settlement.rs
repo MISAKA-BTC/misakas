@@ -23,7 +23,10 @@ fn beacon_fact_of(cw: &Cw, claim: &Digest) -> Option<(&'static str, misaka_palw_
 #[tokio::test]
 async fn x8_g14_opv_settlement_never_substitutes_for_selected_exec_approval() {
     let mut cw = active_world().await;
-    let mut s = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 300).await;
+    // Past the paid path every session claim is a paid claim; slice 0's is locked but never receipted, so its OPV lifecycle runs to
+    // Final while its paid authority stays unapproved. The root's signed lifetime outlasts that Final.
+    cw.unapproved = vec![1];
+    let mut s = opened(&mut cw, false, |_| false, |_, _, _| Vec::new()).await;
     for index in 0..3 {
         s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &s.slices[index].claim).await);
     }

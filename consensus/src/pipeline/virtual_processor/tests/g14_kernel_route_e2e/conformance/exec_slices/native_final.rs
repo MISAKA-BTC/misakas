@@ -308,7 +308,9 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
     cw.net._keep.push(Box::new(receiver));
     // Signed worker terms are fixed before any computation. The native trace
     // commitment remains the module's seam; only the prefix kernel matrix lies.
-    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 1_024).await;
+    // The lying prefix reaches its paid Final unrefuted (its drawn seats collude); the signed lifetime covers the paid path.
+    cw.collude_lies = true;
+    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 2_048).await;
     for (index, slice) in s.slices.iter().enumerate() {
         s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
     }
@@ -441,7 +443,9 @@ async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_r
     })
     .await;
     cw.net._keep.push(Box::new(receiver));
-    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 1_024).await;
+    // The lying prefix reaches its paid Final unrefuted (its drawn seats collude); the signed lifetime covers the paid path.
+    cw.collude_lies = true;
+    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 2_048).await;
     for (index, slice) in s.slices.iter().enumerate() {
         s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
     }
@@ -545,6 +549,9 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     use kaspa_consensus_core::palw_vesting_v1::palw_vesting_payout_key_v1;
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     const W: u64 = 436;
+    if let Ok(filter) = std::env::var("G14_LOG") {
+        kaspa_core::log::try_init_logger(&filter);
+    }
     // Predeclared signed lifetimes isolate the first root's exact payout window.
     // R admits both funded roots together; it does not serialize their payment.
     const FIRST_LIFETIME: u64 = 1_024;

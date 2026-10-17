@@ -114,6 +114,15 @@ struct Cw {
     turn: usize,
     /// The paid verification class over the source class (RFC07 sources), once registered.
     paid_class: Option<Digest>,
+    /// x8: the drawn seats of a lying prefix/slice claim sign it Clean too (a colluding quorum), so the lie reaches its paid Final
+    /// unrefuted and only a public proof can revoke it afterwards. Off by default: a lying claim is then never locked.
+    collude_lies: bool,
+    /// x8: session jobs (0 = prefix, 1..=3 the slices) whose paid claims are locked but get no receipts — the claim's OPV lifecycle
+    /// runs on, its paid authority is never approved (the "OPV settlement never substitutes" control).
+    unapproved: Vec<usize>,
+    /// x8: the extra jobs of a session are paid and approved like the session's own (a test whose extra claim must reach the slice
+    /// admission's own checks — the scope or the job nonce — rather than stop at the paid-approval gate).
+    paid_extras: bool,
 }
 
 impl Cw {
@@ -232,7 +241,7 @@ impl Cw {
         let tensors = f.params.tensors.iter().map(|(k, t)| (*k, t.to_le_bytes())).collect();
         let ops = palw_tir_inventory_operands_v1(&f.program, &Tensors(tensors)).expect("the inventory");
         let cand = Fixture { program: f.program.clone(), params: f.params.clone(), plan: f.plan.clone(), pc: f.pc.clone() };
-        Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs: 0, turn: 0, paid_class: None }
+        Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs: 0, turn: 0, paid_class: None, collude_lies: false, unapproved: Vec::new(), paid_extras: false }
     }
 
     fn producer(&mut self) -> usize {
@@ -1078,9 +1087,9 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
 
     // ---- a real restart, then the window closes on the restarted node and on the importer alike ----
     let (sink, root) = (cw.net.chain.sink(), cw.net.chain.tip_state().1.state_root());
-    let Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class } = cw;
+    let Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class, collude_lies, unapproved, paid_extras } = cw;
     let net = net.restart(db.clone());
-    let mut cw = Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class };
+    let mut cw = Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class, collude_lies, unapproved, paid_extras };
     assert_eq!((cw.net.chain.sink(), cw.net.chain.tip_state().1.state_root()), (sink, root), "the same tip off disk");
     assert_eq!(cw.attempt().evidence, Some(posted), "the attempt row off disk");
     cw.net.beat_to(posted.window_end_daa + 1).await;
