@@ -183,3 +183,4 @@
 | ADR-0181 | [採用済み設計を原則凍結し、重大問題時のみ新規 RFC・ADR で変更する](0181-design-freeze-and-controlled-change.md) | Accepted / 原則凍結 |
 | ADR-0182 | [画像・動画経路とモデル改善を mainnet 後へ延期し、当面無効にする](0182-defer-media-and-model-improvement-until-post-mainnet.md) | Accepted / 延期・無効化方針 |
 | ADR-0183 | [paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon sour…](0183-paid-lock-randomness-bootstrap-and-paid-sources.md) | 原文と後続改定を参照 |
+| ADR-0184 | [native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg](0184-native-liability-horizon-panel-record-and-single-certified-leg.md) | 原文と後続改定を参照 |

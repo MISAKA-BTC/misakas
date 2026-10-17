@@ -202,4 +202,5 @@
 - [ADR-0153 — (draft) — 2M verification by shards: the implementation plan](0153-2m-verification-sharding-plan.md)
 - [ADR-0166 — Verifier unavailability is not producer fraud](0166-verifier-unavailability-is-not-producer-fraud.md)
 - [ADR-0171 — Probabilistic constraint checks are the normal large-model verifier; the court resolves disputes exa](0171-probabilistic-constraint-checks-and-court-on-dispute.md)
+- [ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg](0184-native-liability-horizon-panel-record-and-single-certified-leg.md)
 

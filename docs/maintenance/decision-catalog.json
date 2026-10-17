@@ -1418,6 +1418,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0184",
+      "path": "docs/adr/0184-native-liability-horizon-panel-record-and-single-certified-leg.md",
+      "title": "ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",

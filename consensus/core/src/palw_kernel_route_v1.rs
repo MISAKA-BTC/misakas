@@ -789,6 +789,11 @@ pub struct KernelFinalReadV1 {
     /// beacon event's `claim_final` / `da_satisfied` are derived from it, so RFC-0010 V3 (`ChainPanelBeaconHistoryV1`), the v3
     /// sealed sources and every other reader see exactly what the EXEC slice and the RPC see.
     pub settlement: &'static str,
+    /// **RFC07 record-only event of a Panel-licensed Final** (user decision 2026-10-17, ADR-0184): Borsh of
+    /// `(FinalReceiptV1, settlement label, producer, job payer)` read from the rooted ledger rows — authenticated by the route's
+    /// committed root, NEVER a beacon source and never credit (it is not in `event`, which every collector and the EXEC gate read).
+    /// `None` for every other path.
+    pub panel_record: Option<Vec<u8>>,
 }
 
 /// The beacon event of a selected-approved Final (RFC07 adapter): the kernel's `WorkFinalEventV1`, read through the ONE kernel
@@ -894,7 +899,14 @@ impl PalwKernelRouteStateV1 {
                 .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
             let (final_path, event) = self.final_export_v1(&ledger, &receipt, settlement)?;
             let statement = receipt.assurance.statement();
-            out.push(KernelFinalReadV1 { receipt, final_path, event, statement, settlement: settlement.label() });
+            let panel_record = (final_path == "PanelLicensed")
+                .then(|| {
+                    let work = ledger.claims.get(&receipt.claim).map(|r| (r.producer, r.job_id));
+                    let payer = work.and_then(|(_, job)| ledger.job_poster(&job));
+                    borsh::to_vec(&(&receipt, settlement.label(), work.map(|(p, _)| p), payer)).ok()
+                })
+                .flatten();
+            out.push(KernelFinalReadV1 { receipt, final_path, event, statement, settlement: settlement.label(), panel_record });
         }
         Ok(out)
     }
