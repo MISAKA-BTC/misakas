@@ -1,5 +1,7 @@
 # ADR-0172 — Model extensibility uses versioned kernels, not a universal VM
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -125,14 +127,14 @@ challenged faults, not a mechanism that retroactively removes undetected-error p
 
 | Document / component | Decision |
 | --- | --- |
-| RFC05 old Parts I/II, ladder TIR → BVM/GVM, Linux/ISA fallback and EXEC VM programme | Withdrawn; RFC05 retains only the reason. The [Kernel design](../design/palw/versioned-kernels.md) specifies the selected extension route. |
+| RFC05 old Parts I/II, ladder TIR → BVM/GVM, Linux/ISA fallback and EXEC VM programme | Withdrawn; RFC05 retains only the reason. The [Kernel design](../design/palw/models/versioned-kernels.md) specifies the selected extension route. |
 | RFC04 improvement, candidate/evaluation/promotion rules | Keep. Off-chain automation is unrestricted. Code-by-tests/EXEC is not promised via a future VM; a distinct reviewed non-VM checker extension would need its own specification. |
 | RFC11 model registration and broad coverage | Replace all proposed VM fallback with active-kernel plan composition or an explicitly required future kernel. Preserve the real 9B/2M blockers and the all-HF denominator. |
 | ADR0171 / RFC07 probabilistic verification | Unchanged security direction; reusable kernel-primitive templates replace references to VM templates. Full replay remains a conformance baseline or exact small-class option, not the required ordinary large-model path. |
 | RFC02's residual-GVM route and RFC03's VM Tests reference | Withdrawn; RFC02 §§II.11–II.12 now specify active-kernel registration and an explicit extension queue. RFC03's future test relation needs a bounded non-VM kernel/task profile. Missing support stays uncovered until the full route passes. |
 | Existing live EVM and any historical VM-coded objects | No change by documentation. Inventory actual activation/code before cleanup; retain required historical replay. Dormant prototypes need no new implementation or activation under this roadmap. |
 
-The [RFC01–12 consistency audit](../rfc/evidence/0012-kernel-only-design-audit.md) records the
+The [RFC01–12 consistency audit](../evidence/rfc/0012-kernel-only-design-audit.md) records the
 2026-10-06 cross-document dispositions. RFC01/03/06 distinguish legacy replay from the new checker;
 RFC07/08/09/10 bind kernel/checker identities without reviving an interpreter. RFC12 removes DNS
 authority, not the existing native EVM lane. RFC11 §15.9 specifies the research/benchmark basis

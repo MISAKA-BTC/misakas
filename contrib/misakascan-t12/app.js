@@ -502,7 +502,7 @@ async function renderFaucet(){
     <h2 class="sec">Then what?</h2>
     <div class="note">Running a node needs no funds. Producing blocks needs a registered bond (above) — the floor
       execution class needs no model at all. The walkthrough is
-      <a href="https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md" target="_blank" rel="noopener">docs/testnet12-join-mining.md</a>; the
+      <a href="https://github.com/MISAKA-BTC/misakas/blob/main/docs/operations/mining/testnet12-join-mining.md" target="_blank" rel="noopener">docs/operations/mining/testnet12-join-mining.md</a>; the
       <a href="#/llm">LLM Jobs</a> page shows the classes and the verifier seats currently live.</div>`;
 
   const cards = document.getElementById("fcCards");
@@ -583,7 +583,7 @@ function showErrFor(gen, msg, ctx){ if (gen === routeGen) showErr(msg, ctx); }
    holds the file is not Ready until it files SeatReadinessProved.
 
    Everything rendered is a count, an identifier, a lifecycle state or a DAA score — the "shown"
-   half of docs/explorer/README.md. No prompt and no answer passes through this file.
+   half of docs/reference/explorer/README.md. No prompt and no answer passes through this file.
 --------------------------------------------------------------------------------------------- */
 
 // **An op the node may not know kills the WHOLE socket, not just the call** — a pre-ADR-0135
@@ -626,7 +626,7 @@ function stateBadge(s) {
 
 /* ---- The display layer: the name a reader came for, beside the id the chain signs -----------
    Display only. Nothing here enters `class_id`, `rules_hash` or any signature — the chain keeps
-   answering in hashes and this looks the hash up. docs/explorer/user-dictionary.md is the contract.
+   answering in hashes and this looks the hash up. docs/reference/explorer/user-dictionary.md is the contract.
 
    **A name carries the SHAPE, not just the model.** `class_id` hashes the whole
    `PalwShapeProfile` — n_ctx, n_batch, the runtime flags — so one artifact legitimately carries
@@ -3861,7 +3861,7 @@ cargo build --release --bin qwen25-convert --bin palw-class
 #    expect class ebf44d0aa09ff7d1…, inventory root 88096dc177826d88…
 
 # the full path — conversion, memory, bond, panel duty:
-#    docs/testnet12-join-mining.md §6</pre>`;
+#    docs/operations/mining/testnet12-join-mining.md §6</pre>`;
   const chips = document.getElementById("llmChips");
   if (chips) chips.addEventListener("click", e => {
     const b = e.target.closest("button"); if (!b) return;

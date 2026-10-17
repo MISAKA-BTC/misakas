@@ -1,5 +1,7 @@
 # RFC-0012 — PALW-only consensus and native EVM settlement: retire DNS validators and their reorg veto
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -13,7 +15,7 @@
 * Status: **Draft — dormant implementation; no activation or production settlement parameters assigned.**
 * Spec closures, 2026-10-15: [R12-* requirement groups](#spec-closure-2026-10-15) — normative rules and named parameters; no PASS or activation implied.
 * Revision, 2026-10-10後続改定: §2.1 withdraws model-availability consensus and adds model-bond coinbase allocation under unchanged total issuance and individual ceilings. Rule E and claim-specific adjudication remain separate gates; the dormant DNS-retirement work does not implement this amendment.
-* Implementation record: [unactivated fence, native heads, monetary transition and remaining release gates](0012-dormant-implementation.md).
+* Implementation record: [unactivated fence, native heads, monetary transition and remaining release gates](../design/palw/integration/rfc-0012-dormant-implementation.md).
 * Source baseline: `3b09a814ed4b2a2f90009c05c1219efc9be46b5f` on `misakas/main`.
 * Requested direction: remove DNS validators, DNS finality, DNS attestations, precommits,
   DNS-final and the DNS/stake reorg veto; let PALW block production and settlement carry the EVM bridge.
@@ -436,7 +438,7 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 
 ## 改定 — 2026-10-12（モデル配分とブロック生成機会の接続：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3A.5。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3A.5。
 
 ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bondと1.3〜2倍の係数、提案）をブロック生成機会へ接続する場合、coinbase配分だけの変更として済ませず、ブロック機会の帰属・上限・移行を本RFCで明示する。物理blockの総頻度、DAA/難易度、fork choice、Final weightを同時に変更するとは決定しておらず、特にFinal weightへ係数を自動乗算しない。必要な変更は別のversioned review・試験・activationを要する。
 
@@ -447,7 +449,7 @@ ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bond�
 ## Spec closures — 2026-10-15
 
 **Scope and reading rule.** This section closes specification gaps that the
-[design audit's requirement index](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引)
+[design audit's requirement index](../audit/palw/design-reviews/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引)
 lists for R12-AUTHORITY, R12-SETTLE, R12-BRIDGE, R12-HEADS, R12-MONEY and R12-OPS. Where this RFC's body is silent
 or contradicts a later design record, ADR or user ruling, this section governs; superseded body text is kept
 and annotated, not deleted. [PRINCIPLES](../PRINCIPLES.md) and ADR-0173/0176/0177/0178 rank above it. Nothing
@@ -503,7 +505,7 @@ Mechanics results and private-process acceptance are not independent review or e
 
    | Parameter | Invariant | Recommendation and source |
    | --- | --- | --- |
-   | `settled_anchor_depth` D | integer ≥ 1; counts distinct qualifying grant/attempt anchors, never slices | recommended **3** — 2026-10-11 drill-provisional ruling; with a 400 ‰ operator cap three operators is the minimum that can satisfy it ([policy proposal](../design/palw/rfc-0012-policy-proposal.md)) |
+   | `settled_anchor_depth` D | integer ≥ 1; counts distinct qualifying grant/attempt anchors, never slices | recommended **3** — 2026-10-11 drill-provisional ruling; with a 400 ‰ operator cap three operators is the minimum that can satisfy it ([policy proposal](../design/palw/execution/rfc-0012-policy-proposal.md)) |
    | `unique_mature_work` W (pwu) | > 0; distinct from ADR-0176's budget window | recommended **6,331,093,440** as a drill floor (= 3 × smallest REAL claim); production value from a census `⌈k × matured REAL work per window⌉`, which does not exist yet |
    | `operator_concentration_cap_permille` | 1..1000 | recommended **400** (2026-10-11 drill ruling) |
    | `class_concentration_cap_permille` | 1..1000 | recommended **1000** for now; re-evaluate **600** once ≥ 3 REAL classes have mature work (2026-10-11 ruling) |
@@ -582,7 +584,7 @@ after undo/replay.
    a single `preflight` call before signing, WASM `misakaPreflightV1`). It refuses on genesis mismatch, a missing or
    incomplete import status, an unknown finality authority, and retired kinds once retirement is active or scheduled
    within 1,000 DAA of the sink. The 1,000 DAA margin is a proposal: **USER REVIEW**. Integrator note:
-   [rfc12-external-wallet-integration-2026-10-15](../design/palw/rfc12-external-wallet-integration-2026-10-15.md).
+   [rfc12-external-wallet-integration-2026-10-15](../design/palw/execution/rfc12-external-wallet-integration-2026-10-15.md).
    Third-party migration itself remains EXTERNAL.
 
 ### ALL-MODEL
@@ -598,7 +600,7 @@ allocation to block opportunities does not change D, W, fork choice or Final wei
 
 **ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
 
-* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
+* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
 * **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
 * **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
 * **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**

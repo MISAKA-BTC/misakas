@@ -1,10 +1,9 @@
-# PALW — proof of AI work
+# PALW — 仕事・bond・検証・配分
 
-**Design premise (above every ADR/RFC/spec):** [PRINCIPLES.md](../PRINCIPLES.md) — probabilistic detection, public localization,
-deterministic adjudication, economic deterrence.
+Bond が時間あたりの仕事・報酬の上限を決め、モデル計算はその枠を使うための正当な仕事です。[PRINCIPLES](../PRINCIPLES.md) / [状態](../STATUS.md)。
 
-- **Governing ADRs:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md) (public verifier completeness), [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md) (bond/time bounds), [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md) (no model-availability consensus; read its D1 supplement), [ADR index](../adr/README.md).
-- **RFCs 0001–0015:** [docs/rfc/](../rfc/) — inference surface, tensor IR and onboarding, generative classes, improvement, sharded Panels, certificates, claim-backed blocks, remote miner, permissionless Panel, long-context onboarding, PALW-only consensus, reproducible layouts, public prosecution, Panel-free verification.
-- **Specs and design records:** [docs/spec/palw/](../spec/palw/), [docs/design/palw/](../design/palw/) (G14 completion matrix, readiness matrix, lane records).
-- **2026-10-12 review and proposals:** [rfc-adr-review-resolution-2026-10-12.md](../design/palw/rfc-adr-review-resolution-2026-10-12.md), [panel1-bond-budget-model-capital-amendments-2026-10-12.md](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md).
-- **Code:** the PALW crates live under `misaka/palw/` (see the repository layout in the [README](../../README.md)); consensus integration under `consensus/core/src/palw_*`.
+[モデル階層](../spec/palw/model-tiers.md)、[配分](../spec/palw/model-allocation.md)、[bond 予算](../spec/palw/bond-budgets.md)、[ブロック機会](../spec/palw/block-opportunity.md)、[claim 認証](../spec/palw/claim-certification.md)に分けて読みます。
+
+モデルの旧資格審査を廃止しても claim の検証を省きません。階層係数0.3は、必ず総発行の30%を受け取るという意味でも、合意への無条件参加でもありません。
+
+当面の画像・動画とモデル改善は [延期・無効](../governance/post-mainnet-scope.md)。採用済み設計は [原則凍結](../governance/design-freeze.md)であり、Draft全文や過去の試験を今回の採用・有効化と扱いません。

@@ -200,7 +200,7 @@ The live deployment (misakaoptions.com, 2026-09-05) reads both endpoints off the
 `WRPC_URL: "wss://misakascan.com/kaspa"` and `EVM_RPC_URL: "https://misakascan.com/evm"`. The
 browser reaches them directly; the site's own host proxies neither.
 
-Known class ids on testnet-12 (its genesis classes, `docs/testnet-12-regenesis-2026-09-23.md`;
+Known class ids on testnet-12 (its genesis classes, `docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md`;
 `getPalwClasses` lists them live), usable as `CLASS_IDS` while the registry window is dormant:
 
 ```

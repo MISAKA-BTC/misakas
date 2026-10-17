@@ -254,7 +254,7 @@ def aux_scan(value):
         alts=[aux_expand(a) for a in value[4:].split('|')]
         return 'any_aux_row_v1(frame,&['+','.join('try_exact_aux_row_v1::<'+a+'>' for a in alts)+'])?'
     return '<'+aux_expand(value)+' as NativeWireScanV1>::scan_native_wire_v1(frame)?'
-AUX_SPEC_ARMS='// Tables 42–106 and 112 (rfc06_native_aux_spec.py; inventory: docs/design/palw/native-resource-aux-inventory-2026-10-15.md).\n'
+AUX_SPEC_ARMS='// Tables 42–106 and 112 (rfc06_native_aux_spec.py; inventory: docs/design/palw/execution/native-resource-aux-inventory-2026-10-15.md).\n'
 _total=set()
 for _n in AUX.NS:
     if _n['cond']=='true':

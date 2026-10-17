@@ -1,5 +1,5 @@
 //! **ADR-0176 / ADR-0177 — the user's rulings of 2026-10-15 (C1–C5) on the budget engine** (DORMANT; no height; every value a
-//! calibration starting point, never a production value). Binding text: `docs/design/palw/user-decisions-2026-10-15-adr-rfc16-rfc17.md`
+//! calibration starting point, never a production value). Binding text: `docs/history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md`
 //! §1.
 //!
 //! ```text

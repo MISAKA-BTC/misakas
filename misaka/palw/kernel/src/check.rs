@@ -1,4 +1,4 @@
-//! **The deterministic plan checker** (`docs/design/palw/versioned-kernels.md` §K.4 step 2, RFC-0011 §16.2–§16.3).
+//! **The deterministic plan checker** (`docs/design/palw/models/versioned-kernels.md` §K.4 step 2, RFC-0011 §16.2–§16.3).
 //!
 //! Everything a plan states is re-derived here from the program and the descriptor and compared:
 //!

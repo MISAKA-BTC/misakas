@@ -1,6 +1,6 @@
 //! **G14 lane closure (2026-10-16): the kernel route / OPV, the EXEC slice and the native funded (v11 / v29 / v39) lanes** — the rules
 //! that close the gaps the G14 completeness audit found in these three dormant lanes
-//! (`docs/design/palw/g14-completeness-proof-2026-10-16.md` §3.4–§3.6, §4.2; IDs G-K1, G-X1, G-N1, G-N3, G-14 and the collateral
+//! (`docs/audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md` §3.4–§3.6, §4.2; IDs G-K1, G-X1, G-N1, G-N3, G-14 and the collateral
 //! depletion class). The user's claim: when the producer and every Panel seat collude, one public bonded verifier outside the Panel
 //! still reaches an objective conviction from public authenticated material alone, and that conviction voids the claim, slashes the
 //! producer and every bond that signed Valid, and refuses block production, reward and credit.

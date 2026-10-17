@@ -13,7 +13,7 @@
 //!   root but not that the chain carrying the root wins, and the transition leading to the root is not re-executed here. So L2 is
 //!   established in exactly one way in this module: the facts are proven at a checkpoint the client already trusts (its own node, or a
 //!   signed checkpoint it verified), which IS the decision point. Anything else is [`L2StatusV1::Unverified`] — a DESIGN_GAP, not a
-//!   rounding error (record: `docs/design/palw/rfc-0009-remote-record.md`, round 2).
+//!   rounding error (record: `docs/evidence/palw/implementation-records/rfc-0009-remote-record.md`, round 2).
 //! * **L3 — claim state** ([`proven_on_chain_v1`]): bond, class and claim rows proven (op 202) against a header that is ON the L1-verified
 //!   chain — never against a header the client merely received.
 //!

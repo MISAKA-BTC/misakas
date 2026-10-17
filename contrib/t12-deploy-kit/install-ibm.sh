@@ -31,7 +31,7 @@ START_GAP=20
 # b0 and b6 are the only heartbeat miners; both down pauses the chain clock (PLAN.md §15)
 UPGRADE_REQUIRE_UP=(169.58.232.113:26311)
 BINARIES=(kaspad misaka palw-class)
-# int-10.2 D1 (docs/design/palw/t12-replay-memory-1001.md §5): a multi-seat host runs the host pinner — its own unit and
+# int-10.2 D1 (docs/design/palw/consensus/t12-replay-memory-1001.md §5): a multi-seat host runs the host pinner — its own unit and
 # memory cgroup, started before the seats (pinner-lib.sh), so the class artifacts' page cache is charged there and to no
 # seat — and the host ledger, so every seat's grant also needs the host's free memory less EVERY seat's reservations.
 # The seats keep their MemoryMax and share. Either line off: empty HOST_LEDGER_DIR / HOST_PINNER=0 (then re-stage).

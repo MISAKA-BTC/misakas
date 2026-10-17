@@ -11,7 +11,7 @@ pub mod derivation_path;
 pub mod error;
 mod imports;
 /// kaspa-pq Phase 5: ML-DSA-87 wallet keygen + P2PKH address derivation
-/// (see docs/kaspa-pq-spec.md §8 and docs/adr/0002-mldsa65-p2pkh.md).
+/// (see docs/spec/pq/kaspa-pq-spec.md §8 and docs/adr/0002-mldsa65-p2pkh.md).
 pub mod kaspa_pq;
 
 /// kaspa-pq Phase 7 (PR-7.4): WASM bindings for the kaspa-pq

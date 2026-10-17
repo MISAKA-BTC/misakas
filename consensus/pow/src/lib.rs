@@ -1159,7 +1159,7 @@ mod tests_pq {
         );
     }
 
-    /// **The audit's P0-1 / C1 red test, by its registered name** (`docs/palw-rc-threat-model.md`):
+    /// **The audit's P0-1 / C1 red test, by its registered name** (`docs/security/palw/palw-rc-threat-model.md`):
     /// the finalizer arm, the wire carrier and this test land together, and together they make
     /// "mutating any one bit of the commitment fails the PoW" (ADR-0042 Decision 3a) a checked
     /// property instead of an intention.

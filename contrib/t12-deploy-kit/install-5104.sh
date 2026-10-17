@@ -34,7 +34,7 @@ RESERVE_MIB=4096             # non-kaspad RSS incl. the other session's t11 fixt
 FIXTURE_PATTERN=misakas-stale-consensus-diagnosis   # that node's command line (not ours; left running, counted in RESERVE_MIB)
 START_GAP=30                 # each node re-derives the 8k manifest root (--palw-verify-class-manifest) and maps 1.7 GB
 BINARIES=(kaspad misaka palw-class)
-# int-10.2 D1 (docs/design/palw/t12-replay-memory-1001.md §5): a multi-seat host runs the host pinner — its own unit and
+# int-10.2 D1 (docs/design/palw/consensus/t12-replay-memory-1001.md §5): a multi-seat host runs the host pinner — its own unit and
 # memory cgroup, started before the seats (pinner-lib.sh), so the class artifacts' page cache is charged there and to no
 # seat — and the host ledger, so every seat's grant also needs the host's free memory less EVERY seat's reservations.
 # The seats keep their MemoryMax and share. Either line off: empty HOST_LEDGER_DIR / HOST_PINNER=0 (then re-stage).

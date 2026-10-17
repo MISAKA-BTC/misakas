@@ -1,5 +1,5 @@
 //! **Pinned class artifacts: the one page-cache copy a host's seats share, kept resident and counted
-//! once** (int-10.2 A1; `docs/design/palw/t12-replay-memory-1001.md`).
+//! once** (int-10.2 A1; `docs/design/palw/consensus/t12-replay-memory-1001.md`).
 //!
 //! # What was measured (testnet-12, 5.104, 2026-10-01)
 //!

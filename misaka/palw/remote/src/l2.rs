@@ -1,4 +1,4 @@
-//! **RFC-0009 L2 — the PALW fork choice, verified without a full node** (design: `docs/design/palw/rfc9-l2-fork-choice.md`).
+//! **RFC-0009 L2 — the PALW fork choice, verified without a full node** (design: `docs/design/palw/consensus/rfc9-l2-fork-choice.md`).
 //!
 //! Three things, kept apart:
 //!

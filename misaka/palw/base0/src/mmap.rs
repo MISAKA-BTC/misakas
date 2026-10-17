@@ -308,7 +308,7 @@ impl FileIdentityV1 {
 
 /// **A whole file mapped `PROT_READ | MAP_SHARED`, which can be locked into RAM** — the pin kaspad
 /// takes on a class artifact whose replay reads it in place (`palw_artifact_pin`, int-10.2;
-/// `docs/design/palw/t12-replay-memory-1001.md`).
+/// `docs/design/palw/consensus/t12-replay-memory-1001.md`).
 ///
 /// # Why its own mapping, and why `MAP_SHARED`
 ///

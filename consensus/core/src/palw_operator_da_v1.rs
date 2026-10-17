@@ -1,7 +1,7 @@
 //! **Lane B of the panel-seed stopgap (2026-09-26): what an operator's non-seat data-availability
 //! filer reads of the tip** — node policy's read, never a rule.
 //!
-//! **Why.** The panel seed CRITICAL (`docs/t12-panel-seed-2026-09-25.md`): while audit P0-10 is open
+//! **Why.** The panel seed CRITICAL (`docs/history/networks/testnet-12/t12-panel-seed-2026-09-25.md`): while audit P0-10 is open
 //! a lottery win costs ~279 junk BLAKE2b draws, so whoever holds the anchor can re-roll a claim's
 //! panel until its own Sybil seats cover it, and a coverage lie reaches `Final` with no slash. The
 //! user's decision of 2026-09-26 01:00 adds, beside fence F1 and the operator-anchor fence, a node

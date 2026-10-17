@@ -1,5 +1,7 @@
 # ADR-0180 — PALW のみの合意:BFT の validator を使わない
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 * **Status:** Accepted(ユーザー決定 2026-10-16)。RFC-0012 の採用理由を記録する。
 * **Related:**
   * [RFC-0012](../rfc/0012-palw-only-consensus-and-native-evm-settlement.md):PALW のみの合意と native EVM 決済。DNS validator・attestation・precommit・DNS-final・stake による reorg 拒否権を退役する。

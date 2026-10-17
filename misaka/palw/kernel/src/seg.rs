@@ -1,5 +1,5 @@
 //! **Segmented claims (K2-TIR-v4): position, segment and claim roots, the segmented evidence object, and prompt tiles**
-//! (`docs/design/palw/k2-real-scale.md` §1–§2, §5).
+//! (`docs/design/palw/models/k2-real-scale.md` §1–§2, §5).
 //!
 //! ```text
 //! node leaf     = H(POS_LEAF; occurrence u16, node u16, C_v3(value))       canonical (occurrence, node) order, derived values included
@@ -306,7 +306,7 @@ pub fn node_path_len_v1(node_count: u64) -> u64 {
     crate::merkle::depth(node_count)
 }
 
-/// **The evidence object of a segmented claim** (`docs/design/palw/k2-real-scale.md` §1.3): the header, the job's input, the positions,
+/// **The evidence object of a segmented claim** (`docs/design/palw/models/k2-real-scale.md` §1.3): the header, the job's input, the positions,
 /// the claim root over the segment roots and the suite. No state or output root: continuity is by wiring, the output by the decode court.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SegmentedEvidenceV2 {

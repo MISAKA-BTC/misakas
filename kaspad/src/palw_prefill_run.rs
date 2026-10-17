@@ -1,5 +1,5 @@
 //! **The prefill run width, chosen from the memory a replay can be granted** (int-10.2 A2;
-//! `docs/design/palw/t12-replay-memory-1001.md`).
+//! `docs/design/palw/consensus/t12-replay-memory-1001.md`).
 //!
 //! # What was measured
 //!

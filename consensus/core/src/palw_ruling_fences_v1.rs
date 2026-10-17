@@ -1,5 +1,5 @@
-//! **The rules of the user's 2026-10-12 rulings** (`docs/design/palw/mainnet-spec-register-2026-10-12.md` §3,
-//! `docs/design/palw/rfc-adr-review-resolution-2026-10-12.md` "ユーザー判断 — 2026-10-12") — three DORMANT fences, each `None` on every
+//! **The rules of the user's 2026-10-12 rulings** (`docs/design/palw/integration/mainnet-spec-register-2026-10-12.md` §3,
+//! `docs/audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md` "ユーザー判断 — 2026-10-12") — three DORMANT fences, each `None` on every
 //! preset and refused when armed by [`Params::validate_palw_2026_10_12_ruling_fences_v1`]:
 //!
 //! ```text

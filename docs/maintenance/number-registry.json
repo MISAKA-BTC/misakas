@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "scope": "uploaded ZIP only; integration-branch reservations unverified",
+  "allocated_here": {
+    "adr": [
+      "0181",
+      "0182"
+    ],
+    "rfc": [
+      "0021",
+      "0022"
+    ]
+  },
+  "next_local": {
+    "adr": "0183",
+    "rfc": "0023"
+  },
+  "legacy_duplicates": {
+    "adr": {
+      "0026": [
+        "docs/adr/0026-current-palw-testnet11-architecture.md",
+        "docs/adr/0026-palw-v2-runtime-separated-verification.md"
+      ],
+      "0173": [
+        "docs/adr/0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md",
+        "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md"
+      ]
+    },
+    "rfc": {}
+  },
+  "missing_sequence": {
+    "adr": [
+      "0048",
+      "0104",
+      "0113",
+      "0156",
+      "0157",
+      "0158",
+      "0159",
+      "0164"
+    ],
+    "rfc": []
+  },
+  "spec_shared_18": [
+    "docs/spec/palw/18-inference-surface.md",
+    "docs/spec/palw/18-layer-sharded-panels.md",
+    "docs/spec/palw/18-verification-certificates.md"
+  ]
+}

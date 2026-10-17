@@ -50,7 +50,7 @@ impl PalwRfc0608FenceV1 {
 
 /// **Open blockers**: known code or design gaps that make arming the fence unsafe (not mere coverage gaps and not values to
 /// measure — those belong to the record). While a fence has an entry here no record can arm it. Each entry names the
-/// remaining-work checkbox (`docs/design/palw/rfc-0006-0007-0008-0012-remaining-work-2026-10-15.md`) that closes it.
+/// remaining-work checkbox (`docs/design/palw/integration/rfc-0006-0007-0008-0012-remaining-work-2026-10-15.md`) that closes it.
 pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
     (
         PalwRfc0608FenceV1::SettlementOnceV1,

@@ -1,5 +1,7 @@
 # ADR-0178 — The fork choice heals a partition on bonded participation: one search over every tip, economic keys counted over each branch's exclusive past, and participation first past `W_p`
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **INTERNAL (user decision 2026-10-08).** Finding V6 is kept out of every public text — docs, commit messages, explorer text, issues.
 > This draft and its record live on the unpushed branch `fin/palw-finality-consistency`. V6 is named here only as "the stale-incumbent
 > comparison"; its mechanics are in the internal record, §3.
@@ -11,7 +13,7 @@ immutable". Code, tests and the record say ADR-0178.
 (lane FINX successor, 2026-10-09; §9), refused when armed in this binary; it ships armed only in the single full-activation release,
 which assigns its height. User decisions already taken (2026-10-08): no public advisory; no early dedicated fence; **the fix ships in
 the single full-activation release**; `palw_dns_retirement_v1` may be armed only with rule E at or below it. Record:
-[`docs/design/palw/finality-palw-consistency.md`](../design/palw/finality-palw-consistency.md).
+[`docs/design/palw/finality-palw-consistency.md`](../design/palw/consensus/finality-palw-consistency.md).
 
 **Builds on / amends (if accepted):** ADR-0042 Decision 9 (one comparator), the strict-win reorg rule (`palw_reorg_strict_economic_win`,
 lane rcore/f1-strictwin-tie), the pruning-proof strict-economic commit (rcore/hf-pptake2), ADR-0065 D2 (frontier provenance — its "bonds

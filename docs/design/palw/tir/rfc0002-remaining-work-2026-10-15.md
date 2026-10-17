@@ -50,7 +50,7 @@
 
 ## genesis 8モデル(2026-10-15 ユーザー決定、初期7モデルを置き換え)
 
-初期7モデルは同日にgenesis 8モデルへ置き換えた(下の表は履歴として残す)。対象はhuihui abliterated版(1.5BはDolphin 3.0。#8 も 2026-10-16 から huihui の abliterated GGUF を 32K で再変換したもの)で、番号は元の1〜10を維持する(7と9は削除)。**対象はテキスト生成のみ**(token id → 次 token の logits)。**全モデルを 32K(32,768 token)の文脈で提供する**(2026-10-16 ユーザー決定。長文脈のメモリ設計は [RFC-0020](../../../rfc/0020-long-context-calibration-memory.md))。vision tower・mmproj・画像/音声/動画の埋め込み・MTP head は計算・網羅・claim 受理・報酬の対象外で、名前付きで拒否する。画像経路は有効化しない。全モデルを一つの版付き `PALWART3` `.palwart` 形式で出荷する。状態・アーキテクチャ×層種別の網羅表・未完了項目は [genesis8-status.md](../genesis8-status.md)、変換パイプラインは `scripts/genesis/genesis10_pipeline.py`、genesisリストは `consensus/core/src/palw_genesis8_catalog_v1.rs`(休眠)。
+初期7モデルは同日にgenesis 8モデルへ置き換えた(下の表は履歴として残す)。対象はhuihui abliterated版(1.5BはDolphin 3.0。#8 も 2026-10-16 から huihui の abliterated GGUF を 32K で再変換したもの)で、番号は元の1〜10を維持する(7と9は削除)。**対象はテキスト生成のみ**(token id → 次 token の logits)。**全モデルを 32K(32,768 token)の文脈で提供する**(2026-10-16 ユーザー決定。長文脈のメモリ設計は [RFC-0020](../../../rfc/0020-long-context-calibration-memory.md))。vision tower・mmproj・画像/音声/動画の埋め込み・MTP head は計算・網羅・claim 受理・報酬の対象外で、名前付きで拒否する。画像経路は有効化しない。全モデルを一つの版付き `PALWART3` `.palwart` 形式で出荷する。状態・アーキテクチャ×層種別の網羅表・未完了項目は [genesis8-status.md](../integration/genesis8-status.md)、変換パイプラインは `scripts/genesis/genesis10_pipeline.py`、genesisリストは `consensus/core/src/palw_genesis8_catalog_v1.rs`(休眠)。
 
 | # | 対象 | 経路 | 状態 |
 | --- | --- | --- | --- |

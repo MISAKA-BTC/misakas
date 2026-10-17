@@ -1,5 +1,7 @@
 # ADR-0015: Remote-Signer / HSM Protocol for Validator Signing
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 **Status:** 将来設計では不採用。旧ネットワークの実装・規則は移行まで有効。
 
 DNS validator 向け HSM・PKCS#11・HA 拡張は今後実装しない。[RFC-0012](../rfc/0012-palw-only-consensus-and-native-evm-settlement.md) で対象の validator 役を廃止するため。

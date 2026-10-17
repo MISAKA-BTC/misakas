@@ -168,7 +168,7 @@ fn rfc0012_a_void_entry_is_extracted_and_a_resumed_final_is_not_evidence_twice()
 }
 
 // =====================================================================================================================
-// Measurements for the policy proposal (docs/design/palw/rfc-0012-policy-proposal.md): every number comes from the fold or
+// Measurements for the policy proposal (docs/design/palw/execution/rfc-0012-policy-proposal.md): every number comes from the fold or
 // from the certification code, on testnet-12's own Params. They are printed; the assertions pin the facts the proposal quotes.
 // =====================================================================================================================
 

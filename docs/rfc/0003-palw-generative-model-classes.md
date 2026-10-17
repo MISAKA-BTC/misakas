@@ -1,5 +1,9 @@
 # RFC-0003: PALW Generative Model Classes — one job, determinism and output layer, and the class profiles on top of it
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
+> **適用時期の現行方針（2026-10-17 文書化）:** 本 RFC の画像・動画経路は **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。
+
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -2609,7 +2613,7 @@ The rest of the RFC (Parts I and II, the program surface, the activation order) 
 
 ## 改定 — 2026-10-12（challenge windowの再付与禁止、公開検証不能な経路の報酬除外：提案）
 
-**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §5と[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md)。
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §5と[RFC/ADRレビューの整理（2026-10-12）](../audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md)。
 
 - **§I.4.7 / Decision 22の将来規則を置換:** challengeの放棄、失敗、close、Panel交代により、claim全体のchallenge windowを最初から付与し直してはならない。licence anchorを記録上更新する場合でも、challenge開始cutoff、absolute hard deadline、producer枠の回復時計は変更しない（RFC-0014 §7.2の2026-10-12改定と統一。旧claimは旧ruleset）。
 - **N4/X2:** 画像bytesやsource IDsがPanelにだけ渡されるなど、公開訴追に必要な証拠を確保できない生成物・画像入力・source経路は、新規の報酬・weight対象から外す。通常の非報酬AI推論ではプライバシーを維持して利用できる。既存の実装記録は削除せず、将来の有効化対象を限定する。過去の有効claimは旧rulesetで処理し、遡及変更しない。

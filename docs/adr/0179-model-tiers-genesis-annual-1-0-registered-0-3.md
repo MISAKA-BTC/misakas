@@ -1,8 +1,10 @@
 # ADR-0179 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 > **統治する前提 — [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提、2026-10-15 ユーザー決定):** モデルの二階層と、モデル単位の検証の不採用。本 ADR は §9 を実装上の規則として書き下したものであり、§9 と衝突する場合は §9 が優先する。本 ADR は §9 を再審しない。
 
-* **Status:** Accepted(ユーザー決定 2026-10-15 第 4 回・第 5 回、[判断記録](../design/palw/user-decisions-2026-10-15-adr-rfc16-rfc17.md) §7b・§7c)。実装は休眠(fence `palw_model_tier_v1`、全 preset で `None`、有効化は承認していない)。build・試験は未実施で PASS ではない。
+* **Status:** Accepted(ユーザー決定 2026-10-15 第 4 回・第 5 回、[判断記録](../history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md) §7b・§7c)。実装は休眠(fence `palw_model_tier_v1`、全 preset で `None`、有効化は承認していない)。build・試験は未実施で PASS ではない。
 * **Supersedes:** [RFC-0017](../rfc/0017-model-eligibility-examination-and-renewal.md) のモデル資格審査(Registered → Probation → Eligible → Lapsed、抽選審査、更新、失効、試行手数料・試行上限)。RFC-0017 は本 ADR の階層制度の文書に改定した。
 * **Related:** [ADR-0175](0175-registered-models-are-permanently-immutable.md)(登録の不変性)、[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)(配分 `α = 1.5`、30 日平均)、[RFC-0016](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)(V+)、[RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md)(Gate C)、[PRINCIPLES §8](../PRINCIPLES.md)(暗号学的な計算証明を使わない)。
 

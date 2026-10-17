@@ -32,7 +32,7 @@ pub use kaspa_hashes::EvmH256;
 // ---------------------------------------------------------------------
 // kaspa-pq Phase 9 (PR-9.5b): consensus-identity semantic aliases.
 //
-// The Hash → Hash64 cascade (ADR-0008 / docs/hash64-migration-inventory.md)
+// The Hash → Hash64 cascade (ADR-0008 / docs/design/pq/hash64-migration-inventory.md)
 // stages width changes per identity. This module introduces NAMES for
 // each identity, all pointing at the upstream 32-byte `Hash` /
 // `kaspa_hashes::Hash32` today. PR-9.5c onward flips individual
@@ -531,7 +531,7 @@ pub mod palw_operator_da_v1;
 /// ADR-0133 S2: optimistic licence from the full-replay seat, behind `Params::palw_verification_s2`.
 pub mod palw_optimistic_licence_v2;
 /// The OPV ↔ PALW Work Beacon startup cycle, closed: the complete-check bootstrap, derived OPV eligibility, the effective bits of a
-/// passed attempt, and the dependency graph (`docs/design/palw/opv-beacon-bootstrap.md`) — dormant with the kernel route's fences.
+/// passed attempt, and the dependency graph (`docs/design/palw/verification/opv-beacon-bootstrap.md`) — dormant with the kernel route's fences.
 pub mod palw_opv_bootstrap_v1;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
 /// ADR-0077 SA-5, which says what arming it does NOT buy.
@@ -764,7 +764,7 @@ pub mod palw_tokenizer_rendering_v1;
 pub mod palw_transcendental;
 /// RFC-0004 Part II: the typed-roots fence `palw_typed_roots_v1` — dormant, no height, refused when armed.
 pub mod palw_typed_roots_v1;
-/// MISAKA PALW full-logits trace scheme v2 (docs/palw-full-logits-trace-v2-design.md):
+/// MISAKA PALW full-logits trace scheme v2 (docs/design/palw/execution/palw-full-logits-trace-v2-design.md):
 /// Land-stage types, domains and preimage layouts only. Consensus-inert by design —
 /// nothing in validation, fork choice or the header pipeline may consume it until the
 /// staged activations pass their gates. `palw_execution_algo_id = 2` in here is a

@@ -1,6 +1,6 @@
 //! **ECON — the honest verifier's incentive (PRINCIPLES §6 condition 6) and the bounty's self-dealing bound, at ADR-0032's 49%.**
 //!
-//! Design and proofs: `docs/design/palw/econ-verifier-incentive-and-allocation.md` (§2 self-dealing, §3 the verifier's incentive).
+//! Design and proofs: `docs/design/palw/economics/econ-verifier-incentive-and-allocation.md` (§2 self-dealing, §3 the verifier's incentive).
 //! The closed forms and every parameter sweep live in the executable model `scripts/sim/misaka-palw-econ-verifier-model.py`; this file
 //! holds only what is a claim about consensus code and so needs the ledger to prove it.
 //!

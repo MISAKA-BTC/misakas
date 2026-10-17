@@ -1,5 +1,7 @@
 # ADR-0024: Verified LLM Token-Weighted BFT for DNS finality
 
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
 **Status:** Retired — VLT validator 投票重み・compute overlay は廃止済み。
 
 VLT による validator 投票重みは再実装しない。PALW は validator 投票に依存せず、VLT 重みは [ADR-0128](0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md) で削除、compute committee/beacon は [ADR-0134](0134-the-compute-overlays-committee-beacon-retires-at-a-height-and-its-machinery-goes.md) で廃止されたため。
