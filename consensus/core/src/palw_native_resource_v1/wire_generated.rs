@@ -9824,6 +9824,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::mode::VerificationModeV1 {
     }
 }
 wire_struct!(misaka_palw_kernel::model_eligibility_v1::EligibilityAttestationV1; u16, [u8;64], [u8;64], [u8;64], misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1, [u8;64], Vec<u32>);
+wire_struct!(misaka_palw_kernel::capacity_attestation_v1::CapacityAttestationV1; u16, [u8;64], [u8;64], [u8;64], u128, u64, u64, u64, u64, u64, u64, [u8;64]);
 wire_struct!(misaka_palw_kernel::model_eligibility_v1::EligibilityExamCommitV1; u16, [u8;64], [u8;64], [u8;64], misaka_palw_kernel::model_eligibility_v1::EligibilityExamPurposeV1, [u8;64], u32, u32);
 impl NativeWireScanV1 for misaka_palw_kernel::model_eligibility_v1::EligibilityExamPurposeV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
@@ -10474,6 +10475,15 @@ impl NativeWireScanV1 for misaka_palw_kernel::route::KernelRouteObjectV1 {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(
                     <misaka_palw_kernel::model_eligibility_v1::EligibilityAttestationV1 as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
+            76 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <misaka_palw_kernel::capacity_attestation_v1::CapacityAttestationV1 as NativeWireScanV1>::scan_native_wire_v1(
                         reader,
                     )?,
                 )?;

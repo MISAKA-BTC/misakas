@@ -1581,6 +1581,10 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             }
             return super::palw_model_eligibility_fold_v1::apply_attest_eligibility_exam_v1(builder, ctx, signer, attestation);
         }
+        // RFC-0016 V8 (inner 76, audit 16-A): a verifier's capacity attestation, past `palw_elastic_final_capacity_v1`.
+        KernelRouteObjectV1::AttestCapacityV1 { attestation } => {
+            return super::palw_rfc0016_fold_v1::apply_attest_capacity_v1(builder, ctx, signer, attestation);
+        }
         KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } => {
             return super::palw_panel_source_fee_fold_v2::fund_panel_sources_v2(builder, ctx, signer, *epoch, terms);
         }

@@ -19,8 +19,10 @@
 
 use super::*;
 use crate::palw_rfc0016_v1::capacity::{
-    PalwAdmissionQuoteV1, PalwVerifierSupplyV1, palw_admission_quote_v1, palw_c7_derived_cap_v1, palw_capacity_fits_v1,
-    palw_opv_capacity_admits_v1, palw_queue_bond_share_cap_v1, palw_verifier_share_permille_v1, palw_waterfill_capacity_v1,
+    PalwAdmissionQuoteV1, PalwCapacityAttestationV1, PalwCapacityResourcesV1, PalwClaimLoadV1, PalwVerifierSupplyV1,
+    palw_admission_quote_v1, palw_c7_derived_cap_v1, palw_capacity_attestation_check_v1, palw_capacity_fits_v1,
+    palw_capacity_resource_supply_from_attestations_v1, palw_opv_capacity_admits_v1, palw_queue_bond_share_cap_v1,
+    palw_verifier_share_permille_v1, palw_waterfill_capacity_v1, palw_waterfill_resources_v1,
 };
 use crate::palw_rfc0016_v1::ledger::*;
 use crate::palw_rfc0016_v1::metrics::{PalwRfc0016ObservationV1, palw_rfc0016_observe_v1, palw_rfc0016_observed_v1};
@@ -244,6 +246,19 @@ impl PalwChainStateV2 {
         marked.then_some(out)
     }
 
+    /// **V8's read API** (audit 16-A): every stored capacity attestation, in key order (class, then verifier). A stored row counts only
+    /// while [`palw_capacity_attestation_check_v1`] passes at the reader's DAA; expired rows are pruned by the per-block tick.
+    pub fn rfc0016_capacity_attestations_v1(&self) -> Vec<PalwCapacityAttestationV1> {
+        rfc0016_rows_v1(self, PALW_RFC0016_TELEMETRY_TABLE_V1, &[PALW_RFC0016_CAPACITY_ATTESTATION_PREFIX_V1])
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let class = Hash64::try_from_slice(k.get(1..65)?).ok()?;
+                let row: PalwCapacityAttestationRowV1 = borsh::from_slice(v).ok()?;
+                Some(capacity_attestation_of_row_v1(class, &row))
+            })
+            .collect()
+    }
+
     fn rfc0016_telemetry_u64s_v1<T: borsh::BorshDeserialize + Default>(&self, key: Vec<u8>) -> T {
         self.kernel_route.as_ref().and_then(|route| route.aux_row(PALW_RFC0016_TELEMETRY_TABLE_V1, &key)).unwrap_or_default()
     }
@@ -310,8 +325,34 @@ impl PalwFoldReadV1<'_> {
             let owed = palw_panel_owed_v1(self.state, self.params, index, self.own_attempt_class, extra);
             palw_panel_terms_v1(self.state, g.seat_count as u128, &owed)
         });
+        if let Some(mirror) = self.params.rfc0016_v1()
+            && self.params.rfc0016_capacity_active_at(now_daa)
+        {
+            return self.rfc0016_attested_capacity_v1(class_id, fold, now_daa, &terms, seat, mirror.claim_load);
+        }
         let capacity = palw_waterfill_capacity_v1(&verifiers, &terms);
         (capacity.get(class_id).copied().unwrap_or(0), terms.get(class_id).copied().unwrap_or(0), ready_here)
+    }
+
+    /// **V8, audit 16-A: the capacity read from capacity attestations** (past `palw_elastic_final_capacity_v1`). The supply is each
+    /// attesting bond's ONE machine (component-wise minimum of its valid attestations), credited only for the classes it is seat-ready
+    /// for, its compute never above the network's reference seat (`seat`: a verifier cannot raise its credit by declaring more than the
+    /// reference measures; declaring less, or letting an attestation expire, lowers it). Each class's per-claim load is its registry
+    /// facts (compute `economic_ccu_per_claim` over its window, the demand terms' unit; memory `working_set_bytes`) and the measured
+    /// DA / court load ([`crate::palw_rfc0016_v1::values::PALW_RFC0016_CLAIM_LOAD_V1`]); `None` (unmeasured) credits nothing. The split
+    /// is the exact multi-resource water-filling: a verifier's DA and court are spent once across its classes.
+    fn rfc0016_attested_capacity_v1(
+        &self,
+        class_id: &Hash64,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+        now_daa: u64,
+        terms: &BTreeMap<Hash64, u128>,
+        seat: u128,
+        claim_load: Option<crate::palw_rfc0016_v1::values::PalwRfc0016ClaimLoadV1>,
+    ) -> (u128, u128, u32) {
+        palw_rfc0016_attested_capacity_v1(self.state, class_id, now_daa, terms, seat, claim_load, |bond_key, class| {
+            self.state.bonds.get(bond_key).is_some_and(|bond| self.model_registry_seat_is_ready(bond_key, bond, class, now_daa, fold))
+        })
     }
 
     /// **The elastic room** (RFC-0016 §10): `None` below `palw_elastic_final_capacity_v1` (the shipped room decides). Past it:
@@ -413,6 +454,87 @@ fn rfc0016_unqueue_v1(builder: &mut TransitionBuilder<'_>, class_id: &Hash64, qu
     Ok(())
 }
 
+fn capacity_attestation_of_row_v1(class: Hash64, row: &PalwCapacityAttestationRowV1) -> PalwCapacityAttestationV1 {
+    let (verifier, (compute, memory, da, court), (from, to, expires), evidence_root) = *row;
+    PalwCapacityAttestationV1 {
+        model: class,
+        verifier,
+        capability: PalwCapacityResourcesV1 {
+            compute_ccu_per_span: compute,
+            memory_bytes: memory,
+            da_bytes_per_span: da,
+            court_permille_per_span: court,
+        },
+        window_from_daa: from,
+        window_to_daa: to,
+        expires_daa: expires,
+        evidence_root,
+    }
+}
+
+/// **Inner 76: a verifier's capacity attestation** (RFC-0016 V8, audit 16-A), past `palw_elastic_final_capacity_v1`. The signer is the
+/// attesting bond (an `Active` one); the class a registered model class (never the floor); the attestation's own checks hold at this
+/// block (closed non-empty window, expiry after it and not passed, evidence, non-zero compute). One row per (class, verifier): a
+/// re-attestation replaces it, an all-zero resource vector revokes it. A refusal writes nothing. Nothing here grants reward, a block
+/// right or Final weight; the row only bounds what capacity the bond is credited.
+pub(super) fn apply_attest_capacity_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    attestation: &misaka_palw_kernel::capacity_attestation_v1::CapacityAttestationV1,
+) -> Result<(), PalwStateV2Error> {
+    let refuse = |why: &str| PalwStateV2Error::KernelRouteRefused(why.to_string());
+    let now = ctx.daa_score;
+    if !builder.params.rfc0016_capacity_active_at(now) {
+        return Err(refuse("palw_elastic_final_capacity_v1 is not in force at this block"));
+    }
+    attestation.validate().map_err(refuse)?;
+    if attestation.verifier != crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(signer) {
+        return Err(refuse("the capacity attestation's verifier is not its signer"));
+    }
+    let record = builder.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
+    if !matches!(record.status, PalwBondStatusV2::Active) {
+        return Err(refuse("a capacity attestation needs an Active bond"));
+    }
+    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+    {
+        let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("the kernel route is missing"))?;
+        if attestation.network != route.header.policy.network_domain {
+            return Err(refuse("the capacity attestation names another network"));
+        }
+    }
+    let class = Hash64::from_bytes(attestation.class_id);
+    if class == builder.params.base_class_id() || !builder.state.model_lifecycles.contains_key(&class) {
+        return Err(refuse("a capacity attestation names a registered model class"));
+    }
+    let key = capacity_attestation_key_v1(&class, &attestation.verifier);
+    if attestation.is_revocation() {
+        let held = builder.state.kernel_route.as_ref().is_some_and(|r| r.aux.contains_key(&(PALW_RFC0016_TELEMETRY_TABLE_V1, key.clone())));
+        if !held {
+            return Err(refuse("no capacity attestation of this verifier for this class to revoke"));
+        }
+        builder.write_kernel_row(PALW_RFC0016_TELEMETRY_TABLE_V1, key, None)?;
+        return Ok(());
+    }
+    let row: PalwCapacityAttestationRowV1 = (
+        *signer,
+        (
+            attestation.compute_ccu_per_span,
+            attestation.memory_bytes,
+            attestation.da_bytes_per_span,
+            attestation.court_permille_per_span,
+        ),
+        (attestation.window_from_daa, attestation.window_to_daa, attestation.expires_daa),
+        Hash64::from_bytes(attestation.evidence_root),
+    );
+    palw_capacity_attestation_check_v1(&capacity_attestation_of_row_v1(class, &row), now)
+        .map_err(|why| refuse(&format!("the capacity attestation does not count: {why:?}")))?;
+    rfc0016_write_v1(builder, PALW_RFC0016_TELEMETRY_TABLE_V1, key, &row)
+}
+
+/// Bounded per block: at most this many expired capacity attestations are pruned in one tick.
+pub const PALW_RFC0016_ATTESTATION_PRUNE_PER_BLOCK_V1: usize = 64;
+
 fn rfc0016_write_v1<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, table: u8, key: Vec<u8>, value: &T) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(table, key, Some(borsh::to_vec(value).expect("an RFC-0016 row serializes")))?;
     Ok(())
@@ -496,10 +618,24 @@ pub(super) fn tick_rfc0016_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
         let stale: Vec<Vec<u8>> = rfc0016_rows_v1(&builder.state, PALW_RFC0016_TELEMETRY_TABLE_V1, &[])
             .into_iter()
             .filter(|(k, _)| k.first() != Some(&PALW_RFC0016_TELEMETRY_CLAIM_MODEL_PREFIX_V1))
+            .filter(|(k, _)| k.first() != Some(&PALW_RFC0016_CAPACITY_ATTESTATION_PREFIX_V1))
             .filter(|(k, _)| k.get(1..9).and_then(|b| b.try_into().ok()).map(u64::from_le_bytes).is_some_and(|e| e < floor))
             .map(|(k, _)| k.clone())
             .collect();
         for k in stale {
+            builder.write_kernel_row(PALW_RFC0016_TELEMETRY_TABLE_V1, k, None)?;
+        }
+    }
+    // V8 (audit 16-A): an expired capacity attestation leaves the state (bounded per block; one that waits counts nothing anyway).
+    if capacity_on {
+        let expired: Vec<Vec<u8>> =
+            rfc0016_rows_v1(&builder.state, PALW_RFC0016_TELEMETRY_TABLE_V1, &[PALW_RFC0016_CAPACITY_ATTESTATION_PREFIX_V1])
+                .into_iter()
+                .filter(|(_, v)| borsh::from_slice::<PalwCapacityAttestationRowV1>(v).is_ok_and(|row| now >= row.2.2))
+                .map(|(k, _)| k.clone())
+                .take(PALW_RFC0016_ATTESTATION_PRUNE_PER_BLOCK_V1)
+                .collect();
+        for k in expired {
             builder.write_kernel_row(PALW_RFC0016_TELEMETRY_TABLE_V1, k, None)?;
         }
     }
@@ -840,4 +976,54 @@ pub fn palw_rfc0016_model_report_v1(
         .map(|((bond, model), (paid, claims))| PalwMinerRevenueRowV1 { bond, model, payout_coinbase_sompi: paid, claims })
         .collect();
     (rows, miners)
+}
+
+/// **V8, audit 16-A: the attested capacity of `class_id`** — [`PalwFoldReadV1::rfc0016_capacity_read_v1`]'s reading past
+/// `palw_elastic_final_capacity_v1`, with the seat-readiness predicate passed in (`ready(bond, class)`). Returns
+/// `(capacity, demand, ready verifiers)` in the demand terms' unit (CCU per span, `× PALW_PANEL_DEMAND_SCALE_V1`).
+///
+/// * Supply: the stored attestations whose verifier is seat-ready for the attested class, each bond ONE machine (the component-wise
+///   minimum of its valid attestations) — so one machine attested to N classes is still one budget, split across them;
+/// * a verifier's compute is credited at most the network's reference seat `seat` (declaring more than the reference measures
+///   raises nothing; declaring less, revoking, or letting an attestation expire lowers it; an attestation without evidence, with an
+///   open window or past its expiry was refused at the fold or counts nothing here);
+/// * each class's per-claim load: compute = its `economic_ccu_per_claim` over its verification window (one seat's replay, the demand
+///   terms' unit), memory = its `working_set_bytes`, DA and court = the measured per-claim load `claim_load` over the window;
+///   `claim_load = None` (unmeasured) credits NOTHING — never a compute-only figure;
+/// * split: [`palw_waterfill_resources_v1`] — a verifier's DA and court are spent once across its classes.
+pub(super) fn palw_rfc0016_attested_capacity_v1(
+    state: &PalwChainStateV2,
+    class_id: &Hash64,
+    now_daa: u64,
+    terms: &BTreeMap<Hash64, u128>,
+    seat: u128,
+    claim_load: Option<crate::palw_rfc0016_v1::values::PalwRfc0016ClaimLoadV1>,
+    ready: impl Fn(&PalwBondKeyV2, &Hash64) -> bool,
+) -> (u128, u128, u32) {
+    let demand = terms.get(class_id).copied().unwrap_or(0);
+    let Some(claim_load) = claim_load else { return (0, demand, 0) };
+    let scale = crate::palw_work_target_v1::PALW_PANEL_DEMAND_SCALE_V1;
+    let attestations: Vec<PalwCapacityAttestationV1> = state
+        .rfc0016_capacity_attestations_v1()
+        .into_iter()
+        .filter(|a| ready(&a.verifier, &a.model))
+        .map(|mut a| {
+            a.capability.compute_ccu_per_span = a.capability.compute_ccu_per_span.saturating_mul(scale).min(seat);
+            a
+        })
+        .collect();
+    let load_of = |class: &Hash64| -> Option<PalwClaimLoadV1> {
+        let row = state.model_lifecycles.get(class)?;
+        let window = (row.profile.verification_window_spans as u64).max(1);
+        Some(PalwClaimLoadV1 {
+            compute_ccu: crate::palw_work_target_v1::palw_panel_demand_term_v1(1, row.work.economic_ccu_per_claim, window),
+            memory_bytes: row.work.working_set_bytes,
+            da_bytes: claim_load.da_bytes_per_claim.div_ceil(window),
+            court_permille: claim_load.court_permille_per_claim.div_ceil(window),
+        })
+    };
+    let supply = palw_capacity_resource_supply_from_attestations_v1(&attestations, now_daa, load_of);
+    let ready_here = supply.iter().filter(|v| v.loads.contains_key(class_id)).count() as u32;
+    let capacity = palw_waterfill_resources_v1(&supply, terms);
+    (capacity.get(class_id).copied().unwrap_or(0), demand, ready_here)
 }

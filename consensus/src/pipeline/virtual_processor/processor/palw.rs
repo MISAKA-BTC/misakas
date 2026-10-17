@@ -6782,6 +6782,9 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelEligibilityV1 => {
                     "an eligibility exam object is refused: palw_model_eligibility_v1 is not in force at this block (RFC-0017)".into()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ElasticCapacityV1 => {
+                    "a capacity attestation is refused: palw_elastic_final_capacity_v1 is not in force at this block (RFC-0016)".into()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => {
                     "a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)"
                         .to_string()
@@ -6862,6 +6865,10 @@ impl VirtualStateProcessor {
             // RFC-0017 (inner 74/75): the mirrored dormant eligibility fence.
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelEligibilityV1 => {
                 self.palw_state_params_v2.as_ref().is_some_and(|p| p.model_eligibility_v1_at(daa_score).is_some())
+            }
+            // RFC-0016 V8 (inner 76): the mirrored dormant elastic-capacity fence.
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ElasticCapacityV1 => {
+                self.palw_state_params_v2.as_ref().is_some_and(|p| p.rfc0016_capacity_active_at(daa_score))
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
                 self.palw_beacon_source_fee_v1.is_some_and(|f| {

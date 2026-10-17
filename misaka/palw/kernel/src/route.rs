@@ -139,6 +139,7 @@ pub const TAG_BOOTSTRAP_EXACT_V1: u8 = 73;
 // `palw_model_eligibility_v1`). Grepped free on `integ/rfc02-rfc06-12-g14` and `pre` before allocating; 72 stays unallocated.
 pub const TAG_COMMIT_ELIGIBILITY_EXAM_V1: u8 = 74;
 pub const TAG_ATTEST_ELIGIBILITY_EXAM_V1: u8 = 75;
+pub const TAG_ATTEST_CAPACITY_V1: u8 = 76;
 /// version, tag, verifier, claim.
 pub const MAX_ATTEST_DRAWN_CHECK_BYTES_V1: usize = 1 + 1 + 64 + 64;
 pub const MAX_FUND_PANEL_BEACON_SOURCE_FEE_BYTES_V2: usize = 288;
@@ -745,6 +746,10 @@ pub enum KernelRouteObjectV1 {
     AttestEligibilityExamV1 {
         attestation: crate::model_eligibility_v1::EligibilityAttestationV1,
     } = 75,
+    /// RFC-0016 V8 (`palw_capacity_attestation_v1`): one bond's signed capacity attestation for one class (consumer-owned).
+    AttestCapacityV1 {
+        attestation: crate::capacity_attestation_v1::CapacityAttestationV1,
+    } = 76,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -937,6 +942,7 @@ impl KernelRouteObjectV1 {
             Self::BootstrapExactV1 { .. } => TAG_BOOTSTRAP_EXACT_V1,
             Self::CommitEligibilityExamV1 { .. } => TAG_COMMIT_ELIGIBILITY_EXAM_V1,
             Self::AttestEligibilityExamV1 { .. } => TAG_ATTEST_ELIGIBILITY_EXAM_V1,
+            Self::AttestCapacityV1 { .. } => TAG_ATTEST_CAPACITY_V1,
             Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
             Self::FundedExecutionV11 { .. } => TAG_FUNDED_EXECUTION_V11,
             Self::StageExecutionV14 { .. } => TAG_STAGE_EXECUTION_V14,
@@ -1216,6 +1222,7 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_BOOTSTRAP_EXACT_V1 => "BootstrapExactV1",
         TAG_COMMIT_ELIGIBILITY_EXAM_V1 => "CommitEligibilityExamV1",
         TAG_ATTEST_ELIGIBILITY_EXAM_V1 => "AttestEligibilityExamV1",
+        TAG_ATTEST_CAPACITY_V1 => "AttestCapacityV1",
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
         TAG_FUNDED_EXECUTION_V11 => "FundedExecutionV11",
         TAG_STAGE_EXECUTION_V14 => "StageExecutionV14",
@@ -1292,6 +1299,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_COMMIT_ELIGIBILITY_EXAM_V1 | TAG_ATTEST_ELIGIBILITY_EXAM_V1 => {
             crate::model_eligibility_v1::MAX_ELIGIBILITY_OBJECT_BYTES_V1
         }
+        TAG_ATTEST_CAPACITY_V1 => crate::capacity_attestation_v1::MAX_CAPACITY_ATTESTATION_OBJECT_BYTES_V1,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_FUNDED_EXECUTION_V11 => MAX_FUNDED_EXECUTION_BYTES_V11,
         TAG_STAGE_EXECUTION_V14 => MAX_STAGE_SOURCE_BYTES_V39,
@@ -1501,9 +1509,10 @@ mod tests {
         // 64: RFC02 typed external stage14. 65–66: prospective Panel consent. 67–69: RFC07/RFC08 signed economic contracts
         // (2026-10-15). 70–71: native Panel authority and paid ClaimV2 (renumbered from 63/64, which the RFC02 branch owns).
         // 73: N3's BootstrapExact contribution (2026-10-15 round 3). 72 is unallocated. 74–75: RFC-0017's eligibility exam.
+        // 76: RFC-0016 V8's capacity attestation (2026-10-17, audit 16-A).
         assert!(max_encoded_bytes_of_tag(72).is_none(), "72 is not allocated");
-        assert!(max_encoded_bytes_of_tag(76).is_none(), "76 is not allocated");
-        for tag in (22..=37).chain(39..=71).chain(73..=75) {
+        assert!(max_encoded_bytes_of_tag(77).is_none(), "77 is not allocated");
+        for tag in (22..=37).chain(39..=71).chain(73..=76) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         for o in [
@@ -1553,6 +1562,22 @@ mod tests {
                     verdict: crate::model_eligibility_v1::EligibilityVerdictV1::Reproduced,
                     transcript: [4; 64],
                     claim_mismatches: (0..64).collect(),
+                },
+            },
+            KernelRouteObjectV1::AttestCapacityV1 {
+                attestation: crate::capacity_attestation_v1::CapacityAttestationV1 {
+                    version: 1,
+                    network: [1; 64],
+                    verifier: [2; 64],
+                    class_id: [3; 64],
+                    compute_ccu_per_span: u128::MAX,
+                    memory_bytes: u64::MAX,
+                    da_bytes_per_span: u64::MAX,
+                    court_permille_per_span: u64::MAX,
+                    window_from_daa: 1,
+                    window_to_daa: 2,
+                    expires_daa: 3,
+                    evidence_root: [4; 64],
                 },
             },
         ] {

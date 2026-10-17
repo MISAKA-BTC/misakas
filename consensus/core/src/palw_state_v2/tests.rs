@@ -20,6 +20,8 @@ mod settlement_liability_v1;
 mod paid_claim_trap_v1;
 // RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
 mod tir_fp_lane_v1;
+// RFC-0016 V8 (audit 2026-10-17, 16-A): capacity attestations through the fold and the attested capacity read.
+mod rfc0016_capacity_attestation_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;
