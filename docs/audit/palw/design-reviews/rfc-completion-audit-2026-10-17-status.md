@@ -27,3 +27,51 @@ Let `R` be the held issuance reward of a certified claim (already drawn at Final
 
 Values to decide: `p` (Panel/verifier share), `b` (buyback), `V` (vesting), and whether the verifier leg is per drawn seat or per
 signing seat.
+
+## Progress 2026-10-18 (integ/validation-r2)
+
+User decisions recorded since: ADR-0185 (fixed-seed beacon bootstrap, seal-commitment lock randomness, paid sources, onboarding
+window 1,024 DAA) and ADR-0184 (RFC08 native liability horizon, RFC07 record-only event, RFC18 single certified leg). RFC07's
+record-only event is implemented (`KernelFinalReadV1::panel_record`); RFC18 needs no change.
+
+**Item 1 — conformance / opv_bootstrap migration to the real paid path:** see the validation record §8
+(`consolidated-validation-2026-10-15.md`). Two consensus bugs past the dormant monetary fence fixed (PAV3 origin header cap, native
+covenant lookup); 37 / 54 in the last full group run, more passing in targeted runs since. Two causes need a user decision:
+v4/v5 opt-in (and the Panel v5 beacon) cannot reach their `final_by` with approved paid sources by construction, and the
+onboarding binding's 200-DAA liability ends before a paid-source conformance can pass.
+
+**Item 2 — RFC08 (ADR-0184), not implemented yet. Implementation plan** (read-only design pass, file:function targets):
+
+- New dormant fence `palw_native_liability_horizon_v1`; only claims committed at or past it take the new rule.
+- Horizon derived, not a new wire field: `final_floor + window_court`, where the Final floor is already a deterministic function
+  of the producer-signed commit body and the ruleset at commit (funded v11: commit + `ExecutionHorizonsV11.challenge_window`;
+  text v29: `NativeTextClaimV29::challenge_end`; job v39: `NativeAcceptedClaimV39::final_after`; mining v39: the Master Final DAA).
+  The producer's signature covers every input of the formula — no wire or object-kind change, so nothing new has to ride
+  unjudged below the fence. (If ADR-0184's "署名" must be a literal signed number, a versioned field on each of the four wires is
+  the alternative.)
+- Admission: replace the four `refuse_unsourced_admission_v1` calls (`palw_bond_budget_fold_v1.rs` funded v11, text v29, job v39,
+  mining v39) with `admit_claim_liability_v1(.., NativeClaim { family })` past the fence, hard deadline = acceptance + the policy's
+  worst-case Final-floor offset + `window_court`; material TTL `u64::MAX` (these families carry no covenant).
+- A sourced leg `PalwLegLiabilityV1::NativeClaim { claim, family, .. }` (terms as the `KernelClaim` branch, horizon from the
+  derivation); at Final the payee's fee is held (no `write_payout`), released by a sweep past the horizon through
+  `settle_once_liable_v1`; a conviction before it refunds the requester and slashes (`slash_bond`); a default refunds the held fee to
+  the requester; the native mining receipt vests at the horizon.
+- Out of scope of ADR-0184 (stay `Unsourced`): the material provider fee (event-relative covenant), a drawn verifier fee outside a
+  paid V2 claim (RFC07-5), the EXEC kernel fee without a reward row, the beacon source fee, mesh audit pay.
+- 08-C (EXEC without `exec_v2_test_admit_class_v1`): a fixture with normal class registration, family certification, seat readiness
+  (the native-Final suite's `ready_native_seats` already proves inventory readiness) and bond share; the native paid-material test
+  fails today for exactly this (`Candidate under the model registry`).
+
+**Item 3 — RFC09, not started. Map:** op 203 (`GetPalwForkChoiceOpening`) serves V1 leaves only; the shared V2/V3 reader is
+`palw_verify_committed_leaf_v2` (`palw_fork_choice_rule_e_leaf_v3.rs`), with window/registry sub-openings in the v2/v3 leaf modules;
+`misaka/palw/remote/src/l2.rs` stops at the Rule E fence (`LeafV1Insufficient`, l2.rs ~940) and already holds an unused
+`verify_committed_opening_v2`. Needed: a V2/V3 opening read (op versioning), the remote comparator over those openings, and the
+2-fork Rule E + Gate C test (none exists; `l2/tests.rs` has the V1 conflict-stop tests).
+
+**Item 4 — RFC10, not started** (depends on the paid-source path above).
+
+**Item 5 — RFC12, not started. Map:** the four `NODE_GAPS` (`scripts/drills/misaka-rfc12-acceptance.py` 69–78) have no node read
+today (reserve balance store has no RPC; no failpoints; no paid-request generator; no by-outpoint UTXO read). A new read follows
+the op registry pattern (`rpc/core/src/api/ops.rs`, message types, service handler, gRPC and wRPC routes). No deposit-refund CLI
+exists (`misaka/apps/cli` has `evm deposit-lock` / `claim`); the refund spend needs the lock outpoint (by-outpoint read), the
+timeout rule (`EvmDepositLockNotRefundableYet`) and an ML-DSA P2PKH signature script as in `validator-core` funding.

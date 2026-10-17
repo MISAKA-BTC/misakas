@@ -42,6 +42,14 @@ async fn x8_g14_opv_settlement_never_substitutes_for_selected_exec_approval() {
         .max()
         .unwrap();
     cw.net.beat_to(floor + 1).await;
+    // A paid claim's Final lands at the close of its signed windows: beat to it.
+    let ttpb = cw.net.ttpb();
+    for _ in 0..2_000 {
+        if matches!(cw.net.claim_state(&k0), ClaimStateV1::Final { .. }) {
+            break;
+        }
+        cw.net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
     let (label, from) = settlement_of(&cw, &k0);
     assert_eq!(label, "final-revocable", "Final within liability is revocable, never safe");
     let liability = cw.net.ledger().claims[&k0].liability_until.expect("a Final claim's horizon");

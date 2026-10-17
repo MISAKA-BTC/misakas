@@ -598,9 +598,12 @@ async fn kernel_claims(
     // as a paid claim and locked on the seal-reveal seed (ADR-0185); the drawn seats approve the honest ones.
     let paid = cw.net.config.params.palw_claim_challenge_v2.is_some();
     let paid_class = if paid { Some(cw.net.paid_class_for(REGISTRANT, kernel_class).await) } else { None };
+    // Only the session's own prefix and slice jobs (the first four) need the approval; an extra public job stays an ordinary job
+    // (a paid job holds its one claim, and the extra jobs' tests have other producers claim them).
+    let session_jobs = 4.min(planned.len());
     let paid_jobs = match paid_class {
         Some(class) => {
-            let pairs: Vec<(usize, Digest)> = planned.iter().map(|(_, job, _, _)| (REGISTRANT, job.id())).collect();
+            let pairs: Vec<(usize, Digest)> = planned[..session_jobs].iter().map(|(_, job, _, _)| (REGISTRANT, job.id())).collect();
             cw.net.enroll_paid_jobs(class, &pairs).await
         }
         None => Vec::new(),
@@ -644,7 +647,14 @@ async fn kernel_claims(
     }
     if let Some(paid_class) = paid_class {
         // Each salted reveal is its paid commit (one a block); then the future sources of every target, shared, and the locks.
-        let sealed: Vec<super::super::paid_path::SealedPaid> = reveals
+        // The extra jobs reveal as ordinary kernel claims.
+        let extras: Vec<(usize, Obj)> =
+            reveals[session_jobs..].iter().map(|(p, o)| (*p, cw.net.route(*p, o))).collect();
+        if !extras.is_empty() {
+            cw.net.send(extras).await;
+        }
+        let lies = &lies[..session_jobs];
+        let sealed: Vec<super::super::paid_path::SealedPaid> = reveals[..session_jobs]
             .iter()
             .zip(&out)
             .zip(&paid_jobs)
@@ -660,7 +670,7 @@ async fn kernel_claims(
         // once, before its seal window opens.
         let later = cw.net.api().unwrap().paid_claim_approved_final_exists_v2();
         let mut committed = Vec::new();
-        for (s, lying) in sealed.iter().zip(&lies) {
+        for (s, lying) in sealed.iter().zip(lies.iter()) {
             let c = cw.net.reveal_paid_covenanted(paid_class, std::slice::from_ref(s)).await[0];
             if later && !*lying {
                 cw.net.fund_future_sources(c.0, c.1, REGISTRANT).await;
@@ -668,10 +678,10 @@ async fn kernel_claims(
             committed.push(c);
         }
         let honest: Vec<(Digest, Digest)> =
-            committed.iter().zip(&lies).filter(|(_, lying)| !**lying).map(|(c, _)| *c).collect();
+            committed.iter().zip(lies.iter()).filter(|(_, lying)| !**lying).map(|(c, _)| *c).collect();
         let targets: Vec<(Digest, Digest, usize, usize)> = committed
             .iter()
-            .zip(&lies)
+            .zip(lies.iter())
             .zip(&sealed)
             .filter(|((_, lying), _)| !**lying)
             .map(|((c, _), s)| (c.0, c.1, REGISTRANT, s.card))

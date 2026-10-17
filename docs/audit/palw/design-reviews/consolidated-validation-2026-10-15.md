@@ -275,3 +275,50 @@ Remaining 29, by cause:
 | x8 kernel claim not committed | 1 | not investigated |
 | pruned import history mismatch (consensus `conformance_rows_survive_reorg_restart_and_pruned_import`) | 1 | same fix as the kaspad fixture (history from the node's own pruning samples) |
 | opt-in source tests (v3 / v4 / v5 and `from_zero` / `eligibility_lost`) still use OPV sources | 6 | move their sources to paid claims (F2) |
+
+### 8. Migration round 2 (2026-10-18): PAV3, covenants, seal-reveal sources, x8 on paid kernel claims
+
+Real path only; no adapter, gate or seam was weakened. Fences stay dormant; t12 identity unchanged.
+
+**Two consensus bugs, both past the dormant `palw_monetary_material_v1` only** (commit `b6bb15419`):
+
+- `palw_exec_v2_origin_v1::decode_header` bounded the carried `palw_commitment` by the PAV2 cap (8 KiB). A PAV3 carriage (two provider
+  signatures, the executor key and seal) exceeds it, so every PAV3 REAL claim's original header was unreadable and its block
+  disqualified (`AuthorizationOrigin`). The PAV3 magic now selects `PALW_ATTEMPT_MATERIAL_MAX_BYTES_V3`.
+- `require_monetary_material_enrollment_v1` looked a covenant up by `terms.root` only. A native PAV3 claim's covenant is its prior
+  session, keyed by the session root and bound to the claim at acceptance (`native_binding`), so the claim's own budget commit was
+  refused ("new paid material has no explicit signed monetary covenant"). It now reads the binding, as
+  `require_native_monetary_material_scope_v1` already did.
+
+**Harness on the real path:**
+
+- x8 REAL attempts mount the owned PAV3 form: the executor and two independent providers enroll a prospective native session
+  through a block (`MonetaryMaterialEnrolledV1` with `native_session`), the lottery prices the provisional PAV3 envelope, the
+  providers sign the Ready and the executor seals it.
+- Every kernel claim past the monetary fence commits under its producer's signed covenant over the complete served material
+  (`kernel_covenant`, shared by the conformance world and `paid_path`).
+- A later paid target (after the first approved paid Final) locks on the seal-reveal seed: the payer funds the future source fee
+  right after the commit, bonds that are no live source target's producer (RFC07-3) seal on the eligible class inside the window,
+  opt in, reveal under covenants; the lock follows the reveal window. One sealed source may seed several targets.
+- `paid_path.rs`: the same steps on any `Net` world (paid class, payer enrollment before any seal, paid commit as the salted
+  reveal, lock, the drawn seats' receipts). Two paid commits in one block land only the first; the helpers send one a block.
+- Since the RFC07 adapter an EXEC slice verifies only through an approved, non-bootstrap paid Final of its kernel claim
+  (`palw_exec_v2_selected_approval_v1`, `paid_claim_bootstrap_locked_v2`): the x8 prefix/slice claims now run that path.
+- The pass assertions accept `ACTIVE_REWARDABLE` only past the artifact binding's horizon (the paid lifetimes outlast it).
+- The harness establishes a pruning import target with the node's own pruning-sample history (as the kaspad fixture).
+
+**Results.** Full `conformance` + `opv_bootstrap` run before the x8 paid migration: **37 / 54** (25 before this round). Targeted runs
+after it, passing: `opv_bootstrap` sealed-source v3, from-zero; `conformance` another-beacon, forged-evidence, hostile-evidence;
+x8 snapshot origin, canonical prefix, outsider conviction, tiny run, lying REAL run, signed legacy job, RFC15 conviction and
+default. `conformance_rows_survive_reorg_restart_and_pruned_import` passes its import now; its pass assertion was fixed after the
+run (not re-run).
+
+**Still failing, by cause:**
+
+| cause | tests | next step |
+| --- | --- | --- |
+| **design conflict (user decision):** a v4/v5 opt-in target needs its sources Final by `final_by = reveal_end + source_final_slack_daa` (120 in the probe), but an approved paid source's own lifetime contains a source window of the same policy plus check/challenge/court windows, so it is Final after `final_by` by construction | `opv_bootstrap` v4 ordinary-withholding, paid-v5 ×2; core `rfc0010_production_fold::paid_panel_sources…` (Panel v5 beacon, same collector) | decide how v4/v5 (and the Panel v5 beacon) read approved paid sources — e.g. the seal-reveal seed as F1 does, or a `final_by` measured from the source's own lifetime |
+| **design value (user decision):** `PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1` = 200 DAA, shorter than the paid-source lock (≈ 450 DAA after the commit), so the binding is Final before the conformance can pass; a DA lapse after the pass can no longer refute it | `opv_bootstrap` eligibility-lost | raise the binding liability to at least the paid lifetime + the evidence window (ADR-0181 path), or drop that scenario |
+| x8 assertions written for OPV timeout Finals: signed root expiries shorter than the paid Final, collateral deltas that now include covenant and source reservations, Final due later | completed-worker, withheld-slice, kernel-finals restart/reorg, second-real-root, honest-slices, native-Final ×3 | per-test: lengthen signed lifetimes inside the max, recompute the economic deltas from the rows, wait for the paid Final |
+| no seam (RFC08 08-C): the class is `Candidate` under the model registry | native paid-material window | the no-seam EXEC fixture (item 2) |
+| not diagnosed | native happy-Final (`card 1's attempt block` disqualified) | read its disqualification (`G14_LOG=…virtual_processor=info`) |
