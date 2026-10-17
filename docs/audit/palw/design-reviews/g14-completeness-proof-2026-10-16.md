@@ -1544,3 +1544,18 @@ text29 の実 job を node 上で作る harness(`funded11/text29.rs`)を書い�
    - 公開告発(action 21)の試験と text29 の T-N13 は書いた。ただし Fund の先へ進めないので、`#[ignore]` で理由を付けて残した。
    - 解決には、`seal_ttl` の固定値、carriage の period、paged の packet 数のどれかを変える判断が要る。
    - 試験で使った horizon(interval 100,000、challenge 30,000、DA 回答 200、retention 300、requests_per_session 128、producer の reserve 1e13 sompi、Final27 の試験 calibration)は、到達性を調べるための値で、測定値ではない。
+
+### 13.6 追補(2026-10-18):text29 と v39 の実 job
+
+- **text29(ユーザー決定 2026-10-18)。**
+  - Final27 の予約 scheduler の carriage period を 2 DAA から 1 DAA にした(休眠。`seal_ttl`・締切・責任は不変、ADR-0187)。
+  - これで Fund が通り、node 試験 2 件 pass。
+    - `text29_harness_registers_prepares_consents_and_funds_a_real_job`
+    - `text29_a_public_filing_convicts_a_lying_text_job_without_a_paid_owner`
+  - 偽った stopped post は、paid owner なしの公開告発(action 21)で有罪になった。producer は reserve 全額(1e13 sompi)を slash された。正直な job は変わらなかった。独立 replay は一致した。
+- **v39(owning39)。** node 試験 `owning39_fixture_registers_consents_and_funds_a_real_job` が pass した。
+  - 実 `FlatSourceWireV39` で、source(41)、class(42)、producer の consent(43)、Fund(44)、偽った claim の commit(45)まで通った。
+  - 外部の独立 replay(SDK の `execute_independent_replay_v39` / `detect_first_fault_v39`)で filing(762 byte)を作った。court と G-N2 が使う `check_flat_filing_v39` は、node に commit された post の上で Computation と判定した。
+  - **固定値の衝突ではなかったもの。** Fund の同時義務の締切は v39 では commit window で決まる。probe の 5 DAA では、約 88 packet が period 1 で service の 17.6 倍になる。これは policy の horizon で、固定定数ではない。試験では 200 DAA にした(負荷 0.45)。
+  - **未了。** Master の登録(65〜70)、Master Final、mining の登録・seat・commit(73〜75)、認証、receipt。G-N2 の action 80 を、この job の Final 後に node 上で走らせるところまでは届いていない。
+- 試験の horizon(interval 100,000、challenge 30,000、DA 回答 200、commit window 200、Final27 の試験 calibration など)は到達性のための値で、測定値ではない。
