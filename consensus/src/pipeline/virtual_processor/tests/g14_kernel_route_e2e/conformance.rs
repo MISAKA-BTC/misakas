@@ -1085,7 +1085,7 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
 
 // RFC-0008 v2 (X8R): the composed run — a REAL root on this world's kernel-bound class, its slices verified through the route.
 mod exec_slices;
-mod paid_sources;
+pub(super) mod paid_sources;
 /// **G14C (GAP-03): ops 231 and 212, served by a node started after the evidence was posted, carry everything the SDK's fresh
 /// verifier needs.** The attempt row, the evidence row and the program arrive as op 231 serves them, the Final facts as op 212 serves
 /// them — each op's own builder over a node that synced by IBD, through the RPC's JSON wire form (`canonical.rs`'s [`Rpc`]) — and

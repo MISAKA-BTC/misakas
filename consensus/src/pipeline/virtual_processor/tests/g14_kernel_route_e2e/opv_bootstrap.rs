@@ -1202,7 +1202,25 @@ fn beacon_of(net: &Net, o: &Onb) -> AttemptBeaconV1 {
 
 /// The bootstrap B (complete check, eligible, registered under OPV) and a candidate C bound under the SEALED-SOURCE policy, committed.
 async fn sealed_world(seed: u64) -> (Net, Onb, Onb) {
-    let mut net = Net::over_cfg(boot_config(0, Vec::new()), TestConsensus::new);
+    sealed_world_over(seed, boot_config(0, Vec::new())).await
+}
+
+/// [`boot_config`] with the paid-source path armed (ADR-0185: the beacon's sources are approved paid claims).
+fn paid_boot_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (cfg, bundle, premine, floats) = boot_config(0, Vec::new());
+    let mut params = cfg.params.clone();
+    super::paid_path::arm_paid_sources(&mut params);
+    assert!(params.validate_palw_v2().is_err(), "private drill configuration stays unarmable on every real network");
+    // The fold reads the V2 bundle the params mirror (the arming syncs its fences into it).
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => bundle,
+    };
+    (Config::new(params), bundle, premine, floats)
+}
+
+async fn sealed_world_over(seed: u64, cfg: (Config, PalwConsensusParamsV2, Premine, Premine)) -> (Net, Onb, Onb) {
+    let mut net = Net::over_cfg(cfg, TestConsensus::new);
     net.beat_to(1).await;
     let mut onbs = onboard_all(&mut net, vec![Spec::honest(seed, BOOT, true), Spec::sealed(seed + 1, CAND)]).await;
     let c = onbs.pop().unwrap();
@@ -1226,25 +1244,32 @@ async fn sealed_world(seed: u64) -> (Net, Onb, Onb) {
 #[tokio::test]
 async fn g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_the_class_passes() {
     kaspa_core::log::try_init_logger("warn");
-    let (mut net, b, c) = sealed_world(51).await;
+    let (mut net, b, c) = sealed_world_over(51, paid_boot_config()).await;
     let policy = palw_onboarding_sealed_policy_v1();
     let start = net.attempt(c.v2).committed_daa + policy.anchor_delay_slots;
     let w = policy.beacon_window_slots;
+    // ADR-0185: the sources are approved paid claims of B's OPV class — the payers enroll their jobs before any seal, the sealers
+    // (other bonds) seal inside the window and reveal as their paid commits; the drawn seats approve them and they reach paid Final.
     let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x70).await;
+    let paid_class = net.paid_class_over(BOOT, b.opv).await;
+    let paid_jobs = net.enroll_paid_jobs(paid_class, &[(PRODUCERS[0], jobs[0].id()), (PRODUCERS[1], jobs[1].id())]).await;
     net.beat_to(start).await;
-    let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
+    let sealed = net.seal_paid(&b.kfx(), b.opv, &jobs, &paid_jobs, &PRODUCERS[2..4]).await;
     assert!(net.daa() < start + w, "both seals inside the seal window");
     assert!(matches!(beacon_of(&net, &c), AttemptBeaconV1::Waiting { state: "SEALING", have: 2, .. }), "{:?}", beacon_of(&net, &c));
     net.beat_to(start + w).await;
-    reveal_now(&mut net, &reveals).await;
+    let paid = net.reveal_paid(paid_class, &sealed).await;
+    let reveals: Vec<(usize, K, Digest)> = sealed.iter().map(|s| (s.card, s.reveal.clone(), s.id)).collect();
     for (_, _, id) in &reveals {
         assert!(net.ledger().claims.contains_key(id), "the salted reveal committed");
         assert!(net.ledger().claim_beacon_salt(id).is_some(), "its salt is kept (table 25)");
     }
     assert!(net.daa() < start + 2 * w, "both reveals inside the reveal window");
+    net.lock_and_receipt(BOOT, &paid).await;
     let ttpb = net.ttpb();
     let mut locked = None;
-    for _ in 0..400 {
+    // The paid sources reach Final after their signed lifetime (≈ 444 DAA under the probe policies).
+    for _ in 0..3_000 {
         match beacon_of(&net, &c) {
             AttemptBeaconV1::Locked(bk) => {
                 locked = Some(bk);

@@ -41,7 +41,7 @@ fn material_policy(window_daa: u64) -> PalwMonetaryMaterialPolicyV1 {
 /// **Arm the paid-claim path on `params`** (every fence unapproved and refused by validation, as everywhere in this file): the paid
 /// claim challenge with the bootstrap seed, the beacon source and source-fee fences its commit reads, the monetary covenant and the
 /// income fences that covenant needs.
-pub(super) fn arm_paid_sources(params: &mut kaspa_consensus_core::config::params::Params) {
+pub(crate) fn arm_paid_sources(params: &mut kaspa_consensus_core::config::params::Params) {
     use kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1;
     use kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1;
     let mut challenge = PalwClaimChallengeFenceV2::unapproved_probe_at(ForkActivation::new(1));
