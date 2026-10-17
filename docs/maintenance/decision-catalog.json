@@ -1412,8 +1412,8 @@
     {
       "kind": "adr",
       "number": "0183",
-      "path": "docs/adr/0183-paid-lock-randomness-bootstrap-and-paid-sources.md",
-      "title": "ADR-0183 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に",
+      "path": "docs/adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md",
+      "title": "ADR-0185 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に",
       "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
     },

@@ -909,7 +909,7 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
         if !lock.source_valid {
             continue;
         }
-        // A bootstrap or seal-reveal lock (ADR-0183) did not draw from a locked v5 beacon: its seed was fixed at the lock from the
+        // A bootstrap or seal-reveal lock (ADR-0185) did not draw from a locked v5 beacon: its seed was fixed at the lock from the
         // pinned seed or from sources that had all revealed, so there is no beacon whose later state could withdraw it.
         if lock.anchor == paid_claim_bootstrap_anchor_v2() || lock.anchor == paid_claim_seal_anchor_v2() {
             continue;

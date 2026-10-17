@@ -287,7 +287,7 @@ impl Cw {
     /// They reach Final with no Panel when their window closes.
     async fn source_claims(&mut self, n: usize) -> Vec<Digest> {
         // RFC07 adapter (74921a40a): an OPV timeout Final exports no event; the sources are approved paid claims on the real path
-        // (`paid_sources`, ADR-0183).
+        // (`paid_sources`, ADR-0185).
         self.paid_source_claims(n).await
     }
 
@@ -344,7 +344,7 @@ impl Cw {
     /// Beat until the attempt's beacon locks (k = 2 future Panel-independent Finals, then depth D).
     async fn until_locked(&mut self) -> u64 {
         let ttpb = self.net.ttpb();
-        // Paid sources reach Final only after their signed lifetime (≈ 444 DAA, ADR-0183): bounded by the widened window.
+        // Paid sources reach Final only after their signed lifetime (≈ 444 DAA, ADR-0185): bounded by the widened window.
         for _ in 0..(kaspa_consensus_core::palw_conformance_evidence_v1::PALW_ONBOARDING_POLICY_WINDOW_DAA_V1 * 2) {
             let read = self.read();
             // Locked at the sink (what the next block's fold sees), not only at the virtual's DAA the read is taken at.
@@ -640,7 +640,7 @@ async fn g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_
     assert_eq!(state(&cw).0, S::ChallengePending, "nothing passes before the window closes");
     cw.net.beat_to(posted.window_end_daa + 1).await;
     let a = cw.attempt();
-    // With paid sources the beacon locks after their signed lifetime (ADR-0183), by which time the artifact binding may already be
+    // With paid sources the beacon locks after their signed lifetime (ADR-0185), by which time the artifact binding may already be
     // Final: the pass then goes straight on to ACTIVE_REWARDABLE.
     let binding_final = cw.net.api().unwrap().artifact_binding_v1(&cw.v2_class, &cw.kernel_root).unwrap().final_daa;
     assert!(

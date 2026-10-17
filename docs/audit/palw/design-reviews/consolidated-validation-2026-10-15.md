@@ -260,7 +260,7 @@ native-Final assertions (F1) must be decided first; for the 7 opt-in tests (F2).
 
 ### 7. Window widened (user decision 10-17) and the migration run
 
-`PALW_ONBOARDING_POLICY_WINDOW_DAA_V1` 120 → 1,024 (ADR-0183 §4). The `Cw` harness now uses approved paid sources by default.
+`PALW_ONBOARDING_POLICY_WINDOW_DAA_V1` 120 → 1,024 (ADR-0185 §4). The `Cw` harness now uses approved paid sources by default.
 `g14_kernel_route_e2e::{conformance, opv_bootstrap}`: **25 / 54 PASS** (16 before), including
 `g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_class_activates` (beacon locked on two bootstrap-locked
 paid Finals, evidence passed; its state assertion now also accepts a direct ACTIVE_REWARDABLE when the binding is already Final).

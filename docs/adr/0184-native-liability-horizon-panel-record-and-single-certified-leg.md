@@ -5,7 +5,7 @@
 - **Implementation:** RFC07 は `integ/validation-r2`(`KernelFinalReadV1::panel_record`)。RFC08 は未実装(本 ADR が仕様)。RFC18 は変更なし。
 - **Verification:** 未実施。
 - **Activation:** なし(全 fence dormant、t12 identity 不変)。
-- **Related:** [外部監査の状況](../audit/palw/design-reviews/rfc-completion-audit-2026-10-17-status.md)、ADR-0183。
+- **Related:** [外部監査の状況](../audit/palw/design-reviews/rfc-completion-audit-2026-10-17-status.md)、ADR-0185。
 
 ## 決定
 

@@ -1,4 +1,4 @@
-# ADR-0183 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に
+# ADR-0185 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に
 
 - **Decision:** Accepted — ユーザー決定 2026-10-17(F1・F2・bootstrap、ADR-0181 の例外変更経路で記録)。
 - **Scope:** RFC-0007 paid claim(`palw_claim_challenge_v2`)の checker 抽選の乱数源と beacon source の範囲。PALW 合意方式・既存数値は変更しない。

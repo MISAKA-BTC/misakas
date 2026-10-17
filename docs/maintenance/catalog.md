@@ -188,7 +188,7 @@
 - [adr/0180-palw-only-consensus-no-bft-validators.md](../adr/0180-palw-only-consensus-no-bft-validators.md)
 - [adr/0181-design-freeze-and-controlled-change.md](../adr/0181-design-freeze-and-controlled-change.md)
 - [adr/0182-defer-media-and-model-improvement-until-post-mainnet.md](../adr/0182-defer-media-and-model-improvement-until-post-mainnet.md)
-- [adr/0183-paid-lock-randomness-bootstrap-and-paid-sources.md](../adr/0183-paid-lock-randomness-bootstrap-and-paid-sources.md)
+- [adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md](../adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md)
 - [adr/0184-native-liability-horizon-panel-record-and-single-certified-leg.md](../adr/0184-native-liability-horizon-panel-record-and-single-certified-leg.md)
 - [adr/INDEX.md](../adr/INDEX.md)
 - [adr/README.md](../adr/README.md)

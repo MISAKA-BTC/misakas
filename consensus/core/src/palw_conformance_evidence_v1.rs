@@ -607,7 +607,7 @@ pub fn evidence_diff_v1(a: &BeaconConformanceEvidenceV1, b: &BeaconConformanceEv
 /// The policy's numbers: `k` works, the anchor delay, the collection window, the settlement depth `D`, the repetitions, the bits.
 pub const PALW_ONBOARDING_POLICY_K_V1: u32 = 2;
 pub const PALW_ONBOARDING_POLICY_DELAY_DAA_V1: u64 = 2;
-/// User decision 2026-10-17 (ADR-0183): at least a paid source claim's signed lifetime including its source window — the beacon's
+/// User decision 2026-10-17 (ADR-0185): at least a paid source claim's signed lifetime including its source window — the beacon's
 /// sources are approved paid claims, whose Final lands after their checking, challenge and dispute windows (≈ 444 DAA after commit
 /// under the unapproved probe policies). Was 120, inside which no paid source could be Final. INTERIM.
 pub const PALW_ONBOARDING_POLICY_WINDOW_DAA_V1: u64 = 1_024;
