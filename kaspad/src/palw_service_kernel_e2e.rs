@@ -750,14 +750,6 @@ async fn g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_th
         let when = if pre.contains(id) { "pre-Final" } else { "post-Final" };
         eprintln!("[service-kernel] {lie:?} ({when}): convicted by the service; carried {carried:?}");
     }
-    for (p, before) in &producer_before {
-        let n = after_final.iter().chain(before_final.iter()).filter(|(_, q, ..)| q == p).count() as u64;
-        assert_eq!(
-            collateral_of(&w.chain, w.chain.bonds[*p]).0,
-            before - n * policy.claim_collateral,
-            "card {p}: each conviction slashed its real bond"
-        );
-    }
     // G14 lane closure G-K1: each colluding seat is charged its signer liability lock once per convicted claim it covered (the
     // honest twin's seats are not). The jobs' poster (card 1) also pays one thing in the meantime: the honest twin's Final reward, out
     // of its job escrow (GAP-5: user-pays; the bond's `slashed` records the escrow spend). No convicted claim is paid.
@@ -766,6 +758,18 @@ async fn g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_th
         kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1,
     );
     let convicted_seats: Vec<Vec<usize>> = after_final.iter().chain(before_final.iter()).map(|(.., s)| s.clone()).collect();
+    // A producer is a seat on the OTHER producers' claims too (the seats are drawn among every card but the claim's own producer),
+    // so its collateral also pays G-K1's lock once per convicted claim it covered (validation 2026-10-17: card 0 lost exactly one
+    // lock beyond its own reservations; the assertion predated G-K1).
+    for (p, before) in &producer_before {
+        let n = after_final.iter().chain(before_final.iter()).filter(|(_, q, ..)| q == p).count() as u64;
+        let covered = convicted_seats.iter().filter(|seats| seats.contains(p)).count() as u64;
+        assert_eq!(
+            collateral_of(&w.chain, w.chain.bonds[*p]).0,
+            before - n * policy.claim_collateral - covered * lock,
+            "card {p}: each conviction slashed its real bond, and each convicted claim it covered charged its lock (seats: {convicted_seats:?})"
+        );
+    }
     for (card, before) in &seat_slashed {
         if !producers.contains(card) {
             let paid = if *card == REGISTRANT { policy.claim_reward } else { 0 };

@@ -357,6 +357,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_monetary_material_v1"
             | "palw_material_release_recovery_v2"
             | "palw_memory_routing_court_v2"
+            | "palw_tir_public_conviction_v1"
+            | "palw_native_mining_v39"
             | "palw_staged_tir_route_v1"
             | "palw_staged_float_constraint_v1"
             | "palw_exec_payload_v2"
@@ -390,6 +392,20 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
+            // Bare heights mirrored onto the V2 bundle the fold reads, armed as `fork_id_v1`'s probe arms them (landed after this
+            // harness was last run: validation 2026-10-17). Far above the chain they judge nothing here.
+            "palw_settlement_once_v1" => {
+                params.palw_settlement_once_v1 = Some(at);
+                params.sync_palw_settlement_once_v1();
+            }
+            "palw_paid_claim_trap_v1" => {
+                params.palw_paid_claim_trap_v1 = Some(at);
+                params.sync_palw_paid_claim_trap_v1();
+            }
+            "palw_class_registration_origin_v1" => {
+                params.palw_class_registration_origin_v1 = Some(at);
+                params.sync_palw_class_registration_origin_v1();
+            }
             // The 2026-10-12 rulings' rules (register X3, N4, D2): bare heights and X3's unapproved probe policy, mirrored onto the
             // V2 bundle the fold reads. Each keys on a claim's acceptance DAA, so far above the chain they judge nothing here.
             "palw_court_model_scope_v1" | "palw_public_evidence_reward_v1" | "palw_claim_hard_deadline_v1" => {
@@ -527,10 +543,97 @@ fn zeros<T: borsh::BorshDeserialize>() -> T {
 /// `PALW_LIFECYCLE_NEW_KINDS_V1` is carried here without an edit (a kind no near-zero body decodes to needs a hand-built sample in
 /// [`well_formed`], and the panic says so).
 fn zero_filled_kind(tag: u8) -> Obj {
-    let object: Obj = minimal_decode(&[tag])
-        .unwrap_or_else(|| panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample instead"));
+    let object: Obj = match tag {
+        170 | 171 => tir_public_sample(tag),
+        _ => minimal_decode(&[tag])
+            .unwrap_or_else(|| panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample instead")),
+    };
     assert_eq!(borsh::to_vec(&object).unwrap()[0], tag);
     object
+}
+
+/// **Kinds 170/171 (G14 original paid TIR control and atomic Valid grant/Ready, `palw_tir_public_conviction_v1`)**: their bodies
+/// fix lengths (ML-DSA-87 signatures, a bounded owned part) no near-zero body decodes to, so they take the hand-built shape core's
+/// `zero_filled_kind` uses (`palw_tir_public_carriage_v1`'s `#[cfg(test)]` fixtures, which this crate cannot reach). Shape only:
+/// nothing here is signed or admissible — below its fence the kind must ride undecided like every other new kind.
+fn tir_public_sample(tag: u8) -> Obj {
+    use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
+    use kaspa_consensus_core::palw_tir_public_carriage_v1::{
+        PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicControlV1, PalwTirPublicGrantReadyV1,
+    };
+    use kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1;
+    use kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1;
+    let h = Hash64::from_u64_word;
+    let bond = |n: u64| PalwBondKeyV2(TransactionOutpoint::new(h(n), 0));
+    let sig = || vec![2u8; MLDSA87_SIGNATURE_LEN];
+    match tag {
+        170 => Obj::TirPublicControlV1 {
+            control: Box::new(PalwTirPublicControlV1 {
+                version: 1,
+                claim: h(1),
+                allocation_id: h(2),
+                source_id: h(3),
+                target: PalwTirPublicControlTargetV1::Acquisition { owner: bond(7), reserved_daa: 10 },
+                expected_turn: 4,
+                declared_rent_sompi: 0,
+                signer: bond(8),
+                action: PalwTirPublicControlActionV1::Acquisition(PalwTirPublicOwnedActionV1::Part {
+                    demand_id: h(4),
+                    answerer: bond(8),
+                    offset: 16_384,
+                    bytes: vec![1, 2, 3],
+                }),
+                signature: sig(),
+            }),
+        },
+        171 => {
+            let receipt = kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2 {
+                claim: h(1),
+                verdict: kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                seat_bond: bond(8),
+                signed_daa: 20,
+                signature: sig(),
+            };
+            let grant = PalwTirPublicCustodyGrantV1 {
+                version: 1,
+                claim: receipt.claim,
+                seat: receipt.seat_bond,
+                signed_daa: receipt.signed_daa,
+                pledge_id: h(20),
+                valid_receipt_digest: PalwTirPublicCustodyGrantV1::receipt_digest_v1(&receipt),
+                signature: sig(),
+            };
+            let descriptor = kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+                version: 1,
+                source_id: h(3),
+                class_id: h(10),
+                artifact_root: h(11),
+                execution_root: h(12),
+                trace_root: h(13),
+                step_root: h(14),
+                step_leaf_count: 19,
+                decode_count: 3,
+                vocab: 8,
+                material_until_daa: 1000,
+                manifest_digest: h(15),
+                retained_bytes: 1024,
+            };
+            Obj::TirPublicGrantReadyV1 {
+                grant: Box::new(PalwTirPublicGrantReadyV1 {
+                    version: 1,
+                    claim: h(1),
+                    allocation_id: h(2),
+                    source_id: h(3),
+                    signer: bond(8),
+                    receipt,
+                    grant,
+                    descriptor,
+                    signature: sig(),
+                }),
+            }
+        }
+        _ => unreachable!("only kinds 170 and 171 take this sample"),
+    }
 }
 
 /// One well-formed, signed object of every kind the live build cannot decode that has a hand-built sample.
