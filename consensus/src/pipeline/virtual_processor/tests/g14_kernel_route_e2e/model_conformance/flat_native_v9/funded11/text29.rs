@@ -142,7 +142,6 @@ pub(super) async fn text_funded(net: &mut Net, f: &Sparse9, positions: u32) -> D
 }
 
 #[tokio::test]
-#[ignore = "text29 Fund is unreachable: paged29 synchronous obligations (~72 packets, period 2) exceed the physical service within the 97-DAA proof deadline fixed by seal_ttl = 100 (G14 proof §13.5); needs a parameter decision"]
 async fn text29_harness_registers_prepares_consents_and_funds_a_real_job() {
     kaspa_core::log::try_init_logger("warn");
     let f = sparse9(false);
@@ -305,7 +304,6 @@ fn public_text_filing(job: Digest, fault: &FlatFaultV25) -> Vec<u8> {
 /// **Action 21 on a real text29 job**: a lying stopped post is convicted by an outsider's public filing (no paid owner); the same
 /// filing against an honest job is dismissed.
 #[tokio::test]
-#[ignore = "text29 Fund is unreachable: paged29 synchronous obligations (~72 packets, period 2) exceed the physical service within the 97-DAA proof deadline fixed by seal_ttl = 100 (G14 proof §13.5); needs a parameter decision"]
 async fn text29_a_public_filing_convicts_a_lying_text_job_without_a_paid_owner() {
     kaspa_core::log::try_init_logger("warn");
     let f = sparse9(false);

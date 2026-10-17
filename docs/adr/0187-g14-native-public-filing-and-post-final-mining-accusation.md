@@ -40,6 +40,12 @@
 - text29 の `paid_restore` の二次の料金式は、block あたりの court work 上限を常に超え、text29 は到達不能だった。同じ単価の線形の式に直した。
 - Fund は、paged29 の同時義務が固定の `seal_ttl` の下で物理 service を超えるため、まだ成立しない。値の判断を待つ(G14 完全性証明 §13.5)。
 
+## 追記(2026-10-18、ユーザー決定):carriage の period
+
+- Final27 の予約 scheduler(`NativeCarriageServiceV22::reserved_scheduler_v30`)の carriage period を 2 DAA から 1 DAA にした。物理 service は 2 倍になる。
+- `seal_ttl`、締切、責任期間は変えていない。Final27 が有効な所だけに効く(全 preset で休眠)。Final27 の外の probe service は period 2 のまま。
+- text29 と v39 は同じ service を使うので、両方の Fund の同時義務の検査に効く。
+
 ## 帰結
 
 - 暗号学的な計算証明は使っていない。

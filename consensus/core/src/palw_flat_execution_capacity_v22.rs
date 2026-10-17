@@ -189,6 +189,10 @@ impl NativeCarriageServiceV22 {
         queue.check(queue.network_domain)?;
         let mut service = Self::probe(mass);
         service.implemented = true;
+        // User decision 2026-10-18 (ADR-0187): the reserved Final27 scheduler serves one slot every DAA (was 2), doubling the
+        // physical service; seal_ttl, deadlines and liability are unchanged. Only reached where Final27 is in force (dormant on
+        // every preset); the probe service below it keeps period 2.
+        service.period_daa = 1;
         service.check(mass)?;
         Ok(service)
     }
