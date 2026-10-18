@@ -1189,6 +1189,23 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     for (inner, object) in kernel_inner_kinds(bond) {
         payloads.push((format!("kernel-route inner kind {inner} inside tag 110"), payload_of(&object)));
     }
+    // A near-zero outer route decodes only action 0. Carry the appended native
+    // actions explicitly: their bodies must remain unjudged below the owning fence,
+    // including malformed semantic bodies that the newer native fold would reject.
+    for action in [19, 20, 21, 80] {
+        use misaka_palw_kernel::route::KernelRouteObjectV1 as Route;
+        let mut routes = vec![Route::StageExecutionV14 { action, body: vec![0; 64] }];
+        if action != 80 {
+            routes.push(Route::FundedExecutionV11 { action, body: vec![0; 64] });
+        }
+        for route in routes {
+            let bytes = route.encode();
+            assert_eq!(Route::decode(&bytes).unwrap(), route, "the appended action's outer frame decodes");
+            let inner = bytes[1];
+            let object = Obj::KernelRouteV1 { bytes, signer: bond, signature: vec![1; 64] };
+            payloads.push((format!("native inner {inner} action {action} below its fence"), payload_of(&object)));
+        }
+    }
     let route = Obj::KernelRouteV1 { bytes: vec![5; 512], signer: bond, signature: vec![1; 64] };
     let one_chunk: Vec<Obj> = [route.clone(), well_formed(bond)[1].clone(), well_formed(bond)[5].clone(), provider_answer()]
         .iter()

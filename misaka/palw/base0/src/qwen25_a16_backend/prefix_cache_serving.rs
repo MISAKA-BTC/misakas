@@ -239,7 +239,11 @@ fn public_prefix_court_reconstructs_the_actual_a16_cache_and_refutes_a_false_nam
             let run = producer.execute_free_prompt(&j, &ids).unwrap();
             let retained = crate::produce::base0_material_decode_any_v1(&run.outcome.material).unwrap();
             let binding = retained.binding();
-            let raw = retained.tiles().expect("the non-held dense fixture retains public step tiles");
+            // FP retains a folded capture (ADR-0082), including for this small dense
+            // geometry. Use the production replay reader to recover its public tiles;
+            // the reconstructed tree below must still equal the original commitment.
+            let replayed = producer.tiles_from_material_v1(&retained).unwrap();
+            let raw = &replayed.tiles;
             let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(index, tile)| (*index, tile)).collect();
             let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
             for (index, tile) in raw {

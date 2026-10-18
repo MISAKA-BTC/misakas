@@ -369,3 +369,40 @@ Required regression: repeated equal-work siblings in both arrival orders; one si
 state root, each valid sibling retained exactly once; invalid/finality-violating tips
 still excluded; exact pre-fence behavior. Reproduction on the dependency-complete tree
 and the repeated-run results remain pending.
+
+### 2026-10-18 — dependency integration and fixture corrections
+
+Merged `origin/integ/validation-r2` (`b6bb15419`) and
+`origin/integ/g14-court-capacity-r2` (`57a325676`) into the red-test branch. The
+validation lane's fence list and the existing list are both retained. The kernel
+service collateral assertions keep that lane's accounting for producer sanctions,
+colluding-seat liability and the job poster's honest escrow payment.
+
+* **BASE-0 prefix court: 1 / 1 passed.** The test assumed dense STEP retention;
+  the producer uses folded retention since ADR-0082. It now reconstructs through
+  the production `tiles_from_material_v1` and checks the same committed STEP root.
+* **Quant decode pins: 1 / 1 passed.** Added `mlx_b3_g64_bf16`, `mlx_b4_g32`, and
+  `mlx_b6_mixed`; an explicit comparison confirms every previous 33 pin is unchanged.
+  Independent MLX decode/oracle checks passed **4 + 3 tests**. The quantized inventory
+  is now HF 36 / GGUF 12; the three-way inventory assertions follow those files.
+* **Admission:** GLM-5's lowered per-position work is 1,549,071,488,000 MAC-equivalent,
+  exceeding the unchanged 2^40 V1 ceiling. It belongs in the explicit bounded-work
+  refusal inventory; no production ceiling was raised. Updated admission run pending.
+* **SDK static pilot:** the retained program root still equals
+  `a1360976cdff92e473dff36769bf468140e4fb5a03150ed3be67d7af3ca72d0a5e21f4d1bf70aa4e39678aa5d6d82bdb499556f3b01999be362adb9e7a560f3d`.
+  The current canonical 32-position planner prices actual public operand modes and
+  bounded history, yielding 776,366 court bytes / 278,696,960 work, rather than the
+  historical 629,606 / 473,589,248 pins. The node's guaranteed reservation remains
+  536,870,912 work; static eligibility remains separate from activation and actual
+  reward/conviction. Runtime after both pin corrections is pending.
+* **A2/H1:** the mempool/template rehearsal previously interpreted a kind below its
+  owning fence even though block acceptance carried it unjudged. H1 now skips the
+  rehearsal for the same `kind_in_force_at` predicate. The uniform sweep also sends
+  Stage actions 19–21/80 and funded actions 19–21 as well-formed outer routes with
+  deliberately invalid semantic bodies, which must stay unjudged below the owner.
+  The two owning-fence matrix tests are pending execution.
+
+The first combined EVM-enabled build found one additional caller of the newly
+HFP1-aware `carry_fp_commitment` helper. That caller now supplies its actual event
+binding as well. This was a compile-time fixture omission, not a runtime PASS. The
+consensus test target continued building; the corrected node rebuild is queued.

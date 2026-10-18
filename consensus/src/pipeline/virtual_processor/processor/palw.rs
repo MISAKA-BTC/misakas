@@ -245,6 +245,13 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Option<String> {
+        // A-2: a below-fence kind is undecodable to the live release. The normal
+        // acceptance walk skips it; rehearsing the newer fold here would instead
+        // refuse its dormant court/ledger and prevent a template from carrying it.
+        // Keep this local admission gate on the same owning-fence reading.
+        if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+            return None;
+        }
         if let Some(verdict) = self.palw_exec_origin_rehearsal_v1_on(state, state_params, point, object) {
             use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 as Verdict;
             return match verdict {

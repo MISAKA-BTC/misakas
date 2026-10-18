@@ -636,7 +636,7 @@ async fn registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_p
     certify_fp_lane(&mut chain, &mut floats, fixture.profile.clone(), true).await;
     fixture.declare_semantics(&mut chain, &mut floats).await;
     fixture.prepare_panel(&mut chain, &mut floats).await;
-    let (_, _, Some((commitment, ids)), _) = fixture.produce(&chain, 3) else { unreachable!() };
+    let (_, event, Some((commitment, ids)), _) = fixture.produce(&chain, 3) else { unreachable!() };
     let quote = chain
         .tc
         .palw_fp_commitment_price_v1(
@@ -652,7 +652,7 @@ async fn registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_p
         .expect("the normally jury-admitted bought class accepts the ordinary FP price query");
     assert!(quote.quanta > 0 && quote.pwu > 0);
     eprintln!("[service-tiled] native bought-class FP price accepted: {} quanta, {} pwu", quote.quanta, quote.pwu);
-    let claim = carry_fp_commitment(&mut chain, &mut floats, &commitment, &ids, false).await;
+    let claim = carry_fp_commitment(&mut chain, &mut floats, &commitment, &event, &ids, false).await;
     fixture.refresh_panel_readiness(&mut chain, &mut floats).await;
     let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
     chain.advance(slot).await;

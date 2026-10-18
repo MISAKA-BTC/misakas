@@ -308,8 +308,12 @@ mod tests {
         );
         let d = k2_tir_v4_descriptor();
         let plan = misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &program, root, 32).unwrap();
-        assert_eq!(plan.budgets.worst_court_bytes, 629_606);
-        assert_eq!(plan.budgets.worst_court_work, 473_589_248);
+        // The program/root is unchanged. The current element-court planner also
+        // prices the public value modes, their actual operand forms and bounded
+        // 32-position history. The old bytes/work recording predates that
+        // accounting. Keep the node's reservation fixed.
+        assert_eq!(plan.budgets.worst_court_bytes, 776_366);
+        assert_eq!(plan.budgets.worst_court_work, 278_696_960);
         let policy = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(
             kaspa_hashes::Hash64::from_bytes([0; 64]),
             kaspa_hashes::Hash64::from_bytes([0; 64]),
