@@ -467,6 +467,102 @@ pub fn tir_public_owner_queue_wait_v1(
     product(sum(&[ahead, 1])?.div_ceil(k), tenure)
 }
 
+/// **Serial cone rounds of the bounded-round localisation (ADR-0190 step 1, DORMANT).** The disputed step's derived operand closure
+/// is fetched in ONE batched request (round 1), and the value-dependent follow-ups in ONE request (round 2): the serial cone rounds
+/// are this constant whatever the run count; bytes per round are carried by parts.
+pub const PALW_TIR_BOUNDED_CONE_ROUNDS_V1: u64 = 2;
+
+/// The bounded-round localisation path's breakdown ([`tir_public_localization_path_bounded_v1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirBoundedPathV1 {
+    pub turns: u64,
+    pub daa: u64,
+    pub cone_runs: u64,
+    pub round1_body: u64,
+    pub round2_body: u64,
+    pub round1_daa: u64,
+    pub round2_daa: u64,
+    pub output_check_daa: u64,
+    pub restart_daa: u64,
+    pub gather_bytes: u64,
+}
+
+/// **The bounded-round localisation path (ADR-0190; DORMANT: no preset selects it; the legacy path is untouched).**
+///
+/// Each term is priced from its own request span (no widest-turn reuse, ADR-0190 step 4):
+/// * IDs and the step-tree descent to the first differing leaf, as the legacy path (bounded by tree height, not by runs);
+/// * the faulty leaf (one turn);
+/// * round 1: ONE batched request carrying the whole cone (`cone_runs × run body`) plus the gather / model-parameter operand bytes;
+/// * round 2: ONE request carrying the leaf and the value-dependent trace path (rows descent, tile descent, every tile of one row);
+/// * the output / stop-rule check: its own request, one trace tile;
+/// * `reorg_replay_moves` restarts, each replaying the two cone rounds (2 turns per restart), at their own spans.
+///
+/// `uncovered_gather_bytes` is the gather / model-parameter operand bound, which the structural analyser does not yet derive. `None`
+/// refuses the frame: the term is never assumed to be 0.
+pub fn tir_public_localization_path_bounded_v1(
+    source: &PalwTirPublicSourceV1,
+    maximum_custodians: u64,
+    config: &PalwStagedPublicCourtConfigV1,
+    clock: &PalwTirFrameClockV1,
+    uncovered_gather_bytes: Option<u64>,
+) -> Result<PalwTirBoundedPathV1, String> {
+    use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1 as R;
+    let gather = uncovered_gather_bytes.ok_or(
+        "TIR bounded door: gather / model-parameter operand bytes are not bounded (ADR-0190 term); the frame is refused, not priced at 0",
+    )?;
+    let slots = maximum_custodians.checked_add(1).ok_or("TIR frame slots overflow")?;
+    let body = |request: R| -> Result<u64, String> { Ok(crate::palw_tir_public_owned_v1::request_body_bound_v1(source, request)?.0) };
+    let span = |bytes: u64| tir_public_turn_span_v1(bytes, slots, config, clock);
+    let level = |count: u64| height(count).min(u64::from(crate::palw_tir_court_v1::PALW_TIR_STEP_NODE_DEPTH_V1)) as u8;
+    let n = source.leaf_count_v1();
+    let d = u64::from(source.decode_count_v1());
+    let tiled = source.supports_tiled_trace_v1() && d > 0;
+    let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+    let run = u32::try_from(n.clamp(1, u64::from(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)))
+        .map_err(|_| "TIR run overflow")?;
+    let leaf_body = body(R::StepLeaf { index: 0 })?;
+    let tile_body = body(R::TraceTile { row: 0, tile: 0 })?;
+    let run_body = if run > 1 { body(R::StepRun { first: 0, count: run })? } else { leaf_body };
+    let cone_runs = source.cone_runs_v1();
+
+    let ids_daa = if tiled { span(body(R::Ids { offset: 0 })?)? } else { 0 };
+    let node_body = if n > 1 { body(R::StepNode { level: level(n), index: 0 })? } else { leaf_body };
+    let descent_turns = source.step_descent_units_v1();
+    let descent_daa = product(descent_turns, span(node_body)?)?;
+    let leaf_daa = span(leaf_body)?;
+
+    let round1_body = sum(&[product(cone_runs, run_body)?, gather])?;
+    let round1_daa = span(round1_body)?;
+    let trace_body = if tiled {
+        let rows_node = if d > 1 { body(R::RowsNode { level: level(d), index: 0 })? } else { tile_body };
+        let tile_node = if tiles > 1 { body(R::TileNode { row: 0, level: level(tiles), index: 0 })? } else { tile_body };
+        sum(&[product(descent(d), rows_node)?, product(descent(tiles), tile_node)?, product(tiles, tile_body)?])?
+    } else {
+        0
+    };
+    let round2_body = sum(&[leaf_body, trace_body])?;
+    let round2_daa = span(round2_body)?;
+    let output_check_daa = span(tile_body)?;
+
+    let restarts = config.prices.reorg_replay_moves;
+    let restart_daa = product(restarts, sum(&[round1_daa, round2_daa])?)?;
+    let restart_turns = product(restarts, PALW_TIR_BOUNDED_CONE_ROUNDS_V1)?;
+    let turns = sum(&[u64::from(tiled), descent_turns, 1, PALW_TIR_BOUNDED_CONE_ROUNDS_V1, 1, restart_turns])?;
+    let daa = sum(&[ids_daa, descent_daa, leaf_daa, round1_daa, round2_daa, output_check_daa, restart_daa])?;
+    Ok(PalwTirBoundedPathV1 {
+        turns,
+        daa,
+        cone_runs,
+        round1_body,
+        round2_body,
+        round1_daa,
+        round2_daa,
+        output_check_daa,
+        restart_daa,
+        gather_bytes: gather,
+    })
+}
+
 /// **The filing allowance** after the stream door: the filer's witness parts (in order) and its conviction, at the measured capacity.
 pub fn tir_public_filing_daa_v1(
     witness_moves: u64,

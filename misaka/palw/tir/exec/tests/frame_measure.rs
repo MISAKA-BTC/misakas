@@ -1008,8 +1008,35 @@ fn door_breakdown_on_a_real_class() {
             other => panic!("armed at 3,120 the real class must be refused on the door: {other:?}"),
         }
     }
+    // ADR-0190 bounded-round door (DORMANT; measurement only). The gather / model-parameter bound is not derived yet, so the path
+    // must refuse without it. The door at a gather value is a SENSITIVITY line, not a bound.
+    assert!(
+        fc::tir_public_localization_path_bounded_v1(&source, 6, &cfg, &clk, None).is_err(),
+        "the bounded door refuses an unbounded gather term"
+    );
+    let fenced_at = |gather: u64| -> serde_json::Value {
+        let p = fc::tir_public_localization_path_bounded_v1(&source, 6, &cfg, &clk, Some(gather)).unwrap();
+        let door = door_of(6, p.daa, queue6, fm6, prep6);
+        json!({
+            "gather_bytes_sensitivity_only": gather,
+            "door_daa": door,
+            "fits_3120": door <= 3_120,
+            "turns": p.turns,
+            "path_daa": p.daa,
+            "round1_body_bytes": p.round1_body,
+            "round2_body_bytes": p.round2_body,
+            "round1_daa": p.round1_daa,
+            "round2_daa": p.round2_daa,
+            "output_check_daa": p.output_check_daa,
+            "restart_daa": p.restart_daa,
+            "cone_runs": p.cone_runs,
+        })
+    };
+    let fenced = json!({ "serial_cone_rounds": fc::PALW_TIR_BOUNDED_CONE_ROUNDS_V1, "at_zero_gather_sensitivity": fenced_at(0) });
+    println!("[door-breakdown-bounded] {}", fenced);
     let horizon = t12_horizon_daa();
     let record = json!({
+        "fenced_bounded_round_door": fenced,
         "record": "misaka-palw/g14-door-breakdown/v1",
         "date": "2026-10-18",
         "status": "analysis only: no rule, constant, price or window changed; every value re-derived from the public functions",
