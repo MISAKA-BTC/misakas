@@ -125,6 +125,12 @@ pub(crate) fn owner_may_pursue_v1(
     !view.liable.contains(signer) && now >= preparation_until_daa && now < view.collect_until_daa && (slot_open || owns_here)
 }
 
+// Starting a replay cannot help once a new Open can no longer be included. An
+// acquisition already accepted before the door still has its full pursuit window.
+fn owner_acquisition_door_open_v1(now: u64, open_until: u64, owns_here: bool) -> bool {
+    owns_here || now.saturating_add(1) < open_until
+}
+
 /// **Lane g14-court-capacity-r2: may this bond Open now as far as the K_owner cap goes** — always past `palw_court_capacity_v1`
 /// (`fair_start`: an Open at the cap waits in the owner queue instead of being refused), else only on a free or reclaimable slot.
 pub(crate) fn owner_slot_open_v1(fair_start: bool, slot_free_or_reclaimable: bool) -> bool {
@@ -397,6 +403,9 @@ impl PalwPanelService {
                     let view = frame.view_v1(state.staged_tir_owner_count_v1(&claim));
                     let plan = frame.plan_v1();
                     let owns_here = state.staged_tir_acquisitions_of_v1(&claim).iter().any(|(owner, _)| *owner == signer);
+                    if !owner_acquisition_door_open_v1(now, plan.terms.open_until_daa, owns_here) {
+                        continue;
+                    }
                     // Lane g14-court-capacity-r2: past `palw_court_capacity_v1` an Open is never refused for the K_owner cap (it
                     // waits in the owner queue), so a free slot is not a precondition.
                     let slot_open =
@@ -903,6 +912,15 @@ mod tests {
         assert!(!owner_retry_waits_v1(Some(previous), next, Some(100), 101));
         assert!(!owner_retry_waits_v1(Some(previous), previous, Some(100), 100 + COURT_MOVE_REPLAN_DAA));
         assert!(!owner_retry_waits_v1(None, next, None, 0));
+    }
+
+    #[test]
+    fn owner_discovery_skips_closed_open_door_but_preserves_existing_acquisitions() {
+        assert!(owner_acquisition_door_open_v1(98, 100, false));
+        assert!(!owner_acquisition_door_open_v1(99, 100, false));
+        assert!(!owner_acquisition_door_open_v1(101, 100, false));
+        assert!(owner_acquisition_door_open_v1(101, 100, true));
+        assert!(!owner_acquisition_door_open_v1(u64::MAX, u64::MAX, false));
     }
 
     fn h(n: u64) -> Hash64 {
