@@ -1621,3 +1621,24 @@ Run 12 remains running with its inherited binary. At DAA 52, producer slash was
 live locks. The 100-DAA schedule is a source-level delay condition, not yet a demonstrated
 explanation of that particular live run. This change will need a rebuilt binary and a new
 D-02 observation; the inherited run is not stopped or retroactively counted as fixed.
+
+
+### 12.9 Run 12 terminal result: D-02 FAIL (2026-10-18)
+
+The inherited driver completed at 13:46 JST, without being stopped or restarted by
+Codex. At 13:44:21 its terminal D-02 row is **FAIL**: all three Valid signer bonds
+remain unslashed, and ProducerFrozen was not observed after conviction. The prior
+producer CourtFraud/slash observation in §12.7 is retained but does not close D-02.
+D-15 remains BLOCKED because the driver did not obtain a successful D-02 result.
+
+The same run reports restart + fresh IBD state equality **PASS** at 13:45:59. It also
+reports the legacy fused-leaf admission row **FAIL**, with 73 V2 Attempt claims
+admitted past the fence in this older binary; the driver explicitly identifies the
+missing integrated court-capacity route rule. D-01 and D-16 are BLOCKED, while
+out-of-scope route-less FP refusal D-17 is PASS. Sparse and skip-all runs are still
+required. These outcomes are not replaced by the newer source fixes.
+
+Evidence: the inherited scratchpad `g14drill/run12.log` and terminal `run12.json`,
+completed 2026-10-18 13:46 JST. The §12.8 wake change was not present in this run's
+binary and requires its own unit result and rebuilt live drill; its effectiveness
+against this terminal failure has not been demonstrated.
