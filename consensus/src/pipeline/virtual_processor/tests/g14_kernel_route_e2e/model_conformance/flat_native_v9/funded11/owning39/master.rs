@@ -506,12 +506,16 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     let (bad_claim, good_claim) = (mining_claim(&net, &claims[0]), mining_claim(&net, &claims[1]));
     // ---- seed anchors (attempt blocks) until both certifications are drawn ----
     let ttpb = net.ttpb();
-    for _ in 0..64 {
+    for round in 0..64 {
         if cert_row(&net, &bad_claim).is_some_and(|r| r.anchor.is_some()) && cert_row(&net, &good_claim).is_some_and(|r| r.anchor.is_some()) {
             break;
         }
         {
-            let (block, _) = net.chain.build_attempt(5, ttpb, Vec::new(), &|_| true);
+            // Rotate across genesis bonds: the first card's unsettled pre-Final weight can hit its
+            // Final-weight cap before it can seed the Gate C anchor. The cap is a frozen rule;
+            // let another eligible bond provide the attempt instead of weakening the budget.
+            let attempt_card = 5 + (round % 3);
+            let (block, _) = net.chain.build_attempt(attempt_card, ttpb, Vec::new(), &|_| true);
             let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&block.header.palw_commitment).unwrap();
             let (_, tip) = net.chain.tip_state();
             let params = net.chain.vp().palw_state_params_v2.clone().unwrap();
@@ -527,7 +531,8 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
                 Ok((_, _, skipped)) => println!("g14n2/node: the anchor attempt folds; skipped {skipped:?}"),
             }
         }
-        let (attempt_block, attempt_claim) = net.chain.attempt(5, ttpb, Vec::new(), &|_| true).await;
+        let attempt_card = 5 + (round % 3);
+        let (attempt_block, attempt_claim) = net.chain.attempt(attempt_card, ttpb, Vec::new(), &|_| true).await;
         let tip = net.chain.tip_state().1;
         println!(
             "g14n2/node: attempt at daa {} (sink is it: {}) admitted {} anchor {:?}",
