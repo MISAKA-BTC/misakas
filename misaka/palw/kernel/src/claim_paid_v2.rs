@@ -328,6 +328,24 @@ pub struct PaidClaimCheckAuthorityV2 {
     compact_consumer: Option<std::rc::Rc<dyn crate::claim_compact_v1::native_v4::CompactRelationConsumerV4>>,
     can_complete: bool,
 }
+/// **The bootstrap lock's marker anchor** (user decision 2026-10-17, dormant): a paid lock taken before any approved paid Final
+/// exists carries this anchor in place of a work beacon's challenge anchor, so every reader tells a bootstrap lock from a beacon
+/// lock off the authenticated row alone. A beacon anchor equal to it is a 512-bit preimage of a fixed domain hash.
+pub fn paid_claim_bootstrap_anchor_v2() -> Digest {
+    object_id(b"MISAKA/PALW/PAID-CLAIM-BOOTSTRAP-ANCHOR/V2", &())
+}
+/// **The seal-reveal lock's marker anchor** (user decision 2026-10-17 on F1, dormant): a paid lock seeded by the commitments of claims
+/// sealed after the target (`misaka_palw_challenge::paid_opt_in::collect_paid_seal_reveal_seed_v6`) carries this anchor; readers
+/// re-derive the authority from the lock row, as for a bootstrap lock.
+pub fn paid_claim_seal_anchor_v2() -> Digest {
+    object_id(b"MISAKA/PALW/PAID-CLAIM-SEAL-REVEAL-ANCHOR/V2", &())
+}
+/// **The bootstrap checker-draw seed** of one paid claim: the network's pinned bootstrap seed (genesis / annual-fork params), bound
+/// to the claim's beacon context and its signed statement. PREDICTABLE by construction — anyone can compute the draw before the
+/// claim commits; that is why the window ends at the first approved paid Final and its claims earn the reduced reward.
+pub fn paid_claim_bootstrap_seed_v2(bootstrap_seed: &Digest, context: &BeaconContextV1, commitment_root: &Digest) -> Digest {
+    object_id(b"MISAKA/PALW/PAID-CLAIM-BOOTSTRAP-SEED/V2", &(bootstrap_seed, context.id(), commitment_root))
+}
 impl PaidClaimCheckAuthorityV2 {
     pub fn verify(
         class: &PaidClaimClassV2,
@@ -337,6 +355,39 @@ impl PaidClaimCheckAuthorityV2 {
         beacon: &VerifiedWorkBeaconV1,
         now: u64,
         checker_snapshot: Digest,
+    ) -> Result<Self, String> {
+        Self::verify_seeded(class, enrollment, subject, context, now, checker_snapshot, |expected| {
+            misaka_palw_challenge::challenge_seed_v1(context, expected, beacon).map_err(|e| e.to_string())
+        })
+    }
+    /// **The bootstrap check authority** (dormant; user decision 2026-10-17): the same statement checks as [`Self::verify`], with
+    /// the checker draw seeded by `sample_seed` instead of a locked work beacon. The native lock computes that seed with
+    /// [`paid_claim_bootstrap_seed_v2`] from the network's pinned bootstrap seed, only while no approved paid Final exists, and
+    /// writes it into the lock row (anchor [`paid_claim_bootstrap_anchor_v2`]); every later reader passes the lock row's seed — an
+    /// authenticated chain row, never a value a party supplies.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_bootstrap_v2(
+        class: &PaidClaimClassV2,
+        enrollment: &PaidClaimEnrollmentV2,
+        subject: &ChallengeSubjectV1,
+        context: &BeaconContextV1,
+        now: u64,
+        checker_snapshot: Digest,
+        sample_seed: Digest,
+    ) -> Result<Self, String> {
+        if class.interactive_plan.is_some() {
+            return Err("a staged/interactive paid class takes no bootstrap seed".into());
+        }
+        Self::verify_seeded(class, enrollment, subject, context, now, checker_snapshot, |_| Ok(sample_seed))
+    }
+    fn verify_seeded(
+        class: &PaidClaimClassV2,
+        enrollment: &PaidClaimEnrollmentV2,
+        subject: &ChallengeSubjectV1,
+        context: &BeaconContextV1,
+        now: u64,
+        checker_snapshot: Digest,
+        seed_of: impl FnOnce(&ChallengeSubjectV1) -> Result<Digest, String>,
     ) -> Result<Self, String> {
         let expected = paid_subject_with_checker_snapshot_v2(subject, class, enrollment, checker_snapshot)?;
         if !enrollment.lifetime.receipt_open(now)
@@ -349,7 +400,7 @@ impl PaidClaimCheckAuthorityV2 {
         {
             return Err("paid check authority is late or substitutes its signed statement/policy".into());
         }
-        let seed = misaka_palw_challenge::challenge_seed_v1(context, &expected, beacon).map_err(|e| e.to_string())?;
+        let seed = seed_of(&expected)?;
         Ok(Self {
             enrollment: enrollment.id(),
             base_claim: enrollment.base_claim,

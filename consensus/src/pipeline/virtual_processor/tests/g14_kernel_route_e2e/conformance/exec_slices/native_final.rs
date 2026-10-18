@@ -126,7 +126,12 @@ async fn finalize_native_root(cw: &mut Cw, s: &Session) -> (u64, Obj) {
     let licence = license_native_root(cw, s.real.claim).await;
     let end = cw.net.daa() + cw.net.bundle.state.window_challenge() + 1_000;
     while !matches!(cw.net.chain.tip_state().1.claim(&s.real.claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }) {
-        assert!(cw.net.daa() < end, "native Final must be reachable before the signed root expiry");
+        assert!(
+            cw.net.daa() < end,
+            "native Final must be reachable before the signed root expiry: claim {:?}, root {:?}",
+            cw.net.chain.tip_state().1.claim(&s.real.claim).map(|c| c.phase.clone()),
+            cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).map(|r| r.phase.clone())
+        );
         cw.net.beat_to(cw.net.daa() + 1).await;
     }
     let state = cw.net.chain.tip_state().1;
@@ -560,6 +565,11 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             policy.max_open_claims_per_bond = 1_000;
             policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 };
             params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy });
+            // The signed covenant policy's window is the physical monetary window (`palw_monetary_material_fold_v1::policy`):
+            // the paid-source arming of the world follows this test's W.
+            if let Some(material) = params.palw_monetary_material_v1.as_mut() {
+                material.policy.window_daa = W;
+            }
             params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
             params.palw_material_income_v3 = Some(ForkActivation::new(1));
             params.sync_palw_bond_budget_v1();

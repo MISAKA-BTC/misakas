@@ -203,13 +203,15 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         use misaka_palw_kernel::lifecycle::ClaimStateV1 as C;
         let target = self.beacon_source_target_v4(context)?;
         let ledger = self.ledger()?;
-        // A prospective OPV claim which depends on paid Panel checking cannot
-        // re-enter the Panel-independent source pool through its old base codec.
+        // The one source of a beacon event is the RFC07 adapter: `finals_read_v1` exports an event only for a paid claim whose
+        // canonical paid Final the ASSIGNED quorum approved (selected checkers, validity independent of any Panel); every other
+        // Final — an optimistic timeout, a Panel-licensed Final, an unapproved paid claim — exports none and so cannot be a source.
+        // User decision 2026-10-17: approved paid claims ARE sources (the earlier exclusion of every paid claim left the pool with
+        // no possible member once the adapter landed).
         let finals: std::collections::BTreeMap<_, _> = self
             .finals_read_v1()?
             .into_iter()
             .filter_map(|f| {
-                if ledger.paid_claim_consumers_v2.contains_key(&f.receipt.claim) { return None; }
                 let bytes = f.event?;
                 let w: misaka_palw_challenge::AttributedWorkV1 = borsh::from_slice(&bytes).ok()?;
                 Some((f.receipt.claim, w.event))

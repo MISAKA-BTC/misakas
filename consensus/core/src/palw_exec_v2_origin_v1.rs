@@ -75,7 +75,15 @@ fn decode_header(mut bytes: &[u8]) -> std::io::Result<crate::header::Header> {
         palw_commitment: Vec::new(),
     };
     let len = u32::deserialize(&mut bytes)? as usize;
-    if len > crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES || len != bytes.len() {
+    // A PAV3 native custody carriage (only past `palw_monetary_material_v1`) is bounded by its own cap, not the PAV2 commitment
+    // cap: two provider signatures and the executor seal alone exceed 8 KiB, so the PAV2 bound made every PAV3 REAL claim's
+    // original header unreadable (validation 2026-10-17). Below that fence no accepted header carries the PAV3 magic.
+    let cap = if crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(bytes) {
+        crate::palw_attempt_material_v3::PALW_ATTEMPT_MATERIAL_MAX_BYTES_V3
+    } else {
+        crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES
+    };
+    if len > cap || len != bytes.len() {
         return Err(bad());
     }
     header.palw_commitment = bytes.to_vec();

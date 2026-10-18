@@ -1,5 +1,5 @@
 //! RFC-0008 RFC08-2: the combined liability predicate wired into settlement (`settle_once_liable_v1`) and admission
-//! (`admit_claim_liability_v1`, `refuse_unsourced_admission_v1`). SOURCE ONLY — written, never compiled or executed in this lane.
+//! (`admit_claim_liability_v1`, `admit_native_claim_liability_v1`). SOURCE ONLY — written, never compiled or executed in this lane.
 //! The pure predicate's every term is pinned in `palw_settlement_liability_v1`'s own tests; these pin the WIRING: dormancy below
 //! the fence, the old ruleset for a claim accepted before it, an unsourced term refusing (never defaulted) with a zero-amount
 //! marker that closes the obligation, and a leg with no liable claim passing by name.
@@ -54,7 +54,7 @@ fn below_the_fence_the_predicate_reads_nothing_and_every_leg_is_dormant() {
         assert_eq!(once, PalwSettleOnceV1::Dormant);
         assert_eq!(b.leg_liability_refusal_v1(100, &leg, 5), None, "nothing binds below the fence");
     }
-    b.refuse_unsourced_admission_v1(100, "a native claim").unwrap();
+    b.admit_native_claim_liability_v1(100, None, 500).unwrap();
     assert_eq!(b.state, parent);
     assert!(b.entries.is_empty());
 }
@@ -79,11 +79,13 @@ fn an_unsourced_term_refuses_the_leg_by_name_and_closes_the_obligation_at_zero()
         .settle_once_liable_v1(101, o, PalwSettlementConsumerV1::KernelObject, 7, PalwSettlementDebitV1::Held { amount: 7 }, leg)
         .unwrap();
     assert!(matches!(again, PalwSettleOnceV1::AlreadySettled(row) if row.amount == 0));
-    // Admission of an unsourced claim type is refused past the fence, by name.
-    assert!(matches!(
-        b.refuse_unsourced_admission_v1(100, "a native mining claim carries no signed hard deadline"),
-        Err(PalwStateV2Error::BondBudgetRefused(why)) if why.contains("native mining")
-    ));
+    // ADR-0184 §1 (user decision 2026-10-18): a native claim is no longer unsourced — its maximum horizon is derived from the
+    // producer-signed deadline that bounds its Final floor, plus `window_court`; an unbudgeted one has no reservation to bind.
+    assert_eq!(
+        super::super::palw_settlement_liability_fold_v1::native_claim_hard_deadline_v1(&p, 500),
+        500 + p.window_court()
+    );
+    b.admit_native_claim_liability_v1(100, None, 500).unwrap();
 }
 
 #[test]

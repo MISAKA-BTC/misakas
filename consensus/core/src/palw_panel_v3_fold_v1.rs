@@ -195,6 +195,9 @@ impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
         ))
     }
 
+    fn opt_in_seal_reveal_v6(&self) -> bool {
+        self.state.kernel_route.as_ref().is_some_and(|route| route.opt_in_seal_reveal_v6())
+    }
     fn paid_material(&self, context: &Digest) -> Result<crate::palw_beacon_source_fee_v1::PaidBeaconMaterialV5, String> {
         let route = self.state.kernel_route.as_ref().ok_or("Panel paid sources have no rooted kernel route")?;
         if route.beacon_source_target_v4(context)?.context.subject_kind != misaka_palw_challenge::SubjectKindV1::PanelAssignment {

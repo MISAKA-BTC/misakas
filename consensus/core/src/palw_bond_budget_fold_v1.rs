@@ -2505,8 +2505,6 @@ impl TransitionBuilder<'_> {
         job: &misaka_palw_kernel::flat_execution11::ExecutionJobRecordV11,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         use misaka_palw_kernel::flat_execution11::ExecutionClassContextV11;
-        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): no signed hard deadline or material TTL to source for this type.
-        self.refuse_unsourced_admission_v1(ctx.daa_score, "a native funded execution claim carries no signed hard deadline")?;
         if !class.can_admit()
             || class.native_admission_epoch() != Some((ctx.block.as_bytes(), ctx.daa_score))
             || job.class_id != class.record().id()
@@ -2529,7 +2527,7 @@ impl TransitionBuilder<'_> {
                 "funded work has no independently authenticated native model-line allocation".into(),
             ));
         }
-        self.plan_bond_budget_v1(
+        let plan = self.plan_bond_budget_v1(
             ctx,
             producer,
             None,
@@ -2546,7 +2544,10 @@ impl TransitionBuilder<'_> {
             },
             PalwBudgetOriginV1::KernelRoute,
             0,
-        )
+        )?;
+        // RFC-0008 / ADR-0184 §1 (dormant `palw_settlement_once_v1`): the signed job deadline bounds the claim's Final floor.
+        self.admit_native_claim_liability_v1(ctx.daa_score, plan.as_ref(), job.deadline_daa)?;
+        Ok(plan)
     }
 }
 pub(super) fn funded_execution_budget_id_v13(job: &misaka_palw_kernel::hash::Digest) -> Hash64 {
@@ -2567,8 +2568,6 @@ impl TransitionBuilder<'_> {
         admission: &crate::palw_native_text_stop_v29::CheckedNativeTextAdmissionV29,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
-        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): no signed hard deadline or material TTL to source for this type.
-        self.refuse_unsourced_admission_v1(ctx.daa_score, "a native text claim carries no signed hard deadline")?;
         admission.check_current(ctx.block.as_bytes(), ctx.daa_score, maximum, funding).map_err(|why| bad(&why))?;
         let m = maximum.record();
         let r = &funding.request;
@@ -2596,7 +2595,7 @@ impl TransitionBuilder<'_> {
         if mirror.allocation_at(ctx.daa_score).is_some() {
             return Err(bad("text29 has no independently authenticated native model-line allocation"));
         }
-        self.plan_bond_budget_v1(
+        let plan = self.plan_bond_budget_v1(
             ctx,
             producer,
             None,
@@ -2613,7 +2612,10 @@ impl TransitionBuilder<'_> {
             },
             PalwBudgetOriginV1::KernelRoute,
             0,
-        )
+        )?;
+        // RFC-0008 / ADR-0184 §1: the signed funding deadline bounds the claim's challenge end (its Final floor).
+        self.admit_native_claim_liability_v1(ctx.daa_score, plan.as_ref(), funding.deadline)?;
+        Ok(plan)
     }
 }
 pub(super) fn native_text_budget_id_v29(job: &misaka_palw_kernel::hash::Digest) -> Hash64 {
@@ -2634,8 +2636,6 @@ impl TransitionBuilder<'_> {
         admission: &crate::palw_native_job_v39::CheckedNativeFundingV39,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
-        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): no signed hard deadline or material TTL to source for this type.
-        self.refuse_unsourced_admission_v1(ctx.daa_score, "a native job claim carries no signed hard deadline")?;
         let extras = self.extras.kernel_route.as_ref().ok_or_else(|| bad("native39 budget lacks original native environment"))?;
         let owning = extras
             .native_execution39
@@ -2672,7 +2672,7 @@ impl TransitionBuilder<'_> {
         if mirror.allocation_at(ctx.daa_score).is_some() {
             return Err(bad("native39 funded work has no authenticated native model-line allocation"));
         }
-        self.plan_bond_budget_v1(
+        let plan = self.plan_bond_budget_v1(
             ctx,
             producer,
             None,
@@ -2691,7 +2691,10 @@ impl TransitionBuilder<'_> {
             },
             PalwBudgetOriginV1::KernelRoute,
             0,
-        )
+        )?;
+        // RFC-0008 / ADR-0184 §1: the signed original deadline bounds `final_after` (the claim's Final floor).
+        self.admit_native_claim_liability_v1(ctx.daa_score, plan.as_ref(), original.deadline)?;
+        Ok(plan)
     }
 }
 pub(super) fn native_job_budget_id_v39(job: &misaka_palw_kernel::hash::Digest) -> Hash64 {
@@ -2737,8 +2740,6 @@ impl TransitionBuilder<'_> {
         exposure_sompi: u128,
     ) -> Result<PalwBudgetPlanV1, PalwStateV2Error> {
         let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
-        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): no signed hard deadline or material TTL to source for this type.
-        self.refuse_unsourced_admission_v1(ctx.daa_score, "a native mining claim carries no signed hard deadline")?;
         if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
             return Err(bad("native39 mining requires the ADR-0176 bond budget in force"));
         }
@@ -2747,15 +2748,20 @@ impl TransitionBuilder<'_> {
         let reward_sompi = carve.checked_mul(quanta).ok_or_else(|| bad("native39 reward ask overflow"))?;
         let final_weight = weight_per_quantum.checked_mul(quanta as u128).ok_or_else(|| bad("native39 weight ask overflow"))?;
         let liability_sompi = self.bond_formula_native_mining_liability_v39(ctx, reward_sompi, final_weight, block_units, exposure_sompi);
-        self.plan_bond_budget_v1(
-            ctx,
-            producer,
-            Some(model),
-            PalwBudgetAskV1 { block_units, reward_sompi, final_weight, liability_sompi },
-            PalwBudgetOriginV1::FreePrompt,
-            0,
-        )?
-        .ok_or_else(|| bad("native39 mining reservation could not be planned"))
+        let plan = self
+            .plan_bond_budget_v1(
+                ctx,
+                producer,
+                Some(model),
+                PalwBudgetAskV1 { block_units, reward_sompi, final_weight, liability_sompi },
+                PalwBudgetOriginV1::FreePrompt,
+                0,
+            )?
+            .ok_or_else(|| bad("native39 mining reservation could not be planned"))?;
+        // RFC-0008 / ADR-0184 §1: a mining claim is accepted only over Final components (its Master's Final is at or before this
+        // block), so its Final floor is this block's DAA at the latest.
+        self.admit_native_claim_liability_v1(ctx.daa_score, Some(&plan), ctx.daa_score)?;
+        Ok(plan)
     }
     /// ADR-0176 bond formula v2 over the claim's whole ask and its slash exposure (type `NativeFunded`, the Panel-free mode);
     /// below the formula's fence the exposure itself.

@@ -68,6 +68,16 @@ pub(super) enum PalwAdmissionLiabilityV1 {
     V2Claim,
     /// A kernel claim (its producer-signed paid lifetime and its covenant are read by the claim's digest).
     KernelClaim { claim: [u8; 64] },
+    /// **A native funded / text / job / mining claim** (ADR-0184 §1, user decision 2026-10-18): its liability horizon is the Final
+    /// floor + `window_court`, derived from the producer-signed commit inputs; `hard` is the latest it can be — the family's signed
+    /// deadline (which bounds the Final floor) + `window_court`. No covenant: the material TTL is not a term of these families.
+    NativeClaim { hard: u64 },
+}
+
+/// **RFC08 / ADR-0184 §1: the native claim's maximum liability horizon at admission** — the producer-signed deadline that bounds the
+/// claim's Final floor, plus `window_court` (the formula every other lane uses after Final). Deterministic from signed inputs.
+pub(super) fn native_claim_hard_deadline_v1(params: &PalwStateParamsV2, signed_deadline: u64) -> u64 {
+    signed_deadline.saturating_add(params.window_court())
 }
 
 /// Refusal as a semantic consensus error (never a local capacity error).
@@ -427,6 +437,7 @@ impl TransitionBuilder<'_> {
                         .ok_or("the material TTL: no healthy event-relative monetary covenant for the kernel claim");
                     (hard, ttl, hard)
                 }
+                PalwAdmissionLiabilityV1::NativeClaim { hard } => (Ok(hard), Ok(u64::MAX), Ok(hard)),
             };
         let terms = PalwSettlementTermsSourcedV1 {
             reserved_reward: Ok(reserved),
@@ -453,12 +464,17 @@ impl TransitionBuilder<'_> {
 }
 
 impl TransitionBuilder<'_> {
-    /// **Admission of a claim type whose liability terms have no authenticated source** (no signed hard deadline, no material
-    /// TTL — the native funded, native text, native job and native mining claims): refused past the fence, by name; a no-op below.
-    pub(super) fn refuse_unsourced_admission_v1(&self, now: u64, why: &'static str) -> Result<(), PalwStateV2Error> {
-        if self.liability_fence_from_v1(now).is_some() {
-            return Err(liability_refused_v1(PalwSettlementLiabilityRefusalV1::Unsourced(why)));
-        }
-        Ok(())
+    /// **Admission of a native funded / text / job / mining claim past the fence** (ADR-0184 §1, user decision 2026-10-18): the
+    /// predicate with the derived horizon (`native_claim_hard_deadline_v1`) — was refused here as unsourced. `plan`: the claim's
+    /// budget plan (`None` = unbudgeted, where the predicate has no reservation to read and does not bind). A no-op below the fence.
+    pub(super) fn admit_native_claim_liability_v1(
+        &self,
+        now: u64,
+        plan: Option<&super::palw_bond_budget_fold_v1::PalwBudgetPlanV1>,
+        signed_deadline: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(plan) = plan else { return Ok(()) };
+        let hard = native_claim_hard_deadline_v1(self.params, signed_deadline);
+        self.admit_claim_liability_v1(now, plan, PalwAdmissionLiabilityV1::NativeClaim { hard })
     }
 }

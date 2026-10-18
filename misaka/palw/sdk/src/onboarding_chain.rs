@@ -410,9 +410,9 @@ fn fresh_verify_reads_inner(
                 .paid_material
                 .as_ref()
                 .ok_or_else(|| Refusal::new("SOURCE_FEE_UNFUNDED", "mandatory source fee capacity has not been prepaid"))?;
-            kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v5(&input, contract, facts, promises)
+            kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v5_with(&input, contract, facts, promises, sources.seal_reveal)
         }
-        Some(sources) => kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v4(
+        Some(sources) => kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v4_with(
             &input,
             &misaka_palw_challenge::OptInContractV4 {
                 context_id: sources.target.terms.context,
@@ -420,6 +420,7 @@ fn fresh_verify_reads_inner(
                 source_final_by: sources.target.terms.final_by,
             },
             &sources.facts,
+            sources.seal_reveal,
         ),
         None => fresh_verify_v1(&input),
     };
@@ -467,6 +468,8 @@ pub struct VerifiedOptInSourcesV4 {
     fee_receipts:
         std::collections::BTreeMap<misaka_palw_kernel::hash::Digest, misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1>,
     paid_material: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PaidBeaconMaterialV5>,
+    /// The route's seal-reveal rule (`opt_in_seal_reveal_v6`), read from the same rooted route.
+    seal_reveal: bool,
     paid_cost_bounds: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1>,
 }
 
@@ -604,6 +607,7 @@ fn opt_in_sources_from_kernel_rows_inner(
         fee_receipts,
         paid_material,
         paid_cost_bounds,
+        seal_reveal: route.opt_in_seal_reveal_v6(),
     })
 }
 

@@ -41,11 +41,25 @@ fn card_pubkey(i: usize) -> Vec<u8> {
 fn parts(sibling_fence: bool) -> Parts {
     let (config, _bundle, premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
+    // testnet-12's second model row is the 2M row, which takes no claim without a measured verification row (ADR-0152 §4-quater
+    // V2, U-D1: `ClassDeadlineUnmeasured`, derived 13,995 DAA > 600). Validation 2026-10-17 found this source's card-2 sibling
+    // refused for exactly that (its claim unrecorded, and as a chain candidate its block disqualified). Open it as on its flag day
+    // with the same measured row the R-core door-gate suite uses, so all three rows take claims.
+    params.palw_class_verify_rows = Box::leak(Box::new([super::t12_rcore_sr10_door_gate::t12_2m_flag_day_row(&params)]));
+    params.sync_palw_class_verify_deadline();
     if sibling_fence {
         params.palw_dag_sibling_attribution_v1 = Some(ForkActivation::always());
         params.sync_palw_rfc0018_v1();
     }
-    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    // `ConfigBuilder::build` runs `validate_palw_v2`, which refuses the sibling fence on every network ("implemented dormant, user
+    // decisions open", RFC-0018 §12): the armed fixture is constructed directly, as the other fence-bypassing harnesses do.
+    let config = if sibling_fence {
+        params.skip_proof_of_work = true;
+        assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
+        Config::new(params)
+    } else {
+        ConfigBuilder::new(params).skip_proof_of_work().build()
+    };
     let bundle = match &config.params.palw_consensus_mode {
         PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => unreachable!("testnet-12 is ConsensusV2"),
@@ -234,6 +248,18 @@ fn assert_retained_and_attributed(tag: &str, rig: &Rig, siblings: &[Sibling], me
     for s in siblings {
         let hash = s.block.header.hash;
         let merged = gd.selected_parent == hash || gd.mergeset_blues.contains(&hash) || gd.mergeset_reds.contains(&hash);
+        if !merged {
+            let merger_header = rig.c.ctx.consensus.get_header(merger).unwrap();
+            eprintln!(
+                "[rfc18-diag] {tag}: card {} sibling {hash} status {:?}; merger parents {:?}; sibling daa {} merger daa {}; tips {:?}",
+                s.card,
+                rig.c.ctx.consensus.get_block_status(hash),
+                merger_header.direct_parents(),
+                s.block.header.daa_score,
+                merger_header.daa_score,
+                rig.c.ctx.consensus.get_tips()
+            );
+        }
         assert!(merged, "{tag}: sibling {hash} (card {}) is in the merger's past as selected parent, blue or red", s.card);
     }
     let (_, state) = rig.c.tip_state();

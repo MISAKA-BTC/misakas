@@ -80,7 +80,16 @@ const PALW_SIGNED_REGISTRATION_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/onboardi
 /// attested); the liability is how long it stays refutable (and reserved) — it equals the kernel ledger's own liability horizon.
 pub const PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1: u64 = 100 * SOMPI_PER_KASPA;
 pub const PALW_ONBOARDING_BINDING_WINDOW_DAA_V1: u64 = 40;
-pub const PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1: u64 = 200;
+/// User decision 2026-10-18 (ADR-0185 note): derived, not picked — the binding stays refutable through the latest conformance pass
+/// its class can reach (the binding window, then the paid-source beacon's delay + collection window (≥ a paid source's lifetime,
+/// ADR-0185 §4) + depth, the evidence deadline and the challenge window), so the post-pass DA-loss eligibility rule keeps its
+/// meaning. Was 200, which ended before any paid-source conformance could pass.
+pub const PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1: u64 = PALW_ONBOARDING_BINDING_WINDOW_DAA_V1
+    + crate::palw_conformance_evidence_v1::PALW_ONBOARDING_POLICY_DELAY_DAA_V1
+    + crate::palw_conformance_evidence_v1::PALW_ONBOARDING_POLICY_WINDOW_DAA_V1
+    + crate::palw_conformance_evidence_v1::PALW_ONBOARDING_POLICY_DEPTH_DAA_V1
+    + crate::palw_conformance_evidence_v1::PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1
+    + crate::palw_conformance_evidence_v1::PALW_CONFORMANCE_CHALLENGE_WINDOW_DAA_V1;
 /// The challenger's share of a refuted binding's slash (permille); the rest is burned (the slash's burn at release). The PALW reporter
 /// share of ADR-0032 (49 %), the route's one rate (`PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1`).
 pub const PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1: u64 =
@@ -730,7 +739,17 @@ impl PalwKernelRouteStateV1 {
                         AttemptBeaconV1::Unavailable { have: 0, need: policy.work_count_k }
                     });
                 };
-                misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, daa)
+                if self.opt_in_seal_reveal_v6() {
+                    misaka_palw_challenge::collect_opt_in_seal_reveal_beacon_v6(
+                        &ctx,
+                        &contract.source,
+                        &sources,
+                        Some((&contract, &promises)),
+                        daa,
+                    )
+                } else {
+                    misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, daa)
+                }
             } else if attempt.is_opt_in_source() {
                 let target = self.beacon_source_target_v4(&ctx.id())?;
                 let contract = misaka_palw_challenge::OptInContractV4 {
@@ -738,7 +757,12 @@ impl PalwKernelRouteStateV1 {
                     terms_id: target.terms.id(),
                     source_final_by: target.terms.final_by,
                 };
-                misaka_palw_challenge::collect_opt_in_work_beacon_v4(&ctx, &contract, &self.beacon_opt_in_sources_v4(&ctx.id())?, daa)
+                let sources = self.beacon_opt_in_sources_v4(&ctx.id())?;
+                if self.opt_in_seal_reveal_v6() {
+                    misaka_palw_challenge::collect_opt_in_seal_reveal_beacon_v6(&ctx, &contract, &sources, None, daa)
+                } else {
+                    misaka_palw_challenge::collect_opt_in_work_beacon_v4(&ctx, &contract, &sources, daa)
+                }
             } else {
                 misaka_palw_challenge::collect_sealed_work_beacon_v3(&ctx, &self.beacon_sealed_sources_v1()?, daa)
             };

@@ -167,7 +167,7 @@ pub fn paid_claim_commit_object_v2(
         || j.base_job != base_job
         || commit_daa > j.last_commit_daa
         || l.claims.contains_key(&base_claim)
-        || l.beacon_sources.values().any(|source| source.job == base_job && source.outcome.is_none())
+        // F2 (2026-10-17): whether a live source opt-in of the job blocks the paid commit is the fold's policy-dependent rule.
         || material_consent == [0; 64]
     {
         return Err(Refusal::new("CLAIM_ENROLLMENT_INVALID", "prospective class/job/material consent or commit deadline mismatch"));
@@ -355,21 +355,8 @@ pub fn paid_claim_commit_object_derived_v2(
         misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.id(),
     };
     let mut l = route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER_INVALID", e))?;
-    if l.beacon_sources.values().any(|source| {
-        source.job
-            == match &commit {
-                misaka_palw_kernel::route::SaltedCommitV1::Claim { claim, .. }
-                | misaka_palw_kernel::route::SaltedCommitV1::Segmented { claim, .. } => claim.job_id,
-                misaka_palw_kernel::route::SaltedCommitV1::Pipeline { claim, .. } => claim.job_id,
-                misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.job_id(),
-            }
-            && source.outcome.is_none()
-    }) {
-        return Err(Refusal::new(
-            "CLAIM_SOURCE_DEPENDENCY",
-            "a paid checker-dependent claim cannot consume an independent source opt-in",
-        ));
-    }
+    // F2 (2026-10-17): a live source opt-in of the job no longer blocks a paid commit under the seal-reveal policy; the native fold
+    // applies the policy-dependent rule.
     l.try_replay_salted_claim_v4(&commit, &salt, commit.producer(), commit_daa)
         .map_err(|e| Refusal::new("CLAIM_ADMISSION_INVALID", e))?;
     let subject = l
