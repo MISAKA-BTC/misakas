@@ -3011,8 +3011,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // 168–169: the G14 TIR staged route (native seed opening, TIR class layout publication), merged 2026-10-15.
     (168, 169, "G14 TIR staged route", &["palw_staged_tir_route_v1"]),
     (170, 171, "G14 original paid TIR conviction", &["palw_tir_public_conviction_v1"]),
-    // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Checked free on this branch, the
-    // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
+    // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Confirmed 2026-10-18 (lane
+    // d2-x3-finish) as THE tag for that kind: no other allocation row uses 230, and the kind is dormant behind `palw_court_model_scope_v1`.
+    // Its codec and its A-2 kind-table row are not landed yet (the remaining step of R-D2-READY; register §3.1.1).
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
     (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),

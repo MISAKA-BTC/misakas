@@ -15556,7 +15556,9 @@ fn close_da_session_refuted_v2(
     builder.slash_seat(accuser, accuser_exposure, builder.params.min_collateral_sompi())?;
     let paused = palw_da_paused_daa_v2(&claim.phase, ctx.daa_score);
     debug_assert_eq!(paused, ctx.daa_score.saturating_sub(accused_daa), "the pause is the session's own length");
-    let restored = resume_claim_after_da_session_v2(claim_id, claim, resumed, paused)?;
+    // REQ-X3-3: an X3 claim is given no pause credit (its deadlines are fixed at acceptance). Old claims: the pause, unchanged.
+    let credit = crate::palw_ruling_fences_v1::palw_x3_pause_credit_v1(builder.params, claim, paused);
+    let restored = resume_claim_after_da_session_v2(claim_id, claim, resumed, credit)?;
     builder.write_claim(claim_id, Some(restored.clone()))?;
     // §4-quater V6 on the ADR-0062 court (below `palw_rcore_plus`), before the re-arm reads `H`.
     builder.credit_verify_pause_v6(claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score)?;

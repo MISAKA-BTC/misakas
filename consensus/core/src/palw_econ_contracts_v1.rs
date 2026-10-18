@@ -616,6 +616,24 @@ pub fn palw_minimum_price_c_upper_v1(
     u64::try_from(total).map_err(|_| PalwMinimumPriceRefusalV1::Unrepresentable)
 }
 
+/// **`C_upper` for an X3 claim** (REQ-X3-6, 2026-10-18): the class cost of [`palw_minimum_price_c_upper_v1`] plus the priced retention
+/// extension `extra_daa × c_retain` ([`crate::palw_ruling_fences_v1::palw_x3_retention_cost_sompi_v1`]). `extension` is `None` under the
+/// old ruleset, which leaves the term unchanged. An unmeasured `c_retain` (0) with a positive extension is refused as UNKNOWN.
+pub fn palw_minimum_price_c_upper_x3_v1(
+    policy: &PalwMinimumPricePolicyV1,
+    class: &Digest,
+    capital_sompi: u64,
+    span_daa: u64,
+    x3_policy: &crate::palw_ruling_fences_v1::PalwClaimHardDeadlinePolicyV1,
+    extension: Option<&crate::palw_ruling_fences_v1::PalwX3RetentionExtensionV1>,
+) -> Result<u64, PalwMinimumPriceRefusalV1> {
+    let base = palw_minimum_price_c_upper_v1(policy, class, capital_sompi, span_daa)?;
+    let Some(extension) = extension else { return Ok(base) };
+    let retention = crate::palw_ruling_fences_v1::palw_x3_retention_cost_sompi_v1(x3_policy, extension.extra_daa)
+        .map_err(PalwMinimumPriceRefusalV1::Unknown)?;
+    base.checked_add(retention).ok_or(PalwMinimumPriceRefusalV1::Unrepresentable)
+}
+
 /// `required_M = ⌈C_upper / p_collect_lower⌉`; refused as UNKNOWN when `p_collect_lower` is zero and the cost positive.
 pub fn palw_minimum_price_required_v1(policy: &PalwMinimumPricePolicyV1, c_upper: u64) -> Result<u64, PalwMinimumPriceRefusalV1> {
     if c_upper == 0 {

@@ -56,7 +56,32 @@ pub enum PalwG14GatedFenceV1 {
     LegacyHeldDaV2,
     /// `palw_court_capacity_v1` (lane g14-court-capacity, audit G-07): the court budget, time price and deadline-aware queue.
     CourtCapacityV1,
+    /// `palw_court_model_scope_v1` (register D2, ruling 2026-10-12; lane d2-x3-finish, 2026-10-18): its unconditional refusal is replaced by
+    /// this gate. Its requirements are tests and drills (no economic value is measured).
+    CourtModelScopeV1,
+    /// `palw_claim_hard_deadline_v1` (register X3, ruling 2026-10-12; lane d2-x3-finish, 2026-10-18): its unconditional refusal is replaced
+    /// by this gate, and its policy terms are measurements ([`Self::needs_measured_value`]).
+    ClaimHardDeadlineV1,
 }
+
+/// **D2's arm-readiness requirements** (register §3.1.1, ADR-0177 D2): the replacement routes' own tests, the node-level full-collusion
+/// conviction past the fence, and the fence-crossing drill. No economic value is measured.
+pub const PALW_D2_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "T-D2 fold: palw_court_model_scope_routes_v1 suite; a D2 claim's restricted units refused, the replacement routes admitted, old claims unaffected",
+    "node E2E: past the fence a new claim's full collusion (producer and every seat, outside bond) is convicted by the replacement route; the block stands",
+    "drill: the shipped binary crosses the fence; the four model-byte routes are closed for new claims only and every older claim settles",
+];
+
+/// **X3's arm-readiness requirements** (register §3.1, REQ-X3-1..6): the fold tests, the MEASURED policy terms (every `B_*` term with no
+/// existing source and `c_retain`; 0 is refused), the node-level flow, and the fence-crossing drill.
+pub const PALW_X3_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "V1 build, regressions and boundary decode (palw_ruling_fences_v1 X3 suite, REQ-X3-1..6)",
+    "measured: B_cold_fetch, B_check, B_localize, B_carrier, B_reorg_slack and c_retain on the slowest supported node and the real retention \
+     price, as the approved policy (none of them 0)",
+    "node E2E: acceptance fixes the deadline, effective = min(proposed, hard), no extension or regrant for a new claim, a pursuit starts only \
+     inside its budget, and reaching the deadline alone never Finals an unresolved claim",
+    "drill: the shipped binary crosses the fence; restart and reorg replay identical across it; claims accepted before it keep the old rules",
+];
 
 /// The G14 validation steps V1–V7 (`g14-objective-conviction-remaining-2026-10-15.md` §5), one evidence digest each.
 pub const PALW_G14_VALIDATION_STEPS_V1: &[&str] = &[
@@ -141,7 +166,7 @@ pub const PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1: &[&str] = &[
 ];
 
 impl PalwG14GatedFenceV1 {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::StagedPublicCourtV1,
         Self::StagedTirRouteV1,
         Self::StagedFloatConstraintV1,
@@ -152,6 +177,8 @@ impl PalwG14GatedFenceV1 {
         Self::LegacyPublicFilerV1,
         Self::LegacyHeldDaV2,
         Self::CourtCapacityV1,
+        Self::CourtModelScopeV1,
+        Self::ClaimHardDeadlineV1,
     ];
 
     /// The `Params` field's name.
@@ -167,6 +194,8 @@ impl PalwG14GatedFenceV1 {
             Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
             Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
             Self::CourtCapacityV1 => "palw_court_capacity_v1",
+            Self::CourtModelScopeV1 => "palw_court_model_scope_v1",
+            Self::ClaimHardDeadlineV1 => "palw_claim_hard_deadline_v1",
         }
     }
 
@@ -182,6 +211,8 @@ impl PalwG14GatedFenceV1 {
             Self::LegacyPublicFilerV1 => PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1,
             Self::LegacyHeldDaV2 => PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1,
             Self::CourtCapacityV1 => PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1,
+            Self::CourtModelScopeV1 => PALW_D2_ARMING_REQUIREMENTS_V1,
+            Self::ClaimHardDeadlineV1 => PALW_X3_ARMING_REQUIREMENTS_V1,
         }
     }
 
@@ -198,6 +229,7 @@ impl PalwG14GatedFenceV1 {
                 | Self::LegacyPublicFilerV1
                 | Self::LegacyHeldDaV2
                 | Self::CourtCapacityV1
+                | Self::ClaimHardDeadlineV1
         )
     }
 
@@ -214,6 +246,8 @@ impl PalwG14GatedFenceV1 {
             Self::LegacyPublicFilerV1 => p.palw_legacy_public_filer_v1,
             Self::LegacyHeldDaV2 => p.palw_legacy_held_da_v2,
             Self::CourtCapacityV1 => p.palw_court_capacity_v1.map(|f| f.activation),
+            Self::CourtModelScopeV1 => p.palw_court_model_scope_v1,
+            Self::ClaimHardDeadlineV1 => p.palw_claim_hard_deadline_v1.map(|f| f.activation),
         };
         raw.filter(|f| *f != ForkActivation::never())
     }
@@ -262,6 +296,14 @@ impl PalwG14GatedFenceV1 {
                 "palw_court_capacity_v1 cannot be armed: no arm-readiness record (measured court operation costs and block budget, \
                  rho_court, saturation / refill / maximum-load drills) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 \
                  is empty; audit G-07)"
+            }
+            Self::CourtModelScopeV1 => {
+                "palw_court_model_scope_v1 cannot be armed: no arm-readiness record (D2 replacement-route suite, node full-collusion E2E, \
+                 fence-crossing drill) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 is empty; register D2)"
+            }
+            Self::ClaimHardDeadlineV1 => {
+                "palw_claim_hard_deadline_v1 cannot be armed: no arm-readiness record (X3 fold suite, measured B_* terms and c_retain, node \
+                 E2E, fence-crossing drill) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 is empty; register X3)"
             }
         }
     }

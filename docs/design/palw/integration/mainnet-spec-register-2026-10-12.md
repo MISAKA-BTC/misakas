@@ -109,6 +109,15 @@
 - **N4**: 生成tensor claim（tag 87）は現状weightlessなので対象外。将来weightを与えるfenceは同じ述語を使う必要がある。
 - R-core+未満のADR-0062経路（`resume_claim_after_da_session_v2`）のpause返却にはX3のguardを入れていない（t12はR-core+をgenesisで武装）。
 
+#### 3.1.2 2026-10-18（d2-x3-finish）— 休眠 fence の arm 形と X3 の窓の合成（ADR-0188）
+
+- **arm の形:** D2（`palw_court_model_scope_v1`）と X3（`palw_claim_hard_deadline_v1`）の無条件 refusal を、G14 の arm-readiness record（`PalwG14GatedFenceV1::{CourtModelScopeV1, ClaimHardDeadlineV1}`）に置き換えた。`PALW_G14_ARMING_RECORDS_V1` は**空のまま**で、どの real network でも両 fence は refuse される。
+- **X3 の期限:** `T_prepare = window_bind + window_receipt`、`T_observe = window_challenge_at(activation)`、`T_resolve = B_disclose + B_court + Δ`（Δ = 5 つの `B_*`）。`hard = accepted + prepare + observe + resolve`。`palw_x3_composed_policy_v1` で作り、`palw_x3_composition_refusal_v1` で activation の窓と照合する。未測定（0）の `B_*` と `c_retain` は refuse する。**値は未承認・未測定。**
+- **X3 の pause:** 新 claim の DA pause 返還（`resume_claim_after_da_session_v2` の呼び出し 2 箇所）は 0。旧 claim は不変。
+- **econ:** `palw_minimum_price_c_upper_x3_v1` と `PalwBeaconSourceCostBoundsV1::minimum_gross_fee_x3` が retention の価格を入れる。`c_retain = 0` で拡張が正なら UNKNOWN。
+- **R-D2-READY:** tag 230 を確定（`PALW_A2_TAG_ALLOCATIONS_V1` の既存行）。kind の codec と A-2 kind-table 行は未着手。
+- **R-D2-COVER / node-level 試験:** 未着手（下記の状態は ADR-0188 の検証欄を参照）。
+
 #### 3.1.1 2026-10-15（round 3）— D2代替経路・N4のtag 87・X3のretention延長（未検証のソース）
 
 上の未解決4項目のうち3つに休眠のソースを追加した。**ビルド・テストは未実行**で、PASSを主張しない。新しいobject種別・fence・tag・state tableは追加していない（既存3 fenceの裏側。fence未満・`None` presetではどのhookも読まれず、A-2の表とharnessは変更不要）。

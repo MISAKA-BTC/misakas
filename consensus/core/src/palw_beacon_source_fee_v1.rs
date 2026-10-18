@@ -21,6 +21,27 @@ pub struct PalwBeaconSourceCostBoundsV1 {
 
 impl PalwBeaconSourceCostBoundsV1 {
     pub fn minimum_gross_fee(&self, terms: &misaka_palw_kernel::beacon_source::BeaconSourceTermsV1) -> Result<u64, String> {
+        self.minimum_gross_fee_with_material(terms, self.material_sompi)
+    }
+
+    /// **The gross floor of an X3 source** (REQ-X3-6, 2026-10-18): the same floor with the material term `material_sompi + extra_daa ×
+    /// c_retain`. The zero check on the measured `material_sompi` itself still applies, so an unmeasured material term is refused.
+    pub fn minimum_gross_fee_x3(
+        &self,
+        terms: &misaka_palw_kernel::beacon_source::BeaconSourceTermsV1,
+        x3_policy: &crate::palw_ruling_fences_v1::PalwClaimHardDeadlinePolicyV1,
+        extension: Option<&crate::palw_ruling_fences_v1::PalwX3RetentionExtensionV1>,
+    ) -> Result<u64, String> {
+        let material = crate::palw_ruling_fences_v1::palw_x3_material_term_with_retention_v1(self.material_sompi, x3_policy, extension)
+            .map_err(str::to_owned)?;
+        self.minimum_gross_fee_with_material(terms, material)
+    }
+
+    fn minimum_gross_fee_with_material(
+        &self,
+        terms: &misaka_palw_kernel::beacon_source::BeaconSourceTermsV1,
+        material_sompi: u64,
+    ) -> Result<u64, String> {
         terms.validate()?;
         let span =
             terms.hold_until.checked_sub(terms.seal_start).and_then(|d| d.checked_add(1)).ok_or("source cost horizon overflow")?;
@@ -44,7 +65,7 @@ impl PalwBeaconSourceCostBoundsV1 {
         [
             self.execution_sompi,
             self.carrier_sompi,
-            self.material_sompi,
+            material_sompi,
             self.public_court_sompi,
             self.locked_capital_sompi,
             self.minimum_net_receipt_sompi,

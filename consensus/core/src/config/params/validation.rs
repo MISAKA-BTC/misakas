@@ -6,8 +6,8 @@ impl Params {
     /// **The three fences of the 2026-10-12 rulings** (register §3): `palw_court_model_scope_v1` (D2), `palw_public_evidence_reward_v1`
     /// (N4) and `palw_claim_hard_deadline_v1` (X3). D2 and X3 are refused when armed at a real height until their rules are verified (and
     /// the user approves the X3 policy values); N4 until its arm-readiness record is pinned (`crate::palw_g14_gates_v1`);
-    /// `None` and `Some(never())` pass. The rules exist as dormant, unverified source (`crate::palw_ruling_fences_v1`, 2026-10-15);
-    /// the refusal stays until they are verified and the user approves the X3 policy values.
+    /// `None` and `Some(never())` pass. Since 2026-10-18 D2 and X3 are gated like the other G14 fences: armed at a real height they need a
+    /// pinned arm-readiness record for that network and height, and an X3 policy with an unmeasured (0) term is refused.
     pub fn validate_palw_2026_10_12_ruling_fences_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         self.validate_palw_2026_10_12_ruling_fences_in_v1(crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1)
     }
@@ -18,17 +18,21 @@ impl Params {
         &self,
         records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
     ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        for (fence, why) in [
-            (
-                self.palw_court_model_scope_v1,
-                "palw_court_model_scope_v1 cannot be armed: its rule (register D2, ruling 2026-10-12) is not built and verified yet",
-            ),
-            (
-                self.palw_claim_hard_deadline_v1.map(|f| f.activation),
-                "palw_claim_hard_deadline_v1 cannot be armed: its rule (register X3, ruling 2026-10-12) is not built and verified yet",
-            ),
-        ] {
-            if fence.is_some_and(|f| f != ForkActivation::never()) {
+        // D2 and X3 are record-gated (G14 pattern, audit G-10): armed at a real height, each needs a pinned arm-readiness record for
+        // this network and height (`crate::palw_g14_gates_v1`). The list is empty, so both stay refused on every real network.
+        self.validate_palw_g14_fence_record_in_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::CourtModelScopeV1, records)?;
+        self.validate_palw_g14_fence_record_in_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::ClaimHardDeadlineV1, records)?;
+        // X3's policy: every term is a measurement; 0 means UNMEASURED and is refused, never read as free (REQ-X3-6's price). Its three
+        // spans must be the composition of the windows read from the bundle at activation (user decision 2026-10-18).
+        if let Some(f) = self.palw_claim_hard_deadline_v1.filter(|f| f.activation != ForkActivation::never()) {
+            if !crate::palw_ruling_fences_v1::palw_x3_unmeasured_terms_v1(&f.policy).is_empty() {
+                return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                    "palw_claim_hard_deadline_v1 cannot be armed: a policy term is unmeasured (0 is unknown, never free: B_cold_fetch, B_check, B_localize, B_carrier, B_reorg_slack, c_retain)",
+                ));
+            }
+            if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+                && let Some(why) = crate::palw_ruling_fences_v1::palw_x3_composition_refusal_v1(&bundle.state, f.activation, &f.policy)
+            {
                 return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why));
             }
         }
