@@ -1066,8 +1066,9 @@ class Pipeline:
             self.r.run(argv)
             return
         # The converter's reads are anonymous: no token reaches it (a public source), so none can be printed or sent.
-        p = subprocess.run(argv, text=True, stdout=subprocess.PIPE, env=anon_env())
+        p = subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=anon_env())
         if p.returncode != 0:
+            report.write_text(p.stdout + p.stderr)
             raise SystemExit(f"#{m['id']}: the converter exited {p.returncode}")
         report.write_text(p.stdout)
         st.mark("convert", {"report": str(report)})
@@ -1182,7 +1183,9 @@ class Pipeline:
         if p.returncode != 0 or not out.exists():
             raise SystemExit(f"#{m['id']}: qwen25-convert exited {p.returncode} (log: {d['base'] / 'qwen25-convert.log'})")
         lines = p.stdout.splitlines()
-        pick = lambda key: next((ln.split(key, 1)[1].strip() for ln in lines if key in ln), None)  # noqa: E731
+        # Match the value line itself. `a16 artifact` also appears in the converter's explanatory
+        # comment; substring matching selected that earlier empty line and discarded the digest.
+        pick = lambda key: next((ln.split(key, 1)[1].strip() for ln in lines if ln.strip().startswith(key)), None)  # noqa: E731
         info = {"n_ctx": opts["n_ctx"], "file": out.name, "bytes": out.stat().st_size, "sha256": sha256_file(out),
                 "artifact_digest": (pick("a16 artifact") or "").split()[0] or None,
                 "faithful": {k: pick(k) for k in ("a16 top-1 agree", "a16 top-5 contains", "a16 rank corr (100)", "a16 FAITHFUL")}}
