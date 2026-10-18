@@ -1742,3 +1742,8 @@ At 17:21 JST, Run 15's P RPC returned DAA 1 / 1 DAG block, 1,148 draws,
 5 produced blocks and a lane window of 8 blocks over DAA 0..1 (4 attempt,
 3 heartbeat, 1 other). The producer was drawing. No D-02 terminal row or
 seat-slash result was available; this remains an in-progress investigation.
+
+At 17:22 JST, P's DAG advanced to DAA 2 / 2 blocks, with 1,231 draws and 5
+produced blocks; its last work block remained DAA 1. The lane window held 9
+blocks over DAA 0..1 (5 attempts, 3 heartbeats, 1 other). No D-02 terminal row
+or seat-slash result was available.
