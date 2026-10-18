@@ -2673,3 +2673,20 @@ Build logs: `build.log`, `build-artifacts.jsonl`, terminal marker `build.exit`.
 After success the executable/dependencies must be identified and hashed, copied
 to the reference host and measured there. Partial harness results still cannot
 arm any fence.
+
+
+### 17.5 Gated continuation of the inherited genesis #2 process
+
+A local one-shot orchestration process `/tmp/codex-g14-genesis-after02.py`
+waits for the identified inherited parent PID 71988 to terminate (it neither
+restarts nor signals it). Before any upload it requires upload_refusal=None,
+32,768 measured long-fit positions and the pre-upload snapshot's artifact root,
+index SHA-256 and program digest. A failure or identity mismatch stops it.
+Only after successful #2 upload, verify and cleanup does it run #1 preflight
+and download under the user's explicit one-model acquisition approval.
+It does not start #1 conversion or fetch #3/#4/#5. Logs and phase marker:
+`/tmp/codex-g14-genesis-after02.log`,
+`/tmp/codex-g14-genesis-after02-status.json`; singleton lock prevents duplicate
+launch. HF segment 00000 is not deleted: the pipeline performs no remote delete.
+Initial observed phase is waiting_for_inherited_fit_parent. No fit/upload success
+is inferred from this orchestration being started.
