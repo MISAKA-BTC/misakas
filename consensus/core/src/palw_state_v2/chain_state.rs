@@ -655,6 +655,24 @@ impl PalwChainStateV2 {
         self.model_versions.range((*line_id, 0)..=(*line_id, u32::MAX)).map(|((_, n), v)| (*n, v)).collect()
     }
 
+    /// ADR-0191 step B: the designated-custodian record of `key`, written only by a tag-245 event once its fence is in force.
+    pub fn tir_designated_record(
+        &self,
+        key: &crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1,
+    ) -> Option<&crate::palw_tir_designated_answers_v1::PalwTirDesignatedRecordV1> {
+        self.tir_designated.records.get(key)
+    }
+
+    /// ADR-0191 step B: every designated-custodian record in the registry (empty below the fence).
+    pub fn tir_designated_records(
+        &self,
+    ) -> &std::collections::BTreeMap<
+        crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1,
+        crate::palw_tir_designated_answers_v1::PalwTirDesignatedRecordV1,
+    > {
+        &self.tir_designated.records
+    }
+
     pub fn model_proposals_of(&self, line_id: &Hash64) -> Vec<(&Hash64, &crate::palw_model_lines_v1::PalwModelProposalV1)> {
         self.model_proposals.iter().filter(|(_, p)| p.line_id == *line_id).collect()
     }
