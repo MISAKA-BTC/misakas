@@ -100,7 +100,7 @@ impl PalwChainStateV2 {
                     if !has_input {
                         return Err("claim admission lost its presented original input".into());
                     }
-                    use crate::palw_native_resource_v1::{NativeRetainedV1, native_value_requests_v1, reserve_native_requests_v1};
+                    use crate::palw_native_resource_v1::{native_value_requests_v1, reserve_native_requests_v1, NativeRetainedV1};
                     let demand = native_value_requests_v1(claim).map_err(PalwClaimCheckpointErrorV1::Resource)?;
                     let lease = reserve_native_requests_v1(demand).map_err(PalwClaimCheckpointErrorV1::Resource)?;
                     Ok(Some(NativeRetainedV1::from_owner_reserved_v1(claim.clone(), lease)))
@@ -170,10 +170,14 @@ pub(super) fn retain_changed_claim_context_v1(
         q.member::<Hash64, ()>(builder.entries.len() as u64)?;
         q.exact::<PalwClaimLocalNativeChangeV1>(builder.entries.len() as u64)?;
         for entry in &builder.entries {
-            if let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry {
-                if *table != PALW_CLAIM_LOCAL_TABLE_V1 {
+            match entry {
+                PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } if *table != PALW_CLAIM_LOCAL_TABLE_V1 => {
                     q.copy(key)?.copy(old)?.copy(new)?;
                 }
+                PalwDeltaEntryV2::ExecV2Row { key, old, new, .. } => {
+                    q.copy(key)?.copy(old)?.copy(new)?;
+                }
+                _ => {}
             }
         }
         builder.admit_native_write_v1(q)?;
@@ -181,15 +185,21 @@ pub(super) fn retain_changed_claim_context_v1(
     let mut claims = BTreeSet::new();
     let mut native_changes = Vec::with_capacity(builder.entries.len());
     for entry in &builder.entries {
-        if let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry {
-            if *table != PALW_CLAIM_LOCAL_TABLE_V1 {
-                native_changes.push(PalwClaimLocalNativeChangeV1 {
-                    table: *table,
-                    key: key.clone(),
-                    old: old.clone(),
-                    new: new.clone(),
-                });
+        let native = match entry {
+            PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } if *table != PALW_CLAIM_LOCAL_TABLE_V1 => {
+                Some((PalwClaimLocalRowOwnerV1::KernelRoute, table, key, old, new))
             }
+            PalwDeltaEntryV2::ExecV2Row { table, key, old, new } => Some((PalwClaimLocalRowOwnerV1::ExecV2, table, key, old, new)),
+            _ => None,
+        };
+        if let Some((owner, table, key, old, new)) = native {
+            native_changes.push(PalwClaimLocalNativeChangeV1 {
+                owner,
+                table: *table,
+                key: key.clone(),
+                old: old.clone(),
+                new: new.clone(),
+            });
         }
         match entry {
             PalwDeltaEntryV2::Claim { key, .. } => {

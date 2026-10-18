@@ -11,6 +11,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash64, ZERO_HASH64};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[path = "palw_claim_local_origins_v1.rs"]
+mod origins_v1;
+pub use origins_v1::*;
+
 pub const PALW_CLAIM_LOCAL_TABLE_V1: u8 = 144;
 
 /// Actual presented inputs, retained without declaring them valid. Only the
@@ -108,11 +112,19 @@ impl PalwClaimLocalPolicyContextV1 {
     }
 }
 
+/// Table numbers are owner-local: EXEC table 1 is not the kernel bond table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+pub enum PalwClaimLocalRowOwnerV1 {
+    KernelRoute,
+    ExecV2,
+}
+
 /// Exact native row events from the executing journal. Registry/model rows
 /// are evidence context, not claims or model approvals. Keep intermediate
 /// values too: an insert followed by removal can leave no final-state row.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwClaimLocalNativeChangeV1 {
+    pub owner: PalwClaimLocalRowOwnerV1,
     pub table: u8,
     pub key: Vec<u8>,
     pub old: Option<Vec<u8>>,
@@ -168,32 +180,38 @@ impl PalwClaimLiabilityFrameV1 {
             )));
         }
         let overflow = || PalwClaimCheckpointErrorV1::Resource(NativeCoverageV1::overflow::<Self>("native journal inspection"));
-        let per_key = btree_node_envelope_bytes_v1::<(u8, Vec<u8>), Option<&[u8]>>() as u64;
+        type Key = (PalwClaimLocalRowOwnerV1, (u8, Vec<u8>));
+        let per_key = btree_node_envelope_bytes_v1::<Key, Option<&[u8]>>() as u64;
         let mut demand = (self.native_changes.len() as u64).checked_mul(per_key).ok_or_else(overflow)?;
         for change in &self.native_changes {
             demand = demand.checked_add(change.key.len() as u64).ok_or_else(overflow)?;
         }
         let _workspace = reserve_native_requests_v1(demand).map_err(PalwClaimCheckpointErrorV1::Resource)?;
-        fn row<'a>(state: &'a crate::palw_state_v2::PalwStateCarriageV2, key: &(u8, Vec<u8>)) -> Option<&'a [u8]> {
-            let route = state.kernel_route.as_ref()?;
-            let map = if key.0 < crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 { &route.rows } else { &route.aux };
-            map.get(key).map(Vec::as_slice)
-        }
-        let mut pending: BTreeMap<(u8, Vec<u8>), Option<&[u8]>> = BTreeMap::new();
+        let mut pending: BTreeMap<Key, Option<&[u8]>> = BTreeMap::new();
         for change in &self.native_changes {
-            if change.table == PALW_CLAIM_LOCAL_TABLE_V1 || change.old == change.new {
+            if (change.owner == PalwClaimLocalRowOwnerV1::KernelRoute && change.table == PALW_CLAIM_LOCAL_TABLE_V1)
+                || change.old == change.new
+            {
                 return Err("native journal contains its own namespace or a no-op".into());
             }
-            let key = (change.table, change.key.clone());
-            let initial = row(prior, &key);
-            let previous = pending.entry(key).or_insert(initial);
-            if *previous != change.old.as_deref() {
-                return Err("native journal does not continue its original row".into());
+            let key = (change.owner, (change.table, change.key.clone()));
+            match pending.entry(key) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    if !claim_local_row_matches_v1(prior, entry.key(), change.old.as_deref())? {
+                        return Err("native journal does not continue its original row".into());
+                    }
+                    entry.insert(change.new.as_deref());
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    if *entry.get() != change.old.as_deref() {
+                        return Err("native journal does not continue its intermediate row".into());
+                    }
+                    entry.insert(change.new.as_deref());
+                }
             }
-            *previous = change.new.as_deref();
         }
         for (key, last) in pending {
-            if row(current, &key) != last {
+            if !claim_local_row_matches_v1(current, &key, last)? {
                 return Err("native journal does not reach its current row".into());
             }
         }
@@ -252,6 +270,50 @@ impl PalwClaimLiabilityFrameV1 {
         }
         self.validate_native_changes_v1(&prior, &current)?;
         inspect(&prior, &current)
+    }
+}
+
+fn claim_local_row_matches_v1(
+    state: &crate::palw_state_v2::PalwStateCarriageV2,
+    key: &(PalwClaimLocalRowOwnerV1, (u8, Vec<u8>)),
+    bytes: Option<&[u8]>,
+) -> Result<bool, PalwClaimCheckpointErrorV1> {
+    use crate::palw_state_v2::*;
+    let (owner, row_key) = key;
+    let (table, raw_key) = row_key;
+    if *owner == PalwClaimLocalRowOwnerV1::KernelRoute {
+        let row = state.kernel_route.as_ref().and_then(|route| {
+            let rows =
+                if *table < crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 { &route.rows } else { &route.aux };
+            rows.get(row_key)
+        });
+        return Ok(row.map(Vec::as_slice) == bytes);
+    }
+    // These keys are fixed-width Copy values. Comparing the stored typed row
+    // streams its canonical encoding; it never decodes an untrusted row or
+    // allocates another encoded copy of a large root/reward record.
+    fn matches<K: Copy + Ord + BorshDeserialize, V: BorshSerialize>(
+        rows: &BTreeMap<K, V>,
+        key: &[u8],
+        bytes: Option<&[u8]>,
+    ) -> Result<bool, PalwClaimCheckpointErrorV1> {
+        let key: K = borsh::from_slice(key).map_err(|_| PalwClaimCheckpointErrorV1::Semantic("EXEC journal key does not decode"))?;
+        Ok(match (rows.get(&key), bytes) {
+            (None, None) => true,
+            (Some(row), Some(bytes)) => palw_check_canonical_liability_bytes_v1(row, bytes).is_ok(),
+            _ => false,
+        })
+    }
+    match *table {
+        PALW_EXEC_V2_TABLE_ROOTS_V1 => matches(&state.exec_v2.roots, raw_key, bytes),
+        PALW_EXEC_V2_TABLE_SLICES_V1 => matches(&state.exec_v2.slices, raw_key, bytes),
+        PALW_EXEC_V2_TABLE_JOBS_V1 => matches(&state.exec_v2.jobs, raw_key, bytes),
+        PALW_EXEC_V2_TABLE_ANCHORED_V1 => matches(&state.exec_v2.anchored, raw_key, bytes),
+        PALW_EXEC_V2_TABLE_REWARDS_V1 => matches(&state.exec_v2_rewards, raw_key, bytes),
+        PALW_EXEC_V2_TABLE_REWARD_HOLDS_V1 => matches(&state.exec_v2_reward_holds, raw_key, bytes),
+        PALW_EXEC_V2_TABLE_JOB_USES_V1 => matches(&state.exec_v2_job_uses, raw_key, bytes),
+        PALW_EXEC_V2_TABLE_ORIGINS_V1 => matches(&state.exec_v2_origins, raw_key, bytes),
+        _ => Err("EXEC journal names an unallocated table".into()),
     }
 }
 

@@ -1,7 +1,8 @@
 //! Exact typed checkpoint coverage. These are allocation and byte-shape
 //! visitors; semantic authority comes from the executed liability fold.
 use crate::palw_claim_local_v1::{
-    PalwClaimLiabilityFrameV1, PalwClaimLocalCheckpointV1, PalwClaimLocalInputV1, PalwClaimLocalNativeChangeV1, PalwClaimLocalRecordV1,
+    PalwClaimLiabilityFrameV1, PalwClaimLocalCheckpointV1, PalwClaimLocalInputV1, PalwClaimLocalNativeChangeV1,
+    PalwClaimLocalRecordV1, PalwClaimLocalRowOwnerV1,
 };
 use crate::palw_native_resource_v1::wire::wire_struct;
 use crate::palw_native_resource_v1::{native_enum, native_struct};
@@ -15,8 +16,18 @@ use std::io::{self, Read};
 native_struct!(PalwClaimLocalRecordV1; claim, accepted_daa, accepted_blue_score, accepting_block, anchors, inputs,
     execution_root, reservations, final_claim, certified, voided, liability_closed, material);
 native_struct!(PalwClaimLocalCheckpointV1; point, records, liability_state, material);
-native_struct!(PalwClaimLocalNativeChangeV1; table, key, old, new);
-wire_struct!(PalwClaimLocalNativeChangeV1; u8, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
+native_enum!(PalwClaimLocalRowOwnerV1; KernelRoute, ExecV2);
+impl NativeWireScanV1 for PalwClaimLocalRowOwnerV1 {
+    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 | 1 => Ok(NativeWireShapeV1::default()),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown liability row owner")),
+        }
+    }
+}
+native_struct!(PalwClaimLocalNativeChangeV1; owner, table, key, old, new);
+wire_struct!(PalwClaimLocalNativeChangeV1; PalwClaimLocalRowOwnerV1, u8, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
 wire_struct!(PalwClaimLocalRecordV1; Hash64, u64, u64, Hash64, bool, BTreeSet<Hash64>, Hash64, BTreeSet<Hash64>,
     bool, bool, bool, bool, BTreeSet<Hash64>);
 wire_struct!(PalwClaimLocalCheckpointV1; PalwBlockContextV2, BTreeMap<Hash64, PalwClaimLocalRecordV1>, Vec<u8>, BTreeMap<Hash64, Vec<u8>>);

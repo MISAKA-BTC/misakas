@@ -471,7 +471,13 @@ fn rfc23s2_native_only_fold_retains_actual_rows_through_restore_and_reorg() {
         .iter()
         .filter_map(|e| match e {
             PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } if *table != PALW_CLAIM_LOCAL_TABLE_V1 => {
-                Some(PalwClaimLocalNativeChangeV1 { table: *table, key: key.clone(), old: old.clone(), new: new.clone() })
+                Some(PalwClaimLocalNativeChangeV1 {
+                    owner: PalwClaimLocalRowOwnerV1::KernelRoute,
+                    table: *table,
+                    key: key.clone(),
+                    old: old.clone(),
+                    new: new.clone(),
+                })
             }
             _ => None,
         })
