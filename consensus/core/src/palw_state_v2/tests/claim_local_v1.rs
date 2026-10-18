@@ -443,3 +443,103 @@ fn rfc23s2_admission_reader_scopes_reused_fp_identity_by_its_real_acceptance() {
     );
     assert!(bad.claim_local_admission_context_v1(&p, &rebirth, id).is_err());
 }
+
+fn native_exit() -> PalwConsensusObjectV2 {
+    PalwConsensusObjectV2::KernelRouteV1 {
+        bytes: misaka_palw_kernel::route::KernelRouteObjectV1::RequestExit {
+            bond: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond_key(1)),
+        }
+        .encode(),
+        signer: bond_key(1),
+        signature: Vec::new(),
+    }
+}
+
+#[test]
+fn rfc23s2_native_only_fold_retains_actual_rows_through_restore_and_reorg() {
+    let p = rules();
+    let before = parent(&p);
+    let point = ctx(2, 100, 2);
+    let (after, delta) =
+        apply_palw_transition_v2_with_extras(&before, &p, &point, &[native_exit()], None, false, false, false, false, &extra())
+            .unwrap();
+    let f = frame(&after, point);
+    assert!(f.claims.is_empty());
+    assert!(!f.native_changes.is_empty());
+    let journal: Vec<_> = delta
+        .entries
+        .iter()
+        .filter_map(|e| match e {
+            PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } if *table != PALW_CLAIM_LOCAL_TABLE_V1 => {
+                Some(PalwClaimLocalNativeChangeV1 { table: *table, key: key.clone(), old: old.clone(), new: new.clone() })
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(f.native_changes, journal);
+    f.validate_context_v1().unwrap();
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&after)).unwrap();
+    crate::palw_native_resource_v1::preflight_native_carriage_v1(bytes.as_slice(), bytes.len() as u64).unwrap();
+    let restored =
+        borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state_v3(&p, Some(after.state_root()), false, None).unwrap();
+    assert_eq!(*frame(&restored, point), *f);
+    assert_eq!(apply_delta_v2(&before, &delta, &p).unwrap().state_root(), after.state_root());
+    assert_eq!(
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&revert_delta_v2(&after, &delta, &p).unwrap())).unwrap(),
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&before)).unwrap()
+    );
+}
+
+#[test]
+fn rfc23s2_native_transient_journal_keeps_intermediate_values_and_refuses_discontinuity() {
+    let p = rules();
+    let before = parent(&p);
+    let extras = extra();
+    let point = ctx(2, 100, 2);
+    let mut builder = TransitionBuilder::new(&before, &p, false, false, false, false, &extras);
+    palw_kernel_route_fold_v1::ensure_route_header(&mut builder, &point).unwrap();
+    // Real journal writer seam; the row is absent in both boundary carriages.
+    for value in [Some(vec![1]), Some(vec![2]), None] {
+        builder.write_kernel_row(32, vec![9; 64], value).unwrap();
+    }
+    palw_claim_local_fold_v1::retain_changed_claim_context_v1(
+        &mut builder,
+        &before,
+        &point,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+    )
+    .unwrap();
+    let f = frame(&builder.state, point);
+    assert_eq!(f.native_changes.len(), 3);
+    f.validate_context_v1().unwrap();
+    let mut bad = (*f).clone();
+    bad.native_changes[1].old = Some(vec![7]);
+    assert!(bad.validate_context_v1().is_err());
+    let mut bad = (*f).clone();
+    bad.native_changes.swap(0, 1);
+    assert!(bad.validate_context_v1().is_err());
+    let mut bad = (*f).clone();
+    bad.native_changes[0].table = PALW_CLAIM_LOCAL_TABLE_V1;
+    assert!(bad.validate_context_v1().is_err());
+}
+
+#[test]
+fn rfc23s2_native_prefence_state_and_delta_remain_identical() {
+    let released = params();
+    let future = released.clone().with_claim_local_settlement_from_daa(Some(100));
+    let before = parent(&released);
+    let point = ctx(2, 99, 2);
+    let run = |p| {
+        apply_palw_transition_v2_with_extras(&before, p, &point, &[native_exit()], None, false, false, false, false, &extra()).unwrap()
+    };
+    let (a, da) = run(&released);
+    let (b, db) = run(&future);
+    assert_eq!(borsh::to_vec(&da).unwrap(), borsh::to_vec(&db).unwrap());
+    assert_eq!(
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&a)).unwrap(),
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&b)).unwrap()
+    );
+}

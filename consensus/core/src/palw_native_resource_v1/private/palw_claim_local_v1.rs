@@ -1,25 +1,27 @@
 //! Exact typed checkpoint coverage. These are allocation and byte-shape
 //! visitors; semantic authority comes from the executed liability fold.
 use crate::palw_claim_local_v1::{
-    PalwClaimLiabilityFrameV1, PalwClaimLocalCheckpointV1, PalwClaimLocalInputV1, PalwClaimLocalRecordV1,
+    PalwClaimLiabilityFrameV1, PalwClaimLocalCheckpointV1, PalwClaimLocalInputV1, PalwClaimLocalNativeChangeV1, PalwClaimLocalRecordV1,
 };
 use crate::palw_native_resource_v1::wire::wire_struct;
-use crate::palw_native_resource_v1::{
-    NativeCoverageV1, NativeHeapV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, preflight_native_carriage_v1,
-};
 use crate::palw_native_resource_v1::{native_enum, native_struct};
-use crate::{Hash64, palw_state_v2::PalwBlockContextV2};
+use crate::palw_native_resource_v1::{
+    preflight_native_carriage_v1, NativeCoverageV1, NativeHeapV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1,
+};
+use crate::{palw_state_v2::PalwBlockContextV2, Hash64};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
 native_struct!(PalwClaimLocalRecordV1; claim, accepted_daa, accepted_blue_score, accepting_block, anchors, inputs,
     execution_root, reservations, final_claim, certified, voided, liability_closed, material);
 native_struct!(PalwClaimLocalCheckpointV1; point, records, liability_state, material);
+native_struct!(PalwClaimLocalNativeChangeV1; table, key, old, new);
+wire_struct!(PalwClaimLocalNativeChangeV1; u8, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
 wire_struct!(PalwClaimLocalRecordV1; Hash64, u64, u64, Hash64, bool, BTreeSet<Hash64>, Hash64, BTreeSet<Hash64>,
     bool, bool, bool, bool, BTreeSet<Hash64>);
 wire_struct!(PalwClaimLocalCheckpointV1; PalwBlockContextV2, BTreeMap<Hash64, PalwClaimLocalRecordV1>, Vec<u8>, BTreeMap<Hash64, Vec<u8>>);
 
-native_struct!(PalwClaimLiabilityFrameV1; point, network_identity, fired_forks, policy, claims, prior_state, current_state, accepted_objects, origin_headers, inputs);
+native_struct!(PalwClaimLiabilityFrameV1; point, network_identity, fired_forks, policy, claims, native_changes, prior_state, current_state, accepted_objects, origin_headers, inputs);
 native_enum!(PalwClaimLocalInputV1;
     Attempt { block, execution_key, envelope }, ReceiptSpend { block, spend },
     History { claim, pledge }, PublicBinding { claim, header }, CustodyDelegation { claim, delegation }, TirOriginal { claim, envelope }, FreePromptNative { claim, job_pin, public_job, eval });
@@ -87,6 +89,7 @@ impl NativeWireScanV1 for PalwClaimLiabilityFrameV1 {
         sum =
             sum.merge(<crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         sum = sum.merge(<BTreeSet<Hash64> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(<Vec<PalwClaimLocalNativeChangeV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         // Each raw state frame has its own exact byte boundary. Scan the real
         // carriage, not just Vec<u8>, before any embedded Borsh allocation.
         for _ in 0..2 {

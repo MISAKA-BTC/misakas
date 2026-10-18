@@ -144,7 +144,7 @@ impl PalwChainStateV2 {
     }
 }
 
-/// Freeze the state at actual claim/certification changes. A stuck A does not
+/// Freeze the state at actual claim/certification or native row changes. A stuck A does not
 /// acquire references to unrelated B frames merely by being in the same DAG.
 pub(super) fn retain_changed_claim_context_v1(
     builder: &mut TransitionBuilder<'_>,
@@ -168,10 +168,29 @@ pub(super) fn retain_changed_claim_context_v1(
     if builder.native_writers_tracking_v1() {
         let mut q = native_writers::NativeWriteQuoteV1::new("claim-local changed claims");
         q.member::<Hash64, ()>(builder.entries.len() as u64)?;
+        q.exact::<PalwClaimLocalNativeChangeV1>(builder.entries.len() as u64)?;
+        for entry in &builder.entries {
+            if let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry {
+                if *table != PALW_CLAIM_LOCAL_TABLE_V1 {
+                    q.copy(key)?.copy(old)?.copy(new)?;
+                }
+            }
+        }
         builder.admit_native_write_v1(q)?;
     }
     let mut claims = BTreeSet::new();
+    let mut native_changes = Vec::with_capacity(builder.entries.len());
     for entry in &builder.entries {
+        if let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry {
+            if *table != PALW_CLAIM_LOCAL_TABLE_V1 {
+                native_changes.push(PalwClaimLocalNativeChangeV1 {
+                    table: *table,
+                    key: key.clone(),
+                    old: old.clone(),
+                    new: new.clone(),
+                });
+            }
+        }
         match entry {
             PalwDeltaEntryV2::Claim { key, .. } => {
                 claims.insert(*key);
@@ -201,7 +220,7 @@ pub(super) fn retain_changed_claim_context_v1(
             _ => {}
         }
     }
-    if claims.is_empty() {
+    if claims.is_empty() && native_changes.is_empty() {
         return Ok(());
     }
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
@@ -314,6 +333,7 @@ pub(super) fn retain_changed_claim_context_v1(
         fired_forks,
         policy: PalwClaimLocalPolicyContextV1::from_rules_v1(builder.params, ctx.daa_score),
         claims,
+        native_changes,
         prior_state: borsh::to_vec(&prior).expect("canonical original carriage"),
         current_state: borsh::to_vec(&current).expect("canonical current carriage"),
         accepted_objects: accepted_objects.to_vec(),

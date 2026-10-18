@@ -108,6 +108,17 @@ impl PalwClaimLocalPolicyContextV1 {
     }
 }
 
+/// Exact native row events from the executing journal. Registry/model rows
+/// are evidence context, not claims or model approvals. Keep intermediate
+/// values too: an insert followed by removal can leave no final-state row.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwClaimLocalNativeChangeV1 {
+    pub table: u8,
+    pub key: Vec<u8>,
+    pub old: Option<Vec<u8>>,
+    pub new: Option<Vec<u8>>,
+}
+
 /// Fold-produced historical context for the claims actually changed at a DAG
 /// point. The two carriages omit this namespace: a frame never contains frames.
 /// These are original state/identity witnesses, not declarations of correctness.
@@ -118,6 +129,7 @@ pub struct PalwClaimLiabilityFrameV1 {
     pub fired_forks: [u8; 32],
     pub policy: PalwClaimLocalPolicyContextV1,
     pub claims: BTreeSet<Hash64>,
+    pub native_changes: Vec<PalwClaimLocalNativeChangeV1>,
     pub prior_state: Vec<u8>,
     pub current_state: Vec<u8>,
     pub accepted_objects: Vec<crate::palw_state_v2::PalwConsensusObjectV2>,
@@ -140,6 +152,54 @@ impl PalwClaimLiabilityFrameV1 {
         self.with_context_carriages_v1(|_, _| Ok(()))
     }
 
+    fn validate_native_changes_v1(
+        &self,
+        prior: &crate::palw_state_v2::PalwStateCarriageV2,
+        current: &crate::palw_state_v2::PalwStateCarriageV2,
+    ) -> Result<(), PalwClaimCheckpointErrorV1> {
+        use crate::palw_native_resource_v1::{btree_node_envelope_bytes_v1, reserve_native_requests_v1, NativeCoverageV1};
+        if self.native_changes.is_empty() {
+            return Ok(());
+        }
+        if cfg!(not(target_pointer_width = "64")) {
+            return Err(PalwClaimCheckpointErrorV1::Resource(NativeCoverageV1::unsupported::<Self>(
+                "native journal inspection",
+                "pinned BTree layout requires 64-bit target",
+            )));
+        }
+        let overflow = || PalwClaimCheckpointErrorV1::Resource(NativeCoverageV1::overflow::<Self>("native journal inspection"));
+        let per_key = btree_node_envelope_bytes_v1::<(u8, Vec<u8>), Option<&[u8]>>() as u64;
+        let mut demand = (self.native_changes.len() as u64).checked_mul(per_key).ok_or_else(overflow)?;
+        for change in &self.native_changes {
+            demand = demand.checked_add(change.key.len() as u64).ok_or_else(overflow)?;
+        }
+        let _workspace = reserve_native_requests_v1(demand).map_err(PalwClaimCheckpointErrorV1::Resource)?;
+        fn row<'a>(state: &'a crate::palw_state_v2::PalwStateCarriageV2, key: &(u8, Vec<u8>)) -> Option<&'a [u8]> {
+            let route = state.kernel_route.as_ref()?;
+            let map = if key.0 < crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 { &route.rows } else { &route.aux };
+            map.get(key).map(Vec::as_slice)
+        }
+        let mut pending: BTreeMap<(u8, Vec<u8>), Option<&[u8]>> = BTreeMap::new();
+        for change in &self.native_changes {
+            if change.table == PALW_CLAIM_LOCAL_TABLE_V1 || change.old == change.new {
+                return Err("native journal contains its own namespace or a no-op".into());
+            }
+            let key = (change.table, change.key.clone());
+            let initial = row(prior, &key);
+            let previous = pending.entry(key).or_insert(initial);
+            if *previous != change.old.as_deref() {
+                return Err("native journal does not continue its original row".into());
+            }
+            *previous = change.new.as_deref();
+        }
+        for (key, last) in pending {
+            if row(current, &key) != last {
+                return Err("native journal does not reach its current row".into());
+            }
+        }
+        Ok(())
+    }
+
     /// Keep the preflight reservation through the whole borrowed inspection.
     /// A callback cannot return a reference into a discarded carriage.
     pub(crate) fn with_context_carriages_v1<T>(
@@ -151,7 +211,7 @@ impl PalwClaimLiabilityFrameV1 {
     ) -> Result<T, PalwClaimCheckpointErrorV1> {
         use crate::palw_native_resource_v1::{preflight_native_carriage_v1, reserve_native_requests_v1};
         use crate::palw_state_v2::PalwStateCarriageV2;
-        if self.claims.is_empty()
+        if (self.claims.is_empty() && self.native_changes.is_empty())
             || self.claims.contains(&ZERO_HASH64)
             || self.network_identity == [0; 32]
             || self.fired_forks == [0; 32]
@@ -190,6 +250,7 @@ impl PalwClaimLiabilityFrameV1 {
         {
             return Err("liability frame changed its original DAG point".into());
         }
+        self.validate_native_changes_v1(&prior, &current)?;
         inspect(&prior, &current)
     }
 }
@@ -304,7 +365,7 @@ impl PalwClaimLocalCheckpointV1 {
         if self.point != *point || self.records != *expected || self.liability_state != expected_liability_state {
             return Err("checkpoint differs from the fold's liability state".into());
         }
-        use crate::palw_native_resource_v1::{NativeHeapV1, reserve_native_requests_v1};
+        use crate::palw_native_resource_v1::{reserve_native_requests_v1, NativeHeapV1};
         // Record envelopes dominate the vertex maps/queue; input/material set
         // envelopes dominate dedup sets and twice-grown consumer vectors. Four
         // copies cover both validation and the largest subsequent graph read.
@@ -468,7 +529,7 @@ fn decode_claim_local_value_v1<T: BorshDeserialize + BorshSerialize + crate::pal
     bytes: &[u8],
 ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<T>, crate::palw_native_resource_v1::NativeDecodeErrorV1<std::io::Error>> {
     use crate::palw_native_resource_v1::{
-        NativeDecodeErrorV1 as D, NativeRetainedV1, preflight_native_value_v1, reserve_native_requests_v1,
+        preflight_native_value_v1, reserve_native_requests_v1, NativeDecodeErrorV1 as D, NativeRetainedV1,
     };
     // Unconditional shape validation also protects configurations without a
     // local quota. A huge nested count in a short frame never reaches Borsh.
@@ -695,7 +756,7 @@ mod tests {
 
     #[test]
     fn rfc23s2_checkpoint_native_decode_covers_real_heap_and_rejects_hostile_counts() {
-        use crate::palw_native_resource_v1::{NativeHeapV1, preflight_native_value_v1};
+        use crate::palw_native_resource_v1::{preflight_native_value_v1, NativeHeapV1};
         let c = fixture();
         let bytes = borsh::to_vec(&c).unwrap();
         let shape = preflight_native_value_v1::<PalwClaimLocalCheckpointV1>(bytes.as_slice(), bytes.len() as u64).unwrap();
@@ -758,7 +819,7 @@ impl crate::config::params::Params {
 #[cfg(test)]
 mod fence_tests {
     use crate::config::params::{
-        DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_t12_shipped_params,
+        palw_t12_shipped_params, ForkActivation, DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS,
     };
     #[test]
     fn rfc23s2_fence_is_dormant_some_only_and_never_armable_without_measurements() {

@@ -134,3 +134,13 @@
 - 新しい FP の試験で、wire generator が enum variant 全体の属性を先に消し、内側の `borsh(skip)` を見失っていることが判明した(28成功・1失敗、0.46秒)。variant 先頭の属性だけを先に除くよう生成元を修正し、FP kind 12 の scanner から wire に無い3項目を除いた。旧 object の Borsh bytes は変更しない。省略される `job_pin` / `public_job` / `eval` の実際の提示値は、休眠 frame の `FreePromptNative` 入力欄へ別途保持する。改善 DTO の外部 wire / 有効化条件には触れず、eval の保存欄は既存の job と tail の tuple で表す。改善経路を mainnet 前に開く変更ではない。
 - 隔離再生成で FP kind 12 が15 wire fieldであり、3つの省略項目を読まないこと、`F/f/V/144` と非再帰 guard が残ることを確認した。元の受理 / 後の frame / merged carrier / FP ID 再受理 / native 専用値 / cold restore / 欠落入力 / fence 前の未知 bytes を含む `rfc23` は29件成功・0件失敗(0.38秒、build 5分57秒)。A-2 17件(13.30秒)、aux registry 6件(4.20秒)、carriage 4件(0.03秒)、material 5件(0.01秒)、typed kernel material 3件(0.03秒)も成功した。資料2群に各1重複があるので unit は62件の異なる試験が成功。integration の release 9件(0.21秒)、activation pool 5件(0.44秒)、testnet12 identity 1件(0.05秒)も成功した(build 3分46秒)。合計77件。node の最終 check も2分00秒で成功した(各コマンドの環境・opt-level override・`--no-default-features`・`-j 3` は前節と同じ)。初回の compile 中断と中間の compile error は合格件数へ加算しない。文書 index / link 検査は既知43・新規0。
 - 入力からの依存導出、credit / 報酬の一度だけの反映・取消、全 native policy / signed covenant / raw material の保持と転送、GC、共有 fork choice / settled / lifecycle / pruning / IBD、外部1人の反証を含む node drill は未完了である。
+
+
+### native 行だけが変わる fold の原資料(2026-10-18、保存検証済み・段階2全体は未完)
+
+- chain claim / 認証行だけでなく、実行 journal の `KernelRouteRow` が変わる transition でも frame を作る。台帳の job / claim / demand / court / EXEC 行などを同じ writer で扱い、モデルや registry の行を claim やモデル審査として解釈しない。自分の aux 144 は対象外にする。
+- frame は行の table / key / old / new を journal 順で保持する。作成・更新・削除が1 transition に同居して両端では存在しない行も失わない。前後の carriage と各行の連続性を検査し、自己 namespace・no-op・途中値の不一致を拒否する。この検査は実行結果の正しさや Gate C 認証を証明するものではない。
+- 履歴の Vec と行のコピー、検査時の BTreeMap と key の workspace を割り当て前に予約する。全て休眠 fence の内側であり、既存 native object の wire bytes は変更しない。
+- この履歴は原状態を残す接続である。native credit lot の依存 reader、資料の完全な署名済み covenant と実バイト列の収録・転送、frame の回収、credit / 報酬・frontier / settled / lifecycle / pruning / IBD の一体接続、および外部1人による反証の node 試験は引き続き未完である。
+- **試験:** 同じ scoped 環境・opt-level override・`--no-default-features`・`-j 3` で `rfc23` は32件成功・0件失敗(0.26秒、build 6分32秒)。今回の3件は、chain claim の無い実 fold の行履歴と cold restore / delta replay / revert、実 row writer での作成→更新→削除と途中値・順序改変の拒否、fence 前の state / delta のバイト一致を扱う。途中行の試験は writer seam の検査であり、全 native job / court 経路の node drill として数えない。A-2 17件(13.08秒)、aux registry 6件(3.90秒)、carriage 4件・material 5件・typed material 3件(各0.00秒)も成功した。資料2群の各1重複を除いて unit は65件。integration の release 9件(0.15秒)、activation pool 5件(0.19秒)、testnet12 identity 1件(0.07秒)も成功した(build 4分07秒)。合計80件の異なる試験が成功した。
+- node の最終 `cargo check --lib -j 3 -p kaspa-consensus --no-default-features` も同じ環境・opt-level overrideで成功した(3分01秒)。文書 index / link 検査は既知43・新規0。全 native 経路の G14 / pruning / IBD / restart の node 受入試験の完了を意味しない。
