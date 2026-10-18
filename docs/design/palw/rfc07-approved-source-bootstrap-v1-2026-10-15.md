@@ -1,6 +1,6 @@
 # RFC07: selected approval を持つ最初の source の接続
 
-状態: **UNCOMPILED / UNEXECUTED。新契約に加え、有限epochのnative journal・承認slot・履歴settlementからの新source eventと独立versionのcollectorを実装中。own-chain resolverの全呼出境界、実worker、後続assignment consumerは未完了。公開 activation や数値の承認ではない。**
+状態: **UNCOMPILED / UNEXECUTED。有限epochのown-chain resolver・native journal・承認slot・履歴settlementからの新source event、直接Programの実producer/checkerとprivate共通profileを接続した。後続assignmentのversioned lineage、経済consumerと統合受入は残る。公開 activation や数値の承認ではない。**
 
 ## 現状の停止条件
 
@@ -75,3 +75,33 @@ cutoffを越えるblockの生産者がblockを留保する場合のanchor取得�
 これはモデル審査ではなく、既にnative claimとしてcommitされた1 workのcheckerである。matching replay自体は認証を代替せず、native foldがselected quorumを数える。現時点のworkerは直接Programとlocal authenticated model取得に限定し、他scope、network model取得とobjective fault/無回答の自動告発、verifier slash・報酬収支は残る。
 
 下流consumer向けにはnative source eventと実consumer claimの観測を追加したが、versioned transitive lineageは未解決である。`VersionedLineageUnimplemented` / `NativeConsumerAbsent` を明示し、collectorへ常にfalseのdependency callbackを渡さず、seedやLocked assignmentを生成しない。旧V1 collectorやsource Final pathを使った代用はしない。worker・getter・private factoryを含め全て未build・未実行であり、統合campaignの受入結果ではない。
+
+
+## 2026-10-18 同一testnetでの source / paid 共通profileと実producer
+
+新しい明示profile `source-paid-v1` は既存exact `paid-v4` factoryへoperator指定のsource policyだけを追加する。`--private-probe-source-policy=ABSOLUTE_BORSH` のcanonical Borsh `(u64 activation, PalwSelectedSourceBootstrapPolicyV1)` が必須で、A/B/JOINを含む全nodeが同じsalt・policy・Params fingerprintを使う。source-v1と旧paid-v4のfactory/意味は維持する。public presetはNone、manifestはreleaseApproval=falseであり、private値は検証・承認されていない。
+
+同じnode constructorからpaid producer/provider/checker、V5 continuation、source producer/checker、readonly paid観測を起動できる。`--private-probe-paid-generation-export=ABSOLUTE_JSON` はrootのV5 own-state exporterへ接続する。exact original signed claim・expected sequence/current consentから得た330-byteの不変metadata fileはcontinuationの入力だけであり、source承認・支払や置換の権威ではない。paid-v4でも明示exportだけのreadonly nodeを使える。V5 continuationと元のpaid producer/replacementの排他制約は維持する。
+
+`export_private_source_paid_bootstrap_v1` は別のentry pointで共通profileの完全なParamsを検査し、その実network/rulesetでartifactを再検査・署名する。旧paid-v4 exporterのexact factory制約を緩めず、旧profileのconsensus identityへ黙って新policyを混ぜない。primitive fixtureやstatement fileの作成自体はnative登録・conformance・source acceptanceの観測ではない。
+
+`--private-probe-source-open=ABSOLUTE_JSON` は1つの実claimを元のproducer keyでOpenする。JSONはversion、claim、producer_bond/key、payer_key、funding_outpoint、maximum_fee_sompi、maximum_input_bytesを明示する。既存accepted claimを対象とする場合はproductionを省略できる。最初のsourceを自分で作る場合はproductionにbase_job、canonical Borsh model file、秘密のsalt、seal_funding_outpoint、claim_funding_outpoint、各stageのfee capとmaximum_workspace_bytesを明示する。seal/reveal/openは3つの別々の固定inputであり、自動補充・input置換は行わない。
+
+実producerはcoherentなown epoch/stateから直接Programの登録classとpayerが既にpostした実jobを読む。paid enrollmentのあるbase jobは拒否し、paid claimが必要なsourceを自分で生成する循環を作らない。既存SDKの実work生成器へown reserved ledger projectionを渡し、有限workspace/work/materialを予約・照合した上で、parameter commitmentの一致、全positionの実行、decode、claim/evidence/commitmentを生成する。caller指定claim IDと一致した場合だけ不変commit WALを保存する。実行中にordinary blockが進んでも、最新own epoch/importと同じimmutable job/classを再照合できれば生成物は保持する。local fileはchain受付の代用にならない。
+
+提出順はordinary native `SealClaim` → own ledgerでのseal受付・既存delay/TTL → `CommitClaimSalted` → own ledgerでの実claim受付 → `SourceBootstrapV1::Open` である。各stageは実rehearsal、既存bond/UTXO/maturity制約、明示fee capを通し、signed objectとexact carrierの不変WALを使う。再起動・reorgでは元の署名・carrier・inputのみ再送する。sealがexpireした場合に別inputや新しいsaltでやり直さず、UNKNOWN/未取得・不一致では承認やsource eventを作らない。その後のselected checkerは別の実署名slotとquorumを必要とする。
+
+このproducerが自動作成するのはdirect Programのclaimであり、class登録・モデル審査・payer jobの代理作成ではない。class/jobは先に実native経路で受付されている必要がある。local model以外のnetwork取得、pipeline/EXEC等のscope adapter、fault/無回答の自動告発、selected verifierのslash/liability/実収支、後続consumerへのversioned lineage、全経路の受入campaignは引き続き残件である。コードは未build・未test・未実行であり、この節は合格証拠ではない。
+
+
+## 2026-10-18 V6 downstream の明示private policyとworker接続
+
+`source-paid-v1` の任意の追加file `--private-probe-paid-bootstrap-source-policy=ABSOLUTE_BORSH` はcanonical Borsh `(u64 activation, PaidBootstrapSourcePolicyV6)` を読む。policyの全値はoperator指定でありdefaultはない。absenceでは従来のsource-paid profileの意味とbytesを保つ。追加時はsource bootstrap policy ID、own network、source最大件数、非zero scheduled activationとnative mirrorを照合し、source/consumer policy以外をexact paid-v4 baselineへ固定する。全nodeと再起動時に同じpolicy content pinを必要とする。public presetと通常起動のrelease拒否は維持する。
+
+V6を明示した新規producer workでは、署名前のdraftだけを `CommitWithApprovedBootstrapV6` へ変換する。declared commit DAAがactivationより前なら明示errorにし、実own DAAがactivationへ達するまで待つ。旧namespaceへのfallbackはしない。既存のsigned object/transaction WALを変換・署名し直すこともない。offline work exporterにも同じ新draft分岐を置き、V6の場合だけ `signed-paid-enrollment-v6.borsh` と `misaka.private-paid-native-work.v6` manifestを作る。旧exportのfile名/schemaはabsence時に維持する。ファイル作成はnative受付を意味しない。
+
+新規V6 workのprivate paid specは `source_lock_funding_outpoint` と `maximum_source_lock_fee_sompi` を明示する。元claim用の全inputと別の固定inputで、実payerへ戻るsingle change、独立fee ceiling、bond-lock/maturity、実native rehearsalを検査する。V6にFund操作はない。own accepted enrollment/bindingが揃った後、`LockApprovedBootstrapV6` を `source-lock-v6.borsh` / `source-lock-carrier-v6.borsh` へ保存して実mempoolへ提出し、native effective lockを監視する。reorgでは同じ署名・input・carrierを再送し、spent coinやlocalmarkerを受付の代わりにしない。
+
+private checkerはSDKの実material検査を維持し、own V6 effective lockが束縛するassignment/context/seedでだけ `ReceiptApprovedBootstrapV6` を認識する。cold outboxも新receipt namespaceを識別し、現在のown namespaceが異なる場合は同じ不変WALを保留する。旧receiptをV6へ再ラベルせず、old source fee/collectorのguardを削除しない。復元carrierは元inputの所属だけでなく、single changeの宛先、現在のpayer/fee、bond-lockとmaturityも再検査する。
+
+このV6 private経路はnative consumerが対応するNonInteractive、interactive_planなし、review_scopeなしに限定する。compact/staged classはprovider fundingや実work生成の前に拒否し、他のscopeのconsumerが完成したとは扱わない。V6新規enrollmentとV5 material-generation原署名の互換は別append契約が必要で、既存V5の原署名を黙って新namespaceへ変換しない。全てsource記述でありbuild/test/node受入はまだ実行していない。検証者の正直なstake・source供給/検閲・実費用/収益の数値選定は後の一回の統合campaignに残る。

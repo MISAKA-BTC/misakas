@@ -35,6 +35,9 @@ pub struct PrivateKernelPaidWorkSpecV4 {
     #[serde(deserialize_with = "bounded_funding")]
     funding_outpoints: Vec<String>,
     maximum_fee_sompi: u64,
+    /// Separate immutable carrier budget for the explicit V6 source lock.
+    source_lock_funding_outpoint: Option<String>,
+    maximum_source_lock_fee_sompi: Option<u64>,
     max_input_bytes: u64,
     max_material_bytes: u64,
     max_workspace_bytes: u64,
@@ -249,6 +252,11 @@ impl PrivateKernelPaidWorkSpecV4 {
         {
             return Err("kernel paid spec has invalid version or explicit bounds".into());
         }
+        if spec.source_lock_funding_outpoint.is_some() != spec.maximum_source_lock_fee_sompi.is_some()
+            || spec.maximum_source_lock_fee_sompi == Some(0)
+        {
+            return Err("V6 source lock requires paired separate funding and positive explicit fee cap".into());
+        }
         regular(&spec.work_path)?;
         regular(&spec.payer_key)?;
         for word in [&spec.checkpoint, &spec.paid_class, &spec.paid_job, &spec.salt] {
@@ -285,6 +293,16 @@ impl PrivateKernelPaidWorkSpecV4 {
             || funding.iter().any(|o| kaspa_consensus_core::config::drill::palw_t12_public_genesis_txid_v1(&o.transaction_id))
         {
             return Err("kernel paid funding duplicates or names a public genesis UTXO".into());
+        }
+        if let Some(raw) = &self.source_lock_funding_outpoint {
+            let point = crate::palw_producer::parse_outpoint(raw)?;
+            if ctx.config.params.palw_paid_bootstrap_source_v6.is_none()
+                || funding.contains(&point)
+                || point == producer.0
+                || kaspa_consensus_core::config::drill::palw_t12_public_genesis_txid_v1(&point.transaction_id)
+            {
+                return Err("V6 lock funding needs explicit policy and a distinct private non-bond carrier input".into());
+            }
         }
         if !(2..=8).contains(&ctx.recovery_provider_roster_v4.len())
             || ctx.recovery_provider_roster_v4.windows(2).any(|p| p[0] >= p[1])
@@ -402,6 +420,18 @@ impl PreparedKernelPaidWorkV4 {
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
             &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
         );
+        // Explicitly configuring V6 chooses the namespace for NEW unsigned
+        // work. Wait for its real native activation instead of silently making
+        // a legacy commit because a declared earliest DAA predates the fence.
+        // A previously signed WAL always keeps its original namespace.
+        let source_fence = self.config.params.palw_paid_bootstrap_source_v6;
+        let source_policy = source_fence.map(|f| f.policy.id());
+        if object.is_none() && source_fence.is_some_and(|f| !f.activation.is_active(self.spec.commit_daa)) {
+            return Err("explicit V6 new work requires its declared commit DAA at/after activation; no legacy fallback".into());
+        }
+        if object.is_none() && source_policy.is_some() && self.spec.source_lock_funding_outpoint.is_none() {
+            return Err("a new explicit V6 commit requires its independent source-lock input/fee authority".into());
+        }
         let mut observed_enrollment = false;
         loop {
             if matches!(self.tick.tick(Duration::from_secs(2)).await, kaspa_core::task::tick::TickReason::Shutdown) {
@@ -432,6 +462,18 @@ impl PreparedKernelPaidWorkV4 {
                     kaspa_core::info!("private kernel paid enrollment accepted: {}", faster_hex::hex_string(&root));
                 }
                 observed_enrollment = true;
+                match route.paid_bootstrap_binding_v6(&authority.enrollment.id()) {
+                    Ok(Some(binding)) => {
+                        if source_policy != Some(binding.policy) {
+                            return Err("existing V6 binding differs from explicit producer policy; signed WAL retained".into());
+                        }
+                        self.drive_source_lock_v6(&route, &authority, &path).await?;
+                    }
+                    Ok(None) => {} // Old accepted/signed enrollment keeps its original namespace.
+                    Err(error) => {
+                        kaspa_core::debug!("V6 own binding unavailable; no source lock: {error}");
+                    }
+                }
                 // Current application is reversible. Continue observing so a
                 // rollback reuses the original signed object and exact spend.
                 // This is neither Final nor permission to retire the WAL.
@@ -439,6 +481,31 @@ impl PreparedKernelPaidWorkV4 {
             }
             observed_enrollment = false;
             if object.is_none() {
+                if source_fence.is_some_and(|f| !f.activation.is_active(api.get_virtual_daa_score())) {
+                    continue;
+                }
+                if source_policy.is_some() {
+                    use misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2;
+                    let raw = route.aux.iter().find_map(|((table, key), raw)| {
+                        (*table == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_CLASSES_V2
+                            && key.as_slice() == class.as_slice())
+                        .then_some(raw)
+                    });
+                    let Some(raw) = raw else { continue };
+                    let registered = match retain_native_value_decode_v1(raw, || borsh::from_slice::<PaidClaimClassV2>(raw)) {
+                        Ok(registered) => registered,
+                        Err(error) => {
+                            kaspa_core::debug!("V6 producer class unavailable; no provider funding: {error}");
+                            continue;
+                        }
+                    };
+                    if !registered.supports_approved_bootstrap_source_v6() {
+                        return Err(
+                            "V6 private producer supports the explicit noninteractive direct consumer; no compact/staged fallback"
+                                .into(),
+                        );
+                    }
+                }
                 if handoff.is_none() {
                     let candidate = api.palw_kernel_producer_candidate_v4(
                         checkpoint,
@@ -502,6 +569,12 @@ impl PreparedKernelPaidWorkV4 {
                     self.spec.commit_daa,
                 )
                 .map_err(|e| e.to_string())?;
+                let inner = if let Some(policy) = source_policy {
+                    misaka_palw_sdk::claim_paid_v2::paid_claim_commit_object_approved_bootstrap_v6(&route, policy, inner)
+                        .map_err(|e| e.to_string())?
+                } else {
+                    inner
+                };
                 use kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1;
                 let wire = borsh::object_length(&inner).map_err(|e| e.to_string())? as u64 + 1;
                 let copy = inner.native_heap_v1("kernel paid signing decoder").bytes().ok_or("kernel paid signing heap unknown")?;
@@ -598,7 +671,7 @@ impl PreparedKernelPaidWorkV4 {
             }
             let _hold = &transaction_lease;
             let tx = transaction.as_ref().ok_or("kernel durable transaction absent")?;
-            if !self.funding.contains(&tx.inputs[0].previous_outpoint) {
+            if tx.inputs.len() != 1 || !self.funding.contains(&tx.inputs[0].previous_outpoint) {
                 return Err("kernel saved carrier funding is outside current explicit authorization; WAL retained".into());
             }
             if self
@@ -621,8 +694,24 @@ impl PreparedKernelPaidWorkV4 {
                 .iter()
                 .try_fold(0u64, |sum, output| sum.checked_add(output.value))
                 .and_then(|outputs| entry.amount.checked_sub(outputs));
-            if entry.script_public_key != script || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi) {
-                return Err("kernel saved carrier exceeds current payer/fee authorization; WAL retained".into());
+            if entry.script_public_key != script
+                || tx.outputs.len() != 1
+                || tx.outputs[0].script_public_key != script
+                || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi)
+            {
+                return Err("kernel saved carrier exceeds current payer/change/fee authorization; WAL retained".into());
+            }
+            if api.palw_bond_payout_payload_v2(PalwBondKeyV2(tx.inputs[0].previous_outpoint)).is_some()
+                || !crate::palw_panel::palw_fee_funding_usable_v1(
+                    &tx.inputs[0].previous_outpoint,
+                    &entry,
+                    api.get_virtual_daa_score(),
+                    self.config.params.coinbase_spend_maturity(),
+                    None,
+                    &std::collections::HashSet::new(),
+                )
+            {
+                continue;
             }
             let _relay =
                 super::recovery_ack_carrier_v4::reserve_carrier_build_v4(signed, &entry, self.payer.verification_key.as_ref().len())?;
@@ -643,6 +732,187 @@ impl PreparedKernelPaidWorkV4 {
         }
     }
 }
+impl PreparedKernelPaidWorkV4 {
+    /// The V6 collector has no Fund operation. Its one explicit lock carrier
+    /// has an independent payer input/fee ceiling and survives rollback as the
+    /// exact same signed object and transaction; no spent input is an ACK.
+    async fn drive_source_lock_v6(
+        &self,
+        observed: &kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1,
+        authority: &kaspa_consensus_core::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2,
+        path: &Path,
+    ) -> Result<(), String> {
+        use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
+        use misaka_palw_kernel::{claim_paid_v2::PaidClaimObjectV2, route::KernelRouteObjectV1};
+        let enrollment = authority.enrollment.id();
+        let Some(raw_point) = self.spec.source_lock_funding_outpoint.as_deref() else {
+            return Err("V6 source lock requires independent explicitly authorized carrier funding".into());
+        };
+        let point = crate::palw_producer::parse_outpoint(raw_point)?;
+        let fee_cap = self.spec.maximum_source_lock_fee_sompi.ok_or("V6 source lock fee authority absent")?;
+        let instance = self.manager.consensus();
+        let api = instance.unguarded_session_blocking();
+        let Some(route) = api.palw_kernel_route_v1() else { return Ok(()) };
+        if route.header.policy.network_domain != observed.header.policy.network_domain {
+            return Ok(());
+        }
+        let binding = match route.paid_bootstrap_binding_v6(&enrollment) {
+            Ok(Some(binding)) => binding,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                kaspa_core::debug!("V6 lock own binding unreadable: {error}");
+                return Ok(());
+            }
+        };
+        if self.config.params.palw_paid_bootstrap_source_v6.map(|f| f.policy.id()) != Some(binding.policy)
+            || binding.enrollment != enrollment
+        {
+            return Err("V6 lock binding changes explicit native enrollment/policy".into());
+        }
+        let current = match route.paid_claim_enrollment_v3(&enrollment) {
+            Ok(a) => a,
+            Err(error) => {
+                kaspa_core::debug!("V6 lock own enrollment unavailable: {error}");
+                return Ok(());
+            }
+        };
+        if current.enrollment != authority.enrollment {
+            return Err("V6 lock own enrollment statement changed".into());
+        }
+        match route.paid_claim_effective_lock_v6(&current) {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) => {}
+            Err(error) => {
+                kaspa_core::debug!("V6 effective lock unknown: {error}");
+                return Ok(());
+            }
+        }
+        let daa = api.get_virtual_daa_score();
+        if !authority.enrollment.lifetime.receipt_open(daa) {
+            return Ok(());
+        }
+        let object_path = path.join("source-lock-v6.borsh");
+        let tx_path = path.join("source-lock-carrier-v6.borsh");
+        let _signing = reserve_native_requests_v1(
+            (std::mem::size_of::<PalwConsensusObjectV2>() as u64)
+                .checked_add(kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64)
+                .and_then(|n| n.checked_add(4 * (std::mem::size_of::<KernelRouteObjectV1>() + 66) as u64))
+                .ok_or("V6 lock signing request overflow")?,
+        )
+        .map_err(|e| e.to_string())?;
+        let inner = KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::LockApprovedBootstrapV6 { enrollment } };
+        let bytes = inner.encode();
+        let domain = Hash64::from_bytes(route.header.policy.network_domain);
+        let object = if object_path.exists() {
+            let (raw, _raw) = read_bounded(&object_path, self.spec.max_input_bytes)?;
+            retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwConsensusObjectV2>(&raw)).map_err(|e| e.to_string())?
+        } else {
+            let signed = misaka_palw_sdk::claim_paid_v2::sign_paid_claim_object_v2(&self.key, domain, self.producer, &inner)?;
+            publish_borsh(&object_path, &signed, self.spec.max_input_bytes)?;
+            NativeRetainedV1::retain_existing_v1(signed).map_err(|e| e.to_string())?
+        };
+        let PalwConsensusObjectV2::KernelRouteV1 { bytes: saved, signer, signature } = &*object else {
+            return Err("V6 lock WAL object namespace differs".into());
+        };
+        let message = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_message_v1(domain, &self.producer, &bytes);
+        if *signer != self.producer
+            || *saved != bytes
+            || !kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3(
+                self.key.public_key(),
+                message.as_byte_slice(),
+                signature,
+                kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
+            )
+        {
+            return Err("V6 lock immutable WAL substitutes enrollment/signature/purpose".into());
+        }
+        // The actual own fold re-derives approved source events and lineage.
+        // A missing source or local material/history fault never spends a fee.
+        if !matches!(api.palw_object_rehearsal_v1(&object), Some(PalwObjectRehearsalV1::Accepted)) {
+            return Ok(());
+        }
+        let Some(entry) = api.get_virtual_utxo_entry(point) else { return Ok(()) };
+        let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
+            &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
+        );
+        if entry.script_public_key != script
+            || api.palw_bond_payout_payload_v2(PalwBondKeyV2(point)).is_some()
+            || !crate::palw_panel::palw_fee_funding_usable_v1(
+                &point,
+                &entry,
+                daa,
+                self.config.params.coinbase_spend_maturity(),
+                None,
+                &std::collections::HashSet::new(),
+            )
+        {
+            return Ok(());
+        }
+        let (tx, _owner) = if tx_path.exists() {
+            let (raw, _raw) = read_bounded(&tx_path, self.spec.max_input_bytes)?;
+            super::recovery_ack_carrier_v4::decode_carrier(&raw, &object)?
+        } else {
+            if self.flow.mining_manager().outpoint_is_spent_in_mempool(&point) {
+                return Ok(());
+            }
+            let minimum = crate::palw_panel::palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.config.params, &object, daa);
+            if entry.amount < minimum {
+                return Ok(());
+            }
+            let owner =
+                super::recovery_ack_carrier_v4::reserve_carrier_build_v4(&object, &entry, self.payer.verification_key.as_ref().len())?;
+            let tx = crate::palw_panel::palw_carrier_fees::build_lifecycle_carrier_v2(
+                &self.config,
+                &self.payer,
+                &object,
+                point,
+                &entry,
+                &[],
+                None,
+                daa,
+            )?;
+            let fee =
+                tx.outputs.iter().try_fold(0u64, |n, output| n.checked_add(output.value)).and_then(|n| entry.amount.checked_sub(n));
+            if fee.is_none_or(|fee| fee > fee_cap) {
+                return Err("V6 lock carrier exceeds its explicit fee ceiling".into());
+            }
+            publish_borsh(&tx_path, &tx, self.spec.max_input_bytes)?;
+            (tx, owner)
+        };
+        let fee = tx.outputs.iter().try_fold(0u64, |n, output| n.checked_add(output.value)).and_then(|n| entry.amount.checked_sub(n));
+        if tx.inputs.len() != 1
+            || tx.inputs[0].previous_outpoint != point
+            || tx.outputs.len() != 1
+            || tx.outputs[0].script_public_key != script
+            || fee.is_none_or(|fee| fee > fee_cap)
+        {
+            return Err("V6 lock carrier WAL substitutes input/change/fee authority".into());
+        }
+        if self
+            .flow
+            .mining_manager()
+            .clone()
+            .has_transaction(tx.id(), kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly)
+            .await
+        {
+            return Ok(());
+        }
+        let _relay =
+            super::recovery_ack_carrier_v4::reserve_carrier_build_v4(&object, &entry, self.payer.verification_key.as_ref().len())?;
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            self.flow.submit_rpc_transaction(&instance.unguarded_session(), tx, kaspa_mining::mempool::tx::Orphan::Forbidden),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => kaspa_core::debug!("V6 lock exact carrier awaiting native acceptance: {error}"),
+            Err(_) => kaspa_core::debug!("V6 lock exact carrier submission timed out"),
+        }
+        Ok(())
+    }
+}
+
 fn validate_saved(
     object: &PalwConsensusObjectV2,
     class: [u8; 64],
@@ -658,11 +928,14 @@ fn validate_saved(
     preflight_native_value_v1::<misaka_palw_kernel::route::KernelRouteObjectV1>(raw, raw.len() as u64).map_err(|e| e.to_string())?;
     let inner = retain_native_value_decode_v1(raw, || misaka_palw_kernel::route::KernelRouteObjectV1::decode(bytes))
         .map_err(|e| e.to_string())?;
-    let misaka_palw_kernel::route::KernelRouteObjectV1::PaidClaimV2 {
-        object: misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2::Commit { enrollment, commit, salt: saved_salt },
-    } = &*inner
-    else {
-        return Err("saved kernel object is not a paid commit".into());
+    use misaka_palw_kernel::{claim_paid_v2::PaidClaimObjectV2, route::KernelRouteObjectV1};
+    let (enrollment, commit, saved_salt) = match &*inner {
+        KernelRouteObjectV1::PaidClaimV2 {
+            object:
+                PaidClaimObjectV2::Commit { enrollment, commit, salt }
+                | PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { enrollment, commit, salt, .. },
+        } => (enrollment, commit, salt),
+        _ => return Err("saved kernel object is not its original paid commit namespace".into()),
     };
     if *signer != producer
         || enrollment.class != class

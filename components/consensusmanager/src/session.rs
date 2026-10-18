@@ -411,7 +411,13 @@ impl ConsensusSessionOwned {
         &self,
         custodian: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         after: Option<kaspa_consensus_core::Hash64>,
-    ) -> Result<(Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>, Option<kaspa_consensus_core::Hash64>), String> {
+    ) -> Result<
+        (
+            Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+            Option<kaspa_consensus_core::Hash64>,
+        ),
+        String,
+    > {
         self.consensus.palw_staged_custody_delegations_to_v1(custodian, after)
     }
 
@@ -712,6 +718,30 @@ impl ConsensusSessionOwned {
         ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
     ) -> Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
         self.consensus.palw_native_material_provider_authority_v3(checkpoint, header, ready)
+    }
+    pub fn palw_native_material_provider_authority_v4(
+        &self,
+        checkpoint: BlockHash,
+        header: &Header,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<kaspa_consensus_core::api::PalwNativeMaterialProviderAuthorityV4, String> {
+        self.consensus.palw_native_material_provider_authority_v4(checkpoint, header, ready)
+    }
+    pub fn palw_native_routing_execution_authority_v2(
+        &self,
+        checkpoint: BlockHash,
+        candidate: &Header,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>>, String> {
+        self.consensus.palw_native_routing_execution_authority_v2(checkpoint, candidate, job, executor)
+    }
+    pub fn palw_native_routing_claim_authority_v2(
+        &self,
+        claim: Hash64,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>, String> {
+        self.consensus.palw_native_routing_claim_authority_v2(claim, job)
     }
     pub fn palw_monetary_material_covenants_v1(
         &self,

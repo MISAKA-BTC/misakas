@@ -2333,6 +2333,14 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux138 prefix1 original paid enrollment bootstrap binding and prefix2 selected-source lock; PaidClaimV2 appended indices16-18",
+        },
+        "palw_paid_bootstrap_source_v6",
+        "RFC07 explicit native bootstrap lineage for paid claims",
+        true,
+    ),
+    a2_row(
         PalwA2SlotV1::ObjectTags { lo: 230, hi: 230 },
         "palw_court_model_scope_v1",
         "D2 seat readiness digest (reserved; not landed)",

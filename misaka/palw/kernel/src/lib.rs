@@ -207,3 +207,5 @@ pub mod beacon_bootstrap_v1;
 /// RFC-0017 (2026-10-15): model eligibility exam commits and attestations (inner 74/75), consumer-owned past
 /// `palw_model_eligibility_v1`; dormant.
 pub mod model_eligibility_v1;
+
+pub mod claim_paid_bootstrap_source_v6;

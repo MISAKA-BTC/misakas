@@ -201,6 +201,12 @@ def validate_campaign(plan, drill):
             'all source-paid-v1 nodes including JOIN must use the same exact operator policy input')
         require(source_policies[0] in {pin.get('path') for pin in plan['pinnedInputs'] if isinstance(pin, dict)},
             'source-paid-v1 policy must have an independently frozen content pin')
+    paid_policies = [paid_observations.paid_bootstrap_source_policy(node['argv']) for node in drill['nodes'].values()]
+    if any(policy is not None for policy in paid_policies):
+        require(all(policy is not None for policy in paid_policies) and len(set(paid_policies)) == 1,
+            'all nodes including JOIN must use the same exact V6 bootstrap source policy')
+        require(paid_policies[0] in {pin.get('path') for pin in plan['pinnedInputs'] if isinstance(pin, dict)},
+            'V6 bootstrap source policy must have an independently frozen content pin')
     endpoints = []
     for node in drill['nodes'].values():
         for key in ('wrpc', 'p2p', 'eth', 'grpc'):

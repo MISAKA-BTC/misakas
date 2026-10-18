@@ -476,6 +476,9 @@ impl Params {
         if self.palw_selected_source_bootstrap_v1.is_some_and(|f| f.at == ForkActivation::never()) {
             self.palw_selected_source_bootstrap_v1 = None;
         }
+        if self.palw_paid_bootstrap_source_v6.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_paid_bootstrap_source_v6 = None;
+        }
         // ADR-0100 Decision 4, likewise.
         if self.palw_shard_licensing == Some(ForkActivation::never()) {
             self.palw_shard_licensing = None;
@@ -1067,6 +1070,7 @@ impl Params {
             palw_shard_court,
             palw_memory_routing_court_v2,
             palw_selected_source_bootstrap_v1,
+            palw_paid_bootstrap_source_v6,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -1386,6 +1390,7 @@ impl Params {
             ("palw_shard_court", *palw_shard_court),
             ("palw_memory_routing_court_v2", *palw_memory_routing_court_v2),
             ("palw_selected_source_bootstrap_v1", palw_selected_source_bootstrap_v1.map(|f| f.at)),
+            ("palw_paid_bootstrap_source_v6", palw_paid_bootstrap_source_v6.map(|f| f.activation)),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
             ("palw_kimi_k3", *palw_kimi_k3),
@@ -1656,6 +1661,11 @@ impl Params {
             h.write(b"palw_selected_source_bootstrap_v1");
             h.write(fence.at.daa_score().to_le_bytes());
             h.write(fence.policy.id().as_byte_slice());
+        }
+        if let Some(fence) = self.palw_paid_bootstrap_source_v6 {
+            h.write(b"palw_paid_bootstrap_source_v6");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_slice());
         }
         // ADR-0100 Decision 4's fence, NAMED likewise: it changes what licenses a claim.
         if let Some(licensing) = self.palw_shard_licensing {
@@ -2613,6 +2623,7 @@ impl Params {
             palw_shard_court,
             palw_memory_routing_court_v2,
             palw_selected_source_bootstrap_v1,
+            palw_paid_bootstrap_source_v6,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -3405,6 +3416,9 @@ impl Params {
         if let Some(fence) = palw_selected_source_bootstrap_v1.as_mut() {
             fork(&mut fence.at, visit);
         }
+        if let Some(fence) = palw_paid_bootstrap_source_v6.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // ADR-0100 Decision 4. Some-only, likewise.
         if let Some(activation) = palw_shard_licensing.as_mut() {
             fork(activation, visit);
@@ -4064,6 +4078,7 @@ impl Params {
             palw_shard_court,
             palw_memory_routing_court_v2,
             palw_selected_source_bootstrap_v1,
+            palw_paid_bootstrap_source_v6,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -4894,6 +4909,11 @@ impl Params {
             h.write(b"palw_selected_source_bootstrap_v1");
             h.write(fence.at.daa_score().to_le_bytes());
             h.write(fence.policy.id().as_byte_slice());
+        }
+        if let Some(fence) = palw_paid_bootstrap_source_v6 {
+            h.write(b"palw_paid_bootstrap_source_v6");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_slice());
         }
         // ADR-0100 Decision 4, Some-only for the same reason: every shipped preset leaves it
         // `None` and fingerprints byte-identically to a build without the field.

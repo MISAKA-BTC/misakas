@@ -290,7 +290,11 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         let a: PalwPaidClaimAuthorityV2 =
             self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap()).ok_or("paid claim authority missing")?;
         a.validate(&*self.ledger()?)?;
-        if a.context.id() != *context || self.beacon_source_target_v4(context)? != a.source_target {
+        let v6 = self.paid_bootstrap_binding_v6(&a.enrollment.id()).map_err(|why| why.to_string())?;
+        if a.context.id() != *context || match v6 {
+            Some(binding) => binding.original_context != *context || binding.enrollment != a.enrollment.id(),
+            None => self.beacon_source_target_v4(context)? != a.source_target,
+        } {
             return Err("paid claim context/target mismatch".into());
         }
         Ok(a)
@@ -315,7 +319,17 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         context: &Digest,
         now: u64,
     ) -> Result<misaka_palw_kernel::claim_paid_v2::PaidClaimCheckAuthorityV2, String> {
-        let a = self.paid_claim_authority_v2(context)?;
+        let a = self.paid_claim_authority_checked_v6(context).map_err(|why| why.to_string())?;
+        a.validate(&*self.ledger_checked_v1().map_err(|why| why.to_string())?)?;
+        if let Some(binding) = self.paid_bootstrap_binding_v6(&a.enrollment.id()).map_err(|why| why.to_string())? {
+            if binding.original_context != *context || binding.enrollment != a.enrollment.id() {
+                return Err("paid claim context/target mismatch".into());
+            }
+            return self.paid_bootstrap_check_authority_v6(&a, now).map_err(|why| why.to_string());
+        }
+        if self.beacon_source_target_v4(context)? != a.source_target {
+            return Err("paid claim context/target mismatch".into());
+        }
         let (contract, sources, promises) = self.paid_beacon_material_v5(context)?.ok_or("paid claim source funding missing")?;
         let collected = misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, &contract, &sources, &promises, now)
             .map_err(|e| e.to_string())?;
@@ -338,29 +352,34 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     /// Used by both native fold loads and fresh SDK/root readers. Consumer state
     /// cannot be omitted from a cold restart merely because V1 rows still decode.
     pub fn apply_paid_claim_consumer_inputs_v2(&self, ledger: &mut misaka_palw_kernel::ledger::KernelLedgerV1) -> Result<(), String> {
+        self.apply_paid_claim_consumer_inputs_checked_v6(ledger).map_err(|why| why.to_string())
+    }
+    pub fn apply_paid_claim_consumer_inputs_checked_v6(&self, ledger: &mut misaka_palw_kernel::ledger::KernelLedgerV1)
+        -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
         let mut inputs = std::collections::BTreeMap::new();
-        for ((table, key), bytes) in
+        for ((table, key), _bytes) in
             self.aux.range((PAID_CLAIM_ENROLLMENTS_V2, Vec::new())..(PAID_CLAIM_ENROLLMENTS_V2 + 1, Vec::new()))
         {
             if key.len() != 64 {
                 continue;
             }
-            let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
-            if *table != PAID_CLAIM_ENROLLMENTS_V2 || *key != borsh::to_vec(&a.context.id()).unwrap() {
-                return Err("paid claim authority key mismatch".into());
+            let context: Digest = key.as_slice().try_into().expect("primary paid authority key64");
+            let a = self.paid_claim_authority_checked_v6(&context)?;
+            if *table != PAID_CLAIM_ENROLLMENTS_V2 || context != a.context.id() {
+                return Err(E::Decode("paid claim authority key mismatch".into()));
             }
-            a.validate(ledger)?;
+            a.validate(ledger).map_err(E::Decode)?;
             if ledger
                 .claims
                 .get(&a.enrollment.base_claim)
                 .is_some_and(|row| row.life.final_hold_until > a.enrollment.lifetime.liability_until)
             {
-                return Err("paid claim proof grace exceeded its signed absolute lifetime".into());
+                return Err(E::Decode("paid claim proof grace exceeded its signed absolute lifetime".into()));
             }
             let complete = if a.class.interactive_plan.is_some() {
-                self.paid_claim_interactive_complete_v3(&a, ledger)?
-            } else if let Some(lock) =
-                self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
+                self.paid_claim_interactive_complete_v3(&a, ledger).map_err(E::Decode)?
+            } else if let Some(lock) = self.paid_claim_effective_lock_checked_v6(&a)?
             {
                 let mut signers = std::collections::BTreeSet::new();
                 for seat in &lock.seats {
@@ -370,9 +389,9 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                     let Some(bytes) = self.aux.get(&(PAID_CLAIM_RECEIPTS_V2, key.clone())) else {
                         continue;
                     };
-                    let receipt: PaidClaimReceiptV2 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
+                    let receipt: PaidClaimReceiptV2 = borsh::from_slice(bytes).map_err(|e| E::Decode(e.to_string()))?;
                     if receipt.enrollment != a.enrollment.id() {
-                        return Err("paid seat receipt substitutes enrollment".into());
+                        return Err(E::Decode("paid seat receipt substitutes enrollment".into()));
                     }
                     let expected = object_id(b"MISAKA/PALW/PAID-CLAIM-RECEIPT/V2", &(receipt.enrollment, receipt.signer));
                     if key != borsh::to_vec(&expected).unwrap()
@@ -391,7 +410,7 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                         || !lock.seats.iter().any(|s| crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(s) == receipt.signer)
                         || !signers.insert(receipt.signer)
                     {
-                        return Err("paid claim receipt projection is malformed/replayed".into());
+                        return Err(E::Decode("paid claim receipt projection is malformed/replayed".into()));
                     }
                 }
                 lock.source_valid && lock.quorum > 0 && signers.len() >= lock.quorum as usize
@@ -399,7 +418,7 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                 false
             };
             if inputs.insert(a.enrollment.base_claim, PaidClaimConsumerV2 { lifetime: a.enrollment.lifetime, complete }).is_some() {
-                return Err("base claim has multiple verification authorities".into());
+                return Err(E::Decode("base claim has multiple verification authorities".into()));
             }
         }
         ledger.paid_claim_consumers_v2 = inputs;
@@ -481,6 +500,8 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error;
         let refuse = |s: String| PalwStateV2Error::CarriageInconsistent(format!("paid claim: {s}"));
+        let native = |why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, &refuse);
+        self.assert_paid_bootstrap_source_consistency_v6(params)?;
         self.assert_paid_compact_consistency_v4(params)?;
         let Some(route) = self.kernel_route() else { return Ok(()) };
         let owned = |t: u8| matches!(t,113..=119|122..=124);
@@ -493,7 +514,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         if !fence.activation.is_active(now) {
             return Err(refuse("paid rows precede their compiled activation".into()));
         }
-        let l = route.ledger().map_err(&refuse)?;
+        let l = route.ledger_checked_v1().map_err(&native)?;
         let p = fence.policy;
         // Restore-only borrowed keys: source validation bounds the live set by
         // MAX_LIVE_BEACON_SOURCE_SLOTS_V1; do not rescan its full retained history
@@ -509,13 +530,14 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         // fixed (Digest,u32) entries. No cached authority cloning or resettable
         // admission counters are introduced into the consensus state.
         let mut per_job = std::collections::BTreeMap::<Digest, u32>::new();
-        for ((table, key), bytes) in
+        for ((table, key), _bytes) in
             route.aux.range((PAID_CLAIM_ENROLLMENTS_V2, Vec::new())..(PAID_CLAIM_ENROLLMENTS_V2 + 1, Vec::new()))
         {
             if *table != PAID_CLAIM_ENROLLMENTS_V2 || key.len() != 64 {
                 continue;
             }
-            let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+            let context: Digest = key.as_slice().try_into().expect("primary paid authority key64");
+            let a = route.paid_claim_authority_checked_v6(&context).map_err(&native)?;
             if !per_job.contains_key(&a.job.id()) && per_job.len() >= p.maximum_jobs as usize {
                 return Err(refuse("unbounded restore job scratch".into()));
             }
@@ -534,15 +556,13 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 }
                 match (*table, key[0], index.kind) {
                     (PAID_CLAIM_ENROLLMENTS_V2, PAID_CLAIM_ID_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::Enrollment) => {
-                        let a = route.paid_claim_enrollment_v3(&owner).map_err(&refuse)?;
+                        let a = route.paid_claim_enrollment_checked_v6(&owner).map_err(&native)?;
                         if a.context.id() != index.target {
                             return Err(refuse("enrollment index target mismatch".into()));
                         }
                     }
                     (PAID_CLAIM_ENROLLMENTS_V2, PAID_CLAIM_BASE_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::BaseClaim) => {
-                        let a: PalwPaidClaimAuthorityV2 = route
-                            .aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(&index.target).unwrap())
-                            .ok_or_else(|| refuse("base index target missing".into()))?;
+                        let a = route.paid_claim_authority_checked_v6(&index.target).map_err(&native)?;
                         a.validate(&l).map_err(&refuse)?;
                         if a.enrollment.base_claim != owner || a.context.id() != index.target {
                             return Err(refuse("base index replaces primary authority".into()));
@@ -647,7 +667,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     }
                 }
                 PAID_CLAIM_ENROLLMENTS_V2 => {
-                    let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    let a = route.paid_claim_authority_checked_v6(&id).map_err(&native)?;
                     a.validate(&l).map_err(&refuse)?;
                     let c: PaidClaimClassV2 = route
                         .aux_row(PAID_CLAIM_CLASSES_V2, &borsh::to_vec(&a.class.id()).unwrap())
@@ -703,15 +723,15 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 }
                 PAID_CLAIM_RECEIPTS_V2 => {
                     let receipt: PaidClaimReceiptV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
-                    let a = route.paid_claim_enrollment_v3(&receipt.enrollment).map_err(&refuse)?;
+                    let a = route.paid_claim_enrollment_checked_v6(&receipt.enrollment).map_err(&native)?;
                     if id != object_id(b"MISAKA/PALW/PAID-CLAIM-RECEIPT/V2", &(receipt.enrollment, receipt.signer))
                         || a.class.interactive_plan.is_some()
                         || receipt.signed_daa > now
                     {
                         return Err(refuse("receipt key/time/interactive routing substituted".into()));
                     }
-                    let lock: PalwPaidClaimLockV2 = route
-                        .aux_row(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&receipt.enrollment).unwrap())
+                    let lock = route.paid_claim_effective_lock_checked_v6(&a)
+                        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, &refuse))?
                         .ok_or_else(|| refuse("receipt has no initial lock".into()))?;
                     if receipt.version != 2
                         || !receipt.complete
@@ -783,7 +803,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 }
                 PAID_CLAIM_FINALS_V2 => {
                     let row: PalwPaidClaimFinalV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
-                    let a = route.paid_claim_enrollment_v3(&row.enrollment).map_err(&refuse)?;
+                    let a = route.paid_claim_enrollment_checked_v6(&row.enrollment).map_err(&native)?;
                     if !l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
                         return Err(refuse("stored paid Final lacks assigned verifier approvals".into()));
                     }
@@ -814,11 +834,13 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                             )
                             .ok_or_else(|| refuse("last Final round absent".into()))?;
                         route.validate_paid_round_v4(&last, &a, &l).map_err(&refuse)?;
-                        (last.lock.ok_or_else(|| refuse("Final round lock absent".into()))?, plan.rounds, last.transcript_root)
+                        (crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(
+                            last.lock.as_ref().ok_or_else(|| refuse("Final round lock absent".into()))?)
+                            .map_err(PalwStateV2Error::NativeResource)?, plan.rounds, last.transcript_root)
                     } else {
                         (
-                            route
-                                .aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
+                            route.paid_claim_effective_lock_checked_v6(&a)
+                                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, &refuse))?
                                 .ok_or_else(|| refuse("Final initial lock absent".into()))?,
                             1,
                             [0; 64],

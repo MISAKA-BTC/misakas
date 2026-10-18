@@ -219,6 +219,16 @@ pub enum PaidClaimObjectV2 {
         generation: crate::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5,
         original_signature: Vec<u8>,
     },
+    /// New source policy is signed before its future source window. No old
+    /// Commit or existing enrollment can be switched to this namespace.
+    CommitWithApprovedBootstrapV6 {
+        enrollment: PaidClaimEnrollmentV2,
+        commit: crate::route::SaltedCommitV1,
+        salt: Digest,
+        source_policy: Digest,
+    },
+    LockApprovedBootstrapV6 { enrollment: Digest },
+    ReceiptApprovedBootstrapV6 { receipt: PaidClaimReceiptV2 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -322,6 +332,19 @@ pub struct PaidClaimCheckAuthorityV2 {
     can_complete: bool,
 }
 impl PaidClaimCheckAuthorityV2 {
+    pub(crate) fn from_approved_bootstrap_parts_v6(
+        class: &PaidClaimClassV2, enrollment: &PaidClaimEnrollmentV2, context: Digest, seed: Digest,
+    ) -> Result<Self, String> {
+        class.validate()?;
+        Ok(Self {
+            enrollment: enrollment.id(), base_claim: enrollment.base_claim,
+            verification_class: class.id(), evidence_root: enrollment.commit_root,
+            transcript_root: enrollment.prior_transcript, source_context: context, sample_seed: seed,
+            maximum_stream_blocks: class.maximum_stream_blocks, round: 0, message_root: [0; 64],
+            opening_bound: true, interactive_plan: None, compact_proof_root: None,
+            compact_consumer: None, can_complete: true,
+        })
+    }
     pub fn verify(
         class: &PaidClaimClassV2,
         enrollment: &PaidClaimEnrollmentV2,

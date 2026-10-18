@@ -1000,3 +1000,5 @@ pub mod palw_source_bootstrap_v1;
 pub mod palw_routed_material_v2;
 pub mod palw_paid_material_generation_v5;
 pub mod palw_paid_claim_observation_v5;
+
+pub mod palw_paid_bootstrap_source_v6;

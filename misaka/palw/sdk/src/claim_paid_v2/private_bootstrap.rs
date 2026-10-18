@@ -26,6 +26,17 @@ pub fn produce_program_work_v3(
     parameter_wire: BTreeMap<(u16, Option<u16>), TensorWireV1>,
 ) -> Result<ProgramPaidBootstrapWorkV3, Refusal> {
     let l = route.ledger().map_err(|e| Refusal::new("BOOTSTRAP_CHAIN", e))?;
+    produce_program_work_from_ledger_v3(&l, base_job, producer, parameter_wire)
+}
+/// Same bounded direct Program producer over an already authenticated native
+/// ledger projection. This function does not authenticate externally decoded
+/// rows; the own-node caller retains the coherent snapshot and allocation owner.
+pub fn produce_program_work_from_ledger_v3(
+    l: &misaka_palw_kernel::ledger::KernelLedgerV1,
+    base_job: Digest,
+    producer: Digest,
+    parameter_wire: BTreeMap<(u16, Option<u16>), TensorWireV1>,
+) -> Result<ProgramPaidBootstrapWorkV3, Refusal> {
     let job: &KernelJobV1 = l.jobs.get(&base_job).ok_or_else(|| Refusal::new("BOOTSTRAP_JOB", "post the real native job first"))?;
     let class = l
         .classes

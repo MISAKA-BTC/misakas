@@ -540,7 +540,7 @@ impl PalwKernelRouteStateV1 {
         let scoped = |mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1| -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
             ledger.commitment_scope_from_daa = commitment_scope;
             ledger.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_checked_v6(&mut ledger)?;
             Ok(ledger)
         };
         if let Some(cached) = self.ledger_cache.get_reserved_v1().map_err(E::Resource)? {
@@ -1476,7 +1476,7 @@ impl PalwKernelRouteStateV1 {
             let mut cached = cached;
             cached.commitment_scope_from_daa = commitment_scope;
             cached.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(&mut cached).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_checked_v6(&mut cached)?;
             return Ok(cached);
         }
         let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true).map_err(E::Resource)?;
@@ -1499,7 +1499,7 @@ impl PalwKernelRouteStateV1 {
             ledger.note_native_candidate_projection_v9(owner, class).map_err(E::Decode)?;
         }
         ledger.commitment_scope_from_daa = commitment_scope;
-        self.apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(E::Decode)?;
+        self.apply_paid_claim_consumer_inputs_checked_v6(&mut ledger)?;
         Ok(crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(ledger, lease))
     }
 }

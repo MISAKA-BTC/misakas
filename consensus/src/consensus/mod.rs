@@ -1427,6 +1427,79 @@ impl ConsensusApi for Consensus {
     ) -> Result<kaspa_consensus_core::api::PalwNativeMaterialProviderAuthorityV4, String> {
         self.virtual_processor.palw_native_material_provider_authority_v4_impl(&self.config.params, checkpoint, header, ready)
     }
+    fn palw_native_routing_execution_authority_v2(
+        &self,
+        checkpoint: BlockHash,
+        candidate: &Header,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>>, String> {
+        self.virtual_processor.palw_native_routing_execution_authority_v2_impl(
+            &self.config.params,
+            checkpoint,
+            candidate,
+            job,
+            executor,
+        )
+    }
+    fn palw_native_routing_claim_authority_v2(
+        &self,
+        claim: Hash64,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    ) -> Result<Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>, String> {
+        self.virtual_processor.palw_native_routing_claim_authority_v2_impl(&self.config.params, claim, job)
+    }
+    fn palw_paid_material_generation_snapshot_v5(
+        &self,
+        original: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Result<kaspa_consensus_core::palw_paid_material_generation_v5::PalwPaidMaterialGenerationSnapshotV5, String> {
+        use kaspa_consensus_core::{
+            palw_paid_claim_observation_v5::NativePaidClaimSnapshotV5,
+            palw_paid_material_generation_v5::{PalwPaidMaterialGenerationSnapshotV5, paid_material_generation_for_original_v5},
+        };
+        if self.config.params.palw_claim_challenge_v2.is_none() || self.config.params.palw_material_release_recovery_v2.is_none() {
+            return Err("own paid generation requires explicit paid/recovery capabilities".into());
+        }
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("own paid generation requires ConsensusV2".into());
+        };
+        let before = self.lkg_virtual_state.load();
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || import.active.is_some() {
+            return Err("own paid generation import incomplete".into());
+        }
+        let (checkpoint, state) = self
+            .virtual_processor
+            .palw_v2_reader_state(&bundle.state)
+            .map_err(|e| e.to_string())?
+            .ok_or("own paid generation state absent")?;
+        if checkpoint != before.ghostdag_data.selected_parent || state.last_point().is_none_or(|p| p.block != checkpoint) {
+            return Err("own paid generation point differs from selected parent".into());
+        }
+        let generation = paid_material_generation_for_original_v5(&state, original).map_err(|e| e.to_string())?;
+        let result = PalwPaidMaterialGenerationSnapshotV5 {
+            snapshot: NativePaidClaimSnapshotV5 {
+                checkpoint,
+                state_point: checkpoint,
+                state_root: self.virtual_processor.palw_committed_root_v1(&state),
+                daa: before.daa_score,
+                import_epoch: import.epoch,
+            },
+            generation,
+        };
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != import.epoch
+            || checkpoint != after.ghostdag_data.selected_parent
+            || before.daa_score != after.daa_score
+        {
+            return Err("own paid generation changed point/clock/import generation".into());
+        }
+        Ok(result)
+    }
     fn palw_paid_claim_observation_v5(
         &self,
         base: kaspa_hashes::Hash64,
@@ -1482,6 +1555,40 @@ impl ConsensusApi for Consensus {
         kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapObservationV1,
         kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
     > {
+        use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
+        use kaspa_consensus_core::palw_state_v2::PalwStateV2Error as E;
+        let observed = self.palw_source_bootstrap_epoch_observation_v1()?;
+        let fault = |error: E| match error {
+            E::NativeResource(why) => F::Capacity(why),
+            E::NativeContextUnavailable(why) => why,
+            _ => F::StoreUnreadable,
+        };
+        if observed.state.source_bootstrap_work_v1(work).map_err(fault)?.is_none() {
+            return Err(F::HistoryUnavailable);
+        }
+        observed.state.source_bootstrap_check_work_authority_v1(work).map_err(fault)?;
+        let after = self.lkg_virtual_state.load();
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|error| match error {
+            kaspa_database::prelude::StoreError::KeyNotFound(_) => F::HistoryUnavailable,
+            kaspa_database::prelude::StoreError::LocalResourceUnavailable(_) => F::CapacityUnavailable,
+            _ => F::StoreUnreadable,
+        })?;
+        if !stable
+            || import.active.is_some()
+            || import.epoch != observed.import_epoch
+            || after.ghostdag_data.selected_parent != observed.checkpoint
+            || after.daa_score != observed.virtual_daa
+        {
+            return Err(F::HistoryUnavailable);
+        }
+        Ok(observed)
+    }
+    fn palw_source_bootstrap_epoch_observation_v1(
+        &self,
+    ) -> Result<
+        kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapObservationV1,
+        kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
+    > {
         use kaspa_consensus_core::palw_source_bootstrap_v1::{
             PalwSourceBootstrapContextFaultV1 as F, PalwSourceBootstrapObservationV1,
         };
@@ -1521,10 +1628,7 @@ impl ConsensusApi for Consensus {
         if epoch.context.policy != fence.policy {
             return Err(F::StoreUnreadable);
         }
-        if state.source_bootstrap_work_v1(work).map_err(state_fault)?.is_none() {
-            return Err(F::HistoryUnavailable);
-        }
-        state.source_bootstrap_check_work_authority_v1(work).map_err(state_fault)?;
+        state.source_bootstrap_check_epoch_authority_v1().map_err(state_fault)?;
         let after = self.lkg_virtual_state.load();
         let (after_import, stable) = self.virtual_processor.pruning_import_status().map_err(fault)?;
         if !stable

@@ -608,8 +608,8 @@ mod source_controls {
 }
 fn check_fee(tx: &Transaction, entry: &kaspa_consensus_core::tx::UtxoEntry, cap: u64) -> Result<(), String> {
     let fee = tx.outputs.iter().try_fold(0u64, |sum, output| sum.checked_add(output.value)).and_then(|n| entry.amount.checked_sub(n));
-    if fee.is_none_or(|fee| fee > cap) {
-        return Err("V5 exact carrier exceeds its current explicit fee cap".into());
+    if fee.is_none_or(|fee| fee > cap) || tx.outputs.len() != 1 || tx.outputs[0].script_public_key != entry.script_public_key {
+        return Err("V5 exact carrier exceeds its fee cap or redirects the authorized payer change".into());
     }
     Ok(())
 }

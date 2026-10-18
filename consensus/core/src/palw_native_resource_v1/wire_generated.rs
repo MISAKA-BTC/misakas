@@ -3518,6 +3518,7 @@ wire_struct!(crate::palw_onboarding_v1::KernelBindingRowV1; crate::Hash64, crate
 wire_struct!(crate::palw_onboarding_v1::PostedEvidenceRowV1; crate::Hash64, crate::Hash64, crate::Hash64, u64, u64, u64);
 wire_struct!(crate::palw_opv_bootstrap_v1::CompleteCheckPostV1; u16, [u8;64], Vec<crate::palw_artifact::PalwArtifactOperandV1>, crate::palw_opv_bootstrap_v1::CompleteRootsV1, crate::palw_opv_bootstrap_v1::CompleteRootsV1);
 wire_struct!(crate::palw_opv_bootstrap_v1::CompleteRootsV1; [u8;64], [u8;64], [u8;64]);
+wire_struct!(crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6; u16, [u8; 64], misaka_palw_challenge::approved_source_v1::ApprovedSourceStateV1, crate::palw_claim_challenge_v2::PalwPaidClaimLockV2);
 wire_struct!(crate::palw_panel_economy_v1::PalwSeatEconomyV1; u64, u32, u32);
 wire_struct!(crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2; misaka_palw_kernel::panel_lifetime_v2::PanelLifetimeAuthorizationV2, crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::Hash64, Option<crate::Hash64>);
 wire_struct!(crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2; [u8; 64], crate::Hash64, u64, crate::Hash64);
@@ -7982,7 +7983,38 @@ wire_struct!(misaka_palw_challenge::approval_scope::LifetimeCounterV3; u128, u12
 wire_struct!(misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3; u16, [u8;64], [u8;64], u64, u64, Vec<misaka_palw_challenge::policy::ReviewedTupleV2>, u128, u128, u128, [u8;64], [u8;64], [u8;64]);
 wire_struct!(misaka_palw_challenge::approval_scope::SourceEconomicObservationV3; [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, u64, u64, u64, u64, u64, u64, u64, [u8;64]);
 wire_struct!(misaka_palw_challenge::approval_scope::SourceIndependenceObservationV3; [u8;64], u64, u64, std::collections::BTreeMap<[u8;64], [u8;64]>, std::collections::BTreeSet<[u8;64]>, std::collections::BTreeSet<[u8;64]>, std::collections::BTreeSet<[u8;64]>, [u8;64]);
+wire_struct!(misaka_palw_challenge::approved_source_v1::ApprovedSourceCollectorPolicyV1; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, u32, u64, u64, u64);
+wire_struct!(misaka_palw_challenge::approved_source_v1::ApprovedSourceConsumerV1; [u8;64], u64, [u8;64], [u8;64]);
 wire_struct!(misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, u64, u64, u16, u16);
+impl NativeWireScanV1 for misaka_palw_challenge::approved_source_v1::ApprovedSourceStateV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
 wire_struct!(misaka_palw_challenge::beacon::AttributedWorkV1; misaka_palw_challenge::beacon::WorkFinalEventV1, misaka_palw_challenge::beacon::SourceAttributionV1);
 wire_struct!(misaka_palw_challenge::beacon::BeaconContextV1; [u8;64], [u8;64], misaka_palw_challenge::policy::PostCommitChallengePolicyV1, misaka_palw_challenge::subject::SubjectKindV1, [u8;64], u64, u64, BTreeSet<[u8;64]>, BTreeSet<[u8;64]>, misaka_palw_challenge::subject::RootV1);
 impl NativeWireScanV1 for misaka_palw_challenge::beacon::FinalPathV1 {
@@ -8461,6 +8493,8 @@ wire_struct!(misaka_palw_kernel::claim_compact_v1::native_v4::CompactInstanceV4;
 wire_struct!(misaka_palw_kernel::claim_compact_v1::native_v4::LocatedCompactProofV4; misaka_palw_kernel::claim_compact_v1::native_v4::CompactInstanceV4, misaka_palw_kernel::claim_compact_v1::CompactRelationProofV1);
 wire_struct!(misaka_palw_kernel::claim_compact_v1::native_v4::NativeCompactProofV4; u16, [u8;64], [u8;64], Vec<misaka_palw_kernel::claim_compact_v1::native_v4::LocatedCompactProofV4>);
 wire_struct!(misaka_palw_kernel::claim_interactive_v3::CompiledClaimProofPlanV3; u16, [u8;64], misaka_palw_kernel::claim_paid_v2::PaidClaimTargetV2, misaka_palw_challenge::policy::InteractiveModeV1, u32, u64, u64);
+wire_struct!(misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6; u16, [u8;64], misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6, [u8;64], [u8;64], [u8;64], u64, misaka_palw_challenge::approved_source_v1::ApprovedSourceCollectorPolicyV1, misaka_palw_challenge::approved_source_v1::ApprovedSourceConsumerV1);
+wire_struct!(misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6; u16, [u8;64], [u8;64], u32, u32, u64, u64, u64, u32, u64);
 wire_struct!(misaka_palw_kernel::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64);
 wire_struct!(misaka_palw_kernel::claim_paid_v2::NativeSourcePaymentProofV3; Vec<u8>, Vec<Vec<u8>>, u32);
 impl NativeWireScanV1 for misaka_palw_kernel::claim_paid_v2::PaidClaimCheckingV2 {
@@ -8612,6 +8646,28 @@ impl NativeWireScanV1 for misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2 {
                 sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 sum=sum.merge(<misaka_palw_kernel::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            16 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                sum = sum.merge(<misaka_palw_kernel::route::SaltedCommitV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            17 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            18 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2 as NativeWireScanV1>::scan_native_wire_v1(
+                    reader,
+                )?)?;
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),

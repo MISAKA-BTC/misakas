@@ -18,6 +18,7 @@ PAID_KINDS = frozenset(('native-paid-observed', 'native-paid-assigned-quorum',
 UNRESOLVED = ('nativeSelectedApproval', 'sourceProvenanceRevalidated',
     'historicalSignatureReplay', 'coinbaseOutputReplayed', 'oneTimeFeeSettlement')
 SOURCE_POLICY_FLAG = '--private-probe-source-policy='
+PAID_BOOTSTRAP_POLICY_FLAG = '--private-probe-paid-bootstrap-source-policy='
 
 
 class Unavailable(ValueError):
@@ -71,6 +72,19 @@ def source_policy(argv):
         'source-paid-v1 policy must be an explicit absolute frozen operator input')
     # The native factory validates canonical Borsh, nonzero activation and all
     # bounds. This collector neither chooses nor approves policy numbers.
+    return path
+
+
+def paid_bootstrap_source_policy(argv):
+    flags = [arg for arg in argv if arg.startswith(PAID_BOOTSTRAP_POLICY_FLAG)]
+    need(len(flags) <= 1, 'paid bootstrap source policy flag repeated')
+    if not flags:
+        return None
+    need('--private-probe-profile=source-paid-v1' in argv,
+        'paid bootstrap source policy requires the explicit common source-paid profile')
+    path = flags[0][len(PAID_BOOTSTRAP_POLICY_FLAG):]
+    need(Path(path).is_absolute() and '{' not in path and '\x00' not in path,
+        'paid bootstrap source policy must be an absolute frozen operator input')
     return path
 
 

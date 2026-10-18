@@ -516,6 +516,27 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<PalwNativeMaterialProviderAuthorityV4, String> {
         Err("native routed material provider authority unavailable".into())
     }
+    /// Before execution-root construction: exact prospective job/class/owner
+    /// routing from this node's stable selected native snapshot. None is only
+    /// dormant policy or an explicitly typed non-routed class.
+    fn palw_native_routing_execution_authority_v2(
+        &self,
+        _checkpoint: BlockHash,
+        _candidate: &Header,
+        _job: &crate::palw_v2::PalwJobContextV2,
+        _executor: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>>, String> {
+        Err("own native routing execution authority unavailable".into())
+    }
+    /// Exact native accepted-claim stamp and whole job, independently of any
+    /// provider record. None preserves historical unstamped V1 claims only.
+    fn palw_native_routing_claim_authority_v2(
+        &self,
+        _claim: crate::Hash64,
+        _job: &crate::palw_v2::PalwJobContextV2,
+    ) -> Result<Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>, String> {
+        Err("own native routing claim authority unavailable".into())
+    }
     /// Bounded own-node accepted facts. Availability is a coherent read, not
     /// selected approval or complete one-time settlement.
     fn palw_paid_claim_observation_v5(
@@ -532,6 +553,15 @@ pub trait ConsensusApi: Send + Sync {
     fn palw_source_bootstrap_observation_v1(
         &self,
         _work: crate::Hash64,
+    ) -> Result<
+        crate::palw_source_bootstrap_v1::PalwSourceBootstrapObservationV1,
+        crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
+    > {
+        Err(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable)
+    }
+    /// The own fixed epoch before any producer has opened a source work.
+    fn palw_source_bootstrap_epoch_observation_v1(
+        &self,
     ) -> Result<
         crate::palw_source_bootstrap_v1::PalwSourceBootstrapObservationV1,
         crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
@@ -631,6 +661,14 @@ pub trait ConsensusApi: Send + Sync {
     }
     fn palw_kernel_material_consent_accepted_v4(&self, _root: Hash64, _consent: Hash64) -> Result<bool, String> {
         Err("own-node current accepted kernel consent unavailable".into())
+    }
+    /// Metadata for the original immutable enrollment under the own current
+    /// recovery covenant. Caller files are never evidence of native authority.
+    fn palw_paid_material_generation_snapshot_v5(
+        &self,
+        _original: &crate::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Result<crate::palw_paid_material_generation_v5::PalwPaidMaterialGenerationSnapshotV5, String> {
+        Err("own-node paid material generation snapshot unavailable".into())
     }
     fn palw_kernel_material_admission_accepted_v4(
         &self,

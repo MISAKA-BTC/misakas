@@ -55,6 +55,7 @@ pub(super) struct PalwAuditDutyV1 {
     owed: BTreeMap<Hash64, (Hash64, Option<u64>)>,
     pub(super) replays: PalwSeatReplaysV1,
     pub(super) replaying: Option<(Hash64, PalwSeatReplayKeyV1)>,
+    routing_owner: Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>,
 }
 
 impl PalwAuditDutyV1 {
@@ -66,6 +67,7 @@ impl PalwAuditDutyV1 {
             owed: BTreeMap::new(),
             replays: PalwSeatReplaysV1::default(),
             replaying: None,
+            routing_owner: None,
         }
     }
 
@@ -130,6 +132,11 @@ impl PalwPanelService {
                 PalwSeatReplayPollV1::Absent => duty.replaying = None,
                 PalwSeatReplayPollV1::Done { result, .. } => {
                     duty.replaying = None;
+                    let routing_owner = duty.routing_owner.take();
+                    if let Err(why) = self.refresh_native_routing_replay_v2(session, routing_owner.as_ref()) {
+                        warn!("[{PALW_PANEL}] claim {claim}: audit native routing context changed: {why}");
+                        return;
+                    }
                     if let Some(candidate) = duty.candidates.iter().find(|c| c.claim_id == claim).cloned() {
                         match super::palw_operator_da::palw_operator_da_verdict_v1(&result, &candidate.job) {
                             Some(super::palw_operator_da::PalwOperatorDaVerdictV1::Reproduces) => {
@@ -234,6 +241,10 @@ impl PalwPanelService {
             return unjudged(duty, "its block's header is not held here");
         };
         let key = (claim, ctx.job_id);
+        let routing_owner = match self.bind_native_routing_replay_v2(session, backend.as_mut(), claim, &ctx) {
+            Ok(owner) => owner,
+            Err(why) => return unjudged(duty, &format!("native routing context unavailable ({why})")),
+        };
         // At the widest prefill run the ledger grants, on this duty's own instance — the one the
         // replay below runs on (int-10.2 A2).
         let backends = self.backends();
@@ -260,6 +271,7 @@ impl PalwPanelService {
         duty.replays
             .start(key, job.class_id, false, current_daa, Some(reserved), backend, move |b| b.execute_for_verdict(&ctx, &prompt));
         duty.replaying = Some((claim, key));
+        duty.routing_owner = routing_owner;
     }
 }
 

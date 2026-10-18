@@ -65,9 +65,14 @@ def qualify(t,item):
     return re.sub(r'(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*',token,t)
 
 private={};public=[]
+# Runtime authorities retain the own authenticated snapshot. They have no
+# transport codec; reaching one through a future wire field is a source error.
+runtime_authorities={'PalwNativeRoutingExecutionAuthorityV2', 'PalwNativeRoutingClaimAuthorityV2'}
 for path in sorted(G['visited']):
     item=defs.get(path)
     if not item or path in manual:continue
+    if item['name'] in runtime_authorities:
+        raise ValueError(('own runtime authority cannot be reconstructed from wire bytes',path))
     if path=='misaka_palw_kernel::ledger::KernelLedgerV1':continue # not a Borsh wire layout
     kind,form,body=(item[k] for k in ['kind','form','body'])
     fieldtypes=[]
@@ -345,6 +350,9 @@ router_arms += '137 if key_bytes==1 && prefix==0=>crate::palw_source_bootstrap_v
 router_arms += '137 if key_bytes==65 && prefix==1=>crate::palw_source_bootstrap_v1::PalwSourceBootstrapWorkRowV1::scan_native_wire_v1(frame)?,\n'
 router_arms += '137 if key_bytes==65 && prefix==2=><crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
 router_arms += '137=>return Err(wire::wire_bad("unallocated selected-source bootstrap row namespace")),\n'
+router_arms += '138 if key_bytes==65 && prefix==1=>misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6::scan_native_wire_v1(frame)?,\n'
+router_arms += '138 if key_bytes==65 && prefix==2=>crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6::scan_native_wire_v1(frame)?,\n'
+router_arms += '138=>return Err(wire::wire_bad("unallocated paid bootstrap source V6 row namespace")),\n'
 
 code=code.replace(router_marker, router_arms+router_marker, 1)
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)

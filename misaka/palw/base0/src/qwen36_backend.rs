@@ -165,6 +165,12 @@ pub struct Qwen36Backend {
     /// (`Qwen25A16Backend::with_held_answerability_v1`): past `palw_offence_attribution` no held class
     /// this family serves answers a dissection — it has no windowed builder (the review's F4).
     held_answerability: bool,
+    /// Supplied only by SDK resolution of an actual verified holding.
+    resolved_artifact_identity_v2: Option<(Hash64, Hash64)>,
+    native_routing_execution_v2:
+        Option<std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>>,
+    native_routing_claim_v2: Option<std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>,
+    native_routing_plan_lease_v2: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 
 impl Qwen36Backend {
@@ -259,6 +265,10 @@ impl Qwen36Backend {
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
             held_answerability: false,
+            resolved_artifact_identity_v2: None,
+            native_routing_execution_v2: None,
+            native_routing_claim_v2: None,
+            native_routing_plan_lease_v2: None,
         }
     }
 
@@ -360,6 +370,10 @@ impl Qwen36Backend {
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
             held_answerability: false,
+            resolved_artifact_identity_v2: None,
+            native_routing_execution_v2: None,
+            native_routing_claim_v2: None,
+            native_routing_plan_lease_v2: None,
         }
     }
 
@@ -405,6 +419,10 @@ impl Qwen36Backend {
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
             held_answerability: false,
+            resolved_artifact_identity_v2: None,
+            native_routing_execution_v2: None,
+            native_routing_claim_v2: None,
+            native_routing_plan_lease_v2: None,
         })
     }
 
@@ -1529,6 +1547,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         job: &PalwJobContextV2,
         prompt: &[usize],
     ) -> Result<kaspa_consensus_core::palw_backend::PalwReplayRootsV1, String> {
+        self.require_native_routing_job_v2(job).map_err(|e| e.to_string())?;
         use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
         let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
             let outcome = self.execute(job, prompt)?;
@@ -1658,6 +1677,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
+        self.require_native_routing_job_v2(job).map_err(|e| e.to_string())?;
         // **The captured attempt, where the declaration is the program.** A plan proves this
         // build serves the registered graph node for node, and the planned traced walk is what a
         // capture is placed from — so court capability rides exactly the constructor that proves
@@ -1883,6 +1903,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             |count, select, stream| {
                 let shape = palw_fp_run_facts_for_executed_v1(job, count);
                 let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
+                // Pipeline stop probes may execute a different count before
+                // selecting the final run. Their fixed FP identity must still
+                // be the native claim's; the final exact count is checked below.
+                self.require_native_fp_identity_v2(&ctx).map_err(|e| e.to_string())?;
                 let run = qwen36_execute_free_prompt_select_v1(
                     &self.artifact,
                     profile,
@@ -1898,6 +1922,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             |(run, _)| run.generated_token_ids.as_slice(),
         )?;
 
+        self.require_native_routing_job_v2(&run.binding.job_context).map_err(|e| e.to_string())?;
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
         let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
         let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
@@ -2593,6 +2618,19 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         })
     }
 
+    fn bind_native_routing_execution_v2(
+        &mut self,
+        authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>,
+    ) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+        self.bind_native_routing_plan_v2(authority)
+    }
+    fn bind_native_routing_claim_v2(
+        &mut self,
+        authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>,
+    ) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+        self.bind_native_claim_plan_v2(authority)
+    }
+
     fn held_state_chunk_answer_v1(
         &self,
         capture: &[u8],
@@ -3156,6 +3194,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         prompt: &[usize],
         leaf_index: u64,
     ) -> Result<PalwExecutionOutcomeV1, String> {
+        self.require_native_routing_job_v2(job).map_err(|e| e.to_string())?;
         let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
             return Err("a backend with no registered graph carries no capture to tamper with".to_string());
         };

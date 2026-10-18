@@ -43,6 +43,27 @@ pub fn export_private_paid_bootstrap_v4(config: &Config, output: &Path) -> Resul
         return Err("paid bootstrap requires its exact real-PoW private paid-v4 factory".into());
     }
     super::paid_v4_factory::validate_private_paid_claim_relations_v4(&config.params)?;
+    export_paid_bootstrap_for_validated_params(config, output)
+}
+
+/// Separate source-paid profile: artifacts are signed under its actual combined
+/// Params identity. The old paid-v4 entry point still requires its exact factory.
+pub fn export_private_source_paid_bootstrap_v1(config: &Config, output: &Path) -> Result<serde_json::Value, String> {
+    let salt = config.palw_drill_genesis_salt.as_ref().ok_or("source-paid bootstrap salted identity absent")?;
+    if config.private_population.is_some()
+        || config.params.skip_proof_of_work
+        || config.params.palw_claim_compact_v4.is_none()
+        || config.params.palw_material_release_recovery_v2.is_none()
+    {
+        return Err("source-paid bootstrap requires its exact real-PoW paid-v4 base and explicit source policy".into());
+    }
+    super::source_bootstrap_factory_v1::validate_private_source_bootstrap_relations_v1(&config.params, salt)?;
+    export_paid_bootstrap_for_validated_params(config, output)
+}
+
+fn export_paid_bootstrap_for_validated_params(config: &Config, output: &Path) -> Result<serde_json::Value, String> {
+    let salt = config.palw_drill_genesis_salt.as_ref().ok_or("private paid bootstrap salted identity absent")?;
+    let expected = &config.params;
     // The original exporter retains its exact complete-v1 guard and source bytes.
     // This base artifact is a deterministic public file fixture, not an old
     // conformance or receipt silently promoted to a new ruleset.
@@ -138,6 +159,11 @@ pub fn export_private_paid_bootstrap_v4(config: &Config, output: &Path) -> Resul
         "bondKeyFile":"base-material/bond.seed","fundingKeyFile":"base-material/funding.seed",
         "seats":base_manifest["seats"],"initialTarget":base_manifest["initialTarget"],"slashValuePerPwu":base_manifest["slashValuePerPwu"]});
     manifest["privateProbeProfile"] = super::private_probe_manifest(config);
+    if config.params.palw_selected_source_bootstrap_v1.is_some() {
+        manifest["schema"] = serde_json::json!("misaka.private-source-paid-bootstrap.v1");
+        manifest["kind"] = serde_json::json!("rfc-private-source-paid-bootstrap-file-fixture-v1");
+        manifest["sourceBootstrapApprovalsObserved"] = serde_json::json!(false);
+    }
     manifest["compactContractIncluded"] = serde_json::json!(false);
     manifest["recoveryEnrollmentIncluded"] = serde_json::json!(false);
     // Copy only primitive/material/genesis-money fields whose bytes and scope

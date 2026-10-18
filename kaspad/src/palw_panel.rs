@@ -155,6 +155,8 @@ mod selected_event_responder;
 #[path = "palw_kernel_verifier.rs"]
 pub(crate) mod palw_kernel_verifier;
 
+#[path = "palw_native_routing_replay_v2.rs"]
+mod native_routing_replay_v2;
 /// ADR-0160 F-Q (stage 2, rcore/cap-s1): the operator's audit duty — an operator node in a credited
 /// claim's audit pool replays it and posts a receipt batch when it reproduces (a child module, so it
 /// reads the replay runner and the court queue's seams).
@@ -12796,6 +12798,14 @@ impl PalwPanelService {
                             // At the widest prefill run the ledger grants, on this duty's own instance —
                             // the one offloaded below (int-10.2 A2).
                             let mut resolved = resolved;
+                            let routing_owner =
+                                match self.bind_native_routing_replay_v2(&session, resolved.as_mut(), duty.claim_id, &ctx) {
+                                    Ok(owner) => owner,
+                                    Err(why) => {
+                                        warn!("[{PALW_PANEL}] claim {}: native routed replay held: {why}", duty.claim_id);
+                                        break 'verdict None;
+                                    }
+                                };
                             let backends = self.backends();
                             let reserved = match self.reserve_replay_at_widest_run_v1(
                                 "full-seat",
@@ -12829,6 +12839,10 @@ impl PalwPanelService {
                                 b.execute_for_verdict(&ctx_for_blocking, &prompt_for_blocking)
                             })
                             .await;
+                            if let Err(why) = self.refresh_native_routing_replay_v2(&session, routing_owner.as_ref()) {
+                                warn!("[{PALW_PANEL}] claim {}: replay context changed: {why}", duty.claim_id);
+                                break 'verdict None;
+                            }
                             crate::palw_backends::log_storage_v1(PALW_PANEL, "replay", &storage_before, &self.class_holdings);
                             match replayed {
                                 Ok((backend, Ok(roots))) => {
@@ -17775,11 +17789,20 @@ impl PalwPanelService {
         duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
         seat_r_duty: PalwSeatRDutyV1,
         current_daa: u64,
-        backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+        mut backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
         ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
         prompt: &[usize],
         replays: &mut PalwSeatReplaysV1,
     ) -> (PalwSeatReplayStepV1, Option<Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>>) {
+        // Bind before starting or consuming a worker result. An own context
+        // refusal remains NoVerdict, never an arithmetic fault.
+        let routing_owner = match self.bind_native_routing_replay_v2(session, backend.as_mut(), duty.claim_id, ctx) {
+            Ok(owner) => owner,
+            Err(why) => {
+                warn!("[{PALW_PANEL}] claim {}: native routing replay held: {why}", duty.claim_id);
+                return (PalwSeatReplayStepV1::NoVerdict, Some(backend));
+            }
+        };
         let key = (duty.claim_id, ctx.job_id);
         let mut poll = replays.poll(&key, current_daa).await;
         if let PalwSeatReplayPollV1::Done { result: Err(e), fresh } = &poll
@@ -17793,6 +17816,10 @@ impl PalwPanelService {
         match poll {
             PalwSeatReplayPollV1::Running => (PalwSeatReplayStepV1::Waiting, None),
             PalwSeatReplayPollV1::Done { result, fresh } => {
+                if let Err(why) = self.refresh_native_routing_replay_v2(session, routing_owner.as_ref()) {
+                    warn!("[{PALW_PANEL}] claim {}: native routing replay result held: {why}", duty.claim_id);
+                    return (PalwSeatReplayStepV1::NoVerdict, Some(backend));
+                }
                 let step = palw_seat_replay_step_v1(&result, duty.execution_root, duty.trace_root, duty.work_leaves, duty.output_root);
                 match (&result, &step) {
                     (Ok(roots), PalwSeatReplayStepV1::Licensed) if fresh => info!(
@@ -18070,6 +18097,42 @@ impl PalwPanelService {
             // Whether this job's replay can decide the claim: the claim's own, or any while none is.
             let decides = is_own || !holds_own;
             let key = (duty.claim_id, *job_id);
+            let mut routed_backend = None;
+            let mut routing_owner = None;
+            if self
+                .consensus_config
+                .params
+                .palw_memory_routing_court_v2
+                .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(current_daa))
+            {
+                let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { continue };
+                // A captured exact executed count may differ from the decoder
+                // ceiling. Its native job pin authenticates the context before
+                // it may select a plan; a capture never grants authority.
+                let context = jobs[index]
+                    .2
+                    .iter()
+                    .find_map(|bytes| {
+                        let payload = palw_fp_capture_decode_v1(bytes, form)?;
+                        let shape = backend.capture_shape(&payload.capture)?;
+                        let ctx = shape.job_context;
+                        (ctx.job_id == *job_id
+                            && duty.fp_job_pin_v1().is_some_and(|pin| {
+                                kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&ctx) == pin
+                            }))
+                        .then_some(ctx)
+                    })
+                    .or_else(|| backend.fp_job_context_v1(&material.job));
+                let Some(context) = context else { continue };
+                match self.bind_native_routing_replay_v2(session, backend.as_mut(), duty.claim_id, &context) {
+                    Ok(owner) => routing_owner = owner,
+                    Err(why) => {
+                        warn!("[{PALW_PANEL}] claim {}: FP native routing context held: {why}", duty.claim_id);
+                        continue;
+                    }
+                }
+                routed_backend = Some(backend);
+            }
             let mut poll = replays.poll(&key, current_daa).await;
             if decides
                 && let PalwSeatReplayPollV1::Done { result: Err(e), fresh } = &poll
@@ -18086,6 +18149,10 @@ impl PalwPanelService {
             match poll {
                 PalwSeatReplayPollV1::Running => waiting |= decides,
                 PalwSeatReplayPollV1::Done { result: Ok(replayed), fresh } => {
+                    if let Err(why) = self.refresh_native_routing_replay_v2(session, routing_owner.as_ref()) {
+                        warn!("[{PALW_PANEL}] claim {}: FP replay context changed: {why}", duty.claim_id);
+                        continue;
+                    }
                     let step = palw_seat_replay_step_v1(
                         &Ok(replayed),
                         duty.execution_root,
@@ -18163,8 +18230,12 @@ impl PalwPanelService {
                         });
                         continue;
                     }
-                    let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
-                        return (PalwSeatReplayStepV1::NoVerdict, None);
+                    let mut backend = match routed_backend.take() {
+                        Some(backend) => backend,
+                        None => match self.resolve_backend(session, duty.class_id, duty.artifact_root) {
+                            Ok(backend) => backend,
+                            Err(_) => return (PalwSeatReplayStepV1::NoVerdict, None),
+                        },
                     };
                     let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), material, form) else { continue };
                     let ctx = backend.fp_job_context_v1(&material.job);

@@ -164,6 +164,23 @@ pub(crate) fn qwen36_artifact_by_registered_root(
         .map(|(_, artifact)| artifact)
 }
 
+/// Stronger prospective identity than the historical resolver's raw-root
+/// compatibility arm. An inventory-root class must bind the actual inventory
+/// under this exact profile before native V2 execution can be armed.
+pub(crate) fn native_registered_identity_v2(
+    holdings: &[PalwLoadedArtifactV1],
+    artifact: &Arc<Qwen36ArtifactV1>,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    expected: Hash64,
+) -> bool {
+    holdings.iter().any(|holding| {
+        parts_of(holding).is_some_and(|(_, mapping)| {
+            Arc::ptr_eq(&mapping, artifact)
+                && registered_root_of(holding, profile).is_some_and(|result| result.is_ok_and(|root| root == expected))
+        })
+    })
+}
+
 fn table_entry(model_id: &str) -> Option<Qwen36CanonicalClassV1> {
     qwen36_canonical_classes_v1().into_iter().find(|c| c.model_id == model_id)
 }
@@ -232,18 +249,21 @@ impl PalwModelLineageV1 for Qwen36LineageV1 {
         let entry = qwen36_canonical_classes_v1().into_iter().find(|c| c.class_id() == Some(class_id))?;
         let profile = entry.profile().ok()?;
         if let Some(artifact) = qwen36_artifact_by_registered_root(holdings, artifact_root, &profile) {
+            let native_identity = native_registered_identity_v2(holdings, &artifact, &profile, artifact_root);
             // The ladder the RULESET froze — see the dense lineage's resolve for the whole note.
-            return Some(Ok(Box::new(
-                misaka_palw_base0::qwen36_backend::Qwen36Backend::new(
-                    artifact,
-                    entry.model_id,
-                    entry.canonical_job,
-                    class_id,
-                    network_id.to_vec(),
-                )
-                .with_step_ladder_cap(court.max_step_leaf_count())
-                .with_prompt_ids_form(prompt_ids_form),
-            )));
+            let backend = misaka_palw_base0::qwen36_backend::Qwen36Backend::new(
+                artifact,
+                entry.model_id,
+                entry.canonical_job,
+                class_id,
+                network_id.to_vec(),
+            );
+            let backend =
+                if native_identity { backend.with_resolved_artifact_identity_v2(class_id, artifact_root) } else { Ok(backend) };
+            return Some(backend.map(|backend| {
+                Box::new(backend.with_step_ladder_cap(court.max_step_leaf_count()).with_prompt_ids_form(prompt_ids_form))
+                    as Box<dyn PalwExecutionBackendV1>
+            }));
         }
         Some(Err(format!(
             "the chain names the {} class and this node holds no artifact whose computed root is {artifact_root} \

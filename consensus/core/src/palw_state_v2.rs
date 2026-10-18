@@ -1882,6 +1882,10 @@ pub struct PalwStateParamsV2 {
     /// Some-only policy is committed by Params; skip preserves historical ruleset bytes.
     #[borsh(skip)]
     pub(crate) selected_source_bootstrap_v1: Option<(u64, crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1)>,
+    /// Some-only Params identity carries this separately versioned lineage contract.
+    #[borsh(skip)]
+    pub(crate) paid_bootstrap_source_v6:
+        Option<(u64, misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6)>,
     #[borsh(skip)]
     paid_consumer_lifecycle: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
@@ -25367,6 +25371,8 @@ mod staged_court_state_tests_v1 {
 
 #[path = "palw_claim_challenge_fold_v2.rs"]
 mod palw_claim_challenge_fold_v2;
+#[path = "palw_paid_bootstrap_source_fold_v6.rs"]
+mod palw_paid_bootstrap_source_fold_v6;
 
 // Read-only native allocation inventory; no state/root/codec field is added.
 #[path = "palw_native_resource_v1/private/palw_state_v2.rs"]

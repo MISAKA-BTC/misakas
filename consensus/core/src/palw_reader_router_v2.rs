@@ -12,6 +12,13 @@ use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_step::{PALW_STEP_INPUT_SENTINEL_MIN, PalwShapeProfileV3, PalwStepNodeV1, PalwStepOutLenV1, kernel_semantics_id_v1};
 use crate::palw_step_refute::{KDESC_KIMI_MOE_COMBINE, KDESC_KIMI_ROUTER_TOPK, KDESC_Q36_MOE_COMBINE, KDESC_Q36_ROUTER_TOPK};
 
+#[path = "palw_reader_router_v2/execution.rs"]
+mod execution;
+pub use execution::PalwNativeRoutingExecutionAuthorityV2;
+#[path = "palw_reader_router_v2/claim_execution.rs"]
+mod claim_execution;
+pub use claim_execution::PalwNativeRoutingClaimAuthorityV2;
+
 pub const PALW_READER_ROUTER_TABLE_V2: u8 = 136;
 pub const PALW_READER_ROUTER_VERSION_V2: u16 = 2;
 pub const PALW_READER_ROUTER_DOMAIN_V2: &[u8] = b"misaka-palw/reader-router/declaration/v2";

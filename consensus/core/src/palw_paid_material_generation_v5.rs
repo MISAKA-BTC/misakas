@@ -21,6 +21,57 @@ use misaka_palw_kernel::{
     route::SaltedCommitV1,
 };
 
+/// Read-only metadata from a coherent own-node snapshot. Exporting this fixed
+/// record grants neither admission nor approval; native V5 admission rechecks
+/// the live covenant and both signatures.
+#[derive(Clone, Copy, Debug)]
+pub struct PalwPaidMaterialGenerationSnapshotV5 {
+    pub snapshot: crate::palw_paid_claim_observation_v5::NativePaidClaimSnapshotV5,
+    pub generation: Generation,
+}
+
+/// Authenticate the original immutable V2 or explicitly versioned V6 WAL
+/// against the own registered producer. Neither an unsigned enrollment nor a
+/// replacement wrapper may manufacture a different draw's metadata export.
+pub fn paid_material_generation_for_original_v5(
+    state: &PalwChainStateV2,
+    original: &crate::palw_state_v2::PalwConsensusObjectV2,
+) -> Result<Generation, E<String>> {
+    use misaka_palw_kernel::{claim_paid_v2::PaidClaimObjectV2, route::KernelRouteObjectV1};
+    let crate::palw_state_v2::PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, signature } = original else {
+        return Err(E::Decode("V5 export requires original signed kernel object".into()));
+    };
+    let route = state.kernel_route().ok_or_else(|| E::Decode("V5 export own route absent".into()))?;
+    let body = bytes.get(1..).ok_or_else(|| E::Decode("V5 export original version absent".into()))?;
+    preflight_native_value_v1::<KernelRouteObjectV1>(body, body.len() as u64).map_err(|e| E::Decode(e.to_string()))?;
+    let inner = retain_native_value_decode_classified_v1(body, || KernelRouteObjectV1::decode(bytes).map_err(|e| e.to_string()))?;
+    let network = Hash64::from_bytes(route.header.policy.network_domain);
+    let (enrollment, message) = match &*inner {
+        KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::Commit { enrollment, commit, salt } } => {
+            (enrollment, original_paid_commit_message_v5(network, signer, enrollment, commit, salt).map_err(E::Decode)?)
+        }
+        KernelRouteObjectV1::PaidClaimV2 {
+            object: PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { enrollment, commit, salt, source_policy },
+        } => (
+            enrollment,
+            original_paid_bootstrap_commit_message_v7(network, signer, enrollment, commit, salt, source_policy).map_err(E::Decode)?,
+        ),
+        _ => return Err(E::Decode("generation export refuses substituted original object family".into())),
+    };
+    let bond = state.bond(signer).ok_or_else(|| E::Decode("V5 export original producer absent".into()))?;
+    if message != crate::palw_kernel_route_v1::palw_kernel_route_message_v1(network, signer, bytes)
+        || !crate::palw_attempt_material_v3::verify_ready_signature_v3(
+            &bond.pubkey,
+            message.as_byte_slice(),
+            signature,
+            PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
+        )
+    {
+        return Err(E::Decode("V5 export original signature/network/identity differs".into()));
+    }
+    paid_material_generation_from_route_v5(route, enrollment, *signer)
+}
+
 fn row<T: NativeWireScanV1 + BorshDeserialize>(
     route: &PalwKernelRouteStateV1,
     table: u8,
@@ -124,6 +175,32 @@ mod identity_controls {
         assert_eq!(borsh::to_vec(&generation).unwrap().len(), 330);
         generation.initial_consent = [18; 64];
         assert!(generation.validate(&e).is_err(), "arbitrary historic consent cannot become another draw");
+    }
+    #[test]
+    fn original_bootstrap_message_keeps_index16_policy_and_legacy_identity_separate() {
+        // Encoding control only: this synthetic work is not admitted native
+        // computation, source approval or a successful material replacement.
+        let (actor, enrollment, commit) = fixture();
+        let network = Hash64::from_bytes([9; 64]);
+        let salt = [10; 64];
+        let source_policy = [19; 64];
+        let original = KernelRouteObjectV1::PaidClaimV2 {
+            object: PaidClaimObjectV2::CommitWithApprovedBootstrapV6 {
+                enrollment: enrollment.clone(),
+                commit: commit.clone(),
+                salt,
+                source_policy,
+            },
+        };
+        let bytes = original.encode();
+        assert_eq!(bytes[2], 16);
+        let message = original_paid_bootstrap_commit_message_v7(network, &actor, &enrollment, &commit, &salt, &source_policy).unwrap();
+        assert_eq!(message, crate::palw_kernel_route_v1::palw_kernel_route_message_v1(network, &actor, &bytes));
+        assert_ne!(message, original_paid_commit_message_v5(network, &actor, &enrollment, &commit, &salt).unwrap());
+        assert_ne!(
+            message,
+            original_paid_bootstrap_commit_message_v7(network, &actor, &enrollment, &commit, &salt, &[20; 64]).unwrap()
+        );
     }
 }
 
@@ -239,6 +316,103 @@ pub fn validate_paid_material_generation_v5(
         PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
     ) {
         return Err(E::Decode("V5 original V2 enrollment signature differs".into()));
+    }
+    Ok(())
+}
+
+/// Exact original index16 message. The source policy is part of the original
+/// signed bytes; it cannot be moved into an index15 legacy continuation.
+pub fn original_paid_bootstrap_commit_message_v7(
+    network: Hash64,
+    producer: &PalwBondKeyV2,
+    enrollment: &PaidClaimEnrollmentV2,
+    commit: &SaltedCommitV1,
+    salt: &[u8; 64],
+    source_policy: &[u8; 64],
+) -> Result<Hash64, String> {
+    struct Writer(blake2b_simd::State);
+    impl std::io::Write for Writer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let body = (enrollment, commit, salt, source_policy);
+    let length =
+        (borsh::object_length(&body).map_err(|e| e.to_string())? as u64).checked_add(3).ok_or("original V6 commit length overflow")?;
+    if length > crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 as u64 {
+        return Err("original V6 commit exceeds native carrier bound".into());
+    }
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_OBJECT_DOMAIN_V1).to_state();
+    state.update(network.as_byte_slice());
+    state.update(producer.0.transaction_id.as_byte_slice());
+    state.update(&producer.0.index.to_le_bytes());
+    state.update(&length.to_le_bytes());
+    state.update(&[misaka_palw_kernel::route::KERNEL_ROUTE_VERSION_V1, misaka_palw_kernel::route::TAG_PAID_CLAIM_V2, 16]);
+    let mut writer = Writer(state);
+    body.serialize(&mut writer).map_err(|e| e.to_string())?;
+    let mut result = [0; 64];
+    result.copy_from_slice(writer.0.finalize().as_bytes());
+    Ok(Hash64::from_bytes(result))
+}
+
+/// Dedicated V7 admission after verifying the new outer actor signature. The
+/// exact V6 source-policy signature and current material contract are separate
+/// checks; neither a V5 metadata file nor a local WAL restores a vanished lock.
+pub fn validate_paid_material_generation_v7(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    now: u64,
+    producer: &PalwBondKeyV2,
+    enrollment: &PaidClaimEnrollmentV2,
+    commit: &SaltedCommitV1,
+    salt: &[u8; 64],
+    source_policy: &[u8; 64],
+    generation: &Generation,
+    original_signature: &[u8],
+) -> Result<(), E<String>> {
+    let (_, source) = params
+        .paid_bootstrap_source_v6
+        .as_ref()
+        .filter(|(at, _)| {
+            let activation = crate::config::params::ForkActivation::new(*at);
+            activation != crate::config::params::ForkActivation::never() && activation.is_active(now)
+        })
+        .ok_or_else(|| E::Decode("V7 approved bootstrap capability is dormant".into()))?;
+    source.validate().map_err(E::Decode)?;
+    let policy = params.material_release_recovery_at_v2(now).ok_or_else(|| E::Decode("V7 recovery capability is dormant".into()))?;
+    params.monetary_material_at_v1(now).ok_or_else(|| E::Decode("V7 monetary capability is dormant".into()))?;
+    let route = state.kernel_route().ok_or_else(|| E::Decode("V7 own route absent".into()))?;
+    if source.id() != *source_policy
+        || source.network != route.header.policy.network_domain
+        || *generation != paid_material_generation_from_route_v5(route, enrollment, *producer)?
+        || commit.producer() != enrollment.producer
+    {
+        return Err(E::Decode("V7 source policy or exact current material generation differs".into()));
+    }
+    let recovery =
+        row::<PalwMaterialRecoveryRowV2>(route, PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, Hash64::from_bytes(enrollment.base_claim))?;
+    recovery.validate(policy).map_err(|e| E::Decode(e.to_string()))?;
+    let native = state.bond(producer).ok_or_else(|| E::Decode("V7 original signer native key absent".into()))?;
+    let message = original_paid_bootstrap_commit_message_v7(
+        Hash64::from_bytes(route.header.policy.network_domain),
+        producer,
+        enrollment,
+        commit,
+        salt,
+        source_policy,
+    )
+    .map_err(E::Decode)?;
+    if !crate::palw_attempt_material_v3::verify_ready_signature_v3(
+        &native.pubkey,
+        message.as_byte_slice(),
+        original_signature,
+        PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
+    ) {
+        return Err(E::Decode("V7 original V6 enrollment/source-policy signature differs".into()));
     }
     Ok(())
 }

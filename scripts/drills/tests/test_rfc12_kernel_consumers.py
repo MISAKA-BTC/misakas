@@ -66,6 +66,38 @@ class ConsumerSourceControls(unittest.TestCase):
             '--private-probe-recovery-ack-funding=' + point(9)]
         return plan, producer, checker
 
+    def test_v6_namespace_policy_signed_artifact_and_separate_funding_are_frozen(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            plan, producer, _ = self.fixture(root)
+            # Canonical framing/identity only: native validation must reject
+            # this deliberately incomplete policy/work if actually launched.
+            policy = root / 'source-policy-v6.borsh'
+            raw = (1).to_bytes(8, 'little') + b'\x06\x00' + b'\x01' * 128 + b'\x00' * 44
+            self.assertEqual(len(raw), consumers.BOOTSTRAP_SOURCE_POLICY_BYTES)
+            policy.write_bytes(raw)
+            for node in plan['nodes'].values():
+                node['argv'][1] = '--private-probe-profile=source-paid-v1'
+                node['argv'].append(consumers.BOOTSTRAP_SOURCE_POLICY_FLAG + '=' + str(policy))
+            signed = root / 'signed-paid-enrollment-v6.borsh'
+            signed.write_bytes(b'fixture-not-native-admission')
+            manifest_path = root / 'manifest.json'
+            manifest = json.loads(manifest_path.read_text())
+            manifest.update(schema='misaka.private-paid-native-work.v6', sourceNamespace='approved-bootstrap-v6',
+                sourcePolicyId=consumers.bootstrap_source_policy_id(policy), signedEnrollment=signed.name)
+            manifest_path.write_text(json.dumps(manifest))
+            producer.update(source_lock_funding_outpoint=point(99), maximum_source_lock_fee_sompi=30)
+            (root / 'producer.json').write_text(json.dumps(producer))
+            plan['nativeKernelConsumers']['maximumDirectCarrierExposureSompi'] = 230
+            prepared = consumers.prepare(plan, {'ROOT': str(root)})
+            self.assertEqual(prepared['directCarrierExposureUpperSompi'], 230)
+            pinned = {row['path'] for row in prepared['workers'][0]['inputs']}
+            self.assertIn(str(policy), pinned)
+            self.assertIn(str(signed), pinned)
+            signed.write_bytes(b'changed signed enrollment framing')
+            with self.assertRaises(ValueError):
+                consumers.revalidate(prepared, 'A')
+
     def test_bootstrap_precedes_worker_activation_and_fresh_join_remains_unstarted(self):
         with tempfile.TemporaryDirectory() as folder:
             plan, _, _ = self.fixture(Path(folder))

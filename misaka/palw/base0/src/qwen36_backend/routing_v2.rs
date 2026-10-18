@@ -30,6 +30,99 @@ fn legacy_map<K, V>(q: &mut PalwMaterialConstructionRequestsV2, count: u64) -> R
 }
 
 impl Qwen36Backend {
+    /// SDK runtime context: call after an actual holding matched the chain's
+    /// class/root. This local builder neither verifies a raw network root nor
+    /// creates native routing authority.
+    pub fn with_resolved_artifact_identity_v2(mut self, class: Hash64, root: Hash64) -> Result<Self, String> {
+        if class != self.class_profile_id || root == Hash64::default() {
+            return Err("Q36 resolved holding identity differs from its actual compiled class".into());
+        }
+        self.resolved_artifact_identity_v2 = Some((class, root));
+        Ok(self)
+    }
+    pub(super) fn require_native_routing_job_v2(&self, job: &PalwJobContextV2) -> Result<(), E> {
+        if self.native_routing_execution_v2.as_ref().is_some_and(|authority| authority.job() != job)
+            || self.native_routing_claim_v2.as_ref().is_some_and(|authority| authority.job() != job)
+        {
+            return Err(E::Substitution);
+        }
+        Ok(())
+    }
+    pub(super) fn require_native_fp_identity_v2(&self, job: &PalwJobContextV2) -> Result<(), E> {
+        if self.native_routing_execution_v2.is_some() {
+            return Err(E::Substitution); // A block attempt owner is never FP authority.
+        }
+        if let Some(owner) = &self.native_routing_claim_v2 {
+            if !owner.is_free_prompt() {
+                return Err(E::Substitution);
+            }
+            let expected = owner.job();
+            // Compare every fixed context field without allocating a clone.
+            // Only the stop probe's count is allowed to vary here.
+            if job.version != expected.version
+                || job.network_id != expected.network_id
+                || job.job_id != expected.job_id
+                || job.job_nullifier != expected.job_nullifier
+                || job.assignment_id != expected.assignment_id
+                || job.execution_seed != expected.execution_seed
+                || job.model_profile_id != expected.model_profile_id
+                || job.runtime_manifest_hash != expected.runtime_manifest_hash
+                || job.runtime_class_id != expected.runtime_class_id
+                || job.shape_profile_id != expected.shape_profile_id
+                || job.trace_scheme_id != expected.trace_scheme_id
+                || job.cu_ruleset_id != expected.cu_ruleset_id
+                || job.tokenizer_id != expected.tokenizer_id
+                || job.prompt_token_ids_hash != expected.prompt_token_ids_hash
+                || job.declared_prefill_tokens != expected.declared_prefill_tokens
+                || job.max_context_tokens != expected.max_context_tokens
+            {
+                return Err(E::Substitution);
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn bind_native_routing_plan_v2(
+        &mut self,
+        authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>,
+    ) -> Result<(), E> {
+        let row = authority.row();
+        let profile = self.profile.as_ref().ok_or(E::Incomplete)?;
+        if self.resolved_artifact_identity_v2 != Some((row.declaration.class_id, row.declaration.artifact_root))
+            || self.native_routing_claim_v2.is_some()
+            || self.class_profile_id != row.declaration.class_id
+            || authority.native_profile() != profile
+            || authority.job().shape_profile_id != row.declaration.class_id
+            || self.native_routing_execution_v2.as_ref().is_some_and(|old| !old.same_execution_v2(&authority))
+        {
+            return Err(E::Substitution);
+        }
+        let native = self.plan.as_ref().ok_or(E::Incomplete)?.bind_reader_router_v2(profile, &row.declaration, authority.network())?;
+        self.plan = Some(native.plan);
+        self.native_routing_plan_lease_v2 = native.lease;
+        self.native_routing_execution_v2 = Some(authority);
+        Ok(())
+    }
+    pub(super) fn bind_native_claim_plan_v2(
+        &mut self,
+        authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>,
+    ) -> Result<(), E> {
+        let row = authority.row();
+        let profile = self.profile.as_ref().ok_or(E::Incomplete)?;
+        if self.native_routing_execution_v2.is_some()
+            || self.resolved_artifact_identity_v2 != Some((row.declaration.class_id, row.declaration.artifact_root))
+            || self.class_profile_id != row.declaration.class_id
+            || authority.native_profile() != profile
+            || authority.job().shape_profile_id != row.declaration.class_id
+            || self.native_routing_claim_v2.as_ref().is_some_and(|old| !old.same_claim_v2(&authority))
+        {
+            return Err(E::Substitution);
+        }
+        let native = self.plan.as_ref().ok_or(E::Incomplete)?.bind_reader_router_v2(profile, &row.declaration, authority.network())?;
+        self.plan = Some(native.plan);
+        self.native_routing_plan_lease_v2 = native.lease;
+        self.native_routing_claim_v2 = Some(authority);
+        Ok(())
+    }
     pub(super) fn routed_material_bundle_from_fold_v2(
         &self,
         capture: &[u8],
@@ -60,7 +153,15 @@ impl Qwen36Backend {
         {
             return Err(E::Substitution);
         }
-        let plan = self.plan.as_ref().ok_or_else(|| E::Unsupported("Q36 fold has no actual graph execution plan".into()))?;
+        if self.resolved_artifact_identity_v2 != Some((authority.record().class_id, authority.record().artifact_root)) {
+            return Err(E::Substitution);
+        }
+        let native_plan = self
+            .plan
+            .as_ref()
+            .ok_or_else(|| E::Unsupported("Q36 fold has no actual graph execution plan".into()))?
+            .bind_reader_router_v2(&b.shape_profile, &authority.record().routing.declaration, authority.record().network)?;
+        let plan = &native_plan.plan;
         let interval = self.checkpoint_interval().ok_or(E::Incomplete)?;
         let source = material.native_heap_v1("Q36 V2 folded material source");
         let source_bytes = source.bytes().ok_or_else(|| E::LocalResource(source))?;

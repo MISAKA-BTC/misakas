@@ -124,6 +124,9 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     let paid_class: misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2 = route
         .aux_row(kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_CLASSES_V2, &request.paid_class.to_vec())
         .ok_or("requested paid class is not in the pinned native snapshot")?;
+    if config.params.palw_paid_bootstrap_source_v6.is_some() && !paid_class.supports_approved_bootstrap_source_v6() {
+        return Err("explicit V6 exporter supports only noninteractive consumers; no compact/staged namespace fallback".into());
+    }
     let compact = if let Some(plan) = paid_class.interactive_plan.as_ref().filter(|p| p.version == 4) {
         let fence = config
             .params
@@ -139,19 +142,22 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     };
     let work = produce_native_work_with_resident_v3(&route, request.base_job, producer, request.inputs, resident)
         .map_err(|e| e.to_string())?;
-    let enrollment = work
-        .signed_enrollment(
-            &route,
-            request.paid_class,
-            request.paid_job,
-            request.salt,
-            request.material_consent,
-            request.not_before_daa,
-            &key,
-            domain,
-            bond,
-        )
+    let unsigned = work
+        .enrollment_draft(&route, request.paid_class, request.paid_job, request.salt, request.material_consent, request.not_before_daa)
         .map_err(|e| e.to_string())?;
+    let (unsigned, enrollment_file) = if let Some(fence) = config.params.palw_paid_bootstrap_source_v6 {
+        if !fence.activation.is_active(request.not_before_daa) {
+            return Err("explicit V6 export requires a declared commit DAA in its scheduled activation; no legacy fallback".into());
+        }
+        (
+            misaka_palw_sdk::claim_paid_v2::paid_claim_commit_object_approved_bootstrap_v6(&route, fence.policy.id(), unsigned)
+                .map_err(|e| e.to_string())?,
+            "signed-paid-enrollment-v6.borsh",
+        )
+    } else {
+        (unsigned, "signed-paid-enrollment-v2.borsh")
+    };
+    let enrollment = misaka_palw_sdk::claim_paid_v2::sign_paid_claim_object_v2(&key, domain, bond, &unsigned)?;
     std::fs::create_dir(output).map_err(|e| format!("fresh paid work directory: {e}"))?;
     #[cfg(unix)]
     {
@@ -161,17 +167,22 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     write_new(&output.join("program-work-v3.borsh"), &borsh::to_vec(&work).map_err(|e| e.to_string())?)?;
     write_new(&output.join("salted-commit-v1.borsh"), &borsh::to_vec(&work.commit).map_err(|e| e.to_string())?)?;
     write_new(&output.join("public-material-v2.borsh"), &borsh::to_vec(&work.material).map_err(|e| e.to_string())?)?;
-    write_new(&output.join("signed-paid-enrollment-v2.borsh"), &borsh::to_vec(&enrollment).map_err(|e| e.to_string())?)?;
+    write_new(&output.join(enrollment_file), &borsh::to_vec(&enrollment).map_err(|e| e.to_string())?)?;
     let mut manifest = serde_json::json!({"schema":"misaka.private-paid-native-work.v4","requestVersion":request.version,"nativeCommitTag":work.commit.commit_tag(),"baseJob":faster_hex::hex_string(&request.base_job),
         "paidClass":faster_hex::hex_string(&request.paid_class),"paidJob":faster_hex::hex_string(&request.paid_job),
         "ledgerRoot":request.ledger_root.to_string(),"auxRoot":request.aux_root.to_string(),
         "producer":faster_hex::hex_string(&producer),"work":"program-work-v3.borsh","material":"public-material-v2.borsh",
-        "signedEnrollment":"signed-paid-enrollment-v2.borsh","realTirExecution":true,
+        "signedEnrollment":enrollment_file,"realTirExecution":true,
         "privateWorkspaceBoundBytes":work.resource_bound.workspace_bytes.to_string(),
         "privateMaterialBoundBytes":work.resource_bound.material_bytes.to_string(),
         "privateExecutionWorkBound":work.resource_bound.execution_work.to_string(),
         "resourceApproval":false,"nativeEnrollmentIncluded":false,
         "sourceLocked":false,"receiptQuorumIncluded":false,"nativeFinalObserved":false,"releaseApproval":false});
+    if let Some(fence) = config.params.palw_paid_bootstrap_source_v6 {
+        manifest["schema"] = serde_json::json!("misaka.private-paid-native-work.v6");
+        manifest["sourceNamespace"] = serde_json::json!("approved-bootstrap-v6");
+        manifest["sourcePolicyId"] = serde_json::json!(faster_hex::hex_string(&fence.policy.id()));
+    }
     if let Some(registration) = compact {
         manifest["proofPlanVersion"] = serde_json::json!(4);
         manifest["proofPlan"] = serde_json::json!(faster_hex::hex_string(&registration.plan.id()));

@@ -163,7 +163,9 @@ impl PreparedSourceBootstrapCheckerV1 {
             if matches!(self.tick.tick(Duration::from_secs(2)).await, kaspa_core::task::tick::TickReason::Shutdown) {
                 return Ok(());
             }
-            let api = self.manager.consensus().unguarded_session();
+            let instance = self.manager.consensus();
+            let session = instance.unguarded_session();
+            let api = instance.unguarded_session_blocking();
             let observation = match api.palw_source_bootstrap_observation_v1(id) {
                 Ok(view) => view,
                 Err(error) => {
@@ -366,8 +368,24 @@ impl PreparedSourceBootstrapCheckerV1 {
             }
             let Some(entry) = api.get_virtual_utxo_entry(self.funding) else { continue };
             let fee = tx.outputs.iter().try_fold(0u64, |n, o| n.checked_add(o.value)).and_then(|n| entry.amount.checked_sub(n));
-            if entry.script_public_key != script || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi) {
-                return Err("source carrier exceeds explicit payer/fee authority; WAL retained".into());
+            if entry.script_public_key != script
+                || tx.outputs.len() != 1
+                || tx.outputs[0].script_public_key != script
+                || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi)
+            {
+                return Err("source carrier exceeds explicit payer/change/fee authority; WAL retained".into());
+            }
+            if api.palw_bond_payout_payload_v2(PalwBondKeyV2(self.funding)).is_some()
+                || !crate::palw_panel::palw_fee_funding_usable_v1(
+                    &self.funding,
+                    &entry,
+                    latest.virtual_daa,
+                    self.config.params.coinbase_spend_maturity(),
+                    None,
+                    &HashSet::new(),
+                )
+            {
+                continue;
             }
             let _hold = &tx_owner;
             if self
@@ -383,7 +401,7 @@ impl PreparedSourceBootstrapCheckerV1 {
                 super::recovery_ack_carrier_v4::reserve_carrier_build_v4(object, &entry, self.payer.verification_key.as_ref().len())?;
             match tokio::time::timeout(
                 Duration::from_secs(10),
-                self.flow.submit_rpc_transaction(&api, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden),
+                self.flow.submit_rpc_transaction(&session, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden),
             )
             .await
             {

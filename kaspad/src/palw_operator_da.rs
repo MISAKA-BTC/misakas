@@ -508,6 +508,7 @@ pub(super) struct PalwOperatorDaBookV1 {
     /// The lane's replay runner (SEAT-R's, its own instance) and the one replay in flight.
     pub(super) replays: PalwSeatReplaysV1,
     pub(super) replaying: Option<(Hash64, PalwSeatReplayKeyV1)>,
+    routing_owner: Option<Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>,
     /// The DAA a replay start was last refused (the ledger): no start for a re-plan after.
     replay_held_at: Option<u64>,
     /// The DAA of this node's last filing (the per-DAA cap).
@@ -845,6 +846,11 @@ impl PalwPanelService {
                 PalwSeatReplayPollV1::Absent => book.replaying = None,
                 PalwSeatReplayPollV1::Done { result, .. } => {
                     book.replaying = None;
+                    let routing_owner = book.routing_owner.take();
+                    if let Err(why) = self.refresh_native_routing_replay_v2(session, routing_owner.as_ref()) {
+                        warn!("[{PALW_PANEL}] claim {claim}: operator native routing context changed: {why}");
+                        return;
+                    }
                     let candidate = book.candidate(&claim).cloned();
                     match (candidate.as_ref().and_then(|c| palw_operator_da_verdict_v1(&result, &c.job)), candidate) {
                         (Some(verdict), Some(candidate)) => {
@@ -1019,6 +1025,10 @@ impl PalwPanelService {
             return unjudged(book, "its block's header is not held here", String::new());
         };
         let key = (claim, ctx.job_id);
+        let routing_owner = match self.bind_native_routing_replay_v2(session, backend.as_mut(), claim, &ctx) {
+            Ok(owner) => owner,
+            Err(why) => return unjudged(book, "native routing context unavailable", format!(" ({why})")),
+        };
         // At the widest prefill run the ledger grants, on this duty's own instance — the one the
         // replay below runs on (int-10.2 A2).
         let backends = self.backends();
@@ -1051,6 +1061,7 @@ impl PalwPanelService {
         book.replays
             .start(key, job.class_id, false, current_daa, Some(reserved), backend, move |b| b.execute_for_verdict(&ctx, &prompt));
         book.replaying = Some((claim, key));
+        book.routing_owner = routing_owner;
         book.idle_at = None;
     }
 

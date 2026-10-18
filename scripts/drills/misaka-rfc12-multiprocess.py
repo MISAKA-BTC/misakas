@@ -241,6 +241,10 @@ class Drill:
         if any(policy is not None for policy in source_policies) and (
                 any(policy is None for policy in source_policies) or len(set(source_policies)) != 1):
             raise ValueError('all source-paid-v1 roles including JOIN must declare the same explicit operator policy')
+        paid_policies = [paid_observations.paid_bootstrap_source_policy(node['argv']) for node in plan['nodes'].values()]
+        if any(policy is not None for policy in paid_policies) and (
+                any(policy is None for policy in paid_policies) or len(set(paid_policies)) != 1):
+            raise ValueError('all paid bootstrap roles including JOIN must declare the same explicit V6 policy')
         self.paid_observation_processes = {}
         self.paid_observations = []
 

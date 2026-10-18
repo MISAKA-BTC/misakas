@@ -20,6 +20,21 @@ WORK_FLAG = '--private-probe-kernel-paid-work='
 CHECK_FLAG = '--private-probe-kernel-paid-check='
 BOND_DOMAIN = b'misaka-palw/kernel-route/bond-id/v1'
 NETWORK_DOMAIN = b'misaka-palw/attempt-v2/network-domain/v1'
+BOOTSTRAP_SOURCE_POLICY_FLAG = '--private-probe-paid-bootstrap-source-policy'
+BOOTSTRAP_SOURCE_POLICY_BYTES = 182  # Borsh (u64 activation, fixed PolicyV6).
+
+
+def bootstrap_source_policy_id(path):
+    path = regular(path, BOOTSTRAP_SOURCE_POLICY_BYTES)
+    with path.open('rb') as source:
+        raw = source.read(BOOTSTRAP_SOURCE_POLICY_BYTES + 1)
+    if len(raw) != BOOTSTRAP_SOURCE_POLICY_BYTES or raw[8:10] != b'\x06\x00' or int.from_bytes(raw[:8], 'little') == 0:
+        raise ValueError('V6 source policy needs its exact fixed canonical tuple and explicit nonzero activation')
+    policy = raw[8:]
+    # Identity only. The native factory validates every value; this driver
+    # neither selects nor approves any number, stake assumption or fee.
+    return hashlib.blake2b(len(policy).to_bytes(8, 'little') + policy,
+        key=b'MISAKA/PALW/PAID-BOOTSTRAP-SOURCE-POLICY/V6', digest_size=64).hexdigest()
 
 
 def exact(value, name, maximum=2**64 - 1, minimum=1):
@@ -193,14 +208,14 @@ def prepare(plan, values=None):
             raise ValueError('kernel workers must run in distinct known processes')
         worker_roles.add(role)
         argv = plan['nodes'][role]['argv']
-        if flag(argv, '--private-probe-profile') != 'paid-v4' or any(value.startswith((WORK_FLAG, CHECK_FLAG)) for value in argv):
+        if flag(argv, '--private-probe-profile') not in ('paid-v4', 'source-paid-v1') or any(value.startswith((WORK_FLAG, CHECK_FLAG)) for value in argv):
             raise ValueError('kernel workers need the paid-v4 private factory without preexisting consumer flags')
         spec, digest = read_json(entry['specification'])
         common = {'version', 'work_path', 'payer_key', 'funding_outpoints', 'maximum_fee_sompi', 'max_input_bytes', 'max_workspace_bytes'}
         required_spec = common | ({'checkpoint', 'paid_class', 'paid_job', 'salt', 'commit_daa', 'expires_daa',
             'max_material_bytes', 'max_units'} if is_producer else {'enrollment', 'round', 'checker_bond', 'checker_key',
             'provider_bond', 'provider_address', 'max_unit_bytes', 'max_total_fetch_bytes', 'max_requests'})
-        optional_spec = set() if is_producer else {'compact_record_path', 'challenge_valid_until_daa'}
+        optional_spec = {'source_lock_funding_outpoint', 'maximum_source_lock_fee_sompi'} if is_producer else {'compact_record_path', 'challenge_valid_until_daa'}
         if not isinstance(spec, dict) or not required_spec <= set(spec) or set(spec) - required_spec - optional_spec:
             raise ValueError('kernel specification differs from the actual node JSON schema')
         if type(spec.get('version')) is not int or spec['version'] != 4:
@@ -230,8 +245,33 @@ def prepare(plan, values=None):
             expected_work = work
             exporter, export_digest = read_json(entry['workManifest'])
             files.append(dict(path=entry['workManifest'], maximumBytes=MAX_SPEC_BYTES, sha256=export_digest))
-            if exporter.get('schema') != 'misaka.private-paid-native-work.v4' or exporter.get('realTirExecution') is not True:
+            if exporter.get('schema') not in ('misaka.private-paid-native-work.v4', 'misaka.private-paid-native-work.v6') or exporter.get('realTirExecution') is not True:
                 raise ValueError('kernel producer needs the real TIR exporter manifest')
+            v6 = exporter['schema'] == 'misaka.private-paid-native-work.v6'
+            explicit_v6 = [value for value in argv if value.startswith(BOOTSTRAP_SOURCE_POLICY_FLAG + '=')]
+            if v6:
+                policy_path = flag(argv, BOOTSTRAP_SOURCE_POLICY_FLAG)
+                if flag(argv, '--private-probe-profile') != 'source-paid-v1' or exporter.get('sourceNamespace') != 'approved-bootstrap-v6':
+                    raise ValueError('V6 export needs the exact explicit source-paid native namespace')
+                for node in plan['nodes'].values():
+                    if flag(node['argv'], '--private-probe-profile') != 'source-paid-v1' or flag(node['argv'], BOOTSTRAP_SOURCE_POLICY_FLAG) != policy_path:
+                        raise ValueError('every V6 role including JOIN needs the same explicit policy bytes')
+                if hex_text(exporter.get('sourcePolicyId'), 'V6 exported policy') != bootstrap_source_policy_id(policy_path):
+                    raise ValueError('V6 export is bound to another exact source policy')
+                files.append(dict(path=policy_path, maximumBytes=BOOTSTRAP_SOURCE_POLICY_BYTES,
+                    sha256=file_digest(policy_path, BOOTSTRAP_SOURCE_POLICY_BYTES)))
+                if exporter.get('signedEnrollment') != 'signed-paid-enrollment-v6.borsh':
+                    raise ValueError('V6 exporter must name its dedicated signed enrollment artifact')
+                signed = Path(entry['workManifest']).parent / exporter['signedEnrollment']
+                files.append(dict(path=str(signed), maximumBytes=MAX_WORK_INPUT_BYTES,
+                    sha256=file_digest(signed, MAX_WORK_INPUT_BYTES)))
+                point = outpoint(spec.get('source_lock_funding_outpoint'))
+                if point in used:
+                    raise ValueError('V6 source lock cannot reuse any declared worker/ACK funding input')
+                used.add(point)
+                exposure += exact(spec.get('maximum_source_lock_fee_sompi'), 'V6 maximum_source_lock_fee_sompi')
+            elif explicit_v6 or any(spec.get(key) is not None for key in ('source_lock_funding_outpoint', 'maximum_source_lock_fee_sompi')):
+                raise ValueError('legacy V4 export cannot silently use V6 source policy or funding')
             # Provenance/identity only: the actual node validates the bytes and
             # own native authority. No exporter assertion becomes acceptance.
             if exporter.get('work') != work.name or Path(entry['workManifest']).parent != work.parent:

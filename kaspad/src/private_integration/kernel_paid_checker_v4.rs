@@ -191,11 +191,44 @@ fn receipt_accepted(route: &PalwKernelRouteStateV1, a: &PalwPaidClaimAuthorityV2
         Ok(route.paid_claim_round_v3(&a.enrollment.id(), round)?.receipts.iter().any(|r| r.signer == signer))
     } else {
         let id = misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/PAID-CLAIM-RECEIPT/V2", &(a.enrollment.id(), signer));
-        Ok(route
-            .aux_row::<PaidClaimReceiptV2>(PAID_CLAIM_RECEIPTS_V2, &id)
-            .is_some_and(|r| r.signer == signer && r.enrollment == a.enrollment.id()))
+        let receipt = route.aux_row::<PaidClaimReceiptV2>(PAID_CLAIM_RECEIPTS_V2, &id);
+        if route.paid_bootstrap_binding_v6(&a.enrollment.id()).map_err(|e| e.to_string())?.is_some() {
+            let Some(lock) = route.paid_claim_effective_lock_v6(a)? else { return Ok(false) };
+            return Ok(receipt.is_some_and(|r| {
+                r.signer == signer
+                    && r.enrollment == a.enrollment.id()
+                    && r.round == 0
+                    && lock.source_valid
+                    && r.assignment == lock.assignment
+                    && r.source_context == lock.context
+                    && r.sample_seed == lock.seed
+            }));
+        }
+        Ok(receipt.is_some_and(|r| r.signer == signer && r.enrollment == a.enrollment.id()))
     }
 }
+fn receipt_namespace_matches_v6(
+    route: &PalwKernelRouteStateV1,
+    inner: &KernelRouteObjectV1,
+    enrollment: &Digest,
+) -> Result<(), String> {
+    let KernelRouteObjectV1::PaidClaimV2 { object } = inner else { return Ok(()) };
+    let approved = matches!(object, PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { .. });
+    if !matches!(
+        object,
+        PaidClaimObjectV2::Receipt { .. }
+            | PaidClaimObjectV2::RoundReceipt { .. }
+            | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { .. }
+    ) {
+        return Ok(());
+    }
+    let native = route.paid_bootstrap_binding_v6(enrollment).map_err(|e| e.to_string())?.is_some();
+    if approved != native {
+        return Err("own receipt namespace differs from immutable signed WAL; hold without rebinding".into());
+    }
+    Ok(())
+}
+
 fn receipt_from_saved(object: &PalwConsensusObjectV2, checker: PalwBondKeyV2) -> Result<PaidClaimReceiptV2, String> {
     let PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, .. } = object else {
         return Err("checker WAL is not a native kernel object".into());
@@ -208,7 +241,10 @@ fn receipt_from_saved(object: &PalwConsensusObjectV2, checker: PalwBondKeyV2) ->
     let decoded = retain_native_value_decode_v1(raw, || KernelRouteObjectV1::decode(bytes)).map_err(|e| e.to_string())?;
     match &*decoded {
         KernelRouteObjectV1::PaidClaimV2 {
-            object: PaidClaimObjectV2::Receipt { receipt } | PaidClaimObjectV2::RoundReceipt { receipt },
+            object:
+                PaidClaimObjectV2::Receipt { receipt }
+                | PaidClaimObjectV2::RoundReceipt { receipt }
+                | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { receipt },
         } => Ok(receipt.clone()),
         _ => Err("checker WAL is not a paid seat receipt".into()),
     }
@@ -264,7 +300,12 @@ fn validate_saved_object(
     let decoded = saved_kernel_object(object, actor)?;
     let bond = palw_kernel_bond_id_v1(&actor);
     match &*decoded {
-        KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::Receipt { .. } | PaidClaimObjectV2::RoundReceipt { .. } } => {
+        KernelRouteObjectV1::PaidClaimV2 {
+            object:
+                PaidClaimObjectV2::Receipt { .. }
+                | PaidClaimObjectV2::RoundReceipt { .. }
+                | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { .. },
+        } => {
             let receipt = receipt_from_saved(object, actor)?;
             if receipt.enrollment != enrollment
                 || receipt.round != round
@@ -775,6 +816,9 @@ impl PreparedKernelPaidCheckV4 {
             }
             let _hold = &transaction_lease;
             let tx = transaction.as_ref().ok_or("checker transaction WAL absent")?;
+            if tx.inputs.len() != 1 || !self.funding.contains(&tx.inputs[0].previous_outpoint) {
+                return Err("checker exact carrier input outside current explicit authorization; WAL retained".into());
+            }
             if self
                 .flow
                 .mining_manager()
@@ -795,8 +839,24 @@ impl PreparedKernelPaidCheckV4 {
                 .iter()
                 .try_fold(0u64, |sum, output| sum.checked_add(output.value))
                 .and_then(|outputs| entry.amount.checked_sub(outputs));
-            if entry.script_public_key != script || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi) {
-                return Err("checker saved carrier exceeds current payer/fee authorization; exact WAL retained".into());
+            if entry.script_public_key != script
+                || tx.outputs.len() != 1
+                || tx.outputs[0].script_public_key != script
+                || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi)
+            {
+                return Err("checker saved carrier exceeds current payer/change/fee authorization; exact WAL retained".into());
+            }
+            if api.palw_bond_payout_payload_v2(PalwBondKeyV2(tx.inputs[0].previous_outpoint)).is_some()
+                || !crate::palw_panel::palw_fee_funding_usable_v1(
+                    &tx.inputs[0].previous_outpoint,
+                    &entry,
+                    api.get_virtual_daa_score(),
+                    self.config.params.coinbase_spend_maturity(),
+                    None,
+                    &std::collections::HashSet::new(),
+                )
+            {
+                continue;
             }
             let _relay =
                 super::recovery_ack_carrier_v4::reserve_carrier_build_v4(signed, &entry, self.payer.verification_key.as_ref().len())?;
@@ -818,8 +878,8 @@ impl PreparedKernelPaidCheckV4 {
     }
 }
 
-mod outbox;
 mod challenge_history;
+mod outbox;
 
 #[cfg(test)]
 mod tests;

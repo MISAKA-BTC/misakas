@@ -43,6 +43,17 @@ def fixture():
 
 
 class PaidObservationCounterexamples(unittest.TestCase):
+    def test_new_policy_input_is_explicit_bounded_to_common_profile_and_never_inferred(self):
+        flag = paid.PAID_BOOTSTRAP_POLICY_FLAG
+        profile = '--private-probe-profile=source-paid-v1'
+        self.assertIsNone(paid.paid_bootstrap_source_policy([profile]))
+        self.assertEqual(paid.paid_bootstrap_source_policy([profile, flag + '/owned/policy.borsh']), '/owned/policy.borsh')
+        for argv in ([flag + '/owned/policy.borsh'], [profile, flag + 'relative'],
+                     [profile, flag + '{ROOT}/policy.borsh'],
+                     [profile, flag + '/owned/policy.borsh', flag + '/owned/other.borsh']):
+            with self.assertRaises(paid.Unavailable):
+                paid.paid_bootstrap_source_policy(argv)
+
     def validate(self, envelope, dag=None, node=None):
         _, default_dag, default_node = fixture()
         return paid.validate(envelope, h(6), dag or default_dag, node or default_node, stamp, h(3), h(4))

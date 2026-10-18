@@ -182,6 +182,13 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         }
         137 if key_bytes == 65 && prefix == 2 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         137 => return Err(wire::wire_bad("unallocated selected-source bootstrap row namespace")),
+        138 if key_bytes == 65 && prefix == 1 => {
+            misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6::scan_native_wire_v1(frame)?
+        }
+        138 if key_bytes == 65 && prefix == 2 => {
+            crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6::scan_native_wire_v1(frame)?
+        }
+        138 => return Err(wire::wire_bad("unallocated paid bootstrap source V6 row namespace")),
         135 => return Err(wire::wire_bad("unallocated compact V4 row namespace")),
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,

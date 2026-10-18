@@ -85,8 +85,12 @@ fn observation(
     let decoded =
         if matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. }) { Some(saved_kernel_object(object, actor)?) } else { None };
     if let Some(decoded) = &decoded {
+        receipt_namespace_matches_v6(route, decoded, &enrollment).map_err(CheckerOutboxErrorV4::NativeView)?;
         if let KernelRouteObjectV1::PaidClaimV2 {
-            object: PaidClaimObjectV2::Receipt { receipt } | PaidClaimObjectV2::RoundReceipt { receipt },
+            object:
+                PaidClaimObjectV2::Receipt { receipt }
+                | PaidClaimObjectV2::RoundReceipt { receipt }
+                | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { receipt },
         } = &**decoded
         {
             if receipt.enrollment != enrollment || receipt.round != round || receipt.signer != palw_kernel_bond_id_v1(&actor) {
@@ -124,7 +128,10 @@ fn observation(
     if let PalwConsensusObjectV2::KernelRouteV1 { .. } = object {
         let decoded = saved_kernel_object(object, actor)?;
         if let KernelRouteObjectV1::PaidClaimV2 {
-            object: PaidClaimObjectV2::Receipt { receipt } | PaidClaimObjectV2::RoundReceipt { receipt },
+            object:
+                PaidClaimObjectV2::Receipt { receipt }
+                | PaidClaimObjectV2::RoundReceipt { receipt }
+                | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { receipt },
         } = &*decoded
         {
             if receipt.signer != palw_kernel_bond_id_v1(&actor) {
