@@ -1684,3 +1684,9 @@ The old forged run logs a replay of its second frame every tick after the new-ow
 ### 14.7 Serialize pending TIR builds under memory pressure (2026-10-18)
 
 With swap usage at 16,645 MB, our ordinary-payment build and queued owner retry/closed-door builds were explicitly interrupted (cargo roots 26136, 28931, 33990 and their compiler descendants). They had not reached test execution. This is a resource-management interruption, not a pass or test failure. Keep the GDN/native target build running first; rerun the TIR targeted commands with `-j 1` once that build finishes. The already running forged executable 12058, genesis fit 72982 and run-12 driver 84986 were not interrupted. Their results do not validate the newer owner scheduler fixes.
+
+### 14.8 Old forged executable reaches Final (2026-10-18)
+
+The pre-owner-fix `/tmp/codex-g14-tir-forged-test` terminated after asserting at 12:29:04 JST that the forged claim reached `Final { final_daa: 2321 }` (accepted DAA 1722, licensed DAA 1727, collect door 2320). `/tmp/codex-g14-tir-forged.log` also records `TIR immutable request acquisition budget exhausted` before that outcome. Subsequent DB strong-reference destructor panics abort cleanup; the primary security failure is the forged Final, not cleanup. This run proves neither conviction nor seat slash.
+
+The owner retry and closed-door changes were not in that executable. Do not infer that they fix this result until a new node run passes. A serial (`-j 1`) build/run of `palw_tir_public_owner::tests` is now active in `/tmp/codex-g14-owner-tests-serial.log`, then both the corrected forged node test and ordinary honest quantum payment must run. The declared-semantics door refusal also remains open.
