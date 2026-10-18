@@ -406,3 +406,12 @@ The first combined EVM-enabled build found one additional caller of the newly
 HFP1-aware `carry_fp_commitment` helper. That caller now supplies its actual event
 binding as well. This was a compile-time fixture omission, not a runtime PASS. The
 consensus test target continued building; the corrected node rebuild is queued.
+
+Runtime update: the SDK static pilot now passes **1 / 1** with both current pins.
+The A2 pair exposed a harness bookkeeping omission: `ElasticCapacityV1` already
+armed `palw_elastic_final_capacity_v1` through the kernel-kind enum, but the central
+landed-row match did not recognize that name. Comparing all 46 landed fence names
+found exactly this omission; the match now recognizes it. The pair has not yet been
+rerun after that correction. EVM C-items: **3 passed**, the preexisting long safe-
+frontier test was reported ignored by the default run and has been explicitly
+launched with `--ignored`; no four-test PASS is claimed until it finishes.
