@@ -1714,12 +1714,26 @@ At 17:08 JST, the read-only sample advanced to DAA 28 / 28 DAG blocks, with
 DAA 0..28 (53 attempt, 47 heartbeat, 1 other); producer state remained
 `drawing`. No terminal D-02 result or seat slash was observed.
 
+At 17:09 JST, `python3 -m unittest discover -s scripts/drills/tests -p
+'test_*.py'` passed all 130 drill-driver tests. This verifies the Python
+driver and supporting plans, including the stalled-wait regression; it is not
+node-level evidence and does not close D-02 or release acceptance.
+
 At 17:11 JST, P's DAG advanced to DAA 29 / 29 blocks and draws rose to 16,728.
 Produced work blocks remained 40 and the last work block remained DAA 28; the
 lane window still covered 101 blocks over DAA 0..28. The producer was drawing,
 but this sample contained no new work block, terminal D-02 result or seat slash.
 
-At 17:09 JST, `python3 -m unittest discover -s scripts/drills/tests -p
-'test_*.py'` passed all 130 drill-driver tests. This verifies the Python
-driver and supporting plans, including the stalled-wait regression; it is not
-node-level evidence and does not close D-02 or release acceptance.
+### 12.11 Run 13 process loss and Run 15 restart (2026-10-18)
+
+After the interrupted continuation, the Run 13 driver and both private nodes
+were absent from the process table, and its `/tmp` result JSON, `/tmp` log and
+`/private/tmp/codex-g14-drill-run13` node data were absent. No terminal result
+could be recovered; the DAA observations above remain progress samples only.
+Run 14 did not start a node because its relative executable path was resolved
+from the node working directory. Run 15 was then started at 17:16 JST with
+absolute paths to the same prebuilt private binary, a fresh work directory,
+fresh salt and ports 36200/36260. It uses `--no-d16` and is an investigation of
+D-02, not release acceptance. At startup P and R launched; no D-02 outcome is
+available yet. The Run 14 launch error and Run 15 logs are retained under
+`/tmp/codex-g14-drill-run14.log` and `/tmp/codex-g14-drill-run15.log`.
