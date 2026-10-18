@@ -223,6 +223,12 @@ class Scan(unittest.TestCase):
                                                dict(subnetworkId='1a' + '00' * 19, payload='ef01')]
                 for i, tx in enumerate(block_['transactions']):
                     tx['verboseData'] = dict(transactionId=tid(h, i))
+                    tx.setdefault('inputs', [])
+                    tx.setdefault('outputs', [])
+                    if h == 'c1' and i == 2:
+                        tx['inputs'] = [dict(previousOutpoint=dict(transactionId=tid('genesis', 0), index=0))]
+                        if bad == 'missing-inputs':
+                            del tx['inputs']
                 block_['verboseData']['selectedParentHash'] = {'c1': 'genesis', 'c2': 'c1', 'c3': 'c2'}.get(h, 'genesis')
                 return result
         return Rpc()
@@ -281,8 +287,13 @@ class Scan(unittest.TestCase):
         self.assertEqual(row['selectedParentHash'], 'c1')
         self.assertEqual(row['acceptedTransactionIds'], [self.trace_id('c1', 0), self.trace_id('c1', 2)])
         self.assertEqual(row['acceptedEvidenceTransactions'], [dict(transactionId=self.trace_id('c1', 2), bodyHash='c1',
-                                                                   kind=0x12, payload='abcd')])
-        for bad in ('missing-row', 'missing-body', 'duplicate-id'):
+                                                                   kind=0x12, payload='abcd',
+                                                                   inputs=[dict(previousOutpoint=dict(
+                                                                       transactionId=self.trace_id('genesis', 0), index=0))],
+                                                                   outputs=[])])
+        self.assertEqual([tx['transactionId'] for tx in row['acceptedTransactionPoints']], row['acceptedTransactionIds'])
+        self.assertEqual(row['acceptedTransactionPoints'][1]['inputs'][0]['previousOutpoint']['index'], 0)
+        for bad in ('missing-row', 'missing-body', 'duplicate-id', 'missing-inputs'):
             with self.subTest(bad=bad), self.assertRaises(J.NotObservable):
                 R.scan_window(self.trace_rpc(bad), 'genesis', 150, 250, 10, R.ReadBudget(10), include_acceptance=True)
 

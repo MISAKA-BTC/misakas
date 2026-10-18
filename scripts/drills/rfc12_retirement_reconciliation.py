@@ -459,16 +459,23 @@ def scan_window(rpc, genesis, from_daa, to_daa, maximum_chain, budget, include_a
                     txid = J.norm((tx.get('verboseData') or {}).get('transactionId'))
                     if not isinstance(txid, str) or not txid:
                         raise J.NotObservable('an acceptance trace body serves no transaction id')
+                    if not isinstance(tx.get('inputs'), list) or not isinstance(tx.get('outputs'), list):
+                        raise J.NotObservable('an acceptance trace body omits exact transaction inputs or outputs')
                     row = dict(transactionId=txid, bodyHash=member_hash, kind=subnetwork_kind(tx['subnetworkId']),
-                               payload=tx.get('payload', ''))
+                               payload=tx.get('payload', ''), inputs=tx['inputs'], outputs=tx['outputs'])
                     previous = transactions.get(txid)
-                    if previous and (previous['kind'], previous['payload']) != (row['kind'], row['payload']):
-                        raise J.NotObservable('one transaction id serves inconsistent evidence bytes')
+                    if previous and any(previous[key] != row[key] for key in ('kind', 'payload', 'inputs', 'outputs')):
+                        raise J.NotObservable('one transaction id serves inconsistent body bytes')
                     transactions[txid] = row
             ids = acceptance[block_hash]
             if any(txid not in transactions for txid in ids):
                 raise J.NotObservable('an accepted transaction has no body in the accepting mergeset')
             trace = dict(selectedParentHash=parent, acceptedTransactionIds=ids,
+                         acceptedTransactionPoints=[dict(transactionId=txid, bodyHash=transactions[txid]['bodyHash'],
+                                                        inputs=[dict(previousOutpoint=item['previousOutpoint'])
+                                                                for item in transactions[txid]['inputs']],
+                                                        outputs=[dict(value=item['value'], scriptPublicKey=item['scriptPublicKey'])
+                                                                 for item in transactions[txid]['outputs']]) for txid in ids],
                          acceptedEvidenceTransactions=[transactions[txid] for txid in ids
                                                        if transactions[txid]['kind'] in (0x12, 0x1a)])
         for member_hash, member in members:
