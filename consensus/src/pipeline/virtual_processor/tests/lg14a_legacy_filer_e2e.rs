@@ -123,6 +123,10 @@ fn lg14a_config_with(armed: bool, d2: bool, x3: bool) -> (Config, PalwConsensusP
             let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!("testnet-12 is ConsensusV2") };
             fence.policy.resolve_daa = kaspa_consensus_core::palw_ruling_fences_v1::palw_claim_pursuit_budget_v1(&bundle.state, &fence.policy);
             params.palw_claim_hard_deadline_v1 = Some(fence);
+            // X3 governs the held-DA pursuit too (REQ-X3-5's open session is a reserved held session): arm LG14-B with it.
+            if armed {
+                params.palw_legacy_held_da_v2 = Some(ForkActivation::new(0));
+            }
         }
         params.sync_palw_2026_10_12_ruling_fences_v1();
         let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!("testnet-12 is ConsensusV2") };
@@ -1284,20 +1288,70 @@ async fn x3_req_4_a_pursuit_starts_only_inside_its_budget_on_the_node() {
     assert!(lg.view(id).record.is_none(), "REQ-X3-4 on the node: no reservation opens past the admitted start");
 }
 
-/// **REQ-X3-5 on the node**: an unresolved claim (a live reservation) that reaches its hard deadline is not Final; reaching the deadline
-/// alone never Finals it.
+/// **REQ-X3-5 on the node**: an unresolved claim whose DA session is OPEN (the session holds the claim's Final under X3) is not Final
+/// at its hard deadline; reaching the deadline alone never Finals it. (Test premise corrected 2026-10-19, ADR-0188 §3.1.2: a plain
+/// reservation without a session does not hold under X3 — see `x3_req_5b_a_reservation_without_a_session_finals_at_its_effective_deadline`.)
 #[tokio::test]
-#[ignore = "BLOCKED (ADR-0188 R-X3-HOLD): on the node a claim with a LIVE dispute reservation went Final at its window end (final_daa 4204 < hard 4322, record still live); the legacy reservation hold does not carry over under X3. Needs a design decision."]
 async fn x3_req_5_reaching_the_deadline_alone_never_finals_an_unresolved_claim_on_the_node() {
     kaspa_core::log::try_init_logger("warn");
     let mut lg = Lg::over_with(true, false, true, TestConsensus::new);
     let (produced, licensed) = reserved_then_licensed(&mut lg, true).await;
     let id = produced.claim_id;
+    let newcomer = lg.bond(NEWCOMER);
+    // The reserved outsider reads the binding (answered), then demands the descent's first held unit; the producer withholds it, so
+    // a reserved DA session stays open on the claim (the same pursuit as `legacy_v2_attempt_held_da_withholding_ends_in_da_default`).
+    let mut v = Verifier::check(&lg, NEWCOMER, id);
+    let withhold = |unit: &PalwDaUnitV1| matches!(unit, PalwDaUnitV1::LegacyHeldV2(_));
+    for _ in 0..8 {
+        if v.binding.is_some() {
+            break;
+        }
+        v.step(&mut lg, &produced, &withhold).await;
+    }
+    let binding = v.binding.clone().expect("the binding, read off the producer's authenticated answer");
+    let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
+    let unit = kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 };
+    let object = v.demand(&mut lg, PalwLegacyProbeV1::HeldNode { unit });
+    lg.send(vec![(NEWCOMER, object)]).await;
+    assert!(
+        lg.view(id).sessions.iter().any(|(accuser, session)| *accuser == newcomer && session.units.contains(&PalwDaUnitV1::LegacyHeldV2(unit))),
+        "the reserved held session is open"
+    );
     let claim = lg.chain.tip_state().1.claim(&id).expect("on the tip").clone();
     let hard = palw_claim_hard_deadline_of_v1(&lg.bundle.state, &claim).expect("X3 governs the claim");
     assert!(hard > licensed, "the hard deadline lies past the license");
+    // Walk past the hard deadline one beat at a time: while the session is open the claim is never Final; the withheld unit ends in
+    // the objective DA default (Voided), never in a deadline-made Final.
+    let mut daa = lg.daa();
+    while daa <= hard + 2 {
+        let phase = lg.view(id).phase.clone();
+        assert!(!matches!(phase, PalwClaimPhaseV2::Final { .. }), "REQ-X3-5: an unresolved claim is never Final by a deadline (daa {daa}, hard {hard}, phase {phase:?})");
+        if matches!(phase, PalwClaimPhaseV2::Voided { .. }) {
+            break;
+        }
+        lg.beat(1).await;
+        daa = lg.daa();
+    }
+}
+
+/// **REQ-X3-2 on the node (premise of REQ-X3-5, 2026-10-19)**: a plain reservation with NO DA session does not hold a claim under X3;
+/// it Finals at the effective deadline min(proposed, hard), which is the claim's window floor here (below the hard deadline).
+#[tokio::test]
+async fn x3_req_5b_a_reservation_without_a_session_finals_at_its_effective_deadline() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut lg = Lg::over_with(true, false, true, TestConsensus::new);
+    let (produced, _licensed) = reserved_then_licensed(&mut lg, true).await;
+    let id = produced.claim_id;
+    let claim = lg.chain.tip_state().1.claim(&id).expect("on the tip").clone();
+    let hard = palw_claim_hard_deadline_of_v1(&lg.bundle.state, &claim).expect("X3 governs the claim");
+    assert!(lg.view(id).record.is_some(), "the reservation is live");
+    assert!(lg.chain.tip_state().1.da_claim(&id).map_or(0, |r| r.open_sessions()) == 0, "no DA session");
     lg.beat_to(hard + 2).await;
-    assert!(!matches!(lg.view(id).phase, PalwClaimPhaseV2::Final { .. }), "REQ-X3-5: an unresolved claim at its hard deadline is not Final");
+    match lg.view(id).phase {
+        // REQ-X3-2: effective = min(proposed, hard); a plain reservation (no session) does not hold the claim past it.
+        PalwClaimPhaseV2::Final { final_daa } => assert!(final_daa <= hard, "never past the hard deadline ({final_daa} > {hard})"),
+        other => panic!("a plain reservation without a session does not hold under X3: {other:?} (hard {hard})"),
+    }
 }
 
 /// **REQ-X3-1 across a restart (2026-10-18)**: the claim's fixed hard deadline is the same after the stop and the reopen, the PALW tip
