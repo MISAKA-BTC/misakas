@@ -116,7 +116,9 @@
 - **X3 の pause:** 新 claim の DA pause 返還（`resume_claim_after_da_session_v2` の呼び出し 2 箇所）は 0。旧 claim は不変。
 - **econ:** `palw_minimum_price_c_upper_x3_v1` と `PalwBeaconSourceCostBoundsV1::minimum_gross_fee_x3` が retention の価格を入れる。`c_retain = 0` で拡張が正なら UNKNOWN。
 - **R-D2-READY:** tag 230 を確定（`PALW_A2_TAG_ALLOCATIONS_V1` の既存行）。kind の codec と A-2 kind-table 行は未着手。
-- **R-D2-COVER / node-level 試験:** 未着手（下記の状態は ADR-0188 の検証欄を参照）。
+- **R-D2-COVER:** 2026-10-18 に導出して記録（ADR-0188「R-D2-COVER」）。finalize の読み取り集合は評価の実行後にしか決まらない（添字が step のデータに依存）。opening は空・部分の carriage を受理し、厳密な関門は root claim の finalize（Step 8）。露出は 1 件の finalize が読む相異なる leaf に有界。試験 `r_d2_cover_…` で固定。
+- **node-level 試験（REQ-X3-1〜5、D2 full-collusion、restart/reorg）:** 未着手。harness（`lg14a_legacy_filer_e2e` の型）で X3 を arm する必要がある。次の作業。
+- **tag 230 の codec:** 未実装。wire 形の案 A/B と A-2 への影響は ADR-0188「R-D2-READY」（Proposed、ユーザー判断待ち）。
 
 #### 3.1.1 2026-10-15（round 3）— D2代替経路・N4のtag 87・X3のretention延長（未検証のソース）
 

@@ -341,3 +341,26 @@ fn a_readiness_digest_is_refuted_only_by_the_registered_bytes() {
     let undrawn = open_artifact_leaves_v1(&leaves, &[1]).unwrap();
     assert!(refute(honest, &undrawn[0]).is_err());
 }
+
+/// **R-D2-COVER (2026-10-18): the finalize's exact read set is not derived at opening.** For an IR cone the set of inventory leaves the
+/// finalize reads is `used.params` of its evaluation: each `param(...)` read adds the leaf that holds the byte it indexes, and the
+/// index is computed by the program from the carried steps, so the set is data-dependent. It is not a function of the program
+/// alone, and the opening does not run the evaluation. So the opening ADMITS an empty carriage (`TirParams(None)`) and a
+/// partial one without checking it against that set. The exact gate is the root claim's finalize (Step 8 of the IR refutation:
+/// `used.params.len() != r.params.opened_count()` refuses), where a missing leaf must come from the accused's own copy. That
+/// is the compelled exposure: at most the distinct leaves of one finalize, each a whole inventory piece of the class.
+/// This test pins both halves; a change to either must update the residual in the module docs and ADR-0188.
+#[test]
+fn r_d2_cover_the_opening_does_not_derive_the_finalize_read_set_and_the_finalize_is_the_exact_gate() {
+    let (fx, leaf) = fused_fixture(None);
+    let c = claim_record(&fx, FENCE);
+    let root = h64(ARTIFACT_ROOT);
+    let none = crate::palw_tir_court_v1::PalwTirParamOpeningV1::None;
+    // The opening admits an empty carriage without any derivation of the read set (the residual, pinned).
+    assert_eq!(palw_d2_named_leaf_operands_admit_v1(&c, leaf, &PalwD2OpeningOperandsV1::TirParams(&none), root, None, LADDER), Ok(()));
+    // The exact gate lives in the IR refutation's canonical check; the evaluation close's params are carried unchecked at opening.
+    let tir = include_str!("../palw_tir_court_v1.rs");
+    assert!(tir.contains("if used.params.len() != r.params.opened_count() {"));
+    assert!(tir.contains("the artifact multiproof is not the set the evaluation reads"));
+    assert_eq!(palw_d2_named_leaf_operands_admit_v1(&c, leaf, &PalwD2OpeningOperandsV1::CarriedUnchecked, root, None, LADDER), Ok(()));
+}

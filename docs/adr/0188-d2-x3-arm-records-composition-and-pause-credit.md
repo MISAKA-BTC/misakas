@@ -9,7 +9,7 @@
   - X3 の claim には DA pause credit を与えない（`palw_x3_pause_credit_v1`）。旧 claim は pause をそのまま返す。
   - econ: `palw_minimum_price_c_upper_x3_v1`（`palw_econ_contracts_v1`）と `PalwBeaconSourceCostBoundsV1::minimum_gross_fee_x3`（`palw_beacon_source_fee_v1`）が retention の価格を `C_upper` と material 項に入れる。`c_retain = 0` で拡張が正なら UNKNOWN として refuse する。
 - **Tag:** R-D2-READY は tag **230**（`PALW_A2_TAG_ALLOCATIONS_V1` に 2026-10-15 から予約済みの行）を確定した。kind の codec と A-2 kind-table の行は未着手。
-- **Verification:** 下の「テスト結果」を参照。node-level の REQ-X3-1〜5 の block flow テストと、restart / reorg の replay 同一性は**未実施**。
+- **Verification:** 下の「テスト結果」を参照。node-level の REQ-X3-1〜5 の block flow テストと、restart / reorg の replay 同一性は**未実施**（2026-10-18 の再確認でも未着手）。R-D2-COVER は 2026-10-18 に導出して試験を追加した（下の「R-D2-COVER」）。tag 230 の codec は実装せず、Proposed の選択肢を下に書いた。
 - **Activation:** なし。`PALW_G14_ARMING_RECORDS_V1` は空で、D2 と X3 は全 real network で refuse される。X3 の policy 値（B_cold_fetch・B_check・B_localize・B_carrier・B_reorg_slack・c_retain）は**ユーザー承認と測定が必要で、未決**。
 - **Related:** [mainnet-spec-register §3.1.1](../design/palw/integration/mainnet-spec-register-2026-10-12.md)、[RFC-0014 §7.2](../rfc/0014-panel-independent-fraud-prosecution.md)、[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)（D2 の出典）、[ADR-0187](0187-g14-native-public-filing-and-post-final-mining-accusation.md)。
 
@@ -35,3 +35,30 @@
 - `--lib` 全体で 8 件が FAIL（4,612 PASS）: `fork_id_v1` の 2 件、`palw_lifecycle_objects_v2::tests::a2u` の 3 件、`palw_native_resource_v1` の 1 件、`palw_state_v2::tests` の 2 件。**base（17cbdee9e）でも同じ 8 件が FAIL（4,609 PASS）を確認済み（2026-10-18）。本ブランチが原因ではないため修正していない。**
 - 未実施: node-level（block flow）の REQ-X3-1〜5 試験、restart / reorg 再生の同一性、R-D2-COVER、node-level の D2 full-collusion 試験、R-D2-READY の codec。
 - econ（2026-10-18、commit 4cc05d5ec）: `x3_gross_floor_*` 2 件・`c_upper_x3_*` 2 件 PASS（`c_retain` 0 の正の延長は UNKNOWN、overflow・未測定 class も拒否）。
+
+## R-D2-COVER（2026-10-18）— IR / pipeline / evaluation finalize の読み取り集合
+
+**結論:** finalize が読む inventory leaf の正確な集合は、opening 時には導出していない。導出できるのは finalize の評価を実行した後だけである。
+
+- **何が決まるか。** IR の評価では `palw_tir_court_v1` の `param()` が、読んだ byte を持つ inventory leaf を `used.params` に入れる。どの byte を読むかは program と carried step の値で決まる（添字が step のデータに依存する）。よって集合は program だけの関数ではない。
+- **opening の検査。** `palw_d2_named_leaf_operands_admit_v1` は `TirParams(None)` と `TirParams(Single)`（multiproof が登録 root に届くこと）を受理し、読み取り集合との一致は見ない。`EvalCone` の params は `CarriedUnchecked` で素通し。
+- **厳密な関門。** root claim の finalize の Step 8（`check_canonical`: `used.params.len() != r.params.opened_count()` で拒否、`palw_tir_court_v1.rs`）。不足する leaf は被告が自分の copy から補うしかない。
+- **露出の上限。** 被告が補う leaf は、その 1 件の告発の finalize が読む相異なる leaf に限られる。各 leaf は class の inventory の 1 piece 全体で、数は `PalwTirInventoryIndexV1::leaf_count()` で上から抑えられる。挑戦者が公開を怠った場合、この露出は挑戦者の告発の費用になる（棄却された claim では挑戦者が負担）。
+- **残余（閉じていない）。** 課題は「被告に model byte を強制しない」の原則と、この露出の関係である。opening で読み取り集合を導出する（評価を一度走らせて検証する）案は未実装。費用は告発 1 件あたり finalize 1 回で、有界。採否は設計判断。
+- **試験:** `r_d2_cover_the_opening_does_not_derive_the_finalize_read_set_and_the_finalize_is_the_exact_gate`（`palw_court_model_scope_routes_v1/tests.rs`）が上の 2 点（opening は空の carriage を受理、厳密な関門は finalize の Step 8）を固定する。
+
+## R-D2-READY — tag 230 の codec（Proposed、ユーザー判断待ち）
+
+tag 230 の wire 形は設計判断のため実装しない。選択肢:
+
+- **案 A（per-leaf digest 列）。** 新 object `SeatReadinessDigest { beacon: Hash64, class_id: Hash64, seat: PalwBondKeyV2, span: u64, digests: Vec<(u32 leaf_index, Hash64 digest)> }`。digest は `palw_d2_readiness_digest_v1` の値。borsh。`digests` の長さは draw の上限で有界（上限は policy の名前付き値、未決）。A-2 への影響: kind 表に tag 230 の行を 1 つ追加し、fence 未満は「decode 不能と同じ扱い」（判定せず通す、ADR の既存規則）。fingerprint と A-2 pin が変わるので、pin の再測定が要る。休眠（`palw_court_model_scope_v1` 配下）なので、arm まで網の挙動は変わらない。
+- **案 B（Merkle 根 1 個）。** `SeatReadinessRoot { beacon, class_id, seat, span, root: Hash64, leaf_count: u32 }` の 1 個だけを置き、反証は leaf index と Merkle path を伴う。object は小さいが、反証に path の codec（sibling 列の上限と順序の規則）が増える。A-2 への影響は案 A と同じ行数、追加の pin は path codec 分。
+- **案 C（既存の readiness proof の tag 47/50/93 を使う）。** 不採用。readiness proof は model bytes を被告に出させる（D2 の目的と反する）。
+
+**ユーザーに決めてほしいこと:** A か B か。反証の 1 件あたりの費用（B は path 分だけ重い）と、digest 列の上限（draw 数）の値。どちらも arm 前の判断で、今は実装しない。
+
+## 残り（この ADR の範囲外、または未実施）
+
+- node-level の REQ-X3-1〜5、D2 の node-level full-collusion、restart / reorg 再生の同一性（`consensus/src/pipeline/virtual_processor/tests`）。
+- tag 230 の codec と A-2 kind-table 行（上の選択）。
+- X3 の Δ（5 項）と `c_retain` の測定・承認（未決のまま）。
