@@ -296,5 +296,20 @@ class Catalog(unittest.TestCase):
             self.assertEqual(len(cat["editions"][0]["models"]), 7, "the tentative #3 is left out unless asked")
 
 
+class UploadGateTest(unittest.TestCase):
+    """User decision 2026-10-18: a genesis upload needs a MEASURED fit within tolerance, short and long."""
+
+    def test_unmeasured_or_out_of_tolerance_fits_never_upload(self):
+        good_long = {"measured": True, "within": True}
+        self.assertIsNone(gp.upload_refusal({"measured": True, "within": True, "long": good_long}))
+        for fit in (None, {}, {"measured": False, "reason": "source evicted"},
+                    {"measured": True, "within": False, "long": good_long},
+                    {"measured": True, "within": True},
+                    {"measured": True, "within": True, "long": {"measured": False, "reason": "--no-fit-long"}},
+                    {"measured": True, "within": True, "long": {}},
+                    {"measured": True, "within": True, "long": {"measured": True, "within": False}}):
+            self.assertIsNotNone(gp.upload_refusal(fit), fit)
+
+
 if __name__ == "__main__":
     unittest.main()
