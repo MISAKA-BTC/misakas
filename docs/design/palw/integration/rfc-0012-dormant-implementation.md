@@ -290,18 +290,17 @@ existing V4 exporter. The generator checks the node's genesis and parameter
 identity, downloads bounded carriage pages, verifies their canonical state
 against the caller-pinned header under its own exact private ruleset, and
 creates a new mode-0600 V4 request. It does not create missing jobs, approvals,
-receipts, or Panel membership. The plan parser retains `{REQUEST_BLOCK}` and `{WORK_DIR}` placeholders.
-The pre-merge driver pinned the request block from a generation-bracketed read;
-restoring that wiring on the canonical validation driver is pending.
+receipts, or Panel membership. The driver pins `{REQUEST_BLOCK}` from a generation-bracketed live read before
+invoking the request command, and gives each paid-work cycle its own `{WORK_DIR}`.
 
 The canonical validation CLI is `misaka evm refund --outpoint=TXID:INDEX
---key-file=KEY [--fee=SOMPI] [--yes]`. Its first-party acceptance wiring and
-script-engine controls are being reconciled after the merge. Normal admission
+--key-file=KEY [--fee=SOMPI] [--yes]`. First-party acceptance wiring requires the plan destination to match that
+original owner; script-engine controls are being verified after the merge. Normal admission
 resolves a raced spend or claim.
 
 The validation private-integration build contains eight literal import crash
 rendezvous. The operator must arm an owned directory after genesis, wait for
 the exact marker, SIGKILL the owned child, clear arming, then reopen. The
-acceptance driver still needs its exact-WAL arming port after the merge;
-pre-merge sixteen-stage controls do not describe this merged node. Full
+acceptance driver arms those exact markers in an owned import process.
+Pre-merge sixteen-stage controls do not describe this merged node. Full
 acceptance and independent reserve accrual/drip reconciliation remain open.

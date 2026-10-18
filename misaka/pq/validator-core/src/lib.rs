@@ -476,7 +476,15 @@ pub fn build_fp_commitment_tx_with_tir_public_original_v1(
     if let Some(history) = history_pledge {
         envelope = envelope.with_history_pledge_v1(history.clone())?;
     }
-    build_funded_overlay_tx_with(signer, SUBNETWORK_ID_PALW_FP_COMMITMENT, envelope.encode_v1()?, funding_outpoint, funding, fee, false)
+    build_funded_overlay_tx_with(
+        signer,
+        SUBNETWORK_ID_PALW_FP_COMMITMENT,
+        envelope.encode_v1()?,
+        funding_outpoint,
+        funding,
+        fee,
+        false,
+    )
 }
 
 /// An external producer's original public envelope (version 2): the same original FP claim and
@@ -4450,5 +4458,40 @@ mod rfc9_sighash_audit {
         garbage.inputs[0].signature_script[10] ^= 0xFF;
         assert_eq!(fresh_id(&garbage), id);
         assert!(!verifies(&garbage, &entry), "…but a corrupted script does not validate, so it is a refusal, not a second tx");
+    }
+    #[test]
+    fn rfc12_refund_is_timeout_bound_owned_and_validates_with_the_real_script_engine() {
+        use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
+        use kaspa_txscript::{TxScriptEngine, caches::Cache};
+        let owner = key();
+        let other = ValidatorKey::from_seed([0x78; VALIDATOR_SEED_LEN]);
+        let refund = pay_to_address_script(&owner.funding_address(Prefix::Testnet));
+        let point = TransactionOutpoint::new(Hash64::from_u64_word(12012), 0);
+        let entry = UtxoEntry::new(10_000_000, evm_deposit_lock_script([3; 20], 1000, 100, refund.script()), 5, false);
+        let build =
+            |key: &ValidatorKey, daa, fee| key.build_deposit_lock_refund_tx((point, entry.clone()), Prefix::Testnet, daa, fee, 0);
+        assert!(build(&owner, 999, 1000).is_err());
+        assert!(build(&other, 1000, 1000).is_err());
+        assert!(build(&owner, 1000, entry.amount).is_err());
+        let tx = build(&owner, 1000, 1000).unwrap();
+        let valid = |tx: &Transaction, entry: &UtxoEntry| {
+            let populated = PopulatedTransaction::new(tx, vec![entry.clone()]);
+            let cache = Cache::new(0);
+            let reused = SigHashReusedValuesUnsync::new();
+            TxScriptEngine::from_transaction_input(&populated, &tx.inputs[0], 0, entry, &reused, &cache).execute().is_ok()
+        };
+        assert!(valid(&tx, &entry), "the signature spends the actual prefixed EVM lock script");
+        assert_eq!(tx.outputs.len(), 1);
+        assert_eq!(tx.outputs[0].script_public_key, refund);
+        assert_eq!(tx.outputs[0].value, entry.amount - 1000);
+        let mut changed_tx = tx.clone();
+        changed_tx.outputs[0].value -= 1;
+        assert!(!valid(&changed_tx, &entry), "the fee/output is signed");
+        let mut changed_entry = entry.clone();
+        changed_entry.amount += 1;
+        assert!(!valid(&tx, &changed_entry), "the input amount is signed");
+        changed_entry = entry.clone();
+        changed_entry.script_public_key = evm_deposit_lock_script([3; 20], 1001, 100, refund.script());
+        assert!(!valid(&tx, &changed_entry), "the original lock timeout is signed, not just the refund suffix");
     }
 }

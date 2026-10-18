@@ -218,3 +218,33 @@ this checkpoint; no end-to-end completion is claimed.
 ### 2026-10-18 — validation merge
 
 Merged validation 8478ec5dc, newer than required base 042e5e759. Incoming implementation wins all conflicts. Canonical op203 extras, op246 acceptance reads, remote rule_e reader, refund command and native job liability holds are retained. Codex op214 and its duplicate DTO are superseded. Paid-request generator and bounded carriage capture remain; adapters/tests/docs must be reconciled against the merged APIs before the next build. The c514deee4 runtime build and queued RPC test were deliberately interrupted at this source transition; neither is runtime evidence.
+
+### 2026-10-18 — adapters after the validation merge (work in progress)
+
+- The merged remote/RPC service/CLI compile check passes (`8df6acf6e` plus adapter work). The validation op203 extras,
+  op246 acceptance RPC and `evm refund` remain canonical; the withdrawn branch-only op214 is not reintroduced.
+- Ported the owned exact-WAL arming and the original-input/refund-output checks onto that driver. The strict point reader
+  now validates raw op246 lists before normalization. Refund wiring uses the validation owner's destination and refuses a
+  plan naming another destination. Live request-block pinning is restored for the bounded first-party generator.
+- Merged Python controls: existing acceptance **54/54**, exact-WAL **5/5**, point reads **4/4**. These remain synthetic
+  controls. A real-script refund test has been ported to validation's `build_deposit_lock_refund_tx` and awaits execution.
+- Node gaps still to fix: op246's legacy optional store calls can hide read errors and do not take all points under one virtual
+  lock; missing known-zero rows need explicit retained-history handling. The older pre-merge stronger reader has not been
+  silently treated as merged. No merged-tip OS crash, refund broadcast or full acceptance run is claimed.
+- RFC08 08-B review is now based on validation's native job39 hold implementation. Text29, funded11, mining vesting and
+  post-Final family transitions still need completion. The targeted merged hold tests are running; 08-C and RFC10 follow.
+
+- Merged baseline results: native hold unit/codec/preset checks **7/7** and the canonical refund builder's real-script
+  controls **1/1** pass. Required identity targets pass: `palw_activation_pool_is_t12_only` **5/5**,
+  `palw_the_release_did_not_move` **9/9**, and `g14_close_legacy::testnet12_identity_did_not_move` **1/1**.
+  Earlier zero-match unit invocations were not counted as tests; these counts are the actual integration targets.
+- The issuer now reads validation's `committed_leaf` with the shared V2/V3 reader. A concrete merged miner defect was found:
+  it entered the V3 reader only when peers showed more than one candidate. Dispatch now covers the ordinary single-tip
+  case too, retaining the validation comparator. Its normal-publication and missing/tamper no-signing controls are being
+  verified; mixed-activation and V2 non-Gate-C comparison remain open.
+
+- Resource stop: shared free space fell to **24 GiB**. The owned guard interrupted the issuer check and the queued remote
+  miner test before completion, as required by the 25 GiB rule. They are **not** counted as passing. The nine/ five/ one
+  identity results above and seven hold / one refund result completed before this stop. No EVM build starts below 30 GB.
+  Compiler artifacts were cleaned only inside this lane's own `/tmp/misaka-rfc0912-target`; other lanes were not stopped
+  or cleaned. Remaining source work continues without a build until the free-space rule permits it.

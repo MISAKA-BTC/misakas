@@ -59,27 +59,24 @@ PRIMARY = ('A', 'B', 'JOIN')
 BOXES = (1, 2, 3, 4, 5, 6, 7, 9)
 SOURCE_OF = {'B': 'A', 'JOIN': 'A'}
 MARKER = 'rfc12-private-probe-v1.json'
-# Reads this harness needs that no node serves in this tree. Each is reported in the evidence;
-# predicates that depend on one are BLOCKED, never inferred.
-# The paid-claim read (op 247, getPalwPaidClaim) is served since 2026-10-15; a node built before it still makes its
-# predicates BLOCKED (rfc12_acceptance_observe.paid_claim_value).
-# RFC-0012 §4.4 (2026-10-16): the per-coinbase DNS share is classified from coinbase outputs and the bonds' own
-# StakeBond transactions (rfc12_retirement_reconciliation), and --private-probe-retirement-daa gives pre-fence DNS
-# history, so those two gaps are closed. The reserve balance itself still has no read.
-# Op 246 (getPalwAcceptanceReads, 2026-10-18) serves the reserve balance per block and the virtual UTXO point read by outpoint
-# (rfc12_acceptance_observe.acceptance_reads); a node built before it still makes the predicates that need them BLOCKED. The
-# private-integration build carries exact pruning-import crash points between the WAL barriers (MISAKA_RFC12_IMPORT_CRASH_STAGE /
-# MISAKA_RFC12_IMPORT_CRASH_DIRECTORY rendezvous: utxo-before-clear, utxo-after-clear, utxo-before-virtual-copy,
-# utxo-after-virtual-clear, utxo-mid-virtual-copy, utxo-after-virtual-copy, import-before-complete); this harness does not arm
-# them yet. The reserve reconciliation formula across the retirement boundary is not wired: the balance is read, not judged.
+# Implementation locations are recorded separately from runtime evidence. A
+# compiled capability is not an observed acceptance result; missing/old binaries
+# still produce explicit BLOCKED findings at the corresponding read/step.
 NODE_GAPS = [
-    dict(read='a first-party generator of the paid-work request from a live authenticated snapshot', proposed=None,
-         consumers=['usefulWork.requestCommand stays an operator input']),
-    dict(read='reserve reconciliation across the retirement boundary from the served balances', proposed='op 246 reserveBalances',
-         consumers=['checkbox 7: the balance is read (op 246), the reconciliation rule is not wired']),
-    dict(read='harness arming of the private-build import crash points', proposed='MISAKA_RFC12_IMPORT_CRASH_STAGE',
-         consumers=['checkbox 3: exact crash points exist in the private-integration build; the harness still kills at phases']),
+    dict(read='DNS security reserve balance per block', proposed='getPalwAcceptanceReads (op 246)',
+         implementation='get_palw_acceptance_reads_call', runtimeObserved=False,
+         consumers=['reserve reconciliation; independent accrual/drip evidence still required']),
+    dict(read='in-process crash failpoints between import WAL barriers', proposed='private-integration-config build feature',
+         implementation='exact owned import-wal rendezvous', runtimeObserved=False,
+         consumers=['checkbox 3: one of eight validation rendezvous stages per bounded run']),
+    dict(read='first-party paid-work request from a live authenticated snapshot', proposed='private node request generator',
+         implementation='--private-probe-generate-paid-request', runtimeObserved=False,
+         consumers=['usefulWork.requestCommand with explicit pinned block/spec/inputs']),
+    dict(read='virtual UTXO point read by outpoint', proposed='getPalwAcceptanceReads (op 246)',
+         implementation='generation-locked point lookup', runtimeObserved=False,
+         consumers=['original deposit/refund inputs and named refund/withdrawal outputs']),
 ]
+
 
 
 class WaitTimeout(Exception):
@@ -96,6 +93,7 @@ class AcceptanceDrill(bootstrap.FiniteBootstrapDrill):
     def __init__(self, plan, root, sampler):
         super().__init__(plan, root, sampler, {})
         self.launch_count, self.launches, self.log_paths, self.link_roles = {}, [], {}, []
+        self.import_wal = {}
 
     def start(self, role, extra=()):
         self.sampler.check()
@@ -109,7 +107,17 @@ class AcceptanceDrill(bootstrap.FiniteBootstrapDrill):
         path = folder / ('node-%s-%d.log' % (role, count))
         log = open(path, 'w')
         self.logs[role] = log
-        self.processes[role] = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+        env = os.environ.copy()
+        for name in ('MISAKA_RFC12_IMPORT_CRASH_STAGE', 'MISAKA_RFC12_IMPORT_CRASH_DIRECTORY'):
+            env.pop(name, None)
+        if role in self.import_wal:
+            rendezvous = folder / 'import-wal'
+            rendezvous.mkdir(exist_ok=True)
+            for name in ('ready', 'armed'):
+                (rendezvous / name).unlink(missing_ok=True)
+            env.update(MISAKA_RFC12_IMPORT_CRASH_STAGE=self.import_wal[role],
+                       MISAKA_RFC12_IMPORT_CRASH_DIRECTORY=str(rendezvous))
+        self.processes[role] = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, env=env)
         self.launch_count[role] = count
         self.sampler.register(role, self.processes[role])
         self.sampler.register('%s_LAUNCH_%d' % (role, count), self.processes[role])
@@ -129,7 +137,7 @@ class AcceptanceRun:
         self.bounds, self.fees = plan['bounds'], plan['fees']
         self.deadline = time.monotonic() + self.bounds['workflowTimeoutSeconds']
         self.sampler = OwnedResourceSampler({}, limits)
-        self.drill = self.manifest = self.fixture = self.genesis = self.old_block = None
+        self.drill = self.manifest = self.fixture = self.genesis = self.old_block = self.request_block = None
         self.flags, self.findings, self.phases, self.commands = set(), [], [], []
         self.rows, self.consumer_rows, self.import_rows, self.settlement_rows, self.bridge_rows = [], [], [], [], []
         self.cli_records, self.amounts, self.payer_start, self.diagnostics = [], {}, {}, []
@@ -233,6 +241,8 @@ class AcceptanceRun:
                   'WORK_DIR': str(self.current_work_dir or self.root / 'useful-work')}
         if self.fixture:
             values['FIXTURE'] = str(self.fixture)
+        if self.request_block:
+            values['REQUEST_BLOCK'] = self.request_block
         if self.old_block:
             values['OLD_BLOCK'] = self.old_block
         if self.drill:
@@ -416,6 +426,10 @@ class AcceptanceRun:
             raise transport.Blocked('the factory exports %d seats; the plan names seat %d' % (len(seats), max(needed)))
         self.manifest, self.fixture, self.genesis = manifest, fixture, J.norm(manifest['genesis'])
         self.evidence['factoryManifest'] = manifest
+        if any(p['trigger']['kind'] == 'import-wal' for p in self.plan['crash']['points']):
+            capability = manifest.get('privateProbeProfile', {}).get('importCrashFailpoints', {})
+            if capability.get('available') is not True or capability.get('rendezvousVersion') != 1:
+                raise transport.Blocked('exact WAL crashes require the advertised private-integration rendezvous capability')
         self.flags.add('identity')
 
     def observer_argv(self, role, endpoints):
@@ -569,6 +583,10 @@ class AcceptanceRun:
         work_dir.mkdir(parents=True, exist_ok=False)
         self.current_work_dir = work_dir
         self.checker_bond_of = {}
+        pinned = self.wait(lambda: O.bracketed(drill, 'A', 'request-checkpoint', lambda rpc, dag, node: None),
+                           'live paid request checkpoint')
+        self.request_block = J.norm(pinned['dag']['sink'])
+        self.evidence.setdefault('paidRequestCheckpoints', []).append(pinned)
         self.fixtures('USEFUL_REQUEST', [uw['requestCommand']])
         request = Path(P.fill(uw['requestFile'], self.values())).resolve()
         if not request.is_file() or self.root not in request.parents:
@@ -775,16 +793,35 @@ class AcceptanceRun:
                 self.moved_sink[row['role']] = J.norm(row['dag']['sink'])
         self.settlement_rows.extend(rows or [])
 
+    def point_set(self, roles, label, outpoints):
+        def read(role):
+            def body(rpc, dag, node):
+                value = O.rfc12_state_value(rpc, outpoints)
+                if J.norm(value['virtualSelectedParent']) != J.norm(dag['sink']) or value['virtualDaaScore'] != dag['virtualDaaScore']:
+                    raise J.Pending('the outpoint read moved to another virtual generation')
+                return value
+            return O.bracketed(self.drill, role, label, body)
+        return self.same_sink(self.parallel(roles, read), label)
+
     def bridge_snapshot(self, roles, label):
         bridge = self.plan['bridge']
         withdrawal, refund = bridge['withdrawal']['destinationAddress'], bridge['refund']['destinationAddress']
+        points = list(self.bridge.get('effectPoints', {}))
+        if not points:
+            raise J.NotObservable('bridge effects have no directly observed outpoints')
 
         def read(role):
-            row = self.money_read(role, 'bridge@' + label, [withdrawal, refund])
-            entries = row['value']['entries']
-            row['value'] = dict(withdrawalOutpoints=[J.outpoint_key(e) for e in entries if e['address'] == withdrawal],
-                                refundOutpoints=[J.outpoint_key(e) for e in entries if e['address'] == refund])
-            return row
+            def body(rpc, dag, node):
+                entries = O.utxo_entries(rpc, [withdrawal, refund], self.plan['scan']['maximumUtxoRowsPerAddress'])
+                value = O.rfc12_state_value(rpc, points)
+                if J.norm(value['virtualSelectedParent']) != J.norm(dag['sink']) or value['virtualDaaScore'] != dag['virtualDaaScore']:
+                    raise J.Pending('bridge point read moved to another virtual generation')
+                if J.stable_point_states(value['pointStates']) != J.stable_point_states(self.bridge['effectPoints']):
+                    raise J.Violation('a named bridge input/output changed or disappeared')
+                return dict(withdrawalOutpoints=[J.outpoint_key(e) for e in entries if e['address'] == withdrawal],
+                            refundOutpoints=[J.outpoint_key(e) for e in entries if e['address'] == refund],
+                            pointStates=value['pointStates'])
+            return O.bracketed(self.drill, role, 'bridge@' + label, body)
         rows = self.wait(lambda: self.same_sink(self.parallel(roles, read), 'bridge@' + label),
                          'bridge effect rows (%s)' % label, optional=True)
         self.bridge_rows.extend(rows or [])
@@ -846,6 +883,11 @@ class AcceptanceRun:
         deposit = lock('DEPOSIT_LOCK', bridge['evmAddress'], bridge['depositAmountSompi'], bridge['claimTipSompi'],
                        bridge['claimTimeoutDaaDelta'], bridge['depositLockFeeSompi'])
         self.bridge['deposit'] = deposit
+        def accepted_lock():
+            rows = self.point_set(self.live(PRIMARY), 'deposit-unspent', [deposit['outpoint']])
+            J.point_present(rows, deposit['outpoint'], deposit['amount'], deposit['amount'])
+            return rows
+        self.rows.extend(self.wait(accepted_lock, 'the original deposit outpoint is unspent on every node'))
         claim = complete.cli_prefix(drill, cli, salt) + ['evm', 'claim', '--outpoint=' + deposit['outpoint']]
         self.wait(lambda: self.run_owned('DEPOSIT_CLAIM', claim, self.bounds['commandTimeoutSeconds'], expect_success=False)
                   ['exitCode'] == 0 or None, 'the deposit claim is queued on the mining node (lock accepted)')
@@ -860,6 +902,13 @@ class AcceptanceRun:
         facts = self.judge(5, 'deposit-credited-once', J.deposit_credit, before_wei,
                            self.credit_rows(rows, bridge['evmAddress']), deposit['amount'], deposit['tip'])
         self.bridge['creditedWei'] = (facts or {}).get('creditedWei')
+        def consumed_deposit():
+            rows = self.point_set(self.live(PRIMARY), 'deposit-consumed', [deposit['outpoint']])
+            J.point_consumed(rows, deposit['outpoint'])
+            return rows
+        point_rows = self.wait(consumed_deposit, 'the credited deposit outpoint is consumed')
+        self.rows.extend(point_rows)
+        self.judge(5, 'credited-deposit-outpoint-consumed', J.point_consumed, point_rows, deposit['outpoint'])
         target = rows[0]['value']['ethLatestNumber'] + bridge['postClaimEvmBlocks']
 
         def later():
@@ -876,6 +925,12 @@ class AcceptanceRun:
         refund = bridge['refund']
         self.bridge['refundLock'] = lock('REFUND_LOCK', refund['evmAddress'], refund['amountSompi'], 0,
                                          refund['timeoutDaaDelta'], refund['lockFeeSompi'])
+        def refund_lock_unspent():
+            lock = self.bridge['refundLock']
+            rows = self.point_set(self.live(PRIMARY), 'refund-lock-unspent', [lock['outpoint']])
+            J.point_present(rows, lock['outpoint'], lock['amount'], lock['amount'])
+            return rows
+        self.rows.extend(self.wait(refund_lock_unspent, 'the refund lock is an actual named unspent output'))
         self.flags.add('bridgeDeposit')
 
     def phase_market(self):
@@ -986,22 +1041,58 @@ class AcceptanceRun:
         self.judge(5, 'expired-lock-claim-refused', J.refused, self.expect_refusal('REFUND_LOCK_LATE_CLAIM', late),
                    'a claim at/after the refund timeout')
         refund = bridge['refund']
+        refund_anchor = bootstrap.rpc_read(drill, 'JOIN', 'getBlockDagInfo')['sink']
+        if not refund['commands']:
+            key = self.fixture / self.manifest['fundingKeyFile']
+            argv = complete.cli_prefix(drill, cli, salt) + ['evm', 'refund', '--outpoint=' + refund_lock['outpoint'],
+                    '--fee=' + str(refund['maximumRefundFeeSompi']), '--key-file=' + str(key)]
+            preview = self.cli('REFUND_PREVIEW', argv)
+            if preview.get('to') != refund['destinationAddress']:
+                raise transport.Blocked('the plan refund destination must match the original refund owner')
+            fee = preview.get('feeSompi')
+            if type(fee) is not int or not 0 <= fee <= refund['maximumRefundFeeSompi']:
+                raise transport.Blocked('signed refund fee exceeds the plan cap')
+            sent = self.cli('REFUND_SIGNED', argv + ['--yes'])
+            if not sent.get('refundTxid'):
+                raise transport.Blocked('the signed refund returned no outpoint')
         if refund['commands']:
             self.fixtures('REFUND', refund['commands'])
-            low, high = refund['amountSompi'] - refund['maximumRefundFeeSompi'], refund['amountSompi']
+        low, high = refund['amountSompi'] - refund['maximumRefundFeeSompi'], refund['amountSompi']
 
-            def refunded():
-                rows = self.destination_set(self.live(PRIMARY), 'refund-after', refund['destinationAddress'])
-                for row in rows:
-                    J.exactly_one_new_utxo(self.bridge['destinationsBefore']['refund'], row['value']['entries'], low, high)
-                return rows
-            rows = self.wait(refunded, 'the refund materializes once on every process')
-            self.rows.extend(rows)
+        def refunded():
+            rows = self.destination_set(self.live(PRIMARY), 'refund-after', refund['destinationAddress'])
             for row in rows:
-                self.judge(5, 'refund-exactly-once/%s' % P.ROLE_NAMES[row['role']], J.exactly_one_new_utxo,
-                           self.bridge['destinationsBefore']['refund'], row['value']['entries'], low, high)
-        else:
-            self.block(5, 'refund-exactly-once', 'no refund command: the CLI has no deposit-refund subcommand and the plan supplies none')
+                J.exactly_one_new_utxo(self.bridge['destinationsBefore']['refund'], row['value']['entries'], low, high)
+            return rows
+        rows = self.wait(refunded, 'the refund materializes once on every process')
+        self.rows.extend(rows)
+        for row in rows:
+            self.judge(5, 'refund-exactly-once/%s' % P.ROLE_NAMES[row['role']], J.exactly_one_new_utxo,
+                       self.bridge['destinationsBefore']['refund'], row['value']['entries'], low, high)
+        refund_point = J.exactly_one_new_utxo(self.bridge['destinationsBefore']['refund'], rows[0]['value']['entries'], low, high)['outpoint']
+        def refunded_points():
+            found = self.point_set(self.live(PRIMARY), 'refund-points', [refund_lock['outpoint'], refund_point, self.bridge['deposit']['outpoint']])
+            J.point_consumed(found, refund_lock['outpoint'])
+            J.point_consumed(found, self.bridge['deposit']['outpoint'])
+            J.point_present(found, refund_point, low, high)
+            return found
+        point_rows = self.wait(refunded_points, 'refund spends the original lock and creates one named output')
+        self.rows.extend(point_rows)
+        self.bridge['effectPoints'] = point_rows[0]['value']['pointStates']
+        def refund_body():
+            txid = refund_point.rsplit(':', 1)[0]
+            row = O.bracketed(drill, 'JOIN', 'refund-transaction-link',
+                lambda rpc, dag, node: O.accepted_transactions(rpc, refund_anchor, [txid], self.plan['scan']))
+            J.refund_link(row, refund_lock['outpoint'], refund_point, refund_lock['amount'], refund['maximumRefundFeeSompi'])
+            return row
+        body = self.wait(refund_body, 'the refund transaction spends the original lock with conserved value')
+        self.rows.append(body)
+        self.judge(5, 'refund-original-outpoint-value-conservation', J.refund_link, body,
+                   refund_lock['outpoint'], refund_point, refund_lock['amount'], refund['maximumRefundFeeSompi'])
+        if not refund['commands']:
+            self.judge(5, 'second-refund-of-original-outpoint-refused', J.refused,
+                       self.expect_refusal('REFUND_SECOND_SPEND', argv + ['--yes']),
+                       'a second refund of the consumed lock')
         evm = self.wait(lambda: self.evm_set(self.live(PRIMARY), 'refund-evm', [refund['evmAddress']]), 'refund EVM account read')
         self.rows.extend(evm)
         self.judge(5, 'refunded-lock-never-credited', J.backing, self.bridge['beforeWei'][refund['evmAddress']],
@@ -1021,6 +1112,14 @@ class AcceptanceRun:
             for row in rows:
                 self.judge(5, 'withdrawal-exactly-once/%s' % P.ROLE_NAMES[row['role']], J.exactly_one_new_utxo,
                            self.bridge['destinationsBefore']['withdrawal'], row['value']['entries'], amount, amount)
+            withdrawal_point = J.exactly_one_new_utxo(self.bridge['destinationsBefore']['withdrawal'], rows[0]['value']['entries'], amount, amount)['outpoint']
+            def withdrawal_points():
+                found = self.point_set(self.live(PRIMARY), 'withdrawal-point', [withdrawal_point])
+                J.point_present(found, withdrawal_point, amount, amount)
+                return found
+            point_rows = self.wait(withdrawal_points, 'the synthetic withdrawal outpoint materializes')
+            self.rows.extend(point_rows)
+            self.bridge['effectPoints'].update(point_rows[0]['value']['pointStates'])
             evm = self.wait(lambda: self.evm_set(self.live(PRIMARY), 'withdrawal-evm', [bridge['evmAddress']]),
                             'EVM balance after the withdrawal')
             self.rows.extend(evm)
@@ -1217,6 +1316,10 @@ class AcceptanceRun:
             self.capacity_import(source)
         else:
             self.drill.start('CRASHJOIN')
+            if 'CRASHJOIN' in self.drill.import_wal:
+                self.wait(lambda: bootstrap.ready(self.drill, 'CRASHJOIN', self.manifest) or None,
+                          'crash joiner initializes its own genesis before WAL arming')
+                (self.root / 'CRASHJOIN' / 'import-wal' / 'armed').write_text(self.drill.import_wal['CRASHJOIN'])
             self.drill.join_link('CRASHJOIN', source)
 
         def joined():
@@ -1472,8 +1575,9 @@ class AcceptanceRun:
         rpc = self.drill.rpc('JOIN')
         try:
             to_daa = rpc.call('getBlockDagInfo')['virtualDaaScore']
+            block_budget = R.ReadBudget(dns['maximumBlockReads'])
             scan = R.scan_window(rpc, self.genesis, dns['scanFromDaa'], to_daa, self.plan['scan']['maximumScannedChainBlocks'],
-                                 R.ReadBudget(dns['maximumBlockReads']))
+                                 block_budget)
             status_budget = R.ReadBudget(dns['maximumStatusReads'])
             registry = R.bond_registry(rpc, history['bondPageLimit'], history['maximumBondPages'], status_budget)
             evidence = dict(scanFromDaa=dns['scanFromDaa'], scanToDaa=to_daa, readsUsed=scan['readsUsed'],
@@ -1486,6 +1590,12 @@ class AcceptanceRun:
             palw = {seat['payAddress'] for seat in self.manifest['seats']}
             blocks = R.classify_blocks(scan['blocks'], dns_scripts, set(scan['minerScripts']), palw)
             evidence['blocks'] = blocks
+            reserve_reads = []
+            for block in blocks:
+                block_budget.take()
+                reserve_reads.append(O.rfc12_state_value(rpc, block_hash=block['hash']))
+            evidence['reserveReads'] = reserve_reads
+            evidence['readsUsed'] = block_budget.used
             self.judge(7, 'coinbase-outputs-classified-from-node-reads', R.classification_complete, blocks)
             daas = {block['daa'] for block in blocks
                     if block['daa'] < fence and any(output['kind'] == R.DNS for output in block['outputs'])}
@@ -1502,7 +1612,7 @@ class AcceptanceRun:
         self.judge(7, 'no-new-dns-share-or-retired-kind-from-the-fence', R.post_fence_dns_share, blocks, scan['bodies'],
                    fence, dns['legacySettlementWindowDaa'], entitled, dns['dnsCadence'])
         self.judge(7, 'legacy-bond-exit-paid-once', R.legacy_exit_paid_once, exit_record)
-        self.judge(7, 'dns-reserve-balance-reconciled', R.reserve_balance, None)
+        self.judge(7, 'dns-reserve-balance-reconciled', R.reserve_balance, dict(balances=reserve_reads))
 
     def phase_coverage(self):
         """RFC-0006 EXEC origin coverage: freeze production, then read the archive and pruned roles' own minute-cadence
@@ -1563,6 +1673,10 @@ class AcceptanceRun:
     def arm(self, phase):
         self.armed = [dict(point=point, state='armed', armedAt=time.monotonic())
                       for point in self.plan['crash']['points'] if point['phase'] == phase]
+        for armed in self.armed:
+            if armed['point']['trigger']['kind'] == 'import-wal':
+                role = P.ROLE_KEYS[armed['point']['role']]
+                self.drill.import_wal[role] = armed['point']['trigger']['stage']
 
     def finish_crash_points(self, phase):
         for armed in self.armed:
@@ -1570,6 +1684,11 @@ class AcceptanceRun:
                 self.crash_records[armed['point']['name']] = dict(killed=False, state=armed['state'])
                 self.findings.append(J.judge(3, 'crash:' + armed['point']['name'], J.crash_point, armed['point'],
                                              dict(killed=False)))
+        for armed in self.armed:
+            if armed['point']['trigger']['kind'] == 'import-wal':
+                role = P.ROLE_KEYS[armed['point']['role']]
+                self.drill.import_wal.pop(role, None)
+                (self.root / role / 'import-wal' / 'armed').unlink(missing_ok=True)
         self.armed = []
 
     def import_probe(self, role):
@@ -1600,6 +1719,14 @@ class AcceptanceRun:
 
     def trigger(self, point, role):
         kind, trigger = point['trigger']['kind'], point['trigger']
+        if kind == 'import-wal':
+            marker = self.root / role / 'import-wal' / 'ready'
+            try:
+                if marker.read_bytes() == trigger['stage'].encode('ascii'):
+                    return dict(source='owned-file', kind=kind, stage=trigger['stage'], marker=str(marker))
+            except FileNotFoundError:
+                pass
+            return None
         if kind in ('kernel-outbox', 'checker-outbox'):
             files = P.OUTBOX_FILES if kind == 'kernel-outbox' else P.CHECKER_OUTBOX_FILES
             for record, names in O.outbox_records(self.root, role, kind, files).items():
@@ -1658,8 +1785,13 @@ class AcceptanceRun:
         record = dict(killed=False, trigger=observed)
         self.crash_records[point['name']] = record
         try:
-            record['before'] = observed.get('node') if point['trigger']['kind'] in ('import-phase', 'after-convergence') \
-                else self.crash_state(point, role, observed)
+            if point['trigger']['kind'] == 'import-wal':
+                record['before'] = dict(walStage=observed['stage'])
+                self.drill.import_wal.pop(role, None)
+                (self.root / role / 'import-wal' / 'armed').unlink(missing_ok=True)
+            else:
+                record['before'] = observed.get('node') if point['trigger']['kind'] in ('import-phase', 'after-convergence') \
+                    else self.crash_state(point, role, observed)
             self.drill.kill(role)  # SIGKILL: no graceful shutdown, no destructor
             armed['state'] = 'killed'
             record.update(killed=True, killedUnix=time.time())
@@ -1676,7 +1808,7 @@ class AcceptanceRun:
                              optional=True)
             record.update(recovered=rows is not None, afterRows=rows or [])
             after = self.crash_state(point, role, observed)
-            record['after'] = after if point['trigger']['kind'] not in ('import-phase', 'after-convergence') else \
+            record['after'] = after if point['trigger']['kind'] not in ('import-phase', 'import-wal', 'after-convergence') else \
                 (rows[0]['node'] if rows else {})
             if point['trigger']['kind'] in ('kernel-outbox', 'checker-outbox'):
                 # The kernel record directory is named by its base claim; a checker record belongs to the current claim.

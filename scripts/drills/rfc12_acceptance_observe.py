@@ -397,8 +397,38 @@ def rfc12_state_value(rpc, outpoints=(), block_hash=''):
                 or int(point.rsplit(':', 1)[1]) > 2**32 - 1:
             raise NotObservable('RFC12 point read contains a malformed outpoint')
     try:
-        response = rpc.call('getRfc12State', dict(blockHash=block_hash, outpoints=list(outpoints)))
-        value = json.loads(response['snapshotJson'])
+        # Validation's op246 is canonical. Preserve its known/present distinction
+        # while checking the raw lists before dictionaries could hide omissions.
+        requested_blocks = [block_hash] if block_hash else []
+        response = rpc.call(ACCEPTANCE_READS_METHOD, dict(reserveBlocks=requested_blocks, outpoints=list(outpoints)))
+        if not isinstance(response, dict) or response.get('available') is not True:
+            raise ValueError('op246 state read is unavailable')
+        balances = response['reserveBalances']
+        if not isinstance(balances, list) or len(balances) != len(requested_blocks):
+            raise ValueError('missing or unsolicited reserve response')
+        reserve = None
+        for row in balances:
+            if norm(row['blockHash']) != block_hash or type(row['known']) is not bool:
+                raise ValueError('reserve response names another block or has no known flag')
+            reserve = row['balanceSompi'] if row['known'] else None
+        utxos = []
+        for row in response['outpoints']:
+            if type(row.get('present')) is not bool:
+                raise ValueError('outpoint response has no exact presence flag')
+            txid, index = row['outpoint'].rsplit(':', 1)
+            if not index.isascii() or not index.isdecimal() or str(int(index)) != index:
+                raise ValueError('outpoint response index is not canonical')
+            entry = None
+            if row['present']:
+                version, script = row['scriptVersion'], row['scriptHex']
+                if type(version) is not int or not 0 <= version <= 65535 or not isinstance(script, str) \
+                        or len(script) % 2 or not re.fullmatch(r'[0-9a-fA-F]*', script):
+                    raise ValueError('outpoint script is malformed')
+                entry = dict(amount=row['amount'], scriptPublicKey='%04x' % version + script.lower(),
+                             isCoinbase=row['isCoinbase'], blockDaaScore=row['blockDaaScore'])
+            utxos.append(dict(outpoint=dict(transactionId=norm(txid), index=int(index)), utxoEntry=entry))
+        value = dict(version=1, blockHash=block_hash or norm(response['sink']), reserveBalance=reserve,
+                     virtualSelectedParent=norm(response['sink']), virtualDaaScore=response['virtualDaa'], utxos=utxos)
     except (OSError, RuntimeError, KeyError, TypeError, ValueError) as error:
         raise NotObservable('RFC12 reserve/outpoint read unavailable: %s' % error) from error
     if type(value.get('version')) is not int or value['version'] != 1 or not isinstance(value.get('utxos'), list):
