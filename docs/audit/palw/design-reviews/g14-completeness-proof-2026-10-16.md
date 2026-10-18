@@ -1750,3 +1750,29 @@ not only after valid EOF. The targeted core test is still compiling in
 `/tmp/codex-g14-tokenizer-byte-bound.log`; **no test PASS or 02-B node acceptance
 is claimed**. The earlier 5390/3120 refusal remains the recorded node outcome
 until the rebuilt declared-semantics case proves otherwise.
+
+### 16.7 Genesis #2 long fit and #1 local conversion (2026-10-18)
+
+The inherited #2 32K long fit completed within tolerance: 32,768 positions,
+mean KL 0.005664636700854534, worst window 0.00793125104839523, and
+late/early ratio 1.9007658595599624. The successful pipeline then uploaded
+segment 00001 and the six staged index/manifest/card/license files to
+`Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW`; the pre-existing 00000 segment
+was retained. The remote hash verification matched the local record, followed
+by cleanup. Pipeline log:
+`/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-14-lane-restart-builds-c00813/7adc9332-ba5a-4def-b8fd-2d73c009e942/scratchpad/g2b.log`.
+
+The user-approved #1 source acquisition completed at the pinned revision:
+`model.safetensors` is 3,087,467,144 bytes and the required tokenizer/config
+files passed the pipeline checks. Its A16 conversion is 1,811,942,348 bytes at
+32,768 context, `FAITHFUL=true`, with artifact digest
+`51742986e20447cd7349b6d9cf2d2aca42831edff527eced50be5f4d7fe6620543295fc97185e95dd05fe47033fa5a7303333b376da824655f3b6ed5b9f51105`.
+The PALWART3 wrapper was rebuilt and recorded at root
+`7de89f2ae145c1dfa85f3e92e1019da8fbb1dfabc13453d3dd2fd14e4c434a58bdb785030fd90acff4ebcfdca1986bc3a8add00e3c865470934e8fd9d6bfbf4f`.
+The 32K A16 window comparison is running; this run used `--no-upload`, so no
+#1 artifact has been published yet. It exposed and led to fixes for a substring match that
+discarded the converter's artifact digest and mixed `palwart pack` stderr into
+its JSON report. Pipeline tests pass 17/17. Run log:
+`/tmp/codex-g14-genesis-model01-fixed.log`; source acquisition and output
+remains local, and the older failed outputs were retained under dated
+`out-attempt-*` directories.
