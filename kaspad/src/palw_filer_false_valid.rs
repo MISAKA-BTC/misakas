@@ -293,6 +293,19 @@ impl PalwFalseValidFilerV1 {
         self.cases.contains_key(claim)
     }
 
+    /// A caller has read this claim's CourtFraud verdict from the accepted chain.
+    /// Revisit its receipts now even if the first (pre-licence) scan found none.
+    /// Keep the original proof and all in-flight/settled accounting; every filing
+    /// still passes the ordinary receipt admission, adjudicator, gate and fold.
+    pub(crate) fn wake_after_court_fraud_v1(&mut self, claim: &Hash64, current_daa: u64) -> bool {
+        let Some(case) = self.cases.get_mut(claim) else { return false };
+        case.next_daa = case.next_daa.min(current_daa);
+        case.expires_daa = case.expires_daa.max(current_daa.saturating_add(self.ttl_daa));
+        case.walked_daa = None;
+        case.walk = None;
+        true
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.cases.is_empty()
     }
@@ -838,6 +851,31 @@ mod tests {
         let mut filer = PalwFalseValidFilerV1::new(10_000, 500, DEPTH);
         assert!(filer.note_proof_v1(proof(), PalwFalseValidSourceV1::CaptureSample { leaf: 3 }, Some(40), daa));
         filer
+    }
+
+    #[test]
+    fn court_fraud_wakes_a_prelicence_empty_scan_without_replacing_its_proof() {
+        let mut filer = filer_with_proof(100);
+        let mut door = door();
+        let original = filer.cases[&claim()].proof.clone();
+        let empty = PalwFalseValidScanOutcomeV1 {
+            claim_id: claim(), receipts: vec![], filings: vec![], walked: true,
+            walk: Some(PalwFalseValidWalkV1 {
+                anchor: Hash64::from_u64_word(100), anchor_daa: 100, floor: 40, next: None,
+            }),
+        };
+        assert!(filer.apply_v1(empty, 100, &mut door).is_empty());
+        assert!(filer.due_v1(101, |_| false).is_empty(), "an empty scan normally waits 100 DAA");
+        filer.cases.get_mut(&claim()).unwrap().sent.insert(bond(1), (100, 1));
+        assert!(!filer.wake_after_court_fraud_v1(&Hash64::from_u64_word(0xBAD), 110));
+        assert!(filer.wake_after_court_fraud_v1(&claim(), 110));
+        let scans = filer.due_v1(110, |_| true);
+        assert_eq!(scans.len(), 1, "the verdict triggers an immediate rescan");
+        assert_eq!(scans[0].proof.as_ref(), original.as_ref());
+        assert_eq!(scans[0].walk_from_daa, 40, "reread from the claim's original receipt floor");
+        assert!(scans[0].walk.is_none());
+        assert!(scans[0].skip.contains(&bond(1)), "an in-flight filing is still held");
+        assert_eq!(filer.cases[&claim()].sent[&bond(1)], (100, 1), "no retry count is reset");
     }
 
     #[test]
