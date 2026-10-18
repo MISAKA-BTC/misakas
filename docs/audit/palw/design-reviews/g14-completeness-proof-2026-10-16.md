@@ -1635,3 +1635,13 @@ slash(脚本の共謀 Panel の licence が有罪確定より前に届かなか�
 **12.5 cone 上限(監査 (b))。** `cone_runs_bound_v1` を frame の局所化項に入れた。horizon を超える door の frame は従来どおり
 `DoorBeyondLiabilityHorizon` で作らない。test-only 時計の corpus(n ≤ 256)で拒否される class はない。実測時計での class 別の
 可否は測定記録(`PALW_TIR_FRAME_COST_RECORDS_V1`、空)が入るまで出せない。
+
+
+## 14. Codex 継続: T-N1 の node 受入条件を強制する(2026-10-18)
+
+branch `codex/g14-tir-completion`、元の TIR worktree を継続使用。genesis #2 の fit(PID 71987 / 72982)は停止していない。
+
+- `kaspad/src/palw_service_tir_frame_e2e.rs` の誠実系は、未使用 quantum を持つだけでは合格しない。実サービスが出した誠実な frame の Final を確認し、当選 quantum を receipt block に載せ、consensus state の `spent` が増えることを必須とした。同じ claim の当選を引き直さず、当選しない場合は次の実サービスの frame を観測する。時間と block 数の上限を超えれば失敗する。
+- 偽造系は、共謀 seat 集合が空の場合に失敗させる。TEST harness 内だけで anchor delay を 1 DAA にし、実 Panel binding の後、短い preparation 窓の中で preparation と Ready を batch 搬送し、conviction より前に licence を着地させる。課金前の担保を先に記録し、各 seat の実減額を確認する。本番 preset・m/k・経済値を変更していない。
+- **検証状態: 未完。** `CARGO_INCREMENTAL=0 cargo test -j 3 -p kaspad --lib --features private-integration-config tir_frame_node_tn1_an_honest -- --nocapture --test-threads=1` を実行中。log は `/tmp/codex-g14-tir-honest.log`。この追記時点ではビルド中で、支払い・seat slash を示した結果として数えない。偽造系の実行も必要。
+- 次に、上記 2 系の結果と 02-B の node 実行を確認し、出荷 binary の測定・fence drill と区別して報告する。G14 全体の完了・武装・配備を意味しない。

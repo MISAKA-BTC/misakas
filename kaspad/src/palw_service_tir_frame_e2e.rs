@@ -916,6 +916,7 @@ async fn colluders_prepare(chain: &mut Chain, floats: &mut [Funding], claim: Has
         .expect("the accepted TIR state reads");
     let frame = frame_out.expect("the frame");
     let plan = frame.plan_v1().clone();
+    let mut controls = Vec::new();
     for (card, action) in debits {
         let mut control = PalwTirPublicControlV1 {
             version: 1,
@@ -931,8 +932,9 @@ async fn colluders_prepare(chain: &mut Chain, floats: &mut [Funding], claim: Has
         };
         let message = control.signing_message_v1(chain.network_domain).unwrap();
         control.signature = signed(card, message.as_byte_slice(), PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1);
-        chain.send(card, &PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) }, &mut floats[card], &[]).await;
+        controls.push((card, PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) }));
     }
+    send_batch(chain, floats, controls).await;
     seats
 }
 
@@ -982,6 +984,7 @@ async fn colluders_license(
         retained_bytes: 1,
     };
     let mut receipts = Vec::new();
+    let mut grants = Vec::new();
     for card in &seats {
         let seat = chain.bonds[*card];
         let signed_daa = chain.daa();
@@ -1021,10 +1024,11 @@ async fn colluders_license(
         // A Panel bound after the frame's preparation window has no Ready lane (the carrier is refused as missing the fixed
         // preparation deadline); such a Panel licenses on its plain Valid receipts, as the honest seats' services do.
         if !drawn.is_empty() {
-            chain.send(*card, &PalwConsensusObjectV2::TirPublicGrantReadyV1 { grant: Box::new(movement) }, &mut floats[*card], &[]).await;
+            grants.push((*card, PalwConsensusObjectV2::TirPublicGrantReadyV1 { grant: Box::new(movement) }));
         }
         receipts.push(receipt);
     }
+    send_batch(chain, floats, grants).await;
     // 3. The licence on exactly those receipts. A Panel with Ready lanes licenses by the V2 quorum on its credited receipts; a Panel
     //    bound after the preparation window licenses as the honest services do past R-core+ — by coverage, on V3 receipts each over
     //    the seat's assigned segment mask.
@@ -1090,7 +1094,16 @@ async fn colluders_license(
 /// and one public bond outside the Panel — the actual service — localizes and convicts.
 async fn tn1_node(forged: bool) {
     kaspa_core::log::try_init_logger(&std::env::var("TN1_LOG").unwrap_or_else(|_| "warn,kaspad_lib::palw_panel=info".into()));
-    let (config, bundle, premine, mut floats) = tir_frame_config();
+    let (mut config, mut bundle, premine, mut floats) = tir_frame_config();
+    if forged {
+        // HARNESS ONLY: bind the colluding panel before the short preparation door closes.
+        // The external service still discovers, acquires and convicts the claim itself.
+        bundle.panel =
+            kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2::new(bundle.panel.seat_count(), bundle.panel.quorum(), 1).unwrap();
+        let mut params = config.params.clone();
+        params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        config = Config::new(params);
+    }
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
     let fixture = TirFixture::new(&chain);
@@ -1192,7 +1205,31 @@ async fn tn1_node(forged: bool) {
     let frame = chain.tc.palw_tir_public_frame_v1(claim).unwrap().unwrap();
     eprintln!("[service-tir-frame] piece 3: framed claim {claim} accepted at DAA {}: {frame:?}", chain.daa());
     // The colluding Panel prepares inside the frame's preparation window (harness-scripted adversary).
-    let drawn = if forged { colluders_prepare(&mut chain, &mut floats, claim).await } else { Vec::new() };
+    let producer_bond = chain.bonds[0];
+    let collateral_of = |chain: &Chain, bond: PalwBondKeyV2| {
+        chain
+            .tc
+            .palw_claim_rows_v1(bond, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor, false, 0)
+            .unwrap()
+            .bond
+            .unwrap()
+            .collateral
+    };
+    let before = collateral_of(&chain, producer_bond);
+    let mut colluders = Vec::new();
+    let mut colluder_collateral = Vec::new();
+    if forged {
+        let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
+        while chain.daa() < slot {
+            step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
+        }
+        anchor_block(&mut chain).await;
+        let drawn = colluders_prepare(&mut chain, &mut floats, claim).await;
+        assert!(!drawn.is_empty(), "the early bound panel must prepare and sign");
+        colluder_collateral = drawn.iter().map(|c| collateral_of(&chain, chain.bonds[*c])).collect();
+        colluders = colluders_license(&node, &mut chain, &mut floats, &fixture, &mut ready_at, claim, drawn).await;
+        assert!(!colluders.is_empty(), "a forged claim must be licensed before conviction to exercise seat slash");
+    }
     // **The harness's clock against the services' wall clock**: a block here takes ~60 ms, a service's replay and open take seconds,
     // and the frame's owner-open door is a few DAA under the TEST-ONLY clock (a real network's DAA is a heartbeat). Through the
     // open door the harness paces one DAA per 4 s, so the outside service's open lands inside it as it would on a network.
@@ -1224,26 +1261,20 @@ async fn tn1_node(forged: bool) {
         tokio::time::sleep(Duration::from_secs(pace)).await;
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
     }
-    let producer_bond = chain.bonds[0];
-    let collateral_of = |chain: &Chain, bond: PalwBondKeyV2| {
-        chain.tc.palw_claim_rows_v1(bond, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor, false, 0).unwrap().bond.unwrap().collateral
-    };
-    let before = collateral_of(&chain, producer_bond);
-    // The Panel is drawn at the anchor after the claim's anchor delay.
-    let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
-    while chain.daa() + 2 < slot {
-        step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
+    // The honest Panel is drawn at the anchor after the claim's anchor delay.
+    if !forged {
+        let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
+        while chain.daa() + 2 < slot {
+            step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
+        }
+        // Fresh readiness right before the draw (the harness's, see above).
+        fixture.refresh_readiness(&mut chain, &mut floats).await;
+        ready_at = chain.daa();
+        while chain.daa() < slot {
+            step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
+        }
+        anchor_block(&mut chain).await;
     }
-    // Fresh readiness right before the draw (the harness's, see above).
-    fixture.refresh_readiness(&mut chain, &mut floats).await;
-    ready_at = chain.daa();
-    while chain.daa() < slot {
-        step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
-    }
-    anchor_block(&mut chain).await;
-    let colluders =
-        if forged { colluders_license(&node, &mut chain, &mut floats, &fixture, &mut ready_at, claim, drawn).await } else { Vec::new() };
-    let colluder_collateral: Vec<u64> = colluders.iter().map(|c| collateral_of(&chain, chain.bonds[*c])).collect();
     loop {
         assert!(std::time::Instant::now() < deadline, "no outcome: {:?}", chain.view(claim));
         // The owner's acquisition, dissection and filing run on its own loop (tens of moves, seconds each in this debug build): through
@@ -1281,11 +1312,9 @@ async fn tn1_node(forged: bool) {
         eprintln!("[service-tir-frame] forged: convicted by the outside service at DAA {}", chain.daa());
     } else {
         assert_eq!(collateral_of(&chain, producer_bond), before, "the honest producer is not charged");
-        // **The payment right**: a Final free-prompt claim's quanta draw at its beacon slot against the pooled receipt target
-        // scaled by the compute each carries — one receipt block per winning quantum. The right is asserted (Final, at least one
-        // unspent quantum, its work priced in compute); a WIN is not: at testnet-12's `W` (~10^11 CCU a block) this tiny class's
-        // ~7·10^4-CCU job wins with odds ~10^-7, so the harness spends a quantum only if one happens to win in the window. The
-        // spend itself is the fold T-N1's (`t_n1_an_honest_ir_fp_claim_reaches_final_and_payment_inside_the_liability_horizon`).
+        // Require a real receipt spend. The producer keeps submitting honest frames: if this
+        // frame's fixed beacon loses, observe subsequent Final frames rather than treating a
+        // payment right as payment or rerolling the same claim's ticket.
         let mut source = None;
         chain
             .tc
@@ -1298,27 +1327,41 @@ async fn tn1_node(forged: bool) {
         let kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, spent } = &source else { panic!("a free-prompt claim: {source:?}") };
         assert!(*quanta >= 1 && spent.is_empty() && pwu > 0, "the Final claim holds unspent priced quanta: {source:?} pwu {pwu}");
         let mut paid = None;
-        for _ in 0..60 {
-            if let Some(block) = spend_one_quantum(&mut chain, 0, claim).await {
-                paid = Some(block);
+        for _ in 0..1_800 {
+            assert!(std::time::Instant::now() < deadline, "no honest framed claim paid before the test deadline");
+            for candidate in framed_claims(&chain) {
+                if matches!(chain.view(candidate).phase, PalwClaimPhaseV2::Final { .. })
+                    && let Some(block) = spend_one_quantum(&mut chain, 0, candidate).await
+                {
+                    paid = Some((candidate, block));
+                    break;
+                }
+            }
+            if paid.is_some() {
                 break;
             }
             step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
         }
-        match paid {
-            Some(block) => eprintln!("[service-tir-frame] honest: Final and paid in receipt block {block} at DAA {}", chain.daa()),
-            None => eprintln!(
-                "[service-tir-frame] honest: Final at DAA {} with {quanta} unspent quanta (pwu {pwu}); no quantum won its draw in the window",
-                chain.daa()
-            ),
-        }
+        let (paid_claim, block) = paid.expect("T-N1 requires an actual quantum spend, not only a payment right");
+        let mut spent = false;
+        chain
+            .tc
+            .palw_tir_public_read_v1(&mut |state| {
+                spent = matches!(state.claim(&paid_claim).map(|c| &c.source),
+                Some(kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2::FreePrompt { spent, .. }) if !spent.is_empty());
+                Ok(())
+            })
+            .unwrap();
+        assert!(spent, "the receipt block must consume the claim's quantum in consensus state");
+        assert_eq!(collateral_of(&chain, producer_bond), before, "payment never charges the honest producer");
+        eprintln!("[service-tir-frame] honest: claim {paid_claim} Final and paid in receipt block {block} at DAA {}", chain.daa());
     }
     node.finish().await;
 }
 
 /// **T-N1, honest, at node level**: the producer service's framed claim is replayed (material pulled over socket P2P) and licensed
-/// by the seats' actual services, reaches `Final` with its payment right (unspent priced quanta; the producer uncharged); the outside
-/// service convicts nothing. A quantum's WIN is not asserted (odds ~10^-7 for this tiny class at testnet-12's `W`).
+/// by the seats' actual services and reaches `Final`. At least one honest framed claim's
+/// quantum must be consumed by an actual receipt block; the producer remains uncharged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tir_frame_node_tn1_an_honest_framed_claim_is_final_with_its_payment_right() {
     on_service_stack(|| tn1_node(false)).await;
