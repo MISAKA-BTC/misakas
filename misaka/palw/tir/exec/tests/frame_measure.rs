@@ -116,12 +116,22 @@ fn t12_horizon_daa() -> u64 {
     bundle.state.window_challenge_at(PLANNED_FENCE_DAA) + bundle.state.window_court()
 }
 
+/// **testnet-12's shipped court, the same one `palw-class declare-layout` reads** (`court_params_v1` in the CLI):
+/// `max_close_bytes` is the held set's widest close over the ladder, not the default. The earlier fixed
+/// `PalwCourtParamsV2::new(1 << 22, 45, 2)` priced the native witness at the default 2,250,000 B and so
+/// refused a class the real court would carry (10-18 finding).
+fn t12_court() -> PalwCourtParamsV2 {
+    let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else { unreachable!() };
+    bundle.court
+}
+
 /// The frame's native rules at testnet-12's ladder, at a custodian upper of `custodians`, with `cost`.
 fn rules_with(custodians: u64, cost: kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1) -> PalwTirPublicAllocationRulesV1 {
     PalwTirPublicAllocationRulesV1 {
         maximum_leaves: 1 << 22,
         maximum_custodians: custodians,
-        court: PalwCourtParamsV2::new(1 << 22, 45, 2).unwrap(),
+        court: t12_court(),
         dissection: true,
         prompt_form: PalwPromptIdsFormV1::Flat,
         config: cost.config,
