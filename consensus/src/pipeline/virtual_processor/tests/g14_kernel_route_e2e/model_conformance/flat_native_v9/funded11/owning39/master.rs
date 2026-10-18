@@ -558,6 +558,26 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     let colluders = attest_all(&mut net, &bad_claim, &[1, 3]).await;
     attest_all(&mut net, &good_claim, &[]).await;
     println!("g14n2/node: forged claim drawn over {} distinct bonds, attested by cards {colluders:?}", colluders.len());
+    for (label, claim) in [("forged", &bad_claim), ("honest", &good_claim)] {
+        let row = cert_row(&net, claim).expect("the drawn certification row");
+        let per_card: Vec<(usize, usize)> = (0..8usize)
+            .map(|card| (card, row.draws.iter().filter(|draw| **draw == net.kid(card)).count()))
+            .filter(|(_, count)| *count > 0)
+            .collect();
+        println!(
+            "g14n2/node: {label} draw histogram {per_card:?}; positive positions {}/{} (k={})",
+            row.positive_positions(),
+            row.draws.len(),
+            cert.k
+        );
+        assert!(
+            row.positive_positions() >= cert.k as u32,
+            "the selected deterministic draw does not meet Gate C before its prosecution window: {label}, positive {}/{}, k={}, histogram {per_card:?}",
+            row.positive_positions(),
+            row.draws.len(),
+            cert.k
+        );
+    }
     // ---- the prosecution window, then both certify and receive their receipts (77) ----
     let until = drawn.final_daa + cert.prosecution_window_daa + 2;
     eprintln!("g14n2/node: prosecution wait from DAA {} to {until} (Final {}, window {})", net.daa(), drawn.final_daa, cert.prosecution_window_daa);
