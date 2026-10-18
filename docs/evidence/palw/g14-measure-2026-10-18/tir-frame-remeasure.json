@@ -1,0 +1,25 @@
+{
+  "record": "misaka-palw/g14-tir-frame-remeasure/v1",
+  "status": "Fixture re-measure only. The real-model (Huihui-Qwen3.5-2B 32K) frame measurement is UNMEASURED. Nothing pinned into PALW_TIR_FRAME_COST_RECORDS_V1.",
+  "source_sha": "f58d09814879cd22882b9a2b529a78c20a07cb65 (code identical to aacbc583c; only the court-measurements doc commit differs)",
+  "build": "cargo test --release (lto=thin, strip, overflow-checks), CARGO_INCREMENTAL=0, -j 6, rustc 1.93.0, features node",
+  "command": "MISAKA_TIR_FRAME_MEASURE_OUT=... cargo test --release -p misaka-palw-tir-exec --features node --test frame_measure -- --nocapture",
+  "hardware": "Apple M1 Max, 10 cores, 32 GiB, Darwin 25.6.0",
+  "model_class": "the 11 corpus fixture classes of frame_measure (not Huihui)",
+  "prompt_len": "job_for_anchor fixture prompt", "decode_len": 2,
+  "concurrency": "sequential, one test thread",
+  "trials": 1,
+  "raw": ["tir-frame-measure-fixture.json", "raw/tir-frame-measure.log"],
+  "result": "Every deterministic count and byte size (2087 leaves compared, nanosecond fields excluded) is identical to docs/design/palw/evidence/tir-frame-measure-2026-10-16/frame-ops-after.json; only host label and source commit differ. The 10-16 baseline (action_parser_steps 15,625,804, per custodian 18,575, frame_passes_per_check 2, control_bytes 14,320) is therefore reproduced on this source for the fixtures, not confirmed for the real model.",
+  "unmeasured": {
+    "real_model_frame_operations": "The harness builds the court from an in-memory MapParams whose Tensor stores Vec<i128>; the Huihui PALWART3 (2.54 GB of instances) would need ~16x that in RAM (> 32 GiB). The node backend TirArtifactV1 opens only PALWTIR1, and PALWART3 is read only through PalwArtTirParamsV3 in SDK deep verify. A streamed court source for PALWART3 in the harness is required first.",
+    "custodian_growth_real_model": "same reason",
+    "carriage_latency_inclusion_margin_daa": "needs network observation (devnet/t12); not run",
+    "contended_bytes_per_daa": "needs a loaded devnet; parallel_bytes_per_daa 125,000 stays a theoretical upper bound only",
+    "recovery_amount_reorg_replay_moves": "needs V7 restart/reorg drill; not run",
+    "acquisition_daa_real_model": "not measured",
+    "control_bytes_vs_shipped_maximum": "not checked against the shipped maximum"
+  },
+  "design_bound": {"maximum_door_daa": 3120},
+  "adopted_margin": "none"
+}
