@@ -2653,3 +2653,23 @@ upload. A pending measurement invalidates an old fit before executing the tool.
 Offline pipeline tests: 17 passed, 0.854 s, log
 `/tmp/codex-g14-a16-pipeline-offline.log`. Rust syntax parsing and diff checks
 passed; compiled Rust tests, actual 32K measurement and upload remain pending.
+
+
+### 17.4 Reference build resource refusal and separated builder
+
+The reference host unit ended with `Result=oom-kill` at 08:36:37 host UTC.
+Kernel log explicitly says `CONSTRAINT_MEMCG` in this measurement unit, with
+rustc killed at approximately 2,951,424 KiB anonymous RSS: the 3 GiB cap refused
+the build. Existing t12 kaspad PID 269885 remained alive; its service/files were
+not changed. The cap on this 12 GB host was not increased.
+Both 95.111.236.186 and builder candidate 5.104.81.23 report Ubuntu 24.04.4 and
+glibc 2.39-0ubuntu8.9. Fixed source `11b4bf7e0` was separately archived to
+`/root/g14-reference-build-11b4bf7e0` on 5.104.81.23. Unit
+`g14-reference-build-11b4bf7e0.service` builds the court test executable only
+(`--no-run`); no timing on that builder will be reference evidence. Limits:
+MemoryMax 6 GiB, CPUQuota 100%, Nice 19, IOWeight 10, OOMScoreAdjust 1000,
+-j1 and incremental off; the pinned compiler and normal release profile remain.
+Build logs: `build.log`, `build-artifacts.jsonl`, terminal marker `build.exit`.
+After success the executable/dependencies must be identified and hashed, copied
+to the reference host and measured there. Partial harness results still cannot
+arm any fence.
