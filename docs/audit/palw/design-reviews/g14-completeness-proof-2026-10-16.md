@@ -1684,10 +1684,16 @@ seat slash or terminal D-02 result. The driver JSON is nonterminal and
 `releaseApproval` remains false. This confirms slow but continuing chain
 progress and observable single-claim prioritization, not acceptance.
 
-At 18:03 JST, a read-only wRPC sample on P returned DAA 26 / 26 blocks,
+At 17:03 JST, a read-only wRPC sample on P returned DAA 26 / 26 blocks,
 15,280 producer draws, 50 attempt blocks and 43 heartbeat blocks across the
 94-block lane window (DAA 0..26); the last work block was DAA 26. The driver
 and node remained alive. This is one additional DAA since the 17:00 sample,
 not a terminal D-02 result: no seat-slash observation or release approval was
 returned. The slow progress remains unresolved and this run still uses
 `--no-d16`, so it is not release acceptance evidence.
+
+At 17:05 JST, a second read-only wRPC sample returned DAA 27 / 27 blocks,
+15,605 producer draws and 43 heartbeat blocks; the lane window still covered
+94 blocks over DAA 0..26, with the last work block at DAA 26. The node is
+advancing, but no new work block or terminal D-02 result appeared in this
+sample. The driver remains nonterminal and this run is not release acceptance.
