@@ -2456,3 +2456,28 @@ not only after valid EOF. The targeted core test is still compiling in
 `/tmp/codex-g14-tokenizer-byte-bound.log`; **no test PASS or 02-B node acceptance
 is claimed**. The earlier 5390/3120 refusal remains the recorded node outcome
 until the rebuilt declared-semantics case proves otherwise.
+
+
+## 16. Consolidated G14 source, qualification still pending (2026-10-18)
+
+`3c0bf17c1` combines the Codex native, drill and TIR/genesis branches. Native
+field inventory and wire visitors were regenerated against the combined schemas;
+all preset activation values remain dormant. This is source integration only.
+Existing node processes execute their original captured binaries and do not
+validate the new merge merely by remaining alive. Other Codex work streams are
+still active and their final integration is not claimed here.
+
+On the consolidated source, `python3 -m unittest discover -s scripts/genesis/tests
+-p test_genesis10_pipeline.py -v` passes **13/13, 0.320s**. Log:
+`/tmp/codex-g14-integrated-genesis-pipeline-tests.log`. This is an offline suite,
+including upload refusal for unmeasured/out-of-tolerance fits, not actual model
+conversion, upload or remote verification. Genesis #2's inherited long-fit
+process is still running; no success is inferred from its progress counter.
+
+The merged Rust compile, tokenizer syntax-bound regression, ordinary GDN node
+registration/prosecution, TIR payment and licensed-seat slash, native post-Final
+conviction, rebuilt live D-02, required sparse/skip-all and shipping boundary
+drills, RFC18 multi-model acceptance, the full genesis sequence, reference-node
+measurements and final fence/main integration remain outstanding. Historical
+lane section numbers above are retained with their branch-qualified headings;
+matching numbers from separate lane records do not replace one another.
