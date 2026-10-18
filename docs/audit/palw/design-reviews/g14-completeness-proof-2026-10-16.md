@@ -1672,3 +1672,14 @@ virtual chain while producer draws continue. It is not evidence that the
 driver's lie has been convicted, nor an explanation of every missing drill
 row. The terminal result JSON still had only the initial 6 observations and
 no acceptance result.
+
+At 17:00 JST, read-only RPC on P reported DAA 25 / 25 blocks, 14,441
+producer draws, 36 produced blocks and the same class-ticket probability of
+3.582e-3. The lane window held 92 blocks over DAA 0..25 (49 attempt, 42
+heartbeat, 1 other), with the last work block at DAA 24. O logged two claims
+whose local replay did not reproduce their committed roots, reserved against
+the first, and deferred a second reservation behind it (G-D02c). These claims
+remain before their receipt / conviction deadlines; this sample proves no
+seat slash or terminal D-02 result. The driver JSON is nonterminal and
+`releaseApproval` remains false. This confirms slow but continuing chain
+progress and observable single-claim prioritization, not acceptance.
