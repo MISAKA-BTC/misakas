@@ -349,6 +349,8 @@ class A16Windows(unittest.TestCase):
                        lambda r: r.update(a16_artifact_digest="cd" * 64),
                        lambda r: r["calibration"].update(artifact_digest="cd" * 64),
                        lambda r: r["calibration"].update(logit_scale=0),
+                       lambda r: r["calibration"].update(logit_scale=True),
+                       lambda r: r["windows"][0].update(top1_agree=True),
                        lambda r: r["windows"][0].update(positions=63),
                        lambda r: r["windows"][0]["kl"].update(mean=float("nan")),
                        lambda r: r["windows"][0]["kl"].update(max=float("inf"))]:
