@@ -1843,3 +1843,16 @@ evidence from that public filing alone. It checks that an honest root cannot jus
 forged output and attempts the court's ExecutorGuilty terminal for the corresponding lying
 root. This new test has **not run yet**: `/tmp/codex-g14-q36-held-forgery.log` is waiting for
 the node-build artifact lock. No guilty verdict is claimed from its source alone.
+
+
+### 15.13 Long node-clock waits gain diagnostic progress output (2026-10-18)
+
+The shared G14 node harness now reports long `beat_to` targets, DAA progress every 1,000
+heartbeat blocks, and completion. G-N2 also prints its prosecution target, the native Final
+DAA and the unchanged prosecution window. Wall time is diagnostic only; it is not a cost
+measurement or consensus input. No timeout, deadline, policy, threshold or target was changed.
+
+The current G-N2 PID 42654 predates these log changes and remains running. It is neither
+restarted nor declared failed because its observation is sparse. The new diagnostics will
+apply to a future rebuild/rerun if one is needed. No extra test was introduced merely to
+assert log text; execution evidence for the G-N2 behaviour remains pending.

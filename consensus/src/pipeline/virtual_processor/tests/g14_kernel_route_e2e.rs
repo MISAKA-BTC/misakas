@@ -365,8 +365,22 @@ impl Net {
 
     async fn beat_to(&mut self, daa: u64) {
         let ttpb = self.ttpb();
+        let start = self.daa();
+        let began = std::time::Instant::now();
+        let mut beats = 0u64;
+        let long = daa.saturating_sub(start) >= 1_000;
+        if long {
+            eprintln!("g14/node: heartbeat advance {start} -> {daa}");
+        }
         while self.daa() < daa {
             self.chain.heartbeat(ttpb, Vec::new()).await;
+            beats += 1;
+            if beats % 1_000 == 0 {
+                eprintln!("g14/node: heartbeat advance {start} -> {daa}: now {}, {beats} blocks, {:.1}s", self.daa(), began.elapsed().as_secs_f64());
+            }
+        }
+        if long || beats >= 1_000 {
+            eprintln!("g14/node: heartbeat target {daa} reached at {}, {beats} blocks, {:.1}s", self.daa(), began.elapsed().as_secs_f64());
         }
     }
 

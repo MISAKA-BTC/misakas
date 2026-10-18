@@ -555,6 +555,7 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     println!("g14n2/node: forged claim drawn over {} distinct bonds, attested by cards {colluders:?}", colluders.len());
     // ---- the prosecution window, then both certify and receive their receipts (77) ----
     let until = drawn.final_daa + cert.prosecution_window_daa + 2;
+    eprintln!("g14n2/node: prosecution wait from DAA {} to {until} (Final {}, window {})", net.daa(), drawn.final_daa, cert.prosecution_window_daa);
     net.beat_to(until).await;
     for c in [&bad_claim, &good_claim] {
         let r = cert_row(&net, c).unwrap();
