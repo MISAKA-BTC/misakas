@@ -120,6 +120,13 @@
 - **node-level 試験（REQ-X3-1〜5、D2 full-collusion、restart/reorg）:** 未着手。harness（`lg14a_legacy_filer_e2e` の型）で X3 を arm する必要がある。次の作業。
 - **tag 230 の codec:** 未実装。wire 形の案 A/B と A-2 への影響は ADR-0188「R-D2-READY」（Proposed、ユーザー判断待ち）。
 
+- **検証の現況（2026-10-18、同節の追記）:**
+- **変更**: D2（`palw_court_model_scope_v1`）と X3（`palw_claim_hard_deadline_v1`）の無条件 refusal を record gate に置換（`PALW_G14_ARMING_RECORDS_V1` は**空のまま**）。X3 の期限は窓の合成（`palw_x3_composed_policy_v1`）、X3 claim は DA pause を返さない（`palw_x3_pause_credit_v1`）。tag 230 は R-D2-READY として確定（codec と A-2 行の landed は未着手）。
+- **検証済み**: `palw_ruling_fences_v1` 16、econ の X3 gross floor / C_upper 4（commit 4cc05d5ec）。`--lib` の 8 件の FAIL は base 17cbdee9e でも同一（既存の失敗、本変更の原因ではない）。
+- **未検証・未実施**: node-level（virtual processor の block flow）の REQ-X3-1〜5、restart/reorg 再生の同一性、node-level の D2 full-collusion 試験、R-D2-COVER の finalize 読み取り集合の導出、tag 230 の codec と A-2 行。
+- **未測定（0 のまま拒否）**: X3 の Δ（`B_cold_fetch`・`B_check`・`B_localize`・`B_carrier`・`B_reorg_slack`）と `c_retain`。値は承認と測定まで入れない。
+- **activation**: なし。全 network で refuse。
+
 #### 3.1.1 2026-10-15（round 3）— D2代替経路・N4のtag 87・X3のretention延長（未検証のソース）
 
 上の未解決4項目のうち3つに休眠のソースを追加した。**ビルド・テストは未実行**で、PASSを主張しない。新しいobject種別・fence・tag・state tableは追加していない（既存3 fenceの裏側。fence未満・`None` presetではどのhookも読まれず、A-2の表とharnessは変更不要）。
@@ -149,11 +156,3 @@
 - [mainnet-readiness.md](../../../operations/releases/mainnet-readiness.md) の各行は「最終確認 2026-09-25 / `0e8ec984e`」のままで、冒頭の2026-10-10の設計注記は別基準である。これを単一の「現在のPASS表」として読まない。
 - 今後は行ごとに **検証SHA** と **テスト実行への参照**（CI run または `cargo test` の対象とSHA）を付け、ページ全体の更新日だけで状態を表さない。
 - [activation-readiness-matrix.md](activation-readiness-matrix.md) の Implemented / Verified / Armable はこの台帳の 実装 / 検証 と同じ意味で使い、「実証」（本番条件での第三者による検証・訴追）を別の段として加える。
-
-#### 3.1.2 2026-10-18 — D2/X3 arm-readiness record・X3 合成・tag 230 の予約確定（ADR-0188、検証の現況）
-
-- **変更**: D2（`palw_court_model_scope_v1`）と X3（`palw_claim_hard_deadline_v1`）の無条件 refusal を record gate に置換（`PALW_G14_ARMING_RECORDS_V1` は**空のまま**）。X3 の期限は窓の合成（`palw_x3_composed_policy_v1`）、X3 claim は DA pause を返さない（`palw_x3_pause_credit_v1`）。tag 230 は R-D2-READY として確定（codec と A-2 行の landed は未着手）。
-- **検証済み**: `palw_ruling_fences_v1` 16、econ の X3 gross floor / C_upper 4（commit 4cc05d5ec）。`--lib` の 8 件の FAIL は base 17cbdee9e でも同一（既存の失敗、本変更の原因ではない）。
-- **未検証・未実施**: node-level（virtual processor の block flow）の REQ-X3-1〜5、restart/reorg 再生の同一性、node-level の D2 full-collusion 試験、R-D2-COVER の finalize 読み取り集合の導出、tag 230 の codec と A-2 行。
-- **未測定（0 のまま拒否）**: X3 の Δ（`B_cold_fetch`・`B_check`・`B_localize`・`B_carrier`・`B_reorg_slack`）と `c_retain`。値は承認と測定まで入れない。
-- **activation**: なし。全 network で refuse。
