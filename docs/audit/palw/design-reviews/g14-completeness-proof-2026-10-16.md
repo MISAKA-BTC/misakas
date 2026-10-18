@@ -1685,3 +1685,9 @@ attempt は既存の `attempt_job_for_claim` で accepted block の job と prom
 `gdn_accuser_view_v2` は folded capture の tile 再構成に通常の full-execution 一致検査を使用していた。checkpoint root だけが偽造された capture でも全 root が不一致となるため、GDN 検出に届く前に拒否される。GDN 専用の読み取りでは、再実行した binding の checkpoint Merkle root だけを対象 capture の値に置換し、execution commitment を再計算した後、他の全 field が一致することを必須にした。通常の capture 検証は full binding の一致を要する。告発の決定論的裁定や consensus の受理条件は変更しない。
 
 対象試験は、既存の graph-v8 実行から本物の folded capture を保持し、state chunk 1 byte と checkpoint tree を偽造して再 commit した serialized capture を service host に渡す。正直な capture は `honest`、偽造 checkpoint は case を開くことを必須とした。結果は `/tmp/codex-g14-gdn-service-host.log` 待ちであり、まだ PASS として計上しない。これは service host の対象試験で、full node E2E は依然必要。
+
+### 15.5 GDN artifact fixture; build interrupted for disk capacity (2026-10-18)
+
+Added `palw_service_gdn_e2e.rs`: write a tiny hybrid artifact with Qwen36Writer, carry a normal signed ClassRegistered through mempool/template, and independently resolve its backend through the node SDK loader and chain class resolver. This is the registration/holding foundation for the prosecution E2E; it does not demonstrate conviction or slash. Not yet built or run.
+
+The GDN fold and service-host builds were interrupted when available disk reached 24,974,090,240 bytes, below the 25 GB limit. Only our cargo processes 13968 / 16947 and their orphan compiler were interrupted. This is incomplete validation due to capacity, not a test failure or pass. TIR node tests, native G-N2, genesis #2 fit and run 12 remain running. Resume the same targeted commands after recovering capacity.

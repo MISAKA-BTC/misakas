@@ -43,6 +43,8 @@ use std::{collections::BTreeSet, sync::Arc, thread::JoinHandle, time::Duration};
 mod staged_tokenizer;
 #[path = "palw_service_terminal_e2e.rs"]
 mod terminal;
+#[path = "palw_service_gdn_e2e.rs"]
+mod gdn;
 #[path = "palw_service_tiled_e2e.rs"]
 mod tiled;
 

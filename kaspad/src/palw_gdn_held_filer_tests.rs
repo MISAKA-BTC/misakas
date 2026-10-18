@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 const NETWORK: &[u8] = b"misaka-palw-rc";
 
-fn geometry() -> PalwQwen36GeometryV1 {
+pub(crate) fn geometry() -> PalwQwen36GeometryV1 {
     PalwQwen36GeometryV1 {
         layer_count: 4,
         full_attention_interval: 4,
