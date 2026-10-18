@@ -205,10 +205,38 @@ choices and are NOT adopted here. The span fit is an assumption; the conclusion 
 Test evidence: `palw_tir_adjudication_slot_v1` (7 tests, M = 1, FIFO grant, duplicate refused, silent holder reclaimed at its deadline,
 re-occupation capped, worst wait `(K−1)·budget`, pure in events and time).
 
+## Final terms: block shrink under K_owner = 8 (2026-10-19)
+
+Decision (goal authority): `K_owner = 8` is kept (fewer owners would reduce outside verifiers' access). The adjudication block is
+shrunk instead by bisecting deeper. Each extra level divides every reduction block (attention tile, GDN state block, matmul block) by
+16 (rounded up), adds one round of 46 DAA, and never divides the floor (one leaf + one logits tile = 16,384 B).
+
+Door (declared fit `span(B) = 44 + ceil(B / 920)`; prep 16; output 53; `K = 8`):
+
+`D(levels) = 16 + 53 + (R + levels)·46 + (K + 1)·span(B(levels))`, `B(levels) = 16,384 + ceil(65,536/16^L) + ceil(65,536/16^L) + ceil(131,072/16^L)`
+
+| extra levels L | B (bytes) | span | 32K door (R = 12) | 2M door (R = 16) |
+|---:|---:|---:|---:|---:|
+| 0 | 278,528 | 347 | 3,744 | 3,928 |
+| 1 | 32,768 | 80 | 1,387 | 1,571 |
+| **2** | **17,408** | **63** | **1,280** | **1,464** |
+| 3 | 16,448 | 62 | 1,317 | 1,501 |
+| 7 | 16,385 | 62 | 1,501 | 1,685 |
+
+**Minimum at L = 2 for both sizes.** At 2M: `D = 1,464 ≤ 3,120` with headroom 1,656. Dominant term at L = 2: the carrier count
+`(K+1)·span = 9·63 = 567`, then the rounds `18·46 = 828`. The shortfall of the no-shrink design (808 DAA at 2M) is closed by two levels.
+
+Implemented as a pure function (dormant, derivation only): `palw_tir_dispute_door_fit_v1` and `palw_tir_dispute_door_minimum_v1`
+in `palw_tir_frame_cost_v1` (test `the_dispute_door_is_within_3120_at_32k_and_2m_at_the_minimising_level`).
+
+**Not proven:** the span fit at block sizes near 17 KB (the fit is from two points at 0.8 MB and 2.1 MB; its intercept of 44 DAA
+dominates at this size, so the result depends on it); the recomputation of the 17 KB block from authenticated operands is the
+existing step machinery and is not re-derived here; no check is skipped and no hash or checkpoint is taken as proof.
+
 ## Unmet conditions
 
 1. Shape constants of graph-v7@2097152 (kv row, state block, matmul blocks) from the program, not declared.
-2. **Not met:** the door with serialised admission exceeds 3,120 at 32K and 2M for `K = 8` and `B_adj = 278,528` (see "Admission and the owner queue"). Either the block shrinks to about 195 KB at 2M or `K ≤ 4` is adopted. Both are design decisions for the user; the derived prep (16) is a declared-parameter value, to be measured.
+2. **Met by the final terms above (two extra levels, B = 17,408 B, 2M door 1,464):** the earlier shortfall at `K = 8`, `B_adj = 278,528` was 3,744 / 3,928 (see "Admission and the owner queue"). Either the block shrinks to about 195 KB at 2M or `K ≤ 4` is adopted. Both are design decisions for the user; the derived prep (16) is a declared-parameter value, to be measured.
 3. Span slope re-measured on the shipped binary.
 4. Adversarial tests: whole collusion + one external verifier; default on missing answers; restart and reorg identity across the fence.
 
