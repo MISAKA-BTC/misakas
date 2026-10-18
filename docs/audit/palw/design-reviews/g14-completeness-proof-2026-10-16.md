@@ -1707,3 +1707,11 @@ The no-default-features kaspad lib-test build completed in 37m08s. The service-h
 The independently cloned executable `/tmp/codex-g14-gdn-built-test` ran the registered-artifact test, which failed in 0.57s because ClassRegistered had not produced a registry row. Its graph reaches the token-lift kernel while the fixture had not armed that kernel's admission fence at its start height. The test now explicitly arms that dormant fence at DAA 0; shipped presets are unchanged. This explanation remains to be verified by rerun. The registration test and fold E2Es remain incomplete; no node prosecution success is claimed.
 
 15.7 diagnostic follow-up: the registered GDN fixture now runs the shared `palw_admission_shape_at_v1` / `palw_admission_probe_v1` before funding its ordinary ClassRegistered carrier. This exposes the actual native refusal if another graph prerequisite is absent, without replacing the real mempool/template registration or its registry assertion. Validation remains pending behind the active native lib-test build.
+
+### 15.8 GDN fold and service-host results (2026-10-18)
+
+- `/tmp/codex-g14-gdn-fold-resume.log`: **8 passed / 0 failed**, 12.39s. Includes two held-court fold E2Es: the answering forger is CourtFraud at DAA 106 after demand/answer/accusation (producer loses 200), and the silent forger is ProducerWithholding at DAA 125 (producer loses 200), plus honest/no-demand and head/transition tests. These remain fold-level evidence.
+- `/tmp/codex-g14-gdn-service-host-held.log`: **1 passed / 0 failed**, 2.75s, after kaspad lib-test build 13m30s (including waiting). The real serialized held capture is decoded using the claim prompt; the forged checkpoint opens an outside case; foreign binding/prompt are refused. This validates the service host, not full P2P prosecution.
+- `/tmp/codex-g14-gdn-registration.log`: **0 passed / 1 failed**, 0.33s. The new preflight reports the precise prerequisite `Gate(GdnKeyHeadsNeedsItsFence)`. The registration fixture now also arms the existing GDN key-head fence at DAA 0; no shipped preset or policy value changes. Rerun in `/tmp/codex-g14-gdn-registration-key-heads.log`, pending.
+
+The earlier token-lift-only change did not close registration; the actual refusal above supersedes the prior suspected explanation. Full GDN node/P2P conviction and collateral assertions are still required.

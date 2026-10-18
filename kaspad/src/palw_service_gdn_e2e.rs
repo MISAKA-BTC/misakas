@@ -136,6 +136,7 @@ async fn registered_gdn_class_passes_normal_registration_and_host_resolution() {
     // This graph reaches the token-lift kernel; the ordinary admission gate requires its fence.
     let mut params = config.params.clone();
     params.palw_token_lift = Some(ForkActivation::new(0));
+    params.palw_gdn_key_heads = Some(ForkActivation::new(0));
     let mut chain = Chain::new(Config::new(params), bundle, &premine);
     chain.advance(2).await;
     let fixture = GdnFixture::new(&chain);
