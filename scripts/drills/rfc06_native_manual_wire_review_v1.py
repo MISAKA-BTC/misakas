@@ -23,7 +23,7 @@ PINNED = {
 'crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1': ('reviewed-field-layout','049c32133b7944f49670cbffd8ad581e47bd0e7f8cc3369b969fb93969026178'),
 'crate::palw_staged_bundle_v1::PalwStagedFamilyCheckpointV1': ('reviewed-field-layout','734f45329f56538ee85d85977e841f357de05634b6b37b846622feaea926780b'),
 'crate::palw_staged_bundle_v1::PalwStagedFamilyRowV1': ('reviewed-field-layout','b92b6935c58487df4bdf9f5e254db9a43e018a57463827d3cf49b1bc0c01270a'),
-'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','7344dcc14d16436e54235966fa07280d52a191a9091f258b33f467b07c2b933b'),
+'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','81bf93a51e0c411f0a9b1ddfbd872bdf498f206686b96672d072e4701461abcd'),
 'crate::palw_tir_prefix_owned_v1::PalwTirPrefixLeafAnswerV1': ('reviewed-field-layout','1aa6332539dd6d430025fdd6d15e1737c9ccd0fad6ced34bc4798e4dcbfad422'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicChunkRecordV1': ('reviewed-field-layout','394604fa55e5ec254a05265c967a3604f9584f90505e54083bcd28b91b626d92'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicContractV1': ('reviewed-field-layout','a37709c03faa51fcc923e9055aa29a280ab0b09ef3cfa086ef66997762cf745f'),

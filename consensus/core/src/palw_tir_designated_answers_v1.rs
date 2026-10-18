@@ -28,6 +28,9 @@ pub type PalwTirDigestV1 = [u8; 32];
 /// `palw_tir_designated_answers_v1`: below it the live build reads the bytes as undecodable and skips them (A-2).
 pub const PALW_TIR_DESIGNATED_EVENT_TAG_V1: u8 = 245;
 
+/// The carriage tail of [`PalwTirDesignatedRegistryV1`] (appended after the state carriage's other tails, written only when non-empty).
+pub const PALW_CARRIAGE_TIR_DESIGNATED_TAIL_V1: u8 = 0xE3;
+
 /// The most designated custodians one request names (a bound on the handover chain).
 pub const PALW_TIR_DESIGNATED_MAX_CUSTODIANS_V1: usize = 8;
 

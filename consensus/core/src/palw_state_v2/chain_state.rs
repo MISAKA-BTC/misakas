@@ -138,6 +138,7 @@ impl PalwChainStateV2 {
             improvement_eval_jobs: BTreeMap::new(),
             panel_v3: None,
             legacy_disputes: BTreeMap::new(),
+            tir_designated: Default::default(),
             fp_public_jobs: BTreeMap::new(),
             class_semantics: BTreeMap::new(),
             claim_semantics: BTreeMap::new(),
@@ -2835,6 +2836,11 @@ impl PalwChainStateV2 {
         if !self.legacy_disputes.is_empty() {
             state.update(b"legacy_disputes/v1");
             state.update(collection_root(b"legacy_disputes", &self.legacy_disputes).as_byte_slice());
+        }
+        // **ADR-0191 step B.** Its own block: empty until a designated event is folded past its fence, which nothing below it can do.
+        if !self.tir_designated.records.is_empty() {
+            state.update(b"tir_designated/v1");
+            state.update(collection_root(b"tir_designated", &self.tir_designated.records).as_byte_slice());
         }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a

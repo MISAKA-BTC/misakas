@@ -670,11 +670,10 @@ fn apply_object_inner(
         PalwConsensusObjectV2::MemoryRoutingV2 { object } => {
             super::palw_memory_routing_fold_v2::apply_memory_routing_v2(builder, ctx, object)?;
         }
-        // ADR-0191 step B (tag 245). The lifecycle gate routes it by `palw_tir_designated_answers_v1`: below that fence it never
-        // reaches this fold (A-2, no state write). The registry is not yet a field of the fold state, so an in-force event is refused
-        // rather than applied to a throwaway registry; the wiring is the open step.
-        PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => {
-            return Err(PalwStateV2Error::InvalidParams("TirDesignatedEventV1: the designated registry is not wired into the fold state"));
+        // ADR-0191 step B (tag 245): the acceptance gate routes it by `palw_tir_designated_answers_v1`, so below that fence it never
+        // reaches this fold (A-2). Here it is folded only when the extras flag (the fence's mirror) is set; otherwise a strict no-op.
+        PalwConsensusObjectV2::TirDesignatedEventV1 { event } => {
+            apply_tir_designated_event_v1(builder, event)?;
         }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
@@ -3811,4 +3810,44 @@ fn check_readiness_model_scope_v1(
     let registered = builder.state.class(class_id).map(|class| class.registered_daa);
     crate::palw_ruling_fences_v1::palw_court_model_scope_admits_readiness_v1(builder.params, ctx.daa_score, registered)
         .map_err(|why| PalwStateV2Error::ReadinessProofRefused(why.to_string()))
+}
+
+/// **The one writer of the designated registry (tag 245, ADR-0191 step B).** Dormant: without `extras.tir_designated_answers_active`
+/// the event is a strict no-op, so the state (and its root) is byte-identical. In force, the registry's pure rules run on a
+/// one-record copy of the touched request, so a refused event writes nothing; an event that changes nothing (a repeat) journals
+/// nothing. Only the touched record is journaled (delta 215).
+pub(super) fn apply_tir_designated_event_v1(
+    builder: &mut TransitionBuilder<'_>,
+    event: &crate::palw_tir_designated_answers_v1::PalwTirDesignatedEventV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_tir_designated_answers_v1 as d;
+    if !builder.extras.tir_designated_answers_active {
+        return Ok(());
+    }
+    let key = match event {
+        d::PalwTirDesignatedEventV1::Open(request) => request.key,
+        d::PalwTirDesignatedEventV1::Answer { key, .. } | d::PalwTirDesignatedEventV1::FalseValid { key, .. } => *key,
+    };
+    let mut working = d::PalwTirDesignatedRegistryV1::default();
+    if let Some(record) = builder.state.tir_designated.records.get(&key) {
+        working.records.insert(key, record.clone());
+    }
+    d::palw_tir_apply_designated_event_v1(&mut working, true, event.clone()).map_err(|refusal| {
+        PalwStateV2Error::ImmutableModelUpdate(match refusal {
+            d::PalwTirDesignatedRegistryErrorV1::Rule(_) => "designated-answer event refused by its rules",
+            d::PalwTirDesignatedRegistryErrorV1::AlreadyOpen => "a designated request is open once",
+            d::PalwTirDesignatedRegistryErrorV1::UnknownRequest => "designated event names an unopened request",
+        })
+    })?;
+    let new = working.records.remove(&key);
+    let old = builder.state.tir_designated.records.get(&key).cloned();
+    if old == new {
+        return Ok(());
+    }
+    match &new {
+        Some(record) => builder.state.tir_designated.records.insert(key, record.clone()),
+        None => builder.state.tir_designated.records.remove(&key),
+    };
+    builder.entries.push(PalwDeltaEntryV2::TirDesignated { key, old, new });
+    Ok(())
 }
