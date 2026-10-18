@@ -68,6 +68,23 @@ fn current(
     Ok((anchor, checkpoint, history))
 }
 
+/// Most jobs have no monetary challenge history. Do not reconstruct a whole
+/// finalized native state for those jobs on every poll. Legacy WALs without a
+/// base still need the positive own view; a filename alone is not acceptance.
+pub(super) fn needs_finalized_view(outbox: &Path, cap: u64, actor: PalwBondKeyV2, claim: Digest) -> Result<bool, Error> {
+    if outbox.join("challenge-base.borsh").exists() {
+        return Ok(true);
+    }
+    for slot in 0..64 {
+        if let Some(object) = read_action(outbox, slot, cap)? {
+            if challenge(&object, actor, claim)?.is_some() {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Publish before the first new challenge object/transaction. For an existing
 /// WAL the exact current A2/A3 may recover its previous anchor; an unrelated
 /// latest checkpoint is never treated as that WAL's acceptance.

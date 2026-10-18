@@ -379,12 +379,25 @@ impl PreparedKernelPaidCheckV4 {
                 kaspa_core::debug!("checker own native route unavailable; exact WAL retained");
                 continue;
             };
-            let finalized_challenges = match api.palw_material_challenge_finalized_v4(self.checker) {
-                Ok(view) => view,
-                Err(error) => {
-                    kaspa_core::debug!("checker own finalized challenge state unavailable; no action: {error}");
-                    continue;
+            let needs_finality =
+                match challenge_history::needs_finalized_view(&self.outbox, self.spec.max_input_bytes, self.checker, base) {
+                    Ok(needs) => needs,
+                    Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                        kaspa_core::debug!("checker challenge history unknown; exact WAL retained: {error}");
+                        continue;
+                    }
+                    Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+                };
+            let finalized_challenges = if needs_finality {
+                match api.palw_material_challenge_finalized_v4(self.checker) {
+                    Ok(view) => view,
+                    Err(error) => {
+                        kaspa_core::debug!("checker own finalized challenge state unavailable; no action: {error}");
+                        continue;
+                    }
                 }
+            } else {
+                None
             };
             let scanned = match outbox::scan_outbox(
                 &self.outbox,
