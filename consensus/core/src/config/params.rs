@@ -79,7 +79,7 @@ pub struct ForkedParam<T: Copy> {
 }
 
 impl<T: Copy> ForkedParam<T> {
-    const fn new(pre: T, post: T, activation: ForkActivation) -> Self {
+    pub const fn new(pre: T, post: T, activation: ForkActivation) -> Self {
         Self { pre, post, activation }
     }
 
@@ -3281,9 +3281,8 @@ pub struct Params {
     /// USER decision (PRINCIPLES §0 / ADR-0173/0176/0177/0178 amendment pending); until then it is fail-closed and the fence is refused
     /// when armed. **Dormant** as above.
     pub palw_independently_work_certified_v1: Option<ForkActivation>,
-    /// **palw_dag_width_schedule_v1** — RFC-0018 §8: a named (GHOSTDAG k, block time, parents, mergeset) step. SPEC AND STUB: nothing
-    /// reads it; validation refuses it armed. Values are a user decision. **Dormant** as above (the schedule's id is hashed beside
-    /// the height).
+    /// **palw_dag_width_schedule_v1** — RFC-0018 §8: dormant per-block k, parents, mergeset and merge-depth readers,
+    /// keyed on the selected parent's DAA. Block time remains fixed. All presets are None; validation refuses arming.
     pub palw_dag_width_schedule_v1: Option<crate::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be

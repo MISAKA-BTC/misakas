@@ -354,8 +354,8 @@ pub struct VirtualStateProcessor {
 
     // Config
     pub(super) genesis: GenesisBlock,
-    pub(super) max_block_parents: u8,
-    pub(super) mergeset_size_limit: u64,
+    pub(super) max_block_parents: kaspa_consensus_core::config::params::ForkedParam<u16>,
+    pub(super) mergeset_size_limit: kaspa_consensus_core::config::params::ForkedParam<u64>,
     /// ADR-0068 Phase 1 (F3a): the heartbeat width bound's fence (same activation as the lane —
     /// `Params::palw_heartbeat_width_fence`). `Some` = templates keep their mergesets within
     /// `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeat members, chunking sibling floods exactly as
@@ -1285,8 +1285,8 @@ impl VirtualStateProcessor {
             palw_maturity_warn_last_band: std::sync::atomic::AtomicU64::new(0),
             palw_beacon_fold: params.palw_beacon_fold,
             palw_chunk_cap_charge: params.palw_chunk_cap_charge,
-            max_block_parents: params.max_block_parents(),
-            mergeset_size_limit: params.mergeset_size_limit(),
+            max_block_parents: params.max_block_parents_history(),
+            mergeset_size_limit: params.mergeset_size_limit_history(),
             palw_heartbeat_width_fence: params.palw_heartbeat_width_fence(),
 
             db,
@@ -3891,8 +3891,9 @@ impl VirtualStateProcessor {
                     let (pair, counts) = self.palw_rule_e_pair_v1(&mut states, refused, sink)?;
                     // RFC-0018 §6: the v2 order past its fence at the sink's DAA (the v1 order exactly below it).
                     let capital_v2 = self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.palw_rule_e_participation_v2_at(daa));
-                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v2(&pair.a, &pair.b, counts, capital_v2)
-                        != std::cmp::Ordering::Greater)
+                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v2(
+                        &pair.a, &pair.b, counts, capital_v2,
+                    ) != std::cmp::Ordering::Greater)
                         .then_some(refused);
                 }
                 let (incumbent, challenger) = (self.palw_candidate_order_v2(sink)?, self.palw_candidate_order_v2(refused)?);
@@ -5205,8 +5206,9 @@ impl VirtualStateProcessor {
         // we might touch such data prior to validating the bounded merge rule. All in all, this function is short
         // enough so we avoid making further optimizations
         let _prune_guard = self.pruning_lock.blocking_read();
-        let max_block_parents = self.max_block_parents as usize;
-        let mergeset_size_limit = self.mergeset_size_limit;
+        let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
+        let max_block_parents = self.max_block_parents.get(parent_daa) as usize;
+        let mergeset_size_limit = self.mergeset_size_limit.get(parent_daa);
         let max_candidates = self.max_virtual_parent_candidates(max_block_parents);
 
         // Prioritize half the blocks with highest blue work and pick the rest randomly to ensure diversity between nodes

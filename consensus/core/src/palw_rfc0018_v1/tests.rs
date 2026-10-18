@@ -539,8 +539,8 @@ fn rfc18_anchor_contributions_are_committed_fold_output() {
 /// participation, settled-anchor and weight credit exactly when it is SecurityCertified — never for its tier.
 #[test]
 fn rfc18_round5_every_tier_needs_security_certified_and_none_is_exempt() {
-    use crate::palw_fork_choice_rule_e_v1::{PalwRuleECertificationV1, PalwRuleENoBondBudgetV1};
     use crate::palw_annual_catalog_v1::{ApprovedModelV1, PalwAnnualCatalogChainV1};
+    use crate::palw_fork_choice_rule_e_v1::{PalwRuleECertificationV1, PalwRuleENoBondBudgetV1};
     use crate::palw_model_tier_v1::{PalwModelTierFenceV1, palw_model_tier_of_v1};
     let root = Hash64::from_u64_word(0xA11);
     // RFC-0019: listed in the genesis catalog (edition 0) …
@@ -624,7 +624,11 @@ fn rfc18_frontier_rolls_back_on_conviction_and_pruning_never_passes_a_rollback_t
     assert_eq!(palw_gate_c_frontier_v1(&state, &p, u64::MAX).0, 20);
     // The claim at 10 retires: the floor takes it; the frontier is unchanged; the rollback bound moves up to 20.
     let floor = PalwCertifiedFrontierFloorV1 { blue_score: 10, block: Hash64::from_u64_word(0xB10C_0000 + 10).as_bytes() };
-    state.set_kernel_aux_row_for_tests(PALW_SECURITY_CERTIFICATION_TABLE_V1, certification_frontier_floor_key_v1(), Some(borsh::to_vec(&floor).unwrap()));
+    state.set_kernel_aux_row_for_tests(
+        PALW_SECURITY_CERTIFICATION_TABLE_V1,
+        certification_frontier_floor_key_v1(),
+        Some(borsh::to_vec(&floor).unwrap()),
+    );
     state.set_false_valid_rows_for_tests(claim_id(10), None, None, None, 0);
     assert_eq!(palw_gate_c_frontier_v1(&state, &p, u64::MAX).0, 20);
     assert_eq!(palw_frontier_rollback_bound_v1(&state, &p), Some(20));
@@ -668,7 +672,13 @@ fn rfc18_dag_width_estimate_is_monotone_and_the_schedule_is_structurally_checked
     assert!(palw_dag_width_red_permille_v1(300_000, 120_000, 4) < long, "a wider k reds less");
     let probe = PalwDagWidthScheduleFenceV1::unapproved_probe_at(ForkActivation::new(FENCE));
     assert_eq!(probe.schedule.refusal(), None);
-    let bad = PalwDagWidthScheduleV1 { ghostdag_k: 4, target_time_per_block_ms: 120_000, max_block_parents: 10, mergeset_size_limit: 30 };
+    let bad = PalwDagWidthScheduleV1 {
+        ghostdag_k: 4,
+        target_time_per_block_ms: 120_000,
+        max_block_parents: 10,
+        mergeset_size_limit: 30,
+        merge_depth: 30,
+    };
     assert!(bad.refusal().is_some());
     assert_ne!(probe.schedule.id(), bad.id());
 }
@@ -949,4 +959,68 @@ fn rfc18_a_slow_model_a_claim_stops_only_the_shared_frontier_not_model_b_final_c
 
 fn expect_share(blocks: u64, cap: u64, models: u64) -> u64 {
     blocks * cap / models
+
+#[test]
+fn rfc18_width_histories_switch_at_the_parent_and_restore_on_reorg() {
+    let mut p = crate::config::params::MAINNET_PARAMS.clone();
+    let base = (p.ghostdag_k(), p.max_block_parents() as u16, p.mergeset_size_limit(), p.merge_depth());
+    let mut fence = PalwDagWidthScheduleFenceV1::unapproved_probe_at(ForkActivation::new(100));
+    fence.schedule.merge_depth = base.3 + 17;
+    p.palw_dag_width_schedule_v1 = Some(fence);
+    for daa in [0, 99, 100, 101, 99, 100] {
+        let expected = if daa < 100 { base } else { (3, 16, 360, base.3 + 17) };
+        assert_eq!(
+            (
+                p.ghostdag_k_history().get(daa),
+                p.max_block_parents_history().get(daa),
+                p.mergeset_size_limit_history().get(daa),
+                p.merge_depth_history().get(daa)
+            ),
+            expected
+        );
+    }
+    fence.activation = ForkActivation::never();
+    p.palw_dag_width_schedule_v1 = Some(fence);
+    for daa in [0, 99, 100, u64::MAX] {
+        assert_eq!(
+            (
+                p.ghostdag_k_history().get(daa),
+                p.max_block_parents_history().get(daa),
+                p.mergeset_size_limit_history().get(daa),
+                p.merge_depth_history().get(daa)
+            ),
+            base
+        );
+    }
+}
+
+#[test]
+fn rfc18_width_merge_depth_is_committed_and_unmeasured_steps_cannot_arm() {
+    let mut f = PalwDagWidthScheduleFenceV1::unapproved_probe_at(ForkActivation::new(100));
+    let id = f.schedule.id();
+    f.schedule.merge_depth += 1;
+    assert_ne!(id, f.schedule.id());
+    let mut p = crate::config::params::MAINNET_PARAMS.clone();
+    p.palw_dag_width_schedule_v1 = Some(f);
+    assert!(p.validate_palw_rfc0018_v1().is_err());
+    f.schedule.merge_depth = 0;
+    assert!(f.schedule.refusal().is_some());
+}
+
+#[test]
+fn rfc18_width_cannot_change_the_clock_shrink_a_cluster_or_outrun_pruning() {
+    let base = palw_t12_shipped_params();
+    let mut p = base.clone();
+    let mut f = PalwDagWidthScheduleFenceV1::unapproved_probe_at(ForkActivation::new(100));
+    f.schedule.target_time_per_block_ms += 1;
+    p.palw_dag_width_schedule_v1 = Some(f);
+    assert!(matches!(p.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("block time")));
+    f.schedule.target_time_per_block_ms = base.target_time_per_block();
+    p.blockrate.ghostdag_k = f.schedule.ghostdag_k + 1;
+    p.palw_dag_width_schedule_v1 = Some(f);
+    assert!(matches!(p.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("decrease k")));
+    p.blockrate.ghostdag_k = base.ghostdag_k();
+    f.schedule.merge_depth = base.finality_depth() + 1;
+    p.palw_dag_width_schedule_v1 = Some(f);
+    assert!(matches!(p.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("geometry")));
 }

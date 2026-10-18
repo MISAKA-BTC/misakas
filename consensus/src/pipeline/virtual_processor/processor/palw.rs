@@ -822,9 +822,8 @@ impl VirtualStateProcessor {
         // it — the ceiling is the pruning-progress rule, independent of security credit: below the oldest unresolved claim and the
         // oldest Final claim whose certification is still undecided (history an open claim, court or certification still reads),
         // never above. Below the fence (every shipped network) the frontier rule, unchanged.
-        let gate_c = state_params.rfc0018_v1().is_some_and(|mirror| {
-            mirror.gate_c_at(state.last_point().map_or(0, |point| point.daa_score))
-        });
+        let gate_c =
+            state_params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(state.last_point().map_or(0, |point| point.daa_score)));
         if gate_c {
             // Two bounds, both independent of whether anything certifies: the progress ceiling (open claims, courts, undecided
             // certifications) and the ROLLBACK bound — the lowest frontier a still-open conviction window could move the frontier
@@ -2980,7 +2979,9 @@ impl VirtualStateProcessor {
         // RFC06-8: a class registered past `palw_class_registration_origin_v1` carries its registering block and admission digest
         // in the snapshot's own state (kernel route aux 141); bytes that hash to that digest ARE the original declaration. A class
         // registered before the fence has no row and falls through to the genesis rule below, unchanged.
-        if kaspa_consensus_core::palw_class_registration_origin_v1::palw_class_declaration_origin_authenticated_v1(route, &id, class, bytes) {
+        if kaspa_consensus_core::palw_class_registration_origin_v1::palw_class_declaration_origin_authenticated_v1(
+            route, &id, class, bytes,
+        ) {
             return Ok(());
         }
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
@@ -6629,9 +6630,9 @@ impl VirtualStateProcessor {
             let owner = if a.action == 54 {
                 let part = kaspa_consensus_core::palw_native_job_v39::borrowed_native_commit_metadata_v39(a.body)
                     .ok_or_else(|| "native39 original bounded commit page metadata absent".to_string())?;
-                state.kernel_route().and_then(|r| {
-                    r.native_commit_owner_v39(part.job, part.group, part.index, part.count, part.total, daa_score)
-                })
+                state
+                    .kernel_route()
+                    .and_then(|r| r.native_commit_owner_v39(part.job, part.group, part.index, part.count, part.total, daa_score))
             } else {
                 let (job, group) = kaspa_consensus_core::palw_native_job_v39::borrowed_native_commit_assembly_v39(a.body)
                     .ok_or_else(|| "native39 exact original commit assembly frame".to_string())?;
@@ -7179,10 +7180,11 @@ impl VirtualStateProcessor {
                     permissionless: None,
                 }))
             }
-            None => Some(
-                self.palw_block_may_anchor_a_panel_v1(header, daa)
-                    .then_some(PalwChainAnchorV1 { reach: daa, operator_attempts: None, permissionless: None }),
-            ),
+            None => Some(self.palw_block_may_anchor_a_panel_v1(header, daa).then_some(PalwChainAnchorV1 {
+                reach: daa,
+                operator_attempts: None,
+                permissionless: None,
+            })),
         }
     }
 
@@ -10388,9 +10390,9 @@ impl VirtualStateProcessor {
         let mut out = Vec::new();
         // RFC-0018 §5.2: past the permissionless anchor a block anchors only the claims a contribution of ANOTHER bond reaches — the
         // per-claim predicate step 4c asks, on the same committed contributions.
-        let permissionless = self.palw_panel_anchor_permissionless_at(block_daa).then(|| {
-            kaspa_consensus_core::palw_rfc0018_v1::palw_permissionless_contributions_from_state_v1(state, header.blue_score)
-        });
+        let permissionless = self
+            .palw_panel_anchor_permissionless_at(block_daa)
+            .then(|| kaspa_consensus_core::palw_rfc0018_v1::palw_permissionless_contributions_from_state_v1(state, header.blue_score));
         for claim_id in provisional {
             let Some(claim) = folded.claim(&claim_id) else { continue };
             if let Some(contributions) = permissionless.as_ref()
@@ -10832,7 +10834,7 @@ impl VirtualStateProcessor {
             if fence.is_active(selected_daa) {
                 return;
             }
-            if fence.is_active(selected_daa.saturating_add(self.mergeset_size_limit).saturating_add(1)) {
+            if fence.is_active(selected_daa.saturating_add(self.mergeset_size_limit.get(selected_daa)).saturating_add(1)) {
                 let base = self.ghostdag_manager.ghostdag(&virtual_parents[..]);
                 match self.window_manager.block_daa_window(&base) {
                     Ok(window) if !fence.is_active(window.daa_score) => {}
@@ -10877,7 +10879,10 @@ impl VirtualStateProcessor {
                     None => malformed = true,
                 }
             }
-            if malformed || ghostdag.mergeset_size() as u64 - members.len() as u64 > self.mergeset_size_limit {
+            if malformed
+                || ghostdag.mergeset_size() as u64 - members.len() as u64
+                    > self.mergeset_size_limit.get(self.headers_store.get_daa_score(selected_parent).unwrap())
+            {
                 continue;
             }
             if palw_execution_mergeset_rule_v1(None, &members, width, lane.max_per_mergeset).is_err() {

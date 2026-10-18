@@ -39,7 +39,8 @@ impl HeaderProcessor {
         let (permit_members, slice_members) = self.round_lane_members_v2(ctx.ghostdag_data())?;
         let round_members = (permit_members.len() + slice_members) as u64;
         let mergeset_size = ctx.ghostdag_data().mergeset_size() as u64 - round_members;
-        let mergeset_size_limit = self.mergeset_size_limit;
+        let mergeset_size_limit =
+            self.mergeset_size_limit.get(self.headers_store.get_daa_score(ctx.ghostdag_data().selected_parent).unwrap());
         if mergeset_size > mergeset_size_limit {
             return Err(RuleError::MergeSetTooBig(mergeset_size, mergeset_size_limit));
         }

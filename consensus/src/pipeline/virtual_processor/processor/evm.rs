@@ -662,7 +662,7 @@ impl VirtualStateProcessor {
                 })
                 .collect();
         round_tips.sort_by_key(|(tip_round, tip)| std::cmp::Reverse((*tip_round, *tip)));
-        let max_block_parents = self.max_block_parents as usize;
+        let max_block_parents = self.max_block_parents.get(self.headers_store.get_daa_score(anchor).unwrap()) as usize;
         let mut parents: Vec<BlockHash> = Vec::new();
         let parents_with_anchor = |chosen: &[BlockHash]| -> Vec<BlockHash> {
             let anchor_is_behind_a_tip =
@@ -715,7 +715,8 @@ impl VirtualStateProcessor {
             {
                 continue;
             }
-            if ghostdag.mergeset_size() as u64 - (members.len() + slices) as u64 > self.mergeset_size_limit
+            if ghostdag.mergeset_size() as u64 - (members.len() + slices) as u64
+                > self.mergeset_size_limit.get(self.headers_store.get_daa_score(anchor).unwrap())
                 || (members.len() + slices) as u64 > lane.max_per_mergeset
                 || palw_execution_mergeset_rule_v1(round, &members, round_width, lane.max_per_mergeset).is_err()
             {

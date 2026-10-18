@@ -6,7 +6,7 @@
 //! | `palw_panel_anchor_permissionless_v1` | lane A's operator-only anchor is replaced: any ADMITTED attempt of a registered, matured bond (blue or red) contributes, one contribution per bond, and the seed is the aggregate of the contributions at or past the slot | the anchor block's DAA (as lane A) |
 //! | `palw_rule_e_participation_v2` | rule E's participation is the capital (read in the common past `F`) of the distinct bonds with a non-voided, Gate-C-certified attempt in a side's exclusive past; the even split is a third of the common capital | the incumbent's DAA (as rule E) |
 //! | `palw_independently_work_certified_v1` (Gate C) | an uncertified claim contributes nothing to participation, provisional weight, final weight, safe-frontier advance, settled-anchor credit or coinbase | the claim's acceptance DAA |
-//! | `palw_dag_width_schedule_v1` | a named (k, block time, parents, mergeset) schedule — SPEC AND STUB ONLY: no reader exists; validation refuses it | the selected parent's DAA (spec) |
+//! | `palw_dag_width_schedule_v1` | per-block k, parents, mergeset and merge depth; block time fixed; validation refuses arming | the selected parent's DAA |
 //!
 //! **Dormant**: every fence is `None` on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from
 //! `Some(never())`, and refused when armed ([`Params::validate_palw_rfc0018_v1`]). The fold, the processor and the RPC read the four
@@ -27,7 +27,9 @@ use crate::Hash64;
 use crate::KType;
 use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
-use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwStateParamsV2};
+use crate::palw_state_v2::{
+    PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwStateParamsV2,
+};
 use blake2b_simd::Params as Blake2bParams;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -479,7 +481,10 @@ pub struct PalwAnchorContributionV1 {
 /// admitted, whatever happened to it later — so the processor (reading the selected parent's state) and the fold's step 4c (reading
 /// its own state, which adds only claims accepted in the anchor block itself, excluded by the blue-score bound) read one set.
 /// Recognition is therefore one chain block later than the attempt's acceptance.
-pub fn palw_permissionless_contributions_from_state_v1(state: &PalwChainStateV2, before_blue_score: u64) -> Vec<PalwAnchorContributionV1> {
+pub fn palw_permissionless_contributions_from_state_v1(
+    state: &PalwChainStateV2,
+    before_blue_score: u64,
+) -> Vec<PalwAnchorContributionV1> {
     state
         .claims_iter()
         .filter(|(_, claim)| matches!(claim.source, PalwClaimSourceV2::Attempt) && claim.accepted_blue_score < before_blue_score)
@@ -570,18 +575,18 @@ pub fn palw_permissionless_anchor_reach_v1(contributions: &[PalwAnchorContributi
 }
 
 // -------------------------------------------------------------------------------------------------
-// The DAG width schedule (RFC-0018 §8) — SPEC AND STUB
+// The DAG width schedule (RFC-0018 §8) — dormant per-block readers
 // -------------------------------------------------------------------------------------------------
 
-/// **One step of the DAG width schedule.** No reader exists in this binary: GHOSTDAG's `k`, the parents bound and the mergeset bound are
-/// constructor scalars of the GHOSTDAG manager and the header pipeline, and the block time scales every DAA-denominated PALW window
-/// (RFC-0018 §8.4). A per-block reader (ForkedParam-style, keyed on the selected parent's DAA) is the follow-up the user decides on.
+/// One dormant step, read at the selected parent's DAA at every coloring and validation site.
+/// Block-time changes require a separate clock/window migration and remain refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwDagWidthScheduleV1 {
     pub ghostdag_k: KType,
     pub target_time_per_block_ms: u64,
     pub max_block_parents: u16,
     pub mergeset_size_limit: u64,
+    pub merge_depth: u64,
 }
 
 impl PalwDagWidthScheduleV1 {
@@ -592,13 +597,14 @@ impl PalwDagWidthScheduleV1 {
         h.update(&self.target_time_per_block_ms.to_le_bytes());
         h.update(&self.max_block_parents.to_le_bytes());
         h.update(&self.mergeset_size_limit.to_le_bytes());
+        h.update(&self.merge_depth.to_le_bytes());
         finish(h)
     }
 
     /// Structural refusals (the values themselves are the user's).
     pub fn refusal(&self) -> Option<&'static str> {
-        if self.ghostdag_k == 0 || self.max_block_parents < 2 || self.target_time_per_block_ms == 0 {
-            return Some("palw_dag_width_schedule_v1: k ≥ 1, at least two parents and a positive block time");
+        if self.ghostdag_k == 0 || self.max_block_parents < 2 || self.target_time_per_block_ms == 0 || self.merge_depth == 0 {
+            return Some("palw_dag_width_schedule_v1: k ≥ 1, at least two parents, a positive block time and merge depth");
         }
         if self.mergeset_size_limit < self.ghostdag_k as u64 * 10 {
             return Some("palw_dag_width_schedule_v1: the mergeset bound must exceed 10·k (Kaspa's own relation)");
@@ -624,6 +630,7 @@ impl PalwDagWidthScheduleFenceV1 {
                 target_time_per_block_ms: 120_000,
                 max_block_parents: 16,
                 mergeset_size_limit: 360,
+                merge_depth: 30,
             },
         }
     }
@@ -655,6 +662,35 @@ pub fn palw_dag_width_red_permille_v1(delay_ms: u64, interval_ms: u64, k: KType)
 pub const PALW_RFC0018_ARMABLE_V1: bool = false;
 
 impl Params {
+    /// Histories are keyed on the selected parent's authenticated DAA, never a candidate's declared score.
+    /// None/never is exactly the old scalar, including for pre-fence replay and reorg.
+    fn dag_width_history<T: Copy>(
+        &self,
+        current: T,
+        step: impl FnOnce(PalwDagWidthScheduleV1) -> T,
+    ) -> crate::config::params::ForkedParam<T> {
+        match self.palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()) {
+            Some(f) => crate::config::params::ForkedParam::new(current, step(f.schedule), f.activation),
+            None => crate::config::params::ForkedParam::new_const(current),
+        }
+    }
+
+    pub fn ghostdag_k_history(&self) -> crate::config::params::ForkedParam<KType> {
+        self.dag_width_history(self.ghostdag_k(), |s| s.ghostdag_k)
+    }
+
+    pub fn max_block_parents_history(&self) -> crate::config::params::ForkedParam<u16> {
+        self.dag_width_history(self.max_block_parents() as u16, |s| s.max_block_parents)
+    }
+
+    pub fn mergeset_size_limit_history(&self) -> crate::config::params::ForkedParam<u64> {
+        self.dag_width_history(self.mergeset_size_limit(), |s| s.mergeset_size_limit)
+    }
+
+    pub fn merge_depth_history(&self) -> crate::config::params::ForkedParam<u64> {
+        self.dag_width_history(self.merge_depth(), |s| s.merge_depth)
+    }
+
     fn rfc0018_from(f: Option<ForkActivation>) -> Option<u64> {
         f.filter(|a| *a != ForkActivation::never()).map(|a| a.daa_score())
     }
@@ -728,7 +764,29 @@ impl Params {
         if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
             && bundle.state.rfc0018_v1().copied() != self.palw_rfc0018_expected_mirror_v1()
         {
-            return Err(PalwModeV2Error::Invalid("RFC-0018's fences disagree with the V2 bundle's mirror: Params::sync_palw_rfc0018_v1"));
+            return Err(PalwModeV2Error::Invalid(
+                "RFC-0018's fences disagree with the V2 bundle's mirror: Params::sync_palw_rfc0018_v1",
+            ));
+        }
+        if let Some(f) = self.palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()) {
+            if f.schedule.ghostdag_k < self.ghostdag_k() {
+                return Err(PalwModeV2Error::Invalid("DAG width schedule cannot decrease k across an existing k-cluster"));
+            }
+            if f.schedule.target_time_per_block_ms != self.target_time_per_block() {
+                return Err(PalwModeV2Error::Invalid("DAG width schedule cannot change block time without a clock/window migration"));
+            }
+            let k = self.ghostdag_k_history().upper_bound() as u64;
+            let merge = self.merge_depth_history().upper_bound();
+            let size = self.mergeset_size_limit_history().upper_bound();
+            let lower = self
+                .finality_depth()
+                .saturating_add(merge.saturating_mul(2))
+                .saturating_add(size.saturating_mul(k).saturating_mul(4))
+                .saturating_add(k.saturating_mul(2))
+                .saturating_add(2);
+            if self.pruning_depth() < lower || merge > self.finality_depth() {
+                return Err(PalwModeV2Error::Invalid("DAG width schedule exceeds retained pruning/finality geometry"));
+            }
         }
         let armed = [
             ("palw_dag_sibling_attribution_v1", Self::rfc0018_from(self.palw_dag_sibling_attribution_v1)),
@@ -760,6 +818,6 @@ pub fn palw_claim_is_attempt_v1(claim: &PalwClaimStateV2) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod attack_tests;
+#[cfg(test)]
+mod tests;
