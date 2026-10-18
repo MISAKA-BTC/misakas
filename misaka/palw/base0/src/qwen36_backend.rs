@@ -20,6 +20,8 @@
 //! rides as ordinary step openings, which is also the required set the court derives for a
 //! class with zero checkpoints.
 
+mod held_attention_v1;
+
 use crate::qwen36::{Qwen36ArtifactV1, Qwen36Cache, Qwen36Engine, Qwen36ShapeV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES as LEG_MAX_LEAVES;
@@ -159,8 +161,8 @@ pub struct Qwen36Backend {
     /// output root. Set by the node from its params (`set_attempt_rules_v1`); `Legacy` by default.
     attempt_rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1,
     /// **ADR-0152 §4-ter N4's selector**, as the dense tier's
-    /// (`Qwen25A16Backend::with_held_answerability_v1`): past `palw_offence_attribution` no held class
-    /// this family serves answers a dissection — it has no windowed builder (the review's F4).
+    /// (`Qwen25A16Backend::with_held_answerability_v1`): past `palw_offence_attribution` held
+    /// hybrid answerability remains conservative until every prosecution path is qualified.
     held_answerability: bool,
 }
 
@@ -3095,17 +3097,43 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         .map_err(|e| crate::attn_responder::base0_attn_name_the_missing_anchor_v1(e, filing))
     }
 
-    /// **ADR-0152 §4-ter N4 (the review's F4):** past `palw_offence_attribution` EVERY held class this
-    /// family serves says `false` — it has no windowed builder (`attn_site_evidence_held_v1` is the
-    /// trait's `Err`), and its dense builder answers a held job only under the materialization cap.
-    /// The consensus predicate agrees: a recurrent held class is unanswerable
-    /// (`PalwHeldUnanswerableV1::Recurrent`), so C1 lists it and C5 refuses to register it. Below the
-    /// fence, byte for byte what it was.
+    /// Held evidence builders exist, but that alone does not establish end-to-end
+    /// answerability. Keep the existing advertisement and C5 admission rule until
+    /// attention, recurrence, liability and node/P2P tests qualify the whole path.
     fn supports_dissection(&self) -> bool {
         self.plan.is_some()
             && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1)
             && !(self.held_answerability
                 && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4))
+    }
+
+    fn attn_site_evidence_held_v1(
+        &self,
+        material: &[u8],
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+        filing: Option<&kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1>,
+    ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
+        let profile = self.profile.as_ref().ok_or("no registered hybrid profile")?;
+        if !kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
+            return Err("the windowed hybrid builder requires a held profile".into());
+        }
+        match filing {
+            None => self.attn_held_responder_v1(material, narrowed, carried_prompt),
+            Some(filing) => self.attn_held_challenger_v1(filing, narrowed, carried_prompt),
+        }
+    }
+
+    fn attn_held_cache_write_rows_v1(
+        &self,
+        filing: &kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1,
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+        kind: kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1,
+        attn_layer: u16,
+        history_position: u32,
+    ) -> Result<Vec<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
+        self.attn_held_cache_write_rows_of_v1(filing, narrowed, carried_prompt, kind, attn_layer, history_position)
     }
 
     fn has_fused_site(&self) -> bool {
@@ -4967,7 +4995,7 @@ mod tests {
     }
 
     /// **ADR-0152 §4-ter N4 (the review's F4): past `palw_offence_attribution` no held hybrid class
-    /// takes a dissection's turn** — this family has no windowed builder, so its held (graph-v7) row
+    /// takes a dissection's turn** — until the complete hybrid path is qualified its held (graph-v7) row
     /// says `false` there, while it says `true` below the fence and its non-held (graph-v6) row is
     /// unchanged on either side. The consensus predicate agrees (the class is `Recurrent`).
     #[test]

@@ -1773,3 +1773,24 @@ for held profiles under held-answerability. The new checkpoint filer does not su
 missing held-attention responder/challenger (the Qwen25 A16 backend implements both).
 The full GDN path must satisfy those answerability requirements as well as recurrence
 checkpoint prosecution before claiming ordinary node/P2P completion.
+
+
+### 15.11 Qwen36 held-attention implementation in progress (2026-10-18)
+
+`qwen36_backend/held_attention_v1.rs` adds the three missing backend verbs, using the
+existing interval/fold opening and held-court evidence builders:
+
+- responder: open only the fused output and query leaves from folded retention, recompute the
+  anchor with the backend's memoized hybrid kernels, and build the held slice sub-roots;
+- challenger: replay from genesis through the site's step with a prefix stream, authenticate the
+  query against the accused output path, and serialize the same replay's attention **and** GDN
+  cache through the existing hybrid map serializer; no accused capture is required;
+- cache-write fallback: open the requested K/V row tiles from the same prefix-checked replay.
+
+The test exercises prefill and decode sites past the dense materialization cap, compares both
+parties' evidence, runs the real attention court to an honest verdict, opens K/V cache writes,
+and rejects foreign prompts and changed slice sub-roots. The targeted base0 test build is
+running (`/tmp/codex-g14-q36-held-build.log`); **no build/test success is claimed yet**.
+`supports_dissection()` and C5 admission remain conservative. This supersedes the statement
+in §15.10 that no held override exists, but does not establish complete GDN answerability,
+new-model registration, false-Valid liability, or node/P2P prosecution.
