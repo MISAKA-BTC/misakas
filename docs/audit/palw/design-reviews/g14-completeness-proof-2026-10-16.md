@@ -1591,3 +1591,11 @@ drill の記録(run 3〜7 の JSON と、O の filer の log 抜粋)は、作業
 - 試験:`g07r2_a_court_demanding_claim_promises_the_retention_its_guarantee_needs` pass。g14_court_capacity は 15 passed / 1 ignored。
 - 回帰:g14_close_legacy 8、g14_close_gates 12、lg14a_legacy_dispute_fold 9、g14_detection_gate 5、すべて pass。kaspa-consensus と kaspad の check も通った。
 - 残り:rider は lead の retention を運ぶ。lead と class が違う rider の扱いは、試験していない。
+
+## 12.7 Codex run-12 observation: producer conviction, seat follow-up pending (2026-10-18)
+
+Continued the inherited run-12 driver and nodes without restarting them. The outsider log at 12:03:48 JST reports claim `0259bbc07ec804cca6e295147a50a86916f0372a61aa7da2123b4a7973e0661a116363869f9f69418a577eb371d4286217a94b0c7eab56804bc7176f176b2fc8` convicted as CourtFraud at DAA 38, public terminal leaf 2780, with `every liable Valid signer is handed to the false-Valid filer: true (G14 G-D02a)`. This demonstrates that the new conviction watcher executes and notes the proof; it does not demonstrate a filed or accepted seat offence.
+
+A subsequent read-only RPC observation of the outsider at DAA 45 reports producer card 0 `bondSlashed = 93906321001040`, and cards 1, 2, 3 each `bondSlashed = 0`. No P2-8c follow-up line was found in that observation. The driver remains running and the D-02 terminal row has not yet been written into its result JSON. G-D02a is therefore **pending**, not closed. The existing driver requires a positive slash of every Valid signer for court conviction PASS, and that requirement is retained.
+
+Sources: `run12/O/node.log`, `run12.json`, and read-only `getBlockDagInfo` / `getPalwClaims` on port 34173, under the run path in `handover-g14-drill-2026-10-18.md`. Later observations must replace this interim status with the terminal driver result and actual per-seat slash deltas. Neither a watcher log nor producer slash alone is sufficient.
