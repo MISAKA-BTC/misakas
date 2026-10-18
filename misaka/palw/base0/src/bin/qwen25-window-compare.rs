@@ -28,6 +28,35 @@ fn arg<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(|s| s.as_str())
 }
 
+/// KL(reference || integer) in physical logit units, with stable log-sum-exp.
+fn logit_kl_v1(reference: &[f32], integer: &[i32], scale: f64) -> Result<f64, &'static str> {
+    if reference.is_empty() || reference.len() != integer.len() || !scale.is_finite() || scale <= 0.0 {
+        return Err("invalid logit dimensions or scale");
+    }
+    let r: Vec<f64> = reference.iter().map(|v| f64::from(*v)).collect();
+    let q: Vec<f64> = integer.iter().map(|v| f64::from(*v) * scale).collect();
+    if r.iter().chain(&q).any(|v| !v.is_finite()) { return Err("non-finite logit"); }
+    let rm = r.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let qm = q.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let rz = r.iter().map(|v| (v - rm).exp()).sum::<f64>().ln();
+    let qz = q.iter().map(|v| (v - qm).exp()).sum::<f64>().ln();
+    let kl: f64 = r.iter().zip(&q).map(|(r, q)| {
+        let rp = r - rm - rz;
+        rp.exp() * (rp - (q - qm - qz))
+    }).sum();
+    if !kl.is_finite() { return Err("non-finite divergence"); }
+    Ok(kl.max(0.0))
+}
+
+fn kl_summary_v1(reference: &[Vec<f32>], integer: &[Vec<i32>], scale: f64) -> serde_json::Value {
+    if reference.is_empty() || reference.len() != integer.len() { die("incomplete comparison window".into()); }
+    let values: Vec<f64> = reference.iter().zip(integer).map(|(r, q)| {
+        logit_kl_v1(r, q, scale).unwrap_or_else(|why| die(why.into()))
+    }).collect();
+    serde_json::json!({"mean": values.iter().sum::<f64>() / values.len() as f64,
+        "max": values.iter().copied().fold(0.0, f64::max)})
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let dir = args.get(1).unwrap_or_else(|| die("usage: qwen25-window-compare <dir> --a16 FILE --tokens FILE [...]".into()));
@@ -67,6 +96,18 @@ fn main() {
     let artifact = decode_artifact_file_v1(&std::fs::read(a16).unwrap_or_else(|e| die(format!("{a16}: {e}"))))
         .unwrap_or_else(|e| die(format!("{a16}: {e}")));
     let engine = A16Engine::new(&artifact).unwrap_or_else(|e| die(format!("the A16 engine refused the artifact: {e:?}")));
+    let calibration = arg(&args, "--calibration-report").map(|path| {
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)
+            .unwrap_or_else(|e| die(format!("{path}: {e}")))).unwrap_or_else(|e| die(format!("{path}: {e}")));
+        if value["schema"] != "misaka-palw/a16-source-calibration/v1"
+            || value["artifact_digest"] != artifact.artifact_digest().to_string()
+            || value["n_ctx"].as_u64() != Some(artifact.shape.max_position as u64) {
+            die("calibration report does not name this artifact and context".into());
+        }
+        let scale = value["logit_scale"].as_f64().filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or_else(|| die("calibration report has no finite positive physical logit scale".into()));
+        (value, scale)
+    });
 
     // The integer run: the whole prefix on one cache.
     let started = std::time::Instant::now();
@@ -104,6 +145,9 @@ fn main() {
             "top5_contains": full.top5_contains,
             "top100_rank_correlation": full.top100_rank_correlation,
         });
+        if let Some((_, scale)) = &calibration {
+            entry["kl"] = kl_summary_v1(&r, &q, *scale);
+        }
         if args.iter().any(|a| a == "--control") {
             // The same window, its prefix cut off: the integer engine restarted at the window.
             let mut cut = A16Cache::new(ref_cfg.n_layers);
@@ -116,6 +160,9 @@ fn main() {
                 "top5_contains": c.top5_contains,
                 "top100_rank_correlation": c.top100_rank_correlation,
             });
+            if let Some((_, scale)) = &calibration {
+                entry["control_prefix_cut"]["kl"] = kl_summary_v1(&r, &control, *scale);
+            }
         }
         report.push(entry);
     }
@@ -123,6 +170,7 @@ fn main() {
         "tool": "qwen25-window-compare",
         "sequence_tokens": n,
         "a16_artifact_digest": artifact.artifact_digest().to_string(),
+        "calibration": calibration.map(|(value, _)| value),
         "integer_seconds": integer_secs,
         "reference_seconds": reference_secs,
         "windows": report,
@@ -132,5 +180,26 @@ fn main() {
     match arg(&args, "--out") {
         Some(path) => std::fs::write(path, &text).unwrap_or_else(|e| die(format!("{path}: {e}"))),
         None => println!("{text}"),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn physical_logit_scale_and_stable_kl_detect_a_wrong_distribution() {
+        assert!(logit_kl_v1(&[1.0, -1.0], &[2, -2], 0.5).unwrap() < 1e-12);
+        assert!(logit_kl_v1(&[1.0, -1.0], &[-2, 2], 0.5).unwrap() > 1.0);
+        assert!(logit_kl_v1(&[-1000.0, -1002.0], &[0, -2], 1.0).unwrap() < 1e-12);
+    }
+    #[test]
+    fn incomplete_or_non_finite_rows_never_produce_a_score() {
+        assert!(logit_kl_v1(&[], &[], 1.0).is_err());
+        assert!(logit_kl_v1(&[1.0], &[1, 2], 1.0).is_err());
+        assert!(logit_kl_v1(&[f32::NAN], &[1], 1.0).is_err());
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(logit_kl_v1(&[1.0], &[1], scale).is_err());
+        }
     }
 }
