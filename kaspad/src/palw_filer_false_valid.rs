@@ -525,6 +525,12 @@ impl PalwFalseValidFilerV1 {
         let (mut filed, mut waiting) = (false, false);
         for filing in &outcome.filings {
             let seat = filing.accused;
+            if !filing.files() && !filing.declined() {
+                info!(
+                    "[{PALW_PANEL}] claim {}: false-Valid scan for {seat:?} produced no filing: {:?} (P2-8c)",
+                    filing.claim_id, filing.check
+                );
+            }
             for id in &filing.not_liable {
                 if case.not_liable.insert(*id) {
                     info!(

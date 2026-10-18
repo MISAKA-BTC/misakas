@@ -1642,3 +1642,22 @@ Evidence: the inherited scratchpad `g14drill/run12.log` and terminal `run12.json
 completed 2026-10-18 13:46 JST. The §12.8 wake change was not present in this run's
 binary and requires its own unit result and rebuilt live drill; its effectiveness
 against this terminal failure has not been demonstrated.
+
+### 12.10 Run 13 slow progress at genesis DAA 16 (2026-10-18)
+
+Run 13 used the inherited private drill binary with `--no-d16` and remains an
+experiment, not release acceptance. Its result JSON has no terminal rows. A
+read-only RPC sample on P's port 35103 returned `virtualDaaScore = 16` and
+`blockCount = 16` at 16:32 and again at 16:33 JST, while the node process was
+alive and consuming CPU. At 16:34 a subsequent sample returned DAA 17 / 17
+blocks, and the log recorded an accepted block. The chain was progressing very
+slowly rather than permanently stalled; the samples do not identify why. No
+drill row has reached a terminal result.
+
+The driver already has a DAA stall limit for operation waits. A mocked
+regression test `scripts/drills/tests/test_g14_collusion_wait.py` now covers
+that behavior and passes; `git diff --check` is clean. This test-only addition
+does not diagnose or fix the slow DAA progress. The inherited run is
+still live and has not been counted as a pass; the binaries and node logs are
+retained. The cause of the slow progress must be diagnosed before treating a
+drill as release acceptance evidence.

@@ -360,6 +360,10 @@ class Drill:
     def wait(self, label, predicate, timeout_s, every=10, stall_s=None):
         deadline = time.monotonic() + timeout_s
         last_err, last_daa, moved = None, None, time.monotonic()
+        # A live process is not evidence of chain liveness: mining workers can
+        # spin while the virtual DAA is stuck (for example on an invalid or
+        # unselectable template). Bound this independently of the operation's
+        # much longer end-to-end timeout so drills fail with useful evidence.
         stall_s = stall_s or self.args.stall_s
         while time.monotonic() < deadline:
             self.check_alive()
@@ -372,9 +376,11 @@ class Drill:
             except Exception as e:  # noqa: BLE001 — retried; the last one is reported on timeout
                 last_err = repr(e)[:400]
             daa = self.daa_quiet()
-            if daa is not None and daa != last_daa:
-                last_daa, moved = daa, time.monotonic()
-            if time.monotonic() - moved > stall_s:
+            now_mono = time.monotonic()
+            if daa is not None:
+                if daa != last_daa:
+                    last_daa, moved = daa, now_mono
+            if now_mono - moved > stall_s:
                 raise Blocked('%s: the chain DAA did not move for %d s (DAA %s; last error %s)' % (label, stall_s, last_daa, last_err))
             time.sleep(every)
         raise Blocked('%s: timed out after %d s (DAA %s; last error %s)' % (label, timeout_s, last_daa, last_err))
