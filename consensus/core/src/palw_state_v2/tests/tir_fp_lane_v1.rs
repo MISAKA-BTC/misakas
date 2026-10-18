@@ -360,7 +360,14 @@ fn tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3
         PalwStateV2Error::ClassNotRewardable { code, .. } if code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1
     ));
     // The registrant binds the class; again is nothing; another container is refused.
-    let (bound_state, _) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).expect("the binding folds");
+    let (bound_state, bound_delta) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).expect("the binding folds");
+    // Restart / IBD: the stored delta replayed on the parent rebuilds the same row and root; reorg: reverting it removes the row.
+    let replayed = apply_delta_v2(&l.state, &bound_delta, &l.p).expect("the stored delta replays");
+    assert_eq!(replayed.state_root(), bound_state.state_root(), "replaying the stored delta restores the bound container");
+    assert_eq!(palw_tir_bound_container_v1(&replayed, l.class_id), palw_tir_bound_container_v1(&bound_state, l.class_id));
+    let reverted = revert_delta_v2(&bound_state, &bound_delta, &l.p).expect("the binding reverts");
+    assert_eq!(reverted.state_root(), l.state.state_root(), "a reorg past the binding removes it exactly");
+    assert!(palw_tir_bound_container_v1(&reverted, l.class_id).is_none());
     let PalwConsensusObjectV2::TirClassContainerBoundV1 { binding, .. } = &bound else { unreachable!() };
     assert_eq!(palw_tir_bound_container_v1(&bound_state, l.class_id).map(|row| row.container_root), Some(binding.container_root));
     let next = ctx(4, AT_DAA + 1, 4);
