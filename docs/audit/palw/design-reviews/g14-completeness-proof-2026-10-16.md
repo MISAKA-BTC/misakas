@@ -1715,3 +1715,23 @@ The independently cloned executable `/tmp/codex-g14-gdn-built-test` ran the regi
 - `/tmp/codex-g14-gdn-registration.log`: **0 passed / 1 failed**, 0.33s. The new preflight reports the precise prerequisite `Gate(GdnKeyHeadsNeedsItsFence)`. The registration fixture now also arms the existing GDN key-head fence at DAA 0; no shipped preset or policy value changes. Rerun in `/tmp/codex-g14-gdn-registration-key-heads.log`, pending.
 
 The earlier token-lift-only change did not close registration; the actual refusal above supersedes the prior suspected explanation. Full GDN node/P2P conviction and collateral assertions are still required.
+
+
+### 15.9 GDN ordinary registration is still refused (2026-10-18)
+
+The key-head fence did not complete the node fixture. `/tmp/codex-g14-gdn-registration-carried.log`
+finished **0 passed / 1 failed** in 0.47 s: the signed registration transaction was present in
+public block history, but its class was absent from the class table at DAA 3. This is before
+backend resolution, not a missing local artifact. The fixture now distinguishes a template
+omission, a missing class row, and a missing serving declaration.
+
+The existing `p0a_e2_on_testnet_12_c5_refuses_every_held_hybrid_past_the_fence` was run directly
+from the built consensus test executable: **1 passed / 0 failed**, 0.88 s,
+`/tmp/codex-g14-gdn-c5-registration-rule.log`. It confirms that the shipped attribution C5
+refuses held hybrid registration even with the GDN key-head fence armed. The node fixture now
+also asks this same attribution predicate before constructing its registration, so this
+prerequisite fails explicitly instead of appearing as an unexplained missing declaration.
+
+No attribution gate was disabled, no unregistered class was injected, and no GDN node/P2P
+conviction is claimed. Resolving the actual admission/attribution path remains required;
+the eight fold tests and one service-host test in §15.8 do not establish that path.
