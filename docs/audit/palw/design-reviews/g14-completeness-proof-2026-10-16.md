@@ -1708,3 +1708,8 @@ produced work blocks, while draws rose to 15,918. The lane window now held 98
 blocks over DAA 0..27 (52 attempt, 45 heartbeat, 1 other), with no network-lost
 blocks and the producer still drawing. No terminal D-02 result or seat slash
 was observed; this remains slow progress, not acceptance.
+
+At 17:08 JST, the read-only sample advanced to DAA 28 / 28 DAG blocks, with
+16,187 draws and 40 produced work blocks. The lane window held 101 blocks over
+DAA 0..28 (53 attempt, 47 heartbeat, 1 other); producer state remained
+`drawing`. No terminal D-02 result or seat slash was observed.
