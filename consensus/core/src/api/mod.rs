@@ -41,6 +41,16 @@ use crate::BlockHash;
 
 pub use self::stats::{BlockCount, ConsensusStats};
 
+/// Bounded RFC12 observations from one locked virtual state. Missing historical
+/// balances and spent/unknown outpoints are explicit; storage failures are errors.
+#[derive(Clone, Debug)]
+pub struct PalwAcceptanceReadsV1 {
+    pub sink: BlockHash,
+    pub virtual_daa: u64,
+    pub reserve_balances: Vec<(BlockHash, Option<u64>)>,
+    pub outpoints: Vec<(TransactionOutpoint, Option<UtxoEntry>)>,
+}
+
 /// **LIVE-R1 N2: the consensus half of the partition watchdog.** This node's recent resolves settled on
 /// `sink` after refusing the heavier `refused` on the PALW deep-reorg rule — a candidate it had
 /// UTXO-validated and weighed, and that did not strictly out-weigh its sink on `(safe frontier, safe
@@ -989,6 +999,16 @@ pub trait ConsensusApi: Send + Sync {
     fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
         let _ = block;
         None
+    }
+
+    /// At most 64 blocks and 64 outpoints, with one virtual state/UTXO lock and
+    /// pruning protection. Implementations must not assemble separate snapshots.
+    fn get_palw_acceptance_reads_v1(
+        &self,
+        _blocks: Vec<BlockHash>,
+        _outpoints: Vec<TransactionOutpoint>,
+    ) -> ConsensusResult<PalwAcceptanceReadsV1> {
+        Err(ConsensusError::General("atomic PALW acceptance reads are unsupported"))
     }
 
     fn get_tips(&self) -> Vec<BlockHash> {

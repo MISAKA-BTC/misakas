@@ -3016,7 +3016,42 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
-        self.storage.reserve_balance_store.get(block).ok()
+        let _guard = self.pruning_lock.blocking_read();
+        self.dns_reserve_balance_checked_v1(block).ok().flatten()
+    }
+
+    fn get_palw_acceptance_reads_v1(
+        &self,
+        blocks: Vec<BlockHash>,
+        outpoints: Vec<TransactionOutpoint>,
+    ) -> ConsensusResult<kaspa_consensus_core::api::PalwAcceptanceReadsV1> {
+        use crate::model::stores::virtual_state::VirtualStateStoreReader;
+        if blocks.len() > 64 || outpoints.len() > 64 {
+            return Err(ConsensusError::General("at most 64 reserve blocks and 64 outpoints per acceptance read"));
+        }
+        let _pruning = self.pruning_lock.blocking_read();
+        let virtual_stores = self.virtual_stores.read();
+        let unavailable = |e| ConsensusError::GeneralOwned(format!("PALW acceptance read: {e}"));
+        let state = virtual_stores.state.get().map_err(unavailable)?;
+        let reserve_balances = blocks
+            .into_iter()
+            .map(|block| self.dns_reserve_balance_checked_v1(block).map(|balance| (block, balance)))
+            .collect::<ConsensusResult<Vec<_>>>()?;
+        let outpoints = outpoints
+            .into_iter()
+            .map(|outpoint| {
+                UtxoSetStoreReader::get(&virtual_stores.utxo_set, &outpoint)
+                    .optional()
+                    .map(|entry| (outpoint, entry.map(|entry| entry.as_ref().clone())))
+                    .map_err(unavailable)
+            })
+            .collect::<ConsensusResult<Vec<_>>>()?;
+        Ok(kaspa_consensus_core::api::PalwAcceptanceReadsV1 {
+            sink: state.ghostdag_data.selected_parent,
+            virtual_daa: state.daa_score,
+            reserve_balances,
+            outpoints,
+        })
     }
 
     fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
@@ -5208,6 +5243,39 @@ pub fn palw_derived_claim_view_v1(
 }
 
 impl Consensus {
+    /// Missing reserve rows encode zero only for a retained, UTXO-validated
+    /// block (or genesis). A matching imported snapshot also establishes the
+    /// balance. Unknown/pruned history remains unknown; storage errors remain
+    /// errors for the checked acceptance reader.
+    fn dns_reserve_balance_checked_v1(&self, block: BlockHash) -> ConsensusResult<Option<u64>> {
+        use crate::model::stores::pruning_overlay_snapshot::PruningPointOverlaySnapshotStoreReader;
+        let unavailable = |e| ConsensusError::GeneralOwned(format!("DNS reserve read: {e}"));
+        // Candidate commit stages acceptance/reserve cache writes before the DB
+        // batch is durable. Its status write guard stays exclusive through that
+        // commit; acquire it first so staged rows cannot establish a post-state.
+        let statuses = self.statuses_store.read();
+        if statuses.get(block).optional().map_err(unavailable)? == Some(BlockStatus::StatusUTXOValid) {
+            if let Some(balance) = self.storage.reserve_balance_store.get(block).optional().map_err(unavailable)? {
+                return Ok(Some(balance));
+            }
+            if block == self.config.params.genesis.hash
+                || self.acceptance_data_store.get(block).optional().map_err(unavailable)?.is_some()
+            {
+                return Ok(Some(0));
+            }
+        }
+        drop(statuses);
+        Ok(self
+            .storage
+            .pruning_overlay_snapshot_store
+            .read()
+            .get()
+            .optional()
+            .map_err(unavailable)?
+            .filter(|snapshot| snapshot.pruning_point == block)
+            .map(|snapshot| snapshot.snapshot.reserve_balance))
+    }
+
     fn palw_finalized_material_recovery_state_v2(
         &self,
     ) -> Result<Option<(BlockHash, kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1)>, String> {

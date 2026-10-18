@@ -1568,11 +1568,15 @@ class AcceptanceRun:
                        'this run arms retirement at DAA %d; no pre-fence DNS history exists' % fence)
             return
         target = fence + dns['observeAfterFenceDaa']
-        self.wait(lambda: bootstrap.rpc_read(self.drill, 'JOIN', 'getBlockDagInfo')['virtualDaaScore'] >= target or None,
+        archive_role = P.ROLE_KEYS[self.plan['coverage']['archiveRole']]
+        self.wait(lambda: all(bootstrap.rpc_read(self.drill, role, 'getBlockDagInfo')['virtualDaaScore'] >= target
+                              for role in dict.fromkeys(('JOIN', archive_role))) or None,
                   'the chain passes the fence and its observation span')
         exit_record = self.legacy_exit(fence)
         history = self.plan['reconciliation']
-        rpc = self.drill.rpc('JOIN')
+        # The declared archive retains the accepted bodies across pruning. JOIN
+        # may legitimately have discarded the pre-retirement history by now.
+        rpc = self.drill.rpc(archive_role)
         try:
             to_daa = rpc.call('getBlockDagInfo')['virtualDaaScore']
             block_budget = R.ReadBudget(dns['maximumBlockReads'])
@@ -1580,7 +1584,7 @@ class AcceptanceRun:
                                  block_budget, include_acceptance=True)
             status_budget = R.ReadBudget(dns['maximumStatusReads'])
             registry = R.bond_registry(rpc, history['bondPageLimit'], history['maximumBondPages'], status_budget)
-            evidence = dict(scanFromDaa=dns['scanFromDaa'], scanToDaa=to_daa, readsUsed=scan['readsUsed'],
+            evidence = dict(sourceRole=archive_role, scanFromDaa=dns['scanFromDaa'], scanToDaa=to_daa, readsUsed=scan['readsUsed'],
                             chainBlocks=scan['chainBlocks'], registry=registry, exit=exit_record)
             try:
                 dns_scripts, unread = R.bond_scripts(scan['bondTxs'], registry)

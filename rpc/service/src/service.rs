@@ -3841,29 +3841,27 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .outpoints
             .iter()
             .map(|text| {
-                let (txid, index) = text.trim().rsplit_once(':').ok_or_else(|| RpcError::General(format!("outpoint {text}: not txid:index")))?;
+                let (txid, index) =
+                    text.trim().rsplit_once(':').ok_or_else(|| RpcError::General(format!("outpoint {text}: not txid:index")))?;
                 let txid = <kaspa_consensus_core::tx::TransactionId as std::str::FromStr>::from_str(txid)
                     .map_err(|e| RpcError::General(format!("outpoint {text}: {e}")))?;
                 let index = index.parse::<u32>().map_err(|e| RpcError::General(format!("outpoint {text}: {e}")))?;
-                Ok((text.trim().to_string(), kaspa_consensus_core::tx::TransactionOutpoint::new(txid, index)))
+                Ok(kaspa_consensus_core::tx::TransactionOutpoint::new(txid, index))
             })
             .collect::<RpcResult<Vec<_>>>()?;
         let session = self.consensus_manager.consensus().unguarded_session();
+        // The consensus method owns pruning protection and one virtual read
+        // lock; do not compose individually stamped convenience readers here.
         let answer = session
-            .spawn_blocking(move |c| {
-                let sink = c.get_sink();
-                let virtual_daa = c.get_virtual_daa_score();
-                let reserves: Vec<_> = blocks.iter().map(|b| (*b, c.get_dns_reserve_balance(*b))).collect();
-                let utxos: Vec<_> = outpoints.into_iter().map(|(text, o)| (text, c.get_virtual_utxo_entry(o))).collect();
-                (sink, virtual_daa, reserves, utxos)
-            })
-            .await;
-        let (sink, virtual_daa, reserves, utxos) = answer;
+            .spawn_blocking(move |c| c.get_palw_acceptance_reads_v1(blocks, outpoints))
+            .await
+            .map_err(|e| RpcError::General(format!("PALW acceptance reads: {e}")))?;
         Ok(GetPalwAcceptanceReadsResponse {
             available: true,
-            sink: sink.to_string(),
-            virtual_daa,
-            reserve_balances: reserves
+            sink: answer.sink.to_string(),
+            virtual_daa: answer.virtual_daa,
+            reserve_balances: answer
+                .reserve_balances
                 .into_iter()
                 .map(|(b, balance)| RpcPalwReserveBalance {
                     block_hash: b.to_string(),
@@ -3871,11 +3869,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     balance_sompi: balance.unwrap_or(0),
                 })
                 .collect(),
-            outpoints: utxos
+            outpoints: answer
+                .outpoints
                 .into_iter()
                 .map(|(outpoint, entry)| match entry {
                     Some(e) => RpcPalwOutpointEntry {
-                        outpoint,
+                        outpoint: format!("{}:{}", outpoint.transaction_id, outpoint.index),
                         present: true,
                         amount: e.amount,
                         script_version: e.script_public_key.version(),
@@ -3883,7 +3882,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                         block_daa_score: e.block_daa_score,
                         is_coinbase: e.is_coinbase,
                     },
-                    None => RpcPalwOutpointEntry { outpoint, ..Default::default() },
+                    None => RpcPalwOutpointEntry {
+                        outpoint: format!("{}:{}", outpoint.transaction_id, outpoint.index),
+                        ..Default::default()
+                    },
                 })
                 .collect(),
         })
