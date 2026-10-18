@@ -176,7 +176,19 @@ impl<'a> PalwGateCViewV1<'a> {
 /// The answer is a fact frozen in the state (the row's decided outcome), so the fold's addition at certification, every re-derivation
 /// (consistency, retirement, reversal) and rule E read one answer.
 pub fn palw_independently_work_certified_v1(claim_id: &Hash64, claim: &PalwClaimStateV2, state: &PalwGateCViewV1<'_>) -> bool {
-    let Some(mirror) = palw_rfc0018_mirror_v1(state.params) else { return true };
+    palw_work_certified_from_row_v1(state.params, claim, || {
+        crate::palw_security_certification_v1::palw_claim_security_certified_v1(state.chain, claim_id)
+    })
+}
+
+/// The same predicate over a borrowed historical row. Keep the row read lazy:
+/// pre-fence callers must neither decode nor inspect new certification bytes.
+pub(crate) fn palw_work_certified_from_row_v1(
+    params: &PalwStateParamsV2,
+    claim: &PalwClaimStateV2,
+    row_certifies: impl FnOnce() -> bool,
+) -> bool {
+    let Some(mirror) = palw_rfc0018_mirror_v1(params) else { return true };
     if !mirror.gate_c_governs(claim.accepted_daa) {
         return true;
     }
@@ -186,9 +198,7 @@ pub fn palw_independently_work_certified_v1(claim_id: &Hash64, claim: &PalwClaim
     // (Round 5, user decision 2026-10-15: model-level review is abolished, so U-2's Probation bar has no subject and is removed —
     // this per-claim drawn certification is the one safety gate, the same for every model tier.)
     match mirror.gate_c_rule {
-        PalwGateCRuleV1::SecurityCertifiedV1 => {
-            crate::palw_security_certification_v1::palw_claim_security_certified_v1(state.chain, claim_id)
-        }
+        PalwGateCRuleV1::SecurityCertifiedV1 => row_certifies(),
         PalwGateCRuleV1::FailClosedV1 => false,
     }
 }

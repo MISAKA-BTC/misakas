@@ -509,6 +509,18 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     builder.arm_deadline(at, claim_id)?;
                     continue;
                 }
+                // RFC23: retirement must not discard a certified consumer's
+                // held amount while another actual liability is still open.
+                if let Some(at) = super::palw_security_certification_fold_v1::try_release_claim_local_reward_v1(
+                    builder,
+                    ctx.daa_score,
+                    &claim_id,
+                    &claim,
+                    true,
+                )? {
+                    builder.arm_deadline(at, claim_id)?;
+                    continue;
+                }
                 // G-15 (`palw_reward_liability_horizon_v1`, dormant): a certified reward still deferred to the liability horizon is
                 // named now — a retired claim can no longer be convicted, so retirement closes its liability window too. A no-op below
                 // the fence, for a voided claim, and once the Gate C sweep has named it.

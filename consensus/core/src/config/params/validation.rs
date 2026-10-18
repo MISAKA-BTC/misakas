@@ -316,6 +316,7 @@ impl Params {
         self.validate_palw_court_capacity_in_v1(records)?;
         // **RFC-0023 stage 1** (`crate::palw_unresolved_bound_v1`): mirror agreement; never armable yet.
         self.validate_palw_unresolved_bound_v1()?;
+        self.validate_palw_claim_local_settlement_v1()?;
         // **G-13's capacity** (`crate::palw_panel_liability_v1`): LG14-A beside V02's short lock life needs V02's split at or below
         // the later of the two, so the lock G-13 extends to the liability horizon is Resolved liability, never work capacity.
         self.validate_palw_g13_liability_split_v1()?;

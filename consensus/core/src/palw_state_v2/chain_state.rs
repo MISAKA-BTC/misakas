@@ -3269,6 +3269,7 @@ impl PalwChainStateV2 {
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;
+        self.assert_claim_local_context_v1(params)?;
         self.assert_material_release_recovery_consistency_v2(params)?;
         self.assert_mesh_consistency_v1()?;
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.

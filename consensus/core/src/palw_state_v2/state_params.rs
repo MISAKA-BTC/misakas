@@ -115,6 +115,7 @@ impl PalwStateParamsV2 {
             rcore_conservative_classes: Vec::new(),
             final_lock_full_collateral_from_daa: None,
             unresolved_bound_from_daa: None,
+            claim_local_settlement_from_daa: None,
             capacity_room_from_daa: None,
             capacity_batch_from_daa: None,
             capacity_audit_from_daa: None,
@@ -1680,6 +1681,15 @@ impl PalwStateParamsV2 {
         self
     }
     /// RFC-0023 stage 1: `Params::palw_unresolved_bound_v1`'s height, if armed.
+    pub fn with_claim_local_settlement_from_daa(mut self, from: Option<u64>) -> Self {
+        self.claim_local_settlement_from_daa = from;
+        self
+    }
+    pub fn claim_local_settlement_from_daa(&self) -> Option<u64> { self.claim_local_settlement_from_daa }
+    pub fn claim_local_settlement_active_at(&self, daa: u64) -> bool {
+        self.claim_local_settlement_from_daa.is_some_and(|from| daa >= from)
+    }
+
     pub fn unresolved_bound_from_daa(&self) -> Option<u64> {
         self.unresolved_bound_from_daa
     }

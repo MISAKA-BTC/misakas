@@ -669,6 +669,9 @@ impl Params {
         if self.palw_unresolved_bound_v1 == Some(ForkActivation::never()) {
             self.palw_unresolved_bound_v1 = None;
         }
+        if self.palw_claim_local_settlement_v1 == Some(ForkActivation::never()) {
+            self.palw_claim_local_settlement_v1 = None;
+        }
         // RFC-0016's two dormant fences, likewise.
         if self.palw_model_block_rights_v1 == Some(ForkActivation::never()) {
             self.palw_model_block_rights_v1 = None;
@@ -1192,6 +1195,7 @@ impl Params {
             palw_reward_liability_horizon_v1,
             palw_court_capacity_v1,
             palw_unresolved_bound_v1,
+            palw_claim_local_settlement_v1,
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
@@ -1531,6 +1535,7 @@ impl Params {
             ("palw_reward_liability_horizon_v1", *palw_reward_liability_horizon_v1),
             ("palw_court_capacity_v1", palw_court_capacity_v1.as_ref().map(|f| f.activation)),
             ("palw_unresolved_bound_v1", *palw_unresolved_bound_v1),
+            ("palw_claim_local_settlement_v1", *palw_claim_local_settlement_v1),
             ("palw_model_block_rights_v1", *palw_model_block_rights_v1),
             ("palw_elastic_final_capacity_v1", *palw_elastic_final_capacity_v1),
             ("palw_model_eligibility_v1", *palw_model_eligibility_v1),
@@ -2058,6 +2063,10 @@ impl Params {
         // RFC-0023 stage 1, NAMED, Some-only.
         if let Some(at) = self.palw_unresolved_bound_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_unresolved_bound_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_claim_local_settlement_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_claim_local_settlement_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // RFC-0016's two dormant fences, NAMED likewise. Some-only.
@@ -2857,6 +2866,7 @@ impl Params {
             palw_reward_liability_horizon_v1,
             palw_court_capacity_v1,
             palw_unresolved_bound_v1,
+            palw_claim_local_settlement_v1,
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
@@ -3803,6 +3813,9 @@ impl Params {
         if let Some(activation) = palw_unresolved_bound_v1.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_claim_local_settlement_v1.as_mut() {
+            fork(activation, visit);
+        }
         // RFC-0016's two dormant fences. Some-only.
         if let Some(activation) = palw_model_block_rights_v1.as_mut() {
             fork(activation, visit);
@@ -4390,6 +4403,7 @@ impl Params {
             palw_reward_liability_horizon_v1,
             palw_court_capacity_v1,
             palw_unresolved_bound_v1,
+            palw_claim_local_settlement_v1,
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
@@ -5463,6 +5477,10 @@ impl Params {
         // RFC-0023 stage 1, Some-only.
         if let Some(at) = palw_unresolved_bound_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_unresolved_bound_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = palw_claim_local_settlement_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_claim_local_settlement_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // RFC-0016's two dormant fences, Some-only for the same reason.

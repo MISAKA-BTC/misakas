@@ -10097,6 +10097,9 @@ impl<'a> TransitionBuilder<'a> {
             terminal_daa.checked_add(self.params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?;
         let at = palw_exec_v2_rewards_v1::retirement(&self.state, self.params, &id, Some(ordinary), claim)?
             .expect("retirement is configured");
+        let at = if self.params.claim_local_settlement_active_at(claim.accepted_daa) {
+            crate::palw_rfc0018_v1::palw_gate_c_retirement_floor_v1(self.params, claim, at)
+        } else { at };
         self.arm_deadline(at, id)?;
         Ok(())
     }
@@ -10106,6 +10109,8 @@ impl<'a> TransitionBuilder<'a> {
     /// The panel goes with it: `write_panel` had no `None` caller anywhere, so a bound claim's
     /// panel outlived the claim by exactly forever and grew at the same one-per-block rate.
     pub(super) fn retire_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+        let now = self.state.last_point.map_or(0, |p| p.daa_score);
+        super::palw_claim_local_rewards_v1::clear_hold_v1(self, now, id)?;
         self.forget_paid_consumer_v1(id)?;
         // A `Final` attempt claim folded its `pwu` into `safe_weight` when it finalized. The
         // running total does not move here — the claim's contribution is simply carried by a

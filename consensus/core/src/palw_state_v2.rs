@@ -245,6 +245,10 @@ pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
 // `palw_independently_work_certified_v1`.
 #[path = "palw_security_certification_fold_v1.rs"]
 mod palw_security_certification_fold_v1;
+#[path = "palw_claim_local_fold_v1.rs"]
+mod palw_claim_local_fold_v1;
+#[path = "palw_claim_local_rewards_v1.rs"]
+mod palw_claim_local_rewards_v1;
 // RFC-0008: the once-only settlement registry (dormant `palw_settlement_once_v1`; kernel route aux 140) — every settlement consumer
 // checks and writes its exact obligation's marker in the same transition before any value moves.
 #[path = "palw_settlement_once_fold_v1.rs"]
@@ -1654,6 +1658,9 @@ pub struct PalwStateParamsV2 {
     /// is what the params identity hashes (Some-only) and validation refuses a disagreeing copy.
     #[borsh(skip)]
     unresolved_bound_from_daa: Option<u64>,
+    /// RFC-0023 stage 2: mirrored Some-only fence, excluded from the old parameter wire form.
+    #[borsh(skip)]
+    claim_local_settlement_from_daa: Option<u64>,
     // ---- end lane V02 ----
     /// **ADR-0160 F-R: `Params::palw_capacity_verify_room`'s height** (lane verify V2), mirrored here
     /// by `Params::sync_palw_capacity_verify` because the room is read by the fold, by the producer's
@@ -11177,7 +11184,12 @@ fn terminal_deadline_with_material_v1(
     // The staged court's material horizon floors the retirement (integration, `25a9253d5`); the operational release above is a
     // collateral clock, not a retirement, and is not floored (R6781-F merge).
     palw_exec_v2_rewards_v1::retirement(state, params, id, terminal_deadline_at_v1(claim, params, last_daa)?, claim)
-        .map(|at| at.map(|at| state.staged_retirement_floor_v1(id, at)))
+        .map(|at| at.map(|at| {
+            let at=state.staged_retirement_floor_v1(id,at);
+            if params.claim_local_settlement_active_at(claim.accepted_daa) && matches!(claim.phase,PalwClaimPhaseV2::Final{..}) {
+                at.max(palw_claim_local_rewards_v1::hold_hint_v1(state,*id,claim).unwrap_or(0))
+            } else {at}
+        }))
         .map(|at| palw_unpaid_reward_retirement_floor_v1(state, params, id, claim, last_daa, at, false))
 }
 
@@ -15253,6 +15265,9 @@ fn apply_palw_transition_v7_inner(
 
     palw_monetary_material_fold_v1::refresh(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
+    palw_claim_local_fold_v1::retain_changed_claim_context_v1(
+        &mut builder, parent, ctx, accepted_objects, block_work, merged_work, own_execution_key,
+    )?;
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
         builder.entries.push(PalwDeltaEntryV2::Weights {
@@ -19859,6 +19874,9 @@ pub fn palw_model_refund_payout_key_v1(carrier: &crate::tx::TransactionId) -> Ha
 /// transition before the struct existed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwTransitionExtrasV1 {
+    /// Original stable network identity and forks fired at this accepting DAA.
+    /// Future scheduled forks cannot alter a historical liability frame.
+    pub claim_local_rule_context_v1: Option<([u8; 32], [u8; 32])>,
     /// **ADR-0165 / ADR-0125 semantic amendment: the genuine reds of the accepting block's classified mergeset**, set by the processor.
     /// Execution rounds (including refused rounds) are excluded. The
     /// floor state machine reads a merged attempt's colour from it — a carrying block in the set is RED, every other
@@ -24463,6 +24481,16 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
 
 impl PalwStateCarriageV2 {
     pub fn from_state(state: &PalwChainStateV2) -> Self {
+        Self::from_state_with_claim_local_projection_v1(state, false)
+    }
+
+    /// A historical liability frame cannot recursively contain its predecessors.
+    /// The caller reserves the actual source's typed copy before construction.
+    pub(crate) fn from_state_for_claim_local_frame_v1(state: &PalwChainStateV2) -> Self {
+        Self::from_state_with_claim_local_projection_v1(state, true)
+    }
+
+    fn from_state_with_claim_local_projection_v1(state: &PalwChainStateV2, omit_claim_local: bool) -> Self {
         Self {
             version: PALW_STATE_V2_VERSION,
             bonds: state.bonds.clone(),
@@ -24573,7 +24601,17 @@ impl PalwStateCarriageV2 {
             seat_availability: state.seat_availability.clone(),
             seat_root_readiness: state.seat_root_readiness.clone(),
             panel_v3: state.panel_v3.clone(),
-            kernel_route: state.kernel_route.clone(),
+            kernel_route: state.kernel_route.as_ref().map(|route| {
+                if !omit_claim_local { return route.clone(); }
+                crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+                    header: route.header.clone(),
+                    rows: route.rows.clone(),
+                    aux: route.aux.iter()
+                        .filter(|((table, _), _)| *table != crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1)
+                        .map(|(key, row)| (key.clone(), row.clone())).collect(),
+                    ledger_cache: Default::default(),
+                }
+            }),
             legacy_disputes: state.legacy_disputes.clone(),
             fp_public_jobs: state.fp_public_jobs.clone(),
             class_semantics: state.class_semantics.clone(),

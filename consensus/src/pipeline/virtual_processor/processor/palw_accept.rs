@@ -1972,6 +1972,11 @@ impl VirtualStateProcessor {
             _ => None,
         };
         let mut extras = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+            claim_local_rule_context_v1: self.palw_state_params_v2.as_ref()
+                .filter(|params| params.claim_local_settlement_active_at(daa_score))
+                .map(|_| (self.palw_kernel_route_ruleset_id.as_bytes(),
+                    kaspa_consensus_core::palw_onboarding_v1::palw_envelope_fork_digest_v1(
+                        self.genesis.hash, &self.palw_fence_schedule, daa_score).as_bytes())),
             // ADR-0165: the reds of the accepting block's mergeset belong to the chain walk's own fold (a block's GHOSTDAG
             // data, set where it is folded — `extras.merged_reds`); every other reading of the fences (a rehearsal, the
             // pre-object base) merges no work, so nothing in it is red.

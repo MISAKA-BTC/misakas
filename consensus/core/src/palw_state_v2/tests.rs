@@ -4,6 +4,8 @@
 
 mod kernel_route_locator_v1;
 mod public_filer_targeting_v1;
+mod claim_local_v1;
+mod claim_local_rewards_v1;
 // RFC-0017: model eligibility through the actual fold (claim gate, commit-then-draw, fee, promotion, lapse, renewal).
 mod model_eligibility_fold_v1;
 mod public_prefix_fold_v1;
@@ -28349,6 +28351,7 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
+            claim_local_rule_context_v1: None,
             merged_reds: Default::default(),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
@@ -28625,6 +28628,7 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
+            claim_local_rule_context_v1: None,
             merged_reds: Default::default(),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),

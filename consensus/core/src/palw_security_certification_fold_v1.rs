@@ -16,7 +16,9 @@
 
 use super::*;
 use crate::palw_kernel_route_v1::palw_kernel_bond_id_v1;
-use crate::palw_model_eligibility_v1::{PalwEligibilityAttestationRowV1, PalwEligibilityAttestationV1, PalwEligibilityVerdictV1, PalwEligibilityVerifierV1};
+use crate::palw_model_eligibility_v1::{
+    PalwEligibilityAttestationRowV1, PalwEligibilityAttestationV1, PalwEligibilityVerdictV1, PalwEligibilityVerifierV1,
+};
 use crate::palw_security_certification_v1::*;
 
 fn refuse(why: impl Into<String>) -> PalwStateV2Error {
@@ -27,7 +29,11 @@ fn row_of<T: borsh::BorshDeserialize>(state: &PalwChainStateV2, key: &[u8]) -> O
     state.kernel_route.as_ref()?.aux_row::<T>(PALW_SECURITY_CERTIFICATION_TABLE_V1, key)
 }
 
-fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) -> Result<(), PalwStateV2Error> {
+fn write_row<T: borsh::BorshSerialize>(
+    builder: &mut TransitionBuilder<'_>,
+    key: Vec<u8>,
+    row: Option<&T>,
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_SECURITY_CERTIFICATION_TABLE_V1,
         key,
@@ -156,8 +162,8 @@ pub(super) fn hold_issuance_reward_at_final_v1(
         return Ok(escrow);
     }
     let key = certification_claim_key_v1(&palw_certification_id_v1(claim_id));
-    let mut row: PalwClaimCertificationRowV1 =
-        row_of(&builder.state, &key).ok_or_else(|| refuse("a governed Final has no certification row (commit_at_final_v1 runs first)"))?;
+    let mut row: PalwClaimCertificationRowV1 = row_of(&builder.state, &key)
+        .ok_or_else(|| refuse("a governed Final has no certification row (commit_at_final_v1 runs first)"))?;
     row.held_reward = row.held_reward.checked_add(escrow).ok_or(PalwStateV2Error::Overflow("held certification reward"))?;
     write_row(builder, key, Some(&row))?;
     Ok(0)
@@ -258,10 +264,14 @@ fn native_attestor_lock_v39(
     builder.note_kernel_bond(signer)?;
     Ok(())
 }
-fn native_attestor_locks_v39(builder: &TransitionBuilder<'_>, claim: &Hash64) -> Vec<(Vec<u8>, crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1)> {
+fn native_attestor_locks_v39(
+    builder: &TransitionBuilder<'_>,
+    claim: &Hash64,
+) -> Vec<(Vec<u8>, crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1)> {
     use crate::palw_g14_lane_closure_v1::*;
     let Some(route) = builder.state.kernel_route.as_ref() else { return Vec::new() };
-    let Some(row) = row_of::<PalwClaimCertificationRowV1>(&builder.state, &certification_native_key_v39(&palw_native_certification_id_v39(claim)))
+    let Some(row) =
+        row_of::<PalwClaimCertificationRowV1>(&builder.state, &certification_native_key_v39(&palw_native_certification_id_v39(claim)))
     else {
         return Vec::new();
     };
@@ -269,7 +279,8 @@ fn native_attestor_locks_v39(builder: &TransitionBuilder<'_>, claim: &Hash64) ->
         .iter()
         .filter_map(|a| {
             let key = palw_native_attestor_lock_key_v1(&a.verifier, &claim.as_bytes());
-            let lock: PalwKernelSignerLockRowV1 = borsh::from_slice(route.aux.get(&(PALW_G14_LANE_CLOSURE_TABLE_V1, key.clone()))?).ok()?;
+            let lock: PalwKernelSignerLockRowV1 =
+                borsh::from_slice(route.aux.get(&(PALW_G14_LANE_CLOSURE_TABLE_V1, key.clone()))?).ok()?;
             Some((key, lock))
         })
         .collect()
@@ -294,7 +305,11 @@ pub(super) fn release_native_attestor_locks_v39(builder: &mut TransitionBuilder<
     Ok(())
 }
 /// G-N2: a convicted mining claim's certification is withdrawn — decided or not, it never certifies again.
-pub(super) fn withdraw_native_mining_v39(builder: &mut TransitionBuilder<'_>, claim: &Hash64, now: u64) -> Result<(), PalwStateV2Error> {
+pub(super) fn withdraw_native_mining_v39(
+    builder: &mut TransitionBuilder<'_>,
+    claim: &Hash64,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
     let key = certification_native_key_v39(&palw_native_certification_id_v39(claim));
     if let Some(mut row) = row_of::<PalwClaimCertificationRowV1>(&builder.state, &key) {
         row.outcome = Some((PalwCertificationOutcomeV1::Withdrawn, now));
@@ -391,7 +406,10 @@ pub fn certification_deferred_floor_key_v1() -> Vec<u8> {
 }
 
 /// RFC-0023 stage 1: apply the deferred floor once the resolved prefix reaches it.
-pub(super) fn apply_deferred_frontier_floor_v1(builder: &mut TransitionBuilder<'_>, resolved_through: u64) -> Result<(), PalwStateV2Error> {
+pub(super) fn apply_deferred_frontier_floor_v1(
+    builder: &mut TransitionBuilder<'_>,
+    resolved_through: u64,
+) -> Result<(), PalwStateV2Error> {
     let key = certification_deferred_floor_key_v1();
     let Some(pending) = row_of::<PalwCertifiedFrontierFloorV1>(&builder.state, &key) else { return Ok(()) };
     if pending.blue_score > resolved_through {
@@ -437,7 +455,9 @@ fn credit_certified_v1(
     // until the claim's liability horizon (`final + window_court`) has passed and is named by the sweep only if the claim is still
     // certified then (the deferred release in the sweep, which alone names a governed reward and zeroes it, so it is named once even
     // when certification lands past the horizon). The weight credit above is unchanged. Below the fence: named now.
-    if crate::palw_g14_gates_v1::palw_certified_reward_held_until_v1(builder.params, claim).is_some() {
+    if crate::palw_g14_gates_v1::palw_certified_reward_held_until_v1(builder.params, claim).is_some()
+        || builder.params.claim_local_settlement_active_at(claim.accepted_daa)
+    {
         return Ok(());
     }
     name_certified_reward_v1(builder, now, claim_id, claim, row)
@@ -471,6 +491,73 @@ pub(super) fn release_deferred_certified_reward_at_retirement_v1(
     name_certified_reward_v1(builder, now, claim_id, claim, &row)?;
     row.held_reward = 0;
     write_row(builder, key, Some(&row))
+}
+
+/// RFC23 stage2: the single fenced export of a held certified issuance leg.
+/// A dependency denial burns the unissued right, never collateral or a fraud
+/// label. A pending dependency preserves both the row and its amount.
+pub(super) fn try_release_claim_local_reward_v1(
+    builder: &mut TransitionBuilder<'_>,
+    now: u64,
+    id: &Hash64,
+    claim: &PalwClaimStateV2,
+    retiring: bool,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    use super::palw_claim_local_rewards_v1::{self as local, RewardReadinessV1};
+    if !builder.params.claim_local_settlement_active_at(claim.accepted_daa) {
+        return Ok(None);
+    }
+    let ordinary = if retiring { None } else { local::ordinary_retirement_v1(&builder.state, builder.params, *id, claim, now)? };
+    let retire_now = retiring || ordinary.is_some_and(|at| now > at);
+    let Some(row) = local::retained_certification_v1(&builder.state, *id)? else {
+        if local::hold_hint_v1(&builder.state, *id, claim).is_some() {
+            // Preserve the unpaid claim and keep the derived deadline equal to
+            // the caller's retry clock even if its certification row is absent.
+            local::set_hold_v1(builder, *id, claim, now)?;
+            return Ok(Some(now));
+        }
+        return Ok(None);
+    };
+    if row.held_reward == 0 || !row.outcome.is_some_and(|(o, _)| o.certifies()) {
+        local::clear_hold_v1(builder, now, *id)?;
+        if let Some(at) = ordinary {
+            builder.disarm_deadline(*id);
+            builder.arm_deadline(at, *id)?;
+        }
+        return Ok(None);
+    }
+    match local::reward_readiness_v1(&builder.state, builder.params, now, *id, retire_now)? {
+        RewardReadinessV1::Hold(at) => {
+            let at = at.max(now);
+            if retire_now {
+                local::set_hold_v1(builder, *id, claim, at)?;
+            }
+            return Ok(Some(at));
+        }
+        RewardReadinessV1::Ready => name_certified_reward_v1(builder, now, id, claim, &row)?,
+        RewardReadinessV1::Denied => {}
+    }
+    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeOwnerMutationErrorV1};
+    let consumed = row
+        .try_mutate_owner_classified_v1(NativeCoverageV1::zero(), |r| {
+            r.held_reward = 0;
+            Ok::<(), std::convert::Infallible>(())
+        })
+        .map_err(|e| match e {
+            NativeOwnerMutationErrorV1::TypedRam(e) => PalwStateV2Error::NativeResource(e),
+            NativeOwnerMutationErrorV1::Rejected(e) => match e {},
+            NativeOwnerMutationErrorV1::Bound(e) => PalwStateV2Error::CarriageInconsistent(e),
+        })?;
+    let mut key = [0u8; 65];
+    key[0] = CERTIFICATION_CLAIM_PREFIX_V1;
+    key[1..].copy_from_slice(&palw_certification_id_v1(id));
+    builder.write_kernel_row_encoded_v1(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key, Some(&*consumed))?;
+    local::clear_hold_v1(builder, now, *id)?;
+    if let Some(at) = ordinary {
+        builder.disarm_deadline(*id);
+        builder.arm_deadline(at, *id)?;
+    }
+    Ok(None)
 }
 
 /// **The held issuance reward named** (the certified claim's coinbase leg): once, through the once-only settlement guard.
@@ -554,6 +641,17 @@ pub(super) fn sweep_security_certification_v1(
         let claim = if native { None } else { builder.state.claims.get(&claim_id).cloned() };
         // An owning39 mining claim stands while its native claim row and its complete Master escrow Final stand.
         let native_live = native && super::palw_native_mining_fold_v39::native_mining_claim_live_v39(&builder.state, &claim_id);
+        if builder.params.claim_local_settlement_active_at(now)
+            && let Some(c) = claim.as_ref()
+            && builder.params.claim_local_settlement_active_at(c.accepted_daa)
+            && (super::palw_claim_local_rewards_v1::hold_hint_v1(&builder.state, claim_id, c).is_some()
+                || (row.held_reward > 0 && row.outcome.is_some_and(|(o, _)| o.certifies())))
+        {
+            // The fenced owner either consumes this amount exactly once or
+            // preserves it. Never fall through to the legacy G-15 shortcut.
+            try_release_claim_local_reward_v1(builder, now, &claim_id, c, false)?;
+            continue;
+        }
         // **G-15: a certified reward deferred to the liability horizon** is named here, once, the first sweep strictly past it — and
         // only if the claim still stands certified (a conviction in the window voids it, and the reward is never named: burned).
         if let (Some((outcome, _)), Some(c)) = (row.outcome, claim.as_ref())
@@ -606,8 +704,12 @@ pub(super) fn sweep_security_certification_v1(
                 // the standing fact, and no chain accusation can name a native mining claim.
                 // G14 lane closure G-N2: an open post-Final accusation of the mining claim is pending; a convicted claim is not live.
                 PalwCertificationClaimFactsV1 {
-                    still_final: native_live && !crate::palw_native_receipt_v39::native_mining_convicted_v39(&builder.state, &claim_id),
-                    accusation_pending: crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&builder.state, &claim_id),
+                    still_final: native_live
+                        && !crate::palw_native_receipt_v39::native_mining_convicted_v39(&builder.state, &claim_id),
+                    accusation_pending: crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(
+                        &builder.state,
+                        &claim_id,
+                    ),
                 }
             } else {
                 PalwCertificationClaimFactsV1 {
@@ -656,6 +758,14 @@ pub(super) fn sweep_security_certification_v1(
         }
         if changed {
             write_row(builder, key, Some(&row))?;
+            if builder.params.claim_local_settlement_active_at(now)
+                && row.held_reward > 0
+                && row.outcome.is_some_and(|(o, _)| o.certifies())
+                && let Some(c) = claim.as_ref()
+                && builder.params.claim_local_settlement_active_at(c.accepted_daa)
+            {
+                try_release_claim_local_reward_v1(builder, now, &claim_id, c, false)?;
+            }
         }
     }
     if network != network_before {

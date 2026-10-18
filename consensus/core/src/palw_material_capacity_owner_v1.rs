@@ -9,6 +9,110 @@ use crate::palw_native_resource_v1::{
 };
 use std::mem::size_of;
 type Store = PalwMonetaryMaterialProviderStoreV1;
+/// A complete, authenticated liability archive. Unlike identity-only provider
+/// retention, this capability requires the original native authority / ledger
+/// and authenticates every court unit. The owner retains its allocation ticket.
+/// Expected manifests must come from the executed checkpoint's signed covenants.
+pub struct PalwLiabilityMaterialArchiveV1 {
+    store: NativeRetainedV1<Store>,
+}
+
+#[cfg(test)]
+#[test]
+fn rfc23s2_archive_capacity_refusal_is_separate_from_invalid_material() {
+    use crate::palw_native_resource_v1::NativeDecodeErrorV1 as D;
+    let expected = BTreeMap::new();
+    let empty = [0u8; 4];
+    let result = PalwLiabilityMaterialArchiveV1::recover_with_v1(
+        &empty,
+        &expected,
+        4,
+        None,
+        |_| panic!("empty archive has no authority lookup"),
+        |requests| {
+            assert!(requests > 0);
+            Err(C::unsupported::<Store>("archive test", "local capacity exhausted"))
+        },
+    );
+    assert!(matches!(result, Err(D::Resource(_))), "retryable local refusal is not invalid material");
+    let hostile = u32::MAX.to_le_bytes();
+    let result = PalwLiabilityMaterialArchiveV1::recover_with_v1(
+        &hostile,
+        &expected,
+        4,
+        None,
+        |_| panic!("malformed archive must not consult authority"),
+        |_| panic!("malformed nested shape must fail before reservation / decoding"),
+    );
+    assert!(matches!(result, Err(D::Decode(_))));
+}
+impl PalwLiabilityMaterialArchiveV1 {
+    pub fn recover_v1(
+        encoded: &[u8],
+        expected: &BTreeMap<Hash64, (PalwMaterialManifestV1, u64)>,
+        total_capacity: u64,
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
+    ) -> Result<Self, crate::palw_native_resource_v1::NativeDecodeErrorV1<PalwMaterialCapacityErrorV1>> {
+        Self::recover_with_v1(encoded, expected, total_capacity, ledger, authority, reserve_native_requests_v1)
+    }
+
+    fn recover_with_v1(
+        encoded: &[u8],
+        expected: &BTreeMap<Hash64, (PalwMaterialManifestV1, u64)>,
+        total_capacity: u64,
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
+        reserve: impl FnOnce(u64) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, C>,
+    ) -> Result<Self, crate::palw_native_resource_v1::NativeDecodeErrorV1<PalwMaterialCapacityErrorV1>> {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1 as D;
+        use PalwMaterialCapacityErrorV1 as E;
+        if encoded.len() as u64 > total_capacity {
+            return Err(D::Decode(E::Capacity));
+        }
+        let mut max_bytes = 0;
+        for (manifest, limit) in expected.values() {
+            manifest.validate(*limit).map_err(D::Decode)?;
+            max_bytes = max_bytes.max(*limit);
+        }
+        // Scan both the outer map and all embedded response codecs BEFORE any
+        // Borsh allocation, even with local capacity capabilities disabled.
+        let requests = recovery_requests(encoded, ledger).map_err(|why| D::Decode(E::Authentication(why)))?;
+        let count = requests.bytes().ok_or_else(|| D::Resource(requests.clone()))?;
+        let lease = reserve(count).map_err(D::Resource)?;
+        let value = Store::recover_verified_inner_v1(encoded, max_bytes, total_capacity, ledger, authority).map_err(D::Decode)?;
+        crate::palw_claim_local_v1::palw_check_canonical_liability_bytes_v1(&value, encoded)
+            .map_err(|why| D::Decode(E::Authentication(why.to_string())))?;
+        if value.contracts.len() != expected.len()
+            || value.contracts.iter().any(|(consent, (id, manifest, _))| {
+                expected.get(consent).is_none_or(|(signed, _)| manifest != signed || *id != signed.id())
+            })
+        {
+            return Err(D::Decode(E::Substitution));
+        }
+        Ok(Self { store: NativeRetainedV1::from_owner_reserved_v1(value, lease) })
+    }
+
+    /// Borrow actual verified bytes for an external verifier. No provider URL,
+    /// digest or claim that a server is healthy substitutes for this payload.
+    pub fn material_v1(&self, consent: Hash64, claim: Hash64) -> Option<(&PalwMaterialScopeV1, &[u8])> {
+        let (_, manifest, rows) = self.store.contracts.get(&consent)?;
+        Some((manifest.scope(claim)?, rows.get(&claim)?.as_slice()))
+    }
+
+    /// Build an ordinary existing DA/court answer from the archived full bundle.
+    /// Its admission and any subsequent adjudication still use the native fold.
+    pub fn answer_v1(
+        &self,
+        consent: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: crate::palw_state_v2::PalwBondKeyV2,
+        demand: PalwMonetaryMaterialDemandV1,
+    ) -> Result<NativeRetainedV1<crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1>, String> {
+        self.store.provider_answer_action_v1(consent, root, dependency, provider, demand)
+    }
+}
 const COMPONENT: &str = "monetary provider ownership";
 fn add(a: C, b: C) -> C {
     a.add::<Store>(b, COMPONENT)
