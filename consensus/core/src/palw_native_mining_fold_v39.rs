@@ -228,7 +228,7 @@ fn register(
     {
         return Err(bad("mining39 registration sequence/share/policy/duplicate line/model capacity differs"));
     }
-    if !prepay(builder, ctx, signer, p, 65536, body.len())? {
+    if !prepay(builder, ctx, signer, p, 0, body.len())? {
         return Ok(());
     }
     let record = NativeMiningModelRecordV39 {
@@ -409,7 +409,7 @@ fn commit(
     }
     // The stages this producer actually produced, each credited at most once ever.
     let mut stages = Vec::new();
-    let mut restore = 65536u64;
+    let mut restore = 0u64;
     for c in &fin.components {
         let h = super::palw_native_job_fold_v39::header(r, c.original.job)?;
         if h.original.producer != *signer {

@@ -506,6 +506,11 @@ impl<B: PalwExecutionBackendV1 + ?Sized> PalwCaptureLeafProverV1 for PalwPerInde
 }
 
 pub trait PalwExecutionBackendV1: Send + Sync {
+    /// **The concrete backend, for a node-side consumer that needs a family's own API** (RFC-0006 06-A: the held-GDN filer reads
+    /// the Qwen3.6 hybrid's accuser view and recompute kernels). `None` by default; no consensus rule reads it.
+    fn as_any_v1(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
     /// A human-readable identity for logs — the model id for a converted class, the floor's name
     /// for the derived one. Never used for dispatch: the chain's `class_id` is.
     fn model_id(&self) -> &str;

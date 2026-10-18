@@ -376,4 +376,4 @@ pub fn palw_gdn_held_filer_tick_v1<H: PalwGdnHeldHostV1>(host: &H, book: &mut Pa
 
 #[cfg(test)]
 #[path = "palw_gdn_held_filer_tests.rs"]
-mod tests;
+pub(crate) mod tests;

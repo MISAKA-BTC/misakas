@@ -241,7 +241,9 @@ pub(super) async fn commit_value(
         }
     }
     let inputs = ActualInputResolverV39::derive(checked, maximum, &[], &NoPages).unwrap();
-    let dir = std::env::temp_dir().join(format!("g14n2-master39-{}-{}-{}", std::process::id(), net.daa(), producer));
+    static RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("g14n2-master39-{}-{}-{}-{run}", std::process::id(), net.daa(), producer));
     std::fs::create_dir_all(&dir).unwrap();
     let mut archive = misaka_palw_sdk::native_trace_archive_v39::DiskTraceArchiveV39::create(&dir.join("producer"), checked, 1 << 20).unwrap();
     archive.begin(checked.root(), maximum.root(), inputs.root()).unwrap();
@@ -318,7 +320,6 @@ fn outsider_filing(fx: &Fixture, c: &Component, net: &Net) -> Option<Vec<u8>> {
 }
 
 #[tokio::test]
-#[ignore = "unreachable at the shipped kernel-route block work budget (2^30, half reserved): Master 65 needs >= 1.14e9 work; see owning39_master_registration_is_refused_by_the_block_work_budget and the proof doc 13.7"]
 async fn owning39_master_component_job_reaches_final_and_the_master_is_final() {
     kaspa_core::log::try_init_logger("warn");
     let mut net = Net::over_cfg(owning_config_with(Some(CHALLENGE)), TestConsensus::new);
@@ -340,8 +341,13 @@ fn mining_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let domain = params.palw_funded_execution_v11.as_ref().unwrap().policies.execution.network_domain;
     let mut fence = PalwNativeMiningFenceV39::unapproved_probe_at(ForkActivation::new(0), domain);
     let p = &mut fence.policy;
+    // The premise must cover the design threshold k/m = 32/47 (the probe's 2/3 does not: 2·47 < 32·3): a TEST premise.
+    p.honest_stake_numerator = 7;
+    p.honest_stake_denominator = 10;
     p.assumption_review = [1; 64];
     p.qualification = [2; 64];
+    // One MAC a quantum (the fixture's work is a handful of MACs; the probe's 2^30 makes every fixture Master sub-quantum).
+    p.network_quantum_mac = 1;
     p.network_slash_per_mac = 1_000;
     p.claim_window_daa = 10_000;
     p.receipt_lifetime_daa = 100;
@@ -366,13 +372,47 @@ fn mining_claim(net: &Net, id: &Digest) -> NativeMiningClaimRecordV39 {
     borsh::from_slice::<(Digest, NativeMiningClaimRecordV39)>(&raw).unwrap().1
 }
 
+/// The certification row of a mining claim (aux 136, the native `'V'` key).
+fn cert_row(net: &Net, c: &NativeMiningClaimRecordV39) -> Option<kaspa_consensus_core::palw_security_certification_v1::PalwClaimCertificationRowV1> {
+    use kaspa_consensus_core::palw_security_certification_v1::*;
+    let key = certification_native_key_v39(&palw_native_certification_id_v39(&c.claim_hash()));
+    net.api().unwrap().aux.get(&(PALW_SECURITY_CERTIFICATION_TABLE_V1, key)).map(|raw| borsh::from_slice(raw).unwrap())
+}
+
+/// Every drawn bond (by card) attests `Reproduced` (inner 75) on the claim's certification — colluding attestors on a forged claim.
+async fn attest_all(net: &mut Net, c: &NativeMiningClaimRecordV39, except: &[usize]) -> Vec<usize> {
+    use misaka_palw_kernel::model_eligibility_v1::*;
+    let row = cert_row(net, c).expect("the certification row");
+    let id = kaspa_consensus_core::palw_security_certification_v1::palw_native_certification_id_v39(&c.claim_hash());
+    let mut cards = Vec::new();
+    for card in 0..8usize {
+        if except.contains(&card) || !row.draws.contains(&net.kid(card)) {
+            continue;
+        }
+        let attestation = EligibilityAttestationV1 {
+            version: ELIGIBILITY_ATTESTATION_VERSION_V1,
+            network: net.domain.as_bytes(),
+            exam: id,
+            verifier: net.kid(card),
+            verdict: EligibilityVerdictV1::Reproduced,
+            transcript: [0xA0 | card as u8; 64],
+            claim_mismatches: vec![],
+        };
+        let o = net.route(card, &K::AttestEligibilityExamV1 { attestation });
+        net.send(vec![(card, o)]).await;
+        cards.push(card);
+    }
+    cards
+}
+
 /// **G-N2 end to end on the node**: two complete Masters of the same model line — stage 0 forged by card 0 (carry 7 for 5), stage 0
-/// computed honestly by card 3 — both reach job Final unaccused and Master Final; the model is registered (73), both producers
-/// take a seat (74) and commit a mining claim (75). An outsider (card 1) replays independently and files (80, kind 0) against the
-/// forged claim: its producer's reserved exposure is collected, the claim closes without reward, its certification row is
-/// withdrawn and its material hold released. The same filing against the honest claim convicts nothing; the honest claim stands.
+/// computed honestly by card 3 — both reach job Final unaccused and Master Final; the model is registered (73), both producers take a
+/// seat (74) and commit a mining claim (75) past the design verifier maturity (7 days); seed anchors from attempt blocks draw Gate C
+/// (design m = 47, k = 32, with replacement over the matured pool); every drawn bond attests `Reproduced` (colluding on the forged
+/// one), both certify after the design prosecution window and get receipts (77). An outsider (card 1) replays independently and files
+/// (80, kind 0) against the forged claim: its producer's reserved exposure is collected, its receipt revoked, its certification
+/// withdrawn, its attestors' locks charged, its hold released. The same filing against the honest claim changes nothing.
 #[tokio::test]
-#[ignore = "unreachable at the shipped kernel-route block work budget (2^30, half reserved): Master 65 needs >= 1.14e9 work; see owning39_master_registration_is_refused_by_the_block_work_budget and the proof doc 13.7"]
 async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_and_the_honest_one_is_untouched() {
     kaspa_core::log::try_init_logger("warn");
     let mut net = Net::over_cfg(mining_config(), TestConsensus::new);
@@ -383,7 +423,7 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     assert!(outsider_filing(&fx, &honest, &net).is_none(), "the honest commit yields no filing");
     finalize(&mut net, &forged).await;
     finalize(&mut net, &honest).await;
-    // ---- the model line (73, registrant card 1), the producers' seats (74) and their mining claims (75) ----
+    // ---- the model line (73, registrant card 1) and the producers' seats (74) ----
     let wire = NativeMiningModelWireV39 { version: 39, template_master: forged.master, sequence: 0, share_permille: 0 };
     let before = ids(&net, MINING_MODEL_KIND_V39);
     act(&mut net, 1, REGISTER_MODEL_ACTION_V39, borsh::to_vec(&wire).unwrap()).await;
@@ -392,57 +432,115 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
         act(&mut net, card, MODEL_SEAT_ACTION_V39, borsh::to_vec(&NativeMiningSeatWireV39 { version: 39, model, kind: 0 }).unwrap()).await;
         assert!(row(&net, MINING_SEAT_KIND_V39, &(model, net.bond(card))).is_some(), "card {card} holds a possession seat");
     }
+    // ---- past the design verifier maturity (the genesis bonds become the Gate C pool), the mining claims (75) ----
+    let cert = net.chain.vp().palw_state_params_v2.clone().unwrap().rfc0018_v1().unwrap().certification;
+    net.beat_to(cert.verifier_maturity_daa + 2).await;
     let mut claims = Vec::new();
     for (card, c) in [(0usize, &forged), (3, &honest)] {
         let before = ids(&net, MINING_CLAIM_KIND_V39);
         let w = NativeMiningCommitWireV39 { version: 39, model, master: c.master, sequence: 0 };
         act(&mut net, card, MINING_COMMIT_ACTION_V39, borsh::to_vec(&w).unwrap()).await;
-        let id = new_id(&net, MINING_CLAIM_KIND_V39, &before);
+        claims.push(new_id(&net, MINING_CLAIM_KIND_V39, &before));
         assert!(row(&net, MINING_JOB_HOLD_KIND_V39, &c.job).is_some(), "the credited component's material is held");
-        claims.push(id);
     }
     let (bad_claim, good_claim) = (mining_claim(&net, &claims[0]), mining_claim(&net, &claims[1]));
+    // ---- seed anchors (attempt blocks) until both certifications are drawn ----
+    let ttpb = net.ttpb();
+    for _ in 0..64 {
+        if cert_row(&net, &bad_claim).is_some_and(|r| r.anchor.is_some()) && cert_row(&net, &good_claim).is_some_and(|r| r.anchor.is_some()) {
+            break;
+        }
+        {
+            let (block, _) = net.chain.build_attempt(5, ttpb, Vec::new(), &|_| true);
+            let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&block.header.palw_commitment).unwrap();
+            let (_, tip) = net.chain.tip_state();
+            let params = net.chain.vp().palw_state_params_v2.clone().unwrap();
+            let last = tip.last_point().unwrap();
+            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: block.header.hash,
+                daa_score: block.header.daa_score,
+                blue_score: last.blue_score + 1,
+                subsidy: 0,
+            };
+            match net.chain.vp().palw_v2_fold_attempt_for_tests(&tip, &params, &point, &[], &envelope, &block.header) {
+                Err(why) => println!("g14n2/node: the anchor attempt is refused by the fold: {why:?}"),
+                Ok((_, _, skipped)) => println!("g14n2/node: the anchor attempt folds; skipped {skipped:?}"),
+            }
+        }
+        let (attempt_block, attempt_claim) = net.chain.attempt(5, ttpb, Vec::new(), &|_| true).await;
+        let tip = net.chain.tip_state().1;
+        println!(
+            "g14n2/node: attempt at daa {} (sink is it: {}) admitted {} anchor {:?}",
+            net.daa(),
+            net.chain.sink() == attempt_block.header.hash,
+            tip.claim(&attempt_claim).is_some(),
+            tip.round_seed_anchor().map(|a| a.span)
+        );
+        let to = net.daa() + 8;
+        net.beat_to(to).await;
+    }
+    let drawn = cert_row(&net, &bad_claim).unwrap();
     println!(
-        "g14n2/node: forged claim exposure {} quanta {}; honest exposure {}",
-        bad_claim.price.reserved_exposure, bad_claim.price.quanta, good_claim.price.reserved_exposure
+        "g14n2/node: tip daa {}, seed anchor {:?}, committed_span {}, drawn {:?}",
+        net.daa(),
+        net.chain.tip_state().1.round_seed_anchor().map(|a| a.span),
+        drawn.committed_span,
+        drawn.anchor
     );
-    let cert_key = |c: &NativeMiningClaimRecordV39| {
-        kaspa_consensus_core::palw_security_certification_v1::certification_native_key_v39(
-            &kaspa_consensus_core::palw_security_certification_v1::palw_native_certification_id_v39(&c.claim_hash()),
-        )
-    };
-    let cert_row = |net: &Net, c: &NativeMiningClaimRecordV39| {
-        net.api().unwrap().aux.get(&(kaspa_consensus_core::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1, cert_key(c))).cloned()
-    };
-    assert!(cert_row(&net, &bad_claim).is_some() && cert_row(&net, &good_claim).is_some(), "both claims are committed for Gate C");
-    // ---- the outsider's filing against the honest claim convicts nothing (its fee is spent) ----
+    assert!(drawn.anchor.is_some() && !drawn.draws.is_empty(), "the forged claim is drawn (outcome {:?})", drawn.outcome);
+    assert_eq!(drawn.draws.len(), cert.m as usize, "m = 47 positions");
+    // The honest producer (card 3) never vouches for the forged claim.
+    let colluders = attest_all(&mut net, &bad_claim, &[1, 3]).await;
+    attest_all(&mut net, &good_claim, &[]).await;
+    println!("g14n2/node: forged claim drawn over {} distinct bonds, attested by cards {colluders:?}", colluders.len());
+    // ---- the prosecution window, then both certify and receive their receipts (77) ----
+    let until = drawn.final_daa + cert.prosecution_window_daa + 2;
+    net.beat_to(until).await;
+    for c in [&bad_claim, &good_claim] {
+        let r = cert_row(&net, c).unwrap();
+        assert!(r.outcome.is_some_and(|(o, _)| o.certifies()), "certified by the colluding draws: {:?}", r.outcome);
+        let subject = NativeMiningSubjectWireV39 { version: 39, kind: 0, id: c.id };
+        act(&mut net, 1, ISSUE_RECEIPT_ACTION_V39, borsh::to_vec(&subject).unwrap()).await;
+        assert!(row(&net, MINING_RECEIPT_KIND_V39, &native_mining_receipt_id_v39(c.id)).is_some(), "the receipt is issued");
+    }
+    let locks = |net: &Net, card: usize| net.api().unwrap().signer_locks_of_v1(&net.bond(card));
+    let locked: Vec<(usize, u64)> = colluders.iter().map(|card| (*card, locks(&net, *card))).collect();
+    assert!(locked.iter().all(|(_, l)| *l > 0), "every Reproduced attestor holds a lock: {locked:?}");
+    let safe_before = net.chain.tip_state().1.safe_weight();
+    // ---- the outsider's filing: on the honest claim nothing; on the forged one the conviction ----
     let filing = outsider_filing(&fx, &forged, &net).expect("the forged commit yields a filing");
     let (c0, c3) = (net.collateral(0), net.collateral(3));
     let accuse = |claim: Digest| NativeMiningAccusationWireV39 { version: 39, kind: 0, claim, stage: 0, body: filing.clone() };
     act(&mut net, 1, ACCUSE_MINING_ACTION_V39, borsh::to_vec(&accuse(good_claim.id)).unwrap()).await;
     assert_eq!(net.collateral(3), c3, "a filing that does not verify on the honest component never touches its producer");
     assert!(row(&net, MINING_CONVICTED_KIND_V39, &good_claim.id).is_none());
-    // ---- the filing against the forged claim convicts it ----
+    let attestor_collateral: Vec<(usize, u64)> = colluders.iter().map(|card| (*card, net.collateral(*card))).collect();
     act(&mut net, 1, ACCUSE_MINING_ACTION_V39, borsh::to_vec(&accuse(bad_claim.id)).unwrap()).await;
     assert!(row(&net, MINING_CONVICTED_KIND_V39, &bad_claim.id).is_some(), "the forged mining claim is convicted after its Master Final");
     let collected = c0 - net.collateral(0);
-    let expect = u64::try_from(bad_claim.price.reserved_exposure).unwrap().min(c0);
-    assert_eq!(collected, expect, "the producer's reserved exposure is collected");
-    let closed = mining_claim(&net, &bad_claim.id);
-    assert_eq!(closed.closed.map(|(_, issued)| issued), Some(false), "closed without reward");
-    assert!(row(&net, MINING_RECEIPT_KIND_V39, &native_mining_receipt_id_v39(bad_claim.id)).is_none(), "no receipt");
+    assert_eq!(collected, u64::try_from(bad_claim.price.reserved_exposure).unwrap().min(c0), "the reserved exposure is collected");
+    assert_eq!(mining_claim(&net, &bad_claim.id).closed.map(|(_, issued)| issued), Some(false), "closed without reward");
+    assert!(row(&net, MINING_RECEIPT_KIND_V39, &native_mining_receipt_id_v39(bad_claim.id)).is_none(), "the receipt is revoked");
     assert!(row(&net, MINING_JOB_HOLD_KIND_V39, &forged.job).is_none(), "the hold ends with the conviction");
-    let withdrawn = cert_row(&net, &bad_claim)
-        .map(|raw| borsh::from_slice::<kaspa_consensus_core::palw_security_certification_v1::PalwClaimCertificationRowV1>(&raw).unwrap());
-    println!("g14n2/node: collected {collected}, forged certification after conviction {:?}", withdrawn.as_ref().map(|r| r.outcome));
+    assert!(net.chain.tip_state().1.safe_weight() <= safe_before, "no safe weight survives from the forged claim");
     assert!(
         !kaspa_consensus_core::palw_security_certification_v1::palw_native_mining_security_certified_v39(&net.chain.tip_state().1, &bad_claim.claim_hash()),
-        "the forged claim carries no Gate C credit"
+        "the forged claim's certification is withdrawn"
     );
-    // ---- the honest claim stands ----
+    for (card, before) in &attestor_collateral {
+        assert!(net.collateral(*card) < *before, "attestor card {card} is charged ({} → {})", before, net.collateral(*card));
+    }
+    println!(
+        "g14n2/node: collected {collected} (exposure {}), attestors {:?} → {:?}",
+        bad_claim.price.reserved_exposure,
+        attestor_collateral,
+        colluders.iter().map(|c| net.collateral(*c)).collect::<Vec<_>>()
+    );
+    // ---- the honest claim stands, certified and receipted ----
     assert_eq!(net.collateral(3), c3, "the honest producer is untouched");
-    assert_eq!(mining_claim(&net, &good_claim.id).closed, None, "the honest claim stays live");
-    assert!(row(&net, MINING_JOB_HOLD_KIND_V39, &honest.job).is_some(), "the honest component stays held");
+    assert_eq!(mining_claim(&net, &good_claim.id).closed.map(|(_, i)| i), Some(true), "the honest claim keeps its receipt");
+    assert!(row(&net, MINING_RECEIPT_KIND_V39, &native_mining_receipt_id_v39(good_claim.id)).is_some());
+    assert!(kaspa_consensus_core::palw_security_certification_v1::palw_native_mining_security_certified_v39(&net.chain.tip_state().1, &good_claim.claim_hash()));
     let replay = net.replay().await;
     net.assert_same(&replay, "G-N2 node conviction");
     for c in [&forged, &honest] {
@@ -450,14 +548,14 @@ async fn g14n2_node_a_forged_mining_claim_is_convicted_after_its_master_final_an
     }
 }
 
-/// **Finding (2026-10-18): the owning39 Master and mining actions cannot ride any block.** Their metadata prepay charges the kernel
+/// **Finding (2026-10-18), then the user's decision (10-18): bill the bytes the action carries.** Before it, Their metadata prepay charges the kernel
 /// route's per-block court-work budget (`max_court_work_per_block = 2^30`, `prosecution_reserve_permille = 500`: ordinary admission may
 /// spend 2^29 = 536,870,912) with `bytes × 16,384 + 2^20` (Master 65/66 and the component's invocation restore) or `bytes × 8,192 +
 /// 65,536` (mining 73/75), and every such action restores at least 65,536 bytes of fixed envelope before its own body. The fold then
 /// returns without writing (`prepay` → `Ok(false)`): the action is carried, charged nothing, and changes nothing. This test pins the
 /// refusal on the node and prints the numbers; the end-to-end tests above are ignored until the value is decided.
 #[tokio::test]
-async fn owning39_master_registration_is_refused_by_the_block_work_budget() {
+async fn owning39_master_registration_is_billed_on_its_carried_bytes_within_the_block_work_budget() {
     kaspa_core::log::try_init_logger("warn");
     let mut net = Net::over_cfg(owning_config_with(Some(CHALLENGE)), TestConsensus::new);
     net.beat_to(5).await;
@@ -497,17 +595,17 @@ async fn owning39_master_registration_is_refused_by_the_block_work_budget() {
     let raw = borsh::to_vec(&register).unwrap();
     let master = register.root(net.bond(2));
     let source_bytes = fx.checked.wire().to_bytes().len() as u64;
-    let extent = raw.len() as u64 + 65_536 + source_bytes + 4_096;
+    let extent = raw.len() as u64 + source_bytes + 4_096;
     let work = extent * 16_384 + (1 << 20);
     let (cap, reserve) = (1u64 << 30, 500u64);
     let admission = cap - cap * reserve / 1000;
     println!(
         "owning39 Master 65: register {} bytes, source {source_bytes} bytes, restore extent {extent} bytes → work {work} vs ordinary          admission limit {admission} (block cap {cap}); mining 73 work {} vs the same limit",
         raw.len(),
-        (65_536u64 + 76) * 8_192 + 65_536
+        76u64 * 8_192 + 65_536
     );
-    assert!(work > cap, "the smallest Master exceeds even the whole block's court work");
-    assert!((65_536u64 + 76) * 8_192 + 65_536 > admission, "the mining registration exceeds the ordinary admission limit");
+    assert!(work < admission, "the Master's carried bytes fit the ordinary admission limit");
+    assert!(76u64 * 8_192 + 65_536 < admission, "so does the mining registration");
     act(&mut net, 2, 65, raw).await;
-    assert!(row(&net, 80, &master).is_none(), "the Master registration is carried and changes nothing");
+    assert!(row(&net, 80, &master).is_some(), "the Master registers");
 }

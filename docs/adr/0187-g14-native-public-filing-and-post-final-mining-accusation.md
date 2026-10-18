@@ -50,3 +50,10 @@
 
 - 暗号学的な計算証明は使っていない。
 - 残る限界:ordinary lane と discovery ticket の先取り(価格だけで抑えている)。text29 と v39 の実 job での試験。node 水準の担保不足(正規の経路では作れない)。
+
+## 追記(2026-10-18、ユーザー決定):v39 の Master・mining の料金は運ぶ bytes で計る
+
+- v39 の Master(65、66、67〜70 の metadata upload)、mining(73、75)、component の Fund の restore 料金から、固定の envelope(65,536 byte、66 の 131,072 byte と component ごとの 32,768 byte、prior component ごとの 16,384 byte、finalized の 32,768 byte)を外した。action が実際に運ぶ・restore する bytes(登録 body、source、book、post)だけを数える。
+- block あたりの court work 上限(2^30、通常 2^29)と単価(16,384 / 8,192 work/byte)は変えていない。休眠の `palw_native_execution_v39` / `palw_native_mining_v39` の中だけで効く。
+- これで fixture の Master 65 は 97,027,072 work 程度になり、通常の admission の上限に入る(G14 完全性証明 §13.7 の表の前提が変わった)。
+- Master の audit(`derive_native_master_final_audit_v39`)の restore extent の再計算も同じ式にした。

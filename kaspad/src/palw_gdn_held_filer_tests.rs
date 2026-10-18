@@ -51,21 +51,22 @@ fn bond(n: u64) -> PalwBondKeyV2 {
 
 /// The forged world: the honest view, the forged view (checkpoint `index`'s state with one byte of `(node_slot, head)`'s first
 /// demanded chunk flipped, the leg and binding re-committed), the forged state chunks the producer would disclose, and the oracle.
-struct World {
-    backend: Qwen36Backend,
-    honest: Base0GdnOwnedMaterialV2,
-    forged: Base0GdnOwnedMaterialV2,
+pub(crate) struct World {
+    pub(crate) profile: kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    pub(crate) backend: Qwen36Backend,
+    pub(crate) honest: Base0GdnOwnedMaterialV2,
+    pub(crate) forged: Base0GdnOwnedMaterialV2,
     forged_chunks: Vec<Vec<u8>>,
     positions: u32,
     index: u32,
     leg_leaves: Vec<Hash64>,
-    shape_profile_id: Hash64,
-    openings: Vec<PalwArtifactOpeningV1>,
-    oracle: PalwProvenOperandsV1,
-    inventory_root: Hash64,
+    pub(crate) shape_profile_id: Hash64,
+    pub(crate) openings: Vec<PalwArtifactOpeningV1>,
+    pub(crate) oracle: PalwProvenOperandsV1,
+    pub(crate) inventory_root: Hash64,
 }
 
-fn world(forge_head: u32) -> World {
+pub(crate) fn world(forge_head: u32) -> World {
     let artifact = Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8));
     let profile = qwen36_profile_v8(geometry()).expect("graph-v8 projects");
     let backend = Qwen36Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), profile.clone(), qwen36_held_canonical_v1(160))
@@ -137,6 +138,7 @@ fn world(forge_head: u32) -> World {
         .collect();
     let oracle = PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root()).unwrap();
     World {
+        profile: profile.clone(),
         backend,
         honest,
         forged,
@@ -151,7 +153,7 @@ fn world(forge_head: u32) -> World {
     }
 }
 
-fn claim_of(m: &Base0GdnOwnedMaterialV2, w: &World) -> PalwGdnHeldClaimV1 {
+pub(crate) fn claim_of(m: &Base0GdnOwnedMaterialV2, w: &World) -> PalwGdnHeldClaimV1 {
     PalwGdnHeldClaimV1 {
         claim: Hash64::from_u64_word(0xC1A1),
         executor: bond(1),
@@ -162,7 +164,7 @@ fn claim_of(m: &Base0GdnOwnedMaterialV2, w: &World) -> PalwGdnHeldClaimV1 {
 }
 
 /// The producer's own answer to `unit` (its forged bytes and their path to the committed forged root).
-fn producer_answer(w: &World, claim: &PalwGdnHeldClaimV1, unit: PalwHeldMissingV1) -> PalwConsensusObjectV2 {
+pub(crate) fn producer_answer(w: &World, claim: &PalwGdnHeldClaimV1, unit: PalwHeldMissingV1) -> PalwConsensusObjectV2 {
     let PalwHeldMissingV1::StateChunk { chunk, .. } = unit else { unreachable!() };
     let siblings = kaspa_consensus_core::palw_state_chunk_map::palw_state_chunk_path_for_map_v1(
         &w.forged.binding.shape_profile,
@@ -188,7 +190,7 @@ fn producer_answer(w: &World, claim: &PalwGdnHeldClaimV1, unit: PalwHeldMissingV
     }
 }
 
-fn sign(_: &[u8], _: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn sign(_: &[u8], _: &[u8]) -> Option<Vec<u8>> {
     Some(vec![0x51; 8])
 }
 

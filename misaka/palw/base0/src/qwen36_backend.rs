@@ -1338,6 +1338,19 @@ impl Qwen36Backend {
         })
     }
 
+    /// **The class inventory's operand openings and its root** (RFC-0006 06-A): what a GDN accusation carries and its oracle checks
+    /// against the class's registered artifact root. Public data of the registered artifact; never a proof of computation.
+    pub fn gdn_inventory_openings_v2(
+        &self,
+    ) -> Result<(Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, kaspa_hashes::Hash64), String> {
+        let profile = self.profile.as_ref().ok_or_else(|| "this backend serves no registered profile".to_string())?;
+        let inventory = crate::inventory::qwen36_inventory_v1(&self.artifact, profile).map_err(|e| format!("{e:?}"))?;
+        let openings = (0..inventory.operands().len())
+            .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).ok_or_else(|| format!("inventory row {i} has no opening")))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((openings, inventory.root()))
+    }
+
     /// **Fresh recompute kernels over this tier's registered plan** — what the accuser's own anchor states are computed with.
     pub fn gdn_recompute_kernels_v2(&self) -> Result<crate::fp_recompute::Qwen36RecomputeKernelsV1<'_>, String> {
         let plan =
@@ -1598,6 +1611,9 @@ impl Qwen36Backend {
 }
 
 impl PalwExecutionBackendV1 for Qwen36Backend {
+    fn as_any_v1(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
     fn model_id(&self) -> &str {
         &self.model_id
     }

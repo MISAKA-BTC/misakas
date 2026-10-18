@@ -2526,3 +2526,216 @@ async fn a_pooled_demand_is_not_resent_after_a_restart_and_a_failing_build_backs
     TURN.with(|turn| turn.set(20));
     RCORE.with(|rcore| rcore.set(false));
 }
+
+// ---- RFC-0006 06-A: the held-GDN filer against the real fold ------------------------------------------------------------------
+
+/// The fold with the memory/routing court's runtime mirror (tag 244) on, as `palw_memory_routing_court_v2` arms it.
+fn gdn_step(parent: &PalwChainStateV2, daa: u64, objects: &[PalwConsensusObjectV2], att: Option<&PalwAttemptEnvelopeV2>) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    let p = params().with_memory_routing_court_from_daa(Some(0));
+    let c = PalwBlockContextV2 { block: Hash64::from_u64_word(0x6D_0000 + daa), daa_score: daa, blue_score: daa, subsidy: 10_000 };
+    let mut extras = launch();
+    extras.memory_routing_court = Some(kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2 { ladder: 1 << 26, max_close_bytes: 64 << 20 });
+    let (child, delta) = apply_palw_transition_v2_with_extras(parent, &p, &c, objects, att, false, false, false, true, &extras)?;
+    child.assert_internal_consistency(&p).expect("internal consistency");
+    assert_eq!(apply_delta_v2(parent, &delta, &p).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
+    assert_eq!(revert_delta_v2(&child, &delta, &p).expect("reverts"), *parent, "DAA {daa}: the delta reverts");
+    Ok(child)
+}
+
+/// The forged hybrid claim on the chain: the held Qwen3.6 class (graph-v8, held v5) registered under the forger's job, one attempt
+/// whose execution root is the forged binding's, a panel of BOTH seats and their licence — every seat colludes.
+fn gdn_licensed(w: &crate::palw_gdn_held_filer::tests::World) -> (PalwChainStateV2, Hash64) {
+    let class_id = w.profile.shape_profile_id();
+    let bond = |n: u64| PalwConsensusObjectV2::BondRegistered {
+        bond: bond_key(n),
+        pubkey: vec![n as u8; 4],
+        operator_pubkey: op_key(20 + n),
+        collateral: 1_000_000_000,
+        payout_payload: Hash64::from_u64_word(0x9A00 + n),
+        capable_classes: Default::default(),
+        signature: Vec::new(),
+    };
+    let register = vec![
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(1),
+            artifact_root: h64(11),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+            initial_target: u128::MAX / 2,
+            share_permille: 1000,
+            activation_daa: 0,
+            admission: None,
+        },
+        bond(PRODUCER),
+        bond(SEAT),
+        bond(COLLUDER),
+        bond(STRANGER),
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root: w.inventory_root,
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+            initial_target: u128::MAX / 2,
+            share_permille: 100,
+            activation_daa: 0,
+            admission: Some(Box::new(PalwClassAdmissionCarriageV2 {
+                profile: w.profile.clone(),
+                canonical: w.forged.binding.job_context.clone(),
+                registrant_bond: bond_key(PRODUCER),
+                signature: Vec::new(),
+            })),
+        },
+    ];
+    let s = gdn_step(&PalwChainStateV2::genesis(), 100, &register, None).expect("the registry");
+    let network_domain = h64(999);
+    let executor_bond = bond_key(PRODUCER).0;
+    let env = PalwAttemptEnvelopeV2 {
+        attempt: PalwAttemptUnsignedV2 {
+            version: PALW_ATTEMPT_V2_VERSION,
+            network_domain,
+            challenge: challenge_v2(network_domain, h64(5), 1_700, 1, h64(1), &executor_bond),
+            class_id,
+            executor_bond,
+            executor_pubkey: vec![7; 4],
+            operator_id: palw_operator_id_v2(&op_key(20 + PRODUCER)),
+            artifact_root: w.inventory_root,
+            trace_root: h64(0x7A),
+            output_root: h64(32),
+            pwu: 40,
+            trace_manifest_root: h64(33),
+            trace_chunk_count: 4,
+            trace_retention_daa: 999_999,
+            execution_root: w.forged.binding.committed_execution_root,
+        },
+        signature: vec![0; 8],
+    };
+    let claim = attempt_id_v2(&env.attempt);
+    let s = gdn_step(&s, 101, &[], Some(&env)).expect("the claim");
+    let seats = vec![
+        PalwPanelSeatV2 { bond: bond_key(SEAT), operator_id: palw_operator_id_v2(&op_key(20 + SEAT)) },
+        PalwPanelSeatV2 { bond: bond_key(COLLUDER), operator_id: palw_operator_id_v2(&op_key(20 + COLLUDER)) },
+    ];
+    let s = gdn_step(&s, 102, &[PalwConsensusObjectV2::PanelBound { claim, anchor: h64(77), seats }], None).expect("the panel");
+    let valid = |seat: u64| PalwSeatReceiptV2 {
+        claim: Hash64::default(),
+        verdict: PalwReceiptVerdictV2::Valid,
+        seat_bond: bond_key(seat),
+        signed_daa: 0,
+        signature: Vec::new(),
+    };
+    let s = gdn_step(&s, 103, &[PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: vec![valid(SEAT), valid(COLLUDER)] }], None)
+        .expect("both colluding seats licence the forged claim");
+    (s, claim)
+}
+
+/// The outside bond's node seam: the claim's chain facts, its PUBLIC served capture (no producer heap) and a cold kernel cache.
+struct GdnNode<'a> {
+    w: &'a crate::palw_gdn_held_filer::tests::World,
+    claim: crate::palw_gdn_held_filer::PalwGdnHeldClaimV1,
+    chain: std::cell::RefCell<Vec<PalwConsensusObjectV2>>,
+    window: u64,
+}
+
+impl crate::palw_gdn_held_filer::PalwGdnHeldHostV1 for GdnNode<'_> {
+    fn accusable_claims(&self) -> Vec<crate::palw_gdn_held_filer::PalwGdnHeldClaimV1> {
+        vec![self.claim.clone()]
+    }
+    fn material(&self, _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1) -> Result<misaka_palw_base0::gdn_evidence_v2::Base0GdnOwnedMaterialV2, String> {
+        Ok(self.w.forged.clone())
+    }
+    fn kernels(
+        &self,
+        _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1,
+    ) -> Result<Box<dyn misaka_palw_base0::fp_recompute::Base0FpRecomputeKernelsV1 + '_>, String> {
+        Ok(Box::new(self.w.backend.gdn_recompute_kernels_v2()?))
+    }
+    fn objects(&self, _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1) -> Vec<PalwConsensusObjectV2> {
+        self.chain.borrow().clone()
+    }
+    fn openings(
+        &self,
+        _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1,
+    ) -> Result<(Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1), String> {
+        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&self.w.openings, self.w.inventory_root)
+            .map_err(|e| format!("{e:?}"))?;
+        Ok((self.w.openings.clone(), oracle))
+    }
+    fn disclose_window_daa(&self) -> u64 {
+        self.window
+    }
+    fn bond(&self) -> PalwBondKeyV2 {
+        bond_key(STRANGER)
+    }
+    fn network_domain(&self) -> Hash64 {
+        h64(999)
+    }
+    fn sign(&self, _: &[u8], _: &[u8]) -> Option<Vec<u8>> {
+        Some(vec![9; 8])
+    }
+}
+
+/// Block by block: the outside bond's filer tick, the forger's answer the block after a demand lands (or silence), the real fold.
+fn gdn_play(answering: bool) -> (PalwChainStateV2, Hash64, u64, Vec<&'static str>) {
+    let w = crate::palw_gdn_held_filer::tests::world(0);
+    let (mut s, claim) = gdn_licensed(&w);
+    let before = collateral(&s, PRODUCER);
+    let window = kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&params());
+    let node = GdnNode {
+        w: &w,
+        claim: crate::palw_gdn_held_filer::PalwGdnHeldClaimV1 {
+            claim,
+            executor: bond_key(PRODUCER),
+            execution_root: w.forged.binding.committed_execution_root,
+            trace_root: h64(0x7A),
+            shape_profile_id: w.shape_profile_id,
+        },
+        chain: Default::default(),
+        window,
+    };
+    let mut book = crate::palw_gdn_held_filer::PalwGdnHeldBookV1::default();
+    let mut owed = None;
+    let mut log = Vec::new();
+    for daa in 104..104 + 4 * window + 200 {
+        if matches!(phase_of(&s, &claim), PalwClaimPhaseV2::Voided { .. }) {
+            break;
+        }
+        let mut objects = Vec::new();
+        if let Some(unit) = owed.take() {
+            objects.push(crate::palw_gdn_held_filer::tests::producer_answer(&w, &node.claim, unit));
+            log.push("answer");
+        }
+        for (_, object) in crate::palw_gdn_held_filer::palw_gdn_held_filer_tick_v1(&node, &mut book, daa) {
+            match &object {
+                PalwConsensusObjectV2::DefaultAccusedHeld { accusation } => {
+                    log.push("demand");
+                    if answering {
+                        owed = Some(accusation.missing);
+                    }
+                }
+                _ => log.push("accusation"),
+            }
+            objects.push(object);
+        }
+        s = gdn_step(&s, daa, &objects, None).unwrap_or_else(|e| panic!("DAA {daa}: {e} ({log:?})"));
+        node.chain.borrow_mut().extend(objects);
+    }
+    let lost = before - collateral(&s, PRODUCER);
+    (s, claim, lost, log)
+}
+
+#[test]
+fn rfc06_held_gdn_filer_e2e_one_outside_bond_convicts_a_forged_checkpoint_all_seats_colluding() {
+    let (s, claim, lost, log) = gdn_play(true);
+    println!("rfc06 held GDN e2e (answering): {log:?}, producer lost {lost}, phase {:?}", phase_of(&s, &claim));
+    assert!(matches!(phase_of(&s, &claim), PalwClaimPhaseV2::Voided { .. }), "the forged claim is voided");
+    assert!(lost > 0, "the producer's collateral is actually reduced");
+    assert!(log.contains(&"accusation"), "the outside bond's filer filed the GDN accusation");
+}
+
+#[test]
+fn rfc06_held_gdn_filer_e2e_a_silent_forger_is_defaulted() {
+    let (s, claim, lost, log) = gdn_play(false);
+    println!("rfc06 held GDN e2e (silent): {log:?}, producer lost {lost}, phase {:?}", phase_of(&s, &claim));
+    assert!(matches!(phase_of(&s, &claim), PalwClaimPhaseV2::Voided { .. }), "the silent forger is voided by the DA default");
+    assert!(lost > 0, "the producer's collateral is actually reduced");
+}

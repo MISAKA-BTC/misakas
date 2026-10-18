@@ -263,6 +263,8 @@ mod tir_dissect;
 mod tir_shard;
 #[cfg(test)]
 mod tir_shard_e2e;
+/// RFC-0006 06-A: the held-GDN filer on the service tick.
+mod gdn_filer_tick;
 /// RFC-0018 (iv): the single in-flight carrier's wait across many classes.
 #[cfg(test)]
 mod carrier_wait_many_classes;
@@ -8880,6 +8882,8 @@ impl PalwPanelService {
         // rides its class's lane (its own confirmed output, one in flight; `palw_receipt_lane_takes_v1`).
         let mut receipt_lanes: BTreeMap<Hash64, PalwReadinessLaneV1> = BTreeMap::new();
         let mut own_receipt_class: HashMap<Hash64, Hash64> = HashMap::new();
+        // RFC-0006 06-A: the held-GDN filer's cases (dormant below `palw_memory_routing_court_v2`).
+        let mut gdn_book = crate::palw_gdn_held_filer::PalwGdnHeldBookV1::default();
         // ADR-0135: a possession proof that found no carrier slot waits for the next one, and the
         // receipts yield until it lands — a seat whose proofs starve behind its own receipt traffic
         // counts as no seat at all (measured on the devnet: receipts filled the eight-carrier chain
@@ -13696,6 +13700,18 @@ impl PalwPanelService {
                     &mut court_moved,
                 )
                 .await;
+            // RFC-0006 06-A: the held-GDN filer — a forged recurrence checkpoint of a held hybrid claim this bond may dispute.
+            self.gdn_held_filer_tick_v1(
+                &session,
+                &mut gdn_book,
+                &materials,
+                current_daa,
+                network_domain,
+                bond_key,
+                &mut court_pending,
+                &mut court_due,
+            )
+            .await;
             // P2-8c (N10): the replay's contradiction proves the claim's liable `Valid` signers false too.
             if let Some((refuted, bound_daa)) = &replay_made {
                 false_valid.note_executor_refuted_v1(
