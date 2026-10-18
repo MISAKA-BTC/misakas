@@ -4877,7 +4877,7 @@ mod amendment_1 {
     }
 
     #[test]
-    fn rfc23s2_native_dependency_reader_closes_rows_and_holds_missing_opv_approval_or_evidence() {
+    fn rfc23s2_native_dependency_reader_requires_selected_opv_approval_and_holds_missing_evidence() {
         use crate::palw_state_v2::palw_claim_local_rewards_v1::{RewardReadinessV1, exec_dependency_readiness_v1};
         use crate::palw_work_slice_v2::PalwWorkPrefixStageV2;
 
@@ -4911,12 +4911,6 @@ mod amendment_1 {
         root.prefix = PalwWorkPrefixStageV2::Verified { verified_daa: 107, route_reward: 0 };
         let now = liability_until + 1;
 
-        assert_eq!(
-            exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
-            RewardReadinessV1::Ready,
-            "the non-OPV compatibility path has actual Final rows beyond every liability deadline"
-        );
-
         let class_key = prefix.row.class_binding_id.to_vec();
         s.kernel_route.as_mut().unwrap().rows.insert(
             (misaka_palw_kernel::rows::TABLE_OPV_CLASSES_V1, class_key.clone()),
@@ -4927,11 +4921,78 @@ mod amendment_1 {
             RewardReadinessV1::Hold(liability_until),
             "OPV class without a selected approval enrollment remains held"
         );
-        s.kernel_route
-            .as_mut()
-            .unwrap()
-            .rows
-            .remove(&(misaka_palw_kernel::rows::TABLE_OPV_CLASSES_V1, class_key));
+
+        let route = s.kernel_route.as_mut().unwrap();
+        for (i, (claim, row)) in std::iter::once((prefix.claim_id, &prefix.row))
+            .chain(slices.iter().map(|slice| (slice.claim_id, &slice.row)))
+            .enumerate()
+        {
+            let base_claim = claim.as_bytes().to_owned();
+            let lifetime = misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2 {
+                committed_daa: 100,
+                checking_until: 101,
+                challenge_until: 102,
+                dispute_until: 103,
+                liability_until,
+            };
+            let enrollment = misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2 {
+                version: 2,
+                class: row.class_binding_id,
+                job: row.job_id,
+                base_claim,
+                producer: row.producer,
+                commit_root: [0xA2 + i as u8; 64],
+                lifetime,
+                accepted_until_daa: 200,
+                material_consent: [0xA3 + i as u8; 64],
+                round: 0,
+                prior_transcript: [0; 64],
+            };
+            let enrollment_id = enrollment.id();
+            let target = [0xA4 + i as u8; 64];
+            let index_key = crate::palw_claim_challenge_v2::paid_claim_index_key_v3(
+                crate::palw_claim_challenge_v2::PAID_CLAIM_BASE_INDEX_PREFIX_V3,
+                &base_claim,
+            );
+            let index = crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3 {
+                version: 3,
+                kind: crate::palw_claim_challenge_v2::PalwPaidClaimIndexKindV3::BaseClaim,
+                owner: base_claim,
+                target,
+            };
+            let mut authority = borsh::to_vec(&2u16).unwrap();
+            authority.extend(borsh::to_vec(&enrollment).unwrap());
+            let final_row = crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2 {
+                enrollment: enrollment_id,
+                base_claim,
+                verification_class: enrollment.class,
+                sample_seed: [0xA5 + i as u8; 64],
+                source_context: [0xA6 + i as u8; 64],
+                signed_lifetime: lifetime,
+                complete_receipts: 1,
+                logical_final_daa: 107,
+                completed_rounds: 1,
+                transcript_root: [0xA7 + i as u8; 64],
+            };
+            route.aux.insert(
+                (crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2, index_key),
+                borsh::to_vec(&index).unwrap(),
+            );
+            route.aux.insert(
+                (crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2, target.to_vec()),
+                authority,
+            );
+            route.aux.insert(
+                (crate::palw_claim_challenge_v2::PAID_CLAIM_FINALS_V2, enrollment_id.to_vec()),
+                borsh::to_vec(&final_row).unwrap(),
+            );
+            assert!(crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(route, &claim));
+        }
+        assert_eq!(
+            exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
+            RewardReadinessV1::Ready,
+            "the canonical positive enrollment/final path unlocks only after every claim deadline"
+        );
 
         let missing_claim = s.exec_v2.slices.get(&(root_id, 1)).expect("admitted middle slice").evidence_root;
         assert_eq!(missing_claim, slices[1].claim_id);
