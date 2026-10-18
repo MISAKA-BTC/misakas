@@ -620,7 +620,7 @@ def main():
     assert len(args.salt) == 64 and int(args.salt, 16) != 0, 'an explicit nonzero private 32-byte salt is required'
     assert 0 < args.maximum_carrier_fee_sompi <= 2**64 - 1 and args.timeout > 0 and args.factory_timeout > 0
     limits = read_limits(args.resource_limits)
-    root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-bootstrap-'))
+    root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-bootstrap-')).resolve(strict=True)
     sampler = OwnedResourceSampler({}, limits)
     drill = None
     result = dict(status='FAIL', artifactDirectory=str(root), resourceLimits=limits, resourceLimitsMet=False,

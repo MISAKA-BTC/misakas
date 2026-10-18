@@ -176,7 +176,7 @@ def main():
                      '--testnet', '--netsuffix=12', '--print-private-probe-profile']
     if args.bonds is not None:
         manifest_argv.append('--private-probe-bonds=' + str(args.bonds))
-    root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-construction-'))
+    root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-construction-')).resolve(strict=True)
     owned_children = {}
     sampler = OwnedResourceSampler(owned_children, limits)
     factory, drill, plan = None, None, None

@@ -3,6 +3,8 @@ from copy import deepcopy
 import sys
 from pathlib import Path
 import unittest
+import tempfile
+import json
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -42,6 +44,21 @@ def fixture():
 class OwnedRecoveryRead(unittest.TestCase):
     def read(self, values, **kwargs):
         return recovery.validate(*values, stamp, **kwargs)
+
+    def test_owned_native_file_uses_the_actual_appdir_network_subdirectory(self):
+        envelope, dag, node, bootstrap, providers = fixture()
+        with tempfile.TemporaryDirectory() as folder:
+            appdir = Path(folder) / 'B' / 'appdir'
+            data = appdir / 'misaka-testnet-12'
+            data.mkdir(parents=True)
+            (data / recovery.FILE).write_text(json.dumps(envelope))
+            drill = type('OwnedDrill', (), dict(root=Path(folder), values={'B_APPDIR': str(appdir)},
+                plan=dict(nativeCustodyProvider=dict(providerBonds=providers))))()
+            def rpc_read(_drill, _role, method):
+                return dag if method == 'getBlockDagInfo' else node
+            row = recovery.observe(drill, 'B', bootstrap, rpc_read, stamp)
+            self.assertEqual(row['row']['root'], h(9))
+            self.assertFalse(row['publicCertificate'])
 
     def test_current_native_metadata_requires_exact_generation_and_binding(self):
         values = fixture()
