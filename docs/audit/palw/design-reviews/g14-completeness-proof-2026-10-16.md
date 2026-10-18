@@ -1709,3 +1709,23 @@ record. The embedded program is 32,301 bytes and matches the short fit's digest
 This snapshot does not rehash the 2.54 GB of segment data, certify numerical fidelity,
 mark the stale state as measured, upload anything or verify Hugging Face contents. The full
 long-fit decision and the pipeline's upload/verify gates remain required. No model was downloaded.
+
+
+### 14.10 Owner unit tests pass; fresh T-N1 node runs started (2026-10-18)
+
+The serial rebuild finished after 61m53s. Its original filter
+`palw_tir_public_owner::tests` matched **zero tests**, so that command establishes compilation,
+not a passing owner test. Listing the actual binary identified the module as
+`palw_panel::palw_fraud_filer::tir_public_owner::tests`.
+
+Running `target/debug/deps/kaspad_lib-b2a13e8b08797a07 tir_public_owner::tests --nocapture --test-threads=1`
+passed **4/4 in 0.06 s** (`/tmp/codex-g14-owner-tests-correct-filter.log`): IDs-first acquisition,
+seat finding to the filer queue, closed-door discovery with existing acquisitions preserved,
+and immediate next moves while retries remain paced.
+
+A clone of that same executable, `/tmp/codex-g14-tir-owner-fixed-test-20261018`, now runs the
+forged node case (PID 61854, `/tmp/codex-g14-tir-forged-owner-fixed.log`) and the default-semantics
+actual-quantum payment case (PID 61855, `/tmp/codex-g14-tir-default-payment-owner-fixed.log`).
+Both were confirmed live. Their results are pending; the earlier forged run that reached Final
+in §14.8 is not counted as fixed by unit tests. The separate declared-semantics 02-B liability-door
+refusal in §14.4 also remains unresolved.
