@@ -457,3 +457,34 @@ post-launch strict-economic rule is absent. Added an explicit private-fixture
 investigation, without changing the default tests or any shipping schedule. The
 strict probe and six-permutation arrival checks remain pending. RFC12's separate
 `rfc12_utxo_import_target_and_completion_are_generation_bound` also passes **1 / 1**.
+
+### 2026-10-18 — SDK corpus and historical witness pins
+
+The Idefics3 preflight fixture now succeeds through the built-in path: the actual
+verdict has the same convert/register/mine statuses and blockers, but no longer
+requires `adapter_file: true`. Removed only that obsolete marker; the other 99
+inventory entries are unchanged. The targeted corpus run passes **2 / 2** (the
+Idefics3 comparison and the separate inventory summary); a full 100-entry run is
+in progress. This header/shape preflight is not full original-task source fidelity
+or RFC11 registration/Final coverage.
+
+The actual-weight 32-position public court target also reproduced an additional
+stale assertion: it compared the immutable recorded plan to today's resource-cost
+planner byte for byte. Only `worst_court_bytes` / `worst_court_work` differ:
+629,606 / 473,589,248 in the historical record, 776,366 / 278,696,960 now. The test
+pins both pairs and compares **every other plan field**, including all relations,
+identities and other budget fields. The original 161,675-byte bundle, its parameter
+commitments, its plan root, the 17,924-byte court witness and all position roots are
+unchanged. Both terminal-court tests now pass **2 / 2**, including actual conviction
+of substituted delivery, no fault for honest delivery and rejection of mixed claim
+material. This remains terminal-court replay, not current class admission or Final.
+
+### 2026-10-18 — inactive staged quote regression identified
+
+The first socket multipart test with the HFP1 helper failed before its service
+loop: `staged preclaim quote exceeds the original bounded FP descriptor` (76.68 s).
+This is a fixture regression introduced by consulting the staged quote for a legacy
+large job while the staged fence is inactive. The helper now consults that quote
+only when `palw_staged_public_court_v1` is active; legacy jobs retain their original
+plain carrier route. This is separate from the previously reported socket wall
+expiry, whose original cause still requires execution after this correction.

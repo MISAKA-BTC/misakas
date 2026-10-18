@@ -103,7 +103,16 @@ fn recorded_real_32_position_trace_convicts_substituted_delivery_from_public_wit
     let program = misaka_palw_tir::TirProgramV1::decode_canonical(&bundle.program_bytes).unwrap();
     let d = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor();
     let root = misaka_palw_kernel::public::program_root_v1(&bundle.program_bytes);
-    assert_eq!(bundle.plan, misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &program, root, 32).unwrap());
+    let mut current_plan = misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &program, root, 32).unwrap();
+    // Preserve the actual historical public witness, including its original plan
+    // root. This terminal-court test is not a current registration quote. Only
+    // these two static cost fields have changed; every relation and identity must
+    // still equal the current canonical plan. Current admission has its own test.
+    assert_eq!((bundle.plan.budgets.worst_court_bytes, bundle.plan.budgets.worst_court_work), (629_606, 473_589_248));
+    assert_eq!((current_plan.budgets.worst_court_bytes, current_plan.budgets.worst_court_work), (776_366, 278_696_960));
+    current_plan.budgets.worst_court_bytes = bundle.plan.budgets.worst_court_bytes;
+    current_plan.budgets.worst_court_work = bundle.plan.budgets.worst_court_work;
+    assert_eq!(bundle.plan, current_plan, "the recorded computation/relations differ only in the two historical cost pins");
     assert_eq!(bundle.params.by_instance.len(), 1636);
     let params: misaka_palw_kernel::trace::ParamCommitmentsV1 = borsh::from_slice(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),

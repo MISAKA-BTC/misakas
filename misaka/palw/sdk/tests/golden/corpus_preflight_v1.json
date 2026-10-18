@@ -608,7 +608,6 @@
     }
   },
   "idefics3": {
-    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"

@@ -1211,7 +1211,12 @@ async fn carry_fp_commitment(
     );
     // Use the same authenticated prospective resource quote as the real producer. A
     // staged claim without this custody envelope is deliberately not admitted by the fold.
-    let pledge = chain.tc.palw_staged_preclaim_quote_v1(commitment.clone(), header.clone()).unwrap().map(|(_, quote)| {
+    let prospective = if chain.config.params.palw_staged_public_court_v1_active_at(chain.daa()) {
+        chain.tc.palw_staged_preclaim_quote_v1(commitment.clone(), header.clone()).unwrap()
+    } else {
+        None
+    };
+    let pledge = prospective.map(|(_, quote)| {
         use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
         let mut pledge = PalwHistoryCustodyPledgeV1 {
             version: 1,
