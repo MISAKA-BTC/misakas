@@ -7,7 +7,9 @@ use crate::palw_native_custody_v3::{NativeReadyExchangeV3, PalwNativeCustodyCont
 use kaspa_consensus_core::{
     Hash64,
     palw_claim_challenge_v2::{PAID_CLAIM_RECEIPTS_V2, PalwPaidClaimAuthorityV2},
-    palw_kernel_material_query_v4::{PALW_KERNEL_MATERIAL_QUERY_FRAME_BYTES_V4, PalwKernelMaterialUnitQueryV4},
+    palw_kernel_material_query_v4::{
+        PALW_KERNEL_MATERIAL_QUERY_FRAME_BYTES_V4, PalwKernelMaterialUnitQueryV4, material_provider_generation_from_route_v4,
+    },
     palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1},
     palw_native_resource_v1::{
         NativeDemandLeaseV1, NativeRetainedV1, preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_v1,
@@ -227,6 +229,7 @@ fn validate_saved_object(
     round: u32,
     source: &VerifiedPaidClaimSourcesV2,
     provider: PalwBondKeyV2,
+    material_consent: Option<Hash64>,
     valid_until: Option<u64>,
 ) -> Result<(), String> {
     if let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, .. } = object {
@@ -244,11 +247,14 @@ fn validate_saved_object(
         if *signer != actor
             || *root != Hash64::from_bytes(base)
             || *dependency != Hash64::from_bytes(base)
-            || *consent != Hash64::from_bytes(source.authority().enrollment.material_consent)
+            || Some(*consent) != material_consent
             || *p != provider
             || Some(*valid_until_daa) != valid_until
         {
-            return Err("checker material challenge WAL differs from explicit exact generation/actor/deadline".into());
+            return Err(
+                "checker material challenge WAL differs from current native generation/actor/deadline; retained without rebinding"
+                    .into(),
+            );
         }
         return Ok(());
     }
@@ -281,12 +287,7 @@ fn court_action_accepted(
 ) -> Result<bool, String> {
     if let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, .. } = object {
         let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
-            root,
-            provider,
-            dependency,
-            stage,
-            position,
-            ..
+            root, dependency, ..
         } = &**action
         else {
             return Ok(false);
@@ -294,28 +295,12 @@ fn court_action_accepted(
         if *signer != actor || *root != Hash64::from_bytes(base) || *dependency != Hash64::from_bytes(base) {
             return Err("checker saved material challenge identity differs".into());
         }
-        let raw = route
-            .aux
-            .iter()
-            .find(|((table, key), _)| {
-                *table == kaspa_consensus_core::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_TABLE_V1
-                    && key.as_slice() == root.as_byte_slice()
-            })
-            .map(|(_, bytes)| bytes.as_slice());
-        let Some(raw) = raw else { return Ok(false) };
-        preflight_native_value_v1::<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>(raw, raw.len() as u64)
-            .map_err(|e| e.to_string())?;
-        let row = retain_native_value_decode_v1(raw, || {
-            borsh::from_slice::<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>(raw)
-        })
-        .map_err(|e| e.to_string())?;
-        return Ok(row.challenges.iter().any(|c| {
-            c.provider == *provider
-                && c.dependency == *dependency
-                && c.stage == *stage
-                && c.position == *position
-                && c.challenger == actor
-        }));
+        // The legacy challenge projection has coordinates and actor, but no
+        // signed consent/object identity. A matching old generation's row must
+        // not complete this different signed WAL after replacement or reorg.
+        // Exact native acceptance provenance remains a separate implementation
+        // task. Keep the WAL; neither a match nor a spent input is an ACK.
+        return Ok(false);
     }
     let decoded = saved_kernel_object(object, actor)?;
     match &*decoded {
@@ -420,6 +405,18 @@ impl PreparedKernelPaidCheckV4 {
                 return Ok(());
             }
             let domain = Hash64::from_bytes(route.header.policy.network_domain);
+            let material_consent = match material_provider_generation_from_route_v4(&route, Hash64::from_bytes(base), self.provider) {
+                Ok(consent) => consent,
+                Err(error) => {
+                    // A local decoding/resource refusal creates no provider
+                    // fault and never causes a receipt/challenge signature.
+                    kaspa_core::debug!("private checker current provider generation pending: {error}");
+                    continue;
+                }
+            };
+            if object.is_none() && material_consent.is_none() {
+                continue;
+            }
             let source = match sources(route, enrollment, self.spec.round) {
                 Ok(s) => s,
                 Err(error) => {
@@ -447,7 +444,7 @@ impl PreparedKernelPaidCheckV4 {
                     let query = PalwKernelMaterialUnitQueryV4 {
                         version: 4,
                         root: Hash64::from_bytes(base),
-                        consent: Hash64::from_bytes(a.enrollment.material_consent),
+                        consent: material_consent.ok_or("checker serving provider has no current active generation")?,
                         dependency: Hash64::from_bytes(base),
                         provider: self.provider,
                         stage,
@@ -527,6 +524,7 @@ impl PreparedKernelPaidCheckV4 {
                 self.spec.round,
                 &source,
                 self.provider,
+                material_consent,
                 self.spec.challenge_valid_until_daa,
             )?;
             let signature_ok = match &**signed {
