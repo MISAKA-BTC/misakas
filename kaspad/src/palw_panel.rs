@@ -10205,7 +10205,9 @@ impl PalwPanelService {
                             continue;
                         }
                     };
-                    if !backend.supports_dissection() {
+                    let memory_route = self.consensus_config.params.palw_memory_routing_court_v2_fence()
+                        .is_some_and(|f| f.is_active(current_daa));
+                    if !backend.supports_dissection_with_memory_routing_v2(memory_route) {
                         *court_stalls
                             .entry("this class's family cannot take a dissection's turn in this build — the clock will decide")
                             .or_default() += 1;

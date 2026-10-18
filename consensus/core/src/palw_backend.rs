@@ -1213,6 +1213,13 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         false
     }
 
+    /// Versioned held-memory route, resolved by the caller at the active height.
+    /// Existing backends retain their old advertisement unless they implement
+    /// the new evidence builders and override this capability explicitly.
+    fn supports_dissection_with_memory_routing_v2(&self, _active: bool) -> bool {
+        self.supports_dissection()
+    }
+
     /// **Does this backend's class commit a fused attention site at all?** (ADR-0093 as built.) A
     /// claim of such a class disputed down to a fused leaf is answered by a root claim, which only
     /// a backend that [`Self::supports_dissection`] can file; a producer asks both before it

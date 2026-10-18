@@ -2557,3 +2557,30 @@ tir_frame_node_tn1_a_forged_framed_claim_is_convicted_by_one_outside_service
 --nocapture --test-threads=1`, log
 `/tmp/codex-g14-integrated-tir-forged-full-runs.log`. Both the actual licensed
 colluder set and every colluder's collateral decrease remain mandatory.
+
+
+## 17. GDN route wiring worktree: candidate coverage, not activation (2026-10-18)
+
+Worktree `/Users/wata/.codex/worktrees/g14-gdn-route/MISAKA-testnet`, branch
+`codex/g14-gdn-route`, is isolated from the consolidated build so active compiler
+inputs are not rewritten. The existing lane worktrees and processes are retained.
+
+Added a V2 candidate answerability reading. Dormant reads delegate to V1 exactly.
+Its hybrid coverage requires a shape-valid version-3 integer profile with the
+key-head-aware hybrid v5 map, derivable GDN key heads and dissectable fused tiles.
+It removes only the blanket recurrent refusal for that covered route; context,
+reference replay cost, factor 2 and 120-DAA cap remain. New tests cover dormant
+identity, old maps, malformed/float profiles, context and compute refusal.
+
+Added a height-resolved backend capability with the old advertisement as its
+default. Qwen36 overrides only the explicitly active new route; producer and
+attention responder pass the actual current fence reading. The existing
+`supports_dissection()` remains unchanged, so a configured future fence does not
+by itself advertise early support. A backend test checks that separation.
+
+**WIP, not qualified.** Rust 2024 syntax parsing and whitespace checks pass; no
+compile/test PASS is claimed. C5 registration, SDK preflight, accepted-claim
+fence/mirror consistency and consolidated node qualification still need to be
+connected. The ordinary GDN registration refusal is not closed. No shipped
+preset, numerical policy, model tier or model-review rule is changed, and no
+activation record is pinned by this work.

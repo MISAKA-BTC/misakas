@@ -250,3 +250,42 @@ fn f4_f5_answerability_is_the_classs_compute_turn() {
     }
     assert_eq!(held.iter().filter(|(_, _, why)| why.is_none()).count(), 1, "the 8k row, answerable");
 }
+
+
+/// The new route does not reinterpret old profiles or remove the cost/context bounds.
+/// This test alone is not node/P2P qualification or activation approval.
+#[test]
+fn memory_routing_held_candidate_preserves_old_reading_and_frozen_bounds() {
+    use kaspa_consensus_core::palw_class_admission_v2::*;
+    use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v7, qwen36_profile_v8};
+    use kaspa_consensus_core::palw_step::PalwStepLaneV1;
+    let mut geometry = QWEN36_35B_A3B;
+    geometry.n_ctx = 32;
+    geometry.tile_len = geometry.attn_head_dim;
+    let covered = qwen36_profile_v8(geometry).unwrap();
+    assert!(palw_held_hybrid_route_covered_v2(&covered));
+    assert!(matches!(palw_held_class_unanswerable_v1(&covered), Some(PalwHeldUnanswerableV1::Recurrent { .. })));
+    assert_eq!(palw_held_class_unanswerable_v2(&covered, false), palw_held_class_unanswerable_v1(&covered));
+    assert_eq!(palw_held_class_unanswerable_v2(&covered, true), None);
+    let legacy = qwen36_profile_v7(geometry).unwrap();
+    assert!(!palw_held_hybrid_route_covered_v2(&legacy));
+    assert_eq!(palw_held_class_unanswerable_v2(&legacy, true), palw_held_class_unanswerable_v1(&legacy));
+    let mut float = covered.clone();
+    float.lane = PalwStepLaneV1::Float32;
+    assert!(!palw_held_hybrid_route_covered_v2(&float));
+    let mut malformed = covered.clone();
+    malformed.gdn_head_k_dim = 0;
+    assert!(!palw_held_hybrid_route_covered_v2(&malformed));
+    let mut wide = geometry;
+    wide.n_ctx = PALW_HELD_ANSWERABLE_N_CTX_V1 + 1;
+    let wide = qwen36_profile_v8(wide).unwrap();
+    assert!(matches!(palw_held_class_unanswerable_v2(&wide, true), Some(PalwHeldUnanswerableV1::ContextPastBound { .. })));
+    let mut costly = geometry;
+    costly.n_ctx = PALW_HELD_ANSWERABLE_N_CTX_V1;
+    costly.layer_count = 400;
+    let costly = qwen36_profile_v8(costly).unwrap();
+    assert!(palw_held_hybrid_route_covered_v2(&costly));
+    assert!(palw_held_compute_turn_daa_v1(&costly).unwrap() > PALW_HELD_COMPUTE_TURN_CAP_DAA_V1);
+    assert!(matches!(palw_held_class_unanswerable_v2(&costly, true), Some(PalwHeldUnanswerableV1::ComputeTurnPastCap { .. })));
+    assert_eq!((PALW_HELD_COMPUTE_REPLAYS_V1, PALW_HELD_COMPUTE_TURN_CAP_DAA_V1), (2, 120));
+}

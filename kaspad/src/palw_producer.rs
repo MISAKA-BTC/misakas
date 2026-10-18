@@ -2483,7 +2483,10 @@ pub(crate) fn palw_dissection_refusal_v1(
     daa_score: u64,
     class_id: kaspa_consensus_core::Hash64,
 ) -> Option<String> {
-    (backend.has_fused_site() && !backend.supports_dissection() && params.palw_kary_court_active_at(daa_score)).then(|| {
+    let memory_route = params.palw_memory_routing_court_v2_fence().is_some_and(|f| f.is_active(daa_score));
+    (backend.has_fused_site()
+        && !backend.supports_dissection_with_memory_routing_v2(memory_route)
+        && params.palw_kary_court_active_at(daa_score)).then(|| {
         format!(
             "this node will not produce for class {class_id}: its fused attention site cannot be dissected by this build, and a \
              claim disputed down to that leaf is convicted by the silence it could not answer (ADR-0093){}",

@@ -2387,6 +2387,42 @@ pub fn palw_held_class_unanswerable_v1(profile: &PalwShapeProfileV3) -> Option<P
         .then_some(PalwHeldUnanswerableV1::ComputeTurnPastCap { turn, cap: PALW_HELD_COMPUTE_TURN_CAP_DAA_V1 })
 }
 
+/// Structural coverage of the versioned hybrid held route. This is not a
+/// registration credential: the ordinary profile/kernel/admission checks still
+/// apply, and callers must also qualify and activate the memory/routing court.
+/// Old maps do not silently acquire the meaning of the key-head-aware v5 map.
+pub fn palw_held_hybrid_route_covered_v2(profile: &PalwShapeProfileV3) -> bool {
+    profile.version == crate::palw_step::PALW_STEP_OBJECT_VERSION_V3
+        && profile.lane == crate::palw_step::PalwStepLaneV1::Int32
+        && profile.state_chunk_map_id == crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v5()
+        && profile.validate_shape().is_ok()
+        && crate::palw_step::palw_gdn_key_heads_v1(profile).is_ok()
+        && palw_fused_sites_are_dissectable_v1(profile)
+}
+
+/// Candidate held-answerability reading for the memory/routing court's V2
+/// route. With the route dormant this is EXACTLY V1. The versioned full-cache
+/// replay path removes only the old blanket recurrent-layer refusal for its
+/// covered map; context, reference cost, replay factor and turn cap are unchanged.
+/// No shipped caller activates this reading until consolidated qualification.
+pub fn palw_held_class_unanswerable_v2(
+    profile: &PalwShapeProfileV3,
+    memory_routing_court: bool,
+) -> Option<PalwHeldUnanswerableV1> {
+    let legacy = palw_held_class_unanswerable_v1(profile);
+    if !memory_routing_court
+        || !matches!(legacy, Some(PalwHeldUnanswerableV1::Recurrent { .. }))
+        || !palw_held_hybrid_route_covered_v2(profile)
+    {
+        return legacy;
+    }
+    let Some(turn) = palw_held_compute_turn_daa_v1(profile) else {
+        return Some(PalwHeldUnanswerableV1::Unpriced);
+    };
+    (turn > PALW_HELD_COMPUTE_TURN_CAP_DAA_V1)
+        .then_some(PalwHeldUnanswerableV1::ComputeTurnPastCap { turn, cap: PALW_HELD_COMPUTE_TURN_CAP_DAA_V1 })
+}
+
 /// **ADR-0152 §4-ter C5: is a held class's attention lie attributable?** Past
 /// `palw_offence_attribution` (`attribution`), a registration whose held profile no honest party can
 /// dissect ([`palw_held_class_unanswerable_v1`]) is refused — [`PalwClassAdmissionError::HeldClassUnattributable`]

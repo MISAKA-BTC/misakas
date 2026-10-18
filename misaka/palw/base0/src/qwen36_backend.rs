@@ -3107,6 +3107,16 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4))
     }
 
+    fn supports_dissection_with_memory_routing_v2(&self, active: bool) -> bool {
+        self.supports_dissection()
+            || (active
+                && self.plan.is_some()
+                && self.profile.as_ref().is_some_and(|profile| {
+                    kaspa_consensus_core::palw_class_admission_v2::palw_held_hybrid_route_covered_v2(profile)
+                        && kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v2(profile, true).is_none()
+                }))
+    }
+
     fn attn_site_evidence_held_v1(
         &self,
         material: &[u8],
