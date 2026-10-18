@@ -1802,3 +1802,30 @@ fold-only geometry (context 160, tile 512) was not a valid assertion that this s
 could serve every declared job or dissect its attention sites. The fixture asserts both context
 agreement and dissectable tile geometry; C5 remains in force. Its next node rerun is pending the
 held-backend build, and no registration success is inferred from these fixture changes.
+
+
+### 15.12 Held-attention test passes after complete-cache resume selection (2026-10-18)
+
+The first new backend test compiled, then failed **0/1 in 0.30 s**
+(`/tmp/codex-g14-q36-held-test.log`): replaying the fold's edge block did not reproduce its
+committed step root. The held profile has attention-only checkpoints between checkpoints
+that also contain GDN recurrence state. Restoring such a partial checkpoint into a fresh
+hybrid cache loses recurrence history.
+
+The responder now supplies a resume state to the bounded leaf opener only when the named
+checkpoint carries recurrence. Otherwise it asks that opener to replay from genesis, still
+streaming/discarding the unrelated leaves rather than materializing the job's leaf vector.
+Its separately computed evidence anchor may still be an attention-only leaf, as the held
+attention court requires; that leaf is not mistaken for a complete execution cache.
+
+`cargo test -j1 -p misaka-palw-base0 --lib q36_held_attention_rebuilds_both_parties_from_fold_and_public_filing -- --nocapture --test-threads=1`
+then passed **1/1 in 1.25 s** after a 42.55 s rebuild using existing dependency artifacts
+(`/tmp/codex-g14-q36-held-complete-anchor.log`, `CARGO_INCREMENTAL=0`). It checks prefill and
+decode evidence past the dense materialization cap, identical responder/challenger evidence,
+the real held-attention court's honest verdict, K/V cache-write openings, and rejection of
+foreign prompts and altered slice sub-roots.
+
+This is backend evidence construction and adjudication, not node/P2P prosecution or ordinary
+GDN registration. C5 and conservative `supports_dissection()` remain unchanged. The
+additional genesis replay has a real compute cost that final measurements must include;
+no timing, capacity policy or activation qualification is inferred from the passing test.

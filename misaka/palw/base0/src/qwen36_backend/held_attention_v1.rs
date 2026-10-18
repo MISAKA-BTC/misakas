@@ -91,7 +91,18 @@ impl Qwen36Backend {
             self.checkpoint_interval().ok_or("no registered hybrid checkpoint cadence")?,
             cap,
             &kernels,
-            &|c| self.fold_anchor_state_v1(fold, &prompt_ids, c),
+            &|covered| {
+                let profile = &binding.shape_profile;
+                let positions =
+                    kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, &binding.job_context, covered);
+                // Attention-only leaves between recurrence checkpoints cannot
+                // restore the hybrid cache. Let the bounded leaf opener replay
+                // from genesis instead of resuming with zero recurrence state.
+                if !kaspa_consensus_core::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1(profile, positions) {
+                    return None;
+                }
+                self.fold_anchor_state_v1(fold, &prompt_ids, covered)
+            },
             self.prompt_ids_form,
         )
         .map_err(|e| format!("the fold's own leaves: {e}"))?
