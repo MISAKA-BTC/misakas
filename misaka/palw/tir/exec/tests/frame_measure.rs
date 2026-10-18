@@ -1027,3 +1027,142 @@ fn door_breakdown_on_a_real_class() {
         std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
     }
 }
+
+/// **Analysis only (2026-10-18, read set).** The court's read set of ONE disputed step, per step kind, on a real class. The read set
+/// is the refutation the production builder (`backend.cone_refutation`, the court's own `TirSource` over the dense capture) carries:
+/// its step-leaf operands (`operands`), its inventory multiproof (`params`), its prompt and decode carriage. Nothing here
+/// materialises the class's i128 params and no rule is changed. Per step kind: sampled disputed leaves; per leaf: distinct leaves,
+/// distinct 256-leaf runs, value bytes, the whole-run bytes of the touched runs, the wire bytes of the refutation.
+/// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> MISAKA_READ_SET_OUT=<json> [MISAKA_READ_SET_PER_KIND=4] cargo test --release -p
+///  misaka-palw-tir-exec --features node --test frame_measure read_set_on_a_real_class -- --nocapture`
+#[test]
+fn read_set_on_a_real_class() {
+    use std::collections::BTreeMap;
+    let path = std::path::PathBuf::from(std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR").expect("a PALWTIR1 file"));
+    let per_kind: usize = std::env::var("MISAKA_READ_SET_PER_KIND").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+    let (root, _) = artifact.inventory_root().unwrap();
+    let class = artifact.class().unwrap();
+    let canonical =
+        kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
+        .unwrap()
+        .with_network_id_v1(NET);
+    let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
+    let decode: u32 = std::env::var("MISAKA_READ_SET_DECODE").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    let job = fp_job(&backend, &prompt, decode);
+    let ids: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+    let run = backend.execute_free_prompt(&job, &ids).unwrap();
+    let material = run.outcome.material.clone();
+    let capture = backend.decode_capture(&material).unwrap();
+    let ctx = capture.binding.job_context.clone();
+    let n = capture.binding.step_leaf_count;
+    let space = backend.space();
+    let program = &space.program;
+    drop(capture);
+    let rules = PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+
+    // Step kind of every leaf: a commit point by its primitive, a checkpoint tile, or a history tile.
+    let prim_name = |p: &misaka_palw_tir::Prim| -> String { format!("{p:?}").chars().take_while(|c| c.is_alphanumeric()).collect() };
+    let mut groups: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+    let mut value_count: Vec<u32> = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        let leaf = space.leaf_at(&ctx, i).unwrap();
+        let label = match leaf.kind {
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit { block, node, .. } => {
+                let b = &program.blocks[block as usize];
+                format!("commit:{}:{}", b.name.split('.').next().unwrap_or(&b.name), prim_name(&b.nodes[node as usize].prim))
+            }
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::State { state, .. } => format!("state:{state}"),
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::HistTile { state, .. } => format!("hist:{state}"),
+        };
+        groups.entry(label).or_default().push(i);
+        value_count.push(leaf.value_count);
+    }
+    let whole_run_bytes = |run: u64| -> u64 {
+        let first = run * 256;
+        let last = (first + 256).min(n);
+        (first..last).map(|i| 4 * value_count[i as usize] as u64).sum()
+    };
+
+    let mut kinds = Vec::new();
+    let (mut max_runs, mut max_leaves, mut max_value_bytes, mut max_run_bytes, mut max_wire) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut total_trials = 0u64;
+    let start_all = Instant::now();
+    for (label, idx) in &groups {
+        // Evenly spaced disputed leaves across the kind's leaves (every position it occurs at), plus the last one.
+        let steps = per_kind.max(2) - 1;
+        let mut picks: Vec<u64> = (0..=steps).map(|k| idx[(k * (idx.len() - 1)) / steps]).collect();
+        picks.push(*idx.last().unwrap());
+        picks.sort_unstable();
+        picks.dedup();
+        let (mut k_runs, mut k_leaves, mut k_value, mut k_run_bytes, mut k_wire, mut k_params, mut k_prompt_decode) =
+            (0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+        let mut samples = Vec::new();
+        for &i in &picks {
+            let r = backend.cone_refutation(&material, i, &rules).unwrap();
+            total_trials += 1;
+            let mut runs = std::collections::BTreeSet::new();
+            let mut value_bytes = 0u64;
+            for p in &r.operands.preimages {
+                let li = space.leaf_index(&ctx, &p.coord).expect("an operand is a leaf of this job");
+                runs.insert(li / 256);
+                value_bytes += p.values_le.len() as u64;
+            }
+            let run_bytes: u64 = runs.iter().map(|r| whole_run_bytes(*r)).sum();
+            let params_bytes = borsh::to_vec(&r.params).unwrap().len() as u64;
+            let prompt_decode = (borsh::to_vec(&r.prompt_token_ids).unwrap().len()
+                + borsh::to_vec(&r.prompt_ids_openings).unwrap().len()
+                + borsh::to_vec(&r.decode_tokens).unwrap().len()) as u64;
+            let wire = borsh::to_vec(&r).unwrap().len() as u64;
+            let leaves = r.operands.preimages.len() as u64;
+            k_runs = k_runs.max(runs.len() as u64);
+            k_leaves = k_leaves.max(leaves);
+            k_value = k_value.max(value_bytes);
+            k_run_bytes = k_run_bytes.max(run_bytes);
+            k_wire = k_wire.max(wire);
+            k_params = k_params.max(params_bytes);
+            k_prompt_decode = k_prompt_decode.max(prompt_decode);
+            samples.push(json!({
+                "leaf": i, "position": space.leaf_at(&ctx, i).unwrap().position, "distinct_leaves": leaves,
+                "distinct_runs_256": runs.len(), "value_bytes": value_bytes, "whole_run_bytes": run_bytes,
+                "params_multiproof_bytes": params_bytes, "prompt_decode_bytes": prompt_decode, "wire_bytes": wire,
+            }));
+        }
+        max_runs = max_runs.max(k_runs);
+        max_leaves = max_leaves.max(k_leaves);
+        max_value_bytes = max_value_bytes.max(k_value);
+        max_run_bytes = max_run_bytes.max(k_run_bytes);
+        max_wire = max_wire.max(k_wire);
+        kinds.push(json!({
+            "kind": label, "disputed_leaves_of_kind": idx.len(), "sampled": picks.len(),
+            "max_distinct_runs_256": k_runs, "max_distinct_leaves": k_leaves, "max_value_bytes": k_value,
+            "max_whole_run_bytes": k_run_bytes, "max_params_multiproof_bytes": k_params,
+            "max_prompt_decode_bytes": k_prompt_decode, "max_wire_bytes": k_wire, "samples": samples,
+        }));
+        println!("[read-set] {label}: n={} runs<= {k_runs} leaves<= {k_leaves} value<= {k_value} wire<= {k_wire}", idx.len());
+    }
+    let record = json!({
+        "record": "misaka-palw/tir-read-set-real/v1",
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "host": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH, "label": std::env::var("MISAKA_MEASURE_HOST").unwrap_or_default() },
+        "source_commit": std::env::var("MISAKA_SOURCE_COMMIT").unwrap_or_default(),
+        "artifact": path.display().to_string(),
+        "class_id": format!("{}", class.class_id(&root)),
+        "job": { "prefill": prompt.len(), "decode": decode, "step_leaves": n, "kinds": groups.len(), "trials": total_trials },
+        "layout": { "checkpoint_interval": backend.class().layout.checkpoint_interval, "h_tile": backend.class().layout.h_tile, "states": program.states.len(), "blocks": program.blocks.len(), "layers": program.schedule.layers.len() },
+        "per_kind_samples": per_kind,
+        "elapsed_s": start_all.elapsed().as_secs(),
+        "max_over_sampled_kinds": {
+            "distinct_runs_256": max_runs, "distinct_leaves": max_leaves, "value_bytes": max_value_bytes,
+            "whole_run_bytes": max_run_bytes, "wire_bytes": max_wire,
+        },
+        "kinds": kinds,
+    });
+    println!("[read-set] {}", serde_json::to_string(&record["max_over_sampled_kinds"]).unwrap());
+    if let Ok(out) = std::env::var("MISAKA_READ_SET_OUT") {
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+}
