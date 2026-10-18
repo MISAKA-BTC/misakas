@@ -571,6 +571,46 @@ pub struct Base0FpMaterialV2 {
     pub checkpoint_leaves: Vec<kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2>,
 }
 
+impl kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1 for Base0FpMaterialV2 {
+    fn native_heap_v1(&self, component: &str) -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1};
+        NativeCoverageV1::zero()
+            .add::<Self>(self.binding.native_heap_v1(component), component)
+            .add::<Self>(self.step_tree.native_heap_v1(component), component)
+            .add::<Self>(self.logits_rows.native_heap_v1(component), component)
+            .add::<Self>(self.generated_token_ids.native_heap_v1(component), component)
+            .add::<Self>(self.prompt_token_ids.native_heap_v1(component), component)
+            .add::<Self>(self.checkpoint_chunks.native_heap_v1(component), component)
+            .add::<Self>(self.checkpoint_leaves.native_heap_v1(component), component)
+    }
+    fn native_members_v1(&self) -> Option<u64> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1;
+        let mut n = self.binding.native_members_v1()?;
+        n = n.checked_add(self.step_tree.native_members_v1()?)?;
+        n = n.checked_add(self.logits_rows.native_members_v1()?)?;
+        n = n.checked_add(self.generated_token_ids.native_members_v1()?)?;
+        n = n.checked_add(self.prompt_token_ids.native_members_v1()?)?;
+        n = n.checked_add(self.checkpoint_chunks.native_members_v1()?)?;
+        n.checked_add(self.checkpoint_leaves.native_members_v1()?)
+    }
+}
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Base0FpMaterialV2 {
+    fn scan_native_wire_v1<R: std::io::Read>(
+        reader: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeWireScanV1, NativeWireShapeV1};
+        reader.step()?;
+        let shape = NativeWireShapeV1::default().merge(u16::scan_native_wire_v1(reader)?)?;
+        let shape = shape.merge(kaspa_consensus_core::palw_step_leg::PalwStepBindingV2::scan_native_wire_v1(reader)?)?;
+        let shape = shape.merge(crate::fp_capture::Base0SparseStepTreeV1::scan_native_wire_v1(reader)?)?;
+        let shape = shape.merge(Vec::<Vec<i32>>::scan_native_wire_v1(reader)?)?;
+        let shape = shape.merge(Vec::<u32>::scan_native_wire_v1(reader)?)?;
+        let shape = shape.merge(Vec::<u32>::scan_native_wire_v1(reader)?)?;
+        let shape = shape.merge(Vec::<Vec<Vec<u8>>>::scan_native_wire_v1(reader)?)?;
+        shape.merge(Vec::<kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2>::scan_native_wire_v1(reader)?)
+    }
+}
+
 /// Encode a FOLDED run's retention. Refuses a dense one by name: two encodings of one commitment
 /// is the thing the ADR warns about, and the way to keep them one is to make each refuse the
 /// other's input.

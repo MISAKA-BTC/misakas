@@ -63,6 +63,11 @@ use kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
 
+/// Explicit selected-router consumer of the historical folded retention. The
+/// capture magic, sparse root and V1 selector keep their historical meanings.
+#[path = "fp_interval/routing_v2.rs"]
+pub mod routing_v2;
+
 /// The opening's wire magic. Opaque bytes with a magic and a version, borsh behind it — the
 /// family's other codecs' shape ([`crate::produce::base0_material_encode_v1`]), so bytes that are
 /// not an interval opening are refused as such rather than mis-parsed as one.

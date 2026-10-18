@@ -37,6 +37,55 @@ fn read<T: crate::palw_native_resource_v1::NativeWireScanV1 + BorshDeserialize>(
 }
 
 impl PalwChainStateV2 {
+    /// Revalidate the checker subject against this same native ledger, not
+    /// just the decoded journal's shape. Approval bytes alone are insufficient.
+    pub fn source_bootstrap_check_work_authority_v1(&self, id: Hash64) -> Result<(), PalwStateV2Error> {
+        let epoch = self.source_bootstrap_epoch_v1()?.ok_or_else(|| refuse("bootstrap checker epoch absent"))?;
+        validate_cohort(&epoch)?;
+        let row = self.source_bootstrap_work_v1(id)?.ok_or_else(|| refuse("bootstrap checker work absent"))?;
+        validate_work(&epoch, &row)?;
+        if row.work.id() != id {
+            return Err(refuse("bootstrap checker work key differs from statement"));
+        }
+        let ledger = self.source_bootstrap_checker_ledger_v1()?;
+        if derive_native_work(&epoch, &ledger, row.work.claim)? != row.work {
+            return Err(refuse("bootstrap checker statement differs from its native claim/material"));
+        }
+        Ok(())
+    }
+
+    /// Own native projection for a real downstream claim, with unresolved
+    /// transitive lineage kept unavailable. This never returns a seed or a
+    /// Locked collector result, even when the source itself is approved.
+    pub fn source_bootstrap_consumer_observation_v1(
+        &self,
+        source_work: Hash64,
+        consumer_claim: Hash64,
+    ) -> Result<crate::palw_source_bootstrap_v1::PalwSourceBootstrapConsumerObservationV1, PalwStateV2Error> {
+        use crate::palw_source_bootstrap_v1::{
+            PalwSourceBootstrapConsumerObservationV1, PalwSourceBootstrapConsumerUnavailableV1 as U,
+        };
+        let source = self.source_bootstrap_event_v1(source_work)?;
+        let ledger = self.source_bootstrap_checker_ledger_v1()?;
+        let exists = self.claim(&consumer_claim).is_some() || ledger.claims.contains_key(&consumer_claim.as_bytes());
+        Ok(PalwSourceBootstrapConsumerObservationV1 {
+            source,
+            unavailable: if exists { U::VersionedLineageUnimplemented } else { U::NativeConsumerAbsent },
+        })
+    }
+
+    /// Core-owned operational ledger projection for the selected source worker.
+    /// Callers must obtain this state from their own coherent native getter;
+    /// this method does not authenticate an externally supplied snapshot.
+    pub fn source_bootstrap_checker_ledger_v1(
+        &self,
+    ) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwStateV2Error> {
+        self.kernel_route()
+            .ok_or_else(|| refuse("bootstrap checker kernel route absent"))?
+            .ledger_native_projection_checked_v9()
+            .map_err(|e| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(e, refuse))
+    }
+
     /// Fixed projection from own accepted rows. Remote event bytes cannot call
     /// this method in place of authenticating the source native state.
     pub fn source_bootstrap_event_v1(

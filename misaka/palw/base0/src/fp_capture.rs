@@ -376,6 +376,31 @@ pub struct Base0SparseStepTreeV1 {
     retained: Vec<Hash64>,
 }
 
+// The legacy retention bytes stay unchanged. The V2 routed consumer scans the
+// actual nested length before decoding, and retains the decoded source owner
+// alongside its gather and complete-bundle destination.
+impl kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1 for Base0SparseStepTreeV1 {
+    fn native_heap_v1(&self, component: &str) -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1;
+        self.retained.native_heap_v1(component)
+    }
+    fn native_members_v1(&self) -> Option<u64> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1;
+        self.retained.native_members_v1()
+    }
+}
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Base0SparseStepTreeV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(
+        reader: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeWireScanV1, NativeWireShapeV1};
+        reader.step()?;
+        let shape = NativeWireShapeV1::default().merge(u64::scan_native_wire_v1(reader)?)?;
+        let shape = shape.merge(u32::scan_native_wire_v1(reader)?)?;
+        shape.merge(Vec::<Hash64>::scan_native_wire_v1(reader)?)
+    }
+}
+
 impl Base0SparseStepTreeV1 {
     /// Nodes the tree retains — one per `2^retain_level` leaves.
     pub fn retained_len(&self) -> usize {

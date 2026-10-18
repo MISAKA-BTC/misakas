@@ -999,3 +999,4 @@ pub mod palw_material_challenge_history_v4;
 pub mod palw_source_bootstrap_v1;
 pub mod palw_routed_material_v2;
 pub mod palw_paid_material_generation_v5;
+pub mod palw_paid_claim_observation_v5;

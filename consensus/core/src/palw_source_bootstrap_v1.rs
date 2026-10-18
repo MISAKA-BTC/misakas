@@ -9,8 +9,42 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_challenge::bootstrap_epoch_v1::{BootstrapCandidateV1, BootstrapEpochV1, BootstrapPolicyV1, BootstrapSeatV1};
 
 pub const PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1: u8 = 137;
+
+/// A runtime observation obtained only through this node's coherent own-state
+/// getter. The retained native state owns all epoch/work/cohort allocations;
+/// this type has no wire deserializer and imports no remote authority.
+#[derive(Debug)]
+pub struct PalwSourceBootstrapObservationV1 {
+    pub checkpoint: Hash64,
+    pub virtual_daa: u64,
+    pub import_epoch: u64,
+    pub state: std::sync::Arc<crate::palw_native_resource_v1::NativeChainStateV1>,
+}
+
+/// The bootstrap journal authenticates approvals and historical settlement.
+/// It does not yet authenticate a downstream assignment's transitive seed /
+/// checker graph. Keep that missing consumer authority explicit rather than
+/// calling the collector with an invented independent (`false`) callback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwSourceBootstrapConsumerUnavailableV1 {
+    NativeConsumerAbsent,
+    VersionedLineageUnimplemented,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct PalwSourceBootstrapConsumerObservationV1 {
+    pub source: Option<misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1>,
+    pub unavailable: PalwSourceBootstrapConsumerUnavailableV1,
+}
 pub const PALW_SELECTED_SOURCE_BOOTSTRAP_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/source-bootstrap/approval/v1";
 pub const PALW_SELECTED_SOURCE_BOOTSTRAP_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/source-bootstrap/message/v1";
+
+impl crate::palw_state_v2::PalwStateParamsV2 {
+    /// Read-only mirror check for explicit private construction. It does not
+    /// bypass the public startup refusal or approve any policy value.
+    pub fn selected_source_bootstrap_v1_mirror_matches(&self, activation: u64, policy: &PalwSelectedSourceBootstrapPolicyV1) -> bool {
+        self.selected_source_bootstrap_v1.as_ref().is_some_and(|(at, p)| *at == activation && p == policy)
+    }
+}
 
 /// Local preparation faults are not assertions against a carrier or peer.
 /// In particular missing own history is not permission to omit a journal row.

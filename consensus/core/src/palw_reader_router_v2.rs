@@ -9,10 +9,8 @@
 use crate::Hash64;
 use crate::palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1};
 use crate::palw_state_v2::PalwBondKeyV2;
-use crate::palw_step::{PALW_STEP_INPUT_SENTINEL_MIN, PalwShapeProfileV3, PalwStepNodeV1, PalwStepOutLenV1};
-use crate::palw_step_refute::{
-    KDESC_KIMI_MOE_COMBINE, KDESC_KIMI_ROUTER_TOPK, KDESC_Q36_MOE_COMBINE, KDESC_Q36_ROUTER_TOPK, kernel_semantics_id_v1,
-};
+use crate::palw_step::{PALW_STEP_INPUT_SENTINEL_MIN, PalwShapeProfileV3, PalwStepNodeV1, PalwStepOutLenV1, kernel_semantics_id_v1};
+use crate::palw_step_refute::{KDESC_KIMI_MOE_COMBINE, KDESC_KIMI_ROUTER_TOPK, KDESC_Q36_MOE_COMBINE, KDESC_Q36_ROUTER_TOPK};
 
 pub const PALW_READER_ROUTER_TABLE_V2: u8 = 136;
 pub const PALW_READER_ROUTER_VERSION_V2: u16 = 2;

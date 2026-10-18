@@ -516,6 +516,28 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<PalwNativeMaterialProviderAuthorityV4, String> {
         Err("native routed material provider authority unavailable".into())
     }
+    /// Bounded own-node accepted facts. Availability is a coherent read, not
+    /// selected approval or complete one-time settlement.
+    fn palw_paid_claim_observation_v5(
+        &self,
+        _base: crate::Hash64,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_paid_claim_observation_v5::NativePaidClaimObservationV5>,
+        String,
+    > {
+        Err("own native paid claim observations unavailable".into())
+    }
+    /// Coherent own selected-state observation for the finite source checker.
+    /// No remote bytes or public RPC projection can construct this authority.
+    fn palw_source_bootstrap_observation_v1(
+        &self,
+        _work: crate::Hash64,
+    ) -> Result<
+        crate::palw_source_bootstrap_v1::PalwSourceBootstrapObservationV1,
+        crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
+    > {
+        Err(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable)
+    }
     fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
         Err("monetary material covenant reads are unavailable".into())
     }

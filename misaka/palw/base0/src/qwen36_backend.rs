@@ -26,6 +26,9 @@ use kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES as LEG_MAX_LEA
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2};
 use kaspa_hashes::Hash64;
 
+#[path = "qwen36_backend/routing_v2.rs"]
+mod routing_v2;
+
 /// Domain separators. Distinct from BASE-0's so that a root computed for one class can never be
 /// read as the other's, which is the only thing a domain tag is for.
 pub const QWEN36_DOMAIN_JOB_PROMPT: &[u8] = b"misaka-palw/qwen36/job-prompt/v1";
@@ -2428,10 +2431,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         use kaspa_consensus_core::palw_routed_material_v2::{
             PalwHeldMaterialBundleV2, PalwHeldMaterialUnitV2, PalwMaterialConstructionRequestsV2, construct_material_unit_v2,
         };
-        // This concrete adapter owns dense capture data. Sparse fold replay must
-        // get a separate bounded gather adapter; never select a V1 router there.
         if capture.starts_with(&crate::produce::PALW_BASE0_FP_MATERIAL_MAGIC_V2) {
-            return Err(E::Unsupported("V2 routed complete material from folded capture is not connected".into()));
+            return self.routed_material_bundle_from_fold_v2(capture, prompt, roots, authority, max_bytes);
         }
         let retained =
             retain_native_value_decode_classified_v1::<crate::produce::Base0RetainedMaterialV1, std::io::Error>(capture, || {
