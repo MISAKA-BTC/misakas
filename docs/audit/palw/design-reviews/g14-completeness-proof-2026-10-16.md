@@ -2574,3 +2574,19 @@ tests. No new download or model computation was used by these unit checks.
 The original declared-semantics 5390/3120 node refusal is not retroactively
 reclassified. A rebuilt declared-semantics node/payment result is still required.
 The consolidated payment/forged builds and cone-budget regression are pending.
+
+
+### 16.5 Integrated owner-cone bound unit passed; node reruns started
+
+On the integrated source at `11b4bf7e0`, targeted
+`cone_acquisition_backtracking_stays_within_full_run_turn_and_leaf_budgets`
+completed: 1 passed, 0 failed, 820 filtered, 0.00 s. Log:
+`/tmp/codex-g14-owner-cone-run-budget.log`. This checks aligned 256-leaf
+acquisition runs under backward dependency discovery without increasing the
+charged leaf or turn bounds. It is not a conviction or payment result.
+The same compiled kaspad lib-test artifact `kaspad_lib-d9823aa9f1bf4010`
+started both default-semantic honest-payment and forged-frame outside-service
+node tests. Their current logs are
+`/tmp/codex-g14-integrated-tir-payment-beacon.log` and
+`/tmp/codex-g14-integrated-tir-forged-full-runs.log`; neither has a terminal
+result at this record. Prior failed Final/payment runs remain failures.
