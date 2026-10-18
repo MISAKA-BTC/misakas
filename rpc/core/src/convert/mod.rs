@@ -4,6 +4,7 @@
 
 pub mod block;
 pub mod notification;
+pub mod palw_fork_choice;
 pub mod palw_kernel;
 pub mod palw_legacy;
 pub mod scope;

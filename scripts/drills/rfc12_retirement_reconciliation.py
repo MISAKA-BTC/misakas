@@ -350,7 +350,7 @@ def legacy_exit_paid_once(record):
 
 
 def reserve_balance(view):
-    raise J.NotObservable('reserve balance reads are available through getRfc12State, but no independent per-block '
+    raise J.NotObservable('reserve balance reads are available through getPalwAcceptanceReads, but no independent per-block '
                           'accrual/drip trace was supplied; balance deltas alone are not flow reconciliation')
 
 

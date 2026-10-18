@@ -5,9 +5,13 @@
 //! the lighter by two), then healed. The remote client sees only what op 203 v2 serves (the committed leaves of both paths, each
 //! tip's v3 window above the fork, the fork's v3 registry openings) and an issuer's attestation of each tip's committed root; it
 //! verifies every byte with the node's own readers and must choose exactly the node's sink. Missing or tampered evidence STOPs.
+//! The fully armed V3 case tests RFC18 §6.4's zero-certified-credit GHOSTDAG fallback; these carriage-only claims are not
+//! positively certified. A separate Gate-C-only deep-tie case has no incumbent-independent winner and must STOP.
+use super::super::super::g14r_socket_rpc::SocketRpc;
 use super::rule_e::{free_attempt, free_slot};
 use super::*;
-use kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2;
+use kaspa_rpc_core::api::rpc::RpcApi;
+use kaspa_wrpc_client::WrpcEncoding;
 use misaka_palw_remote::l2::{ForkChoiceAttestationV1, L2LimitsV1, L2StopV1, PeerViewV1};
 use misaka_palw_remote::l2_rule_e::{
     CommittedServedV2, PALW_FORK_CHOICE_LEAF_VERSION_RULE_E_V3, RuleEEvidenceV2, RuleEInputV2, verify_fork_choice_rule_e_v2,
@@ -16,13 +20,13 @@ use misaka_palw_remote::verify::{ChainPointV1, ClientRulesetV1, VerifiedChainV1}
 
 const SPLIT_V2: usize = 24;
 
-fn net_rule_e(gate_c: bool) -> Net {
+fn net_rule_e(gate_c: bool, capital_v2: bool) -> Net {
     let (mut config, _, premine, floats) = parts_ruled(None, true);
     config.params.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(1));
     // Gate C's certification sweep is a kernel route move: the kernel route is in force with it.
     config.params.palw_probabilistic_constraints_v1 = gate_c.then_some(ForkActivation::new(0));
     config.params.palw_independently_work_certified_v1 = gate_c.then_some(ForkActivation::new(1));
-    config.params.palw_rule_e_participation_v2 = None;
+    config.params.palw_rule_e_participation_v2 = capital_v2.then_some(ForkActivation::new(1));
     config.params.sync_palw_rfc0018_v1();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
         unreachable!("ConsensusV2")
@@ -60,38 +64,42 @@ fn chain_of(node: &T12Chain, checkpoint: BlockHash, tip: BlockHash) -> VerifiedC
 }
 
 /// Op 203 v2 as the node serves it, for every block of `chains`, the windows above `fork_blue` and every harness bond's registry.
-fn served(node: &T12Chain, chains: &[&VerifiedChainV1], fork_blue: u64) -> (Vec<CommittedServedV2>, Vec<(BlockHash, Hash64)>) {
-    use kaspa_consensus_core::api::ConsensusApi;
-    let extras = PalwForkChoiceExtrasRequestV2 { rule_e_window_above_blue: Some(fork_blue), registry_bonds: node.bonds.clone() };
+async fn served(node: &T12Chain, chains: &[&VerifiedChainV1], fork_blue: u64) -> (Vec<CommittedServedV2>, Vec<(BlockHash, Hash64)>) {
+    let socket = SocketRpc::start(node.ctx.consensus.consensus_clone(), WrpcEncoding::Borsh).await;
+    let client = socket.client().await;
     let mut blocks: Vec<BlockHash> = chains.iter().flat_map(|c| c.hashes.iter().copied()).collect();
     blocks.sort();
     blocks.dedup();
     let (mut out, mut roots) = (Vec::new(), Vec::new());
     for chunk in blocks.chunks(16) {
-        let served = node.ctx.consensus.palw_fork_choice_openings_v2(chunk, &extras).expect("op 203 v2 serves");
-        for (block, entry) in served.entries {
-            let e = entry.unwrap_or_else(|why| panic!("{block} is served: {why}"));
-            roots.push((block, e.committed_root));
-            let v2 = kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::PalwForkChoiceLeafV2::decode(&e.committed_leaf).is_ok();
-            let (mut registry, mut registry_v2) = (Vec::new(), Vec::new());
-            assert_eq!(node.bonds.len(), e.registry_openings.len());
-            for (bond, bytes) in node.bonds.iter().copied().zip(&e.registry_openings) {
-                if v2 {
-                    registry_v2.push((bond, borsh::from_slice(bytes).expect("a v2 registry opening")));
-                } else {
-                    registry.push((bond, borsh::from_slice(bytes).expect("a v3 registry opening")));
-                }
-            }
-            out.push(CommittedServedV2 {
-                block,
-                leaf: e.committed_leaf,
-                inner_root: e.opening.inner_root,
-                window: e.rule_e_window.map(|w| (fork_blue, borsh::from_slice(&w).expect("a window opening"))),
-                registry,
-                registry_v2,
-            });
+        let served = client
+            .get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
+                block_hashes: chunk.iter().map(ToString::to_string).collect(),
+                rule_e_window_above_blue: Some(fork_blue),
+                registry_bonds: node.bonds.iter().map(|bond| faster_hex::hex_string(&borsh::to_vec(bond).unwrap())).collect(),
+            })
+            .await
+            .expect("real op203 socket response");
+        assert!(served.available, "{}", served.reason);
+        assert_eq!(served.entries.len(), chunk.len());
+        for entry in served.entries {
+            assert!(entry.available, "{}", entry.reason);
+            let decoded = misaka_palw_remote::l2_rule_e::committed_entry_from_wire_v2(
+                &entry.block_hash,
+                &entry.committed_leaf,
+                &entry.inner_root,
+                Some(fork_blue),
+                &entry.rule_e_window,
+                &entry.registry_openings,
+                &node.bonds,
+            )
+            .expect("production remote decoder accepts the node's entry");
+            roots.push((decoded.block, entry.committed_root.parse().unwrap()));
+            out.push(decoded);
         }
     }
+    client.disconnect().await.unwrap();
+    socket.stop().await;
     (out, roots)
 }
 
@@ -122,17 +130,22 @@ fn attest(
 
 #[tokio::test]
 async fn rfc09_remote_rule_e_gate_c_choice_is_the_full_nodes_and_refuses_missing_or_tampered_evidence() {
-    run_case(true).await;
+    run_case(true, true).await;
 }
 
 #[tokio::test]
 async fn rfc09_remote_rule_e_v2_choice_is_the_full_nodes_and_refuses_missing_or_tampered_evidence() {
-    run_case(false).await;
+    run_case(false, false).await;
 }
 
-async fn run_case(gate_c: bool) {
+#[tokio::test]
+async fn rfc09_gate_c_only_zero_credit_split_refuses_a_remote_winner() {
+    run_case(true, false).await;
+}
+
+async fn run_case(gate_c: bool, capital_v2: bool) {
     kaspa_core::log::try_init_logger(&std::env::var("G14_LOG").unwrap_or_else(|_| "warn".into()));
-    let mut n = net_rule_e(gate_c);
+    let mut n = net_rule_e(gate_c, capital_v2);
     let version = if gate_c { PALW_FORK_CHOICE_LEAF_VERSION_RULE_E_V3 } else { 2 };
     let fork = shared_prefix(&mut n).await;
     let (mut hb, mut lb) = (Vec::new(), Vec::new());
@@ -150,12 +163,17 @@ async fn run_case(gate_c: bool) {
     feed(&mut n.light, &hb).await;
     feed(&mut n.heavy, &lb).await;
     let node_choice = n.light.sink();
-    assert_eq!(n.heavy.sink(), node_choice, "both full nodes agree");
+    if !gate_c || capital_v2 {
+        assert_eq!(n.heavy.sink(), node_choice, "both full nodes agree");
+    } else {
+        assert_eq!(n.heavy.sink(), ht, "zero-credit deep tie preserves heavy incumbent");
+        assert_eq!(n.light.sink(), lt, "zero-credit deep tie preserves light incumbent");
+    }
     assert!(node_choice == ht || node_choice == lt);
     let rule_fork = n.light.vp().palw_rule_e_fork_v1(lt, ht).expect("the pair has a fork");
     assert_eq!(rule_fork.fork, fork, "the partition's fork point");
     let (ca, cb) = (chain_of(&n.light, fork, lt), chain_of(&n.light, fork, ht));
-    let (served, roots) = served(&n.light, &[&ca, &cb], rule_fork.fork_blue_score);
+    let (served, roots) = served(&n.light, &[&ca, &cb], rule_fork.fork_blue_score).await;
     let ruleset = ClientRulesetV1::of(&n.config.params);
     let root_of = |b: BlockHash| roots.iter().find(|(x, _)| *x == b).unwrap().1;
     let evidence = vec![
@@ -180,6 +198,13 @@ async fn run_case(gate_c: bool) {
             &verify,
         )
     };
+    if gate_c && !capital_v2 {
+        assert!(
+            matches!(run(&served, &evidence), Err(L2StopV1::NoRobustWinner)),
+            "Gate C without capital-v2 has no incumbent-independent winner for this zero-credit deep tie"
+        );
+        return;
+    }
     // The remote's choice is the full node's.
     let established = run(&served, &evidence).expect("the remote establishes the fork choice");
     assert_eq!(established.chosen.tip_hash(), node_choice, "remote = full node choice under rule E + Gate C");

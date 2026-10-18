@@ -48,6 +48,47 @@ pub struct CommittedServedV2 {
     pub registry_v2: Vec<(PalwBondKeyV2, PalwRuleERegistryOpeningV1)>,
 }
 
+/// Decode one untrusted wire entry without dropping or reassigning bond proofs.
+/// Authentication remains the responsibility of the canonical verifier below.
+pub fn committed_entry_from_wire_v2(
+    block: &str,
+    leaf: &[u8],
+    inner_root: &str,
+    window_above_blue: Option<u64>,
+    window: &[u8],
+    registry_openings: &[Vec<u8>],
+    bonds: &[PalwBondKeyV2],
+) -> Option<CommittedServedV2> {
+    if registry_openings.len() != bonds.len()
+        || bonds.len() > kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2
+    {
+        return None;
+    }
+    let is_v2 = PalwForkChoiceLeafV2::decode(leaf).is_ok();
+    if !is_v2 && PalwForkChoiceLeafV3::decode(leaf).is_err() {
+        return None;
+    }
+    let (mut registry, mut registry_v2) = (Vec::new(), Vec::new());
+    for (bond, bytes) in bonds.iter().copied().zip(registry_openings) {
+        if is_v2 {
+            registry_v2.push((bond, borsh::from_slice(bytes).ok()?));
+        } else {
+            registry.push((bond, borsh::from_slice(bytes).ok()?));
+        }
+    }
+    Some(CommittedServedV2 {
+        block: block.parse().ok()?,
+        leaf: leaf.to_vec(),
+        inner_root: inner_root.parse().ok()?,
+        window: match window_above_blue {
+            Some(from) if !window.is_empty() => Some((from, borsh::from_slice(window).ok()?)),
+            _ => None,
+        },
+        registry,
+        registry_v2,
+    })
+}
+
 /// **The evidence at a tip**: an issuer's attestation of the tip's committed root and form — the leaf itself comes
 /// from the served entries and must envelope to the attested root.
 #[derive(Clone, Debug)]
@@ -468,6 +509,29 @@ mod tests {
             registry_root: ext.registry_root,
         };
         (leaf, palw_rule_e_open_window_above_v1(&[record], 5), bond)
+    }
+
+    #[test]
+    fn wire_decoder_preserves_bond_association_and_refuses_partial_proofs() {
+        let (leaf, window, bond) = fixture();
+        let proof = borsh::to_vec(&palw_rule_e_open_registry_v1(&[bond], &bond)).unwrap();
+        let bytes = leaf.encode();
+        let window = borsh::to_vec(&window).unwrap();
+        let block = leaf.block.to_string();
+        let root = Hash64::from_u64_word(4).to_string();
+        let read = |proofs: &[Vec<u8>]| committed_entry_from_wire_v2(
+            &block, &bytes, &root, Some(5), &window, proofs, &[bond],
+        );
+        let decoded = read(&[proof.clone()]).unwrap();
+        assert!(decoded.registry.is_empty());
+        assert_eq!(decoded.registry_v2[0].0, bond);
+        assert_eq!(decoded.window.unwrap().0, 5);
+        assert!(read(&[]).is_none());
+        assert!(read(&[proof.clone(), proof.clone()]).is_none());
+        let mut truncated = proof;
+        truncated.pop();
+        assert!(read(&[truncated]).is_none());
+        assert!(committed_entry_from_wire_v2(&block, &[0], &root, None, &[], &[], &[]).is_none());
     }
 
     #[test]

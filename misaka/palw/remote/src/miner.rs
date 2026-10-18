@@ -652,18 +652,30 @@ fn rule_e_mode_v2(
             }
         }
     }
-    // The fork's registry openings of every bond the tips' windows name (asked once the windows are known).
+    // Fetch every window bond within op203's bound. Keep V2 membership and V3 capital
+    // separate, and attach only to the identical committed leaf/root at the fork.
     let bonds = window_bonds_v2(&served, &tips);
     if let Some(fork) = fork.filter(|_| !bonds.is_empty()) {
         for node in nodes {
-            if let Ok(got) = node.fork_choice_committed_v2(&[fork.hash], None, &bonds) {
-                for entry in got {
-                    if let Some(existing) =
-                        served.iter_mut().find(|s| s.block == entry.block && s.leaf == entry.leaf && s.registry.is_empty())
-                    {
-                        existing.registry = entry.registry;
-                    } else {
-                        served.push(entry);
+            for chunk in bonds.chunks(
+                kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2,
+            ) {
+                if let Ok(got) = node.fork_choice_committed_v2(&[fork.hash], None, chunk) {
+                    for entry in got {
+                        for existing in served.iter_mut().filter(|s| {
+                            s.block == entry.block && s.leaf == entry.leaf && s.inner_root == entry.inner_root
+                        }) {
+                            for proof in &entry.registry {
+                                if !existing.registry.contains(proof) {
+                                    existing.registry.push(proof.clone());
+                                }
+                            }
+                            for proof in &entry.registry_v2 {
+                                if !existing.registry_v2.contains(proof) {
+                                    existing.registry_v2.push(proof.clone());
+                                }
+                            }
+                        }
                     }
                 }
             }

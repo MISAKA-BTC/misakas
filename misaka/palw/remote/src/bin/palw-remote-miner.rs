@@ -321,29 +321,15 @@ impl RemoteNode for WrpcNode<'_> {
             .iter()
             .filter(|e| e.available)
             .filter_map(|e| {
-                if e.registry_openings.len() != bonds.len() {
-                    return None;
-                }
-                let is_v2 =
-                    kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::PalwForkChoiceLeafV2::decode(&e.committed_leaf).is_ok();
-                let (mut registry, mut registry_v2) = (Vec::new(), Vec::new());
-                for (bond, bytes) in bonds.iter().copied().zip(&e.registry_openings) {
-                    if is_v2 {
-                        registry_v2.push((bond, borsh::from_slice(bytes).ok()?));
-                    } else {
-                        registry.push((bond, borsh::from_slice(bytes).ok()?));
-                    }
-                }
-                Some(misaka_palw_remote::l2_rule_e::CommittedServedV2 {
-                    block: e.block_hash.parse().ok()?,
-                    leaf: e.committed_leaf.clone(),
-                    inner_root: e.inner_root.parse().ok()?,
-                    window: window_above_blue
-                        .filter(|_| !e.rule_e_window.is_empty())
-                        .and_then(|from| Some((from, borsh::from_slice(&e.rule_e_window).ok()?))),
-                    registry,
-                    registry_v2,
-                })
+                misaka_palw_remote::l2_rule_e::committed_entry_from_wire_v2(
+                    &e.block_hash,
+                    &e.committed_leaf,
+                    &e.inner_root,
+                    window_above_blue,
+                    &e.rule_e_window,
+                    &e.registry_openings,
+                    bonds,
+                )
             })
             .collect())
     }

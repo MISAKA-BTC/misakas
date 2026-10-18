@@ -3361,78 +3361,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwForkChoiceOpeningRequest,
     ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
-        use kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1;
-        // Parsed before a byte of chain state is read: a malformed hash, or too many, is an error.
-        if request.block_hashes.len() > PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1 {
-            return Err(RpcError::General(format!(
-                "at most {PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1} block hashes per request (got {})",
-                request.block_hashes.len()
-            )));
-        }
-        let blocks =
-            request.block_hashes.iter().map(|text| parse_hash64(text.trim(), "blockHashes")).collect::<RpcResult<Vec<_>>>()?;
-        // RFC09 (v2): the bonds whose v3 registry openings each entry carries, hex of the borsh bond key; malformed is an error.
-        use kaspa_consensus_core::palw_fork_choice_commitment_v1::{PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2, PalwForkChoiceExtrasRequestV2};
-        if request.registry_bonds.len() > PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2 {
-            return Err(RpcError::General(format!(
-                "at most {PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2} registry bonds per request (got {})",
-                request.registry_bonds.len()
-            )));
-        }
-        let registry_bonds = request
-            .registry_bonds
-            .iter()
-            .map(|text| {
-                let mut bytes = vec![0u8; text.trim().len() / 2];
-                faster_hex::hex_decode(text.trim().as_bytes(), &mut bytes)
-                    .ok()
-                    .and_then(|_| borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>(&bytes).ok())
-                    .ok_or_else(|| RpcError::General(format!("registryBonds: {text} is not a hex borsh bond key")))
-            })
-            .collect::<RpcResult<Vec<_>>>()?;
-        let extras = PalwForkChoiceExtrasRequestV2 { rule_e_window_above_blue: request.rule_e_window_above_blue, registry_bonds };
-        let unavailable = |reason: String| GetPalwForkChoiceOpeningResponse { available: false, reason, ..Default::default() };
+        use kaspa_rpc_core::convert::palw_fork_choice::{parse_request, response};
+        let (blocks, extras) = parse_request(&request)?;
         if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(unavailable("this network has no PALW V2 state".to_string()));
+            return Ok(response(Err("this network has no PALW V2 state".into())));
         }
         let session = self.consensus_manager.consensus().unguarded_session();
-        match session.spawn_blocking(move |c| c.palw_fork_choice_openings_v2(&blocks, &extras)).await {
-            Err(reason) => Ok(unavailable(reason)),
-            Ok(served) => Ok(GetPalwForkChoiceOpeningResponse {
-                available: true,
-                reason: String::new(),
-                sink: served.sink.to_string(),
-                tips: served.tips.iter().map(|t| t.to_string()).collect(),
-                entries: served
-                    .entries
-                    .into_iter()
-                    .map(|(block, entry)| match entry {
-                        Ok(e) => RpcPalwForkChoiceEntry {
-                            block_hash: block.to_string(),
-                            available: true,
-                            reason: String::new(),
-                            header: Some(RpcHeader::from(&e.header)),
-                            leaf: e.opening.leaf.encode(),
-                            inner_root: e.opening.inner_root.to_string(),
-                            committed_root: e.committed_root.to_string(),
-                            committed_form: e.committed_form,
-                            committed_leaf: e.committed_leaf,
-                            rule_e_window: e.rule_e_window.unwrap_or_default(),
-                            registry_openings: e.registry_openings,
-                        },
-                        Err(reason) => RpcPalwForkChoiceEntry { block_hash: block.to_string(), reason, ..Default::default() },
-                    })
-                    .collect(),
-                dns_overlay: served.dns_gate.is_some(),
-                dns_stage_active: served.dns_gate.is_some_and(|d| d.stage_active),
-                dns_confirmed_anchor: served
-                    .dns_gate
-                    .and_then(|d| d.confirmed_anchor)
-                    .map(|(anchor, _)| anchor.to_string())
-                    .unwrap_or_default(),
-                dns_confirmed_anchor_daa: served.dns_gate.and_then(|d| d.confirmed_anchor).map(|(_, daa)| daa).unwrap_or(0),
-            }),
-        }
+        Ok(response(session.spawn_blocking(move |c| c.palw_fork_choice_openings_v2(&blocks, &extras)).await))
     }
 
     // ------------------------------------------------------------------------------------------
