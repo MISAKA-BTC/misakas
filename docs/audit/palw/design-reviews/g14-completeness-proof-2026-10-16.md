@@ -2511,3 +2511,32 @@ building with `CARGO_INCREMENTAL=0 cargo test -j1 -p kaspad --lib
 This fixes a source-level missing beacon path; a passing payment result and any
 further cause of refusal remain unverified until the rerun completes. The forged
 process and inherited fit continue separately.
+
+
+### 16.2 Match cone acquisition to the prepaid full-run path (2026-10-18, pending)
+
+The owner-fixed forged process 61854 remains live. Its mempool rejects owner
+controls with `TIR immutable request acquisition budget exhausted`, later also
+`late TIR demand has no full prepaid response span`; at DAA 2300 the forged
+claim is still ReceiptLicensed. No conviction or seat-slash result is claimed.
+Log: `/tmp/codex-g14-tir-forged-owner-fixed.log`.
+
+The frame's immutable localization plan prices cone acquisition in full runs
+(up to the existing 256-leaf bound). `owner_cone_probe_v1` instead turned a
+backend `StepPreimage`/`StepOpening` need into a one-leaf demand. Repeated missing
+preimages could therefore consume one turn per leaf rather than the plan's run
+count. The owner now requests the canonical full run containing the first missing
+leaf. Alignment prevents backward dependency discovery from paying for
+partially overlapping runs. The already acquired target-leaf disclosure remains
+separate, as the plan prices it. All responses still require their original
+source and authenticated range opening; budgets, frozen constants and deadlines
+are unchanged.
+
+Added a reverse-discovery regression for 1, 130, 256, 257 and 1031 leaves. It
+requires complete coverage without repaid leaves, bounded run size, total logical
+charge exactly n, and turns exactly ceil(n/256); out-of-range requests refuse.
+It is queued behind the consolidated build in
+`/tmp/codex-g14-owner-cone-run-budget.log`. This addresses a source-level mismatch;
+it is not yet a passing unit or node result, nor proof that this is the only
+cause of the live failure. The consolidated payment build will include this
+owner change, and the forged node case must be rerun with the rebuilt binary.

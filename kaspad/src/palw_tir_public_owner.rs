@@ -78,6 +78,23 @@ const PALW_TIR_PUBLIC_OWNER_COPY_BYTES_V1: u64 = 64 << 20;
 const PALW_TIR_PUBLIC_OWNER_TARGETS_V1: u64 = 4_096;
 const PALW_TIR_PUBLIC_OWNER_SOURCE_READS_V1: u64 = 1 << 20;
 
+/// The frame prices cone acquisition in full native runs. A single missing
+/// preimage must not become one paid turn per leaf. Canonical run alignment also
+/// prevents reverse dependency discovery from buying overlapping partial runs.
+fn owner_cone_run_request_v1(leaf_count: u64, missing: u64) -> Result<PalwTirPublicRequestV1, String> {
+    if missing >= leaf_count {
+        return Err("TIR cone missing leaf is outside the original execution".into());
+    }
+    let run = u64::from(PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1);
+    let first = (missing / run) * run;
+    let count = (leaf_count - first).min(run) as u32;
+    Ok(if count == 1 {
+        PalwTirPublicRequestV1::StepLeaf { index: first }
+    } else {
+        PalwTirPublicRequestV1::StepRun { first, count }
+    })
+}
+
 /// What the independent replay disagrees with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SuspicionV1 {
@@ -309,7 +326,7 @@ fn owner_cone_probe_v1(
                     return Err("the cone builder named a range outside the original execution".into());
                 }
                 match gap(first, count) {
-                    Some((missing, length)) => ConeOutcomeV1::Acquire(request_for(missing, length)),
+                    Some((missing, _)) => ConeOutcomeV1::Acquire(owner_cone_run_request_v1(source.leaf_count_v1(), missing)?),
                     None => {
                         ConeOutcomeV1::Refused("the named credential is already authenticated; no demand repairs the builder".into())
                     }
@@ -903,6 +920,37 @@ impl PalwPanelService {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_tir_public_claim_v1::{PalwTirPublicCustodianLoadV1, PalwTirPublicFrameViewV1};
+
+    #[test]
+    fn cone_acquisition_backtracking_stays_within_full_run_turn_and_leaf_budgets() {
+        assert!(owner_cone_run_request_v1(0, 0).is_err());
+        assert!(owner_cone_run_request_v1(130, 130).is_err());
+        assert_eq!(owner_cone_run_request_v1(130, 129).unwrap(),
+            PalwTirPublicRequestV1::StepRun { first: 0, count: 130 });
+        for n in [1u64, 130, 256, 257, 1_031] {
+            let mut covered = BTreeSet::new();
+            let mut turns = 0u64;
+            let mut charged = 0u64;
+            // Discover later dependencies first, then backtrack across boundaries.
+            for missing in (0..n).rev() {
+                if covered.contains(&missing) { continue }
+                let (first, count) = match owner_cone_run_request_v1(n, missing).unwrap() {
+                    PalwTirPublicRequestV1::StepLeaf { index } => (index, 1u64),
+                    PalwTirPublicRequestV1::StepRun { first, count } => (first, u64::from(count)),
+                    other => panic!("a cone preimage run: {other:?}"),
+                };
+                assert!(first <= missing && missing < first + count);
+                assert!(count <= u64::from(PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1));
+                for leaf in first..first + count {
+                    assert!(covered.insert(leaf), "backtracking must not repay a previously acquired leaf");
+                }
+                turns += 1;
+                charged += count;
+            }
+            assert_eq!(charged, n, "all cone leaves fit the prepaid logical budget");
+            assert_eq!(turns, n.div_ceil(u64::from(PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)));
+        }
+    }
 
     #[test]
     fn owner_next_move_does_not_wait_for_the_previous_moves_retry_interval() {
