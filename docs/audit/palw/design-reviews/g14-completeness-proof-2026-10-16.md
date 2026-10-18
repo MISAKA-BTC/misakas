@@ -2979,3 +2979,120 @@ and reports the old 41,113/3,120 DAA refusal; the corrected 64 KiB source
 fixture has not yet been rebuilt into a node run. Genesis #1's 32K fit remains
 active at the last observed 13,312/32,768 position with no report. These live
 runs were not stopped for this commit.
+
+### 12.10 Run 13 slow progress at genesis DAA 16 (2026-10-18)
+
+Run 13 used the inherited private drill binary with `--no-d16` and remains an
+experiment, not release acceptance. Its result JSON has no terminal rows. A
+read-only RPC sample on P's port 35103 returned `virtualDaaScore = 16` and
+`blockCount = 16` at 16:32 and again at 16:33 JST, while the node process was
+alive and consuming CPU. At 16:34 a subsequent sample returned DAA 17 / 17
+blocks, and the log recorded an accepted block. The chain was progressing very
+slowly rather than permanently stalled; the samples do not identify why. No
+drill row has reached a terminal result.
+
+The driver already has a DAA stall limit for operation waits. A mocked
+regression test `scripts/drills/tests/test_g14_collusion_wait.py` now covers
+that behavior and passes; `git diff --check` is clean. This test-only addition
+does not diagnose or fix the slow DAA progress. The inherited run is
+still live and has not been counted as a pass; the binaries and node logs are
+retained. The cause of the slow progress must be diagnosed before treating a
+drill as release acceptance evidence.
+
+At 16:44 JST, read-only `getPalwNodeStatus` on P reported `producerState =
+drawing`, 11,586 draws, 30 produced blocks, no class-ticket winners lost on
+the network-difficulty comparison, and a class-ticket probability of
+`3.582e-3` (1 in 279). The lane mix covered 76 blocks over DAA 0..20, with 43
+attempt and 32 heartbeat blocks; the lane tip remained DAA 20. O also reported
+DAA 20 / 20 blocks. This narrows the symptom to slow progress in the selected
+virtual chain while producer draws continue. It is not evidence that the
+driver's lie has been convicted, nor an explanation of every missing drill
+row. The terminal result JSON still had only the initial 6 observations and
+no acceptance result.
+
+At 17:00 JST, read-only RPC on P reported DAA 25 / 25 blocks, 14,441
+producer draws, 36 produced blocks and the same class-ticket probability of
+3.582e-3. The lane window held 92 blocks over DAA 0..25 (49 attempt, 42
+heartbeat, 1 other), with the last work block at DAA 24. O logged two claims
+whose local replay did not reproduce their committed roots, reserved against
+the first, and deferred a second reservation behind it (G-D02c). These claims
+remain before their receipt / conviction deadlines; this sample proves no
+seat slash or terminal D-02 result. The driver JSON is nonterminal and
+`releaseApproval` remains false. This confirms slow but continuing chain
+progress and observable single-claim prioritization, not acceptance.
+
+At 17:03 JST, a read-only wRPC sample on P returned DAA 26 / 26 blocks,
+15,280 producer draws, 50 attempt blocks and 43 heartbeat blocks across the
+94-block lane window (DAA 0..26); the last work block was DAA 26. The driver
+and node remained alive. This is one additional DAA since the 17:00 sample,
+not a terminal D-02 result: no seat-slash observation or release approval was
+returned. The slow progress remains unresolved and this run still uses
+`--no-d16`, so it is not release acceptance evidence.
+
+At 17:05 JST, a second read-only wRPC sample returned DAA 27 / 27 blocks,
+15,605 producer draws and 43 heartbeat blocks; the lane window still covered
+94 blocks over DAA 0..26, with the last work block at DAA 26. The node is
+advancing, but no new work block or terminal D-02 result appeared in this
+sample. The driver remains nonterminal and this run is not release acceptance.
+
+At 17:06 JST, P had advanced its lane tip to DAA 27 and reported 39 produced
+blocks and 15,812 draws. The DAG had 27 blocks and the lane window was still
+94 blocks over DAA 0..26 (50 attempt, 43 heartbeat, 1 other); no terminal D-02
+result or seat-slash observation was present. This is progress, not acceptance.
+
+At 17:07 JST, read-only RPC still reported DAA 27 / 27 DAG blocks and 39
+produced work blocks, while draws rose to 15,918. The lane window now held 98
+blocks over DAA 0..27 (52 attempt, 45 heartbeat, 1 other), with no network-lost
+blocks and the producer still drawing. No terminal D-02 result or seat slash
+was observed; this remains slow progress, not acceptance.
+
+At 17:08 JST, the read-only sample advanced to DAA 28 / 28 DAG blocks, with
+16,187 draws and 40 produced work blocks. The lane window held 101 blocks over
+DAA 0..28 (53 attempt, 47 heartbeat, 1 other); producer state remained
+`drawing`. No terminal D-02 result or seat slash was observed.
+
+At 17:09 JST, `python3 -m unittest discover -s scripts/drills/tests -p
+'test_*.py'` passed all 130 drill-driver tests. This verifies the Python
+driver and supporting plans, including the stalled-wait regression; it is not
+node-level evidence and does not close D-02 or release acceptance.
+
+At 17:11 JST, P's DAG advanced to DAA 29 / 29 blocks and draws rose to 16,728.
+Produced work blocks remained 40 and the last work block remained DAA 28; the
+lane window still covered 101 blocks over DAA 0..28. The producer was drawing,
+but this sample contained no new work block, terminal D-02 result or seat slash.
+
+### 12.11 Run 13 process loss and Run 15 restart (2026-10-18)
+
+After the interrupted continuation, the Run 13 driver and both private nodes
+were absent from the process table, and its `/tmp` result JSON, `/tmp` log and
+`/private/tmp/codex-g14-drill-run13` node data were absent. No terminal result
+could be recovered; the DAA observations above remain progress samples only.
+Run 14 did not start a node because its relative executable path was resolved
+from the node working directory. Run 15 was then started at 17:16 JST with
+absolute paths to the same prebuilt private binary, a fresh work directory,
+fresh salt and ports 36200/36260. It uses `--no-d16` and is an investigation of
+D-02, not release acceptance. At startup P and R launched; no D-02 outcome is
+available yet. The Run 14 launch error and Run 15 logs are retained under
+`/tmp/codex-g14-drill-run14.log` and `/tmp/codex-g14-drill-run15.log`.
+
+At 17:21 JST, Run 15's P RPC returned DAA 1 / 1 DAG block, 1,148 draws,
+5 produced blocks and a lane window of 8 blocks over DAA 0..1 (4 attempt,
+3 heartbeat, 1 other). The producer was drawing. No D-02 terminal row or
+seat-slash result was available; this remains an in-progress investigation.
+
+At 17:22 JST, P's DAG advanced to DAA 2 / 2 blocks, with 1,231 draws and 5
+produced blocks; its last work block remained DAA 1. The lane window held 9
+blocks over DAA 0..1 (5 attempts, 3 heartbeats, 1 other). No D-02 terminal row
+or seat-slash result was available.
+
+At 17:28 JST, Run 15's driver had restarted O, then R and P; the JSON RPC was
+briefly unavailable during P's restart and returned afterward. P then reported
+DAA 4 / 4 DAG blocks, 59 draws, 0 produced blocks since restart, and last work
+DAA 4; the lane window held 17 blocks over DAA 0..4 (8 attempts, 8 heartbeats,
+1 other). This demonstrates continued chain state across the driver's node
+restart, not a D-02 verdict or seat slash.
+
+At 17:28 JST, P's node log reported a drill attempt committing a lie at step
+leaf 2780 of 5560. This is evidence that the configured false claim reached
+the producer's attempt path; the log does not establish an outsider filing,
+CourtFraud conviction, or any Valid-seat slash. Run 15 remains nonterminal.
