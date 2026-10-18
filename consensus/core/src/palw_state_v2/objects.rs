@@ -3824,6 +3824,11 @@ pub(super) fn apply_tir_designated_event_v1(
     if !builder.extras.tir_designated_answers_active {
         return Ok(());
     }
+    // Reserve the event copy before the working registry clones it, as the tag-244 and legacy writers reserve their copies.
+    let _event_copy = crate::palw_native_resource_v1::reserve_native_requests_v1(
+        crate::palw_native_resource_v1::native_value_requests_v1(event).map_err(PalwStateV2Error::NativeResource)?,
+    )
+    .map_err(PalwStateV2Error::NativeResource)?;
     let key = match event {
         d::PalwTirDesignatedEventV1::Open(request) => request.key,
         d::PalwTirDesignatedEventV1::Answer { key, .. } | d::PalwTirDesignatedEventV1::FalseValid { key, .. } => *key,

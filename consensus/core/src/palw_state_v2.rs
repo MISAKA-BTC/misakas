@@ -20224,7 +20224,7 @@ pub struct PalwTransitionExtrasV1 {
     /// TIR original of an unbound class is refused. False below it (every shipped preset).
     pub tir_container_identity_active: bool,
     /// `palw_tir_designated_answers_v1` at this block (ADR-0191 step B): a tag-245 event folds into the designated registry.
-    /// `false` by `Default` and below the fence (every shipped preset). The processor does not set it yet (unwired).
+    /// `false` by `Default` and below the fence (every shipped preset). The processor sets it from `palw_tir_designated_answers_v1`.
     pub tir_designated_answers_active: bool,
     /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
     /// admitted with the rooted f32 row court. False below it: refused.
