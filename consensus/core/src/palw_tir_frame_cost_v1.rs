@@ -535,4 +535,16 @@ mod tests {
         assert_eq!(wide, 2 + 6 + (258 * 8 * (4 * 8_192 + 700u64)).div_ceil(64 << 10));
         assert!(wide < 258 * 4 * 8, "not end to end");
     }
+
+    #[test]
+    fn owner_queue_wait_scales_with_the_open_capacity_bound() {
+        let mut cost = palw_tir_frame_test_only_cost_v1();
+        let open_window = 5; // The node fixture's acquisition (4) plus one inclusion margin.
+        assert_eq!(tir_public_owner_queue_wait_v1(open_window, &cost.config, &cost.clock).unwrap(), 48);
+
+        // At 64 MiB/DAA, 8,192 controls can enter per DAA. The queue bound correctly counts
+        // those opens, so increasing inclusion capacity cannot be used to erase queue latency.
+        cost.clock.parallel_bytes_per_daa = 64 << 20;
+        assert_eq!(tir_public_owner_queue_wait_v1(open_window, &cost.config, &cost.clock).unwrap(), 40_968);
+    }
 }

@@ -2051,14 +2051,14 @@ text29 の実 job を node 上で作る harness(`funded11/text29.rs`)を書い�
   - 沈黙する producer:要求は 1 件だけ開き、窓を過ぎると default。
   - 正直な producer:case を開かず、何も要求しない。
   - tick(host の seam 経由):要求 → 回答 → 告発の 2 object を運んで `accused` で閉じる。沈黙は `defaulted`、正直は `honest` で object 0 件。
-- **未了。** service の tick への接続(held hybrid の claim の列挙、公開 served material の取得、priority lane への queue)と、node 上の E2E(全 seat 共謀、外部 bond 1 本、cold cache、担保の実際の減額)。告発の fold の効果は既存の tag 244 の arm(`convict_by_court_verdict_v1`)で、ここでは node 上で確かめていない。
+- **node E2E 完了(2026-10-18、Codex rerun)。** service tick で held hybrid claim を列挙し、公開情報から backend/capture を解決、要求・回答・告発を実 carrier で node template と chain fold に流す経路を実証した。全 seat 共謀、外部 bond 1 本、cold cache で、偽 checkpoint は CourtFraud となり producer collateral が 200 減った。silent producer は ProducerWithholding で collateral 200 減、honest producer は触られない。回答された正直な先行候補を飛ばし、偽 head 1 で2単位 demand の後に告発した。
 
 **実行した試験(2026-10-18、targeted)。**
 - kaspa-consensus:`owning39` 2 passed / 2 ignored(13.7)、`rfc23s1_node` 1 passed。
 - kaspa-consensus-core:`rfc23s1`・`rfc18_` 42 passed(修正後の fairness 試験を含む)。
-- kaspad:`carrier_wait_many_classes`・`rfc06_held_gdn_filer` 8 passed。
+- kaspad:`rfc06_held_gdn_filer` 8 passed(6 unit/tick + 2 node E2E)。`carrier_wait_many_classes` 1 passed(37s、2 land-time × lanes × storm × class-count sweep)。
 - core の identity:`--test g14_court_capacity`(`testnet12_identity_did_not_move` を含む)15 passed / 1 ignored。
-- `rfc0018_dag_siblings` の node 試験 3 件は失敗した。fence ありの 1 件は config の validation が RFC-0018 fence の武装を拒否して起動しない。fence なしの 2 件は sibling が merger の past に入らない。どちらも sibling の順の変更(fence の中だけ)を通らない経路で、RFC18 監査 D16 が記録した既存の失敗と同じ症状である。未解決。
+- `rfc0018_dag_siblings` の node 試験 3 件は失敗した(今回の再実行は §12.12 参照)。fence ありの1件は validation 拒否、fenceなしの2件は sibling/claim が merger に残らない。RFC18 acceptance は未完了。
 
 
 ## 15. Codex 継続: native の再確認と担保を備えた試験(2026-10-18)
@@ -2690,3 +2690,292 @@ It does not start #1 conversion or fetch #3/#4/#5. Logs and phase marker:
 launch. HF segment 00000 is not deleted: the pipeline performs no remote delete.
 Initial observed phase is waiting_for_inherited_fit_parent. No fit/upload success
 is inferred from this orchestration being started.
+
+### 16.4 Tokenizer authenticated-byte bound: unit and regressions pass (2026-10-18)
+
+On the TIR branch containing `0d0d2d4aa` (the same byte-bound source is merged
+here), `authenticated_byte_bound_covers_key_events_at_every_parser_pause`
+passes **1/1, 0.65s**, after a 64m30s core test build. Log:
+`/tmp/codex-g14-tokenizer-byte-bound.log`.
+The adjacent `cargo test -j1 -p kaspa-consensus-core --lib palw_tokenizer_ --
+--nocapture --test-threads=1` then passes **22/22, 5.55s**, including that new test,
+native EOF inventory, JSON/table streams and owned tokenizer court. Log:
+`/tmp/codex-g14-tokenizer-byte-bound-regressions.log`. These are not 23 unique
+tests. No new download or model computation was used by these unit checks.
+
+The original declared-semantics 5390/3120 node refusal is not retroactively
+reclassified. A rebuilt declared-semantics node/payment result is still required.
+The consolidated payment/forged builds and cone-budget regression are pending.
+
+
+### 16.5 Integrated owner-cone bound unit passed; node reruns started
+
+On the integrated source at `11b4bf7e0`, targeted
+`cone_acquisition_backtracking_stays_within_full_run_turn_and_leaf_budgets`
+completed: 1 passed, 0 failed, 820 filtered, 0.00 s. Log:
+`/tmp/codex-g14-owner-cone-run-budget.log`. This checks aligned 256-leaf
+acquisition runs under backward dependency discovery without increasing the
+charged leaf or turn bounds. It is not a conviction or payment result.
+The same compiled kaspad lib-test artifact `kaspad_lib-d9823aa9f1bf4010`
+started both default-semantic honest-payment and forged-frame outside-service
+node tests. Their current logs are
+`/tmp/codex-g14-integrated-tir-payment-beacon.log` and
+`/tmp/codex-g14-integrated-tir-forged-full-runs.log`; neither has a terminal
+result at this record. Prior failed Final/payment runs remain failures.
+
+
+### 16.6 Integrated TIR node runs still lack payment and conviction evidence (2026-10-18)
+
+Rechecked the live consolidated runs. The default-semantic honest-payment test
+(PID 97543) remains active. At DAA 1950, target claim
+`15a9579ffcdc7277f86155834d54da711a0aaeea536a36e92470c23f6e403c6019afbcdaa17c482a65d006e16258ebd0515fc6483e45127f36d63ec5dce91191`
+is still `PanelBound { bound_daa: 1740 }`; the panel log reports all 5/5 Valid
+receipts pooled and the claim offered first, but no licence or quantum spend.
+The same service log reports that the seat is not near the tip, but this does
+not establish that readiness blocks licensing: `readiness_duties` returns an
+empty list when the node is unsynced, before a duty can set `readiness_waiting`,
+and `palw_licence_order::the_proof_wait_is_not_a_latch` covers the one-tick wait.
+The earlier readiness-starvation explanation is withdrawn. No T-N1 payment is
+claimed.
+
+The forged outside-service test (PID 97557) has reached `ReceiptLicensed`
+(`licensed_daa: 1728`) in the latest captured test state, but no `CourtFraud`,
+conviction, producer slash, or colluding-seat slash is recorded. A later
+`TirPublicControlV1` for a separate frame was refused because the owner row was
+already open or its native-row allowance exhausted; that message alone does not
+establish the target claim's outcome. No TIR conviction or slash is claimed.
+
+These node tests remain live and were not restarted. The separate native
+post-Master-Final claim test (PID 42654) is active after selecting its claim and
+five attestors; no verdict/slash result is recorded. RFC18 sibling acceptance
+is still compiling (`rustc` PID 4450 under cargo test PID 4403). Genesis #2's
+fit worker (PID 72982) remains CPU-active, but its RAM log's newest record is
+still integer sequence 0 position 31,744 (15:43:54); no fit result, upload, or
+verification is established. Drill run13 remains a non-approval run with D16
+disabled. G14 therefore remains incomplete.
+
+The subsequent log continues to report the honest claim `PanelBound` with all
+5/5 panel receipts at DAA 2000 and bind age 260 DAA. Exact target-claim log
+counts are five Valid V3 receipts and five whole-job Valid V2 receipts; the V3
+masks are `0xf`, `0x8`, `0x1`, `0x2`, and `0x4`. The receipt assembler still
+has not submitted a licence. This narrows the issue beyond missing panel
+receipts but does not identify why the coverage/quorum doors return no object;
+instrumented per-door diagnostics or a terminal test result are still needed.
+
+### 16.7 Native Gate C fixture retry and drill G-D02a evidence (2026-10-18)
+
+The first node-level native mining accusation run (PID 42654, log
+`/tmp/codex-g14-native-claim-attestation.log`) failed after about 12 minutes of
+test execution: the seed attempt was repeatedly skipped because card 5's
+unsettled pre-Final weight exceeded its Final-weight cap, so the forged claim
+was not drawn. The test fixture now rotates the seed attempt across genesis
+bonds 5–7 while keeping ADR-0176 and Gate C values unchanged. This is a
+fixture-only correction; the rerun is compiling under an isolated target at
+`/tmp/codex-g14-native-retry.log`, so no pass is claimed yet.
+
+Run 12's outsider log confirms the watcher handed the liable Valid signers to
+the false-Valid filer (`G14 G-D02a ... handed ...: true`) and carried its
+legacy terminal at DAA 38. The final run record nevertheless says D-02 failed:
+all three signer bonds have `bondSlashed: 0`, and ProducerFrozen was not
+observed. Handoff is therefore not slash evidence. The auto-filing gap remains
+open and needs the actual kind-3 filing/conviction path fixed and rerun.
+
+The TIR node test fixture also had a mismatch: its 64-token original was priced
+using the generic test-only 64 KiB/DAA inclusion capacity, and the derived
+5,053-DAA pursuit exceeded the unchanged 3,120-DAA liability horizon. The
+test-only T12 single-node harness capacity is now 64 MiB/DAA; the protocol
+horizon and production measurements remain untouched. This edit is not yet
+rebuilt or verified, and the prior running binaries retain the old fixture.
+
+
+### 16.8 Consolidated G14 status at 2026-10-18 16:30 JST
+
+The #2 long-window fit completed and passed its documented tolerance, then
+uploaded the missing segment and staged metadata with matching remote hashes.
+The user-approved #1 model weights were acquired at the pinned revision. Its
+local A16 32K conversion is running; the partial artifact is not validated or
+published. #3–#5 have not started.
+
+The G14N2 native mining node test has not passed. Its first run failed to draw
+the forged claim because repeated card-5 attempts exceeded the frozen
+Final-weight cap. The fixture now rotates only the anchor-attempt signer across
+cards 5–7; the isolated-target rebuild is still compiling. The v39 carrier
+billing correction and an actual post-Final conviction/slash therefore remain
+unverified. The GDN held-filer suite has unit-level progress, but its node
+registration/host-resolution build is blocked behind a shared artifact lock;
+there is no node-level conviction or collateral evidence yet.
+
+The TIR default-semantics node test did create a real target quantum winner
+once the maturity beacon was supplied. It then failed because the receipt block
+spent a different eligible claim and the assertion expected that claim to have
+a TIR frame. The receipt-block fixture now names the target claim in its signed
+carriage. This correction is not yet rebuilt or rerun. The forged outside
+service has not demonstrated CourtFraud or either producer/Valid-seat slash;
+its public-control acquisition budget exhausted on an unrelated owner row. The
+declared-semantics binary predates the test-only capacity correction and still
+reports 5,053 required DAA against the fixed 3,120 horizon. The revised fixture
+has not been compiled into that run.
+
+RFC18 core sibling/fairness checks are recorded as passing, but the three
+node-level DAG sibling tests remain failed in the existing record. A targeted
+node test rebuild remains active. Drill run12 confirms the filer handoff but
+not a slash: all Valid signer bonds ended at zero slash. Run13 is still only at
+its initial D-02 observation and was explicitly launched with D16 disabled;
+it is not a release-acceptance run. Sparse/skip-all, carrier-rate boundary, and
+DAA 16,000 acceptance remain open.
+
+No support-class release court-capacity measurement has been accepted. The
+provided SSH targets are address candidates only; none has been selected with
+CPU/RAM evidence. The low-end release build and measured capacity fence remain
+unverified. Integration, DAA 16,000 drill, main push, and deployment are not
+complete; deployment to t12 still requires user approval.
+
+### 16.9 Codex continuation snapshot (2026-10-18, after 16:30 JST)
+
+This snapshot supersedes the live-status statements in §16.8 where newer
+evidence below differs; it does not supersede the earlier historical results.
+At the time of inspection, three long-running processes were independently
+confirmed live with `ps`:
+
+| Work | Live evidence | Current conclusion |
+|---|---|---|
+| Approved genesis model #1 32K window comparison | PID 1766, ~40 minutes elapsed, about 497% CPU; log `/tmp/codex-g14-genesis-model01-resume.log` is at integer 8,192/32,768, no report file/result yet | Conversion is done as previously recorded; fit/verification remains in progress. Do not upload/verify or start #3 until its report passes. |
+| Native G-N2 node path | PID 2279, ~40 minutes elapsed, about 90% CPU; log `/tmp/codex-g14-native-g-n2-resume.log` records an accepted anchor attempt at DAA 7635 and a forged mining claim drawn over five distinct bonds, attested by cards 2, 4, 5, 6, 7 | This is the post-Final actual-claim test; it has not emitted the prosecution result or completed. v39 charge and slash/credit-denial acceptance remain unverified. |
+| TIR default-semantics node path | PID 19314, ~26 minutes elapsed; node DB files and local service sockets remain open | Stack samples place it inside the first-claim loop at `tn1_node` line 1320, repeatedly calling `step_ready` and scanning `framed_claims`; no TFP1 claim is carried yet. Earlier repeated `DoorBeyondLiabilityHorizon { required: 41113, allowed: 3120 }` came from the old capacity fixture. Current 64 MiB/DAA binary has not produced a claim; deadline is 7,200 seconds. No TIR payment or slash is established. |
+
+G-N2 PID 2279 is now terminal. Its test log ends with `0 passed; 1 failed` after
+2,558.22 seconds: the forged actual claim was drawn over five bonds and the
+test reached the post-attestation prosecution step, but `cert_row(...).outcome`
+was still `None` at `master.rs:567` (`certified by the colluding draws`). The
+test did not reach action 80, producer conviction, seat slash, receipt revocation,
+or credit denial. `attest_all` yielded five distinct cards `[2,4,5,6,7]`; the
+reason fewer than `k=32` positions were positive is not logged, so inspect the
+draw histogram and accepted attestation rows before changing the fixture.
+The certification policy `m=47,k=32`, liability, and lock rules remain frozen.
+
+Genesis #1's approved 32K comparison (PID 1766) remains active. Its log advanced
+to integer position 10,240/32,768; the report is absent, so RFC13 comparison,
+upload, and verification are not complete.
+
+RFC18 node acceptance was rerun against the current native worktree binary.
+The first attempt at this rerun used the stale `kaspa_consensus-c10db0d0b45ce964`
+binary and failed for the card-2 unmeasured verification row. The current source
+fixture explicitly opens card 2's 2M class with the same measured flag-day row
+used by the R-core door-gate suite. A fresh `cargo test -p kaspa-consensus --lib
+rfc18_three_models_three_miners_from_the_same_parents_are_all_retained_and_each_recorded
+-j 3 -- --nocapture --test-threads=1` then compiled successfully and passed in
+0.55s. The fresh executable also passed
+`rfc18_arrival_order_does_not_matter_for_dag_claims_or_state` (all six sibling
+arrival permutations, 2.86s) and
+`rfc18_with_the_sibling_fence_retention_and_arrival_order_independence_hold`
+(2.71s). Thus the three targeted current-source node acceptance tests pass;
+this closes the RFC18 sibling acceptance item at this test scope, without
+claiming the separate real-process RFC18 drill. The carrier-wait test passed,
+and the held-GDN filer service E2E passed (8 targeted GDN tests). Drill Run15 was interrupted while the driver stopped
+the relay required by producer P; its record is `INTERRUPTED` / `KeyboardInterrupt`,
+so it is neither a successful nor a terminal D-02 slash result. Run12 still
+shows the latest completed D-02 failure: valid signer bonds were not slashed.
+
+The documentation checker passed after its root `.DS_Store` allowlist was
+updated, and `git diff --check` was clean at this snapshot. The native worktree
+still contains uncommitted lane changes; preserve them and review the complete
+diff before any commit or push. G14, RFC18, genesis #1 verification, the
+remaining genesis sequence, release capacity measurement, integration, DAA
+16,000 drill, and main push remain incomplete. No deployment to t12 has been
+performed or authorized by this snapshot.
+
+### 16.10 Initial support-class host inventory (2026-10-18)
+
+The three usable SSH entries supplied for the low-end release measurement were
+queried read-only for `hostname`, `lscpu`, and `free -h`. The slowest candidate
+by reported CPU generation/count and RAM is `95.111.236.186` (`vmi3225101`):
+x86_64 Intel Core Processor (Broadwell), 6 CPUs, 11 GiB RAM (3.0 GiB available
+at inspection). The other two candidates report AMD EPYC, 8 CPUs, and 23 GiB
+RAM each. This selects the Broadwell host as the preliminary support-class
+reference for a future release-build measurement; this inventory is not a
+court-capacity benchmark, and no fence value or measurement record is derived
+from it. Release-binary timing and memory measurements remain outstanding.
+
+### 16.11 TIR owner-queue capacity diagnosis (2026-10-18)
+
+The live TIR test still uses the previously built 64 MiB/DAA fixture binary and
+continues to report a 41,113-DAA door against the unchanged 3,120-DAA horizon.
+The source calculation identifies the cause: with 8,192 controls/DAA, the
+five-DAA Open window permits 40,960 queue entries, whose eight-owner tenure
+bound adds 40,968 DAA. The remaining terms account for 145 DAA. The source
+fixture has now been corrected to use the test-only default capacity of
+64 KiB/DAA; its same queue formula yields 48 DAA, so the derived door is
+expected to be 193 DAA. This arithmetic and source edit are not yet verified by
+a rebuilt node test; the already-running binary was left untouched and provides
+no quantum-payment result so far. The protocol liability horizon remains fixed.
+
+### 16.12 Native G-N2 Gate C diagnostic rerun (2026-10-18)
+
+The targeted `g14n2_node` test rebuilt successfully (5m42s) and reached its
+seed draw at DAA 7,635. On this run the forged claim's draw histogram was
+cards 1–7 = 5, 6, 3, 5, 9, 6, 13 positions; the colluding attestors (cards
+2, 4, 5, 6, 7) therefore had 39/47 positive positions. The honest claim had
+47/47. Both meet the unchanged `k=32`; the prior `None` certification did not
+recur on this seed. The node test is now advancing the frozen prosecution
+window from DAA 7,655 to 12,668 before issuing receipts and attempting the
+outsider's action-80 accusation. At this snapshot it has not yet shown
+conviction, collateral collection, receipt revocation, attestor charges, or
+credit denial. Test process PID 46349 is live. A TIR owner-queue arithmetic
+unit test is also added but not yet run.
+
+### 16.13 Three-round integrated G14 acceptance plan (2026-10-18)
+
+The target is to close the remaining G14-body acceptance in about three
+coordinated candidate-testnet rounds using the same candidate binary and frozen
+ruleset. “Three rounds” means three evidence-producing campaigns, each with
+multiple separately reported cases, not three single happy-path transactions.
+It is a planning target, not a claim that three attempts guarantee a pass. Any
+failed or inconclusive case must be corrected and rerun; G14 is 100% only when
+every required acceptance row has direct evidence.
+
+1. **Core claim path:** an honest claim reaches actual payment; a forged native
+   mining claim reaches Master Final, Gate C, post-Final action-80 conviction,
+   producer collection, receipt/weight/credit revocation, attestor charge, and
+   leaves the honest control unchanged. Include TIR ordinary payment and its
+   colluding-seat slash, plus GDN held-data node-level prosecution. The current
+   G-N2, T-N1, and GDN tests are prerequisites and may supply evidence only for
+   the exact assertions they cover.
+2. **Adversarial operations:** run G-D02a and verify every liable Valid signer
+   is slashed; exercise G-D02b re-filing after a controlled reorg and G-D02c
+   repeated lies against one outside bond; cover reservation, carrier-rate and
+   backpressure limits, sparse and skip-all behavior, and F-boundary retirement.
+   Keep each trigger, outcome, and resulting balance/state evidence distinct.
+3. **Release/fence acceptance:** on the release binary, cross DAA 16,000 and run
+   D-01–D-18 / A–G, RFC18 parallel multi-model cases and separate RFC-0023 stage
+   timings, honest payment versus dishonest slash, restart/reorg/IBD/pruned
+   import, and the non-opening image/video/model-improvement checks. Measure and
+   pin release-build court capacity and memory on the selected support-class
+   host before enabling the measured fence.
+
+The rounds can share a candidate testnet environment, with independent claims,
+adversarial episodes, and controlled reorgs carrying separate logs and chain
+evidence. Testnet rounds do not replace genesis model conversion, fit, upload
+and remote verification, nor static/fold/unit boundaries without a valid node
+injection path. An observed sampled-verifier run also does not establish a
+guarantee beyond the frozen honest-fraction assumption. This plan has not
+started; its implementation prerequisites remain open, and t12 deployment
+remains approval-gated.
+
+### 16.14 Current test results before partial push (2026-10-18)
+
+`cargo test -j 3 -p kaspa-consensus-core --lib
+owner_queue_wait_scales_with_the_open_capacity_bound` passed (1 passed, 0
+failed; 4,554 filtered out). It verifies the queue-wait arithmetic at the
+test-only 64 KiB/DAA default (48 DAA for the fixture's five-DAA Open window)
+and at 64 MiB/DAA (40,968 DAA). This is a calculation-level result only; it
+does not establish TIR node payment or colluding-seat slashing.
+
+The active native G-N2 node process PID 46349 has advanced the frozen
+prosecution wait to DAA 11,655 of 12,668. It has not yet emitted its final
+result; action-80 conviction, collateral collection, receipt/credit
+revocation, attestor charges, and the honest-claim control remain unverified.
+The long-running TIR node process PID 19314 still executes its earlier binary
+and reports the old 41,113/3,120 DAA refusal; the corrected 64 KiB source
+fixture has not yet been rebuilt into a node run. Genesis #1's 32K fit remains
+active at the last observed 13,312/32,768 position with no report. These live
+runs were not stopped for this commit.

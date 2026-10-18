@@ -26,6 +26,9 @@ pub(super) fn tir_frame_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>
     let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { unreachable!() };
     // The TEST-ONLY frame cost (small windows; not a measurement), its longest door at this network's own liability horizon.
     let mut cost = kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    // Keep the test-only capacity at its generic value (64 KiB / DAA). Raising this to 64 MiB
+    // shortened inclusion terms but made the owner-queue worst case admit thousands of opens per
+    // DAA, pushing the derived door beyond the frozen liability horizon.
     cost.clock.maximum_door_daa = bundle.state.window_challenge_at(0) + bundle.state.window_court();
     // The outside service replays once the frame's preparation closes and opens a few DAA later (its own DAA-paced loop); the
     // TEST-ONLY 2-DAA acquisition leaves it one DAA. 4 DAA keeps the frame's collect door (which the licence waits out) inside the
@@ -928,20 +931,28 @@ async fn spend_one_quantum(chain: &mut Chain, card: usize, claim: Hash64) -> Opt
     chain.stamp(&mut template.block);
     template.block.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
-    let mut seed = [0xB0; 32];
-    seed[0] += card as u8;
-    let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
-    let envelope = key.build_fp_receipt_spend_envelope(
-        chain.network_domain,
-        pre_pow,
-        template.block.header.timestamp,
-        template.block.header.nonce,
-        win.claim_id,
-        win.quantum_index,
-        bond,
-        win.beacon.beacon_block,
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        chain.config.params.net.to_string().as_bytes(), Some(chain.config.params.genesis.hash),
     );
-    template.block.header.palw_commitment = envelope.encode();
+    let claim_id = win.claim_id;
+    let quantum_index = win.quantum_index;
+    let beacon_block = win.beacon.beacon_block;
+    let challenge = kaspa_consensus_core::palw_freeprompt_v3::spend_challenge_v3(
+        network_domain, pre_pow, template.block.header.timestamp, template.block.header.nonce,
+        claim_id, quantum_index, &bond,
+    );
+    let spend = kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3 {
+        version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+        network_domain, challenge, claim_id, quantum_index, beacon_block, producer_bond: bond,
+        producer_pubkey: card_pubkey(card),
+    };
+    let signature = signed(
+        card, kaspa_consensus_core::palw_freeprompt_v3::fp_spend_id_v3(&spend).as_byte_slice(),
+        kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+    );
+    template.block.header.palw_commitment = borsh::to_vec(
+        &kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3 { spend, signature },
+    ).unwrap();
     template.block.header.finalize();
     let block = chain.insert(template.block).await;
     Some(block.hash())
@@ -1469,6 +1480,28 @@ async fn tn1_node(forged: bool, declared: bool) {
         for _ in 0..1_800 {
             assert!(std::time::Instant::now() < deadline, "no honest framed claim paid before the test deadline");
             supply_receipt_beacon(&mut chain, &fixture, &mut beacon_slots).await;
+            let (_, state) = chain.tc.palw_state_v2_store.read().load_tip(&chain.bundle.state).unwrap().unwrap();
+            let mut finalized = 0usize;
+            let mut mature = 0usize;
+            for candidate in framed_claims(&chain) {
+                let Some(row) = state.claim(&candidate) else { continue };
+                let PalwClaimPhaseV2::Final { final_daa } = row.phase else { continue };
+                finalized += 1;
+                if kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(
+                    &chain.bundle.state, &state, &candidate, row, final_daa,
+                )
+                .ok()
+                .and_then(|clock| {
+                    kaspa_consensus_core::palw_freeprompt_v3::fp_draw_slot_v3(
+                        clock,
+                        chain.bundle.freeprompt.receipt_maturity_daa(),
+                    )
+                })
+                .is_some_and(|slot| slot <= chain.daa())
+                {
+                    mature += 1;
+                }
+            }
             for candidate in framed_claims(&chain) {
                 if matches!(chain.view(candidate).phase, PalwClaimPhaseV2::Final { .. })
                     && let Some(block) = spend_one_quantum(&mut chain, 0, candidate).await
@@ -1479,6 +1512,13 @@ async fn tn1_node(forged: bool, declared: bool) {
             }
             if paid.is_some() {
                 break;
+            }
+            if chain.daa() % 50 == 0 {
+                eprintln!(
+                    "[service-tir-frame] receipt progress at DAA {}: finalized frames {finalized}, mature draw slots {mature}, attempt beacons supplied {}, spendable winners none yet",
+                    chain.daa(),
+                    beacon_slots.len()
+                );
             }
             step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
         }
