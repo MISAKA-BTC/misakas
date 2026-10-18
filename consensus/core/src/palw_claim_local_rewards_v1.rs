@@ -207,6 +207,56 @@ fn exec_window(state: &PalwChainStateV2, params: &PalwStateParamsV2, id: Hash64)
     Ok(state.exec_v2_liability_until_v1(params, &id)?.map_or(RewardReadinessV1::Ready, RewardReadinessV1::Hold))
 }
 
+/// A chain claim that consumed EXEC output inherits each native evidence claim's
+/// liability. A finite EXEC horizon alone does not establish that the prefix and
+/// every slice were selected by the native receipt tally, remained Final, and
+/// survived the full challenge window.
+fn exec_dependency_readiness_v1(state: &PalwChainStateV2, id: Hash64, now: u64) -> Result<RewardReadinessV1, PalwStateV2Error> {
+    use crate::palw_exec_v2_verify::PalwSliceVerificationV1 as V;
+    use crate::palw_work_slice_v2::PalwWorkPrefixStageV2;
+    let Some(root) = state.exec_v2.roots.get(&id) else {
+        return Ok(if state.exec_v2_rewards.contains_key(&id) { RewardReadinessV1::Hold(u64::MAX) } else { RewardReadinessV1::Ready });
+    };
+    if matches!(root.prefix, PalwWorkPrefixStageV2::Unbound) {
+        return Ok(RewardReadinessV1::Hold(u64::MAX));
+    }
+    let Some(route) = state.kernel_route.as_ref() else {
+        return Ok(RewardReadinessV1::Hold(u64::MAX));
+    };
+    let (known, lease) = prepare_exec_reader(state, id)?;
+    if !known {
+        return Ok(RewardReadinessV1::Hold(u64::MAX));
+    }
+    let _lease = lease;
+    let inputs = std::iter::once(root.prefix_claim)
+        .chain(state.exec_v2.slices.range((id, 0)..=(id, u32::MAX)).map(|(_, slice)| slice.evidence_root));
+    let mut result = RewardReadinessV1::Ready;
+    for input in inputs {
+        let Some(bytes) = route.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, input.as_byte_slice().to_vec())) else {
+            return Ok(RewardReadinessV1::Hold(u64::MAX));
+        };
+        let row: misaka_palw_kernel::ledger::ClaimRowV1 =
+            borsh::from_slice(bytes).map_err(|_| bad("malformed EXEC dependency row"))?;
+        let decision = match crate::palw_exec_v2_verify::palw_exec_v2_claim_outcome_v1(&row, now) {
+            V::ProvenFalse | V::Defaulted => RewardReadinessV1::Denied,
+            V::Pending => RewardReadinessV1::Hold(row.liability_until.unwrap_or(u64::MAX)),
+            V::Verified { .. } if !crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(route, &input) => {
+                RewardReadinessV1::Hold(row.liability_until.unwrap_or(u64::MAX))
+            }
+            V::Verified { .. } => match row.liability_until {
+                Some(until) if now > until => RewardReadinessV1::Ready,
+                Some(until) => RewardReadinessV1::Hold(until),
+                None => RewardReadinessV1::Hold(u64::MAX),
+            },
+        };
+        result = result.join(decision);
+        if result == RewardReadinessV1::Denied {
+            return Ok(result);
+        }
+    }
+    Ok(result)
+}
+
 /// The real unhinted retirement, including existing native/material clocks.
 /// A scheduling hint must never waive one of those obligations.
 pub(super) fn ordinary_retirement_v1(
@@ -254,6 +304,12 @@ fn live_source(
                 decision = decision.join(RewardReadinessV1::Hold(until));
             }
         }
+    }
+    // A native dependency can default or be convicted even on the block that
+    // closes this chain claim. Retirement is not a substitute for resolving it.
+    decision = decision.join(exec_dependency_readiness_v1(state, id, now)?);
+    if decision == RewardReadinessV1::Denied {
+        return Ok(decision);
     }
     if state.palw_accusation_pending_v1(&id) || state.palw_tir_public_prosecution_open_v1(&id, now) {
         decision = decision.join(RewardReadinessV1::Hold(now));
@@ -366,7 +422,7 @@ fn inputs_known(
 ) -> Result<bool, PalwStateV2Error> {
     // Native session input certification/birth closure is a separate bridge.
     // A mere finite horizon does not authenticate those inputs for this owner.
-    if state.exec_v2.roots.contains_key(&id) || state.exec_v2_rewards.contains_key(&id) {
+    if state.exec_v2_rewards.contains_key(&id) {
         return Ok(false);
     }
     let Some(origin) = origin_for(state, params, id, c)? else {

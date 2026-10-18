@@ -236,6 +236,7 @@ fn rfc23s2_reward_historical_gate_c_preserves_lazy_prefence_and_fail_closed_rule
 #[test]
 fn rfc23s2_reward_native_horizon_alone_never_authenticates_unresolved_inputs() {
     use super::super::palw_claim_local_rewards_v1::{RewardReadinessV1, reward_readiness_v1};
+    use crate::palw_work_slice_v2::{PalwWorkPrefixStageV2, PalwWorkRootPhaseV2, PalwWorkRootV2};
     let (p, mut s, [_, b, _]) = world(false);
     assert_eq!(reward_readiness_v1(&s, &p, 129, b, true).unwrap(), RewardReadinessV1::Ready);
     // Isolate the unsupported bridge using a closed, zero-value native receipt.
@@ -250,6 +251,37 @@ fn rfc23s2_reward_native_horizon_alone_never_authenticates_unresolved_inputs() {
         },
     );
     assert_eq!(reward_readiness_v1(&s, &p, 129, b, true).unwrap(), RewardReadinessV1::Hold(u64::MAX));
+
+    // A root's cached Verified prefix cannot stand in for the native Claim row
+    // and selected receipt approval. Even when its chain liability has elapsed,
+    // absent evidence stays held.
+    let root = PalwWorkRootV2 {
+        class_id: h64(20),
+        canonical_job_id: h64(21),
+        job_work_id: h64(22),
+        kernel_version: 1,
+        plan_root: h64(23),
+        total_work: 1,
+        boundaries: vec![0, 1],
+        initial_state_root: h64(24),
+        evidence_policy_root: h64(25),
+        root_bond: bond_key(1),
+        extra_executors: Vec::new(),
+        executor_exposure: 0,
+        anchor: ctx(1, 100, 1).block,
+        opened_daa: 100,
+        expiry_daa: 200,
+        next_index: 0,
+        last_state_root: h64(24),
+        accepted_work: 0,
+        verified_work: 0,
+        pending: 0,
+        phase: PalwWorkRootPhaseV2::Open,
+        prefix_claim: h64(901),
+        prefix: PalwWorkPrefixStageV2::Verified { verified_daa: 101, route_reward: 0 },
+    };
+    s.exec_v2.roots.insert(b, root);
+    assert_eq!(reward_readiness_v1(&s, &p, 129, b, false).unwrap(), RewardReadinessV1::Hold(u64::MAX));
 }
 
 #[test]
