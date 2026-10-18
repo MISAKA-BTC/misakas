@@ -63,6 +63,28 @@ impl PalwChainStateV2 {
         Ok(row)
     }
 
+    pub fn has_reader_router_claim_stamp_v2(&self, claim_id: Hash64) -> bool {
+        raw(self, &key(0xA2, claim_id)).is_some()
+    }
+
+    /// Guard old implicit-selector consumers without allocating/decoding the
+    /// declaration in the signature-only outer walk. Full identity validation
+    /// remains the typed V2 consumer's. A present malformed stamp is refused.
+    pub fn require_implicit_reader_slot_v1(&self, claim_id: Hash64, slot: u32) -> Result<(), PalwStateV2Error> {
+        let Some(bytes) = raw(self, &key(0xA2, claim_id)) else { return Ok(()) };
+        let class_id: Hash64 = borsh::from_slice(bytes).map_err(|_| refused("routing claim stamp is malformed"))?;
+        let claim = self.claim(&claim_id).ok_or_else(|| refused("routing claim stamp is orphaned"))?;
+        if claim.class_id != class_id {
+            return Err(refused("routing stamp names another class"));
+        }
+        let profile = self.fp_work_profile_of(&class_id).ok_or_else(|| refused("routing stamp lacks native class graph"))?;
+        let (node, _) = profile.resolve_node_slot(slot).ok_or_else(|| refused("V2 consumer reader slot is unresolved"))?;
+        if needs_reader_router_v2(node) {
+            return Err(refused("V2-stamped routed reader cannot use the V1 implicit router consumer"));
+        }
+        Ok(())
+    }
+
     /// Explicit per-claim consumer stamp avoids retroactive interpretation,
     /// including old and new claims accepted at the same DAA score. Missing
     /// stamps keep V1 semantics; an invalid present stamp is never a fallback.

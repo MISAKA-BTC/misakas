@@ -560,6 +560,9 @@ fn action_inner_v4(
                 return Err(refused("native material answer adjudication budget is spent"));
             }
             let claim = builder.state.claim(dependency).ok_or(PalwStateV2Error::MissingClaim(*dependency))?;
+            if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = disclosure.as_ref() {
+                builder.state.require_implicit_reader_slot_v1(*dependency, evidence.refutation.output_preimage.coord.node_slot)?;
+            }
             crate::palw_held_da_v1::palw_held_da_check_disclosure_v1(
                 &claim.execution_root,
                 missing,

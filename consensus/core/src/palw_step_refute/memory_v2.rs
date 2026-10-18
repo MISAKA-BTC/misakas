@@ -375,7 +375,7 @@ fn reserve_workspace_v2(
     reserve_native_requests_v1(q.bytes_v1()).map_err(Into::into)
 }
 
-fn verified_input_rows_v2(
+pub(super) fn verified_input_rows_v2(
     binding: &leg::PalwStepBindingV2,
     supplied: &[PalwStepInputRowV1],
     required: &[Vec<(u64, PalwStepCoordinateV1)>],

@@ -583,6 +583,80 @@ pub(super) fn apply_object(
                 }
             }
         }
+        PalwConsensusObjectV2::RoutedStepAccusedV2 { accusation } => {
+            let limits = builder.extras.memory_routing_court.ok_or(PalwStateV2Error::ShardCourtDormant)?;
+            let claim_id = accusation.claim;
+            let routing = builder
+                .state
+                .reader_router_of_claim_v2(claim_id)?
+                .ok_or_else(|| PalwStateV2Error::ShardCourt("routing V2 accusation needs the native claim consumer stamp".into()))?;
+            let source = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
+            let _claim_copy = crate::palw_native_resource_v1::reserve_native_requests_v1(
+                crate::palw_native_resource_v1::native_value_requests_v1(source).map_err(PalwStateV2Error::NativeResource)?,
+            )
+            .map_err(PalwStateV2Error::NativeResource)?;
+            let claim = source.clone();
+            let ladder = builder.state.class_step_ladder_v1(&claim.class_id, limits.ladder);
+            accusation.validate_shape(ladder).map_err(|e| PalwStateV2Error::ShardCourt(e.into()))?;
+            if accusation.encoded_bytes().map_err(|e| PalwStateV2Error::ShardCourt(e.into()))? > limits.max_close_bytes {
+                return Err(PalwStateV2Error::ShardCourt("routing accusation exceeds the current court close ceiling".into()));
+            }
+            let reserved_final = matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
+                && builder.state.legacy_dispute_reservation_v1(&claim_id, &accusation.accuser_bond).is_some();
+            if claim.phase.is_terminal() && !reserved_final {
+                return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "RoutedStepAccusedV2" });
+            }
+            if accusation.executor_bond != claim.bond {
+                return Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(claim_id));
+            }
+            if accusation.execution_root != claim.execution_root || accusation.trace_root != claim.trace_root {
+                return Err(PalwStateV2Error::ShardCourtRootsDiffer(claim_id));
+            }
+            let accuser = accusation.accuser_bond;
+            if accuser == claim.bond {
+                return Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(accuser));
+            }
+            if !builder.extras.offence_attribution_active
+                && let Some((session, _)) = builder.state.court_sessions.iter().find(|(_, row)| row.claim == claim_id)
+            {
+                return Err(PalwStateV2Error::ShardCourtClaimUnderSession { claim: claim_id, session: *session });
+            }
+            let record = builder.state.bonds.get(&accuser).ok_or(PalwStateV2Error::MissingBond(accuser))?;
+            if !matches!(record.status, PalwBondStatusV2::Active) {
+                return Err(PalwStateV2Error::BondNotActive(accuser));
+            }
+            let floor = builder.params.min_collateral_sompi();
+            if record.collateral < floor {
+                return Err(PalwStateV2Error::BondBelowFloor { bond: accuser, collateral: record.collateral, floor });
+            }
+            let artifact_root =
+                builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
+            let actual = crate::palw_shard_court_v1::PalwOneMoveClaimV2 {
+                execution_root: claim.execution_root,
+                class_id: claim.class_id,
+                artifact_root,
+            };
+            let verdict =
+                crate::palw_routing_court_v2::palw_routing_court_verdict_v2(accusation, &actual, ladder, &routing.declaration)
+                    .map_err(|e| match e {
+                        crate::palw_step_refute::routing_v2::PalwRoutingCourtErrorV2::Resource(cause) => {
+                            PalwStateV2Error::NativeResource(cause)
+                        }
+                        other => PalwStateV2Error::ShardCourt(other.to_string()),
+                    })?;
+            match verdict {
+                crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
+                    builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?
+                }
+                crate::palw_shard_court_v1::PalwShardCourtVerdictV1::FalseAccusation => {
+                    let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
+                    builder.slash_seat(accuser, charge, floor)?;
+                }
+                crate::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection => {
+                    return Err(PalwStateV2Error::ShardCourt("routing terminal must never invent an attention dissection".into()));
+                }
+            }
+        }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
                 return Err(PalwStateV2Error::ShardCourtDormant);
@@ -639,6 +713,7 @@ pub(super) fn apply_object(
                 class_id: claim.class_id,
                 artifact_root,
             };
+            builder.state.require_implicit_reader_slot_v1(claim_id, accusation.refutation.output_preimage.coord.node_slot)?;
             let verdict = crate::palw_shard_court_v1::palw_shard_court_verdict_at_v2(
                 accusation,
                 &bound_to,
@@ -855,6 +930,9 @@ pub(super) fn apply_object(
             {
                 return Err(PalwStateV2Error::HeldDaSessionMismatch(claim_id));
             }
+            if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &disclosure.disclosure {
+                builder.state.require_implicit_reader_slot_v1(claim_id, evidence.refutation.output_preimage.coord.node_slot)?;
+            }
             crate::palw_held_da_v1::palw_held_da_check_disclosure_v1(
                 &claim.execution_root,
                 &disclosure.missing,
@@ -881,6 +959,7 @@ pub(super) fn apply_object(
                     class_id: claim.class_id,
                     artifact_root,
                 };
+                builder.state.require_implicit_reader_slot_v1(claim_id, evidence.refutation.output_preimage.coord.node_slot)?;
                 match evidence.verdict_at_v2(&bound_to, ladder, builder.extras.audit_2026_09_23_active).map_err(|e| {
                     PalwStateV2Error::HeldDaRefused { claim: claim_id, why: format!("the evidence does not adjudicate: {e}") }
                 })? {

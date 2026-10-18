@@ -1402,6 +1402,14 @@ pub fn adjudicate_court_close_v4(
     // the ceiling, and that is the right answer — the object was inadmissible on its face.
     check_close_cost_v2(proof, court)?;
     let (session, claim) = resolve_court_session_v2(state, session_id)?;
+    if let PalwCourtVerdictProofV2::Arithmetic { refutation, .. } | PalwCourtVerdictProofV2::ArithmeticOpened { refutation, .. } =
+        proof
+    {
+        state
+            .require_implicit_reader_slot_v1(session.claim, refutation.output_preimage.coord.node_slot)
+            .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(e.to_string()))?;
+    }
+
     if matches!(proof, PalwCourtVerdictProofV2::DecodeToken { .. } | PalwCourtVerdictProofV2::DecodeTokenTiled { .. }) {
         palw_decode_close_admits_claim_v1(
             session.claim,

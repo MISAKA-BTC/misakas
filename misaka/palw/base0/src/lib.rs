@@ -69,6 +69,7 @@ pub mod gen_tensor_worker;
 pub mod gen_worker;
 pub mod gguf;
 pub mod gdn_court_v2;
+pub mod routing_court_v2;
 pub mod inventory;
 pub mod legs;
 pub mod memory_phase;

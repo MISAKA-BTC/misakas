@@ -2520,6 +2520,42 @@ impl VirtualStateProcessor {
                     // This String-only walk must not turn a local workspace
                     // refusal into a skipped invalid peer object.
                 }
+                Obj::RoutedStepAccusedV2 { accusation } => {
+                    if !self.palw_memory_routing_court_v2_at(point.daa_score) {
+                        return Err("routing version-2 court is dormant on this network".into());
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("routing accusation without V2 court parameters")?;
+                    let claim = state.claim(&accusation.claim).ok_or("routing accusation names an absent native claim")?;
+                    let ladder = state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
+                    accusation.validate_shape(ladder)?;
+                    if accusation.encoded_bytes()? > court.max_close_bytes() {
+                        return Err("routing accusation exceeds the current close-byte ceiling".into());
+                    }
+                    if claim.bond != accusation.executor_bond
+                        || claim.execution_root != accusation.execution_root
+                        || claim.trace_root != accusation.trace_root
+                    {
+                        return Err("routing accusation executor/roots are not the actual native claim's".into());
+                    }
+                    state.class(&claim.class_id).ok_or("routing accusation class is absent")?;
+                    let signer = state.bond(&accusation.accuser_bond).ok_or("routing accuser bond is absent")?;
+                    let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let message = kaspa_consensus_core::palw_routing_court_v2::palw_routing_court_session_id_v2(network, accusation);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &signer.pubkey,
+                        message.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_routing_court_v2::PALW_ROUTING_COURT_MLDSA87_CONTEXT_V2,
+                    ) {
+                        return Err("routing accusation is not signed by its registered accuser".into());
+                    }
+                    // Full deterministic adjudication runs in the typed fold.
+                    // This String-only walk must not turn a local workspace
+                    // refusal into a skipped invalid peer object.
+                }
                 Obj::ShardCourtAccused { accusation } => {
                     let claim_id = accusation.claim;
                     if !self.palw_shard_court_at(point.daa_score) {
@@ -2579,6 +2615,9 @@ impl VirtualStateProcessor {
                         class_id: claim.class_id,
                         artifact_root: class.artifact_root,
                     };
+                    state
+                        .require_implicit_reader_slot_v1(claim_id, accusation.refutation.output_preimage.coord.node_slot)
+                        .map_err(|e| e.to_string())?;
                     match kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_verdict_at_v2(
                         accusation,
                         &bound_to,
@@ -2884,6 +2923,12 @@ impl VirtualStateProcessor {
                         kaspa_consensus_core::palw_held_da_v1::PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT,
                     ) {
                         return Err(format!("claim {claim_id}'s held disclosure is not signed by the bond that produced it"));
+                    }
+                    if let kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &disclosure.disclosure
+                    {
+                        state
+                            .require_implicit_reader_slot_v1(claim_id, evidence.refutation.output_preimage.coord.node_slot)
+                            .map_err(|e| e.to_string())?;
                     }
                     kaspa_consensus_core::palw_held_da_v1::palw_held_da_check_disclosure_v1(
                         &claim.execution_root,

@@ -4006,6 +4006,7 @@ wire_struct!(crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1; 
 wire_struct!(crate::palw_rendering_stream_v1::LeafHashContinuationV1; [u64; 8], u128, Vec<u8>);
 wire_struct!(crate::palw_rendering_stream_v1::PalwRenderingStreamV1; crate::Hash64, crate::Hash64, u32, bool, u32, u32, crate::Hash64, crate::palw_rendering_stream_v1::LeafHashContinuationV1, Option<crate::palw_decode_constraint_v1::PalwConstraintStateV1>);
 wire_struct!(crate::palw_reward_v2::PalwRewardParamsV2; u16);
+wire_struct!(crate::palw_routing_court_v2::PalwRoutingCourtAccusationV2; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Vec<u8>);
 wire_struct!(crate::palw_seat_availability_v1::PalwSeatAvailEpochV1; u64, u32, u32);
 wire_struct!(crate::palw_seat_availability_v1::PalwSeatAvailabilityV1; Option<u64>, Vec<crate::palw_seat_availability_v1::PalwSeatAvailEpochV1>);
 wire_struct!(crate::palw_selected_event_source_v1::PalwSelectedEventAnswerV1; crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1, crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1);
@@ -5604,6 +5605,15 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwConsensusObjectV2 {
                     )?,
                 )?;
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            245 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_routing_court_v2::PalwRoutingCourtAccusationV2> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
@@ -7223,6 +7233,8 @@ impl NativeWireScanV1 for crate::palw_step_refute::PalwTraceEventDisclosureV1 {
 wire_struct!(crate::palw_step_refute::memory_v2::PalwGdnCheckpointWitnessV2; crate::palw_step_leg::PalwCheckpointLeafV2, crate::palw_step_leg::PalwStepOpeningV1, Vec<crate::palw_step_refute::memory_v2::PalwGdnStateChunkWitnessV2>);
 wire_struct!(crate::palw_step_refute::memory_v2::PalwGdnStateChunkWitnessV2; u32, Vec<u8>, Vec<crate::Hash64>);
 wire_struct!(crate::palw_step_refute::memory_v2::PalwGdnStepRefutationV2; u16, crate::palw_step_refute::PalwExecutionStepRefutationV1, Option<crate::palw_step_refute::memory_v2::PalwGdnCheckpointWitnessV2>);
+wire_struct!(crate::palw_step_refute::routing_v2::PalwRoutedLeafEvidenceV2; crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2, Vec<crate::palw_artifact::PalwArtifactOpeningV1>);
+wire_struct!(crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2; u16, crate::palw_step_refute::PalwExecutionStepRefutationV1);
 wire_struct!(crate::palw_task_heads_v1::PalwGenHeadBodyV1; crate::palw_gen_job_v1::PalwGenEmbeddingInputV1, u8, u32, u8);
 wire_struct!(crate::palw_task_heads_v1::PalwGenHeadOffersV1; u8, u8, u32, crate::Hash64, Vec<u32>, Option<u32>, Option<u8>);
 wire_struct!(crate::palw_terminal_carriage_v1::PalwPendingTerminalV1; crate::palw_terminal_carriage_v1::PalwTerminalDeclarationV1, u64, BTreeMap<u8, Vec<u8>>);

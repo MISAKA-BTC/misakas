@@ -7241,6 +7241,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
         O::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
         O::ReaderRouterDeclaredV2 { .. } => "ReaderRouterDeclaredV2",
+        O::RoutedStepAccusedV2 { .. } => "RoutedStepAccusedV2",
         O::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
         O::BondShardsDeclared { .. } => "BondShardsDeclared",
         O::ShardReceiptLicensed { .. } => "ShardReceiptLicensed",

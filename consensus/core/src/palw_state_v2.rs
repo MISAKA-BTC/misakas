@@ -7347,6 +7347,11 @@ pub enum PalwConsensusObjectV2 {
         declaration: Box<crate::palw_reader_router_v2::PalwReaderRouterDeclarationV2>,
         signature: Vec<u8>,
     } = 244,
+    /// Version2 routing arithmetic court, only for explicitly V2-stamped claims.
+    /// New wire kind; neither V1 roots nor V1 selector semantics are changed.
+    RoutedStepAccusedV2 {
+        accusation: Box<crate::palw_routing_court_v2::PalwRoutingCourtAccusationV2>,
+    } = 245,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -15418,6 +15423,9 @@ fn apply_legacy_held_answer_v2(
     }
     let network = builder.extras.held_context_ladder.unwrap_or(crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
     let ladder = builder.state.class_step_ladder_v1(&claim.class_id, network);
+    if let crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2::KernelWitness(witness) = &carriage.answer {
+        builder.state.require_implicit_reader_slot_v1(claim_id, witness.refutation.output_preimage.coord.node_slot)?;
+    }
     palw_legacy_held_check_answer_v3(
         &claim.execution_root,
         &carriage.unit,
@@ -15488,6 +15496,27 @@ fn apply_legacy_leaf_recompute_v2(
         class_id: claim.class_id,
         artifact_root,
     };
+    if builder.state.has_reader_router_claim_stamp_v2(claim_id) {
+        // A leaf-hash recompute deliberately has no output preimage coordinate.
+        // Reserve the actual profile's two temporary KV-term inventories before
+        // deriving its canonical coordinate, then refuse a V1 selector for V2 data.
+        let mut routing_q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        routing_q
+            .vec_v1::<(u128, u128, u128)>(u64::from(accusation.refutation.binding.shape_profile.global_node_count()))
+            .map_err(PalwStateV2Error::NativeResource)?;
+        routing_q
+            .vec_v1::<(u128, u128, u128)>(u64::from(accusation.refutation.binding.shape_profile.global_node_count()))
+            .map_err(PalwStateV2Error::NativeResource)?;
+        let _routing_coord = crate::palw_native_resource_v1::reserve_native_requests_v1(routing_q.bytes_v1())
+            .map_err(PalwStateV2Error::NativeResource)?;
+        if let Some(coord) = crate::palw_step::canonical_step_coordinates(
+            &accusation.refutation.binding.shape_profile,
+            &accusation.refutation.binding.job_context,
+            accusation.leaf_index,
+        ) {
+            builder.state.require_implicit_reader_slot_v1(claim_id, coord.node_slot)?;
+        }
+    }
     match crate::palw_legacy_held_da_v2::palw_legacy_leaf_recompute_verdict_v2(accusation, &bound_to, ladder)
         .map_err(|e| refused(e.to_string()))?
     {

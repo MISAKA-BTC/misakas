@@ -149,9 +149,13 @@ def source_types():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--reader-router', action='store_true', help='emit only the additive tag244 declaration pin')
+    kind = parser.add_mutually_exclusive_group()
+    kind.add_argument('--reader-router', action='store_true', help='emit only the additive tag244 declaration pin')
+    kind.add_argument('--routed-step', action='store_true', help='emit only the additive tag245 direct-routing court pin')
     args = parser.parse_args()
     name, tag = ('ReaderRouterDeclaredV2', 244) if args.reader_router else ('GdnStepAccusedV2', 243)
+    if args.routed_step:
+        name, tag = 'RoutedStepAccusedV2', 245
     types = source_types()
     key = "consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2"
     declaration = types.pop(key)[1]

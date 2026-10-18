@@ -182,7 +182,35 @@ impl PalwReaderRouterDeclarationV2 {
             let combine = reader.kernel_semantics_id == kernel_semantics_id_v1(KDESC_Q36_MOE_COMBINE)
                 || reader.kernel_semantics_id == kernel_semantics_id_v1(KDESC_KIMI_MOE_COMBINE);
             if combine {
-                let reference = *reader.input_refs.get(2).ok_or_else(|| bad("combine lacks its explicit routing input"))?;
+                let routing_ref = if reader.kernel_semantics_id == kernel_semantics_id_v1(KDESC_Q36_MOE_COMBINE) { 1 } else { 2 };
+                if reader.input_refs.len() != routing_ref + 1 {
+                    return Err(bad("combine input count differs from its exact kernel family"));
+                }
+                let routed_ref = reader.input_refs[0];
+                if routed_ref >= PALW_STEP_INPUT_SENTINEL_MIN {
+                    return Err(bad("combine routed outputs are not a node"));
+                }
+                let (routed, routed_layer) = profile
+                    .resolve_node_slot(table_first + u32::from(routed_ref))
+                    .ok_or_else(|| bad("combine routed output is absent"))?;
+                if routed_layer != Some(layer) || k.checked_mul(reader_width) != Some(fixed(routed)?) {
+                    return Err(bad("combine routed output width differs from its selected router expert count"));
+                }
+                if reader.kernel_semantics_id == kernel_semantics_id_v1(KDESC_KIMI_MOE_COMBINE) {
+                    let shared_ref = reader.input_refs[1];
+                    if shared_ref >= PALW_STEP_INPUT_SENTINEL_MIN {
+                        return Err(bad("Kimi shared outputs are not a node"));
+                    }
+                    let (shared, shared_layer) = profile
+                        .resolve_node_slot(table_first + u32::from(shared_ref))
+                        .ok_or_else(|| bad("Kimi shared output is absent"))?;
+                    if shared_layer != Some(layer)
+                        || reader_width.checked_mul(crate::palw_kimi_k3_ops::KIMI_K3_SHARED_EXPERTS as u32) != Some(fixed(shared)?)
+                    {
+                        return Err(bad("Kimi shared output width differs from the kernel's two shared experts"));
+                    }
+                }
+                let reference = *reader.input_refs.get(routing_ref).ok_or_else(|| bad("combine lacks its explicit routing input"))?;
                 if reference >= PALW_STEP_INPUT_SENTINEL_MIN
                     || table_first.checked_add(u32::from(reference)) != Some(binding.router_slot)
                 {
@@ -229,10 +257,10 @@ pub fn selected_reader_router_v2<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_step::{PalwStepNodeRoleV1, PalwStepOpKindV1};
-    fn profile_and_mapping(kimi: bool) -> (PalwShapeProfileV3, PalwReaderRouterDeclarationV2) {
+    pub(crate) fn profile_and_mapping(kimi: bool) -> (PalwShapeProfileV3, PalwReaderRouterDeclarationV2) {
         let mut p = crate::palw_step_refute::tests::profile();
         let node = |desc: &str, width, refs: &[u16], name: &str| PalwStepNodeV1 {
             op_kind: PalwStepOpKindV1::MatMulQuant,
@@ -247,14 +275,14 @@ mod tests {
         let router = if kimi { KDESC_KIMI_ROUTER_TOPK } else { KDESC_Q36_ROUTER_TOPK };
         let combine = if kimi { KDESC_KIMI_MOE_COMBINE } else { KDESC_Q36_MOE_COMBINE };
         p.gdn_nodes = vec![
-            node(crate::palw_step_refute::KDESC_Q36_SIGMOID, 8, &[crate::palw_step::PALW_STEP_INPUT_LAYER_IN], "score_a"),
+            node(crate::palw_step_refute::KDESC_Q36_SIGMOID, 16, &[crate::palw_step::PALW_STEP_INPUT_LAYER_IN], "score_a"),
             node(router, 4, &[0], "route_a"),
             node(crate::palw_step_refute::KDESC_Q36_SIGMOID, 16, &[0], "score_b"),
             node(router, 8, &[2], "route_b"),
             node(crate::palw_step_refute::KDESC_Q36_MATMUL_GROUPED, 16, &[0], "a.routed"),
             node(crate::palw_step_refute::KDESC_Q36_MATMUL_GROUPED, 32, &[0], "b.routed"),
-            node(combine, 8, &[4, 0, 1], "combine_a"),
-            node(combine, 8, &[5, 0, 3], "combine_b"),
+            node(combine, 8, if kimi { &[4, 0, 1] } else { &[4, 1] }, "combine_a"),
+            node(combine, 8, if kimi { &[5, 0, 3] } else { &[5, 3] }, "combine_b"),
         ];
         let base = p.pre_nodes.len() as u32;
         let d = PalwReaderRouterDeclarationV2 {
@@ -292,6 +320,41 @@ mod tests {
             assert_ne!(a, reader_router_message_v2(Hash64::from_u64_word(1), &changed));
         }
     }
+    #[test]
+    fn actual_q36_and_kimi_graphs_bind_their_own_combine_ref_and_score_universe() {
+        let q36 = crate::palw_qwen36_profile::qwen36_profile_v2(crate::palw_qwen36_profile::QWEN36_35B_A3B).unwrap();
+        let kimi = crate::palw_kimi_k3_profile::kimi_k3_profile_v1(crate::palw_kimi_k3_profile::KIMI_K3_CARD).unwrap();
+        for profile in [q36, kimi] {
+            // These actual source graphs contain one router in each layer. This
+            // fixture constructs the explicit owner mapping; production lookup
+            // never substitutes this uniqueness scan for a missing declaration.
+            let mut bindings = Vec::new();
+            for reader_slot in 0..profile.global_node_count() {
+                let (reader, layer) = profile.resolve_node_slot(reader_slot).unwrap();
+                if !needs_reader_router_v2(reader) {
+                    continue;
+                }
+                let routers: Vec<_> = (0..reader_slot)
+                    .filter(|slot| {
+                        let (n, l) = profile.resolve_node_slot(*slot).unwrap();
+                        l == layer
+                            && (n.kernel_semantics_id == kernel_semantics_id_v1(KDESC_Q36_ROUTER_TOPK)
+                                || n.kernel_semantics_id == kernel_semantics_id_v1(KDESC_KIMI_ROUTER_TOPK))
+                    })
+                    .collect();
+                assert_eq!(routers.len(), 1);
+                bindings.push(PalwReaderRouterBindingV2 { reader_slot, router_slot: routers[0] });
+            }
+            let declaration = PalwReaderRouterDeclarationV2 {
+                version: 2,
+                class_id: profile.shape_profile_id(),
+                artifact_root: Hash64::from_u64_word(7),
+                bindings,
+            };
+            declaration.check_profile(&profile).unwrap();
+        }
+    }
+
     #[test]
     fn declaration_has_additive_wire_kind_and_old_fence_refuses_activation() {
         let (_, d) = profile_and_mapping(false);

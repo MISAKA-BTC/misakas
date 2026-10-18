@@ -611,6 +611,9 @@ pub(super) fn apply_da_answer_v1(
                 return Err(PalwStateV2Error::HeldContextDormant);
             };
             let ladder = builder.state.class_step_ladder_v1(&claim.class_id, network_ladder);
+            if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure {
+                builder.state.require_implicit_reader_slot_v1(claim_id, evidence.refutation.output_preimage.coord.node_slot)?;
+            }
             crate::palw_held_da_v1::palw_held_da_check_disclosure_v1(
                 &claim.execution_root,
                 missing,
@@ -639,6 +642,7 @@ pub(super) fn apply_da_answer_v1(
                                 .to_string(),
                     });
                 }
+                builder.state.require_implicit_reader_slot_v1(claim_id, evidence.refutation.output_preimage.coord.node_slot)?;
                 crate::palw_step_refute::check_execution_step_committed_half_v1(
                     &evidence.refutation,
                     evidence.prompt_ids_opening.as_ref(),
@@ -657,6 +661,7 @@ pub(super) fn apply_da_answer_v1(
                     class_id: claim.class_id,
                     artifact_root,
                 };
+                builder.state.require_implicit_reader_slot_v1(claim_id, evidence.refutation.output_preimage.coord.node_slot)?;
                 match evidence.verdict_at_v2(&bound_to, ladder, builder.extras.audit_2026_09_23_active).map_err(|e| {
                     PalwStateV2Error::HeldDaRefused { claim: claim_id, why: format!("the evidence does not adjudicate: {e}") }
                 })? {
