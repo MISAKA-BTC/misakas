@@ -2557,3 +2557,20 @@ tir_frame_node_tn1_a_forged_framed_claim_is_convicted_by_one_outside_service
 --nocapture --test-threads=1`, log
 `/tmp/codex-g14-integrated-tir-forged-full-runs.log`. Both the actual licensed
 colluder set and every colluder's collateral decrease remain mandatory.
+
+
+### 16.4 Tokenizer authenticated-byte bound: unit and regressions pass (2026-10-18)
+
+On the TIR branch containing `0d0d2d4aa` (the same byte-bound source is merged
+here), `authenticated_byte_bound_covers_key_events_at_every_parser_pause`
+passes **1/1, 0.65s**, after a 64m30s core test build. Log:
+`/tmp/codex-g14-tokenizer-byte-bound.log`.
+The adjacent `cargo test -j1 -p kaspa-consensus-core --lib palw_tokenizer_ --
+--nocapture --test-threads=1` then passes **22/22, 5.55s**, including that new test,
+native EOF inventory, JSON/table streams and owned tokenizer court. Log:
+`/tmp/codex-g14-tokenizer-byte-bound-regressions.log`. These are not 23 unique
+tests. No new download or model computation was used by these unit checks.
+
+The original declared-semantics 5390/3120 node refusal is not retroactively
+reclassified. A rebuilt declared-semantics node/payment result is still required.
+The consolidated payment/forged builds and cone-budget regression are pending.
