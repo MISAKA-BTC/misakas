@@ -63,12 +63,12 @@ tag 230 の wire 形は設計判断のため実装しない。選択肢:
 - **PASS:** `x3_req_1_2_3_the_hard_deadline_is_fixed_at_acceptance_on_the_node`（期限は accepted + 合成値、min、後続ブロックで不変）、`x3_req_4_a_pursuit_starts_only_inside_its_budget_on_the_node`（許容 start は accepted から cutoff まで、cutoff+1 以後は reservation なし）、`x3_the_fixed_deadline_survives_a_restart_and_replays`（再起動後も期限・tip・delta 行が一致、fresh node が同じ root に再生）、`d2_a_reorg_undoes_and_returns_the_reservation_exactly`（D2 の reorg、旧 legacy シナリオを D2 arm で実行）。`cargo test -p kaspa-consensus --lib lg14a_legacy_filer_e2e`: **29 passed, 3 ignored**（2026-10-19、commit a9e81e94f の後）。
 - **BLOCKED（無視フラグ付きで記録）:**
   - `d2_a_full_collusion_on_a_new_claim_is_convicted_before_final_on_the_node`、`d2_the_pursuit_survives_a_restart`（R-D2-NODE）: 新 claim の held StepLeaf の告発は mempool で拒否される（ADR-0177 D2 の「モデル bytes を強制しない」）。replacement route（`palw_d2_one_move_on_claim_part_v1` など）は node の admission に配線されていない。配線は consensus 経路の実装で、この session の範囲を超える。
-  - `x3_req_5_reaching_the_deadline_alone_never_finals_an_unresolved_claim_on_the_node`（R-X3-HOLD）: 生きた dispute reservation のある claim が、hard より前（final_daa 4204、hard 4322）に window の終わりで Final になった（record は生きたまま）。legacy の reservation による Final の保持が X3 では効かない。設計判断が要る。
+  - ~~R-X3-HOLD~~ **解消（2026-10-19、commit 0bc3f67b5）:** 規則の不具合ではなく、試験の前提の誤りだった。X3 では、claim の Final を止めるのは開いている DA session だけである（DL-1 の X3 行は `open_sessions() > 0` のときに期限を None にする）。session のない reservation は、有効期限 `min(提案, hard)` を超えて Final を止めない（REQ-X3-2）。試験を 2 本に分けた。`x3_req_5_reaching_the_deadline_alone_never_finals_an_unresolved_claim_on_the_node` は、reserved の held DA session を開いて producer が答えない場合に、hard を過ぎても Final にならず DA default（Voided）に至ることを確かめる。`x3_req_5b_a_reservation_without_a_session_finals_at_its_effective_deadline` は、session のない reservation の claim が hard 以下で Final になることを確かめる。試験環境では X3 と LG14-B（held DA）を一緒に武装する。`lg14a_legacy_filer_e2e`: **31 passed, 2 ignored**（R-D2-NODE の 2 件）。
 - **発見 1（期限の composition）:** probe の `resolve_daa`（200）は `B_disclose + B_court + Δ` より短く、どの pursuit も許可されない（`palw_claim_pursuit_budget_v1` は `window_court` と disclose window を含む）。registers の「X3 と L の窓」の未解決項と同じ。値の再測定が arm の前提。
 - **発見 2（held claim の期限）:** X3 を arm すると、node 上の held claim の bind 期限は legacy の `None` ではなく hard に従う（REQ-X3-2 の min）。試験は legacy 値（None）を固定する。
 
 ## 残り（この ADR の範囲外、または未実施）
 
-- node-level の BLOCKED 2 件（R-D2-NODE、R-X3-HOLD）。X3 の reorg 再生（pre-cutoff の reservation を使うシナリオは未作成）。REQ-X3-5 の node 版。
+- node-level の BLOCKED 1 件（R-D2-NODE：filer が D2 claim に KernelWitness を要求し、fold が claim-part 経路で裁定する変更が要る）。X3 の reorg 再生（pre-cutoff の reservation と session を使うシナリオは未作成）。
 - tag 230 の codec と A-2 kind-table 行（上の選択）。
 - X3 の Δ（5 項）と `c_retain` の測定・承認（未決のまま）。
