@@ -197,6 +197,21 @@ fn release_and_refund_remove_only_the_settled_producer_index_entry() {
         let index = borsh::to_vec(&(39u8, 22u8, row(500).producer)).unwrap();
         let other = [0x7C; 64];
         parent.kernel_route.as_mut().unwrap().aux.insert((112, index.clone()), borsh::to_vec(&vec![JOB, other]).unwrap());
+        use misaka_palw_kernel::flat_quota11::{QuotaQuantitiesV11, QuotaSubjectSummaryV11, SubjectBindingV11, FUTURE_ACTION_KINDS_V11};
+        let subject = QuotaSubjectSummaryV11 {
+            binding: SubjectBindingV11 {
+                version: 11, policy_root: [1;64], class_id: [2;64], class_scope9_root: [3;64],
+                program_root: [4;64], parameter_root: [5;64], job_id: JOB, job_input_root: [6;64],
+                resource10_root: [7;64], quota_plan_root: [8;64], actual_positions: 1,
+                requester: [9;64], producer: [10;64], admitted_interval: 0, deadline_daa: 500,
+            },
+            committed: QuotaQuantitiesV11::default(), consumed: QuotaQuantitiesV11::default(),
+            guarantee_remaining: QuotaQuantitiesV11::default(), future_attempts_used: [1; FUTURE_ACTION_KINDS_V11],
+            closed: false, retained_protected_seals: 2,
+        };
+        let subject_key = borsh::to_vec(&(2u8, JOB)).unwrap();
+        parent.kernel_route.as_mut().unwrap().aux.insert((92, subject_key.clone()),
+            borsh::to_vec(&(subject.row_root(), &subject)).unwrap());
         let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
         hold_native_fee_v1(&mut b, &row(500)).unwrap();
         if refund {
@@ -206,5 +221,10 @@ fn release_and_refund_remove_only_the_settled_producer_index_entry() {
         }
         let remaining: Vec<[u8; 64]> = b.state.kernel_route.as_ref().unwrap().aux_row(112, &index).unwrap();
         assert_eq!(remaining, vec![other], "other jobs keep their collateral index slot");
+        let (root, closed): ([u8;64], QuotaSubjectSummaryV11) =
+            b.state.kernel_route.as_ref().unwrap().aux_row(92, &subject_key).unwrap();
+        assert_eq!(root, closed.row_root());
+        assert_eq!(closed, QuotaSubjectSummaryV11 { closed: true, ..subject },
+            "actual release/refund closes retained capacity without refunding attempts or guarantees");
     }
 }

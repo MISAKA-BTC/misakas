@@ -930,7 +930,11 @@ fn credit(
     )
     .map_err(bad)?;
     public::cancel_remaining(builder, h)?;
-    subject.closed = true;
+    // A held Final still admits independently paid accusations. Closing the
+    // subject here would make protected::owner reject every new owner despite
+    // accusable_v39 accepting the same claim. Keep its prepaid capacity intact
+    // until the held fee actually leaves; never return consumed allowance.
+    subject.closed = !held;
     builder.write_kernel_row(QUOTA, b(&(2u8, h.id)), Some(b(&(subject.row_root(), subject))))?;
     write_book(builder, h, book)?;
     let c = NativeSingleCreditV39 {
@@ -977,6 +981,25 @@ pub(super) fn clear_held_producer_slot_v39(
     }
     let route = builder.state.kernel_route.as_ref().ok_or_else(|| bad("native39 held producer catalogue absent"))?;
     let mut ids = list(route, 22, &row.producer)?;
+    // The native release guard authenticates the original subject. Close its
+    // retained capacity with the actual fee transition, preserving all debits.
+    // Authenticate any present row before changing it or the producer index.
+    let subject_key = b(&(2u8, row.job));
+    let subject = route.aux.get(&(QUOTA, subject_key.clone())).map(|raw| {
+        if raw.len() >= 8192 {
+            return Err(bad("native39 held subject extent"));
+        }
+        let (root, mut subject): (Digest, QuotaSubjectSummaryV11) =
+            borsh::from_slice(raw).map_err(|_| bad("native39 held subject grammar"))?;
+        if root != subject.row_root() || subject.binding.job_id != row.job {
+            return Err(bad("native39 held subject root/job differs"));
+        }
+        subject.closed = true;
+        Ok(subject)
+    }).transpose()?;
+    if let Some(subject) = subject {
+        builder.write_kernel_row(QUOTA, subject_key, Some(b(&(subject.row_root(), subject))))?;
+    }
     if ids.contains(&row.job) {
         ids.retain(|id| *id != row.job);
         builder.write_kernel_row(TABLE, k(22, &row.producer), Some(b(&ids)))?;
@@ -1060,6 +1083,11 @@ pub(super) fn native_dispute_open_v39(
     }
     let Some(r) = builder.state.kernel_route.as_ref() else { return true };
     let Ok(h) = header(r, row.job) else { return true };
+    let Some(raw) = r.aux.get(&(QUOTA, b(&(2u8, row.job)))).filter(|raw| raw.len() < 8192) else { return true };
+    let Ok((root, subject)) = borsh::from_slice::<(Digest, QuotaSubjectSummaryV11)>(raw) else { return true };
+    if root != subject.row_root() || subject.binding.job_id != row.job {
+        return true;
+    }
     protected::status(r, &h).map_or(true, |st| !st.pending.is_empty() || st.owners.iter().any(|id| *id != [0; 64]))
 }
 
