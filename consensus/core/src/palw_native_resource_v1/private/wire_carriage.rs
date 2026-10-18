@@ -529,7 +529,7 @@ pub(crate) fn scan_carriage_native_wire_v1<R: std::io::Read>(
                 counts.push(("tir_shard_claims", shape.outer_entries, shape.collection_entries));
             }
             PALW_CARRIAGE_FLOOR_STATE_TAIL_V1 => {
-                let shape = <Option<crate::palw_real_share_v1::PalwFloorStateV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+                let shape = <crate::palw_real_share_v1::PalwFloorStateV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?;
                 sum = sum.merge(shape)?;
                 counts.push(("floor_state", shape.outer_entries, shape.collection_entries));
             }
@@ -576,13 +576,12 @@ pub(crate) fn scan_carriage_native_wire_v1<R: std::io::Read>(
                 counts.push(("seat_root_readiness", shape.outer_entries, shape.collection_entries));
             }
             PALW_CARRIAGE_PANEL_V3_TAIL_V1 => {
-                let shape = <Option<misaka_palw_panel::PermissionlessPanelStateV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+                let shape = <misaka_palw_panel::PermissionlessPanelStateV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?;
                 sum = sum.merge(shape)?;
                 counts.push(("panel_v3", shape.outer_entries, shape.collection_entries));
             }
             crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1 => {
-                let shape =
-                    <Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+                let shape = <crate::palw_kernel_route_v1::PalwKernelRouteStateV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?;
                 sum = sum.merge(shape)?;
                 counts.push(("kernel_route", shape.outer_entries, shape.collection_entries));
             }
@@ -629,8 +628,7 @@ pub(crate) fn scan_carriage_native_wire_v1<R: std::io::Read>(
                 counts.push(("legacy_disputes", shape.outer_entries, shape.collection_entries));
             }
             crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1 => {
-                let shape =
-                    <Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+                let shape = <crate::palw_bond_budget_v1::PalwBondBudgetStateV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?;
                 sum = sum.merge(shape)?;
                 counts.push(("bond_budget", shape.outer_entries, shape.collection_entries));
             }

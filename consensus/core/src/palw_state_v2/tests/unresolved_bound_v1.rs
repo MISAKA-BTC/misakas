@@ -31,7 +31,13 @@ fn params(stage1: bool) -> PalwStateParamsV2 {
     .with_unresolved_bound_from_daa(stage1.then_some(FENCE))
 }
 fn claim(daa: u64, blue: u64, l: u64, phase: PalwClaimPhaseV2) -> PalwClaimStateV2 {
-    let mut c = palw_claim_template_v1(class(), PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(9), 0)), daa, 0, 1_000);
+    let mut c = palw_claim_template_v1(
+        class(),
+        PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(9), 0)),
+        daa,
+        0,
+        1_000,
+    );
     c.pwu = 900;
     c.phase = phase;
     c.accepted_blue_score = blue;
@@ -70,16 +76,37 @@ fn world() -> PalwChainStateV2 {
     s.set_false_valid_rows_for_tests(id(1), Some(claim(FENCE + 1, 10, 20_000, PalwClaimPhaseV2::Provisional)), None, None, 0);
     s.set_unresolved_for_tests(10, id(1), true);
     // B: certified Final at blue 20, a SHORT horizon (it retires while A is still open). C: certified Final at blue 30.
-    s.set_false_valid_rows_for_tests(id(2), Some(claim(FENCE + 2, 20, 1_000, PalwClaimPhaseV2::Final { final_daa: FENCE + 100 })), None, None, 0);
+    s.set_false_valid_rows_for_tests(
+        id(2),
+        Some(claim(FENCE + 2, 20, 1_000, PalwClaimPhaseV2::Final { final_daa: FENCE + 100 })),
+        None,
+        None,
+        0,
+    );
     certify(&mut s, id(2));
-    s.set_false_valid_rows_for_tests(id(3), Some(claim(FENCE + 3, 30, 1_000, PalwClaimPhaseV2::Final { final_daa: FENCE + 100 })), None, None, 0);
+    s.set_false_valid_rows_for_tests(
+        id(3),
+        Some(claim(FENCE + 3, 30, 1_000, PalwClaimPhaseV2::Final { final_daa: FENCE + 100 })),
+        None,
+        None,
+        0,
+    );
     certify(&mut s, id(3));
     let floor = PalwCertifiedFrontierFloorV1 { blue_score: 0, block: [0; 64] };
-    s.set_kernel_aux_row_for_tests(PALW_SECURITY_CERTIFICATION_TABLE_V1, certification_frontier_floor_key_v1(), Some(borsh::to_vec(&floor).unwrap()));
+    s.set_kernel_aux_row_for_tests(
+        PALW_SECURITY_CERTIFICATION_TABLE_V1,
+        certification_frontier_floor_key_v1(),
+        Some(borsh::to_vec(&floor).unwrap()),
+    );
     s
 }
 fn at(s: &mut PalwChainStateV2, daa: u64) {
-    s.set_last_point_for_tests(Some(PalwBlockContextV2 { block: BlockHash::from_u64_word(daa), daa_score: daa, blue_score: daa, subsidy: 0 }));
+    s.set_last_point_for_tests(Some(PalwBlockContextV2 {
+        block: BlockHash::from_u64_word(daa),
+        daa_score: daa,
+        blue_score: daa,
+        subsidy: 0,
+    }));
 }
 fn frontier(s: &PalwChainStateV2, p: &PalwStateParamsV2, now: u64) -> u64 {
     palw_gate_c_frontier_v1(s, p, palw_resolved_through_v1(s, p, now)).0
@@ -116,6 +143,9 @@ fn rfc23s1_floor_horizons_late_conviction_and_restore_as_one_set() {
         .aux_row(PALW_SECURITY_CERTIFICATION_TABLE_V1, &palw_security_certification_fold_v1::certification_deferred_floor_key_v1())
         .expect("the retirement is deferred");
     assert_eq!(deferred.blue_score, 20);
+    let deferred_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+    crate::palw_native_resource_v1::preflight_native_carriage_v1(deferred_bytes.as_slice(), deferred_bytes.len() as u64)
+        .expect("the actual deferred-floor carriage passes native preflight");
     for now in [FENCE + 5_000, FENCE + 20_001] {
         assert!(frontier(&s, &p, now) <= palw_resolved_through_v1(&s, &p, now), "invariant: frontier inside the prefix at {now}");
         assert_eq!(frontier(&s, &p, now), 0, "A holds the frontier while within its bound");
@@ -142,6 +172,8 @@ fn rfc23s1_floor_horizons_late_conviction_and_restore_as_one_set() {
     // replay of stage 1 is not run yet.)
     let carriage = PalwStateCarriageV2::from_state(&s);
     let bytes = borsh::to_vec(&carriage).unwrap();
+    crate::palw_native_resource_v1::preflight_native_carriage_v1(bytes.as_slice(), bytes.len() as u64)
+        .expect("the actual applied-floor carriage passes native preflight");
     let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
     assert_eq!(back, carriage);
     assert!(back.claims.contains_key(&id(1)), "the open claim travels");

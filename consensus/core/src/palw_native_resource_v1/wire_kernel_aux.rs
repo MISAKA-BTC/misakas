@@ -186,8 +186,24 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         140 if key_bytes == 64 => crate::palw_settlement_once_v1::PalwSettlementOnceRowV1::scan_native_wire_v1(frame)?,
         140 => return Err(wire::wire_bad("unallocated settlement-once row namespace")),
         // RFC-0018 (2026-10-15): SecurityCertified rows (aux 136, 65-byte keys: prefix ‖ 64-byte id).
-        136 if key_bytes == 65 && prefix == crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1 => {
+        136 if key_bytes == 65
+            && matches!(
+                prefix,
+                crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1
+                    | crate::palw_security_certification_v1::CERTIFICATION_NATIVE_MINING_PREFIX_V39
+            ) =>
+        {
             crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?
+        }
+        // Both floor writers use the same fixed row. The deferred key is the
+        // one-byte stage-1 namespace, not a prefixed claim id.
+        136 if n == 72
+            && ((key_bytes == 65
+                && prefix == crate::palw_security_certification_v1::CERTIFICATION_FRONTIER_FLOOR_PREFIX_V1
+                && k[1..].iter().all(|b| *b == 0))
+                || k == b"f") =>
+        {
+            <(u64, [u8; 64]) as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
         136 if key_bytes == 65 && prefix == crate::palw_security_certification_v1::CERTIFICATION_CLASS_PREFIX_V1 => {
             crate::palw_security_certification_v1::PalwCertificationClassRowV1::scan_native_wire_v1(frame)?

@@ -53,6 +53,19 @@ pub struct PalwClaimLocalCheckpointV1 {
     pub material: BTreeMap<Hash64, Vec<u8>>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PalwClaimCheckpointErrorV1 {
+    #[error("{0}")]
+    Semantic(&'static str),
+    #[error("checkpoint validation needs local native capacity: {0}")]
+    Resource(crate::palw_native_resource_v1::NativeCoverageV1),
+}
+impl From<&'static str> for PalwClaimCheckpointErrorV1 {
+    fn from(why: &'static str) -> Self {
+        Self::Semantic(why)
+    }
+}
+
 impl PalwClaimLocalCheckpointV1 {
     /// Both expected arguments come from committed state, not the checkpoint sender. Comparing the
     /// complete material manifest prevents a sender replacing a complete archive with one spot check.
@@ -61,14 +74,22 @@ impl PalwClaimLocalCheckpointV1 {
         point: &PalwBlockContextV2,
         expected: &BTreeMap<Hash64, PalwClaimLocalRecordV1>,
         expected_liability_state: &[u8],
-    ) -> Result<PalwValidatedClaimCheckpointV1<'_>, &'static str> {
+    ) -> Result<PalwValidatedClaimCheckpointV1<'_>, PalwClaimCheckpointErrorV1> {
         if self.point != *point || self.records != *expected || self.liability_state != expected_liability_state {
-            return Err("checkpoint differs from the fold's liability state");
+            return Err("checkpoint differs from the fold's liability state".into());
         }
+        use crate::palw_native_resource_v1::{NativeHeapV1, reserve_native_requests_v1};
+        // Record envelopes dominate the vertex maps/queue; input/material set
+        // envelopes dominate dedup sets and twice-grown consumer vectors. Four
+        // copies cover both validation and the largest subsequent graph read.
+        // Retain the ticket for the validated reader's lifetime.
+        let bound = self.records.native_heap_v1("claim checkpoint graph").scale::<Self>(4, "claim checkpoint graph workspace");
+        let requests = bound.bytes().ok_or(PalwClaimCheckpointErrorV1::Resource(bound))?;
+        let workspace = reserve_native_requests_v1(requests).map_err(PalwClaimCheckpointErrorV1::Resource)?;
         let mut required = BTreeSet::new();
         for (id, record) in &self.records {
             if *id != record.claim || record.accepted_daa > point.daa_score || record.accepted_blue_score > point.blue_score {
-                return Err("checkpoint claim identity or acceptance point differs");
+                return Err("checkpoint claim identity or acceptance point differs".into());
             }
             if record.inputs.contains(id)
                 || record.inputs.iter().any(|input| {
@@ -77,20 +98,20 @@ impl PalwClaimLocalCheckpointV1 {
                         .is_some_and(|r| r.accepted_daa > record.accepted_daa || r.accepted_blue_score > record.accepted_blue_score)
                 })
             {
-                return Err("checkpoint input was not available at admission");
+                return Err("checkpoint input was not available at admission".into());
             }
             if (record.voided && (record.final_claim || record.certified))
                 || (record.certified && !record.final_claim)
                 || (record.liability_closed && !record.final_claim && !record.voided)
             {
-                return Err("checkpoint phase, certification and liability flags disagree");
+                return Err("checkpoint phase, certification and liability flags disagree".into());
             }
             if record.inputs.iter().any(|input| !self.records.contains_key(input)) {
-                return Err("checkpoint lost a consumed claim");
+                return Err("checkpoint lost a consumed claim".into());
             }
             if !record.liability_closed {
                 if record.material.is_empty() {
-                    return Err("open liability has no material manifest");
+                    return Err("open liability has no material manifest".into());
                 }
                 required.extend(record.material.iter().copied());
             }
@@ -117,36 +138,47 @@ impl PalwClaimLocalCheckpointV1 {
             }
         }
         if visited != self.records.len() {
-            return Err("checkpoint input provenance contains a cycle");
+            return Err("checkpoint input provenance contains a cycle".into());
         }
         if !required.is_empty() && self.liability_state.is_empty() {
-            return Err("open liabilities lost their policy, registry, randomness or court state");
+            return Err("open liabilities lost their policy, registry, randomness or court state".into());
         }
         if required != self.material.keys().copied().collect() {
-            return Err("checkpoint is missing material or contains unbound material");
+            return Err("checkpoint is missing material or contains unbound material".into());
         }
         if self.material.iter().any(|(id, bytes)| palw_liability_material_id_v1(bytes) != *id) {
-            return Err("checkpoint material bytes differ from their identity");
+            return Err("checkpoint material bytes differ from their identity".into());
         }
-        Ok(PalwValidatedClaimCheckpointV1 { checkpoint: self })
+        Ok(PalwValidatedClaimCheckpointV1 { checkpoint: self, _workspace: workspace })
     }
 
     /// The dependency closure includes shared execution and reservation identities. Model IDs
     /// deliberately do not occur in this schema. Missing input provenance fails closed.
     fn dependencies(&self, claim: Hash64) -> Result<BTreeSet<Hash64>, &'static str> {
-        let mut seen = BTreeSet::new();
+        if !self.records.contains_key(&claim) {
+            return Err("missing dependency record");
+        }
+        let mut seen = BTreeSet::from([claim]);
         let mut queue = VecDeque::from([claim]);
         while let Some(id) = queue.pop_front() {
-            if !seen.insert(id) {
-                continue;
-            }
             let record = self.records.get(&id).ok_or("missing dependency record")?;
-            queue.extend(record.inputs.iter().copied());
+            for input in &record.inputs {
+                if seen.insert(*input) {
+                    queue.push_back(*input);
+                }
+            }
             for (other_id, other) in &self.records {
-                if (record.execution_root != ZERO_HASH64 && record.execution_root == other.execution_root)
-                    || !record.reservations.is_disjoint(&other.reservations)
+                // A later reuse consumes the earlier identity. It cannot
+                // retroactively reopen an earlier, irrevocable checkpoint.
+                // Claims accepted together share liability mutually.
+                if other.accepted_blue_score <= record.accepted_blue_score
+                    && other.accepted_daa <= record.accepted_daa
+                    && ((record.execution_root != ZERO_HASH64 && record.execution_root == other.execution_root)
+                        || !record.reservations.is_disjoint(&other.reservations))
                 {
-                    queue.push_back(*other_id);
+                    if seen.insert(*other_id) {
+                        queue.push_back(*other_id);
+                    }
                 }
             }
         }
@@ -185,10 +217,64 @@ impl PalwClaimLocalCheckpointV1 {
     }
 }
 
+/// Preflight untrusted checkpoint bytes before Borsh allocates. The returned
+/// owner keeps its allocation ticket; callers must still use `validate` with
+/// the executed state's records and liability projection before reading it.
+pub fn palw_decode_claim_checkpoint_v1(
+    bytes: &[u8],
+) -> Result<
+    crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLocalCheckpointV1>,
+    crate::palw_native_resource_v1::NativeDecodeErrorV1<std::io::Error>,
+> {
+    use crate::palw_native_resource_v1::{
+        NativeDecodeErrorV1 as D, NativeRetainedV1, preflight_native_value_v1, reserve_native_requests_v1,
+    };
+    // Unconditional shape validation also protects configurations without a
+    // local quota. A huge nested count in a short frame never reaches Borsh.
+    let shape = preflight_native_value_v1::<PalwClaimLocalCheckpointV1>(bytes, bytes.len() as u64).map_err(D::Decode)?;
+    let lease = reserve_native_requests_v1(shape.logical_requests_v1()).map_err(D::Resource)?;
+    let value = borsh::from_slice(bytes).map_err(D::Decode)?;
+    palw_check_canonical_liability_bytes_v1(&value, bytes).map_err(D::Decode)?;
+    Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
+}
+
+/// Reject duplicate/reordered map and set encodings without allocating a
+/// second encoded payload. Borsh's permissive map reader may otherwise erase
+/// duplicates before the executed-state comparison can observe them.
+pub(crate) fn palw_check_canonical_liability_bytes_v1<T: BorshSerialize>(value: &T, bytes: &[u8]) -> std::io::Result<()> {
+    struct Exact<'a> {
+        bytes: &'a [u8],
+        at: usize,
+    }
+    impl std::io::Write for Exact<'_> {
+        fn write(&mut self, chunk: &[u8]) -> std::io::Result<usize> {
+            let end = self.at.checked_add(chunk.len()).ok_or_else(|| std::io::Error::other("canonical extent overflow"))?;
+            if self.bytes.get(self.at..end) != Some(chunk) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "noncanonical liability encoding"));
+            }
+            self.at = end;
+            Ok(chunk.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = Exact { bytes, at: 0 };
+    borsh::to_writer(&mut writer, value)?;
+    if writer.at != bytes.len() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "noncanonical liability extent"));
+    }
+    Ok(())
+}
+
+#[path = "palw_native_resource_v1/private/palw_claim_local_v1.rs"]
+mod native_resource_inventory_v1;
+
 /// Read capabilities exist only after exact state and byte validation. Runtime code cannot rank
 /// forks or settle effects directly from a peer-supplied checkpoint's self-declared flags.
 pub struct PalwValidatedClaimCheckpointV1<'a> {
     checkpoint: &'a PalwClaimLocalCheckpointV1,
+    _workspace: Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 impl PalwValidatedClaimCheckpointV1<'_> {
     pub fn credit_eligible(&self, claim: Hash64) -> bool {
@@ -341,6 +427,57 @@ mod tests {
         assert_eq!(restored.affected_by(id(1)).unwrap(), c.affected_by(id(1)).unwrap());
         let reverted: PalwClaimLocalCheckpointV1 = borsh::from_slice(&bytes).unwrap();
         assert_eq!(reverted, c);
+    }
+
+    #[test]
+    fn rfc23s2_future_reuse_cannot_reopen_irrevocable_credit() {
+        let mut c = fixture();
+        let mut later = c.records[&id(2)].clone();
+        later.claim = id(6);
+        later.accepted_daa = 6;
+        later.accepted_blue_score = 6;
+        later.accepting_block = id(306);
+        later.final_claim = false;
+        later.certified = false;
+        later.liability_closed = false;
+        c.records.insert(later.claim, later);
+        let checked = c.validate(&c.point, &c.records, &c.liability_state).unwrap();
+        assert!(checked.irreversible_eligible(id(2)));
+        assert!(!checked.credit_eligible(id(6)));
+        assert_eq!(checked.affected_by(id(6)).unwrap(), BTreeSet::from([id(6)]));
+        assert_eq!(checked.affected_by(id(2)).unwrap(), BTreeSet::from([id(2), id(6)]));
+        assert!(checked.settled(2));
+    }
+
+    #[test]
+    fn rfc23s2_checkpoint_native_decode_covers_real_heap_and_rejects_hostile_counts() {
+        use crate::palw_native_resource_v1::{NativeHeapV1, preflight_native_value_v1};
+        let c = fixture();
+        let bytes = borsh::to_vec(&c).unwrap();
+        let shape = preflight_native_value_v1::<PalwClaimLocalCheckpointV1>(bytes.as_slice(), bytes.len() as u64).unwrap();
+        assert!(
+            shape.logical_requests_v1()
+                >= c.native_heap_v1("fixture").bytes().unwrap() + std::mem::size_of::<PalwClaimLocalCheckpointV1>() as u64
+        );
+        let restored = palw_decode_claim_checkpoint_v1(&bytes).unwrap();
+        assert_eq!(*restored, c);
+        let checked = restored.validate(&c.point, &c.records, &c.liability_state).unwrap();
+        assert!(checked.settled(2));
+        assert!(checked.dependencies(id(999)).is_err());
+        let mut hostile = borsh::to_vec(&c.point).unwrap();
+        hostile.extend(u32::MAX.to_le_bytes());
+        assert!(palw_decode_claim_checkpoint_v1(&hostile).is_err());
+        assert!(palw_decode_claim_checkpoint_v1(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(palw_decode_claim_checkpoint_v1(&trailing).is_err());
+        let mut duplicated: Vec<_> = c.records.iter().collect();
+        duplicated.insert(0, duplicated[0]);
+        let noncanonical = borsh::to_vec(&(c.point, duplicated, &c.liability_state, &c.material)).unwrap();
+        assert!(palw_decode_claim_checkpoint_v1(&noncanonical).is_err(), "duplicate record keys cannot disappear during decode");
+        let reversed: Vec<_> = c.records.iter().rev().collect();
+        let noncanonical = borsh::to_vec(&(c.point, reversed, &c.liability_state, &c.material)).unwrap();
+        assert!(palw_decode_claim_checkpoint_v1(&noncanonical).is_err(), "checkpoint map order is canonical");
     }
 }
 
