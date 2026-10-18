@@ -19,7 +19,7 @@ wire_struct!(PalwClaimLocalRecordV1; Hash64, u64, u64, Hash64, bool, BTreeSet<Ha
     bool, bool, bool, bool, BTreeSet<Hash64>);
 wire_struct!(PalwClaimLocalCheckpointV1; PalwBlockContextV2, BTreeMap<Hash64, PalwClaimLocalRecordV1>, Vec<u8>, BTreeMap<Hash64, Vec<u8>>);
 
-native_struct!(PalwClaimLiabilityFrameV1; point, network_identity, fired_forks, claims, prior_state, current_state, accepted_objects, origin_headers, inputs);
+native_struct!(PalwClaimLiabilityFrameV1; point, network_identity, fired_forks, policy, claims, prior_state, current_state, accepted_objects, origin_headers, inputs);
 native_enum!(PalwClaimLocalInputV1;
     Attempt { block, execution_key, envelope }, ReceiptSpend { block, spend },
     History { claim, pledge }, PublicBinding { claim, header }, CustodyDelegation { claim, delegation }, TirOriginal { claim, envelope });
@@ -75,6 +75,8 @@ impl NativeWireScanV1 for PalwClaimLiabilityFrameV1 {
         let mut sum = <PalwBlockContextV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?;
         sum = sum.merge(<[u8; 32] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         sum = sum.merge(<[u8; 32] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+        sum =
+            sum.merge(<crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         sum = sum.merge(<BTreeSet<Hash64> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         // Each raw state frame has its own exact byte boundary. Scan the real
         // carriage, not just Vec<u8>, before any embedded Borsh allocation.

@@ -71,7 +71,7 @@ fn finish(state: blake2b_simd::State) -> [u8; 64] {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 /// An exact ratio `num / den`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwRatioV1 {
     pub num: u64,
     pub den: u64,
@@ -84,7 +84,8 @@ impl PalwRatioV1 {
 }
 
 /// The route a class is adjudicated on (mirrors `palw_genesis8_catalog_v1::PalwGenesisRouteV1`, plus the kernel route).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
 pub enum PalwDetectionRouteV1 {
     Base0A16 = 1,
     TirV1 = 2,
@@ -94,7 +95,8 @@ pub enum PalwDetectionRouteV1 {
 }
 
 /// **How an honest checker inspects one claim of the class.**
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
 pub enum PalwInspectionMethodV1 {
     /// The checker replays `K` distinct checkpoint intervals and compares every row and every recomputed state root exactly (the
     /// seat's interval arm, ADR-0077 Decision 8 / ADR-0082 Decision 9).
@@ -105,7 +107,7 @@ pub enum PalwInspectionMethodV1 {
 }
 
 /// **Where `N` comes from** — chain counts only. Each rule is the class's own checkpoint geometry spelled once on the consensus side.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwIntervalCountRuleV1 {
     /// `N = max(1, ⌈(decode − 1) / checkpoint_interval⌉)` — base0's call geometry (`Base0FpIntervalGeometryV1::from_chain_facts_v1`).
     DecodeCalls { checkpoint_interval: u32 },
@@ -116,14 +118,14 @@ pub enum PalwIntervalCountRuleV1 {
 }
 
 /// **The fault set the target is promised for**: claims whose detectably-bad interval count is at least `D_min(N)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFaultModelV1 {
     pub d_min_abs: u32,
     pub d_min_ppm: u32,
 }
 
 /// **The deterrence inputs.** `cost_per_interval_sompi` and the coverage floors are DESIGN values until measured.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwDetectionEconomicsV1 {
     /// An honest checkpoint interval's compute cost, sompi.
     pub cost_per_interval_sompi: u64,
@@ -143,7 +145,7 @@ pub struct PalwDetectionEconomicsV1 {
 }
 
 /// **The resources a check consumes**, coupled to `K` — a `K` they cannot carry refuses the class instead of dropping an opening.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwDetectionResourcesV1 {
     /// The class's ceiling on one opening's bytes (`palw_fp_interval_opening_ceiling_v1` at `n_max`).
     pub opening_bytes: u64,
@@ -168,7 +170,7 @@ pub struct PalwDetectionResourcesV1 {
 }
 
 /// The policy's clock.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwDetectionDeadlinesV1 {
     /// From the panel's bind: every round must have been inspected by here (≤ the receipt window).
     pub inspection_deadline_daa: u64,
@@ -179,7 +181,8 @@ pub struct PalwDetectionDeadlinesV1 {
 }
 
 /// **How a detected mismatch is localised** to what the court adjudicates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
 pub enum PalwLocalisationV1 {
     /// The seat's `Fault { interval, leaf }` / `FaultInRange` (or the `(0, 0)` state-root fault) → the leaf court's bisection.
     IntervalLeafCourt = 1,
@@ -188,7 +191,7 @@ pub enum PalwLocalisationV1 {
 }
 
 /// **One class's detection policy** (consensus value; [`Self::id`] is what fingerprints and draws bind).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwDetectionPolicyV1 {
     pub version: u16,
     pub class_id: Hash64,

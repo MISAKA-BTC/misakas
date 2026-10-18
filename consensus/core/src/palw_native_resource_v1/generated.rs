@@ -2,6 +2,21 @@
 //! scripts/drills/gen_rfc06_native_inventory.py after schema changes.
 //! Every field/variant is exhaustive; private layouts are visited beside owners.
 use super::*;
+native_struct!(crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1; clocks, detection, certification, court_capacity);
+native_struct!(crate::palw_claim_local_v1::PalwClaimLocalClockPolicyV1; bind, receipt, challenge, court, turn, retirement, epoch);
+native_struct!(crate::palw_detection_policy_v1::PalwDetectionPolicyV1; version, class_id, kernel_version, route, method, n_rule, n_max, attempt_intervals, fault_model, epsilon, k_max, shadow_rate_ppm, economics, resources, deadlines, localisation);
+native_struct!(crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1; m, k, veto, anchor_delay_spans, attest_window_daa, prosecution_window_daa, certify_by_daa, verifier_maturity_daa, verifier_min_collateral_sompi, draws_per_epoch, epoch_daa);
+native_struct!(crate::palw_court_capacity_v1::PalwCourtCapacityPolicyV1; version, block_budget, op_work, memory_per_byte, rho_sompi, session_weight, ticket_window_daa, one_move_budget, reserve_permille);
+native_enum!(crate::palw_detection_policy_v1::PalwDetectionRouteV1; Base0A16, TirV1, PalwQ361, Kernel);
+native_enum!(crate::palw_detection_policy_v1::PalwInspectionMethodV1; IntervalReplay, FullReexecution);
+native_enum!(crate::palw_detection_policy_v1::PalwIntervalCountRuleV1; DecodeCalls { checkpoint_interval }, HeldPositions { width }, PricedLeaves { leaves_per_interval });
+native_struct!(crate::palw_detection_policy_v1::PalwFaultModelV1; d_min_abs, d_min_ppm);
+native_struct!(crate::palw_detection_policy_v1::PalwRatioV1; num, den);
+native_struct!(crate::palw_detection_policy_v1::PalwDetectionEconomicsV1; cost_per_interval_sompi, collateral_per_interval_sompi, check_coverage_ppm, collection_ppm, margin_permille, fixed_gain_sompi);
+native_struct!(crate::palw_detection_policy_v1::PalwDetectionResourcesV1; opening_bytes, max_claim_fetch_bytes, replay_units_per_interval, max_claim_replay_units, checker_units_per_daa, fetch_daa, claims_in_flight, retention_pairs_cap, court_openings_per_claim, da_bytes_per_claim);
+native_struct!(crate::palw_detection_policy_v1::PalwDetectionDeadlinesV1; inspection_deadline_daa, round_spacing_daa, rounds);
+native_enum!(crate::palw_detection_policy_v1::PalwLocalisationV1; IntervalLeafCourt, RootDescentElementCourt);
+native_struct!(crate::palw_court_capacity_v1::PalwCourtCostV1; work, bytes, memory);
 native_struct!(crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3; version, network_domain, challenge, claim_id, quantum_index, beacon_block, producer_bond, producer_pubkey);
 native_struct!(crate::header::Header; hash, version, parents_by_level, hash_merkle_root, accepted_id_merkle_root, utxo_commitment, timestamp, bits, nonce, pow_algo_id, daa_score, blue_work, blue_score, pruning_point, evm_payload_hash, evm_commitment_root, overlay_commitment_root, palw_state_root, palw_commitment);
 native_struct!(crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3; version, base, ready, provider_signatures, seal);

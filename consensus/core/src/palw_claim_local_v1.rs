@@ -25,6 +25,62 @@ pub enum PalwClaimLocalInputV1 {
     TirOriginal { claim: Hash64, envelope: Box<crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1> },
 }
 
+/// Values in force at this fold point, retained independently of their IDs.
+/// This is historical context, not authority to invent an older claim's policy.
+/// Native per-job policies and all route-specific covenants still belong in
+/// their original admitted material; these fields do not replace them.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwClaimLocalPolicyContextV1 {
+    pub clocks: PalwClaimLocalClockPolicyV1,
+    pub detection: Vec<crate::palw_detection_policy_v1::PalwDetectionPolicyV1>,
+    pub certification: Option<crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1>,
+    pub court_capacity: Option<crate::palw_court_capacity_v1::PalwCourtCapacityPolicyV1>,
+}
+
+/// Base windows at the fold point; per-class / already-open session deadlines
+/// are retained in the two state carriages, never reconstructed from these.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwClaimLocalClockPolicyV1 {
+    pub bind: u64,
+    pub receipt: u64,
+    pub challenge: u64,
+    pub court: u64,
+    pub turn: u64,
+    pub retirement: u64,
+    pub epoch: u64,
+}
+
+impl PalwClaimLocalPolicyContextV1 {
+    /// Borrow the effective list so its allocation can be reserved before copying.
+    pub(crate) fn detection_at_v1(
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+        daa: u64,
+    ) -> &[crate::palw_detection_policy_v1::PalwDetectionPolicyV1] {
+        params
+            .detection_policy_v1()
+            .filter(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(daa))
+            .map_or(&[], |f| f.policies.as_slice())
+    }
+
+    /// The caller reserves the borrowed detection list before constructing this copy.
+    pub(crate) fn from_rules_v1(params: &crate::palw_state_v2::PalwStateParamsV2, daa: u64) -> Self {
+        Self {
+            clocks: PalwClaimLocalClockPolicyV1 {
+                bind: params.window_bind(),
+                receipt: params.window_receipt(),
+                challenge: params.window_challenge_at(daa),
+                court: params.window_court(),
+                turn: params.turn_deadline_daa(),
+                retirement: params.claim_retirement_daa(),
+                epoch: params.epoch_length(),
+            },
+            detection: Self::detection_at_v1(params, daa).to_vec(),
+            certification: params.rfc0018_v1().filter(|f| f.gate_c_at(daa)).map(|f| f.certification),
+            court_capacity: params.court_capacity_at_v1(daa),
+        }
+    }
+}
+
 /// Fold-produced historical context for the claims actually changed at a DAG
 /// point. The two carriages omit this namespace: a frame never contains frames.
 /// These are original state/identity witnesses, not declarations of correctness.
@@ -33,6 +89,7 @@ pub struct PalwClaimLiabilityFrameV1 {
     pub point: PalwBlockContextV2,
     pub network_identity: [u8; 32],
     pub fired_forks: [u8; 32],
+    pub policy: PalwClaimLocalPolicyContextV1,
     pub claims: BTreeSet<Hash64>,
     pub prior_state: Vec<u8>,
     pub current_state: Vec<u8>,

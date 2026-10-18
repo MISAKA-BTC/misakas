@@ -173,3 +173,115 @@ fn rfc23s2_origin_local_capacity_refusal_does_not_publish_a_partial_frame() {
     assert!(builder.state.kernel_route.is_none());
     assert_eq!(checker.outstanding(), (0, 0));
 }
+
+fn policy_rules() -> PalwStateParamsV2 {
+    use crate::config::params::ForkActivation;
+    use crate::palw_detection_policy_v1::*;
+    use crate::palw_rfc0018_v1::{PalwGateCRuleV1, PalwRfc0018MirrorV1};
+    rules()
+        .with_detection_policy_v1(Some(PalwDetectionPolicyFenceV1 {
+            activation: ForkActivation::new(150),
+            policies: vec![palw_detection_genesis_design_v1(
+                h64(1),
+                PalwDetectionRouteV1::Base0A16,
+                PalwIntervalCountRuleV1::DecodeCalls { checkpoint_interval: 16 },
+            )],
+        }))
+        .with_rfc0018_v1(Some(PalwRfc0018MirrorV1 {
+            sibling_attribution_from_daa: None,
+            panel_anchor_permissionless_from_daa: None,
+            rule_e_participation_v2_from_daa: None,
+            gate_c_from_daa: Some(150),
+            gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
+            certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(720),
+            fp_receipt_tail_daa: 0,
+        }))
+        .with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 {
+            from_daa: 150,
+            policy: crate::palw_court_capacity_v1::palw_court_capacity_placeholder_policy_v1(),
+        }))
+}
+
+#[test]
+fn rfc23s2_policy_fold_retains_actual_values_through_cold_restore() {
+    let p = policy_rules();
+    let s1 = parent(&p);
+    let env = attempt(40, 1);
+    let (s2, _) = step(&s1, &p, &ctx(2, 100, 2), Some(&env), &extra()).unwrap();
+    let first = frame(&s2, ctx(2, 100, 2));
+    assert!(first.policy.detection.is_empty());
+    assert!(first.policy.certification.is_none());
+    assert!(first.policy.court_capacity.is_none());
+    // An actual timeout mutation at the later point creates another frame.
+    // These are fixture policies, never a declaration that arming is permitted.
+    let point = ctx(3, 150, 3);
+    let (s3, _) = step(&s2, &p, &point, None, &extra()).unwrap();
+    let f = frame(&s3, point);
+    assert_eq!(f.policy.detection, p.detection_policy_v1().unwrap().policies);
+    assert_eq!(f.policy.certification, Some(p.rfc0018_v1().unwrap().certification));
+    assert_eq!(f.policy.court_capacity, p.court_capacity_at_v1(150));
+    assert_eq!(f.policy.clocks.challenge, p.window_challenge_at(150));
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s3)).unwrap();
+    crate::palw_native_resource_v1::preflight_native_carriage_v1(bytes.as_slice(), bytes.len() as u64).unwrap();
+    let restored =
+        borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state_v3(&p, Some(s3.state_root()), false, None).unwrap();
+    assert_eq!(frame(&restored, point).policy, f.policy);
+    assert_eq!(frame(&restored, ctx(2, 100, 2)).policy, first.policy);
+    // A forged, enormous policy-vector count is refused before Borsh allocation.
+    let mut bad = borsh::to_vec(&*f).unwrap();
+    let at = borsh::to_vec(&(f.point, f.network_identity, f.fired_forks, &f.policy.clocks)).unwrap().len();
+    bad[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(palw_decode_claim_liability_frame_v1(&bad).is_err());
+}
+
+#[test]
+fn rfc23s2_policy_future_settings_cannot_change_earlier_frame_or_delta_bytes() {
+    let p1 = policy_rules();
+    let mut detection = p1.detection_policy_v1().unwrap().clone();
+    detection.policies[0].resources.max_claim_fetch_bytes += 17;
+    let p2 = p1.clone().with_detection_policy_v1(Some(detection));
+    let s1 = parent(&p1);
+    let env = attempt(40, 1);
+    let point = ctx(2, 100, 2);
+    let (a, da) = step(&s1, &p1, &point, Some(&env), &extra()).unwrap();
+    let (b, db) = step(&s1, &p2, &point, Some(&env), &extra()).unwrap();
+    assert_eq!(borsh::to_vec(&da).unwrap(), borsh::to_vec(&db).unwrap());
+    assert_eq!(
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&a)).unwrap(),
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&b)).unwrap()
+    );
+}
+
+#[test]
+fn rfc23s2_policy_codec_preserves_all_discriminants_and_values() {
+    use crate::palw_detection_policy_v1::*;
+    for route in
+        [PalwDetectionRouteV1::Base0A16, PalwDetectionRouteV1::TirV1, PalwDetectionRouteV1::PalwQ361, PalwDetectionRouteV1::Kernel]
+    {
+        for rule in [
+            PalwIntervalCountRuleV1::DecodeCalls { checkpoint_interval: 16 },
+            PalwIntervalCountRuleV1::HeldPositions { width: 7 },
+            PalwIntervalCountRuleV1::PricedLeaves { leaves_per_interval: 1234 },
+        ] {
+            for method in [PalwInspectionMethodV1::IntervalReplay, PalwInspectionMethodV1::FullReexecution] {
+                for localisation in [PalwLocalisationV1::IntervalLeafCourt, PalwLocalisationV1::RootDescentElementCourt] {
+                    for gain in [None, Some(987654321)] {
+                        let mut p = palw_detection_genesis_design_v1(h64(14), route, rule);
+                        p.method = method;
+                        p.localisation = localisation;
+                        p.economics.fixed_gain_sompi = gain;
+                        let bytes = borsh::to_vec(&p).unwrap();
+                        crate::palw_native_resource_v1::preflight_native_value_v1::<PalwDetectionPolicyV1>(
+                            bytes.as_slice(),
+                            bytes.len() as u64,
+                        )
+                        .unwrap();
+                        let restored: PalwDetectionPolicyV1 = borsh::from_slice(&bytes).unwrap();
+                        assert_eq!(restored, p);
+                        assert_eq!(restored.id(), p.id());
+                    }
+                }
+            }
+        }
+    }
+}

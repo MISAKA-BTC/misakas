@@ -108,6 +108,9 @@ pub(super) fn retain_changed_claim_context_v1(
         for object in accepted_objects {
             q.copy(object)?;
         }
+        q.exact::<crate::palw_detection_policy_v1::PalwDetectionPolicyV1>(
+            PalwClaimLocalPolicyContextV1::detection_at_v1(builder.params, ctx.daa_score).len() as u64,
+        )?;
         builder.admit_native_write_v1(q)?;
     }
     // Preserve the actual presented signed attempt/spend and transaction-local
@@ -179,6 +182,7 @@ pub(super) fn retain_changed_claim_context_v1(
         point: *ctx,
         network_identity,
         fired_forks,
+        policy: PalwClaimLocalPolicyContextV1::from_rules_v1(builder.params, ctx.daa_score),
         claims,
         prior_state: borsh::to_vec(&prior).expect("canonical original carriage"),
         current_state: borsh::to_vec(&current).expect("canonical current carriage"),

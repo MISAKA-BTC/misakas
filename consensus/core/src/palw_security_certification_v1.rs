@@ -95,7 +95,7 @@ pub const PALW_CERT_EPOCH_DAYS_DESIGN_V1: u64 = 1;
 pub const PALW_SECURITY_PUBLIC_CHECK_CLASSES_PINNED_V1: &[[u8; 64]] = &[];
 
 /// The certification policy (mirrored on the state params beside Gate C's fence).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwSecurityCertificationPolicyV1 {
     pub m: u16,
     pub k: u16,
