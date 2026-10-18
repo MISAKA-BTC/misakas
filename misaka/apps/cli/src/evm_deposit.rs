@@ -227,17 +227,21 @@ pub async fn refund(ctx: &Ctx, ks: &KeySource, outpoint: &str, fee: u64, yes: bo
         txid.parse::<kaspa_consensus_core::tx::TransactionId>().map_err(|e| generic(format!("--outpoint txid: {e}")))?,
         index,
     );
+    let canonical_outpoint = format!("{}:{index}", lock_outpoint.transaction_id);
     let nv = connect(ctx).await?;
     let read = nv
         .client
         .get_palw_acceptance_reads(kaspa_rpc_core::GetPalwAcceptanceReadsRequest {
             reserve_blocks: Vec::new(),
-            outpoints: vec![format!("{txid}:{index}")],
+            outpoints: vec![canonical_outpoint.clone()],
         })
         .await
         .map_err(|e| generic(format!("getPalwAcceptanceReads: {e}")))?;
     if !read.available {
         return Err(generic("the node serves no outpoint read (it predates op 246)".to_string()));
+    }
+    if read.outpoints.len() != 1 || read.outpoints[0].outpoint != canonical_outpoint || !read.reserve_balances.is_empty() {
+        return Err(generic("the node's outpoint response does not match the requested refund input".to_string()));
     }
     let entry = read.outpoints.first().filter(|o| o.present).ok_or_else(|| {
         generic(format!("{txid}:{index} is not in the node's virtual UTXO set (claimed, refunded, or never created)"))
@@ -253,7 +257,7 @@ pub async fn refund(ctx: &Ctx, ks: &KeySource, outpoint: &str, fee: u64, yes: bo
     let key = ks.load_key()?;
     let prefix = nv.params.prefix();
     let tx = key
-        .build_deposit_lock_refund_tx((lock_outpoint, utxo), prefix, nv.virtual_daa, fee, nv.params.storage_mass_parameter)
+        .build_deposit_lock_refund_tx((lock_outpoint, utxo), prefix, read.virtual_daa, fee, nv.params.storage_mass_parameter)
         .map_err(|e| generic(format!("build deposit-lock refund: {e}")))?;
     let sent = if yes {
         Some(
@@ -271,7 +275,7 @@ pub async fn refund(ctx: &Ctx, ks: &KeySource, outpoint: &str, fee: u64, yes: bo
         OutputFormat::Json => println!(
             "{}",
             json!({ "ok": true, "dryRun": sent.is_none(), "lockOutpoint": format!("{txid}:{index}"), "to": to.to_string(),
-                    "amountSompi": entry.amount, "feeSompi": fee, "refundTxid": sent, "virtualDaa": nv.virtual_daa })
+                    "amountSompi": entry.amount, "feeSompi": fee, "refundTxid": sent, "virtualDaa": read.virtual_daa })
         ),
         OutputFormat::Human => {
             println!("Lock    : {txid}:{index} ({} BILI)", sompi_to_msk(entry.amount));
