@@ -354,6 +354,7 @@
 - [design/palw/integration/g14-integration-matrix.md](../design/palw/integration/g14-integration-matrix.md)
 - [design/palw/integration/g14-objective-conviction-remaining-2026-10-15.md](../design/palw/integration/g14-objective-conviction-remaining-2026-10-15.md)
 - [design/palw/integration/genesis8-status.md](../design/palw/integration/genesis8-status.md)
+- [design/palw/integration/handover-g14-drill-2026-10-18.md](../design/palw/integration/handover-g14-drill-2026-10-18.md)
 - [design/palw/integration/handover-g14-native-dag-2026-10-18.md](../design/palw/integration/handover-g14-native-dag-2026-10-18.md)
 - [design/palw/integration/hf-onboarding-closed-loop-matrix.md](../design/palw/integration/hf-onboarding-closed-loop-matrix.md)
 - [design/palw/integration/int-11-drill-flags.md](../design/palw/integration/int-11-drill-flags.md)

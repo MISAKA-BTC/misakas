@@ -11163,6 +11163,40 @@ fn terminal_deadline_with_material_v1(
     // collateral clock, not a retirement, and is not floored (R6781-F merge).
     palw_exec_v2_rewards_v1::retirement(state, params, id, terminal_deadline_at_v1(claim, params, last_daa)?, claim)
         .map(|at| at.map(|at| state.staged_retirement_floor_v1(id, at)))
+        .map(|at| palw_unpaid_reward_retirement_floor_v1(state, params, id, claim, last_daa, at, false))
+}
+
+/// G-15: how often a `Final` claim held past its retirement for an unmatured vesting row is rechecked (DAA).
+pub(crate) const PALW_UNPAID_RETIREMENT_RECHECK_DAA_V1: u64 = 10;
+
+/// **G-15 (`palw_reward_liability_horizon_v1`, dormant): the liability window covers every unpaid reward.** A governed `Final` claim
+/// whose retirement `at` has already passed (`at < now`) while its vesting row is unmatured (its DAA expiry met, its settlement clock
+/// not yet, V-4) is not retired: its retirement moves to the next multiple of [`PALW_UNPAID_RETIREMENT_RECHECK_DAA_V1`] at or past
+/// `now`, rechecked there — so the post-Final public dispute (`palw_final_public_dispute_open_v1`) stays open until the reward is paid
+/// and no reward is ever unpaid AND unprosecutable. The deadline sweep and DL-1's derivation apply this one function, so the deadline
+/// index re-derives exactly. The identity below the fence, for a voided claim, before `at` and once the row matured or left.
+pub(crate) fn palw_unpaid_reward_retirement_floor_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    id: &Hash64,
+    claim: &PalwClaimStateV2,
+    now: Option<u64>,
+    at: Option<u64>,
+    at_the_sweep: bool,
+) -> Option<u64> {
+    let (Some(at_daa), Some(now)) = (at, now) else { return at };
+    // At the sweep the floor applies only while the row is unpaid (else the claim retires there). Any other time a governed Final
+    // still in the state past its retirement can only be one the sweep held, so DL-1's derivation re-derives the held deadline
+    // without asking the row (which may have matured since — the next sweep then retires it).
+    if at_daa < now
+        && params.reward_liability_horizon_governs_v1(claim.accepted_daa)
+        && matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
+        && (!at_the_sweep || state.vesting_row(id).is_some_and(|row| row.matured_at.is_none()))
+    {
+        let r = PALW_UNPAID_RETIREMENT_RECHECK_DAA_V1;
+        return Some(now.div_ceil(r).saturating_mul(r));
+    }
+    at
 }
 
 /// Only the still-pending first terminal deadline; after its sweep, retirement

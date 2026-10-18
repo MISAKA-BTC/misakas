@@ -529,6 +529,9 @@ async fn legacy_v2_attempt_held_da_withholding_ends_in_da_default() {
     assert_eq!(lg.exposure(NEWCOMER), 0, "the outsider is made whole");
 }
 
+// The external audit's acceptance tests D, E, F and G (2026-10-17, lane integ/g14-drill) over this module's validated network.
+mod g14_acceptance;
+
 /// **An honest V2 Attempt under G14 fully armed reaches `Final` and is paid after the liability-horizon hold** (user decision
 /// 2026-10-16: the testnet-12 fence moves only once G14 is fully armed with option (b) kept AND PALW rewards, block production and
 /// `Final` proceed normally). LG14-A, LG14-B, option (b), the court-capacity fence (the measured config [`measured_court`]) and the

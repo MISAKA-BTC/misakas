@@ -495,6 +495,16 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     terminal_deadline_at_v1(&claim, builder.params, Some(ctx.daa_score))?,
                     &claim,
                 )?;
+                // G-15: an unpaid Final is not retired (`palw_unpaid_reward_retirement_floor_v1`, the same floor DL-1 derives).
+                let effective = super::palw_unpaid_reward_retirement_floor_v1(
+                    &builder.state,
+                    builder.params,
+                    &claim_id,
+                    &claim,
+                    Some(ctx.daa_score),
+                    effective,
+                    true,
+                );
                 if let Some(at) = effective.filter(|at| *at >= ctx.daa_score) {
                     builder.arm_deadline(at, claim_id)?;
                     continue;

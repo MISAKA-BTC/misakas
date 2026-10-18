@@ -641,6 +641,10 @@ pub(super) struct PalwFraudFilerCaseV1 {
     awaiting_public: Option<(PalwLegacyProbeV1, u64)>,
     /// The last item sent, when, and how many times.
     pub(super) sent: Option<(PalwFraudFilerSentV1, u64, u8)>,
+    /// **G14 (G-D02b): the court round of this case's last item the priority lane reported carried, and when.** The engine reads the
+    /// chain, so if it asks for the very item again after it was carried, the carrying block left the selected chain (a reorg — e.g.
+    /// the nodes mining apart across a fork-id switch) and the item is resent at once, without spending its retry budget.
+    pub(super) carried: Option<(u32, u64)>,
     /// Reporter-door handoffs of the claim's direct proof, bounded like the replay lane's.
     direct_handed: u8,
     direct_asked_at: Option<u64>,
@@ -697,6 +701,7 @@ impl PalwFraudFilerCaseV1 {
             release_pending: false,
             awaiting_public: None,
             sent: None,
+            carried: None,
             direct_handed: 0,
             direct_asked_at: None,
             tir: None,
@@ -1134,6 +1139,9 @@ impl PalwFraudFilerCaseV1 {
 
     /// May `item` be sent now? A different item always; the same item has a bounded retry interval and count.
     fn may_send(&self, item: PalwFraudFilerSentV1, now_daa: u64) -> Result<bool, ()> {
+        if self.reorged_out_v1(item, now_daa) {
+            return Ok(true);
+        }
         match self.sent {
             Some((last, at, sends)) if last == item => {
                 if now_daa.saturating_sub(at) < PALW_FRAUD_FILER_RESEND_DAA_V1 {
@@ -1148,11 +1156,27 @@ impl PalwFraudFilerCaseV1 {
         }
     }
 
+    /// The item was carried after it was last sent and the engine asks for it again: the carrying block was reorged out.
+    /// Only once the carrying block had time to be folded (the engine reads the fold, a block after the carrier), so an item asked
+    /// for again in the very next blocks is not mistaken for a reorged one.
+    fn reorged_out_v1(&self, item: PalwFraudFilerSentV1, now_daa: u64) -> bool {
+        matches!((self.sent, self.carried), (Some((last, sent_at, _)), Some((round, carried_at)))
+            if last == item
+                && round == palw_fraud_filer_item_round_v1(item)
+                && carried_at >= sent_at
+                && now_daa >= carried_at.saturating_add(PALW_FRAUD_FILER_REORG_CONFIRM_DAA_V1))
+    }
+
     fn note_sent(&mut self, item: PalwFraudFilerSentV1, now_daa: u64) {
+        let reorged = self.reorged_out_v1(item, now_daa);
         let sends = match self.sent {
+            _ if reorged => 1,
             Some((last, _, sends)) if last == item => sends.saturating_add(1),
             _ => 1,
         };
+        if reorged {
+            self.carried = None;
+        }
         self.sent = Some((item, now_daa, sends));
     }
 }
@@ -1185,6 +1209,64 @@ pub(super) struct PalwFraudFilerBookV1 {
     /// This bond's role (an operator's genesis bond, or any other) — read once per refresh.
     role: Option<PalwFilerRoleV1>,
     network_form: Option<kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1>,
+    /// **G14 (G-D02a): the step refutation each public legacy terminal carried**, kept until the pursuit ends. When the chain
+    /// convicts the producer on it, the same refutation proves every liable `Valid` signer false, and is handed to the false-Valid
+    /// filer (`palw_filer_false_valid.rs`) so the kind-3 filings follow without anyone filing by hand.
+    pub(super) terminal_proofs: BTreeMap<Hash64, PalwFraudFilerTerminalProofV1>,
+    /// **G14 (G-D02c): the one claim per producer this filer drives to conviction first.** One outside bond carries one object a
+    /// block, and a producer lying on every draw makes a claim a block, so reserving every claim as it arrives starves the pursuit
+    /// that would end them all (ADR-0160: one conviction forfeits every open claim of the bond and takes its collateral). While a
+    /// producer's focus is pursued, its other claims are reserved only once their Final deadline comes within
+    /// [`PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1`] — so none reaches Final unheld, and the carrier goes to the focus's descent first.
+    pub(super) focus: BTreeMap<PalwBondKeyV2, Hash64>,
+}
+
+/// G-D02c: a non-focus claim of a producer under pursuit is reserved once its Final deadline is this near (DAA). Generous against the
+/// pursuit's length so a deferred claim is never left unheld at its floor; a claim with no Final deadline yet (unbound, unlicensed)
+/// waits.
+pub(super) const PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1: u64 = 60;
+
+/// G-D02c: should the filer defer reserving `claim` of `producer` now? Only while another claim of the same producer is the focus and
+/// `claim`'s Final deadline (if any) is farther than the margin.
+pub(super) fn palw_fraud_filer_defer_reservation_v1(
+    focus: &BTreeMap<PalwBondKeyV2, Hash64>,
+    producer: &PalwBondKeyV2,
+    claim: &Hash64,
+    final_deadline_daa: Option<u64>,
+    current_daa: u64,
+) -> bool {
+    focus.get(producer).is_some_and(|f| f != claim)
+        && final_deadline_daa.is_none_or(|d| d > current_daa.saturating_add(PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1))
+}
+
+/// One public terminal's refutation (the producer's committed half, the verifier's own model rows, the prompt carriage).
+#[derive(Clone, Debug)]
+pub(super) struct PalwFraudFilerTerminalProofV1 {
+    pub(super) leaf: u64,
+    pub(super) refutation: kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1,
+    pub(super) operand_openings: Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>,
+    pub(super) prompt_ids_opening: Option<kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+}
+
+impl PalwFraudFilerTerminalProofV1 {
+    /// The refutation a public terminal object carries (`None` for any other object).
+    pub(super) fn of_terminal_v1(object: &PalwConsensusObjectV2) -> Option<Self> {
+        match object {
+            PalwConsensusObjectV2::LegacyLeafRecomputedV2 { accusation } => Some(Self {
+                leaf: accusation.leaf_index,
+                refutation: accusation.refutation.clone(),
+                operand_openings: accusation.artifact_openings.clone(),
+                prompt_ids_opening: accusation.prompt_ids_opening.clone(),
+            }),
+            PalwConsensusObjectV2::ShardCourtAccused { accusation } => Some(Self {
+                leaf: accusation.leaf_index,
+                refutation: accusation.refutation.clone(),
+                operand_openings: accusation.artifact_openings.clone(),
+                prompt_ids_opening: accusation.prompt_ids_opening.clone(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 impl PalwFraudFilerBookV1 {
@@ -1681,6 +1763,7 @@ impl PalwFraudFilerBookV1 {
     /// Settle a case: its run (and the capture's reservation) and cached answers are let go.
     pub(super) fn settle(&mut self, claim: &Hash64, verdict: PalwFraudFilerVerdictV1) {
         self.answers.retain(|(held, _), _| held != claim);
+        self.focus.retain(|_, focused| focused != claim);
         if let Some(case) = self.cases.get_mut(claim) {
             case.verdict = verdict;
             case.deferred_public = None;
@@ -2498,6 +2581,67 @@ pub(super) fn palw_fraud_filer_public_filing_with_budget_v3(
     Ok(Some(filing))
 }
 
+/// G-D02b: DAA after an item's carriage before the engine asking for it again is read as a reorg (the fold lands a block after the
+/// carrier; the margin covers that and a merge).
+pub(super) const PALW_FRAUD_FILER_REORG_CONFIRM_DAA_V1: u64 = 4;
+
+/// The court round a filer item rides (`court_due` / `court_moved` key).
+pub(super) fn palw_fraud_filer_item_round_v1(item: PalwFraudFilerSentV1) -> u32 {
+    match item {
+        PalwFraudFilerSentV1::Reserve => PALW_FRAUD_FILER_RESERVE_ROUND_V1,
+        PalwFraudFilerSentV1::Release => PALW_FRAUD_FILER_RELEASE_ROUND_V1,
+        PalwFraudFilerSentV1::Demand(_) | PalwFraudFilerSentV1::Reacquire { .. } => PALW_FRAUD_FILER_DEMAND_ROUND_V1,
+        PalwFraudFilerSentV1::Terminal { .. } => PALW_FRAUD_FILER_TERMINAL_ROUND_V2,
+    }
+}
+
+#[cfg(test)]
+mod g_d02b_tests {
+    use super::*;
+
+    /// G-D02c: while one claim of a producer is the focus, its other claims are deferred until their Final deadline is near; claims of
+    /// other producers, and the focus itself, never are.
+    #[test]
+    fn a_producers_other_claims_wait_for_the_focus_until_their_deadline_is_near() {
+        let p = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Default::default(), 0));
+        let q = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Default::default(), 1));
+        let (focus_claim, other) = (Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let mut focus = BTreeMap::new();
+        assert!(!palw_fraud_filer_defer_reservation_v1(&focus, &p, &other, None, 10), "no focus: reserve");
+        focus.insert(p, focus_claim);
+        assert!(!palw_fraud_filer_defer_reservation_v1(&focus, &p, &focus_claim, None, 10), "the focus itself");
+        assert!(palw_fraud_filer_defer_reservation_v1(&focus, &p, &other, None, 10), "no Final deadline yet: wait");
+        assert!(palw_fraud_filer_defer_reservation_v1(&focus, &p, &other, Some(10 + PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1 + 1), 10));
+        assert!(!palw_fraud_filer_defer_reservation_v1(&focus, &p, &other, Some(10 + PALW_FRAUD_FILER_FOCUS_MARGIN_DAA_V1), 10), "near: reserve");
+        assert!(!palw_fraud_filer_defer_reservation_v1(&focus, &q, &other, None, 10), "another producer");
+    }
+
+    /// G-D02b: an item carried and then asked for again (its block reorged out) is resent at once and does not spend the retry
+    /// budget; an item never carried keeps the normal spacing and budget.
+    #[test]
+    fn a_reorged_out_item_is_resent_at_once_without_spending_its_budget() {
+        let mut case = PalwFraudFilerCaseV1::new(super::tests::candidate_for_input_test());
+        let item = PalwFraudFilerSentV1::Reserve;
+        assert_eq!(case.may_send(item, 10), Ok(true));
+        case.note_sent(item, 10);
+        assert_eq!(case.may_send(item, 11), Ok(false), "spacing before any carriage");
+        case.carried = Some((palw_fraud_filer_item_round_v1(item), 12));
+        assert_eq!(case.may_send(item, 13), Ok(false), "asked again right after its carriage: the fold has not landed yet");
+        let later = 12 + PALW_FRAUD_FILER_REORG_CONFIRM_DAA_V1;
+        assert_eq!(case.may_send(item, later), Ok(true), "carried, then still asked past the margin: reorged out, resend at once");
+        case.note_sent(item, later);
+        assert_eq!(case.sent.map(|s| s.2), Some(1), "the reorged resend does not spend the retry budget");
+        assert_eq!(case.carried, None);
+        assert_eq!(case.may_send(item, later + 1), Ok(false), "normal spacing again");
+        for _ in 0..PALW_FRAUD_FILER_SENDS_V1 {
+            case.note_sent(item, later + 1);
+        }
+        assert_eq!(case.may_send(item, later + 1 + PALW_FRAUD_FILER_RESEND_DAA_V1), Err(()), "the budget still bounds plain retries");
+        case.carried = Some((PALW_FRAUD_FILER_DEMAND_ROUND_V1, 20));
+        assert!(!case.reorged_out_v1(item, 100), "another round's carriage says nothing about this item");
+    }
+}
+
 pub(super) fn palw_fraud_filer_sign_terminal_v2(
     object: PalwConsensusObjectV2,
     domain: &Hash64,
@@ -2639,13 +2783,20 @@ impl PalwPanelService {
     ) {
         // What the priority lane carried of this filer's items since the last tick, said and forgotten here: the filer keeps its own
         // spacing (`sent`), never `court_moved`'s debounce.
+        let mut carried = Vec::new();
         court_moved.retain(|(claim, round, responder), at| {
             if !palw_fraud_filer_queued_v1(*round, *responder) {
                 return true;
             }
             info!("[{PALW_PANEL}] claim {claim}: the fraud filer's item (round {round}) was carried at DAA {at} (LG14-A)");
+            carried.push((*claim, *round, *at));
             false
         });
+        for (claim, round, at) in carried {
+            if let Some(case) = book.cases.get_mut(&claim) {
+                case.carried = Some((round, at));
+            }
+        }
         let params = &self.consensus_config.params;
         if !(params.palw_legacy_public_filer_active_at(current_daa) && self.config.fee_outpoint.is_some()) {
             if book.running.as_ref().is_some_and(|replay| replay.handle.is_finished()) {
@@ -2873,6 +3024,65 @@ impl PalwPanelService {
                 seat_replay_room,
             )
             .await;
+        }
+        // **G14 (G-D02a): our public terminals that the chain convicted on** — a voided claim leaves the candidate list before its case
+        // reaches `Done`, so the conviction is read here, per terminal we sent. The terminal's own refutation was offered to the
+        // false-Valid filer when it was built; a proof too large for its book (`note_proof_v1` refuses it) is replaced by the
+        // chain's rooted `CourtFraud` contradiction, the small continuation the scan already accepts for such proofs.
+        if !book.terminal_proofs.is_empty() {
+            let claims: Vec<Hash64> = book.terminal_proofs.keys().copied().collect();
+            let phases = session
+                .clone()
+                .spawn_blocking(move |c| claims.into_iter().map(|claim| (claim, c.palw_legacy_dispute_v1(claim).map(|v| (v.phase, v.accepted_daa)))).collect::<Vec<_>>())
+                .await;
+            for (claim, phase) in phases {
+                match phase {
+                    Some((kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Voided { voided_daa, reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::CourtFraud }, accepted_daa)) => {
+                        let proof = book.terminal_proofs.remove(&claim).expect("listed above");
+                        let armed = crate::palw_filer_false_valid::palw_false_valid_armed_v1(params, self.config.fee_outpoint.is_some(), current_daa);
+                        let mut noted = false_valid.holds(&claim);
+                        if !noted {
+                            noted = false_valid.note_step_refutation_v1(
+                                armed,
+                                claim,
+                                &proof.refutation,
+                                &proof.operand_openings,
+                                proof.prompt_ids_opening.as_ref(),
+                                crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: proof.leaf },
+                                Some(accepted_daa),
+                                current_daa,
+                            );
+                        }
+                        if !noted && armed {
+                            noted = false_valid.note_proof_v1(
+                                kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidProofV1 {
+                                    claim_id: claim,
+                                    contradiction: kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud { voided_daa },
+                                    prompt_ids_opening: None,
+                                },
+                                crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: proof.leaf },
+                                Some(accepted_daa),
+                                current_daa,
+                            );
+                        }
+                        // An early capture proof may already have scanned before
+                        // the licence landed and be sleeping for the empty-walk interval.
+                        if noted && armed {
+                            false_valid.wake_after_court_fraud_v1(&claim, current_daa);
+                        }
+                        info!(
+                            "[{PALW_PANEL}] claim {claim}: convicted (CourtFraud at DAA {voided_daa}) on our public terminal at leaf {} — \
+                             every liable Valid signer is handed to the false-Valid filer: {noted} (G14 G-D02a)",
+                            proof.leaf
+                        );
+                    }
+                    // Still open: keep watching. Gone, or ended otherwise: nothing to file.
+                    Some((phase, _)) if !phase.is_terminal() => {}
+                    _ => {
+                        book.terminal_proofs.remove(&claim);
+                    }
+                }
+            }
         }
         // Every pursued case, one engine step each (a step that reads an answer runs on to the next).
         let role = book.role.unwrap_or(PalwFilerRoleV1::PublicBond);
@@ -4190,6 +4400,28 @@ impl PalwPanelService {
                         })
                         .await
                         .unwrap_or_else(|e| Err(format!("the public terminal task did not finish: {e}")));
+                        if let Ok(object) = &terminal
+                            && let Some(proof) = PalwFraudFilerTerminalProofV1::of_terminal_v1(object)
+                        {
+                            // G14 (G-D02a): the terminal's refutation is objective evidence against every liable Valid signer
+                            // too; the false-Valid filer files only what the chain's own check accepts, so noting it now (and
+                            // again at the conviction, see below) never pays for a filing the fold refuses.
+                            false_valid.note_step_refutation_v1(
+                                crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                    params,
+                                    self.config.fee_outpoint.is_some(),
+                                    current_daa,
+                                ),
+                                claim,
+                                &proof.refutation,
+                                &proof.operand_openings,
+                                proof.prompt_ids_opening.as_ref(),
+                                crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: proof.leaf },
+                                Some(case.candidate.accepted_daa),
+                                current_daa,
+                            );
+                            book.terminal_proofs.insert(claim, proof);
+                        }
                         self.fraud_filer_queue_v1(book, claim, item, current_daa, court_pending, court_due, || {
                             palw_fraud_filer_sign_terminal_v2(
                                 terminal?,
@@ -4209,6 +4441,33 @@ impl PalwPanelService {
                                 "[{PALW_PANEL}] claim {claim}: the pursuit ended without an objective outcome — {phase:?} (LG14-A)"
                             ),
                         }
+                        // G14 (G-D02a): a conviction on our own terminal proves every liable Valid signer false as well.
+                        if phase == PalwFilerPhaseV1::Convicted
+                            && let Some(proof) = book.terminal_proofs.remove(&claim)
+                        {
+                            let bound = view.as_ref().map(|v| v.accepted_daa);
+                            if false_valid.note_step_refutation_v1(
+                                crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                    params,
+                                    self.config.fee_outpoint.is_some(),
+                                    current_daa,
+                                ),
+                                claim,
+                                &proof.refutation,
+                                &proof.operand_openings,
+                                proof.prompt_ids_opening.as_ref(),
+                                crate::palw_filer_false_valid::PalwFalseValidSourceV1::CourtClose { leaf: proof.leaf },
+                                bound,
+                                current_daa,
+                            ) {
+                                info!(
+                                    "[{PALW_PANEL}] claim {claim}: the public conviction at leaf {} is handed to the false-Valid filer (G14 G-D02a)",
+                                    proof.leaf
+                                );
+                            }
+                        } else if phase != PalwFilerPhaseV1::Convicted {
+                            book.terminal_proofs.remove(&claim);
+                        }
                         book.settle(&claim, PalwFraudFilerVerdictV1::Settled(phase));
                         break;
                     }
@@ -4222,6 +4481,23 @@ impl PalwPanelService {
                     }
                     PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve) => {
                         let Some(view) = view.as_ref() else { break };
+                        let producer = case.candidate.producer;
+                        // Only a licensed claim's deadline is its Final deadline (a provisional / bound claim's is its bind deadline,
+                        // and its Final is at least a challenge window past its licence).
+                        let final_deadline = match view.phase {
+                            kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { .. } => view.deadline_daa,
+                            _ => None,
+                        };
+                        if palw_fraud_filer_defer_reservation_v1(&book.focus, &producer, &claim, final_deadline, current_daa) {
+                            crate::palw_backends::note_throttled_v1("fraud-filer-focus", || {
+                                format!(
+                                    "[{PALW_PANEL}] claim {claim}: reservation deferred — producer's claim {} is pursued first (G14 G-D02c)",
+                                    book.focus[&producer]
+                                )
+                            });
+                            break;
+                        }
+                        book.focus.entry(producer).or_insert(claim);
                         self.fraud_filer_queue_v1(
                             book,
                             claim,
@@ -6585,12 +6861,12 @@ impl PalwPanelService {
         }
         match build() {
             Ok(object) => {
-                let round = match item {
-                    PalwFraudFilerSentV1::Reserve => PALW_FRAUD_FILER_RESERVE_ROUND_V1,
-                    PalwFraudFilerSentV1::Release => PALW_FRAUD_FILER_RELEASE_ROUND_V1,
-                    PalwFraudFilerSentV1::Demand(_) | PalwFraudFilerSentV1::Reacquire { .. } => PALW_FRAUD_FILER_DEMAND_ROUND_V1,
-                    PalwFraudFilerSentV1::Terminal { .. } => PALW_FRAUD_FILER_TERMINAL_ROUND_V2,
-                };
+                let round = palw_fraud_filer_item_round_v1(item);
+                if case.reorged_out_v1(item, current_daa) {
+                    warn!(
+                        "[{PALW_PANEL}] claim {claim}: the fraud filer's {item:?} was carried but is no longer on the selected chain (reorg) — resending (G14 G-D02b)"
+                    );
+                }
                 info!("[{PALW_PANEL}] claim {claim}: the fraud filer queues {item:?} (LG14-A, RFC-0014 §6–§7)");
                 court_due.insert((claim, round, false), current_daa);
                 court_pending.push((claim, round, false, object));

@@ -1333,6 +1333,7 @@ impl FlowContext {
             return;
         }
         self.palw_gossip.mark_own_receipt(&bytes);
+        self.palw_gossip.drill_loop_back_receipt(&bytes);
         let msg = kaspa_p2p_lib::make_message!(
             kaspa_p2p_lib::pb::kaspad_message::Payload::PalwSeatReceiptBroadcast,
             kaspa_p2p_lib::pb::PalwSeatReceiptBroadcastMessage { receipt: bytes }

@@ -4054,6 +4054,19 @@ pub enum PalwDrillTirFrameFaultV1 {
     NoTfp1,
 }
 
+/// **DRILL ONLY (G14 audit G-17): the lie this node's canonical free-prompt claims commit** (`--palw-drill-fp-fault`). `Backend` is one of
+/// the families' own free-prompt drill verbs (`execute_free_prompt_with_drill_fault_v2`: a forged KV cache row — the state fault — or a
+/// forged fused attention output, every root re-derived); `SkipAll` commits an execution root no computation reproduces, the claim
+/// of a producer that computed nothing. The daemon refuses the flag off a private drill chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillFpFaultV1 {
+    Backend(kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1),
+    SkipAll,
+}
+
+/// The execution root a [`PalwDrillFpFaultV1::SkipAll`] claim commits — a drill constant no run reproduces.
+pub const PALW_DRILL_SKIP_ALL_EXECUTION_ROOT_WORD_V1: u64 = 0x5C1F_A11C_0DE5_C1F0;
+
 #[derive(Clone)]
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
@@ -4123,6 +4136,18 @@ pub struct PalwPanelConfig {
     pub drill_answer_only: bool,
     /// DRILL ONLY (devnet/simnet): refuse every leaf-evidence request, so the slow path runs.
     pub drill_refuse_leaf_evidence: bool,
+    /// **DRILL ONLY (the G14 collusion drill; the daemon refuses it off a private drill chain)**: the producer bonds this seat
+    /// colludes with (`--palw-drill-collude-with`). Empty: an honest node, as before.
+    pub drill_collude_with: Vec<PalwBondKeyV2>,
+    /// **DRILL ONLY (the G14 collusion drill D-11)**: never answer a legacy held DA unit (`--palw-drill-withhold-held-da`).
+    pub drill_withhold_held_da: bool,
+    /// **DRILL ONLY (G14 audit G-17 / D-11)**: answer no DA unit of any kind (`--palw-drill-withhold-all-da`).
+    pub drill_withhold_all_da: bool,
+    /// **DRILL ONLY (G14 audit G-17)**: the canonical free-prompt claims' lie (`--palw-drill-fp-fault`). See [`PalwDrillFpFaultV1`].
+    pub drill_fp_fault: Option<PalwDrillFpFaultV1>,
+    /// **DRILL ONLY (G14 audit G-17, the sparse fault)**: canonical free-prompt claims lie at one leaf drawn from this seed and the
+    /// honest run (`--palw-drill-sparse-fault-seed`; `palw_producer::palw_drill_sparse_lie_leaf_v1`).
+    pub drill_sparse_fault_seed: Option<u64>,
     /// **RFC-0004 (A10): evaluate** (`--palw-improve-evaluate`): run the evaluation jobs of every governed
     /// line's open epoch whose subject class this node holds, and carry their claims.
     pub improve_evaluate: bool,
@@ -4268,6 +4293,9 @@ enum CaptureSamplesV1 {
 
 pub struct PalwPanelService {
     worker_running: std::sync::atomic::AtomicBool,
+    /// **DRILL ONLY (`--palw-drill-extra-seat`)**: this service's own copy of the node's gossip inbox, fanned out by the daemon when
+    /// several seat identities share the process; `None` takes the node's inbox as before.
+    drill_inbox: std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<kaspa_p2p_flows::palw_gossip::PalwGossipEvent>>>,
     /// Read-only test observation of real completed replay verdicts; never drives the service.
     #[cfg(test)]
     fraud_filer_honest_replays: std::sync::Mutex<HashSet<Hash64>>,
@@ -4634,6 +4662,16 @@ impl PalwPanelService {
         }
     }
 
+    /// **DRILL ONLY**: hand this service its own copy of the gossip inbox (`--palw-drill-extra-seat`), before the worker starts.
+    pub(crate) fn drill_attach_inbox_v1(&self, inbox: tokio::sync::mpsc::Receiver<kaspa_p2p_flows::palw_gossip::PalwGossipEvent>) {
+        *self.drill_inbox.lock().unwrap() = Some(inbox);
+    }
+
+    /// The configuration this service runs (`--palw-drill-extra-seat` clones it for another seat identity in the same process).
+    pub(crate) fn drill_config_v1(&self) -> &PalwPanelConfig {
+        &self.config
+    }
+
     pub fn new(
         config: PalwPanelConfig,
         consensus_manager: Arc<ConsensusManager>,
@@ -4703,6 +4741,7 @@ impl PalwPanelService {
         };
         Self {
             worker_running: std::sync::atomic::AtomicBool::new(false),
+            drill_inbox: std::sync::Mutex::new(None),
             #[cfg(test)]
             fraud_filer_honest_replays: std::sync::Mutex::new(HashSet::new()),
             config,
@@ -5978,6 +6017,16 @@ impl PalwPanelService {
     /// (RBF, `submit_rpc_transaction_replacement`), and the opening records it; every other carrier
     /// is submitted exactly as before. `Err` carries the pool's refusal for the site to log.
     async fn submit_carrier_v1(&self, session: &kaspa_consensusmanager::ConsensusProxy, tx: Transaction) -> Result<(), String> {
+        // DRILL ONLY (the G14 collusion drill): a colluding seat files nothing against its producer — no accusation, demand,
+        // disclosure or filing leaves this node; its receipts, readiness proofs and bond objects do.
+        if !self.config.drill_collude_with.is_empty()
+            && let Err(kind) = palw_drill_collusion_allows_v1(&tx)
+        {
+            crate::palw_backends::note_throttled_v1("drill-collusion-filter", || {
+                format!("[{PALW_PANEL}] PALW DRILL (G14 collusion): this colluding seat files no {kind}; the carrier is not submitted")
+            });
+            return Err(format!("PALW DRILL (G14 collusion): a colluding seat files no {kind}"));
+        }
         let opening = self.carrier_replacement.lock().unwrap().as_ref().filter(|opening| opening.is_replaced_by(&tx)).cloned();
         let Some(opening) = opening else {
             return self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await.map_err(|e| e.to_string());
@@ -7878,8 +7927,29 @@ impl PalwPanelService {
             Some(PalwDrillTirFrameFaultV1::Selection { position }) => Some(position),
             _ => None,
         };
+        // G14 audit G-17: the canonical claim's backend lie (KV / attention) and the sparse single-leaf lie.
+        let drill_fp_backend = match self.config.drill_fp_fault {
+            Some(PalwDrillFpFaultV1::Backend(fault)) => Some(fault),
+            _ => None,
+        };
+        let drill_sparse_seed = self.config.drill_sparse_fault_seed;
         let (_backend, executed) = offload(backend, move |b| {
-            let run = match drill_fault_leaf {
+            let sparse_leaf = match drill_sparse_seed {
+                Some(seed) => {
+                    let honest = b.execute_free_prompt(&job_for_run, &prompt_for_run)?;
+                    let (leaf, of) = crate::palw_producer::palw_drill_sparse_lie_leaf_v1(&honest.outcome.material, seed)
+                        .ok_or_else(|| "PALW DRILL: the honest free-prompt capture holds no openable, non-fused leaf to lie at".to_string())?;
+                    warn!("[{PALW_PANEL}] PALW DRILL (G-17 sparse): this canonical claim lies at step leaf {leaf}, one of {of} candidates");
+                    Some(leaf)
+                }
+                None => None,
+            };
+            let run = match drill_fault_leaf.or(sparse_leaf) {
+                None if drill_fp_backend.is_some() => b.execute_free_prompt_with_drill_fault_v2(
+                    &job_for_run,
+                    &prompt_for_run,
+                    drill_fp_backend.expect("checked"),
+                )?,
                 None if drill_selection.is_some() => b.execute_free_prompt_with_selection_fault_v1(
                     &job_for_run,
                     &prompt_for_run,
@@ -7913,7 +7983,12 @@ impl PalwPanelService {
         if let Some(position) = drill_selection {
             warn!("[{PALW_PANEL}] PALW DRILL (D-06): this canonical claim commits a token at decode position {position} its job's rule does not select");
         }
-        // G14 drill D-07: the commitment names an output root its own committed trace's ids do not reproduce.
+        // G14 audit G-17 (skip-all-compute): the commitment names an execution root no computation reproduces.
+        if self.config.drill_fp_fault == Some(PalwDrillFpFaultV1::SkipAll) {
+            commitment.execution_root = Hash64::from_u64_word(PALW_DRILL_SKIP_ALL_EXECUTION_ROOT_WORD_V1);
+            warn!("[{PALW_PANEL}] PALW DRILL (G-17 skip-all): this canonical claim commits an execution root no computation reproduces");
+        }
+                // G14 drill D-07: the commitment names an output root its own committed trace's ids do not reproduce.
         if tir_drill == Some(PalwDrillTirFrameFaultV1::Output) {
             commitment.output_root = Hash64::from_u64_word(0xD07D_07D0_7D07_D07D);
             warn!("[{PALW_PANEL}] PALW DRILL (D-07): this canonical claim commits a substituted output root");
@@ -8573,7 +8648,8 @@ impl PalwPanelService {
             return;
         };
         let bond_key = PalwBondKeyV2(bond);
-        let Some(mut inbox) = self.flow_context.palw_gossip().take_inbox() else {
+        let drill_inbox = self.drill_inbox.lock().unwrap().take();
+        let Some(mut inbox) = drill_inbox.or_else(|| self.flow_context.palw_gossip().take_inbox()) else {
             warn!("[{PALW_PANEL}] the gossip inbox was already taken — panel service disabled");
             self.public_cache_retirement_worker_v1().await;
             return;
@@ -11131,6 +11207,28 @@ impl PalwPanelService {
                     if !palw_disclosure_due_v1(duty, current_daa) {
                         continue;
                     }
+                    // DRILL ONLY (G14 audit G-17 / D-11, `--palw-drill-withhold-all-da`): no unit of any kind is answered.
+                    if self.config.drill_withhold_all_da {
+                        crate::palw_backends::note_throttled_v1("drill-withhold-all-da", || {
+                            format!(
+                                "[{PALW_PANEL}] PALW DRILL (G14 D-11): withholding DA unit {:?} of claim {} (every demand runs to its deadline)",
+                                duty.unit, duty.claim_id
+                            )
+                        });
+                        continue;
+                    }
+                    // DRILL ONLY (the G14 collusion drill D-11, `--palw-drill-withhold-held-da`): a legacy held unit is never answered.
+                    if self.config.drill_withhold_held_da
+                        && matches!(duty.unit, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(_))
+                    {
+                        crate::palw_backends::note_throttled_v1("drill-withhold-held-da", || {
+                            format!(
+                                "[{PALW_PANEL}] PALW DRILL (G14 D-11): withholding legacy held unit {:?} of claim {} (the demand runs to its deadline)",
+                                duty.unit, duty.claim_id
+                            )
+                        });
+                        continue;
+                    }
                     if flat_queued.contains(&duty.claim_id)
                         && kaspa_consensus_core::palw_da_rcore_v1::palw_da_flat_answers_unit_v1(&duty.unit, duty.in_run_rows)
                     {
@@ -11689,6 +11787,8 @@ impl PalwPanelService {
                 // and this seat files nothing), or nothing at all. Never `Valid`.
                 let duty_key = seat_duty_panel_key_v1(duty);
                 let mut sampled_now = false;
+                // DRILL ONLY (the G14 collusion drill): a seat colluding with this claim's producer signs Valid without judging it.
+                let colluding = self.config.drill_collude_with.contains(&duty.executor_bond);
                 if let Some(running) = s3_samplings.get(&duty_key) {
                     if !running.is_finished() {
                         continue;
@@ -11700,7 +11800,8 @@ impl PalwPanelService {
                         Ok(PalwSeatS3SampleV1::Faulted) => self.note_seat_fault_v1(duty.claim_id, 0, 0),
                         Ok(PalwSeatS3SampleV1::Unchecked) | Err(_) => {}
                     }
-                } else if !s3_sampled.contains(&duty_key)
+                } else if !colluding
+                    && !s3_sampled.contains(&duty_key)
                     && palw_seat_sampled_due_v1(
                         seat_r,
                         self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
@@ -11737,6 +11838,7 @@ impl PalwPanelService {
                 // segment but not the whole replay could never pass (the second pass, finding 4).
                 if !(seat_r && (seat_replays.holds_claim(&duty.claim_id) || seat_r_duty.role == PalwSeatRRoleV1::PartialResumes))
                     && !sampled_now
+                    && !colluding
                     && let Err(why) = self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))
                 {
                     crate::palw_backends::note_throttled_v1("panel-replay-budget", || {
@@ -11758,6 +11860,32 @@ impl PalwPanelService {
                     // Q-7: a finished S3 sampling is this duty's answer (above).
                     if sampled_now {
                         break 'verdict Some(PalwReceiptVerdictV2::Sampled);
+                    }
+                    // DRILL ONLY (the G14 collusion drill, `--palw-drill-collude-with`): every seat of this Panel is the producer's, so
+                    // the claim is signed Valid as a reproduced replay would sign it — the whole job (V2) and the seat's own mask (V3) —
+                    // and nothing about it is judged or filed. What the drill then shows is that one bond OUTSIDE the Panel still
+                    // convicts it from public material, and that each of these Valid signatures is charged.
+                    if colluding {
+                        // As the seat's own role would license it: a full seat by its replay, a partial seat (SEAT-S4) by a verified
+                        // resume over exactly its assigned mask.
+                        if seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {
+                            licensed_by_verified_resume = true;
+                            segments_attested = Some(
+                                kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
+                                    duty.panel_anchor,
+                                    duty.claim_id,
+                                    duty.panel_seat_count.max(1),
+                                )
+                                .mask_of(duty.seat_index as u16),
+                            );
+                        } else {
+                            licensed_by_replay = true;
+                        }
+                        info!(
+                            "[{PALW_PANEL}] PALW DRILL (G14 collusion): claim {} of colluding producer {}:{} — signed Valid without judging it",
+                            duty.claim_id, duty.executor_bond.0.transaction_id, duty.executor_bond.0.index
+                        );
+                        break 'verdict Some(PalwReceiptVerdictV2::Valid);
                     }
                     // **Class capability is decided BEFORE looking at deliveries.** This resolve
                     // lived inside the per-material loop, so a seat that received NOTHING never
@@ -15478,6 +15606,39 @@ fn verdict_name(verdict: &PalwReceiptVerdictV2) -> &'static str {
 /// object for court session X round 0" is true of a challenger opening a case and of the accused
 /// answering it, and reading a fleet's court traffic meant guessing which. The catch-all is gone
 /// on purpose, so a new object cannot be added without deciding what it is called here.
+/// **DRILL ONLY (the G14 collusion drill): what a colluding seat may carry** — its seat receipts and licences, its readiness proofs,
+/// its bond objects and the binding of a Panel; `Err(kind)` names the first other object in `tx` (an accusation, demand, disclosure,
+/// filing, court move or chunk of one), which a seat that colludes with the producer never files.
+fn palw_drill_collusion_allows_v1(tx: &Transaction) -> Result<(), &'static str> {
+    const ALLOWED: &[&str] = &[
+        "SeatReadinessProved",
+        "SeatReadinessProvedV2",
+        "TirSeatReadinessProved",
+        "BondRegistered",
+        "BondCapabilityDeclared",
+        "BondShardsDeclared",
+        "BondRetireRequested",
+        "PanelBound",
+        "PanelBeaconProofV3",
+        "ReceiptLicensed",
+        "ReceiptLicensedV2",
+        "ReceiptLicensedBatchV1",
+        "ShardReceiptLicensed",
+        "TirShardReceiptLicensed",
+        "OptimisticLicensed",
+        "VerificationVertexV1",
+        "AttemptRidersV1",
+    ];
+    let extracted = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx));
+    for carried in &extracted.objects {
+        let kind = object_name(&carried.object);
+        if !ALLOWED.contains(&kind) {
+            return Err(kind);
+        }
+    }
+    Ok(())
+}
+
 fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
     match object {
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",
