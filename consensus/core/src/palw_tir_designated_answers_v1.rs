@@ -422,8 +422,8 @@ mod tests {
             Err(PalwTirDesignatedRegistryErrorV1::AlreadyOpen)
         );
         let snapshot = reg.clone();
-        // A non-designated answer is ignored (Ok, no change); a late answer is refused (no change).
-        palw_tir_apply_designated_event_v1(&mut reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(9), body: [1; 32], at_daa: 1_005 }).unwrap();
+        // A non-designated answer is ignored (Ok, no change); a late answer is refused (no change). Requests open at 100, default at 120.
+        palw_tir_apply_designated_event_v1(&mut reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(9), body: [1; 32], at_daa: 105 }).unwrap();
         assert_eq!(reg, snapshot, "non-designated answer: no state change");
         assert_eq!(
             palw_tir_apply_designated_event_v1(&mut reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(1), body: [1; 32], at_daa: 9_999 }),
@@ -437,7 +437,7 @@ mod tests {
         let events = |reg: &mut PalwTirDesignatedRegistryV1| {
             palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::Open(request(2))).unwrap();
             palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::FalseValid { key: key(), signer: c(2) }).unwrap();
-            palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(2), body: [3; 32], at_daa: 1_015 }).unwrap();
+            palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(2), body: [3; 32], at_daa: 115 }).unwrap();
         };
         let mut a = PalwTirDesignatedRegistryV1::default();
         let mut b = PalwTirDesignatedRegistryV1::default();

@@ -146,7 +146,8 @@ mod tests {
         s.request(1u8, 0);
         s.request(2u8, 1);
         // Holder 1 is silent past its budget (deadline 347): slot passes to 2 AT the deadline, not at the observation time.
-        assert_eq!(s.holder_at(347), Some(2), "the slot passes at the deadline 347");
+        assert_eq!(s.holder_at(347), Some(1), "the holder keeps the slot through its deadline tick");
+        assert_eq!(s.holder_at(348), Some(2), "the slot passes just after the deadline 347, dated at 347");
         assert_eq!(s.holder_at(400), Some(2));
         assert_eq!(s.worst_wait_daa(2), 347);
     }
