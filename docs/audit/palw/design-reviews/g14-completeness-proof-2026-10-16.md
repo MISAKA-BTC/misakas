@@ -2632,3 +2632,24 @@ in release. Its log/exit paths are `court-release-online.log` and
 `court-release-online.exit` in that directory. This harness alone does not measure
 all operation classes, their working sets, or real leaf recomputation; no
 arming policy is derived from it. No existing t12 files or services were modified.
+
+
+### 17.3 Genesis #1 approval and A16 whole-prefix fit connection
+
+The user approved additional acquisition of #1 Dolphin3.0-Qwen2.5-1.5B:
+one weight file, 3,087,467,144 bytes, plus approximately 14 MB metadata, after
+#2's processing. This does not authorize new downloads of #3/#4/#5. HF auth
+read-only check succeeded for Misakachain; no new model download was performed.
+
+Pipeline source now invokes the existing A16 whole-prefix window comparator.
+The converter emits an optional artifact-bound calibration sidecar containing
+its physical logit scale; the original scale formula is shared without changing
+artifact bytes or integer execution. The comparator can report stable physical
+KL and prefix-cut control metrics. Pipeline uses all 32 drift samples from the
+existing registry and its unchanged KL/top-1/drift thresholds. At 32K this scores
+2,048 sampled positions after advancing the whole 32,768-token prefix, not every
+position. Missing, changed, foreign, incomplete or non-finite evidence refuses
+upload. A pending measurement invalidates an old fit before executing the tool.
+Offline pipeline tests: 17 passed, 0.854 s, log
+`/tmp/codex-g14-a16-pipeline-offline.log`. Rust syntax parsing and diff checks
+passed; compiled Rust tests, actual 32K measurement and upload remain pending.
