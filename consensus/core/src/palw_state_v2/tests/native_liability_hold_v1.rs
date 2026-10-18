@@ -187,3 +187,24 @@ fn payable_backlog_still_releases_at_most_the_per_block_bound() {
     release_held_native_fees_v1(&mut b, 503, |_, _| false).unwrap();
     assert_eq!(b.state.pending_payouts.len(), PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1 + 1);
 }
+
+#[test]
+fn release_and_refund_remove_only_the_settled_producer_index_entry() {
+    for refund in [false, true] {
+        let p = armed();
+        let extras = PalwTransitionExtrasV1::default();
+        let mut parent = with_route(PalwChainStateV2::genesis());
+        let index = borsh::to_vec(&(39u8, 22u8, row(500).producer)).unwrap();
+        let other = [0x7C; 64];
+        parent.kernel_route.as_mut().unwrap().aux.insert((112, index.clone()), borsh::to_vec(&vec![JOB, other]).unwrap());
+        let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+        hold_native_fee_v1(&mut b, &row(500)).unwrap();
+        if refund {
+            refund_native_fee_v1(&mut b, PALW_NATIVE_FAMILY_JOB_V39, &JOB, 500).unwrap();
+        } else {
+            release_held_native_fees_v1(&mut b, 501, |_, _| false).unwrap();
+        }
+        let remaining: Vec<[u8; 64]> = b.state.kernel_route.as_ref().unwrap().aux_row(112, &index).unwrap();
+        assert_eq!(remaining, vec![other], "other jobs keep their collateral index slot");
+    }
+}

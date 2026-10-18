@@ -8,6 +8,10 @@ use crate::{
     palw_native_job_v39::*,
     palw_native_queue_v30::*,
 };
+use crate::palw_native_liability_hold_v1::{
+    PALW_NATIVE_FAMILY_JOB_V39, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1, PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+    PalwNativeHeldFeeRowV1, palw_native_held_fee_key_v1,
+};
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::{
     flat_job39::*,
@@ -351,7 +355,13 @@ pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128
         .iter()
         .filter_map(|id| header(r, *id).ok())
         .filter(|h| {
-            h.original.producer == *bond && matches!(h.terminal, NativeJobTerminalV39::Funded | NativeJobTerminalV39::Challengeable)
+            h.original.producer == *bond
+                && (matches!(h.terminal, NativeJobTerminalV39::Funded | NativeJobTerminalV39::Challengeable)
+                    || (h.terminal == NativeJobTerminalV39::Final
+                        && r.aux_row::<PalwNativeHeldFeeRowV1>(
+                            PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+                            &palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_JOB_V39, &h.id),
+                        ).is_some_and(|row| row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1 && row.family == PALW_NATIVE_FAMILY_JOB_V39 && row.job == h.id && row.producer == *bond)))
         })
         .fold(0u128, |n, h| n.saturating_add(h.original.reserve as u128))
         .saturating_add(public::reserved(r, bond))
@@ -942,15 +952,38 @@ fn credit(
         builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id), ctx.daa_score)?;
     }
     // Keep the original books/posts/credit for Master and independent audit,
-    // but a terminal job no longer occupies an active actor job slot. This
-    // does not return any resource or monetary-window allowance.
+    // A held Final retains the producer slot as its collateral index; other
+    // terminal slots can leave without returning any prepaid allowance.
     for (kind, who) in [(21, h.original.requester), (22, h.original.producer)] {
+        // The producer catalogue is also the bounded collateral-reservation index.
+        // Keep this slot while the Final fee is held, including an awaited verdict.
+        if held && kind == 22 {
+            continue;
+        }
         let mut ids = list(builder.state.kernel_route.as_ref().unwrap(), kind, &who)?;
         ids.retain(|id| *id != h.id);
         builder.write_kernel_row(TABLE, k(kind, &who), Some(b(&ids)))?;
     }
     Ok(())
 }
+/// Release the bounded producer reservation slot only when its held fee has been
+/// paid or refunded. The original job/book/credit remain available for audit.
+pub(super) fn clear_held_producer_slot_v39(
+    builder: &mut TransitionBuilder<'_>,
+    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
+) -> Result<(), PalwStateV2Error> {
+    if row.family != crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39 {
+        return Ok(());
+    }
+    let route = builder.state.kernel_route.as_ref().ok_or_else(|| bad("native39 held producer catalogue absent"))?;
+    let mut ids = list(route, 22, &row.producer)?;
+    if ids.contains(&row.job) {
+        ids.retain(|id| *id != row.job);
+        builder.write_kernel_row(TABLE, k(22, &row.producer), Some(b(&ids)))?;
+    }
+    Ok(())
+}
+
 /// **RFC08 08-B (ADR-0184 §1): the credit of a conviction of a Final claim before its liability horizon.** The Final's fee was
 /// held (aux 144), never queued: it is refunded to the requester whole, the producer's reserve is collected as a pre-Final
 /// conviction collects it (`s.actual_slash`), the finder is paid as [`credit`] pays it, and the job's single-credit record is
@@ -1326,3 +1359,7 @@ pub(super) fn accepted_consent_wire(r: &PalwKernelRouteStateV1, producer: &PalwB
         })
     })
 }
+
+#[cfg(test)]
+#[path = "palw_native_job_fold_v39_liability_tests.rs"]
+mod liability_tests;

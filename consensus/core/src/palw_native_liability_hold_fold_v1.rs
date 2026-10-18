@@ -96,6 +96,7 @@ pub(super) fn release_native_fee_v1(
     )?;
     builder.write_payout(queue, Some(PalwPayoutV2 { payload: Hash64::from_bytes(row.payload), amount: row.amount }))?;
     builder.bond_budget_close_v1(&Hash64::from_bytes(row.budget), now)?;
+    super::palw_native_job_fold_v39::clear_held_producer_slot_v39(builder, row)?;
     Ok(())
 }
 
@@ -126,6 +127,7 @@ pub(super) fn refund_native_fee_v1(
     builder.cancel_native_recipient_v1(Hash64::from_bytes(row.income_root), row.producer, row.income_kind)?;
     builder.write_payout(queue, Some(PalwPayoutV2 { payload: Hash64::from_bytes(row.refund_payload), amount: row.amount }))?;
     builder.bond_budget_close_v1(&Hash64::from_bytes(row.budget), now)?;
+    super::palw_native_job_fold_v39::clear_held_producer_slot_v39(builder, &row)?;
     Ok(row)
 }
 
