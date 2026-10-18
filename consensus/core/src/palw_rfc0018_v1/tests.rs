@@ -959,6 +959,7 @@ fn rfc18_a_slow_model_a_claim_stops_only_the_shared_frontier_not_model_b_final_c
 
 fn expect_share(blocks: u64, cap: u64, models: u64) -> u64 {
     blocks * cap / models
+}
 
 #[test]
 fn rfc18_width_histories_switch_at_the_parent_and_restore_on_reorg() {
