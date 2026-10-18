@@ -61,6 +61,22 @@ impl GdnFixture {
     }
 
     pub async fn register(&self, chain: &mut Chain, floats: &mut [Funding]) {
+        let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(
+            &chain.config.params,
+            &chain.bundle,
+            &self.profile,
+            chain.daa(),
+        )
+        .unwrap();
+        kaspa_consensus_core::palw_class_admission_v2::palw_admission_probe_v1(
+            &chain.bundle,
+            &self.profile,
+            &self.canonical,
+            self.root,
+            &[],
+            &shape,
+        )
+        .unwrap_or_else(|why| panic!("the ordinary GDN registration preflight refuses: {why:?}"));
         let terms = chain.tc.palw_v2_registration_terms().unwrap();
         let mut object = kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_capped_v1(
             self.profile.clone(),
