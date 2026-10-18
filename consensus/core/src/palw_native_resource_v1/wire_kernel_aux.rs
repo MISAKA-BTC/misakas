@@ -64,7 +64,16 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
     let n = frame.remaining();
     let key_bytes = k.len() as u64;
     let prefix = k.first().copied().unwrap_or(0);
+    if table == crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1
+        && crate::palw_claim_local_v1::palw_claim_local_frame_scan_active_v1()
+    {
+        return Err(wire::wire_bad("a liability frame contains its own namespace"));
+    }
     Ok(match table {
+        144 if key_bytes == 65 && prefix == b'F' => {
+            crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1::scan_native_wire_v1(frame)?
+        }
+        144 => return Err(wire::wire_bad("unallocated claim-local liability namespace")),
         32 => <crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         33 => <crate::palw_kernel_route_v1::KernelAssignmentV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         34 => <Vec<misaka_palw_kernel::receipt::PalwConstraintReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(frame)?,

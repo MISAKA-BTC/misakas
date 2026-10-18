@@ -11,6 +11,93 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash64, ZERO_HASH64};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+pub const PALW_CLAIM_LOCAL_TABLE_V1: u8 = 144;
+
+/// Actual presented inputs, retained without declaring them valid. Only the
+/// fold's resulting claim rows and journal establish what was admitted.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwClaimLocalInputV1 {
+    Attempt { block: Hash64, execution_key: Hash64, envelope: Box<crate::palw_attempt_v2::PalwAttemptEnvelopeV2> },
+    ReceiptSpend { block: Hash64, spend: Box<crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3> },
+    History { claim: Hash64, pledge: Box<crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1> },
+    PublicBinding { claim: Hash64, header: Box<crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1> },
+    CustodyDelegation { claim: Hash64, delegation: Box<crate::palw_history_custody_v1::PalwProducerCustodyDelegationV1> },
+    TirOriginal { claim: Hash64, envelope: Box<crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1> },
+}
+
+/// Fold-produced historical context for the claims actually changed at a DAG
+/// point. The two carriages omit this namespace: a frame never contains frames.
+/// These are original state/identity witnesses, not declarations of correctness.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwClaimLiabilityFrameV1 {
+    pub point: PalwBlockContextV2,
+    pub network_identity: [u8; 32],
+    pub fired_forks: [u8; 32],
+    pub claims: BTreeSet<Hash64>,
+    pub prior_state: Vec<u8>,
+    pub current_state: Vec<u8>,
+    pub accepted_objects: Vec<crate::palw_state_v2::PalwConsensusObjectV2>,
+    pub origin_headers: BTreeMap<Hash64, Vec<u8>>,
+    pub inputs: Vec<PalwClaimLocalInputV1>,
+}
+
+pub fn palw_claim_liability_frame_key_v1(block: Hash64) -> [u8; 65] {
+    let mut key = [0u8; 65];
+    key[0] = b'F';
+    key[1..].copy_from_slice(block.as_byte_slice());
+    key
+}
+
+impl PalwClaimLiabilityFrameV1 {
+    /// Structural/context consistency is necessary, not approval of the claims
+    /// or authority for a sender's invented historical state. The frame must
+    /// also be a row of the accepted checkpoint's committed native state.
+    pub fn validate_context_v1(&self) -> Result<(), PalwClaimCheckpointErrorV1> {
+        use crate::palw_native_resource_v1::{preflight_native_carriage_v1, reserve_native_requests_v1};
+        use crate::palw_state_v2::PalwStateCarriageV2;
+        if self.claims.is_empty()
+            || self.claims.contains(&ZERO_HASH64)
+            || self.network_identity == [0; 32]
+            || self.fired_forks == [0; 32]
+        {
+            return Err("liability frame has no claim or original rule identity".into());
+        }
+        let mut demands = 0u64;
+        for bytes in [&self.prior_state, &self.current_state] {
+            let scan = preflight_native_carriage_v1(bytes.as_slice(), bytes.len() as u64)
+                .map_err(|e| claim_local_checkpoint_io_v1(e, "malformed original liability carriage"))?;
+            demands = demands
+                .checked_add(
+                    scan.memory_requests_v1().map_err(|e| claim_local_checkpoint_io_v1(e, "original carriage demand overflow"))?,
+                )
+                .ok_or_else(|| {
+                    PalwClaimCheckpointErrorV1::Resource(crate::palw_native_resource_v1::NativeCoverageV1::overflow::<Self>(
+                        "original context demand",
+                    ))
+                })?;
+        }
+        let _lease = reserve_native_requests_v1(demands).map_err(PalwClaimCheckpointErrorV1::Resource)?;
+        let prior: PalwStateCarriageV2 = borsh::from_slice(&self.prior_state)
+            .map_err(|_| PalwClaimCheckpointErrorV1::Semantic("original prior state does not decode"))?;
+        let current: PalwStateCarriageV2 = borsh::from_slice(&self.current_state)
+            .map_err(|_| PalwClaimCheckpointErrorV1::Semantic("original current state does not decode"))?;
+        for (state, bytes) in [(&prior, &self.prior_state), (&current, &self.current_state)] {
+            palw_check_canonical_liability_bytes_v1(state, bytes)
+                .map_err(|_| PalwClaimCheckpointErrorV1::Semantic("noncanonical original state"))?;
+            if state.kernel_route.as_ref().is_some_and(|route| route.aux.keys().any(|(table, _)| *table == PALW_CLAIM_LOCAL_TABLE_V1))
+            {
+                return Err("liability frame contains its own namespace".into());
+            }
+        }
+        if current.last_point != Some(self.point)
+            || prior.last_point.is_some_and(|p| p.blue_score >= self.point.blue_score || p.daa_score > self.point.daa_score)
+        {
+            return Err("liability frame changed its original DAG point".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwClaimLocalRecordV1 {
     pub claim: Hash64,
@@ -59,6 +146,25 @@ pub enum PalwClaimCheckpointErrorV1 {
     Semantic(&'static str),
     #[error("checkpoint validation needs local native capacity: {0}")]
     Resource(crate::palw_native_resource_v1::NativeCoverageV1),
+}
+// Local scanner limitations must never become a consensus verdict against
+// valid bytes. Keep malformed/truncated bytes distinct from capacity refusal.
+fn claim_local_decode_io_v1<T>(error: std::io::Error) -> crate::palw_native_resource_v1::NativeDecodeErrorV1<std::io::Error> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::OutOfMemory => NativeDecodeErrorV1::Resource(NativeCoverageV1::overflow::<T>("claim-local scan")),
+        ErrorKind::Unsupported | ErrorKind::TimedOut => {
+            NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<T>("claim-local scan", &error.to_string()))
+        }
+        _ => NativeDecodeErrorV1::Decode(error),
+    }
+}
+fn claim_local_checkpoint_io_v1(error: std::io::Error, malformed: &'static str) -> PalwClaimCheckpointErrorV1 {
+    match claim_local_decode_io_v1::<PalwClaimLiabilityFrameV1>(error) {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwClaimCheckpointErrorV1::Resource(why),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_) => PalwClaimCheckpointErrorV1::Semantic(malformed),
+    }
 }
 impl From<&'static str> for PalwClaimCheckpointErrorV1 {
     fn from(why: &'static str) -> Self {
@@ -226,12 +332,27 @@ pub fn palw_decode_claim_checkpoint_v1(
     crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLocalCheckpointV1>,
     crate::palw_native_resource_v1::NativeDecodeErrorV1<std::io::Error>,
 > {
+    decode_claim_local_value_v1(bytes)
+}
+
+pub fn palw_decode_claim_liability_frame_v1(
+    bytes: &[u8],
+) -> Result<
+    crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLiabilityFrameV1>,
+    crate::palw_native_resource_v1::NativeDecodeErrorV1<std::io::Error>,
+> {
+    decode_claim_local_value_v1(bytes)
+}
+
+fn decode_claim_local_value_v1<T: BorshDeserialize + BorshSerialize + crate::palw_native_resource_v1::NativeWireScanV1>(
+    bytes: &[u8],
+) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<T>, crate::palw_native_resource_v1::NativeDecodeErrorV1<std::io::Error>> {
     use crate::palw_native_resource_v1::{
         NativeDecodeErrorV1 as D, NativeRetainedV1, preflight_native_value_v1, reserve_native_requests_v1,
     };
     // Unconditional shape validation also protects configurations without a
     // local quota. A huge nested count in a short frame never reaches Borsh.
-    let shape = preflight_native_value_v1::<PalwClaimLocalCheckpointV1>(bytes, bytes.len() as u64).map_err(D::Decode)?;
+    let shape = preflight_native_value_v1::<T>(bytes, bytes.len() as u64).map_err(claim_local_decode_io_v1::<T>)?;
     let lease = reserve_native_requests_v1(shape.logical_requests_v1()).map_err(D::Resource)?;
     let value = borsh::from_slice(bytes).map_err(D::Decode)?;
     palw_check_canonical_liability_bytes_v1(&value, bytes).map_err(D::Decode)?;
@@ -269,6 +390,9 @@ pub(crate) fn palw_check_canonical_liability_bytes_v1<T: BorshSerialize>(value: 
 
 #[path = "palw_native_resource_v1/private/palw_claim_local_v1.rs"]
 mod native_resource_inventory_v1;
+pub(crate) fn palw_claim_local_frame_scan_active_v1() -> bool {
+    native_resource_inventory_v1::frame_scan_active_v1()
+}
 
 /// Read capabilities exist only after exact state and byte validation. Runtime code cannot rank
 /// forks or settle effects directly from a peer-supplied checkpoint's self-declared flags.
@@ -533,6 +657,33 @@ mod fence_tests {
             p.sync_palw_claim_local_settlement_v1();
             assert_ne!(p.consensus_params_id(), old);
             assert!(p.validate_palw_claim_local_settlement_v1().is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod local_capacity_classification_tests {
+    use super::*;
+    #[test]
+    fn rfc23s2_scanner_capacity_refusal_is_never_a_semantic_verdict() {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1;
+        use std::io::{Error, ErrorKind};
+        for kind in [ErrorKind::OutOfMemory, ErrorKind::TimedOut, ErrorKind::Unsupported] {
+            assert!(matches!(
+                claim_local_decode_io_v1::<PalwClaimLiabilityFrameV1>(Error::from(kind)),
+                NativeDecodeErrorV1::Resource(_)
+            ));
+            assert!(matches!(claim_local_checkpoint_io_v1(Error::from(kind), "malformed"), PalwClaimCheckpointErrorV1::Resource(_)));
+        }
+        for kind in [ErrorKind::InvalidData, ErrorKind::UnexpectedEof] {
+            assert!(matches!(
+                claim_local_decode_io_v1::<PalwClaimLiabilityFrameV1>(Error::from(kind)),
+                NativeDecodeErrorV1::Decode(_)
+            ));
+            assert!(matches!(
+                claim_local_checkpoint_io_v1(Error::from(kind), "malformed"),
+                PalwClaimCheckpointErrorV1::Semantic("malformed")
+            ));
         }
     }
 }

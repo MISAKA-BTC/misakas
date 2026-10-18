@@ -2874,6 +2874,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "LG14 terminal objective evidence",
         true,
     ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "claim-local original liability frames (kernel aux144 F + accepting block)" },
+        "palw_claim_local_settlement_v1",
+        "RFC-0023 stage 2 historical context",
+        true,
+    ),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {
