@@ -251,6 +251,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                         Some(kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at));
                 }
             }
+            // RFC-0002 02-A (tag 175): the TIR container binding, in force where the TIR lane is (`palw_tir_v1` is armed above).
+            PalwLifecycleKindFenceV1::TirContainerIdentityV1 => params.palw_tir_container_identity_v1 = Some(at),
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {

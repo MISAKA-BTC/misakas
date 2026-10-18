@@ -439,6 +439,100 @@ impl PalwTirStepSpaceV1 {
         n
     }
 
+    /// **The widest leaf of `job`, in lanes** (G14 audit §11 (a)): every leaf holds at most this many four-byte lanes — a committed
+    /// node's tile is `min(tile_len, elements at the job's widest H)` (H never shrinks with the position), a checkpoint tile
+    /// `min(tile_lanes, elements)`, a history tile `h_tile` rows of `min(tile_lanes, elements)` lanes. Exact for the class and the job,
+    /// unlike the layout's widest tile (a 4,096-lane logits tile over an 8-word vocabulary holds 8 lanes).
+    pub fn maximum_leaf_lanes_v1(&self, job: &PalwTirJobShapeV1) -> u64 {
+        let last = job.positions.saturating_sub(1);
+        let mut widest = 0u64;
+        for (block, _) in &self.occurrences {
+            let h = self.h_of(*block, last);
+            for c in &self.blocks[*block as usize].commits {
+                widest = widest.max(c.elements(h).min(u64::from(c.tile_len)));
+            }
+        }
+        for s in &self.fixed {
+            widest = widest.max(s.elements.min(u64::from(s.tile_lanes)));
+        }
+        for s in &self.hist {
+            widest = widest.max(s.elements.min(u64::from(s.tile_lanes)).saturating_mul(u64::from(self.layout.h_tile)));
+        }
+        widest
+    }
+
+    /// **The most four-byte lanes `count` consecutive leaves of `job` can hold** (G14 audit §11 (a)): the smaller of `count` widest
+    /// leaves and the positions such a window can touch — a position has at least `L_min` leaves (its non-post commits at `H = 1`,
+    /// every position has them), so `count` consecutive leaves span at most `⌈(count − 1) / L_min⌉ + 1` positions — each at the most
+    /// lanes any position emits (its commits at the widest `H` with the post block, a checkpoint and a history tile).
+    pub fn maximum_window_lanes_v1(&self, job: &PalwTirJobShapeV1, count: u64) -> u128 {
+        let per_leaf = u128::from(count).saturating_mul(u128::from(self.maximum_leaf_lanes_v1(job)));
+        let post = self.occurrences.len() - 1;
+        let minimum: u64 = self
+            .occurrences
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != post)
+            .map(|(_, (b, _))| self.block_leaves_at(*b, 0))
+            .fold(0u64, |acc, n| acc.saturating_add(n));
+        if minimum == 0 || count == 0 {
+            return per_leaf;
+        }
+        let last = job.positions.saturating_sub(1);
+        let mut position = 0u128;
+        for (block, _) in &self.occurrences {
+            let h = self.h_of(*block, last);
+            for c in &self.blocks[*block as usize].commits {
+                position = position.saturating_add(u128::from(c.elements(h)));
+            }
+        }
+        for s in &self.fixed {
+            position = position.saturating_add(u128::from(s.elements));
+        }
+        for s in &self.hist {
+            position = position.saturating_add(u128::from(s.elements).saturating_mul(u128::from(self.layout.h_tile)));
+        }
+        let spans = u128::from((count - 1).div_ceil(minimum)) + 1;
+        per_leaf.min(spans.saturating_mul(position))
+    }
+
+    /// **The most step-leaf runs an honest owner needs to acquire the cone of ANY leaf of `job`** (G14 audit §11 (b)), when it fetches
+    /// each missing stretch as one full run of `run` leaves from its first missing leaf. Derived from what the court's cone evaluation
+    /// reads (`palw_tir_court_v1::TirSource`): committed values at the leaf's own position; a fixed state between checkpoints by
+    /// REPLAY back to the last checkpoint (the checkpoint leaf at the position before it), so at most `checkpoint_interval` positions
+    /// back; a history row in the current (incomplete) tile from its commit point, so at most `h_tile` positions further back; a
+    /// completed history tile from its one tile leaf at the tile's last position, over the reading block's attention window `W`
+    /// (the whole context where a block has none). So the cone lies in ONE contiguous stretch of positions
+    /// `[a − checkpoint_interval − h_tile, a]` plus at most `⌈(W + checkpoint_interval) / h_tile⌉ + 1` single positions' history
+    /// leaves; never more than the job's whole leaf range.
+    pub fn cone_runs_bound_v1(&self, job: &PalwTirJobShapeV1, leaf_count: u64, run: u64) -> u64 {
+        let run = run.max(1);
+        let whole = leaf_count.div_ceil(run);
+        let last = job.positions.saturating_sub(1);
+        // Every occurrence's commits at the widest H (the post block included), a checkpoint and a history tile: the most leaves
+        // any one position holds.
+        let commits_per_position =
+            self.occurrences.iter().fold(0u64, |acc, (block, _)| acc.saturating_add(self.block_leaves_at(*block, last)));
+        let per_position =
+            commits_per_position.saturating_add(self.fixed_leaves_per_checkpoint()).saturating_add(self.hist_leaves_per_tile());
+        let ci = u64::from(self.layout.checkpoint_interval);
+        let ht = u64::from(self.layout.h_tile);
+        let stretch = ci.saturating_add(ht).saturating_add(1).saturating_mul(per_position);
+        let mut bound = stretch.div_ceil(run).saturating_add(1);
+        if !self.hist.is_empty() {
+            let window = self
+                .blocks
+                .iter()
+                .map(|b| b.window.map(u64::from).unwrap_or(u64::from(job.positions)))
+                .max()
+                .unwrap_or(u64::from(job.positions));
+            let tiles = window.saturating_add(ci).div_ceil(ht.max(1)).saturating_add(1);
+            let per_tile = self.hist_leaves_per_tile().div_ceil(run).saturating_add(1);
+            bound = bound.saturating_add(tiles.saturating_mul(per_tile));
+        }
+        bound.min(whole).max(1)
+    }
+
     /// Canonical four-byte lanes emitted at one position, without constructing its leaf
     /// metadata. Node replay admission pairs this with `leaves_at_position` to account
     /// preimage buffers before enumeration/allocation. Saturation refuses on conversion

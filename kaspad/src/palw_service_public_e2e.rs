@@ -47,6 +47,8 @@ mod terminal;
 mod gdn;
 #[path = "palw_service_tiled_e2e.rs"]
 mod tiled;
+#[path = "palw_service_tir_frame_e2e.rs"]
+mod tir_frame;
 
 pub(super) struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,

@@ -125,6 +125,12 @@ pub(crate) fn owner_may_pursue_v1(
     !view.liable.contains(signer) && now >= preparation_until_daa && now < view.collect_until_daa && (slot_open || owns_here)
 }
 
+// Starting a replay cannot help once a new Open can no longer be included. An
+// acquisition already accepted before the door still has its full pursuit window.
+fn owner_acquisition_door_open_v1(now: u64, open_until: u64, owns_here: bool) -> bool {
+    owns_here || now.saturating_add(1) < open_until
+}
+
 /// **Lane g14-court-capacity-r2: may this bond Open now as far as the K_owner cap goes** — always past `palw_court_capacity_v1`
 /// (`fair_start`: an Open at the cap waits in the owner queue instead of being refused), else only on a free or reclaimable slot.
 pub(crate) fn owner_slot_open_v1(fair_start: bool, slot_free_or_reclaimable: bool) -> bool {
@@ -165,6 +171,8 @@ struct OwnerCaseV1 {
     cone_want: Option<PalwTirPublicRequestV1>,
     cone_needs_ids: bool,
     demands: u32,
+    // The unsigned signing digest distinguishes a retry from the next accepted-state move.
+    last_move: Option<Hash64>,
     done: bool,
     _replay: crate::palw_memory_ledger::PalwMemoryReservationV1,
 }
@@ -175,6 +183,11 @@ pub(crate) struct PalwTirPublicOwnerBookV1 {
     after: Option<Hash64>,
     cases: HashMap<Hash64, OwnerCaseV1>,
     skipped: HashMap<Hash64, u64>,
+}
+
+// Only an identical move waits the retry interval; a new native turn/action can proceed.
+fn owner_retry_waits_v1(last: Option<Hash64>, next: Hash64, moved_at: Option<u64>, now: u64) -> bool {
+    last == Some(next) && moved_at.is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
 }
 
 /// The outcome of one sparse-cone probe over the accepted public material.
@@ -390,6 +403,9 @@ impl PalwPanelService {
                     let view = frame.view_v1(state.staged_tir_owner_count_v1(&claim));
                     let plan = frame.plan_v1();
                     let owns_here = state.staged_tir_acquisitions_of_v1(&claim).iter().any(|(owner, _)| *owner == signer);
+                    if !owner_acquisition_door_open_v1(now, plan.terms.open_until_daa, owns_here) {
+                        continue;
+                    }
                     // Lane g14-court-capacity-r2: past `palw_court_capacity_v1` an Open is never refused for the K_owner cap (it
                     // waits in the owner queue), so a free slot is not a precondition.
                     let slot_open =
@@ -452,6 +468,12 @@ impl PalwPanelService {
                             .map(|(row, allocation)| (row.owned.contract_v1().reserved_daa, allocation));
                     }
                     let Some((reserved_daa, acquisition)) = case.acquisition else {
+                        // An Open is admitted only before the frame's owner-open door (`reserved_daa < open_until_daa`, the
+                        // contract's own check): past it nothing can open, so the case ends instead of re-sending a refused Open.
+                        if now.saturating_add(1) >= terms.open_until_daa {
+                            ended.push(*claim);
+                            continue;
+                        }
                         let rent = frame.plan_v1().owner_terms_v1()?.plan.rent_sompi;
                         steps.push(OwnerStepV1::Move {
                             claim: *claim,
@@ -467,7 +489,10 @@ impl PalwPanelService {
                                 action: PalwTirPublicControlActionV1::Open,
                                 signature: Vec::new(),
                             }),
-                            due: queue_due,
+                            // Its own door, not the collection's: the court lane orders moves by due, and an Open scheduled at
+                            // `collect_until − 1` waited behind every earlier-due move on the lane until its door had closed (node
+                            // T-N1 harness, 2026-10-17: queued behind the fraud filer's demands, carried 70+ DAA after the door).
+                            due: terms.open_until_daa.saturating_sub(1),
                         });
                         continue;
                     };
@@ -787,6 +812,7 @@ impl PalwPanelService {
                                 cone_want: None,
                                 cone_needs_ids: false,
                                 demands: 0,
+                                last_move: None,
                                 done: false,
                                 _replay: memory,
                             },
@@ -794,12 +820,13 @@ impl PalwPanelService {
                     }
                     OwnerStepV1::Move { claim, mut control, due: due_daa } => {
                         let queue = (claim, PALW_TIR_PUBLIC_OWNER_ROUND_V1, false);
+                        let digest = control.signing_message_v1(network_domain)?;
+                        let last = book.cases.get(&claim).and_then(|case| case.last_move);
                         if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                            || owner_retry_waits_v1(last, digest, moved.get(&queue).copied(), now)
                         {
                             return Ok(());
                         }
-                        let digest = control.signing_message_v1(network_domain)?;
                         control.signature = self
                             .sign(digest.as_byte_slice(), PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1)
                             .ok_or("TIR owner signing key unavailable")?;
@@ -809,6 +836,9 @@ impl PalwPanelService {
                             && let Some(case) = book.cases.get_mut(&claim)
                         {
                             case.demands += 1;
+                        }
+                        if let Some(case) = book.cases.get_mut(&claim) {
+                            case.last_move = Some(digest);
                         }
                         pending.push((queue.0, queue.1, queue.2, PalwConsensusObjectV2::TirPublicControlV1 { control }));
                         due.insert(queue, due_daa);
@@ -873,6 +903,25 @@ impl PalwPanelService {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_tir_public_claim_v1::{PalwTirPublicCustodianLoadV1, PalwTirPublicFrameViewV1};
+
+    #[test]
+    fn owner_next_move_does_not_wait_for_the_previous_moves_retry_interval() {
+        let previous = Hash64::from_u64_word(1);
+        let next = Hash64::from_u64_word(2);
+        assert!(owner_retry_waits_v1(Some(previous), previous, Some(100), 101));
+        assert!(!owner_retry_waits_v1(Some(previous), next, Some(100), 101));
+        assert!(!owner_retry_waits_v1(Some(previous), previous, Some(100), 100 + COURT_MOVE_REPLAN_DAA));
+        assert!(!owner_retry_waits_v1(None, next, None, 0));
+    }
+
+    #[test]
+    fn owner_discovery_skips_closed_open_door_but_preserves_existing_acquisitions() {
+        assert!(owner_acquisition_door_open_v1(98, 100, false));
+        assert!(!owner_acquisition_door_open_v1(99, 100, false));
+        assert!(!owner_acquisition_door_open_v1(101, 100, false));
+        assert!(owner_acquisition_door_open_v1(101, 100, true));
+        assert!(!owner_acquisition_door_open_v1(u64::MAX, u64::MAX, false));
+    }
 
     fn h(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)

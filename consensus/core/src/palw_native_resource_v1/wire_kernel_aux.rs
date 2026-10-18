@@ -1051,7 +1051,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         106 => return Err(wire::wire_bad("unallocated aux table 106 row namespace")),
         112 => return Err(wire::wire_bad("unallocated aux table 112 row namespace")),
         115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 | 136 => {
-            return Err(wire::wire_bad("unallocated aux row namespace"));
+            return Err(wire::wire_bad("unallocated aux row namespace"))
         }
         141 if key_bytes == 64 => {
             crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1::scan_native_wire_v1(frame)?
@@ -1081,7 +1081,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
                     &format!("native aux table {table}"),
                     "nested row codec is not in the explicit supported shape inventory",
                 ),
-            ));
+            ))
         }
     })
 }

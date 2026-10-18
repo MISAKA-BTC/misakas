@@ -105,6 +105,8 @@ pub mod onboarding_snapshot;
 /// `artifact_digest` recomputed by the BASE-0 decoder, the TIR section's inventory root by the
 /// consensus function (pinning the light packer's twin).
 pub mod palwart_deep;
+/// RFC-0002 02-A: a TIR class's `PALWART3` container binding (tag 175, dormant), built from the container's header.
+pub mod tir_container;
 pub mod panel_lifetime_v2;
 pub mod panel_source_fee_v2;
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).

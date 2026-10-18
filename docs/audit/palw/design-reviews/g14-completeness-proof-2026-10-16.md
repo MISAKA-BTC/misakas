@@ -1095,6 +1095,250 @@ corpus の 11 class(step leaf 52〜222)はすべて、上限 1〜6、33、257 �
   ただし、それは「preset の court 窓を保つ」という既存 harness の前提を外すことになり、測定値でもない。そのため、この branch では採らなかった。
 - harness の残り(§8.4 の 2)は変わっていない。
 
+## 10. 追補: TIR 公開 frame の価格と時計(§9.5)と T-N1(2026-10-17、branch `integ/g14-tir-pricing-r2`)
+
+本文と §7〜§9 は書き換えない。この節は §9.5 の価格・時計の問題と T-N1 について、この branch で変えたことと測った値を記す。
+外部監査(10-17)の §6.3 と §7 P0(3) の要求も扱う。要求は「受理した追及の最大時間を、Final・報酬の支払い・bond exit と lock の期限と整合させる」こと、
+そして「価格と時計は実測した parser work・資料の大きさ・replay 回数・同時追及数から導き、根拠のない短い timeout や安い料金で負荷上限を失わない」ことである。
+新しい規則はすべて休眠である。`palw_tir_frame_cost_v1` は全 preset で `None`、`PALW_TIR_FRAME_COST_RECORDS_V1` は空である。
+testnet-12 の identity と指紋は変わらない(`shipped_presets_have_pinned_fingerprints` は ok)。
+
+### 10.1 変えたこと
+
+1. **価格: 実測した cost unit(`palw_tir_frame_cost_v1`)。**
+   - 旧: 受理する action ごとに frame 全体を 32 回読むとし、1 byte あたり 32 parser step で数えていた。
+   - 新: read action(Demand / Begin / Part / Finish)は、fold で測った 1 action の時間を parser step に換算して課金する。
+     値は `action_parser_steps + action_parser_steps_per_custodian × 上限` である。
+   - frame 全体の pass を課金するのは、fold が実際に全体を検査する所だけにした。外部 owner の Open と conviction filing で、それぞれ `frame_passes_per_check` 回である。
+   - fold 側の対応: `native_frame` は Open と Convict のときだけ frame の全構造を検査する。それ以外の control は frame の不変 identity と自分の row を検査する。
+     rooted frame を書く install と custody 書き込みは、毎回全体を検査する。
+   - この変更で、read action は上限 257 で 2.3 ms から 0.31 ms になった(測定)。
+2. **時計: 直列の積み上げをやめた(`tir_public_turn_span_v1` / `tir_public_localization_path_v1` / `tir_public_preparation_door_v1`)。**
+   - 直列に待つのは、前の move が chain で受理されている必要がある move だけにした。
+     - Demand → 回答
+     - Begin → Part → Finish
+     - 1 turn の回答 → 次の Demand
+     - debit → Ready
+   - custodian は並列に回答する。全 actor が同時に chain に載せる量は、測定した包含容量 `parallel_bytes_per_daa` で割って時間に足す。
+     このとき K_owner = 8 の同時 owner を全員数える(同時追及数による負荷上限)。
+   - turn の数は、正直な owner の局所化 path の turn 数と `reorg_replay_moves` 回の再開 turn の和にした。turn 予算全体 × 65 の直列ではない。
+     局所化 path は IDs、step descent、leaf、cone を run で(安全側に全 leaf を run で)、trace、出力検査である。
+3. **preparer の WorkDebit は 1 pass に 1 件にした(consensus と node の両方)。**
+   - consensus: `maximum_slices_per_actor = passes`。debit の work は `tir_public_pass_budget_v1`(preparer の lane ÷ passes、grant 1 件)である。
+   - node: `palw_tir_public_custodian` は pass の最初の slice で debit を 1 件出す。受理された permit の下で、pass の全 slice(cold capture と publication)を chain を待たずに実行する。
+     permit の扱いは `OperationalLedgerV1::from_native_pass_permit_v1`、`require_preparation_v1` の pass mode で行う。
+   - write-ahead の物理 charge は pass 単位にした。
+4. **受理した追及の最大時間を liability horizon の内側に置いた(外部監査 §7 P0(3))。**
+   - `PalwTirFrameClockV1::maximum_door_daa` を新設した。conviction door(`collect_until − accepted`)がこれを超える frame は作らない(`DoorBeyondLiabilityHorizon`)。
+     G-03 により、そのような claim は受理されない。報酬経路を持たないので、Final が無期限に遅れることもない。
+   - 武装時の検証(`validate_palw_tir_frame_cost_in_v1`)は、`maximum_door_daa` > `window_challenge_at(fence) + window_court` を拒否する。
+     これは legacy route が Final を覆せた最後の日(`palw_legacy_fp_liability_floor_v1`)である。
+   - 既存の hold との整合:
+     - frame の claim の Final floor は `max(licence + window_challenge, collect_until)` である(`palw_claim_final_floor_v1`)。
+     - Gate C は door が閉じるまで待つ。
+     - credited seat の lock は `bond_exit_after_daa`(= material door ≥ collect door)まで延びる。
+     - したがって、受理された追及はすべて「Final・支払い・seat の exit/lock 期限」より前に終わる。
+5. **記録がなければ武装しない(G-10 と同じ形)。**
+   - `palw_tir_public_conviction_v1` を武装するには、次の 2 つが要る。
+     - well-formed な `palw_tir_frame_cost_v1`
+     - その network・高さ・値を名指す pinned record(version、source commit、measurement digest、review digest。`PalwTirFrameCostRecordV1`)
+   - isolated な G14 試験 genesis は record の pin を省略する。horizon 検査は省略しない。
+   - `palw_tir_frame_test_only_cost_v1` は試験専用で、測定値ではない。どの preset にもどの record にも入っていない。
+
+### 10.2 測った値(release、Apple M1 Max 10c、記録 `docs/design/palw/evidence/tir-frame-measure-2026-10-16/`)
+
+**fold action**(`fold-actions-after.json`、`tir_frame_accepting_actions_are_measured_across_custodian_uppers`):
+
+| 項目 | 上限 6 | 上限 257 |
+|---|---|---|
+| read action | 74〜217 µs | 302〜310 µs |
+| Open | 0.09 ms | 1.89 ms |
+| filing | 0.07 ms | 1.28 ms |
+
+- ML-DSA-87 の verify は 98 µs、frame 全体の 1 pass(上限 257、2.70 MB)は 1.73 ms だった。
+- 導いた候補値: `action_parser_steps` 15,625,804、`action_parser_steps_per_custodian` 18,575、`frame_passes_per_check` 2。
+- 同じ harness の前回の実行では 8,674,280 / 45,961 だった。小さい上限での host の揺れによる。武装には、最も遅い対応 node の記録が要る。
+
+**frame**(`frame-ops-after.json`、`frame_measure`、11 class)。候補 `candidate-t12-cost.json` の条件:
+- margin 4、acquisition 1、restart 1、collection 8、retention 256
+- control 14,320 B、包含容量 125,000 B/DAA(t12 の block mass 上限で、上限値。実網の観測値ではない)
+
+| 量 | §9.4 / §9.5 の値(network_v1) | この branch(候補、上限 6) | 上限 257 |
+|---|---|---|---|
+| claim の最低 rent | 2e7〜8e7 MSK | 1.1e4〜1.5e4 MSK | 3.9e5〜5.4e5 MSK |
+| 外部 owner の Open rent | 約 2.2e7 MSK | 5.2e3〜7.2e3 MSK | 1.9e5〜2.7e5 MSK |
+| preparation door | +0.9e6〜3.8e6 DAA | +16 DAA | +102 DAA |
+| owner の turn 数 | fresh × 65 | 11 | 11 |
+| preparer 1 人の WorkDebit | 2.3e5〜9.5e5 件 | 2 件(1 pass に 1 件 × 2 pass) | 2 件 |
+| conviction door(collect − accepted) | +6e7〜2.4e8 DAA | **+3,389〜12,507 DAA** | **+91,448〜353,906 DAA** |
+
+- 実際の 1 preparation pass(node と同じ手順: cold capture、次に publication)は 68〜241 slice で、budget の範囲に収まった。
+  pass の IO は 1 debit の budget の 0.9〜3.2 % だった。
+- rent の残りの大部分は、owner と preparer の work lane である。原因は、court の固定上限 `maximum_replay_io_bytes` × passes。
+- door の残りの大部分は、cone run の turn にかかる同時包含の項である。8 owner × slot 数 × 回答 body を 125 KB/DAA で割る。
+  回答 body の上限は 1 leaf = class layout の最大 tile × 4(16 KB)で数えている。実測の最大回答は 647 B だった。
+
+### 10.3 結果: testnet-12 で frame は「整合した拒否」になる
+
+- testnet-12 の liability horizon は、fence 16,000 で `120 + 3,000 = 3,120` DAA である。
+- 候補値のもとでは、corpus 11 class のどれも上限 6 と 257 の両方で door が horizon を超える(最小は moe n=52、上限 6 で 3,389)。
+- したがって、この候補で武装すると、IR class の FP claim は frame を作れず、G-03 で受理されない。
+  報酬は出ないが、Final が無期限に遅れることも、負荷上限が外れることもない。
+- **testnet-12 で正直な IR FP claim が支払いまで届くことは、この branch では示せていない。**
+  試験(10.4)が通るのは、試験専用の config のもとでだけである。
+
+### 10.4 T-N1(fold 水準、production transition)
+
+`consensus/core/src/palw_state_v2/tests/tir_fp_lane_v1.rs`。
+
+- 全 block を `apply_palw_transition_v2_with_extras` に通した(支払いは V7 の receipt spend)。全 control は実 ML-DSA-87 で署名し、fold で検証した。
+- frame の価格と時計は TEST-ONLY config による。offence attribution、panel economy、R-core+ は testnet-12 と同じく武装した。
+- 経路:
+  1. claim の受理と frame の設置
+  2. Panel(5 seat)の bind
+  3. producer の 1 pass 1 debit と Ready
+  4. 3 seat それぞれの pass debit と、atomic な Valid + raw custody grant + Ready
+  5. その 3 receipt による licence
+- `t_n1_an_honest_ir_fp_claim_reaches_final_and_payment_inside_the_liability_horizon`: ok。
+  - floor 266 = collect_until。horizon 627 の内側である。
+  - floor の前は Final ではなく、spend も拒否される。
+  - floor の後は Final になり、receipt quantum の spend で weight(支払い)が加わる。
+  - producer の担保は不変である。
+- `t_n1_a_forged_ir_fp_claim_is_convicted_by_one_outside_owner_and_never_paid`: ok。経路は次のとおり。
+  1. 1 leaf を偽った commitment を、Panel の 3 seat が Valid で license する。
+  2. Panel 外の bond 1 つが、preparation door の後に Open する。
+  3. その bond は、自分の再計算と比べて偽の leaf(1 つだけ)を局所化し、Demand する。
+  4. producer が Begin / Part / Finish で回答する(turn span 10 DAA の内側)。
+  5. その bond が、自分の再計算から作った cone refutation を filing する。
+
+  結果:
+  - claim は `Voided(CourtFraud)`。
+  - producer と Valid の 3 seat が slash され、それぞれの offence は 1 回だけ記録される。seat の lock は取られる。署名しなかった 2 seat は無傷である。
+  - 2 回目の filing は拒否される。
+  - claim は Final に届かず、receipt spend は拒否される。safe weight は 0 のままである。
+- **これは node E2E ではない。** carrier の fee と burn、PQ mempool、template、node service loop は通らない(§8.4 の harness)。
+
+### 10.5 実行した試験(この branch)
+
+- `cargo test -p kaspa-consensus-core --lib -- palw_tir_public tir_fp_lane t_n1 shipped_presets_have_pinned_fingerprints tir_preparation_is_claim_wide palw_tir_frame_cost palw_native_resource aux_registry_tests`:
+  `134 passed; 0 failed`。T-N1 の 2 本、door の上限試験 `a_frame_whose_door_exceeds_the_records_longest_pursuit_is_not_built`、
+  cost record の試験、`shipped_presets_have_pinned_fingerprints` を含む。§7.4 / §8.3 / §9.6 で失敗と記録された
+  `flat_original_binding_does_not_acquire_tiled_trace_obligations` も、この base では ok だった。
+- `cargo test --release -p misaka-palw-tir-exec --features node --test free_prompt`: `5 passed; 0 failed`。
+- `cargo test -p kaspa-consensus-core --test g14_close_legacy`: `8 passed; 0 failed`。
+  horizon を 1 DAA 超える `maximum_door_daa` は、武装時の検証で拒否される(追加した assert)。
+- `cargo test -p kaspad --lib -- tir_public_custodian tir_acquisition_driver tir_public_owner tir_public_filer palw_drill_tir_frame_tests`: `16 passed; 0 failed`。
+  1 pass 1 debit にした custodian の build と既存 unit を確認した。pass mode の node loop を通しで動かす試験は無い。
+- `cargo test --release -p misaka-palw-tir-exec --features node --test frame_measure`: `1 passed`。
+  11 class すべてで、node と同じ手順の 1 pass が 1 debit の budget に収まることを assert した。
+- `cargo test --release -p kaspa-consensus-core --lib -- tir_frame_accepting_actions_are_measured_across_custodian_uppers`: `1 passed`。
+
+### 10.6 残り(閉じていないもの)
+
+1. **testnet-12 の horizon に door を収めること。** 候補値では収まらない(10.3)。次のいずれかが要る。測定値を伴わずに値を短くすることはしない。
+   - (a) 回答 body の上限を、class の実際の leaf の大きさから導く。
+     window あたりの最大 leaf byte を、step space から決定的に数える。現在は 1 leaf を最大 tile × 4 で数えており、実測の約 27 倍である。
+   - (b) cone の turn の上限を、program の依存関係から導く。現在は安全側に、全 leaf を run で取る。
+   - (c) 同時追及の負荷モデルを見直す。K_owner × 全 custodian slot が毎 turn 全回答を chain に載せる前提である。owner 枠の lane と共同で扱う。
+   - (d) 上限 257(stratified seat)の frame の扱い。slot 数に比例する包含項のため、door は上限 6 の約 28 倍になる。
+   - (e) 包含容量 `parallel_bytes_per_daa` と `inclusion_margin_daa` を、testnet-12 で出荷 binary を使って観測すること(現在の値は上限値)。
+2. **rent の work lane。** court の固定上限 `maximum_replay_io_bytes` × passes が支配的である。実測の pass IO はその 1〜3 % だった。
+   class ごとの実測上限に置き換えるかは未決である。
+3. **T-N1 の node 水準。** kaspad の `palw_service_public_e2e` で、mempool と template を通す経路は未作成である(§8.4 の 2 は不変)。
+   pass mode の custodian loop を通しで動かす node 試験も無い。
+4. **記録。** `PALW_TIR_FRAME_COST_RECORDS_V1` は空のままである。武装には、最も遅い対応 node での測定、testnet-12 で観測した network input、review digest が要る。
+5. G-T1(能動的な slot 占有)と K_owner の扱いは、owner 枠の lane の担当である(この branch は `palw_tir_public_fold_v1.rs` の owner admission を変えていない)。
+
+## 11. 追補: conviction door を導出して horizon に収める(2026-10-17、branch `integ/g14-tir-pricing-r2`)
+
+§10.6 の 1 の続きである。値を短くするのではなく、各項を導出し直した。新しい規則はすべて休眠のままで、testnet-12 の指紋は変わらない。
+door は `collect_until − accepted`、horizon は testnet-12 の fence 16,000 で `120 + 3,000 = 3,120` DAA である。
+測定条件は §10.2 の候補と同じで、記録は `frame-ops-after.json` にある。
+
+### 11.1 各項の導出と、適用後の door(corpus 11 class、frame の上限で測定)
+
+| 段階 | 変更 | door(最小〜最大) | horizon 内か |
+|---|---|---|---|
+| §10(出発点) | — | 3,389〜12,507(上限 6) | 否 |
+| (a) 回答 body の上限 | class の step space から導く(下記) | 609〜727(上限 6) | 可 |
+| Open 窓の修正 | `acquisition_daa + inclusion_margin`(下記) | (a) に含む | — |
+| (d) frame の custodian 上限 | 6(flat Panel 5 seat と producer) | 上限は 257 → 6 | — |
+| (c) owner queue の待ち | door に含める(下記) | **2,145〜2,263** | **可** |
+
+(a) **回答 body の上限は class の実際の leaf から導く。**
+- `PalwTirStepSpaceV1::maximum_leaf_lanes_v1` は、job の最も広い leaf を数える。committed node では `min(tile, その job の最大 H での要素数)`、checkpoint と history の tile も同様に数える。
+- `maximum_window_lanes_v1` は、連続する c 個の leaf が保持できる lane を数える。
+  値は `min(c × 最大 leaf, (⌈(c−1)/L_min⌉ + 1) × 1 position の最大 lane)` である。
+- source の `unit_bound_v1`(StepLeaf / StepRun)と prepared bytes はこの値を使う。decode の上限は従来どおり layout の値である。
+- 実測と上限:
+
+  | 量 | 値 |
+  |---|---|
+  | 最大 leaf | 96 B(従来の上限 16,384 B) |
+  | n leaf の run の実回答 | 5.9〜25.0 KB |
+  | 同じ run の上限 | 7.6〜42.3 KB |
+
+  `frame_measure` は、11 class すべてで「実回答 ≤ 上限」を assert した。
+- job の geometry が保持できない body は Begin で拒否される。
+  - その場合、producer は回答できず、default される(DA conviction)。
+  - それを Valid とした seat も default される。正直な seat は自分の replay が一致しないので Valid を出さない。
+  - このため multi-part の fixture は、実際に計算した 4,096 lane の logits leaf(`test_support::tiny_execution_wide`)に替えた。
+
+**Open 窓の修正。** 窓は `acquisition_daa + inclusion_margin` にした。候補値の窓は 1 DAA で、Open 自身の inclusion margin(4 DAA)より短かった。
+
+(d) **frame の custodian 上限は flat Panel の seat と producer(`palw_tir_frame_custodian_upper_v1`、testnet-12 では 6)である。**
+- frame の claim は、atomic な Valid + grant + Ready で credit された V1 receipt でしか license されない(`require_qualified_receipts_v1`)。
+- frame の claim に対して、typed / segmented / shard の licence はすべて拒否される(`require_qualified_typed_receipts_v1`)。
+- したがって、stratified(×256)や shard licensing(×1,024)の seat は frame の custodian になれない。上限を超える grant は、契約の `custodians ≤ maximum_custodians` で拒否される。
+- typed の raw-grant 経路を将来 frame に配線する場合は、この上限も追従させる必要がある。
+- 試験 `free_prompt` で、t12 の frame 上限が 6 であることを assert した。参考値として、上限 257 で数えた door は 12,871〜16,399 である。
+
+(c) **owner queue の待ちを door に含めた(`tir_public_owner_queue_wait_v1`)。**
+- lane g14-court-capacity-r2 の fair start(`1e566221e`)では、K_owner 枠が埋まっている間の Open は queue で待ち、`⌈(q+1)/K⌉` tenure 以内に入る。
+  tenure は `max(grace, Open 窓 / 2K)` である。
+- q(前に並べる Open の数)は、Open 窓の間に包含できる control の数で抑えられる: `窓 × ⌊parallel / control_bytes⌋` = 5 × 8 = 40。
+- grace は 256 なので、待ちは `⌈41/8⌉ × 256 = 1,536` DAA である。
+- 待っている row は demand しないので、custodian の負荷は K_owner 本のままである。turn span の同時性の項は従来どおりである。
+- **lane 間の注意:** tenure の式は court-capacity lane の `tir_owner_tenure_v1` と同じでなければならない。merge のときに、片方がもう片方を呼ぶ形に統一する必要がある。
+
+(b) **cone の turn 数の上限は導出できていない。**
+- cone がどこまで遡るかは demand engine の再帰で決まる。state は直前の checkpoint まで再構成し、attention の history は窓全体を読む。
+- 健全な静的上限を出すには、demand engine を対象にした静的解析が要る。安全側の `⌈n/256⌉` turn のままにした。
+- corpus は n ≤ 256 なので cone の turn は 1 回で、door には影響しない。実 model(n が桁違いに大きい)では、この項が支配的になる見込みである(未測定)。
+
+### 11.2 残っている支配項と、必要な判断
+
+- corpus では、door 2,145〜2,263 のうち **1,536 が owner queue の待ち**(6 tenure × grace 256)である。残りの約 610〜730 が局所化 path(11 turn)と preparation(16)である。
+  1 turn の span は約 50 DAA で、内訳は inclusion margin 4 × 6 move と、8 owner の同時包含である。
+- door は horizon 3,120 に収まるので、この候補では window の判断は要らない。
+- 実 model については (b) が残る。n/256 個の cone turn が door を horizon の外に押し出すかどうかは、実 model で測るまで分からない(未測定)。
+  外に出る class は、§10.1 の 4 により frame を作れず、受理されない。
+
+### 11.3 試験(この branch、targeted のみ)
+
+- `cargo test -p kaspa-consensus-core --lib -- palw_tir_public tir_fp_lane t_n1 shipped_presets_have_pinned_fingerprints tir_preparation_is_claim_wide palw_tir_frame_cost palw_native_resource aux_registry_tests palw_tir_court palw_tir_step`:
+  `143 passed; 0 failed`。T-N1 の 2 本と、wide leaf に替えた acquisition fixture を含む。
+- `cargo test -p kaspa-consensus-core --test g14_close_legacy`: `8 passed`。
+- `cargo test --release -p misaka-palw-tir-exec --features node --test frame_measure --test free_prompt`: `1 + 5 passed`。
+- `cargo test -p kaspad --lib -- tir_public_custodian tir_acquisition_driver tir_public_owner tir_public_filer palw_drill_tir_frame_tests`: `17 passed; 0 failed`。
+  これは consensus crate(`palw_accept` の frame 上限)の build も兼ねる。
+
+### 11.4 node 水準(§10.6 の 3)
+
+- **custodian loop。** 1 permit で pass 全体を回す loop を、純関数 `run_pass_slices_v1` に切り出した。production の Run step はこの関数を呼ぶ。
+  試験 `one_permit_funds_a_whole_preparation_pass_across_run_steps_and_fails_closed_past_its_budget` が確かめること:
+  - 1 permit が、capture 300 slice と publication 20 slice を、1 step 64 slice ずつ 6 step で賄う。
+  - 全 slice が 1 回ずつ charge される。
+  - budget を 1 slice 超える pass は、超える slice を実行する前に fail closed する。
+  - 実 backend の reader ではなく fake を使った試験で、consensus の snapshot の検査は通らない。
+- **mempool / template を通す node 水準の T-N1 は未作成。** 既存の harness(`palw_service_public_e2e`、`palw_service_kernel_e2e`)に次が無い:
+  1. IR class を `Active` まで進める lifecycle(kernel e2e は登録まで)
+  2. TIR attempt family の認証と layout 公開(tag 169)を mempool に通すこと
+  3. 試験で frame の fence と cost model を武装したときの producer の TFP1 carriage
+  4. 正直な seat の grant+Ready、owner、filer を service loop で回すこと
+
+  fold 水準の T-N1(§10.4)は、2〜4 の consensus 側を production transition で通している。
+
 ## 12. 追補: 共謀 drill の driver と受入試験 A〜G(2026-10-17、branch `integ/g14-drill`)
 
 外部監査(external audit `rfc1_20_audit_ja.md` §8 の受入試験 A〜G、§7 の指標)と、本書 §5.3(D-01〜D-18)・§4 G-17 に対する、この lane の作業と結果を記録する。
@@ -2066,3 +2310,149 @@ recurrent profiles, and `supports_dissection` remains conservative when held
 answerability is armed. Connecting a covered, versioned route must preserve the
 context bound, compute safety factor and turn cap, all other admission checks,
 and consistency between the SDK, registry, registration fold and genesis mirror.
+
+## 12. 追補: T-N1 をノード段で通す(受入試験 A、2026-10-18、branch `integ/g14-tir-pricing-r2`)
+
+**12.1 結果(実行・合格)。** どちらも PQ mempool → production template → 実サービス(socket P2P で接続)を通る。
+
+| 試験 | 時間 | 示したこと |
+|---|---|---|
+| `tir_frame_node_an_ir_class_walks_to_active_through_the_mempool`(piece 1+2) | 533 s | SDK 登録 → family 認証 → lane 認証 → layout 公開 → readiness jury → probation 10 → Active |
+| `tir_frame_node_tn1_an_honest_framed_claim_is_final_with_its_payment_right`(piece 3+4) | 1,955 s | producer サービスが TFP1 付き canonical IR claim を出し、5 seat サービスが P2P で material を取得・再実行・Valid・license → Final。未使用の価格付き quantum 1、producer 担保は不変 |
+| `tir_frame_node_tn1_a_forged_framed_claim_is_convicted_by_one_outside_service` | 1,775 s | producer サービスが cone 偽造(D-05)。producer の custodian が準備・封印、外部 bond のサービスが再実行で不一致 → owner 取得 → 局所化 → arithmetic finding → 公開 filer → DAA 1,808 で `Voided{CourtFraud}`、producer slash、quantum は使えない |
+
+**12.2 示していないこと。** (a) 誠実 claim の quantum の**当選**(この run では当たらず。spend 自体は fold 段 T-N1)。(b) 共謀 seat の
+slash(脚本の共謀 Panel の licence が有罪確定より前に届かなかったので、課金できる Valid がない。seat slash 枝は fold 段 T-N1)。
+
+**12.3 見つけて直したもの(本番コード、休眠 fence の下)。**
+1. **DL-1 の index ずれ(consensus)。** `TransitionBuilder::arm_deadline` が終端 claim の operational release(abandon hold)にも staged
+   material horizon の floor を掛け、DL-1 の再構築は掛けない → debug assert で virtual processor が停止。arm 側を DL-1 に合わせた
+   (`4a713ecee`)。staged court の行がある所でだけ起き、t12 の fold は不変。
+2. **IR canonical claim の tokenizer。** `build_canonical_claim` が job の `tokenizer_id` を既定値のままにし、frame の source 解決で
+   全 IR canonical claim が作れなかった。class record の tokenizer を入れる。
+3. **owner Open の期限。** Open を `collect_until − 1` の期限で court lane(EDF、1 件 in-flight)に積んでいたため、先に期限が来る
+   手に負けて open door を過ぎた。期限を `open_until − 1` にし、door を過ぎた case は終える。
+
+**12.4 harness だけの設定(出荷しない)。** 512 quanta / canonical job、payout rate を t12 の 2.5×10^6 倍(W₀ ≈ 1.4×10^5 CCU、
+小さな class を正直に引けるように)、acquisition 4 DAA、owner の open 窓は 90 s/DAA・回収 door は 2 s/DAA で時間を刻む(debug build の
+サービスは 1 手に数秒〜数分、試験の 1 block は 60 ms。t12 の 1 DAA は 120 s heartbeat)。probe は正直な実行(捏造 root の probe は
+全公開 bond の fraud filer が正しく追い、1 件 in-flight の court lane を塞いだ)。
+
+**12.5 cone 上限(監査 (b))。** `cone_runs_bound_v1` を frame の局所化項に入れた。horizon を超える door の frame は従来どおり
+`DoorBeyondLiabilityHorizon` で作らない。test-only 時計の corpus(n ≤ 256)で拒否される class はない。実測時計での class 別の
+可否は測定記録(`PALW_TIR_FRAME_COST_RECORDS_V1`、空)が入るまで出せない。
+
+
+## 14. Codex 継続: T-N1 の node 受入条件を強制する(2026-10-18)
+
+branch `codex/g14-tir-completion`、元の TIR worktree を継続使用。genesis #2 の fit(PID 71987 / 72982)は停止していない。
+
+- `kaspad/src/palw_service_tir_frame_e2e.rs` の誠実系は、未使用 quantum を持つだけでは合格しない。実サービスが出した誠実な frame の Final を確認し、当選 quantum を receipt block に載せ、consensus state の `spent` が増えることを必須とした。同じ claim の当選を引き直さず、当選しない場合は次の実サービスの frame を観測する。時間と block 数の上限を超えれば失敗する。
+- 偽造系は、共謀 seat 集合が空の場合に失敗させる。TEST harness 内だけで anchor delay を 1 DAA にし、実 Panel binding の後、短い preparation 窓の中で preparation と Ready を batch 搬送し、conviction より前に licence を着地させる。課金前の担保を先に記録し、各 seat の実減額を確認する。本番 preset・m/k・経済値を変更していない。
+- **検証状態: 未完。** `CARGO_INCREMENTAL=0 cargo test -j 3 -p kaspad --lib --features private-integration-config tir_frame_node_tn1_an_honest -- --nocapture --test-threads=1` を実行中。log は `/tmp/codex-g14-tir-honest.log`。この追記時点ではビルド中で、支払い・seat slash を示した結果として数えない。偽造系の実行も必要。
+- 次に、上記 2 系の結果と 02-B の node 実行を確認し、出荷 binary の測定・fence drill と区別して報告する。G14 全体の完了・武装・配備を意味しない。
+
+
+### 14.1 02-B の node 受入経路を追加(2026-10-18、結果待ち)
+
+- 誠実系 T-N1 を、通常の `ClassSemanticsDeclaredV1` で非既定の model profile・runtime manifest・runtime class・CU ruleset を宣言する fixture にした。tokenizer は実 JSON から ID と rendering table を作り、同じ ID を PALWTIR1 container に格納する。raw JSON と `.palwtokens` は同じ artifact の隣に置き、通常の sidecar loader で読む。
+- raw 長はローカルの値を証明済みとして注入しない。実サービスの既存 inventory worker が on-chain EOF certificate を取得し、それから frame を出す経路を試す。受理 frame では 4 つの非既定 ID と inventory の実 byte 数を assert する。
+- 一致する frame の quote を positive control とし、runtime manifest 1 フィールドだけ異なる header の quote が拒否されることを assert する。実際に支払われた frame にも同じ非既定 manifest と CU ruleset が残ることを確認する。
+- 共謀系は、準備した集合と実際に bound された seat 集合の一致も必須とし、担保の事前 snapshot は card を key に保存する。
+- **ビルド成功、runtime は結果待ち。** Rust 構文解析と `git diff --check` に加え、対象 lib test のビルドが 26m28s で完了した。`/tmp/codex-g14-tir-honest.log` の対象 node 試験は実行中(PID 9789)。非既定 semantics の Final・支払い完了としてはまだ数えない。
+
+### 14.2 token table loader の実行結果と修正(2026-10-18)
+
+最初の誠実系実行は、build 26m28s の後、92.76s で失敗した。追加 fixture の `eog_token_ids` が空で、通常 loader が「少なくとも 1 個の vocabulary 内 EOG ID が必要」と拒否した。これは Final・支払いの成功結果ではない。fixture の最終 vocabulary ID を EOG として指定した。
+
+修正後の同一 cargo command は build 3m07s で完了し、`/tmp/codex-g14-tir-honest-eog.log` で node 試験を実行中。別の `/tmp/codex-g14-tir-forged-test` は修正前 executable の clone であり、追加 semantics fixture を使用しない偽造系を実行中(`/tmp/codex-g14-tir-forged.log`)。両者とも、この追記時点では合格を確認していない。
+
+### 14.3 Declared semantics reaches inventory, then refuses the liability door (2026-10-18)
+
+The EOG-fixed honest node test reached Active at DAA 399 and the ordinary native tokenizer inventory worker advanced past its EOF wait. The producer then refused the original allocation: `DoorBeyondLiabilityHorizon { required: 5390, allowed: 3120 }` in `/tmp/codex-g14-tir-honest-eog.log` (11:37:15 JST). The configured plan cannot change with more blocks, so our honest test processes 12111 / 13795 were explicitly interrupted to investigate the allocation instead of waiting for the 7200-second bound. This is NOT a test pass or a completed payment demonstration. The independent forged test, inherited fit and drill remain running. Do not remove declared semantics or increase the liability horizon to turn this result green.
+
+### 14.4 Separate ordinary payment and declared-semantics acceptance (2026-10-18)
+
+Added `tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum`, using the same production-service/P2P/receipt-spend harness with the original semantic identities. The existing honest test retains the non-default declared semantics, native EOF inventory and altered-manifest negative control; its 5390/3120 door refusal remains unresolved. Both tests require an actual consumed quantum. A pass of the ordinary payment case does not establish 02-B or close G14 as a whole. The forged case retains the mandatory licensed colluder set and per-seat collateral reduction.
+
+The ordinary payment case is running via the same targeted cargo command with filter `tir_frame_node_tn1_default_semantics`, log `/tmp/codex-g14-tir-default-payment.log`. Validation is pending.
+
+### 14.5 Owner next-move pacing (2026-10-18, validation pending)
+
+The running forged executable repeatedly submitted the owner's shared court round. Inspection found that owner scheduling, unlike the already corrected custodian responder, applied `COURT_MOVE_REPLAN_DAA` to every move on that round, including a different action/native turn after the previous one was accepted. Added the unsigned control signing digest to each owner's in-memory case: only an identical move waits the existing retry interval; the pending-carrier guard remains. No consensus deadline, capacity, rent or preset changes. A targeted retry/next-move boundary test is queued in `/tmp/codex-g14-owner-retry.log`.
+
+The still-running `/tmp/codex-g14-tir-forged-test` predates this fix. Its result cannot validate the corrected scheduler, and a new forged node run will be required after the current run terminates. The ordinary payment build also remains pending.
+
+### 14.6 Do not replay a frame whose new-owner door has closed (2026-10-18)
+
+The old forged run logs a replay of its second frame every tick after the new-owner door closes. Existing-case handling removes that unopenable case, but discovery only checked the later conviction door and recreated it immediately. Discovery now checks the same earliest inclusion condition as the existing Open builder before spending replay work. An already accepted acquisition remains eligible after the new-owner door, under its unchanged pursuit deadlines. Added boundary coverage for one DAA before the closing door, after it, an existing acquisition, and saturated clock arithmetic. Targeted test queued in `/tmp/codex-g14-owner-closed-door.log`; result pending. No acceptance window or liability value is changed.
+
+### 14.7 Serialize pending TIR builds under memory pressure (2026-10-18)
+
+With swap usage at 16,645 MB, our ordinary-payment build and queued owner retry/closed-door builds were explicitly interrupted (cargo roots 26136, 28931, 33990 and their compiler descendants). They had not reached test execution. This is a resource-management interruption, not a pass or test failure. Keep the GDN/native target build running first; rerun the TIR targeted commands with `-j 1` once that build finishes. The already running forged executable 12058, genesis fit 72982 and run-12 driver 84986 were not interrupted. Their results do not validate the newer owner scheduler fixes.
+
+### 14.8 Old forged executable reaches Final (2026-10-18)
+
+The pre-owner-fix `/tmp/codex-g14-tir-forged-test` terminated after asserting at 12:29:04 JST that the forged claim reached `Final { final_daa: 2321 }` (accepted DAA 1722, licensed DAA 1727, collect door 2320). `/tmp/codex-g14-tir-forged.log` also records `TIR immutable request acquisition budget exhausted` before that outcome. Subsequent DB strong-reference destructor panics abort cleanup; the primary security failure is the forged Final, not cleanup. This run proves neither conviction nor seat slash.
+
+The owner retry and closed-door changes were not in that executable. Do not infer that they fix this result until a new node run passes. A serial (`-j 1`) build/run of `palw_tir_public_owner::tests` is now active in `/tmp/codex-g14-owner-tests-serial.log`, then both the corrected forged node test and ordinary honest quantum payment must run. The declared-semantics door refusal also remains open.
+
+
+### 14.9 Genesis #2 pre-upload identity snapshot (2026-10-18)
+
+The active long fit reached integer sequence 0 position **27,200/32,768** and PID 72982
+remained live. Its final report does not yet exist; no upload eligibility is established.
+The state file was saved at 03:36 JST, before the 03:39 short-fit report, consistent with
+the parent pipeline saving the completed fit only after the long fit returns.
+
+[Identity snapshot](../../../evidence/palw/implementation-records/genesis02-preupload-identity-2026-10-18.json)
+records a read-only check of the existing PALWART3 index: exact header framing, index SHA-256,
+trailing artifact root, embedded program's plain BLAKE2b-512 against the short-fit report,
+kernel ID/version, tokenizer ID and both on-disk segment sizes all agree with the retained
+record. The embedded program is 32,301 bytes and matches the short fit's digest
+`8f99de747ebfd268dce331f1639aa664535bff23e17284ac1f2029db02a0d97fafd00c42a70e6f65dc2d614bf420984c54871bcdba28c9d74b515496f190c896`.
+
+This snapshot does not rehash the 2.54 GB of segment data, certify numerical fidelity,
+mark the stale state as measured, upload anything or verify Hugging Face contents. The full
+long-fit decision and the pipeline's upload/verify gates remain required. No model was downloaded.
+
+
+### 14.10 Owner unit tests pass; fresh T-N1 node runs started (2026-10-18)
+
+The serial rebuild finished after 61m53s. Its original filter
+`palw_tir_public_owner::tests` matched **zero tests**, so that command establishes compilation,
+not a passing owner test. Listing the actual binary identified the module as
+`palw_panel::palw_fraud_filer::tir_public_owner::tests`.
+
+Running `target/debug/deps/kaspad_lib-b2a13e8b08797a07 tir_public_owner::tests --nocapture --test-threads=1`
+passed **4/4 in 0.06 s** (`/tmp/codex-g14-owner-tests-correct-filter.log`): IDs-first acquisition,
+seat finding to the filer queue, closed-door discovery with existing acquisitions preserved,
+and immediate next moves while retries remain paced.
+
+A clone of that same executable, `/tmp/codex-g14-tir-owner-fixed-test-20261018`, now runs the
+forged node case (PID 61854, `/tmp/codex-g14-tir-forged-owner-fixed.log`) and the default-semantics
+actual-quantum payment case (PID 61855, `/tmp/codex-g14-tir-default-payment-owner-fixed.log`).
+Both were confirmed live. Their results are pending; the earlier forged run that reached Final
+in §14.8 is not counted as fixed by unit tests. The separate declared-semantics 02-B liability-door
+refusal in §14.4 also remains unresolved.
+
+
+### 14.11 Tighter authenticated tokenizer byte bound (2026-10-18, validation pending)
+
+The native EOF certificate still authenticates the exact original raw bytes. Its
+key-event work bound now derives `max(1, floor(actual_bytes / 2))`, rather than
+`max(1, actual_bytes)`. Each object-key uniqueness event consumes its own opening
+and closing quote. Each ordinary/added ID event consumes a distinct field colon
+and at least one numeric byte. These byte pairs do not overlap, even in a parsed
+prefix followed by invalid JSON. No owner-declared event count is trusted.
+Both preclaim pricing and BundleOpen read this same certificate method; the
+liability horizon, inclusion prices, signatures and EOF admission are unchanged.
+The staged public court remains dormant in every preset.
+
+Added a parser-pause regression with one-byte and larger chunks, empty/escaped
+keys, ordinary and added IDs, duplicate keys/IDs, invalid suffixes and tiny
+operands. It checks the consumed-byte bound after every proven pending event,
+not only after valid EOF. The targeted core test is still compiling in
+`/tmp/codex-g14-tokenizer-byte-bound.log`; **no test PASS or 02-B node acceptance
+is claimed**. The earlier 5390/3120 refusal remains the recorded node outcome
+until the rebuilt declared-semantics case proves otherwise.

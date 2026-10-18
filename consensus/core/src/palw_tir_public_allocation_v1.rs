@@ -67,7 +67,13 @@ pub fn tir_public_prepared_bytes_v1(
     let step_tree_bytes = tir_public_tree_disk_bytes_v1(n)?;
     let row_tree_bytes = tir_public_tree_disk_bytes_v1(d)?;
     let tile_forest_bytes = mul(d, tir_public_tree_disk_bytes_v1(tiles)?)?;
-    let raw_format_leaf = add(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?, 26)?;
+    // Audit §10: a leaf is at most the class layout's widest committed tile (`maximum_leaf_bytes_v1`, the bound every leaf is
+    // decoded under), not the format's 65,536-lane tile — measured: 13–60 KB generations against 28–118 MB bounds before.
+    // §11 (a): at most the job's actual widest leaf (the class's step space), never above the layout's decode bound.
+    let raw_format_leaf = add(
+        source.widest_leaf_value_bytes_v1().min(source.maximum_leaf_bytes_v1()).min(mul(u64::from(crate::palw_step::PALW_STEP_MAX_TILE_LEN), 4)?),
+        26,
+    )?;
     let capture_payload = add(add(mul(prefill, 4)?, mul(d, add(mul(vocab, 4)?, 8)?)?)?, mul(n, raw_format_leaf)?)?;
     let original_capture_bytes = add(capture_payload, add(mul(u64::from(record.program_bytes), 64)?, 65_536)?)?;
     let original_indexes = add(add(add(step_tree_bytes, mul(n, 8)?)?, tile_forest_bytes)?, mul(row_tree_bytes, 2)?)?;
@@ -87,6 +93,9 @@ pub struct PalwTirPublicAllocationRulesV1 {
     pub dissection: bool,
     pub prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     pub config: PalwStagedPublicCourtConfigV1,
+    /// The frame's measured cost units and inclusion capacity (audit §10), from the network's pinned frame cost record — or the
+    /// TEST-ONLY config in tests. Never a carrier field.
+    pub clock: crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1,
 }
 impl PalwTirPublicAllocationRulesV1 {
     fn commitment_v1(self) -> Result<Hash64, String> {
@@ -96,7 +105,7 @@ impl PalwTirPublicAllocationRulesV1 {
         };
         hash(
             b"misaka-palw/tir-allocation-rules/v1",
-            &(VERSION, self.maximum_leaves, self.maximum_custodians, self.court, self.dissection, form, self.config),
+            &(VERSION, self.maximum_leaves, self.maximum_custodians, self.court, self.dissection, form, self.config, self.clock),
         )
     }
 }
@@ -144,6 +153,9 @@ pub enum PalwTirPublicAllocationMissingV1 {
     NativeRootClaimCeiling { required: u64, native: u64 },
     PreparedPublicationBound { required: u64, allocated: u64 },
     PreparedSliceBound { required: u64, allocated: u64 },
+    /// The frame's conviction door (`collect_until − accepted`) exceeds the measured record's longest accepted pursuit
+    /// (`PalwTirFrameClockV1::maximum_door_daa`, at most the network's liability horizon): not built, so not accepted (G-03).
+    DoorBeyondLiabilityHorizon { required: u64, allowed: u64 },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwTirPublicAllocationQuoteV1 {
@@ -262,21 +274,21 @@ fn original_controls(
     // map, hence the native O(custodians^2) bound. This does not bound cloning
     // or hashing unrelated global ledger maps.
     let journal_bytes = mul(mul(frame, writes)?, 8)?;
-    // Full-frame source checks remain enabled. Cover up to32 full byte/hash
-    // passes per accepting action, including cumulative allocation/receipt
-    // checks. This bounds finite protocol actions, not unlimited RPC spam.
-    let owner_validation_bytes = mul(mul(frame, owner_reads)?, 32)?;
-    let preparation_validation_bytes = mul(mul(frame, preparation_reads)?, 32)?;
+    // **Audit §10 (the frame pricing fix): measured cost units per accepting action, a full-frame pass only where the fold makes
+    // one.** Before the fix every accepting action was charged 32 full-frame byte passes at 32 parser steps a byte (1,024 steps per
+    // frame byte). Measured (release, fold-level, `tir_frame_accepting_actions_are_measured_across_custodian_uppers`): one Demand,
+    // Begin, Part or Finish cost about one full-frame pass (its source re-check) — 0.12 ms at a 63 KB frame, 2.3 ms at 2.7 MB — and
+    // the fold now re-checks the rooted frame only at an owner's Open and at a filing (every write re-checks what it writes; the
+    // state root authenticates the rest). So each read action is charged the measured units, and each owner's Open and filing one
+    // measured full-frame pass each. The writes (grants, Ready) keep their journal charge above.
+    let clock = acquisition.clock;
+    let owner_validation_bytes = mul(frame, mul(clock.frame_passes_per_check, 2)?)?;
+    let action_steps = clock.action_steps_v1(rules.maximum_custodians)?;
+    let owner_action_steps = mul(owner_reads, action_steps)?;
+    let preparation_action_steps = mul(preparation_reads, action_steps)?;
     let key = crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN as u64;
-    let decode = add(mul(signature_checks, add(signature, key)?)?, mul(references, 256)?)?;
-    let mut plan = component(
-        add(journal_bytes, preparation_validation_bytes)?,
-        mul(frame, 16)?,
-        decode,
-        writes,
-        acquisition.envelope.vocab,
-        rules.config,
-    )?;
+    let decode = add(add(mul(signature_checks, add(signature, key)?)?, mul(references, 256)?)?, preparation_action_steps)?;
+    let mut plan = component(journal_bytes, mul(frame, 16)?, decode, writes, acquisition.envelope.vocab, rules.config)?;
     plan.row_bytes = frame;
     plan.rent_sompi = add(
         add(
@@ -286,7 +298,8 @@ fn original_controls(
         mul(plan.maximum_parser_steps, rules.config.prices.rent_per_parser_step)?,
     )?;
     plan.resident_ram_bytes = add(mul(frame, 16)?, mul(add(signature, key)?, 8)?)?;
-    let mut owner_validation = component(owner_validation_bytes, mul(frame, 16)?, 0, 0, acquisition.envelope.vocab, rules.config)?;
+    let mut owner_validation =
+        component(owner_validation_bytes, mul(frame, 16)?, owner_action_steps, 0, acquisition.envelope.vocab, rules.config)?;
     // Read validation creates no additional move, stored row, deadline or
     // capital pool. Its byte/parser/hash/RAM rent is nevertheless real.
     owner_validation.row_bytes = 0;
@@ -302,7 +315,7 @@ fn original_controls(
             maximum_frame_writes: writes,
             maximum_native_signature_checks: signature_checks,
             maximum_state_references: references,
-            maximum_frame_validation_bytes: add(owner_validation_bytes, preparation_validation_bytes)?,
+            maximum_frame_validation_bytes: owner_validation_bytes,
         },
     ))
 }
@@ -653,7 +666,7 @@ pub fn derive_tir_public_allocation_v1(
     } else {
         None
     };
-    let acquisition = PalwTirPublicOwnedPlanV1::derive_v1(&source, rules.maximum_custodians, rules.config)?;
+    let acquisition = PalwTirPublicOwnedPlanV1::derive_v1(&source, rules.maximum_custodians, rules.config, rules.clock)?;
     // D=0 has no trace rows/IDs to acquire, not an unknown source silently
     // omitted. Original output identity over the empty IDs is a local check.
     let flat_trace = if view.is_tiled_v1() || source.decode_count_v1() == 0 {
@@ -683,10 +696,12 @@ pub fn derive_tir_public_allocation_v1(
             allocated: preparation.maximum_prepared_bytes,
         });
     }
-    let native_slices = mul(add(executor.prepared_disk_bytes.div_ceil(16_384), 8)?, add(rules.config.prices.reorg_replay_moves, 1)?)?;
-    if native_slices > preparation.maximum_slices_per_actor {
+    // Audit §10: a preparer's whole pass rides one debit, so no slice count bounds its publication; `PreparedSliceBound` stays a
+    // named refusal for a plan whose passes exceed its debits.
+    let passes = add(rules.config.prices.reorg_replay_moves, 1)?;
+    if passes > preparation.maximum_slices_per_actor {
         return incomplete(PalwTirPublicAllocationMissingV1::PreparedSliceBound {
-            required: native_slices,
+            required: passes,
             allocated: preparation.maximum_slices_per_actor,
         });
     }
@@ -724,12 +739,21 @@ pub fn derive_tir_public_allocation_v1(
     let semantic_resource_plan_id = semantic.as_ref().map(|quote| quote.resource_plan_id);
     let maximum_semantic_history_records = semantic.as_ref().map_or(0, |quote| quote.maximum_records);
     let preparation_until_daa = add(geometry.accepted_daa, preparation.preparation_daa)?;
-    let open = add(preparation_until_daa, rules.config.acquisition_daa)?;
-    // Cold work and Ready are already before owner opening. They remain in the
-    // monetary SUM, but do NOT allocate a second cold-preparation deadline after
-    // every request. Per-owner WorkDebit/response inclusion stays after open.
-    let pre_inclusion = add(preparation_work.envelope.inclusion_daa, preparation.envelope.inclusion_daa)?;
-    let post_inclusion = sum.inclusion_daa.checked_sub(pre_inclusion).ok_or("native preparation inclusion is not inside SUM")?;
+    // §11: the Open window holds one response window AND the Open's own inclusion (an Open sent at the preparation door must be
+    // includable before the window closes; the candidate's 1-DAA window was shorter than one inclusion margin).
+    let open = add(preparation_until_daa, add(rules.config.acquisition_daa, rules.config.prices.inclusion_margin_daa)?)?;
+    // **Audit §10 (the frame pricing fix): the stream door is the honest owner's critical path** — its localization turns plus
+    // the restart turns, each at the span of the largest unit (`acquisition.envelope.inclusion_daa`); its own debits and the
+    // custodians' ride inside those spans. Before the fix the door was every component's inclusion summed end to end (each
+    // WorkDebit and each move one margin, each turn one `acquisition_daa`, the controls' writes and the executor's carriers after
+    // Open too): 6e7–2.4e8 DAA at 6 custodians. Cold work and Ready stay before Open (the preparation door).
+    // §11 (c): the owner queue's worst wait (the fair start admits a newcomer within ⌈(q + 1) / K_owner⌉ tenures) precedes it.
+    let queue_wait = crate::palw_tir_frame_cost_v1::tir_public_owner_queue_wait_v1(
+        add(rules.config.acquisition_daa, rules.config.prices.inclusion_margin_daa)?,
+        &rules.config,
+        &rules.clock,
+    )?;
+    let post_inclusion = add(acquisition.envelope.inclusion_daa, queue_wait)?;
     let generic_end = add(open, post_inclusion.max(1))?;
     let stream = if let Some(quote) = &mut semantic {
         let shift = generic_end.checked_sub(geometry.accepted_daa).ok_or("native semantic offset underflow")?;
@@ -739,7 +763,18 @@ pub fn derive_tir_public_allocation_v1(
     } else {
         generic_end
     };
-    let collect = add(stream, rules.config.collection_daa)?;
+    // The collection door holds a filing that starts at the stream door: its witness parts and conviction at the measured capacity.
+    let filing = crate::palw_tir_frame_cost_v1::tir_public_filing_daa_v1(terminal.envelope.maximum_moves, &rules.config, &rules.clock)?;
+    let collect = add(stream, rules.config.collection_daa.max(filing))?;
+    // External audit 10-17 §7 P0(3): an accepted pursuit ends inside the liability horizon the record pins (validated at arming
+    // against `window_challenge + window_court`); a longer door is refused, never accepted with an unbounded Final delay.
+    let door = collect.checked_sub(geometry.accepted_daa).ok_or("native TIR door underflow")?;
+    if door > rules.clock.maximum_door_daa {
+        return incomplete(PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon {
+            required: door,
+            allowed: rules.clock.maximum_door_daa,
+        });
+    }
     let material = add(collect, rules.config.reorg_retention_daa)?;
     let terms = PalwRenderingClaimTermsV1 {
         accepted_daa: geometry.accepted_daa,
@@ -866,7 +901,11 @@ impl PalwTirPublicAllocationPlanV1 {
             || self.resource_plan_id != self.resource_id_v1()?
             || self.allocation_id != self.accepted_id_v1()?
             || self.preparation_until_daa != add(self.terms.accepted_daa, self.preparation.preparation_daa)?
-            || self.terms.open_until_daa != add(self.preparation_until_daa, self.acquisition.config.acquisition_daa)?
+            || self.terms.open_until_daa
+                != add(
+                    self.preparation_until_daa,
+                    add(self.acquisition.config.acquisition_daa, self.acquisition.config.prices.inclusion_margin_daa)?,
+                )?
             || self.terms.open_until_daa >= self.terms.stream_until_daa
             || self.terms.stream_until_daa >= self.terms.collect_until_daa
             || self.terms.collect_until_daa > self.terms.material_until_daa
@@ -879,8 +918,13 @@ impl PalwTirPublicAllocationPlanV1 {
             || self.control_footprint.maximum_state_references
                 != mul(add(self.controls.maximum_moves, add(owner_reads, preparation_reads)?)?, 32)?
             || self.control_footprint.maximum_frame_validation_bytes
-                != mul(mul(frame_bytes, add(owner_reads, preparation_reads)?)?, 32)?
-            || self.owner_validation.maximum_stream_bytes < mul(mul(frame_bytes, owner_reads)?, 32)?
+                != mul(frame_bytes, mul(self.acquisition.clock.frame_passes_per_check, 2)?)?
+            || self.owner_validation.maximum_stream_bytes < self.control_footprint.maximum_frame_validation_bytes
+            || self.owner_validation.maximum_parser_steps
+                < mul(owner_reads, self.acquisition.clock.action_steps_v1(self.acquisition.maximum_custodians)?)?
+            || self.controls.maximum_parser_steps
+                < mul(preparation_reads, self.acquisition.clock.action_steps_v1(self.acquisition.maximum_custodians)?)?
+            || self.terms.stream_until_daa < add(self.terms.open_until_daa, self.acquisition.envelope.inclusion_daa)?
             || self.owner_validation.resident_ram_bytes < mul(frame_bytes, 16)?
             || self.owner_validation.row_bytes != 0
             || self.owner_validation.maximum_moves != 0
@@ -1059,6 +1103,7 @@ mod tests {
                 dissection: true,
                 prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 config: PalwStagedPublicCourtConfigV1::network_v1(),
+                clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
             },
         }
     }
@@ -1080,6 +1125,23 @@ mod tests {
             PalwTirPublicAllocationQuoteV1::Complete(plan) => plan,
             missing => panic!("native fixture lacks a complete resource derivation: {missing:?}"),
         }
+    }
+    /// **External audit 10-17 §7 P0(3): an accepted pursuit ends inside the record's longest door.** A frame whose conviction door
+    /// is exactly the ceiling is built; one DAA less of ceiling and it is NOT built (named), so G-03 refuses the claim instead of
+    /// accepting it with a Final the frame would delay past the liability horizon.
+    #[test]
+    fn a_frame_whose_door_exceeds_the_records_longest_pursuit_is_not_built() {
+        let mut f = fixture(false, false);
+        let plan = complete(&f, false);
+        let door = plan.terms.collect_until_daa - plan.terms.accepted_daa;
+        f.rules.clock.maximum_door_daa = door;
+        assert!(matches!(quote(&f, false), PalwTirPublicAllocationQuoteV1::Complete(_)), "a door at the ceiling is built");
+        f.rules.clock.maximum_door_daa = door - 1;
+        assert!(matches!(
+            quote(&f, false),
+            PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. }
+                if missing == vec![PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon { required: door, allowed: door - 1 }]
+        ));
     }
     #[test]
     fn generic_native_tir_gets_real_sum_without_a_fourth_semantic_family() {
@@ -1159,7 +1221,9 @@ mod tests {
     fn native_rederive_rejects_self_consistent_underfunding_and_foreign_rules() {
         let f = fixture(false, false);
         let mut plan = *complete(&f, false);
-        plan.controls.maximum_stream_bytes -= 1;
+        // An underfunded component the structural checksum does not bound (audit §10: the controls' stream bytes are now exactly
+        // their structural lower bound, so the underfunding is taken from their hash blocks).
+        plan.controls.maximum_blake_blocks -= 1;
         plan.terms.plan = plan.summed_v1().unwrap();
         plan.resource_plan_id = plan.resource_id_v1().unwrap();
         plan.allocation_id = plan.accepted_id_v1().unwrap();

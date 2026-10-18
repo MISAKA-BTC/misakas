@@ -126,6 +126,23 @@ def anon_env() -> dict:
     return env
 
 
+def upload_refusal(fit: dict | None) -> str | None:
+    """**The upload gate (user decision 2026-10-18):** a genesis artifact is uploaded only after its fit was MEASURED and is
+    within tolerance — the short fit and the long-context fit both. "Not measured" (an evicted source, --no-fit, --no-fit-long,
+    a host too small) stops the run; it is never a pass. Returns the refusal, or None when the upload may proceed."""
+    fit = fit or {}
+    if not fit.get("measured"):
+        return f"the fit was not measured ({fit.get('reason', 'no fit recorded')}); a genesis upload needs a measured fit"
+    if not fit.get("within"):
+        return f"the fit is out of tolerance (KL {fit.get('kl_mean')}, top-1 {fit.get('top1_agreement')})"
+    long = fit.get("long")
+    if not isinstance(long, dict) or not long.get("measured"):
+        return f"the long-context fit was not measured ({(long or {}).get('reason', 'no long fit recorded')})"
+    if long.get("within") is not True:
+        return "the long-context fit is out of tolerance"
+    return None
+
+
 def upload_env() -> dict:
     """The environment for Hub writes: the stored login (`hf auth login`) is used; it is never read or printed here. The
     converter runs anonymously (`anon_env`), so a hook it starts restores the default."""
@@ -1233,6 +1250,9 @@ class Pipeline:
             if st.data.get("record") is not None:
                 st.data["record"]["fit"] = fit
             st.mark("fit", {"measured": False}, self.a.dry_run)
+            if not self.a.dry_run:
+                # User decision 2026-10-18: an unmeasured fit stops a genesis run; it never proceeds to the upload.
+                raise SystemExit(f"#{m['id']}: FIT NOT MEASURED ({why}) — the run stops; nothing is uploaded")
             return
         opts = effective_options(m, self.a.context)
         texts = self.reg["calibration_texts"]
@@ -1266,7 +1286,7 @@ class Pipeline:
         log(f"#{m['id']} fit: mean KL {kl}, top-1 {top1} (tolerance KL <= {tol['kl_mean_max']}, top-1 >= {tol['top1_min']})")
         if within:
             fit["long"] = self.fit_long(m, opts, d, model_path)
-            within = fit["long"].get("within", True)
+            within = fit["long"].get("within") is True
             fit["within"] = within
         if not within:
             st.save()
@@ -1370,10 +1390,12 @@ class Pipeline:
             return
         rec = st.data.get("record") or {}
         fit = st.data.get("fit") or {}
-        if fit.get("measured") and not fit.get("within"):
-            raise SystemExit(f"#{m['id']}: the fit is out of tolerance (KL {fit.get('kl_mean')}, top-1 {fit.get('top1_agreement')}); "
-                             "the index is not uploaded")
+        refusal = upload_refusal(fit)
+        if refusal is not None and not self.a.dry_run:
+            raise SystemExit(f"#{m['id']}: {refusal}; the index is not uploaded")
         if self.a.dry_run:
+            if refusal is not None:
+                log(f"#{m['id']} upload would be refused: {refusal}")
             self.ensure_repo(m)
             self.r.run([self.hf, "upload", m["target_repo"], "<stage dir>", m.get("upload_prefix", "").rstrip("/") or ".",
                         "--commit-message", f"genesis8 #{m['id']}: PALWART3 index and card"])

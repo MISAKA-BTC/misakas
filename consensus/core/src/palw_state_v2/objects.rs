@@ -547,6 +547,39 @@ fn apply_object_inner(
         PalwConsensusObjectV2::TirClassLayoutPublishedV1 { class_id, layout } => {
             palw_staged_court_fold_v1::publish_tir_layout(builder, ctx, *class_id, layout)?
         }
+        // **RFC-0002 02-A (tag 175): a registered TIR class bound to its `PALWART3` container** — the opening recomputes the root,
+        // its one weight section's inner root is the class's artifact root and its program record is the class's program and
+        // tokenizer (`check_tir_container_binding_v1`). Bound once: the same container again folds to nothing, another is refused.
+        // The registrant's signature is the acceptance layer's (as for `ClassSemanticsDeclaredV1`).
+        PalwConsensusObjectV2::TirClassContainerBoundV1 { binding, signature: _ } => {
+            use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
+            if !builder.extras.tir_container_identity_active {
+                return Err(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding before palw_tir_container_identity_v1"));
+            }
+            let class_id = binding.class_id;
+            let artifact_root = builder
+                .state
+                .class(&class_id)
+                .filter(|class| class.registrant_bond.is_some())
+                .map(|class| class.artifact_root)
+                .ok_or(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding names no registrant-signed class"))?;
+            let record = builder
+                .state
+                .tir_class_v1(&class_id)
+                .ok_or(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding names no registered TIR class"))?;
+            let row = crate::palw_tir_container_v1::check_tir_container_binding_v1(binding, &class_id, &artifact_root, record, ctx.daa_score)
+                .map_err(PalwStateV2Error::ImmutableModelUpdate)?;
+            match crate::palw_tir_container_v1::palw_tir_bound_container_v1(&builder.state, class_id).map(|bound| bound.container_root) {
+                Some(bound) if bound == row.container_root => {}
+                Some(_) => {
+                    return Err(PalwStateV2Error::ImmutableModelUpdate("a TIR class's bound container is immutable"));
+                }
+                None => builder.write_staged_row_v1(
+                    PalwStagedCourtKeyV1::TirContainer(class_id),
+                    Some(PalwStagedCourtRowV1::TirContainer(Box::new(row))),
+                )?,
+            }
+        }
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => {
             palw_terminal_carriage_fold_v1::declare(builder, ctx, declaration)?;
         }
@@ -3317,6 +3350,20 @@ fn apply_object_inner(
             // so no frameless TIR claim reaches a reward, weight or credit (it cannot route around the one public conviction door).
             // `Ok` below the fence and for every non-TIR class: byte-identical there.
             palw_tir_public_fold_v1::require_original_frame_v1(builder, *claim_id, *class_id)?;
+            // **RFC-0002 02-A: past `palw_tir_container_identity_v1` a TIR original's class must be bound to its `PALWART3`
+            // container** (tag 175), so the operands a court opens under the class's artifact root are the inner inventory of a
+            // registered container. Refused at the same door as G-03, before anything is priced or written. `Ok` below the fence and
+            // for every non-TIR class.
+            if builder.extras.tir_container_identity_active
+                && builder.state.tir_class_v1(class_id).is_some()
+                && crate::palw_tir_container_v1::palw_tir_bound_container_v1(&builder.state, *class_id).is_none()
+            {
+                return Err(PalwStateV2Error::ClassNotRewardable {
+                    class: *class_id,
+                    code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
+                    why: "past palw_tir_container_identity_v1 a TIR original's class must be bound to its PALWART3 container".into(),
+                });
+            }
             // **G-01 option (b) / G-05 (`palw_g14_route_required_v1`)**: past the fence a free-prompt claim whose job needs a G14
             // route that is not armed (selection: the TIR public frame on THIS commitment; constraint / prefix / tokenizer: the staged
             // court with its legacy filer; never for non-public evidence) is not taken — no reward, weight or credit; its carrier pays

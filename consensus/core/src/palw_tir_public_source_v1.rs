@@ -165,6 +165,13 @@ pub struct PalwTirPublicSourceV1 {
     maximum_leaf_bytes: u64,
     maximum_leaves: u64,
     source_id: Hash64,
+    /// **G14 audit §11 (a): the most bytes of leaf values `c` consecutive leaves of THIS job hold, for `c = 1 ..= RUN`** — from the
+    /// class's step space (`maximum_window_lanes_v1`: the job's actual widest leaf, and the positions a window can touch), not the
+    /// layout's widest tile × 4. Index `c − 1`. Only response BOUNDS read it (prices, clocks, the accepted body ceiling); decoding
+    /// stays at `maximum_leaf_bytes`.
+    window_value_bytes: Vec<u64>,
+    /// G14 audit §11 (b): the most full step-leaf runs the cone of any leaf of this job needs (`cone_runs_bound_v1`).
+    cone_runs: u64,
 }
 fn hash(domain: &[u8], bytes: &[u8]) -> Hash64 {
     Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(domain).hash(bytes).as_bytes().try_into().expect("64"))
@@ -208,6 +215,15 @@ impl PalwTirPublicSourceV1 {
             .filter(|n| *n <= LEAF_BYTES as u64)
             .ok_or("TIR native leaf geometry exceeds original format")?;
         let source_id = hash(b"misaka-palw/tir-public-source/v1", &borsh::to_vec(header).map_err(|e| e.to_string())?);
+        let job = verified.space.job_shape(&header.job_context).map_err(|e| e.to_string())?;
+        let window_value_bytes = (1..=RUN as u64)
+            .map(|count| {
+                let lanes = verified.space.maximum_window_lanes_v1(&job, count);
+                // Never above the format's own per-leaf ceiling (the decode bound).
+                u64::try_from(lanes.saturating_mul(4)).unwrap_or(u64::MAX).min(count.saturating_mul(maximum_leaf_bytes))
+            })
+            .collect();
+        let cone_runs = verified.space.cone_runs_bound_v1(&job, header.step_leaf_count, RUN as u64);
         Ok(Self {
             header: header.clone(),
             class_id: verified.class_id,
@@ -217,6 +233,8 @@ impl PalwTirPublicSourceV1 {
             maximum_leaf_bytes,
             maximum_leaves,
             source_id,
+            window_value_bytes,
+            cone_runs,
         })
     }
     pub fn source_id_v1(&self) -> Hash64 {
@@ -224,6 +242,18 @@ impl PalwTirPublicSourceV1 {
     }
     pub fn header_v1(&self) -> &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1 {
         &self.header
+    }
+    /// The largest leaf preimage this source decodes (`4 ×` the class layout's widest committed tile; every leaf is refused past it).
+    pub fn maximum_leaf_bytes_v1(&self) -> u64 {
+        self.maximum_leaf_bytes
+    }
+    /// The most full step-leaf runs the cone of any leaf of this job needs (G14 audit §11 (b)); at most `⌈leaves / run⌉`.
+    pub fn cone_runs_v1(&self) -> u64 {
+        self.cone_runs
+    }
+    /// The job's actual widest leaf, in value bytes (G14 audit §11 (a); at most [`Self::maximum_leaf_bytes_v1`]).
+    pub fn widest_leaf_value_bytes_v1(&self) -> u64 {
+        self.window_value_bytes[0]
     }
     pub fn leaf_count_v1(&self) -> u64 {
         self.header.step_leaf_count
@@ -495,8 +525,11 @@ impl PalwTirPublicSourceV1 {
         };
         let bytes = match *request {
             StepNode { level, index } => node(self.leaf_count_v1(), level, index)?,
-            StepLeaf { .. } => 1 + self.maximum_leaf_bytes + 26 + 76 + h * 64,
-            StepRun { count, .. } => 1 + 4 + u64::from(count) * (self.maximum_leaf_bytes + 26 + 64) + 16 + h * 128,
+            // G14 audit §11 (a): leaf values at the job's actual widest leaf / window (`window_value_bytes`), framing as before.
+            StepLeaf { .. } => 1 + self.window_value_bytes[0] + 26 + 76 + h * 64,
+            StepRun { count, .. } => {
+                1 + 4 + self.window_value_bytes[count as usize - 1] + u64::from(count) * (26 + 64) + 16 + h * 128
+            }
             RowsNode { level, index } => node(u64::from(self.decode_count_v1()), level, index)?,
             TileNode { level, index, .. } => 64 + 76 + rows_h * 64 + node(tiles, level, index)?,
             TraceTile { tile, .. } => {

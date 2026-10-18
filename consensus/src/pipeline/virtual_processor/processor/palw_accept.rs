@@ -1992,6 +1992,8 @@ impl VirtualStateProcessor {
             tir_public_originals: Default::default(),
             // G14 G-03: the route's own fence (not whether its rules resolved), so a frameless TIR original is refused past it.
             tir_public_conviction_active: self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa_score)),
+            // RFC-0002 02-A: the TIR container identity's own fence.
+            tir_container_identity_active: self.palw_tir_container_identity_v1.is_some_and(|f| f.is_active(daa_score)),
             staged_float_constraint_active: self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(daa_score)),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
@@ -2223,7 +2225,11 @@ impl VirtualStateProcessor {
         {
             return None;
         }
-        let config = extras.staged_public_court?;
+        // The staged court must be in force; the frame is priced and clocked by its own MEASURED cost model (audit §10), never
+        // by the staged routes' `network_v1` template. No model (every shipped preset): no rules, the route stays closed.
+        extras.staged_public_court?;
+        let cost = self.palw_tir_frame_cost_v1?;
+        cost.check_v1().ok()?;
         let params = self.palw_state_params_v2.as_ref()?;
         let court = self.palw_court_params_at(daa_score)?.ok()?;
         // The legacy helper has a conservative u16::MAX fallback for callers without registry
@@ -2231,10 +2237,9 @@ impl VirtualStateProcessor {
         if !params.panel_v3_rule_at(daa_score) && extras.model_registry.is_none() {
             return None;
         }
-        let maximum_custodians = kaspa_consensus_core::palw_state_v2::PalwChainStateV2::staged_registered_tir_maximum_custodians_v1(
-            daa_score, params, extras,
-        )
-        .ok()?;
+        // G14 audit §11 (d): the frame's own upper (the flat Panel's credited seats and the producer), not the typed routes' 257.
+        let maximum_custodians =
+            kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(daa_score, params, extras).ok()?;
         let maximum_leaves = self.palw_court_step_ladder_at(daa_score, &court);
         if maximum_custodians == 0 || maximum_leaves == 0 {
             return None;
@@ -2245,7 +2250,8 @@ impl VirtualStateProcessor {
             court,
             dissection: self.palw_fused_dissectable_at(daa_score),
             prompt_form: self.palw_prompt_ids_form_at(daa_score),
-            config,
+            config: cost.config,
+            clock: cost.clock,
         })
     }
 

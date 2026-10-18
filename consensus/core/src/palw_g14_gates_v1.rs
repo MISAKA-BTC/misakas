@@ -466,6 +466,41 @@ impl Params {
         Ok(())
     }
 
+    /// **The TIR frame cost gate** (audit §10): `Ok` when `palw_tir_public_conviction_v1` is not armed; otherwise the ruleset must
+    /// carry a well-formed `palw_tir_frame_cost_v1` and — unless its genesis is an isolated G14 test genesis — a record in `records`
+    /// must name this network, the fence's height and exactly that model.
+    pub fn validate_palw_tir_frame_cost_in_v1(
+        &self,
+        records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
+    ) -> Result<(), PalwModeV2Error> {
+        let Some(at) = PalwG14GatedFenceV1::TirPublicConvictionV1.armed(self) else { return Ok(()) };
+        let Some(cost) = self.palw_tir_frame_cost_v1.as_ref() else {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_tir_public_conviction_v1 cannot be armed without a measured TIR frame cost model (palw_tir_frame_cost_v1; audit §10)",
+            ));
+        };
+        if cost.check_v1().is_err() {
+            return Err(PalwModeV2Error::Invalid("palw_tir_frame_cost_v1 is malformed (zero window, price, unit or capacity)"));
+        }
+        // External audit 10-17 §7 P0(3): the longest accepted pursuit ends inside the liability horizon Final and payment are held
+        // to (`window_challenge_at(fence) + window_court`), on every network including an isolated test genesis.
+        if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
+            let horizon =
+                bundle.state.window_challenge_at(at.daa_score()).saturating_add(bundle.state.window_court());
+            if cost.clock.maximum_door_daa > horizon {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_tir_frame_cost_v1's longest accepted pursuit (maximum_door_daa) exceeds the network's liability horizon \
+                     window_challenge + window_court",
+                ));
+            }
+        }
+        if self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
+        crate::palw_tir_frame_cost_v1::palw_tir_frame_cost_record_admits_v1(self.genesis.hash, at.daa_score(), Some(cost), records)
+            .map_err(|why| PalwModeV2Error::Invalid(why.reason()))
+    }
+
     /// `palw_g14_route_required_v1` in force at `daa_score`.
     pub fn palw_g14_route_required_v1_active_at(&self, daa_score: u64) -> bool {
         PalwG14GatedFenceV1::G14RouteRequiredV1.armed(self).is_some_and(|f| f.is_active(daa_score))
@@ -761,6 +796,13 @@ pub fn palw_g14_genesis_test_params_v1() -> Params {
     p.palw_staged_tir_route_v1 = at;
     p.palw_staged_float_constraint_v1 = at;
     p.palw_tir_public_conviction_v1 = at;
+    // The frame's cost model: the TEST-ONLY config (an isolated genesis skips the record pin, never the model itself).
+    // Its longest accepted pursuit is this genesis's own liability horizon at the fence (validation refuses a longer one).
+    let mut cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    if let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode {
+        cost.clock.maximum_door_daa = bundle.state.window_challenge_at(0).saturating_add(bundle.state.window_court());
+    }
+    p.palw_tir_frame_cost_v1 = Some(cost);
     p.palw_public_evidence_reward_v1 = at;
     p.sync_palw_2026_10_12_ruling_fences_v1();
     p.palw_g14_route_required_v1 = at;

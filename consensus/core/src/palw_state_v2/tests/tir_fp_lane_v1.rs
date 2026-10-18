@@ -25,6 +25,10 @@ struct Lane {
     /// Past the fence, with the TFP1 pairing.
     extras: PalwTransitionExtrasV1,
     leaves: u64,
+    /// The producer's ML-DSA-87 signing key (T-N1 signs the producer's preparation and answers with it).
+    keypair: libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
+    /// The producer's run as committed (honest, or forged at one leaf).
+    execution: crate::palw_tir_court_v1::test_support::TinyExecution,
 }
 
 fn at() -> PalwBlockContextV2 {
@@ -35,6 +39,17 @@ fn at() -> PalwBlockContextV2 {
 /// one family certified for the attempt lane covering every primitive its program reaches, and a producer bond with a real ML-DSA-87
 /// key. The commitment, its frame and the paired extras, built the way the producer builds them.
 fn lane(certify: bool) -> Lane {
+    lane_with(certify, None, None)
+}
+
+/// [`lane`] whose producer commits a run forged at `forge` (`(leaf, lane)`: one lane of one committed leaf moved — a commitment
+/// the program did not compute), its frame priced and clocked by `cost` (`None`: the staged `network_v1` template with the TEST-ONLY
+/// clock, as before).
+fn lane_with(
+    certify: bool,
+    forge: Option<(usize, usize)>,
+    cost: Option<crate::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
+) -> Lane {
     use crate::palw_e2e_adjudicability::{PalwE2eCoveringV1, PalwE2eFamilyV1, palw_e2e_family_id_v1};
     use crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1;
     let (p, base, _, _) = derived_work_chain();
@@ -155,7 +170,7 @@ fn lane(certify: bool) -> Lane {
     .unwrap();
     let rule = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&job).expect("a V3 job has a selection rule");
     let select = |_: u32, row: &[i32], before: &[u32]| rule.select_v1(before, row, None).expect("a lane is admissible");
-    let x = crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), None, &select);
+    let x = crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), forge, &select);
     let binding = x.binding.clone();
     let run = crate::palw_backend::PalwFpRunV1 {
         outcome: crate::palw_backend::PalwExecutionOutcomeV1 {
@@ -227,14 +242,15 @@ fn lane(certify: bool) -> Lane {
         }),
         ..Default::default()
     };
-    let upper = state.staged_maximum_custodians_v1(class_id, AT_DAA, &p, &extras).expect("the native custodian upper");
+    let upper = crate::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(AT_DAA, &p, &extras).expect("the frame's upper");
     extras.tir_public_allocation_rules_v1 = Some(PalwTirPublicAllocationRulesV1 {
         maximum_leaves: 1 << 40,
         maximum_custodians: upper,
         court: crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 40, 45, 2).unwrap(),
         dissection: true,
         prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
-        config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+        config: cost.map_or(crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(), |c| c.config),
+        clock: cost.map_or(crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock, |c| c.clock),
     });
     let plan = palw_tir_public_original_quote_v1(&state, &p, &extras, AT_DAA, &original, &header)
         .expect("the quote folds")
@@ -246,7 +262,7 @@ fn lane(certify: bool) -> Lane {
         PalwTirPublicFpEnvelopeV1::new_v1(borsh::to_vec(&payload).unwrap(), header, pledge, plan.terms.plan.rent_sompi).expect("TFP1");
     envelope.matches_object_v1(&object).expect("the envelope is the object's own");
     extras.tir_public_originals.insert(claim, envelope.clone());
-    Lane { p, state, class_id, claim, object, envelope, extras, leaves: binding.step_leaf_count }
+    Lane { p, state, class_id, claim, object, envelope, extras, leaves: binding.step_leaf_count, keypair: kp, execution: x }
 }
 
 /// **Past the fence (every fence the lane reads at DAA 0): an IR class's framed free-prompt commitment is priced from its admitted
@@ -315,6 +331,76 @@ fn tir_fp_lane_is_closed_below_the_fence_and_frameless_past_it() {
     ));
 }
 
+/// **RFC-0002 02-A: past `palw_tir_container_identity_v1` the lane takes only a class bound to its `PALWART3` container.** The framed
+/// original of an unbound class is refused at G-03's door (`TIR_CLASS_CONTAINER_UNBOUND`); the registrant's binding (tag 175) folds,
+/// folds again as nothing, and a binding to another container is refused (immutable); the same original is then admitted. Below the
+/// fence the binding kind is refused by the fold (it rides unjudged at acceptance) and the original is taken as before.
+#[test]
+fn tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3_container() {
+    use crate::palw_tir_container_v1::{PALW_TIR_UNBOUND_CONTAINER_CODE_V1, palw_tir_bound_container_v1, test_binding_v1};
+    let mut l = lane(false);
+    let mut class = l.state.class(&l.class_id).unwrap().clone();
+    class.registrant_bond = Some(bond_key(PRODUCER));
+    l.state.set_class_for_tests(l.class_id, class);
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
+    let bind = |manifest: &[u8]| PalwConsensusObjectV2::TirClassContainerBoundV1 {
+        binding: Box::new(test_binding_v1(&record, artifact_root, manifest)),
+        signature: Vec::new(),
+    };
+    let bound = bind(b"{\"model\":\"tiny\"}");
+    // Below the fence: the binding does not fold, and the unbound original is taken exactly as before.
+    assert!(apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &l.extras).is_err());
+    assert!(apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).is_ok());
+    // Past it: the unbound class's original is refused at the door.
+    let mut past = l.extras.clone();
+    past.tir_container_identity_active = true;
+    assert!(matches!(
+        apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &past).unwrap_err(),
+        PalwStateV2Error::ClassNotRewardable { code, .. } if code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1
+    ));
+    // The registrant binds the class; again is nothing; another container is refused.
+    let (bound_state, bound_delta) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).expect("the binding folds");
+    // Restart / IBD: the stored delta replayed on the parent rebuilds the same row and root; reorg: reverting it removes the row.
+    let replayed = apply_delta_v2(&l.state, &bound_delta, &l.p).expect("the stored delta replays");
+    assert_eq!(replayed.state_root(), bound_state.state_root(), "replaying the stored delta restores the bound container");
+    assert_eq!(palw_tir_bound_container_v1(&replayed, l.class_id), palw_tir_bound_container_v1(&bound_state, l.class_id));
+    let reverted = revert_delta_v2(&bound_state, &bound_delta, &l.p).expect("the binding reverts");
+    assert_eq!(reverted.state_root(), l.state.state_root(), "a reorg past the binding removes it exactly");
+    assert!(palw_tir_bound_container_v1(&reverted, l.class_id).is_none());
+    let PalwConsensusObjectV2::TirClassContainerBoundV1 { binding, .. } = &bound else { unreachable!() };
+    assert_eq!(palw_tir_bound_container_v1(&bound_state, l.class_id).map(|row| row.container_root), Some(binding.container_root));
+    let next = ctx(4, AT_DAA + 1, 4);
+    let (again, _) = apply_derived(&bound_state, &l.p, &next, std::slice::from_ref(&bound), &past).expect("the same binding again");
+    assert_eq!(
+        palw_tir_bound_container_v1(&again, l.class_id),
+        palw_tir_bound_container_v1(&bound_state, l.class_id),
+        "the same container again folds to nothing (the row, its bound DAA included, is unchanged)"
+    );
+    assert_eq!(
+        apply_derived(&bound_state, &l.p, &next, std::slice::from_ref(&bind(b"{}")), &past).unwrap_err(),
+        PalwStateV2Error::ImmutableModelUpdate("a TIR class's bound container is immutable")
+    );
+    // A binding whose inner root is another inventory is refused by the chain's own check.
+    let mut stray = test_binding_v1(&record, Hash64::from_u64_word(0xBAD), b"{}");
+    stray.class_id = l.class_id;
+    assert_eq!(
+        apply_derived(
+            &l.state,
+            &l.p,
+            &at(),
+            &[PalwConsensusObjectV2::TirClassContainerBoundV1 { binding: Box::new(stray), signature: Vec::new() }],
+            &past
+        )
+        .unwrap_err(),
+        PalwStateV2Error::ImmutableModelUpdate("the bound container's inner inventory root is not the class's registered artifact root")
+    );
+    // Bound (the binding and the original in one block): the same original is admitted.
+    let (admitted, _) =
+        apply_derived(&l.state, &l.p, &at(), &[bound.clone(), l.object.clone()], &past).expect("the bound class's original");
+    assert!(admitted.claim(&l.claim).is_some());
+}
+
 /// **The lane's authentication on a gated network**: an IR class passes the free-prompt certification gate past the fence only
 /// when one certified family covers every primitive its program reaches; below the fence the gate is the legacy one.
 #[test]
@@ -329,4 +415,474 @@ fn tir_fp_lane_is_authenticated_by_one_covering_family_on_a_gated_network() {
             assert_eq!(folded.unwrap_err(), PalwStateV2Error::FreePromptLaneUncertified(l.class_id));
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// **T-N1 (G14 audit §10): an honest IR free-prompt claim reaches Final and payment; a forged one is convicted by ONE outside bond.**
+//
+// Every step is a block through the production transition (`apply_palw_transition_v2_with_extras`, and its V7 form for the receipt
+// spend), every control is signed with a real ML-DSA-87 key and verified by the fold. The frame is priced and clocked by the TEST-ONLY
+// frame cost (`palw_tir_frame_test_only_cost_v1`: small windows, NOT a measurement). Not covered here: the carrier transaction's fee
+// and burn, the PQ mempool, the template and the node service loops (the kaspad service E2E's; see the audit's §10).
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const SEAT: u64 = 0x2A0;
+const OUTSIDER: u64 = 0x3A0;
+
+fn tn1_ctx(daa: u64) -> PalwBlockContextV2 {
+    ctx(daa, daa, daa)
+}
+
+fn tn1_bond(state: &mut PalwChainStateV2, n: u64, pubkey: Vec<u8>) {
+    state.bonds.insert(
+        bond_key(n),
+        PalwBondStateV2 {
+            pubkey,
+            operator_id: op_id(n),
+            collateral: 1_000_000_000_000,
+            slashed: 0,
+            status: PalwBondStatusV2::Active,
+            registered_daa: 0,
+            payout_payload: h64(0x9A00 + n),
+            capable_classes: Default::default(),
+        },
+    );
+}
+
+/// One signed frame control as a block's consensus object.
+fn tn1_control(
+    keypair: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
+    domain: Hash64,
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    signer: PalwBondKeyV2,
+    target: crate::palw_tir_public_carriage_v1::PalwTirPublicControlTargetV1,
+    action: crate::palw_tir_public_carriage_v1::PalwTirPublicControlActionV1,
+    rent: u64,
+    turn: u64,
+) -> PalwConsensusObjectV2 {
+    let plan = frame.plan_v1();
+    let mut control = crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1 {
+        version: 1,
+        claim: plan.original_claim,
+        allocation_id: plan.allocation_id,
+        source_id: plan.source_id,
+        target,
+        expected_turn: turn,
+        declared_rent_sompi: rent,
+        signer,
+        action,
+        signature: Vec::new(),
+    };
+    tn1_sign(keypair, domain, &mut control);
+    PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) }
+}
+
+fn tn1_sign(
+    keypair: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
+    domain: Hash64,
+    control: &mut crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1,
+) {
+    let message = control.signing_message_v1(domain).expect("the control's message");
+    control.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &keypair.signing_key,
+        message.as_byte_slice(),
+        crate::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1,
+        [0x2B; 32],
+    )
+    .unwrap()
+    .as_ref()
+    .to_vec();
+    control.check_v1().expect("a well-formed control");
+}
+
+/// The world past the claim's acceptance: the framed claim folded at `AT_DAA`, then the producer's preparation (ONE WorkDebit for the
+/// pass — the batched debit of audit §10 — and its Ready), then a Panel of one seat bound and the claim licensed. Returns the lane,
+/// the state, the frame and the next free DAA.
+fn tn1_licensed(forge: Option<(usize, usize)>) -> (Lane, PalwChainStateV2, crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1, u64) {
+    use crate::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
+    use crate::palw_tir_public_owned_v1::{PalwTirPublicOwnedActionV1 as Owned, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1};
+    let cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    let mut l = lane_with(false, forge, Some(cost));
+    // An accuser's room is a share of its collateral (the fixture params carry none): half, as the conviction fold tests use.
+    // R-core+ in force from genesis, as on testnet-12 (`palw_t12_arm_every_rule_from_genesis`): the conviction tiers, the
+    // `CourtConviction` record and the exit-lock lattice a collectible debit needs.
+    l.p = l
+        .p
+        .clone()
+        .with_fp_exposure_ceiling(500)
+        .expect("a representable exposure ratio")
+        .with_escrow_backed_exposure_from_daa(Some(0))
+        .with_rcore_plus_mirrors(Some(0), 12_900, Vec::new());
+    // ADR-0152 v2 F2 as testnet-12 arms it at genesis: the claim records its job identity (the free-prompt job pin), the identity a
+    // public conviction is judged against (`original_job_matches_v1`); without it no arithmetic refutation can name the claim.
+    l.extras.offence_attribution_active = true;
+    // ADR-0124's panel economy, as on testnet-12: the bound seats go on duty (the duty row a seat's atomic Valid + grant credits).
+    l.extras.panel_economy_active = true;
+    for n in 3..5 {
+        tn1_bond(&mut l.state, SEAT + n, vec![7; 4]);
+    }
+    let domain = l.extras.tir_public_network_domain_v1.unwrap();
+    let (s, _) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).expect("the framed claim folds");
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&s, l.claim).expect("the frame is installed").clone();
+    let plan = frame.plan_v1().clone();
+    let terms = plan.terms;
+    eprintln!(
+        "[T-N1] test-only clock: accepted {} preparation_until +{} open_until +{} stream_until +{} collect_until +{} material +{}",
+        terms.accepted_daa,
+        plan.preparation_until_daa - terms.accepted_daa,
+        terms.open_until_daa - terms.accepted_daa,
+        terms.stream_until_daa - terms.accepted_daa,
+        terms.collect_until_daa - terms.accepted_daa,
+        terms.material_until_daa - terms.accepted_daa,
+    );
+    assert!(
+        terms.collect_until_daa - terms.accepted_daa <= cost.clock.maximum_door_daa,
+        "an accepted pursuit ends inside the record's longest door"
+    );
+    let producer = bond_key(PRODUCER);
+    let maximum = frame.descriptor_v1().maximum_leaves;
+    let key = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirPreparation(plan.original_claim, plan.allocation_id);
+
+    // ---- the Panel binds (five seats; three will sign Valid), and the producer files its ONE debit for the pass ----
+    let seat_kps: Vec<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair> =
+        (0..3u8).map(|n| libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x50 + n; 32])).collect();
+    let mut s = s;
+    for (n, kp) in seat_kps.iter().enumerate() {
+        tn1_bond(&mut s, SEAT + n as u64, kp.verification_key.as_ref().to_vec());
+    }
+    let seats: Vec<PalwPanelSeatV2> = (0..5).map(|n| PalwPanelSeatV2 { bond: bond_key(SEAT + n), operator_id: op_id(SEAT + n) }).collect();
+    let preparation = T::Preparation { original_accepted_daa: terms.accepted_daa };
+    let debit_of = |s: &PalwChainStateV2, actor: PalwBondKeyV2| {
+        let mut book = crate::palw_tir_public_state_v1::palw_tir_public_work_book_v1(s, key, actor, maximum).expect("a duty");
+        let snapshot = crate::palw_tir_public_state_v1::palw_tir_public_preparation_snapshot_v1(s, key, maximum).unwrap().unwrap();
+        let lane = &snapshot.row.preparation.work_v1().allocation;
+        assert_eq!(snapshot.row.preparation.contract_v1().plan.maximum_slices_per_actor, lane.maximum_restarts + 1, "one debit a pass");
+        let work = crate::palw_tir_frame_cost_v1::tir_public_pass_budget_v1(lane.per_actor, lane.maximum_restarts + 1).unwrap();
+        let scope = PalwTirPublicWorkScopeV1 {
+            claim: plan.original_claim,
+            owner: producer,
+            reserved_daa: terms.accepted_daa,
+            bundle_id: plan.allocation_id,
+            source_id: plan.source_id,
+            turn: 0,
+            request: crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: 0 },
+            actor,
+            phase: PalwTirPublicWorkPhaseV1::Capture,
+            input_head: plan.source_id,
+            input_offset: 0,
+            slice: 0,
+            cursor_id: h64(0xC0),
+        };
+        (book.prepare_v1(s, scope, work, None, maximum).expect("the pass's one debit prepares"), book)
+    };
+    let mut daa = AT_DAA + 1;
+    let bind = PalwConsensusObjectV2::PanelBound { claim: l.claim, anchor: h64(77), seats };
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[bind], &l.extras).expect("the Panel binds");
+    let (debit, mut producer_book) = debit_of(&s, producer);
+    let object = tn1_control(&l.keypair, domain, &frame, producer, preparation, A::Preparation(debit), 0, 0);
+    daa += 1;
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[object], &l.extras).expect("the pass's debit folds");
+    assert!(producer_book.confirm_v1(&s, maximum).expect("confirms").is_some(), "the accepted debit mints the pass's permit");
+    daa += 1;
+
+    // ---- the producer's Ready, and the three Valid seats' own pass debits (each prepares its own capture) ----
+    let header = frame.header_v1();
+    let original = frame.original_v1();
+    let descriptor = crate::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+        version: 1,
+        source_id: plan.source_id,
+        class_id: frame.descriptor_v1().class_id,
+        artifact_root: header.artifact_root,
+        execution_root: original.execution_root,
+        trace_root: original.trace_root,
+        step_root: header.step_merkle_root,
+        step_leaf_count: header.step_leaf_count,
+        decode_count: header.job_context.exact_decode_tokens,
+        vocab: plan.acquisition.envelope.vocab,
+        material_until_daa: terms.material_until_daa,
+        manifest_digest: h64(0xD1),
+        retained_bytes: 1,
+    };
+    let mut objects = vec![tn1_control(&l.keypair, domain, &frame, producer, preparation, A::Preparation(Owned::PreparationReady { descriptor }), 0, 0)];
+    for (n, kp) in seat_kps.iter().enumerate() {
+        let seat = bond_key(SEAT + n as u64);
+        let (debit, _) = debit_of(&s, seat);
+        objects.push(tn1_control(kp, domain, &frame, seat, preparation, A::Preparation(debit), 0, 0));
+    }
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &objects, &l.extras).expect("Ready and the seats' debits fold");
+    daa += 1;
+
+    // ---- each Valid seat's atomic Valid + raw custody grant + Ready (it becomes liable on the claim) ----
+    let mut receipts = Vec::new();
+    let mut grants = Vec::new();
+    for (n, kp) in seat_kps.iter().enumerate() {
+        let seat = bond_key(SEAT + n as u64);
+        let sign = |message: &[u8], context: &[u8]| {
+            libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0x5E; 32]).unwrap().as_ref().to_vec()
+        };
+        let message = crate::palw_panel_v2::palw_receipt_message_v2(domain, l.claim, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid, daa);
+        let receipt = crate::palw_panel_v2::PalwSeatReceiptV2 {
+            claim: l.claim,
+            verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+            seat_bond: seat,
+            signed_daa: daa,
+            signature: sign(message.as_byte_slice(), crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT),
+        };
+        let mut grant = crate::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1 {
+            version: 1,
+            claim: l.claim,
+            seat,
+            signed_daa: daa,
+            pledge_id: frame.custody_v1().pledge_v1().id_v1(),
+            valid_receipt_digest: crate::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1::receipt_digest_v1(&receipt),
+            signature: Vec::new(),
+        };
+        grant.signature = sign(grant.id_v1().as_byte_slice(), crate::palw_tir_public_custody_v1::PALW_TIR_SOURCE_GRANT_CONTEXT_V1);
+        let mut movement = crate::palw_tir_public_carriage_v1::PalwTirPublicGrantReadyV1 {
+            version: 1,
+            claim: l.claim,
+            allocation_id: plan.allocation_id,
+            source_id: plan.source_id,
+            signer: seat,
+            receipt: receipt.clone(),
+            grant,
+            descriptor,
+            signature: Vec::new(),
+        };
+        let digest = movement.signing_message_v1(domain).unwrap();
+        movement.signature = sign(digest.as_byte_slice(), crate::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_GRANT_READY_CONTEXT_V1);
+        movement.check_v1().unwrap();
+        grants.push(PalwConsensusObjectV2::TirPublicGrantReadyV1 { grant: Box::new(movement) });
+        receipts.push(receipt);
+    }
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &grants, &l.extras).expect("the seats' atomic grants fold");
+    assert!(daa < plan.preparation_until_daa, "every Ready landed inside the preparation door");
+    daa += 1;
+
+    // ---- the claim is licensed on those exact credited receipts (the Panel signs whatever the producer committed) ----
+    let licence = PalwConsensusObjectV2::ReceiptLicensed { claim: l.claim, receipts };
+    let (s, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[licence], &l.extras).expect("the claim is licensed");
+    assert!(
+        matches!(s.claim(&l.claim).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+        "licensed: {:?}",
+        s.claim(&l.claim).unwrap().phase
+    );
+    daa += 1;
+    (l, s, frame, daa)
+}
+
+fn tn1_spend(l: &Lane, s: &PalwChainStateV2, daa: u64) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+    let bond = bond_key(PRODUCER).0;
+    let spend = PalwReceiptSpendUnsignedV3 {
+        version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+        network_domain: h64(999),
+        challenge: crate::palw_freeprompt_v3::spend_challenge_v3(h64(999), h64(0xB0), 1_700, 7, l.claim, 0, &bond),
+        claim_id: l.claim,
+        quantum_index: 0,
+        beacon_block: h64(0xBEAC),
+        producer_bond: bond,
+        producer_pubkey: l.keypair.verification_key.as_ref().to_vec(),
+    };
+    apply_palw_transition_v7(
+        s,
+        &l.p,
+        None,
+        &tn1_ctx(daa),
+        &[],
+        PalwBlockWorkV3::ReceiptSpend(&spend),
+        &[],
+        Hash64::default(),
+        false,
+        false,
+        true,
+        false,
+        &l.extras,
+    )
+    .map(|(state, delta, _)| (state, delta))
+}
+
+/// **T-N1, honest half: an IR free-prompt claim the producer computed reaches `Final` at the frame's own door and is paid** — its
+/// receipt quantum spends (the receipt lane's weight is its payment), and the producer's collateral is untouched.
+#[test]
+fn t_n1_an_honest_ir_fp_claim_reaches_final_and_payment_inside_the_liability_horizon() {
+    let (l, s, frame, daa) = tn1_licensed(None);
+    let terms = frame.plan_v1().terms;
+    let claim = s.claim(&l.claim).unwrap().clone();
+    let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase else { unreachable!() };
+    let floor = palw_claim_final_floor_v1(&s, &l.p, &l.claim, &claim, licensed_daa).unwrap();
+    assert!(floor >= terms.collect_until_daa, "no Final before the frame's conviction door closes");
+    let horizon = licensed_daa + l.p.window_challenge_at(licensed_daa) + l.p.window_court();
+    eprintln!("[T-N1] honest: licensed {licensed_daa} floor {floor} collect_until {} horizon {horizon}", terms.collect_until_daa);
+    assert!(floor <= horizon, "the frame's door ends inside the liability horizon (no indefinitely delayed Final)");
+    let collateral = s.bonds.get(&bond_key(PRODUCER)).unwrap().collateral;
+    // Not Final (and not payable) before the floor.
+    let (before, _) = apply_derived(&s, &l.p, &tn1_ctx(floor.max(daa + 1) - 1), &[], &l.extras).unwrap();
+    assert!(!matches!(before.claim(&l.claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "not Final before its floor");
+    assert!(tn1_spend(&l, &before, floor.max(daa + 1)).is_err(), "no receipt spend (payment) before Final");
+    let (after, _) = apply_derived(&before, &l.p, &tn1_ctx(floor.max(daa + 1) + 1), &[], &l.extras).unwrap();
+    assert!(matches!(after.claim(&l.claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "Final at its floor");
+    let weight = after.safe_weight();
+    let (paid, _) = tn1_spend(&l, &after, floor.max(daa + 1) + 2).expect("the Final claim's quantum spends");
+    assert!(paid.safe_weight() > weight, "the spend adds its quantum's weight: the claim is paid");
+    assert_eq!(paid.bonds.get(&bond_key(PRODUCER)).unwrap().collateral, collateral, "the honest producer is not charged");
+}
+
+/// **T-N1, forged half: a claim whose committed leaf the program did not compute, licensed by its (colluding) Panel, is convicted by
+/// ONE bond outside the Panel** — it Opens its own acquisition after the preparation door, Demands the leaf its own replay disagrees
+/// with, the producer answers it (Begin / Part / Finish, authenticated against the claim's step root), and the outsider files the
+/// cone refutation built from its own recomputation. The claim is voided (`CourtFraud`), the producer's collateral is debited, it
+/// never reaches `Final`, and its receipt quantum never spends (no weight, no reward).
+#[test]
+fn t_n1_a_forged_ir_fp_claim_is_convicted_by_one_outside_owner_and_never_paid() {
+    use crate::palw_tir_public_carriage_v1::{
+        PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T, PalwTirPublicControlV1 as Control,
+        PalwTirPublicConvictionEvidenceV1 as Evidence,
+    };
+    use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART, PalwTirPublicOwnedActionV1 as Owned};
+    const FORGED: usize = 7;
+    let (l, mut s, frame, mut daa) = tn1_licensed(Some((FORGED, 1)));
+    let plan = frame.plan_v1().clone();
+    let terms = plan.terms;
+    let domain = l.extras.tir_public_network_domain_v1.unwrap();
+    let producer = bond_key(PRODUCER);
+    let outsider_kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x3A; 32]);
+    tn1_bond(&mut s, OUTSIDER, outsider_kp.verification_key.as_ref().to_vec());
+    let outsider = bond_key(OUTSIDER);
+    let before = s.bonds.get(&producer).unwrap().collateral;
+
+    // ---- the outside owner opens its own acquisition once the preparation door has closed ----
+    daa = daa.max(plan.preparation_until_daa);
+    let rent = plan.owner_terms_v1().unwrap().plan.rent_sompi;
+    let open = tn1_control(&outsider_kp, domain, &frame, outsider, T::OwnerOpen { owner: outsider }, A::Open, rent, 0);
+    let (opened, _) = apply_derived(&s, &l.p, &tn1_ctx(daa), &[open], &l.extras).expect("an outside bond opens");
+    let acquisition = T::Acquisition { owner: outsider, reserved_daa: daa };
+    daa += 1;
+
+    // ---- its own replay of the job disagrees at the forged leaf: it demands that leaf ----
+    let honest = crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(
+        |_, _, _| l.execution.binding.job_context.clone(),
+        None,
+        &|_, row, before| {
+            crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&l.envelope.original_fp_v1().unwrap().commitment.job)
+                .unwrap()
+                .select_v1(before, row, None)
+                .unwrap()
+        },
+    );
+    let differs: Vec<usize> = (0..honest.hashes.len()).filter(|i| honest.hashes[*i] != l.execution.hashes[*i]).collect();
+    assert_eq!(differs, vec![FORGED], "the owner's own recomputation localizes exactly the forged leaf");
+    let request = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: FORGED as u64 };
+    let demand = tn1_control(&outsider_kp, domain, &frame, outsider, acquisition, A::Acquisition(Owned::Demand { request }), 0, 0);
+    let (demanded, _) = apply_derived(&opened, &l.p, &tn1_ctx(daa), &[demand], &l.extras).expect("the owner demands the leaf");
+    daa += 1;
+    let owner_key = *demanded
+        .staged_courts
+        .keys()
+        .find(|key| {
+            matches!(key, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirAcquisition(c, owner, _)
+                if *c == l.claim && *owner == outsider)
+        })
+        .expect("the owner's acquisition row");
+    let pending = |state: &PalwChainStateV2| match state.staged_court_row_v1(&owner_key) {
+        Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirAcquisition(row)) => row.owned.active_v1().cloned(),
+        _ => None,
+    };
+    let p = pending(&demanded).expect("an open demand");
+    eprintln!("[T-N1] forged: demand opened {} respond_until {} (turn span {})", p.opened_daa, p.respond_until_daa, p.respond_until_daa - p.opened_daa);
+
+    // ---- the producer answers from its committed material (it must, or it is defaulted) ----
+    let body = borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+        preimage: l.execution.preimages[FORGED].clone(),
+        opening: crate::palw_step_leg::step_opening_v1(&l.execution.hashes, FORGED as u64).unwrap(),
+    })
+    .unwrap();
+    let mut state = demanded;
+    let mut moves = vec![Owned::Begin {
+        demand_id: p.demand_id,
+        answerer: producer,
+        total_bytes: body.len() as u64,
+        body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body),
+    }];
+    for (i, bytes) in body.chunks(PART).enumerate() {
+        moves.push(Owned::Part { demand_id: p.demand_id, answerer: producer, offset: (i * PART) as u64, bytes: bytes.to_vec() });
+    }
+    moves.push(Owned::Finish { demand_id: p.demand_id, answerer: producer });
+    for action in moves {
+        let object = tn1_control(&l.keypair, domain, &frame, producer, acquisition, A::Acquisition(action), 0, p.turn);
+        state = apply_derived(&state, &l.p, &tn1_ctx(daa), &[object], &l.extras).expect("the answer move folds").0;
+        daa += 1;
+    }
+    assert!(daa <= p.respond_until_daa, "the honest custodian's whole answer fits its turn span");
+    assert!(daa < terms.collect_until_daa, "the localization ends before the conviction door closes");
+
+    // ---- the outsider files the cone refutation from its own recomputation; the fold adjudicates it deterministically ----
+    let rules = crate::palw_tir_court_v1::PalwTirCourtRulesV1 {
+        max_step_leaf_count: 1 << 26,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        limits: misaka_palw_tir::demand::DemandLimits::UNLIMITED,
+    };
+    let refutation =
+        crate::palw_tir_court_v1::build_tir_cone_refutation_v1(&l.execution.binding, FORGED as u64, &l.execution, &rules).unwrap();
+    let mut proof = crate::palw_court_v2::PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+    proof.tir_strip_program_v1();
+    let second_proof = proof.clone();
+    let mut filing = Control::conviction_unsigned_v1(
+        plan.original_claim,
+        plan.allocation_id,
+        plan.source_id,
+        outsider,
+        Evidence::Arithmetic { proof: Box::new(proof) },
+        frame.conviction_rent_v1(),
+    )
+    .unwrap();
+    tn1_sign(&outsider_kp, domain, &mut filing);
+    let (convicted, _) = apply_derived(
+        &state,
+        &l.p,
+        &tn1_ctx(daa),
+        &[PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(filing) }],
+        &l.extras,
+    )
+    .expect("one outside bond's filing convicts");
+    assert!(
+        matches!(convicted.claim(&l.claim).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "the forged claim is voided"
+    );
+    assert!(convicted.bonds.get(&producer).unwrap().collateral < before, "the producer is slashed");
+    // The producer's conviction and each credited false-Valid seat's offence, each recorded once.
+    assert_eq!(convicted.consumed_offences.len(), state.consumed_offences.len() + 4, "producer + the three Valid seats");
+    for n in 0..3 {
+        let seat = bond_key(SEAT + n);
+        assert!(
+            convicted.consumed_offences.contains_key(&crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &l.claim)),
+            "the Valid seat {n}'s false-Valid offence is consumed"
+        );
+        assert!(!convicted.slashable_locks.contains_key(&(seat, l.claim)), "its lock on the claim is taken");
+        assert!(convicted.bonds.get(&seat).unwrap().collateral < state.bonds.get(&seat).unwrap().collateral, "seat {n} is slashed");
+    }
+    for n in 3..5 {
+        let seat = bond_key(SEAT + n);
+        assert_eq!(convicted.bonds.get(&seat).unwrap().collateral, state.bonds.get(&seat).unwrap().collateral, "a silent seat is not");
+    }
+    // Once only: the same filing again finds the offence consumed and the claim voided.
+    let mut again = Control::conviction_unsigned_v1(
+        plan.original_claim,
+        plan.allocation_id,
+        plan.source_id,
+        outsider,
+        Evidence::Arithmetic { proof: Box::new(second_proof) },
+        frame.conviction_rent_v1(),
+    )
+    .unwrap();
+    tn1_sign(&outsider_kp, domain, &mut again);
+    assert!(
+        apply_derived(&convicted, &l.p, &tn1_ctx(daa + 1), &[PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(again) }], &l.extras)
+            .is_err(),
+        "no second conviction of the same offence"
+    );
+    // Past every floor: never Final, never paid, no weight.
+    let (later, _) = apply_derived(&convicted, &l.p, &tn1_ctx(terms.material_until_daa + 1), &[], &l.extras).unwrap();
+    assert!(!matches!(later.claim(&l.claim).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::Final { .. })), "never Final");
+    assert!(tn1_spend(&l, &later, terms.material_until_daa + 2).is_err(), "its receipt never spends: no reward, no weight");
+    assert_eq!(later.safe_weight(), 0, "no consensus weight from the forged claim");
 }
