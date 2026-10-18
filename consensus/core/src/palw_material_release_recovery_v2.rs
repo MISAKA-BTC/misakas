@@ -383,6 +383,26 @@ impl PalwChainStateV2 {
             if *table != PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 {
                 continue;
             }
+            if key.len() == 69
+                && key.first() == Some(&crate::palw_material_challenge_checkpoint_v4::PALW_MATERIAL_CHALLENGE_CHECKPOINT_PREFIX_V4)
+            {
+                use crate::palw_material_challenge_checkpoint_v4::{
+                    decode_material_challenge_checkpoint_v4, material_challenge_checkpoint_key_v4,
+                };
+                let checkpoint = decode_material_challenge_checkpoint_v4(bytes).map_err(bad)?;
+                checkpoint.validate(Hash64::from_bytes(route.header.policy.network_domain)).map_err(bad)?;
+                // Canonical unique keys plus an existing owning bond bound
+                // this family to one fixed cell per native bond, without a
+                // second population index or a new policy/default number.
+                if key.as_slice() != material_challenge_checkpoint_key_v4(&checkpoint.challenger).as_slice()
+                    || self.bond(&checkpoint.challenger).is_none_or(|bond| bond.registered_daa > checkpoint.created_daa)
+                    || params.material_release_recovery_at_v2(checkpoint.created_daa).is_none()
+                    || params.material_release_recovery_at_v2(checkpoint.applied_daa).is_none()
+                {
+                    return Err(bad("challenge checkpoint key/owner/fence differs"));
+                }
+                continue;
+            }
             if key.len() != 64 {
                 let stream: PalwMaterialProviderAckCheckpointV2 =
                     borsh::from_slice(bytes).map_err(|_| bad("malformed provider stream"))?;

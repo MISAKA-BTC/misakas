@@ -295,12 +295,16 @@ fn court_action_accepted(
         if *signer != actor || *root != Hash64::from_bytes(base) || *dependency != Hash64::from_bytes(base) {
             return Err("checker saved material challenge identity differs".into());
         }
-        // The legacy challenge projection has coordinates and actor, but no
-        // signed consent/object identity. A matching old generation's row must
-        // not complete this different signed WAL after replacement or reorg.
-        // Exact native acceptance provenance remains a separate implementation
-        // task. Keep the WAL; neither a match nor a spent input is an ACK.
-        return Ok(false);
+        // Only the native applied-statement checkpoint authenticates this
+        // exact actor/consent/unit/deadline. The old coordinate projection and
+        // a spent funding input establish no such acceptance.
+        let checkpoint =
+            kaspa_consensus_core::palw_material_challenge_checkpoint_v4::material_challenge_checkpoint_from_route_v4(route, actor)?;
+        return checkpoint
+            .map(|c| c.matches(Hash64::from_bytes(route.header.policy.network_domain), actor, action))
+            .transpose()
+            .map(|matched| matched.unwrap_or(false))
+            .map_err(str::to_string);
     }
     let decoded = saved_kernel_object(object, actor)?;
     match &*decoded {
@@ -383,10 +387,6 @@ impl PreparedKernelPaidCheckV4 {
             }
             let api = self.manager.consensus().unguarded_session();
             let route = api.palw_kernel_route_v1().ok_or("checker own native route unavailable")?;
-            let a = route.paid_claim_enrollment_v3(&enrollment)?;
-            if a.enrollment.base_claim != base {
-                return Err("checker opening belongs to another enrolled claim".into());
-            }
             if let Some(signed) = &object {
                 if court_action_accepted(&route, signed, self.checker, base)? {
                     kaspa_core::info!(
@@ -395,6 +395,10 @@ impl PreparedKernelPaidCheckV4 {
                     );
                     return Ok(());
                 }
+            }
+            let a = route.paid_claim_enrollment_v3(&enrollment)?;
+            if a.enrollment.base_claim != base {
+                return Err("checker opening belongs to another enrolled claim".into());
             }
             if receipt_accepted(&route, &a, self.spec.round, palw_kernel_bond_id_v1(&self.checker))? {
                 kaspa_core::info!(

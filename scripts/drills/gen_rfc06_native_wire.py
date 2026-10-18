@@ -322,6 +322,13 @@ body=code[a:b].removeprefix('let shape=').removesuffix(';').replace('&mut frame'
 code=code[:a]+'let shape=scan_native_aux_row_v1(table,&key[..key_bytes as usize],&mut frame)?;'+code[b:]
 code+='\n/// One aux row\'s exact codec, dispatched on its table and FULL key (`k`) and, where two family layouts share a key shape, its row\n/// length (`n`). Tables 42–106 and 112 follow scripts/drills/rfc06_native_aux_spec.py; a key shape no fold writes fails closed.\npub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1>{let k=key;let n=frame.remaining();let key_bytes=k.len() as u64;let prefix=k.first().copied().unwrap_or(0);Ok('+body+')}\n'
 code+=AUX_HELPERS
+# Versioned fixed receipt namespace, separate from root64 and old A1 streams.
+# One row per existing challenger bond; restore scans no unbounded history.
+checkpoint_arm = '134 if key_bytes==69 && prefix==0xA2=>crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4::scan_native_wire_v1(frame)?,\n'
+checkpoint_marker = '134=>return Err('
+if code.count(checkpoint_marker) != 1:
+ raise ValueError('material checkpoint namespace requires the explicit aux134 fallback')
+code=code.replace(checkpoint_marker, checkpoint_arm+checkpoint_marker, 1)
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)
 
 # Concrete native ledger row codecs; reflected from the same KernelLedger

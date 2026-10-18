@@ -344,7 +344,7 @@ fn action_inner_v4(
         | PalwMonetaryMaterialActionV1::Release { root, .. } => *root,
     };
     let mut row = builder.state.monetary_material_row_v1(root).ok_or_else(|| refused("no enrolled monetary material root"))?;
-    if let PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { consent, provider, .. } = a {
+    let challenge_checkpoint = if let PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { consent, provider, .. } = a {
         if builder.params.material_release_recovery_at_v2(ctx.daa_score).is_none() {
             return Err(refused("current generation challenge own fence dormant"));
         }
@@ -353,7 +353,24 @@ fn action_inner_v4(
         if current != Some(*consent) {
             return Err(refused("current challenge substitutes provider generation"));
         }
-    }
+        use crate::palw_material_challenge_checkpoint_v4::{
+            PalwMaterialChallengeCheckpointV4, material_challenge_checkpoint_from_route_v4,
+        };
+        let route = builder.state.kernel_route().ok_or_else(|| refused("challenge checkpoint route absent"))?;
+        let previous = material_challenge_checkpoint_from_route_v4(route, *signer).map_err(refused)?;
+        Some(
+            PalwMaterialChallengeCheckpointV4::next(
+                previous,
+                Hash64::from_bytes(route.header.policy.network_domain),
+                *signer,
+                a,
+                ctx.daa_score,
+            )
+            .map_err(refused)?,
+        )
+    } else {
+        None
+    };
     if !recovery_answer
         && builder.state.material_recovery_row_v2(root).is_some()
         && matches!(
@@ -698,6 +715,9 @@ fn action_inner_v4(
             return Ok(());
         }
     }
+    if let Some(checkpoint) = challenge_checkpoint {
+        builder.write_material_challenge_checkpoint_v4(*signer, Some(checkpoint))?;
+    }
     write(builder, root, Some(&row));
     Ok(())
 }
@@ -976,6 +996,68 @@ mod tests {
                 .collect(),
         };
         (state, params, e)
+    }
+    #[test]
+    fn applied_challenge_checkpoint_writer_reserves_before_mutation_and_journals_bond_cleanup() {
+        use crate::palw_material_challenge_checkpoint_v4::{
+            PalwMaterialChallengeCheckpointV4 as Checkpoint, material_challenge_checkpoint_from_route_v4 as read,
+        };
+        use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+        let (state, params, _) = fixture();
+        use crate::palw_material_release_recovery_v2::{PalwMaterialReleaseRecoveryMirrorV2, PalwMaterialReleaseRecoveryPolicyV2};
+        let params = params.with_material_release_recovery_v2(Some(PalwMaterialReleaseRecoveryMirrorV2 {
+            from_daa: 1,
+            policy: PalwMaterialReleaseRecoveryPolicyV2 {
+                version: 2,
+                max_reserved_contracts: 1,
+                max_generations_per_contract: 2,
+                max_provider_streams: 4,
+                max_reserved_history_cells: 16,
+                measurement_root: h(77),
+            },
+        }));
+        let extras = PalwTransitionExtrasV1::default();
+        let action = PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
+            root: h(9),
+            consent: h(7),
+            provider: bond(2),
+            dependency: h(9),
+            stage: 255,
+            position: 0,
+            valid_until_daa: 100,
+        };
+        // Storage/owner fixture only; no signature, typed unit or native
+        // admission success is inferred from direct calls to this writer.
+        let checkpoint = Checkpoint::next(None, h(1), bond(4), &action, 2).unwrap();
+        let mut refused = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+        refused.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+        assert!(matches!(
+            refused.write_material_challenge_checkpoint_v4(bond(4), Some(checkpoint)),
+            Err(PalwStateV2Error::NativeResource(_))
+        ));
+        assert!(refused.entries.is_empty());
+        assert!(read(refused.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert_eq!(checker.outstanding(), (0, 0));
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_material_challenge_checkpoint_v4(bond(4), Some(checkpoint)).unwrap();
+        assert_eq!(read(b.state.kernel_route().unwrap(), bond(4)).unwrap(), Some(checkpoint));
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let delta = PalwStateDeltaV2 { point: ctx(2), entries: b.entries.clone() };
+        let applied = apply_delta_v2(&state, &delta, &params).unwrap();
+        assert_eq!(read(applied.kernel_route().unwrap(), bond(4)).unwrap(), Some(checkpoint));
+        let restored = revert_delta_v2(&applied, &delta, &params).unwrap();
+        assert!(read(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        b.write_bond(bond(4), None).unwrap();
+        assert!(b.state.bond(&bond(4)).is_none());
+        assert!(read(b.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let all = PalwStateDeltaV2 { point: ctx(2), entries: b.entries.clone() };
+        let applied = apply_delta_v2(&state, &all, &params).unwrap();
+        assert!(applied.bond(&bond(4)).is_none());
+        let restored = revert_delta_v2(&applied, &all, &params).unwrap();
+        assert!(restored.bond(&bond(4)).is_some());
+        assert!(read(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
     }
     /// Fold/storage fixture: native signature and finalized-chain authority are
     /// tested by the integration consumers, not manufactured by this unit test.

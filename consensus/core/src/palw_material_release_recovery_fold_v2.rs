@@ -51,7 +51,12 @@ fn plan_streams(
     let used = b
         .state
         .kernel_route()
-        .map(|r| r.aux.keys().filter(|(t, k)| *t == PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 && k.len() != 64).count())
+        .map(|r| {
+            r.aux
+                .keys()
+                .filter(|(t, k)| *t == PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 && k.len() == 69 && k.first() == Some(&0xA1))
+                .count()
+        })
         .unwrap_or(0);
     if used.checked_add(new_count).is_none_or(|n| n > p.max_provider_streams as usize) {
         return Err(refused("provider ACK stream slots unavailable before admission"));

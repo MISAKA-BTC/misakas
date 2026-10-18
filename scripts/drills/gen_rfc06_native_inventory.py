@@ -88,6 +88,7 @@ queue=['crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMate
        'crate::palw_kernel_parameter_material_v4::PalwKernelSegmentedPartV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterRowV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterOpeningV4',
        'crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4',
        'crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4','crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitResponseV4',
+       'crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4',
        'crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4',
        'crate::palw_step_refute::memory_v2::PalwGdnStepRefutationV2',
        'misaka_palw_kernel::spec::retrieval::SliceResponseV1','misaka_palw_kernel::spec::retrieval::EntryResponseV1','misaka_palw_kernel::spec::retrieval::RetrievalItemV1',

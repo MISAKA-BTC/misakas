@@ -136,6 +136,12 @@ impl<'a> TransitionBuilder<'a> {
             .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
             .map_err(PalwStateV2Error::NativeResource)?;
 
+        if new.is_none() {
+            // Fixed metadata is bounded by the existing native bond table.
+            // Remove it in the same journal before removing its owning bond;
+            // rollback restores both, without treating absence as acceptance.
+            self.write_material_challenge_checkpoint_v4(key, None)?;
+        }
         // ADR-0160 F-W: the bond's cap is a function of its collateral, so every collateral move — a
         // slash lowers it, a refund restores it — re-caps the bond's provisional term HERE, the one
         // site all of them pass (the "recap" of ADR-0160 §7.1).
@@ -385,6 +391,49 @@ impl<'a> TransitionBuilder<'a> {
                 ))
             })?;
         }
+        Ok(())
+    }
+
+    pub(super) fn write_material_challenge_checkpoint_v4(
+        &mut self,
+        actor: PalwBondKeyV2,
+        new: Option<crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4>,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_material_challenge_checkpoint_v4::{
+            PALW_MATERIAL_CHALLENGE_CHECKPOINT_BYTES_V4 as BYTES, PALW_MATERIAL_CHALLENGE_CHECKPOINT_KEY_BYTES_V4 as KEY,
+            material_challenge_checkpoint_key_v4,
+        };
+        use crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 as TABLE;
+        let key = material_challenge_checkpoint_key_v4(&actor);
+        let Some(route) = self.state.kernel_route() else {
+            if new.is_none() {
+                return Ok(());
+            }
+            return Err(PalwStateV2Error::ExecV2Refused("challenge checkpoint needs native route".into()));
+        };
+        let absent = !route.aux.iter().any(|((table, k), _)| *table == TABLE && k.as_slice() == key.as_slice());
+        if absent && new.is_none() {
+            return Ok(());
+        }
+        if new.is_some_and(|r| r.challenger != actor || self.state.bond(&actor).is_none_or(|bond| bond.registered_daa > r.created_daa))
+        {
+            return Err(PalwStateV2Error::ExecV2Refused("challenge checkpoint needs its existing owning bond".into()));
+        }
+        if let Some(row) = &new {
+            row.validate(Hash64::from_bytes(route.header.policy.network_domain))
+                .map_err(|e| PalwStateV2Error::ExecV2Refused(e.into()))?;
+        }
+        let encoded = new.as_ref().map(|r| r.encoded()).transpose().map_err(|e| PalwStateV2Error::ExecV2Refused(e.into()))?;
+        // Reserve the input buffers before constructing them; the generic map
+        // writer then reserves their map/journal clones, membership and actual
+        // journal capacity. The transition owner follows the resulting state.
+        self.native_reservation
+            .grow_v1((KEY + if encoded.is_some() { BYTES } else { 0 }) as u64)
+            .map_err(PalwStateV2Error::NativeResource)?;
+        let key = (TABLE, key.to_vec());
+        let bytes = encoded.as_ref().map(|r| r.to_vec());
+        self.reserve_map_journal_v1(&key, &bytes, absent, "applied material challenge checkpoint writer")?;
+        self.write_kernel_row(key.0, key.1, bytes);
         Ok(())
     }
 

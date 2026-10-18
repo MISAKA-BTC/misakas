@@ -159,6 +159,9 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
                 size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, u64>>(),
             )?
         }
+        134 if key_bytes == 69 && prefix == 0xA2 => {
+            crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4::scan_native_wire_v1(frame)?
+        }
         134 => return Err(wire::wire_bad("unallocated material recovery row namespace")),
         135 if key_bytes == 64 => crate::palw_claim_compact_v4::PalwPaidCompactContractV4::scan_native_wire_v1(frame)?,
         135 if key_bytes == 65 && prefix == 0x50 => {
