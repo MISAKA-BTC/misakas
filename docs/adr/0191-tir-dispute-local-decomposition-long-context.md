@@ -175,10 +175,40 @@ Each missing term is a function. The inputs marked "declared" are the parameters
 The headroom at 2M is 85 DAA, which is conditional: it holds only if the queue after the split stays at or below 1,621, and only
 with `M = 1` enforced by an admission rule that is not yet derived. It is not a guarantee.
 
+## Admission and the owner queue: derived (2026-10-19, supersedes the queue headroom above)
+
+**Correction.** The table above counted the owner queue at its legacy 1,536 and the headroom of 85 DAA at 2M. That is withdrawn. Once
+adjudications are serialised per claim, an owner that queues waits for every earlier holder's budget, so the queue term is not the
+legacy term. The derivation below replaces it.
+
+- **Admission (implemented, dormant, pure: `palw_tir_adjudication_slot_v1`)**: one slot per claim (`M = 1`). A holder that is silent
+  past the adjudication budget is reclaimed AT its deadline and the next owner takes the slot there; a reclaimed owner re-queues at the
+  tail at most once more, then is refused the slot on that claim. Budget `B_budget = span(B_adj)`.
+- **Queue after the split**: position `p` (1-based) waits `(p − 1) · span(B_adj)`, worst `(K − 1) · span(B_adj)` with `K = 8`
+  (`PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1`). The legacy `ceil((q+1)/K) · tenure` term is not used by this admission.
+- **Door** (declared inputs as above, `prep = 16`, `R_32K = 12`, `R_2M = 16`, bisection 46 DAA per round, output 53):
+
+  `D = prep + R · 46 + 53 + span(B_adj) (own) + span(B_adj) (restart) + (K − 1) · span(B_adj)`
+  `  = prep + R · 46 + 53 + (K + 1) · span(B_adj)`
+
+| | 32K | 2M |
+|---|---:|---:|
+| `B_adj = 278,528` (current block shape), `span = 347` | **3,744** | **3,928** |
+| headroom to 3,120 | **−624** | **−808** |
+| largest `B_adj` with `K = 8` that fits 3,120 | 214,000 B (span 277) | 195,000 B (span 256) |
+| `K = 4` at `B_adj = 278,528` | — | **2,540** (fits) |
+
+**Result: the door as declared does NOT meet 3,120 at 32K or 2M.** It fits only if (a) the adjudication block is at most about
+195 KB at 2M (214 KB at 32K), or (b) at most 4 owners contend per claim (`K = 4` passes at 2M with 580 DAA headroom). Both are design
+choices and are NOT adopted here. The span fit is an assumption; the conclusion depends on it.
+
+Test evidence: `palw_tir_adjudication_slot_v1` (7 tests, M = 1, FIFO grant, duplicate refused, silent holder reclaimed at its deadline,
+re-occupation capped, worst wait `(K−1)·budget`, pure in events and time).
+
 ## Unmet conditions
 
 1. Shape constants of graph-v7@2097152 (kv row, state block, matmul blocks) from the program, not declared.
-2. The M = 1 admission rule (serialising adjudications per claim without a `(K−1)·span` wait) and the owner queue after the split (`≤ 1,621`) are derived; the derived prep (16) is a declared-parameter value, to be measured.
+2. **Not met:** the door with serialised admission exceeds 3,120 at 32K and 2M for `K = 8` and `B_adj = 278,528` (see "Admission and the owner queue"). Either the block shrinks to about 195 KB at 2M or `K ≤ 4` is adopted. Both are design decisions for the user; the derived prep (16) is a declared-parameter value, to be measured.
 3. Span slope re-measured on the shipped binary.
 4. Adversarial tests: whole collusion + one external verifier; default on missing answers; restart and reorg identity across the fence.
 
