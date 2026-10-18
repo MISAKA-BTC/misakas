@@ -28,7 +28,7 @@ pub type PalwTirDigestV1 = [u8; 32];
 pub const PALW_TIR_DESIGNATED_MAX_CUSTODIANS_V1: usize = 8;
 
 /// The request key: the only thing an authenticated body may be reused for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash), BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirRequestKeyV1 {
     pub claim: PalwTirDigestV1,
     pub root: PalwTirDigestV1,
@@ -36,7 +36,7 @@ pub struct PalwTirRequestKeyV1 {
 }
 
 /// One request with its designated custodians and obligation.
-#[derive(Clone, Debug, PartialEq, Eq), BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirDesignatedRequestV1 {
     pub key: PalwTirRequestKeyV1,
     /// Designated custodians in handover order (no duplicates, 1..=`PALW_TIR_DESIGNATED_MAX_CUSTODIANS_V1`).
@@ -47,7 +47,7 @@ pub struct PalwTirDesignatedRequestV1 {
 }
 
 /// The first answer that was accepted: who signed it, the body digest and the DAA it was accepted at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq), BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirAcceptedAnswerV1 {
     pub by: PalwTirCustodianIdV1,
     pub body: PalwTirDigestV1,
@@ -66,7 +66,7 @@ pub enum PalwTirDesignatedOutcomeV1 {
 }
 
 /// A request's record: the request, its first accepted answer, and the liabilities that survive the handover.
-#[derive(Clone, Debug, PartialEq, Eq), BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirDesignatedRecordV1 {
     pub request: PalwTirDesignatedRequestV1,
     pub answer: Option<PalwTirAcceptedAnswerV1>,
