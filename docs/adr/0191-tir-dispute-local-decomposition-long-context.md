@@ -105,7 +105,7 @@ Door(N, h, V, b, B_bis, B_adj, B_out, M) =
 | **sum, excluding prep and concurrency** | **2,835** | **3,019** |
 | headroom to 3,120 for prep, M > 1, and unmeasured terms | 285 | 101 |
 
-Arithmetic from `door-arith` in this ADR; no measurement. `C` appears only in the commitment count (`N / C` checkpoint commitments
+Arithmetic from `door-arith` in this ADR; no measurement. **Superseded by the table in "Derived terms" below**, which adds prep, the M-admission and the owner queue. `C` appears only in the commitment count (`N / C` checkpoint commitments
 and `N` block commitments of the claim), not in the rounds or the body. At 2M, `C = 65,536` and `N / C = 32`.
 
 Concurrency: `M` concurrent disputes of one claim enlarge the adjudication carrier to `M · 278,528` B, i.e. about `303·M` DAA; with
@@ -117,7 +117,7 @@ That rule is not derived here and is listed as unmet.
 
 | | ADR-0190 bounded-round (2 rounds) | ADR-0191 dispute-local (log rounds) |
 |---|---|---|
-| serial rounds | 2 (cone), independent of runs | ceil(log_b) per dimension, 14 at 32K, 18 at 2M |
+| serial rounds | 2 (cone), independent of runs | ceil(log_b) per dimension, 14 at 32K, 18 at 2M (incl. adjudication and output) |
 | per-round body | read set of the whole cone, grows with ctx | constant (1 KB bisection; `B_adj` 278,528 B) |
 | transport at 32K | 322,141 DAA (40 GB shared) | 303 DAA (adjudication) |
 | 2M | not bounded (window grows linearly) | 3,019 at M = 1, excluding prep |
@@ -137,10 +137,48 @@ ADR-0190's 390 MB threshold no longer applies: the transport is bounded by a blo
   bound instead, which is independent of it. If its closure shows a block larger than the one above, the door changes by
   `span(ΔB)` per adjudication and is re-counted.
 
+## Derived terms (update, 2026-10-18; arithmetic with declared assumptions)
+
+Each missing term is a function. The inputs marked "declared" are the parameters of the existing frame (`inclusion_margin_daa = 4`,
+`acquisition_daa = 1`, `control_bytes = 14,320`, `parallel_bytes_per_daa = 125,000`, `reorg_replay_moves = 1`, `K_owner = 8`,
+`PALW_TIR_FRAME_PREPARATION_DEBITS_PER_PASS_V1 = 1`). They are not measured on the shipped binary.
+
+- **prep(maxc)** = `acq + margin · S + ceil(maxc · S · control_bytes / BPD)` with `S = (reorg + 1)·1 + 1 = 3` serial units.
+  At `maxc = 6` or `8`: `1 + 12 + 3 = 16` DAA. It does not depend on ctx, C or h.
+- **Concurrency**: with `M` adjudication carriers admitted per claim at once, the adjudication and the restart each cost
+  `span(M · B_adj)`. Non-queue door `D(R, M) = R · span(1,024) + span(M·B_adj) + span(B_out) + span(M·B_adj)`, `R = R_pos+R_attn+R_op+R_tile`.
+  - 32K (R = 12): `M = 1` → 1,299; `M = 2` → 1,905; `M = 8` → 5,537.
+  - 2M (R = 16): `M = 1` → 1,483; `M = 2` → 2,089; `M = 8` → 5,721.
+  - So at 2M, `M = 1` is the only admissible value under 3,120. A rule that admits one adjudication carrier per claim at a time is
+    required. The waiting it imposes on the other `K−1` owners is `(K−1) · span(B_adj) = 2,429` DAA if serialised naively, which
+    exceeds the budget. Admission therefore must be a queue whose wait is bounded by the owner queue term, not by stacking carriers.
+    That admission rule is NOT derived; it is the open design point.
+- **Owner queue after the tenure split**: the split changes the tenure from `max(grace, window / 2K)` to `grace + span(B_adj)` for an
+  owner that is awaiting (it never goes idle while awaiting, and it rotates when its request completes). The queue term is still
+  `ceil((q+1)/K) · tenure'` with `q = open_window · (parallel / control)`. Its value depends on `open_window` and `grace`, neither
+  of which is derived. The condition it must meet at 2M with `M = 1` is `queue' ≤ 3,120 − 16 − 1,483 = 1,621`. The legacy 1,536 meets
+  it with 85 DAA of headroom. Whether the split keeps it there is not shown.
+
+### Table with all terms (2M, `M = 1`; the 32K column is the same, excluding the 32K round count)
+
+| term | 32K | 2M |
+|---|---:|---:|
+| prep (derived above) | 16 | 16 |
+| bisection rounds | 12 rounds × 46 = 552 | 16 × 46 = 736 |
+| adjudication (`M = 1`) | 347 | 347 |
+| output | 53 | 53 |
+| restart (adjudication only) | 347 | 347 |
+| owner queue (legacy value; condition `≤ 1,621` at 2M) | 1,536 | 1,536 |
+| **total at `M = 1`** | **2,851** | **3,035** |
+| headroom to 3,120 | 269 | **85** |
+
+The headroom at 2M is 85 DAA, which is conditional: it holds only if the queue after the split stays at or below 1,621, and only
+with `M = 1` enforced by an admission rule that is not yet derived. It is not a guarantee.
+
 ## Unmet conditions
 
 1. Shape constants of graph-v7@2097152 (kv row, state block, matmul blocks) from the program, not declared.
-2. Prep term and M-admission rule derived; total ≤ 3,120 at 2M shown with the derived values.
+2. The M = 1 admission rule (serialising adjudications per claim without a `(K−1)·span` wait) and the owner queue after the split (`≤ 1,621`) are derived; the derived prep (16) is a declared-parameter value, to be measured.
 3. Span slope re-measured on the shipped binary.
 4. Adversarial tests: whole collusion + one external verifier; default on missing answers; restart and reorg identity across the fence.
 
