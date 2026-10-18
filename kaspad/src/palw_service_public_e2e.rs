@@ -1167,6 +1167,7 @@ async fn carry_fp_commitment(
     chain: &mut Chain,
     floats: &mut [Funding],
     commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    event: &kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
     prompt: &Vec<u32>,
     large: bool,
 ) -> Hash64 {
@@ -1186,7 +1187,50 @@ async fn carry_fp_commitment(
         .price
         .expect("the ordinary registry admits and prices this FP job");
     let signer = kaspa_pq_validator_core::ValidatorKey::from_seed([0xB0; 32]);
+    let header = kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(
+        kaspa_consensus_core::palw_public_binding_v1::PalwPublicLegacyBindingHeaderV1::of_binding_v1(event.binding()),
+    );
+    // Use the same authenticated prospective resource quote as the real producer. A
+    // staged claim without this custody envelope is deliberately not admitted by the fold.
+    let pledge = chain.tc.palw_staged_preclaim_quote_v1(commitment.clone(), header.clone()).unwrap().map(|(_, quote)| {
+        use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
+        let mut pledge = PalwHistoryCustodyPledgeV1 {
+            version: 1,
+            claim: kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment),
+            producer: chain.bonds[0],
+            execution_root: commitment.execution_root,
+            job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment),
+            cu_ruleset_id: header.job_context_v1().cu_ruleset_id,
+            resource_plan_id: quote.resource_plan_id,
+            maximum_records: quote.maximum_records,
+            maximum_custodians: quote.maximum_custodians,
+            accept_until_daa: quote.plan.terms.open_until_daa,
+            material_until_daa: quote.plan.terms.open_until_daa.checked_add(quote.material_span_daa).unwrap(),
+            signature: vec![],
+        };
+        pledge.signature = signed(0, pledge.pledge_id_v1().as_byte_slice(), PALW_HISTORY_PLEDGE_CONTEXT_V1);
+        pledge.check_v1().unwrap();
+        pledge
+    });
     let build = |fee| {
+        if let Some(pledge) = &pledge {
+            return signer
+                .build_fp_commitment_tx_original_public_v1(
+                    &chain.config.params,
+                    chain.daa(),
+                    chain.network_domain,
+                    chain.config.params.palw_prompt_ids_form_v1(),
+                    commitment.clone(),
+                    carried.clone(),
+                    kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: quote.quanta, pwu: quote.pwu },
+                    pledge,
+                    &header,
+                    floats[0].0,
+                    &floats[0].1,
+                    fee,
+                )
+                .unwrap();
+        }
         if large {
             return large_constraint_transaction(commitment.clone(), carried.clone(), &floats[0], fee);
         }
@@ -1425,8 +1469,8 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         let event = backend.disclose_trace_event(&outcome.material, 0, 0).unwrap();
         (outcome, event, None)
     });
-    let claim = if let Some((_, _, Some((commitment, prompt)))) = &foreign {
-        carry_fp_commitment(&mut chain, &mut floats, commitment, prompt, case.large_constraint()).await
+    let claim = if let Some((_, event, Some((commitment, prompt)))) = &foreign {
+        carry_fp_commitment(&mut chain, &mut floats, commitment, event, prompt, case.large_constraint()).await
     } else {
         let (attempt, claim) = chain.build_attempt_roots(
             0,

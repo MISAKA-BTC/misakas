@@ -79,3 +79,50 @@ unnecessary parentheses 33, duplicated attributes 24, unused mut 23, items after
 
 `305373db9`, `78cb8cfb2`, `b03945c66`, `08ac332ab`, A-2 re-pin, `b8d8ab1a3`, `664efaa6d`, `2f63cd963`, `e95166f12`, `b57628bdd`,
 `417f3dcff`, `f2b8b05b8`, `8275f2188`, `dcd255e93`.
+
+## 2026-10-18 — Codex red-test follow-up (in progress)
+
+Base: `origin/pre` `c68d385d0`; branch `codex/red-tests`. Targeted builds use
+`CARGO_INCREMENTAL=0`, `-j 3`, debug info disabled, and an isolated target directory.
+The testnet-12 identity pins and shipped activation presets are unchanged.
+Only completed executions below are PASS; the remaining handover items are still open.
+
+### BASE-0 integer-path guard
+
+Reproduced both failures with the actual standalone `float_free.rs` test target:
+1 passed, 2 failed. Six newly added source files lacked classification. The raw-string
+precheck inspected entire files, including the tokenizer's test fixtures, although test
+modules are outside the integer execution guard's scope. Classified cancellation,
+retained integer public sources/GDN evidence and STEP hashing for scanning; classified
+the offline GGUF reader and the separate Float32-family sidecar with explicit reasons.
+Moved the unsupported-raw-string refusal to scanned code, preserving fail-closed
+behavior there. A regression checks that code after a raw-string test module is still
+scanned and that a raw string in shipped code is still refused.
+
+Standalone verification: **4 passed**, scanning 50,869 / 71,525 lines in 51 declared
+files (71%; test bodies excluded). Cargo verification and prefix-cache tests are pending.
+
+### RFC-0018 sibling investigation / proposed correction (not implemented)
+
+The sink-search loop consumes a rejected candidate from its heap in
+`consensus/src/pipeline/virtual_processor/processor.rs` (`sink_search_algorithm`).
+`dns_reorg_outcome_checked` in `processor/dns.rs` maps a strict-economic refusal to
+`DominanceViolation`. The loop then pushes only the candidate's parents back into the
+heap. On accepting the incumbent, it returns the remaining heap as virtual-parent
+candidates. Thus rejecting an equal-work sibling as a replacement sink can also remove
+it as a merge parent. This conflates replacement permission with DAG inclusion;
+arrival/hash order determines whether the sibling was popped before the incumbent.
+
+Proposed correction: keep a bounded, separately tracked set of UTXO-valid tips which
+fail *only* the replacement-sink economic comparison. Under a separately reviewed dormant
+fence, offer those tips to ordinary virtual-parent/mergeset validation after choosing the
+sink, preserving finality, ancestry, merge-depth, parent-count and mergeset limits.
+Do not grant credit for inclusion, waive claim certification, or relax the sink's
+strict-economic rule. A general gate refusal or invalid UTXO/finality is not enough to
+qualify a tip. The exact predicate and any new fence require the frozen-design RFC/ADR
+review before adoption; no live fork-choice rule has been edited here.
+
+Required regression: repeated equal-work siblings in both arrival orders; one sink and
+state root, each valid sibling retained exactly once; invalid/finality-violating tips
+still excluded; exact pre-fence behavior. Reproduction on the dependency-complete tree
+and the repeated-run results remain pending.

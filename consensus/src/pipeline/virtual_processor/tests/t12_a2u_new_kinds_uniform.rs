@@ -226,7 +226,9 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             // fence (armed above through `MonetaryMaterialV1`), with its unapproved probe terms.
             PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => {
                 params.palw_material_release_recovery_v2 = Some(
-                    kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at),
+                    kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(
+                        at,
+                    ),
                 );
             }
             // RFC-0006 memory/routing court v2 (tags 243-244): in force at the later of its own and the shard court's fence.
@@ -240,7 +242,9 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             // objective-offence ledger, R-core+ and the aggregate liability all are, each armed at or below `at` here.
             PalwLifecycleKindFenceV1::TirPublicConvictionV1 => {
                 params.palw_tir_public_conviction_v1 = Some(at);
-                for field in [&mut params.palw_staged_tir_route_v1, &mut params.palw_staged_public_court_v1, &mut params.palw_rcore_plus] {
+                for field in
+                    [&mut params.palw_staged_tir_route_v1, &mut params.palw_staged_public_court_v1, &mut params.palw_rcore_plus]
+                {
                     if field.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score()) {
                         *field = Some(at);
                     }
@@ -354,6 +358,9 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_claim_challenge_v2"
             | "palw_panel_lifetime_v2"
             | "palw_monetary_material_v1"
+            | "palw_material_release_recovery_v2"
+            | "palw_memory_routing_court_v2"
+            | "palw_tir_public_conviction_v1"
             | "palw_staged_tir_route_v1"
             | "palw_staged_float_constraint_v1"
             | "palw_exec_payload_v2"

@@ -128,6 +128,11 @@ const CONSENSUS_PATH: &[&str] = &[
     // what they hand the engine decides the K/V state a commitment's rows are computed from, so they are scanned, not exempt.
     "src/prefix_cache.rs",
     "src/decode_scheduler.rs",
+    // Worker cancellation, retained integer evidence and STEP hashing affect committed runs.
+    "src/cancel.rs",
+    "src/flat_public_source.rs",
+    "src/gdn_evidence_v2.rs",
+    "src/step_tile_hasher.rs",
 ];
 
 /// Not executed by consensus, but they *state* the class's arithmetic: the KAT set publishes the
@@ -145,6 +150,8 @@ const STATES_THE_ARITHMETIC: &[&str] = &[
 /// Off the execution path, each with the reason it is off it. Present so that the union of this
 /// list and [`CONSENSUS_PATH`] can be compared against what is actually on disk.
 const EXEMPT: &[(&str, &str)] = &[
+    ("src/remote_gguf.rs", "offline converter's authenticated checkpoint range reader; executes no model arithmetic"),
+    ("src/float_public_source.rs", "Float32-family sidecar transport; integer BASE-0 families never produce these rows"),
     ("src/convert.rs", "offline PTQ: float in, (multiplier, shift) out, frozen at registration"),
     ("src/gguf.rs", "offline checkpoint reader: the file it decodes is float, and it never executes"),
     ("src/bin/qwen25-convert.rs", "offline PTQ driver"),
@@ -345,15 +352,6 @@ fn scan(path: &Path, label: &str) -> (Vec<Finding>, usize, usize) {
              that moved must be re-classified here, not silently dropped from the scan."
         )
     });
-    // A raw string would flip `in_string` without a matching close and silently blind the scan
-    // from there to the end of the file. Refusing is the only honest answer available here: the
-    // alternative is a green result that means nothing.
-    assert!(
-        !has_raw_string(&source),
-        "{label} contains a raw string, which `code_only` does not track — it would desync the \
-         string state for the rest of the file and scan real code as prose (or skip it). Teach \
-         `code_only` raw strings before adding a file that uses one."
-    );
     let mut findings = Vec::new();
     let mut scanned = 0usize;
     let mut in_string = false;
@@ -390,7 +388,16 @@ fn scan(path: &Path, label: &str) -> (Vec<Finding>, usize, usize) {
             }
             continue;
         }
+        let was_in_string = in_string;
         let code = code_only(raw, &mut in_string);
+        // Test bodies are outside this guard's scope. In shipped code the prefix survives
+        // stripping string contents, so still fail closed before an unsupported raw string
+        // can blind subsequent lines. Comments and ordinary string contents cannot trigger it.
+        assert!(
+            was_in_string || !has_raw_string(&code),
+            "{label}:{} contains a raw string on the execution path; teach code_only raw strings before scanning it",
+            index + 1
+        );
         let reason = if has_float_type(&code) {
             Some("an IEEE-754 type (ADR-0040 Decision A)")
         } else if LIBM_CALLS.iter().any(|c| code.contains(c)) {
@@ -450,6 +457,19 @@ fn the_execution_path_contains_no_float() {
 /// The scan is only as good as its file list. A module added to `src/` that appears in neither
 /// list is unclassified, and unclassified means unscanned — so it fails here rather than passing
 /// quietly in the test above.
+#[test]
+fn raw_strings_in_test_modules_do_not_hide_later_execution_code() {
+    let path = std::env::temp_dir().join(format!("misaka-float-scan-{}.rs", std::process::id()));
+    std::fs::write(&path, "#[cfg(test)]\nmod tests {\n    let fixture = r#\"1.25\"#;\n}\nfn shipped() { let x = 1.0f32; }\n").unwrap();
+    let (findings, _, _) = scan(&path, "fixture");
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].line, 5, "code after a test module must still be scanned");
+    std::fs::write(&path, "fn shipped() { let raw = r#\"1.25\"#; }\n").unwrap();
+    let rejected = std::panic::catch_unwind(|| scan(&path, "fixture")).is_err();
+    std::fs::remove_file(path).unwrap();
+    assert!(rejected, "unsupported raw strings in shipped code must still fail closed");
+}
+
 #[test]
 fn every_source_file_is_classified() {
     let root = crate_root();
