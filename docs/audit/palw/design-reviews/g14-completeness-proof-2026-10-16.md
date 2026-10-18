@@ -1747,3 +1747,10 @@ At 17:22 JST, P's DAG advanced to DAA 2 / 2 blocks, with 1,231 draws and 5
 produced blocks; its last work block remained DAA 1. The lane window held 9
 blocks over DAA 0..1 (5 attempts, 3 heartbeats, 1 other). No D-02 terminal row
 or seat-slash result was available.
+
+At 17:28 JST, Run 15's driver had restarted O, then R and P; the JSON RPC was
+briefly unavailable during P's restart and returned afterward. P then reported
+DAA 4 / 4 DAG blocks, 59 draws, 0 produced blocks since restart, and last work
+DAA 4; the lane window held 17 blocks over DAA 0..4 (8 attempts, 8 heartbeats,
+1 other). This demonstrates continued chain state across the driver's node
+restart, not a D-02 verdict or seat slash.
