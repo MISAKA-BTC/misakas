@@ -1402,3 +1402,51 @@ mod tests {
         assert_ne!(palw_model_verification_context_key_v1(&tally), palw_model_verification_decided_key_v1(&tally));
     }
 }
+
+/// REQ-X3-6 (econ): the X3 `C_upper` variant prices the retention extension at `c_retain`, and refuses an unmeasured `c_retain`.
+#[cfg(test)]
+mod x3_c_upper_tests {
+    use super::*;
+    use crate::palw_ruling_fences_v1::{PalwClaimHardDeadlineFenceV1, PalwX3RetentionExtensionV1};
+
+    fn ext(extra_daa: u64) -> PalwX3RetentionExtensionV1 {
+        PalwX3RetentionExtensionV1 { base_retention_daa: 100, retention_daa: 100 + extra_daa, extra_daa }
+    }
+
+    #[test]
+    fn c_upper_x3_keeps_the_old_term_without_an_extension_and_prices_the_extension_otherwise() {
+        let policy = PalwMinimumPricePolicyV1::unapproved_probe_v1();
+        let mut x3 = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy;
+        let class = [7u8; 64];
+        let base = palw_minimum_price_c_upper_v1(&policy, &class, 1_000_000, 1_000).unwrap();
+        assert_eq!(base, 1_100);
+        // Old ruleset: no extension, the term is the unchanged class cost (even with c_retain unmeasured).
+        x3.retention_cost_per_daa_sompi = 0;
+        assert_eq!(palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, None), Ok(base));
+        // Priced: base + extra_daa × c_retain exactly.
+        x3.retention_cost_per_daa_sompi = 3;
+        assert_eq!(palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, Some(&ext(50))), Ok(base + 150));
+        // A zero-length extension costs nothing even when c_retain is unmeasured.
+        x3.retention_cost_per_daa_sompi = 0;
+        assert_eq!(palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, Some(&ext(0))), Ok(base));
+    }
+
+    #[test]
+    fn c_upper_x3_refuses_an_unmeasured_positive_extension_and_an_overflow_and_an_unmeasured_class() {
+        let policy = PalwMinimumPricePolicyV1::unapproved_probe_v1();
+        let mut x3 = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy;
+        let class = [7u8; 64];
+        x3.retention_cost_per_daa_sompi = 0;
+        assert!(matches!(
+            palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, Some(&ext(50))),
+            Err(PalwMinimumPriceRefusalV1::Unknown(_))
+        ));
+        x3.retention_cost_per_daa_sompi = u64::MAX;
+        assert!(palw_minimum_price_c_upper_x3_v1(&policy, &class, 1_000_000, 1_000, &x3, Some(&ext(2))).is_err());
+        x3.retention_cost_per_daa_sompi = 3;
+        assert!(matches!(
+            palw_minimum_price_c_upper_x3_v1(&policy, &[9u8; 64], 1_000_000, 1_000, &x3, Some(&ext(50))),
+            Err(PalwMinimumPriceRefusalV1::Unknown(_))
+        ));
+    }
+}

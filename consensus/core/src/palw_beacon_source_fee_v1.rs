@@ -421,3 +421,59 @@ mod tests {
         }
     }
 }
+
+/// REQ-X3-6 (econ): the X3 gross floor adds `extra_daa × c_retain` to the material term, and refuses an unmeasured one.
+#[cfg(test)]
+mod x3_gross_fee_tests {
+    use super::*;
+    use crate::palw_ruling_fences_v1::{PalwClaimHardDeadlineFenceV1, PalwX3RetentionExtensionV1};
+
+    fn terms() -> misaka_palw_kernel::beacon_source::BeaconSourceTermsV1 {
+        misaka_palw_kernel::beacon_source::BeaconSourceTermsV1 {
+            context: [1; 64],
+            seal_start: 10,
+            seal_end: 20,
+            reveal_end: 30,
+            final_by: 40,
+            hold_until: 100,
+            deposit: 100,
+            max_per_producer: 1,
+            max_total: 2,
+        }
+    }
+
+    fn bounds() -> PalwBeaconSourceCostBoundsV1 {
+        let mut b = PalwBeaconSourceFeeFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy.cost_bounds.unwrap();
+        b.execution_sompi = 200;
+        b.carrier_sompi = 20;
+        b.material_sompi = 30;
+        b.public_court_sompi = 40;
+        b.locked_capital_sompi = 50;
+        b.minimum_net_receipt_sompi = 60;
+        b
+    }
+
+    #[test]
+    fn x3_gross_floor_equals_the_old_floor_without_an_extension_and_adds_the_priced_extension() {
+        let b = bounds();
+        let mut x3 = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy;
+        x3.retention_cost_per_daa_sompi = 0;
+        assert_eq!(b.minimum_gross_fee(&terms()).unwrap(), 400);
+        assert_eq!(b.minimum_gross_fee_x3(&terms(), &x3, None).unwrap(), 400);
+        x3.retention_cost_per_daa_sompi = 5;
+        let ext = PalwX3RetentionExtensionV1 { base_retention_daa: 100, retention_daa: 110, extra_daa: 10 };
+        assert_eq!(b.minimum_gross_fee_x3(&terms(), &x3, Some(&ext)).unwrap(), 400 + 50);
+    }
+
+    #[test]
+    fn x3_gross_floor_refuses_an_unmeasured_positive_extension_and_an_unmeasured_material_term() {
+        let mut x3 = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(1)).policy;
+        x3.retention_cost_per_daa_sompi = 0;
+        let ext = PalwX3RetentionExtensionV1 { base_retention_daa: 100, retention_daa: 110, extra_daa: 10 };
+        assert!(bounds().minimum_gross_fee_x3(&terms(), &x3, Some(&ext)).is_err(), "a positive extension at c_retain 0 is UNKNOWN");
+        let zero_ext = PalwX3RetentionExtensionV1 { base_retention_daa: 100, retention_daa: 100, extra_daa: 0 };
+        assert!(bounds().minimum_gross_fee_x3(&terms(), &x3, Some(&zero_ext)).is_ok());
+        let unmeasured_material = PalwBeaconSourceCostBoundsV1 { material_sompi: 0, ..bounds() };
+        assert!(unmeasured_material.minimum_gross_fee_x3(&terms(), &x3, None).is_err(), "the zero check on material still applies");
+    }
+}
