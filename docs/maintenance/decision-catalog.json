@@ -1451,9 +1451,9 @@
     },
     {
       "kind": "adr",
-      "number": "0188",
-      "path": "docs/adr/0188-tir-court-read-set-door-options.md",
-      "title": "ADR-0188 — TIR court read set and the conviction door: options (Proposed)",
+      "number": "0189",
+      "path": "docs/adr/0189-tir-court-read-set-door-options.md",
+      "title": "ADR-0189 — TIR court read set and the conviction door: options (Proposed)",
       "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     },

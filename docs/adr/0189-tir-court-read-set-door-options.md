@@ -1,4 +1,4 @@
-# ADR-0188 — TIR court read set and the conviction door: options (Proposed)
+# ADR-0189 — TIR court read set and the conviction door: options (Proposed)
 
 - **Decision:** Proposed (2026-10-18). Nothing adopted, nothing implemented, no fence, no pin, no rule changed.
 - **Scope:** the Huihui-Qwen3.5-2B 32K class, the cone term of the conviction door (`palw_tir_frame_cost_v1`, `cone_runs_bound_v1`).

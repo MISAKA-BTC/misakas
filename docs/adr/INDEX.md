@@ -187,4 +187,4 @@
 | ADR-0185 | [paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon sour…](0185-paid-lock-randomness-bootstrap-and-paid-sources.md) | 原文と後続改定を参照 |
 | ADR-0186 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md) | 原文と後続改定を参照 |
 | ADR-0187 | [native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md) | 原文と後続改定を参照 |
-| ADR-0188 | [TIR court read set and the conviction door: options (Proposed)](0188-tir-court-read-set-door-options.md) | 原文と後続改定を参照 |
+| ADR-0189 | [TIR court read set and the conviction door: options (Proposed)](0189-tir-court-read-set-door-options.md) | 原文と後続改定を参照 |

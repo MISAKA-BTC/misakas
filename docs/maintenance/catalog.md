@@ -193,7 +193,7 @@
 - [adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md](../adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md)
 - [adr/0186-hold-unresolved-liability-advance-independent-claims.md](../adr/0186-hold-unresolved-liability-advance-independent-claims.md)
 - [adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md](../adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md)
-- [adr/0188-tir-court-read-set-door-options.md](../adr/0188-tir-court-read-set-door-options.md)
+- [adr/0189-tir-court-read-set-door-options.md](../adr/0189-tir-court-read-set-door-options.md)
 - [adr/INDEX.md](../adr/INDEX.md)
 - [adr/README.md](../adr/README.md)
 - [adr/TOPICS.md](../adr/TOPICS.md)
