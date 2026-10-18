@@ -211,7 +211,7 @@ fn exec_window(state: &PalwChainStateV2, params: &PalwStateParamsV2, id: Hash64)
 /// liability. A finite EXEC horizon alone does not establish that the prefix and
 /// every slice were selected by the native receipt tally, remained Final, and
 /// survived the full challenge window.
-fn exec_dependency_readiness_v1(state: &PalwChainStateV2, id: Hash64, now: u64) -> Result<RewardReadinessV1, PalwStateV2Error> {
+pub(super) fn exec_dependency_readiness_v1(state: &PalwChainStateV2, id: Hash64, now: u64) -> Result<RewardReadinessV1, PalwStateV2Error> {
     use crate::palw_exec_v2_verify::PalwSliceVerificationV1 as V;
     use crate::palw_work_slice_v2::PalwWorkPrefixStageV2;
     let Some(root) = state.exec_v2.roots.get(&id) else {

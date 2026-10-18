@@ -4875,4 +4875,56 @@ mod amendment_1 {
         assert_eq!(VerificationProviderHorizon.code(), 31);
         assert_eq!(PalwSliceRefusalV2::name_of_code(31), "verification_provider_horizon");
     }
+
+    #[test]
+    fn rfc23s2_native_dependency_reader_releases_only_after_real_selected_claim_rows_close() {
+        use crate::palw_state_v2::palw_claim_local_rewards_v1::{RewardReadinessV1, exec_dependency_readiness_v1};
+        use crate::palw_work_slice_v2::PalwWorkPrefixStageV2;
+
+        let (p, mut s, root_id, slices, mut prefix) =
+            session_with(1_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        let route = s.kernel_route.as_mut().expect("native route");
+        let expiry = s.exec_v2.roots.get(&root_id).unwrap().expiry_daa;
+        let liability_until = crate::palw_exec_v2_verify::palw_exec_v2_retention_terms_v1(
+            expiry,
+            0,
+            p.window_court(),
+            &route.header.policy,
+        )
+        .unwrap()
+        .liability_until;
+        let close_row = |row: &mut ClaimRowV1| {
+            row.life.state = ClaimStateV1::Final { final_daa: 105 };
+            row.life.retention_met = true;
+            row.liability_until = Some(liability_until);
+            row.convicted = false;
+        };
+        close_row(&mut prefix.row);
+        route.rows.insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&prefix.claim_id)), borsh::to_vec(&prefix.row).unwrap());
+        for slice in &slices {
+            let mut row = slice.row.clone();
+            close_row(&mut row);
+            route.rows.insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&slice.claim_id)), borsh::to_vec(&row).unwrap());
+        }
+        s = carry_all(&p, &s, &slices);
+        let root = s.exec_v2.roots.get_mut(&root_id).expect("admitted EXEC root");
+        root.prefix = PalwWorkPrefixStageV2::Verified { verified_daa: 107, route_reward: 0 };
+        let now = liability_until + 1;
+
+        assert_eq!(
+            exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
+            RewardReadinessV1::Ready,
+            "every admitted prefix/slice Claim row is Final, selected, and beyond its liability deadline"
+        );
+
+        let missing_claim = s.exec_v2.slices.get(&(root_id, 1)).expect("admitted middle slice").evidence_root;
+        assert_eq!(missing_claim, slices[1].claim_id);
+        let route = s.kernel_route.as_mut().unwrap();
+        route.rows.remove(&(TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&missing_claim)));
+        assert_eq!(
+            exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
+            RewardReadinessV1::Hold(u64::MAX),
+            "missing evidence cannot borrow the cached Verified prefix"
+        );
+    }
 }
