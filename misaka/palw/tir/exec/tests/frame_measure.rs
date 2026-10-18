@@ -283,7 +283,7 @@ fn bounds(plan: &kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPub
 }
 
 /// The measurements of one class (deterministic counts and sizes, and this host's nanoseconds).
-fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &MapParams, k: usize) -> Value {
+fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: Option<&MapParams>, k: usize) -> Value {
     // --- execute: the producer's free-prompt run --------------------------------------------------------------------------
     let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C ^ k as u8; 64])).unwrap();
     let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
@@ -332,11 +332,24 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
         None,
         rules(upper),
     ) {
-        Ok(PalwTirPublicAllocationQuoteV1::Complete(plan)) => plan,
-        other => panic!("{name}: no complete frame at {upper}: {other:?}"),
+        Ok(PalwTirPublicAllocationQuoteV1::Complete(plan)) => Ok(plan),
+        other => Err(format!("{other:?}")),
     };
-    let plan6 = quote(6);
-    let plan257 = quote(257);
+    let geometry_json = json!({ "leaves": n, "decode": d, "vocab": vocab, "tiles": tiles, "prefill": header.job_context.declared_prefill_tokens });
+    let (plan6, plan257) = match (quote(6), quote(257)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (a, b) if params.is_none() => {
+            // A real class whose frame the candidate cost does not complete: the refusal IS the measurement.
+            return json!({
+                "class": name,
+                "geometry": geometry_json,
+                "execute": { "ns": execute_ns, "capture_bytes": material.len() },
+                "frame_upper6": a.err().unwrap_or_else(|| "complete".into()),
+                "frame_upper257": b.err().unwrap_or_else(|| "complete".into()),
+            });
+        }
+        (a, b) => panic!("{name}: no complete frame: {:?} / {:?}", a.err(), b.err()),
+    };
     let passes = plan6.preparation.maximum_restarts + 1;
     let unit = plan6.acquisition.unit_bytes_v1(&source).unwrap();
 
@@ -484,6 +497,11 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
     }
     drop(warm);
 
+    // The court half needs the class's tensors in memory (`MapParams`, i128 per element): a fixture class only. A real-model run
+    // (`params: None`) records it as unmeasured.
+    let (step_check, filing) = match params {
+        None => (json!("UNMEASURED: no in-memory params for this class (real-model run)"), json!("UNMEASURED")),
+        Some(params) => {
     // --- per-step check: the owner's replayed refutation and the court's check, every leaf --------------------------------------
     let c = court(program, params);
     let tparams = TirParams::from_map(&c.plan, params).unwrap();
@@ -571,6 +589,15 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
     }
     assert!(!filing.is_null(), "{name}: a forged leaf is filed and convicted");
 
+    let step_check = json!({
+            "leaves": court_n, "retain_ns": retain_ns, "replay_pass_ns": replay_pass_ns,
+            "owner_refutation_build_max_ns": build_max, "owner_refutation_build_total_ns": build_total,
+            "court_check_max_ns": check_max, "court_check_total_ns": check_total, "refutation_bytes_max": refutation_bytes_max,
+        });
+    (step_check, filing)
+        }
+    };
+
     // --- frame bytes: the full-frame encode + hash at the uppers 6 and 257 ------------------------------------------------------
     let frame = |plan: &kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1| {
         let bytes = plan.control_footprint.maximum_frame_bytes;
@@ -617,11 +644,7 @@ fn measure(name: &str, backend: &TirBackendV1, program: &TirProgramV1, params: &
             "publish_io_bytes": publish_io, "retained_bytes": descriptor.retained_bytes, "quoted_publish_slices": need.maximum_publish_slices,
             "warm_open_ns": warm_open_ns, "warm_leaf_answers": n, "warm_slices": warm_slices, "warm_ns": warm_ns,
         },
-        "step_check": {
-            "leaves": court_n, "retain_ns": retain_ns, "replay_pass_ns": replay_pass_ns,
-            "owner_refutation_build_max_ns": build_max, "owner_refutation_build_total_ns": build_total,
-            "court_check_max_ns": check_max, "court_check_total_ns": check_total, "refutation_bytes_max": refutation_bytes_max,
-        },
+        "step_check": step_check,
         "filing": filing,
         "frame": [frame(&plan6), frame(&plan257)],
         "plans": [bounds(&plan6), bounds(&plan257)],
@@ -654,7 +677,7 @@ fn tir_frame_operations_are_measured_on_every_corpus_class() {
         let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
             .unwrap()
             .with_network_id_v1(NET);
-        classes.push(measure(&name, &backend, &program, &params, k));
+        classes.push(measure(&name, &backend, &program, Some(&params), k));
         k += 1;
     }
     assert_eq!(classes.len(), 11, "every corpus class");
@@ -694,5 +717,45 @@ fn tir_frame_operations_are_measured_on_every_corpus_class() {
             class["frame"][0]["frame_bytes"],
             class["frame"][1]["frame_bytes"],
         );
+    }
+}
+
+/// **One real class's frame operations** (the court half unmeasured): `MISAKA_TIR_FRAME_MEASURE_PALWTIR` names a `PALWTIR1` file
+/// (e.g. `palwart extract-legacy` of a genesis `PALWART3`), opened as the node opens it, with the container's own layout.
+/// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> [MISAKA_TIR_FRAME_MEASURE_OUT=<json>] cargo test --release -p misaka-palw-tir-exec
+/// --features node --test frame_measure -- --ignored --nocapture tir_frame_operations_on_a_real_class`
+#[test]
+#[ignore]
+fn tir_frame_operations_on_a_real_class() {
+    let path = std::path::PathBuf::from(std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR").expect("a PALWTIR1 file"));
+    let start = Instant::now();
+    let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+    let open_ns = ns(start);
+    let start = Instant::now();
+    let (root, _) = artifact.inventory_root().unwrap();
+    let root_ns = ns(start);
+    let class = artifact.class().unwrap();
+    let program = TirProgramV1::decode_canonical(&class.program).unwrap();
+    let canonical =
+        kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
+        .unwrap()
+        .with_network_id_v1(NET);
+    let measured = measure(&name, &backend, &program, None, 0);
+    let record = json!({
+        "record": "misaka-palw/tir-frame-measure-real/v1",
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "host": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH, "label": std::env::var("MISAKA_MEASURE_HOST").unwrap_or_default() },
+        "source_commit": std::env::var("MISAKA_SOURCE_COMMIT").unwrap_or_default(),
+        "artifact": path.display().to_string(),
+        "class_id": format!("{}", class.class_id(&root)),
+        "inventory_root": format!("{root}"),
+        "open_ns": open_ns, "inventory_root_ns": root_ns,
+        "class": measured,
+    });
+    println!("[tir-frame-measure-real] {}", serde_json::to_string(&record).unwrap());
+    if let Ok(out) = std::env::var("MISAKA_TIR_FRAME_MEASURE_OUT") {
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
     }
 }
