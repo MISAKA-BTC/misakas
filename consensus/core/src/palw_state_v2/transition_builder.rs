@@ -342,7 +342,10 @@ impl<'a> TransitionBuilder<'a> {
     /// Reserve this writer's actual row copy, absent membership and journal
     /// replacement before either collection changes. This accounts requested
     /// typed allocation; a separate physical allocator quota remains necessary.
-    fn reserve_map_journal_v1<K: crate::palw_native_resource_v1::NativeHeapV1, V: crate::palw_native_resource_v1::NativeHeapV1>(
+    pub(super) fn reserve_map_journal_v1<
+        K: crate::palw_native_resource_v1::NativeHeapV1,
+        V: crate::palw_native_resource_v1::NativeHeapV1,
+    >(
         &mut self,
         key: &K,
         new: &Option<V>,
@@ -579,6 +582,9 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_class(&mut self, key: Hash64, new: Option<PalwClassStateV2>) -> Result<(), PalwStateV2Error> {
+        if new.is_none() {
+            self.remove_reader_router_class_v2(key)?;
+        }
         self.reserve_map_journal_v1(&key, &new, !self.state.classes.contains_key(&key), "native class writer")?;
         let old = match &new {
             Some(record) => self.state.classes.insert(key, record.clone()),
@@ -735,6 +741,14 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) -> Result<(), PalwStateV2Error> {
+        if !self.state.claims.contains_key(&key) {
+            if let Some(claim) = &new {
+                self.stamp_reader_router_claim_v2(key, claim)?;
+            }
+        } else if new.is_none() {
+            self.remove_reader_router_claim_v2(key)?;
+        }
+
         let (requests, slots) =
             if self.native_reservation.is_tracking_v1() { self.claim_cascade_requests_v1(key, &new)? } else { (0, 0) };
         self.reserve_mutation_sequence_v1(requests, slots)?;

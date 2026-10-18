@@ -3896,6 +3896,20 @@ fn canonical_input_leaves_with_start_v2(
     anchored: bool,
     recurrence_start: Option<u32>,
 ) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
+    canonical_input_leaves_routing_v2(profile, context, out_slot, out_coord, program, anchored, recurrence_start, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn canonical_input_leaves_routing_v2(
+    profile: &PalwShapeProfileV3,
+    context: &crate::palw_v2::PalwJobContextV2,
+    out_slot: u32,
+    out_coord: &PalwStepCoordinateV1,
+    program: KernelProgram,
+    anchored: bool,
+    recurrence_start: Option<u32>,
+    selected_router: Option<(u32, &crate::palw_step::PalwStepNodeV1)>,
+) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
     let (node, layer) = profile.resolve_node_slot(out_slot)?;
     let table_first_slot = out_slot - intra_table_index(profile, out_slot)? as u32;
     let mut out = Vec::new();
@@ -4157,7 +4171,10 @@ fn canonical_input_leaves_with_start_v2(
     // opens it against the step root like every other input, and refused (`None`) when the table
     // holds zero or two routers: a court that had to choose would be choosing the evidence.
     if qwen36_reads_routing_v1(node) {
-        let (router_slot, router) = qwen36_router_topk_slot(profile, out_slot)?;
+        let (router_slot, router) = match selected_router {
+            Some(selected) => selected,
+            None => qwen36_router_topk_slot(profile, out_slot)?,
+        };
         let len = match router.out_len {
             crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
             crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => return None,
@@ -5578,6 +5595,7 @@ fn i32_len_to_f32_bits(n: u32) -> u32 {
 /// Versioned recurrence state membership and deterministic local adjudication.
 /// No existing evidence tag, state map or root is reinterpreted by this module.
 pub mod memory_v2;
+pub mod routing_v2;
 
 #[cfg(test)]
 pub(crate) mod hostile_totality_tests;

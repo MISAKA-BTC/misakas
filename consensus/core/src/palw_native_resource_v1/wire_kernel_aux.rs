@@ -170,6 +170,10 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         135 if key_bytes == 65 && prefix == 0x50 => {
             crate::palw_claim_compact_v4::PalwPaidCompactProofBindingV4::scan_native_wire_v1(frame)?
         }
+        136 if key_bytes == 64 => crate::palw_reader_router_v2::PalwReaderRouterRowV2::scan_native_wire_v1(frame)?,
+        136 if key_bytes == 65 && prefix == 0xA1 => <u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        136 if key_bytes == 65 && prefix == 0xA2 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        136 => return Err(wire::wire_bad("unallocated reader/router V2 row namespace")),
         135 => return Err(wire::wire_bad("unallocated compact V4 row namespace")),
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,

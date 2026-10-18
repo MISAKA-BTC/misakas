@@ -2458,6 +2458,32 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
                 }
+                Obj::ReaderRouterDeclaredV2 { declaration, signature } => {
+                    use kaspa_consensus_core::palw_reader_router_v2 as routing;
+                    if !self.palw_memory_routing_court_v2_at(point.daa_score) {
+                        return Err("reader/router V2 declaration is dormant on this network".into());
+                    }
+                    let class = state.class(&declaration.class_id).ok_or("routing declaration names an unknown class")?;
+                    if class.artifact_root != declaration.artifact_root {
+                        return Err("routing declaration names another artifact".into());
+                    }
+                    let registrant = class.registrant_bond.as_ref().ok_or("sentinel class has no signing registrant")?;
+                    let bond = state.bond(registrant).ok_or("routing registrant bond is absent")?;
+                    if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err("routing registrant is not Active".into());
+                    }
+                    // Graph checks and typed allocation refusal run in the native fold.
+                    // This signature-only String walk does not mask local capacity as peer fault.
+                    let message = routing::reader_router_message_v2(self.palw_network_domain_v2(), declaration);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &bond.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        routing::PALW_READER_ROUTER_SIGNATURE_CONTEXT_V2,
+                    ) {
+                        return Err("routing declaration lacks its original class registrant signature".into());
+                    }
+                }
                 Obj::GdnStepAccusedV2 { accusation } => {
                     if !self.palw_memory_routing_court_v2_at(point.daa_score) {
                         return Err("GDN version-2 court is dormant on this network".into());

@@ -3973,6 +3973,9 @@ impl NativeWireScanV1 for crate::palw_public_material_v1::PublicUnitV1 {
         }
     }
 }
+wire_struct!(crate::palw_reader_router_v2::PalwReaderRouterBindingV2; u32, u32);
+wire_struct!(crate::palw_reader_router_v2::PalwReaderRouterDeclarationV2; u16, crate::Hash64, crate::Hash64, Vec<crate::palw_reader_router_v2::PalwReaderRouterBindingV2>);
+wire_struct!(crate::palw_reader_router_v2::PalwReaderRouterRowV2; crate::palw_reader_router_v2::PalwReaderRouterDeclarationV2, crate::palw_state_v2::PalwBondKeyV2, u64);
 impl NativeWireScanV1 for crate::palw_real_share_v1::PalwFloorModeV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
@@ -5591,6 +5594,16 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwConsensusObjectV2 {
                 sum = sum.merge(
                     <Box<crate::palw_gdn_court_v2::PalwGdnCourtAccusationV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?,
                 )?;
+                Ok(sum)
+            }
+            244 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_reader_router_v2::PalwReaderRouterDeclarationV2> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),

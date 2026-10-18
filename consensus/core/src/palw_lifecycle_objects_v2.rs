@@ -560,6 +560,13 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             Ok(())
         }
+        PalwConsensusObjectV2::ReaderRouterDeclaredV2 { declaration, signature } => {
+            if signature.is_empty() { return Err("reader/router declaration requires the original registrant signature"); }
+            if borsh::object_length(declaration).map_err(|_| "reader/router declaration cannot be measured")? as u64
+                > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES
+            { return Err("reader/router declaration exceeds the existing close-byte ceiling"); }
+            declaration.check_shape(u32::MAX).map_err(|_| "reader/router declaration is not canonical")
+        }
         PalwConsensusObjectV2::GdnStepAccusedV2 { accusation } => {
             if accusation.signature.is_empty() { return Err("GDN accusation must carry its accuser's signature"); }
             if accusation.encoded_bytes()? > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
@@ -1432,7 +1439,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         }
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
-        O::GdnStepAccusedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::MemoryRoutingCourtV2),
+        O::GdnStepAccusedV2 { .. } | O::ReaderRouterDeclaredV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::MemoryRoutingCourtV2),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         // The TIR and greedy Float32 routes' forms appended inside the staged court's kinds are owned by their own fences
@@ -1603,6 +1610,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (241, "MonetaryMaterialReplacedV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (242, "MonetaryMaterialActionV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (243, "GdnStepAccusedV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
+    (244, "ReaderRouterDeclaredV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
@@ -2283,7 +2291,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC08 explicit monetary material covenants",
         true,
     ),
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 243, hi: 243 }, "palw_memory_routing_court_v2", "RFC06 GDN/routing court version2", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 243, hi: 244 }, "palw_memory_routing_court_v2", "RFC06 GDN/routing court version2", true),
     a2_row(
         PalwA2SlotV1::ObjectTags { lo: 230, hi: 230 },
         "palw_court_model_scope_v1",
@@ -2905,7 +2913,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
-    (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
+    (243, 244, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
 ];
 
 #[cfg(test)]
@@ -3925,6 +3933,7 @@ pub(crate) mod tests {
                 (241, zero_filled_kind(241)),
                 (242, zero_filled_kind(242)),
                 (243, zero_filled_kind(243)),
+                (244, zero_filled_kind(244)),
                 (104, O::ArtifactBoundV1 { v2_class: h, kernel_param_root: h, signer: bond(), signature: vec![1] }),
                 (
                     105,
@@ -5179,6 +5188,7 @@ pub(crate) mod tests {
             (242, 0xd29d0349b76c136f),
             // New source declaration pin only; no old kind was re-pinned.
             (243, 0x5b8caf052fb70f7d),
+            (244, 0x70822efc23c62034), // Prospective native reader/router declaration; no old pin refreshed.
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),

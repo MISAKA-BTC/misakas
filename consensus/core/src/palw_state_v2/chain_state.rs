@@ -3109,6 +3109,7 @@ impl PalwChainStateV2 {
                 )));
             }
         }
+        self.assert_reader_router_consistency_v2()?;
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;

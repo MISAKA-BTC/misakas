@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Emit the NEW tag243 source pin; never refresh old pins or run Rust tests.
+"""Emit a NEW RFC06 source pin; never refresh old pins or run Rust tests.
 
 The source walk follows the existing A2U declaration manifest grammar. Its output
 is an unexecuted source-generation input, not a codec/compatibility acceptance.
 """
 from pathlib import Path
 import re
+import argparse
 
 ROOT = Path(__file__).resolve().parents[2]
 DIRS = [
@@ -147,14 +148,18 @@ def source_types():
     return types
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--reader-router', action='store_true', help='emit only the additive tag244 declaration pin')
+    args = parser.parse_args()
+    name, tag = ('ReaderRouterDeclaredV2', 244) if args.reader_router else ('GdnStepAccusedV2', 243)
     types = source_types()
     key = "consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2"
     declaration = types.pop(key)[1]
-    start = declaration.index("GdnStepAccusedV2{")
-    end = group_end(declaration, start + len("GdnStepAccusedV2"))
+    start = declaration.index(name + "{")
+    end = group_end(declaration, start + len(name))
     comma = declaration.find(",", end)
     segment = declaration[start:comma]
-    if not segment.endswith("=243"): raise RuntimeError("tag243 declaration not frozen")
+    if not segment.endswith(f"={tag}"): raise RuntimeError(f"tag{tag} declaration not frozen")
     by_name = {}
     for key, (_, value) in sorted(types.items()):
         name = key.rsplit("::", 1)[-1].removeprefix("impl BorshDeserialize for ").split("#")[0]
@@ -168,6 +173,6 @@ def main():
     pin = segment
     for name in sorted(seen):
         for key, _ in by_name.get(name, []): pin += f"|{key}={types[key][0]:016x}"
-    print(f"(243, 0x{fnv(pin):016x}), // RFC06 GDN data-membership/real-recompute carrier v2; source only")
+    print(f"({tag}, 0x{fnv(pin):016x}), // additive RFC06 carrier v2; source only")
 
 if __name__ == "__main__": main()

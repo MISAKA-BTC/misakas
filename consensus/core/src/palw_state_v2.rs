@@ -7341,6 +7341,12 @@ pub enum PalwConsensusObjectV2 {
     GdnStepAccusedV2 {
         accusation: Box<crate::palw_gdn_court_v2::PalwGdnCourtAccusationV2>,
     } = 243,
+    /// Prospective immutable per-reader routing identity. Owner signature and
+    /// exact registered graph are checked before any V2-routed claim is admitted.
+    ReaderRouterDeclaredV2 {
+        declaration: Box<crate::palw_reader_router_v2::PalwReaderRouterDeclarationV2>,
+        signature: Vec<u8>,
+    } = 244,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -13247,6 +13253,7 @@ pub fn palw_panel_room_read_v1(
 
 mod native_mutation;
 mod transition_builder;
+mod reader_router_v2;
 
 // ---------------------------------------------------------------------------------------------
 // The transition

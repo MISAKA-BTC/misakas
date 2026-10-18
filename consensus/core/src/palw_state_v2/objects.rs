@@ -514,6 +514,9 @@ pub(super) fn apply_object(
                     .to_string(),
             ));
         }
+        PalwConsensusObjectV2::ReaderRouterDeclaredV2 { declaration, .. } => {
+            reader_router_v2::declare(builder, ctx, declaration)?;
+        }
         PalwConsensusObjectV2::GdnStepAccusedV2 { accusation } => {
             let limits = builder.extras.memory_routing_court.ok_or(PalwStateV2Error::ShardCourtDormant)?;
             let claim_id = accusation.claim;

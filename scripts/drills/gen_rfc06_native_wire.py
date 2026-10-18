@@ -330,6 +330,16 @@ checkpoint_marker = '134=>return Err('
 if code.count(checkpoint_marker) != 1:
  raise ValueError('material checkpoint namespace requires the explicit aux134 fallback')
 code=code.replace(checkpoint_marker, checkpoint_arm+checkpoint_marker, 1)
+# Prospective per-reader identity: an immutable class row, a durable first-use
+# marker and per-claim V2 stamps. Old unstamped claims retain their V1 meaning.
+router_marker = '135=>return Err('
+if code.count(router_marker) != 1:
+ raise ValueError('reader/router namespace requires the explicit aux135 fallback')
+router_arms = '136 if key_bytes==64=>crate::palw_reader_router_v2::PalwReaderRouterRowV2::scan_native_wire_v1(frame)?,\n'
+router_arms += '136 if key_bytes==65 && prefix==0xA1=><u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
+router_arms += '136 if key_bytes==65 && prefix==0xA2=><crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
+router_arms += '136=>return Err(wire::wire_bad("unallocated reader/router V2 row namespace")),\n'
+code=code.replace(router_marker, router_arms+router_marker, 1)
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)
 
 # Concrete native ledger row codecs; reflected from the same KernelLedger
