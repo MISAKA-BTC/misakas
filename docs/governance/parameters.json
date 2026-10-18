@@ -128,8 +128,8 @@
       "proposed": "max(1000, window_bind + window_receipt + window_challenge_at(activation) + 1) = 1321 for current private T12",
       "unit": "DAA",
       "scope": "feature-gated private paid-v3/v4 factory only",
-      "approval_state": "Proposed / 未承認・未適用",
-      "guard": "Keep full minimum-path guard, per-class derived receipt checks and public preset identity; no modified-profile runtime until approval",
+      "approval_state": "2026-10-18 user approved private-only change and fresh-fingerprint/fresh-DB retry; no public/security/economic approval",
+      "guard": "Keep full minimum-path guard, per-class derived receipt checks and public preset identity; rebuild before private runtime retry",
       "source": "kaspad/src/private_integration/paid_claim_factory.rs",
       "changed_by_reorganization": false,
       "symbol": "private service_span_daa"
