@@ -1661,3 +1661,14 @@ does not diagnose or fix the slow DAA progress. The inherited run is
 still live and has not been counted as a pass; the binaries and node logs are
 retained. The cause of the slow progress must be diagnosed before treating a
 drill as release acceptance evidence.
+
+At 16:44 JST, read-only `getPalwNodeStatus` on P reported `producerState =
+drawing`, 11,586 draws, 30 produced blocks, no class-ticket winners lost on
+the network-difficulty comparison, and a class-ticket probability of
+`3.582e-3` (1 in 279). The lane mix covered 76 blocks over DAA 0..20, with 43
+attempt and 32 heartbeat blocks; the lane tip remained DAA 20. O also reported
+DAA 20 / 20 blocks. This narrows the symptom to slow progress in the selected
+virtual chain while producer draws continue. It is not evidence that the
+driver's lie has been convicted, nor an explanation of every missing drill
+row. The terminal result JSON still had only the initial 6 observations and
+no acceptance result.
