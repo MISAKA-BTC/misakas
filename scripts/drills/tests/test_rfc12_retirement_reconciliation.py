@@ -1,5 +1,6 @@
 """RFC-0012 §4.4 classifier, bounded scan and checkbox-7 judgement controls; synthetic rows, never a node result."""
 from pathlib import Path
+import copy
 import sys
 import unittest
 
@@ -186,6 +187,46 @@ class Judgement(unittest.TestCase):
 
 
 class Scan(unittest.TestCase):
+    @staticmethod
+    def trace_id(block_hash, index):
+        return ('%02x' % ({'genesis': 1, 'c1': 2, 'c2': 3, 'm1': 4, 'c3': 5}[block_hash] * 16 + index)) * 64
+
+    def trace_rpc(self, bad=None):
+        base, tid = self.rpc(), self.trace_id
+
+        class Rpc:
+            def call(self, method, params=None):
+                if method == 'getVirtualChainFromBlock':
+                    result = base.call(method, params)
+                    assert params['includeAcceptedTransactionIds']
+                    accepted = {'c1': [tid('genesis', 0)], 'c2': [tid('c1', 0), tid('c1', 2)], 'c3': [tid('c2', 0)]}
+                    result['acceptedTransactionIds'] = [dict(acceptingBlockHash=h, acceptedTransactionIds=accepted[h])
+                                                         for h in result['addedChainBlockHashes']]
+                    if result['acceptedTransactionIds']:
+                        if bad == 'missing-row':
+                            result['acceptedTransactionIds'].pop()
+                        elif bad == 'missing-body':
+                            result['acceptedTransactionIds'][1]['acceptedTransactionIds'].append('ff' * 64)
+                        elif bad == 'duplicate-id':
+                            result['acceptedTransactionIds'][1]['acceptedTransactionIds'].append(tid('c1', 2))
+                    return result
+                h = params['hash']
+                if h == 'genesis':
+                    result = copy.deepcopy(base.call('getBlock', dict(hash='c1')))
+                    result['block']['transactions'] = result['block']['transactions'][:1]
+                    result['block']['header']['daaScore'] = 0
+                else:
+                    result = copy.deepcopy(base.call(method, params))
+                block_ = result['block']
+                if h == 'c1':
+                    block_['transactions'] += [dict(subnetworkId='12' + '00' * 19, payload='abcd'),
+                                               dict(subnetworkId='1a' + '00' * 19, payload='ef01')]
+                for i, tx in enumerate(block_['transactions']):
+                    tx['verboseData'] = dict(transactionId=tid(h, i))
+                block_['verboseData']['selectedParentHash'] = {'c1': 'genesis', 'c2': 'c1', 'c3': 'c2'}.get(h, 'genesis')
+                return result
+        return Rpc()
+
     def rpc(self, missing_body=None):
         def tx(subnetwork, payload='', txid=None):
             return dict(subnetworkId=subnetwork, payload=payload, verboseData=dict(transactionId=txid or 'f0' * 64))
@@ -233,6 +274,17 @@ class Scan(unittest.TestCase):
             R.scan_window(self.rpc(), 'genesis', 0, 1000, 2, R.ReadBudget(10))
         with self.assertRaisesRegex(J.NotObservable, 'no body'):
             R.scan_window(self.rpc(missing_body='c2'), 'genesis', 0, 1000, 10, R.ReadBudget(10))
+
+    def test_acceptance_trace_joins_exact_ids_and_ignores_unaccepted_evidence(self):
+        scan = R.scan_window(self.trace_rpc(), 'genesis', 150, 250, 10, R.ReadBudget(10), include_acceptance=True)
+        row, = scan['blocks']
+        self.assertEqual(row['selectedParentHash'], 'c1')
+        self.assertEqual(row['acceptedTransactionIds'], [self.trace_id('c1', 0), self.trace_id('c1', 2)])
+        self.assertEqual(row['acceptedEvidenceTransactions'], [dict(transactionId=self.trace_id('c1', 2), bodyHash='c1',
+                                                                   kind=0x12, payload='abcd')])
+        for bad in ('missing-row', 'missing-body', 'duplicate-id'):
+            with self.subTest(bad=bad), self.assertRaises(J.NotObservable):
+                R.scan_window(self.trace_rpc(bad), 'genesis', 150, 250, 10, R.ReadBudget(10), include_acceptance=True)
 
 
 if __name__ == '__main__':

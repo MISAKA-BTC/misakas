@@ -374,17 +374,37 @@ def spk_hex(value):
     raise ValueError('unknown scriptPublicKey shape')
 
 
-def chain_hashes(rpc, start, maximum):
-    hashes, cursor = [], start
+def chain_hashes(rpc, start, maximum, acceptance=None):
+    hashes, seen, cursor = [], set(), start
     while True:
-        chain = rpc.call('getVirtualChainFromBlock', {'startHash': cursor, 'includeAcceptedTransactionIds': False,
+        chain = rpc.call('getVirtualChainFromBlock', {'startHash': cursor, 'includeAcceptedTransactionIds': acceptance is not None,
                                                       'minConfirmationCount': None})
         if chain.get('removedChainBlockHashes'):
             raise J.NotObservable('the scan start left the selected chain')
         added = [J.norm(item) for item in chain.get('addedChainBlockHashes') or []]
+        if len(set(added)) != len(added) or seen.intersection(added):
+            raise J.NotObservable('the selected-chain scan repeated a block')
+        if acceptance is not None:
+            rows = chain.get('acceptedTransactionIds')
+            if not isinstance(rows, list):
+                raise J.NotObservable('the node omitted requested accepted transaction ids')
+            page = {}
+            for row in rows:
+                accepting = J.norm(row.get('acceptingBlockHash'))
+                ids = row.get('acceptedTransactionIds')
+                if accepting not in added or accepting in page or not isinstance(ids, list):
+                    raise J.NotObservable('accepted transaction rows do not match the selected-chain page')
+                ids = [J.norm(txid) for txid in ids]
+                if any(not isinstance(txid, str) or not txid for txid in ids) or len(set(ids)) != len(ids):
+                    raise J.NotObservable('accepted transaction ids are missing or repeated')
+                page[accepting] = ids
+            if set(page) != set(added):
+                raise J.NotObservable('accepted transaction rows do not cover the selected-chain page')
+            acceptance.update(page)
         if not added:
             return hashes
         hashes.extend(added)
+        seen.update(added)
         if len(hashes) > maximum:
             raise J.NotObservable('the selected chain exceeds the predeclared chain-block bound (%d)' % maximum)
         cursor = added[-1]
@@ -404,10 +424,11 @@ def body_of(block_hash, block):
     return transactions
 
 
-def scan_window(rpc, genesis, from_daa, to_daa, maximum_chain, budget):
+def scan_window(rpc, genesis, from_daa, to_daa, maximum_chain, budget, include_acceptance=False):
     """Chain blocks with from_daa <= DAA <= to_daa, their coinbase outputs, every merged body's kinds at its own DAA,
     every miner script any read coinbase names, and every StakeBond transaction payload read on the way."""
-    hashes = chain_hashes(rpc, genesis, maximum_chain)
+    acceptance = {} if include_acceptance else None
+    hashes = chain_hashes(rpc, genesis, maximum_chain, acceptance)
     cache = {}
     low, high = 0, len(hashes)
     while low < high:  # first chain block at or above from_daa
@@ -425,6 +446,31 @@ def scan_window(rpc, genesis, from_daa, to_daa, maximum_chain, budget):
         verbose = block.get('verboseData') or {}
         members = [(block_hash, block)] + [(J.norm(item), read_block(rpc, J.norm(item), budget, cache))
                                            for item in (verbose.get('mergeSetBluesHashes') or []) + (verbose.get('mergeSetRedsHashes') or [])]
+        trace = {}
+        if include_acceptance:
+            parent = J.norm(verbose.get('selectedParentHash'))
+            if not isinstance(parent, str) or not parent:
+                raise J.NotObservable('the accepting block serves no selected parent')
+            if parent not in {item[0] for item in members}:
+                members.append((parent, read_block(rpc, parent, budget, cache)))
+            transactions = {}
+            for member_hash, member in members:
+                for tx in body_of(member_hash, member):
+                    txid = J.norm((tx.get('verboseData') or {}).get('transactionId'))
+                    if not isinstance(txid, str) or not txid:
+                        raise J.NotObservable('an acceptance trace body serves no transaction id')
+                    row = dict(transactionId=txid, bodyHash=member_hash, kind=subnetwork_kind(tx['subnetworkId']),
+                               payload=tx.get('payload', ''))
+                    previous = transactions.get(txid)
+                    if previous and (previous['kind'], previous['payload']) != (row['kind'], row['payload']):
+                        raise J.NotObservable('one transaction id serves inconsistent evidence bytes')
+                    transactions[txid] = row
+            ids = acceptance[block_hash]
+            if any(txid not in transactions for txid in ids):
+                raise J.NotObservable('an accepted transaction has no body in the accepting mergeset')
+            trace = dict(selectedParentHash=parent, acceptedTransactionIds=ids,
+                         acceptedEvidenceTransactions=[transactions[txid] for txid in ids
+                                                       if transactions[txid]['kind'] in (0x12, 0x1a)])
         for member_hash, member in members:
             if member_hash in bodies:
                 continue
@@ -443,7 +489,7 @@ def scan_window(rpc, genesis, from_daa, to_daa, maximum_chain, budget):
                         address=(output.get('verboseData') or {}).get('scriptPublicKeyAddress'))
                    for index, output in enumerate(coinbase['outputs'])]
         blocks.append(dict(source='node-rpc', hash=block_hash, daa=daa, blueScore=block['header'].get('blueScore'),
-                           coinbaseOutputs=outputs))
+                           coinbaseOutputs=outputs, **trace))
     return dict(blocks=blocks, bodies=list(bodies.values()), bondTxs=bond_txs, minerScripts=sorted(miners),
                 readsUsed=budget.used, chainBlocks=len(hashes))
 

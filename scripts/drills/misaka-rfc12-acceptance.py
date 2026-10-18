@@ -1577,7 +1577,7 @@ class AcceptanceRun:
             to_daa = rpc.call('getBlockDagInfo')['virtualDaaScore']
             block_budget = R.ReadBudget(dns['maximumBlockReads'])
             scan = R.scan_window(rpc, self.genesis, dns['scanFromDaa'], to_daa, self.plan['scan']['maximumScannedChainBlocks'],
-                                 block_budget)
+                                 block_budget, include_acceptance=True)
             status_budget = R.ReadBudget(dns['maximumStatusReads'])
             registry = R.bond_registry(rpc, history['bondPageLimit'], history['maximumBondPages'], status_budget)
             evidence = dict(scanFromDaa=dns['scanFromDaa'], scanToDaa=to_daa, readsUsed=scan['readsUsed'],
