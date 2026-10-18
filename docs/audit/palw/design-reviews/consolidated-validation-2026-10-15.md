@@ -415,3 +415,20 @@ found exactly this omission; the match now recognizes it. The pair has not yet b
 rerun after that correction. EVM C-items: **3 passed**, the preexisting long safe-
 frontier test was reported ignored by the default run and has been explicitly
 launched with `--ignored`; no four-test PASS is claimed until it finishes.
+
+### 2026-10-18 — staged HFP1 quote also needs native tokenizer inventory
+
+The first actual staged-tokenizer run after adding HFP1 reproduced **0 / 2 passed**:
+the quote refused `prospective raw work requires native accepted exact EOF inventory,
+not declared length`. The immutable semantics carries a raw tokenizer hash, while
+its length/key metadata is precisely what these adversarial cases lie about. Such
+metadata cannot supply the quote's actual-length fact. The same setup requirement
+applies to the normally declared native public-prefix fixtures.
+
+The fixture now drives the production `ArtifactInventoryActorV1` over the actual
+registered tokenizer file, signs every ordinary `PublicCourtStreamMoveV1`, and sends
+Open, bounded Parts and Finish through normal carrier admission and block acceptance.
+Only a subsequent native read with its accepted EOF certificate can finish setup.
+It checks actual byte length and a finite movement bound, never inserts a certificate
+or loosens the prospective quote. All four staged cases require a fresh runtime run
+after this change. Updated tir-lower admission meanwhile passes **4 / 4**.

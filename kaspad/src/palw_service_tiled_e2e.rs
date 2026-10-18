@@ -239,6 +239,51 @@ impl TiledFixture {
         }
     }
 
+    /// Run the real producer inventory actor; only native accepted EOF supplies the
+    /// prospective quote's actual-length fact. No declared length becomes a certificate.
+    pub async fn inventory_tokenizer(&self, chain: &mut Chain, floats: &mut [Funding]) {
+        use crate::palw_panel::artifact_inventory::{ArtifactInventoryActorV1, InventoryDecisionV1, InventorySnapshotV1};
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1;
+        use kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1;
+        let path = self.path.parent().unwrap().join("tokenizer.json");
+        let actual = std::fs::metadata(&path).unwrap().len();
+        let opener = chain.bonds[0];
+        let mut actor =
+            ArtifactInventoryActorV1::new_v1(self.profile.shape_profile_id(), self.root, self.table.tokenizer_id, opener, path);
+        let bound = actual.div_ceil(65_536) + 3;
+        for _ in 0..bound {
+            let progress = chain.tc.palw_tokenizer_artifact_inventory_v1(self.profile.shape_profile_id(), opener).unwrap().unwrap();
+            let decision = actor
+                .next_v1(
+                    InventorySnapshotV1 {
+                        now_daa: progress.now_daa,
+                        semantics: &progress.semantics,
+                        certificate: progress.certificate.as_ref(),
+                        attempt: progress.attempt.as_ref(),
+                    },
+                    PalwStagedPublicCourtConfigV1::network_v1(),
+                    |message, context| Ok(signed(0, message, context)),
+                )
+                .unwrap();
+            match decision {
+                InventoryDecisionV1::Ready { actual_bytes } => {
+                    assert_eq!(actual_bytes, actual);
+                    assert!(progress.certificate.is_some(), "readiness is native accepted exact EOF");
+                    eprintln!("[service-tiled] actual tokenizer EOF inventory accepted: {actual_bytes} bytes");
+                    return;
+                }
+                InventoryDecisionV1::Move { mut movement, .. } => {
+                    movement.signature = signed(0, &movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1);
+                    movement.check().unwrap();
+                    let object = PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) };
+                    chain.send(0, &object, &mut floats[0], &[]).await;
+                }
+                InventoryDecisionV1::Wait => panic!("freshly paid tokenizer inventory exhausted its original deadline"),
+            }
+        }
+        panic!("native inventory did not accept the finite original file and EOF");
+    }
+
     pub fn produce(
         &self,
         chain: &Chain,

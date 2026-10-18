@@ -1415,6 +1415,9 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
             } else {
                 fixture.declare_semantics(&mut chain, &mut floats).await;
             }
+            if case.staged_tokenizer() || case.native_prefix() {
+                fixture.inventory_tokenizer(&mut chain, &mut floats).await;
+            }
         }
     }
     let signed_bond = PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 0));
