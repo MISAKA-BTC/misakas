@@ -27,7 +27,7 @@ pub const PALW_NATIVE_LIABILITY_HOLD_TABLE_V1: u8 = 144;
 pub const PALW_NATIVE_HELD_FEE_PREFIX_V1: u8 = 0x01;
 /// The rows' version.
 pub const PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1: u8 = 1;
-/// Rows a block's tick releases (a structural bound on the sweep's work, not an economic value).
+/// Payments a block's tick releases. This bounds payments, not the number of retained rows inspected.
 pub const PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1: usize = 256;
 
 /// The native families the hold covers (ADR-0184 §1). The mining family holds nothing of its own: its claim is accepted only over

@@ -1135,7 +1135,7 @@ fn held_final_adjudication_refunds_once_and_never_overdraws_actual_slash() {
 #[test]
 fn held_final_adjudication_refuses_late_or_substituted_judgments_without_mutation() {
     let (class,quota,_,_,_)=fixture();
-    for case in 0..12 {
+    for case in 0..15 {
         let mut state=committed(&class,&quota);
         state.finalize(class.record(),&ready(&state)).unwrap();
         let before=borsh::to_vec(&state).unwrap();
@@ -1148,7 +1148,10 @@ fn held_final_adjudication_refuses_late_or_substituted_judgments_without_mutatio
             3=>proof.class_id=[99;64],4=>proof.inventory_root=[99;64],5=>proof.parameter_root=[99;64],
             6=>proof.current_daa=horizon+1,7=>{proof.established_daa=horizon+1;proof.current_daa=horizon+1;},
             8=>proof.finder=state.job().producer,9=>proof.proof_id=[0;64],10=>collected=131,
-            _=>horizon=state.job().deadline_daa-1,
+            11=>horizon=state.job().deadline_daa-1,
+            12=>proof.established_daa=state.claim().unwrap().committed_daa-1,
+            13=>proof.current_daa=proof.established_daa-1,
+            _=>proof.finder=[0;64],
         }
         assert!(state.adjudicate_held_final(class.record(),&proof,collected,horizon).is_err(),"case {case}");
         assert_eq!(borsh::to_vec(&state).unwrap(),before,"case {case}");
