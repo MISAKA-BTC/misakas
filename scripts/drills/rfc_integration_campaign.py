@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import time
 import rfc08_native_paid_observation as paid_observations
+import rfc08_native_paid_bootstrap_observation as bootstrap_observations
 
 SCHEMA = 1
 KIND = 'misaka-rfc-integration-campaign-v1'
@@ -26,7 +27,7 @@ NATIVE_KINDS = frozenset(('native-claim-observed', 'native-paid-observed', 'nati
     'reader-router-court', 'all-model-cost-boundaries', 'independent-source-availability',
     'cumulative-soundness-review', '128-bit-review', 'adapter-interoperability',
     'all-rewards-once', 'material-all-path-bounds', 'restart-reorg-atomicity', 'market-accounting',
-    'attack-submission', 'attack-import', 'attack-adjudication'))
+    'attack-submission', 'attack-import', 'attack-adjudication')) | bootstrap_observations.KINDS
 GATES = {
     'rfc06-model-boundaries-cost': 'all-model-cost-boundaries',
     'rfc06-routing-court': 'reader-router-court',
@@ -46,7 +47,7 @@ GATES = {
 }
 SOURCE_LEAVES = ('misaka-rfc-integration-campaign.py', 'rfc_integration_campaign.py', 'misaka-rfc12-multiprocess.py',
     'rfc12_owned_resources.py', 'misaka_wrpc_json.py', 'rfc12_kernel_consumers.py', 'rfc12_native_recovery_observation.py',
-    'rfc08_native_paid_observation.py')
+    'rfc08_native_paid_observation.py', 'rfc08_native_paid_bootstrap_observation.py')
 BUILD_TOOLS = frozenset(('cargo', 'rustc', 'rustup', 'make', 'cmake', 'ninja', 'meson', 'git', 'rebase', 'reset'))
 IDENTIFIER = re.compile(r'[a-z0-9][a-z0-9._-]{0,95}\Z')
 
@@ -271,6 +272,15 @@ def validate_campaign(plan, drill):
                     'paid requirements may pin authority identities, not redefine approval/settlement facts')
                 for key, value in fact['expected'].items():
                     hash_text(value, 128, 'paid expected ' + key)
+            if fact['kind'] in bootstrap_observations.KINDS:
+                argv = drill['nodes'][fact['role']]['argv']
+                require(fact['claimId'] in paid_observations.claims(argv) and
+                    paid_observations.paid_bootstrap_source_policy(argv) is not None,
+                    'V6 requirement needs exact observed claim and explicit frozen V6 policy')
+                require(set(fact['expected']) <= {'enrollment', 'context', 'checkerSnapshot', 'policy', 'binding', 'bootstrapEpoch'},
+                    'V6 expected pins may identify the native graph, not redefine approval/payment facts')
+                for key, value in fact['expected'].items():
+                    hash_text(value, 128, 'V6 expected ' + key)
             requirements.add(fact['kind'])
         require({fact['claimId'] for fact in scenario['requirements']} == set(scenario['claims']),
             'every declared claim must have its own evidence requirements')
@@ -540,6 +550,14 @@ def make_campaign_drill(base):
             self.integrity('stage.after.' + name)
 
         def fact(self, requirement):
+            if requirement['kind'] in bootstrap_observations.KINDS:
+                try:
+                    observed = bootstrap_observations.observe(self, requirement['role'], requirement['claimId'],
+                        base.import_stamp, base.probe_context, self.frozen.plan['network']['consensusParamsId'],
+                        self.frozen.plan['network']['genesisHash'])
+                    return bootstrap_observations.fact(requirement, observed)
+                except (ValueError, OSError, KeyError, TypeError, RuntimeError) as error:
+                    return unknown_fact(requirement, 'current own V6 observation unavailable: ' + str(error))
             if requirement['kind'] in paid_observations.PAID_KINDS:
                 role = requirement['role']
                 # Unconfigured legacy plans retain UNKNOWN without opening a
@@ -592,8 +610,8 @@ def make_campaign_drill(base):
                         deadline = time.monotonic() + min(scenario['observationTimeoutSeconds'], self.remaining())
                         while True:
                             fact = self.fact(requirement)
-                            if fact['status'] != 'UNKNOWN' or requirement['kind'] not in (
-                                    'native-claim-observed', 'native-paid-observed', 'native-paid-assigned-quorum') or time.monotonic() >= deadline:
+                            if fact['status'] != 'UNKNOWN' or requirement['kind'] not in (frozenset((
+                                    'native-claim-observed', 'native-paid-observed', 'native-paid-assigned-quorum')) | bootstrap_observations.KINDS) or time.monotonic() >= deadline:
                                 break
                             self.remaining()
                             time.sleep(.2)

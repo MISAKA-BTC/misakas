@@ -67,7 +67,7 @@ def qualify(t,item):
 private={};public=[]
 # Runtime authorities retain the own authenticated snapshot. They have no
 # transport codec; reaching one through a future wire field is a source error.
-runtime_authorities={'PalwNativeRoutingExecutionAuthorityV2', 'PalwNativeRoutingClaimAuthorityV2'}
+runtime_authorities={'PalwNativeRoutingExecutionAuthorityV2', 'PalwNativeRoutingClaimAuthorityV2', 'PalwNativeRoutingWorkAuthorityV2'}
 for path in sorted(G['visited']):
     item=defs.get(path)
     if not item or path in manual:continue

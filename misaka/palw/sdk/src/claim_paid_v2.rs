@@ -102,8 +102,12 @@ impl VerifiedPaidClaimSourcesV2 {
                 return Err(Refusal::new("CLAIM_ROUND_RECEIPT_AUTHORITY", "local result replaces the signed proof round"));
             }
             PaidClaimObjectV2::RoundReceipt { receipt }
-        } else if self.route.paid_bootstrap_binding_v6(&self.authority.enrollment.id())
-            .map_err(|why| Refusal::new("CLAIM_SOURCE_INVALID", why.to_string()))?.is_some() {
+        } else if self
+            .route
+            .paid_bootstrap_binding_v6(&self.authority.enrollment.id())
+            .map_err(|why| Refusal::new("CLAIM_SOURCE_INVALID", why.to_string()))?
+            .is_some()
+        {
             PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { receipt }
         } else {
             PaidClaimObjectV2::Receipt { receipt }
@@ -132,9 +136,15 @@ pub fn paid_claim_sources_from_route_v2(
     let authority = route.paid_claim_authority_v2(context).map_err(|e| Refusal::new("CLAIM_AUTHORITY_INVALID", e))?;
     let now = route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER_INVALID", e))?.daa;
     let check = route.paid_claim_check_authority_v2(context, now).map_err(|e| Refusal::new("CLAIM_SOURCE_INVALID", e))?;
-    let lock = route.paid_claim_effective_lock_v6(&authority).map_err(|e| Refusal::new("CLAIM_LOCK_INVALID", e))?
+    let lock = route
+        .paid_claim_effective_lock_v6(&authority)
+        .map_err(|e| Refusal::new("CLAIM_LOCK_INVALID", e))?
         .ok_or_else(|| Refusal::new("CLAIM_LOCK_MISSING", "native paid future lock not admitted"))?;
-    if !lock.source_valid || lock.context != check.context() || lock.seed != check.seed() || lock.enrollment != authority.enrollment.id() {
+    if !lock.source_valid
+        || lock.context != check.context()
+        || lock.seed != check.seed()
+        || lock.enrollment != authority.enrollment.id()
+    {
         return Err(Refusal::new("CLAIM_LOCK_INVALID", "native lock differs from re-derived future seed"));
     }
     Ok(VerifiedPaidClaimSourcesV2 { route, authority, check, lock, round: None })
@@ -148,19 +158,28 @@ pub fn paid_claim_commit_object_approved_bootstrap_v6(
     original: KernelRouteObjectV1,
 ) -> Result<KernelRouteObjectV1, Refusal> {
     let KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::Commit { enrollment, commit, salt } } = original else {
-        return Err(Refusal::new("CLAIM_BOOTSTRAP_V6", "V6 builder accepts only a new unsigned V2 Commit, never an existing signed WAL"));
+        return Err(Refusal::new(
+            "CLAIM_BOOTSTRAP_V6",
+            "V6 builder accepts only a new unsigned V2 Commit, never an existing signed WAL",
+        ));
     };
-    let class: PaidClaimClassV2 = route.aux_row(PAID_CLAIM_CLASSES_V2, &enrollment.class)
+    let class: PaidClaimClassV2 = route
+        .aux_row(PAID_CLAIM_CLASSES_V2, &enrollment.class)
         .ok_or_else(|| Refusal::new("CLAIM_BOOTSTRAP_V6", "V6 class consent absent"))?;
     if !class.supports_approved_bootstrap_source_v6() {
-        return Err(Refusal::new("CLAIM_BOOTSTRAP_V6", "V6 source supports the explicit noninteractive unreviewed mechanics scope only"));
+        return Err(Refusal::new(
+            "CLAIM_BOOTSTRAP_V6",
+            "V6 source supports the explicit noninteractive unreviewed mechanics scope only",
+        ));
     }
-    if source_policy == [0;64] || route.paid_claim_for_base_v2(&enrollment.base_claim)
-        .map_err(|why| Refusal::new("CLAIM_BOOTSTRAP_V6", why))?.is_some()
-    { return Err(Refusal::new("CLAIM_BOOTSTRAP_V6", "V6 policy absent or this native work already has an immutable enrollment")); }
-    Ok(KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::CommitWithApprovedBootstrapV6 {
-        enrollment, commit, salt, source_policy,
-    } })
+    if source_policy == [0; 64]
+        || route.paid_claim_for_base_v2(&enrollment.base_claim).map_err(|why| Refusal::new("CLAIM_BOOTSTRAP_V6", why))?.is_some()
+    {
+        return Err(Refusal::new("CLAIM_BOOTSTRAP_V6", "V6 policy absent or this native work already has an immutable enrollment"));
+    }
+    Ok(KernelRouteObjectV1::PaidClaimV2 {
+        object: PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { enrollment, commit, salt, source_policy },
+    })
 }
 
 pub fn paid_claim_commit_object_v2(
@@ -421,14 +440,16 @@ pub fn sign_paid_claim_object_v2(
         PaidClaimObjectV2::EnrollJob { job } => Some(job.payer),
         PaidClaimObjectV2::Commit { enrollment, commit, .. }
         | PaidClaimObjectV2::CommitWithMaterialGenerationV5 { enrollment, commit, .. }
-        | PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { enrollment, commit, .. } => {
+        | PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { enrollment, commit, .. }
+        | PaidClaimObjectV2::CommitApprovedBootstrapWithMaterialGenerationV7 { enrollment, commit, .. } => {
             if commit.producer() != enrollment.producer {
                 return Err("producer consent differs from base claim".into());
             }
             Some(enrollment.producer)
         }
         PaidClaimObjectV2::Fund { terms, .. } => Some(terms.sponsor),
-        PaidClaimObjectV2::Receipt { receipt } | PaidClaimObjectV2::RoundReceipt { receipt }
+        PaidClaimObjectV2::Receipt { receipt }
+        | PaidClaimObjectV2::RoundReceipt { receipt }
         | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { receipt } => Some(receipt.signer),
         PaidClaimObjectV2::FundRound { terms, .. } => Some(terms.sponsor),
         PaidClaimObjectV2::LockRound { .. } => None,
@@ -458,12 +479,13 @@ pub fn sign_paid_claim_object_v2(
 
 pub mod all_target_bootstrap;
 pub mod cli;
+pub mod material_generation_v5;
+pub mod material_generation_v7;
 pub mod private_bootstrap;
 pub mod producer_resources;
+pub mod provider_actions_v4;
 pub mod provider_handoff_v4;
 pub mod provider_reader_v4;
-pub mod provider_actions_v4;
-pub mod material_generation_v5;
 
 /// Portable public material for the all-target CLI verifier. Every value is
 /// authenticated by the mathematical verifier against the anchored commitments.
@@ -571,12 +593,19 @@ pub fn paid_claim_final_from_kernel_rows_v2(
             return Err(Refusal::new("CLAIM_FINAL_INCOMPLETE", "all signed proof rounds must pass"));
         }
         let last = route.paid_claim_round_v3(&enrollment, plan.rounds - 1).map_err(|e| Refusal::new("CLAIM_ROUNDS", e))?;
-        (kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(
-            last.lock.as_ref().ok_or_else(|| Refusal::new("CLAIM_ROUND_LOCK", "last round lock missing"))?)
-            .map_err(|why| Refusal::new("CLAIM_ROUND_LOCK", why.to_string()))?, plan.rounds, last.transcript_root)
+        (
+            kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(
+                last.lock.as_ref().ok_or_else(|| Refusal::new("CLAIM_ROUND_LOCK", "last round lock missing"))?,
+            )
+            .map_err(|why| Refusal::new("CLAIM_ROUND_LOCK", why.to_string()))?,
+            plan.rounds,
+            last.transcript_root,
+        )
     } else {
         (
-            route.paid_claim_effective_lock_v6(&authority).map_err(|e| Refusal::new("CLAIM_LOCK_INVALID", e))?
+            route
+                .paid_claim_effective_lock_v6(&authority)
+                .map_err(|e| Refusal::new("CLAIM_LOCK_INVALID", e))?
                 .ok_or_else(|| Refusal::new("CLAIM_LOCK_MISSING", "Final has no rooted future lock"))?,
             1,
             [0; 64],
@@ -724,8 +753,9 @@ pub fn paid_claim_round_sources_from_route_v3(
         .paid_claim_round_check_authority_v3(&enrollment, round, route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER", e))?.daa)
         .map_err(|e| Refusal::new("CLAIM_ROUND_SOURCE", e))?;
     let lock = kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(
-        row.lock.as_ref().ok_or_else(|| Refusal::new("CLAIM_ROUND_LOCK", "native future lock missing"))?)
-        .map_err(|why| Refusal::new("CLAIM_ROUND_LOCK", why.to_string()))?;
+        row.lock.as_ref().ok_or_else(|| Refusal::new("CLAIM_ROUND_LOCK", "native future lock missing"))?,
+    )
+    .map_err(|why| Refusal::new("CLAIM_ROUND_LOCK", why.to_string()))?;
     if !lock.source_valid || lock.seed != check.seed() {
         return Err(Refusal::new("CLAIM_ROUND_SOURCE", "rooted lock differs from verified future source"));
     }

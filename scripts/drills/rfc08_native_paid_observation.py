@@ -11,6 +11,7 @@ import stat
 
 FLAG = '--private-probe-paid-observe-claims='
 DIRECTORY = 'rfc08-native-paid-observations-v5'
+BOOTSTRAP_DIRECTORY = 'rfc08-native-paid-bootstrap-observations-v6'
 MAX_CLAIMS = 64
 MAX_BYTES = 64 * 1024
 PAID_KINDS = frozenset(('native-paid-observed', 'native-paid-assigned-quorum',
@@ -88,8 +89,9 @@ def paid_bootstrap_source_policy(argv):
     return path
 
 
-def directory(drill, role):
-    path = Path(drill.values[role + '_APPDIR']) / 'misaka-testnet-12' / DIRECTORY
+def directory(drill, role, name=DIRECTORY):
+    need(name in (DIRECTORY, BOOTSTRAP_DIRECTORY), 'unknown paid observation directory')
+    path = Path(drill.values[role + '_APPDIR']) / 'misaka-testnet-12' / name
     need(path.is_absolute() and not any(part.is_symlink() for part in (path,) + tuple(path.parents)),
         'paid observation path traverses a symlink or escapes the owned appdir')
     return path
@@ -105,8 +107,13 @@ def invalidate(drill, role):
     if not values:
         return
     need(role not in drill.processes, 'cannot invalidate observations of an existing owned child')
-    parent = directory(drill, role)
-    if parent.exists():
+    names = [DIRECTORY]
+    if paid_bootstrap_source_policy(drill.plan['nodes'][role]['argv']) is not None:
+        names.append(BOOTSTRAP_DIRECTORY)
+    for name in names:
+        parent = directory(drill, role, name)
+        if not parent.exists():
+            continue
         need(parent.is_dir(), 'paid observation parent is not a directory')
         for value in values:
             for suffix in ('.json', '.pending'):
@@ -231,25 +238,25 @@ def validate(envelope, claim, dag, node, import_stamp, params, genesis):
     return value
 
 
-def observe(drill, role, claim, import_stamp, probe_context, params, genesis):
+def observe(drill, role, claim, import_stamp, probe_context, params, genesis, *, directory_fn=directory, validate_fn=validate):
     need(claim in claims(drill.plan['nodes'][role]['argv']), 'exact claim not enabled in this role\'s frozen paid observation flag')
     process = drill.processes.get(role)
     need(process is not None and process.poll() is None, 'paid observation requires the current owned live child')
     need(getattr(drill, 'paid_observation_processes', {}).get(role) is process,
         'paid observation has no driver-recorded invalidated launch')
-    path = directory(drill, role) / (claim + '.json')
+    path = directory_fn(drill, role) / (claim + '.json')
     rpc = drill.rpc(role)
     try:
         before, node = rpc.call('getBlockDagInfo'), rpc.call('getPalwNodeStatus')
         envelope, file_identity = read_owned(path)
-        value = validate(envelope, claim, before, node, import_stamp, params, genesis)
+        value = validate_fn(envelope, claim, before, node, import_stamp, params, genesis)
         after, after_node = rpc.call('getBlockDagInfo'), rpc.call('getPalwNodeStatus')
         need(probe_context(before, node) == probe_context(after, after_node), 'paid observation crossed sink/DAA/import/Params')
         # An atomic publication during RPC bracketing must retain the exact own
         # committed root at the same state point. Never compare sink.header's
         # root: that header commits its parent's post-state, not this state.
         end_envelope, end_file = read_owned(path)
-        end_value = validate(end_envelope, claim, after, after_node, import_stamp, params, genesis)
+        end_value = validate_fn(end_envelope, claim, after, after_node, import_stamp, params, genesis)
         need(value == end_value, 'paid observation changed its root or facts during the bracket')
         need(drill.processes.get(role) is process and process.poll() is None and
             drill.paid_observation_processes.get(role) is process, 'paid observation crossed a process exit/restart')

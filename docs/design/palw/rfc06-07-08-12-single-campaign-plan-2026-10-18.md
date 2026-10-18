@@ -165,6 +165,10 @@ python3 scripts/drills/misaka-rfc-integration-campaign.py \
 
 ## 残件
 
+V6 paid-bootstrap用のown API/sidecar/collectorを追加した。既存のexact paid claim観測flagに加え、明示共通source-paid profileとV6 policy fileを要求する。V5とV6は別directory/schemaで保持し、restartで両方のexact stale fileを無効化する。新collectorのsourceもcandidate campaignの固定対象に含める。
+
+追加の構造観測kindは`native-paid-bootstrap-observed`、`native-paid-bootstrap-quorum`、`native-paid-bootstrap-source-graph`。expectedはenrollment/context/checkerSnapshot/policy/binding/bootstrapEpochだけを固定できる。current native graphとreceipt structureを観測するもので、上記必須gateのkindは変更していない。full selected approval、独立性/取得・市場条件、履歴署名、実coinbase/決済/全報酬一回精算をこれらで代替しない。全て未実行である。
+
 - 上記未公開 capability の native API/exporter と fixed collector の接続。未実装のまま PASS にしない。
 - 実 artifact・claim・攻撃 transaction による署名済み finite command inputs と full model/cost inventory。
 - binary/context drift、same DB crash、未import attack、command timeout、missing approval、累積 soundness / 実収支 / 全報酬一回精算の actual negative/positive campaign cases。

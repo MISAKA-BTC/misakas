@@ -548,6 +548,17 @@ pub trait ConsensusApi: Send + Sync {
     > {
         Err("own native paid claim observations unavailable".into())
     }
+    /// Explicit aux138 approved-bootstrap draw facts; legacy lock semantics
+    /// and the V5 observation contract remain separate.
+    fn palw_paid_bootstrap_observation_v6(
+        &self,
+        _base: crate::Hash64,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_paid_claim_observation_v6::NativePaidBootstrapObservationV6>,
+        String,
+    > {
+        Err("own-node paid bootstrap observation unavailable".into())
+    }
     /// Coherent own selected-state observation for the finite source checker.
     /// No remote bytes or public RPC projection can construct this authority.
     fn palw_source_bootstrap_observation_v1(

@@ -1548,6 +1548,74 @@ impl ConsensusApi for Consensus {
         }
         Ok(observed)
     }
+    fn palw_paid_bootstrap_observation_v6(
+        &self,
+        base: Hash64,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_paid_claim_observation_v6::NativePaidBootstrapObservationV6,
+        >,
+        String,
+    > {
+        use kaspa_consensus_core::{
+            palw_paid_claim_observation_v5::NativePaidClaimSnapshotV5,
+            palw_paid_claim_observation_v6::native_paid_bootstrap_observation_v6,
+        };
+        let before = self.lkg_virtual_state.load();
+        let fence = self
+            .config
+            .params
+            .palw_paid_bootstrap_source_v6
+            .filter(|f| {
+                f.activation != kaspa_consensus_core::config::params::ForkActivation::never()
+                    && f.activation.is_active(before.daa_score)
+            })
+            .ok_or("own V6 paid observation capability is dormant")?;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("own V6 paid observation requires ConsensusV2".into());
+        };
+        if !bundle.state.paid_bootstrap_source_v6_mirror_matches(fence.activation.daa_score(), &fence.policy) {
+            return Err("own V6 paid observation Params mirror differs".into());
+        }
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || import.active.is_some() {
+            return Err("own V6 paid observation import incomplete".into());
+        }
+        let (checkpoint, state) = self
+            .virtual_processor
+            .palw_v2_reader_state(&bundle.state)
+            .map_err(|e| e.to_string())?
+            .ok_or("own V6 paid observation state absent")?;
+        let point = state.last_point().ok_or("own V6 paid observation state point absent")?;
+        if checkpoint != before.ghostdag_data.selected_parent || point.block != checkpoint {
+            return Err("own V6 paid observation is not the current selected parent".into());
+        }
+        let observed = native_paid_bootstrap_observation_v6(
+            &state,
+            NativePaidClaimSnapshotV5 {
+                checkpoint,
+                state_point: point.block,
+                state_root: self.virtual_processor.palw_committed_root_v1(&state),
+                daa: before.daa_score,
+                import_epoch: import.epoch,
+            },
+            base,
+            fence.policy,
+        )
+        .map_err(|e| e.to_string())?;
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != import.epoch
+            || checkpoint != after.ghostdag_data.selected_parent
+            || before.daa_score != after.daa_score
+        {
+            return Err("own V6 paid observation changed point/clock/import generation".into());
+        }
+        Ok(observed)
+    }
     fn palw_source_bootstrap_observation_v1(
         &self,
         work: kaspa_hashes::Hash64,

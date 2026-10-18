@@ -8670,6 +8670,18 @@ impl NativeWireScanV1 for misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2 {
                 )?)?;
                 Ok(sum)
             }
+            19 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                sum = sum.merge(<misaka_palw_kernel::route::SaltedCommitV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum=sum.merge(<misaka_palw_kernel::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

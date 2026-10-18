@@ -32,7 +32,7 @@ struct Envelope<'a> {
     security_soundness_measured: bool,
 }
 
-fn publish(directory: &Path, base: Hash64, envelope: &Envelope<'_>) -> Result<(), String> {
+pub(super) fn publish<T: serde::Serialize>(directory: &Path, base: Hash64, envelope: &T) -> Result<(), String> {
     let destination = directory.join(format!("{base}.json"));
     let temporary = directory.join(format!("{base}.pending"));
     if destination.exists() {

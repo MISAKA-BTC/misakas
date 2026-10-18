@@ -307,7 +307,7 @@ pub fn native_paid_claim_observation_v5(
     Ok(NativeRetainedV1::from_owner_reserved_v1(out, owner))
 }
 
-fn validate_receipt(
+pub(crate) fn validate_receipt(
     a: &PalwPaidClaimAuthorityV2,
     lock: &PalwPaidClaimLockV2,
     receipt: &PaidClaimReceiptV2,

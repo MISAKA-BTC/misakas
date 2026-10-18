@@ -109,16 +109,25 @@ fn apply_inner(
     let p = current_policy(b, ctx.daa_score)?;
     route_fold::ensure_route_header(b, ctx)?;
     let legacy_enrollment = match o {
-        PaidClaimObjectV2::Fund { enrollment, .. } | PaidClaimObjectV2::Lock { enrollment }
-        | PaidClaimObjectV2::StageMessage { enrollment, .. } | PaidClaimObjectV2::FundRound { enrollment, .. }
-        | PaidClaimObjectV2::LockRound { enrollment, .. } | PaidClaimObjectV2::BindCompactProofV4 { enrollment, .. } => Some(enrollment),
+        PaidClaimObjectV2::Fund { enrollment, .. }
+        | PaidClaimObjectV2::Lock { enrollment }
+        | PaidClaimObjectV2::StageMessage { enrollment, .. }
+        | PaidClaimObjectV2::FundRound { enrollment, .. }
+        | PaidClaimObjectV2::LockRound { enrollment, .. }
+        | PaidClaimObjectV2::BindCompactProofV4 { enrollment, .. } => Some(enrollment),
         PaidClaimObjectV2::Receipt { receipt } => Some(&receipt.enrollment),
         _ => None,
     };
     if let Some(enrollment) = legacy_enrollment {
-        if b.state.kernel_route().unwrap().paid_bootstrap_binding_v6(enrollment)
-            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?.is_some()
-        { return Err(refused("V6 source enrollment refuses legacy funding/lock/receipt/round mode")); }
+        if b.state
+            .kernel_route()
+            .unwrap()
+            .paid_bootstrap_binding_v6(enrollment)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
+            .is_some()
+        {
+            return Err(refused("V6 source enrollment refuses legacy funding/lock/receipt/round mode"));
+        }
     }
     let signer_id = palw_kernel_bond_id_v1(signer);
     // New registration/binding data consumes the native block work admission
@@ -129,6 +138,7 @@ fn apply_inner(
             | PaidClaimObjectV2::BindCompactProofV4 { .. }
             | PaidClaimObjectV2::CommitWithMaterialGenerationV5 { .. }
             | PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { .. }
+            | PaidClaimObjectV2::CommitApprovedBootstrapWithMaterialGenerationV7 { .. }
             | PaidClaimObjectV2::LockApprovedBootstrapV6 { .. }
             | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { .. }
     ) {
@@ -336,21 +346,33 @@ fn apply_inner(
         }
         PaidClaimObjectV2::Commit { enrollment: e, commit, salt }
         | PaidClaimObjectV2::CommitWithMaterialGenerationV5 { enrollment: e, commit, salt, .. }
-        | PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { enrollment: e, commit, salt, .. } => {
+        | PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { enrollment: e, commit, salt, .. }
+        | PaidClaimObjectV2::CommitApprovedBootstrapWithMaterialGenerationV7 { enrollment: e, commit, salt, .. } => {
             let l = route_fold::load_ledger(b, ctx)?;
             let r = b.state.kernel_route.as_ref().unwrap();
             let j: PaidClaimJobV2 =
                 r.aux_row(PAID_CLAIM_JOBS_V2, &key(&e.job)).ok_or_else(|| refused("paid claim payer enrollment missing"))?;
             let c: PaidClaimClassV2 =
                 r.aux_row(PAID_CLAIM_CLASSES_V2, &key(&j.class)).ok_or_else(|| refused("paid claim registrant consent missing"))?;
-            let used = r
-                .aux
-                .iter()
-                .filter(|((t, key), _)| *t == PAID_CLAIM_ENROLLMENTS_V2 && key.len() == 64)
-                .map(|(_, v)| borsh::from_slice::<PalwPaidClaimAuthorityV2>(v))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| refused(e.to_string()))?;
-            let live = used.iter().filter(|a| ctx.daa_score <= a.enrollment.lifetime.liability_until).count();
+            // Only counts are needed. Do not keep deep clones of every
+            // historical enrollment while admitting a generation wrapper.
+            let mut live = 0usize;
+            let mut job_consumers = 0usize;
+            for ((table, key), _) in &r.aux {
+                if *table != PAID_CLAIM_ENROLLMENTS_V2 || key.len() != 64 {
+                    continue;
+                }
+                let context: Digest = key.as_slice().try_into().expect("primary paid authority key64");
+                let used = r
+                    .paid_claim_authority_checked_v6(&context)
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+                if ctx.daa_score <= used.enrollment.lifetime.liability_until {
+                    live = live.checked_add(1).ok_or_else(|| refused("paid live admission count overflow"))?;
+                }
+                if used.job.id() == j.id() {
+                    job_consumers = job_consumers.checked_add(1).ok_or_else(|| refused("paid job admission count overflow"))?;
+                }
+            }
             if e.producer != signer_id
                 || commit.producer() != signer_id
                 || commit_id(commit) != e.base_claim
@@ -364,35 +386,58 @@ fn apply_inner(
                 || e.round != 0
                 || e.prior_transcript != [0; 64]
                 || live >= p.maximum_live_claims as usize
-                || used.iter().filter(|a| a.job.id() == j.id()).count() >= j.maximum_consumers as usize
+                || job_consumers >= j.maximum_consumers as usize
                 || l.claims.contains_key(&e.base_claim)
                 || l.beacon_sources.values().any(|source| source.job == j.base_job && source.outcome.is_none())
             {
                 return Err(refused("paid producer enrollment is late, replayed, unsigned or exceeds capacity"));
             }
             b.state.require_monetary_material_enrollment_v1(b.params, Hash64::from_bytes(e.base_claim), ctx.daa_score, None)?;
-            if let PaidClaimObjectV2::CommitWithMaterialGenerationV5 { generation, original_signature, .. } = o {
-                crate::palw_paid_material_generation_v5::validate_paid_material_generation_v5(
-                    &b.state,
-                    b.params,
-                    ctx.daa_score,
-                    signer,
-                    e,
-                    commit,
-                    salt,
+            match o {
+                PaidClaimObjectV2::CommitWithMaterialGenerationV5 { generation, original_signature, .. } => {
+                    crate::palw_paid_material_generation_v5::validate_paid_material_generation_v5(
+                        &b.state,
+                        b.params,
+                        ctx.daa_score,
+                        signer,
+                        e,
+                        commit,
+                        salt,
+                        generation,
+                        original_signature,
+                    )
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+                }
+                PaidClaimObjectV2::CommitApprovedBootstrapWithMaterialGenerationV7 {
+                    source_policy,
                     generation,
                     original_signature,
-                )
-                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
-            } else {
-                // Legacy Commit retains exact current-consent semantics. Only
-                // the explicitly signed V5 wrapper can follow a replacement.
-                let monetary = b
-                    .state
-                    .monetary_material_row_v1(Hash64::from_bytes(e.base_claim))
-                    .ok_or_else(|| refused("paid claim signed monetary material consent missing"))?;
-                if monetary.consent.as_bytes() != e.material_consent {
-                    return Err(refused("paid claim names another signed material consent"));
+                    ..
+                } => {
+                    crate::palw_paid_material_generation_v5::validate_paid_material_generation_v7(
+                        &b.state,
+                        b.params,
+                        ctx.daa_score,
+                        signer,
+                        e,
+                        commit,
+                        salt,
+                        source_policy,
+                        generation,
+                        original_signature,
+                    )
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+                }
+                _ => {
+                    // Legacy Commit retains exact current-consent semantics. Only
+                    // explicitly signed V5/V7 wrappers can follow a replacement.
+                    let monetary = b
+                        .state
+                        .monetary_material_row_v1(Hash64::from_bytes(e.base_claim))
+                        .ok_or_else(|| refused("paid claim signed monetary material consent missing"))?;
+                    if monetary.consent.as_bytes() != e.material_consent {
+                        return Err(refused("paid claim names another signed material consent"));
+                    }
                 }
             }
             let (sf, _) = source_fences(b, ctx.daa_score)?;
@@ -448,7 +493,9 @@ fn apply_inner(
                 checker_candidates,
             };
             a.validate(&l).map_err(refused)?;
-            if let PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { source_policy, .. } = o {
+            if let PaidClaimObjectV2::CommitWithApprovedBootstrapV6 { source_policy, .. }
+            | PaidClaimObjectV2::CommitApprovedBootstrapWithMaterialGenerationV7 { source_policy, .. } = o
+            {
                 super::palw_paid_bootstrap_source_fold_v6::admit(b, ctx, &a, *source_policy)?;
             }
             let before = l.to_rows();
@@ -538,13 +585,21 @@ fn apply_inner(
             }
         }
         PaidClaimObjectV2::Lock { enrollment } => lock(b, ctx, enrollment)?,
-        PaidClaimObjectV2::LockApprovedBootstrapV6 { enrollment } => super::palw_paid_bootstrap_source_fold_v6::lock(b, ctx, enrollment)?,
+        PaidClaimObjectV2::LockApprovedBootstrapV6 { enrollment } => {
+            super::palw_paid_bootstrap_source_fold_v6::lock(b, ctx, enrollment)?
+        }
         PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { receipt } => {
-            if b.state.kernel_route().unwrap().paid_bootstrap_binding_v6(&receipt.enrollment)
-                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?.is_none()
-            { return Err(refused("V6 receipt has no explicit V6 admission")); }
+            if b.state
+                .kernel_route()
+                .unwrap()
+                .paid_bootstrap_binding_v6(&receipt.enrollment)
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
+                .is_none()
+            {
+                return Err(refused("V6 receipt has no explicit V6 admission"));
+            }
             receipt_fold(b, ctx, signer, receipt)?;
-        },
+        }
         PaidClaimObjectV2::Receipt { receipt } => receipt_fold(b, ctx, signer, receipt)?,
         PaidClaimObjectV2::ReviewScope { scope } => {
             scope.validate().map_err(refused)?;
@@ -769,21 +824,30 @@ fn receipt_fold(
     receipt: &PaidClaimReceiptV2,
 ) -> Result<(), PalwStateV2Error> {
     let r = b.state.kernel_route.as_ref().ok_or_else(|| refused("paid claim route missing"))?;
-    let a = r.paid_claim_enrollment_checked_v6(&receipt.enrollment)
+    let a = r
+        .paid_claim_enrollment_checked_v6(&receipt.enrollment)
         .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
-    a.validate(&*r.ledger_checked_v1()
-        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?).map_err(refused)?;
+    a.validate(
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+    )
+    .map_err(refused)?;
     if a.class.interactive_plan.is_some() || receipt.round != 0 || receipt.message_root != [0; 64] {
         return Err(refused("interactive receipt needs its round consumer"));
     }
-    let lock = r.paid_claim_effective_lock_checked_v6(&a)
+    let lock = r
+        .paid_claim_effective_lock_checked_v6(&a)
         .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
         .ok_or_else(|| refused("paid receipt future lock missing"))?;
-    let current = if r.paid_bootstrap_binding_v6(&a.enrollment.id())
-        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?.is_some() {
+    let current = if r
+        .paid_bootstrap_binding_v6(&a.enrollment.id())
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
+        .is_some()
+    {
         r.paid_bootstrap_check_authority_v6(&a, ctx.daa_score)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
-    } else { r.paid_claim_check_authority_v2(&a.context.id(), ctx.daa_score).map_err(refused)? };
+    } else {
+        r.paid_claim_check_authority_v2(&a.context.id(), ctx.daa_score).map_err(refused)?
+    };
     if !lock.source_valid
         || current.seed() != lock.seed
         || receipt.version != 2
@@ -842,9 +906,14 @@ pub(super) fn tick_paid_claim_final_projection_v2(
                     return Err(refused("interactive Final lacks complete full-material rounds"));
                 }
                 let last = r.paid_claim_round_v3(&a.enrollment.id(), plan.rounds - 1).map_err(refused)?;
-                (crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(
-                    last.lock.as_ref().ok_or_else(|| refused("last round lock missing"))?)
-                    .map_err(PalwStateV2Error::NativeResource)?, plan.rounds, last.transcript_root)
+                (
+                    crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(
+                        last.lock.as_ref().ok_or_else(|| refused("last round lock missing"))?,
+                    )
+                    .map_err(PalwStateV2Error::NativeResource)?,
+                    plan.rounds,
+                    last.transcript_root,
+                )
             } else {
                 (
                     r.paid_claim_effective_lock_checked_v6(&a)
