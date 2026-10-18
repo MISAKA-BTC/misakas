@@ -3557,7 +3557,7 @@ fn apply_object_inner(
                     *trace_chunk_count
                 },
                 trace_retention_daa: if builder.extras.fp_da_pins_active {
-                    ctx.daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(builder.params))
+                    ctx.daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_at_v2(builder.params, ctx.daa_score))
                 } else {
                     *trace_retention_daa
                 },

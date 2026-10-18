@@ -945,7 +945,7 @@ pub fn check_palw_class_lottery_v3(
 /// * `trace_chunk_count == PALW_ATTEMPT_V2_TRACE_CHUNKS` — the one shape every family serves;
 /// * `trace_manifest_root == attempt_trace_manifest_root_v1(trace_root, count)` — a function of a
 ///   value the panel replays;
-/// * `trace_retention_daa == daa_score + palw_min_trace_retention_daa_v1(params)` — the obligation
+/// * `trace_retention_daa == daa_score + palw_min_trace_retention_daa_at_v2(params, daa_score)` — the obligation
 ///   the chain defines, at the block's OWN DAA score (a merged block's, not the accepting block's,
 ///   which is why this takes the header's score rather than reading `ctx`).
 ///
@@ -973,7 +973,7 @@ pub fn check_palw_attempt_da_pins_v1(
                 PalwAdmissionV2Error::TraceManifestNotDerived { claimed, derived }
             }
         })?;
-        let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params));
+        let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_at_v2(state_params, daa_score));
         if attempt.trace_retention_daa != derived {
             return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
         }
@@ -987,7 +987,7 @@ pub fn check_palw_attempt_da_pins_v1(
     if attempt.trace_manifest_root != derived {
         return Err(PalwAdmissionV2Error::TraceManifestNotDerived { claimed: attempt.trace_manifest_root, derived });
     }
-    let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params));
+    let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_at_v2(state_params, daa_score));
     if attempt.trace_retention_daa != derived {
         return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
     }

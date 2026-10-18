@@ -434,7 +434,7 @@ impl TestConsensus {
                     bundle.base_class_id,
                     target,
                     per_inference,
-                    kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_v1(&bundle.state),
+                    kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_at_v2(&bundle.state, header.daa_score),
                 )
             }
             _ => unreachable!("only called on a ConsensusV2 network"),
