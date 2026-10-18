@@ -511,6 +511,17 @@ fn a16_mul_shift(x: f64) -> (i64, u8) {
     }
 }
 
+// The existing converter's power-of-two scale, shared with offline fidelity reporting.
+fn a16_site_exponent_v1(a: f64) -> i32 {
+    if a <= 0.0 { -24 } else { (a.max(1e-9) / 32_767.0).log2().ceil() as i32 + 1 }
+}
+
+/// Physical logit units per committed integer code, for offline source comparison.
+/// This calibration metadata does not enter consensus or change the artifact.
+pub fn a16_logit_scale_v1(stats: &crate::reference::CalibStatsV1) -> f64 {
+    2f64.powi(a16_site_exponent_v1(stats.final_logit_absmax))
+}
+
 /// **The W8A16 conversion (ADR-0040 W) — weights per row, activations wide, and every runtime
 /// number INTEGER before the artifact exists.**
 ///
@@ -541,7 +552,7 @@ pub fn convert_qwen25_a16(
     drop(embed_f);
 
     // Site exponents at 15-bit budgets with one bit of drift headroom.
-    let e15 = |a: f64| -> i32 { if a <= 0.0 { -24 } else { (a.max(1e-9) / 32_767.0).log2().ceil() as i32 + 1 } };
+    let e15 = a16_site_exponent_v1;
     let triple = |x: f64, zero: i64| -> A16QuantParams {
         let (multiplier, shift) = a16_mul_shift(x.abs());
         A16QuantParams { multiplier: if x < 0.0 { -multiplier } else { multiplier }, shift, zero }
