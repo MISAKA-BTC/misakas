@@ -1,0 +1,47 @@
+{
+ "containment": {
+  "contiguous_history_tiles": 20,
+  "hist_operands": 1411,
+  "operands": 14382,
+  "state_operands": 4132,
+  "trials": 2583
+ },
+ "door_formula": "door = 11,223 + runs x 2,346 (non-cone terms 11,223 held at shipped values; 448 x 2,346 + 11,223 = 1,062,231 reproduces the shipped door)",
+ "limit_daa": 3120,
+ "nonconone_daa": 11223,
+ "rows": {
+  "derived, contiguous history tiles (assumption checked on fixture only)": {
+   "cone_runs": 20850,
+   "door_daa": 48925323,
+   "kind": "conditional",
+   "within_3120": false
+  },
+  "derived_upper, per-leaf history runs (no contiguity assumption)": {
+   "cone_runs": 116166,
+   "door_daa": 272536659,
+   "kind": "derived",
+   "within_3120": false
+  },
+  "measured job (5 positions), shipped cone bound": {
+   "cone_runs": 448,
+   "door_daa": 1062231,
+   "kind": "shipped",
+   "within_3120": false
+  },
+  "shipped cone_runs_bound_v1 at 32768 positions": {
+   "cone_runs": 95309,
+   "door_daa": 223606137,
+   "kind": "shipped",
+   "within_3120": false
+  }
+ },
+ "span_per_run_daa": 2346,
+ "window_rule": {
+  "argmax_position": 32639,
+  "max_leaves": 4915476,
+  "max_runs_256_contiguous_history_tiles": 20850,
+  "max_runs_256_per_leaf_history": 116166,
+  "total_step_leaves_at_max_context": 786963904,
+  "whole_runs_256": 3074078
+ }
+}
