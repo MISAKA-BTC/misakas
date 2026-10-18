@@ -1697,3 +1697,8 @@ At 17:05 JST, a second read-only wRPC sample returned DAA 27 / 27 blocks,
 94 blocks over DAA 0..26, with the last work block at DAA 26. The node is
 advancing, but no new work block or terminal D-02 result appeared in this
 sample. The driver remains nonterminal and this run is not release acceptance.
+
+At 17:06 JST, P had advanced its lane tip to DAA 27 and reported 39 produced
+blocks and 15,812 draws. The DAG had 27 blocks and the lane window was still
+94 blocks over DAA 0..26 (50 attempt, 43 heartbeat, 1 other); no terminal D-02
+result or seat-slash observation was present. This is progress, not acceptance.
