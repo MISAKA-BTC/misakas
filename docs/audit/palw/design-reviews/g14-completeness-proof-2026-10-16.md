@@ -1670,3 +1670,9 @@ The EOG-fixed honest node test reached Active at DAA 399 and the ordinary native
 Added `tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum`, using the same production-service/P2P/receipt-spend harness with the original semantic identities. The existing honest test retains the non-default declared semantics, native EOF inventory and altered-manifest negative control; its 5390/3120 door refusal remains unresolved. Both tests require an actual consumed quantum. A pass of the ordinary payment case does not establish 02-B or close G14 as a whole. The forged case retains the mandatory licensed colluder set and per-seat collateral reduction.
 
 The ordinary payment case is running via the same targeted cargo command with filter `tir_frame_node_tn1_default_semantics`, log `/tmp/codex-g14-tir-default-payment.log`. Validation is pending.
+
+### 14.5 Owner next-move pacing (2026-10-18, validation pending)
+
+The running forged executable repeatedly submitted the owner's shared court round. Inspection found that owner scheduling, unlike the already corrected custodian responder, applied `COURT_MOVE_REPLAN_DAA` to every move on that round, including a different action/native turn after the previous one was accepted. Added the unsigned control signing digest to each owner's in-memory case: only an identical move waits the existing retry interval; the pending-carrier guard remains. No consensus deadline, capacity, rent or preset changes. A targeted retry/next-move boundary test is queued in `/tmp/codex-g14-owner-retry.log`.
+
+The still-running `/tmp/codex-g14-tir-forged-test` predates this fix. Its result cannot validate the corrected scheduler, and a new forged node run will be required after the current run terminates. The ordinary payment build also remains pending.

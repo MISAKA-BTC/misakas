@@ -165,6 +165,8 @@ struct OwnerCaseV1 {
     cone_want: Option<PalwTirPublicRequestV1>,
     cone_needs_ids: bool,
     demands: u32,
+    // The unsigned signing digest distinguishes a retry from the next accepted-state move.
+    last_move: Option<Hash64>,
     done: bool,
     _replay: crate::palw_memory_ledger::PalwMemoryReservationV1,
 }
@@ -175,6 +177,11 @@ pub(crate) struct PalwTirPublicOwnerBookV1 {
     after: Option<Hash64>,
     cases: HashMap<Hash64, OwnerCaseV1>,
     skipped: HashMap<Hash64, u64>,
+}
+
+// Only an identical move waits the retry interval; a new native turn/action can proceed.
+fn owner_retry_waits_v1(last: Option<Hash64>, next: Hash64, moved_at: Option<u64>, now: u64) -> bool {
+    last == Some(next) && moved_at.is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
 }
 
 /// The outcome of one sparse-cone probe over the accepted public material.
@@ -796,6 +803,7 @@ impl PalwPanelService {
                                 cone_want: None,
                                 cone_needs_ids: false,
                                 demands: 0,
+                                last_move: None,
                                 done: false,
                                 _replay: memory,
                             },
@@ -803,12 +811,13 @@ impl PalwPanelService {
                     }
                     OwnerStepV1::Move { claim, mut control, due: due_daa } => {
                         let queue = (claim, PALW_TIR_PUBLIC_OWNER_ROUND_V1, false);
+                        let digest = control.signing_message_v1(network_domain)?;
+                        let last = book.cases.get(&claim).and_then(|case| case.last_move);
                         if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                            || owner_retry_waits_v1(last, digest, moved.get(&queue).copied(), now)
                         {
                             return Ok(());
                         }
-                        let digest = control.signing_message_v1(network_domain)?;
                         control.signature = self
                             .sign(digest.as_byte_slice(), PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1)
                             .ok_or("TIR owner signing key unavailable")?;
@@ -818,6 +827,9 @@ impl PalwPanelService {
                             && let Some(case) = book.cases.get_mut(&claim)
                         {
                             case.demands += 1;
+                        }
+                        if let Some(case) = book.cases.get_mut(&claim) {
+                            case.last_move = Some(digest);
                         }
                         pending.push((queue.0, queue.1, queue.2, PalwConsensusObjectV2::TirPublicControlV1 { control }));
                         due.insert(queue, due_daa);
@@ -882,6 +894,16 @@ impl PalwPanelService {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_tir_public_claim_v1::{PalwTirPublicCustodianLoadV1, PalwTirPublicFrameViewV1};
+
+    #[test]
+    fn owner_next_move_does_not_wait_for_the_previous_moves_retry_interval() {
+        let previous = Hash64::from_u64_word(1);
+        let next = Hash64::from_u64_word(2);
+        assert!(owner_retry_waits_v1(Some(previous), previous, Some(100), 101));
+        assert!(!owner_retry_waits_v1(Some(previous), next, Some(100), 101));
+        assert!(!owner_retry_waits_v1(Some(previous), previous, Some(100), 100 + COURT_MOVE_REPLAN_DAA));
+        assert!(!owner_retry_waits_v1(None, next, None, 0));
+    }
 
     fn h(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)
