@@ -1609,13 +1609,15 @@ async fn x8_g14_completed_worker_claims_earn_nothing_when_the_root_expires_on_th
     // that route; its agreed expiry is the real cancellation transition.
     cw.net.beat_to(expiry).await;
     let after = cw.net.chain.tip_state().1;
+    // The root voids at the latest at its signed expiry. Past the paid path the session outlives the REAL claim's own unlicensed
+    // lifetime, so the REAL claim may void first and void the root with it; either way the native route never settles.
     assert!(
         matches!(after.exec_v2_root_v1(&native).unwrap().phase,
-            PalwWorkRootPhaseV2::Voided { voided_daa, .. } if voided_daa == expiry),
-        "the root voids at its signed expiry {expiry}: {:?}",
+            PalwWorkRootPhaseV2::Voided { voided_daa, .. } if voided_daa <= expiry),
+        "the root voids by its signed expiry {expiry}: {:?}",
         after.exec_v2_root_v1(&native).unwrap().phase
     );
-    assert!(matches!(after.claim(&native).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkRootExpired, .. }));
+    assert!(matches!(after.claim(&native).unwrap().phase, PalwClaimPhaseV2::Voided { .. }));
     assert!(after.vesting_row(&native).is_none() && after.exec_v2_reward_vesting_v1(&native).is_none());
     let ledger = cw.net.ledger();
     assert_eq!(ledger.bonds[&poster].collateral, poster_collateral, "cancellation debits no fee or reward");
@@ -1892,7 +1894,10 @@ async fn x8_g14_kernel_finals_holds_and_credit_survive_restart_and_two_actual_re
     assert!(final_rewrite, "observe the actual block journal; no synthetic Final-row injection");
     assert!(bn.ledger().claims[&s.prefix.claim.id].convicted);
     assert!(bn.collateral(ROOT_CARD) < cw.net.collateral(ROOT_CARD));
-    assert!(bn.owed(ACCUSER) > 0, "the public conviction queues its funded bounty");
+    // Past `palw_reporter_income_v2` (armed with the paid path) the funded bounty is staged as deferred reporter income (ADR-0032),
+    // not a pending payout; below it the conviction queues it at once.
+    let reporter_income = bn.config.params.palw_reporter_income_v2.is_some_and(|f| f.is_active(bn.daa()));
+    assert!(reporter_income || bn.owed(ACCUSER) > 0, "the public conviction queues its funded bounty");
     assert!(bn.daa() - fork_daa <= kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1);
     assert!(matches!(bn.chain.tip_state().1.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
     assert_eq!(bn.collateral(REGISTRANT), poster);
@@ -2010,12 +2015,15 @@ async fn x8_g14_a_competing_claim_cannot_spend_a_bound_jobs_escrow_before_native
     cw.net.send(receipts).await;
     let ClaimStateV1::ProbabilisticPass { window_end_daa: end, .. } = cw.net.claim_state(&control.claim.id) else { panic!() };
     let control_poster = cw.net.collateral(REGISTRANT);
+    let control_ledger = cw.net.ledger();
     cw.net.beat_to(end + 1).await;
     let ledger = cw.net.ledger();
     assert!(matches!(ledger.claims[&control.claim.id].life.state, ClaimStateV1::Final { .. }));
     assert!(ledger.claims[&control.claim.id].rewarded);
     assert!(!ledger.job_escrows.contains_key(&control_job.id()));
-    assert_eq!(cw.net.collateral(REGISTRANT), control_poster - control_escrow.amount);
+    // The poster's other paid escrows on the way (source claims of the paid path) are recomputed from the rows.
+    let others = other_paid_escrows(&control_ledger, &ledger, cw.net.kid(REGISTRANT), &[control_job.id(), job.id()]);
+    assert_eq!(cw.net.collateral(REGISTRANT) + others, control_poster - control_escrow.amount);
     // The root never settles (no native licence here): at its signed expiry it voids and the cancellation refunds the held escrow.
     let expiry = cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).unwrap().expiry_daa;
     cw.net.beat_to(expiry + 1).await;

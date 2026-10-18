@@ -19,6 +19,8 @@ const SPLIT_V2: usize = 24;
 fn net_rule_e_gate_c() -> Net {
     let (mut config, _, premine, floats) = parts_ruled(None, true);
     config.params.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(1));
+    // Gate C's certification sweep is a kernel route move: the kernel route is in force with it.
+    config.params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
     config.params.palw_independently_work_certified_v1 = Some(ForkActivation::new(1));
     config.params.sync_palw_rfc0018_v1();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
