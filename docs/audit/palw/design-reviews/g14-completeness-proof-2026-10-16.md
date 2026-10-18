@@ -1642,3 +1642,21 @@ text29 の実 job を node 上で作る harness(`funded11/text29.rs`)を書い�
 - kaspad:`carrier_wait_many_classes`・`rfc06_held_gdn_filer` 8 passed。
 - core の identity:`--test g14_court_capacity`(`testnet12_identity_did_not_move` を含む)15 passed / 1 ignored。
 - `rfc0018_dag_siblings` の node 試験 3 件は失敗した。fence ありの 1 件は config の validation が RFC-0018 fence の武装を拒否して起動しない。fence なしの 2 件は sibling が merger の past に入らない。どちらも sibling の順の変更(fence の中だけ)を通らない経路で、RFC18 監査 D16 が記録した既存の失敗と同じ症状である。未解決。
+
+
+## 15. Codex 継続: native の再確認と担保を備えた試験(2026-10-18)
+
+branch `codex/g14-native-completion`、引き継ぎ commit `ac2f69454` の worktree と target を継続使用。
+
+| 再確認 | 結果 | 根拠 |
+|---|---|---|
+| `owning39_master_registration_is_billed_on_its_carried_bytes_within_the_block_work_budget` | **1 passed** | 既存の対象 test executable を実行、1.48 s。Master 65 は登録 1,400 bytes、source 381 bytes、restore 5,877 bytes、work 97,337,344 / ordinary limit 536,870,912。mining 73 work 688,128。同 log `/tmp/codex-g14-native-carriage.log` |
+| `rfc0018_dag_siblings` | **2 passed、1 failed** | 17.88 s。`rfc18_three_models_three_miners_from_the_same_parents_are_all_retained_and_each_recorded` の launched 側で、card 3 の sibling が merger の selected parent / blue / red に含まれず失敗。直前に経済的な DominanceViolation のログがあった。以前の 3 pass 記録を安定した受入結果として扱わない。原因・再現条件の調査が残る。log `/tmp/codex-g14-rfc18-siblings.log` |
+| 引き継いだ G-N2 node 試験 | **0 passed、1 failed** | `m7.log`、716.64 s。anchor 用 floor attempt が Final-weight cap に skip され、Gate C anchor を作れなかった |
+
+### 15.1 試験の担保(実装、結果待ち)
+
+- `owning39/master.rs` の mining fixture で、8 本の genesis bond の担保を 100 倍にした。各 outpoint の実 UTXO も同額にし、増分は main premine から移す。総額一致を assert し、UTXO commitment と genesis hash を再計算する。m=47 / k=32、認証・weight cap の式と本番 preset は変更しない。
+- これは TEST harness の資金の用意であり、測定値・実ネットワークの経済値ではない。
+- **未完。** import 不足(`MuHashExtensions`)を修正後、`CARGO_INCREMENTAL=0 cargo test -j 3 -p kaspa-consensus --lib -- g14n2_node --nocapture` を再実行中。log `/tmp/codex-g14-native-funded.log`。この時点でビルド中で、認証・77・80・attestor 課金を完了扱いしない。
+- 次に G-N2 の結果を読み、GDN filer の tick 接続と E2E を build・実行し、RFC18 sibling の失敗を修正する。各段階の結果を別々に記録する。

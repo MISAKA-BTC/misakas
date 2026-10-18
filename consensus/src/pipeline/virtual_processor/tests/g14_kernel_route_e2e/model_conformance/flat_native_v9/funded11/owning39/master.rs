@@ -4,6 +4,7 @@
 //! mining claim beside an honest one. Structural test values (a shortened challenge window so a job reaches Final unaccused, a
 //! mining policy with test capacities), never measurements.
 use super::*;
+use kaspa_consensus_core::muhash::MuHashExtensions;
 use kaspa_consensus_core::palw_native_job_v39::*;
 use kaspa_consensus_core::palw_native_master_v39::NativeMasterRegisterV39;
 use kaspa_consensus_core::palw_native_mining_v39::*;
@@ -336,8 +337,33 @@ async fn owning39_master_component_job_reaches_final_and_the_master_is_final() {
 /// `owning_config_with(CHALLENGE)` plus the owning39 mining fence (TEST capacities and premise roots, never measured) and RFC-0018
 /// Gate C (its design certification policy, unchanged), mirrored onto the bundle the chain is built from.
 fn mining_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
-    let (cfg, bundle, premine, floats) = owning_config_with(Some(CHALLENGE));
+    let (cfg, mut bundle, mut premine, floats) = owning_config_with(Some(CHALLENGE));
     let mut params = cfg.params.clone();
+    // HARNESS ONLY: fund the design m=47 draws and the anchor producer with real
+    // collateral. Move it from the main premine; neither caps nor k/m are relaxed.
+    let total_before: u128 = premine.iter().map(|(_, e)| u128::from(e.amount)).sum();
+    let mut added = 0u64;
+    for object in &mut bundle.genesis_objects {
+        if let Obj::BondRegistered { bond, collateral, .. } = object {
+            let entry = premine.iter_mut().find(|(outpoint, _)| *outpoint == bond.0).expect("the bond has funded collateral");
+            assert_eq!(entry.1.amount, *collateral);
+            let enlarged = collateral.checked_mul(100).expect("test collateral fits");
+            added = added.checked_add(enlarged - *collateral).unwrap();
+            *collateral = enlarged;
+            entry.1.amount = enlarged;
+        }
+    }
+    let donor = premine.iter_mut().filter(|(outpoint, _)| !floats.iter().any(|(f, _)| f == outpoint))
+        .max_by_key(|(_, e)| e.amount).expect("the main premine");
+    donor.1.amount = donor.1.amount.checked_sub(added).expect("the main premine funds the extra bonds");
+    assert_eq!(premine.iter().map(|(_, e)| u128::from(e.amount)).sum::<u128>(), total_before, "no money is minted for the harness");
+    let mut multiset = kaspa_muhash::MuHash::new();
+    for (outpoint, entry) in &premine {
+        multiset.add_utxo(outpoint, entry);
+    }
+    params.genesis.utxo_commitment = multiset.finalize();
+    params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
+    params.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle.clone());
     let domain = params.palw_funded_execution_v11.as_ref().unwrap().policies.execution.network_domain;
     let mut fence = PalwNativeMiningFenceV39::unapproved_probe_at(ForkActivation::new(0), domain);
     let p = &mut fence.policy;
