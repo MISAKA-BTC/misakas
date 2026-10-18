@@ -1166,3 +1166,164 @@ fn read_set_on_a_real_class() {
         std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
     }
 }
+
+/// **The position-window rule, checked against the real evaluator** (G14, `derived-upper-1018`). For every disputed step leaf of
+/// every fixture class (checkpoint interval 2, history tile 2, a 10-position job, so State and HistTile leaves and their boundaries
+/// all occur), the operands the production cone refutation carries must satisfy the window rule: a commit or state operand at
+/// position `q` with `q <= p <= q + C + h + 1` (`p` the disputed position), or a HistTile operand at `q < p`; every operand precedes
+/// the disputed leaf. Test only; no rule, constant or price.
+#[test]
+fn read_set_containment_on_fixture_classes() {
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1 as K;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut trials, mut operands, mut state_ops, mut hist_ops) = (0u64, 0u64, 0u64, 0u64);
+    let mut contiguous_tiles = 0u64;
+    let mut classes = Vec::new();
+    for (name, program, params) in programs() {
+        if analyze_ranges(&program).is_err() || program.params.is_empty() {
+            continue;
+        }
+        let program = TirProgramV1::decode_canonical(&tiled(program).encode()).unwrap();
+        let lay = layout(&program, 5, 2, 2, 64);
+        let path = dir.path().join(format!("{}.palwtir", name.replace(' ', "-")));
+        let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
+            params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
+        };
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
+            .unwrap();
+        let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+        let (root, _) = artifact.inventory_root().unwrap();
+        let class = artifact.class().unwrap();
+        let canonical =
+            kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+        let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
+            .unwrap()
+            .with_network_id_v1(NET);
+        let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+        let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
+        let job = fp_job(&backend, &prompt, 6);
+        let ids: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+        let run = backend.execute_free_prompt(&job, &ids).unwrap();
+        let material = run.outcome.material.clone();
+        let capture = backend.decode_capture(&material).unwrap();
+        let ctx = capture.binding.job_context.clone();
+        let n = capture.binding.step_leaf_count;
+        drop(capture);
+        let space = backend.space();
+        let (c, h) = (space.layout.checkpoint_interval as i64, space.layout.h_tile as i64);
+        let rules = PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+        let mut class_ops = 0u64;
+        // A completed history tile's leaves are contiguous in the step index (the structural run count assumes it).
+        let mut tile_ranges: std::collections::BTreeMap<u32, (u64, u64, u64)> = std::collections::BTreeMap::new();
+        for i in 0..n {
+            let l = space.leaf_at(&ctx, i).unwrap();
+            if matches!(l.kind, K::HistTile { .. }) {
+                let e = tile_ranges.entry(l.position).or_insert((i, i, 0));
+                e.0 = e.0.min(i);
+                e.1 = e.1.max(i);
+                e.2 += 1;
+            }
+        }
+        for (pos, (lo, hi, cnt)) in &tile_ranges {
+            assert!(hi - lo + 1 == *cnt, "{name}: the history tile at position {pos} is not one contiguous run of leaves");
+            contiguous_tiles += 1;
+        }
+        for i in 0..n {
+            let p = space.leaf_at(&ctx, i).unwrap().position as i64;
+            let r = backend.cone_refutation(&material, i, &rules).unwrap();
+            trials += 1;
+            for pre in &r.operands.preimages {
+                let li = space.leaf_index(&ctx, &pre.coord).expect("an operand is a leaf of this job");
+                let op = space.leaf_at(&ctx, li).unwrap();
+                let q = op.position as i64;
+                let is_hist = matches!(op.kind, K::HistTile { .. });
+                let in_window = q <= p && p <= q + c + h + 1;
+                let old_hist = is_hist && q < p;
+                assert!(li < i, "{name}: leaf {i} reads leaf {li}, which does not precede it");
+                assert!(
+                    in_window || old_hist,
+                    "{name}: disputed leaf {i} at position {p} reads leaf {li} at position {q} (history: {is_hist}), outside the window rule"
+                );
+                operands += 1;
+                class_ops += 1;
+                if matches!(op.kind, K::State { .. }) {
+                    state_ops += 1;
+                }
+                if is_hist {
+                    hist_ops += 1;
+                }
+            }
+        }
+        classes.push(json!({ "class": name, "step_leaves": n, "disputed_trials": n, "operands_checked": class_ops }));
+    }
+    assert!(trials > 0 && operands > 0, "no fixture class was checked");
+    println!("[containment] trials={trials} operands={operands} state_operands={state_ops} hist_operands={hist_ops} contiguous_history_tiles={contiguous_tiles}");
+    if let Ok(out) = std::env::var("MISAKA_CONTAINMENT_OUT") {
+        let record = json!({ "trials": trials, "operands": operands, "state_operands": state_ops, "hist_operands": hist_ops, "contiguous_history_tiles": contiguous_tiles, "classes": classes });
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+}
+
+/// **The position-window structure of a real class, params-free** (no artifact tensors are read; `TirArtifactV1::open` and the class
+/// record only). Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> MISAKA_WINDOW_OUT=<json> cargo test --release -p misaka-palw-tir-exec
+///  --features node --test frame_measure structural_read_window_on_a_real_class -- --nocapture --ignored`.
+/// Values are the window rule's bound (a superset), not observations. The shipped `cone_runs_bound_v1` is printed beside it.
+#[test]
+#[ignore]
+fn structural_read_window_on_a_real_class() {
+    use kaspa_consensus_core::palw_tir_step_v1::{PalwTirJobShapeV1 as J, PalwTirStepSpaceV1};
+    let path = std::path::PathBuf::from(std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR").expect("a PALWTIR1 file"));
+    let artifact = TirArtifactV1::open(&path).unwrap();
+    let class = artifact.class().unwrap();
+    let space = PalwTirStepSpaceV1::new(&class).unwrap();
+    let (c, h) = (u64::from(space.layout.checkpoint_interval), u64::from(space.layout.h_tile));
+    let max_ctx = space.layout.max_context;
+    let hist_tile = space.hist_leaves_per_tile_v1();
+    let total_of = |job: &J| -> u64 { (0..job.positions).map(|q| space.leaves_at_position(job, q)).sum() };
+    // A prefill of 1 keeps the post occurrence at every position (the upper over all prefills); the cross-check uses the measured job.
+    let job_max = J { prefill: 1, positions: max_ctx };
+    let leaves: Vec<u64> = (0..max_ctx).map(|q| space.leaves_at_position(&job_max, q)).collect();
+    let mut pre = vec![0u64; leaves.len() + 1];
+    for (q, l) in leaves.iter().enumerate() {
+        pre[q + 1] = pre[q] + l;
+    }
+    let whole = pre[leaves.len()].div_ceil(256);
+    let (mut best_leaves, mut best_runs, mut best_p, mut best_runs_contig) = (0u64, 0u64, 0u32, 0u64);
+    let tile_runs = hist_tile.div_ceil(256) + 1;
+    for p in 0..max_ctx as u64 {
+        let lo = p.saturating_sub(c + h + 1);
+        let window = pre[p as usize + 1] - pre[lo as usize];
+        let old_hist = (lo / h) * hist_tile;
+        let leaves_p = window + old_hist;
+        let runs_p = (window.div_ceil(256) + 1 + old_hist).min(whole);
+        if leaves_p > best_leaves {
+            best_leaves = leaves_p;
+            best_p = p as u32;
+        }
+        best_runs = best_runs.max(runs_p);
+        let tiles_old = lo / h;
+        best_runs_contig = best_runs_contig.max((window.div_ceil(256) + 1 + tiles_old * tile_runs).min(whole));
+    }
+    // Cross-check on the measured job (prefill 4, decode 2 -> 5 positions): the leaf count and the shipped bound must match the record.
+    let measured = J { prefill: 4, positions: 5 };
+    let measured_total = total_of(&measured);
+    let measured_bound = space.cone_runs_bound_v1(&measured, measured_total, 256);
+    let mut shipped = Vec::new();
+    for positions in [6u32, 33, 165, 197, 1024, 4096, max_ctx] {
+        let job = J { prefill: 1, positions };
+        let total = total_of(&job);
+        shipped.push(json!({ "positions": positions, "step_leaves": total, "shipped_cone_runs_bound": space.cone_runs_bound_v1(&job, total, 256) }));
+    }
+    let record = json!({
+        "record": "misaka-palw/tir-structural-window/v1",
+        "artifact": path.display().to_string(),
+        "layout": { "checkpoint_interval": c, "h_tile": h, "max_context": max_ctx, "hist_leaves_per_tile": hist_tile },
+        "cross_check_measured_job": { "prefill": 4, "positions": 5, "step_leaves": measured_total, "shipped_cone_runs_bound": measured_bound },
+        "shipped_bound_by_geometry": shipped,
+        "window_rule_over_all_legal_disputes": { "max_leaves": best_leaves, "max_runs_256_per_leaf_history": best_runs, "max_runs_256_contiguous_history_tiles": best_runs_contig, "argmax_position": best_p, "whole_runs_256": whole, "total_step_leaves_at_max_context": pre[leaves.len()] },
+    });
+    println!("{}", serde_json::to_string_pretty(&record).unwrap());
+    if let Ok(out) = std::env::var("MISAKA_WINDOW_OUT") {
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+}

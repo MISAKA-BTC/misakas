@@ -46,3 +46,13 @@ Adopting any option is a user decision. The minimal change that reaches 3,120 is
 - The owner queue removal changes the decided tenure rule. It is a **user decision** and is not adopted here.
 - Still unmet: derived upper bound over all legal jobs (no params-free analyser yet), State/HistTile measurement (not run: decode 30
   took more than 30 minutes per kind), the residual costs of each option, and adversarial tests. No fence, no rule, no implementation.
+
+## Update 2026-10-18 (derived upper, analysis only)
+
+- [derived-upper-1018](../evidence/palw/g14-measure-2026-10-18/derived-upper-1018.md): a value-free window rule for the cone
+  (`q <= p <= q+C+h+1`, HistTile `q < p`) is checked against the real evaluator on fixture classes (2,583 disputed leaves, 14,382
+  operands, 0 violations). Over every disputed position of the 32K class the superset is 116,166 runs (door 272.5 M DAA), or
+  20,850 runs if completed history tiles are contiguous (checked on fixture only; door 48.9 M DAA). The shipped formula gives
+  95,309 at 32K (door 223.6 M DAA), which is below the per-leaf superset: it is sound only under the same contiguity.
+- Open items still unmet: element-level derivation; State and HistTile on the real class (not measured); model (parameter) operand
+  bounds; contiguity proof for all layouts; the adversarial tests. Adopting any option remains a user decision.
