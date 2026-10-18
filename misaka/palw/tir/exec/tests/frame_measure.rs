@@ -1327,3 +1327,740 @@ fn structural_read_window_on_a_real_class() {
         std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
     }
 }
+
+/// Structure dump of a real class (params-free): blocks, nodes (prim, inputs, output shape, commit), states, layout. Read only.
+/// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> MISAKA_STRUCT_OUT=<json> cargo test --release -p misaka-palw-tir-exec --features node
+///  --test frame_measure program_structure_dump_on_a_real_class -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn program_structure_dump_on_a_real_class() {
+    let path = std::path::PathBuf::from(std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR").expect("a PALWTIR1 file"));
+    let artifact = TirArtifactV1::open(&path).unwrap();
+    let class = artifact.class().unwrap();
+    let space = PalwTirStepSpaceV1::new(&class).unwrap();
+    let p = &space.program;
+    let blocks: Vec<Value> = p
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(bi, b)| {
+            let nodes: Vec<Value> = b
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(ni, n)| {
+                    json!({ "i": ni, "prim": format!("{:?}", n.prim), "inputs": format!("{:?}", n.inputs),
+                            "out": format!("{:?} {:?}", n.out.dtype, n.out.shape), "commit": n.commit })
+                })
+                .collect();
+            json!({ "block": bi, "name": b.name, "window": space.info.blocks[bi].window, "is_pre": space.info.blocks[bi].is_pre,
+                    "is_post": space.info.blocks[bi].is_post, "is_layer": space.info.blocks[bi].is_layer,
+                    "carry_in": format!("{:?}", b.carry_in), "carry_out": format!("{:?}", b.carry_out), "nodes": nodes })
+        })
+        .collect();
+    let states: Vec<Value> = p
+        .states
+        .iter()
+        .map(|s| json!({ "name": s.name, "kind": format!("{:?}", s.kind), "dtype": format!("{:?}", s.dtype), "shape": s.shape, "per_layer": s.per_layer }))
+        .collect();
+    let params: Vec<Value> = p.params.iter().map(|d| json!({ "name": d.name, "dtype": format!("{:?}", d.dtype), "shape": d.shape, "per_layer": d.per_layer })).collect();
+    let record = json!({
+        "layout": { "checkpoint_interval": space.layout.checkpoint_interval, "h_tile": space.layout.h_tile, "max_context": space.layout.max_context },
+        "schedule": { "pre": p.schedule.pre, "layers": p.schedule.layers, "post": p.schedule.post },
+        "logits": p.logits, "history_bound": p.history_bound, "token_bound": p.token_bound,
+        "carry": format!("{:?}", space.info.carry), "states": states, "params": params, "blocks": blocks,
+        "commit_tile_lens": space.layout.commit_tiles,
+    });
+    if let Ok(out) = std::env::var("MISAKA_STRUCT_OUT") {
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+    println!("blocks={} states={} params={}", p.blocks.len(), p.states.len(), p.params.len());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// **Demand-driven operand closure of one disputed step** (analysis; test only; no rule, constant or window is read or changed).
+//
+// A value-free replica of the court's demand evaluation (`misaka_palw_tir::demand::eval_demanded` and the `TirSource` leaf
+// mapping): element SETS replace values. Rules that depend on a value are taken at their worst case over every value the operand
+// can hold: `Select` reads both branches; a `Gather` over a parameter reads ONE row per distinct index element, at an unknown
+// row, so its reads are counted as a row bound (ceil(bytes / largest inventory leaf) + 1 per contiguous run of the row) rather than
+// enumerated. Everything else is exact: the element index maps of each primitive, the commit tiles, checkpoints, history tiles and
+// inventory leaves. Output: the set of exact leaves (keyed by position, occurrence, node and tile) with the first consumer kind
+// that demanded each, plus the gather row bounds. Token units are counted apart (they are not step leaves).
+// ---------------------------------------------------------------------------------------------------------------------------
+
+use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
+use misaka_palw_tir::demand::{DemandContext, carry_in_node_v1, hist_row_node_v1, history_length_v1, state_occurrence_v1, state_writer_v1};
+use misaka_palw_tir::prim::Prim;
+use misaka_palw_tir::program::{INPUT_TOKEN, Ref};
+use misaka_palw_tir::types::strides;
+use misaka_palw_tir::validate::ProgramInfo;
+use std::collections::{BTreeSet, HashMap};
+use std::rc::Rc;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum CLeaf {
+    Commit { pos: u32, occ: u16, node: u16, tile: u64 },
+    State { pos: u32, inst: u32, tile: u64 },
+    Hist { tile_end: u32, inst: u32, sub: u64 },
+    Param { leaf: u32 },
+}
+
+const K_NODE: u8 = 2;
+const K_STATE: u8 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CKey {
+    pos: u32,
+    sub: u8,
+    occ: u16,
+    id: u32,
+}
+
+fn unravel_v(mut i: usize, st: &[usize]) -> Vec<usize> {
+    st.iter()
+        .map(|s| {
+            let q = i / s;
+            i %= s;
+            q
+        })
+        .collect()
+}
+
+fn ravel_v(ix: &[usize], st: &[usize]) -> usize {
+    ix.iter().zip(st).map(|(a, b)| a * b).sum()
+}
+
+fn broadcast_v(o: &[usize], in_shape: &[usize]) -> usize {
+    let ist = strides(in_shape);
+    let off = o.len() - in_shape.len();
+    (0..in_shape.len()).map(|k| if in_shape[k] == 1 { 0 } else { o[off + k] * ist[k] }).sum()
+}
+
+fn product_v(s: &[usize]) -> u64 {
+    s.iter().fold(1u64, |a, d| a.saturating_mul(*d as u64))
+}
+
+/// A set of disjoint half-open element intervals, built from points and merged.
+fn intervals_of(mut v: Vec<u64>) -> Vec<(u64, u64)> {
+    v.sort_unstable();
+    v.dedup();
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    for x in v {
+        match out.last_mut() {
+            Some(last) if last.1 == x => last.1 = x + 1,
+            _ => out.push((x, x + 1)),
+        }
+    }
+    out
+}
+
+struct Closure<'a> {
+    prog: &'a TirProgramV1,
+    info: &'a ProgramInfo,
+    space: &'a PalwTirStepSpaceV1,
+    inv: &'a PalwTirInventoryIndexV1,
+    seed: CKey,
+    pend: std::collections::BTreeMap<CKey, Vec<u64>>,
+    /// Exact leaves, with the consumer kind that first demanded each.
+    leaves: std::collections::BTreeMap<CLeaf, (u64, &'static str)>,
+    /// Gather over a parameter: (pos, occ, node, param, layer+1) -> index element -> data rest offsets.
+    gathers: std::collections::BTreeMap<(u32, u16, u16, u16, u16), std::collections::BTreeMap<u64, Vec<u64>>>,
+    tokens: BTreeSet<u32>,
+    shapes: HashMap<(u8, usize), Rc<Vec<Vec<usize>>>>,
+    max_leaf: u64,
+    uncovered: BTreeSet<String>,
+}
+
+#[derive(Default, Debug)]
+struct ClosureSummary {
+    /// Exact leaves per consumer kind: (count, bytes).
+    exact: std::collections::BTreeMap<&'static str, (u64, u64)>,
+    /// Gather-over-parameter row bounds per kind: (leaves, bytes).
+    gather: std::collections::BTreeMap<&'static str, (u64, u64)>,
+    param_exact: u64,
+    tokens: u64,
+    uncovered: Vec<String>,
+}
+
+impl ClosureSummary {
+    fn leaves(&self) -> u64 {
+        self.exact.values().map(|v| v.0).sum::<u64>() + self.gather.values().map(|v| v.0).sum::<u64>()
+    }
+    fn bytes(&self) -> u64 {
+        self.exact.values().map(|v| v.1).sum::<u64>() + self.gather.values().map(|v| v.1).sum::<u64>()
+    }
+}
+
+impl<'a> Closure<'a> {
+    fn new(prog: &'a TirProgramV1, info: &'a ProgramInfo, space: &'a PalwTirStepSpaceV1, inv: &'a PalwTirInventoryIndexV1) -> Self {
+        // The largest inventory leaf bounds every gather row bound.
+        let max_leaf = (0..inv.leaf_count()).filter_map(|i| inv.piece_of(i).map(|p| p.3 as u64)).max().unwrap_or(1).max(1);
+        Self {
+            prog,
+            info,
+            space,
+            inv,
+            seed: CKey { pos: 0, sub: 0, occ: 0, id: 0 },
+            pend: Default::default(),
+            leaves: Default::default(),
+            gathers: Default::default(),
+            tokens: BTreeSet::new(),
+            shapes: HashMap::new(),
+            max_leaf,
+            uncovered: BTreeSet::new(),
+        }
+    }
+
+    fn occ_block(&self, occ: u16) -> Option<u8> {
+        let o = occ as usize;
+        let l = self.prog.schedule.layers.len();
+        if o == 0 {
+            Some(self.prog.schedule.pre)
+        } else if o <= l {
+            Some(self.prog.schedule.layers[o - 1])
+        } else if o == l + 1 {
+            Some(self.prog.schedule.post)
+        } else {
+            None
+        }
+    }
+
+    fn layer_of(&self, occ: u16) -> Option<u16> {
+        let l = self.prog.schedule.layers.len();
+        (occ >= 1 && (occ as usize) <= l).then(|| occ - 1)
+    }
+
+    fn shapes_at(&mut self, block: u8, pos: u32) -> Result<Rc<Vec<Vec<usize>>>, String> {
+        let h = history_length_v1(self.info, block, pos).ok_or("the info does not cover the block")?;
+        if let Some(s) = self.shapes.get(&(block, h)) {
+            return Ok(s.clone());
+        }
+        let s: Rc<Vec<Vec<usize>>> = Rc::new(self.prog.blocks[block as usize].nodes.iter().map(|n| n.out.resolve(h)).collect());
+        self.shapes.insert((block, h), s.clone());
+        Ok(s)
+    }
+
+    fn push(&mut self, key: CKey, idx: u64) {
+        self.pend.entry(key).or_default().push(idx);
+    }
+
+    fn seed_node(&mut self, pos: u32, occ: u16, node: u16, elems: Vec<u64>) {
+        self.seed = CKey { pos, sub: K_NODE, occ, id: node as u32 };
+        self.pend.entry(self.seed).or_default().extend(elems);
+    }
+
+    /// Route one operand element (`r` at element `idx`, read from context `(pos, occ)`).
+    fn route(&mut self, pos: u32, occ: u16, r: Ref, idx: u64, kind: &'static str) -> Result<(), String> {
+        match r {
+            Ref::Node(j) => self.route_node(pos, occ, j as u16, idx, kind),
+            Ref::CarryIn(k) => {
+                let (c, n) = carry_in_node_v1(self.prog, DemandContext { pos, occurrence: occ }, k).ok_or("carry-in names no node")?;
+                self.route_node(c.pos, c.occurrence, n, idx, kind)
+            }
+            Ref::Param(j) => {
+                let d = &self.prog.params[j as usize];
+                let layer = if d.per_layer { self.layer_of(occ) } else { None };
+                let byte = idx * d.dtype.width() as u64;
+                let leaf = self.inv.leaf_of(j, layer, byte).ok_or("a param element without an inventory leaf")?;
+                let bytes = self.inv.piece_of(leaf).ok_or("no piece")?.3 as u64;
+                self.leaves.entry(CLeaf::Param { leaf }).or_insert((bytes, kind));
+                Ok(())
+            }
+            Ref::Const(_) => Ok(()),
+            Ref::State(j) => {
+                let layer = if self.prog.states[j as usize].per_layer { self.layer_of(occ) } else { None };
+                let inst = state_occurrence_v1(self.prog, j, layer).ok_or("no state instance")?;
+                self.push(CKey { pos, sub: K_STATE, occ: inst, id: j as u32 }, idx);
+                Ok(())
+            }
+            Ref::Input(j) => {
+                if j == INPUT_TOKEN {
+                    self.tokens.insert(pos);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Route one element of node `node` of context `(pos, occ)`: a commit tile is a leaf (unless it is the seed), anything else
+    /// is expanded.
+    fn route_node(&mut self, pos: u32, occ: u16, node: u16, idx: u64, kind: &'static str) -> Result<(), String> {
+        let block = self.occ_block(occ).ok_or("no occurrence")?;
+        let committed = self.prog.blocks[block as usize].nodes.get(node as usize).ok_or("no node")?.commit;
+        let key = CKey { pos, sub: K_NODE, occ, id: node as u32 };
+        if committed && key != self.seed {
+            let shapes = self.shapes_at(block, pos)?;
+            let total = product_v(&shapes[node as usize]);
+            let t = self.space.commit_tile_len(block, node).ok_or("a commit node without a tile")? as u64;
+            let tile = idx / t;
+            let count = total.saturating_sub(tile * t).min(t);
+            self.leaves.entry(CLeaf::Commit { pos, occ, node, tile }).or_insert((4 * count, kind));
+        } else {
+            self.push(key, idx);
+        }
+        Ok(())
+    }
+
+    /// A history row element read by `HistAppend` (row `row_pos`, lane `within`) at context `(pos, occ)`.
+    fn route_hist_row(&mut self, pos: u32, occ: u16, state: u16, row_pos: u32, within: u64) -> Result<(), String> {
+        let layer = if self.prog.states[state as usize].per_layer { self.layer_of(occ) } else { None };
+        let ht = self.space.layout.h_tile;
+        let tile_start = row_pos - row_pos % ht;
+        let tile_end = tile_start + (ht - 1);
+        if tile_end < pos {
+            let k = self.space.hist_instance_index(state, layer).ok_or("history without tiles")?;
+            let inst = self.space.hist_instances()[k];
+            let sub = within / inst.tile_lanes as u64;
+            let row_lanes = inst.elements.saturating_sub(sub * inst.tile_lanes as u64).min(inst.tile_lanes as u64);
+            self.leaves.entry(CLeaf::Hist { tile_end, inst: k as u32, sub }).or_insert((4 * row_lanes * ht as u64, "HistAppend(tile)"));
+            Ok(())
+        } else {
+            let (c, n) = hist_row_node_v1(self.prog, state, layer, row_pos).ok_or("the row appends nothing")?;
+            self.route_node(c.pos, c.occurrence, n, within, "HistAppend(row)")
+        }
+    }
+
+    fn expand_node(&mut self, key: CKey, elems: Vec<u64>) -> Result<(), String> {
+        let (pos, occ, node) = (key.pos, key.occ, key.id as usize);
+        let block = self.occ_block(occ).ok_or("no occurrence")?;
+        let shapes = self.shapes_at(block, pos)?;
+        let h = history_length_v1(self.info, block, pos).ok_or("info")?;
+        let prog: &TirProgramV1 = self.prog;
+        let n = prog.blocks[block as usize].nodes[node].clone();
+        let ost = strides(&shapes[node]);
+        let oshape = |r: Ref| -> Vec<usize> {
+            match r {
+                Ref::Node(j) => shapes[j as usize].clone(),
+                Ref::CarryIn(k) => prog.blocks[block as usize].carry_in[k as usize].resolve(h),
+                Ref::Param(j) => prog.params[j as usize].shape.iter().map(|d| *d as usize).collect(),
+                Ref::Const(j) => prog.consts[j as usize].shape.iter().map(|d| *d as usize).collect(),
+                Ref::State(j) => prog.states[j as usize].shape.iter().map(|d| *d as usize).collect(),
+                Ref::Input(_) => Vec::new(),
+            }
+        };
+        let name: &'static str = n.prim.name();
+        for e in elems {
+            let o = unravel_v(e as usize, &ost);
+            match &n.prim {
+                Prim::Reshape | Prim::Cast | Prim::Clamp { .. } | Prim::Log2Floor | Prim::IntExp | Prim::IntRsqrt | Prim::IntLn
+                | Prim::StateWrite { .. } => {
+                    self.route(pos, occ, n.inputs[0], e, name)?;
+                }
+                Prim::Transpose { perm } => {
+                    let ish = oshape(n.inputs[0]);
+                    let mut j = vec![0usize; o.len()];
+                    for (k, p) in perm.iter().enumerate() {
+                        j[*p as usize] = o[k];
+                    }
+                    self.route(pos, occ, n.inputs[0], ravel_v(&j, &strides(&ish)) as u64, name)?;
+                }
+                Prim::Slice { axis, start } => {
+                    let ish = oshape(n.inputs[0]);
+                    let mut q = o.clone();
+                    q[*axis as usize] += *start as usize;
+                    self.route(pos, occ, n.inputs[0], ravel_v(&q, &strides(&ish)) as u64, name)?;
+                }
+                Prim::Concat { axis } => {
+                    let a = *axis as usize;
+                    let mut q = o.clone();
+                    for r in n.inputs.clone() {
+                        let t = oshape(r);
+                        if q[a] < t[a] {
+                            self.route(pos, occ, r, ravel_v(&q, &strides(&t)) as u64, name)?;
+                            break;
+                        }
+                        q[a] -= t[a];
+                    }
+                }
+                Prim::Broadcast => {
+                    let ish = oshape(n.inputs[0]);
+                    self.route(pos, occ, n.inputs[0], broadcast_v(&o, &ish) as u64, name)?;
+                }
+                Prim::Iota { .. } => {}
+                Prim::Gather { axis, batch_dims } => {
+                    let (a, bd) = (*axis as usize, *batch_dims as usize);
+                    let dsh = oshape(n.inputs[0]);
+                    let xsh = oshape(n.inputs[1]);
+                    let m = xsh.len() - bd;
+                    let mut xi_c: Vec<usize> = o[..bd].to_vec();
+                    xi_c.extend_from_slice(&o[a..a + m]);
+                    let xi = ravel_v(&xi_c, &strides(&xsh)) as u64;
+                    self.route(pos, occ, n.inputs[1], xi, "Gather(index)")?;
+                    let rest_sh = &dsh[a + 1..];
+                    let rest_c: Vec<usize> = o[a + m..].to_vec();
+                    let rest = ravel_v(&rest_c, &strides(rest_sh)) as u64;
+                    match n.inputs[0] {
+                        Ref::Const(_) => {}
+                        Ref::Param(j) if a == 0 && bd == 0 => {
+                            let layer = if self.prog.params[j as usize].per_layer { self.layer_of(occ).map(|l| l + 1).unwrap_or(0) } else { 0 };
+                            self.gathers
+                                .entry((pos, occ, node as u16, j, layer))
+                                .or_default()
+                                .entry(xi)
+                                .or_default()
+                                .push(rest);
+                        }
+                        r => {
+                            // Worst case over every data row along the gathered axis: enumerated (sound), flagged when large.
+                            let rows = dsh[a];
+                            if rows as u64 * (rest_sh.iter().map(|d| *d as u64).product::<u64>().max(1)) > 1 << 20 {
+                                self.uncovered.insert(format!("gather over a non-parameter operand with {rows} rows"));
+                            }
+                            for v in 0..rows {
+                                let mut di: Vec<usize> = o[..a].to_vec();
+                                di.push(v);
+                                di.extend_from_slice(&o[a + m..]);
+                                self.route(pos, occ, r, ravel_v(&di, &strides(&dsh)) as u64, "Gather(data)")?;
+                            }
+                        }
+                    }
+                }
+                Prim::Add | Prim::Sub | Prim::Mul | Prim::Div { .. } | Prim::Compare { .. } => {
+                    let ash = oshape(n.inputs[0]);
+                    let bsh = oshape(n.inputs[1]);
+                    self.route(pos, occ, n.inputs[0], broadcast_v(&o, &ash) as u64, name)?;
+                    self.route(pos, occ, n.inputs[1], broadcast_v(&o, &bsh) as u64, name)?;
+                }
+                Prim::Select => {
+                    let csh = oshape(n.inputs[0]);
+                    self.route(pos, occ, n.inputs[0], broadcast_v(&o, &csh) as u64, name)?;
+                    for r in [n.inputs[1], n.inputs[2]] {
+                        let sh = oshape(r);
+                        self.route(pos, occ, r, broadcast_v(&o, &sh) as u64, name)?;
+                    }
+                }
+                Prim::MatMul => {
+                    let xs = oshape(n.inputs[0]);
+                    let ys = oshape(n.inputs[1]);
+                    let (xr, yr, or) = (xs.len(), ys.len(), o.len());
+                    let (m, kk, nn) = (xs[xr - 2], xs[xr - 1], ys[yr - 1]);
+                    let _ = m;
+                    let (r, c) = (o[or - 2], o[or - 1]);
+                    let batch = &o[..or - 2];
+                    let xb = broadcast_v(batch, &xs[..xr - 2]);
+                    let yb = broadcast_v(batch, &ys[..yr - 2]);
+                    let xo = xb * m * kk + r * kk;
+                    let yo = yb * kk * nn + c;
+                    for t in 0..kk {
+                        self.route(pos, occ, n.inputs[0], (xo + t) as u64, name)?;
+                        self.route(pos, occ, n.inputs[1], (yo + t * nn) as u64, name)?;
+                    }
+                }
+                Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
+                    let a = *axis as usize;
+                    let xs = oshape(n.inputs[0]);
+                    let ist = strides(&xs);
+                    for t in 0..xs[a] {
+                        let mut q = o.clone();
+                        q[a] = t;
+                        self.route(pos, occ, n.inputs[0], ravel_v(&q, &ist) as u64, name)?;
+                    }
+                }
+                Prim::TopK { axis, .. } => {
+                    let a = *axis as usize;
+                    let xs = oshape(n.inputs[0]);
+                    let ist = strides(&xs);
+                    for t in 0..xs[a] {
+                        let mut q = o.clone();
+                        q[a] = t;
+                        self.route(pos, occ, n.inputs[0], ravel_v(&q, &ist) as u64, name)?;
+                    }
+                }
+                Prim::HistAppend { state } => {
+                    let s = &prog.states[*state as usize];
+                    let row_len: usize = s.shape.iter().map(|d| *d as usize).product();
+                    let (t, within) = (e as usize / row_len, e as usize % row_len);
+                    if t + 1 == h {
+                        self.route(pos, occ, n.inputs[0], within as u64, name)?;
+                    } else {
+                        let row_pos = (pos as usize + 1 + t).checked_sub(h).ok_or("row before position 0")? as u32;
+                        self.route_hist_row(pos, occ, *state, row_pos, within as u64)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn expand_state(&mut self, key: CKey, elems: Vec<u64>) -> Result<(), String> {
+        let (pos, j) = (key.pos, key.id as u16);
+        let layer = if self.prog.states[j as usize].per_layer { self.layer_of(key.occ) } else { None };
+        let c = self.space.layout.checkpoint_interval;
+        let k = self.space.fixed_instance_index(j, layer).ok_or("no checkpoint for this state")?;
+        let inst = self.space.fixed_instances()[k];
+        for idx in elems {
+            if pos == 0 {
+                continue;
+            }
+            if pos % c != 0 {
+                if let Some((occ_w, w)) = state_writer_v1(self.prog, j, layer) {
+                    self.route_node(pos - 1, occ_w, w, idx, "State(replay)")?;
+                    continue;
+                }
+            }
+            // Checkpoint: the nearest multiple of `c` at or below `pos` (none for position 0).
+            let mut at = pos;
+            while at % c != 0 {
+                at -= 1;
+            }
+            if at == 0 {
+                continue;
+            }
+            let tile = idx / inst.tile_lanes as u64;
+            let count = inst.elements.saturating_sub(tile * inst.tile_lanes as u64).min(inst.tile_lanes as u64);
+            self.leaves.entry(CLeaf::State { pos: at - 1, inst: k as u32, tile }).or_insert((4 * count, "State(checkpoint)"));
+        }
+        Ok(())
+    }
+
+    fn run(&mut self) -> Result<(), String> {
+        while let Some((key, mut v)) = self.pend.pop_last() {
+            v.sort_unstable();
+            v.dedup();
+            if key.sub == K_NODE {
+                self.expand_node(key, v)?;
+            } else {
+                self.expand_state(key, v)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The summary: exact leaves per kind, gather row bounds per kind, token units.
+    fn summary(&self) -> ClosureSummary {
+        let mut s = ClosureSummary::default();
+        for (leaf, (bytes, kind)) in &self.leaves {
+            let e = s.exact.entry(kind).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += bytes;
+            if matches!(leaf, CLeaf::Param { .. }) {
+                s.param_exact += 1;
+            }
+        }
+        for ((_, _, node, param, _), by_xi) in &self.gathers {
+            let w = self.prog.params[*param as usize].dtype.width() as u64;
+            let _ = node;
+            for rests in by_xi.values() {
+                for (a, b) in intervals_of(rests.clone()) {
+                    let len_bytes = (b - a) * w;
+                    let leaves = len_bytes.div_ceil(self.max_leaf) + 1;
+                    let e = s.gather.entry("Gather(data param)").or_insert((0, 0));
+                    e.0 += leaves;
+                    e.1 += leaves * self.max_leaf;
+                }
+            }
+        }
+        s.tokens = self.tokens.len() as u64;
+        s.uncovered = self.uncovered.iter().cloned().collect();
+        s
+    }
+}
+
+/// The exact leaf key of an observed leaf (from the real evaluator), in the same vocabulary as [`CLeaf`].
+fn observed_key(space: &PalwTirStepSpaceV1, l: &kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafV1) -> CLeaf {
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1 as K;
+    match l.kind {
+        K::Commit { occurrence, block, node, first_element, .. } => {
+            let t = space.commit_tile_len(block, node).unwrap_or(1) as u64;
+            CLeaf::Commit { pos: l.position, occ: occurrence as u16, node, tile: first_element / t }
+        }
+        K::State { instance, first_element, .. } => {
+            let t = space.fixed_instances()[instance as usize].tile_lanes as u64;
+            CLeaf::State { pos: l.position, inst: instance, tile: first_element / t }
+        }
+        K::HistTile { instance, first_lane, .. } => {
+            let t = space.hist_instances()[instance as usize].tile_lanes as u64;
+            CLeaf::Hist { tile_end: l.position, inst: instance, sub: first_lane / t }
+        }
+    }
+}
+
+/// **Containment of the demand-driven closure on the fixture classes** (every disputed step leaf of every fixture class, the real
+/// evaluator's cone refutation as the reference). For each disputed commit or checkpoint leaf, the closure seeded by that leaf's
+/// own tile must contain every step leaf the evaluator carried (set containment), and the evaluator's inventory leaves must not
+/// exceed the closure's parameter leaves (exact plus gather row bounds). A history tile is not a seed: its values are its row
+/// commits, which are leaves of the closure already. 0 violations required.
+#[test]
+fn closure_containment_on_fixture_classes() {
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1 as K;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut trials, mut skipped, mut violations, mut observed_total, mut derived_total) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut kinds: BTreeSet<String> = BTreeSet::new();
+    let mut classes = Vec::new();
+    for (name, program, params) in programs() {
+        if analyze_ranges(&program).is_err() || program.params.is_empty() {
+            continue;
+        }
+        let program = TirProgramV1::decode_canonical(&tiled(program).encode()).unwrap();
+        let lay = layout(&program, 5, 2, 2, 64);
+        let path = dir.path().join(format!("{}.palwtir", name.replace(' ', "-")));
+        let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
+            params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
+        };
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
+            .unwrap();
+        let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+        let (root, _) = artifact.inventory_root().unwrap();
+        let class = artifact.class().unwrap();
+        let canonical =
+            kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+        let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
+            .unwrap()
+            .with_network_id_v1(NET);
+        let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+        let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
+        let job = fp_job(&backend, &prompt, 6);
+        let ids: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+        let run = backend.execute_free_prompt(&job, &ids).unwrap();
+        let material = run.outcome.material.clone();
+        let capture = backend.decode_capture(&material).unwrap();
+        let ctx = capture.binding.job_context.clone();
+        let n = capture.binding.step_leaf_count;
+        drop(capture);
+        let space = backend.space();
+        let inv = PalwTirInventoryIndexV1::new(&space.program).unwrap();
+        let rules = PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+        let (mut class_trials, mut class_skipped, mut class_viol) = (0u64, 0u64, 0u64);
+        for i in 0..n {
+            let l = space.leaf_at(&ctx, i).unwrap();
+            let seed = match l.kind {
+                K::Commit { occurrence, block, node, first_element, .. } => {
+                    let _ = block;
+                    Some((l.position, occurrence as u16, node, first_element))
+                }
+                K::State { state, layer, first_element, .. } => {
+                    state_writer_v1(&space.program, state, layer).map(|(occ, w)| (l.position, occ, w, first_element))
+                }
+                K::HistTile { .. } => None,
+            };
+            let Some((pos, occ, node, first)) = seed else {
+                skipped += 1;
+                class_skipped += 1;
+                continue;
+            };
+            let elems: Vec<u64> = (first..first + l.value_count as u64).collect();
+            let mut c = Closure::new(&space.program, &space.info, space, &inv);
+            c.seed_node(pos, occ, node, elems);
+            c.run().unwrap_or_else(|e| panic!("{name}: leaf {i}: the closure refused: {e}"));
+            let sum = c.summary();
+            for k in sum.exact.keys().chain(sum.gather.keys()) {
+                kinds.insert(k.to_string());
+            }
+            let r = backend.cone_refutation(&material, i, &rules).unwrap();
+            trials += 1;
+            class_trials += 1;
+            for pre in &r.operands.preimages {
+                let li = space.leaf_index(&ctx, &pre.coord).expect("an operand is a leaf of this job");
+                let lo = space.leaf_at(&ctx, li).unwrap();
+                let key = observed_key(space, &lo);
+                observed_total += 1;
+                if !c.leaves.contains_key(&key) {
+                    violations += 1;
+                    class_viol += 1;
+                    eprintln!("{name}: seed {:?} misses observed {:?}", (pos, occ, node), key);
+                }
+            }
+            let observed_params = r.params.opened_count() as u64;
+            let derived_params = sum.param_exact + sum.gather.values().map(|v| v.0).sum::<u64>();
+            if observed_params > derived_params {
+                violations += 1;
+                class_viol += 1;
+                eprintln!("{name}: seed {:?}: {observed_params} param leaves observed, {derived_params} derived", (pos, occ, node));
+            }
+            derived_total += sum.leaves();
+        }
+        assert_eq!(class_viol, 0, "{name}: closure containment violated");
+        classes.push(json!({ "class": name, "step_leaves": n, "disputed_trials": class_trials, "skipped_history_or_no_writer": class_skipped, "violations": class_viol }));
+    }
+    assert!(trials > 0 && observed_total > 0, "no fixture class was checked");
+    println!(
+        "[closure-containment] trials={trials} skipped={skipped} observed_leaves={observed_total} derived_leaves_sum={derived_total} violations={violations} kinds={kinds:?}"
+    );
+    assert_eq!(violations, 0, "the closure misses an operand the real evaluator reads");
+    if let Ok(out) = std::env::var("MISAKA_CLOSURE_CONTAINMENT_OUT") {
+        let record = json!({ "trials": trials, "skipped": skipped, "observed_leaves": observed_total, "derived_leaves_sum": derived_total,
+            "violations": violations, "consumer_kinds_exercised": kinds, "classes": classes });
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+}
+
+/// **The closure of disputed steps at the 32K maximum, Huihui-Qwen3.5-2B class** (params-free: the class and its program only; no
+/// tensor is read). Seeds: every commit node of the top GDN layer, the top attention layer and `post`, at position `max_context−1`,
+/// for the first, middle and last tile of each node. Measurement of sampled seeds (see the record), not a maximum over all tiles.
+/// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> MISAKA_CLOSURE_OUT=<json> cargo test --release -p misaka-palw-tir-exec --features node
+///  --test frame_measure closure_bound_on_a_real_class -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn closure_bound_on_a_real_class() {
+    let path = std::path::PathBuf::from(std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR").expect("a PALWTIR1 file"));
+    let artifact = TirArtifactV1::open(&path).unwrap();
+    let class = artifact.class().unwrap();
+    let space = PalwTirStepSpaceV1::new(&class).unwrap();
+    let inv = PalwTirInventoryIndexV1::new(&space.program).unwrap();
+    let pos = space.layout.max_context - 1;
+    let layers = space.program.schedule.layers.len() as u16;
+    let mut occs: Vec<u16> = Vec::new();
+    // The top GDN layer, the top attention layer, and post.
+    let top_gdn = (0..layers).rev().find(|l| space.program.schedule.layers[*l as usize] == space.program.schedule.layers[0]).unwrap();
+    let top_attn = (0..layers).rev().find(|l| space.info.blocks[space.program.schedule.layers[*l as usize] as usize].window.is_some());
+    if let Some(l) = top_attn {
+        occs.push(l + 1);
+    }
+    occs.push(top_gdn + 1);
+    occs.push(layers + 1);
+    let mut record = Vec::new();
+    let (mut best_total, mut best_seed) = (0u64, String::new());
+    let mut per_kind_max: std::collections::BTreeMap<String, u64> = Default::default();
+    let started = Instant::now();
+    for occ in occs {
+        let block = if occ == layers + 1 { space.program.schedule.post } else { space.program.schedule.layers[(occ - 1) as usize] };
+        let nodes = space.program.blocks[block as usize].nodes.len();
+        for node in 0..nodes {
+            if !space.program.blocks[block as usize].nodes[node].commit {
+                continue;
+            }
+            let t = space.commit_tile_len(block, node as u16).unwrap() as u64;
+            let total_lanes = {
+                let h = history_length_v1(&space.info, block, pos).unwrap();
+                space.program.blocks[block as usize].nodes[node].out.resolve(h).iter().map(|d| *d as u64).product::<u64>()
+            };
+            let tiles = total_lanes.div_ceil(t);
+            for tile in [0, tiles / 2, tiles - 1] {
+                let first = tile * t;
+                let count = total_lanes.saturating_sub(first).min(t);
+                let mut c = Closure::new(&space.program, &space.info, space, &inv);
+                c.seed_node(pos, occ, node as u16, (first..first + count).collect());
+                let t0 = Instant::now();
+                c.run().unwrap();
+                let s = c.summary();
+                let kind_bytes: serde_json::Map<String, Value> = s
+                    .exact
+                    .iter()
+                    .chain(s.gather.iter())
+                    .map(|(k, v)| (k.to_string(), json!({ "leaves": v.0, "bytes": v.1 })))
+                    .collect();
+                for (k, v) in s.exact.iter().chain(s.gather.iter()) {
+                    let e = per_kind_max.entry(k.to_string()).or_insert(0);
+                    *e = (*e).max(v.1);
+                }
+                if s.bytes() > best_total {
+                    best_total = s.bytes();
+                    best_seed = format!("occ {occ} block {block} node {node} tile {tile}");
+                }
+                record.push(json!({ "occurrence": occ, "block": block, "node": node, "tile": tile, "tile_len": t,
+                    "leaves": s.leaves(), "bytes": s.bytes(), "tokens": s.tokens, "param_exact": s.param_exact,
+                    "by_kind": kind_bytes, "uncovered": s.uncovered, "seconds": t0.elapsed().as_secs_f64() }));
+            }
+        }
+    }
+    let out = json!({
+        "record": "misaka-palw/tir-closure-sampled/v1", "artifact": path.display().to_string(), "position": pos,
+        "seeds": record.len(), "max_sampled_bytes": best_total, "max_sampled_seed": best_seed,
+        "max_sampled_bytes_per_kind": per_kind_max, "wall_seconds": started.elapsed().as_secs_f64(), "samples": record,
+    });
+    println!("[closure-real] seeds={} max_sampled_bytes={best_total} at {best_seed}", out["seeds"]);
+    if let Ok(o) = std::env::var("MISAKA_CLOSURE_OUT") {
+        std::fs::write(o, serde_json::to_string_pretty(&out).unwrap()).unwrap();
+    }
+}
