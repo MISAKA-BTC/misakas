@@ -20,6 +20,70 @@ impl ProviderObjectiveActionV4 {
         &self.object
     }
 }
+/// Select the next action from the actual bounded provider check, borrowing its
+/// finding without cloning the unit list or allocating another reservation.
+///
+/// The caller must resolve `unit_obligation_accepted` against its own current
+/// canonical native ledger for this exact claim and actor (or positively served
+/// material). A durable local outbox, broadcast, or spent input is not such an
+/// observation. Recompute this selection when that canonical view changes;
+/// the returned index is not a durable cursor and does not authenticate credit.
+/// Clean and concrete-fault results have exactly one action, index zero.
+/// `None` means only that every missing unit already has an observed obligation;
+/// it never turns a Demand result into a clean receipt or verifier approval.
+pub fn next_provider_objective_action_index_v4(
+    checked: &ProviderCheckedResultV4,
+    unit_obligation_accepted: impl FnMut(u8, u32) -> Result<bool, Refusal>,
+) -> Result<Option<usize>, Refusal> {
+    next_objective_action_index_v4(checked.finding(), unit_obligation_accepted)
+}
+impl VerifiedPaidClaimSourcesV2 {
+    /// Select against the same own canonical route that authenticated these
+    /// paid sources. A publicly served position or this actor's existing
+    /// demand avoids duplicate filing; another actor's demand alone does not.
+    /// The reserved ledger owner remains live throughout the borrowed scan.
+    /// Reacquire these sources after a canonical route change. `None` is not a
+    /// clean receipt, a completed verification, or selected-verifier approval.
+    pub fn next_provider_objective_action_index_v4(
+        &self,
+        checked: &ProviderCheckedResultV4,
+        actor: PalwBondKeyV2,
+    ) -> Result<Option<usize>, Refusal> {
+        if !matches!(checked.finding(), OutsiderFindingV1::Demand(_)) {
+            return next_provider_objective_action_index_v4(checked, |_, _| unreachable!("only demands inspect native obligations"));
+        }
+        let ledger = self.route.ledger().map_err(bad)?;
+        let claim = self.authority.enrollment.base_claim;
+        let demander = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&actor);
+        next_provider_objective_action_index_v4(checked, |stage, position| {
+            let key = (claim, stage, position);
+            Ok(ledger.served.contains_key(&key)
+                || ledger.demands.get(&key).is_some_and(|row| row.demanders.iter().any(|(bond, _)| *bond == demander)))
+        })
+    }
+}
+fn next_objective_action_index_v4(
+    finding: &OutsiderFindingV1,
+    mut unit_obligation_accepted: impl FnMut(u8, u32) -> Result<bool, Refusal>,
+) -> Result<Option<usize>, Refusal> {
+    match finding {
+        OutsiderFindingV1::Clean | OutsiderFindingV1::Prosecute(_) => Ok(Some(0)),
+        OutsiderFindingV1::Demand(units) => {
+            if units.is_empty() {
+                return Err(bad("empty demand result has no objective action"));
+            }
+            for (index, &(stage, position)) in units.iter().enumerate() {
+                if stage >= 254 {
+                    return Err(bad("complete provider unit needs monetary material Challenge, not legacy FileDemand"));
+                }
+                if !unit_obligation_accepted(stage, position)? {
+                    return Ok(Some(index));
+                }
+            }
+            Ok(None)
+        }
+    }
+}
 /// A clean result can issue only its assigned receipt. A concrete fault can
 /// issue a kernel FileProof. For a Demand result the caller advances an explicit
 /// index and must fund/submit each required obligation independently. This
@@ -35,6 +99,9 @@ pub fn objective_action_from_provider_check_v4(
     let claim = sources.authority().enrollment.base_claim;
     match checked.finding() {
         OutsiderFindingV1::Clean => {
+            if demand_index != 0 {
+                return Err(bad("one clean result has only action index zero"));
+            }
             Ok(ProviderObjectiveActionV4 { object: checked.receipt(sources, bond, now)?, _construction: None })
         }
         OutsiderFindingV1::Prosecute(proof) => {
@@ -116,4 +183,47 @@ pub fn sign_provider_objective_action_v4(
         return Err(bad("objective action signer returned wrong signature length"));
     }
     NativeRetainedV1::retain_existing_v1(PalwConsensusObjectV2::KernelRouteV1 { bytes, signer: bond, signature }).map_err(bad)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_only_observed_units_in_the_actual_finding_order() {
+        let finding = OutsiderFindingV1::Demand(vec![(1, 19), (0, 7), (3, 21)]);
+        let mut observed = Vec::new();
+        let next = next_objective_action_index_v4(&finding, |stage, position| {
+            observed.push((stage, position));
+            Ok((stage, position) == (1, 19))
+        })
+        .unwrap();
+        assert_eq!(next, Some(1));
+        assert_eq!(observed, vec![(1, 19), (0, 7)]);
+        assert_eq!(next_objective_action_index_v4(&finding, |_, _| Ok(true)).unwrap(), None);
+        // A reorg removing the first obligation requires it again. A saved
+        // cursor must never make this newly missing unit disappear.
+        assert_eq!(next_objective_action_index_v4(&finding, |_, _| Ok(false)).unwrap(), Some(0));
+    }
+
+    #[test]
+    fn clean_and_concrete_fault_never_consult_a_demand_observation() {
+        assert_eq!(next_objective_action_index_v4(&OutsiderFindingV1::Clean, |_, _| panic!("not a demand")).unwrap(), Some(0));
+        let finding = OutsiderFindingV1::Prosecute(misaka_palw_kernel::route::ProsecutionV1::Kernel(vec![]));
+        assert_eq!(next_objective_action_index_v4(&finding, |_, _| panic!("not a demand")).unwrap(), Some(0));
+    }
+
+    #[test]
+    fn empty_unsupported_and_unknown_observations_never_finish_the_check() {
+        assert!(next_objective_action_index_v4(&OutsiderFindingV1::Demand(vec![]), |_, _| Ok(true)).is_err());
+        for stage in [254, 255] {
+            let finding = OutsiderFindingV1::Demand(vec![(stage, 4)]);
+            assert!(next_objective_action_index_v4(&finding, |_, _| panic!("unsupported unit must not be skipped")).is_err());
+        }
+        let finding = OutsiderFindingV1::Demand(vec![(0, 1), (0, 2)]);
+        let result = next_objective_action_index_v4(&finding, |_, position| {
+            if position == 1 { Ok(true) } else { Err(bad("own native observation unavailable")) }
+        });
+        assert!(result.is_err());
+    }
 }

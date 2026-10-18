@@ -51,6 +51,8 @@ pub struct PrivateKernelPaidCheckSpecV4 {
     provider_address: String,
     payer_key: PathBuf,
     #[serde(deserialize_with = "bounded_funding")]
+    /// Each distinct input permits at most one immutable action slot. Include
+    /// funding for every demand and the eventual receipt; no automatic top-up.
     funding_outpoints: Vec<String>,
     maximum_fee_sompi: u64,
     max_input_bytes: u64,
@@ -316,7 +318,10 @@ fn court_action_accepted(
             if *claim == base && *demander == palw_kernel_bond_id_v1(&actor) =>
         {
             let ledger = route.ledger()?;
-            Ok(ledger.demands.get(&(base, *stage, *position)).is_some_and(|row| row.demanders.iter().any(|(d, _)| d == demander)))
+            // A public served answer satisfies the objective even after its
+            // demander row is retired. This is not an exact carrier-fee ACK.
+            Ok(ledger.served.contains_key(&(base, *stage, *position))
+                || ledger.demands.get(&(base, *stage, *position)).is_some_and(|row| row.demanders.iter().any(|(d, _)| d == demander)))
         }
         _ => Ok(false),
     }
@@ -358,24 +363,6 @@ impl PreparedKernelPaidCheckV4 {
         } else {
             None
         };
-        let object_path = self.outbox.join("receipt.borsh");
-        let tx_path = self.outbox.join("transaction.borsh");
-        let mut object = if object_path.exists() {
-            let (raw, _raw) = read_bounded(&object_path, self.spec.max_input_bytes)?;
-            preflight_native_value_v1::<PalwConsensusObjectV2>(&raw, raw.len() as u64).map_err(|e| e.to_string())?;
-            Some(retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwConsensusObjectV2>(&raw)).map_err(|e| e.to_string())?)
-        } else {
-            None
-        };
-        let mut transaction = None;
-        let mut transaction_lease = None;
-        if tx_path.exists() {
-            let signed = object.as_ref().ok_or("checker tx WAL lacks signed receipt")?;
-            let (raw, _raw) = read_bounded(&tx_path, self.spec.max_input_bytes)?;
-            let (tx, lease) = super::recovery_ack_carrier_v4::decode_carrier(&raw, signed)?;
-            transaction = Some(tx);
-            transaction_lease = lease;
-        }
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
             &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
         );
@@ -386,27 +373,64 @@ impl PreparedKernelPaidCheckV4 {
                 return Ok(());
             }
             let api = self.manager.consensus().unguarded_session();
-            let route = api.palw_kernel_route_v1().ok_or("checker own native route unavailable")?;
-            if let Some(signed) = &object {
-                if court_action_accepted(&route, signed, self.checker, base)? {
-                    kaspa_core::info!(
-                        "private objective court action accepted: {} (not a computation approval)",
-                        self.spec.enrollment
-                    );
-                    return Ok(());
+            let Some(route) = api.palw_kernel_route_v1() else {
+                kaspa_core::debug!("checker own native route unavailable; exact WAL retained");
+                continue;
+            };
+            let scanned = match outbox::scan_outbox(
+                &self.outbox,
+                &self.funding,
+                self.spec.max_input_bytes,
+                &route,
+                self.checker,
+                base,
+                enrollment,
+                self.spec.round,
+            ) {
+                Ok(scanned) => scanned,
+                Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                    kaspa_core::debug!("checker own canonical action observation unknown; exact WAL retained: {error}");
+                    continue;
                 }
+                Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+            };
+            let outbox::CheckerOutboxV4 {
+                slot,
+                mut object,
+                mut transaction,
+                mut transaction_lease,
+                used_funding,
+                observed_terminal,
+                exhausted,
+                _metadata,
+            } = scanned;
+            // Continue monitoring the same canonical fact. A later rollback
+            // reselects its original WAL; a local completed flag cannot hide it.
+            if observed_terminal {
+                continue;
             }
-            let a = route.paid_claim_enrollment_v3(&enrollment)?;
+            let (action_directory, object_path, tx_path) = outbox::action_paths(&self.outbox, slot);
+            let a = match route.paid_claim_enrollment_v3(&enrollment) {
+                Ok(authority) => authority,
+                Err(error) => {
+                    kaspa_core::debug!("checker own enrollment unavailable; exact WAL retained: {error}");
+                    continue;
+                }
+            };
             if a.enrollment.base_claim != base {
                 return Err("checker opening belongs to another enrolled claim".into());
             }
-            if receipt_accepted(&route, &a, self.spec.round, palw_kernel_bond_id_v1(&self.checker))? {
-                kaspa_core::info!(
-                    "private selected checker receipt accepted: {} round {} (not aggregate Final)",
-                    self.spec.enrollment,
-                    self.spec.round
-                );
-                return Ok(());
+            match receipt_accepted(&route, &a, self.spec.round, palw_kernel_bond_id_v1(&self.checker)) {
+                Ok(true) => {
+                    // Native seat receipt remains subject to reorg. It is not
+                    // aggregate Final or permission to retire the immutable WAL.
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    kaspa_core::debug!("checker own round unavailable; exact WAL retained: {error}");
+                    continue;
+                }
             }
             let domain = Hash64::from_bytes(route.header.policy.network_domain);
             let material_consent = match material_provider_generation_from_route_v4(&route, Hash64::from_bytes(base), self.provider) {
@@ -486,9 +510,22 @@ impl PreparedKernelPaidCheckV4 {
                 };
                 let signed = match checked_result {
                     Ok(checked) => {
-                        let action =
-                            objective_action_from_provider_check_v4(&source, &checked, self.checker, api.get_virtual_daa_score(), 0)
-                                .map_err(|e| e.to_string())?;
+                        let Some(index) =
+                            source.next_provider_objective_action_index_v4(&checked, self.checker).map_err(|e| e.to_string())?
+                        else {
+                            // All actual missing units have a native own demand
+                            // or public answer. This does not make the check
+                            // Clean; wait for answers and perform the check anew.
+                            continue;
+                        };
+                        let action = objective_action_from_provider_check_v4(
+                            &source,
+                            &checked,
+                            self.checker,
+                            api.get_virtual_daa_score(),
+                            index,
+                        )
+                        .map_err(|e| e.to_string())?;
                         sign_provider_objective_action_v4(&self.key, domain, self.checker, &action).map_err(|e| e.to_string())?
                     }
                     Err(error) => {
@@ -516,6 +553,10 @@ impl PreparedKernelPaidCheckV4 {
                 if !matches!(api.palw_object_rehearsal_v1(&signed), Some(PalwObjectRehearsalV1::Accepted)) {
                     continue;
                 }
+                if exhausted {
+                    return Err("checker explicit action/funding budget exhausted; immutable history retained".into());
+                }
+                owned_dir(&action_directory)?;
                 publish_borsh(&object_path, &*signed, self.spec.max_input_bytes)?;
                 object = Some(signed);
             }
@@ -572,7 +613,10 @@ impl PreparedKernelPaidCheckV4 {
                 let locked = std::collections::HashSet::new();
                 let minimum =
                     crate::palw_panel::palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.config.params, signed, daa);
-                let Some((point, entry)) = self.funding.iter().find_map(|point| {
+                let Some((point, entry)) = self.funding.iter().enumerate().find_map(|(i, point)| {
+                    if used_funding[i] {
+                        return None;
+                    }
                     api.get_virtual_utxo_entry(*point)
                         .filter(|e| {
                             e.amount >= minimum
@@ -626,9 +670,20 @@ impl PreparedKernelPaidCheckV4 {
             {
                 continue;
             }
-            let entry = api
-                .get_virtual_utxo_entry(tx.inputs[0].previous_outpoint)
-                .ok_or("checker original UTXO unavailable; exact WAL retained")?;
+            let Some(entry) = api.get_virtual_utxo_entry(tx.inputs[0].previous_outpoint) else {
+                // Reorg/IBD or an unrelated spend does not authorize a new
+                // input, signature or action slot. Keep monitoring exact WAL.
+                kaspa_core::debug!("checker original UTXO unavailable; exact WAL retained");
+                continue;
+            };
+            let fee = tx
+                .outputs
+                .iter()
+                .try_fold(0u64, |sum, output| sum.checked_add(output.value))
+                .and_then(|outputs| entry.amount.checked_sub(outputs));
+            if entry.script_public_key != script || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi) {
+                return Err("checker saved carrier exceeds current payer/fee authorization; exact WAL retained".into());
+            }
             let _relay =
                 super::recovery_ack_carrier_v4::reserve_carrier_build_v4(signed, &entry, self.payer.verification_key.as_ref().len())?;
             match tokio::time::timeout(
@@ -644,6 +699,8 @@ impl PreparedKernelPaidCheckV4 {
         }
     }
 }
+
+mod outbox;
 
 #[cfg(test)]
 mod tests;
