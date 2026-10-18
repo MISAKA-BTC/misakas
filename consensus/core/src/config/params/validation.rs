@@ -311,6 +311,7 @@ impl Params {
         // G14 test genesis, any well-formed model): `palw_tir_public_conviction_v1` armed with no model, a malformed one, or one no
         // record names for this network and height is refused.
         self.validate_palw_tir_frame_cost_in_v1(cost_records)?;
+        self.validate_palw_tir_bounded_door_in_v1(cost_records)?;
         // **The court-capacity fence** (`crate::palw_court_capacity_v1`, audit G-07): LG14-A at or below it, a sound policy, and on a
         // real network a pinned record and a measured (non-placeholder) policy.
         self.validate_palw_court_capacity_in_v1(records)?;
