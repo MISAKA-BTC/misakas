@@ -2029,7 +2029,7 @@ fn closure_bound_on_a_real_class() {
             for tile in [0, tiles / 2, tiles - 1] {
                 let first = tile * t;
                 let count = total_lanes.saturating_sub(first).min(t);
-                let mut c = Closure::new(&space.program, &space.info, space, &inv);
+                let mut c = Closure::new(&space.program, &space.info, &space, &inv);
                 c.seed_node(pos, occ, node as u16, (first..first + count).collect());
                 let t0 = Instant::now();
                 c.run().unwrap();
