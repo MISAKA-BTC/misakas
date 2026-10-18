@@ -1660,3 +1660,12 @@ branch `codex/g14-native-completion`、引き継ぎ commit `ac2f69454` の workt
 - これは TEST harness の資金の用意であり、測定値・実ネットワークの経済値ではない。
 - **未完。** import 不足(`MuHashExtensions`)を修正後、`CARGO_INCREMENTAL=0 cargo test -j 3 -p kaspa-consensus --lib -- g14n2_node --nocapture` を再実行中。log `/tmp/codex-g14-native-funded.log`。この時点でビルド中で、認証・77・80・attestor 課金を完了扱いしない。
 - 次に G-N2 の結果を読み、GDN filer の tick 接続と E2E を build・実行し、RFC18 sibling の失敗を修正する。各段階の結果を別々に記録する。
+
+
+### 15.2 担保変更に伴う fixture の domain 参照を統一(2026-10-18)
+
+15.1 の対象試験はビルド成功(14m15s)、実行は 0 passed / 1 failed(0.79s)。新しい premine の commitment から genesis hash を再計算した一方、native policy が旧 network domain を持っていたため、stage 41 が `funded native execution policy belongs to another network` で拒否された。G-N2 の成功ではない。
+
+修正では新しい genesis から domain を導き、funded execution / quota とその root、discovery の quota root、Final27 と queue、owning39 の execution / final / physical-service root を一緒に再計算する。`native.check(domain)` を assert する。m/k や資源上限、担保の裏付けと総額は緩めない。
+
+再実行 log は `/tmp/codex-g14-native-funded-domain.log`。結果待ちで、action 80 の成功として数えない。

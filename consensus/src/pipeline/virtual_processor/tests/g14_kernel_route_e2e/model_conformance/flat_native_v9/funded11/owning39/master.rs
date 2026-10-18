@@ -364,7 +364,31 @@ fn mining_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     params.genesis.utxo_commitment = multiset.finalize();
     params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
     params.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle.clone());
-    let domain = params.palw_funded_execution_v11.as_ref().unwrap().policies.execution.network_domain;
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        params.net.to_string().as_bytes(), Some(params.genesis.hash),
+    ).as_bytes();
+    // The fixture's funded genesis defines a new domain. Rebind the whole native
+    // policy graph, including roots that authenticate subordinate policies.
+    let funded = &mut params.palw_funded_execution_v11.as_mut().unwrap().policies;
+    funded.quota.network_domain = domain;
+    funded.execution.network_domain = domain;
+    funded.execution.quota_policy_root = funded.quota.root();
+    funded.discovery.quota_policy_root = funded.quota.root();
+    let execution = funded.clone();
+    let final_policy = &mut params.palw_native_final_v27.as_mut().unwrap().policy;
+    final_policy.network_domain = domain;
+    final_policy.queue_policy.network_domain = domain;
+    let final_policy = final_policy.clone();
+    let mass = kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(&params);
+    let service = kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(
+        &mass, &final_policy.queue_policy,
+    ).unwrap();
+    let native = &mut params.palw_native_execution_v39.as_mut().unwrap().policies;
+    native.network_domain = domain;
+    native.execution = execution;
+    native.final_policy = final_policy.root();
+    native.physical_service = service.root();
+    native.check(domain).expect("the funded fixture has one consistent native policy domain");
     let mut fence = PalwNativeMiningFenceV39::unapproved_probe_at(ForkActivation::new(0), domain);
     let p = &mut fence.policy;
     // The premise must cover the design threshold k/m = 32/47 (the probe's 2/3 does not: 2·47 < 32·3): a TEST premise.
