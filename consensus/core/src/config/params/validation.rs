@@ -208,6 +208,7 @@ impl Params {
         // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed.
         self.validate_palw_cell_coverage_closure_v1()?;
         self.validate_palw_memory_routing_court_v2()?;
+        self.validate_palw_selected_source_bootstrap_v1()?;
         // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
         self.validate_palw_model_eligibility_v1()?;
         self.validate_palw_permissionless_panel_v1()?;

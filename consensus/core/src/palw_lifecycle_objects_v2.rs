@@ -560,12 +560,25 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             Ok(())
         }
+        PalwConsensusObjectV2::SourceBootstrapV1 { signature, .. } => {
+            if signature.is_empty() { return Err("bootstrap carrier requires its native actor signature"); }
+            Ok(())
+        }
         PalwConsensusObjectV2::ReaderRouterDeclaredV2 { declaration, signature } => {
             if signature.is_empty() { return Err("reader/router declaration requires the original registrant signature"); }
             if borsh::object_length(declaration).map_err(|_| "reader/router declaration cannot be measured")? as u64
                 > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES
             { return Err("reader/router declaration exceeds the existing close-byte ceiling"); }
             declaration.check_shape(u32::MAX).map_err(|_| "reader/router declaration is not canonical")
+        }
+        PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { answer } => {
+            if answer.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
+                return Err("routed material answer needs its exact provider signature");
+            }
+            if borsh::object_length(answer).map_err(|_| "routed material answer length")? as u64
+                > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES
+            { return Err("routed material answer exceeds the existing close-byte ceiling"); }
+            answer.check_shape(u64::MAX)
         }
         PalwConsensusObjectV2::RoutedStepAccusedV2 { accusation } => {
             if accusation.signature.is_empty() { return Err("routing accusation must carry its accuser signature"); }
@@ -1203,11 +1216,12 @@ pub enum PalwLifecycleKindFenceV1 {
     StagedFloatConstraintV1 = 13,
     MaterialReleaseRecoveryV2 = 14,
     MemoryRoutingCourtV2 = 15,
+    SelectedSourceBootstrapV1 = 16,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1224,6 +1238,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::StagedFloatConstraintV1,
         Self::MaterialReleaseRecoveryV2,
         Self::MemoryRoutingCourtV2,
+        Self::SelectedSourceBootstrapV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1243,6 +1258,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::MonetaryMaterialV1 => "palw_monetary_material_v1",
             Self::MaterialReleaseRecoveryV2 => "palw_material_release_recovery_v2",
             Self::MemoryRoutingCourtV2 => "palw_memory_routing_court_v2",
+            Self::SelectedSourceBootstrapV1 => "palw_selected_source_bootstrap_v1",
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
         }
@@ -1446,7 +1462,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         }
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
-        O::GdnStepAccusedV2 { .. } | O::ReaderRouterDeclaredV2 { .. } | O::RoutedStepAccusedV2 { .. } => {
+        O::SourceBootstrapV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::SelectedSourceBootstrapV1),
+        O::GdnStepAccusedV2 { .. } | O::ReaderRouterDeclaredV2 { .. } | O::RoutedStepAccusedV2 { .. } | O::RoutedMaterialAnsweredV2 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::MemoryRoutingCourtV2)
         }
         // RFC-0008 v2 (X8R): the work-root declaration (130).
@@ -1621,6 +1638,8 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (243, "GdnStepAccusedV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (244, "ReaderRouterDeclaredV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (245, "RoutedStepAccusedV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
+    (246, "SourceBootstrapV1", PalwLifecycleKindFenceV1::SelectedSourceBootstrapV1),
+    (247, "RoutedMaterialAnsweredV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
@@ -1709,6 +1728,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
                     PalwLifecycleKindFenceV1::MonetaryMaterialV1 => self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
                     PalwLifecycleKindFenceV1::MemoryRoutingCourtV2 => self.palw_memory_routing_court_v2_fence(),
+                    PalwLifecycleKindFenceV1::SelectedSourceBootstrapV1 => self.palw_selected_source_bootstrap_fence(),
                     PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => Self::palw_later_of_v1(
                         self.palw_material_release_recovery_v2.as_ref().map(|f| f.activation),
                         self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
@@ -2302,6 +2322,16 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 243, hi: 245 }, "palw_memory_routing_court_v2", "RFC06 GDN/routing court version2", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 246, hi: 246 }, "palw_selected_source_bootstrap_v1", "RFC07 selected source approval", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 247, hi: 247 }, "palw_memory_routing_court_v2", "RFC06 routed material retrieval V2", true),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux137 fixed epoch/roster, source-work and canonical-input index; selected-slot approvals and historical source settlement",
+        },
+        "palw_selected_source_bootstrap_v1",
+        "RFC07 finite selected-source native journal",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::ObjectTags { lo: 230, hi: 230 },
         "palw_court_model_scope_v1",
@@ -2924,6 +2954,8 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
     (243, 245, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
+    (246, 246, "RFC07 claim-level selected source bootstrap", &["palw_selected_source_bootstrap_v1"]),
+    (247, 247, "RFC06 explicit routed material response", &["palw_memory_routing_court_v2"]),
 ];
 
 #[cfg(test)]
@@ -5201,6 +5233,8 @@ pub(crate) mod tests {
             (243, 0x5b8caf052fb70f7d),
             (244, 0x70822efc23c62034), // Prospective native reader/router declaration; no old pin refreshed.
             (245, 0xf39ead79fd29a4ed), // Typed direct routing terminal; source-only new carrier pin.
+            (246, 0xae839c54035b94d7), // Fixed-epoch selected approval; source-only new carrier pin.
+            (247, 0x771c9ad6c62e3a39), // Explicit routed material response; source-only new carrier pin.
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),

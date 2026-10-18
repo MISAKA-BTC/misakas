@@ -21,6 +21,7 @@
 
 pub mod beacon;
 pub mod bootstrap_epoch_v1;
+pub mod approved_source_v1;
 pub mod composition;
 pub mod conformance;
 pub mod hash;

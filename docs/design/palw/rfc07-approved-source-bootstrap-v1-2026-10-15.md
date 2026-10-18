@@ -1,6 +1,6 @@
 # RFC07: selected approval を持つ最初の source の接続
 
-状態: **UNCOMPILED / UNEXECUTED。新契約と抽選 mechanics の source 境界。native authority・receipt・beacon consumer は未接続。公開 activation や数値の承認ではない。**
+状態: **UNCOMPILED / UNEXECUTED。新契約に加え、有限epochのnative journal・承認slot・履歴settlementからの新source eventと独立versionのcollectorを実装中。own-chain resolverの全呼出境界、実worker、後続assignment consumerは未完了。公開 activation や数値の承認ではない。**
 
 ## 現状の停止条件
 
@@ -47,3 +47,21 @@ modulo の偏りを避けるため整数 rejection を用い、attempt 上限を
 source control は canonical Borsh/hash framing、異なる network/policy/population、固定 epoch の再現、rejection 上限、allocation 拒否、owner 寿命、鍵分割時の coalition ticket mass を対象とする。すべて未実行。
 
 正直な locked-weight の割合、cohort/slot 数、quorum、epoch/anchor/window、source 件数 cap、検閲・取得可能性、資本・報酬・grinding の収支は未承認である。ユーザー指定どおり実装後の一括検証で決める。mechanics-only の test fixture 値を承認済み parameter に昇格しない。
+
+## 2026-10-18 native接続の実装境界
+
+新しい `palw_selected_source_bootstrap_v1` は全presetで `None` とし、未検証の実activationは拒否する。outer tag 246 `SourceBootstrapV1` とaux137を追加し、既存のV1 final-path IDは変更しない。policy全体をSome-onlyのParams identityに含め、borsh-skippedのnative mirrorを同期・照合するため、休眠時の既存ruleset bytesは維持する。
+
+policyはfreeze/anchorのDAA cutoff、開始・承認終了・stake解放位置、population/slot/source件数、実claimのbyte/work上限とown chain headerの厳密訪問上限を明示する。自動次epoch・再抽選・代替anchorは無い。context factoryはfrozen own stateのActive bondから正の利用可能slashable weightを数え、型から計算したVec予約後にpopulationを構築してownerを保持する。block/root/chain/importの権威は別のown-node resolverが検査する。factory単体や外部の同形bytesは権威ではない。
+
+native foldはepochのroster/anchorを固定し、reorg可能な同じaux journalへ書く。人口が0の場合、またはpolicyのpopulation上限を超えた場合は、そのepochを固定Unavailableにする。上限超過は `population_refused` と空のrosterを保存し、巨大な人口のcloneや上限までの切り捨て抽選を行わない。固定drawのrejection上限に達した場合、あるいはDAAの飛びによりfreeze後の独立したanchorが存在しない場合も `draw_refused` として保持し、再抽選・代替anchorを使わず通常chainは進行する。これとローカルhistory/store/capacity不足は区別する。後者を `None` に落としてjournalだけ省略してはならず、typed faultでnative transition全体を保留する。fold/pre-object/rehearsal/templateと実chain walkへtyped faultを接続したが、未実行である。active policyのfreeze後にcontext自体が欠けた場合もcore側でhistory未取得として拒否する。
+
+cutoffを越えるblockの生産者がblockを留保する場合のanchor取得可能性、固定epochの成立率、population上限と正直な参加率、source市場の供給・検閲条件は、機構だけでは保証しない。固定Unavailableがchainを止めないことと、有用なsourceを必ず得られることは別の受入項目であり、後続campaignで測定する。
+
+最初のwork adapterは既存own kernel ledgerの直接program claimを対象にする。native class/program/artifact/plan scope、実claim body、payer/producer、全positionの計算費用を束縛する。旧Panelへの依存を避けるため、OPV lifecycleのclaimに別の新selected approvalを付ける。OPVのFinalは承認を代替せず、quorumの無いsource eventを生成しない。canonical input identityで同じ仕事の再包装をsource件数へ重複計上しない。pipeline/EXEC等のsource adapterを実装済みとはしない。
+
+承認はepoch/policy/work/statement/deadlineに束縛されたactor署名を検査し、drawn slotを一度だけ消費する。同一signerが複数slotを持っても独立運営者とは扱わず、slot数に応じた追加支払は発生させない。新eventはnative accepted quorumと実kernel historical settlementの両方が揃ってからだけprojectionする。stake解放位置までにsettledしない仕事はeventを供給しない。
+
+`misaka/palw/challenge/src/approved_source_v1.rs` は新しいprovenanceとcollectorを提供する。旧collectorのcircularity guardは保持する。新collectorは固定bootstrap policy/epoch/source scope、anchorがconsumer commitmentより前、仕事がそのcommitmentより後、canonical順序、仕事の重複除去と実lineageを検査する。native source getterから後続の実assignmentへこのcollectorを選択する配線と、実transitive lineage resolverは残件である。外部RPCのevent bytesや常にfalseを返す仮のlineage callbackを本番権威として使わない。
+
+残る主な実装は、selected sourceの実workerと不正material/無回答の扱い、verifierのslash/liability・実収支consumer、後続beacon/assignmentのversioned policyとlineage、scope別adapter、実ノードharnessである。追加したdraw一致・canonical ordering・不足quorum・cycle拒否のsource testは未実行であり、native承認E2E・再起動/reorg/IBD/pruning・市場条件の受入結果ではない。全コードを先に完成させた後、同じ候補binary・同じtestnetの複数nodeと複数claimを使う一回の統合受入campaignで正常系と攻撃シナリオをまとめて実行する。保存・pushのための検証は開始しない。

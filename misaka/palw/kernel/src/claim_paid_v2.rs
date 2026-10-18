@@ -210,6 +210,15 @@ pub enum PaidClaimObjectV2 {
         round: u32,
         proof: crate::claim_compact_v1::native_v4::NativeCompactProofV4,
     },
+    /// Appended index 15. The generation is signed separately from the exact
+    /// historical V2 commit; none of its fields enter enrollment.id() or a draw.
+    CommitWithMaterialGenerationV5 {
+        enrollment: PaidClaimEnrollmentV2,
+        commit: crate::route::SaltedCommitV1,
+        salt: Digest,
+        generation: crate::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5,
+        original_signature: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

@@ -455,7 +455,7 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
             Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
         ),
-        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+        PalwLocalTransitionFaultV1,
     > {
         kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
             self.palw_v2_accepted_objects_and_refunds_inner(
@@ -488,7 +488,7 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
             Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
         ),
-        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+        PalwLocalTransitionFaultV1,
     > {
         // **RFC-0007 §I.6: watch the vertices go by** (past the fence only). Every vertex whose signature verifies under its seat's key
         // is remembered, taken by the fold or not, so a second root of one `(round, seat)` — which the fold drops as the round's second
@@ -571,7 +571,7 @@ impl VirtualStateProcessor {
         let audit_active = self.palw_audit_2026_09_11_at(point.daa_score);
         // The old path's synthetic chain point; unused past the fence.
         let mut rehearsal = *point;
-        let mut fee_extras = self.palw_transition_extras_for(point);
+        let mut fee_extras = self.palw_transition_extras_for_objects(state, point, &[]);
         fee_extras.round_fee_incomes = round_fee_incomes.to_vec();
         let mut folded = if audit_active {
             match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_retained_v1(
@@ -587,7 +587,10 @@ impl VirtualStateProcessor {
                 Ok(base) => base,
                 // The pre-object steps are what the real fold runs before any object; if they error
                 // the block is disqualified whatever it carries, so the filter accepts nothing.
-                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why),
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                    return Err(PalwLocalTransitionFaultV1::Context(why));
+                }
                 Err(why) => {
                     info!(
                         "Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}"
@@ -1481,11 +1484,14 @@ impl VirtualStateProcessor {
                             public_original_bindings: public_original_bindings.clone(),
                             producer_custody_delegations: producer_custody_delegations.clone(),
                             model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                            ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
+                            ..self.palw_transition_extras_for_rehearsal_v1(point, std::slice::from_ref(&object), &fee_extras)
                         },
                     ) {
                         Ok(next) => rehearsed_registration = Some(next),
-                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why),
+                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
+                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                            return Err(PalwLocalTransitionFaultV1::Context(why));
+                        }
                         Err(why) => {
                             info!("Block {block}: a class registration was dropped, and the block stands: {why}");
                             continue;
@@ -1681,7 +1687,7 @@ impl VirtualStateProcessor {
                                 public_original_bindings: public_original_bindings.clone(),
                                 producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_rehearsal_v1(point, std::slice::from_ref(&object), &fee_extras)
                             },
                         )
                     } else {
@@ -1703,7 +1709,7 @@ impl VirtualStateProcessor {
                                 public_original_bindings: public_original_bindings.clone(),
                                 producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_rehearsal_v1(point, std::slice::from_ref(&object), &fee_extras)
                             },
                         )
                         .map(|(next, _)| next)
@@ -1782,7 +1788,10 @@ impl VirtualStateProcessor {
                             }
                             accepted.push(object);
                         }
-                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why),
+                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
+                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                            return Err(PalwLocalTransitionFaultV1::Context(why));
+                        }
                         Err(why) => {
                             info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                         }
@@ -2014,6 +2023,10 @@ impl VirtualStateProcessor {
             } else {
                 None
             },
+            // Filled only by for_objects after resolving this state's actual
+            // selected parent. A point hash can be a proposed template block.
+            selected_source_bootstrap_v1: None,
+            selected_source_bootstrap_fault_v1: None,
             // ADR-0100 Decision 4: one shard's seats and quorum ride to the fold when per-shard
             // licensing is armed — the panel parameters the draw and the acceptance layer use.
             shard_licensing: if self.palw_shard_licensing_at(daa_score) {
@@ -2080,13 +2093,52 @@ impl VirtualStateProcessor {
 
     pub(super) fn palw_transition_extras_for_objects(
         &self,
-        _state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
     ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
         let mut extras = self.palw_transition_extras_for(point);
         extras.model_court_window_active = self.palw_model_court_window_active_at(point.daa_score);
         extras.class_court_windows = self.palw_class_court_windows_for_objects(objects, point.daa_score);
+        if let Some(fence) = self
+            .palw_selected_source_bootstrap_v1
+            .as_ref()
+            .filter(|f| f.at != kaspa_consensus_core::config::params::ForkActivation::never() && f.at.is_active(point.daa_score))
+        {
+            use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault;
+            let result = match state.last_point() {
+                Some(parent) => self.palw_source_bootstrap_own_context_v1(state, parent.block, point.daa_score, &fence.policy),
+                None if point.daa_score <= fence.policy.freeze_cutoff_daa => Ok(None),
+                None => Err(Fault::HistoryUnavailable),
+            };
+            match result {
+                Ok(Some(context)) => match context.into_shared_source_bootstrap_v1() {
+                    Ok(owned) => extras.selected_source_bootstrap_v1 = Some(owned),
+                    Err(coverage) => extras.selected_source_bootstrap_fault_v1 = Some(Fault::Capacity(coverage)),
+                },
+                Ok(None) => {}
+                Err(fault) => extras.selected_source_bootstrap_fault_v1 = Some(fault),
+            }
+        }
+        extras
+    }
+
+    /// Every object rehearsal belongs to the original candidate's selected
+    /// parent. In the pre-audit whole-block rehearsal, `folded.last_point` moves
+    /// to a synthetic point after the first object; it is not another own
+    /// selected parent. Retain the one authenticated context resolved before
+    /// rehearsing anything, while deriving object-specific fields as usual.
+    pub(super) fn palw_transition_extras_for_rehearsal_v1(
+        &self,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+        original: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+        let mut extras = self.palw_transition_extras_for(point);
+        extras.model_court_window_active = self.palw_model_court_window_active_at(point.daa_score);
+        extras.class_court_windows = self.palw_class_court_windows_for_objects(objects, point.daa_score);
+        extras.selected_source_bootstrap_v1 = original.selected_source_bootstrap_v1.clone();
+        extras.selected_source_bootstrap_fault_v1 = original.selected_source_bootstrap_fault_v1.clone();
         extras
     }
 
@@ -2097,9 +2149,9 @@ impl VirtualStateProcessor {
         block: BlockHash,
         block_daa: u64,
         carrier_fees: &std::collections::HashMap<TransactionId, u64>,
-    ) -> Vec<PalwCarriedObjectV1> {
+    ) -> Result<Vec<PalwCarriedObjectV1>, PalwLocalTransitionFaultV1> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let txs = self.accepted_txs_from_acceptance_data(acceptance);
         let history_armed = self.palw_staged_public_court_v1.is_some_and(|fence| fence.is_active(block_daa));
@@ -2382,7 +2434,7 @@ impl VirtualStateProcessor {
                 None => (None, Some(carried.carrier)),
             }
         };
-        self.palw_v2_derived_panel_bindings(state, block, block_daa)
+        Ok(self.palw_v2_derived_panel_bindings(state, block, block_daa)?
             .into_iter()
             // Nothing carried a derived binding, so nothing owes rent for it.
             .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None })
@@ -2401,7 +2453,7 @@ impl VirtualStateProcessor {
                 let (refund, unrefundable) = refund_of(&carried);
                 PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), history_pledge: None, original_binding: None, custody_delegation: None, refund, unrefundable, object: carried.object }
             }))
-            .collect()
+            .collect())
     }
 
     /// **RFC-0009 stage D: the proof of one PALW collection against the header of `block`.**
@@ -2670,6 +2722,18 @@ impl VirtualStateProcessor {
         header: &Header,
         ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
     ) -> Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
+        self.palw_native_material_provider_authority_common_v3(checkpoint, header, ready, false)
+    }
+
+    /// Shared authentication only; the caller must choose an explicit authority
+    /// version. V3 must never grant an implicit-router material authority for V2.
+    pub(in crate::pipeline::virtual_processor) fn palw_native_material_provider_authority_common_v3(
+        &self,
+        checkpoint: BlockHash,
+        header: &Header,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+        routed_v2: bool,
+    ) -> Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
         use kaspa_consensus_core::palw_attempt_material_v3::*;
         let (before, stable) = self.pruning_import_status().map_err(|e| e.to_string())?;
         if !stable || before.active.is_some() || !header.parents_by_level.get(0).is_some_and(|p| p.contains(&checkpoint)) {
@@ -2695,6 +2759,18 @@ impl VirtualStateProcessor {
         let class = state.class(&a.class_id).ok_or("provider native class missing")?;
         if producer.pubkey != a.executor_pubkey || producer.operator_id != a.operator_id || class.artifact_root != a.artifact_root {
             return Err("provider exact registered executor/class mismatch".into());
+        }
+        if !routed_v2 && self.palw_memory_routing_court_v2_at(header.daa_score) {
+            let typed_program = state.tir_class_v1(&a.class_id).is_some() || state.gen_class_v1(&a.class_id).is_some();
+            if !typed_program {
+                let profile = state.fp_work_profile_of(&a.class_id).ok_or("provider native reader profile absent")?;
+                if (0..profile.global_node_count())
+                    .filter_map(|slot| profile.resolve_node_slot(slot))
+                    .any(|(node, _)| kaspa_consensus_core::palw_reader_router_v2::needs_reader_router_v2(node))
+                {
+                    return Err("routed V2 attempt requires explicit provider authority V4".into());
+                }
+            }
         }
         let anchor =
             kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(network, pre_pow, a.class_id, &a.executor_bond, header.nonce);

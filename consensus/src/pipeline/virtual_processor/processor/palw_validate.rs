@@ -2458,6 +2458,32 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
                 }
+                Obj::SourceBootstrapV1 { actor, action, signature } => {
+                    use kaspa_consensus_core::palw_source_bootstrap_v1 as bootstrap;
+                    let policy = self
+                        .palw_selected_source_bootstrap_v1
+                        .as_ref()
+                        .filter(|f| {
+                            f.at != kaspa_consensus_core::config::params::ForkActivation::never() && f.at.is_active(point.daa_score)
+                        })
+                        .map(|f| &f.policy)
+                        .ok_or("selected-source bootstrap is dormant on this network")?;
+                    if policy.network != self.palw_network_domain_v2() {
+                        return Err("bootstrap policy network differs from native chain".into());
+                    }
+                    let bond = state.bond(actor).ok_or("bootstrap actor bond is missing")?;
+                    let message = bootstrap::palw_source_bootstrap_message_v1(policy.network, *actor, action);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &bond.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        bootstrap::PALW_SELECTED_SOURCE_BOOTSTRAP_MLDSA87_CONTEXT_V1,
+                    ) {
+                        return Err(
+                            "bootstrap carrier lacks the native actor signature over this exact epoch/work/slot statement".into()
+                        );
+                    }
+                }
                 Obj::ReaderRouterDeclaredV2 { declaration, signature } => {
                     use kaspa_consensus_core::palw_reader_router_v2 as routing;
                     if !self.palw_memory_routing_court_v2_at(point.daa_score) {
@@ -2519,6 +2545,25 @@ impl VirtualStateProcessor {
                     // Full deterministic adjudication runs in the typed fold.
                     // This String-only walk must not turn a local workspace
                     // refusal into a skipped invalid peer object.
+                }
+                Obj::RoutedMaterialAnsweredV2 { answer } => {
+                    if !self.palw_memory_routing_court_v2_at(point.daa_score) {
+                        return Err("routed material V2 is dormant on this network".into());
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("routed material without native court parameters")?;
+                    let claim = state.claim(&answer.claim).ok_or("routed material claim absent")?;
+                    let ladder = state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
+                    answer.check_shape(ladder).map_err(str::to_string)?;
+                    if borsh::object_length(answer).map_err(|e| e.to_string())? as u64 > court.max_close_bytes() {
+                        return Err("routed material answer exceeds current close-byte ceiling".into());
+                    }
+                    let signer = state.bond(&answer.provider).ok_or("routed material provider bond absent")?;
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &signer.pubkey, answer.message(self.palw_network_domain_v2()).as_byte_slice(),
+                        &answer.signature, kaspa_consensus_core::palw_routed_material_v2::PALW_ROUTED_MATERIAL_CONTEXT_V2,
+                    ) { return Err("routed material answer lacks its exact provider signature".into()); }
+                    // Native membership and local workspace admission run in the
+                    // typed fold. A local refusal is not a peer-object verdict.
                 }
                 Obj::RoutedStepAccusedV2 { accusation } => {
                     if !self.palw_memory_routing_court_v2_at(point.daa_score) {

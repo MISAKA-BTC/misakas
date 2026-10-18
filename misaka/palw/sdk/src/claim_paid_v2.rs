@@ -396,7 +396,8 @@ pub fn sign_paid_claim_object_v2(
         PaidClaimObjectV2::BindCompactProofV4 { .. } => None, // exact enrolled producer checked by native admission.
         PaidClaimObjectV2::RegisterClass { class } => Some(class.registrant),
         PaidClaimObjectV2::EnrollJob { job } => Some(job.payer),
-        PaidClaimObjectV2::Commit { enrollment, commit, .. } => {
+        PaidClaimObjectV2::Commit { enrollment, commit, .. }
+        | PaidClaimObjectV2::CommitWithMaterialGenerationV5 { enrollment, commit, .. } => {
             if commit.producer() != enrollment.producer {
                 return Err("producer consent differs from base claim".into());
             }
@@ -437,6 +438,7 @@ pub mod producer_resources;
 pub mod provider_handoff_v4;
 pub mod provider_reader_v4;
 pub mod provider_actions_v4;
+pub mod material_generation_v5;
 
 /// Portable public material for the all-target CLI verifier. Every value is
 /// authenticated by the mathematical verifier against the anchored commitments.

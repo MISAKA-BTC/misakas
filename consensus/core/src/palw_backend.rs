@@ -1405,6 +1405,24 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family serves no block leaves".to_string())
     }
 
+    /// Complete V2 material is a separate codec. A backend must select reader
+    /// inputs from this native authority, never adapt the old implicit selector.
+    fn routed_material_bundle_v2(
+        &self,
+        _capture: &[u8],
+        _prompt: &[u32],
+        _roots: PalwClaimRootsV1,
+        _authority: &crate::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+        _max_bytes: u64,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_routed_material_v2::PalwHeldMaterialBundleV2>,
+        crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1,
+    > {
+        Err(crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::Unsupported(
+            "this backend has no explicit V2 routed capture codec".into(),
+        ))
+    }
+
     /// **ADR-0111 Decision 6, the executor's answer to a held state-chunk accusation** (ADR-0103
     /// Decision 4): checkpoint `checkpoint`'s leaf opened against the binding's checkpoint root, and
     /// chunk `chunk` of its state with the path under the class's map, built from this executor's

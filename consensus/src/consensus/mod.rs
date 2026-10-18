@@ -1419,6 +1419,14 @@ impl ConsensusApi for Consensus {
     ) -> Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
         self.virtual_processor.palw_native_material_provider_authority_v3_impl(checkpoint, header, ready)
     }
+    fn palw_native_material_provider_authority_v4(
+        &self,
+        checkpoint: BlockHash,
+        header: &Header,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<kaspa_consensus_core::api::PalwNativeMaterialProviderAuthorityV4, String> {
+        self.virtual_processor.palw_native_material_provider_authority_v4_impl(&self.config.params, checkpoint, header, ready)
+    }
     fn palw_monetary_material_covenants_v1(
         &self,
     ) -> Result<Vec<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
@@ -1545,7 +1553,9 @@ impl ConsensusApi for Consensus {
             &bundle.state,
             attempt,
             daa,
-        ) else {
+        )
+        .map_err(|e| e.to_string())?
+        else {
             return Ok((point, None));
         };
         let operators = row

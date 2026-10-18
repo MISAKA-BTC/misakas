@@ -78,7 +78,12 @@ pub fn routed_refutation_from_capture_v2(
         }
         Ok(())
     };
-    check(output, index, &target)?;
+    // The indexed output may itself carry a malformed coordinate/shape. It is
+    // still retrievable committed data; only the input inventory is canonical.
+    // The arithmetic/structural court decides that separate offence.
+    if hashes.get(index as usize) != Some(&leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &declaration.class_id, output)) {
+        return Err(evidence("routed capture output differs from its opened committed hash"));
+    }
     let output_opening = leg::step_opening_capped_v1(hashes, index, max_leaves)?;
     if leg::step_opening_root_capped_v1(binding.step_leaf_count, &output_opening, max_leaves)? != binding.step_merkle_root {
         return Err(evidence("routed capture belongs to another step root"));

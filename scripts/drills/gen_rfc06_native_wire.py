@@ -339,6 +339,13 @@ router_arms = '136 if key_bytes==64=>crate::palw_reader_router_v2::PalwReaderRou
 router_arms += '136 if key_bytes==65 && prefix==0xA1=><u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
 router_arms += '136 if key_bytes==65 && prefix==0xA2=><crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
 router_arms += '136=>return Err(wire::wire_bad("unallocated reader/router V2 row namespace")),\n'
+# RFC07 finite bootstrap: the full fixed epoch key and the two exact Hash64
+# namespaces, matching the schema owner's epoch/work/canonical-index journal.
+router_arms += '137 if key_bytes==1 && prefix==0=>crate::palw_source_bootstrap_v1::PalwSourceBootstrapEpochRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '137 if key_bytes==65 && prefix==1=>crate::palw_source_bootstrap_v1::PalwSourceBootstrapWorkRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '137 if key_bytes==65 && prefix==2=><crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
+router_arms += '137=>return Err(wire::wire_bad("unallocated selected-source bootstrap row namespace")),\n'
+
 code=code.replace(router_marker, router_arms+router_marker, 1)
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)
 

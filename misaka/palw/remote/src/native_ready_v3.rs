@@ -61,3 +61,26 @@ pub fn producer_assemble_native_ready_v3(
         .collect::<Result<Vec<_>, _>>()?;
     PalwAttemptMaterialEnvelopeV3::assemble(base, ready, ordered, seal_with)
 }
+
+/// V2 codec uses the existing Ready signature only after its distinct native
+/// authority journal and complete selected-router bundle have been published.
+/// The manifest codec/digest distinguishes this from legacy Ready material.
+pub fn provider_sign_native_ready_routed_v2(
+    store: &mut DurableMonetaryMaterialProviderV1,
+    provider: PalwBondKeyV2,
+    row: &PalwMonetaryMaterialRowV1,
+    ready: &PalwNativeMaterialReadyV3,
+    bundle: &kaspa_consensus_core::palw_routed_material_v2::PalwHeldMaterialBundleV2,
+    authority: &kaspa_consensus_core::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<Vec<u8>, kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+    use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+    if bundle.binding.committed_execution_root != authority.record().execution_root {
+        return Err(E::Substitution);
+    }
+    let id = store.prepare_native_ready_routed_v2(provider, row, ready, bundle, authority)?;
+    if id != ready.id() {
+        return Err(E::Substitution);
+    }
+    sign(id.as_byte_slice(), PALW_MATERIAL_READY_CONTEXT_V3).ok_or_else(|| E::Authentication("native Ready signer unavailable".into()))
+}

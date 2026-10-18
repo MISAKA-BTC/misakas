@@ -41,6 +41,16 @@ use crate::BlockHash;
 
 pub use self::stats::{BlockCount, ConsensusStats};
 
+/// Versioned own-node result for V2-stamped routed material. The old V3 tuple
+/// retains its meaning and cannot authorize this separate journal family.
+/// This runtime authority has no network deserializer.
+#[derive(Debug)]
+pub struct PalwNativeMaterialProviderAuthorityV4 {
+    pub row: crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+    pub material: crate::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+    pub provider_keys: Vec<(crate::palw_state_v2::PalwBondKeyV2, Vec<u8>)>,
+}
+
 /// **LIVE-R1 N2: the consensus half of the partition watchdog.** This node's recent resolves settled on
 /// `sink` after refusing the heavier `refused` on the PALW deep-reorg rule — a candidate it had
 /// UTXO-validated and weighed, and that did not strictly out-weigh its sink on `(safe frontier, safe
@@ -495,6 +505,16 @@ pub trait ConsensusApi: Send + Sync {
         _ready: &crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
     ) -> Result<crate::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
         Err("native material provider authority unavailable".into())
+    }
+    /// Exact V2 reader/router declaration from this node's candidate state.
+    /// The result authenticates material identity, never computation approval.
+    fn palw_native_material_provider_authority_v4(
+        &self,
+        _checkpoint: BlockHash,
+        _header: &Header,
+        _ready: &crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<PalwNativeMaterialProviderAuthorityV4, String> {
+        Err("native routed material provider authority unavailable".into())
     }
     fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
         Err("monetary material covenant reads are unavailable".into())

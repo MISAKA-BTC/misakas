@@ -109,15 +109,19 @@ fn apply_inner(
     let p = current_policy(b, ctx.daa_score)?;
     route_fold::ensure_route_header(b, ctx)?;
     let signer_id = palw_kernel_bond_id_v1(signer);
-    // New proof/registration data consumes the existing native block work
-    // admission once; old V3 objects preserve their prior accounting.
-    let admission_work =
-        if matches!(o, PaidClaimObjectV2::RegisterCompactContractV4 { .. } | PaidClaimObjectV2::BindCompactProofV4 { .. }) {
-            u64::try_from(borsh::to_vec(o).map_err(|e| refused(e.to_string()))?.len())
-                .map_err(|_| refused("compact native work length overflow"))?
-        } else {
-            0
-        };
+    // New registration/binding data consumes the native block work admission
+    // once; original V2/V3 objects preserve their prior accounting.
+    let admission_work = if matches!(
+        o,
+        PaidClaimObjectV2::RegisterCompactContractV4 { .. }
+            | PaidClaimObjectV2::BindCompactProofV4 { .. }
+            | PaidClaimObjectV2::CommitWithMaterialGenerationV5 { .. }
+    ) {
+        u64::try_from(borsh::object_length(o).map_err(|e| refused(e.to_string()))?)
+            .map_err(|_| refused("compact native work length overflow"))?
+    } else {
+        0
+    };
     if !route_fold::charge_route_budget_v1(b, ctx, admission_work, false)? {
         return Err(refused("paid claim block admission capacity exhausted"));
     }
@@ -315,7 +319,8 @@ fn apply_inner(
             }
             put(b, PAID_CLAIM_JOBS_V2, &job.id(), job);
         }
-        PaidClaimObjectV2::Commit { enrollment: e, commit, salt } => {
+        PaidClaimObjectV2::Commit { enrollment: e, commit, salt }
+        | PaidClaimObjectV2::CommitWithMaterialGenerationV5 { enrollment: e, commit, salt, .. } => {
             let l = route_fold::load_ledger(b, ctx)?;
             let r = b.state.kernel_route.as_ref().unwrap();
             let j: PaidClaimJobV2 =
@@ -350,12 +355,29 @@ fn apply_inner(
                 return Err(refused("paid producer enrollment is late, replayed, unsigned or exceeds capacity"));
             }
             b.state.require_monetary_material_enrollment_v1(b.params, Hash64::from_bytes(e.base_claim), ctx.daa_score, None)?;
-            let monetary = b
-                .state
-                .monetary_material_row_v1(Hash64::from_bytes(e.base_claim))
-                .ok_or_else(|| refused("paid claim signed monetary material consent missing"))?;
-            if monetary.consent.as_bytes() != e.material_consent {
-                return Err(refused("paid claim names another signed material consent"));
+            if let PaidClaimObjectV2::CommitWithMaterialGenerationV5 { generation, original_signature, .. } = o {
+                crate::palw_paid_material_generation_v5::validate_paid_material_generation_v5(
+                    &b.state,
+                    b.params,
+                    ctx.daa_score,
+                    signer,
+                    e,
+                    commit,
+                    salt,
+                    generation,
+                    original_signature,
+                )
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+            } else {
+                // Legacy Commit retains exact current-consent semantics. Only
+                // the explicitly signed V5 wrapper can follow a replacement.
+                let monetary = b
+                    .state
+                    .monetary_material_row_v1(Hash64::from_bytes(e.base_claim))
+                    .ok_or_else(|| refused("paid claim signed monetary material consent missing"))?;
+                if monetary.consent.as_bytes() != e.material_consent {
+                    return Err(refused("paid claim names another signed material consent"));
+                }
             }
             let (sf, _) = source_fences(b, ctx.daa_score)?;
             let eligible = match b.extras.kernel_route.as_ref().and_then(|x| x.opv.as_ref()) {

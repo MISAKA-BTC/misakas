@@ -2096,7 +2096,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         crate::float_public_source::write_float_public_source_v1(material, out)
     }
 
-    fn public_execution_binding_header_v1(&self,material:&[u8])->Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,String> {
+    fn public_execution_binding_header_v1(
+        &self,
+        material: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1, String> {
         crate::flat_public_source::original_public_binding_header_v1(material)
     }
 
@@ -2402,6 +2405,191 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             }
         }
         .map_err(|e| format!("{e:?}"))
+    }
+
+    fn routed_material_bundle_v2(
+        &self,
+        capture: &[u8],
+        prompt: &[u32],
+        roots: PalwClaimRootsV1,
+        authority: &kaspa_consensus_core::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+        max_bytes: u64,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_routed_material_v2::PalwHeldMaterialBundleV2,
+        >,
+        kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1,
+    > {
+        use kaspa_consensus_core::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1};
+        use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+        use kaspa_consensus_core::palw_native_resource_v1::{
+            NativeDecodeErrorV1, NativeHeapV1, reserve_native_requests_v1, retain_native_value_decode_classified_v1,
+        };
+        use kaspa_consensus_core::palw_routed_material_v2::{
+            PalwHeldMaterialBundleV2, PalwHeldMaterialUnitV2, PalwMaterialConstructionRequestsV2, construct_material_unit_v2,
+        };
+        // This concrete adapter owns dense capture data. Sparse fold replay must
+        // get a separate bounded gather adapter; never select a V1 router there.
+        if capture.starts_with(&crate::produce::PALW_BASE0_FP_MATERIAL_MAGIC_V2) {
+            return Err(E::Unsupported("V2 routed complete material from folded capture is not connected".into()));
+        }
+        let retained =
+            retain_native_value_decode_classified_v1::<crate::produce::Base0RetainedMaterialV1, std::io::Error>(capture, || {
+                borsh::from_slice(capture)
+            })
+            .map_err(|e| match e {
+                NativeDecodeErrorV1::Resource(e) => E::LocalResource(e),
+                NativeDecodeErrorV1::Decode(e) => E::Authentication(e.to_string()),
+            })?;
+        let (binding, tiles, rows, generated, _) = &*retained;
+        authority.record().validate(binding)?;
+        if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+            authority.record().form,
+            prompt,
+            &binding.job_context.prompt_token_ids_hash,
+        ) {
+            return Err(E::Substitution);
+        }
+        let heap = retained.native_heap_v1("V2 dense material actual capture");
+        let source_heap = heap.bytes().ok_or_else(|| E::LocalResource(heap))?;
+        let mut q = PalwMaterialConstructionRequestsV2::new();
+        q.add_v1(source_heap).map_err(E::LocalResource)?;
+        q.vec_v1::<Hash64>(binding.step_leaf_count).map_err(E::LocalResource)?;
+        q.vec_v1::<(u128, u128, u128)>(u64::from(binding.shape_profile.global_node_count())).map_err(E::LocalResource)?;
+        q.vec_v1::<(u128, u128, u128)>(u64::from(binding.shape_profile.global_node_count())).map_err(E::LocalResource)?;
+        q.vec_v1::<u8>((borsh::object_length(&binding.shape_profile).map_err(|_| E::Capacity)? as u64).max(1024))
+            .map_err(E::LocalResource)?;
+        q.add_v1(source_heap.checked_mul(4).ok_or(E::Capacity)?).map_err(E::LocalResource)?;
+        let _capture = reserve_native_requests_v1(q.bytes_v1()).map_err(E::LocalResource)?;
+        crate::produce::base0_material_answers_the_claim_v1(self, binding, generated, &roots)
+            .map_err(|e| E::Authentication(format!("native V2 capture job: {e:?}")))?;
+        if !crate::produce::base0_material_matches_claim_capped_v1(
+            &retained,
+            roots.execution_root,
+            roots.trace_root,
+            authority.record().ladder,
+            crate::produce::Base0SeatFamilyV1::Qwen36,
+        )
+        .map_err(|e| E::Authentication(format!("native V2 capture roots: {e:?}")))?
+        {
+            return Err(E::Substitution);
+        }
+        let captured = crate::legs::Base0StepTilesV1 { leaves: qwen36_leaves_by_position(binding, tiles), tiles: tiles.clone() };
+        PalwHeldMaterialBundleV2::from_source(binding, authority, max_bytes, |missing| {
+            let mut q = PalwMaterialConstructionRequestsV2::new();
+            // Finite copied input inventory and common verifier scratch: the
+            // complete retained capture bounds each source projection. A repeated
+            // reference can duplicate it once per actual registered input ref.
+            let mut copies = 4u64;
+            if let PalwHeldMissingV1::StepLeaf { leaf } = missing {
+                let coord =
+                    kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, leaf)
+                        .ok_or(E::Incomplete)?;
+                let (node, _) = binding.shape_profile.resolve_node_slot(coord.node_slot).ok_or(E::Incomplete)?;
+                copies = copies.checked_add(node.input_refs.len() as u64).ok_or(E::Capacity)?;
+                if authority.record().routing.declaration.selected_router(coord.node_slot).is_some() {
+                    let routed = kaspa_consensus_core::palw_step_refute::routing_v2::routed_refutation_from_capture_v2(
+                        binding,
+                        coord,
+                        &authority.record().routing.declaration,
+                        &captured.leaves,
+                        &captured.tiles,
+                        authority.record().ladder,
+                    )
+                    .map_err(|e| match e {
+                        kaspa_consensus_core::palw_step_refute::routing_v2::PalwRoutingCourtErrorV2::Resource(e) => {
+                            E::LocalResource(e)
+                        }
+                        other => E::Authentication(other.to_string()),
+                    })?;
+                    let h = routed.native_heap_v1("V2 routed unit handoff");
+                    q.add_v1(h.bytes().ok_or_else(|| E::LocalResource(h))?).map_err(E::LocalResource)?;
+                    q.vec_v1::<PalwHeldMaterialUnitV2>(1).map_err(E::LocalResource)?;
+                    return construct_material_unit_v2(q, || {
+                        let (routed, owner) = routed.into_parts_v1();
+                        let value = PalwHeldMaterialUnitV2::Routed(routed);
+                        drop(owner);
+                        Ok(value)
+                    });
+                }
+            }
+            q.add_v1(source_heap.checked_mul(copies).ok_or(E::Capacity)?).map_err(E::LocalResource)?;
+            q.vec_v1::<PalwHeldMaterialUnitV2>(1).map_err(E::LocalResource)?;
+            q.vec_v1::<Hash64>(binding.step_leaf_count).map_err(E::LocalResource)?;
+            q.vec_v1::<u32>(prompt.len() as u64).map_err(E::LocalResource)?;
+            construct_material_unit_v2(q, || {
+                let disclosure = match missing {
+                    PalwHeldMissingV1::StepLeaf { leaf } => {
+                        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(
+                            &binding.shape_profile,
+                            &binding.job_context,
+                            leaf,
+                        )
+                        .ok_or(E::Incomplete)?;
+                        let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, rows)
+                            .ok_or(E::Incomplete)?;
+                        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
+                            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 {
+                                rows_root,
+                                generated_token_ids: generated.clone(),
+                            },
+                        );
+                        let r = crate::legs::base0_refutation_from_capture_capped_v1(
+                            &binding.shape_profile,
+                            &binding.job_context,
+                            &captured,
+                            binding.clone(),
+                            coord,
+                            prompt.to_vec(),
+                            Some(pin),
+                            None,
+                            authority.record().ladder,
+                        )
+                        .map_err(|e| E::Authentication(format!("{e:?}")))?;
+                        let (refutation, prompt_ids_opening) =
+                            kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1(authority.record().form, r)
+                                .map_err(|e| E::Authentication(e.to_string()))?;
+                        PalwHeldDisclosureV1::StepLeaf {
+                            evidence: Box::new(kaspa_consensus_core::palw_shard_court_v1::PalwLeafEvidenceV1 {
+                                refutation,
+                                artifact_openings: Vec::new(),
+                                prompt_ids_opening,
+                            }),
+                        }
+                    }
+                    PalwHeldMissingV1::PromptIdsTile { tile } => PalwHeldDisclosureV1::PromptIdsTile {
+                        opening: kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1(
+                            prompt,
+                            tile.checked_mul(kaspa_consensus_core::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN).ok_or(E::Capacity)?,
+                        )
+                        .map_err(|e| E::Authentication(e.to_string()))?,
+                    },
+                    PalwHeldMissingV1::StateChunk { checkpoint, chunk } => {
+                        let (anchor, chunk) =
+                            self.held_state_chunk_answer_v1(capture, prompt, checkpoint, chunk).map_err(E::Authentication)?;
+                        PalwHeldDisclosureV1::StateChunk { anchor, chunk }
+                    }
+                    PalwHeldMissingV1::StepRange { first, count } => PalwHeldDisclosureV1::StepRange {
+                        opening: kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1 {
+                            first_leaf_index: first,
+                            leaf_hashes: captured
+                                .leaves
+                                .get(first as usize..first.checked_add(u64::from(count)).ok_or(E::Capacity)? as usize)
+                                .ok_or(E::Incomplete)?
+                                .to_vec(),
+                            siblings: kaspa_consensus_core::palw_step_leg::step_merkle_range_siblings_capped_v1(
+                                &captured.leaves,
+                                first as usize,
+                                count as usize,
+                                authority.record().ladder,
+                            )
+                            .map_err(|e| E::Authentication(e.to_string()))?,
+                        },
+                    },
+                };
+                Ok(PalwHeldMaterialUnitV2::Legacy(disclosure))
+            })
+        })
     }
 
     fn held_state_chunk_answer_v1(

@@ -10,8 +10,9 @@ use kaspad_lib::{
     args::Args,
     daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
     private_integration::{
-        PrivateKernelMaterialReplacementSpecV4, PrivateKernelPaidCheckSpecV4, PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3,
-        PrivateRecoveryAckFeeSpecV4, create_private_integration_core_with_kernel_paid_replacement_v4,
+        PrivateKernelMaterialReplacementSpecV4, PrivateKernelPaidCheckSpecV4, PrivateKernelPaidMaterialGenerationSpecV5,
+        PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4,
+        create_private_integration_core_with_kernel_paid_material_generation_v5,
         create_private_integration_core_with_native_custody_v3, create_private_integration_core_with_native_custody_v4,
         create_private_integration_core_with_runtime, export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3,
         export_private_paid_bootstrap_v4, export_private_paid_program_work_v3, prepare_private_integration_probe,
@@ -42,6 +43,8 @@ paid-v4 hosted providers additionally require an explicit ACK carrier fee payer:
     separate producer carrier payer/funding and input/material/workspace/fee limits; never native acceptance by itself)
   --private-probe-kernel-paid-check=ABSOLUTE_JSON (explicit assigned checker bond/key, provider endpoint,
     acquisition limits and separate receipt payer/funding; checker-only mode needs no producer exchange)
+  --private-probe-kernel-paid-material-generation-v5=ABSOLUTE_JSON (exact original signed claim continuation,
+    separate explicit funding slot/fee cap; exclusive with paid-work and material-replacement workers)
   --private-probe-kernel-material-replacement=ABSOLUTE_JSON (original producer's explicit replacement sender,
     immutable context/bundle/intent, input byte/heap limits and durable proposal WAL; provider funds its carrier)
 Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
@@ -93,6 +96,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-native-recovery-providers"
                         | "--private-probe-kernel-paid-work"
                         | "--private-probe-kernel-paid-check"
+                        | "--private-probe-kernel-paid-material-generation-v5"
                         | "--private-probe-kernel-material-replacement"
                 ) {
                     return Err(format!("unknown private option {name}"));
@@ -191,6 +195,23 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             PrivateKernelMaterialReplacementSpecV4::read(path)
         })
         .transpose()?;
+    let kernel_generation = flags
+        .values
+        .remove("--private-probe-kernel-paid-material-generation-v5")
+        .map(|file| {
+            if profile != "paid-v4" || flags.print || bootstrap.is_some() || paid_output.is_some() {
+                return Err("V5 continuation requires paid-v4 node mode".into());
+            }
+            let path = Path::new(&file);
+            if !path.is_absolute() {
+                return Err("V5 continuation specification path must be absolute".into());
+            }
+            PrivateKernelPaidMaterialGenerationSpecV5::read(path)
+        })
+        .transpose()?;
+    if kernel_generation.is_some() && (kernel_work.is_some() || kernel_replacement.is_some()) {
+        return Err("V5 continuation cannot run with the original paid producer/replacement worker".into());
+    }
     if !recovery_providers.is_empty()
         && (profile != "paid-v4" || native.is_none() || flags.print || bootstrap.is_some() || paid_output.is_some())
     {
@@ -282,22 +303,9 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .filter(|n| *n > 0)
         .ok_or("private file descriptor budget exhausted")?;
     let runtime = Runtime::from_args(&args);
-    let (core, rpc) = if kernel_work.is_some() || kernel_checker.is_some() || kernel_replacement.is_some() {
-        create_private_integration_core_with_kernel_paid_replacement_v4(
-            &runtime,
-            &args,
-            budget,
-            config,
-            native,
-            ack_fees,
-            recovery_providers,
-            kernel_work,
-            kernel_checker,
-            kernel_replacement,
-        )?
-    } else {
-        match native {
-            Some(native) if profile == "paid-v4" => create_private_integration_core_with_native_custody_v4(
+    let (core, rpc) =
+        if kernel_work.is_some() || kernel_checker.is_some() || kernel_replacement.is_some() || kernel_generation.is_some() {
+            create_private_integration_core_with_kernel_paid_material_generation_v5(
                 &runtime,
                 &args,
                 budget,
@@ -305,11 +313,26 @@ fn run(raw: Vec<String>) -> Result<(), String> {
                 native,
                 ack_fees,
                 recovery_providers,
-            )?,
-            Some(native) => create_private_integration_core_with_native_custody_v3(&runtime, &args, budget, config, native)?,
-            None => create_private_integration_core_with_runtime(&runtime, &args, budget, config)?,
-        }
-    };
+                kernel_work,
+                kernel_checker,
+                kernel_replacement,
+                kernel_generation,
+            )?
+        } else {
+            match native {
+                Some(native) if profile == "paid-v4" => create_private_integration_core_with_native_custody_v4(
+                    &runtime,
+                    &args,
+                    budget,
+                    config,
+                    native,
+                    ack_fees,
+                    recovery_providers,
+                )?,
+                Some(native) => create_private_integration_core_with_native_custody_v3(&runtime, &args, budget, config, native)?,
+                None => create_private_integration_core_with_runtime(&runtime, &args, budget, config)?,
+            }
+        };
     Arc::new(kaspa_core::signals::Signals::new(&core)).init();
     // Rpc service does not outlive shutdown's Core reference accounting.
     drop(rpc);

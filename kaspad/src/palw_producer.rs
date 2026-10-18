@@ -2199,23 +2199,46 @@ impl PalwProducerService {
                     base: base.clone(),
                     ..draw.clone()
                 };
-                let authority = session.palw_native_material_provider_authority_v3(checkpoint, &header, &probe)?;
-                // Nothing below reads consensus: the session's read guard is not held across the providers' work.
+                let routed = row.terms.native_session.as_ref().is_some_and(|native| {
+                    native.codec == kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldCompleteV2
+                });
+                let (authority_row, provider_keys, manifest) = if routed {
+                    let authority = session.palw_native_material_provider_authority_v4(checkpoint, &header, &probe)?;
+                    if authority.row.terms.root != row.terms.root || authority.row.consent != row.consent {
+                        return Err("the V2 native session moved between draw and seal".to_string());
+                    }
+                    let (_, manifest) = crate::palw_native_custody_v3::palw_native_bundle_routed_v2(
+                        backend.as_ref(),
+                        &authority.row,
+                        &attempt,
+                        anchor,
+                        &capture,
+                        &prompt,
+                        prefill_draw,
+                        &authority.material,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    (authority.row, authority.provider_keys, manifest)
+                } else {
+                    let authority = session.palw_native_material_provider_authority_v3(checkpoint, &header, &probe)?;
+                    if authority.row.terms.root != row.terms.root || authority.row.consent != row.consent {
+                        return Err("the native session moved between draw and seal".to_string());
+                    }
+                    let (_, manifest) = palw_native_bundle_v3(
+                        backend.as_ref(),
+                        &authority.row,
+                        &attempt,
+                        anchor,
+                        &capture,
+                        &prompt,
+                        prefill_draw,
+                        authority.material,
+                    )?;
+                    (authority.row, authority.provider_keys, manifest)
+                };
+                // Provider publication re-reads its own candidate authority.
                 drop(session);
-                if authority.row.terms.root != row.terms.root || authority.row.consent != row.consent {
-                    return Err("the native session moved between the draw and the seal".to_string());
-                }
-                let (_, manifest) = palw_native_bundle_v3(
-                    backend.as_ref(),
-                    &authority.row,
-                    &attempt,
-                    anchor,
-                    &capture,
-                    &prompt,
-                    prefill_draw,
-                    authority.material,
-                )?;
-                let ready = draft_native_ready_v3(&authority.row, &attempt, anchor, manifest)?;
+                let ready = draft_native_ready_v3(&authority_row, &attempt, anchor, manifest)?;
                 if ready.session != draw.ready.session
                     || ready.consent != draw.ready.consent
                     || ready.providers != draw.ready.providers
@@ -2231,8 +2254,8 @@ impl PalwProducerService {
                     capture,
                     prompt,
                 };
-                let signatures = exchange.0.request_signatures_authenticated(&request, &authority.provider_keys)?;
-                palw_native_check_signatures_v3(&ready, &authority.provider_keys, &signatures)?;
+                let signatures = exchange.0.request_signatures_authenticated(&request, &provider_keys)?;
+                palw_native_check_signatures_v3(&ready, &provider_keys, &signatures)?;
                 Ok::<_, String>((ready, signatures, request.envelope.base))
             }),
         )

@@ -15,6 +15,43 @@ pub const PALW_MATERIAL_SEAL_CONTEXT_V3: &[u8] = b"MISAKA/PALW/MATERIAL-SEAL/V3"
 /// At most this many providers, so the carriage including the executor key/signature, every
 /// provider signature and the seal stays inside [`PALW_ATTEMPT_MATERIAL_MAX_BYTES_V3`].
 pub const PALW_MATERIAL_MAX_PROVIDERS_V3: usize = 8;
+
+/// Consensus callers must retain local preparation failures separately from
+/// invalid signed Ready data. This runtime error is never a wire object.
+#[derive(Clone, Debug)]
+pub enum PalwNativeReadyVerificationErrorV4 {
+    Invalid(String),
+    LocalResource(crate::palw_native_resource_v1::NativeCoverageV1),
+    NativeContext(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
+}
+impl From<String> for PalwNativeReadyVerificationErrorV4 {
+    fn from(value: String) -> Self {
+        Self::Invalid(value)
+    }
+}
+impl From<&str> for PalwNativeReadyVerificationErrorV4 {
+    fn from(value: &str) -> Self {
+        Self::Invalid(value.into())
+    }
+}
+impl From<crate::palw_state_v2::PalwStateV2Error> for PalwNativeReadyVerificationErrorV4 {
+    fn from(value: crate::palw_state_v2::PalwStateV2Error) -> Self {
+        match value {
+            crate::palw_state_v2::PalwStateV2Error::NativeResource(why) => Self::LocalResource(why),
+            crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why) => Self::NativeContext(why),
+            other => Self::Invalid(other.to_string()),
+        }
+    }
+}
+impl std::fmt::Display for PalwNativeReadyVerificationErrorV4 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(why) => f.write_str(why),
+            Self::LocalResource(why) => write!(f, "local native Ready capacity unavailable: {why}"),
+            Self::NativeContext(why) => write!(f, "own native Ready context unavailable: {why}"),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwNativeMaterialSessionV3 {
     pub version: u16,
@@ -193,7 +230,7 @@ impl PalwAttemptMaterialEnvelopeV3 {
         daa: u64,
         verify: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
     ) -> Result<(), String> {
-        self.verify_prior_inner_v4(state, None, anchor, daa, verify)
+        self.verify_prior_inner_v4(state, None, anchor, daa, verify).map_err(|e| e.to_string())
     }
     /// Explicit new recovery fence; legacy V3 verification remains byte-for-byte
     /// the same rule below it. Filtering occurs BEFORE canonical min selection.
@@ -205,6 +242,16 @@ impl PalwAttemptMaterialEnvelopeV3 {
         daa: u64,
         verify: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
     ) -> Result<(), String> {
+        self.verify_prior_with_recovery_typed_v4(state, params, anchor, daa, verify).map_err(|e| e.to_string())
+    }
+    pub fn verify_prior_with_recovery_typed_v4(
+        &self,
+        state: &PalwChainStateV2,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+        anchor: Hash64,
+        daa: u64,
+        verify: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    ) -> Result<(), PalwNativeReadyVerificationErrorV4> {
         self.verify_prior_inner_v4(state, Some(params), anchor, daa, verify)
     }
     fn verify_prior_inner_v4(
@@ -214,20 +261,18 @@ impl PalwAttemptMaterialEnvelopeV3 {
         anchor: Hash64,
         daa: u64,
         verify: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), PalwNativeReadyVerificationErrorV4> {
         self.validate_shape()?;
         let a = &self.base.attempt;
         // The canonical oldest-key eligible session fixes the roster before work;
         // choosing another funded session cannot buy another draw for that work.
-        let selected = select_native_session_v3(
-            state
-                .monetary_material_rows_v1()
-                .into_iter()
-                .filter(|row| params.is_none_or(|p| state.require_material_recovery_v2(p, row.terms.root, daa).is_ok())),
-            a,
-            daa,
-            |provider| state.bond(provider).map(|bond| bond.operator_id),
-        )
+        let selected = if let Some(params) = params {
+            select_native_session_with_recovery_v4(state, params, a, daa)?
+        } else {
+            select_native_session_v3(state.monetary_material_rows_v1(), a, daa, |provider| {
+                state.bond(provider).map(|bond| bond.operator_id)
+            })
+        }
         .ok_or("no eligible prior signed native session")?;
         if selected.terms.root != self.ready.session
             || selected.consent != self.ready.consent
@@ -285,16 +330,31 @@ pub fn select_native_session_with_recovery_v4(
     params: &crate::palw_state_v2::PalwStateParamsV2,
     attempt: &PalwAttemptUnsignedV2,
     daa: u64,
-) -> Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1> {
-    select_native_session_v3(
-        state
-            .monetary_material_rows_v1()
-            .into_iter()
-            .filter(|row| state.require_material_recovery_v2(params, row.terms.root, daa).is_ok()),
-        attempt,
-        daa,
-        |provider| state.bond(provider).map(|b| b.operator_id),
-    )
+) -> Result<Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, crate::palw_state_v2::PalwStateV2Error> {
+    use crate::palw_state_v2::PalwStateV2Error as E;
+    let required = state.native_material_codec_for_candidate_v2(attempt.class_id, daa)?;
+    let mut selected = None;
+    for row in state.monetary_material_rows_v1() {
+        if row.terms.native_session.as_ref().is_none_or(|s| s.codec != required) {
+            continue;
+        }
+        match state.require_material_recovery_v2(params, row.terms.root, daa) {
+            Ok(()) => {}
+            Err(error @ (E::NativeResource(_) | E::NativeContextUnavailable(_))) => return Err(error),
+            Err(_) => continue,
+        }
+        if let Some(row) =
+            select_native_session_v3(std::iter::once(row), attempt, daa, |provider| state.bond(provider).map(|b| b.operator_id))
+        {
+            if selected
+                .as_ref()
+                .is_none_or(|old: &crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1| row.terms.root < old.terms.root)
+            {
+                selected = Some(row);
+            }
+        }
+    }
+    Ok(selected)
 }
 
 /// The Ready a producer asks the selected session's providers to sign, derived only from the

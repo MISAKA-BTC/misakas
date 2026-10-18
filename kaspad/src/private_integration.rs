@@ -48,6 +48,8 @@ mod kernel_paid_producer_v4;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
 mod kernel_paid_checker_v4;
 pub use kernel_paid_checker_v4::PrivateKernelPaidCheckSpecV4;
+mod kernel_paid_material_generation_worker_v5;
+pub use kernel_paid_material_generation_worker_v5::PrivateKernelPaidMaterialGenerationSpecV5;
 mod kernel_material_replacement_worker_v4;
 pub use kernel_material_replacement_worker_v4::PrivateKernelMaterialReplacementSpecV4;
 pub use recovery_ack_carrier_v4::PrivateRecoveryAckFeeSpecV4;
@@ -480,6 +482,7 @@ pub fn create_private_integration_core_with_native_custody_v4(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -508,6 +511,7 @@ pub fn create_private_integration_core_with_kernel_paid_work_v4(
         ack_fees,
         recovery_providers,
         Some(work),
+        None,
         None,
         None,
     )
@@ -557,6 +561,36 @@ pub fn create_private_integration_core_with_kernel_paid_replacement_v4(
     checker: Option<PrivateKernelPaidCheckSpecV4>,
     replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    create_private_integration_core_with_kernel_paid_material_generation_v5(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        native,
+        ack_fees,
+        recovery_providers,
+        work,
+        checker,
+        replacement,
+        None,
+    )
+}
+
+/// Explicit separately funded continuation of the exact original signed paid claim.
+#[allow(clippy::too_many_arguments)]
+pub fn create_private_integration_core_with_kernel_paid_material_generation_v5(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: Option<PrivateNativeCustodySpecV3>,
+    ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
+    recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    work: Option<PrivateKernelPaidWorkSpecV4>,
+    checker: Option<PrivateKernelPaidCheckSpecV4>,
+    replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
+    generation: Option<PrivateKernelPaidMaterialGenerationSpecV5>,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
     create_private_native_custody_v4_inner(
         runtime,
         args,
@@ -568,6 +602,7 @@ pub fn create_private_integration_core_with_kernel_paid_replacement_v4(
         work,
         checker,
         replacement,
+        generation,
     )
 }
 
@@ -583,7 +618,16 @@ fn create_private_native_custody_v4_inner(
     kernel_work: Option<PrivateKernelPaidWorkSpecV4>,
     kernel_checker: Option<PrivateKernelPaidCheckSpecV4>,
     kernel_replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
+    kernel_generation: Option<PrivateKernelPaidMaterialGenerationSpecV5>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    if kernel_generation.is_some() && (kernel_work.is_some() || kernel_replacement.is_some()) {
+        return Err(
+            "V5 continuation is exclusive with the original producer/replacement worker; it retains the original producer lock".into(),
+        );
+    }
+    if kernel_generation.is_some() && (!args.palw_produce || native.is_none()) {
+        return Err("V5 continuation requires the explicit original producer identity and paid-v4 custody configuration".into());
+    }
     if (kernel_work.is_some() || kernel_replacement.is_some()) && (!args.palw_produce || native.is_none()) {
         return Err("kernel work/replacement requires the configured producer and authenticated custody exchange".into());
     }
@@ -625,6 +669,7 @@ fn create_private_native_custody_v4_inner(
         // consumes the context. An uploaded file supplies work, not authority.
         let producer = kernel_work.map(|work| work.prepare(&ctx)).transpose()?;
         let checker = kernel_checker.map(|checker| checker.prepare(&ctx)).transpose()?;
+        let generation = kernel_generation.map(|generation| generation.prepare(&ctx)).transpose()?;
         let replacement = kernel_replacement.map(|replacement| replacement.prepare(&ctx)).transpose()?;
         recovery_observation_v4::start(&ctx)?;
         let exchange = hook(ctx)?;
@@ -637,6 +682,9 @@ fn create_private_native_custody_v4_inner(
         }
         if let Some(checker) = checker {
             checker.start()?;
+        }
+        if let Some(generation) = generation {
+            generation.start()?;
         }
         if let Some(replacement) = replacement {
             replacement.start(exchange.as_ref().ok_or("replacement provider exchange is absent")?.clone())?;

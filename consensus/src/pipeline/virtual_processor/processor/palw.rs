@@ -2,6 +2,11 @@
 
 use super::*;
 
+#[path = "source_bootstrap_v1.rs"]
+mod source_bootstrap_v1;
+#[path = "routed_material_v2.rs"]
+mod routed_material_v2;
+
 impl VirtualStateProcessor {
     /// **The 2026-09-23 Position route matrix, P-B3, at the mempool and at the template: the fold's
     /// market gate on a carrier before it relays and before it is mined.**
@@ -723,6 +728,14 @@ impl VirtualStateProcessor {
                 if e.native_capacity_v1().is_some() {
                     warn!("PALW candidate walk awaits local native capacity: {e}");
                     return PalwWeighFaultV2::NativeCapacityUnavailable;
+                }
+                if let Some(context) = e.native_context_v1() {
+                    use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
+                    return match context {
+                        F::Capacity(_) | F::CapacityUnavailable => PalwWeighFaultV2::NativeCapacityUnavailable,
+                        F::HistoryUnavailable => PalwWeighFaultV2::NoOpinion,
+                        F::StoreUnreadable => PalwWeighFaultV2::StoreUnreadable,
+                    };
                 }
                 match e {
                     W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
@@ -2065,6 +2078,14 @@ impl VirtualStateProcessor {
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 {
         use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
+        let extras = self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object));
+        if let Some(fault) = &extras.selected_source_bootstrap_fault_v1 {
+            use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
+            return PalwObjectRehearsalV1::Refused(match fault {
+                F::Capacity(why) => kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why.clone()),
+                other => kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(other.clone()),
+            });
+        }
         if let Some(verdict) = self.palw_exec_origin_rehearsal_v1_on(state, state_params, point, object) {
             return verdict;
         }
@@ -2080,7 +2101,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)),
+            &extras,
         ) {
             Ok(_) => PalwObjectRehearsalV1::Accepted,
             Err(why) => PalwObjectRehearsalV1::Refused(why),
@@ -3722,21 +3743,21 @@ impl VirtualStateProcessor {
     /// merged carves are paid in full at acceptance (ADR-0058 Decision 5) — byte-identical to before.
     /// Past the fence it re-runs `palw_v2_merged_works` (the fold runs it again at fold time); the
     /// redundant pass is deterministic in the same inputs and paid only past a provisional flag day.
-    pub(in crate::pipeline::virtual_processor) fn palw_v2_merged_escrow_withheld(
+    pub(in crate::pipeline::virtual_processor) fn palw_v2_merged_escrow_withheld_checked_v1(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         ghostdag_data: &GhostdagData,
         mergeset_non_daa: &BlockHashSet,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
-    ) -> BlockHashMap<u64> {
+    ) -> Result<BlockHashMap<u64>, PalwLocalTransitionFaultV1> {
         let mut withheld = BlockHashMap::default();
         let Some(state_params) = self.palw_state_params_v2.as_ref() else {
-            return withheld;
+            return Ok(withheld);
         };
         if !self.palw_audit_2026_09_11_deep_at(point.daa_score) {
-            return withheld;
+            return Ok(withheld);
         }
-        let (works, _skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point);
+        let (works, _skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point)?;
         for work in &works {
             if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve, _, _) = work {
                 withheld.insert(
@@ -3745,7 +3766,29 @@ impl VirtualStateProcessor {
                 );
             }
         }
-        withheld
+        Ok(withheld)
+    }
+
+    #[cfg(test)]
+    pub(in crate::pipeline::virtual_processor) fn palw_v2_merged_escrow_withheld(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag: &GhostdagData,
+        non_daa: &BlockHashSet,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> BlockHashMap<u64> {
+        self.palw_v2_merged_escrow_withheld_checked_v1(state, ghostdag, non_daa, point).unwrap()
+    }
+
+    #[cfg(test)]
+    pub(in crate::pipeline::virtual_processor) fn palw_v2_unentitled_blues(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag: &GhostdagData,
+        non_daa: &BlockHashSet,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> BlockHashSet {
+        self.palw_v2_unentitled_blues_checked_v1(state, ghostdag, non_daa, point).unwrap()
     }
 
     /// **Launch blockers §8: which merged blues this block's coinbase may not pay.**
@@ -3937,17 +3980,17 @@ impl VirtualStateProcessor {
         }
     }
 
-    pub(in crate::pipeline::virtual_processor) fn palw_v2_unentitled_blues(
+    pub(in crate::pipeline::virtual_processor) fn palw_v2_unentitled_blues_checked_v1(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         ghostdag_data: &GhostdagData,
         mergeset_non_daa: &BlockHashSet,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
-    ) -> BlockHashSet {
+    ) -> Result<BlockHashSet, PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::palw_attempt_v2::attempt_id_v2;
         let mut unentitled = BlockHashSet::default();
         let Some(state_params) = self.palw_state_params_v2.as_ref() else {
-            return unentitled;
+            return Ok(unentitled);
         };
         // Identities already paid or claimed in THIS mergeset. The state answers for identities
         // the chain has already seen; nothing but this answers for two siblings carrying one.
@@ -4086,13 +4129,14 @@ impl VirtualStateProcessor {
                         unentitled.insert(*blue);
                     }
                 },
-                Err(why) => {
+                Err(PalwAttemptAdmissionFaultV1::Local(why)) => return Err(why),
+                Err(PalwAttemptAdmissionFaultV1::Invalid(why)) => {
                     debug!("merged block {blue} is not paid a worker share: {why}");
                     unentitled.insert(*blue);
                 }
             }
         }
-        unentitled
+        Ok(unentitled)
     }
 
     /// **RFC-0009: how each merged V4 receipt block is paid** — `{ block → (the executor bond's payout script, the authorization's fee
@@ -4279,7 +4323,7 @@ impl VirtualStateProcessor {
         block: BlockHash,
         block_daa: u64,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        self.palw_v2_derived_panel_bindings(state, block, block_daa)
+        self.palw_v2_derived_panel_bindings(state, block, block_daa).unwrap()
     }
 
     /// The fold the pipeline runs over a candidate's accepted objects — no attempt, no merged work —
@@ -9092,7 +9136,7 @@ impl VirtualStateProcessor {
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
-    ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
+    ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, PalwAttemptAdmissionFaultV1> {
         self.palw_v2_check_attempt_admission_waiving_v1(header, state, state_params, point, bootstrap_state, false)
     }
 
@@ -9107,7 +9151,7 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
         waive_ceiling: bool,
-    ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
+    ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, PalwAttemptAdmissionFaultV1> {
         // ADR-0072 SA-4: EITHER attempt id. Which one is a lane at this height was already decided
         // by the header processor and the pruning-proof gate, both of which refuse the closed side
         // by id; asking again here would be a second spelling of one rule. What this must NOT do is
@@ -9117,7 +9161,7 @@ impl VirtualStateProcessor {
             return Ok(None);
         }
         let Some(admission) = self.palw_admission_params_v2.as_ref() else {
-            return Err("an attempt-lane block on a network with no V2 admission params".to_string());
+            return Err("an attempt-lane block on a network with no V2 admission params".into());
         };
         let envelope = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)
             .map_err(|e| e.to_string())?;
@@ -9134,7 +9178,7 @@ impl VirtualStateProcessor {
                     &header.palw_commitment,
                 )?;
                 let anchor = self.palw_execution_anchor_v1(header, &ready.base.attempt);
-                ready.verify_prior_with_recovery_v4(
+                ready.verify_prior_with_recovery_typed_v4(
                     state,
                     state_params,
                     anchor,
@@ -9248,9 +9292,9 @@ impl VirtualStateProcessor {
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
-    ) -> Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2> {
+    ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, PalwLocalTransitionFaultV1> {
         if !self.palw_anchor_at_ceiling_at(point.daa_score) {
-            return None;
+            return Ok(None);
         }
         // (2) Past lane A only an operator's own attempt binds at its ceiling.
         if self
@@ -9258,10 +9302,10 @@ impl VirtualStateProcessor {
             .as_ref()
             .is_some_and(|rule| rule.active_at(point.daa_score) && rule.operator_of_v1(header).is_none())
         {
-            return None;
+            return Ok(None);
         }
         // (3) Due at the slots this block anchors — `reach`, as step 4c caps it — not at its own DAA.
-        let (anchor_delay, reach) = self.palw_sw8_anchor_for(point)?;
+        let Some((anchor_delay, reach)) = self.palw_sw8_anchor_for(point) else { return Ok(None) };
         if kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1(
             state,
             reach.min(point.daa_score),
@@ -9269,9 +9313,13 @@ impl VirtualStateProcessor {
         )
         .is_empty()
         {
-            return None;
+            return Ok(None);
         }
-        self.palw_v2_check_attempt_admission_waiving_v1(header, state, state_params, point, bootstrap_state, true).ok().flatten()
+        match self.palw_v2_check_attempt_admission_waiving_v1(header, state, state_params, point, bootstrap_state, true) {
+            Ok(value) => Ok(value),
+            Err(PalwAttemptAdmissionFaultV1::Invalid(_)) => Ok(None),
+            Err(PalwAttemptAdmissionFaultV1::Local(why)) => Err(why),
+        }
     }
 
     /// Unit C step 4's consumer: a receipt-lane (algo-7) block's spend, admitted against a beacon
@@ -9309,11 +9357,11 @@ impl VirtualStateProcessor {
         // `virtual_state.mergeset_non_daa` and the two paths compute one identical work list.
         mergeset_non_daa: &BlockHashSet,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
-    ) -> (Vec<PalwMergedOwnedWorkV1>, Vec<(BlockHash, String)>) {
+    ) -> Result<(Vec<PalwMergedOwnedWorkV1>, Vec<(BlockHash, String)>), PalwLocalTransitionFaultV1> {
         let mut works = Vec::new();
         let mut skips = Vec::new();
         if ghostdag_data.unordered_mergeset_without_selected_parent().next().is_none() {
-            return (works, skips);
+            return Ok((works, skips));
         }
         let non_daa = mergeset_non_daa;
         // Lane accept-order: past its fence, parents-first at the accepting block's DAA score.
@@ -9349,10 +9397,11 @@ impl VirtualStateProcessor {
                     Ok(None) => {}
                     Err(why) => skips.push((*blue, why)),
                 },
-                Err(why) => skips.push((*blue, why)),
+                Err(PalwAttemptAdmissionFaultV1::Local(why)) => return Err(why),
+                Err(PalwAttemptAdmissionFaultV1::Invalid(why)) => skips.push((*blue, why)),
             }
         }
-        (works, skips)
+        Ok((works, skips))
     }
 
     pub(super) fn palw_v2_check_receipt_spend(
@@ -9579,12 +9628,12 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         block: BlockHash,
         block_daa: u64,
-    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        let Some(panel_params) = self.palw_panel_params_v2.as_ref() else { return Vec::new() };
+    ) -> Result<Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, PalwLocalTransitionFaultV1> {
+        let Some(panel_params) = self.palw_panel_params_v2.as_ref() else { return Ok(Vec::new()) };
         // The seat-eligibility floor is the registry's own, so the derivation here and the one the
         // acceptance layer runs read the same number (see `palw_bond_may_take_work_v2`).
         let Some(min_collateral) = self.palw_state_params_v2.as_ref().map(|p| p.min_collateral_sompi()) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         // ADR-0065 D1: say so when the live registry has fallen under what the armed fence needs.
         // Log only, and before the loop so it is reported even on a block that binds no panel —
@@ -9618,7 +9667,7 @@ impl VirtualStateProcessor {
                 out.push(object);
             }
         }
-        out
+        Ok(out)
     }
 
     /// **ADR-0152 SW-8: does the chain derive this block's panels on ONE state?** Past
@@ -9685,13 +9734,13 @@ impl VirtualStateProcessor {
         block_daa: u64,
         panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
         min_collateral: u64,
-    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+    ) -> Result<Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1;
-        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Ok(Vec::new()) };
         let Ok(header) = self.headers_store.get_header(block) else {
             // Unreachable for a block under validation (its header is stored before its body is
             // processed); a node that cannot read it derives nothing rather than guessing a point.
-            return Vec::new();
+            return Ok(Vec::new());
         };
         // Finding 6's pre-check, on the parent: a block that anchors, with a claim whose slot it
         // reaches, or nothing to derive. The reach is the block's own DAA score, except past lane A,
@@ -9699,10 +9748,10 @@ impl VirtualStateProcessor {
         // (`palw_anchor_reach_of_v1`, the answer the walk and step 4c read).
         let anchor_delay = panel_params.anchor_delay();
         let Some(reach) = self.palw_anchor_reach_of_v1(block, &header) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         if palw_claims_provisional_past_their_anchor_slot_v1(state, reach, anchor_delay).is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         // The walk's chain point, spelled as the pipeline spells it for this block.
         let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
@@ -9712,7 +9761,7 @@ impl VirtualStateProcessor {
             subsidy: self.coinbase_manager.calc_block_subsidy(block_daa),
         };
         let own_attempt_class = Self::palw_own_attempt_class_of_header_v1(&header);
-        let extras = self.palw_transition_extras_for(&point);
+        let extras = self.palw_transition_extras_for_objects(state, &point, &[]);
         let mut folded = match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_retained_v1(
             state,
             state_params,
@@ -9726,7 +9775,11 @@ impl VirtualStateProcessor {
             Ok(base) => base,
             // The walk accepts nothing on a block whose pre-object fold fails (the block is
             // disqualified whatever it carries), so there is nothing to bind here either.
-            Err(_) => return Vec::new(),
+            Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
+            Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                return Err(PalwLocalTransitionFaultV1::Context(why));
+            }
+            Err(_) => return Ok(Vec::new()),
         };
         // Claim-id order, over the claims the base holds `Provisional` with their slot at or below
         // this block's reach (a binding moves only its own claim, so the list cannot change under the
@@ -9806,13 +9859,17 @@ impl VirtualStateProcessor {
                 self.palw_da_court_at(point.daa_score),
                 &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                     own_attempt_class,
-                    ..self.palw_transition_extras_for(&point)
+                    ..self.palw_transition_extras_for_objects(&folded, &point, std::slice::from_ref(&object))
                 },
             );
             match applied {
                 Ok(next) => {
                     folded = next;
                     out.push(object);
+                }
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                    return Err(PalwLocalTransitionFaultV1::Context(why));
                 }
                 Err(why) => info!(
                     "Block {block}: claim {claim_id}'s panel is not bound — its derived binding was refused by the fold in its \
@@ -9821,7 +9878,7 @@ impl VirtualStateProcessor {
                 ),
             }
         }
-        out
+        Ok(out)
     }
 
     /// **This block's own attempt's class, read off its header** (2026-09-24 DoS audit review of #11):

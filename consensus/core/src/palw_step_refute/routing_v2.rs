@@ -106,6 +106,77 @@ fn evidence(s: &'static str) -> PalwRoutingCourtErrorV2 {
 #[path = "routing_v2/workspace.rs"]
 mod workspace;
 
+/// Authenticate the committed half of a V2 reader without executing a kernel.
+/// A structurally faulty output is still retrievable committed data. The
+/// coordinate choosing the input inventory comes from the opened index, never
+/// from the producer's preimage. No artifact parameters or approval are owed.
+pub fn check_routed_step_committed_half_v2(
+    r: &PalwRoutedStepRefutationV2,
+    claim_execution: Hash64,
+    declaration: &PalwReaderRouterDeclarationV2,
+    max_leaves: u64,
+) -> Result<(), PalwRoutingCourtErrorV2> {
+    use crate::palw_step_leg as leg;
+    if r.version != 2 || r.step.kv_checkpoint.is_some() || !r.step.prompt_token_ids.is_empty() || r.step.decode_tokens.is_some() {
+        return Err(evidence("routed retrieval requires version2 and no unrelated history/token carriage"));
+    }
+    let b = &r.step.binding;
+    if b.committed_execution_root != claim_execution || b.step_leaf_count == 0 || b.step_leaf_count > max_leaves {
+        return Err(evidence("routed retrieval names another execution or exceeds its native ladder"));
+    }
+    let mut q = TirNativeRequestsV1::new();
+    q.vec_v1::<(u128, u128, u128)>(u64::from(b.shape_profile.global_node_count()))?;
+    q.vec_v1::<(u128, u128, u128)>(u64::from(b.shape_profile.global_node_count()))?;
+    q.vec_v1::<u8>(
+        (borsh::object_length(&b.shape_profile).map_err(|_| evidence("cannot measure retrieval profile"))? as u64).max(1024),
+    )?;
+    q.vec_v1::<u8>((754 + b.job_context.network_id.len() as u64).max(1024))?;
+    q.vec_v1::<u8>((150 + r.step.output_preimage.values_le.len() as u64).max(256))?;
+    let _coordinate = reserve_native_requests_v1(q.bytes_v1())?;
+    leg::verify_binding_v1(b)?;
+    let root = leg::step_opening_root_capped_v1(b.step_leaf_count, &r.step.output_opening, max_leaves)?;
+    if root != b.step_merkle_root {
+        return Err(leg::PalwStepLegError::CommittedRootMismatch.into());
+    }
+    if leg::step_tile_leaf_hash_ctx_v1(&b.job_context, &b.shape_profile.shape_profile_id(), &r.step.output_preimage)
+        != r.step.output_opening.leaf_hash
+    {
+        return Err(leg::PalwStepLegError::LeafPreimageMismatch { leaf: "routed step tile" }.into());
+    }
+    let coord = crate::palw_step::canonical_step_coordinates(&b.shape_profile, &b.job_context, r.step.output_opening.leaf_index)
+        .ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let required = canonical_reader_inputs_v2(&b.shape_profile, &b.job_context, &coord, declaration)?;
+    // The input verifier allocates a decoded i32 row and membership scratch per
+    // canonical source. These finite source-derived requests precede decoding.
+    let mut q = TirNativeRequestsV1::new();
+    q.vec_v1::<Vec<u32>>(required.len() as u64)?;
+    for row in required.iter() {
+        q.vec_v1::<(usize, usize)>(row.len() as u64)?;
+        q.vec_v1::<(u64, PalwStepCoordinateV1)>(row.len() as u64)?;
+        let mut words = 0u64;
+        for (_, coord) in row {
+            let n = leg::palw_expected_tile_values_v1(&b.shape_profile, &b.job_context, coord)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            words = words.checked_add(u64::from(n)).ok_or_else(|| evidence("retrieval row width overflows"))?;
+        }
+        q.vec_v1::<u32>(words.checked_mul(2).ok_or_else(|| evidence("retrieval row capacity overflows"))?)?;
+        q.vec_v1::<Hash64>(row.len() as u64)?;
+        q.vec_v1::<Hash64>(row.len() as u64)?;
+        q.vec_v1::<Hash64>(2 * u64::from(64 - b.step_leaf_count.leading_zeros()))?;
+        for (_, coord) in row {
+            let count = leg::palw_expected_tile_values_v1(&b.shape_profile, &b.job_context, coord)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            q.vec_v1::<u8>((150 + 4 * u64::from(count)).max(256))?;
+        }
+    }
+    let _inputs = reserve_native_requests_v1(q.bytes_v1())?;
+    memory_v2::verified_input_rows_v2(b, &r.step.inputs, &required, max_leaves).map_err(|e| match e {
+        memory_v2::PalwGdnCourtErrorV2::Resource(e) => PalwRoutingCourtErrorV2::Resource(e),
+        memory_v2::PalwGdnCourtErrorV2::Evidence(e) => PalwRoutingCourtErrorV2::Evidence(e),
+    })?;
+    Ok(())
+}
+
 /// Direct deterministic arithmetic for the exact V2-stamped native reader.
 /// The declaration is native state, never a field supplied by an accuser.
 /// Matching replay cannot license or finalize the claim. The evidence only

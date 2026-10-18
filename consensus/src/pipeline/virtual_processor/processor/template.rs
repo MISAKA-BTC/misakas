@@ -3,6 +3,41 @@
 use super::*;
 
 impl VirtualStateProcessor {
+    /// A template with no transactions still crosses the bootstrap boundary.
+    /// Resolve its OWN selected-parent context before a selector can evict any
+    /// carrier, and on the alternate prebuilt-transaction entry as well. Local
+    /// history/store/capacity refusal is never a transaction or peer verdict.
+    fn palw_source_bootstrap_template_preflight_v1(&self, virtual_state: &VirtualState) -> Result<(), RuleError> {
+        use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault;
+        let Some(fence) = self.palw_selected_source_bootstrap_v1.as_ref().filter(|f| {
+            f.at != kaspa_consensus_core::config::params::ForkActivation::never()
+                && f.at.is_active(virtual_state.daa_score)
+                && virtual_state.daa_score > f.policy.freeze_cutoff_daa
+        }) else {
+            return Ok(());
+        };
+        let parent = virtual_state.ghostdag_data.selected_parent;
+        let state = self.palw_candidate_state_v2_checked(parent).map_err(|why| {
+            RuleError::LocalNativeStateContextUnavailable(match why {
+                // This legacy snapshot API retains the resource classification
+                // but has no exact Coverage to attach; do not fabricate one.
+                PalwWeighFaultV2::NativeCapacityUnavailable => Fault::CapacityUnavailable,
+                PalwWeighFaultV2::NoOpinion => Fault::HistoryUnavailable,
+                PalwWeighFaultV2::StoreUnreadable => Fault::StoreUnreadable,
+            })
+        })?;
+        let own = self.palw_source_bootstrap_own_context_v1(&state, parent, virtual_state.daa_score, &fence.policy).map_err(
+            |why| match why {
+                Fault::Capacity(coverage) => RuleError::LocalNativeCapacityUnavailable(coverage),
+                other => RuleError::LocalNativeStateContextUnavailable(other),
+            },
+        )?;
+        if own.is_none() {
+            return Err(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable));
+        }
+        Ok(())
+    }
+
     pub(super) fn native_carriage_for_template_snapshot_v22(
         &self,
         virtual_state: &VirtualState,
@@ -313,6 +348,7 @@ impl VirtualStateProcessor {
         let virtual_read = self.virtual_stores.read();
         let virtual_state = virtual_read.state.get().unwrap();
         let virtual_utxo_view = &virtual_read.utxo_set;
+        self.palw_source_bootstrap_template_preflight_v1(&virtual_state)?;
 
         // kaspa-pq DNS-finality (E3/§6.2): capture the template's as-of-selected-parent
         // bond view INSIDE the same read lock as `virtual_state`, BEFORE the selection
@@ -615,6 +651,7 @@ impl VirtualStateProcessor {
         // [`calc_block_parents`] can use deep blocks below the pruning point for this calculation, so we
         // need to hold the pruning lock.
         let _prune_guard = self.pruning_lock.blocking_read();
+        self.palw_source_bootstrap_template_preflight_v1(&virtual_state)?;
         // **The template's stamp, decided before anything is built on it** (`palw_template_stamp_v1`:
         // the median, H5's floor, and the lead cap's construction half). Past median time is the
         // exclusive lower bound for valid block time. **H5 (the clock floor): a template that steps the
@@ -678,6 +715,19 @@ impl VirtualStateProcessor {
         // empty when they agree (the common case, one cached materialization); when they do not,
         // stamping the tip would mine a block this node then disqualifies from virtual.
         let palw_at_selected_parent = self.palw_v2_state_at(virtual_state.ghostdag_data.selected_parent);
+        let palw_unentitled_blues = palw_at_selected_parent
+            .as_ref()
+            .map(|(_, state)| {
+                self.palw_v2_unentitled_blues_checked_v1(
+                    state,
+                    &virtual_state.ghostdag_data,
+                    &virtual_state.mergeset_non_daa,
+                    &self.palw_v2_template_point(&virtual_state),
+                )
+            })
+            .transpose()
+            .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
+            .unwrap_or_default();
         let validator_pool = carve.as_ref().map_or(0, |fs| {
             // The template computes the SAME set the validator will, from the same state it is
             // building on — a template whose pool disagreed with validation would build a coinbase
@@ -685,23 +735,12 @@ impl VirtualStateProcessor {
             // No params means no V2 bundle, which means no entitlement question — and an `expect`
             // here panics every hash-only network's template, because the DNS carve this closure
             // computes exists on networks PALW does not.
-            let unentitled = palw_at_selected_parent
-                .as_ref()
-                .map(|(_, state)| {
-                    self.palw_v2_unentitled_blues(
-                        state,
-                        &virtual_state.ghostdag_data,
-                        &virtual_state.mergeset_non_daa,
-                        &self.palw_v2_template_point(&virtual_state),
-                    )
-                })
-                .unwrap_or_default();
             self.coinbase_manager.coinbase_validator_pool(
                 &virtual_state.ghostdag_data,
                 &virtual_state.mergeset_rewards,
                 &virtual_state.mergeset_non_daa,
                 fs,
-                &unentitled,
+                &palw_unentitled_blues,
                 &self.palw_round_blocks_of(&virtual_state.ghostdag_data),
             )
         });
@@ -718,6 +757,7 @@ impl VirtualStateProcessor {
                 &virtual_state.ghostdag_data,
                 &virtual_state.mergeset_non_daa,
                 &self.palw_v2_template_point(&virtual_state),
+                &palw_unentitled_blues,
             )
         } else {
             (newly_included_stake, expected_stake)
@@ -755,17 +795,6 @@ impl VirtualStateProcessor {
         // Launch blockers §8, construction side: the merged blues this template may not pay. Same
         // state, same question, same answer as the validating walk — a template that disagreed
         // would mine blocks its own node rejects.
-        let palw_unentitled_blues = palw_at_selected_parent
-            .as_ref()
-            .map(|(_, state)| {
-                self.palw_v2_unentitled_blues(
-                    state,
-                    &virtual_state.ghostdag_data,
-                    &virtual_state.mergeset_non_daa,
-                    &self.palw_v2_template_point(&virtual_state),
-                )
-            })
-            .unwrap_or_default();
         // B-1 (deep fence), construction side: the carve withheld from each OTHER merged block.
         // Same selected-parent state, same virtual ghostdag/non-DAA and same template point as the
         // validating walk resolves for the block this template becomes — so the withheld map, and
@@ -785,13 +814,15 @@ impl VirtualStateProcessor {
         let palw_merged_escrow_withheld = palw_at_selected_parent
             .as_ref()
             .map(|(_, state)| {
-                self.palw_v2_merged_escrow_withheld(
+                self.palw_v2_merged_escrow_withheld_checked_v1(
                     state,
                     &virtual_state.ghostdag_data,
                     &virtual_state.mergeset_non_daa,
                     &self.palw_v2_template_point(&virtual_state),
                 )
             })
+            .transpose()
+            .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
             .unwrap_or_default();
         // **RFC-0008 v2: the anchor trailer the covered EXEC blocks need.** Virtual accepted them (they are in its reds), so the block
         // built on it must say which heads it covers or its own validation would recompute a different UTXO state. Carried by the

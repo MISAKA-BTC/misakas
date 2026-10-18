@@ -131,7 +131,11 @@ impl ProtocolError {
             Self::LocalNativeCapacityUnavailable(_)
                 | Self::LocalNativeResourceUnavailable(_)
                 | Self::RuleError(RuleError::LocalNativeCapacityUnavailable(_))
+                | Self::RuleError(RuleError::LocalNativeStateContextUnavailable(_))
                 | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::LocalNativeCapacityUnavailable(_)))
+                | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::LocalNativeStateContextUnavailable(
+                    _
+                )))
         )
     }
 

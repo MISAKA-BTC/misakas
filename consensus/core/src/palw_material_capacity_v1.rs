@@ -19,6 +19,8 @@ pub enum PalwMaterialCodecV1 {
     SegmentedParts,
     /// Versioned complete typed court inventory, including snapshot slices and entries.
     TypedKernelV4,
+    /// Explicit native reader/router stamp, membership-only complete material.
+    NativeHeldCompleteV2,
 }
 
 /// The full original and each continuation occupy separate signed scopes.
@@ -685,7 +687,7 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
         mut authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
     ) -> Result<Self, PalwMaterialCapacityErrorV1> {
-        Self::recover_inner_v4(encoded, max_contract_bytes, total_capacity, ledger, &mut authority, None)
+        Self::recover_inner_v4(encoded, max_contract_bytes, total_capacity, ledger, &mut authority, None, None)
     }
     fn recover_inner_v4(
         encoded: &[u8],
@@ -694,6 +696,14 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
         mut authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
         mut retain_kernel: Option<&mut dyn FnMut(Hash64, &PalwMaterialScopeV1, &[u8]) -> Result<(), String>>,
+        mut routed_authority: Option<
+            &mut dyn FnMut(
+                Hash64,
+            ) -> Result<
+                crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_routed_material_v2::PalwMaterialAuthorityRecordV2>,
+                PalwMaterialCapacityErrorV1,
+            >,
+        >,
     ) -> Result<Self, PalwMaterialCapacityErrorV1> {
         use PalwMaterialCapacityErrorV1 as E;
         if encoded.len() as u64 > total_capacity.saturating_add(1 << 20) {
@@ -708,50 +718,59 @@ impl PalwMonetaryMaterialProviderStoreV1 {
             let mut checked = Vec::new();
             for scope in &manifest.scopes {
                 let bytes = data.get(&scope.claim).ok_or(E::Incomplete)?;
-                let actual = if scope.codec != PalwMaterialCodecV1::NativeHeldComplete && retain_kernel.is_some() {
-                    // A signed identity frame can be kept without pretending a
-                    // historical claim is still present. This grants no answer
-                    // authority; that needs a fresh native-positive replay.
-                    let domain: &[u8] = match scope.codec {
-                        PalwMaterialCodecV1::KernelPositions => b"MISAKA/PALW/MONETARY-KERNEL-BUNDLE/V1",
-                        PalwMaterialCodecV1::SegmentedParts => b"MISAKA/PALW/MONETARY-SEGMENTED-BUNDLE/V1",
-                        PalwMaterialCodecV1::TypedKernelV4 => b"MISAKA/PALW/MONETARY-TYPED-KERNEL-BUNDLE/V4",
-                        PalwMaterialCodecV1::NativeHeldComplete => unreachable!(),
-                    };
-                    if bytes.len() as u64 != scope.bytes
-                        || bytes.get(..64) != Some(scope.claim.as_byte_slice())
-                        || bytes.get(64..68).is_none_or(|b| u32::from_le_bytes(b.try_into().unwrap()) != scope.units)
-                        || Hash64::from_bytes(misaka_palw_kernel::hash::id(domain, bytes)) != scope.content
+                let actual =
+                    if !matches!(scope.codec, PalwMaterialCodecV1::NativeHeldComplete | PalwMaterialCodecV1::NativeHeldCompleteV2)
+                        && retain_kernel.is_some()
                     {
-                        return Err(E::Substitution);
-                    }
-                    retain_kernel.as_mut().unwrap()(consent, scope, bytes).map_err(E::Authentication)?;
-                    scope.clone()
-                } else {
-                    match scope.codec {
-                        PalwMaterialCodecV1::NativeHeldComplete => {
-                            let bundle: PalwHeldMaterialBundleV1 =
-                                borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
-                            let native = authority(scope.claim).ok_or(E::Incomplete)?;
-                            bundle.verify(native, max_contract_bytes)?
+                        // A signed identity frame can be kept without pretending a
+                        // historical claim is still present. This grants no answer
+                        // authority; that needs a fresh native-positive replay.
+                        let domain: &[u8] = match scope.codec {
+                            PalwMaterialCodecV1::KernelPositions => b"MISAKA/PALW/MONETARY-KERNEL-BUNDLE/V1",
+                            PalwMaterialCodecV1::SegmentedParts => b"MISAKA/PALW/MONETARY-SEGMENTED-BUNDLE/V1",
+                            PalwMaterialCodecV1::TypedKernelV4 => b"MISAKA/PALW/MONETARY-TYPED-KERNEL-BUNDLE/V4",
+                            PalwMaterialCodecV1::NativeHeldComplete | PalwMaterialCodecV1::NativeHeldCompleteV2 => unreachable!(),
+                        };
+                        if bytes.len() as u64 != scope.bytes
+                            || bytes.get(..64) != Some(scope.claim.as_byte_slice())
+                            || bytes.get(64..68).is_none_or(|b| u32::from_le_bytes(b.try_into().unwrap()) != scope.units)
+                            || Hash64::from_bytes(misaka_palw_kernel::hash::id(domain, bytes)) != scope.content
+                        {
+                            return Err(E::Substitution);
                         }
-                        PalwMaterialCodecV1::KernelPositions => {
-                            let bundle: PalwKernelMaterialBundleV1 =
-                                borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
-                            bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
+                        retain_kernel.as_mut().unwrap()(consent, scope, bytes).map_err(E::Authentication)?;
+                        scope.clone()
+                    } else {
+                        match scope.codec {
+                            PalwMaterialCodecV1::NativeHeldCompleteV2 => {
+                                let bundle: crate::palw_routed_material_v2::PalwHeldMaterialBundleV2 =
+                                    borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                                let native = routed_authority.as_mut().ok_or(E::Incomplete)?(scope.claim)?;
+                                bundle.verify(&native, max_contract_bytes)?
+                            }
+                            PalwMaterialCodecV1::NativeHeldComplete => {
+                                let bundle: PalwHeldMaterialBundleV1 =
+                                    borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                                let native = authority(scope.claim).ok_or(E::Incomplete)?;
+                                bundle.verify(native, max_contract_bytes)?
+                            }
+                            PalwMaterialCodecV1::KernelPositions => {
+                                let bundle: PalwKernelMaterialBundleV1 =
+                                    borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                                bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
+                            }
+                            PalwMaterialCodecV1::SegmentedParts => {
+                                let bundle: PalwSegmentedMaterialBundleV1 =
+                                    borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                                bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
+                            }
+                            PalwMaterialCodecV1::TypedKernelV4 => {
+                                let bundle: crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4 =
+                                    borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                                bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
+                            }
                         }
-                        PalwMaterialCodecV1::SegmentedParts => {
-                            let bundle: PalwSegmentedMaterialBundleV1 =
-                                borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
-                            bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
-                        }
-                        PalwMaterialCodecV1::TypedKernelV4 => {
-                            let bundle: crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4 =
-                                borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
-                            bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
-                        }
-                    }
-                };
+                    };
                 checked.push((actual, bytes.clone()));
             }
             if data.len() != checked.len() {
@@ -919,6 +938,41 @@ impl PalwMonetaryMaterialProviderStoreV1 {
             missing,
             disclosure: Box::new(self.held_answer(consent, dependency, missing)?),
         })
+    }
+}
+
+impl PalwMonetaryMaterialProviderStoreV1 {
+    fn admit_routed_held_v2(
+        &mut self,
+        consent: Hash64,
+        manifest: &PalwMaterialManifestV1,
+        max_bytes: u64,
+        total_capacity: u64,
+        bundle: &crate::palw_routed_material_v2::PalwHeldMaterialBundleV2,
+        authority: &crate::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+    ) -> Result<(), PalwMaterialCapacityErrorV1> {
+        if manifest.scopes.len() != 1 {
+            return Err(PalwMaterialCapacityErrorV1::Substitution);
+        }
+        let scope = bundle.verify(authority.record(), max_bytes)?;
+        let bytes = borsh::to_vec(bundle).map_err(|e| PalwMaterialCapacityErrorV1::Authentication(e.to_string()))?;
+        self.admit_verified(consent, manifest, max_bytes, total_capacity, vec![(scope, bytes)])
+    }
+    pub fn holds_routed_native_claim_v2(&self, claim: Hash64) -> bool {
+        self.contracts.values().any(|(_, manifest, _)| {
+            manifest.scopes.iter().any(|s| s.claim == claim && s.codec == PalwMaterialCodecV1::NativeHeldCompleteV2)
+        })
+    }
+    pub fn routed_native_authorities_v2(&self) -> BTreeMap<Hash64, BTreeSet<Hash64>> {
+        self.contracts
+            .iter()
+            .map(|(consent, (_, manifest, _))| {
+                (
+                    *consent,
+                    manifest.scopes.iter().filter(|s| s.codec == PalwMaterialCodecV1::NativeHeldCompleteV2).map(|s| s.claim).collect(),
+                )
+            })
+            .collect()
     }
 }
 

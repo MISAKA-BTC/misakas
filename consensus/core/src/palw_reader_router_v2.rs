@@ -64,7 +64,7 @@ fn bad(message: &'static str) -> PalwReaderRouterErrorV2 {
 
 /// Whole-layer uniqueness is deliberately absent: two independent routers can
 /// coexist when every reader has its own immutable selected-router binding.
-pub(crate) fn needs_reader_router_v2(node: &PalwStepNodeV1) -> bool {
+pub fn needs_reader_router_v2(node: &PalwStepNodeV1) -> bool {
     crate::palw_step_refute::qwen36_reads_routing_v1(node)
         || node.kernel_semantics_id == kernel_semantics_id_v1(KDESC_Q36_MOE_COMBINE)
         || node.kernel_semantics_id == kernel_semantics_id_v1(KDESC_KIMI_MOE_COMBINE)

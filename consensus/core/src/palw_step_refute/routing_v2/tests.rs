@@ -124,3 +124,50 @@ fn missing_duplicate_foreign_tiles_and_unrelated_carriage_never_select_a_fallbac
     assert!(check_routed_step_refutation_v2(&unrelated, binding.committed_execution_root, &declaration, &NoWeights, 1 << 26).is_err());
     assert!(check_routed_step_refutation_v2(&built, Hash64::from_u64_word(9), &declaration, &NoWeights, 1 << 26).is_err());
 }
+
+#[test]
+fn routed_retrieval_authenticates_committed_bytes_without_a_merits_verdict() {
+    for wrong in [false, true] {
+        let (binding, declaration, hashes, tiles, target) = fixture(wrong);
+        let evidence = routed_refutation_from_capture_v2(&binding, target, &declaration, &hashes, &tiles, 1 << 26).unwrap();
+        check_routed_step_committed_half_v2(&evidence, binding.committed_execution_root, &declaration, 1 << 26).unwrap();
+        let mut missing = (*evidence).clone();
+        missing.step.inputs.pop();
+        assert!(check_routed_step_committed_half_v2(&missing, binding.committed_execution_root, &declaration, 1 << 26).is_err());
+    }
+    let (mut binding, declaration, mut hashes, mut tiles, target) = fixture(false);
+    let index = crate::palw_step::canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &target).unwrap();
+    let (_, output) = tiles.iter_mut().find(|(at, _)| *at == index).unwrap();
+    output.coord.node_slot = 0; // committed but structurally faulty output
+    hashes[index as usize] = leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &declaration.class_id, output);
+    binding.step_merkle_root = leg::step_merkle_root_capped_v1(&hashes, 1 << 26).unwrap();
+    crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
+    let evidence = routed_refutation_from_capture_v2(&binding, target, &declaration, &hashes, &tiles, 1 << 26).unwrap();
+    check_routed_step_committed_half_v2(&evidence, binding.committed_execution_root, &declaration, 1 << 26).unwrap();
+    assert!(check_routed_step_refutation_v2(&evidence, binding.committed_execution_root, &declaration, &NoWeights, 1 << 26).is_ok());
+}
+
+#[test]
+fn routed_answer_signature_domain_binds_target_generation_and_receipt() {
+    use crate::palw_routed_material_v2::{PalwRoutedMaterialAnswerV2, PalwRoutedMaterialReceiptV2, PalwRoutedMaterialTargetV2};
+    let (binding, declaration, hashes, tiles, target) = fixture(false);
+    let evidence = routed_refutation_from_capture_v2(&binding, target, &declaration, &hashes, &tiles, 1 << 26).unwrap();
+    let h = Hash64::from_u64_word;
+    let mut answer = PalwRoutedMaterialAnswerV2 {
+        version: 2,
+        claim: h(1),
+        provider: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(2), 0)),
+        target: PalwRoutedMaterialTargetV2::Monetary { root: h(3), consent: h(4) },
+        refutation: (*evidence).clone(),
+        receipt: Some(PalwRoutedMaterialReceiptV2 { stream: h(5), sequence: 1, previous: h(6), challenge_deadline_daa: 10 }),
+        signature: Vec::new(),
+    };
+    let id = answer.message(h(7));
+    answer.receipt.as_mut().unwrap().challenge_deadline_daa += 1;
+    assert_ne!(id, answer.message(h(7)));
+    answer.receipt.as_mut().unwrap().challenge_deadline_daa -= 1;
+    answer.target = PalwRoutedMaterialTargetV2::Monetary { root: h(3), consent: h(8) };
+    assert_ne!(id, answer.message(h(7)));
+    answer.target = PalwRoutedMaterialTargetV2::DaKernelWitness;
+    assert_ne!(id, answer.message(h(7)));
+}

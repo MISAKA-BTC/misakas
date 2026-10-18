@@ -332,6 +332,61 @@ impl PalwMonetaryMaterialRowV1 {
     }
 }
 impl PalwChainStateV2 {
+    /// Codec choice comes from this node's native stamp. Before first admission
+    /// the immutable prospective declaration is used; admission subsequently
+    /// stamps the claim in the same transition. Existing unstamped claims keep
+    /// their V1 meaning, even if a declaration was introduced afterwards.
+    pub fn native_material_codec_for_claim_v2(
+        &self,
+        root: Hash64,
+        claim: &crate::palw_state_v2::PalwClaimStateV2,
+    ) -> Result<crate::palw_material_capacity_v1::PalwMaterialCodecV1, crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_material_capacity_v1::PalwMaterialCodecV1 as C;
+        use crate::palw_state_v2::PalwStateV2Error as E;
+        if let Some(stored) = self.claim(&root) {
+            if stored.class_id != claim.class_id
+                || stored.execution_root != claim.execution_root
+                || stored.accepted_daa != claim.accepted_daa
+            {
+                return Err(E::ExecV2Refused("material authority substituted an existing native claim".into()));
+            }
+            return Ok(if self.reader_router_of_claim_v2(root)?.is_some() { C::NativeHeldCompleteV2 } else { C::NativeHeldComplete });
+        }
+        self.native_material_codec_for_candidate_v2(claim.class_id, claim.accepted_daa)
+    }
+
+    /// The prospective codec is resolved before canonical session selection,
+    /// so an obsolete codec0 session cannot mask an eligible codec4 session.
+    pub fn native_material_codec_for_candidate_v2(
+        &self,
+        class: Hash64,
+        accepted_daa: u64,
+    ) -> Result<crate::palw_material_capacity_v1::PalwMaterialCodecV1, crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_material_capacity_v1::PalwMaterialCodecV1 as C;
+        use crate::palw_state_v2::PalwStateV2Error as E;
+        let Some(row) = self.reader_router_declaration_v2(class)? else { return Ok(C::NativeHeldComplete) };
+        if row.bound_from_daa > accepted_daa {
+            return Ok(C::NativeHeldComplete);
+        }
+        let profile = self
+            .fp_work_profile_of(&class)
+            .ok_or_else(|| E::ExecV2Refused("prospective routed material profile is unavailable".into()))?;
+        row.declaration.check_profile(profile).map_err(|e| match e {
+            crate::palw_reader_router_v2::PalwReaderRouterErrorV2::Resource(why) => E::NativeResource(why),
+            other => E::ExecV2Refused(other.to_string()),
+        })?;
+        Ok(
+            if (0..profile.global_node_count())
+                .filter_map(|slot| profile.resolve_node_slot(slot))
+                .any(|(node, _)| crate::palw_reader_router_v2::needs_reader_router_v2(node))
+            {
+                C::NativeHeldCompleteV2
+            } else {
+                C::NativeHeldComplete
+            },
+        )
+    }
+
     /// New native work is admitted only against an explicit complete wire
     /// manifest. An unused-root prepaid service enrollment carries no claim
     /// authority; numeric byte limits alone never authorize inference work.
@@ -359,9 +414,7 @@ impl PalwChainStateV2 {
                 "native material full codec capacity is unsupported or unenrolled".into(),
             )
         })?;
-        if scope.codec != crate::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldComplete
-            || scope.commitment != claim.execution_root
-        {
+        if scope.codec != self.native_material_codec_for_claim_v2(root, claim)? || scope.commitment != claim.execution_root {
             return Err(crate::palw_state_v2::PalwStateV2Error::ExecV2Refused(
                 "native material manifest substituted this execution".into(),
             ));

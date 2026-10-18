@@ -14,6 +14,7 @@
 //! Every read is this node's own committed stores; the peer that sent a branch supplies none of it.
 
 use super::VirtualStateProcessor;
+use super::processor::PalwLocalTransitionFaultV1;
 use crate::model::{
     services::reachability::ReachabilityService,
     stores::{depth::DepthStoreReader, ghostdag::GhostdagStoreReader, headers::HeaderStoreReader, virtual_state::VirtualStores},
@@ -321,8 +322,7 @@ impl VirtualStateProcessor {
         mut heap: BinaryHeap<SortableBlock>,
         mut diff_point: BlockHash,
         finality_point: BlockHash,
-    ) -> Result<(BlockHash, VecDeque<BlockHash>, PalwRuleESearchV1), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>
-    {
+    ) -> Result<(BlockHash, VecDeque<BlockHash>, PalwRuleESearchV1), PalwLocalTransitionFaultV1> {
         let blue_work = |h: BlockHash| self.ghostdag_store.get_blue_work(h).unwrap();
         let snapshot: Vec<SortableBlock> = heap.clone().into_sorted_iter().collect();
         let mut states = PalwRuleEStatesV1::default();

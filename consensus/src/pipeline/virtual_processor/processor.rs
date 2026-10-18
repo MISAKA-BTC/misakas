@@ -217,6 +217,69 @@ pub(crate) enum PalwWeighFaultV2 {
     NativeCapacityUnavailable,
 }
 
+/// Node-local preparation failures retain their cause through acceptance,
+/// candidate walks and virtual resolution. They never disqualify a peer block.
+#[derive(Clone, Debug)]
+pub(crate) enum PalwLocalTransitionFaultV1 {
+    Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
+    Context(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PalwAttemptAdmissionFaultV1 {
+    Invalid(String),
+    Local(PalwLocalTransitionFaultV1),
+}
+impl From<String> for PalwAttemptAdmissionFaultV1 {
+    fn from(value: String) -> Self {
+        Self::Invalid(value)
+    }
+}
+impl From<&str> for PalwAttemptAdmissionFaultV1 {
+    fn from(value: &str) -> Self {
+        Self::Invalid(value.into())
+    }
+}
+impl From<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4> for PalwAttemptAdmissionFaultV1 {
+    fn from(value: kaspa_consensus_core::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4) -> Self {
+        use kaspa_consensus_core::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4 as E;
+        match value {
+            E::Invalid(why) => Self::Invalid(why),
+            E::LocalResource(why) => Self::Local(PalwLocalTransitionFaultV1::Resource(why)),
+            E::NativeContext(why) => Self::Local(PalwLocalTransitionFaultV1::Context(why)),
+        }
+    }
+}
+impl std::fmt::Display for PalwAttemptAdmissionFaultV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(why) => f.write_str(why),
+            Self::Local(why) => std::fmt::Display::fmt(why, f),
+        }
+    }
+}
+impl From<kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> for PalwLocalTransitionFaultV1 {
+    fn from(e: kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1) -> Self {
+        Self::Resource(e)
+    }
+}
+impl std::fmt::Display for PalwLocalTransitionFaultV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Resource(e) => write!(f, "{e}"),
+            Self::Context(e) => write!(f, "{e}"),
+        }
+    }
+}
+impl PalwLocalTransitionFaultV1 {
+    pub(crate) fn into_rule_error_v1(self) -> RuleError {
+        match self {
+            Self::Resource(e) => RuleError::LocalNativeCapacityUnavailable(e),
+            Self::Context(e) => RuleError::LocalNativeStateContextUnavailable(e),
+        }
+    }
+}
+
 /// **How one chain block stands as a panel anchor** ([`VirtualStateProcessor::palw_chain_block_as_anchor_v1`]).
 struct PalwChainAnchorV1 {
     /// The highest claim slot the block anchors: its own DAA score, or past lane A the latest operator
@@ -726,6 +789,8 @@ pub struct VirtualStateProcessor {
     /// must get the same answer for the same block.
     pub(super) palw_shard_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_memory_routing_court_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_selected_source_bootstrap_v1:
+        Option<kaspa_consensus_core::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1>,
     /// `Params::palw_shard_licensing` (ADR-0100 Decision 4). Resolved in ONE place,
     /// [`Self::palw_shard_licensing_at`]; the panel draw, its validation and the fold's extras all
     /// read it through that, so a node cannot bind what its fold refuses.
@@ -1448,6 +1513,7 @@ impl VirtualStateProcessor {
             palw_da_court: params.palw_da_court,
             palw_shard_court: params.palw_shard_court_fence(),
             palw_memory_routing_court_v2: params.palw_memory_routing_court_v2_fence(),
+            palw_selected_source_bootstrap_v1: params.palw_selected_source_bootstrap_v1,
             palw_shard_licensing: params.palw_shard_licensing_fence(),
             palw_token_lift: params.palw_token_lift_fence(),
             palw_kimi_k3: params.palw_kimi_k3_fence(),
@@ -1653,7 +1719,7 @@ impl VirtualStateProcessor {
 
             let resolution = self.resolve_virtual();
             if let Err(ref unavailable) = resolution {
-                warn!("virtual resolution deferred by local native capacity: {unavailable}; no block is disqualified");
+                warn!("virtual resolution deferred by local native preparation: {unavailable}; no block is disqualified");
             }
 
             let statuses_read = self.statuses_store.read();
@@ -1664,7 +1730,7 @@ impl VirtualStateProcessor {
                         // We don't care if receivers were dropped
                         let result = match &resolution {
                             Ok(()) => Ok(statuses_read.get(task.block().hash()).unwrap()),
-                            Err(unavailable) => Err(RuleError::LocalNativeCapacityUnavailable(unavailable.clone())),
+                            Err(unavailable) => Err(unavailable.clone().into_rule_error_v1()),
                         };
                         let _ = virtual_state_result_transmitter.send(result);
                     }
@@ -1676,7 +1742,7 @@ impl VirtualStateProcessor {
         self.pruning_sender.send(PruningProcessingMessage::Exit).unwrap();
     }
 
-    fn resolve_virtual(self: &Arc<Self>) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+    fn resolve_virtual(self: &Arc<Self>) -> Result<(), PalwLocalTransitionFaultV1> {
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let virtual_read = self.virtual_stores.upgradable_read();
         let prev_state = virtual_read.state.get().unwrap();
@@ -1766,7 +1832,10 @@ impl VirtualStateProcessor {
             &chain_path,
         ) {
             Ok(state) => state,
-            Err(RuleError::LocalNativeCapacityUnavailable(unavailable)) => return Err(unavailable),
+            Err(RuleError::LocalNativeCapacityUnavailable(unavailable)) => return Err(unavailable.into()),
+            Err(RuleError::LocalNativeStateContextUnavailable(unavailable)) => {
+                return Err(PalwLocalTransitionFaultV1::Context(unavailable));
+            }
             Err(error) => panic!("all possible rule errors are unexpected here: {error}"),
         };
 
@@ -1853,7 +1922,7 @@ impl VirtualStateProcessor {
         bond_view: &mut ActiveBondView,
         from: BlockHash,
         to: BlockHash,
-    ) -> Result<BlockHash, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+    ) -> Result<BlockHash, PalwLocalTransitionFaultV1> {
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.1): walk the active-bond
         // view in lockstep with `diff` so it always equals the bond set as-of
         // the block whose UTXO state `diff` represents. No-op on networks
@@ -1889,7 +1958,8 @@ impl VirtualStateProcessor {
                     Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason)) => {
                         return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
                             kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
-                        >("native cold tip capacity", &reason));
+                        >("native cold tip capacity", &reason)
+                        .into());
                     }
                     Err(e) => {
                         panic!(
@@ -1920,8 +1990,11 @@ impl VirtualStateProcessor {
                                 Some(state)
                             }
                             Err(e) => {
+                                if let Some(context) = e.native_context_v1() {
+                                    return Err(PalwLocalTransitionFaultV1::Context(context));
+                                }
                                 if let Some(capacity) = e.native_capacity_v1() {
-                                    return Err(capacity);
+                                    return Err(capacity.into());
                                 }
                                 // **A gap between the stored tip and the walk's base is THIS NODE's
                                 // problem, and it used to be charged to the chain.**
@@ -1965,8 +2038,11 @@ impl VirtualStateProcessor {
                                                 Some(state)
                                             }
                                             Err(snap_err) => {
+                                                if let Some(context) = snap_err.native_context_v1() {
+                                                    return Err(PalwLocalTransitionFaultV1::Context(context));
+                                                }
                                                 if let Some(capacity) = snap_err.native_capacity_v1() {
-                                                    return Err(capacity);
+                                                    return Err(capacity.into());
                                                 }
                                                 error!(
                                                     "PALW V2 state cannot be established at {from}: the tip at {tip_block} does not walk here ({e}) and neither does the \
@@ -1989,7 +2065,8 @@ impl VirtualStateProcessor {
                                             kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
                                         >(
                                             "native cold pruning snapshot capacity", &reason
-                                        ));
+                                        )
+                                        .into());
                                     }
                                     Err(snap_err) => {
                                         error!(
@@ -2054,8 +2131,11 @@ impl VirtualStateProcessor {
                 match reverted {
                     Ok(previous) => *state = previous,
                     Err(why) => {
+                        if let Some(context) = why.native_context_v1() {
+                            return Err(PalwLocalTransitionFaultV1::Context(context));
+                        }
                         if let Some(capacity) = why.native_capacity_v1() {
-                            return Err(capacity);
+                            return Err(capacity.into());
                         }
                         error!(
                             "PALW V2 state cannot be reverted through chain block {current} ({why}); the UTXO walk stops at {current} \
@@ -2151,8 +2231,11 @@ impl VirtualStateProcessor {
                         match applied {
                             Ok(next) => *state = next,
                             Err(why) => {
+                                if let Some(context) = why.native_context_v1() {
+                                    return Err(PalwLocalTransitionFaultV1::Context(context));
+                                }
                                 if let Some(capacity) = why.native_capacity_v1() {
-                                    return Err(capacity);
+                                    return Err(capacity.into());
                                 }
                                 error!(
                                     "PALW V2 state cannot advance through chain block {current} ({why}); the UTXO walk stops at {diff_point} \
@@ -2268,8 +2351,9 @@ impl VirtualStateProcessor {
                                 blue_score: header.blue_score,
                                 subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
                             };
-                            self.palw_v2_unentitled_blues(s, &ctx.ghostdag_data, &non_daa, &point)
+                            self.palw_v2_unentitled_blues_checked_v1(s, &ctx.ghostdag_data, &non_daa, &point)
                         })
+                        .transpose()?
                         .unwrap_or_default();
                     // RFC-0009: and how each merged V4 receipt block is split — the same state, mergeset and non-DAA set. Empty (and
                     // unread) while `palw_receipt_spend_v4` is dormant.
@@ -2311,8 +2395,9 @@ impl VirtualStateProcessor {
                                 blue_score: header.blue_score,
                                 subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
                             };
-                            self.palw_v2_merged_escrow_withheld(s, &ctx.ghostdag_data, &non_daa, &point)
+                            self.palw_v2_merged_escrow_withheld_checked_v1(s, &ctx.ghostdag_data, &non_daa, &point)
                         })
+                        .transpose()?
                         .unwrap_or_default();
                     // Audit C-08 part three: and what a released bond's spend must destroy.
                     ctx.palw_v2_bond_burns =
@@ -2455,7 +2540,7 @@ impl VirtualStateProcessor {
                                     // ADR-0075 SA-1/SA-2: what each 0x4b carrier paid, collected
                                     // by the UTXO walk two frames up, where the fee is knowable.
                                     &ctx.palw_v2_accepted_tx_fees,
-                                );
+                                )?;
                                 let history_custody_pledges = objects
                                     .iter()
                                     .filter_map(|carried| carried.history_pledge.clone())
@@ -2542,13 +2627,10 @@ impl VirtualStateProcessor {
                                         Ok(attempt) => attempt,
                                         // Lane bind-deadlock (`palw_anchor_at_ceiling`): an anchor whose
                                         // bond is at its ceiling still binds the claims due at it.
-                                        Err(adm_error) => match self.palw_v2_anchor_at_ceiling_binder_v1(
-                                            &header,
-                                            state,
-                                            state_params,
-                                            &point,
-                                            bootstrap,
-                                        ) {
+                                        Err(PalwAttemptAdmissionFaultV1::Local(why)) => return Err(why),
+                                        Err(PalwAttemptAdmissionFaultV1::Invalid(adm_error)) => match self
+                                            .palw_v2_anchor_at_ceiling_binder_v1(&header, state, state_params, &point, bootstrap)?
+                                        {
                                             Some(envelope) => {
                                                 info!(
                                                     "Block {} anchors at its bond's exposure ceiling ({}): it binds the claims due at \
@@ -2617,7 +2699,7 @@ impl VirtualStateProcessor {
                                     )
                                 };
                                 let (merged_owned, merged_preskips) =
-                                    self.palw_v2_merged_works(&ctx.ghostdag_data, state, state_params, &merged_non_daa, &point);
+                                    self.palw_v2_merged_works(&ctx.ghostdag_data, state, state_params, &merged_non_daa, &point)?;
                                 let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
                                     .iter()
                                     .map(|owned| match owned {
@@ -2792,7 +2874,10 @@ impl VirtualStateProcessor {
                                         Some((state.state_root(), delta, delta_lease))
                                     }
                                     Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => {
-                                        return Err(why);
+                                        return Err(why.into());
+                                    }
+                                    Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                                        return Err(PalwLocalTransitionFaultV1::Context(why));
                                     }
                                     Err(palw_error) => {
                                         info!("Block {} is disqualified from virtual chain (PALW state): {}", current, palw_error);
@@ -3949,12 +4034,12 @@ impl VirtualStateProcessor {
         &self,
         ghostdag: &GhostdagData,
         non_daa: &BlockHashSet,
-        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        _point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        unentitled: &BlockHashSet,
     ) -> (u128, u128) {
         let Some((_, state)) = self.palw_v2_state_at(ghostdag.selected_parent) else {
             return (0, 0);
         };
-        let unentitled = self.palw_v2_unentitled_blues(&state, ghostdag, non_daa, point);
         let mut eligible = 0u128;
         let mut total = 0u128;
         let Some(params) = self.palw_state_params_v2.as_ref() else {
@@ -4940,7 +5025,7 @@ impl VirtualStateProcessor {
         tips: Vec<BlockHash>,
         finality_point: BlockHash,
         pruning_point: BlockHash,
-    ) -> Result<(BlockHash, VecDeque<BlockHash>), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+    ) -> Result<(BlockHash, VecDeque<BlockHash>), PalwLocalTransitionFaultV1> {
         // TODO (relaxed): additional tests
 
         // ADR-0125: a round block is never a sink. Each round tip stands for its anchor, and the set
@@ -7241,6 +7326,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
         O::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
         O::ReaderRouterDeclaredV2 { .. } => "ReaderRouterDeclaredV2",
+        O::SourceBootstrapV1 { .. } => "SourceBootstrapV1",
         O::RoutedStepAccusedV2 { .. } => "RoutedStepAccusedV2",
         O::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
         O::BondShardsDeclared { .. } => "BondShardsDeclared",

@@ -24,6 +24,7 @@ pub(super) fn apply_object(
         _ => {}
     }
     match object {
+        PalwConsensusObjectV2::SourceBootstrapV1 { actor, action, .. } => source_bootstrap_v1::apply(builder, ctx, *actor, action)?,
         // ---- RFC-0010: a certified epoch output (tag 120): queued; the V3 stage verifies it against the branch and drops it if
         // it does not verify, the block standing ----
         PalwConsensusObjectV2::PanelBeaconProofV3 { proof } => {
@@ -582,6 +583,9 @@ pub(super) fn apply_object(
                     return Err(PalwStateV2Error::ShardCourt("GDN terminal must never invent an attention dissection".into()));
                 }
             }
+        }
+        PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { answer } => {
+            da_sessions::apply_routed_material_answer_v2(builder, ctx, answer)?;
         }
         PalwConsensusObjectV2::RoutedStepAccusedV2 { accusation } => {
             let limits = builder.extras.memory_routing_court.ok_or(PalwStateV2Error::ShardCourtDormant)?;

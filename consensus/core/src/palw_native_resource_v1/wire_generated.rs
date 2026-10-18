@@ -2835,6 +2835,10 @@ impl NativeWireScanV1 for crate::palw_material_capacity_v1::PalwMaterialCodecV1 
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
+            4 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3295,6 +3299,32 @@ wire_struct!(crate::palw_native_queue_v30::NativeQueueLeaseV30; u16, [u8;64], [u
 wire_struct!(crate::palw_native_queue_v30::NativeQueuePlanRecordV30; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, u64, u64, u64);
 wire_struct!(crate::palw_native_queue_v30::NativeQueuePolicyV30; u16, [u8;64], u32, u32, u64, u32, u64, u64, bool);
 wire_struct!(crate::palw_native_reply_parts_v29::NativeReplyProgressV29; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u8, [u8;64], u16, u32, u8, bool, bool);
+impl NativeWireScanV1 for crate::palw_native_resource_v1::typed::NativeCoverageV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<String as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<String as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<String as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<String as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<String as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
 wire_struct!(crate::palw_native_settlement_v1::NativeDeltaEvidenceV1; std::collections::BTreeMap<crate::Hash64, u64>, Vec<(crate::Hash64, crate::palw_state_v2::PalwClaimStateV2)>, Vec<(crate::Hash64, crate::palw_state_v2::PalwClaimStateV2, Vec<u32>)>, Vec<crate::Hash64>);
 wire_struct!(crate::palw_native_text_stop_v29::NativeTextBookV29; crate::palw_native_text_stop_v29::NativeTextFundingV29, Option<crate::palw_native_text_stop_v29::NativeTextClaimV29>, crate::palw_native_text_stop_v29::NativeTextTerminalV29, u64, Option<crate::palw_native_text_stop_v29::NativeTextSettlementV29>);
 wire_struct!(crate::palw_native_text_stop_v29::NativeTextClaimV29; [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, u32, [u8;64], [u8;64], [u8;64], crate::palw_native_text_stop_v29::NativeTextStopV29, u64, u64, u64);
@@ -3820,6 +3850,22 @@ wire_struct!(crate::palw_prefix_public_source_v1::PalwPrefixPublicDemandV1; crat
 wire_struct!(crate::palw_prefix_public_source_v1::PalwPrefixPublicSourceV1; crate::palw_step::PalwStepCoordinateV1, u64, u32, u32, crate::Hash64, u64, u64, crate::palw_rendering_stream_v1::LeafHashContinuationV1);
 wire_struct!(crate::palw_prefix_source_stream_v1::PalwPrefixSourceRangeV1; u32, u32, u32, u64, u64, u64);
 wire_struct!(crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1; crate::palw_step_leg::PalwStepOpeningV1, crate::palw_step_leg::PalwStepTileLeafV1);
+impl NativeWireScanV1 for crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
 wire_struct!(crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1; u32, u32, Vec<u32>, crate::palw_step_leg::PalwStepOpeningV1);
 impl NativeWireScanV1 for crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
@@ -4006,6 +4052,54 @@ wire_struct!(crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1; 
 wire_struct!(crate::palw_rendering_stream_v1::LeafHashContinuationV1; [u64; 8], u128, Vec<u8>);
 wire_struct!(crate::palw_rendering_stream_v1::PalwRenderingStreamV1; crate::Hash64, crate::Hash64, u32, bool, u32, u32, crate::Hash64, crate::palw_rendering_stream_v1::LeafHashContinuationV1, Option<crate::palw_decode_constraint_v1::PalwConstraintStateV1>);
 wire_struct!(crate::palw_reward_v2::PalwRewardParamsV2; u16);
+wire_struct!(crate::palw_routed_material_v2::PalwHeldMaterialBundleV2; u16, crate::Hash64, crate::Hash64, Box<crate::palw_step_leg::PalwStepBindingV2>, Vec<(crate::palw_held_da_v1::PalwHeldMissingV1, crate::palw_routed_material_v2::PalwHeldMaterialUnitV2)>);
+impl NativeWireScanV1 for crate::palw_routed_material_v2::PalwHeldMaterialUnitV2 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::palw_held_da_v1::PalwHeldDisclosureV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2 as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(crate::palw_routed_material_v2::PalwMaterialAuthorityRecordV2; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, u64, u64, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1, crate::palw_reader_router_v2::PalwReaderRouterRowV2);
+wire_struct!(crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2; u16, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::palw_routed_material_v2::PalwRoutedMaterialTargetV2, crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2, Option<crate::palw_routed_material_v2::PalwRoutedMaterialReceiptV2>, Vec<u8>);
+wire_struct!(crate::palw_routed_material_v2::PalwRoutedMaterialReceiptV2; crate::Hash64, u64, crate::Hash64, u64);
+impl NativeWireScanV1 for crate::palw_routed_material_v2::PalwRoutedMaterialTargetV2 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
 wire_struct!(crate::palw_routing_court_v2::PalwRoutingCourtAccusationV2; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Vec<u8>);
 wire_struct!(crate::palw_seat_availability_v1::PalwSeatAvailEpochV1; u64, u32, u32);
 wire_struct!(crate::palw_seat_availability_v1::PalwSeatAvailabilityV1; Option<u64>, Vec<crate::palw_seat_availability_v1::PalwSeatAvailEpochV1>);
@@ -4025,6 +4119,63 @@ wire_struct!(crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1; u32, 
 wire_struct!(crate::palw_shard_licensing_v1::PalwShardReceiptPartV1; crate::Hash64, u32, u32, Vec<crate::palw_panel_v2::PalwSeatReceiptV2>);
 wire_struct!(crate::palw_slash::PalwClassContradictionCertificateV1; u16, crate::palw_v2::PalwJobContextV2, crate::palw_slash::PalwExecutionAttestationV1, crate::palw_slash::PalwExecutionAttestationV1);
 wire_struct!(crate::palw_slash::PalwExecutionAttestationV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::tx::TransactionOutpoint, Vec<u8>);
+wire_struct!(crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, u64, u64, u64, u64, u64, u64, misaka_palw_challenge::bootstrap_epoch_v1::BootstrapPolicyV1, crate::Hash64, crate::Hash64, u64, u64, u32, crate::Hash64, crate::Hash64);
+impl NativeWireScanV1 for crate::palw_source_bootstrap_v1::PalwSourceBootstrapActionV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u16 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapApprovalRowV1; u16, crate::palw_state_v2::PalwBondKeyV2, u64, u64);
+impl NativeWireScanV1 for crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <crate::palw_native_resource_v1::typed::NativeCoverageV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            3 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapEpochRowV1; crate::palw_source_bootstrap_v1::PalwSourceBootstrapOwnContextV1, Vec<misaka_palw_challenge::bootstrap_epoch_v1::BootstrapSeatV1>, bool, u32);
+wire_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapMemberV1; crate::palw_state_v2::PalwBondKeyV2, u64);
+wire_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapOwnContextV1; crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1, crate::Hash64, crate::Hash64, u64, Vec<crate::palw_source_bootstrap_v1::PalwSourceBootstrapMemberV1>, bool, Option<(crate::Hash64, u64)>);
+wire_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapWorkRowV1; crate::palw_source_bootstrap_v1::PalwSourceBootstrapWorkV1, Vec<crate::palw_source_bootstrap_v1::PalwSourceBootstrapApprovalRowV1>, Option<(u64, u64)>);
+wire_struct!(crate::palw_source_bootstrap_v1::PalwSourceBootstrapWorkV1; crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, u64, u64);
 wire_struct!(crate::palw_staged_bundle_v1::PalwNativeSourceContextV1; Box<crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>, Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>);
 wire_struct!(crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1; crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1, Option<crate::palw_staged_bundle_v1::PalwTokenizerInventoryV1>, Option<crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1>, Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwSelectedSourceContextV1>>, Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwNativeSourceContextV1>>, Option<
         crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1>,
@@ -5616,6 +5767,24 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwConsensusObjectV2 {
                 )?;
                 Ok(sum)
             }
+            246 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(
+                    <crate::palw_source_bootstrap_v1::PalwSourceBootstrapActionV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            247 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -6899,7 +7068,11 @@ wire_struct!(crate::palw_state_v2::PalwReporterCommitV1; crate::palw_state_v2::P
 wire_struct!(crate::palw_state_v2::PalwReporterCountersV1; u128, u128);
 wire_struct!(crate::palw_state_v2::PalwRewardWinnerV1; u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64);
 wire_struct!(crate::palw_state_v2::PalwStateDeltaV2; crate::palw_state_v2::PalwBlockContextV2, Vec<crate::palw_state_v2::PalwDeltaEntryV2>);
-wire_struct!(crate::palw_state_v2::PalwTransitionExtrasV1; std::collections::BTreeSet<crate::BlockHash>, Option<crate::Hash64>, Option<crate::palw_work_target_v1::PalwWorkTargetFoldV1>, bool, bool, bool, Option<crate::palw_state_v2::PalwEconomicSafetyFoldV1>, Option<u64>, Option<u64>, Option<u64>, bool, bool, bool, bool, bool, bool, bool, bool, std::collections::BTreeSet<crate::Hash64>, bool, bool, bool, bool, Option<u64>, Vec<crate::evm::model_market::PalwEvmMarketActionV1>, Vec<crate::palw_state_v2::PalwCarrierRefundV1>, bool, bool, Option<u64>, Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2>, Option<crate::palw_shard_licensing_v1::PalwShardLicensingParamsV1>, bool, Option<u64>, bool, bool, bool, bool, Option<u64>, bool, bool, Option<crate::palw_activation_pool_v1::PalwActivationPoolTermsV1>, bool, bool, bool, bool, bool, u32, Option<crate::palw_execution_lane_v1::PalwExecLaneFoldV1>, Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>, Vec<crate::palw_bond_budget_v1::PalwRoundFeeIncomeV1>, Vec<crate::palw_work_slice_v2::PalwExecV2CoveredSliceV1>, BTreeMap<crate::Hash64, Vec<u8>>, Option<u64>, Vec<(crate::Hash64, u32)>, Vec<(u8, Vec<u8>, Option<Vec<u8>>)>, Option<crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1>, Option<crate::palw_reward_v2::PalwRewardParamsV2>, Option<crate::palw_model_registry_v1::PalwModelRegistryFoldV1>, Option<crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1>, Option<u64>, Option<u64>, Option<crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1>, bool, bool, BTreeMap<crate::Hash64, crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>, BTreeMap<crate::Hash64, crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>, BTreeMap<crate::Hash64, crate::palw_history_custody_v1::PalwProducerCustodyDelegationV1>, Option<u64>, Option<crate::Hash64>, crate::Hash64, Option<u64>, Option<u64>, Option<crate::palw_panel_v2::PalwSw8DrawInputsV1>, bool, std::collections::BTreeMap<crate::Hash64, u64>, Option<crate::palw_panel_v3_fold_v1::PalwPanelV3InputsV1>, Option<crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1>);
+wire_struct!(crate::palw_state_v2::PalwTransitionExtrasV1; std::collections::BTreeSet<crate::BlockHash>, Option<crate::Hash64>, Option<crate::palw_work_target_v1::PalwWorkTargetFoldV1>, bool, bool, bool, Option<crate::palw_state_v2::PalwEconomicSafetyFoldV1>, Option<u64>, Option<u64>, Option<u64>, bool, bool, bool, bool, bool, bool, bool, bool, std::collections::BTreeSet<crate::Hash64>, bool, bool, bool, bool, Option<u64>, Vec<crate::evm::model_market::PalwEvmMarketActionV1>, Vec<crate::palw_state_v2::PalwCarrierRefundV1>, bool, bool, Option<u64>, Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2>, Option<crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1>, Option<
+        std::sync::Arc<
+            crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_source_bootstrap_v1::PalwSourceBootstrapOwnContextV1>,
+        >,
+    >, Option<crate::palw_shard_licensing_v1::PalwShardLicensingParamsV1>, bool, Option<u64>, bool, bool, bool, bool, Option<u64>, bool, bool, Option<crate::palw_activation_pool_v1::PalwActivationPoolTermsV1>, bool, bool, bool, bool, bool, u32, Option<crate::palw_execution_lane_v1::PalwExecLaneFoldV1>, Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>, Vec<crate::palw_bond_budget_v1::PalwRoundFeeIncomeV1>, Vec<crate::palw_work_slice_v2::PalwExecV2CoveredSliceV1>, BTreeMap<crate::Hash64, Vec<u8>>, Option<u64>, Vec<(crate::Hash64, u32)>, Vec<(u8, Vec<u8>, Option<Vec<u8>>)>, Option<crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1>, Option<crate::palw_reward_v2::PalwRewardParamsV2>, Option<crate::palw_model_registry_v1::PalwModelRegistryFoldV1>, Option<crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1>, Option<u64>, Option<u64>, Option<crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1>, bool, bool, BTreeMap<crate::Hash64, crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>, BTreeMap<crate::Hash64, crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>, BTreeMap<crate::Hash64, crate::palw_history_custody_v1::PalwProducerCustodyDelegationV1>, Option<u64>, Option<crate::Hash64>, crate::Hash64, Option<u64>, Option<u64>, Option<crate::palw_panel_v2::PalwSw8DrawInputsV1>, bool, std::collections::BTreeMap<crate::Hash64, u64>, Option<crate::palw_panel_v3_fold_v1::PalwPanelV3InputsV1>, Option<crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1>);
 impl NativeWireScanV1 for crate::palw_state_v2::PalwVoidReasonV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
@@ -7809,6 +7982,7 @@ wire_struct!(misaka_palw_challenge::approval_scope::LifetimeCounterV3; u128, u12
 wire_struct!(misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3; u16, [u8;64], [u8;64], u64, u64, Vec<misaka_palw_challenge::policy::ReviewedTupleV2>, u128, u128, u128, [u8;64], [u8;64], [u8;64]);
 wire_struct!(misaka_palw_challenge::approval_scope::SourceEconomicObservationV3; [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, u64, u64, u64, u64, u64, u64, u64, [u8;64]);
 wire_struct!(misaka_palw_challenge::approval_scope::SourceIndependenceObservationV3; [u8;64], u64, u64, std::collections::BTreeMap<[u8;64], [u8;64]>, std::collections::BTreeSet<[u8;64]>, std::collections::BTreeSet<[u8;64]>, std::collections::BTreeSet<[u8;64]>, [u8;64]);
+wire_struct!(misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, u64, u64, u16, u16);
 wire_struct!(misaka_palw_challenge::beacon::AttributedWorkV1; misaka_palw_challenge::beacon::WorkFinalEventV1, misaka_palw_challenge::beacon::SourceAttributionV1);
 wire_struct!(misaka_palw_challenge::beacon::BeaconContextV1; [u8;64], [u8;64], misaka_palw_challenge::policy::PostCommitChallengePolicyV1, misaka_palw_challenge::subject::SubjectKindV1, [u8;64], u64, u64, BTreeSet<[u8;64]>, BTreeSet<[u8;64]>, misaka_palw_challenge::subject::RootV1);
 impl NativeWireScanV1 for misaka_palw_challenge::beacon::FinalPathV1 {
@@ -7871,6 +8045,8 @@ impl NativeWireScanV1 for misaka_palw_challenge::beacon::WorkSourceKindV1 {
         }
     }
 }
+wire_struct!(misaka_palw_challenge::bootstrap_epoch_v1::BootstrapPolicyV1; u16, u16, u16, u32, u16, u32);
+wire_struct!(misaka_palw_challenge::bootstrap_epoch_v1::BootstrapSeatV1; u32, [u8;64], u64);
 wire_struct!(misaka_palw_challenge::conformance::BeaconConformanceEvidenceV1; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], misaka_palw_challenge::subject::RootV1, u64, u64, u64, Vec<String>, Vec<String>, [u8;64], [u8;64], u16, misaka_palw_challenge::conformance::ConformanceStatusV1, [u8;64]);
 wire_struct!(misaka_palw_challenge::conformance::ConformanceCommitmentV1; u16, [u8;64], [u8;64], misaka_palw_challenge::subject::SubjectKindV1, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], misaka_palw_challenge::subject::RootV1, misaka_palw_challenge::subject::RootV1, [u8;64], [u8;64], misaka_palw_challenge::subject::RootV1, [u8;64], [u8;64], misaka_palw_challenge::subject::RootV1, misaka_palw_challenge::subject::RootV1, [u8;64], Option<[u8;64]>, Option<u64>);
 impl NativeWireScanV1 for misaka_palw_challenge::conformance::ConformanceStatusV1 {
@@ -8285,6 +8461,7 @@ wire_struct!(misaka_palw_kernel::claim_compact_v1::native_v4::CompactInstanceV4;
 wire_struct!(misaka_palw_kernel::claim_compact_v1::native_v4::LocatedCompactProofV4; misaka_palw_kernel::claim_compact_v1::native_v4::CompactInstanceV4, misaka_palw_kernel::claim_compact_v1::CompactRelationProofV1);
 wire_struct!(misaka_palw_kernel::claim_compact_v1::native_v4::NativeCompactProofV4; u16, [u8;64], [u8;64], Vec<misaka_palw_kernel::claim_compact_v1::native_v4::LocatedCompactProofV4>);
 wire_struct!(misaka_palw_kernel::claim_interactive_v3::CompiledClaimProofPlanV3; u16, [u8;64], misaka_palw_kernel::claim_paid_v2::PaidClaimTargetV2, misaka_palw_challenge::policy::InteractiveModeV1, u32, u64, u64);
+wire_struct!(misaka_palw_kernel::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64);
 wire_struct!(misaka_palw_kernel::claim_paid_v2::NativeSourcePaymentProofV3; Vec<u8>, Vec<Vec<u8>>, u32);
 impl NativeWireScanV1 for misaka_palw_kernel::claim_paid_v2::PaidClaimCheckingV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
@@ -8424,6 +8601,17 @@ impl NativeWireScanV1 for misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2 {
                         reader,
                     )?,
                 )?;
+                Ok(sum)
+            }
+            15 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                sum = sum.merge(<misaka_palw_kernel::route::SaltedCommitV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum=sum.merge(<misaka_palw_kernel::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),

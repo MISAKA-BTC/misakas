@@ -48,6 +48,7 @@ fn bundle_input<T: NativeHeapV1 + BorshSerialize>(bundle: &T) -> Result<C, Strin
 fn inner_response(codec: PalwMaterialCodecV1, data: &[u8]) -> Result<C, String> {
     match codec {
         PalwMaterialCodecV1::NativeHeldComplete => shape::<PalwHeldMaterialBundleV1>(data),
+        PalwMaterialCodecV1::NativeHeldCompleteV2 => Err("routed V2 response requires typed native authority".into()),
         PalwMaterialCodecV1::KernelPositions => shape::<misaka_palw_kernel::public::PositionResponseV1>(data),
         PalwMaterialCodecV1::SegmentedParts => shape::<misaka_palw_kernel::seg_da::SegPartResponseV1>(data),
         PalwMaterialCodecV1::TypedKernelV4 => Err("typed response preflight requires its signed namespace".into()),
@@ -234,6 +235,7 @@ fn recovery_requests(encoded: &[u8], ledger: Option<&misaka_palw_kernel::ledger:
                 sum,
                 match codec {
                     0 => shape::<PalwHeldMaterialBundleV1>(data)?,
+                    4 => shape::<crate::palw_routed_material_v2::PalwHeldMaterialBundleV2>(data)?,
                     1 | 2 | 3 => {
                         let bundle = if codec == 1 {
                             shape::<PalwKernelMaterialBundleV1>(data)?
@@ -388,7 +390,9 @@ impl NativeRetainedV1<Store> {
             PalwMaterialCodecV1::KernelPositions => shape::<PalwKernelMaterialBundleV1>(raw)?,
             PalwMaterialCodecV1::SegmentedParts => shape::<PalwSegmentedMaterialBundleV1>(raw)?,
             PalwMaterialCodecV1::TypedKernelV4 => shape::<PalwTypedKernelMaterialBundleV4>(raw)?,
-            PalwMaterialCodecV1::NativeHeldComplete => return Err("held bundle is not kernel material".into()),
+            PalwMaterialCodecV1::NativeHeldComplete | PalwMaterialCodecV1::NativeHeldCompleteV2 => {
+                return Err("held bundle is not kernel material".into());
+            }
         };
         let requests = add(requests, fixed(1, size_of::<B>()));
         let lease =
@@ -397,7 +401,7 @@ impl NativeRetainedV1<Store> {
             PalwMaterialCodecV1::KernelPositions => B::KernelPositions(borsh::from_slice(raw).map_err(|e| e.to_string())?),
             PalwMaterialCodecV1::SegmentedParts => B::SegmentedParts(borsh::from_slice(raw).map_err(|e| e.to_string())?),
             PalwMaterialCodecV1::TypedKernelV4 => B::TypedKernelV4(borsh::from_slice(raw).map_err(|e| e.to_string())?),
-            PalwMaterialCodecV1::NativeHeldComplete => unreachable!(),
+            PalwMaterialCodecV1::NativeHeldComplete | PalwMaterialCodecV1::NativeHeldCompleteV2 => unreachable!(),
         };
         Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
     }
@@ -412,7 +416,7 @@ impl NativeRetainedV1<Store> {
     ) -> Result<Self, String> {
         let count = recovery_requests(encoded, None)?.bytes().ok_or("provider retention snapshot native size overflow")?;
         let lease = reserve_native_requests_v1(count).map_err(|e| e.to_string())?;
-        let value = Store::recover_inner_v4(encoded, max_bytes, total_capacity, None, authority, Some(&mut retained_identity))
+        let value = Store::recover_inner_v4(encoded, max_bytes, total_capacity, None, authority, Some(&mut retained_identity), None)
             .map_err(|e| e.to_string())?;
         Ok(Self::from_owner_reserved_v1(value, lease))
     }
@@ -531,6 +535,9 @@ impl NativeRetainedV1<Store> {
         let raw = rows.get(&dependency).ok_or("provider answer bundle absent")?;
         let requests = match scope.codec {
             PalwMaterialCodecV1::NativeHeldComplete => shape::<PalwHeldMaterialBundleV1>(raw)?,
+            PalwMaterialCodecV1::NativeHeldCompleteV2 => {
+                return Err("V2 retained bytes require a fresh native routing authority and V2 response".into());
+            }
             PalwMaterialCodecV1::KernelPositions => shape::<PalwKernelMaterialBundleV1>(raw)?,
             PalwMaterialCodecV1::SegmentedParts => shape::<PalwSegmentedMaterialBundleV1>(raw)?,
             PalwMaterialCodecV1::TypedKernelV4 => {
@@ -549,6 +556,136 @@ impl NativeRetainedV1<Store> {
         let lease =
             reserve_native_requests_v1(len.checked_mul(2).ok_or("provider publication byte overflow")?).map_err(|e| e.to_string())?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(self.encoded().map_err(|e| e.to_string())?, lease))
+    }
+}
+
+impl NativeRetainedV1<Store> {
+    /// V2 mutation keeps allocation refusal typed instead of passing through
+    /// the legacy String-only snapshot mutation adapter.
+    pub fn provider_admit_routed_held_v2(
+        &self,
+        consent: Hash64,
+        manifest: &PalwMaterialManifestV1,
+        max_bytes: u64,
+        total_capacity: u64,
+        bundle: &crate::palw_routed_material_v2::PalwHeldMaterialBundleV2,
+        authority: &crate::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+    ) -> Result<Self, PalwMaterialCapacityErrorV1> {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, native_value_requests_v1};
+        use PalwMaterialCapacityErrorV1 as E;
+        bundle.verify(authority.record(), max_bytes)?;
+        let mut q = TirNativeRequestsV1::new();
+        q.add_v1(native_value_requests_v1(&**self).map_err(E::LocalResource)?).map_err(E::LocalResource)?;
+        for _ in 0..3 {
+            q.add_v1(native_value_requests_v1(bundle).map_err(E::LocalResource)?).map_err(E::LocalResource)?;
+            q.add_v1(native_value_requests_v1(manifest).map_err(E::LocalResource)?).map_err(E::LocalResource)?;
+        }
+        let encoded = borsh::object_length(bundle).map_err(|_| E::Capacity)? as u64;
+        for _ in 0..3 {
+            q.vec_v1::<u8>(encoded).map_err(E::LocalResource)?;
+        }
+        q.vec_v1::<BTreeNodeEnvelopeV1<Hash64, (Hash64, PalwMaterialManifestV1, BTreeMap<Hash64, Vec<u8>>)>>(1)
+            .map_err(E::LocalResource)?;
+        q.vec_v1::<BTreeNodeEnvelopeV1<Hash64, Vec<u8>>>(1).map_err(E::LocalResource)?;
+        q.vec_v1::<(PalwMaterialScopeV1, Vec<u8>)>(1).map_err(E::LocalResource)?;
+        let count = q.bytes_v1();
+        let lease = reserve_native_requests_v1(count).map_err(E::LocalResource)?;
+        let mut value = (**self).clone();
+        value.admit_routed_held_v2(consent, manifest, max_bytes, total_capacity, bundle, authority)?;
+        let actual = native_value_requests_v1(&value).map_err(E::LocalResource)?;
+        if actual > count {
+            return Err(E::LocalResource(C::unsupported::<Store>(COMPONENT, "V2 mutation request postcondition exceeded")));
+        }
+        Ok(Self::from_owner_reserved_v1(value, lease))
+    }
+    pub fn recover_provider_routed_v2(
+        encoded: &[u8],
+        max_bytes: u64,
+        total_capacity: u64,
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        authority_v1: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
+        mut authority_v2: impl FnMut(
+            Hash64,
+        ) -> Result<
+            NativeRetainedV1<crate::palw_routed_material_v2::PalwMaterialAuthorityRecordV2>,
+            PalwMaterialCapacityErrorV1,
+        >,
+        retained_kernel: Option<&mut dyn FnMut(Hash64, &PalwMaterialScopeV1, &[u8]) -> Result<(), String>>,
+    ) -> Result<Self, PalwMaterialCapacityErrorV1> {
+        use PalwMaterialCapacityErrorV1 as E;
+        let requests = recovery_requests(encoded, ledger).map_err(|e| E::LocalResource(C::unsupported::<Store>(COMPONENT, &e)))?;
+        let count = requests.bytes().ok_or_else(|| E::LocalResource(requests))?;
+        let lease = reserve_native_requests_v1(count).map_err(E::LocalResource)?;
+        let value = Store::recover_inner_v4(
+            encoded,
+            max_bytes,
+            total_capacity,
+            ledger,
+            authority_v1,
+            retained_kernel,
+            Some(&mut authority_v2),
+        )?;
+        Ok(Self::from_owner_reserved_v1(value, lease))
+    }
+    /// Caller must obtain current own native authority (and current accepted
+    /// generation) immediately before this exact publication. Saved metadata
+    /// alone never authorizes serving or signing an answer.
+    pub fn provider_routed_answer_v2(
+        &self,
+        consent: Hash64,
+        root: Hash64,
+        claim: Hash64,
+        provider: crate::palw_state_v2::PalwBondKeyV2,
+        leaf: u64,
+        authority: &crate::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+        receipt: Option<crate::palw_routed_material_v2::PalwRoutedMaterialReceiptV2>,
+        sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+    ) -> Result<NativeRetainedV1<crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2>, PalwMaterialCapacityErrorV1> {
+        use crate::palw_native_resource_v1::{
+            NativeDecodeErrorV1, TirNativeRequestsV1, native_value_requests_v1, retain_native_value_decode_classified_v1,
+        };
+        use crate::palw_routed_material_v2::*;
+        use PalwMaterialCapacityErrorV1 as E;
+        let (_, manifest, rows) = self.contracts.get(&consent).ok_or(E::Incomplete)?;
+        let scope = manifest.scope(claim).ok_or(E::Incomplete)?;
+        if manifest.root != root || scope.codec != PalwMaterialCodecV1::NativeHeldCompleteV2 || authority.record().claim != claim {
+            return Err(E::Substitution);
+        }
+        let raw = rows.get(&claim).ok_or(E::Incomplete)?;
+        let bundle =
+            retain_native_value_decode_classified_v1::<PalwHeldMaterialBundleV2, std::io::Error>(raw, || borsh::from_slice(raw))
+                .map_err(|e| match e {
+                    NativeDecodeErrorV1::Resource(e) => E::LocalResource(e),
+                    NativeDecodeErrorV1::Decode(e) => E::Authentication(e.to_string()),
+                })?;
+        if bundle.verify(authority.record(), scope.bytes)? != *scope {
+            return Err(E::Substitution);
+        }
+        let wanted = PalwHeldMissingV1::StepLeaf { leaf };
+        let at = bundle.units.binary_search_by_key(&wanted, |(m, _)| *m).map_err(|_| E::Incomplete)?;
+        let PalwHeldMaterialUnitV2::Routed(r) = &bundle.units[at].1 else {
+            return Err(E::Substitution);
+        };
+        let mut q = TirNativeRequestsV1::new();
+        q.add_v1(native_value_requests_v1(r).map_err(E::LocalResource)?).map_err(E::LocalResource)?;
+        q.vec_v1::<PalwRoutedMaterialAnswerV2>(1).map_err(E::LocalResource)?;
+        q.vec_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(E::LocalResource)?;
+        let lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::LocalResource)?;
+        let mut answer = PalwRoutedMaterialAnswerV2 {
+            version: 2,
+            claim,
+            provider,
+            target: PalwRoutedMaterialTargetV2::Monetary { root, consent },
+            refutation: r.clone(),
+            receipt,
+            signature: Vec::new(),
+        };
+        answer.signature = sign(answer.message(authority.record().network).as_byte_slice(), PALW_ROUTED_MATERIAL_CONTEXT_V2)
+            .ok_or_else(|| E::Authentication("routed material provider signer unavailable".into()))?;
+        if answer.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
+            return Err(E::Authentication("routed material signature length differs".into()));
+        }
+        Ok(NativeRetainedV1::from_owner_reserved_v1(answer, lease))
     }
 }
 

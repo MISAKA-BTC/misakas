@@ -1107,6 +1107,7 @@ impl VirtualStateProcessor {
                     blue_score: header.blue_score,
                     subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
                 },
+                &ctx.palw_v2_unentitled_blues,
             )
         } else {
             (newly_included_stake, expected_stake)

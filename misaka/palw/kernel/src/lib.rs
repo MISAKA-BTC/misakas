@@ -85,6 +85,7 @@ pub mod budget;
 pub mod challenge;
 pub mod check;
 pub mod claim_subject;
+pub mod claim_paid_material_generation_v5;
 pub mod court_scope;
 pub mod descriptor;
 pub mod element;
