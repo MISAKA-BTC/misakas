@@ -887,6 +887,10 @@ mod tests {
                 params.palw_paid_claim_trap_v1 = Some(at);
                 params.sync_palw_paid_claim_trap_v1();
             }
+            "palw_native_liability_horizon_v1" => {
+                params.palw_native_liability_horizon_v1 = Some(at);
+                params.sync_palw_native_liability_horizon_v1();
+            }
             "palw_paid_consumer_lifecycle_v1" => {
                 params.palw_paid_consumer_lifecycle_v1 = Some(crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1 {
                     activation: at,

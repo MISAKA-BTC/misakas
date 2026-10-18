@@ -976,23 +976,19 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    /// RFC12 acceptance read: historical reserve and point UTXOs from one virtual
-    /// generation. Missing rows are distinct from storage errors.
-    fn rfc12_state_v1(
-        &self,
-        block: Option<BlockHash>,
-        outpoints: &[TransactionOutpoint],
-    ) -> Result<Rfc12StateV1, String> {
-        let _ = (block, outpoints);
-        Err("this consensus serves no RFC12 state read".into())
-    }
-
     /// Point lookup of a single outpoint in the virtual UTXO set (kaspa-pq EVM
     /// Lane §9.2: a depositor submits a lock outpoint; the node resolves the
     /// `EVM_DEPOSIT_LOCK` entry to build + validate a `DepositClaim`). `None` if
     /// the outpoint is unspent-absent (never existed or already spent).
     fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
         unimplemented!()
+    }
+
+    /// **RFC-0012 acceptance (op 246)**: the DNS security reserve balance `block`'s post-state holds (`reserve_balance_store`);
+    /// `None` where this node holds no reserve row for the block. Read-only.
+    fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
+        let _ = block;
+        None
     }
 
     fn get_tips(&self) -> Vec<BlockHash> {
@@ -2389,14 +2385,16 @@ pub trait ConsensusApi: Send + Sync {
         Err("this consensus serves no fork-choice opening".to_string())
     }
 
-    /// Op 203's bounded Rule E window and fork-registry sub-openings.
+    /// **RFC09: op 203 v2** — [`Self::palw_fork_choice_openings_v1`] with each entry's committed leaf in its own form, and (as asked)
+    /// its v3 rule-E window above a blue score and its v3 registry openings of some bonds: the inputs the full node's rule-E comparator
+    /// reads, for a remote client to evaluate with the node's own functions. Untrusted as served.
     fn palw_fork_choice_openings_v2(
         &self,
         blocks: &[BlockHash],
-        query: &crate::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofQueryV2,
+        extras: &crate::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2,
     ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
-        let _ = (blocks, query);
-        Err("this consensus serves no Rule E fork-choice sub-openings".into())
+        let _ = (blocks, extras);
+        Err("this consensus serves no fork-choice opening".to_string())
     }
 
     /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
@@ -2875,16 +2873,3 @@ pub trait ConsensusApi: Send + Sync {
 }
 
 pub type DynConsensus = Arc<dyn ConsensusApi>;
-
-
-/// Read-only observation; no consensus rule consumes this structure.
-#[derive(Clone, Debug)]
-pub struct Rfc12StateV1 {
-    pub block: BlockHash,
-    pub block_daa: u64,
-    pub reserve_balance: Option<u64>,
-    pub virtual_selected_parent: BlockHash,
-    pub virtual_daa: u64,
-    pub virtual_parents: Vec<BlockHash>,
-    pub utxos: Vec<(TransactionOutpoint, Option<UtxoEntry>)>,
-}

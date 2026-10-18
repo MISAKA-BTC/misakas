@@ -1470,7 +1470,7 @@ async fn sanity_test() {
                         rpc_client
                             .get_palw_fork_choice_opening_call(
                                 None,
-                                GetPalwForkChoiceOpeningRequest { block_hashes: vec!["zz".to_string()], proof_request: Vec::new() }
+                                GetPalwForkChoiceOpeningRequest { block_hashes: vec!["zz".to_string()], ..Default::default() }
                             )
                             .await
                             .is_err()

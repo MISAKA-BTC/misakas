@@ -2681,7 +2681,11 @@ mod mockery {
     // RFC-0009 L2: op 203 and its parts round-trip.
     impl Mock for GetPalwForkChoiceOpeningRequest {
         fn mock() -> Self {
-            GetPalwForkChoiceOpeningRequest { block_hashes: vec![mock_hex(), mock_hex()], proof_request: vec![1, 2, 3] }
+            GetPalwForkChoiceOpeningRequest {
+                block_hashes: vec![mock_hex(), mock_hex()],
+                rule_e_window_above_blue: Some(77),
+                registry_bonds: vec!["ab".repeat(68)],
+            }
         }
     }
     test!(GetPalwForkChoiceOpeningRequest);
@@ -2697,7 +2701,9 @@ mod mockery {
                 inner_root: mock_hex(),
                 committed_root: mock_hex(),
                 committed_form: mock(),
-                rule_e_proof: vec![4, 5, 6],
+                committed_leaf: vec![3; 300],
+                rule_e_window: vec![4; 20],
+                registry_openings: vec![vec![5; 9], vec![6; 2]],
             }
         }
     }
@@ -2719,6 +2725,35 @@ mod mockery {
         }
     }
     test!(GetPalwForkChoiceOpeningResponse);
+
+    // RFC-0012 acceptance: op 246 round-trips.
+    impl Mock for GetPalwAcceptanceReadsRequest {
+        fn mock() -> Self {
+            GetPalwAcceptanceReadsRequest { reserve_blocks: vec![mock_hex()], outpoints: vec!["ab:1".to_string()] }
+        }
+    }
+    test!(GetPalwAcceptanceReadsRequest);
+
+    impl Mock for GetPalwAcceptanceReadsResponse {
+        fn mock() -> Self {
+            GetPalwAcceptanceReadsResponse {
+                available: true,
+                sink: mock_hex(),
+                virtual_daa: 9,
+                reserve_balances: vec![RpcPalwReserveBalance { block_hash: mock_hex(), known: true, balance_sompi: 7 }],
+                outpoints: vec![RpcPalwOutpointEntry {
+                    outpoint: "ab:1".into(),
+                    present: true,
+                    amount: 5,
+                    script_version: 0,
+                    script_hex: "ab".into(),
+                    block_daa_score: 3,
+                    is_coinbase: false,
+                }],
+            }
+        }
+    }
+    test!(GetPalwAcceptanceReadsResponse);
 
     // RFC-0010 (lane C2): op 220 round-trips.
     // RFC-0008 v2 (lane X8R): op 240 round-trips.
@@ -3738,62 +3773,5 @@ mod native_settlement_wire_tests {
         assert_eq!(json["nativeReadiness"]["skipped"]["bondNotHeld"], 2);
         let again: GetPalwSettlementResponse = serde_json::from_value(json).unwrap();
         assert_eq!(again.native_readiness, Some(readiness));
-    }
-}
-
-#[cfg(test)]
-mod rfc09_opening_wire_tests {
-    use crate::model::*;
-    use workflow_serializer::prelude::*;
-
-    #[test]
-    fn rfc09_op203_request_keeps_v1_bytes_and_roundtrips_v2_proof_query() {
-        let plain = GetPalwForkChoiceOpeningRequest { block_hashes: vec!["block".into()], proof_request: Vec::new() };
-        let mut old = Vec::new();
-        store!(u16, &1, &mut old).unwrap();
-        store!(Vec<String>, &plain.block_hashes, &mut old).unwrap();
-        let mut current = Vec::new();
-        Serializer::serialize(&plain, &mut current).unwrap();
-        assert_eq!(current, old);
-        assert_eq!(<GetPalwForkChoiceOpeningRequest as Deserializer>::deserialize(&mut &old[..]).unwrap(), plain);
-        let extended = GetPalwForkChoiceOpeningRequest { proof_request: vec![1, 2, 3], ..plain };
-        current.clear();
-        Serializer::serialize(&extended, &mut current).unwrap();
-        assert_eq!(<GetPalwForkChoiceOpeningRequest as Deserializer>::deserialize(&mut &current[..]).unwrap(), extended);
-        current[..2].copy_from_slice(&99u16.to_le_bytes());
-        assert!(<GetPalwForkChoiceOpeningRequest as Deserializer>::deserialize(&mut &current[..]).is_err());
-    }
-
-    #[test]
-    fn rfc09_op203_entry_v1_and_v2_roundtrip_without_inventing_missing_proofs() {
-        for proof in [Vec::new(), vec![4, 5, 6]] {
-            let entry = RpcPalwForkChoiceEntry { leaf: vec![2, 0], rule_e_proof: proof.clone(), ..Default::default() };
-            let mut bytes = Vec::new();
-            Serializer::serialize(&entry, &mut bytes).unwrap();
-            let back = <RpcPalwForkChoiceEntry as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
-            assert_eq!(back.leaf, entry.leaf);
-            assert_eq!(back.rule_e_proof, proof);
-            assert_eq!(&bytes[..2], &(if proof.is_empty() { 1u16 } else { 2 }).to_le_bytes());
-        }
-    }
-}
-
-#[cfg(test)]
-mod rfc12_state_wire_tests {
-    use crate::model::*;
-    use workflow_serializer::prelude::*;
-
-    #[test]
-    fn rfc12_state_request_and_snapshot_wire_are_versioned_and_exact() {
-        let request = GetRfc12StateRequest { block_hash: "ab".repeat(64), outpoints: vec![format!("{}:3", "cd".repeat(64))] };
-        let mut bytes = Vec::new();
-        Serializer::serialize(&request, &mut bytes).unwrap();
-        assert_eq!(<GetRfc12StateRequest as Deserializer>::deserialize(&mut &bytes[..]).unwrap(), request);
-        bytes[..2].copy_from_slice(&2u16.to_le_bytes());
-        assert!(<GetRfc12StateRequest as Deserializer>::deserialize(&mut &bytes[..]).is_err());
-        let response = GetRfc12StateResponse { snapshot_json: r#"{"version":1,"reserveBalance":0,"utxos":[]}"#.into() };
-        bytes.clear();
-        Serializer::serialize(&response, &mut bytes).unwrap();
-        assert_eq!(<GetRfc12StateResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap(), response);
     }
 }

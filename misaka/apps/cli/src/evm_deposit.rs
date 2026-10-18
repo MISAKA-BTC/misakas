@@ -191,118 +191,6 @@ pub async fn deposit_lock(
     Ok(())
 }
 
-/// Signed timeout refund, resolved by the original outpoint rather than by an
-/// address balance. A raced claim/spend is rejected by normal transaction admission.
-pub async fn deposit_refund(
-    ctx: &Ctx,
-    ks: &KeySource,
-    outpoint_text: &str,
-    to: Option<&str>,
-    fee: Option<u64>,
-    yes: bool,
-) -> CliResult {
-    use kaspa_rpc_core::{GetRfc12StateRequest, RpcTransactionOutpoint, RpcUtxoEntry};
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct PointRow {
-        outpoint: RpcTransactionOutpoint,
-        utxo_entry: Option<RpcUtxoEntry>,
-    }
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Read {
-        version: u16,
-        virtual_daa_score: u64,
-        utxos: Vec<PointRow>,
-    }
-    let error = |s: String| CliError::new(exit::GENERIC, s);
-    let point = crate::bond::parse_outpoint(outpoint_text)?;
-    let nv = connect(ctx).await?;
-    let response = nv
-        .client
-        .get_rfc_12_state(GetRfc12StateRequest {
-            block_hash: String::new(),
-            outpoints: vec![format!("{}:{}", point.transaction_id, point.index)],
-        })
-        .await
-        .map_err(|e| error(format!("read deposit outpoint: {e}")))?;
-    let mut read: Read =
-        serde_json::from_str(&response.snapshot_json).map_err(|e| error(format!("invalid outpoint snapshot: {e}")))?;
-    if read.version != 1 || read.utxos.len() != 1 {
-        return Err(error("unsupported or incomplete outpoint snapshot".into()));
-    }
-    let row = read.utxos.pop().unwrap();
-    if TransactionOutpoint::from(row.outpoint) != point {
-        return Err(error("outpoint snapshot names another deposit".into()));
-    }
-    let entry: UtxoEntry = row.utxo_entry.ok_or_else(|| error("deposit outpoint is absent or already spent".into()))?.into();
-    let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)
-        .ok_or_else(|| error("outpoint is not an EVM deposit lock".into()))?;
-    let key = ks.load_key()?;
-    let destination = match to {
-        Some(s) => kaspa_addresses::Address::try_from(s).map_err(|e| error(format!("invalid refund destination: {e}")))?,
-        None => key.funding_address(nv.params.prefix()),
-    };
-    if destination.prefix != nv.params.prefix() {
-        return Err(error("refund destination belongs to another network".into()));
-    }
-    let recipient = kaspa_txscript::pay_to_address_script(&destination);
-    let mass = MassCalculator::new(
-        nv.params.mass_per_tx_byte,
-        nv.params.mass_per_script_pub_key_byte,
-        nv.params.mass_per_sig_op,
-        nv.params.storage_mass_parameter,
-    );
-    let build = |fee| {
-        key.build_evm_deposit_refund_tx(
-            point,
-            &entry,
-            read.virtual_daa_score,
-            recipient.clone(),
-            fee,
-            nv.params.storage_mass_parameter,
-        )
-        .map_err(error)
-    };
-    let fee = match fee {
-        Some(fee) => fee,
-        None => kaspa_pq_validator_core::relay_fee_for_compute_mass(mass.calc_non_contextual_masses(&build(0)?).compute_mass),
-    };
-    let tx = build(fee)?;
-    let submitted = if yes {
-        Some(
-            nv.client
-                .submit_transaction(RpcTransaction::from(&tx), false)
-                .await
-                .map_err(|e| CliError::new(exit::TX_REJECTED, format!("submit deposit refund: {e}")))?
-                .to_string(),
-        )
-    } else {
-        None
-    };
-    match ctx.output {
-        OutputFormat::Json => println!(
-            "{}",
-            json!({
-                "ok": true, "dryRun": !yes, "inputOutpoint": outpoint_text,
-                "refundOutpoint": submitted.as_ref().map(|id| format!("{id}:0")),
-                "destinationAddress": destination.to_string(), "amountSompi": entry.amount - fee,
-                "feeSompi": fee, "refundTimeoutDaa": lock.timeout_daa_score,
-                "observedDaa": read.virtual_daa_score,
-            })
-        ),
-        OutputFormat::Human => {
-            println!("Refund {} sompi to {} (fee {} sompi)", entry.amount - fee, destination, fee);
-            match submitted {
-                Some(id) => println!("Refund outpoint: {id}:0"),
-                None => println!("Dry-run; pass --yes to broadcast"),
-            }
-        }
-    }
-    let _ = nv.client.disconnect().await;
-    Ok(())
-}
-
 /// `misaka evm claim`: queue the claim of a deposit lock on the node (which must mine for the claim
 /// to be included).
 pub async fn claim(ctx: &Ctx, outpoint: &str) -> CliResult {
@@ -321,6 +209,78 @@ pub async fn claim(ctx: &Ctx, outpoint: &str) -> CliResult {
             println!("{}", json!({ "ok": true, "outpoint": format!("{txid}:{index}"), "response": format!("{response:?}") }))
         }
         OutputFormat::Human => println!("Claim queued for {txid}:{index}: {response:?}"),
+    }
+    let _ = nv.client.disconnect().await;
+    Ok(())
+}
+
+/// `misaka evm refund`: the signed refund of an unclaimed deposit lock past its timeout (RFC-0012 acceptance). The lock's entry is
+/// read by outpoint from the node's virtual UTXO set (op 246); the builder refuses a lock whose refund script is not this key's, or
+/// one not yet refundable — the node would refuse it too (`EvmDepositLockNotRefundableYet`).
+pub async fn refund(ctx: &Ctx, ks: &KeySource, outpoint: &str, fee: u64, yes: bool) -> CliResult {
+    let generic = |m: String| CliError::new(exit::GENERIC, m);
+    let (txid, index) = outpoint
+        .rsplit_once(':')
+        .and_then(|(t, i)| i.parse::<u32>().ok().map(|i| (t.to_string(), i)))
+        .ok_or_else(|| generic(format!("--outpoint must be 'txid_hex:index', got '{outpoint}'")))?;
+    let lock_outpoint = TransactionOutpoint::new(
+        txid.parse::<kaspa_consensus_core::tx::TransactionId>().map_err(|e| generic(format!("--outpoint txid: {e}")))?,
+        index,
+    );
+    let nv = connect(ctx).await?;
+    let read = nv
+        .client
+        .get_palw_acceptance_reads(kaspa_rpc_core::GetPalwAcceptanceReadsRequest {
+            reserve_blocks: Vec::new(),
+            outpoints: vec![format!("{txid}:{index}")],
+        })
+        .await
+        .map_err(|e| generic(format!("getPalwAcceptanceReads: {e}")))?;
+    if !read.available {
+        return Err(generic("the node serves no outpoint read (it predates op 246)".to_string()));
+    }
+    let entry = read.outpoints.first().filter(|o| o.present).ok_or_else(|| {
+        generic(format!("{txid}:{index} is not in the node's virtual UTXO set (claimed, refunded, or never created)"))
+    })?;
+    let mut script = vec![0u8; entry.script_hex.len() / 2];
+    faster_hex::hex_decode(entry.script_hex.as_bytes(), &mut script).map_err(|e| generic(format!("the served script: {e}")))?;
+    let utxo = UtxoEntry::new(
+        entry.amount,
+        kaspa_consensus_core::tx::ScriptPublicKey::from_vec(entry.script_version, script),
+        entry.block_daa_score,
+        entry.is_coinbase,
+    );
+    let key = ks.load_key()?;
+    let prefix = nv.params.prefix();
+    let tx = key
+        .build_deposit_lock_refund_tx((lock_outpoint, utxo), prefix, nv.virtual_daa, fee, nv.params.storage_mass_parameter)
+        .map_err(|e| generic(format!("build deposit-lock refund: {e}")))?;
+    let sent = if yes {
+        Some(
+            nv.client
+                .submit_transaction(RpcTransaction::from(&tx), false)
+                .await
+                .map_err(|e| CliError::new(exit::TX_REJECTED, format!("submit deposit-lock refund: {e}")))?
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    let to = key.funding_address(prefix);
+    match ctx.output {
+        OutputFormat::Json => println!(
+            "{}",
+            json!({ "ok": true, "dryRun": sent.is_none(), "lockOutpoint": format!("{txid}:{index}"), "to": to.to_string(),
+                    "amountSompi": entry.amount, "feeSompi": fee, "refundTxid": sent, "virtualDaa": nv.virtual_daa })
+        ),
+        OutputFormat::Human => {
+            println!("Lock    : {txid}:{index} ({} BILI)", sompi_to_msk(entry.amount));
+            println!("Refund  : to {to}, fee {fee} sompi");
+            match &sent {
+                Some(t) => println!("Refund tx: {t}"),
+                None => println!("Mode    : dry-run (no submit; pass --yes to broadcast)"),
+            }
+        }
     }
     let _ = nv.client.disconnect().await;
     Ok(())

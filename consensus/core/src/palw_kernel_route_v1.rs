@@ -855,6 +855,23 @@ fn selected_approval_event_v1(
     borsh::to_vec(&attributed).map(Some).map_err(|e| e.to_string())
 }
 
+/// **RFC07 record-only event of a Panel-licensed Final** (ADR-0184 §2): Borsh of `(FinalReceiptV1, settlement label, producer,
+/// job payer)` from the rooted ledger rows, `Some` only for the `PanelLicensed` path. It is never a beacon event (`event` stays
+/// `None` on that path) and never EXEC credit.
+pub(crate) fn panel_record_v1(
+    ledger: &KernelLedgerV1,
+    receipt: &misaka_palw_kernel::opv::FinalReceiptV1,
+    final_path: &'static str,
+    settlement: crate::palw_kernel_settlement_v1::PalwKernelSettlementV1,
+) -> Option<Vec<u8>> {
+    if final_path != "PanelLicensed" {
+        return None;
+    }
+    let work = ledger.claims.get(&receipt.claim).map(|r| (r.producer, r.job_id));
+    let payer = work.and_then(|(_, job)| ledger.job_poster(&job));
+    borsh::to_vec(&(receipt, settlement.label(), work.map(|(p, _)| p), payer)).ok()
+}
+
 impl PalwKernelRouteStateV1 {
     /// **The path label and the beacon event of one Final** (the RFC07 adapter's decision, apart from the ledger walk so it can be
     /// asserted on its own): an event only for a `PaidClaimV2` Final that `palw_exec_v2_selected_approval_v1` admits, never for an
@@ -899,13 +916,7 @@ impl PalwKernelRouteStateV1 {
                 .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
             let (final_path, event) = self.final_export_v1(&ledger, &receipt, settlement)?;
             let statement = receipt.assurance.statement();
-            let panel_record = (final_path == "PanelLicensed")
-                .then(|| {
-                    let work = ledger.claims.get(&receipt.claim).map(|r| (r.producer, r.job_id));
-                    let payer = work.and_then(|(_, job)| ledger.job_poster(&job));
-                    borsh::to_vec(&(&receipt, settlement.label(), work.map(|(p, _)| p), payer)).ok()
-                })
-                .flatten();
+            let panel_record = panel_record_v1(&ledger, &receipt, final_path, settlement);
             out.push(KernelFinalReadV1 { receipt, final_path, event, statement, settlement: settlement.label(), panel_record });
         }
         Ok(out)

@@ -3217,8 +3217,10 @@ impl KernelLedgerV1 {
                     // chain for a demand's deadline must not turn a provable fraud into a cheap default. If no valid proof arrives
                     // the outcome stays the default (availability, never fraud) and the reservation is released at the horizon.
                     // The per-class horizon (G14-B), never shortening one an EXEC hold or a source opt-in already extended.
+                    // A paid claim's signed lifetime sets the floor; an EXEC hold's consented extension is never shortened (the
+                    // EXEC consistency invariant: a bound dependency's liability covers its root window).
                     row.liability_until = Some(match self.paid_claim_consumers_v2.get(&claim) {
-                        Some(paid) => paid.lifetime.liability_until,
+                        Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
                         None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
                     });
                 }
@@ -3278,8 +3280,9 @@ impl KernelLedgerV1 {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
                     let liability_daa = self.claim_liability_daa_v1(&id);
                     let row = self.claims.get_mut(&id).expect("listed");
+                    // The paid lifetime's horizon, never shortening an EXEC hold's consented extension (see the default arm).
                     row.liability_until = Some(match self.paid_claim_consumers_v2.get(&id) {
-                        Some(paid) => paid.lifetime.liability_until,
+                        Some(paid) => paid.lifetime.liability_until.max(row.liability_until.unwrap_or(0)),
                         None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
                     });
                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook

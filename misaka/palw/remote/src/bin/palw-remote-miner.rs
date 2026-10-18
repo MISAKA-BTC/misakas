@@ -282,7 +282,7 @@ impl RemoteNode for WrpcNode<'_> {
             .runtime
             .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
                 block_hashes: blocks.iter().map(|b| b.to_string()).collect(),
-                proof_request: Vec::new(),
+                ..Default::default()
             }))
             .map_err(|e| format!("getPalwForkChoiceOpening: {e}"))?;
         if !served.available {
@@ -296,49 +296,44 @@ impl RemoteNode for WrpcNode<'_> {
             .collect())
     }
 
-    fn committed_fork_choice_openings(
+    /// RFC09: op 203 v2's committed leaves (untrusted; `misaka_palw_remote::l2_rule_e` verifies each with the full node's readers).
+    fn fork_choice_committed_v2(
         &self,
         blocks: &[Hash64],
-    ) -> Result<Vec<kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommittedOpeningV2>, String> {
-        let response = self
+        window_above_blue: Option<u64>,
+        bonds: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> Result<Vec<misaka_palw_remote::l2_rule_e::CommittedServedV2>, String> {
+        let registry_bonds: Vec<String> = bonds.iter().map(|b| faster_hex::hex_string(&borsh::to_vec(b).expect("a bond key serializes"))).collect();
+        let served = self
             .runtime
             .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
-                block_hashes: blocks.iter().map(ToString::to_string).collect(),
-                proof_request: Vec::new(),
+                block_hashes: blocks.iter().map(|b| b.to_string()).collect(),
+                rule_e_window_above_blue: window_above_blue,
+                registry_bonds,
             }))
-            .map_err(|e| e.to_string())?;
-        if !response.available {
-            return Err(response.reason);
+            .map_err(|e| format!("getPalwForkChoiceOpening: {e}"))?;
+        if !served.available {
+            return Err(format!("{} serves no fork-choice opening: {}", self.endpoint, served.reason));
         }
-        Ok(response
+        Ok(served
             .entries
             .iter()
             .filter(|e| e.available)
-            .filter_map(|e| misaka_palw_remote::l2::opening_from_wire_v2(&e.leaf, &e.inner_root))
-            .collect())
-    }
-
-    fn fork_choice_proofs(
-        &self,
-        block: Hash64,
-        query: &kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofQueryV2,
-    ) -> Result<Vec<kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofV2>, String> {
-        query.validate()?;
-        let response = self
-            .runtime
-            .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
-                block_hashes: vec![block.to_string()],
-                proof_request: borsh::to_vec(query).map_err(|e| e.to_string())?,
-            }))
-            .map_err(|e| e.to_string())?;
-        if !response.available {
-            return Err(response.reason);
-        }
-        Ok(response
-            .entries
-            .iter()
-            .filter(|e| e.available && e.block_hash == block.to_string())
-            .filter_map(|e| borsh::from_slice(&e.rule_e_proof).ok())
+            .filter_map(|e| {
+                Some(misaka_palw_remote::l2_rule_e::CommittedServedV2 {
+                    block: e.block_hash.parse().ok()?,
+                    leaf: e.committed_leaf.clone(),
+                    inner_root: e.inner_root.parse().ok()?,
+                    window: window_above_blue
+                        .filter(|_| !e.rule_e_window.is_empty())
+                        .and_then(|from| Some((from, borsh::from_slice(&e.rule_e_window).ok()?))),
+                    registry: bonds
+                        .iter()
+                        .copied()
+                        .zip(e.registry_openings.iter().filter_map(|o| borsh::from_slice(o).ok()))
+                        .collect(),
+                })
+            })
             .collect())
     }
 
@@ -779,7 +774,6 @@ fn main() {
                 // directory, ML-DSA-87; the fork-choice rules are this build's own (the drill's params on a drill). Without: L2 stays
                 // the checkpoint rule.
                 fork_choice: args.fork_choice_dir.clone().map(|dir| misaka_palw_remote::miner::RemoteForkChoiceV1 {
-                    params: Some(params.clone()),
                     rules: misaka_palw_remote::l2::ForkChoiceRulesV1::of(&params),
                     limits: args.fork_choice_limits,
                     issuers: args.fork_choice_issuers.clone(),
@@ -791,6 +785,7 @@ fn main() {
                         Ok(found)
                     }),
                     verify_signature: misaka_palw_remote::l2::verify_attestation_mldsa87_v1,
+                    params: Some(std::sync::Arc::new(params.clone())),
                 }),
             }),
             accept_unverified: args.accept_unverified,

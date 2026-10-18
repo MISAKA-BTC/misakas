@@ -912,3 +912,5 @@ async fn finx_p0_f_a_branch_one_tick_ahead_crosses_a_pre_fork_final_first_and_re
 
 /// ADR-0178's rule E against every violation above, armed — and the attacks it is built to hold.
 mod rule_e;
+/// RFC09: the remote client's rule E + Gate C choice from op 203 v2 is the full node's.
+mod rule_e_remote_v2;

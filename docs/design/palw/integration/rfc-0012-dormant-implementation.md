@@ -263,13 +263,13 @@ discovery (unrelated to the finality overlay).
 
 ## RFC12 observation tools — 2026-10-18 implementation in progress
 
-`getRfc12State` (wRPC op 214 and gRPC) accepts `blockHash` (empty selects the
-current virtual selected parent) and at most 64 `outpoints` (`txid:index`). Its
-versioned `snapshotJson` names the requested reserve block and the locked
-virtual generation. `reserveBalance: null` means unavailable history; a point's
-`utxoEntry: null` means that exact point is absent from that virtual UTXO set.
-Read failures are errors, never absent points or zero balances. This read has
-no consensus effect and assigns no activation height.
+Validation merge 8478ec5dc supplies `getPalwAcceptanceReads` (wRPC op 246
+and gRPC), with `reserveBlocks` and `outpoints` arrays bounded to 64 entries
+each. It reports `known` reserve balances, point presence and the served sink
+and DAA. The Codex branch-only op214 was superseded at the merge. Error versus
+absence handling, known-zero history and atomic generation reads still need
+reconciliation with the stronger pre-merge controls; no merged-tip runtime
+acceptance is claimed here.
 
 The private paid-v4 node can create an exporter request from a live pinned
 header with these tooling-only flags (plus the usual private profile, salt,
@@ -290,20 +290,18 @@ existing V4 exporter. The generator checks the node's genesis and parameter
 identity, downloads bounded carriage pages, verifies their canonical state
 against the caller-pinned header under its own exact private ruleset, and
 creates a new mode-0600 V4 request. It does not create missing jobs, approvals,
-receipts, or Panel membership. Acceptance plans can pass `{REQUEST_BLOCK}`,
-which the driver pins from a generation-bracketed live read before invoking
-`usefulWork.requestCommand`; `{WORK_DIR}` is fresh for each paid-work cycle.
+receipts, or Panel membership. The plan parser retains `{REQUEST_BLOCK}` and `{WORK_DIR}` placeholders.
+The pre-merge driver pinned the request block from a generation-bracketed read;
+restoring that wiring on the canonical validation driver is pending.
 
-`misaka evm deposit-refund --outpoint=TXID:INDEX --key-file=KEY [--to=ADDRESS]
-[--fee=SOMPI] [--yes]` reads the original lock by outpoint and signs the actual
-lock amount/script only when its timeout and refund owner match. Without
-`--yes` it previews. Normal admission resolves a raced spend or claim.
+The canonical validation CLI is `misaka evm refund --outpoint=TXID:INDEX
+--key-file=KEY [--fee=SOMPI] [--yes]`. Its first-party acceptance wiring and
+script-engine controls are being reconciled after the merge. Normal admission
+resolves a raced spend or claim.
 
-Exact import crash rendezvous require the nondefault private-only
-`rfc12-import-failpoints` feature. A plan's `import-wal` trigger names one of
-the 16 literal import checkpoints. The owned parent arms it after genesis,
-waits for the exact fsynced marker, sends SIGKILL, clears arming, and restarts.
-One bounded run covers one such checkpoint; it cannot combine that rendezvous
-with a coarse import-phase kill. Compilation and synthetic protocol controls
-are separate from actual process recovery evidence. Full acceptance and
-independent reserve accrual/drip reconciliation remain outstanding.
+The validation private-integration build contains eight literal import crash
+rendezvous. The operator must arm an owned directory after genesis, wait for
+the exact marker, SIGKILL the owned child, clear arming, then reopen. The
+acceptance driver still needs its exact-WAL arming port after the merge;
+pre-merge sixteen-stage controls do not describe this merged node. Full
+acceptance and independent reserve accrual/drip reconciliation remain open.

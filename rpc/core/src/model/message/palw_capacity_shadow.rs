@@ -746,18 +746,20 @@ impl Deserializer for GetPalwStateProofResponse {
 pub struct GetPalwForkChoiceOpeningRequest {
     /// 128 hex each, at most 16. Empty: the sink and every tip.
     pub block_hashes: Vec<String>,
-    /// Borsh `PalwForkChoiceProofQueryV2`; empty requests only the committed leaf.
+    /// **RFC09 (v2):** open each entry's v3 rule-E window above this blue score (the fork point's), for the rule-E comparator.
     #[serde(default)]
-    pub proof_request: Vec<u8>,
+    pub rule_e_window_above_blue: Option<u64>,
+    /// **RFC09 (v2):** the bonds (hex of the borsh `PalwBondKeyV2`) whose v3 registry openings each entry carries (at most 64).
+    #[serde(default)]
+    pub registry_bonds: Vec<String>,
 }
 
 impl Serializer for GetPalwForkChoiceOpeningRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &(if self.proof_request.is_empty() { 1u16 } else { 2 }), writer)?;
+        store!(u16, &2, writer)?;
         store!(Vec<String>, &self.block_hashes, writer)?;
-        if !self.proof_request.is_empty() {
-            store!(Vec<u8>, &self.proof_request, writer)?;
-        }
+        store!(Option<u64>, &self.rule_e_window_above_blue, writer)?;
+        store!(Vec<String>, &self.registry_bonds, writer)?;
         Ok(())
     }
 }
@@ -765,13 +767,10 @@ impl Serializer for GetPalwForkChoiceOpeningRequest {
 impl Deserializer for GetPalwForkChoiceOpeningRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if !(1..=2).contains(&version) {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown fork-choice request version"));
-        }
-        Ok(Self {
-            block_hashes: load!(Vec<String>, reader)?,
-            proof_request: if version == 2 { load!(Vec<u8>, reader)? } else { Vec::new() },
-        })
+        let block_hashes = load!(Vec<String>, reader)?;
+        let (rule_e_window_above_blue, registry_bonds) =
+            if version >= 2 { (load!(Option<u64>, reader)?, load!(Vec<String>, reader)?) } else { (None, Vec::new()) };
+        Ok(Self { block_hashes, rule_e_window_above_blue, registry_bonds })
     }
 }
 
@@ -783,9 +782,7 @@ pub struct RpcPalwForkChoiceEntry {
     pub available: bool,
     pub reason: String,
     pub header: Option<RpcHeader>,
-    /// The Borsh fork-choice leaf in the grammar selected at this state's point (V1/V2/V3).
-    /// Below the fence these are legacy, unauthenticated V1 diagnostic bytes.
-    /// Past the fence verify with `palw_verify_committed_leaf_v2` against a trusted root.
+    /// The borsh fork-choice leaf (292 bytes, the weight-allocation slot included).
     pub leaf: Vec<u8>,
     /// The ADR-0043 root the leaf is enveloped with (128 hex).
     pub inner_root: String,
@@ -793,14 +790,21 @@ pub struct RpcPalwForkChoiceEntry {
     pub committed_root: String,
     /// True past the fence (the committed root is the envelope).
     pub committed_form: bool,
-    /// Borsh `PalwForkChoiceProofV2`, bound to this entry's committed leaf.
+    /// **RFC09 (v2):** the committed leaf in the form the post-state's point selects (v1, rule-E v2 or v3); empty when flat. Verify it
+    /// with `palw_verify_committed_leaf_v2` against the committed root — the full node's own reader.
     #[serde(default)]
-    pub rule_e_proof: Vec<u8>,
+    pub committed_leaf: Vec<u8>,
+    /// **RFC09 (v2):** borsh `PalwRuleEWindowOpeningV1` above the asked blue score (v3 only; empty: not asked or not v3).
+    #[serde(default)]
+    pub rule_e_window: Vec<u8>,
+    /// **RFC09 (v2):** borsh `PalwRuleERegistryOpeningV3` of each asked bond, in the asked order (v3 only).
+    #[serde(default)]
+    pub registry_openings: Vec<Vec<u8>>,
 }
 
 impl Serializer for RpcPalwForkChoiceEntry {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &(if self.rule_e_proof.is_empty() { 1u16 } else { 2 }), writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.block_hash, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.reason, writer)?;
@@ -809,9 +813,9 @@ impl Serializer for RpcPalwForkChoiceEntry {
         store!(String, &self.inner_root, writer)?;
         store!(String, &self.committed_root, writer)?;
         store!(bool, &self.committed_form, writer)?;
-        if !self.rule_e_proof.is_empty() {
-            store!(Vec<u8>, &self.rule_e_proof, writer)?;
-        }
+        store!(Vec<u8>, &self.committed_leaf, writer)?;
+        store!(Vec<u8>, &self.rule_e_window, writer)?;
+        store!(Vec<Vec<u8>>, &self.registry_openings, writer)?;
         Ok(())
     }
 }
@@ -819,10 +823,7 @@ impl Serializer for RpcPalwForkChoiceEntry {
 impl Deserializer for RpcPalwForkChoiceEntry {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if !(1..=2).contains(&version) {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown fork-choice entry version"));
-        }
-        Ok(Self {
+        let mut entry = Self {
             block_hash: load!(String, reader)?,
             available: load!(bool, reader)?,
             reason: load!(String, reader)?,
@@ -831,8 +832,14 @@ impl Deserializer for RpcPalwForkChoiceEntry {
             inner_root: load!(String, reader)?,
             committed_root: load!(String, reader)?,
             committed_form: load!(bool, reader)?,
-            rule_e_proof: if version == 2 { load!(Vec<u8>, reader)? } else { Vec::new() },
-        })
+            ..Default::default()
+        };
+        if version >= 2 {
+            entry.committed_leaf = load!(Vec<u8>, reader)?;
+            entry.rule_e_window = load!(Vec<u8>, reader)?;
+            entry.registry_openings = load!(Vec<Vec<u8>>, reader)?;
+        }
+        Ok(entry)
     }
 }
 

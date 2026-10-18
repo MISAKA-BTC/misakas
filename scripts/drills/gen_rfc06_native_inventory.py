@@ -135,7 +135,9 @@ queue=['crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMate
        'crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1','crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1',
        'crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1',
        # G14 lane closure (2026-10-16): kernel route aux 143 (dormant).
-       'crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1','crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1']; visited=set(); generated=[]; unresolved=[]
+       'crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1','crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1',
+       # RFC08 08-B (2026-10-18): held native fees, kernel route aux 144 (dormant).
+       'crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1']; visited=set(); generated=[]; unresolved=[]
 
 # Resolve dependency types; concrete names, aliases/primitive containers are left
 # to Rust's existing type system, so there is no byte-size inference from codec.

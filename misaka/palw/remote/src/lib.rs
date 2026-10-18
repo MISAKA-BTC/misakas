@@ -30,6 +30,8 @@ pub mod bundle;
 pub mod checkpoint;
 pub mod evidence;
 pub mod l2;
+/// RFC09: the fork choice under rule E + Gate C from op 203 v2 committed leaves (the full node's own readers).
+pub mod l2_rule_e;
 pub mod miner;
 pub mod proof;
 /// Lane DA16: the public material transport — artifacts (both roots of a binding) and claim material (kernel positions, V2 held units).

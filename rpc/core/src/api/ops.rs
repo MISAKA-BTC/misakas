@@ -304,8 +304,6 @@ pub enum RpcApiOps {
     /// G14 lane D / RFC-0015: every Final the kernel route holds, in canonical order, with the beacon's `WorkFinalEventV1` for it
     /// (an OPV Final is `PanelIndependent`: the fact RFC-0010's Panel-assignment beacon needs). Appended at the tail.
     GetPalwKernelFinals = 212,
-    /// RFC12 acceptance reserve/outpoint read. No consensus authority.
-    GetRfc12State = 214,
     /// RFC-0002 P0 (lane RFC02-T): one bond's candidate-refutation seal rows (kernel route aux table 64, inner 36) — slot, seal, clock,
     /// deposit and whether it is live — and the fence's state. Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwModelRefutationSeals = 213,
@@ -336,6 +334,9 @@ pub enum RpcApiOps {
     /// RFC-0012 acceptance: one paid claim (enrollment, round seats/quorum/receipts, Final) at the tip. Read-only, no authority.
     /// Op 247 is the RFC-0012 harness's reservation (`scripts/drills/rfc12_acceptance_observe.py`).
     GetPalwPaidClaim = 247,
+    /// RFC-0012 acceptance: the DNS security reserve balance per block and virtual UTXO point reads by outpoint. Read-only.
+    /// Op 246 (free per the 2026-10-15 number inventory; proto 1310/1311).
+    GetPalwAcceptanceReads = 246,
     /// RFC-0016: the per-model report (targets apart from outcomes; node-local observations labelled) and the pre-lottery quote.
     /// Read-only. Op 255 (245–254 are reserved by other lanes).
     GetPalwRfc0016Report = 255,

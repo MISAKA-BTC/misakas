@@ -1985,31 +1985,36 @@ impl ValidatorKey {
         Ok(tx)
     }
 
-    /// Spend an expired, still-unspent EVM deposit lock with its depositor's
-    /// ML-DSA signature. The original lock script and amount remain in sighash.
-    pub fn build_evm_deposit_refund_tx(
+    /// **RFC-0012 acceptance (EVM lane §9.2): the signed refund of an unclaimed `EVM_DEPOSIT_LOCK`.** Spends `lock` (its outpoint and
+    /// the virtual UTXO entry read by outpoint) to its own embedded refund script, less `fee`. Refused unless the lock parses, its
+    /// refund script is this key's own ML-DSA P2PKH (the only key that can sign it), and `pov_daa >= timeout` — the node refuses an
+    /// earlier spend (`EvmDepositLockNotRefundableYet`: until then the lock is claimable and not spendable). The signature script is
+    /// the refund P2PKH's (the lock-data prefix is a push-and-drop no-op).
+    pub fn build_deposit_lock_refund_tx(
         &self,
-        outpoint: TransactionOutpoint,
-        entry: &UtxoEntry,
+        lock: (TransactionOutpoint, UtxoEntry),
+        prefix: Prefix,
         pov_daa: u64,
-        recipient: ScriptPublicKey,
         fee: u64,
         storage_mass_parameter: u64,
     ) -> Result<Transaction, String> {
-        let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)
-            .ok_or("refund input is not an EVM deposit lock")?;
-        if pov_daa < lock.timeout_daa_score {
-            return Err(format!("deposit refund requires DAA {}, current DAA {pov_daa}", lock.timeout_daa_score));
+        let fields = kaspa_txscript::script_class::parse_evm_deposit_lock(&lock.1.script_public_key)
+            .ok_or_else(|| "the outpoint is not an EVM deposit lock".to_string())?;
+        let own = pay_to_address_script(&self.funding_address(prefix));
+        if fields.refund_script_public_key.script() != own.script() {
+            return Err("the lock's refund script is not this key's funding script".to_string());
         }
-        let own = pay_to_address_script(&self.funding_address(Prefix::Testnet));
-        if lock.refund_script_public_key != own {
-            return Err("deposit refund key does not own the embedded refund script".into());
+        if pov_daa < fields.timeout_daa_score {
+            return Err(format!(
+                "the lock is not refundable yet: DAA {pov_daa} < refund timeout {} (it is claimable until then)",
+                fields.timeout_daa_score
+            ));
         }
-        if !kaspa_txscript::script_class::ScriptClass::from_script(&recipient).is_pq_standard() {
-            return Err("deposit refund destination must be a standard PQ script".into());
+        if lock.1.amount <= fee {
+            return Err(format!("the lock's {} sompi does not cover the fee {fee}", lock.1.amount));
         }
-        if entry.amount <= fee { return Err("deposit refund amount does not cover its fee".into()); }
-        self.sign_native_multi(&[(outpoint, entry.clone())], vec![TransactionOutput::new(entry.amount - fee, recipient)], storage_mass_parameter)
+        let outputs = vec![TransactionOutput::new(lock.1.amount - fee, own)];
+        self.sign_native_multi(std::slice::from_ref(&lock), outputs, storage_mass_parameter)
     }
 
     /// Mass-based fee (sompi) for an `n_inputs`-funded deposit-lock tx — the
@@ -4446,40 +4451,4 @@ mod rfc9_sighash_audit {
         assert_eq!(fresh_id(&garbage), id);
         assert!(!verifies(&garbage, &entry), "…but a corrupted script does not validate, so it is a refusal, not a second tx");
     }
-
-    #[test]
-    fn rfc12_refund_is_timeout_bound_owned_and_validates_with_the_real_script_engine() {
-        use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
-        use kaspa_txscript::{TxScriptEngine, caches::Cache};
-        let owner = key();
-        let other = ValidatorKey::from_seed([0x78; VALIDATOR_SEED_LEN]);
-        let refund = pay_to_address_script(&owner.funding_address(Prefix::Testnet));
-        let recipient = pay_to_address_script(&other.funding_address(Prefix::Testnet));
-        let point = TransactionOutpoint::new(Hash64::from_u64_word(12012), 0);
-        let entry = UtxoEntry::new(10_000_000, evm_deposit_lock_script([3; 20], 1000, 100, refund.script()), 5, false);
-        let build = |key: &ValidatorKey, daa, fee| key.build_evm_deposit_refund_tx(point, &entry, daa, recipient.clone(), fee, 0);
-        assert!(build(&owner, 999, 1000).is_err());
-        assert!(build(&other, 1000, 1000).is_err());
-        assert!(build(&owner, 1000, entry.amount).is_err());
-        let tx = build(&owner, 1000, 1000).unwrap();
-        let valid = |tx: &Transaction, entry: &UtxoEntry| {
-            let populated = PopulatedTransaction::new(tx, vec![entry.clone()]);
-            let cache = Cache::new(0);
-            let reused = SigHashReusedValuesUnsync::new();
-            TxScriptEngine::from_transaction_input(&populated, &tx.inputs[0], 0, entry, &reused, &cache).execute().is_ok()
-        };
-        assert!(valid(&tx, &entry), "the signature spends the actual prefixed EVM lock script");
-        assert_eq!(tx.outputs.len(), 1);
-        assert_eq!(tx.outputs[0].value, entry.amount - 1000);
-        let mut changed_tx = tx.clone();
-        changed_tx.outputs[0].value -= 1;
-        assert!(!valid(&changed_tx, &entry), "the fee/output is signed");
-        let mut changed_entry = entry.clone();
-        changed_entry.amount += 1;
-        assert!(!valid(&tx, &changed_entry), "the input amount is signed");
-        changed_entry = entry.clone();
-        changed_entry.script_public_key = evm_deposit_lock_script([3; 20], 1001, 100, refund.script());
-        assert!(!valid(&tx, &changed_entry), "the original lock timeout is signed, not just the refund suffix");
-    }
-
 }

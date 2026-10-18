@@ -2153,6 +2153,11 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0007 §4.1 T6: held check fees past their trap reveal window (claim terminal) are released once; conviction rows past
     // their window are forgotten. A no-op below `palw_paid_claim_trap_v1`.
     super::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(builder, ctx.daa_score)?;
+    // RFC08 08-B (ADR-0184 §1): held native fees past their liability horizon, with no open dispute, are released once (the
+    // payout the Final deferred). A no-op below `palw_native_liability_horizon_v1`.
+    super::palw_native_liability_hold_fold_v1::release_held_native_fees_v1(builder, ctx.daa_score, |b, row| {
+        super::palw_native_job_fold_v39::native_dispute_open_v39(b, row)
+    })?;
     // G14 lane closure G-K1: signer locks whose claim can no longer be convicted are released (a convicted one charged), whatever
     // the ledger is doing.
     super::palw_g14_lane_closure_fold_v1::sweep_kernel_signer_locks_v1(builder, ctx.daa_score)?;

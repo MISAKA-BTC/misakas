@@ -29,7 +29,7 @@ use crate::{
             statuses::StatusesStoreReader,
             tips::{TipsStore, TipsStoreReader},
             utxo_set::UtxoSetStoreReader,
-            virtual_state::{VirtualState, VirtualStateStoreReader},
+            virtual_state::VirtualState,
         },
     },
     pipeline::{
@@ -3015,42 +3015,8 @@ impl ConsensusApi for Consensus {
         iter.map(|item| item.unwrap()).collect()
     }
 
-    fn rfc12_state_v1(
-        &self,
-        block: Option<BlockHash>,
-        outpoints: &[TransactionOutpoint],
-    ) -> Result<kaspa_consensus_core::api::Rfc12StateV1, String> {
-        if outpoints.len() > 64 { return Err("at most 64 outpoints per RFC12 read".into()); }
-        let virtual_stores = self.virtual_stores.read();
-        let state = virtual_stores.state.get().map_err(|e| format!("virtual generation: {e}"))?;
-        let sink = state.ghostdag_data.selected_parent;
-        let block = block.unwrap_or(sink);
-        let header = self.headers_store.get_header(block).map_err(|e| format!("block header: {e}"))?;
-        let reserve_balance = self.reserve_balance_store.get(block).optional().map_err(|e| format!("reserve row: {e}"))?;
-        // Zero rows are intentionally omitted on validated chain blocks. A
-        // header alone is insufficient evidence that an omitted row means zero.
-        let reserve_balance = if reserve_balance.is_some() { reserve_balance } else {
-            let retained = self.acceptance_data_store.get(block).optional().map_err(|e| format!("acceptance row: {e}"))?.is_some();
-            if retained || block == self.config.params.genesis.hash { Some(0) } else { None }
-        };
-        let mut utxos = Vec::with_capacity(outpoints.len());
-        for point in outpoints {
-            let entry = UtxoSetStoreReader::get(&virtual_stores.utxo_set, point).optional()
-                .map_err(|e| format!("UTXO {point}: {e}"))?.map(|e| e.as_ref().clone());
-            utxos.push((*point, entry));
-        }
-        let virtual_daa = state.daa_score;
-        let virtual_parents = state.parents.clone();
-        drop(virtual_stores);
-        let reserve_balance = if reserve_balance.is_some() { reserve_balance } else {
-            use crate::model::stores::pruning_overlay_snapshot::PruningPointOverlaySnapshotStoreReader;
-            self.pruning_overlay_snapshot_store.read().get().optional().map_err(|e| format!("reserve snapshot: {e}"))?
-                .filter(|s| s.pruning_point == block).map(|s| s.snapshot.reserve_balance)
-        };
-        Ok(kaspa_consensus_core::api::Rfc12StateV1 {
-            block, block_daa: header.daa_score, reserve_balance,
-            virtual_selected_parent: sink, virtual_daa, virtual_parents, utxos,
-        })
+    fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
+        self.storage.reserve_balance_store.get(block).ok()
     }
 
     fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
@@ -4232,17 +4198,18 @@ impl ConsensusApi for Consensus {
         let sink = self.get_sink();
         let mut tips = self.get_tips();
         tips.sort();
-        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips)
+        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips, &Default::default())
     }
 
     fn palw_fork_choice_openings_v2(
         &self,
         blocks: &[BlockHash],
-        query: &kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofQueryV2,
+        extras: &kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2,
     ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let sink = self.get_sink();
         let mut tips = self.get_tips();
         tips.sort();
-        self.virtual_processor.palw_fork_choice_openings_v2_impl(blocks, self.get_sink(), tips, Some(query))
+        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips, extras)
     }
 
     fn import_pruning_point_overlay_snapshot(

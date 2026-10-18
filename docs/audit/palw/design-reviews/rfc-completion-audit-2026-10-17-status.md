@@ -89,6 +89,45 @@ release / refund / slash — needs each family's terminal state machine to stay 
 fixture); RFC07 `panel_record` has no dedicated test yet (every Final read in the suites passes with it `None`); RFC09, RFC10, RFC12
 not started.
 
+## Progress 2026-10-18, third pass (`integ/validation-r2`)
+
+**Item 1 (this lane, done as far as listed):** x8 rewrites and their results — validation record §9. RFC07 `panel_record` has a
+dedicated test. Open in item 1: withheld-slice (an unattributed 5 KAS slash of the root card), native happy-Final (covenant lookup at
+the anchor-slot attempt), and a re-run of the six rewritten tests.
+
+**Items 2–5 move to the Codex lane.** State handed over:
+
+- **RFC08 08-B (partial, committed `2c608053d`):** dormant `palw_native_liability_horizon_v1` (params / identity / fork-id / state
+  mirror borsh-skipped; fingerprints unchanged); `consensus/core/src/palw_native_liability_hold_v1.rs` (aux 144 row) and
+  `palw_native_liability_hold_fold_v1.rs` (hold / release sweep / refund); native job v39 only: `palw_native_job_fold_v39.rs`
+  `credit` holds the fee, `credit_after_final_conviction`, `accusable_v39`, `accusation_horizon_v39`, `native_dispute_open_v39`;
+  `NativeJobBookV39::convict_after_final` (`palw_native_job_v39.rs`); court / DA request / DA default accept a held Final
+  (`palw_native_protected_fold_v39.rs`, `palw_native_public_fold_v39.rs`); Master waits for held components
+  (`palw_native_master_fold_v39.rs`); sweep hooked in `palw_kernel_route_fold_v1.rs` closing tick. Core unit tests only. Remaining:
+  text v29 (`palw_native_text_fold_v29.rs` `settle` ~1268) and funded v11 holds and post-Final accusation; mining receipt vesting;
+  node E2E. ADR-0184 note added.
+- **RFC08 08-C (fixture written, failing):** `Cw::no_seam`, `admit_class_without_seam` (exec_slices.rs), two tests in
+  `exec_slices/native_final.rs`. The class never leaves `Candidate` in 12,000 DAA: ADR-0147's network-drawn admission jury
+  (`transition_builder.rs` `admission_jury_v1` ~6487; audit period, seed anchor of the span before), then Prefetching → Probation.
+  Observation: this jury is a model-level review in the legacy registry path, which PRINCIPLES §9 says is not adopted — flagged, not
+  changed.
+- **RFC09 (implemented, test not passing yet, `aad79f5e5`):** op 203 v2 (committed leaf, v3 window, v3 registry openings; rpc core /
+  gRPC / service; `ConsensusApi::palw_fork_choice_openings_v2`); `misaka/palw/remote/src/l2_rule_e.rs` (verify with
+  `palw_verify_committed_leaf_v2`, `verify_window_suffix_v3`, `palw_rule_e_verify_registry_v3`, `palw_rule_e_pair_from_openings_v3`,
+  `palw_rule_e_order_v2`; STOP on missing/tampered); miner `rule_e_mode_v2` replaces the `LeafV1Insufficient` STOP; node test
+  `hb_fork_choice_probe/finality_consistency/rule_e_remote_v2.rs` fails at setup (Gate C needs the kernel route fence — now armed,
+  not re-run). Issuer still signs v1 attestations only.
+- **RFC10:** not started (needs the paid-source Panel v5 beacon wired into `t12_permissionless_panel_e2e.rs` instead of
+  `reference_source()`).
+- **RFC12 (partial, `24af8f6aa`):** op 246 `getPalwAcceptanceReads` (reserve balance per block, UTXO by outpoint) + harness
+  `acceptance_reads`; pruning-import crash points compiled into the private-integration build; `misaka evm refund` with
+  `build_deposit_lock_refund_tx`. Remaining: paid-work request generator, reserve reconciliation rule, harness arming of the crash
+  points, the `evm` build and the acceptance run (not run).
+
+## Pre-merge Codex measurements (commit c514deee4)
+
+The measurements below apply to c514deee4 before adopting validation 8478ec5dc. Shared implementation conflicts now use validation; these are historical results, not merged-tip acceptance.
+
 
 ## Codex handover 3 — 2026-10-18 (in progress)
 
@@ -175,3 +214,7 @@ this checkpoint; no end-to-end completion is claimed.
   two-fork API test above. Relevant legacy DNS anchors are walked through authenticated selected-parent openings,
   including anchors before the Rule E fork point. A mixed pre-Rule-E fork still fails closed rather than using a
   cross-activation comparator; no activation or complete migration acceptance is claimed.
+
+### 2026-10-18 — validation merge
+
+Merged validation 8478ec5dc, newer than required base 042e5e759. Incoming implementation wins all conflicts. Canonical op203 extras, op246 acceptance reads, remote rule_e reader, refund command and native job liability holds are retained. Codex op214 and its duplicate DTO are superseded. Paid-request generator and bounded carriage capture remain; adapters/tests/docs must be reconciled against the merged APIs before the next build. The c514deee4 runtime build and queued RPC test were deliberately interrupted at this source transition; neither is runtime evidence.

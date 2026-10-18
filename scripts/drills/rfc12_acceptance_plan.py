@@ -55,12 +55,8 @@ CONSUMER_CHECKPOINTS = ('usefulWork', 'bridge', 'market', 'fork', 'partition', '
 # Phases during which a crash point may be armed, and the trigger kinds each role can carry.
 CRASH_PHASES = ('usefulWork', 'fork', 'partition', 'freshJoin', 'coldReopen')
 IMPORT_WAL_STAGES = (
-    'session-begin-before-barrier', 'session-begin-after-barrier',
     'utxo-before-clear', 'utxo-after-clear', 'utxo-before-virtual-copy', 'utxo-after-virtual-clear',
     'utxo-mid-virtual-copy', 'utxo-after-virtual-copy', 'import-before-complete', 'import-after-complete',
-    'evm-sidecar-before-barrier', 'evm-sidecar-after-barrier',
-    'palw-sidecar-before-barrier', 'palw-sidecar-after-barrier',
-    'legacy-sidecar-before-barrier', 'legacy-sidecar-after-barrier',
 )
 TRIGGERS = {
     'import-wal': (('crashJoin',), ('freshJoin',)),

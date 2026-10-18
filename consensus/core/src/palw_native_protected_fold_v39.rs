@@ -227,7 +227,7 @@ fn admit(
     let total = u64::from_le_bytes(raw[130..138].try_into().unwrap());
     let discovery = raw[138] == 1;
     let h = header(builder.state.kernel_route.as_ref().unwrap(), job)?;
-    if h.terminal != NativeJobTerminalV39::Challengeable || *signer == h.original.producer {
+    if !super::accusable_v39(builder, &h, ctx.daa_score) || *signer == h.original.producer {
         return Err(bad("native39 paid owner requires independent original challengeable claim"));
     }
     if !prepay(builder, ctx, signer, p, h.source_bytes as u64 + h.consent_bytes as u64, raw.len(), 16384)? {
@@ -239,8 +239,10 @@ fn admit(
     let actor = builder.state.bonds.get(signer).ok_or_else(|| bad("native39 independent actor absent"))?;
     let operator = actor.operator_id.as_bytes();
     let temporal = &max.record().temporal;
-    let latest =
-        claim.challenge_end.checked_sub(temporal.acquisition).ok_or_else(|| bad("native39 full opportunity cutoff absent"))?;
+    // RFC08 08-B: past a held Final the opportunity runs to the liability horizon (the deadline below it).
+    let horizon = super::accusation_horizon_v39(builder, &h);
+    let latest = if h.terminal == NativeJobTerminalV39::Final { horizon.checked_sub(temporal.acquisition) } else { claim.challenge_end.checked_sub(temporal.acquisition) }
+        .ok_or_else(|| bad("native39 full opportunity cutoff absent"))?;
     let until = ctx
         .daa_score
         .checked_add(temporal.acquisition)
@@ -250,7 +252,7 @@ fn admit(
         // G14 lane closure G-N1: live owners (an expired owner's slot is freed at its expiry).
         || st.admitted >= 4
         || ctx.daa_score > latest
-        || until >= h.original.deadline
+        || until >= horizon
         || total == 0
         || total > quota.paged().maximum_bytes
         || !discovery && proof == [0; 64]
@@ -383,7 +385,7 @@ fn proof_part(
     let mut o = owner(builder.state.kernel_route.as_ref().unwrap(), part.seal)?;
     let paid = plan(builder.state.kernel_route.as_ref().unwrap(), &h)?;
     let st = status(builder.state.kernel_route.as_ref().unwrap(), &h)?;
-    if h.terminal != NativeJobTerminalV39::Challengeable
+    if !super::accusable_v39(builder, &h, ctx.daa_score)
         || o.actor != *signer
         || o.job != h.id
         || !st.owners.contains(&o.id)
@@ -474,9 +476,19 @@ fn proof_part(
         builder.state.bonds.get(&h.original.producer).map(|b| b.collateral),
         h.original.reserve,
     );
-    let s = book.convict(ctx.daa_score, proof, collectible, o.operator).map_err(bad)?;
+    // RFC08 08-B: a held Final is convicted inside its liability horizon (the fee refunded, the reserve collected).
+    let after_final = h.terminal == NativeJobTerminalV39::Final;
+    let s = if after_final {
+        let horizon = super::accusation_horizon_v39(builder, &h);
+        book.convict_after_final(ctx.daa_score, horizon, proof, collectible, o.operator).map_err(bad)?
+    } else {
+        book.convict(ctx.daa_score, proof, collectible, o.operator).map_err(bad)?
+    };
     o.spent = true;
     write_owner(builder, &o)?;
+    if after_final {
+        return super::credit_after_final_conviction(builder, ctx, &mut h, &book, &s, *signer);
+    }
     super::credit(builder, ctx, p, &mut h, &book, &s, Some(*signer))
 }
 fn convert(
@@ -497,7 +509,7 @@ fn convert(
     let mut o = owner(builder.state.kernel_route.as_ref().unwrap(), id)?;
     let paid = plan(builder.state.kernel_route.as_ref().unwrap(), &h)?;
     let st = status(builder.state.kernel_route.as_ref().unwrap(), &h)?;
-    if h.terminal != NativeJobTerminalV39::Challengeable
+    if !super::accusable_v39(builder, &h, ctx.daa_score)
         || !st.owners.contains(&id)
         || o.job != job
         || o.actor != *signer

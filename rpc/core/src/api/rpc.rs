@@ -1074,6 +1074,20 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwPaidClaimResponse::default())
     }
 
+    /// **RFC-0012 acceptance (op 246): the DNS security reserve balance per block and virtual UTXO reads by outpoint.** Read-only.
+    /// A node built before op 246 answers the default (`available` false).
+    async fn get_palw_acceptance_reads(&self, request: GetPalwAcceptanceReadsRequest) -> RpcResult<GetPalwAcceptanceReadsResponse> {
+        self.get_palw_acceptance_reads_call(None, request).await
+    }
+    async fn get_palw_acceptance_reads_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwAcceptanceReadsRequest,
+    ) -> RpcResult<GetPalwAcceptanceReadsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwAcceptanceReadsResponse::default())
+    }
+
     /// **ADR-0152-adjacent: one class's Activation Pool** (op 200; testnet-12) — its budgets, its
     /// payees, the terms and the sink a top-up pays into. A node built before op 200 drops the
     /// WebSocket on it: ask it last on a connection, or reconnect.
@@ -1117,18 +1131,6 @@ pub trait RpcApi: Sync + Send + AnySync {
     ) -> RpcResult<GetPalwStateProofResponse> {
         let _ = (connection, request);
         Ok(GetPalwStateProofResponse::default())
-    }
-
-    async fn get_rfc_12_state(&self, request: GetRfc12StateRequest) -> RpcResult<GetRfc12StateResponse> {
-        self.get_rfc_12_state_call(None, request).await
-    }
-    async fn get_rfc_12_state_call(
-        &self,
-        connection: Option<&DynRpcConnection>,
-        request: GetRfc12StateRequest,
-    ) -> RpcResult<GetRfc12StateResponse> {
-        let _ = (connection, request);
-        Err(RpcError::General("this node serves no RFC12 state read".into()))
     }
 
     /// RFC-0009 L2: the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203). A node built before op 203

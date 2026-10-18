@@ -711,6 +711,17 @@ fn close(
                 return Err(bad("Master39 cannot collect live original child obligations"));
             }
             if h.terminal == NativeJobTerminalV39::Final {
+                // RFC08 08-B (ADR-0184 §1): a component whose fee is still held is still accusable — the Master (and every
+                // mining claim over it) waits for its liability horizon.
+                if super::palw_native_liability_hold_fold_v1::held_native_fee_v1(
+                    &builder.state,
+                    crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39,
+                    &c.job,
+                )
+                .is_some()
+                {
+                    return Err(bad("Master39 component's liability horizon is still open"));
+                }
                 let (book, credit) = original_final(r, c)?;
                 components.push(NativeMasterComponentFinalV39 {
                     original: c.clone(),

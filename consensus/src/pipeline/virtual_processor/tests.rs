@@ -6582,7 +6582,7 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     assert_eq!(reserve_accrued, dist.security_reserve_sompi, "A's slash accrues its reserve share to the pool");
     assert!(reserve_accrued > 0, "the reserve must be non-zero to drip");
     assert_eq!(
-        ctx.consensus.rfc12_state_v1(Some(reserve_settle.header.hash), &[]).unwrap().reserve_balance,
+        ctx.consensus.get_dns_reserve_balance(reserve_settle.header.hash),
         Some(dist.security_reserve_sompi),
         "RFC12 reads the actual positive balance, independently checked against the slashed principal's split"
     );
@@ -6609,12 +6609,12 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     // The sole included validator B receives the WHOLE reserve (cap is u64::MAX): accrued-in == dripped-out.
     assert_eq!(drip_out.value, reserve_accrued, "the entire accrued reserve drips to the lone included validator B");
     assert_eq!(
-        ctx.consensus.rfc12_state_v1(Some(drip_block.header.hash), &[]).unwrap().reserve_balance,
+        ctx.consensus.get_dns_reserve_balance(drip_block.header.hash),
         Some(0),
         "RFC12 reports known zero after the independently observed coinbase drip exhausts the reserve"
     );
     assert_eq!(
-        ctx.consensus.rfc12_state_v1(Some(reserve_settle.header.hash), &[]).unwrap().reserve_balance,
+        ctx.consensus.get_dns_reserve_balance(reserve_settle.header.hash),
         Some(reserve_accrued),
         "a later drip does not change the historical block's reserve balance"
     );

@@ -123,7 +123,6 @@ message KaspadRequest {
     GetPalwCapacityShadowRequestMessage getPalwCapacityShadowRequest = 1216;
     GetPalwStateProofRequestMessage getPalwStateProofRequest = 1218;
     GetPalwForkChoiceOpeningRequestMessage getPalwForkChoiceOpeningRequest = 1220;
-    GetRfc12StateRequestMessage getRfc12StateRequest = 1340;
     GetPalwLegacyDisputeRequestMessage getPalwLegacyDisputeRequest = 1222;
     GetPalwLegacyDisputesRequestMessage getPalwLegacyDisputesRequest = 1224;
     GetPalwFraudFilerStatusRequestMessage getPalwFraudFilerStatusRequest = 1226;
@@ -135,6 +134,7 @@ message KaspadRequest {
     GetPalwStagedPreclaimQuoteRequestMessage getPalwStagedPreclaimQuoteRequest = 1306;
     GetPalwRouterBindingV2RequestMessage getPalwRouterBindingV2Request = 1308;
     GetPalwPaidClaimRequestMessage getPalwPaidClaimRequest = 1312;
+    GetPalwAcceptanceReadsRequestMessage getPalwAcceptanceReadsRequest = 1310;
     GetPalwRfc0016ReportRequestMessage getPalwRfc0016ReportRequest = 1330;
     GetPalwKernelClaimRequestMessage getPalwKernelClaimRequest = 1234;
     GetPalwKernelRowsRequestMessage getPalwKernelRowsRequest = 1236;
@@ -264,7 +264,6 @@ message KaspadResponse {
     GetPalwCapacityShadowResponseMessage getPalwCapacityShadowResponse = 1217;
     GetPalwStateProofResponseMessage getPalwStateProofResponse = 1219;
     GetPalwForkChoiceOpeningResponseMessage getPalwForkChoiceOpeningResponse = 1221;
-    GetRfc12StateResponseMessage getRfc12StateResponse = 1341;
     GetPalwLegacyDisputeResponseMessage getPalwLegacyDisputeResponse = 1223;
     GetPalwLegacyDisputesResponseMessage getPalwLegacyDisputesResponse = 1225;
     GetPalwFraudFilerStatusResponseMessage getPalwFraudFilerStatusResponse = 1227;
@@ -276,6 +275,7 @@ message KaspadResponse {
     GetPalwStagedPreclaimQuoteResponseMessage getPalwStagedPreclaimQuoteResponse = 1307;
     GetPalwRouterBindingV2ResponseMessage getPalwRouterBindingV2Response = 1309;
     GetPalwPaidClaimResponseMessage getPalwPaidClaimResponse = 1313;
+    GetPalwAcceptanceReadsResponseMessage getPalwAcceptanceReadsResponse = 1311;
     GetPalwRfc0016ReportResponseMessage getPalwRfc0016ReportResponse = 1331;
     GetPalwKernelClaimResponseMessage getPalwKernelClaimResponse = 1235;
     GetPalwKernelRowsResponseMessage getPalwKernelRowsResponse = 1237;

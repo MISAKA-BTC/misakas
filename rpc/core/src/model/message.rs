@@ -2566,6 +2566,8 @@ mod palw_router_binding_v2;
 pub use palw_router_binding_v2::*;
 mod palw_paid_claim_read;
 pub use palw_paid_claim_read::*;
+mod palw_acceptance_reads;
+pub use palw_acceptance_reads::*;
 
 mod palw_vesting;
 pub use palw_vesting::*;
@@ -2617,6 +2619,3 @@ mod palw_monetary_material;
 pub use palw_monetary_material::*;
 mod palw_state_carriage;
 pub use palw_state_carriage::*;
-
-mod rfc12_state;
-pub use rfc12_state::*;

@@ -283,7 +283,7 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
         "kind": "rfc12-private-integration-probe",
         "paidRequestGenerator": true,
         "importCrashFailpoints": {
-            "available": cfg!(feature = "rfc12-import-failpoints"),
+            "available": cfg!(feature = "private-integration-config"),
             "rendezvousVersion": 1,
         },
         "network": config.params.net.to_string(),

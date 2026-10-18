@@ -2761,26 +2761,27 @@ enum EvmCmd {
         #[command(flatten)]
         key: KeyArgs,
     },
-    /// Refund an unclaimed deposit after its signed timeout (dry-run unless --yes).
-    DepositRefund {
-        #[arg(long)]
-        outpoint: String,
-        /// Destination address; defaults to the deposit owner's funding address.
-        #[arg(long)]
-        to: Option<String>,
-        #[arg(long)]
-        fee: Option<u64>,
-        #[arg(long)]
-        yes: bool,
-        #[command(flatten)]
-        key: KeyArgs,
-    },
     /// Queue the claim of a deposit lock on this node (`submitEvmDepositClaim`); run it against a
     /// mining node so the claim is included.
     Claim {
         /// The lock outpoint `deposit-lock` printed, `txid_hex:index`.
         #[arg(long)]
         outpoint: String,
+    },
+    /// Refund an unclaimed deposit lock to this key once its refund timeout has passed (dry-run unless --yes). The lock entry is
+    /// read by outpoint (`getPalwAcceptanceReads`, op 246); the spend is signed by this key's ML-DSA-87 funding key.
+    Refund {
+        /// The lock outpoint `deposit-lock` printed, `txid_hex:index`.
+        #[arg(long)]
+        outpoint: String,
+        /// Fee in sompi.
+        #[arg(long, default_value_t = 100_000)]
+        fee: u64,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        key: KeyArgs,
     },
     /// EVM transaction lifecycle (`misaka_getEvmTxStatus`).
     /// A read-only eth_call at latest (ADR-0089's doors answer any caller): --to <addr> --data <hex>.
@@ -3435,10 +3436,10 @@ async fn run_cli() -> std::process::ExitCode {
                 evm_deposit::deposit_lock(ctx, &key.source(), &evm_address, amount, claim_tip, timeout_daa_delta, fee, yes).await
             })
         }
-        Command::Evm(EvmCmd::DepositRefund { outpoint, to, fee, yes, key }) => Box::pin(async move {
-            evm_deposit::deposit_refund(ctx, &key.source(), &outpoint, to.as_deref(), fee, yes).await
-        }),
         Command::Evm(EvmCmd::Claim { outpoint }) => Box::pin(async move { evm_deposit::claim(ctx, &outpoint).await }),
+        Command::Evm(EvmCmd::Refund { outpoint, fee, yes, key }) => {
+            Box::pin(async move { evm_deposit::refund(ctx, &key.source(), &outpoint, fee, yes).await })
+        }
         Command::Evm(EvmCmd::Balance { address }) => Box::pin(async move { eth::balance(ctx, &address) }),
         Command::Evm(EvmCmd::Nonce { address }) => Box::pin(async move { eth::nonce(ctx, &address) }),
         Command::Evm(EvmCmd::EstimateGas { from, to, value, data }) => {
