@@ -20,6 +20,8 @@ UNRESOLVED = ('nativeSelectedApproval', 'sourceProvenanceRevalidated',
     'historicalSignatureReplay', 'coinbaseOutputReplayed', 'oneTimeFeeSettlement')
 SOURCE_POLICY_FLAG = '--private-probe-source-policy='
 PAID_BOOTSTRAP_POLICY_FLAG = '--private-probe-paid-bootstrap-source-policy='
+GENERATION_FLAGS = ('--private-probe-kernel-paid-material-generation-v5=',
+    '--private-probe-kernel-paid-material-generation-v7=')
 
 
 class Unavailable(ValueError):
@@ -86,6 +88,24 @@ def paid_bootstrap_source_policy(argv):
     path = flags[0][len(PAID_BOOTSTRAP_POLICY_FLAG):]
     need(Path(path).is_absolute() and '{' not in path and '\x00' not in path,
         'paid bootstrap source policy must be an absolute frozen operator input')
+    return path
+
+
+def generation_config(argv):
+    flags = [(prefix, arg[len(prefix):]) for arg in argv for prefix in GENERATION_FLAGS if arg.startswith(prefix)]
+    need(len(flags) <= 1, 'material generation worker versions/config flags are mutually exclusive')
+    if not flags:
+        return None
+    prefix, path = flags[0]
+    need(Path(path).is_absolute() and '{' not in path and '\x00' not in path,
+        'material generation config must be an explicit absolute frozen input')
+    profiles = [arg for arg in argv if arg.startswith('--private-probe-profile=')]
+    need(len(profiles) == 1 and profiles[0] in ('--private-probe-profile=paid-v4', '--private-probe-profile=source-paid-v1'),
+        'material generation needs an explicit paid capability profile')
+    if prefix == GENERATION_FLAGS[1]:
+        need(paid_bootstrap_source_policy(argv) is not None,
+            'V7 generation requires common source-paid profile and explicit V6 policy')
+        source_policy(argv)
     return path
 
 

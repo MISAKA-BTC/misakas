@@ -43,6 +43,20 @@ def fixture():
 
 
 class PaidObservationCounterexamples(unittest.TestCase):
+    def test_generation_versions_require_separate_explicit_configs_and_v7_native_source_policy(self):
+        old, new = paid.GENERATION_FLAGS
+        self.assertIsNone(paid.generation_config(['--private-probe-profile=paid-v4']))
+        self.assertEqual(paid.generation_config(['--private-probe-profile=paid-v4', old + '/frozen/generation.json']),
+            '/frozen/generation.json')
+        common = ['--private-probe-profile=source-paid-v1', paid.SOURCE_POLICY_FLAG + '/frozen/source',
+            paid.PAID_BOOTSTRAP_POLICY_FLAG + '/frozen/paid']
+        self.assertEqual(paid.generation_config(common + [new + '/frozen/generation.json']), '/frozen/generation.json')
+        for argv in (common + [old + '/frozen/a', new + '/frozen/b'], common + [new + 'relative'],
+                ['--private-probe-profile=paid-v4', new + '/frozen/a'], common + [new + '{ROOT}/generation.json'],
+                common + [new + '/frozen/a', new + '/frozen/a']):
+            with self.assertRaises(paid.Unavailable):
+                paid.generation_config(argv)
+
     def test_new_policy_input_is_explicit_bounded_to_common_profile_and_never_inferred(self):
         flag = paid.PAID_BOOTSTRAP_POLICY_FLAG
         profile = '--private-probe-profile=source-paid-v1'

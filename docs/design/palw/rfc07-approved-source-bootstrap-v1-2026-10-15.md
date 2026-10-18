@@ -104,4 +104,17 @@ V6を明示した新規producer workでは、署名前のdraftだけを `CommitW
 
 private checkerはSDKの実material検査を維持し、own V6 effective lockが束縛するassignment/context/seedでだけ `ReceiptApprovedBootstrapV6` を認識する。cold outboxも新receipt namespaceを識別し、現在のown namespaceが異なる場合は同じ不変WALを保留する。旧receiptをV6へ再ラベルせず、old source fee/collectorのguardを削除しない。復元carrierは元inputの所属だけでなく、single changeの宛先、現在のpayer/fee、bond-lockとmaturityも再検査する。
 
-このV6 private経路はnative consumerが対応するNonInteractive、interactive_planなし、review_scopeなしに限定する。compact/staged classはprovider fundingや実work生成の前に拒否し、他のscopeのconsumerが完成したとは扱わない。V6新規enrollmentとV5 material-generation原署名の互換は別append契約が必要で、既存V5の原署名を黙って新namespaceへ変換しない。全てsource記述でありbuild/test/node受入はまだ実行していない。検証者の正直なstake・source供給/検閲・実費用/収益の数値選定は後の一回の統合campaignに残る。
+このV6 private経路はnative consumerが対応するNonInteractive、interactive_planなし、review_scopeなしに限定する。compact/staged classはprovider fundingや実work生成の前に拒否し、他のscopeのconsumerが完成したとは扱わない。V6新規enrollmentとmaterial-generation原署名の互換は下記の別append V7契約で扱い、既存V5の原署名を黙って新namespaceへ変換しない。全てsource記述でありbuild/test/node受入はまだ実行していない。検証者の正直なstake・source供給/検閲・実費用/収益の数値選定は後の一回の統合campaignに残る。
+
+
+## 2026-10-18 original V6 の明示 V7 material continuation
+
+`--private-probe-kernel-paid-material-generation-v7=ABSOLUTE_JSON` は `source-paid-v1` と明示V6 policyを必要とする。private JSONのversionは7、`expected_generation_path` が指すnative generation metadataは既存のversion5・330 bytesのままである。旧V5 flagと同時には使えず、original paid producer/replacementとのWAL所有排他も維持する。元のsigned index16を読み、同じenrollment・commit・salt・source policyと原署名を保持したappend index19へ新しいouter署名を付ける。original index2は従来のV5/index15だけを使う。wrapperを新たなoriginalにしたり、旧署名・fileを再ラベルしたりしない。
+
+V7 workerはown coherent epoch observationの同じretained native routeを用い、実producer key/bond、固定source policy/epoch、実class/jobのscopeとidentity、元のclassから導出した変更不能のlifetimeと有限受付期限を署名前に照合する。対応するscopeはNonInteractive・interactive_planなし・review_scopeなしである。current material generationのtyped resource fault、own history未取得・破損・terminal状態は保留する。current取得失敗をinitial consentとみなさず、元transactionの再送を許す場合も、同じown route上のActive initial recovery contractとsequence0の正確なroot/sponsor/nonce/consentを予約付きで読む。第三のgenerationでは新署名・fundingを行わない。SDK/nativeは両署名・現在のmaterial recoveryとpolicyをさらに再照合する。
+
+追加fundingは元claim用の全input、元producer bondおよび元V6 source-lock用inputから独立した一つの固定inputとし、別fee ceilingを明示する。新WALは元producer directory内の `material-generation-v7-SEQUENCE` に保存する。既存V5 directory名は維持する。復元carrierは元の署名object、固定input、single payer change、現在のUTXO/payer/bond-lock/maturityとfee capを再照合する。再起動/reorgでは既存old/new carrierのどちらかだけを再送し、別input・再抽選・受付期限の延長を行わない。local WALやspent coinはnative受付を意味しない。
+
+own accepted enrollment/source binding/checker lockが存在すればmonitorし、新wrapperや追加feeを作らない。V7 continuation worker自身は新しいsource Lockを代理作成しない。V7のnative受付後にLockが必要な運用段階は、元index16 WALと元の明示source-lock inputを保持したpaid producerへ引き継ぐ。old/new WALはともに不変で、同時所有は禁止する。未知のauthorityを消して新しいdrawを作り直すことはない。
+
+namespace・source policyの原署名束縛、wrapperをoriginalへ使えないこと、rollback時のexact old/new選択と第三generation保留のsource controlsを追加したが、未実行である。build・test・node・測定は開始していない。これらと実work/selected quorum/後続assignment・精算・再起動/reorg/IBD/pruningを、同じ候補binary・同じtestnetの一回の統合campaignで受け入れる作業が残る。正直なstake、source供給/検閲、verifier実収益とslash/liability、自動告発および未対応scopeの課題をこのworkerで解消済みとは扱わない。

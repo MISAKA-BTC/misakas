@@ -190,6 +190,10 @@ def validate_campaign(plan, drill):
     for role, node in drill['nodes'].items():
         validate_argv(node['argv'])
         paid_observations.claims(node['argv'])
+        generation = paid_observations.generation_config(node['argv'])
+        if generation is not None:
+            require(generation in {pin.get('path') for pin in plan['pinnedInputs'] if isinstance(pin, dict)},
+                'material generation worker config must have an independently frozen content pin')
         require(node['argv'][0] == plan['candidate']['path'], 'every node/restart must launch the exact same candidate path')
         require(node['wrpc'].startswith('127.0.0.1:') and node['p2p'].startswith('127.0.0.1:') and node['eth'].startswith('http://127.0.0.1:'),
             'campaign must use driver-owned loopback endpoints')

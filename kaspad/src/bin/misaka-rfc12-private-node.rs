@@ -63,6 +63,9 @@ paid-v4 hosted providers additionally require an explicit ACK carrier fee payer:
     acquisition limits and separate receipt payer/funding; checker-only mode needs no producer exchange)
   --private-probe-kernel-paid-material-generation-v5=ABSOLUTE_JSON (exact original signed claim continuation,
     separate explicit funding slot/fee cap; exclusive with paid-work and material-replacement workers)
+  --private-probe-kernel-paid-material-generation-v7=ABSOLUTE_JSON (version7 private authorization,
+    exact original signed V6 source-policy commit; same native generation metadata, distinct immutable V7 WAL,
+    exclusive with V5/original producer/replacement; no new enrollment/context/source draw)
   --private-probe-kernel-material-replacement=ABSOLUTE_JSON (original producer's explicit replacement sender,
     immutable context/bundle/intent, input byte/heap limits and durable proposal WAL; provider funds its carrier)
 Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
@@ -115,6 +118,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-kernel-paid-work"
                         | "--private-probe-kernel-paid-check"
                         | "--private-probe-kernel-paid-material-generation-v5"
+                        | "--private-probe-kernel-paid-material-generation-v7"
                         | "--private-probe-kernel-material-replacement"
                         | "--private-probe-source-policy"
                         | "--private-probe-paid-bootstrap-source-policy"
@@ -263,20 +267,29 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             PrivateKernelMaterialReplacementSpecV4::read(path)
         })
         .transpose()?;
-    let kernel_generation = flags
-        .values
-        .remove("--private-probe-kernel-paid-material-generation-v5")
-        .map(|file| {
-            if !paid_v4_profile || flags.print || bootstrap.is_some() || paid_output.is_some() {
-                return Err("V5 continuation requires paid-v4 node mode".into());
-            }
-            let path = Path::new(&file);
-            if !path.is_absolute() {
-                return Err("V5 continuation specification path must be absolute".into());
-            }
-            PrivateKernelPaidMaterialGenerationSpecV5::read(path)
-        })
-        .transpose()?;
+    let generation_v5 = flags.values.remove("--private-probe-kernel-paid-material-generation-v5");
+    let generation_v7 = flags.values.remove("--private-probe-kernel-paid-material-generation-v7");
+    if generation_v5.is_some() && generation_v7.is_some() {
+        return Err("one immutable continuation slot permits only one explicit V5 or V7 namespace".into());
+    }
+    let kernel_generation = if let Some(file) = generation_v7 {
+        if profile != "source-paid-v1"
+            || paid_bootstrap_source_policy.is_none()
+            || flags.print
+            || bootstrap.is_some()
+            || paid_output.is_some()
+        {
+            return Err("V7 continuation requires source-paid-v1 node mode and its explicit V6 source policy".into());
+        }
+        PrivateKernelPaidMaterialGenerationSpecV5::read_v7(Path::new(&file)).map(Some)?
+    } else if let Some(file) = generation_v5 {
+        if !paid_v4_profile || flags.print || bootstrap.is_some() || paid_output.is_some() {
+            return Err("V5 continuation requires paid-v4 node mode".into());
+        }
+        PrivateKernelPaidMaterialGenerationSpecV5::read(Path::new(&file)).map(Some)?
+    } else {
+        None
+    };
     if kernel_generation.is_some() && (kernel_work.is_some() || kernel_replacement.is_some()) {
         return Err("V5 continuation cannot run with the original paid producer/replacement worker".into());
     }

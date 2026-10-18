@@ -9,10 +9,12 @@ use kaspa_consensus_core::{
         PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1, PalwKernelRouteStateV1, palw_kernel_bond_id_v1, palw_kernel_route_message_v1,
     },
     palw_native_resource_v1::{
-        NativeDemandLeaseV1, NativeRetainedV1, NativeWireScanV1, preflight_native_value_v1, reserve_native_requests_v1,
-        retain_native_value_decode_v1,
+        NativeDecodeErrorV1 as NativeError, NativeDemandLeaseV1, NativeRetainedV1, NativeWireScanV1, preflight_native_value_v1,
+        reserve_native_requests_v1, retain_native_value_decode_classified_v1, retain_native_value_decode_v1,
     },
-    palw_paid_material_generation_v5::{original_paid_commit_message_v5, paid_material_generation_from_route_v5},
+    palw_paid_material_generation_v5::{
+        original_paid_bootstrap_commit_message_v7, original_paid_commit_message_v5, paid_material_generation_from_route_v5,
+    },
     palw_producer_v2::PalwObjectRehearsalV1,
     palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2 as Object},
     tx::{Transaction, TransactionOutpoint},
@@ -52,9 +54,65 @@ struct OriginalFunding {
     funding_outpoints: Vec<String>,
     maximum_fee_sompi: u64,
     payer_key: PathBuf,
+    source_lock_funding_outpoint: Option<String>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OriginalFamily {
+    LegacyV5,
+    ApprovedV7([u8; 64]),
+}
+fn original_parts(
+    inner: &Kernel,
+) -> Result<
+    (&misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2, &misaka_palw_kernel::route::SaltedCommitV1, &[u8; 64], OriginalFamily),
+    String,
+> {
+    match inner {
+        Kernel::PaidClaimV2 { object: Paid::Commit { enrollment, commit, salt } } => {
+            Ok((enrollment, commit, salt, OriginalFamily::LegacyV5))
+        }
+        Kernel::PaidClaimV2 { object: Paid::CommitWithApprovedBootstrapV6 { enrollment, commit, salt, source_policy } } => {
+            Ok((enrollment, commit, salt, OriginalFamily::ApprovedV7(*source_policy)))
+        }
+        _ => Err("continuation requires an exact original V2/V6 signed commit, never a wrapper or another action".into()),
+    }
+}
+fn decode_original(original: &Object, actor: PalwBondKeyV2) -> Result<NativeRetainedV1<Kernel>, String> {
+    let Object::KernelRouteV1 { bytes, signer, .. } = original else {
+        return Err("original carrier namespace differs".into());
+    };
+    if *signer != actor {
+        return Err("original carrier actor differs".into());
+    }
+    let raw = bytes.get(1..).ok_or("original kernel version absent")?;
+    preflight_native_value_v1::<Kernel>(raw, raw.len() as u64).map_err(|e| e.to_string())?;
+    retain_native_value_decode_v1(raw, || Kernel::decode(bytes)).map_err(|e| e.to_string())
+}
+fn original_message(
+    network: Hash64,
+    actor: &PalwBondKeyV2,
+    enrollment: &misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2,
+    commit: &misaka_palw_kernel::route::SaltedCommitV1,
+    salt: &[u8; 64],
+    family: OriginalFamily,
+) -> Result<Hash64, String> {
+    match family {
+        OriginalFamily::LegacyV5 => original_paid_commit_message_v5(network, actor, enrollment, commit, salt),
+        OriginalFamily::ApprovedV7(policy) => {
+            original_paid_bootstrap_commit_message_v7(network, actor, enrollment, commit, salt, &policy)
+        }
+    }
 }
 impl PrivateKernelPaidMaterialGenerationSpecV5 {
     pub fn read(path: &Path) -> Result<Self, String> {
+        Self::read_version(path, 5)
+    }
+    /// Distinct private authorization schema for an original signed V6 commit.
+    /// The shared generation metadata remains native version 5 (330 bytes).
+    pub fn read_v7(path: &Path) -> Result<Self, String> {
+        Self::read_version(path, 7)
+    }
+    fn read_version(path: &Path, version: u16) -> Result<Self, String> {
         let (bytes, _raw) = read_bounded(path, 1 << 20)?;
         let owner = reserve_native_requests_v1(
             (bytes.len() as u64)
@@ -64,7 +122,8 @@ impl PrivateKernelPaidMaterialGenerationSpecV5 {
         )
         .map_err(|e| e.to_string())?;
         let mut spec: Self = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if spec.version != 5
+        if spec.version != version
+            || !matches!(version, 5 | 7)
             || spec.max_input_bytes == 0
             || spec.max_workspace_bytes == 0
             || spec.max_input_bytes > super::native_provider::PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3
@@ -73,13 +132,19 @@ impl PrivateKernelPaidMaterialGenerationSpecV5 {
         {
             return Err("V5 needs exact version, finite input/workspace and explicit one-slot total fee authorization".into());
         }
-        hash(&spec.base_claim)?;
+        spec.base_claim = hash(&spec.base_claim)?.to_string();
         regular(&spec.expected_generation_path)?;
         regular(&spec.original_producer_spec_path)?;
         regular(&spec.payer_key)?;
         crate::palw_producer::parse_outpoint(&spec.funding_outpoint)?;
         spec._owner = owner;
         Ok(spec)
+    }
+    fn validate_family(&self, family: OriginalFamily) -> Result<(), String> {
+        if !matches!((self.version, family), (5, OriginalFamily::LegacyV5) | (7, OriginalFamily::ApprovedV7(_))) {
+            return Err("continuation authorization version differs from exact original signed namespace".into());
+        }
+        Ok(())
     }
     pub fn prepare(self, ctx: &PalwNativeCustodyContextV3) -> Result<PreparedKernelPaidMaterialGenerationV5, String> {
         if ctx.config.params.palw_claim_challenge_v2.is_none() || ctx.config.params.palw_material_release_recovery_v2.is_none() {
@@ -106,7 +171,7 @@ impl PrivateKernelPaidMaterialGenerationSpecV5 {
         ))?);
         let payer = libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed(&self.payer_key)?);
         let funding = crate::palw_producer::parse_outpoint(&self.funding_outpoint)?;
-        if kaspa_consensus_core::config::drill::palw_t12_public_genesis_txid_v1(&funding.transaction_id) {
+        if funding == producer.0 || kaspa_consensus_core::config::drill::palw_t12_public_genesis_txid_v1(&funding.transaction_id) {
             return Err("V5 additional input names public genesis funding".into());
         }
         let (raw, _raw) = read_bounded(&self.original_producer_spec_path, 1 << 20)?;
@@ -125,6 +190,15 @@ impl PrivateKernelPaidMaterialGenerationSpecV5 {
             if crate::palw_producer::parse_outpoint(point)? == funding {
                 return Err("V5 additional input reuses original funding authorization".into());
             }
+        }
+        if original_config
+            .source_lock_funding_outpoint
+            .as_deref()
+            .map(crate::palw_producer::parse_outpoint)
+            .transpose()?
+            .is_some_and(|point| point == funding)
+        {
+            return Err("continuation input reuses the original V6 source-lock funding authority".into());
         }
         let old_payer = libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed(&original_config.payer_key)?);
         owned_dir(&ctx.data_dir)?;
@@ -145,6 +219,20 @@ impl PrivateKernelPaidMaterialGenerationSpecV5 {
             return Err("V5 generation names another base claim".into());
         }
         let original = decode::<Object>(&old.join("object.borsh"), &self, &mut requests)?;
+        // An existing wrapper is never accepted as the original. Validate the
+        // exact signed original namespace before creating any continuation WAL.
+        check_workspace(&self, requests, requests.checked_mul(2).ok_or("original namespace decode overlap overflow")?)?;
+        let decoded = decode_original(&original, producer)?;
+        let (enrollment, _, _, family) = original_parts(&decoded)?;
+        self.validate_family(family)?;
+        generation.validate(enrollment)?;
+        if let OriginalFamily::ApprovedV7(source_policy) = family {
+            let fence = ctx.config.params.palw_paid_bootstrap_source_v6.ok_or("V7 requires explicit approved source policy")?;
+            if source_policy != fence.policy.id() {
+                return Err("V7 original source policy differs from configured namespace".into());
+            }
+        }
+        drop(decoded);
         let old_transaction = if old.join("transaction.borsh").exists() {
             let (bytes, _raw) = read_bounded(&old.join("transaction.borsh"), remaining(&self, requests)?.min(self.max_input_bytes))?;
             let quote = carrier_quote(bytes.len() as u64)?;
@@ -169,7 +257,7 @@ impl PrivateKernelPaidMaterialGenerationSpecV5 {
         let transient = requests.checked_mul(2).ok_or("V5 original decode overlap overflow")?;
         check_workspace(&self, requests, transient)?;
         requests = requests.checked_add(transient).ok_or("V5 aggregate original workspace overflow")?;
-        let outbox = old.join(format!("material-generation-v5-{}", generation.sequence));
+        let outbox = old.join(format!("material-generation-v{}-{}", self.version, generation.sequence));
         owned_dir(&outbox)?;
         Ok(PreparedKernelPaidMaterialGenerationV5 {
             spec: self,
@@ -255,11 +343,12 @@ pub struct PreparedKernelPaidMaterialGenerationV5 {
 impl PreparedKernelPaidMaterialGenerationV5 {
     pub fn start(self) -> Result<(), String> {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        let version = self.spec.version;
         std::thread::Builder::new()
-            .name("private-paid-material-generation-v5".into())
+            .name(format!("private-paid-material-generation-v{version}"))
             .spawn(move || {
                 if let Err(error) = runtime.block_on(self.run()) {
-                    kaspa_core::warn!("private V5 continuation stopped; WAL retained: {error}");
+                    kaspa_core::warn!("private material continuation v{version} stopped; WAL retained: {error}");
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -290,8 +379,49 @@ impl PreparedKernelPaidMaterialGenerationV5 {
             }
             let instance = self.manager.consensus();
             let api = instance.unguarded_session_blocking();
-            let Some(route) = api.palw_kernel_route_v1() else { continue };
-            self.validate_original(&route)?;
+            let own = if self.spec.version == 7 {
+                let Some(fence) = self.config.params.palw_paid_bootstrap_source_v6 else {
+                    return Err("V7 explicit source policy absent".into());
+                };
+                if !fence.activation.is_active(api.get_virtual_daa_score()) {
+                    continue;
+                }
+                let own = match api.palw_source_bootstrap_epoch_observation_v1() {
+                    Ok(own) => own,
+                    Err(error) => {
+                        kaspa_core::debug!("V7 own source authority unavailable; no signature/funding: {error}");
+                        continue;
+                    }
+                };
+                if own.state.bond(&self.producer).is_none_or(|bond| {
+                    bond.pubkey.as_slice() != self.key.public_key()
+                        || !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
+                }) {
+                    kaspa_core::debug!("V7 own producer key/active bond unavailable; no signature/funding");
+                    continue;
+                }
+                let epoch = match own.state.source_bootstrap_epoch_v1() {
+                    Ok(Some(epoch)) => epoch,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        kaspa_core::debug!("V7 own source epoch unavailable: {error}");
+                        continue;
+                    }
+                };
+                if epoch.draw_refused
+                    || fence.policy.bootstrap_policy != epoch.context.policy.id().as_bytes()
+                    || fence.policy.network != epoch.context.policy.network.as_bytes()
+                {
+                    continue;
+                }
+                drop(epoch);
+                Some(own)
+            } else {
+                None
+            };
+            let legacy_route = if own.is_none() { api.palw_kernel_route_v1() } else { None };
+            let Some(route) = own.as_ref().and_then(|own| own.state.kernel_route()).or(legacy_route.as_ref()) else { continue };
+            self.validate_original(route)?;
             if let Some(saved) = &object {
                 self.validate_wrapper(&route, saved)?;
             }
@@ -305,19 +435,69 @@ impl PreparedKernelPaidMaterialGenerationV5 {
                 Err(_) => continue,
                 Ok(None) => {}
             }
+            // A rooted lock/binding without readable enrollment is UNKNOWN,
+            // never permission to recreate a draw or to fund another wrapper.
+            if route.aux.iter().any(|((table, key), _)| {
+                *table == kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_LOCKS_V2
+                    && key.as_slice() == self.generation.enrollment.as_slice()
+            }) {
+                continue;
+            }
+            if self.spec.version == 7 {
+                match (
+                    route.paid_bootstrap_binding_v6(&self.generation.enrollment),
+                    route.paid_bootstrap_lock_v6(&self.generation.enrollment),
+                ) {
+                    (Ok(None), Ok(None)) => {}
+                    _ => {
+                        kaspa_core::debug!("V7 own accepted source binding/lock or unavailable metadata; monitor original WAL");
+                        continue;
+                    }
+                }
+            }
             let old_inner = self.original_inner()?;
-            let Kernel::PaidClaimV2 { object: Paid::Commit { enrollment, .. } } = &*old_inner else { unreachable!() };
-            let current = paid_material_generation_from_route_v5(&route, enrollment, self.producer);
-            let initial_current = if current.as_ref().is_ok_and(|g| *g == self.generation) {
-                false
-            } else {
-                api.palw_kernel_material_consent_accepted_v4(
-                    Hash64::from_bytes(self.generation.root),
-                    Hash64::from_bytes(self.generation.initial_consent),
-                )
-                .unwrap_or(false)
+            let (enrollment, commit, _, family) = original_parts(&old_inner)?;
+            let now = own.as_ref().map_or_else(|| api.get_virtual_daa_score(), |own| own.virtual_daa);
+            if now < enrollment.lifetime.committed_daa || now > enrollment.accepted_until_daa {
+                continue;
+            }
+            if matches!(family, OriginalFamily::ApprovedV7(_)) {
+                match approved_scope_from_route(route, enrollment, commit, now, remaining(&self.spec, requests)?) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        kaspa_core::debug!("V7 own scope/lifetime unobserved; no new signature/funding: {error}");
+                        continue;
+                    }
+                }
+            }
+            let initial = match initial_generation_from_route(
+                route,
+                &self.generation,
+                self.producer,
+                &self.config,
+                now,
+                remaining(&self.spec, requests)?,
+            ) {
+                Ok(initial) => initial,
+                Err(error) => {
+                    kaspa_core::debug!("continuation active material/recovery unobserved; no signature/funding: {error}");
+                    continue;
+                }
             };
-            let selection = select_exact_generation_v5(&self.generation, current.as_ref().ok(), initial_current);
+            let (current, initial_current) = match paid_material_generation_from_route_v5(route, enrollment, self.producer) {
+                Ok(current) => (Some(current), false),
+                Err(NativeError::Resource(error)) => {
+                    kaspa_core::debug!("continuation native generation resource unavailable: {error}");
+                    continue;
+                }
+                Err(NativeError::Decode(_)) => {
+                    // Only exact own initial metadata allows old-transaction
+                    // replay. Corrupt/absent/terminal/unknown history is a hold.
+                    (None, initial)
+                }
+            };
+            let selection = select_exact_generation_v5(&self.generation, current.as_ref(), initial_current);
             if selection == ResumeV5::Expected {
                 if object.is_none() {
                     // Admit the old decode / wrapper / signing overlap before
@@ -327,11 +507,29 @@ impl PreparedKernelPaidMaterialGenerationV5 {
                         requests,
                         carrier_quote(borsh::object_length(&*self.original).map_err(|e| e.to_string())? as u64)?,
                     )?;
-                    let inner = misaka_palw_sdk::claim_paid_v2::material_generation_v5::paid_claim_material_generation_object_v5(
-                        &route,
-                        &self.original,
-                        self.key.public_key(),
-                    )?;
+                    let built = match family {
+                        OriginalFamily::LegacyV5 => {
+                            misaka_palw_sdk::claim_paid_v2::material_generation_v5::paid_claim_material_generation_object_v5(
+                                route,
+                                &self.original,
+                                self.key.public_key(),
+                            )
+                        }
+                        OriginalFamily::ApprovedV7(_) => {
+                            misaka_palw_sdk::claim_paid_v2::material_generation_v7::paid_claim_material_generation_object_v7(
+                                route,
+                                &self.original,
+                                self.key.public_key(),
+                            )
+                        }
+                    };
+                    let inner = match built {
+                        Ok(inner) => inner,
+                        Err(error) => {
+                            kaspa_core::debug!("continuation builder unavailable; no new signature/funding: {error}");
+                            continue;
+                        }
+                    };
                     let signing = (borsh::object_length(&*inner).map_err(|e| e.to_string())? as u64)
                         .checked_mul(4)
                         .and_then(|n| n.checked_add(65536))
@@ -403,31 +601,26 @@ impl PreparedKernelPaidMaterialGenerationV5 {
         }
     }
     fn original_inner(&self) -> Result<NativeRetainedV1<Kernel>, String> {
-        let Object::KernelRouteV1 { bytes, signer, .. } = &*self.original else {
-            return Err("V5 original carrier kind differs".into());
-        };
-        if *signer != self.producer {
-            return Err("V5 original actor differs".into());
-        }
-        let raw = bytes.get(1..).ok_or("V5 original kernel version absent")?;
-        preflight_native_value_v1::<Kernel>(raw, raw.len() as u64).map_err(|e| e.to_string())?;
-        retain_native_value_decode_v1(raw, || Kernel::decode(bytes)).map_err(|e| e.to_string())
+        decode_original(&self.original, self.producer)
     }
     fn validate_original(&self, route: &PalwKernelRouteStateV1) -> Result<(), String> {
         let inner = self.original_inner()?;
-        let Kernel::PaidClaimV2 { object: Paid::Commit { enrollment, commit, salt } } = &*inner else {
-            return Err("V5 original object is not the exact V2 commit".into());
-        };
+        let (enrollment, commit, salt, family) = original_parts(&inner)?;
+        self.spec.validate_family(family)?;
         self.generation.validate(enrollment)?;
+        if let OriginalFamily::ApprovedV7(policy) = family {
+            if self.config.params.palw_paid_bootstrap_source_v6.map(|f| f.policy.id()) != Some(policy) {
+                return Err("V7 original source policy differs from explicit compiled policy".into());
+            }
+        }
         let Object::KernelRouteV1 { bytes, signature, .. } = &*self.original else { unreachable!() };
-        let message = original_paid_commit_message_v5(
-            Hash64::from_bytes(route.header.policy.network_domain),
-            &self.producer,
-            enrollment,
-            commit,
-            salt,
-        )?;
-        if message != palw_kernel_route_message_v1(Hash64::from_bytes(route.header.policy.network_domain), &self.producer, bytes)
+        let network = Hash64::from_bytes(route.header.policy.network_domain);
+        let message = original_message(network, &self.producer, enrollment, commit, salt, family)?;
+        let (base_claim, _, commit_producer) = kaspa_consensus_core::palw_prospective_kernel_material_v4::commit_identity_v4(commit);
+        if enrollment.producer != palw_kernel_bond_id_v1(&self.producer)
+            || commit_producer != enrollment.producer
+            || base_claim != enrollment.base_claim
+            || message != palw_kernel_route_message_v1(network, &self.producer, bytes)
             || !kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3(
                 self.key.public_key(),
                 message.as_byte_slice(),
@@ -435,29 +628,50 @@ impl PreparedKernelPaidMaterialGenerationV5 {
                 PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
             )
         {
-            return Err("V5 original signed identity/network differs".into());
+            return Err("continuation original signed identity/network/source policy differs".into());
         }
         Ok(())
     }
     fn validate_wrapper(&self, route: &PalwKernelRouteStateV1, object: &Object) -> Result<(), String> {
         let Object::KernelRouteV1 { bytes, signer, signature } = object else {
-            return Err("V5 wrapper carrier kind differs".into());
+            return Err("continuation wrapper carrier kind differs".into());
         };
-        let raw = bytes.get(1..).ok_or("V5 wrapper route version absent")?;
+        let original = self.original_inner()?;
+        let (_, _, _, family) = original_parts(&original)?;
+        self.spec.validate_family(family)?;
+        let raw = bytes.get(1..).ok_or("wrapper route version absent")?;
         preflight_native_value_v1::<Kernel>(raw, raw.len() as u64).map_err(|e| e.to_string())?;
         let inner = retain_native_value_decode_v1(raw, || Kernel::decode(bytes)).map_err(|e| e.to_string())?;
-        let Kernel::PaidClaimV2 {
-            object: Paid::CommitWithMaterialGenerationV5 { enrollment, commit, salt, generation, original_signature },
-        } = &*inner
-        else {
-            return Err("V5 wrapper WAL changes object kind".into());
+        let (enrollment, commit, salt, generation, original_signature) = match (&*inner, family) {
+            (
+                Kernel::PaidClaimV2 {
+                    object: Paid::CommitWithMaterialGenerationV5 { enrollment, commit, salt, generation, original_signature },
+                },
+                OriginalFamily::LegacyV5,
+            ) => (enrollment, commit, salt, generation, original_signature),
+            (
+                Kernel::PaidClaimV2 {
+                    object:
+                        Paid::CommitApprovedBootstrapWithMaterialGenerationV7 {
+                            enrollment,
+                            commit,
+                            salt,
+                            source_policy,
+                            generation,
+                            original_signature,
+                        },
+                },
+                OriginalFamily::ApprovedV7(expected),
+            ) if *source_policy == expected => (enrollment, commit, salt, generation, original_signature),
+            _ => return Err("continuation wrapper changes the exact original namespace/source policy".into()),
         };
         let Object::KernelRouteV1 { bytes: old_bytes, signature: old_signature, .. } = &*self.original else { unreachable!() };
         let network = Hash64::from_bytes(route.header.policy.network_domain);
+        generation.validate(enrollment)?;
         if *signer != self.producer
             || *generation != self.generation
             || original_signature != old_signature
-            || original_paid_commit_message_v5(network, signer, enrollment, commit, salt)?
+            || original_message(network, signer, enrollment, commit, salt, family)?
                 != palw_kernel_route_message_v1(network, signer, old_bytes)
             || !kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3(
                 self.key.public_key(),
@@ -466,7 +680,7 @@ impl PreparedKernelPaidMaterialGenerationV5 {
                 PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
             )
         {
-            return Err("V5 immutable wrapper changes old signed work/generation/actor".into());
+            return Err("continuation immutable wrapper changes old signature/work/generation/actor".into());
         }
         Ok(())
     }
@@ -526,6 +740,144 @@ impl PreparedKernelPaidMaterialGenerationV5 {
     }
 }
 
+/// Read the actual own class/job before signing a V7 continuation. Unsupported
+/// scopes and stale finite admission windows cannot create an outer signature.
+/// Missing/oversized history remains typed unavailability, never legacy consent.
+fn approved_scope_from_route(
+    route: &PalwKernelRouteStateV1,
+    enrollment: &misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2,
+    commit: &misaka_palw_kernel::route::SaltedCommitV1,
+    now: u64,
+    maximum_workspace: u64,
+) -> Result<bool, NativeError<String>> {
+    use kaspa_consensus_core::{
+        palw_claim_challenge_v2::{PAID_CLAIM_CLASSES_V2, PAID_CLAIM_JOBS_V2},
+        palw_native_resource_v1::NativeCoverageV1,
+    };
+    use misaka_palw_kernel::claim_paid_v2::{PaidClaimClassV2, PaidClaimJobV2, PaidClaimLifetimeV2};
+    let raw = |table, id: &[u8; 64]| {
+        route
+            .aux
+            .iter()
+            .find_map(|((t, key), bytes)| (*t == table && key.as_slice() == id.as_slice()).then_some(bytes.as_slice()))
+            .ok_or_else(|| NativeError::Decode("own V7 class/job absent".into()))
+    };
+    let class_raw = raw(PAID_CLAIM_CLASSES_V2, &enrollment.class)?;
+    let job_raw = raw(PAID_CLAIM_JOBS_V2, &enrollment.job)?;
+    let shape = |error: std::io::Error| {
+        NativeError::Resource(NativeCoverageV1::unsupported::<PaidClaimClassV2>("V7 own class/job shape", &error.to_string()))
+    };
+    let class_quote = preflight_native_value_v1::<PaidClaimClassV2>(class_raw, class_raw.len() as u64).map_err(shape)?;
+    let job_quote = preflight_native_value_v1::<PaidClaimJobV2>(job_raw, job_raw.len() as u64).map_err(shape)?;
+    let requests = class_quote
+        .logical_requests_v1()
+        .checked_add(job_quote.logical_requests_v1())
+        .ok_or_else(|| NativeError::Resource(NativeCoverageV1::overflow::<PaidClaimClassV2>("V7 class/job overlap")))?;
+    if requests > maximum_workspace {
+        return Err(NativeError::Resource(NativeCoverageV1::unsupported::<PaidClaimClassV2>(
+            "V7 class/job overlap",
+            "explicit workspace ceiling exhausted",
+        )));
+    }
+    let class = retain_native_value_decode_classified_v1(class_raw, || {
+        borsh::from_slice::<PaidClaimClassV2>(class_raw).map_err(|e| e.to_string())
+    })?;
+    let job =
+        retain_native_value_decode_classified_v1(job_raw, || borsh::from_slice::<PaidClaimJobV2>(job_raw).map_err(|e| e.to_string()))?;
+    class.validate().map_err(NativeError::Decode)?;
+    let (root, base_job, producer) = kaspa_consensus_core::palw_prospective_kernel_material_v4::commit_identity_v4(commit);
+    let lifetime = PaidClaimLifetimeV2::of(&class, enrollment.lifetime.committed_daa).map_err(NativeError::Decode)?;
+    let accepted_until = enrollment.lifetime.committed_daa.checked_add(class.maximum_commit_delay_daa);
+    Ok(class.id() == enrollment.class
+        && job.id() == enrollment.job
+        && job.class == enrollment.class
+        && job.version == 2
+        && job.maximum_consumers > 0
+        && job.base_job == base_job
+        && root == enrollment.base_claim
+        && producer == enrollment.producer
+        && class.supports_approved_bootstrap_source_v6()
+        && lifetime == enrollment.lifetime
+        && accepted_until == Some(enrollment.accepted_until_daa)
+        && now >= enrollment.lifetime.committed_daa
+        && now <= enrollment.accepted_until_daa
+        && now <= job.last_commit_daa)
+}
+
+/// Only an exact active initial contract on this SAME native route permits
+/// replaying the old original transaction. No failed current-generation read,
+/// elapsed local timer or monetary consent alone supplies that authority.
+fn initial_generation_from_route(
+    route: &PalwKernelRouteStateV1,
+    expected: &Generation,
+    producer: PalwBondKeyV2,
+    config: &kaspa_consensus_core::config::Config,
+    now: u64,
+    maximum_workspace: u64,
+) -> Result<bool, NativeError<String>> {
+    use kaspa_consensus_core::{
+        palw_material_release_recovery_v2::{PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, PalwMaterialRecoveryRowV2},
+        palw_monetary_material_v1::{PALW_MONETARY_MATERIAL_TABLE_V1, PalwMonetaryMaterialRowV1},
+        palw_native_resource_v1::NativeCoverageV1,
+    };
+    fn raw<'a>(route: &'a PalwKernelRouteStateV1, table: u8, root: &[u8; 64]) -> Result<&'a [u8], NativeError<String>> {
+        route
+            .aux
+            .iter()
+            .find_map(|((t, key), raw)| (*t == table && key.as_slice() == root.as_slice()).then_some(raw.as_slice()))
+            .ok_or_else(|| NativeError::Decode("own initial material history absent".into()))
+    }
+    let monetary_raw = raw(route, PALW_MONETARY_MATERIAL_TABLE_V1, &expected.root)?;
+    let recovery_raw = raw(route, PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, &expected.root)?;
+    let shape = |error: std::io::Error| {
+        NativeError::Resource(NativeCoverageV1::unsupported::<Generation>("initial generation shape", &error.to_string()))
+    };
+    let monetary_quote =
+        preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(monetary_raw, monetary_raw.len() as u64).map_err(shape)?;
+    let recovery_quote =
+        preflight_native_value_v1::<PalwMaterialRecoveryRowV2>(recovery_raw, recovery_raw.len() as u64).map_err(shape)?;
+    let requests = monetary_quote
+        .logical_requests_v1()
+        .checked_add(recovery_quote.logical_requests_v1())
+        .ok_or_else(|| NativeError::Resource(NativeCoverageV1::overflow::<Generation>("initial metadata overlap")))?;
+    if requests > maximum_workspace {
+        return Err(NativeError::Resource(NativeCoverageV1::unsupported::<Generation>(
+            "initial metadata overlap",
+            "explicit workspace ceiling exhausted",
+        )));
+    }
+    let monetary = retain_native_value_decode_classified_v1(monetary_raw, || {
+        borsh::from_slice::<PalwMonetaryMaterialRowV1>(monetary_raw).map_err(|e| e.to_string())
+    })?;
+    let recovery = retain_native_value_decode_classified_v1(recovery_raw, || {
+        borsh::from_slice::<PalwMaterialRecoveryRowV2>(recovery_raw).map_err(|e| e.to_string())
+    })?;
+    let Some(policy) = config.params.palw_material_release_recovery_v2.as_ref().filter(|f| f.activation.is_active(now)) else {
+        return Err(NativeError::Decode("material recovery policy is inactive".into()));
+    };
+    recovery.validate(&policy.policy).map_err(|e| NativeError::Decode(e.to_owned()))?;
+    let PalwMaterialRecoveryRowV2::Active(contract) = &*recovery else {
+        return Err(NativeError::Decode("material recovery is terminal".into()));
+    };
+    if now > monetary.terms.enrollment_until_daa {
+        return Err(NativeError::Decode("material enrollment lifetime elapsed".into()));
+    }
+    Ok(monetary.sequence == 0
+        && monetary.consent.as_bytes() == expected.initial_consent
+        && monetary.terms.root.as_bytes() == expected.root
+        && monetary.terms.sponsor == producer
+        && monetary.terms.native_session.is_none()
+        && now <= monetary.terms.enrollment_until_daa
+        && monetary.terms.material_manifest.as_ref().is_some_and(|m| m.root.as_bytes() == expected.root)
+        && contract.id().as_bytes() == expected.recovery
+        && contract.terms.root.as_bytes() == expected.root
+        && contract.terms.sponsor == producer
+        && contract.terms.nonce == monetary.terms.nonce
+        && contract.terms.initial_consent.as_bytes() == expected.initial_consent
+        && contract.generations.len() == 1
+        && contract.generations[0].consent == monetary.consent)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum ResumeV5 {
     Expected,
@@ -573,6 +925,82 @@ mod source_controls {
             require_same_accepted_enrollment_v5(&expected, [9; 64]).is_err(),
             "same base cannot silently acquire another enrollment"
         );
+    }
+    #[test]
+    fn original_namespace_and_policy_cannot_be_relabelled_or_nested() {
+        use misaka_palw_kernel::{
+            claim_paid_v2::{PaidClaimEnrollmentV2, PaidClaimLifetimeV2},
+            route::SaltedCommitV1,
+            spec::{SpecClaimV1, retrieval::RetrievalClaimV1},
+        };
+        // Codec/identity control only: this empty retrieval is not native work.
+        let commit = SaltedCommitV1::Spec {
+            claim: SpecClaimV1::Retrieval(RetrievalClaimV1 { job_id: [1; 64], producer_bond: [2; 64], result: vec![] }),
+        };
+        let enrollment = PaidClaimEnrollmentV2 {
+            version: 2,
+            class: [3; 64],
+            job: [4; 64],
+            base_claim: [5; 64],
+            producer: [2; 64],
+            commit_root: [6; 64],
+            lifetime: PaidClaimLifetimeV2 {
+                committed_daa: 1,
+                checking_until: 2,
+                challenge_until: 3,
+                dispute_until: 4,
+                liability_until: 5,
+            },
+            accepted_until_daa: 2,
+            material_consent: [7; 64],
+            round: 0,
+            prior_transcript: [0; 64],
+        };
+        let old =
+            Kernel::PaidClaimV2 { object: Paid::Commit { enrollment: enrollment.clone(), commit: commit.clone(), salt: [8; 64] } };
+        let approved = Kernel::PaidClaimV2 {
+            object: Paid::CommitWithApprovedBootstrapV6 {
+                enrollment: enrollment.clone(),
+                commit: commit.clone(),
+                salt: [8; 64],
+                source_policy: [9; 64],
+            },
+        };
+        assert_eq!(original_parts(&old).unwrap().3, OriginalFamily::LegacyV5);
+        assert_eq!(original_parts(&approved).unwrap().3, OriginalFamily::ApprovedV7([9; 64]));
+        let actor = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes([10; 64]), 0));
+        let legacy =
+            original_message(Hash64::from_bytes([11; 64]), &actor, &enrollment, &commit, &[8; 64], OriginalFamily::LegacyV5).unwrap();
+        let v7 = original_message(
+            Hash64::from_bytes([11; 64]),
+            &actor,
+            &enrollment,
+            &commit,
+            &[8; 64],
+            OriginalFamily::ApprovedV7([9; 64]),
+        )
+        .unwrap();
+        assert_ne!(legacy, v7, "V6 policy identity is part of the exact original signature message");
+        let generation = Generation {
+            version: 5,
+            enrollment: enrollment.id(),
+            root: enrollment.base_claim,
+            initial_consent: enrollment.material_consent,
+            recovery: [12; 64],
+            current_consent: [13; 64],
+            sequence: 1,
+        };
+        let wrapper = Kernel::PaidClaimV2 {
+            object: Paid::CommitApprovedBootstrapWithMaterialGenerationV7 {
+                enrollment,
+                commit,
+                salt: [8; 64],
+                source_policy: [9; 64],
+                generation,
+                original_signature: vec![14; 8],
+            },
+        };
+        assert!(original_parts(&wrapper).is_err(), "a continuation cannot become another original enrollment");
     }
     #[test]
     fn old_wal_and_exact_workspace_caps_are_preserved() {
