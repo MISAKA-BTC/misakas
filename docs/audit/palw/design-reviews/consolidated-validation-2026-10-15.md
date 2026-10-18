@@ -448,3 +448,12 @@ native DAA, source/receiver progress and the native clock lead bound. The existi
 360 s / 30 s limits are unchanged until an actual failure establishes the cause.
 The A2 matrix releases its completed post-fence refusal node before independent
 history replays, preserving every comparison with only two resident nodes.
+
+RFC18 reproduction update: the current *launch-harness* retention test passes
+**8 / 8** repetitions. That does not refute the reported strict-economic defect:
+`t12_with_harness_cards` now restores `palw_t12_launch_params_v1`, where the
+post-launch strict-economic rule is absent. Added an explicit private-fixture
+`RFC18_STRICT_ECONOMIC_PROBE=1` option to arm that existing rule at genesis for
+investigation, without changing the default tests or any shipping schedule. The
+strict probe and six-permutation arrival checks remain pending. RFC12's separate
+`rfc12_utxo_import_target_and_completion_are_generation_bound` also passes **1 / 1**.
