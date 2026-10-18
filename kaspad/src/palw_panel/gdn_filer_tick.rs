@@ -79,6 +79,15 @@ impl PalwGdnHeldHostV1 for ServiceGdnHostV1<'_> {
     }
 }
 
+// Select by the chain's commitment before taking the first held capture: an unrelated
+// payload in the pool must not starve a later capture of this claim.
+fn capture_names_claim_v1(capture: &[u8], execution_root: Hash64, class_id: Hash64) -> bool {
+    misaka_palw_base0::produce::base0_material_decode_any_v1(capture).is_ok_and(|retained| {
+        let binding = retained.binding();
+        binding.committed_execution_root == execution_root && binding.shape_profile.shape_profile_id() == class_id
+    })
+}
+
 /// The claim an accepted object answers for, if it is a held DA disclosure.
 fn disclosure_claim_v1(object: &PalwConsensusObjectV2) -> Option<Hash64> {
     match object {
@@ -134,6 +143,9 @@ impl PalwPanelService {
                     if payload.material.job.class_id != d.class_id || payload.material.job.executor_bond != d.executor_bond.0 {
                         return None;
                     }
+                    if !capture_names_claim_v1(&payload.capture, d.execution_root, d.class_id) {
+                        return None;
+                    }
                     let prompt = Self::fp_prompt_for_job(backend.as_ref(), &payload.material, form)?;
                     Some((payload.capture, prompt))
                 }) else {
@@ -155,8 +167,9 @@ impl PalwPanelService {
                 let Some(capture) = pooled
                     .iter()
                     .find(|bytes| {
-                        misaka_palw_base0::produce::base0_material_decode_any_v1(bytes)
-                            .is_ok_and(|retained| retained.binding().job_context == job)
+                        capture_names_claim_v1(bytes, d.execution_root, d.class_id)
+                            && misaka_palw_base0::produce::base0_material_decode_any_v1(bytes)
+                                .is_ok_and(|retained| retained.binding().job_context == job)
                     })
                     .cloned()
                 else {
@@ -229,6 +242,8 @@ mod tests {
     fn gdn_service_host_uses_the_claim_prompt_and_rejects_another_binding() {
         let w = crate::palw_gdn_held_filer::tests::world(0);
         let mut claim = crate::palw_gdn_held_filer::tests::claim_of(&w.honest, &w);
+        assert!(capture_names_claim_v1(&w.capture, claim.execution_root, claim.shape_profile_id));
+        assert!(!capture_names_claim_v1(&w.capture, Hash64::from_u64_word(0xBAD), claim.shape_profile_id));
         let prompt = w.honest.prompt_token_ids.clone();
         assert!(!prompt.is_empty());
         let sign = |_: &[u8], _: &[u8]| None;

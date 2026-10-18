@@ -1677,3 +1677,5 @@ service tick は、保持した最初の byte 列を capture とみなし、`gdn
 attempt は既存の `attempt_job_for_claim` で accepted block の job と prompt を取得し、その job context と一致する capture を選ぶ。free-prompt は FPC envelope を decode し、class と executor が一致する job から既存の `fp_prompt_for_job` で hash-bound prompt を得る。service host は明示 prompt を渡し、execution root と shape profile が対象 claim と一致することも確認する。
 
 実際の graph-v8 capture を使い、正しい prompt を読めること、別 execution root と別 prompt を拒否することの対象試験を追加した。`/tmp/codex-g14-gdn-service-host.log` で build 待ち。fold E2E は `/tmp/codex-g14-gdn-fold.log` で build 中。いずれも現時点で PASS として数えない。service host の対象試験は full node / P2P E2E の代替ではない。
+
+15.3 補足: pool の最初の capture が別 claim のものでも、後の適切な capture を妨げないよう、選択時点で chain の execution root と class ID に一致する binding を選ぶ。対象試験にも正しい capture の受理と別 root の拒否を追加した。build・runtime 結果は引き続き未確定。
