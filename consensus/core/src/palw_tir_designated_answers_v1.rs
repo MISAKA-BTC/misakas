@@ -16,7 +16,8 @@
 //! * tenure and evidence are separate periods: an owner awaiting an answer is not idle, and a handover keeps the pursuit state,
 //!   the evidence horizon and the charges.
 
-use std::collections::BTreeSet;
+use borsh::{BorshDeserialize, BorshSerialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A custodian's identity (a 32-byte public key digest, as the rest of consensus names custodians).
 pub type PalwTirCustodianIdV1 = [u8; 32];
@@ -27,7 +28,7 @@ pub type PalwTirDigestV1 = [u8; 32];
 pub const PALW_TIR_DESIGNATED_MAX_CUSTODIANS_V1: usize = 8;
 
 /// The request key: the only thing an authenticated body may be reused for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash), BorshSerialize, BorshDeserialize)]
 pub struct PalwTirRequestKeyV1 {
     pub claim: PalwTirDigestV1,
     pub root: PalwTirDigestV1,
@@ -35,7 +36,7 @@ pub struct PalwTirRequestKeyV1 {
 }
 
 /// One request with its designated custodians and obligation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq), BorshSerialize, BorshDeserialize)]
 pub struct PalwTirDesignatedRequestV1 {
     pub key: PalwTirRequestKeyV1,
     /// Designated custodians in handover order (no duplicates, 1..=`PALW_TIR_DESIGNATED_MAX_CUSTODIANS_V1`).
@@ -46,7 +47,7 @@ pub struct PalwTirDesignatedRequestV1 {
 }
 
 /// The first answer that was accepted: who signed it, the body digest and the DAA it was accepted at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq), BorshSerialize, BorshDeserialize)]
 pub struct PalwTirAcceptedAnswerV1 {
     pub by: PalwTirCustodianIdV1,
     pub body: PalwTirDigestV1,
@@ -65,12 +66,65 @@ pub enum PalwTirDesignatedOutcomeV1 {
 }
 
 /// A request's record: the request, its first accepted answer, and the liabilities that survive the handover.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq), BorshSerialize, BorshDeserialize)]
 pub struct PalwTirDesignatedRecordV1 {
     pub request: PalwTirDesignatedRequestV1,
     pub answer: Option<PalwTirAcceptedAnswerV1>,
     /// Signers of a Valid later shown false. Never cleared (not by a handover, not by the default).
     pub liable: BTreeSet<PalwTirCustodianIdV1>,
+}
+
+/// The consensus-side registry of designated records, keyed by request. Written only through [`palw_tir_apply_designated_event_v1`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirDesignatedRegistryV1 {
+    pub records: BTreeMap<PalwTirRequestKeyV1, PalwTirDesignatedRecordV1>,
+}
+
+/// An event on the designated-answer path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwTirDesignatedEventV1 {
+    Open(PalwTirDesignatedRequestV1),
+    Answer { key: PalwTirRequestKeyV1, custodian: PalwTirCustodianIdV1, body: PalwTirDigestV1, at_daa: u64 },
+    FalseValid { key: PalwTirRequestKeyV1, signer: PalwTirCustodianIdV1 },
+}
+
+/// Why a designated event is refused by the registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwTirDesignatedRegistryErrorV1 {
+    Rule(PalwTirDesignatedErrorV1),
+    AlreadyOpen,
+    UnknownRequest,
+}
+
+/// **The fold step (DORMANT).** Before the fence is active the registry is not written at all: the call is a strict no-op, so
+/// pre-fence state is byte-identical. Once active, each event is applied by the pure rules above; a refused event changes nothing.
+pub fn palw_tir_apply_designated_event_v1(
+    registry: &mut PalwTirDesignatedRegistryV1,
+    fence_active: bool,
+    event: PalwTirDesignatedEventV1,
+) -> Result<(), PalwTirDesignatedRegistryErrorV1> {
+    if !fence_active {
+        return Ok(());
+    }
+    match event {
+        PalwTirDesignatedEventV1::Open(request) => {
+            if registry.records.contains_key(&request.key) {
+                return Err(PalwTirDesignatedRegistryErrorV1::AlreadyOpen);
+            }
+            let record = palw_tir_open_designated_v1(request).map_err(PalwTirDesignatedRegistryErrorV1::Rule)?;
+            registry.records.insert(record.request.key, record);
+            Ok(())
+        }
+        PalwTirDesignatedEventV1::Answer { key, custodian, body, at_daa } => {
+            let record = registry.records.get_mut(&key).ok_or(PalwTirDesignatedRegistryErrorV1::UnknownRequest)?;
+            palw_tir_answer_designated_v1(record, custodian, body, at_daa).map(|_| ()).map_err(PalwTirDesignatedRegistryErrorV1::Rule)
+        }
+        PalwTirDesignatedEventV1::FalseValid { key, signer } => {
+            let record = registry.records.get_mut(&key).ok_or(PalwTirDesignatedRegistryErrorV1::UnknownRequest)?;
+            palw_tir_mark_false_valid_v1(record, signer);
+            Ok(())
+        }
+    }
 }
 
 /// Why a request or an answer is refused (a refusal leaves the record unchanged).
@@ -347,5 +401,50 @@ mod tests {
         assert_eq!((h.pursuit_step, h.evidence_until_daa, h.charges, h.awaiting), (3, 900, 5, Some(key())));
         assert_eq!(palw_tir_evidence_horizon_v1(&t, Some(400)), 900, "a tenure ending never shortens the horizon");
         assert_eq!(palw_tir_evidence_horizon_v1(&t, Some(1_200)), 1_200);
+    }
+
+    #[test]
+    fn the_fold_step_is_a_strict_no_op_before_the_fence() {
+        let mut reg = PalwTirDesignatedRegistryV1::default();
+        let before = reg.clone();
+        palw_tir_apply_designated_event_v1(&mut reg, false, PalwTirDesignatedEventV1::Open(request(2))).unwrap();
+        palw_tir_apply_designated_event_v1(&mut reg, false, PalwTirDesignatedEventV1::FalseValid { key: key(), signer: c(1) }).unwrap();
+        assert_eq!(reg, before, "pre-fence: nothing is written");
+        assert_eq!(borsh::to_vec(&reg).unwrap(), borsh::to_vec(&before).unwrap(), "pre-fence bytes are identical");
+    }
+
+    #[test]
+    fn armed_events_go_through_the_rules_and_a_refused_event_changes_nothing() {
+        let mut reg = PalwTirDesignatedRegistryV1::default();
+        palw_tir_apply_designated_event_v1(&mut reg, true, PalwTirDesignatedEventV1::Open(request(2))).unwrap();
+        assert_eq!(
+            palw_tir_apply_designated_event_v1(&mut reg, true, PalwTirDesignatedEventV1::Open(request(2))),
+            Err(PalwTirDesignatedRegistryErrorV1::AlreadyOpen)
+        );
+        let snapshot = reg.clone();
+        // A non-designated answer is ignored (Ok, no change); a late answer is refused (no change).
+        palw_tir_apply_designated_event_v1(&mut reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(9), body: [1; 32], at_daa: 1_005 }).unwrap();
+        assert_eq!(reg, snapshot, "non-designated answer: no state change");
+        assert_eq!(
+            palw_tir_apply_designated_event_v1(&mut reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(1), body: [1; 32], at_daa: 9_999 }),
+            Err(PalwTirDesignatedRegistryErrorV1::Rule(PalwTirDesignatedErrorV1::AnswerAfterDefault))
+        );
+        assert_eq!(reg, snapshot, "refused answer: no state change");
+    }
+
+    #[test]
+    fn the_registry_round_trips_through_borsh_and_replays_identically() {
+        let events = |reg: &mut PalwTirDesignatedRegistryV1| {
+            palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::Open(request(2))).unwrap();
+            palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::FalseValid { key: key(), signer: c(2) }).unwrap();
+            palw_tir_apply_designated_event_v1(reg, true, PalwTirDesignatedEventV1::Answer { key: key(), custodian: c(2), body: [3; 32], at_daa: 1_015 }).unwrap();
+        };
+        let mut a = PalwTirDesignatedRegistryV1::default();
+        let mut b = PalwTirDesignatedRegistryV1::default();
+        events(&mut a);
+        events(&mut b);
+        assert_eq!(borsh::to_vec(&a).unwrap(), borsh::to_vec(&b).unwrap(), "replay gives identical bytes");
+        let back = PalwTirDesignatedRegistryV1::try_from_slice(&borsh::to_vec(&a).unwrap()).unwrap();
+        assert_eq!(back, a);
     }
 }
