@@ -2540,3 +2540,20 @@ It is queued behind the consolidated build in
 it is not yet a passing unit or node result, nor proof that this is the only
 cause of the live failure. The consolidated payment build will include this
 owner change, and the forged node case must be rerun with the rebuilt binary.
+
+
+### 16.3 Owner-fixed forged run reaches Final; full-run rerun queued (2026-10-18)
+
+After the §16.2 observation, the old executable's forged claim
+`4442a37ef79c59e3003a8922cdfa3108b3fbe0f53706b13c4f3d6a50faca6417f2c03ace0748768a014868c9ca8020f21390493bae69d6b484bcee4e4d66c3b2`
+reached **Final at DAA 2322**. Its first panic is `a forged claim reached Final`;
+the required producer/colluding-seat slash assertions were not reached. This
+contradicts G14 completion. The refusal and late-demand logs in §16.2 remain
+evidence; the source-level full-run correction is not retroactive qualification.
+
+The consolidated forged node test is queued behind the same kaspad build:
+`CARGO_INCREMENTAL=0 cargo test -j1 -p kaspad --lib --no-default-features --
+tir_frame_node_tn1_a_forged_framed_claim_is_convicted_by_one_outside_service
+--nocapture --test-threads=1`, log
+`/tmp/codex-g14-integrated-tir-forged-full-runs.log`. Both the actual licensed
+colluder set and every colluder's collateral decrease remain mandatory.
