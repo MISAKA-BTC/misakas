@@ -957,6 +957,7 @@ pub mod palw_prefix_state_stream_v1;
 
 pub mod palw_tir_frame_cost_v1;
 pub mod palw_tir_designated_answers_v1;
+pub mod palw_tir_history_bisection_v1;
 pub mod palw_tir_adjudication_slot_v1;
 pub mod palw_tir_container_v1;
 pub mod palw_tir_public_source_v1;
