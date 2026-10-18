@@ -1870,3 +1870,26 @@ This verifies the common helper's immediate rescan and preservation of evidence 
 in-flight offence tracking. The watcher hook is on the drill branch and must be
 integrated for the rebuilt live run. This unit result does not demonstrate a seat
 slash, nor change inherited run 12's terminal D-02 FAIL.
+
+
+### 15.15 Held Qwen36 public-filing adjudication: 2 tests pass (2026-10-18)
+
+`CARGO_INCREMENTAL=0 cargo test -j1 -p misaka-palw-base0 --lib q36_held_attention_ -- --nocapture --test-threads=1`
+completed with **2 passed, 0 failed, 2.03s**, after a 17m55s invocation including
+the artifact-lock wait. Log: `/tmp/codex-g14-q36-held-forgery.log`.
+
+The forged-tile case uses an actual fault-injected execution root, keeps the
+checkpoint root unchanged, and supplies only the public filing plus bound prompt
+to the narrow challenger. An honest root cannot justify the accused committed
+output. A dishonest accumulator consistent with that output opens the court, and
+the independently reconstructed bottom yields `ExecutorGuilty`. The companion
+case checks honest responder/challenger equality across prefill and decode,
+complete-recurrence reconstruction, held cache-write rows, and foreign prompt or
+slice-root rejection. Both use a narrow materialization cap below the leaf count.
+
+This is backend/public-evidence court qualification, not ordinary registration,
+auto-filing, node/P2P conviction or payment qualification. C5 still refuses held
+recurrent profiles, and `supports_dissection` remains conservative when held
+answerability is armed. Connecting a covered, versioned route must preserve the
+context bound, compute safety factor and turn cap, all other admission checks,
+and consistency between the SDK, registry, registration fold and genesis mirror.
