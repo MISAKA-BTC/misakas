@@ -1654,3 +1654,9 @@ branch `codex/g14-tir-completion`、元の TIR worktree を継続使用。genesi
 - 一致する frame の quote を positive control とし、runtime manifest 1 フィールドだけ異なる header の quote が拒否されることを assert する。実際に支払われた frame にも同じ非既定 manifest と CU ruleset が残ることを確認する。
 - 共謀系は、準備した集合と実際に bound された seat 集合の一致も必須とし、担保の事前 snapshot は card を key に保存する。
 - **ビルド成功、runtime は結果待ち。** Rust 構文解析と `git diff --check` に加え、対象 lib test のビルドが 26m28s で完了した。`/tmp/codex-g14-tir-honest.log` の対象 node 試験は実行中(PID 9789)。非既定 semantics の Final・支払い完了としてはまだ数えない。
+
+### 14.2 token table loader の実行結果と修正(2026-10-18)
+
+最初の誠実系実行は、build 26m28s の後、92.76s で失敗した。追加 fixture の `eog_token_ids` が空で、通常 loader が「少なくとも 1 個の vocabulary 内 EOG ID が必要」と拒否した。これは Final・支払いの成功結果ではない。fixture の最終 vocabulary ID を EOG として指定した。
+
+修正後の同一 cargo command は build 3m07s で完了し、`/tmp/codex-g14-tir-honest-eog.log` で node 試験を実行中。別の `/tmp/codex-g14-tir-forged-test` は修正前 executable の clone であり、追加 semantics fixture を使用しない偽造系を実行中(`/tmp/codex-g14-tir-forged.log`)。両者とも、この追記時点では合格を確認していない。

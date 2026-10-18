@@ -165,7 +165,7 @@ impl TirFixture {
             let tokenizer = misaka_palw_base0::tokenizer::QwenTokenizer::from_json(&raw).unwrap();
             let table = kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1 {
                 entries: (0..program.token_bound).map(|id| tokenizer.token_bytes(id)).collect(),
-                eog_token_ids: Vec::new(),
+                eog_token_ids: vec![program.token_bound - 1],
                 tokenizer_id: misaka_palw_base0::artifact::Base0ArtifactV1::tokenizer_commitment_of(&raw),
             };
             (raw, table)
