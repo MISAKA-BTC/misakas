@@ -1794,3 +1794,11 @@ running (`/tmp/codex-g14-q36-held-build.log`); **no build/test success is claime
 `supports_dissection()` and C5 admission remain conservative. This supersedes the statement
 in §15.10 that no held override exists, but does not establish complete GDN answerability,
 new-model registration, false-Valid liability, or node/P2P prosecution.
+
+
+The ordinary GDN node fixture is also corrected to its artifact's actual rotary-table context
+bound (32), a canonical job derived at that bound, and one attention head per tile. The earlier
+fold-only geometry (context 160, tile 512) was not a valid assertion that this small artifact
+could serve every declared job or dissect its attention sites. The fixture asserts both context
+agreement and dissectable tile geometry; C5 remains in force. Its next node rerun is pending the
+held-backend build, and no registration success is inferred from these fixture changes.

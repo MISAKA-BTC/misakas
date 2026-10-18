@@ -17,17 +17,25 @@ impl GdnFixture {
         use misaka_palw_base0::qwen36::{Qwen36Writer, qwen36_dev_fixture};
         use misaka_palw_base0::qwen36_backend::Qwen36Backend;
         let artifact = Arc::new(qwen36_dev_fixture(4, 8));
-        let profile = qwen36_profile_v8(crate::palw_gdn_held_filer::tests::geometry()).unwrap();
+        let mut geometry = crate::palw_gdn_held_filer::tests::geometry();
+        // The artifact's rotary table is finite, and the attention court opens
+        // one head per tile. The fold-only GDN fixture's broad geometry is not
+        // an ordinary node-registration declaration.
+        geometry.n_ctx = artifact.shape.max_position as u32;
+        geometry.tile_len = geometry.attn_head_dim;
+        let profile = qwen36_profile_v8(geometry).unwrap();
         let root = misaka_palw_base0::inventory::qwen36_inventory_v1(&artifact, &profile).unwrap().root();
         let backend = Qwen36Backend::from_registered_profile(
             artifact.clone(),
             chain.config.params.net.to_string().into_bytes(),
             profile.clone(),
-            qwen36_held_canonical_v1(160),
+            qwen36_held_canonical_v1(profile.n_ctx),
         )
         .unwrap()
         .with_prompt_ids_form(chain.config.params.palw_prompt_ids_form_v1());
         let (canonical, _) = backend.job_for_anchor(Hash64::default()).unwrap();
+        assert_eq!(canonical.max_context_tokens, profile.n_ctx, "the registered job uses the artifact's actual context bound");
+        assert!(kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1(&profile));
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("outside-hybrid.palwq36");
         let plan: Vec<(String, usize)> =
