@@ -1680,3 +1680,7 @@ The still-running `/tmp/codex-g14-tir-forged-test` predates this fix. Its result
 ### 14.6 Do not replay a frame whose new-owner door has closed (2026-10-18)
 
 The old forged run logs a replay of its second frame every tick after the new-owner door closes. Existing-case handling removes that unopenable case, but discovery only checked the later conviction door and recreated it immediately. Discovery now checks the same earliest inclusion condition as the existing Open builder before spending replay work. An already accepted acquisition remains eligible after the new-owner door, under its unchanged pursuit deadlines. Added boundary coverage for one DAA before the closing door, after it, an existing acquisition, and saturated clock arithmetic. Targeted test queued in `/tmp/codex-g14-owner-closed-door.log`; result pending. No acceptance window or liability value is changed.
+
+### 14.7 Serialize pending TIR builds under memory pressure (2026-10-18)
+
+With swap usage at 16,645 MB, our ordinary-payment build and queued owner retry/closed-door builds were explicitly interrupted (cargo roots 26136, 28931, 33990 and their compiler descendants). They had not reached test execution. This is a resource-management interruption, not a pass or test failure. Keep the GDN/native target build running first; rerun the TIR targeted commands with `-j 1` once that build finishes. The already running forged executable 12058, genesis fit 72982 and run-12 driver 84986 were not interrupted. Their results do not validate the newer owner scheduler fixes.
