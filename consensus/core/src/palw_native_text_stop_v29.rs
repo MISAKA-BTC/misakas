@@ -560,6 +560,76 @@ impl NativeTextBookV29 {
             proof,
         })
     }
+    /// Replace an unpaid Final with a conviction while its fee is held. Core
+    /// authenticates the held row and derives `horizon` from the signed terms;
+    /// this method neither queues a second payment nor collects collateral.
+    pub(crate) fn convict_after_final(
+        &mut self,
+        proof: Digest,
+        finder: Digest,
+        finder_operator: Digest,
+        actual_collected: u64,
+        now: u64,
+        horizon: u64,
+    ) -> Result<NativeTextSettlementV29, String> {
+        let claim = self.claim.as_ref().ok_or("text29 post-Final conviction has no claim")?;
+        let reward = self.funded.request.reward;
+        let held_final = self.settlement.as_ref().is_some_and(|s| {
+            s.terminal == NativeTextTerminalV29::Final
+                && s.job == self.funded.id()
+                && s.original_funding == self.funded.root()
+                && s.claim == Some(claim.root())
+                && s.escrow_debit == reward
+                && s.producer == reward
+                && s.requester == 0
+                && s.actual_collected_slash == 0
+                && s.finder == [0; 64]
+                && s.finder_credit == 0
+                && s.burned == 0
+                && s.proof != [0; 64]
+        });
+        if self.terminal != NativeTextTerminalV29::Final
+            || !held_final
+            || reward == 0
+            || self.escrow != 0
+            || horizon < self.funded.deadline
+            || now < claim.committed_daa
+            || now > horizon
+            || proof == [0; 64]
+            || finder == [0; 64]
+            || finder == self.funded.request.producer
+            || finder_operator == [0; 64]
+            || finder_operator == self.funded.request.producer_operator
+            || actual_collected > self.funded.maximum.producer_reserve
+        {
+            return Err("text29 post-Final conviction lacks held original fee/horizon/independent finder".into());
+        }
+        let finder_credit = crate::palw_g14_lane_closure_v1::palw_native_scaled_finder_award_v1(
+            self.funded.maximum.finder_award,
+            self.funded.maximum.producer_reserve,
+            actual_collected,
+        );
+        let burned = actual_collected.checked_sub(finder_credit).ok_or("text29 finder exceeds actual collection")?;
+        let settlement = NativeTextSettlementV29 {
+            job: self.funded.id(),
+            original_funding: self.funded.root(),
+            claim: Some(claim.root()),
+            terminal: NativeTextTerminalV29::Convicted,
+            escrow_debit: reward,
+            producer: 0,
+            requester: reward,
+            actual_collected_slash: actual_collected,
+            finder,
+            finder_credit,
+            burned,
+            proof,
+        };
+        // Move the same unpaid principal from the old Final outcome. Only the
+        // held-fee fold may materialize the refund; the book still closes at zero.
+        self.settlement = None;
+        self.escrow = reward;
+        self.settle(settlement)
+    }
     pub(crate) fn finalize(
         &mut self,
         conditions: &CheckedNativeFinalConditionsV27,
@@ -591,7 +661,10 @@ impl NativeTextBookV29 {
             finder: [0; 64],
             finder_credit: 0,
             burned: 0,
-            proof: object_id(b"misaka-palw/native/text-original-final-conditions-receipt/v29", &(conditions.policy_root(),conditions.basis_root())),
+            proof: object_id(
+                b"misaka-palw/native/text-original-final-conditions-receipt/v29",
+                &(conditions.policy_root(), conditions.basis_root()),
+            ),
         })
     }
 }
@@ -728,6 +801,62 @@ mod tests {
         let s = empty.convict(proof, finder, finder_operator, 0, 40).expect("a drained bond still loses the claim");
         assert_eq!((s.actual_collected_slash, s.finder_credit, s.requester), (0, 0, 20));
         assert!(challengeable().convict(proof, finder, finder_operator, 1_001, 40).is_err(), "never more than the reserve");
+    }
+    fn unpaid_final() -> NativeTextBookV29 {
+        let mut book = challengeable();
+        let reward = book.escrow();
+        book.settle(NativeTextSettlementV29 {
+            job: book.funding().id(),
+            original_funding: book.funding().root(),
+            claim: book.claim().map(NativeTextClaimV29::root),
+            terminal: NativeTextTerminalV29::Final,
+            escrow_debit: reward,
+            producer: reward,
+            requester: 0,
+            actual_collected_slash: 0,
+            finder: [0; 64],
+            finder_credit: 0,
+            burned: 0,
+            proof: [0x41; 64],
+        })
+        .unwrap();
+        book
+    }
+
+    #[test]
+    fn held_text_final_conviction_moves_the_same_principal_and_collects_only_available_reserve() {
+        for (collected, award) in [(1_000, 490), (400, 196), (0, 0)] {
+            let mut book = unpaid_final();
+            let settlement = book.convict_after_final([0x51; 64], [0x61; 64], [0x71; 64], collected, 240, 240).unwrap();
+            assert_eq!((settlement.producer, settlement.requester, settlement.escrow_debit), (0, 20, 20));
+            assert_eq!(
+                (settlement.actual_collected_slash, settlement.finder_credit, settlement.burned),
+                (collected, award, collected - award)
+            );
+            assert_eq!((book.escrow(), book.terminal()), (0, NativeTextTerminalV29::Convicted));
+            let root = book.root();
+            assert!(book.convict_after_final([0x51; 64], [0x61; 64], [0x71; 64], collected, 240, 240).is_err());
+            assert_eq!(book.root(), root, "a second conviction cannot recreate the principal");
+            NativeTextBookV29::restore(&borsh::to_vec(&book).unwrap(), book.funding().root(), root).unwrap();
+        }
+    }
+
+    #[test]
+    fn invalid_post_final_text_convictions_preserve_the_original_book() {
+        for (proof, finder, operator, collected, now, horizon) in [
+            ([0; 64], [0x61; 64], [0x71; 64], 400, 240, 240),
+            ([0x51; 64], [4; 64], [0x71; 64], 400, 240, 240),
+            ([0x51; 64], [0x61; 64], [5; 64], 400, 240, 240),
+            ([0x51; 64], [0x61; 64], [0x71; 64], 1_001, 240, 240),
+            ([0x51; 64], [0x61; 64], [0x71; 64], 400, 241, 240),
+            ([0x51; 64], [0x61; 64], [0x71; 64], 400, 200, 200),
+        ] {
+            let mut book = unpaid_final();
+            let before = book.root();
+            assert!(book.convict_after_final(proof, finder, operator, collected, now, horizon).is_err());
+            assert_eq!(book.root(), before);
+        }
+        assert!(challengeable().convict_after_final([0x51; 64], [0x61; 64], [0x71; 64], 400, 240, 240).is_err());
     }
 }
 

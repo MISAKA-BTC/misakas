@@ -474,3 +474,20 @@ Merged validation 8478ec5dc, newer than required base 042e5e759. Incoming implem
   identity results above and seven hold / one refund result completed before this stop. No EVM build starts below 30 GB.
   Compiler artifacts were cleaned only inside this lane's own `/tmp/misaka-rfc0912-target`; other lanes were not stopped
   or cleaned. Remaining source work continues without a build until the free-space rule permits it.
+
+### 2026-10-18 — RFC08 08-B text29 book transition (partial)
+
+- Added the crate-private `NativeTextBookV29::convict_after_final` transition in
+  `consensus/core/src/palw_native_text_stop_v29.rs`. It checks the original Final outcome, principal, inclusive signed
+  horizon supplied by Core, independent finder and collectible-reserve bound; replaces the same unpaid principal with a
+  requester refund; and scales finder/burn from the actual collection. It changes no serialized field or wire object.
+- Added two focused book tests: full/short/zero collection with exactly-once principal movement and rooted restoration;
+  invalid evidence marker, non-independent finder, excess collection, late conviction, short horizon and wrong phase must
+  preserve the original book. These are synthetic book controls, not full native admission/court/payment evidence.
+- **Not yet tested:** the targeted Rust build was interrupted by its owned guard when shared free space again fell below
+  25 GiB. The command used `CARGO_INCREMENTAL=0`, `-j 3`, core opt-level 0/debug 0, and the existing owned target.
+  Formatting and diff checks pass; no Rust test or completed build result is claimed for this addition.
+- **Still required for text29:** connect the verified held row and this transition to the real court/DA-default adapters;
+  hold the fee at Final, keep collectible reservation and accusation/source rights until the horizon, and close them on
+  release/refund. Funded11, mining vesting, job39 end-to-end evidence, 08-C and RFC10 remain open. The helper alone does
+  not complete 08-B and is not reachable from a new public wire path.
