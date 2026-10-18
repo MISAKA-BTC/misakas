@@ -1,19 +1,19 @@
 //! Actual EXEC input references projected from an executed frame. These are
 //! provenance edges, not certification or a complete-material checkpoint.
 use super::{PalwClaimCheckpointErrorV1, PalwClaimLiabilityFrameV1};
+use crate::Hash64;
 use crate::palw_native_resource_v1::{
-    native_enum, native_struct, reserve_native_requests_v1, NativeCoverageV1, NativeHeapV1, NativeRetainedV1, TirNativeRequestsV1,
+    NativeCoverageV1, NativeHeapV1, NativeRetainedV1, TirNativeRequestsV1, native_enum, native_struct, reserve_native_requests_v1,
 };
 use crate::palw_state_v2::PalwBlockContextV2;
 use crate::palw_work_slice_v2::PalwWorkPrefixStageV2;
-use crate::Hash64;
 use kaspa_hashes::ZERO_HASH64;
 
 /// Namespace is part of the reference: a chain claim, a kernel claim and a
 /// work session may deliberately use identical raw bytes. Birth/retirement
 /// resolution still needs their original admission context; raw IDs alone
 /// are not globally unique credit-lot identities.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwClaimLocalWorkRefV1 {
     ChainClaim { claim: Hash64 },
     KernelClaim { claim: Hash64 },

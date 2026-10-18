@@ -450,7 +450,8 @@ impl PalwClaimLocalAdmissionContextV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwClaimLocalRecordV1 {
-    pub claim: Hash64,
+    /// Namespaced identity; raw claim/session/slice bytes are not global IDs.
+    pub work: PalwClaimLocalWorkRefV1,
     pub accepted_daa: u64,
     pub accepted_blue_score: u64,
     /// The shared-DAG block that accepted this claim, including when its carrying block was RED.
@@ -458,7 +459,7 @@ pub struct PalwClaimLocalRecordV1 {
     /// Only an attempt produces a frontier anchor; FP receipt work alone does not.
     pub anchors: bool,
     /// Actual consumed outputs; populated by admission, never inferred from model identity.
-    pub inputs: BTreeSet<Hash64>,
+    pub inputs: BTreeSet<PalwClaimLocalWorkRefV1>,
     pub execution_root: Hash64,
     /// Reservation identities, not bond identities: two reservations on one bond remain separate.
     pub reservations: BTreeSet<Hash64>,
@@ -485,7 +486,7 @@ pub fn palw_liability_material_id_v1(bytes: &[u8]) -> Hash64 {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwClaimLocalCheckpointV1 {
     pub point: PalwBlockContextV2,
-    pub records: BTreeMap<Hash64, PalwClaimLocalRecordV1>,
+    pub records: BTreeMap<PalwClaimLocalWorkRefV1, PalwClaimLocalRecordV1>,
     pub liability_state: Vec<u8>,
     pub material: BTreeMap<Hash64, Vec<u8>>,
 }
@@ -528,7 +529,7 @@ impl PalwClaimLocalCheckpointV1 {
     pub fn validate(
         &self,
         point: &PalwBlockContextV2,
-        expected: &BTreeMap<Hash64, PalwClaimLocalRecordV1>,
+        expected: &BTreeMap<PalwClaimLocalWorkRefV1, PalwClaimLocalRecordV1>,
         expected_liability_state: &[u8],
     ) -> Result<PalwValidatedClaimCheckpointV1<'_>, PalwClaimCheckpointErrorV1> {
         if self.point != *point || self.records != *expected || self.liability_state != expected_liability_state {
@@ -544,7 +545,7 @@ impl PalwClaimLocalCheckpointV1 {
         let workspace = reserve_native_requests_v1(requests).map_err(PalwClaimCheckpointErrorV1::Resource)?;
         let mut required = BTreeSet::new();
         for (id, record) in &self.records {
-            if *id != record.claim || record.accepted_daa > point.daa_score || record.accepted_blue_score > point.blue_score {
+            if *id != record.work || record.accepted_daa > point.daa_score || record.accepted_blue_score > point.blue_score {
                 return Err("checkpoint claim identity or acceptance point differs".into());
             }
             if record.inputs.contains(id)
@@ -574,14 +575,14 @@ impl PalwClaimLocalCheckpointV1 {
         }
         // Actual consumed outputs form a causal DAG. Shared execution / reservation groups are
         // handled separately below and may be mutual; they must not mask a cycle in input provenance.
-        let mut pending: BTreeMap<Hash64, usize> = self.records.iter().map(|(id, r)| (*id, r.inputs.len())).collect();
-        let mut consumers: BTreeMap<Hash64, Vec<Hash64>> = BTreeMap::new();
+        let mut pending: BTreeMap<PalwClaimLocalWorkRefV1, usize> = self.records.iter().map(|(id, r)| (*id, r.inputs.len())).collect();
+        let mut consumers: BTreeMap<PalwClaimLocalWorkRefV1, Vec<PalwClaimLocalWorkRefV1>> = BTreeMap::new();
         for (id, record) in &self.records {
             for input in &record.inputs {
                 consumers.entry(*input).or_default().push(*id);
             }
         }
-        let mut ready: VecDeque<Hash64> = pending.iter().filter(|(_, n)| **n == 0).map(|(id, _)| *id).collect();
+        let mut ready: VecDeque<PalwClaimLocalWorkRefV1> = pending.iter().filter(|(_, n)| **n == 0).map(|(id, _)| *id).collect();
         let mut visited = 0;
         while let Some(id) = ready.pop_front() {
             visited += 1;
@@ -610,7 +611,7 @@ impl PalwClaimLocalCheckpointV1 {
 
     /// The dependency closure includes shared execution and reservation identities. Model IDs
     /// deliberately do not occur in this schema. Missing input provenance fails closed.
-    fn dependencies(&self, claim: Hash64) -> Result<BTreeSet<Hash64>, &'static str> {
+    fn dependencies(&self, claim: PalwClaimLocalWorkRefV1) -> Result<BTreeSet<PalwClaimLocalWorkRefV1>, &'static str> {
         if !self.records.contains_key(&claim) {
             return Err("missing dependency record");
         }
@@ -642,7 +643,7 @@ impl PalwClaimLocalCheckpointV1 {
     }
 
     /// Reversible credit / reward eligibility. Liability expiry alone never certifies a claim.
-    fn credit_eligible(&self, claim: Hash64) -> bool {
+    fn credit_eligible(&self, claim: PalwClaimLocalWorkRefV1) -> bool {
         self.dependencies(claim).is_ok_and(|ids| {
             ids.iter().all(|id| {
                 let r = &self.records[id];
@@ -653,13 +654,13 @@ impl PalwClaimLocalCheckpointV1 {
 
     /// Irreversible checkpoints use only credit whose complete dependency closure is past every
     /// liability. An unresolved claim remains in the checkpoint and supplies no such credit.
-    fn irreversible_eligible(&self, claim: Hash64) -> bool {
+    fn irreversible_eligible(&self, claim: PalwClaimLocalWorkRefV1) -> bool {
         self.credit_eligible(claim) && self.dependencies(claim).is_ok_and(|ids| ids.iter().all(|id| self.records[id].liability_closed))
     }
 
     /// Revocation is directed: users of A are affected by A; A is not affected by a fault in a
     /// consumer. Shared execution roots and reservations form genuine shared liability groups.
-    fn affected_by(&self, convicted: Hash64) -> Result<BTreeSet<Hash64>, &'static str> {
+    fn affected_by(&self, convicted: PalwClaimLocalWorkRefV1) -> Result<BTreeSet<PalwClaimLocalWorkRefV1>, &'static str> {
         if !self.records.contains_key(&convicted) {
             return Err("convicted claim is absent from the checkpoint");
         }
@@ -751,16 +752,16 @@ pub struct PalwValidatedClaimCheckpointV1<'a> {
     _workspace: Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 impl PalwValidatedClaimCheckpointV1<'_> {
-    pub fn credit_eligible(&self, claim: Hash64) -> bool {
+    pub fn credit_eligible(&self, claim: PalwClaimLocalWorkRefV1) -> bool {
         self.checkpoint.credit_eligible(claim)
     }
-    pub fn irreversible_eligible(&self, claim: Hash64) -> bool {
+    pub fn irreversible_eligible(&self, claim: PalwClaimLocalWorkRefV1) -> bool {
         self.checkpoint.irreversible_eligible(claim)
     }
-    pub fn dependencies(&self, claim: Hash64) -> Result<BTreeSet<Hash64>, &'static str> {
+    pub fn dependencies(&self, claim: PalwClaimLocalWorkRefV1) -> Result<BTreeSet<PalwClaimLocalWorkRefV1>, &'static str> {
         self.checkpoint.dependencies(claim)
     }
-    pub fn affected_by(&self, claim: Hash64) -> Result<BTreeSet<Hash64>, &'static str> {
+    pub fn affected_by(&self, claim: PalwClaimLocalWorkRefV1) -> Result<BTreeSet<PalwClaimLocalWorkRefV1>, &'static str> {
         self.checkpoint.affected_by(claim)
     }
     /// Reversible frontier for fork ranking, separate from the irreversible checkpoint support.
@@ -768,15 +769,15 @@ impl PalwValidatedClaimCheckpointV1<'_> {
         self.checkpoint
             .records
             .values()
-            .filter(|r| r.anchors && self.credit_eligible(r.claim))
-            .max_by_key(|r| (r.accepted_blue_score, r.claim))
+            .filter(|r| r.anchors && self.credit_eligible(r.work))
+            .max_by_key(|r| (r.accepted_blue_score, r.work))
     }
     pub fn irreversible_frontier(&self) -> Option<&PalwClaimLocalRecordV1> {
         self.checkpoint
             .records
             .values()
-            .filter(|r| r.anchors && self.irreversible_eligible(r.claim))
-            .max_by_key(|r| (r.accepted_blue_score, r.claim))
+            .filter(|r| r.anchors && self.irreversible_eligible(r.work))
+            .max_by_key(|r| (r.accepted_blue_score, r.work))
     }
     /// Settlement of recorded effects does not assert that every recorded claim is correct. The
     /// unresolved set and its retrievable material remain bound, and only irrevocable credit backs it.
@@ -801,15 +802,47 @@ mod tests {
     fn id(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)
     }
+    fn work(n: u64) -> PalwClaimLocalWorkRefV1 {
+        PalwClaimLocalWorkRefV1::ChainClaim { claim: id(n) }
+    }
+    #[test]
+    fn rfc23s2_checkpoint_keeps_equal_raw_ids_in_distinct_namespaces() {
+        let mut c = fixture();
+        let same_raw_id = [
+            work(2),
+            PalwClaimLocalWorkRefV1::KernelClaim { claim: id(2) },
+            PalwClaimLocalWorkRefV1::ExecSession { root: id(2) },
+            PalwClaimLocalWorkRefV1::ExecSlice { root: id(2), index: 0 },
+        ];
+        for (n, reference) in same_raw_id.into_iter().enumerate().skip(1) {
+            let mut record = c.records[&work(2)].clone();
+            record.work = reference;
+            record.accepting_block = id(900 + n as u64);
+            record.execution_root = id(800 + n as u64);
+            record.reservations = BTreeSet::from([id(900 + n as u64)]);
+            c.records.insert(reference, record);
+        }
+
+        let checked = c.validate(&c.point, &c.records, &c.liability_state).unwrap();
+        assert_eq!(c.records.len(), 8, "one raw identifier may denote four distinct work vertices");
+        for reference in same_raw_id {
+            assert_eq!(checked.dependencies(reference).unwrap(), BTreeSet::from([reference]));
+            assert_eq!(checked.affected_by(reference).unwrap(), BTreeSet::from([reference]));
+        }
+        let bytes = borsh::to_vec(&c).unwrap();
+        let restored = palw_decode_claim_checkpoint_v1(&bytes).unwrap();
+        assert_eq!(*restored, c, "all four namespace discriminants survive canonical decode");
+        restored.validate(&c.point, &c.records, &c.liability_state).unwrap();
+    }
     fn fixture() -> PalwClaimLocalCheckpointV1 {
         let data = b"public replay data, pinned policy, draw and court state".to_vec();
         let material = palw_liability_material_id_v1(&data);
         let mut records = BTreeMap::new();
         for n in 1..=5 {
             records.insert(
-                id(n),
+                work(n),
                 PalwClaimLocalRecordV1 {
-                    claim: id(n),
+                    work: work(n),
                     accepted_daa: n,
                     accepted_blue_score: n,
                     accepting_block: id(300 + n),
@@ -825,9 +858,9 @@ mod tests {
                 },
             );
         }
-        records.get_mut(&id(3)).unwrap().inputs.insert(id(1));
-        records.get_mut(&id(4)).unwrap().execution_root = id(101);
-        records.get_mut(&id(5)).unwrap().reservations = BTreeSet::from([id(201)]);
+        records.get_mut(&work(3)).unwrap().inputs.insert(work(1));
+        records.get_mut(&work(4)).unwrap().execution_root = id(101);
+        records.get_mut(&work(5)).unwrap().reservations = BTreeSet::from([id(201)]);
         PalwClaimLocalCheckpointV1 {
             point: PalwBlockContextV2 { block: id(400), daa_score: 10, blue_score: 10, subsidy: 0 },
             records,
@@ -838,19 +871,19 @@ mod tests {
     #[test]
     fn rfc23s2_independence_shared_execution_and_actual_reservations() {
         let c = fixture();
-        assert!(c.credit_eligible(id(2)));
-        assert!(c.irreversible_eligible(id(2)));
+        assert!(c.credit_eligible(work(2)));
+        assert!(c.irreversible_eligible(work(2)));
         let checked = c.validate(&c.point, &c.records, &c.liability_state).unwrap();
         assert!(checked.settled(2));
         assert!(!checked.settled(3));
         assert!(checked.lifecycle_preserved_through(5));
         assert!(!checked.lifecycle_preserved_through(11), "a checkpoint cannot cover a future effect");
-        assert_eq!(checked.irreversible_frontier().unwrap().claim, id(2));
+        assert_eq!(checked.irreversible_frontier().unwrap().work, work(2));
         for n in [1, 3, 4, 5] {
-            assert!(!c.credit_eligible(id(n)));
+            assert!(!c.credit_eligible(work(n)));
         }
-        assert_eq!(c.affected_by(id(1)).unwrap(), BTreeSet::from([id(1), id(3), id(4), id(5)]));
-        assert_eq!(c.affected_by(id(3)).unwrap(), BTreeSet::from([id(3)]));
+        assert_eq!(c.affected_by(work(1)).unwrap(), BTreeSet::from([work(1), work(3), work(4), work(5)]));
+        assert_eq!(c.affected_by(work(3)).unwrap(), BTreeSet::from([work(3)]));
     }
     #[test]
     fn rfc23s2_checkpoint_requires_the_exact_state_and_actual_bound_material() {
@@ -863,13 +896,13 @@ mod tests {
         bad.material.values_mut().next().unwrap()[0] ^= 1;
         assert!(bad.validate(&c.point, &c.records, &c.liability_state).is_err());
         let mut bad = c.clone();
-        bad.records.remove(&id(1));
+        bad.records.remove(&work(1));
         assert!(bad.validate(&c.point, &c.records, &c.liability_state).is_err());
         assert!(c.validate(&PalwBlockContextV2 { daa_score: 11, ..c.point }, &c.records, &c.liability_state).is_err());
         let mut cycle = c.clone();
-        cycle.records.get_mut(&id(1)).unwrap().inputs.insert(id(3));
-        cycle.records.get_mut(&id(3)).unwrap().accepted_daa = 1;
-        cycle.records.get_mut(&id(3)).unwrap().accepted_blue_score = 1;
+        cycle.records.get_mut(&work(1)).unwrap().inputs.insert(work(3));
+        cycle.records.get_mut(&work(3)).unwrap().accepted_daa = 1;
+        cycle.records.get_mut(&work(3)).unwrap().accepted_blue_score = 1;
         assert!(cycle.validate(&cycle.point, &cycle.records, &cycle.liability_state).is_err());
     }
     #[test]
@@ -885,7 +918,7 @@ mod tests {
             r.anchors = false;
         }
         let checked = c.validate(&c.point, &c.records, &c.liability_state).unwrap();
-        assert!(checked.credit_eligible(id(2)), "FP may have certified spend weight");
+        assert!(checked.credit_eligible(work(2)), "FP may have certified spend weight");
         assert!(checked.frontier().is_none());
         assert!(!checked.settled(2), "FP never becomes an attempt anchor");
     }
@@ -896,9 +929,9 @@ mod tests {
         let bytes = borsh::to_vec(&c).unwrap();
         let mut restored: PalwClaimLocalCheckpointV1 = borsh::from_slice(&bytes).unwrap();
         restored.validate(&c.point, &c.records, &c.liability_state).unwrap();
-        restored.records.get_mut(&id(1)).unwrap().voided = true;
-        assert!(restored.irreversible_eligible(id(2)));
-        assert_eq!(restored.affected_by(id(1)).unwrap(), c.affected_by(id(1)).unwrap());
+        restored.records.get_mut(&work(1)).unwrap().voided = true;
+        assert!(restored.irreversible_eligible(work(2)));
+        assert_eq!(restored.affected_by(work(1)).unwrap(), c.affected_by(work(1)).unwrap());
         let reverted: PalwClaimLocalCheckpointV1 = borsh::from_slice(&bytes).unwrap();
         assert_eq!(reverted, c);
     }
@@ -906,20 +939,20 @@ mod tests {
     #[test]
     fn rfc23s2_future_reuse_cannot_reopen_irrevocable_credit() {
         let mut c = fixture();
-        let mut later = c.records[&id(2)].clone();
-        later.claim = id(6);
+        let mut later = c.records[&work(2)].clone();
+        later.work = work(6);
         later.accepted_daa = 6;
         later.accepted_blue_score = 6;
         later.accepting_block = id(306);
         later.final_claim = false;
         later.certified = false;
         later.liability_closed = false;
-        c.records.insert(later.claim, later);
+        c.records.insert(later.work, later);
         let checked = c.validate(&c.point, &c.records, &c.liability_state).unwrap();
-        assert!(checked.irreversible_eligible(id(2)));
-        assert!(!checked.credit_eligible(id(6)));
-        assert_eq!(checked.affected_by(id(6)).unwrap(), BTreeSet::from([id(6)]));
-        assert_eq!(checked.affected_by(id(2)).unwrap(), BTreeSet::from([id(2), id(6)]));
+        assert!(checked.irreversible_eligible(work(2)));
+        assert!(!checked.credit_eligible(work(6)));
+        assert_eq!(checked.affected_by(work(6)).unwrap(), BTreeSet::from([work(6)]));
+        assert_eq!(checked.affected_by(work(2)).unwrap(), BTreeSet::from([work(2), work(6)]));
         assert!(checked.settled(2));
     }
 
@@ -937,7 +970,7 @@ mod tests {
         assert_eq!(*restored, c);
         let checked = restored.validate(&c.point, &c.records, &c.liability_state).unwrap();
         assert!(checked.settled(2));
-        assert!(checked.dependencies(id(999)).is_err());
+        assert!(checked.dependencies(work(999)).is_err());
         let mut hostile = borsh::to_vec(&c.point).unwrap();
         hostile.extend(u32::MAX.to_le_bytes());
         assert!(palw_decode_claim_checkpoint_v1(&hostile).is_err());

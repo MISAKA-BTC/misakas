@@ -2,7 +2,7 @@
 //! visitors; semantic authority comes from the executed liability fold.
 use crate::palw_claim_local_v1::{
     PalwClaimLiabilityFrameV1, PalwClaimLocalCheckpointV1, PalwClaimLocalInputV1, PalwClaimLocalNativeChangeV1,
-    PalwClaimLocalRecordV1, PalwClaimLocalRewardHoldV1, PalwClaimLocalRowOwnerV1,
+    PalwClaimLocalRecordV1, PalwClaimLocalRewardHoldV1, PalwClaimLocalRowOwnerV1, PalwClaimLocalWorkRefV1,
 };
 use crate::palw_native_resource_v1::wire::wire_struct;
 use crate::palw_native_resource_v1::{
@@ -15,7 +15,7 @@ use std::io::{self, Read};
 
 native_struct!(PalwClaimLocalRewardHoldV1; accepted_daa, accepted_blue_score, until);
 wire_struct!(PalwClaimLocalRewardHoldV1; u64, u64, u64);
-native_struct!(PalwClaimLocalRecordV1; claim, accepted_daa, accepted_blue_score, accepting_block, anchors, inputs,
+native_struct!(PalwClaimLocalRecordV1; work, accepted_daa, accepted_blue_score, accepting_block, anchors, inputs,
     execution_root, reservations, final_claim, certified, voided, liability_closed, material);
 native_struct!(PalwClaimLocalCheckpointV1; point, records, liability_state, material);
 native_enum!(PalwClaimLocalRowOwnerV1; KernelRoute, ExecV2, ChainClaims);
@@ -30,9 +30,20 @@ impl NativeWireScanV1 for PalwClaimLocalRowOwnerV1 {
 }
 native_struct!(PalwClaimLocalNativeChangeV1; owner, table, key, old, new);
 wire_struct!(PalwClaimLocalNativeChangeV1; PalwClaimLocalRowOwnerV1, u8, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
-wire_struct!(PalwClaimLocalRecordV1; Hash64, u64, u64, Hash64, bool, BTreeSet<Hash64>, Hash64, BTreeSet<Hash64>,
+wire_struct!(PalwClaimLocalRecordV1; PalwClaimLocalWorkRefV1, u64, u64, Hash64, bool, BTreeSet<PalwClaimLocalWorkRefV1>, Hash64, BTreeSet<Hash64>,
     bool, bool, bool, bool, BTreeSet<Hash64>);
-wire_struct!(PalwClaimLocalCheckpointV1; PalwBlockContextV2, BTreeMap<Hash64, PalwClaimLocalRecordV1>, Vec<u8>, BTreeMap<Hash64, Vec<u8>>);
+wire_struct!(PalwClaimLocalCheckpointV1; PalwBlockContextV2, BTreeMap<PalwClaimLocalWorkRefV1, PalwClaimLocalRecordV1>, Vec<u8>, BTreeMap<Hash64, Vec<u8>>);
+impl NativeWireScanV1 for PalwClaimLocalWorkRefV1 {
+    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 | 1 | 2 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),
+            3 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?
+                .merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown claim-local work namespace")),
+        }
+    }
+}
 
 native_struct!(PalwClaimLiabilityFrameV1; point, network_identity, fired_forks, policy, claims, native_changes, prior_state, current_state, accepted_objects, origin_headers, inputs);
 native_enum!(PalwClaimLocalInputV1;
