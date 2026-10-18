@@ -37,3 +37,12 @@ No option reaches 3,120. The zero-cone floor is 11,223, so the non-cone terms do
 - No adversarial test of: whole collusion plus one external verifier, default on missing answers, restart and reorg recovery.
 
 Adopting any option is a user decision. The minimal change that reaches 3,120 is not yet identified.
+
+## Update 2026-10-18 (analysis only)
+
+- Non-cone option ceilings and combinations: [nonconone-door-options-1018](../evidence/palw/g14-measure-2026-10-18/nonconone-door-options-1018.md).
+  With the cone at zero the door is 11,223; the non-cone terms must fall by 8,103 DAA. Even with trace, reorg and owner queue all
+  at zero (ceiling) the door is 3,132, because the output check (2,346) remains.
+- The owner queue removal changes the decided tenure rule. It is a **user decision** and is not adopted here.
+- Still unmet: derived upper bound over all legal jobs (no params-free analyser yet), State/HistTile measurement (not run: decode 30
+  took more than 30 minutes per kind), the residual costs of each option, and adversarial tests. No fence, no rule, no implementation.

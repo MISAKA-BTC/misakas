@@ -582,6 +582,7 @@
 - [evidence/palw/g14-measure-2026-10-18/README.md](../evidence/palw/g14-measure-2026-10-18/README.md)
 - [evidence/palw/g14-measure-2026-10-18/cone-runs-analysis-1018.md](../evidence/palw/g14-measure-2026-10-18/cone-runs-analysis-1018.md)
 - [evidence/palw/g14-measure-2026-10-18/door-breakdown-1018.md](../evidence/palw/g14-measure-2026-10-18/door-breakdown-1018.md)
+- [evidence/palw/g14-measure-2026-10-18/nonconone-door-options-1018.md](../evidence/palw/g14-measure-2026-10-18/nonconone-door-options-1018.md)
 - [evidence/palw/g14-measure-2026-10-18/read-set-1018.md](../evidence/palw/g14-measure-2026-10-18/read-set-1018.md)
 - [evidence/palw/implementation-records/README.md](../evidence/palw/implementation-records/README.md)
 - [evidence/palw/implementation-records/adversarial-e2e-record.md](../evidence/palw/implementation-records/adversarial-e2e-record.md)
