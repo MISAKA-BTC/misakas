@@ -4877,7 +4877,7 @@ mod amendment_1 {
     }
 
     #[test]
-    fn rfc23s2_native_dependency_reader_releases_only_after_real_selected_claim_rows_close() {
+    fn rfc23s2_native_dependency_reader_closes_rows_and_holds_missing_opv_approval_or_evidence() {
         use crate::palw_state_v2::palw_claim_local_rewards_v1::{RewardReadinessV1, exec_dependency_readiness_v1};
         use crate::palw_work_slice_v2::PalwWorkPrefixStageV2;
 
@@ -4914,8 +4914,24 @@ mod amendment_1 {
         assert_eq!(
             exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
             RewardReadinessV1::Ready,
-            "every admitted prefix/slice Claim row is Final, selected, and beyond its liability deadline"
+            "the non-OPV compatibility path has actual Final rows beyond every liability deadline"
         );
+
+        let class_key = prefix.row.class_binding_id.to_vec();
+        s.kernel_route.as_mut().unwrap().rows.insert(
+            (misaka_palw_kernel::rows::TABLE_OPV_CLASSES_V1, class_key.clone()),
+            Vec::new(),
+        );
+        assert_eq!(
+            exec_dependency_readiness_v1(&s, root_id, now).unwrap(),
+            RewardReadinessV1::Hold(liability_until),
+            "OPV class without a selected approval enrollment remains held"
+        );
+        s.kernel_route
+            .as_mut()
+            .unwrap()
+            .rows
+            .remove(&(misaka_palw_kernel::rows::TABLE_OPV_CLASSES_V1, class_key));
 
         let missing_claim = s.exec_v2.slices.get(&(root_id, 1)).expect("admitted middle slice").evidence_root;
         assert_eq!(missing_claim, slices[1].claim_id);
