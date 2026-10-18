@@ -658,6 +658,7 @@ pub mod palw_g14_gates_v1;
 /// court budget, time-priced occupancy and a deadline-aware queue. Dormant behind `palw_court_capacity_v1` on every preset.
 pub mod palw_court_capacity_v1;
 pub mod palw_unresolved_bound_v1;
+pub mod palw_claim_local_v1;
 /// Panel collateral (audit G-13's capacity, user direction 2026-10-16): Active and Resolved liability on one bond, `R_new`, and the
 /// validation that keeps G-13's extended lock Resolved (lane V02's split). Reads only; no new fence.
 pub mod palw_panel_liability_v1;

@@ -1650,6 +1650,9 @@ pub struct PalwStateParamsV2 {
     /// is what the params identity hashes (Some-only) and validation refuses a disagreeing copy.
     #[borsh(skip)]
     unresolved_bound_from_daa: Option<u64>,
+    /// RFC-0023 stage 2: mirrored Some-only fence, excluded from the old parameter wire form.
+    #[borsh(skip)]
+    claim_local_settlement_from_daa: Option<u64>,
     // ---- end lane V02 ----
     /// **ADR-0160 F-R: `Params::palw_capacity_verify_room`'s height** (lane verify V2), mirrored here
     /// by `Params::sync_palw_capacity_verify` because the room is read by the fold, by the producer's
