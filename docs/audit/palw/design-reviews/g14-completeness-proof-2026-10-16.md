@@ -1664,3 +1664,9 @@ branch `codex/g14-tir-completion`、元の TIR worktree を継続使用。genesi
 ### 14.3 Declared semantics reaches inventory, then refuses the liability door (2026-10-18)
 
 The EOG-fixed honest node test reached Active at DAA 399 and the ordinary native tokenizer inventory worker advanced past its EOF wait. The producer then refused the original allocation: `DoorBeyondLiabilityHorizon { required: 5390, allowed: 3120 }` in `/tmp/codex-g14-tir-honest-eog.log` (11:37:15 JST). The configured plan cannot change with more blocks, so our honest test processes 12111 / 13795 were explicitly interrupted to investigate the allocation instead of waiting for the 7200-second bound. This is NOT a test pass or a completed payment demonstration. The independent forged test, inherited fit and drill remain running. Do not remove declared semantics or increase the liability horizon to turn this result green.
+
+### 14.4 Separate ordinary payment and declared-semantics acceptance (2026-10-18)
+
+Added `tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum`, using the same production-service/P2P/receipt-spend harness with the original semantic identities. The existing honest test retains the non-default declared semantics, native EOF inventory and altered-manifest negative control; its 5390/3120 door refusal remains unresolved. Both tests require an actual consumed quantum. A pass of the ordinary payment case does not establish 02-B or close G14 as a whole. The forged case retains the mandatory licensed colluder set and per-seat collateral reduction.
+
+The ordinary payment case is running via the same targeted cargo command with filter `tir_frame_node_tn1_default_semantics`, log `/tmp/codex-g14-tir-default-payment.log`. Validation is pending.

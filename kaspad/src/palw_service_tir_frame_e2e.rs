@@ -1160,7 +1160,8 @@ async fn colluders_license(
 
 /// **T-N1 at node level, both cases.** `forged`: the producer's service commits a cone lie (drill D-05), its whole Panel colludes,
 /// and one public bond outside the Panel — the actual service — localizes and convicts.
-async fn tn1_node(forged: bool) {
+async fn tn1_node(forged: bool, declared: bool) {
+    assert!(!forged || !declared, "the separate forged fixture uses the original semantic identities");
     kaspa_core::log::try_init_logger(&std::env::var("TN1_LOG").unwrap_or_else(|_| "warn,kaspad_lib::palw_panel=info".into()));
     let (mut config, mut bundle, premine, mut floats) = tir_frame_config();
     if forged {
@@ -1172,16 +1173,16 @@ async fn tn1_node(forged: bool) {
         params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
         config = Config::new(params);
     }
-    if !forged {
+    if declared {
         let mut params = config.params.clone();
         params.palw_class_semantics_v1 = Some(ForkActivation::new(0));
         config = Config::new(params);
     }
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
-    let fixture = TirFixture::new_with_semantics(&chain, !forged);
+    let fixture = TirFixture::new_with_semantics(&chain, declared);
     fixture.onboard_to_active(&mut chain, &mut floats).await;
-    if !forged {
+    if declared {
         fixture.declare_semantics(&mut chain, &mut floats).await;
     }
     let outsider = register_outsider(&mut chain, &mut floats, &fixture).await;
@@ -1280,7 +1281,7 @@ async fn tn1_node(forged: bool) {
     };
     let frame = chain.tc.palw_tir_public_frame_v1(claim).unwrap().unwrap();
     eprintln!("[service-tir-frame] piece 3: framed claim {claim} accepted at DAA {}: {frame:?}", chain.daa());
-    if !forged {
+    if declared {
         let context = &frame.header.job_context;
         assert_eq!(context.model_profile_id, Hash64::from_u64_word(0x02B1));
         assert_eq!(context.runtime_manifest_hash, Hash64::from_u64_word(0x02B2));
@@ -1450,8 +1451,10 @@ async fn tn1_node(forged: bool) {
         }
         let (paid_claim, block) = paid.expect("T-N1 requires an actual quantum spend, not only a payment right");
         let paid_frame = chain.tc.palw_tir_public_frame_v1(paid_claim).unwrap().expect("the paid claim has its ORIGINAL frame");
-        assert_eq!(paid_frame.header.job_context.runtime_manifest_hash, Hash64::from_u64_word(0x02B2));
-        assert_eq!(paid_frame.header.job_context.cu_ruleset_id, Hash64::from_u64_word(0x02B4));
+        if declared {
+            assert_eq!(paid_frame.header.job_context.runtime_manifest_hash, Hash64::from_u64_word(0x02B2));
+            assert_eq!(paid_frame.header.job_context.cu_ruleset_id, Hash64::from_u64_word(0x02B4));
+        }
         let mut spent = false;
         chain
             .tc
@@ -1473,12 +1476,20 @@ async fn tn1_node(forged: bool) {
 /// quantum must be consumed by an actual receipt block; the producer remains uncharged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tir_frame_node_tn1_an_honest_framed_claim_is_final_with_its_payment_right() {
-    on_service_stack(|| tn1_node(false)).await;
+    on_service_stack(|| tn1_node(false, true)).await;
 }
 
 /// **T-N1, forged, at node level**: the producer service commits a cone lie, the whole Panel colludes, and the outside public bond's
 /// actual service convicts it — voided `CourtFraud`, producer and Valid seats slashed, never paid.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tir_frame_node_tn1_a_forged_framed_claim_is_convicted_by_one_outside_service() {
-    on_service_stack(|| tn1_node(true)).await;
+    on_service_stack(|| tn1_node(true, false)).await;
+}
+
+
+/// Isolate the ordinary T-N1 payment requirement from the additional 02-B semantics
+/// acceptance case above. Both cases remain required; a pass here does not close 02-B.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum() {
+    on_service_stack(|| tn1_node(false, false)).await;
 }
