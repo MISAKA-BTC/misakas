@@ -1,0 +1,32 @@
+{
+ "baseline_448_serial_bound_body": 1062231,
+ "check_baseline_is_1062231": true,
+ "A_serial_measured_runs_bound_body": 29991,
+ "B_serial_measured_runs_measured_run_bytes": 16095,
+ "C_one_round_sparse_wire_bytes": 12537,
+ "D_one_round_sparse_values_only": 11296,
+ "E_shared_material_serial_measured_runs": 17359,
+ "F_shared_material_one_round": 11658,
+ "G_parallel_measured_runs_bound_body": 26197,
+ "H_parallel_one_round_wire": 12537,
+ "I_cone_term_zero_floor": 11223,
+ "inputs": {
+  "R_measured_max_runs": 8,
+  "wire_bytes_max": 1169221,
+  "whole_run_bytes_max": 524288,
+  "value_bytes_max": 24832,
+  "bound_body": 2122389,
+  "other_terms": 11120,
+  "fixed": 103,
+  "turn_span_bound_body": [
+   2346,
+   540,
+   1805
+  ],
+  "turn_span_wire": [
+   1314,
+   308,
+   1005
+  ]
+ }
+}

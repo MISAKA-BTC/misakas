@@ -1450,6 +1450,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0188",
+      "path": "docs/adr/0188-tir-court-read-set-door-options.md",
+      "title": "ADR-0188 — TIR court read set and the conviction door: options (Proposed)",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
