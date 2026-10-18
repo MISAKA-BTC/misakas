@@ -397,6 +397,11 @@ impl PalwClaimLocalAdmissionContextV1 {
             let header: crate::header::Header = borsh::from_slice(encoded_header).map_err(|e| {
                 crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(format!("claim-local origin header: {e}"))
             })?;
+            if header.hash != *block {
+                return Err(crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(
+                    "claim-local origin header differs from its recorded block".into(),
+                ));
+            }
             if !PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
                 drop(header_lease);
                 continue;

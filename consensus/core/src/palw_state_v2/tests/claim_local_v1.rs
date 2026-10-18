@@ -119,7 +119,7 @@ fn rfc23s2_admission_context_recovers_the_exact_pav3_manifest_from_its_origin_he
     let envelope =
         PalwAttemptMaterialEnvelopeV3::assemble(env.clone(), ready, vec![signature.clone(); 2], |_, _| Ok(signature.clone())).unwrap();
     assert!(envelope.encode_wire().starts_with(&PALW_ATTEMPT_MATERIAL_WIRE_MAGIC_V3));
-    let header = crate::header::Header::new_finalized(
+    let mut header = crate::header::Header::new_finalized(
         crate::constants::BLOCK_VERSION,
         vec![vec![point.block]].try_into().unwrap(),
         h64(706),
@@ -135,6 +135,7 @@ fn rfc23s2_admission_context_recovers_the_exact_pav3_manifest_from_its_origin_he
         h64(709),
     )
     .with_palw_commitment(envelope.encode_wire());
+    header.hash = point.block;
     f.origin_headers.insert(point.block, borsh::to_vec(&header).unwrap());
     let key = palw_claim_liability_frame_key_v1(point.block);
     state.kernel_route.as_mut().unwrap().aux.insert((PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec()), borsh::to_vec(&f).unwrap());
@@ -144,6 +145,13 @@ fn rfc23s2_admission_context_recovers_the_exact_pav3_manifest_from_its_origin_he
     assert_eq!(recovered.claim, id);
     assert_eq!(recovered.execution_key, Hash64::default());
     assert_eq!(recovered.manifest, manifest);
+
+    let mut substituted = header;
+    substituted.hash = h64(710);
+    f.origin_headers.insert(point.block, borsh::to_vec(&substituted).unwrap());
+    state.kernel_route.as_mut().unwrap().aux.insert((PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec()), borsh::to_vec(&f).unwrap());
+    let admission = state.claim_local_admission_context_v1(&p, &point, id).unwrap().unwrap();
+    assert!(admission.native_material_binding_v3().is_err(), "a different origin header cannot supply this claim's manifest");
 }
 
 #[test]
