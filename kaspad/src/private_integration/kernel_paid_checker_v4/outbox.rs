@@ -29,9 +29,11 @@ pub(super) struct CheckerOutboxV4 {
     pub transaction_lease: Option<NativeDemandLeaseV1>,
     pub used_funding: [bool; 64],
     pub accepted_challenges: [bool; 64],
-    /// Receipts and negative terminal claims remain monitored. Native applied
-    /// FileDemand / challenge prefixes allow fresh checks, never approval.
+    /// Receipts and negative terminal claims remain monitored. Applied demands
+    /// and finalized challenge prefixes allow fresh checks, never approval.
     pub observed_terminal: bool,
+    /// Applied but not finalized: neither resend nor fund a successor.
+    pub awaiting_finality: bool,
     pub exhausted: bool,
     pub(super) _metadata: Option<NativeDemandLeaseV1>,
 }
@@ -47,6 +49,7 @@ pub(super) fn action_paths(outbox: &Path, slot: usize) -> (PathBuf, PathBuf, Pat
 enum Observation {
     Pending,
     DemandPresent,
+    AwaitFinality,
     TerminalPresent,
     ClaimDecided,
 }
@@ -59,6 +62,7 @@ fn observation(
     enrollment: Digest,
     round: u32,
     challenge_accepted: bool,
+    challenge_finalized: bool,
 ) -> Result<Observation, CheckerOutboxErrorV4> {
     if let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, .. } = object {
         let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
@@ -70,9 +74,13 @@ fn observation(
         if *signer != actor || *root != Hash64::from_bytes(base) || *dependency != Hash64::from_bytes(base) {
             return Err("checker saved monetary subject actor/claim differs".into());
         }
-        // Only contiguous exact subjects matching the CURRENT native prefix
-        // authorize continuation. An older local success flag authorizes none.
-        return Ok(if challenge_accepted { Observation::DemandPresent } else { Observation::Pending });
+        return Ok(if challenge_finalized {
+            Observation::DemandPresent
+        } else if challenge_accepted {
+            Observation::AwaitFinality
+        } else {
+            Observation::Pending
+        });
     }
     let decoded =
         if matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. }) { Some(saved_kernel_object(object, actor)?) } else { None };
@@ -148,6 +156,7 @@ pub(super) fn scan_outbox(
     base: Digest,
     enrollment: Digest,
     round: u32,
+    finalized: Option<&kaspa_consensus_core::palw_material_challenge_history_v4::PalwMaterialChallengeFinalizedViewV4>,
 ) -> Result<CheckerOutboxV4, CheckerOutboxErrorV4> {
     if funding.is_empty() || funding.len() > 64 {
         return Err("checker action history requires one to 64 explicit funding inputs".into());
@@ -168,10 +177,12 @@ pub(super) fn scan_outbox(
         used_funding: [false; 64],
         accepted_challenges: [false; 64],
         observed_terminal: false,
+        awaiting_finality: false,
         exhausted: true,
         _metadata: reserve_native_requests_v1(metadata).map_err(|e| e.to_string())?,
     };
-    result.accepted_challenges = super::challenge_history::accepted_actions(outbox, cap, route, actor, base, enrollment, round)?;
+    let challenges = super::challenge_history::accepted_actions(outbox, cap, route, actor, base, enrollment, round, finalized)?;
+    result.accepted_challenges = challenges.applied;
     let mut first_gap = None;
     let mut terminal_seen = false;
     for slot in 0..64 {
@@ -211,7 +222,8 @@ pub(super) fn scan_outbox(
         } else {
             (None, None)
         };
-        let status = observation(route, &object, actor, base, enrollment, round, result.accepted_challenges[slot])?;
+        let status =
+            observation(route, &object, actor, base, enrollment, round, result.accepted_challenges[slot], challenges.finalized[slot])?;
         // A receipt/proof is the last action. Demands and exact applied
         // challenge subjects may have successors, including when reorg makes
         // an older one pending again. Validate the immutable history shape.
@@ -230,6 +242,7 @@ pub(super) fn scan_outbox(
             result.transaction = transaction;
             result.transaction_lease = lease;
             result.observed_terminal = matches!(status, Observation::TerminalPresent | Observation::ClaimDecided);
+            result.awaiting_finality = status == Observation::AwaitFinality;
             result.exhausted = false;
         }
     }
@@ -254,6 +267,20 @@ mod tests {
         public::ServedPositionV1,
         rows::{LedgerScalarsV1, TABLE_DEMANDS_V1, TABLE_SERVED_V1},
     };
+
+    fn scan_outbox(
+        outbox: &Path,
+        funding: &[TransactionOutpoint],
+        cap: u64,
+        route: &PalwKernelRouteStateV1,
+        actor: PalwBondKeyV2,
+        base: Digest,
+        enrollment: Digest,
+        round: u32,
+    ) -> Result<CheckerOutboxV4, CheckerOutboxErrorV4> {
+        let finalized = super::super::challenge_history::synthetic_finalized(route, actor);
+        super::scan_outbox(outbox, funding, cap, route, actor, base, enrollment, round, Some(&finalized))
+    }
 
     // These are adapter/WAL controls, not signed native admission tests. The
     // synthetic ledger rows let the source exercise canonical-view replacement

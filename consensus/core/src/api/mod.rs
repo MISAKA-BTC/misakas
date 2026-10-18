@@ -567,6 +567,15 @@ pub trait ConsensusApi: Send + Sync {
     fn palw_material_recovery_finalized_daa_v4(&self) -> Result<Option<u64>, String> {
         Err("native finalized recovery clock unavailable".into())
     }
+    /// Fixed observation of this actor's challenge prefix in one coherent OWN
+    /// native finalized snapshot. A local/remote copy is not finality authority
+    /// or computation/fee/approval evidence. None means no finalized snapshot.
+    fn palw_material_challenge_finalized_v4(
+        &self,
+        _actor: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<crate::palw_material_challenge_history_v4::PalwMaterialChallengeFinalizedViewV4>, String> {
+        Err("native finalized challenge prefix reads unavailable".into())
+    }
     fn palw_kernel_producer_candidate_v4(
         &self,
         _checkpoint: BlockHash,

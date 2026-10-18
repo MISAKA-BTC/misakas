@@ -379,6 +379,13 @@ impl PreparedKernelPaidCheckV4 {
                 kaspa_core::debug!("checker own native route unavailable; exact WAL retained");
                 continue;
             };
+            let finalized_challenges = match api.palw_material_challenge_finalized_v4(self.checker) {
+                Ok(view) => view,
+                Err(error) => {
+                    kaspa_core::debug!("checker own finalized challenge state unavailable; no action: {error}");
+                    continue;
+                }
+            };
             let scanned = match outbox::scan_outbox(
                 &self.outbox,
                 &self.funding,
@@ -388,6 +395,7 @@ impl PreparedKernelPaidCheckV4 {
                 base,
                 enrollment,
                 self.spec.round,
+                finalized_challenges.as_ref(),
             ) {
                 Ok(scanned) => scanned,
                 Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
@@ -404,12 +412,13 @@ impl PreparedKernelPaidCheckV4 {
                 used_funding,
                 accepted_challenges,
                 observed_terminal,
+                awaiting_finality,
                 exhausted,
                 _metadata,
             } = scanned;
             // Continue monitoring the same canonical fact. A later rollback
             // reselects its original WAL; a local completed flag cannot hide it.
-            if observed_terminal {
+            if observed_terminal || awaiting_finality {
                 continue;
             }
             let (action_directory, object_path, tx_path) = outbox::action_paths(&self.outbox, slot);
@@ -598,6 +607,13 @@ impl PreparedKernelPaidCheckV4 {
                         kaspa_core::debug!("checker native route changed before challenge WAL; no publish");
                         continue;
                     };
+                    let finalized = match api.palw_material_challenge_finalized_v4(self.checker) {
+                        Ok(view) => view,
+                        Err(error) => {
+                            kaspa_core::debug!("checker finalized baseline unavailable; no publish: {error}");
+                            continue;
+                        }
+                    };
                     match challenge_history::ensure_base(
                         &self.outbox,
                         self.spec.max_input_bytes,
@@ -607,10 +623,34 @@ impl PreparedKernelPaidCheckV4 {
                         enrollment,
                         self.spec.round,
                         None,
+                        finalized.as_ref(),
                     ) {
                         Ok(()) => {}
                         Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
                             kaspa_core::debug!("checker challenge baseline unknown; no publish: {error}");
+                            continue;
+                        }
+                        Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+                    }
+                    // Recheck the same bounded immutable history against these
+                    // latest own snapshots. A different client using this key
+                    // cannot silently insert an unknown predecessor while we
+                    // publish a successor from an older scan.
+                    match outbox::scan_outbox(
+                        &self.outbox,
+                        &self.funding,
+                        self.spec.max_input_bytes,
+                        &own,
+                        self.checker,
+                        base,
+                        enrollment,
+                        self.spec.round,
+                        finalized.as_ref(),
+                    ) {
+                        Ok(latest) if latest.slot == slot && latest.object.is_none() && !latest.exhausted => {}
+                        Ok(_) => continue,
+                        Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                            kaspa_core::debug!("checker challenge history changed before publish: {error}");
                             continue;
                         }
                         Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),

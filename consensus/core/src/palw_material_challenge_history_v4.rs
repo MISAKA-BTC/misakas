@@ -15,11 +15,66 @@ pub const PALW_MATERIAL_CHALLENGE_HISTORY_PREFIX_V4: u8 = 0xA3;
 pub const PALW_MATERIAL_CHALLENGE_HISTORY_KEY_BYTES_V4: usize = 69;
 pub const PALW_MATERIAL_CHALLENGE_HISTORY_BYTES_V4: usize = 206;
 pub const PALW_MATERIAL_CHALLENGE_HISTORY_ANCHOR_BYTES_V4: usize = 72;
+pub const PALW_MATERIAL_CHALLENGE_FINALIZED_VIEW_BYTES_V4: usize = 398;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwMaterialChallengeHistoryAnchorV4 {
     pub sequence: u64,
     pub root: Hash64,
+}
+
+/// Fixed owned observation returned only by the caller's own coherent native
+/// finalized-state API. `finality_block` commits `state_root` for the state
+/// AFTER its selected parent, `state_point`; it is not the post-state of the
+/// finality block itself. Encoding or receiving this value remotely establishes
+/// no finality authority, computation correctness, fee payment, or approval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwMaterialChallengeFinalizedViewV4 {
+    pub version: u16,
+    pub finality_block: Hash64,
+    pub state_point: Hash64,
+    pub state_root: Hash64,
+    pub network: Hash64,
+    pub actor: PalwBondKeyV2,
+    pub anchor: PalwMaterialChallengeHistoryAnchorV4,
+}
+impl PalwMaterialChallengeFinalizedViewV4 {
+    /// Structural and zero-prefix identity checks only. The own API, not this
+    /// method or a local WAL, supplies the finalized-state observation.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.version != 4
+            || [self.finality_block, self.state_point, self.state_root, self.network, self.anchor.root].contains(&Hash64::default())
+        {
+            return Err("finalized challenge view version/anchor fields differ");
+        }
+        if self.anchor.sequence == 0 && self.anchor != material_challenge_history_base_anchor_v4(self.network, self.actor, None, None)?
+        {
+            return Err("finalized challenge zero-prefix substitutes actor/network genesis");
+        }
+        Ok(())
+    }
+    pub fn encoded(&self) -> Result<[u8; PALW_MATERIAL_CHALLENGE_FINALIZED_VIEW_BYTES_V4], &'static str> {
+        self.validate()?;
+        let mut bytes = [0; PALW_MATERIAL_CHALLENGE_FINALIZED_VIEW_BYTES_V4];
+        let mut remaining = bytes.as_mut_slice();
+        borsh::to_writer(&mut remaining, self).map_err(|_| "finalized challenge fixed encoding extent differs")?;
+        if !remaining.is_empty() {
+            return Err("finalized challenge fixed encoding has unused bytes");
+        }
+        Ok(bytes)
+    }
+}
+
+/// Fixed codec only. A decoded local/remote value does not acquire the trust of
+/// the own finalized-state API by satisfying these structural checks.
+pub fn decode_material_challenge_finalized_view_v4(raw: &[u8]) -> Result<PalwMaterialChallengeFinalizedViewV4, &'static str> {
+    if raw.len() != PALW_MATERIAL_CHALLENGE_FINALIZED_VIEW_BYTES_V4 {
+        return Err("finalized challenge fixed row extent differs");
+    }
+    let view: PalwMaterialChallengeFinalizedViewV4 =
+        borsh::from_slice(raw).map_err(|_| "finalized challenge fixed row does not decode")?;
+    view.validate()?;
+    Ok(view)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -200,6 +255,44 @@ mod tests {
     use crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1 as Action;
     fn bond(n: u8) -> PalwBondKeyV2 {
         PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_bytes([n; 64]), 0))
+    }
+    #[test]
+    fn finalized_view_fixed_398_byte_codec_keeps_header_parent_root_and_identity_separate() {
+        let network = Hash64::from_bytes([1; 64]);
+        let actor = bond(2);
+        let view = PalwMaterialChallengeFinalizedViewV4 {
+            version: 4,
+            finality_block: Hash64::from_bytes([3; 64]),
+            state_point: Hash64::from_bytes([4; 64]),
+            state_root: Hash64::from_bytes([5; 64]),
+            network,
+            actor,
+            anchor: material_challenge_history_base_anchor_v4(network, actor, None, None).unwrap(),
+        };
+        let raw = view.encoded().unwrap();
+        assert_eq!(borsh::to_vec(&view).unwrap(), raw);
+        assert_eq!(&raw[..2], &4u16.to_le_bytes());
+        assert_eq!(&raw[2..66], view.finality_block.as_byte_slice());
+        assert_eq!(&raw[66..130], view.state_point.as_byte_slice());
+        assert_eq!(&raw[130..194], view.state_root.as_byte_slice());
+        assert_eq!(&raw[326..334], &0u64.to_le_bytes());
+        assert_eq!(decode_material_challenge_finalized_view_v4(&raw).unwrap(), view);
+        assert!(decode_material_challenge_finalized_view_v4(&raw[..397]).is_err());
+        let mut larger = raw.to_vec();
+        larger.push(0);
+        assert!(decode_material_challenge_finalized_view_v4(&larger).is_err());
+        let mut changed = view;
+        changed.actor = bond(8);
+        assert!(changed.validate().is_err());
+        changed = view;
+        changed.network = Hash64::from_bytes([8; 64]);
+        assert!(changed.validate().is_err());
+        changed = view;
+        changed.state_root = Hash64::default();
+        assert!(changed.validate().is_err());
+        changed = view;
+        changed.version = 3;
+        assert!(changed.validate().is_err());
     }
     fn checkpoint(previous: Option<PalwMaterialChallengeCheckpointV4>, position: u32) -> PalwMaterialChallengeCheckpointV4 {
         PalwMaterialChallengeCheckpointV4::next(

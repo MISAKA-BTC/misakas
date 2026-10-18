@@ -10,9 +10,9 @@ use kaspa_consensus_core::{
         PalwMaterialChallengeCheckpointV4, material_challenge_checkpoint_from_route_v4, material_challenge_statement_v4,
     },
     palw_material_challenge_history_v4::{
-        PalwMaterialChallengeHistoryAnchorV4 as Anchor, PalwMaterialChallengeHistoryV4,
-        advance_material_challenge_history_anchor_v4 as advance, material_challenge_history_base_anchor_v4 as native_anchor,
-        material_challenge_history_from_route_v4,
+        PalwMaterialChallengeFinalizedViewV4 as Finalized, PalwMaterialChallengeHistoryAnchorV4 as Anchor,
+        PalwMaterialChallengeHistoryV4, advance_material_challenge_history_anchor_v4 as advance,
+        material_challenge_history_base_anchor_v4 as native_anchor, material_challenge_history_from_route_v4,
     },
     palw_monetary_material_v1::PalwMonetaryMaterialActionV1 as Action,
 };
@@ -80,9 +80,17 @@ pub(super) fn ensure_base(
     enrollment: Digest,
     round: u32,
     first_existing: Option<&PalwConsensusObjectV2>,
+    finalized: Option<&Finalized>,
 ) -> Result<(), Error> {
     let path = outbox.join("challenge-base.borsh");
     let network = Hash64::from_bytes(route.header.policy.network_domain);
+    // A new durable subject starts only from a finalized, caught-up prefix. An
+    // existing exact WAL may reconstruct its predecessor, but never rebind it.
+    if first_existing.is_none() {
+        if finalized_anchor(finalized, network, actor)? != current(route, actor)?.0 {
+            return Err(Error::NativeView("checker challenge prefix awaits own finality; no new subject".into()));
+        }
+    }
     if path.exists() {
         read_base(outbox, cap, network, actor, claim, enrollment, round)?;
         return Ok(());
@@ -148,9 +156,26 @@ fn read_base(
     Ok(base)
 }
 
-/// Two bounded passes avoid retaining all decoded action objects. Only a
-/// contiguous reconstruction that equals the CURRENT own native prefix marks
-/// earlier challenge slots observed. A reorg selects a shorter prefix again.
+/// Both masks come from exact contiguous WAL subjects and own-native state.
+/// Current application suppresses resends; only finalized application permits
+/// a successor. A local file or a DAA/time estimate grants neither property.
+pub(super) struct ChallengeObservation {
+    pub applied: [bool; 64],
+    pub finalized: [bool; 64],
+}
+
+fn finalized_anchor(view: Option<&Finalized>, network: Hash64, actor: PalwBondKeyV2) -> Result<Anchor, Error> {
+    let view = view.ok_or_else(|| Error::NativeView("checker own finalized challenge view unavailable".into()))?;
+    view.validate().map_err(|e| Error::NativeView(e.into()))?;
+    if view.version != 4 || view.network != network || view.actor != actor || view.anchor.root == Hash64::default() {
+        return Err(Error::NativeView("checker finalized challenge view identity differs".into()));
+    }
+    Ok(view.anchor)
+}
+
+/// Two bounded passes avoid retaining all decoded action objects. The two
+/// independent own snapshots must both match prefixes of this exact history;
+/// an import/reorg race or missing predecessor remains Unknown, not success.
 pub(super) fn accepted_actions(
     outbox: &Path,
     cap: u64,
@@ -159,7 +184,8 @@ pub(super) fn accepted_actions(
     claim: Digest,
     enrollment: Digest,
     round: u32,
-) -> Result<[bool; 64], Error> {
+    finalized: Option<&Finalized>,
+) -> Result<ChallengeObservation, Error> {
     let mut first = None;
     for slot in 0..64 {
         if let Some(object) = read_action(outbox, slot, cap)? {
@@ -169,17 +195,20 @@ pub(super) fn accepted_actions(
             }
         }
     }
+    let empty = || ChallengeObservation { applied: [false; 64], finalized: [false; 64] };
     if first.is_none() && !outbox.join("challenge-base.borsh").exists() {
-        return Ok([false; 64]);
+        return Ok(empty());
     }
-    ensure_base(outbox, cap, route, actor, claim, enrollment, round, first.as_deref())?;
     let network = Hash64::from_bytes(route.header.policy.network_domain);
+    let final_anchor = finalized_anchor(finalized, network, actor)?;
+    ensure_base(outbox, cap, route, actor, claim, enrollment, round, first.as_deref(), finalized)?;
     let base = read_base(outbox, cap, network, actor, claim, enrollment, round)?;
     let (native, _, _) = current(route, actor)?;
     let mut expected = base.anchor;
     let mut seen = [false; 64];
-    let mut accepted = [false; 64];
+    let mut result = empty();
     let mut matched = base.legacy.is_none() && expected == native;
+    let mut final_matched = base.legacy.is_none() && expected == final_anchor;
     let mut legacy = base.legacy;
     for slot in 0..64 {
         let Some(object) = read_action(outbox, slot, cap)? else { continue };
@@ -194,14 +223,35 @@ pub(super) fn accepted_actions(
         }
         seen[slot] = true;
         if expected == native {
-            accepted = seen;
+            result.applied = seen;
             matched = true;
         }
+        if expected == final_anchor {
+            result.finalized = seen;
+            final_matched = true;
+        }
     }
-    if !matched {
-        return Err(Error::NativeView("checker contiguous challenge prefix not on own native view; exact WAL retained".into()));
+    if !matched || !final_matched || result.finalized.iter().zip(&result.applied).any(|(f, a)| *f && !*a) {
+        return Err(Error::NativeView(
+            "checker contiguous challenge prefix not on both own current/finalized views; exact WAL retained".into(),
+        ));
     }
-    Ok(accepted)
+    Ok(result)
+}
+
+#[cfg(test)]
+pub(super) fn synthetic_finalized(route: &PalwKernelRouteStateV1, actor: PalwBondKeyV2) -> Finalized {
+    // Adapter fixture only. Production receives this solely from own consensus;
+    // this helper executes no finality, signature or native admission checks.
+    Finalized {
+        version: 4,
+        finality_block: Hash64::from_bytes([11; 64]),
+        state_point: Hash64::from_bytes([12; 64]),
+        state_root: Hash64::from_bytes([13; 64]),
+        network: Hash64::from_bytes(route.header.policy.network_domain),
+        actor,
+        anchor: current(route, actor).unwrap().0,
+    }
 }
 
 /// A repeated failure for an already applied exact generation/unit waits for
@@ -243,6 +293,30 @@ mod tests {
         palw_material_challenge_history_v4::material_challenge_history_key_v4,
         palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 as TABLE,
     };
+    fn ensure_base(
+        outbox: &Path,
+        cap: u64,
+        route: &PalwKernelRouteStateV1,
+        actor: PalwBondKeyV2,
+        claim: Digest,
+        enrollment: Digest,
+        round: u32,
+        first: Option<&PalwConsensusObjectV2>,
+    ) -> Result<(), Error> {
+        super::ensure_base(outbox, cap, route, actor, claim, enrollment, round, first, Some(&synthetic_finalized(route, actor)))
+    }
+    fn accepted_actions(
+        outbox: &Path,
+        cap: u64,
+        route: &PalwKernelRouteStateV1,
+        actor: PalwBondKeyV2,
+        claim: Digest,
+        enrollment: Digest,
+        round: u32,
+    ) -> Result<[bool; 64], Error> {
+        super::accepted_actions(outbox, cap, route, actor, claim, enrollment, round, Some(&synthetic_finalized(route, actor)))
+            .map(|v| v.applied)
+    }
     const CAP: u64 = 1024 * 1024;
     const CLAIM: Digest = [3; 64];
     const ENROLLMENT: Digest = [4; 64];
@@ -316,10 +390,32 @@ mod tests {
         assert!(rolled[0] && !rolled[1]);
         assert_eq!(accepted(outbox, &zero), [false; 64]);
         let funding = [actor(10).0, actor(11).0, actor(12).0];
-        let after = super::super::outbox::scan_outbox(outbox, &funding, CAP, &both, actor(1), CLAIM, ENROLLMENT, 0).unwrap();
+        let after = super::super::outbox::scan_outbox(
+            outbox,
+            &funding,
+            CAP,
+            &both,
+            actor(1),
+            CLAIM,
+            ENROLLMENT,
+            0,
+            Some(&synthetic_finalized(&both, actor(1))),
+        )
+        .unwrap();
         assert_eq!(after.slot, 2);
         assert!(!after.observed_terminal && after.object.is_none());
-        let retry = super::super::outbox::scan_outbox(outbox, &funding, CAP, &first, actor(1), CLAIM, ENROLLMENT, 0).unwrap();
+        let retry = super::super::outbox::scan_outbox(
+            outbox,
+            &funding,
+            CAP,
+            &first,
+            actor(1),
+            CLAIM,
+            ENROLLMENT,
+            0,
+            Some(&synthetic_finalized(&first, actor(1))),
+        )
+        .unwrap();
         assert_eq!(retry.slot, 1);
         assert!(!retry.observed_terminal && retry.object.is_some());
         applied(&mut both, 9, true);
@@ -403,5 +499,79 @@ mod tests {
         applied(&mut native, 8, true);
         assert!(matches!(accepted_actions(outbox, CAP, &native, actor(1), CLAIM, ENROLLMENT, 0), Err(Error::NativeView(_))));
         assert!(!outbox.join("challenge-base.borsh").exists(), "unknown history must not publish a rebound baseline");
+    }
+
+    #[test]
+    fn applied_subject_waits_for_own_finality_then_successor_rollback_keeps_exact_slot() {
+        let directory = tempfile::tempdir().unwrap();
+        let outbox = directory.path();
+        let zero = route();
+        ensure_base(outbox, CAP, &zero, actor(1), CLAIM, ENROLLMENT, 0, None).unwrap();
+        save(outbox, 0, 7);
+        let mut first = route();
+        applied(&mut first, 7, true);
+        let final_zero = synthetic_finalized(&zero, actor(1));
+        let pending = super::accepted_actions(outbox, CAP, &first, actor(1), CLAIM, ENROLLMENT, 0, Some(&final_zero)).unwrap();
+        assert!(pending.applied[0] && !pending.finalized[0]);
+        let funding = [actor(10).0, actor(11).0, actor(12).0];
+        let held = super::super::outbox::scan_outbox(outbox, &funding, CAP, &first, actor(1), CLAIM, ENROLLMENT, 0, Some(&final_zero))
+            .unwrap();
+        assert!(held.awaiting_finality && held.object.is_some() && held.slot == 0);
+        assert!(!held.observed_terminal && !held.exhausted);
+        let final_first = synthetic_finalized(&first, actor(1));
+        let ready =
+            super::super::outbox::scan_outbox(outbox, &funding, CAP, &first, actor(1), CLAIM, ENROLLMENT, 0, Some(&final_first))
+                .unwrap();
+        assert!(!ready.awaiting_finality && ready.object.is_none() && ready.slot == 1);
+        save(outbox, 1, 8);
+        let retry =
+            super::super::outbox::scan_outbox(outbox, &funding, CAP, &first, actor(1), CLAIM, ENROLLMENT, 0, Some(&final_first))
+                .unwrap();
+        assert!(!retry.awaiting_finality && retry.object.is_some() && retry.slot == 1);
+        let mut both = route();
+        applied(&mut both, 7, true);
+        applied(&mut both, 8, true);
+        let final_both = synthetic_finalized(&both, actor(1));
+        assert!(
+            matches!(
+                super::accepted_actions(outbox, CAP, &first, actor(1), CLAIM, ENROLLMENT, 0, Some(&final_both)),
+                Err(Error::NativeView(_))
+            ),
+            "incoherent current/finalized observations never authorize resend or continuation"
+        );
+        let mut foreign = final_first;
+        foreign.actor = actor(2);
+        assert!(matches!(
+            super::accepted_actions(outbox, CAP, &first, actor(1), CLAIM, ENROLLMENT, 0, Some(&foreign)),
+            Err(Error::NativeView(_))
+        ));
+    }
+
+    #[test]
+    fn new_baseline_requires_positive_caught_up_finality_without_creating_a_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let outbox = directory.path();
+        let zero = route();
+        assert!(matches!(
+            super::ensure_base(outbox, CAP, &zero, actor(1), CLAIM, ENROLLMENT, 0, None, None),
+            Err(Error::NativeView(_))
+        ));
+        let mut pending = route();
+        applied(&mut pending, 99, true);
+        assert!(matches!(
+            super::ensure_base(
+                outbox,
+                CAP,
+                &pending,
+                actor(1),
+                CLAIM,
+                ENROLLMENT,
+                0,
+                None,
+                Some(&synthetic_finalized(&zero, actor(1)))
+            ),
+            Err(Error::NativeView(_))
+        ));
+        assert!(!outbox.join("challenge-base.borsh").exists());
     }
 }

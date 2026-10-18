@@ -2121,6 +2121,46 @@ impl ConsensusApi for Consensus {
         Ok(state.material_provider_ack_checkpoint_v2(&provider).map(|checkpoint| (pin, checkpoint)))
     }
 
+    fn palw_material_challenge_finalized_v4(
+        &self,
+        actor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_material_challenge_history_v4::PalwMaterialChallengeFinalizedViewV4>, String> {
+        use kaspa_consensus_core::{
+            palw_material_challenge_checkpoint_v4::material_challenge_checkpoint_from_route_v4,
+            palw_material_challenge_history_v4::{
+                PalwMaterialChallengeFinalizedViewV4, material_challenge_history_base_anchor_v4,
+                material_challenge_history_from_route_v4,
+            },
+        };
+        // The helper pins import generation, selected chain, finalized header,
+        // its committed parent state root, and recovery consistency together.
+        let Some((pin, state)) = self.palw_finalized_material_recovery_state_v2()? else { return Ok(None) };
+        let header = self.headers_store.get_header(pin).map_err(|e| e.to_string())?;
+        let state_root =
+            kaspa_consensus_core::palw_state_proof_v1::state_root_of_pinned_header_v1(&header, pin).map_err(|e| e.to_string())?;
+        let state_point = self.ghostdag_store.get_data(pin).map_err(|e| e.to_string())?.selected_parent;
+        let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.config.params.net.to_string().as_bytes(),
+            Some(self.config.params.genesis.hash),
+        );
+        let anchor = if let Some(route) = state.kernel_route() {
+            if kaspa_hashes::Hash64::from_bytes(route.header.policy.network_domain) != network {
+                return Err("finalized challenge route differs from configured network incarnation".into());
+            }
+            let checkpoint = material_challenge_checkpoint_from_route_v4(route, actor).map_err(|e| e.to_string())?;
+            let history = material_challenge_history_from_route_v4(route, actor).map_err(|e| e.to_string())?;
+            material_challenge_history_base_anchor_v4(network, actor, checkpoint.as_ref(), history.as_ref()).map_err(str::to_string)?
+        } else {
+            material_challenge_history_base_anchor_v4(network, actor, None, None).map_err(str::to_string)?
+        };
+        // All fields are fixed and owned. This is the own API's observation;
+        // receiving/decoding its bytes remotely does not establish authority.
+        let view =
+            PalwMaterialChallengeFinalizedViewV4 { version: 4, finality_block: pin, state_point, state_root, network, actor, anchor };
+        view.validate().map_err(str::to_string)?;
+        Ok(Some(view))
+    }
+
     fn palw_monetary_material_unused_offer_finalized_v1(
         &self,
         root: kaspa_hashes::Hash64,
