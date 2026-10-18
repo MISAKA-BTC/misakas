@@ -46,7 +46,7 @@ use kaspa_consensus_core::palw_tir_artifact_v1::{PalwTirTensorSourceV1, palw_tir
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1};
 use kaspa_consensus_core::palw_tir_court_v1::{PalwTirCourtRulesV1, check_tir_cone_refutation_v1};
 use kaspa_consensus_core::palw_tir_public_allocation_v1::{
-    PalwTirPublicAllocationQuoteV1, PalwTirPublicAllocationRulesV1, derive_tir_public_allocation_v1,
+    PalwTirPublicAllocationMissingV1, PalwTirPublicAllocationQuoteV1, PalwTirPublicAllocationRulesV1, derive_tir_public_allocation_v1,
 };
 use kaspa_consensus_core::palw_tir_public_source_v1::{PalwTirPublicRequestV1, PalwTirPublicSourceV1};
 use kaspa_consensus_core::palw_tir_step_v1::{PalwTirStepSpaceV1, palw_tir_execution_root_v1};
@@ -766,6 +766,264 @@ fn tir_frame_operations_on_a_real_class() {
     });
     println!("[tir-frame-measure-real] {}", serde_json::to_string(&record).unwrap());
     if let Ok(out) = std::env::var("MISAKA_TIR_FRAME_MEASURE_OUT") {
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+}
+
+/// **Analysis only (2026-10-18, door breakdown).** Decomposes the conviction door of a real class term by term, re-deriving each
+/// term from the public frame-cost functions, asserts the decomposition equals the production allocation's door, and perturbs one
+/// term at a time. Changes no rule: every perturbed value is computed here, never fed back into consensus.
+/// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> MISAKA_DOOR_BREAKDOWN_OUT=<json> cargo test --release -p misaka-palw-tir-exec
+///  --features node --test frame_measure door_breakdown_on_a_real_class -- --nocapture`
+#[test]
+fn door_breakdown_on_a_real_class() {
+    use kaspa_consensus_core::palw_tir_frame_cost_v1 as fc;
+    use kaspa_consensus_core::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1, request_body_bound_v1};
+    let path = std::path::PathBuf::from(std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR").expect("a PALWTIR1 file"));
+    let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+    let (root, _) = artifact.inventory_root().unwrap();
+    let class = artifact.class().unwrap();
+    let canonical =
+        kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
+        .unwrap()
+        .with_network_id_v1(NET);
+    // --- the same execute + binding + source as `measure` (no answers are produced here) --------------------------------------
+    let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
+    let job = fp_job(&backend, &prompt, 2);
+    let ids: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+    let run = backend.execute_free_prompt(&job, &ids).unwrap();
+    let material = run.outcome.material.clone();
+    let shape = backend.capture_shape(&material).unwrap();
+    let commitment = palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, 999_999).unwrap();
+    let PalwPublicExecutionBindingHeaderV1::Tir(header) = backend.public_execution_binding_header_v1(&material).unwrap() else {
+        panic!("an IR capture exports a TIR header")
+    };
+    let (record, _) =
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(backend.class(), &backend.artifact_root()).unwrap();
+    let source = PalwTirPublicSourceV1::new_v1(
+        &record,
+        &backend.class().layout,
+        &header,
+        commitment.execution_root,
+        commitment.trace_root,
+        LADDER,
+    )
+    .unwrap();
+    let geometry = kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1 {
+        class_id: job.class_id,
+        producer: PalwBondKeyV2(job.executor_bond),
+        execution_root: commitment.execution_root,
+        job_identity: palw_fp_job_pin_v1(&commitment),
+        accepted_daa: 100,
+    };
+    let cost = candidate();
+    let quote = |upper: u64| match derive_tir_public_allocation_v1(
+        &geometry,
+        &commitment,
+        &header,
+        &record,
+        &backend.class().layout,
+        None,
+        None,
+        rules(upper),
+    ) {
+        Ok(PalwTirPublicAllocationQuoteV1::Complete(plan)) => *plan,
+        other => panic!("no complete frame at upper {upper}: {other:?}"),
+    };
+    let cfg = cost.config;
+    let clk = cost.clock;
+    let margin = cfg.prices.inclusion_margin_daa;
+    let acq_daa = cfg.acquisition_daa;
+    let n = source.leaf_count_v1();
+    let d = u64::from(source.decode_count_v1());
+    let tiles = u64::from(source.vocab_v1()).div_ceil(kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+    let tiled = source.supports_tiled_trace_v1() && d > 0;
+    let level = |count: u64| (64 - count.max(2).saturating_sub(1).leading_zeros()).min(10) as u8;
+    let height = |count: u64| if count <= 1 { 0 } else { u64::from(64 - (count - 1).leading_zeros()) };
+    let descent = |count: u64| height(count).div_ceil(10) + 1;
+    // Production body bounds of each request type (the bound every span is computed from).
+    let body = |r: PalwTirPublicRequestV1| request_body_bound_v1(&source, r).unwrap().0;
+    let body_ids = body(PalwTirPublicRequestV1::Ids { offset: 0 });
+    let body_leaf = body(PalwTirPublicRequestV1::StepLeaf { index: 0 });
+    let body_node = if n > 1 { body(PalwTirPublicRequestV1::StepNode { level: level(n), index: 0 }) } else { body_leaf };
+    let body_run = body(PalwTirPublicRequestV1::StepRun { first: 0, count: n.clamp(1, 256) as u32 });
+    let body_tile = body(PalwTirPublicRequestV1::TraceTile { row: 0, tile: 0 });
+    let body_rows = if d > 1 { body(PalwTirPublicRequestV1::RowsNode { level: level(d), index: 0 }) } else { body_tile };
+    let body_tnode = if tiles > 1 { body(PalwTirPublicRequestV1::TileNode { row: 0, level: level(tiles), index: 0 }) } else { body_tile };
+    let cone_cap = n.div_ceil(256);
+    // The path as production composes it (`tir_public_localization_path_v1`), parameterised by the terms a lever may change:
+    // `slots` (upper + 1), the run body, and the cone run count. Returns (turns, DAA, widest span, per-segment DAA).
+    let path = |slots: u64, run_body: u64, cone_runs: u64| -> (u64, u64, u64, Vec<(&'static str, u64, u64)>) {
+        let span = |b: u64| fc::tir_public_turn_span_v1(b, slots, &cfg, &clk).unwrap();
+        let mut segs: Vec<(&'static str, u64, u64)> = Vec::new();
+        let push = |segs: &mut Vec<(&'static str, u64, u64)>, name: &'static str, count: u64, each: u64| {
+            segs.push((name, count, each));
+        };
+        let span_leaf = span(body_leaf);
+        let span_node = if n > 1 { span(body_node) } else { span_leaf };
+        let span_run = if n.clamp(1, 256) > 1 { span(run_body) } else { span_leaf };
+        let span_tile = span(body_tile);
+        if tiled {
+            push(&mut segs, "ids (one demand, complete sequence)", 1, span(body_ids));
+        }
+        push(&mut segs, "step-tree descent to first differing leaf", descent_units(n), span_node);
+        push(&mut segs, "leaf itself", 1, span_leaf);
+        push(&mut segs, "cone runs (localisation of the leaf's dependencies)", cone_runs, span_run);
+        if tiled {
+            push(&mut segs, "rows-tree descent (trace path)", descent(d), if d > 1 { span(body_rows) } else { span_tile });
+            push(&mut segs, "tile-tree descent (trace path)", descent(tiles), if tiles > 1 { span(body_tnode) } else { span_tile });
+            push(&mut segs, "trace tiles of one row", tiles, span_tile);
+        }
+        let widest = segs.iter().map(|s| s.2).max().unwrap_or(0);
+        push(&mut segs, "output / stop-rule check", 1, widest);
+        let restarts = cfg.prices.reorg_replay_moves;
+        push(&mut segs, "reorg restart turns (at the widest span)", restarts, widest);
+        let turns = segs.iter().map(|s| s.1).sum();
+        let daa = segs.iter().map(|s| s.1 * s.2).sum();
+        (turns, daa, widest, segs)
+    };
+    let path_k = |slots: u64, run_body: u64, cone_runs: u64, k: u64| -> u64 {
+        let span = |b: u64| {
+            let parts = b.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64).max(1);
+            let custodian = 1 + 2 + parts;
+            let all = slots * k;
+            cfg.acquisition_daa + (1 + 1 + custodian) * margin + (all * custodian * clk.control_bytes + all * b).div_ceil(clk.parallel_bytes_per_daa)
+        };
+        let leaf = span(body_leaf);
+        let node = if n > 1 { span(body_node) } else { leaf };
+        let run = if n.clamp(1, 256) > 1 { span(run_body) } else { leaf };
+        let tile = span(body_tile);
+        let mut segs = vec![];
+        if tiled { segs.push((1u64, span(body_ids))); }
+        segs.push((descent_units(n), node));
+        segs.push((1, leaf));
+        segs.push((cone_runs, run));
+        if tiled {
+            segs.push((descent(d), if d > 1 { span(body_rows) } else { tile }));
+            segs.push((descent(tiles), if tiles > 1 { span(body_tnode) } else { tile }));
+            segs.push((tiles, tile));
+        }
+        let widest = segs.iter().map(|s| s.1).max().unwrap_or(0);
+        segs.push((1, widest));
+        segs.push((cfg.prices.reorg_replay_moves, widest));
+        segs.iter().map(|s| s.0 * s.1).sum()
+    };
+    fn descent_units(n: u64) -> u64 {
+        let h = if n <= 1 { 0 } else { u64::from(64 - (n - 1).leading_zeros()) };
+        h.div_ceil(10) + 1
+    }
+    // The whole door from its terms (`derive_tir_public_allocation_v1`): preparation + Open window + acquisition path + owner queue
+    // + the collection allowance (max(collection, filing)).
+    let door_of = |upper: u64, path_daa: u64, queue: u64, filing_moves: u64, prep: u64| -> u64 {
+        let post = path_daa + queue;
+        let filing = fc::tir_public_filing_daa_v1(filing_moves, &cfg, &clk).unwrap();
+        prep + (acq_daa + margin) + post.max(1) + cfg.collection_daa.max(filing) + 0 * upper
+    };
+    let mut rows = Vec::new();
+    let mut prod = Vec::new();
+    let real_run_body = body_run;
+    let widest_leaf_value = source.widest_leaf_value_bytes_v1();
+    for upper in [6u64, 257] {
+        let plan = quote(upper);
+        let door = plan.terms.collect_until_daa - plan.terms.accepted_daa;
+        let prep = fc::tir_public_preparation_door_v1(upper, &cfg, &clk).unwrap();
+        let queue = fc::tir_public_owner_queue_wait_v1(acq_daa + margin, &cfg, &clk).unwrap();
+        let (turns, path_daa, widest, segs) = path(upper + 1, real_run_body, cone_cap.min(cone_cap));
+        // The production run's cone count is the source's own bound, not the ⌈n/256⌉ cap: read it back.
+        let cone_actual = source.cone_runs_v1();
+        let (t2, p2, _, _) = path(upper + 1, real_run_body, cone_actual);
+        assert_eq!(p2, plan.acquisition.envelope.inclusion_daa, "re-derived path == production acquisition inclusion");
+        assert_eq!(t2, turns - (cone_cap - cone_actual) * 0 + 0 * turns, "turn count");
+        let filing_moves = plan.terminal.envelope.maximum_moves;
+        let rebuilt = door_of(upper, p2, queue, filing_moves, prep);
+        assert_eq!(rebuilt, door, "re-derived door == production collect_until - accepted (upper {upper})");
+        let filing = fc::tir_public_filing_daa_v1(filing_moves, &cfg, &clk).unwrap();
+        prod.push(json!({
+            "upper": upper,
+            "door_daa": door,
+            "preparation_daa": prep,
+            "open_window_daa": acq_daa + margin,
+            "acquisition_path_daa": p2,
+            "queue_wait_daa": queue,
+            "collection_allowance_daa": cfg.collection_daa.max(filing),
+            "filing_daa": filing,
+            "collection_daa_config": cfg.collection_daa,
+            "cone_runs_actual": cone_actual,
+            "cone_runs_cap_ceil_n_256": cone_cap,
+            "widest_span_daa": widest,
+            "turns": t2,
+            "filing_moves": filing_moves,
+            "segments": segs.iter().map(|(name, count, each)| json!({"segment": name, "turns": count, "span_daa": each, "daa": count * each})).collect::<Vec<_>>(),
+        }));
+        let _ = rows.len();
+        rows.push(upper);
+    }
+    // --- levers, one term at a time (computed here only; the production rules are unchanged) ----------------------------------
+    let base_plan6 = quote(6);
+    let prep6 = fc::tir_public_preparation_door_v1(6, &cfg, &clk).unwrap();
+    let queue6 = fc::tir_public_owner_queue_wait_v1(acq_daa + margin, &cfg, &clk).unwrap();
+    let cone_actual = source.cone_runs_v1();
+    let fm6 = base_plan6.terminal.envelope.maximum_moves;
+    let base = door_of(6, path(7, real_run_body, cone_actual).1, queue6, fm6, prep6);
+    let mut levers = Vec::new();
+    let mut lever = |label: &str, formula: &str, door: u64| {
+        levers.push(json!({"lever": label, "formula": formula, "door_daa": door, "fits_3120": door <= 3_120, "vs_base": door as i64 - base as i64}));
+    };
+    lever("baseline (upper 6, production terms)", "as shipped", base);
+    lever("upper 257 (production)", "slots 258", door_of(257, path(258, real_run_body, cone_actual).1, fc::tir_public_owner_queue_wait_v1(acq_daa + margin, &cfg, &clk).unwrap(), fm6, prep6));
+    lever("cone turns = 1 (lower bound of any derived cone bound)", "cone_runs 1", door_of(6, path(7, real_run_body, 1).1, queue6, fm6, prep6));
+    lever("cone turns = ceil(n/256) cap (no derivation)", &format!("cone_runs {cone_cap}"), door_of(6, path(7, real_run_body, cone_cap).1, queue6, fm6, prep6));
+    lever("answer body = real widest leaf x 256 (no run slack)", &format!("run body {} B = 256 x {widest_leaf_value} B value", 256 * widest_leaf_value), door_of(6, path(7, 256 * widest_leaf_value, cone_actual).1, queue6, fm6, prep6));
+    lever("answer body = 0 (fixed-part only, lower bound)", "run body 0", door_of(6, path(7, 0, cone_actual).1, queue6, fm6, prep6));
+    lever("only demanded custodians answer (slots 2)", "slots 2", door_of(1, path(2, real_run_body, cone_actual).1, queue6, fm6, prep6));
+    lever("owner queue wait removed", "queue 0", door_of(6, path(7, real_run_body, cone_actual).1, 0, fm6, prep6));
+    lever("cone = 1 AND body = real widest leaf x 256", "both", door_of(6, path(7, 256 * widest_leaf_value, 1).1, queue6, fm6, prep6));
+    // K_owner lever: the turn span at K concurrent owners (production K = 8), re-derived from its formula and checked at K = 8.
+    let span_k = |b: u64, slots: u64, k: u64| -> u64 {
+        let parts = b.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64).max(1);
+        let custodian = 1 + 2 + parts;
+        let owner = 1 + 1;
+        let all = slots * k;
+        let parallel = (all * custodian * clk.control_bytes + all * b).div_ceil(clk.parallel_bytes_per_daa);
+        cfg.acquisition_daa + (owner + custodian) * margin + parallel
+    };
+    assert_eq!(span_k(real_run_body, 7, 8), fc::tir_public_turn_span_v1(real_run_body, 7, &cfg, &clk).unwrap(), "K-span formula == production at K = 8");
+    lever("K_owner = 1 (one owner, not 8)", "all = slots x 1", door_of(6, path_k(7, real_run_body, cone_actual, 1), queue6, fm6, prep6));
+    lever("K_owner = 4", "all = slots x 4", door_of(6, path_k(7, real_run_body, cone_actual, 4), queue6, fm6, prep6));
+    // Regression (step 1): with the liability horizon ARMED at 3,120 DAA the real class is refused on the door, not built.
+    // The unlimited setting above only measures; it must never count as arming evidence.
+    {
+        let mut armed = candidate();
+        armed.clock.maximum_door_daa = 3_120;
+        match derive_tir_public_allocation_v1(&geometry, &commitment, &header, &record, &backend.class().layout, None, None, rules_with(6, armed)) {
+            Ok(PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. }) => {
+                assert!(
+                    missing.iter().any(|m| matches!(m, PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon { required: 1_062_231, allowed: 3_120 })),
+                    "armed at 3,120 the door must be refused: {missing:?}"
+                );
+            }
+            other => panic!("armed at 3,120 the real class must be refused on the door: {other:?}"),
+        }
+    }
+    let horizon = t12_horizon_daa();
+    let record = json!({
+        "record": "misaka-palw/g14-door-breakdown/v1",
+        "date": "2026-10-18",
+        "status": "analysis only: no rule, constant, price or window changed; every value re-derived from the public functions",
+        "class": name,
+        "geometry": { "leaves": n, "decode": d, "vocab": source.vocab_v1(), "tiles": tiles, "prefill": header.job_context.declared_prefill_tokens },
+        "config": { "acquisition_daa": acq_daa, "inclusion_margin_daa": margin, "collection_daa": cfg.collection_daa, "reorg_replay_moves": cfg.prices.reorg_replay_moves, "reorg_retention_daa": cfg.reorg_retention_daa },
+        "clock": { "control_bytes": clk.control_bytes, "parallel_bytes_per_daa": clk.parallel_bytes_per_daa },
+        "answer": { "run_body_bound_bytes": real_run_body, "leaf_body_bound_bytes": body_leaf, "widest_leaf_value_bytes": widest_leaf_value, "ids_body_bytes": body_ids, "tile_body_bytes": body_tile },
+        "horizon_candidate_daa": horizon,
+        "production": prod,
+        "levers": levers,
+    });
+    println!("[door-breakdown] {}", serde_json::to_string(&record).unwrap());
+    if let Ok(out) = std::env::var("MISAKA_DOOR_BREAKDOWN_OUT") {
         std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
     }
 }
