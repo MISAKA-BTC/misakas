@@ -1856,3 +1856,17 @@ The current G-N2 PID 42654 predates these log changes and remains running. It is
 restarted nor declared failed because its observation is sparse. The new diagnostics will
 apply to a future rebuild/rerun if one is needed. No extra test was introduced merely to
 assert log text; execution evidence for the G-N2 behaviour remains pending.
+
+
+### 15.14 CourtFraud wake regression passes (2026-10-18)
+
+The targeted kaspad unit test
+`palw_filer_false_valid::tests::court_fraud_wakes_a_prelicence_empty_scan_without_replacing_its_proof`
+passed (1 passed, 0 failed, 0.72s), after a 19m40s `-j1` build. Command:
+`CARGO_INCREMENTAL=0 cargo test -j1 -p kaspad --lib --no-default-features -- court_fraud_wakes_a_prelicence_empty_scan_without_replacing_its_proof --nocapture --test-threads=1`.
+Log: `/tmp/codex-g14-court-fraud-wake.log`.
+
+This verifies the common helper's immediate rescan and preservation of evidence and
+in-flight offence tracking. The watcher hook is on the drill branch and must be
+integrated for the rebuilt live run. This unit result does not demonstrate a seat
+slash, nor change inherited run 12's terminal D-02 FAIL.
