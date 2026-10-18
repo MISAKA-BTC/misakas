@@ -1735,3 +1735,10 @@ prerequisite fails explicitly instead of appearing as an unexplained missing dec
 No attribution gate was disabled, no unregistered class was injected, and no GDN node/P2P
 conviction is claimed. Resolving the actual admission/attribution path remains required;
 the eight fold tests and one service-host test in §15.8 do not establish that path.
+
+
+The explicit C5 preflight rerun also terminated: `/tmp/codex-g14-gdn-registration-attribution.log`,
+**0 passed / 1 failed**, 0.24 s, with
+`HeldClassUnanswerable { why: Recurrent { layers: 3 } }` before any carrier was constructed.
+This identifies a current admission refusal, rather than treating the fixture's next missing row
+as an artifact-resolution failure. The refusal is retained; this is not a passing GDN node E2E.
