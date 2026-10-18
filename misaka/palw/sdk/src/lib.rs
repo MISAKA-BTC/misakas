@@ -483,6 +483,7 @@ mod tests {
             legal_job_bound: false,
             offence_attribution: false,
             gdn_key_heads: false,
+            memory_routing_court: false,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         };
         let err = s.preflight_admission(bundle, &row, root, &dormant).expect_err("no court, no fused row");
@@ -551,6 +552,7 @@ mod tests {
             legal_job_bound: false,
             offence_attribution: false,
             gdn_key_heads: false,
+            memory_routing_court: false,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         };
         let priced = s.preflight_admission(bundle, &row, root, &with_rules).expect("the same row, the rules stated");

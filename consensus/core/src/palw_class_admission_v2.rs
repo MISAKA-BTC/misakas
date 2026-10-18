@@ -462,6 +462,8 @@ pub struct PalwAdmissionShapeV1 {
     /// (the derived GDN key-head count), and must a V1/V2 class's key and value head counts agree on a
     /// recurrence map. Carried so every preflight asks what the acceptance path asks.
     pub gdn_key_heads: bool,
+    /// Effective memory/routing court fence at this exact registration height.
+    pub memory_routing_court: bool,
 }
 
 /// **ADR-0103: what the held regime's gate reads at the height** — the caller's reading of two
@@ -515,6 +517,7 @@ pub fn palw_admission_shape_at_v1(
         offence_attribution: params.palw_offence_attribution_active_at(daa_score),
         prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
         gdn_key_heads: params.palw_gdn_key_heads_active_at(daa_score),
+        memory_routing_court: params.palw_memory_routing_court_v2_fence().is_some_and(|f| f.is_active(daa_score)),
     })
 }
 
@@ -2437,6 +2440,25 @@ pub fn palw_held_class_is_attributable_v1(profile: &PalwShapeProfileV3, attribut
         return Ok(());
     }
     match palw_held_class_unanswerable_v1(profile) {
+        None => Ok(()),
+        Some(PalwHeldUnanswerableV1::ContextPastBound { n_ctx, bound }) => {
+            Err(PalwClassAdmissionError::HeldClassUnattributable { n_ctx, bound })
+        }
+        Some(why) => Err(PalwClassAdmissionError::HeldClassUnanswerable { why }),
+    }
+}
+
+/// C5 at the registration's effective memory/routing fence. All ordinary
+/// attribution checks beside C5 remain mandatory and are shared by preflight.
+pub fn palw_held_class_is_attributable_v2(
+    profile: &PalwShapeProfileV3,
+    attribution: bool,
+    memory_routing_court: bool,
+) -> Result<(), PalwClassAdmissionError> {
+    if !attribution {
+        return Ok(());
+    }
+    match palw_held_class_unanswerable_v2(profile, memory_routing_court) {
         None => Ok(()),
         Some(PalwHeldUnanswerableV1::ContextPastBound { n_ctx, bound }) => {
             Err(PalwClassAdmissionError::HeldClassUnattributable { n_ctx, bound })

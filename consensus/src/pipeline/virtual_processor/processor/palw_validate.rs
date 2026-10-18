@@ -1398,9 +1398,10 @@ impl VirtualStateProcessor {
                     // only where its attention lie is attributable — its dissection answerable
                     // (`palw_held_class_unanswerable_v1`: the context bound, a recurrent layer, a
                     // compute turn past the cap — a pure function of the profile).
-                    kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v1(
+                    kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v2(
                         &carriage.profile,
                         self.palw_offence_attribution_at(point.daa_score),
+                        self.palw_memory_routing_court_v2_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                     // **ADR-0152 v3.1 addendum §4-bis.8: every claim of the class must be
@@ -2723,7 +2724,7 @@ impl VirtualStateProcessor {
                         // fold refuses it (`ShardCourtHeldSiteUnanswerable`) off the same mirror.
                         Ok(kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection)
                             if self.palw_offence_attribution_at(point.daa_score)
-                                && state_params.held_class_is_unanswerable_v1(&claim.class_id) =>
+                                && state.held_claim_is_unanswerable_v2(state_params, claim) =>
                         {
                             return Err(format!(
                                 "claim {claim_id}: leaf {} is a fused-attention site of held class {}, whose dissection no honest \

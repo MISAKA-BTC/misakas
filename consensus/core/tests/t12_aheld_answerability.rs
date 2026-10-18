@@ -289,3 +289,24 @@ fn memory_routing_held_candidate_preserves_old_reading_and_frozen_bounds() {
     assert!(matches!(palw_held_class_unanswerable_v2(&costly, true), Some(PalwHeldUnanswerableV1::ComputeTurnPastCap { .. })));
     assert_eq!((PALW_HELD_COMPUTE_REPLAYS_V1, PALW_HELD_COMPUTE_TURN_CAP_DAA_V1), (2, 120));
 }
+
+#[test]
+fn memory_routing_registration_keeps_canonical_job_check_after_held_gate() {
+    use kaspa_consensus_core::palw_attempt_rules_v1::*;
+    use kaspa_consensus_core::palw_base0_profile::rc_job_context;
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v8};
+    let mut geometry = QWEN36_35B_A3B;
+    geometry.n_ctx = 32;
+    geometry.tile_len = geometry.attn_head_dim;
+    let profile = qwen36_profile_v8(geometry).unwrap();
+    let (p, d) = palw_attempt_canonical_v1(&profile, false).unwrap();
+    let canonical = rc_job_context(&profile, p, d);
+    let form = PalwPromptIdsFormV1::MerkleV1;
+    assert!(matches!(palw_registration_attribution_v2(&profile, &canonical, true, form, false),
+        Err(PalwRegistrationAttributionErrorV1::Held(_))));
+    assert_eq!(palw_registration_attribution_v2(&profile, &canonical, true, form, true), Ok(()));
+    let wrong = rc_job_context(&profile, p + 1, d);
+    assert!(matches!(palw_registration_attribution_v2(&profile, &wrong, true, form, true),
+        Err(PalwRegistrationAttributionErrorV1::Class(PalwAttributableClassErrorV1::CanonicalNotTheFormula { .. }))));
+}

@@ -252,12 +252,28 @@ impl PalwChainStateV2 {
     /// bundle lists as unanswerable (the 2M row) keeps the mercy, and below the fence this is v1.
     pub(crate) fn court_root_evidence_is_buildable_v2(
         &self,
-        class_id: &Hash64,
+        claim: &PalwClaimStateV2,
         offence_attribution_active: bool,
         params: &PalwStateParamsV2,
     ) -> bool {
-        self.court_root_evidence_is_buildable_v1(class_id)
-            || (offence_attribution_active && !params.held_class_is_unanswerable_v1(class_id))
+        self.court_root_evidence_is_buildable_v1(&claim.class_id)
+            || (offence_attribution_active && !self.held_claim_is_unanswerable_v2(params, claim))
+    }
+
+    /// Keep pre-fence claims on their original mercy reading. Only a claim
+    /// accepted under the memory/routing court reads the new held route from its
+    /// immutable registered profile. Missing held profile data fails closed.
+    pub fn held_claim_is_unanswerable_v2(&self, params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
+        if !params.memory_routing_court_from_daa().is_some_and(|at| claim.accepted_daa >= at) {
+            return params.held_class_is_unanswerable_v1(&claim.class_id);
+        }
+        match self.fp_work_profile_of(&claim.class_id) {
+            Some(profile) if profile.shape_profile_id() == claim.class_id => {
+                crate::palw_class_admission_v2::palw_held_class_unanswerable_v2(profile, true).is_some()
+            }
+            Some(_) => true,
+            None => params.held_class_is_unanswerable_v1(&claim.class_id) || self.class_is_held_v1(&claim.class_id),
+        }
     }
 
     /// ADR-0071 SA-3: the production fact recorded under `key`, if the chain holds one.

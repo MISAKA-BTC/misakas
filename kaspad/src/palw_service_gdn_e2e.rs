@@ -13,7 +13,7 @@ struct GdnFixture {
 
 impl GdnFixture {
     fn new(chain: &Chain) -> Self {
-        use kaspa_consensus_core::palw_qwen36_profile::{qwen36_held_canonical_v1, qwen36_profile_v8};
+        use kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v8;
         use misaka_palw_base0::qwen36::{Qwen36Writer, qwen36_dev_fixture};
         use misaka_palw_base0::qwen36_backend::Qwen36Backend;
         let artifact = Arc::new(qwen36_dev_fixture(4, 8));
@@ -29,7 +29,7 @@ impl GdnFixture {
             artifact.clone(),
             chain.config.params.net.to_string().into_bytes(),
             profile.clone(),
-            qwen36_held_canonical_v1(profile.n_ctx),
+            kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1(&profile, false).unwrap(),
         )
         .unwrap()
         .with_prompt_ids_form(chain.config.params.palw_prompt_ids_form_v1());
@@ -85,9 +85,12 @@ impl GdnFixture {
             &shape,
         )
         .unwrap_or_else(|why| panic!("the ordinary GDN registration preflight refuses: {why:?}"));
-        kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v1(
+        kaspa_consensus_core::palw_attempt_rules_v1::palw_registration_attribution_v2(
             &self.profile,
+            &self.canonical,
             chain.config.params.palw_offence_attribution_active_at(chain.daa()),
+            shape.prompt_ids_form,
+            shape.memory_routing_court,
         )
         .unwrap_or_else(|why| panic!("the ordinary GDN attribution gate refuses: {why:?}"));
         let terms = chain.tc.palw_v2_registration_terms().unwrap();
@@ -149,11 +152,16 @@ impl GdnFixture {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn registered_gdn_class_passes_normal_registration_and_host_resolution() {
-    let (config, bundle, premine, mut floats) = fixture_config_with(false, true, true, false, false);
+    let (config, _bundle, premine, mut floats) = fixture_config_with(false, true, true, false, false);
     // This graph reaches the token-lift kernel; the ordinary admission gate requires its fence.
     let mut params = config.params.clone();
     params.palw_token_lift = Some(ForkActivation::new(0));
     params.palw_gdn_key_heads = Some(ForkActivation::new(0));
+    params.palw_memory_routing_court_v2 = Some(ForkActivation::new(0));
+    params.sync_palw_memory_routing_court_v2();
+    let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!() };
+    let bundle = bundle.clone();
+    assert_eq!(bundle.state.memory_routing_court_from_daa(), Some(0));
     let mut chain = Chain::new(Config::new(params), bundle, &premine);
     chain.advance(2).await;
     let fixture = GdnFixture::new(&chain);

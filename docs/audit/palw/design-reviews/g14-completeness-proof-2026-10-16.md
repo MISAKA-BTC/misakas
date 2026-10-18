@@ -2584,3 +2584,51 @@ fence/mirror consistency and consolidated node qualification still need to be
 connected. The ordinary GDN registration refusal is not closed. No shipped
 preset, numerical policy, model tier or model-review rule is changed, and no
 activation record is pinned by this work.
+
+
+### 17.1 User-specified reference host reconnaissance (2026-10-18)
+
+The user authorized SSH access to the four supplied hosts for reference-node selection.
+Read-only SSH succeeded on all four; no service, deployment, or chain state was changed.
+Candidate 95.111.236.186 (vmi3225101) reports Broadwell-family Intel, 6 vCPUs,
+11 GiB reported RAM (12 GB class), no swap, 132 GiB free disk, and load 0.00/0.01/0.00
+at 08:13 UTC. Existing t12 kaspad PID 269885 uses approximately 70.8% of RAM;
+reported available RAM was 3.9 GiB. Rust tools exist under /root/.cargo/bin.
+The three other hosts report AMD EPYC-family 8 vCPUs and 23 GiB RAM, with loads
+7.76–11.26 and substantial swap occupancy. The smaller, currently quieter Broadwell
+host is the measurement candidate. CPU identity alone does not establish measured
+court throughput. No release capacity measurement or fence approval is claimed.
+Existing /root/misakas is unrelated revision 2bd134ec and must not be overwritten;
+measurement source/build/results need an isolated directory and bounded resources.
+
+
+### 17.2 Acceptance-cohort wiring and current qualification jobs
+
+The GDN route now passes the effective memory/routing fence through the shared
+registration preflight, SDK, extension and processor. C1 reads the claim's
+acceptance height; pre-fence claims retain the old mercy list. A post-fence held
+claim requires its registered profile under its actual shape id; missing or
+mismatched profile data cannot lift the mercy. Added tests cover the acceptance
+boundary and canonical-job refusal after C5. Node fixture uses the ordinary
+canonical formula and synchronizes the test-armed memory/routing mirror.
+These new tests are compiling; no pass or node conviction is claimed yet.
+
+Run13 uses an immutable copy of the new drill private-node produced at 15:00 JST,
+source `72e5eb8aa`, with old kaspad used only for help/keyring generation and the
+CLI for RPC. Binary SHA-256 values and salt are in
+`/tmp/codex-g14-drill-run13-binaries/provenance.json`; runtime log is
+`/tmp/codex-g14-drill-run13.log`, result `/tmp/codex-g14-drill-run13.json`.
+This is an intermediate correction trial, not final integrated shipping evidence.
+P/R processes started; Valid-seat slashing has not been verified. The driver
+explicitly marks unsupported court-capacity injections as NOT-INJECTABLE.
+
+Reference-host source `11b4bf7e0` was copied by git archive to the separate
+`/root/g14-reference-11b4bf7e0`. The offline baseline exited 101 before compilation
+because its cache lacked locked faster-hex 0.10.1; original log/exit are retained.
+The online locked build is unit `g14-reference-court-online-11b4bf7e0.service`,
+limited to CPU 100%, MemoryMax 3 GiB, Nice 19, IOWeight 10, jobs 1, incremental off.
+It runs the existing partial `g14_court_capacity::palw_court_op_timing_harness`
+in release. Its log/exit paths are `court-release-online.log` and
+`court-release-online.exit` in that directory. This harness alone does not measure
+all operation classes, their working sets, or real leaf recomputation; no
+arming policy is derived from it. No existing t12 files or services were modified.

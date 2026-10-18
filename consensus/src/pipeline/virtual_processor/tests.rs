@@ -15184,7 +15184,7 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
     let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
     let end = at + source[at..].find("\n                Obj::").expect("the next arm");
     let arm = &source[at..end];
-    let refusal = arm.find("state_params.held_class_is_unanswerable_v1(&claim.class_id)").expect("the mirror is read");
+    let refusal = arm.find("state.held_claim_is_unanswerable_v2(state_params, claim)").expect("the mirror is read");
     let guard = &arm[refusal.saturating_sub(160)..refusal];
     assert!(
         guard.contains("if self.palw_offence_attribution_at(point.daa_score)") && guard.contains("NeedsDissection)"),
@@ -15197,7 +15197,7 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
         &fold[fold_at..fold_at + fold[fold_at..].find("PalwConsensusObjectV2::CheckpointAccused { accusation } => {").unwrap()];
     assert!(
         fold_arm
-            .contains("builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id)"),
+            .contains("builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim)"),
         "the fold refuses under the same fence and mirror"
     );
 }
@@ -15223,8 +15223,9 @@ fn the_acceptance_layer_takes_the_held_root_claim_past_the_fence_and_refuses_an_
     }
     let registration = source.find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(").expect("the gate");
     let after = &source[registration..registration + 6_000];
-    let c5 = after.find("palw_held_class_is_attributable_v1(").expect("C5 beside the gate");
+    let c5 = after.find("palw_held_class_is_attributable_v2(").expect("C5 beside the gate");
     assert!(after[c5..c5 + 200].contains("self.palw_offence_attribution_at(point.daa_score)"), "at the block's fence");
+    assert!(after[c5..c5 + 300].contains("self.palw_memory_routing_court_v2_at(point.daa_score)"), "the versioned route uses the same block height");
     assert!(source.contains("O::CourtAttnRootClaimedHeld { .. } => \"CourtAttnRootClaimedHeld\","), "and it has a name");
 }
 

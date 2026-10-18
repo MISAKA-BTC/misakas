@@ -339,7 +339,7 @@ fn apply_object_inner(
                 if accusation.verdict != PalwCourtVerdictV2::ExecutorGuilty {
                     return Err(PalwStateV2Error::ShardCourt("an accusation that opens a dissection declares ExecutorGuilty".into()));
                 }
-                if builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id) {
+                if builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim) {
                     return Err(PalwStateV2Error::ShardCourtHeldSiteUnanswerable { claim: claim_id, leaf, class: claim.class_id });
                 }
                 if open_session.is_some() {
@@ -758,7 +758,7 @@ fn apply_object_inner(
                     // session could only freeze the claim's `Final` for a window and end in the
                     // mercy: the accusation is refused, and the class's residual is (C)'s bound (held
                     // to Final, `c_2M = 1`, RT#2). The answerable held class (8k) opens as before.
-                    if builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id) {
+                    if builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim) {
                         return Err(PalwStateV2Error::ShardCourtHeldSiteUnanswerable {
                             claim: claim_id,
                             leaf: accusation.leaf_index,
@@ -2784,7 +2784,7 @@ fn apply_object_inner(
             let class = builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.clone();
             // **ADR-0152 §4-ter H0/H1: the held form is an answerable held class's, past the fence,
             // over a held map.** `held_answerable` is also what makes the held form REQUIRED below.
-            let held_answerable = palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id);
+            let held_answerable = palw_held_claim_is_answerable_v2(&builder.state, builder.params, builder.extras, &claim);
             if held_sub_roots.is_some() {
                 if !held_answerable {
                     return Err(PalwStateV2Error::HeldRootClaimRefused {
@@ -2960,7 +2960,7 @@ fn apply_object_inner(
             // disclosure. Every later move is a response and takes the court's turn.
             let base = builder.params.turn_deadline_daa();
             let window = if phase.round() == 0
-                && palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim_of_session.class_id)
+                && palw_held_claim_is_answerable_v2(&builder.state, builder.params, builder.extras, &claim_of_session)
             {
                 base.max(phase.last_deadline_daa().saturating_sub(ctx.daa_score))
             } else {

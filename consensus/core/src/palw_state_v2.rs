@@ -8886,16 +8886,16 @@ fn forfeit_close_deposit_v1(
 /// is charged `max(reserved, G)`): held (it recorded the regime's ladder), under the held regime,
 /// and not in the bundle's unanswerable list (the 2M row). `false` below the fence — every arm
 /// that reads it is then byte for byte what it was.
-pub(crate) fn palw_held_class_is_answerable_v1(
+pub(crate) fn palw_held_claim_is_answerable_v2(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     extras: &PalwTransitionExtrasV1,
-    class_id: &Hash64,
+    claim: &PalwClaimStateV2,
 ) -> bool {
     extras.offence_attribution_active
         && extras.held_context_ladder.is_some()
-        && state.class_is_held_v1(class_id)
-        && !params.held_class_is_unanswerable_v1(class_id)
+        && state.class_is_held_v1(&claim.class_id)
+        && !state.held_claim_is_unanswerable_v2(params, claim)
 }
 
 /// **ADR-0152 §4-ter (the review's F3, the user's decision (B)): the reason a court's PROVEN verdict
@@ -15993,7 +15993,7 @@ fn open_held_dissection_v1(
     // other opening keeps the court's turn.
     let opening_turn = match &accusation.refutation.binding.shape_profile {
         profile
-            if palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id)
+            if palw_held_claim_is_answerable_v2(&builder.state, builder.params, builder.extras, claim)
                 && profile.shape_profile_id() == claim.class_id =>
         {
             crate::palw_class_admission_v2::palw_held_move_turn_daa_v1(profile, builder.params.turn_deadline_daa())

@@ -34266,3 +34266,33 @@ fn native_claim_cascade_refusal_keeps_dependent_rows_and_journal_unchanged() {
     assert!(matches!(builder.reserve_mutation_sequence_v1(0, usize::MAX), Err(PalwStateV2Error::NativeResource(_))));
     assert_eq!(checker.outstanding(), (0, 0));
 }
+
+/// The route is selected by the claim's acceptance cohort, including after tip advancement.
+#[test]
+fn memory_routing_held_claim_mercy_preserves_acceptance_cohort_and_fails_closed() {
+    use crate::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v8};
+    let (_, params, mut state, claim_id, _) = held_fused_claim(1, 12);
+    let mut claim = state.claim(&claim_id).unwrap().clone();
+    let mut geometry = QWEN36_35B_A3B;
+    geometry.n_ctx = 32;
+    geometry.tile_len = geometry.attn_head_dim;
+    let profile = qwen36_profile_v8(geometry).unwrap();
+    let class_id = profile.shape_profile_id();
+    let ladder = *state.class_step_ladders.get(&claim.class_id).unwrap();
+    state.class_step_ladders.insert(class_id, ladder);
+    state.fp_work_profiles.insert(class_id, Box::new(profile.clone()));
+    claim.class_id = class_id;
+    let params = params.with_held_unanswerable_classes(vec![class_id]).with_memory_routing_court_from_daa(Some(100));
+    claim.accepted_daa = 99;
+    assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
+    claim.accepted_daa = 100;
+    assert!(!state.held_claim_is_unanswerable_v2(&params, &claim));
+    let dormant = params.clone().with_memory_routing_court_from_daa(None);
+    assert!(state.held_claim_is_unanswerable_v2(&dormant, &claim));
+    state.fp_work_profiles.remove(&class_id);
+    assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
+    let mut foreign = profile;
+    foreign.n_ctx += 1;
+    state.fp_work_profiles.insert(class_id, Box::new(foreign));
+    assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
+}

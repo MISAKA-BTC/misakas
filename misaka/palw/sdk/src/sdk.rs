@@ -750,11 +750,12 @@ impl PalwClassSdk {
             // addendum §4-bis.8), through the one function every pre-check shares. Testnet-12
             // lifecycle audit T12-030: without them this gate admitted a canonical job the processor
             // then dropped, after `model add` had paid the carrier.
-            kaspa_consensus_core::palw_attempt_rules_v1::palw_registration_attribution_v1(
+            kaspa_consensus_core::palw_attempt_rules_v1::palw_registration_attribution_v2(
                 &entry.profile,
                 &canonical,
                 shape.offence_attribution,
                 shape.prompt_ids_form,
+                shape.memory_routing_court,
             )
             .map(|()| admitted)
             .map_err(|e| {

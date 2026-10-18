@@ -172,7 +172,7 @@ pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &P
                     // that cannot make it does not underwrite — `supports_dissection` is held-aware).
                     crate::palw_bisect::PalwBisectPartyV1::Responder
                         if !(owes_the_dissection_opening
-                            && palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id))
+                            && palw_held_claim_is_answerable_v2(&builder.state, builder.params, builder.extras, &claim))
                             && ((no_phase && session.ladder.round() == 0 && !class_holds_weight)
                                 || (builder.extras.court_responder_coverage_active
                                     && owes_the_dissection_opening
@@ -183,7 +183,7 @@ pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &P
                                     // class can (C1, `court_root_evidence_is_buildable_v2`).
                                     && !(builder.extras.audit_2026_09_11_deep_active
                                         && builder.state.court_root_evidence_is_buildable_v2(
-                                            &claim.class_id,
+                                            &claim,
                                             builder.extras.offence_attribution_active,
                                             builder.params,
                                         )))) =>
