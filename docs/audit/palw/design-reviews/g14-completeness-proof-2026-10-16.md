@@ -1690,3 +1690,22 @@ With swap usage at 16,645 MB, our ordinary-payment build and queued owner retry/
 The pre-owner-fix `/tmp/codex-g14-tir-forged-test` terminated after asserting at 12:29:04 JST that the forged claim reached `Final { final_daa: 2321 }` (accepted DAA 1722, licensed DAA 1727, collect door 2320). `/tmp/codex-g14-tir-forged.log` also records `TIR immutable request acquisition budget exhausted` before that outcome. Subsequent DB strong-reference destructor panics abort cleanup; the primary security failure is the forged Final, not cleanup. This run proves neither conviction nor seat slash.
 
 The owner retry and closed-door changes were not in that executable. Do not infer that they fix this result until a new node run passes. A serial (`-j 1`) build/run of `palw_tir_public_owner::tests` is now active in `/tmp/codex-g14-owner-tests-serial.log`, then both the corrected forged node test and ordinary honest quantum payment must run. The declared-semantics door refusal also remains open.
+
+
+### 14.9 Genesis #2 pre-upload identity snapshot (2026-10-18)
+
+The active long fit reached integer sequence 0 position **27,200/32,768** and PID 72982
+remained live. Its final report does not yet exist; no upload eligibility is established.
+The state file was saved at 03:36 JST, before the 03:39 short-fit report, consistent with
+the parent pipeline saving the completed fit only after the long fit returns.
+
+[Identity snapshot](../../../evidence/palw/implementation-records/genesis02-preupload-identity-2026-10-18.json)
+records a read-only check of the existing PALWART3 index: exact header framing, index SHA-256,
+trailing artifact root, embedded program's plain BLAKE2b-512 against the short-fit report,
+kernel ID/version, tokenizer ID and both on-disk segment sizes all agree with the retained
+record. The embedded program is 32,301 bytes and matches the short fit's digest
+`8f99de747ebfd268dce331f1639aa664535bff23e17284ac1f2029db02a0d97fafd00c42a70e6f65dc2d614bf420984c54871bcdba28c9d74b515496f190c896`.
+
+This snapshot does not rehash the 2.54 GB of segment data, certify numerical fidelity,
+mark the stale state as measured, upload anything or verify Hugging Face contents. The full
+long-fit decision and the pipeline's upload/verify gates remain required. No model was downloaded.
