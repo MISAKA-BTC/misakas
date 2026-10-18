@@ -1252,7 +1252,8 @@ class Drill:
         p.start()
         self.wait_rpc(p)
         self.peer_all()
-        since_daa = max(since_daa, self.daa_quiet() or 0)
+        # Only claims accepted after the lying restart are lies (a claim at the restart's own DAA may be the honest run's).
+        since_daa = max(since_daa, (self.daa_quiet() or 0) + 1)
         if n <= 0:
             # Lie on every draw for the rest of the phase (G-D02c): nothing to bound.
             self.lying_ids = set()
