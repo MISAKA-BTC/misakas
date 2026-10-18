@@ -3065,6 +3065,11 @@ impl PalwPanelService {
                                 current_daa,
                             );
                         }
+                        // An early capture proof may already have scanned before
+                        // the licence landed and be sleeping for the empty-walk interval.
+                        if noted && armed {
+                            false_valid.wake_after_court_fraud_v1(&claim, current_daa);
+                        }
                         info!(
                             "[{PALW_PANEL}] claim {claim}: convicted (CourtFraud at DAA {voided_daa}) on our public terminal at leaf {} — \
                              every liable Valid signer is handed to the false-Valid filer: {noted} (G14 G-D02a)",

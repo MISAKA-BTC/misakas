@@ -1599,3 +1599,25 @@ Continued the inherited run-12 driver and nodes without restarting them. The out
 A subsequent read-only RPC observation of the outsider at DAA 45 reports producer card 0 `bondSlashed = 93906321001040`, and cards 1, 2, 3 each `bondSlashed = 0`. No P2-8c follow-up line was found in that observation. The driver remains running and the D-02 terminal row has not yet been written into its result JSON. G-D02a is therefore **pending**, not closed. The existing driver requires a positive slash of every Valid signer for court conviction PASS, and that requirement is retained.
 
 Sources: `run12/O/node.log`, `run12.json`, and read-only `getBlockDagInfo` / `getPalwClaims` on port 34173, under the run path in `handover-g14-drill-2026-10-18.md`. Later observations must replace this interim status with the terminal driver result and actual per-seat slash deltas. Neither a watcher log nor producer slash alone is sufficient.
+
+
+### 12.8 Wake receipt discovery after a confirmed court verdict (2026-10-18)
+
+A case first scanned before its licence is available schedules its next empty-history walk
+100 DAA later. The CourtFraud watcher previously found that case via `holds()` and did not
+advance this schedule, even though the chain had just supplied new terminal evidence.
+`wake_after_court_fraud_v1` now restarts the bounded history walk from the case's original
+receipt floor at the current DAA. The watcher calls it only after reading this claim's
+CourtFraud verdict from consensus.
+
+The original proof, retained receipts, settled/in-flight offence tracking and retry counts
+are preserved; receipt admission, adjudication, gate and fold still decide each filing. A
+new unit test reproduces an empty pre-licence scan, verifies the immediate rewalk and full
+history floor, and confirms that an in-flight filing is not retried. Build/run validation
+is pending the active targeted build queue; this is not a passing live drill result.
+
+Run 12 remains running with its inherited binary. At DAA 52, producer slash was
+93,906,321,001,040 sompi; each of the three colluding seats still showed zero slash and 28
+live locks. The 100-DAA schedule is a source-level delay condition, not yet a demonstrated
+explanation of that particular live run. This change will need a rebuilt binary and a new
+D-02 observation; the inherited run is not stopped or retroactively counted as fixed.
