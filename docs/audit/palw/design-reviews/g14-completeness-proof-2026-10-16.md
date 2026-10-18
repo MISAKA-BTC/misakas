@@ -1754,3 +1754,8 @@ DAA 4 / 4 DAG blocks, 59 draws, 0 produced blocks since restart, and last work
 DAA 4; the lane window held 17 blocks over DAA 0..4 (8 attempts, 8 heartbeats,
 1 other). This demonstrates continued chain state across the driver's node
 restart, not a D-02 verdict or seat slash.
+
+At 17:28 JST, P's node log reported a drill attempt committing a lie at step
+leaf 2780 of 5560. This is evidence that the configured false claim reached
+the producer's attempt path; the log does not establish an outsider filing,
+CourtFraud conviction, or any Valid-seat slash. Run 15 remains nonterminal.
