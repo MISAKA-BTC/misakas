@@ -285,3 +285,161 @@ fn rfc23s2_policy_codec_preserves_all_discriminants_and_values() {
         }
     }
 }
+
+#[test]
+fn rfc23s2_admission_reader_uses_the_real_birth_not_a_later_policy_frame() {
+    let p = policy_rules();
+    let s1 = parent(&p);
+    let env = attempt(40, 1);
+    let id = attempt_id_v2(&env.attempt);
+    let born = ctx(2, 100, 2);
+    let (s2, _) = step(&s1, &p, &born, Some(&env), &extra()).unwrap();
+    let later = ctx(3, 150, 3);
+    let (s3, _) = step(&s2, &p, &later, None, &extra()).unwrap();
+    assert!(matches!(s3.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }));
+    let fact = s3.claim_local_admission_context_v1(&p, &born, id).unwrap().unwrap();
+    assert_eq!(fact.claim_id(), id);
+    assert_eq!(fact.accepting_point(), born);
+    assert!(matches!(fact.original_claim().phase, PalwClaimPhaseV2::Provisional));
+    assert!(fact.frame().policy.detection.is_empty(), "the birth preceded the detection fence");
+    assert!(
+        s3.claim_local_admission_context_v1(&p, &later, id).unwrap().is_none(),
+        "a timeout mutation is not a new birth under its later policy"
+    );
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s3)).unwrap();
+    let restored =
+        borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state_v3(&p, Some(s3.state_root()), false, None).unwrap();
+    let cold = restored.claim_local_admission_context_v1(&p, &born, id).unwrap().unwrap();
+    assert_eq!(cold.original_claim(), fact.original_claim());
+    assert_eq!(cold.frame(), fact.frame());
+}
+
+#[test]
+fn rfc23s2_admission_reader_distinguishes_merged_carrier_and_shared_acceptor() {
+    let p = rules();
+    let s1 = parent(&p);
+    let env = attempt(40, 1);
+    let id = attempt_id_v2(&env.attempt);
+    let carrier = h64(0xB1);
+    let accepting = ctx(2, 100, 2);
+    let mut extras = extra();
+    extras.merged_reds.insert(carrier);
+    let merged = [PalwMergedWorkV1 {
+        carrying_block: carrier,
+        work: PalwBlockWorkV3::Attempt(&env),
+        execution_key: h64(0xE1),
+        subsidy: 0,
+        escrow_carve: None,
+        bits: 0,
+        job_anchor: Hash64::default(),
+    }];
+    let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+    let (s2, _, skips) = apply_palw_transition_v7(
+        &s1,
+        &p,
+        Some(&admission),
+        &accepting,
+        &[],
+        PalwBlockWorkV3::None,
+        &merged,
+        Hash64::default(),
+        false,
+        false,
+        false,
+        false,
+        &extras,
+    )
+    .unwrap();
+    assert!(skips.is_empty(), "the actual merged attempt must be admitted: {skips:?}");
+    let fact = s2.claim_local_admission_context_v1(&p, &accepting, id).unwrap().unwrap();
+    assert_eq!(fact.original_claim().accepted_block, carrier);
+    assert_eq!(fact.accepting_point().block, accepting.block);
+    assert_ne!(carrier, accepting.block);
+}
+
+#[test]
+fn rfc23s2_admission_reader_refuses_lost_or_mismatched_presented_inputs() {
+    let p = rules();
+    let s1 = parent(&p);
+    let env = attempt(40, 1);
+    let id = attempt_id_v2(&env.attempt);
+    let point = ctx(2, 100, 2);
+    let (s2, _) = step(&s1, &p, &point, Some(&env), &extra()).unwrap();
+    for kind in 0..2 {
+        let mut altered = (*frame(&s2, point)).clone();
+        if kind == 0 {
+            altered.inputs.clear();
+        } else if let PalwClaimLocalInputV1::Attempt { block, .. } = &mut altered.inputs[0] {
+            *block = h64(999);
+        }
+        let mut bad = s2.clone();
+        bad.set_kernel_aux_row_for_tests(
+            PALW_CLAIM_LOCAL_TABLE_V1,
+            palw_claim_liability_frame_key_v1(point.block).to_vec(),
+            Some(borsh::to_vec(&altered).unwrap()),
+        );
+        assert!(bad.claim_local_admission_context_v1(&p, &point, id).is_err());
+    }
+    let mut unknown = s1.clone();
+    let before = ctx(1, 99, 1);
+    unknown.set_kernel_aux_row_for_tests(
+        PALW_CLAIM_LOCAL_TABLE_V1,
+        palw_claim_liability_frame_key_v1(before.block).to_vec(),
+        Some(vec![255]),
+    );
+    assert!(
+        unknown.claim_local_admission_context_v1(&p, &before, id).unwrap().is_none(),
+        "do not inspect new frame bytes before their owner fence"
+    );
+}
+
+#[test]
+fn rfc23s2_admission_reader_scopes_reused_fp_identity_by_its_real_acceptance() {
+    let p = rules().with_claim_retirement_daa(30).unwrap();
+    let s1 = parent(&p);
+    let id = h64(0xFC);
+    let birth = ctx(2, 100, 2);
+    let extras = extra();
+    let wire_only = fp_commit(0xFC, 60, 3);
+    let mut presented = wire_only.clone();
+    if let PalwConsensusObjectV2::FreePromptCommitted { job_pin, public_job, .. } = &mut presented {
+        *job_pin = h64(0xCAFE);
+        *public_job = Some(Box::new(public_fp_job_fixture()));
+    }
+    // The released object wire intentionally omits these native-only fields.
+    assert_eq!(borsh::to_vec(&wire_only).unwrap(), borsh::to_vec(&presented).unwrap());
+    let wire = borsh::to_vec(&presented).unwrap();
+    crate::palw_native_resource_v1::preflight_native_value_v1::<PalwConsensusObjectV2>(wire.as_slice(), wire.len() as u64).unwrap();
+    let fold = |s: &PalwChainStateV2, point: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2]| {
+        apply_palw_transition_v2_with_extras(s, &p, point, objects, None, false, false, false, false, &extras).unwrap().0
+    };
+    let s2 = fold(&s1, &birth, &[presented.clone()]);
+    let s3 = fold(&s2, &ctx(3, 111, 3), &[]);
+    assert!(matches!(s3.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }));
+    // Step 0 retires the old record; step 3 admits a new record of the same
+    // identity. The before/after carriages therefore BOTH contain this key.
+    let rebirth = ctx(4, 142, 4);
+    let s4 = fold(&s3, &rebirth, &[presented.clone()]);
+    assert_eq!(s4.claim(&id).unwrap().accepted_daa, 142);
+    let old = s4.claim_local_admission_context_v1(&p, &birth, id).unwrap().unwrap();
+    let new = s4.claim_local_admission_context_v1(&p, &rebirth, id).unwrap().unwrap();
+    assert_eq!(old.original_claim().accepted_daa, 100);
+    assert_eq!(new.original_claim().accepted_daa, 142);
+    assert_ne!(old.accepting_point(), new.accepting_point());
+    assert!(new.frame().inputs.iter().any(|input| matches!(input,
+        PalwClaimLocalInputV1::FreePromptNative { claim, job_pin, public_job: Some(job), eval: None }
+            if *claim == id && *job_pin == h64(0xCAFE) && **job == public_fp_job_fixture())));
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s4)).unwrap();
+    let restored =
+        borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state_v3(&p, Some(s4.state_root()), false, None).unwrap();
+    assert_eq!(restored.claim_local_admission_context_v1(&p, &rebirth, id).unwrap().unwrap().frame(), new.frame());
+    let mut missing = new.frame().clone();
+    missing.inputs.retain(|input| !matches!(input, PalwClaimLocalInputV1::FreePromptNative { .. }));
+    let mut bad = s4.clone();
+    bad.set_kernel_aux_row_for_tests(
+        PALW_CLAIM_LOCAL_TABLE_V1,
+        palw_claim_liability_frame_key_v1(rebirth.block).to_vec(),
+        Some(borsh::to_vec(&missing).unwrap()),
+    );
+    assert!(bad.claim_local_admission_context_v1(&p, &rebirth, id).is_err());
+}

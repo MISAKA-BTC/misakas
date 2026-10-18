@@ -5038,15 +5038,6 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwConsensusObjectV2 {
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 sum = sum.merge(<crate::palw_freeprompt_v3::PalwFpPrefixStateV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
-                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
-                sum = sum.merge(
-                    <Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>> as NativeWireScanV1>::scan_native_wire_v1(
-                        reader,
-                    )?,
-                )?;
-                sum = sum.merge(
-                    <Option<Box<crate::palw_improve_eval_v1::PalwFpEvalCarriageV1>> as NativeWireScanV1>::scan_native_wire_v1(reader)?,
-                )?;
                 Ok(sum)
             }
             13 => {

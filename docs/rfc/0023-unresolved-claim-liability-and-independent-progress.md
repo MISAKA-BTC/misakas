@@ -124,3 +124,13 @@
 - policy list のコピーは構築前に予約し、typed native heap / wire scanner も生成元から追加する。ここでも frame の内側に別の frame は入らない。
 - 追加した3試験を含む `rfc23` は25件成功・0件失敗(0.37秒、build 5分53秒)。policy codec の試験は4 route × 3 N-rule × 2 method × 2 localisation × 2 fixed-gain = 96通りを扱う(受理可能性の測定ではなく保存形式の検査)。同じ生成済み binary の A-2 17件(9.75秒)、aux registry 6件(2.77秒)、carriage 4件、material 5件、typed kernel material 3件も成功した(後の3群は各0.00秒、資料2群に各1重複)。integration の release 9件(0.16秒)、activation pool 5件(0.44秒)、testnet12 identity 1件(0.09秒)も成功した(build 2分57秒)。合計73件の異なる試験が成功。node の最終 `cargo check --lib -j 3 -p kaspa-consensus --no-default-features`(同じ環境・opt-level override)も2分35秒で成功。先行する70件だけを新しい差分の合格根拠にはしていない。
 - native の job / session 固有 policy、各経路の元の保持 covenant、既存 claim の移行資料、全資料の転送・取得、依存からの credit と報酬、frontier / settlement / lifecycle / pruning / IBD は引き続き未完了。段階2全体の完了条件は変更しない。
+
+
+### 受理時点の資料を識別する reader(2026-10-18、metadata reader 検証済み・段階2全体は未完)
+
+- 受理済み state にある `F + accepting block` を読み、前後の claim 行と実際の提示入力の対応を確認する reader を追加した。後の timeout / policy 変更 frame を元の受理資料にしない。退役と同じ transition 内で同一 FP ID を再受理する場合も、ID だけでなく受理 DAA / blue score で区別する。carrying header と共通の accepting block も区別する。
+- 返すのは元 claim と frame の metadata provenance である。計算の正しさ、Gate C 認証、資料全体の取得可能性を認証する capability ではない。node の通常の state/root 認証が前提で、peer が提示した frame だけからこの authority を得ない。fence 前には新しい frame を検査しない。native の job / mining / EXEC credit lot の reader はまだ接続していない。
+- frame 内の carriage は、割り当て前の検査と予約を保持した callback 内で読む。返す claim の独立コピーと lookup key と既存 `attempt_id_v2` が使う Borsh workspace も予約する。ローカル容量拒否を欠落資料や不正 claim として扱わない。
+- 新しい FP の試験で、wire generator が enum variant 全体の属性を先に消し、内側の `borsh(skip)` を見失っていることが判明した(28成功・1失敗、0.46秒)。variant 先頭の属性だけを先に除くよう生成元を修正し、FP kind 12 の scanner から wire に無い3項目を除いた。旧 object の Borsh bytes は変更しない。省略される `job_pin` / `public_job` / `eval` の実際の提示値は、休眠 frame の `FreePromptNative` 入力欄へ別途保持する。改善 DTO の外部 wire / 有効化条件には触れず、eval の保存欄は既存の job と tail の tuple で表す。改善経路を mainnet 前に開く変更ではない。
+- 隔離再生成で FP kind 12 が15 wire fieldであり、3つの省略項目を読まないこと、`F/f/V/144` と非再帰 guard が残ることを確認した。元の受理 / 後の frame / merged carrier / FP ID 再受理 / native 専用値 / cold restore / 欠落入力 / fence 前の未知 bytes を含む `rfc23` は29件成功・0件失敗(0.38秒、build 5分57秒)。A-2 17件(13.30秒)、aux registry 6件(4.20秒)、carriage 4件(0.03秒)、material 5件(0.01秒)、typed kernel material 3件(0.03秒)も成功した。資料2群に各1重複があるので unit は62件の異なる試験が成功。integration の release 9件(0.21秒)、activation pool 5件(0.44秒)、testnet12 identity 1件(0.05秒)も成功した(build 3分46秒)。合計77件。node の最終 check も2分00秒で成功した(各コマンドの環境・opt-level override・`--no-default-features`・`-j 3` は前節と同じ)。初回の compile 中断と中間の compile error は合格件数へ加算しない。文書 index / link 検査は既知43・新規0。
+- 入力からの依存導出、credit / 報酬の一度だけの反映・取消、全 native policy / signed covenant / raw material の保持と転送、GC、共有 fork choice / settled / lifecycle / pruning / IBD、外部1人の反証を含む node drill は未完了である。

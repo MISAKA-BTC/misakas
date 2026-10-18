@@ -17,12 +17,39 @@ pub const PALW_CLAIM_LOCAL_TABLE_V1: u8 = 144;
 /// fold's resulting claim rows and journal establish what was admitted.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwClaimLocalInputV1 {
-    Attempt { block: Hash64, execution_key: Hash64, envelope: Box<crate::palw_attempt_v2::PalwAttemptEnvelopeV2> },
-    ReceiptSpend { block: Hash64, spend: Box<crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3> },
-    History { claim: Hash64, pledge: Box<crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1> },
-    PublicBinding { claim: Hash64, header: Box<crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1> },
-    CustodyDelegation { claim: Hash64, delegation: Box<crate::palw_history_custody_v1::PalwProducerCustodyDelegationV1> },
-    TirOriginal { claim: Hash64, envelope: Box<crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1> },
+    Attempt {
+        block: Hash64,
+        execution_key: Hash64,
+        envelope: Box<crate::palw_attempt_v2::PalwAttemptEnvelopeV2>,
+    },
+    ReceiptSpend {
+        block: Hash64,
+        spend: Box<crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3>,
+    },
+    History {
+        claim: Hash64,
+        pledge: Box<crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+    },
+    PublicBinding {
+        claim: Hash64,
+        header: Box<crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
+    },
+    CustodyDelegation {
+        claim: Hash64,
+        delegation: Box<crate::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
+    },
+    TirOriginal {
+        claim: Hash64,
+        envelope: Box<crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
+    },
+    /// The legacy object's three native-only fields are skipped by its wire
+    /// Borsh codec. Archive them separately; never change that released codec.
+    FreePromptNative {
+        claim: Hash64,
+        job_pin: Hash64,
+        public_job: Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,
+        eval: Option<Box<(crate::palw_improve_eval_v1::PalwEvalJobV1, crate::palw_improve_eval_v1::PalwEvalClaimTailV1)>>,
+    },
 }
 
 /// Values in force at this fold point, retained independently of their IDs.
@@ -110,6 +137,18 @@ impl PalwClaimLiabilityFrameV1 {
     /// or authority for a sender's invented historical state. The frame must
     /// also be a row of the accepted checkpoint's committed native state.
     pub fn validate_context_v1(&self) -> Result<(), PalwClaimCheckpointErrorV1> {
+        self.with_context_carriages_v1(|_, _| Ok(()))
+    }
+
+    /// Keep the preflight reservation through the whole borrowed inspection.
+    /// A callback cannot return a reference into a discarded carriage.
+    pub(crate) fn with_context_carriages_v1<T>(
+        &self,
+        inspect: impl FnOnce(
+            &crate::palw_state_v2::PalwStateCarriageV2,
+            &crate::palw_state_v2::PalwStateCarriageV2,
+        ) -> Result<T, PalwClaimCheckpointErrorV1>,
+    ) -> Result<T, PalwClaimCheckpointErrorV1> {
         use crate::palw_native_resource_v1::{preflight_native_carriage_v1, reserve_native_requests_v1};
         use crate::palw_state_v2::PalwStateCarriageV2;
         if self.claims.is_empty()
@@ -151,7 +190,31 @@ impl PalwClaimLiabilityFrameV1 {
         {
             return Err("liability frame changed its original DAG point".into());
         }
-        Ok(())
+        inspect(&prior, &current)
+    }
+}
+
+/// One chain claim's birth in an executed state, distinguished from later
+/// phase/policy changes and from its RED carrying header. This is metadata
+/// provenance, not computation correctness or a complete-material capability.
+/// Only the state's authenticated frame reader constructs it.
+pub struct PalwClaimLocalAdmissionContextV1 {
+    pub(crate) id: Hash64,
+    pub(crate) frame: crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLiabilityFrameV1>,
+    pub(crate) claim: crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_state_v2::PalwClaimStateV2>,
+}
+impl PalwClaimLocalAdmissionContextV1 {
+    pub fn claim_id(&self) -> Hash64 {
+        self.id
+    }
+    pub fn accepting_point(&self) -> PalwBlockContextV2 {
+        self.frame.point
+    }
+    pub fn original_claim(&self) -> &crate::palw_state_v2::PalwClaimStateV2 {
+        &self.claim
+    }
+    pub fn frame(&self) -> &PalwClaimLiabilityFrameV1 {
+        &self.frame
     }
 }
 

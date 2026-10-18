@@ -22,13 +22,13 @@ wire_struct!(PalwClaimLocalCheckpointV1; PalwBlockContextV2, BTreeMap<Hash64, Pa
 native_struct!(PalwClaimLiabilityFrameV1; point, network_identity, fired_forks, policy, claims, prior_state, current_state, accepted_objects, origin_headers, inputs);
 native_enum!(PalwClaimLocalInputV1;
     Attempt { block, execution_key, envelope }, ReceiptSpend { block, spend },
-    History { claim, pledge }, PublicBinding { claim, header }, CustodyDelegation { claim, delegation }, TirOriginal { claim, envelope });
+    History { claim, pledge }, PublicBinding { claim, header }, CustodyDelegation { claim, delegation }, TirOriginal { claim, envelope }, FreePromptNative { claim, job_pin, public_job, eval });
 
 impl NativeWireScanV1 for PalwClaimLocalInputV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
         let tag = reader.byte()?;
-        if tag > 5 {
+        if tag > 6 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown liability input kind"));
         }
         let mut sum = <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?;
@@ -48,6 +48,15 @@ impl NativeWireScanV1 for PalwClaimLocalInputV1 {
             5 => <Box<crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1> as NativeWireScanV1>::scan_native_wire_v1(
                 reader,
             )?,
+            6 => {
+                sum = sum.merge(<Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(
+                    <Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                <Option<Box<(crate::palw_improve_eval_v1::PalwEvalJobV1, crate::palw_improve_eval_v1::PalwEvalClaimTailV1)>> as NativeWireScanV1>::scan_native_wire_v1(reader)?
+            }
             _ => unreachable!(),
         };
         sum.merge(payload)

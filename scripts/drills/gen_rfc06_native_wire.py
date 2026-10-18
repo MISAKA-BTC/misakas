@@ -88,7 +88,12 @@ for path in sorted(G['visited']):
         arms=[];next_tag=0
         explicit=bool(re.search(r'use_discriminant\s*=\s*true',item['attrs']))
         for index,part in enumerate(split(body)):
-            part=stripattrs(part);m=re.match(r'(\w+)\s*(.*)',part,re.S);name,rest=m.groups();rest=rest.strip();types=[]
+            # Strip only variant-level attributes here. Removing nested field
+            # attributes first erases #[borsh(skip)] before the field loop.
+            part=part.strip()
+            while part.startswith('#['):
+                _,end=brace(part,1);part=part[end:].lstrip()
+            m=re.match(r'(\w+)\s*(.*)',part,re.S);name,rest=m.groups();rest=rest.strip();types=[]
             if rest.startswith(('{','(')):
                 vb,_=brace(rest,0)
                 for field in split(vb):
