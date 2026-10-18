@@ -1660,3 +1660,7 @@ branch `codex/g14-tir-completion`、元の TIR worktree を継続使用。genesi
 最初の誠実系実行は、build 26m28s の後、92.76s で失敗した。追加 fixture の `eog_token_ids` が空で、通常 loader が「少なくとも 1 個の vocabulary 内 EOG ID が必要」と拒否した。これは Final・支払いの成功結果ではない。fixture の最終 vocabulary ID を EOG として指定した。
 
 修正後の同一 cargo command は build 3m07s で完了し、`/tmp/codex-g14-tir-honest-eog.log` で node 試験を実行中。別の `/tmp/codex-g14-tir-forged-test` は修正前 executable の clone であり、追加 semantics fixture を使用しない偽造系を実行中(`/tmp/codex-g14-tir-forged.log`)。両者とも、この追記時点では合格を確認していない。
+
+### 14.3 Declared semantics reaches inventory, then refuses the liability door (2026-10-18)
+
+The EOG-fixed honest node test reached Active at DAA 399 and the ordinary native tokenizer inventory worker advanced past its EOF wait. The producer then refused the original allocation: `DoorBeyondLiabilityHorizon { required: 5390, allowed: 3120 }` in `/tmp/codex-g14-tir-honest-eog.log` (11:37:15 JST). The configured plan cannot change with more blocks, so our honest test processes 12111 / 13795 were explicitly interrupted to investigate the allocation instead of waiting for the 7200-second bound. This is NOT a test pass or a completed payment demonstration. The independent forged test, inherited fit and drill remain running. Do not remove declared semantics or increase the liability horizon to turn this result green.
