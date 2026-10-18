@@ -88,7 +88,7 @@ impl Qwen36Backend {
             fold,
             &[narrowed, query_leaf],
             &prompt_ids,
-            self.checkpoint_interval(),
+            self.checkpoint_interval().ok_or("no registered hybrid checkpoint cadence")?,
             cap,
             &kernels,
             &|c| self.fold_anchor_state_v1(fold, &prompt_ids, c),
