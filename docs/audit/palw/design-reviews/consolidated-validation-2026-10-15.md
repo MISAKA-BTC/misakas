@@ -322,3 +322,30 @@ run (not re-run).
 | x8 assertions written for OPV timeout Finals: signed root expiries shorter than the paid Final, collateral deltas that now include covenant and source reservations, Final due later | completed-worker, withheld-slice, kernel-finals restart/reorg, second-real-root, honest-slices (`WindowClosed` at the paid window end), OPV-settlement (the slice leaves `Pending` earlier), native-Final ×3; competing-claim: a paid job holds its one claim, so the competing claim is refused at commit (the property the test guards holds more strongly; its inclusion assertion needs rewriting) | per-test: lengthen signed lifetimes inside the max, recompute the economic deltas from the rows, wait for the paid Final |
 | no seam (RFC08 08-C): the class is `Candidate` under the model registry | native paid-material window | the no-seam EXEC fixture (item 2) |
 | not diagnosed | native happy-Final (`card 1's attempt block` disqualified) | read its disqualification (`G14_LOG=…virtual_processor=info`) |
+
+### 9. Round 3 (2026-10-18, second half): x8 on the paid path, RFC07 panel_record
+
+Runs 20–23 (`target/vr2/run2{0..3}.log`, targeted `exec_slices`). Last result per test (the final rewrites after run 23 are committed
+but not re-run):
+
+| test | result | note |
+| --- | --- | --- |
+| lying REAL run, kernel claims canonical prefix, outsider conviction, snapshot origin, RFC15 conviction / default, signed covenant | PASS | unchanged |
+| signed legacy job, signed tiny run | PASS (run 22) | extras paid and approved (`Cw::paid_extras`), so the slice admission's own refusal is reached |
+| native root Final + public conviction, native Final reorg recovery | PASS (run 23) | colluding quorum for the lying prefix (`Cw::collude_lies`), lifetime 2,048, poster delta recomputed from the rows (`other_paid_escrows`), recorded-slash accounting |
+| competing claim | rewritten, not re-run | a paid job holds its one claim: the competing commit is refused by name (`one claim per job`) and never included; escrow held; refund at the root's expiry; control payment recomputed from the rows |
+| kernel Finals restart / two reorgs | rewritten, not re-run | colluding prefix; poster snapshot at the unrefuted point; past `palw_reporter_income_v2` the bounty is staged reporter income, not `owed` |
+| completed worker, honest slices | rewritten, not re-run | wait for the paid Finals (`kernel_final_bound`, `beat_until`); the root voids by its expiry (the REAL claim's own unlicensed lifetime may end first); poster delta from the rows |
+| OPV settlement control | rewritten, not re-run | slice 0 locked without receipts (`Cw::unapproved`): it defaults — no Final exists to substitute for approval |
+| second REAL root | rewritten, not re-run | the second REAL attempt draws the first claim's Panel at its anchor slot (`need 4, found 0` voided it): seats are made ready first |
+| withheld slice | FAIL | the root card gets a recorded 5 KAS slash (`slashed` 204,000,000 → 704,000,000) during the default window (DAA 1310, prefix in `ProbabilisticPass`); not attributed yet — possibly a real charge of another bond's default; needs kernel-level logs |
+| native happy Final | FAIL | REGISTRANT's anchor-slot attempt block disqualified: `work-session move is refused: new paid material has no explicit signed monetary covenant` (this test's W = 436 material window); not diagnosed |
+| native paid-material window, 08-C no-seam ×2 | FAIL | class stays `Candidate` (ADR-0147 jury) — moved to the Codex lane with 08-C |
+
+Fixed on the way (kernel, `misaka/palw/kernel/src/ledger.rs` default and Final arms): a paid claim's Final/default overwrote an EXEC
+hold's consented liability extension with the paid lifetime (`max` now); a root lifetime longer than the paid lifetime made the node
+refuse its own tip (`exec v2: a dependency's liability cannot cover its root window`).
+
+RFC07 `panel_record`: split out as `panel_record_v1` (`consensus/core/src/palw_kernel_route_v1.rs`) and tested
+(`panel_record_is_emitted_only_for_a_panel_licensed_final_and_never_as_a_beacon_event`). Core targeted: 33/33 and 151/151 (incl.
+pinned fingerprints, fork-id schedule/identity).
