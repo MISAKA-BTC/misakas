@@ -111,10 +111,12 @@ impl PalwTokenizerArtifactInventoryCertificateV1 {
         }
         Ok(())
     }
-    /// Every parser object-key/vocabulary event consumes at least one raw byte.
-    /// This bound needs no trust in the registrant's possibly false event count.
+    /// Object-key events consume their distinct opening/closing quote bytes.
+    /// Ordinary/added ID events consume a distinct field colon and at least one
+    /// number byte. These pairs never overlap, including before an invalid suffix.
+    /// Derive work from authenticated EOF bytes, never the owner's event declaration.
     pub fn key_event_upper_bound_v1(&self) -> u64 {
-        self.actual_bytes.max(1)
+        crate::palw_tokenizer_json_stream_v1::palw_tokenizer_key_event_byte_bound_v1(self.actual_bytes)
     }
 }
 
@@ -353,7 +355,7 @@ mod tests {
         let certificate = row.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Finish, 103).unwrap().unwrap();
         assert_eq!(certificate.actual_bytes, raw.len() as u64);
         assert_eq!(certificate.artifact_hash, crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(&raw));
-        assert_eq!(certificate.key_event_upper_bound_v1(), raw.len() as u64);
+        assert_eq!(certificate.key_event_upper_bound_v1(), raw.len() as u64 / 2);
         row.check_v1().unwrap();
         assert!(row.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Finish, 104).is_err());
     }

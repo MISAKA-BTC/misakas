@@ -1729,3 +1729,24 @@ actual-quantum payment case (PID 61855, `/tmp/codex-g14-tir-default-payment-owne
 Both were confirmed live. Their results are pending; the earlier forged run that reached Final
 in §14.8 is not counted as fixed by unit tests. The separate declared-semantics 02-B liability-door
 refusal in §14.4 also remains unresolved.
+
+
+### 14.11 Tighter authenticated tokenizer byte bound (2026-10-18, validation pending)
+
+The native EOF certificate still authenticates the exact original raw bytes. Its
+key-event work bound now derives `max(1, floor(actual_bytes / 2))`, rather than
+`max(1, actual_bytes)`. Each object-key uniqueness event consumes its own opening
+and closing quote. Each ordinary/added ID event consumes a distinct field colon
+and at least one numeric byte. These byte pairs do not overlap, even in a parsed
+prefix followed by invalid JSON. No owner-declared event count is trusted.
+Both preclaim pricing and BundleOpen read this same certificate method; the
+liability horizon, inclusion prices, signatures and EOF admission are unchanged.
+The staged public court remains dormant in every preset.
+
+Added a parser-pause regression with one-byte and larger chunks, empty/escaped
+keys, ordinary and added IDs, duplicate keys/IDs, invalid suffixes and tiny
+operands. It checks the consumed-byte bound after every proven pending event,
+not only after valid EOF. The targeted core test is still compiling in
+`/tmp/codex-g14-tokenizer-byte-bound.log`; **no test PASS or 02-B node acceptance
+is claimed**. The earlier 5390/3120 refusal remains the recorded node outcome
+until the rebuilt declared-semantics case proves otherwise.
