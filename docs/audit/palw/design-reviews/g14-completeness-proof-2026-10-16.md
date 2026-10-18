@@ -1829,3 +1829,17 @@ This is backend evidence construction and adjudication, not node/P2P prosecution
 GDN registration. C5 and conservative `supports_dissection()` remain unchanged. The
 additional genesis replay has a real compute cost that final measurements must include;
 no timing, capacity policy or activation qualification is inferred from the passing test.
+
+
+The related `qwen36_backend::tests::p0a_` regression group also completed:
+**4 passed / 0 failed**, 106.02 s (`/tmp/codex-g14-q36-p0a-regression.log`). It covers
+complete checkpoint capture/resume, the checkpoint court's attention-row checks, convolution
+faults and GDN-step faults on both sides of the key-head geometry.
+
+A separate `q36_held_attention_public_filing_convicts_a_forged_committed_tile` test now
+constructs a real forged step commitment via the existing drill fault API, authenticates its
+output tile and unchanged checkpoint leg, and asks the narrow backend to build challenger
+evidence from that public filing alone. It checks that an honest root cannot justify the
+forged output and attempts the court's ExecutorGuilty terminal for the corresponding lying
+root. This new test has **not run yet**: `/tmp/codex-g14-q36-held-forgery.log` is waiting for
+the node-build artifact lock. No guilty verdict is claimed from its source alone.

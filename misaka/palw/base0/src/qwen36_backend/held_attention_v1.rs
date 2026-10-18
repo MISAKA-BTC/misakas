@@ -490,4 +490,111 @@ mod tests {
             assert!(backend.attn_site_evidence_held_v1(&[], leaf, Some(&ids), Some(&foreign_filing)).is_err());
         }
     }
+
+    #[test]
+    fn q36_held_attention_public_filing_convicts_a_forged_committed_tile() {
+        use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
+        use kaspa_consensus_core::palw_step_leg::{PalwStepOpeningV1, step_merkle_path_capped_v1};
+        let artifact = std::sync::Arc::new(crate::qwen36::qwen36_dev_fixture(4, 8));
+        let mut geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
+        geometry.n_ctx = 32;
+        geometry.tile_len = geometry.attn_head_dim;
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v8(geometry).unwrap();
+        let build = || {
+            Qwen36Backend::from_registered_profile(artifact.clone(), b"held-q36-fraud-test".to_vec(), profile.clone(), (19, 3))
+                .unwrap()
+        };
+        let wide = build();
+        let narrow = build().with_step_ladder_cap(1024);
+        let (ctx, prompt) = wide.job_for_anchor(Hash64::from_u64_word(0x3615)).unwrap();
+        let ids: Vec<u32> = prompt.iter().map(|id| *id as u32).collect();
+        let run = qwen36_execute_free_prompt_streaming_v1(
+            &artifact,
+            &profile,
+            wide.plan.as_ref().unwrap(),
+            &ctx,
+            &prompt,
+            wide.step_ladder_cap(),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert!(run.binding.step_leaf_count > narrow.materialize_cap());
+        let material = crate::produce::base0_fp_material_encode_v2(&run, &ids).unwrap();
+        let leaf = (0..run.binding.step_leaf_count)
+            .find(|leaf| {
+                let c = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, *leaf).unwrap();
+                c.call_index == 0
+                    && c.position == 2
+                    && c.tile_index == 0
+                    && profile
+                        .resolve_node_slot(c.node_slot)
+                        .is_some_and(|(n, _)| n.op_kind == kaspa_consensus_core::palw_step::PalwStepOpKindV1::AttnFused)
+            })
+            .expect("a fused tile at the third prompt position");
+        let honest = narrow.attn_site_evidence_held_v1(&material, leaf, Some(&ids), None).unwrap();
+        let forged = wide.execute_with_injected_fault(&ctx, &prompt, leaf).unwrap();
+        let retained = crate::produce::base0_material_decode_any_v1(&forged.material).unwrap();
+        let binding = retained.binding().clone();
+        assert_ne!(binding.step_merkle_root, run.binding.step_merkle_root);
+        assert_eq!(binding.checkpoint_merkle_root, run.binding.checkpoint_merkle_root);
+        let tiles = wide.tiles_from_material_v1(&retained).unwrap();
+        let out_tile = PalwAttnRowOpeningV1 {
+            leaf: tiles.tiles.iter().find(|(index, _)| *index == leaf).unwrap().1.clone(),
+            opening: PalwStepOpeningV1 {
+                leaf_index: leaf,
+                leaf_hash: tiles.leaves[leaf as usize],
+                siblings: step_merkle_path_capped_v1(&tiles.leaves, leaf as usize, wide.step_ladder_cap()).unwrap(),
+            },
+        };
+        let mut filing = filing_of(&honest);
+        filing.binding = binding;
+        filing.out_tile = out_tile;
+        let challenger = narrow.attn_site_evidence_held_v1(&[], leaf, Some(&ids), Some(&filing)).unwrap();
+        let artifact_root = crate::inventory::qwen36_inventory_v1(&artifact, &profile).unwrap().root();
+        let site = challenger.site_v1(artifact_root, false, PALW_HELD_STEP_LADDER_V1).unwrap();
+        let anchored = challenger.site_v1(artifact_root, true, PALW_HELD_STEP_LADDER_V1).unwrap();
+        let actual_root = challenger.evidence.root_claim_v1(&site).unwrap();
+        let committed = palw_attn_opened_lanes_v1(&filing.out_tile, &anchored.binding, site.head_lanes.2 as usize).unwrap();
+        let open = |root: &kaspa_consensus_core::palw_attn_dissect::PalwAttnRootClaimV1| {
+            PalwAttnDissectPhaseV1::open_with_arity(
+                session(),
+                root,
+                site.head_lanes,
+                site.history_positions,
+                &committed,
+                site.site.params.values,
+                2,
+                site.tile_positions,
+                0,
+                10,
+                true,
+            )
+        };
+        assert!(open(&actual_root).is_err(), "an honest root cannot justify the forged committed output");
+        let finalize = |v: &[i64]| kaspa_consensus_core::palw_base0_a16::a16_attn_finalize_v1(v, site.site.params.values);
+        let lane = (0..committed.len()).find(|lane| finalize(&actual_root.claim.v_acc)[*lane] != committed[*lane]).unwrap();
+        let at = |delta: i64| {
+            let mut v = actual_root.claim.v_acc.clone();
+            v[lane] += delta;
+            finalize(&v)[lane]
+        };
+        let (mut lo, mut hi) = (-(1i64 << 44), 1i64 << 44);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if at(mid) < committed[lane] {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let mut lie = actual_root;
+        lie.claim.v_acc[lane] += lo;
+        let phase = open(&lie).expect("the dishonest root is consistent with its forged output");
+        assert_eq!(phase.turn(), PalwBisectTurnV1::Terminal, "this history fits one court tile");
+        let bottom = challenger.bottom_v1(&anchored, &phase).unwrap();
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &bottom, &anchored.binding, &anchored.site, true),
+            Ok(PalwAttnCourtVerdictV1::ExecutorGuilty)
+        );
+    }
 }
