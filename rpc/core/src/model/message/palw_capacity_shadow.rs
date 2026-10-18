@@ -746,10 +746,11 @@ impl Deserializer for GetPalwStateProofResponse {
 pub struct GetPalwForkChoiceOpeningRequest {
     /// 128 hex each, at most 16. Empty: the sink and every tip.
     pub block_hashes: Vec<String>,
-    /// **RFC09 (v2):** open each entry's v3 rule-E window above this blue score (the fork point's), for the rule-E comparator.
+    /// **RFC09 (v2):** open each entry's V2/V3 rule-E window above this blue score (the fork point's), for the rule-E comparator.
     #[serde(default)]
     pub rule_e_window_above_blue: Option<u64>,
-    /// **RFC09 (v2):** the bonds (hex of the borsh `PalwBondKeyV2`) whose v3 registry openings each entry carries (at most 64).
+    /// **RFC09 (v2):** bonds (hex of borsh `PalwBondKeyV2`) whose registry openings each entry carries (at most 64):
+    /// V2 membership or V3 capital, selected by the committed leaf's form.
     #[serde(default)]
     pub registry_bonds: Vec<String>,
 }

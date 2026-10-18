@@ -3,10 +3,9 @@
 //! Past rule E a header commits the envelope of a rule-E leaf (v2, or v3 with rule E v2 capital and Gate C certification state), not
 //! the v1 leaf — so `crate::l2` STOPs (`LeafV1Insufficient`). This module is what replaces that STOP: the client reads the committed
 //! leaf of every block on each candidate's path (op 203 v2) and checks it with `palw_verify_committed_leaf_v2` — the same function
-//! the node's v39 anchor verifier calls — against the root the next header commits; it reads each tip's v3 rule-E window above the
-//! fork point and the fork point's v3 registry openings, verifies them against the verified leaves (`verify_window_suffix_v3`,
-//! `palw_rule_e_verify_registry_v3`), and evaluates the pair with the node's own accumulator (`palw_rule_e_pair_from_openings_v3`,
-//! Gate C applied from each record's certification state) and order (`palw_rule_e_order_v2`). The remote's choice is the full node's
+//! the node's v39 anchor verifier calls — against the root the next header commits. Its own Params select V2 or V3 attestation,
+//! window and registry grammars. V2 verifies membership and uses the inactive Gate C rule; V3 verifies capital and certification.
+//! Each uses the corresponding full-node window/registry reader and pair accumulator, then `palw_rule_e_order_v2`. The remote's choice is the full node's
 //! choice; anything missing, unverifiable or tampered is a STOP — the miner signs nothing.
 //!
 //! Trust: the attested tip's committed root (an issuer the client chose); every other byte is checked against a root the client
@@ -15,10 +14,13 @@ use std::collections::BTreeMap;
 
 use kaspa_consensus_core::config::params::{ForkActivation, Params};
 use kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoicePointV1;
-use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::PalwRuleEWindowOpeningV1;
+use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::{
+    PalwForkChoiceLeafV2, PalwRuleERegistryOpeningV1, PalwRuleEWindowOpeningV1, palw_rule_e_pair_from_openings_v1,
+    verify_registry_membership_v1, verify_window_suffix_v1,
+};
 use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::{
-    PalwCommitFormV1, PalwForkChoiceLeafV3, PalwRuleERegistryOpeningV3, palw_rule_e_pair_from_openings_v3, palw_rule_e_verify_registry_v3,
-    palw_verify_committed_leaf_v2, verify_window_suffix_v3,
+    PalwCommitFormV1, PalwForkChoiceLeafV3, PalwRuleERegistryOpeningV3, palw_rule_e_pair_from_openings_v3,
+    palw_rule_e_verify_registry_v3, palw_verify_committed_leaf_v2, verify_window_suffix_v3,
 };
 use kaspa_consensus_core::palw_fork_choice_rule_e_v1::{
     PalwRuleEClaimRecordV1, palw_rule_e_order_v2, palw_rule_e_participation_counts_v1,
@@ -33,7 +35,7 @@ use crate::verify::{ChainPointV1, ClientRulesetV1, VerifiedChainV1};
 pub const PALW_FORK_CHOICE_LEAF_VERSION_RULE_E_V3: u16 = 3;
 
 /// **One op-203 v2 entry, as served** (untrusted): the committed leaf in its own form and the root it is enveloped with, and — as
-/// asked — the v3 window above a blue score and the v3 registry openings of some bonds.
+/// asked — the form's window above a blue score and registry openings of some bonds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommittedServedV2 {
     pub block: Hash64,
@@ -42,9 +44,11 @@ pub struct CommittedServedV2 {
     /// `(from_blue_score, opening)`: the window opened above `from_blue_score`.
     pub window: Option<(u64, PalwRuleEWindowOpeningV1)>,
     pub registry: Vec<(PalwBondKeyV2, PalwRuleERegistryOpeningV3)>,
+    /// Leaf-v2 membership openings; never interpreted as v3 capital evidence.
+    pub registry_v2: Vec<(PalwBondKeyV2, PalwRuleERegistryOpeningV1)>,
 }
 
-/// **The evidence at a tip**: an issuer's attestation of the tip's committed root (rule-E v3 leaf version) — the leaf itself comes
+/// **The evidence at a tip**: an issuer's attestation of the tip's committed root and form — the leaf itself comes
 /// from the served entries and must envelope to the attested root.
 #[derive(Clone, Debug)]
 pub struct RuleEEvidenceV2 {
@@ -102,7 +106,10 @@ pub fn verify_attestation_rule_e_v2(
     if att.leaf_version != PALW_FORK_CHOICE_LEAF_VERSION_RULE_E_V3 {
         return Err(format!("leaf version {} is not the rule-E v3 form", att.leaf_version));
     }
-    let as_v1 = ForkChoiceAttestationV1 { leaf_version: kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_LEAF_VERSION_V1, ..att.clone() };
+    let as_v1 = ForkChoiceAttestationV1 {
+        leaf_version: kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_LEAF_VERSION_V1,
+        ..att.clone()
+    };
     // The signature covers the real leaf version: check it on `att`, and the remaining fields through the shared checker.
     let (_, pubkey) =
         trusted.iter().find(|(id, _)| *id == att.key_id).ok_or_else(|| format!("issuer '{}' is not trusted", att.issuer()))?;
@@ -155,8 +162,42 @@ pub fn verify_selected_chain_v2<'a>(
     Ok(out)
 }
 
-fn v3(entry: &CommittedServedV2) -> Result<PalwForkChoiceLeafV3, String> {
-    PalwForkChoiceLeafV3::decode(&entry.leaf).map_err(|e| format!("the verified leaf of {} is not v3: {e:?}", entry.block))
+enum RuleELeaf {
+    V2(PalwForkChoiceLeafV2),
+    V3(PalwForkChoiceLeafV3),
+}
+
+impl RuleELeaf {
+    fn version(&self) -> u16 {
+        match self {
+            Self::V2(_) => 2,
+            Self::V3(_) => 3,
+        }
+    }
+
+    fn window(&self, from: u64, opening: &PalwRuleEWindowOpeningV1) -> Result<Vec<PalwRuleEClaimRecordV1>, String> {
+        match self {
+            Self::V2(leaf) => verify_window_suffix_v1(leaf, from, opening).map(|mut records| {
+                // Leaf v2 predates Gate C and does not commit this appended
+                // field. Only the reader's inactive Gate C rule determines it.
+                for record in &mut records {
+                    record.certification = kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleECertificationV1::NotGoverned;
+                }
+                records
+            }),
+            Self::V3(leaf) => verify_window_suffix_v3(leaf, from, opening),
+        }
+        .map_err(|e| format!("rule-E window does not verify: {e:?}"))
+    }
+}
+
+fn rule_e_leaf(entry: &CommittedServedV2) -> Result<RuleELeaf, String> {
+    if let Ok(leaf) = PalwForkChoiceLeafV3::decode(&entry.leaf) {
+        return Ok(RuleELeaf::V3(leaf));
+    }
+    PalwForkChoiceLeafV2::decode(&entry.leaf)
+        .map(RuleELeaf::V2)
+        .map_err(|e| format!("the verified leaf of {} is not rule E: {e:?}", entry.block))
 }
 
 /// **One pair under rule E, from verified openings**: `Greater` — `a` replaces `b`; `Less` — `b` stays; `Equal` resolved by the
@@ -166,18 +207,21 @@ fn v3(entry: &CommittedServedV2) -> Result<PalwForkChoiceLeafV3, String> {
 fn pair_v2(
     params: &Params,
     a: &VerifiedChainV1,
-    a_tip: &PalwForkChoiceLeafV3,
     a_window: &[PalwRuleEClaimRecordV1],
     b: &VerifiedChainV1,
     b_window: &[PalwRuleEClaimRecordV1],
     fork: &ChainPointV1,
-    fork_leaf: &PalwForkChoiceLeafV3,
+    fork_leaf: &RuleELeaf,
     fork_capital: &BTreeMap<PalwBondKeyV2, u64>,
 ) -> Result<Option<std::cmp::Ordering>, String> {
     use std::cmp::Ordering;
-    let _ = a_tip;
-    let pair = palw_rule_e_pair_from_openings_v3(a_window, b_window, |bond| fork_capital.get(bond).copied(), fork_leaf)
-        .map_err(|e| format!("rule E's pair does not evaluate: {e:?}"))?;
+    let pair = match fork_leaf {
+        RuleELeaf::V2(leaf) => {
+            palw_rule_e_pair_from_openings_v1(a_window, b_window, |bond| fork_capital.contains_key(bond), leaf.bonds_len)
+        }
+        RuleELeaf::V3(leaf) => palw_rule_e_pair_from_openings_v3(a_window, b_window, |bond| fork_capital.get(bond).copied(), leaf),
+    }
+    .map_err(|e| format!("rule E's pair does not evaluate: {e:?}"))?;
     let lower_span = a.tip.daa_score.min(b.tip.daa_score).saturating_sub(fork.daa_score);
     let counts = palw_rule_e_participation_counts_v1(lower_span);
     // The node reads v2 participation at its incumbent's DAA: robust only if both tips agree.
@@ -193,7 +237,11 @@ fn pair_v2(
                 s.participation_capital_v2 == 0 && s.economic() == (0, 0, 0)
             };
             let even = |s: &kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleESideV1| {
-                if capital_v2 { s.participation_capital_v2 >= pair.even_split_min_capital_v2 } else { s.participation >= pair.even_split_min }
+                if capital_v2 {
+                    s.participation_capital_v2 >= pair.even_split_min_capital_v2
+                } else {
+                    s.participation >= pair.even_split_min
+                }
             };
             if (capital_v2 && no_credit(&pair.a) && no_credit(&pair.b)) || (counts && even(&pair.a) && even(&pair.b)) {
                 Some((a.tip.blue_work, a.tip.hash).cmp(&(b.tip.blue_work, b.tip.hash)))
@@ -232,13 +280,14 @@ pub fn verify_fork_choice_rule_e_v2(
             .map(|e| &e.attestation)
             .find(|a| a.block == chain.tip_hash())
             .ok_or(L2StopV1::Unweighable(chain.tip_hash()))?;
-        verify_attestation_rule_e_v2(att, input.trusted, input.ruleset, now_daa, input.limits, verify).map_err(stop)?;
+        crate::l2::verify_attestation_v2(input.params, att, input.trusted, input.ruleset, now_daa, input.limits, verify)
+            .map_err(stop)?;
         if att.block_daa != p.daa_score {
             return Err(stop(format!("the attestation of {} names DAA {}, the header {}", att.block, att.block_daa, p.daa_score)));
         }
         let (entry, form) = opened(input.params, input.served, &att.committed_root, &p).map_err(stop)?;
-        if form != PalwCommitFormV1::RuleEV3 {
-            return Err(stop(format!("the tip {} does not commit the rule-E v3 form", p.hash)));
+        if !matches!(form, PalwCommitFormV1::RuleEV2 | PalwCommitFormV1::RuleEV3) {
+            return Err(stop(format!("the tip {} does not commit a rule-E form", p.hash)));
         }
         tips.push((chain, entry, att.block));
     }
@@ -274,17 +323,25 @@ pub fn verify_fork_choice_rule_e_v2(
                 .map_err(|why| L2StopV1::SelectedChainUnverified { tip: a.tip_hash(), why })?;
             verify_selected_chain_v2(input.params, b, fork_index(b, a), b.points.len() - 1, input.served)
                 .map_err(|why| L2StopV1::SelectedChainUnverified { tip: b.tip_hash(), why })?;
-            let fork_entry = a_path.first().copied().ok_or_else(|| stop("the fork point has no verified leaf (the tip is the fork)"))?;
-            let fork_leaf = v3(fork_entry).map_err(stop)?;
+            let fork_entry =
+                a_path.first().copied().ok_or_else(|| stop("the fork point has no verified leaf (the tip is the fork)"))?;
+            let fork_leaf = rule_e_leaf(fork_entry).map_err(stop)?;
+            if rule_e_leaf(a_entry).map_err(stop)?.version() != fork_leaf.version()
+                || rule_e_leaf(b_entry).map_err(stop)?.version() != fork_leaf.version()
+            {
+                return Err(stop("rule-E commitment activation crosses the conflict"));
+            }
             let window = |entry: &CommittedServedV2| -> Result<Vec<PalwRuleEClaimRecordV1>, L2StopV1> {
-                let leaf = v3(entry).map_err(stop)?;
+                let leaf = rule_e_leaf(entry).map_err(stop)?;
                 let (from, opening) =
                     entry.window.as_ref().ok_or_else(|| stop(format!("no rule-E window of {} was served", entry.block)))?;
                 if *from != fork.blue_score {
-                    return Err(stop(format!("the window of {} is opened above {from}, not the fork's {}", entry.block, fork.blue_score)));
+                    return Err(stop(format!(
+                        "the window of {} is opened above {from}, not the fork's {}",
+                        entry.block, fork.blue_score
+                    )));
                 }
-                verify_window_suffix_v3(&leaf, fork.blue_score, opening)
-                    .map_err(|e| stop(format!("the rule-E window of {} does not verify: {e:?}", entry.block)))
+                leaf.window(fork.blue_score, opening).map_err(stop)
             };
             let a_window = window(a_entry)?;
             let b_window = window(b_entry)?;
@@ -295,12 +352,24 @@ pub fn verify_fork_choice_rule_e_v2(
                 if fork_capital.contains_key(&record.bond) {
                     continue;
                 }
-                let opening = fork_entry
-                    .registry
-                    .iter()
-                    .find(|(bond, _)| *bond == record.bond)
-                    .ok_or_else(|| stop(format!("no registry opening of a window bond at the fork {}", fork.hash)))?;
-                match palw_rule_e_verify_registry_v3(&fork_leaf, &record.bond, &opening.1) {
+                let capital =
+                    match &fork_leaf {
+                        RuleELeaf::V2(leaf) => {
+                            let (_, opening) =
+                                fork_entry.registry_v2.iter().find(|(bond, _)| *bond == record.bond).ok_or_else(|| {
+                                    stop(format!("no v2 registry opening of a window bond at the fork {}", fork.hash))
+                                })?;
+                            verify_registry_membership_v1(leaf, &record.bond, opening).map(|present| present.then_some(1))
+                        }
+                        RuleELeaf::V3(leaf) => {
+                            let (_, opening) =
+                                fork_entry.registry.iter().find(|(bond, _)| *bond == record.bond).ok_or_else(|| {
+                                    stop(format!("no v3 registry opening of a window bond at the fork {}", fork.hash))
+                                })?;
+                            palw_rule_e_verify_registry_v3(leaf, &record.bond, opening)
+                        }
+                    };
+                match capital {
                     Ok(Some(capital)) => {
                         fork_capital.insert(record.bond, capital);
                     }
@@ -308,8 +377,7 @@ pub fn verify_fork_choice_rule_e_v2(
                     Err(e) => return Err(stop(format!("the fork's registry opening does not verify: {e:?}"))),
                 }
             }
-            let a_leaf = v3(a_entry).map_err(stop)?;
-            match pair_v2(input.params, a, &a_leaf, &a_window, b, &b_window, &fork, &fork_leaf, &fork_capital).map_err(stop)? {
+            match pair_v2(input.params, a, &a_window, b, &b_window, &fork, &fork_leaf, &fork_capital).map_err(stop)? {
                 Some(std::cmp::Ordering::Greater) => beats[i][j] = true,
                 Some(_) => {}
                 None => return Err(L2StopV1::NoRobustWinner),
@@ -323,7 +391,6 @@ pub fn verify_fork_choice_rule_e_v2(
     Ok(RuleEEstablishedV2 { chosen: chain.clone(), attested, inner_root: entry.inner_root, refused })
 }
 
-
 /// **L3 under rule E**: the ADR-0043 root a collection proof at `proof_header` is checked against — only for a header on the chosen
 /// chain at or below the attested tip, its parent's committed leaf verified down from the tip (`verify_selected_chain_v2`).
 pub fn l3_root_under_rule_e_v2(
@@ -335,7 +402,10 @@ pub fn l3_root_under_rule_e_v2(
     if kaspa_consensus_core::hashing::header::hash(proof_header) != proof_header.hash {
         return Err("the proof's header does not hash to itself".into());
     }
-    let at = est.chosen.index_of(&proof_header.hash).ok_or_else(|| format!("the proof's header {} is not on the chosen chain", proof_header.hash))?;
+    let at = est
+        .chosen
+        .index_of(&proof_header.hash)
+        .ok_or_else(|| format!("the proof's header {} is not on the chosen chain", proof_header.hash))?;
     let attested_at = est.chosen.index_of(&est.attested).ok_or("the attested block left the chosen chain")?;
     if at > attested_at || at == 0 {
         return Err(format!("the proof's header {} is not between the checkpoint and the attested tip", proof_header.hash));
@@ -356,4 +426,74 @@ pub fn window_bonds_v2(served: &[CommittedServedV2], tips: &[Hash64]) -> Vec<Pal
     bonds.sort();
     bonds.dedup();
     bonds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::{
+        palw_rule_e_leaf_v2_ext_of, palw_rule_e_open_registry_v1, palw_rule_e_open_window_above_v1,
+    };
+    use kaspa_consensus_core::palw_fork_choice_rule_e_v1::{PalwRuleECertificationV1 as C, PalwRuleEClaimStatusV1 as S};
+
+    fn fixture() -> (PalwForkChoiceLeafV2, PalwRuleEWindowOpeningV1, PalwBondKeyV2) {
+        let bond = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(1), 0));
+        let record = PalwRuleEClaimRecordV1 {
+            claim_id: Hash64::from_u64_word(2),
+            accepted_blue_score: 10,
+            bond,
+            attempt: true,
+            status: S::Final,
+            safe_weight: 40,
+            live_weight: 0,
+            capped: false,
+            bond_collateral: None,
+            budget: None,
+            certification: C::NotGoverned,
+        };
+        let ext = palw_rule_e_leaf_v2_ext_of(0, &[record], &[bond]);
+        let leaf = PalwForkChoiceLeafV2 {
+            leaf_version: 2,
+            block: Hash64::from_u64_word(3),
+            daa_score: 10,
+            blue_score: 10,
+            safe_frontier_blue_score: 10,
+            safe_frontier: record.claim_id,
+            safe_weight: 40,
+            bounded_immature: 0,
+            bonds_len: ext.registry_len,
+            window_floor_blue_score: ext.window_floor_blue_score,
+            window_len: ext.window_len,
+            window_root: ext.window_root,
+            registry_root: ext.registry_root,
+        };
+        (leaf, palw_rule_e_open_window_above_v1(&[record], 5), bond)
+    }
+
+    #[test]
+    fn v2_uses_the_inactive_gate_c_rule_instead_of_an_uncommitted_certification_field() {
+        let (leaf, mut opening, _) = fixture();
+        for uncommitted in [C::Certified, C::Uncertified] {
+            opening.records[0].certification = uncommitted;
+            let records = RuleELeaf::V2(leaf).window(5, &opening).unwrap();
+            assert_eq!(records[0].certification, C::NotGoverned);
+            assert_eq!(records[0].safe_weight, 40);
+        }
+        opening.records[0].safe_weight += 1;
+        assert!(RuleELeaf::V2(leaf).window(5, &opening).is_err(), "committed weight tampering is refused");
+    }
+
+    #[test]
+    fn v2_membership_is_verified_against_the_fork_registry() {
+        let (leaf, _, bond) = fixture();
+        let absent = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(9), 0));
+        let proof = palw_rule_e_open_registry_v1(&[bond], &bond);
+        assert_eq!(verify_registry_membership_v1(&leaf, &bond, &proof), Ok(true));
+        assert_eq!(verify_registry_membership_v1(&leaf, &absent, &proof), Ok(false), "the singleton also proves edge absence");
+        let mut forged = proof.clone();
+        forged.keys[0] = absent;
+        assert!(verify_registry_membership_v1(&leaf, &absent, &forged).is_err(), "a substituted registry key does not open the root");
+        let absent_proof = palw_rule_e_open_registry_v1(&[bond], &absent);
+        assert_eq!(verify_registry_membership_v1(&leaf, &absent, &absent_proof), Ok(false));
+    }
 }

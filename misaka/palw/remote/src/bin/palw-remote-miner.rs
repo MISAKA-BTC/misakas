@@ -303,7 +303,8 @@ impl RemoteNode for WrpcNode<'_> {
         window_above_blue: Option<u64>,
         bonds: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
     ) -> Result<Vec<misaka_palw_remote::l2_rule_e::CommittedServedV2>, String> {
-        let registry_bonds: Vec<String> = bonds.iter().map(|b| faster_hex::hex_string(&borsh::to_vec(b).expect("a bond key serializes"))).collect();
+        let registry_bonds: Vec<String> =
+            bonds.iter().map(|b| faster_hex::hex_string(&borsh::to_vec(b).expect("a bond key serializes"))).collect();
         let served = self
             .runtime
             .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
@@ -320,6 +321,19 @@ impl RemoteNode for WrpcNode<'_> {
             .iter()
             .filter(|e| e.available)
             .filter_map(|e| {
+                if e.registry_openings.len() != bonds.len() {
+                    return None;
+                }
+                let is_v2 =
+                    kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::PalwForkChoiceLeafV2::decode(&e.committed_leaf).is_ok();
+                let (mut registry, mut registry_v2) = (Vec::new(), Vec::new());
+                for (bond, bytes) in bonds.iter().copied().zip(&e.registry_openings) {
+                    if is_v2 {
+                        registry_v2.push((bond, borsh::from_slice(bytes).ok()?));
+                    } else {
+                        registry.push((bond, borsh::from_slice(bytes).ok()?));
+                    }
+                }
                 Some(misaka_palw_remote::l2_rule_e::CommittedServedV2 {
                     block: e.block_hash.parse().ok()?,
                     leaf: e.committed_leaf.clone(),
@@ -327,11 +341,8 @@ impl RemoteNode for WrpcNode<'_> {
                     window: window_above_blue
                         .filter(|_| !e.rule_e_window.is_empty())
                         .and_then(|from| Some((from, borsh::from_slice(&e.rule_e_window).ok()?))),
-                    registry: bonds
-                        .iter()
-                        .copied()
-                        .zip(e.registry_openings.iter().filter_map(|o| borsh::from_slice(o).ok()))
-                        .collect(),
+                    registry,
+                    registry_v2,
                 })
             })
             .collect())

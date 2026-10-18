@@ -5,8 +5,8 @@
 //! the lighter by two), then healed. The remote client sees only what op 203 v2 serves (the committed leaves of both paths, each
 //! tip's v3 window above the fork, the fork's v3 registry openings) and an issuer's attestation of each tip's committed root; it
 //! verifies every byte with the node's own readers and must choose exactly the node's sink. Missing or tampered evidence STOPs.
-use super::*;
 use super::rule_e::{free_attempt, free_slot};
+use super::*;
 use kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2;
 use misaka_palw_remote::l2::{ForkChoiceAttestationV1, L2LimitsV1, L2StopV1, PeerViewV1};
 use misaka_palw_remote::l2_rule_e::{
@@ -16,12 +16,13 @@ use misaka_palw_remote::verify::{ChainPointV1, ClientRulesetV1, VerifiedChainV1}
 
 const SPLIT_V2: usize = 24;
 
-fn net_rule_e_gate_c() -> Net {
+fn net_rule_e(gate_c: bool) -> Net {
     let (mut config, _, premine, floats) = parts_ruled(None, true);
     config.params.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(1));
     // Gate C's certification sweep is a kernel route move: the kernel route is in force with it.
-    config.params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
-    config.params.palw_independently_work_certified_v1 = Some(ForkActivation::new(1));
+    config.params.palw_probabilistic_constraints_v1 = gate_c.then_some(ForkActivation::new(0));
+    config.params.palw_independently_work_certified_v1 = gate_c.then_some(ForkActivation::new(1));
+    config.params.palw_rule_e_participation_v2 = None;
     config.params.sync_palw_rfc0018_v1();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
         unreachable!("ConsensusV2")
@@ -46,7 +47,12 @@ fn chain_of(node: &T12Chain, checkpoint: BlockHash, tip: BlockHash) -> VerifiedC
         .iter()
         .map(|h| {
             let header = node.vp().headers_store.get_header(*h).unwrap();
-            ChainPointV1 { hash: *h, daa_score: header.daa_score, blue_score: header.blue_score, palw_state_root: header.palw_state_root }
+            ChainPointV1 {
+                hash: *h,
+                daa_score: header.daa_score,
+                blue_score: header.blue_score,
+                palw_state_root: header.palw_state_root,
+            }
         })
         .collect();
     let tip_header = (*node.vp().headers_store.get_header(tip).unwrap()).clone();
@@ -66,24 +72,36 @@ fn served(node: &T12Chain, chains: &[&VerifiedChainV1], fork_blue: u64) -> (Vec<
         for (block, entry) in served.entries {
             let e = entry.unwrap_or_else(|why| panic!("{block} is served: {why}"));
             roots.push((block, e.committed_root));
+            let v2 = kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::PalwForkChoiceLeafV2::decode(&e.committed_leaf).is_ok();
+            let (mut registry, mut registry_v2) = (Vec::new(), Vec::new());
+            assert_eq!(node.bonds.len(), e.registry_openings.len());
+            for (bond, bytes) in node.bonds.iter().copied().zip(&e.registry_openings) {
+                if v2 {
+                    registry_v2.push((bond, borsh::from_slice(bytes).expect("a v2 registry opening")));
+                } else {
+                    registry.push((bond, borsh::from_slice(bytes).expect("a v3 registry opening")));
+                }
+            }
             out.push(CommittedServedV2 {
                 block,
                 leaf: e.committed_leaf,
                 inner_root: e.opening.inner_root,
                 window: e.rule_e_window.map(|w| (fork_blue, borsh::from_slice(&w).expect("a window opening"))),
-                registry: node
-                    .bonds
-                    .iter()
-                    .copied()
-                    .zip(e.registry_openings.iter().map(|o| borsh::from_slice(o).expect("a registry opening")))
-                    .collect(),
+                registry,
+                registry_v2,
             });
         }
     }
     (out, roots)
 }
 
-fn attest(ruleset: &ClientRulesetV1, block: BlockHash, daa: u64, committed_root: Hash64) -> ForkChoiceAttestationV1 {
+fn attest(
+    ruleset: &ClientRulesetV1,
+    block: BlockHash,
+    daa: u64,
+    committed_root: Hash64,
+    leaf_version: u16,
+) -> ForkChoiceAttestationV1 {
     let mut att = ForkChoiceAttestationV1 {
         network_id: ruleset.network_id.clone(),
         genesis: ruleset.genesis.clone(),
@@ -92,7 +110,7 @@ fn attest(ruleset: &ClientRulesetV1, block: BlockHash, daa: u64, committed_root:
         block,
         block_daa: daa,
         committed_root,
-        leaf_version: PALW_FORK_CHOICE_LEAF_VERSION_RULE_E_V3,
+        leaf_version,
         dns_gate: None,
         issued_at_daa: daa,
         key_id: b"issuer".to_vec(),
@@ -104,8 +122,18 @@ fn attest(ruleset: &ClientRulesetV1, block: BlockHash, daa: u64, committed_root:
 
 #[tokio::test]
 async fn rfc09_remote_rule_e_gate_c_choice_is_the_full_nodes_and_refuses_missing_or_tampered_evidence() {
+    run_case(true).await;
+}
+
+#[tokio::test]
+async fn rfc09_remote_rule_e_v2_choice_is_the_full_nodes_and_refuses_missing_or_tampered_evidence() {
+    run_case(false).await;
+}
+
+async fn run_case(gate_c: bool) {
     kaspa_core::log::try_init_logger(&std::env::var("G14_LOG").unwrap_or_else(|_| "warn".into()));
-    let mut n = net_rule_e_gate_c();
+    let mut n = net_rule_e(gate_c);
+    let version = if gate_c { PALW_FORK_CHOICE_LEAF_VERSION_RULE_E_V3 } else { 2 };
     let fork = shared_prefix(&mut n).await;
     let (mut hb, mut lb) = (Vec::new(), Vec::new());
     for slot in 0..SPLIT_V2 {
@@ -131,8 +159,8 @@ async fn rfc09_remote_rule_e_gate_c_choice_is_the_full_nodes_and_refuses_missing
     let ruleset = ClientRulesetV1::of(&n.config.params);
     let root_of = |b: BlockHash| roots.iter().find(|(x, _)| *x == b).unwrap().1;
     let evidence = vec![
-        RuleEEvidenceV2 { attestation: attest(&ruleset, lt, ca.tip.daa_score, root_of(lt)) },
-        RuleEEvidenceV2 { attestation: attest(&ruleset, ht, cb.tip.daa_score, root_of(ht)) },
+        RuleEEvidenceV2 { attestation: attest(&ruleset, lt, ca.tip.daa_score, root_of(lt), version) },
+        RuleEEvidenceV2 { attestation: attest(&ruleset, ht, cb.tip.daa_score, root_of(ht), version) },
     ];
     let views = vec![PeerViewV1 { peer: "a".into(), chain: ca.clone() }, PeerViewV1 { peer: "b".into(), chain: cb.clone() }];
     let trusted = vec![(b"issuer".to_vec(), b"issuer-key".to_vec())];
@@ -140,7 +168,15 @@ async fn rfc09_remote_rule_e_gate_c_choice_is_the_full_nodes_and_refuses_missing
     let verify = |pk: &[u8], msg: &[u8], sig: &[u8]| pk == b"issuer-key" && msg == sig;
     let run = |served: &[CommittedServedV2], evidence: &[RuleEEvidenceV2]| {
         verify_fork_choice_rule_e_v2(
-            &RuleEInputV2 { views: &views, evidence, served, trusted: &trusted, ruleset: &ruleset, params: &n.config.params, limits: &limits },
+            &RuleEInputV2 {
+                views: &views,
+                evidence,
+                served,
+                trusted: &trusted,
+                ruleset: &ruleset,
+                params: &n.config.params,
+                limits: &limits,
+            },
             &verify,
         )
     };
@@ -148,11 +184,38 @@ async fn rfc09_remote_rule_e_gate_c_choice_is_the_full_nodes_and_refuses_missing
     let established = run(&served, &evidence).expect("the remote establishes the fork choice");
     assert_eq!(established.chosen.tip_hash(), node_choice, "remote = full node choice under rule E + Gate C");
     assert_eq!(established.refused.len(), 1);
+    assert!(
+        served
+            .iter()
+            .filter(|s| s.block == lt || s.block == ht)
+            .all(|s| s.window.as_ref().is_some_and(|(_, w)| !w.records.is_empty())),
+        "both fork windows contain actual claims"
+    );
 
     // Missing evidence: a tip's window, the fork's registry, a path leaf, an attestation — STOP.
-    let without_window: Vec<_> =
-        served.iter().cloned().map(|mut s| { if s.block == lt { s.window = None; } s }).collect();
+    let without_window: Vec<_> = served
+        .iter()
+        .cloned()
+        .map(|mut s| {
+            if s.block == lt {
+                s.window = None;
+            }
+            s
+        })
+        .collect();
     assert!(matches!(run(&without_window, &evidence), Err(L2StopV1::RuleEEvidence(_))), "a missing window stops");
+    let without_registry: Vec<_> = served
+        .iter()
+        .cloned()
+        .map(|mut s| {
+            if s.block == fork {
+                s.registry.clear();
+                s.registry_v2.clear();
+            }
+            s
+        })
+        .collect();
+    assert!(matches!(run(&without_registry, &evidence), Err(L2StopV1::RuleEEvidence(_))), "a missing fork registry stops");
     let path_block = ca.hashes[ca.hashes.len() / 2];
     let without_leaf: Vec<_> = served.iter().filter(|s| s.block != path_block).cloned().collect();
     assert!(matches!(run(&without_leaf, &evidence), Err(L2StopV1::SelectedChainUnverified { .. })), "a missing path leaf stops");
@@ -171,7 +234,7 @@ async fn rfc09_remote_rule_e_gate_c_choice_is_the_full_nodes_and_refuses_missing
         .collect();
     assert!(matches!(run(&flipped, &evidence), Err(L2StopV1::SelectedChainUnverified { .. })), "a tampered leaf stops");
     let mut forged = evidence.clone();
-    forged[0].attestation = attest(&ruleset, lt, ca.tip.daa_score, Hash64::from_u64_word(7));
+    forged[0].attestation = attest(&ruleset, lt, ca.tip.daa_score, Hash64::from_u64_word(7), version);
     assert!(run(&served, &forged).is_err(), "an attested root no served leaf opens stops");
     let lt_window = served.iter().find(|s| s.block == lt).unwrap().window.clone();
     let swapped: Vec<_> = served

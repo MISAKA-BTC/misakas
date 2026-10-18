@@ -11120,16 +11120,25 @@ impl VirtualStateProcessor {
             self.palw_fork_choice_commitment_v1,
             Some(opening.leaf.daa_score),
         );
-        // RFC09 (op 203 v2): the committed leaf in its own form, and the v3 rule-E inputs a remote client's comparator reads.
+        // RFC09: the point's own committed form also selects the opening grammar.
         let params = &self.native_redemption_params_v33;
         let committed_leaf = kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_committed_leaf_bytes_v2(&state, params).unwrap_or_default();
+        use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::{PalwCommitFormV1, palw_rule_e_commit_form_v1};
+        let form = palw_rule_e_commit_form_v1(params, opening.leaf.daa_score);
         let rule_e_window = extras.rule_e_window_above_blue.and_then(|from| {
-            kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::prove_window_suffix_v3(&state, params, from)
-                .map(|w| borsh::to_vec(&w).expect("a window opening serializes"))
+            match form {
+                PalwCommitFormV1::RuleEV2 => kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::prove_window_suffix_v1(&state, params, from),
+                PalwCommitFormV1::RuleEV3 => kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::prove_window_suffix_v3(&state, params, from),
+                _ => None,
+            }.map(|w| borsh::to_vec(&w).expect("a window opening serializes"))
         });
-        let v3 = kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_rule_e_commit_form_v1(params, opening.leaf.daa_score)
-            == kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommitFormV1::RuleEV3;
-        let registry_openings = if v3 && !extras.registry_bonds.is_empty() {
+        let registry_openings = if form == PalwCommitFormV1::RuleEV2 {
+            extras.registry_bonds.iter()
+                .take(kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_REGISTRY_BONDS_V2)
+                .map(|bond| borsh::to_vec(&kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::prove_registry_membership_v1(&state, bond))
+                    .expect("a registry opening serializes"))
+                .collect()
+        } else if form == PalwCommitFormV1::RuleEV3 && !extras.registry_bonds.is_empty() {
             let entries = kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_rule_e_registry_entries_v3(&state);
             extras
                 .registry_bonds

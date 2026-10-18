@@ -1425,6 +1425,7 @@ mod tests {
                         inner_root: o.inner_root,
                         window: None,
                         registry: Vec::new(),
+                        registry_v2: Vec::new(),
                     })
                 })
                 .collect())
