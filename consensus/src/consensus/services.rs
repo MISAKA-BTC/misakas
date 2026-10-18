@@ -126,7 +126,8 @@ impl ConsensusServices {
             reachability_service.clone(),
             storage.ghostdag_store.clone(),
             storage.headers_store.clone(),
-        );
+        )
+        .with_merge_depth_history(params.merge_depth_history());
         let ghostdag_manager = GhostdagManager::new(
             params.genesis.hash,
             params.ghostdag_k(),
@@ -143,7 +144,8 @@ impl ConsensusServices {
             crate::processes::ghostdag::protocol::HeartbeatTransparency::from_params(params),
             // ADR-0125: a round block is never a selected parent and always red, past this fence.
             params.palw_execution_lane_fence().map(|lane| lane.activation),
-        );
+        )
+        .with_dag_width(params.palw_dag_width_schedule_v1);
 
         let coinbase_manager = CoinbaseManager::new(
             params.coinbase_payload_script_public_key_max_len,
@@ -196,6 +198,7 @@ impl ConsensusServices {
             params.palw_held_context_fence(),
         )
         // ADR-0125: the lane's payee outputs widen the coinbase cap where the lane is configured.
+        .with_mergeset_size_history(params.mergeset_size_limit_history())
         .with_round_lane_declared(params.palw_execution_lane_fence().is_some())
         .with_receipt_v4_declared(params.palw_receipt_spend_v4_fence().is_some())
         // ADR-0152-adjacent (Activation Pool): the activation sink's two doors, where the ruleset
@@ -285,7 +288,8 @@ impl ConsensusServices {
             is_consensus_exiting,
         )
         // A-2 uniformity: a header carriage form added after the live build is read as that build reads it below its fence.
-        .with_header_forms(params.palw_header_form_fences_v1()),
+        .with_header_forms(params.palw_header_form_fences_v1())
+        .with_dag_width(params.palw_dag_width_schedule_v1),
         );
 
         let sync_manager = SyncManager::new(
@@ -298,6 +302,20 @@ impl ConsensusServices {
             storage.pruning_point_store.clone(),
             storage.statuses_store.clone(),
         );
+        let history = params.mergeset_size_limit_history();
+        let sync_manager = if history.activation() != ForkActivation::never() {
+            use crate::model::stores::{ghostdag::GhostdagStoreReader, headers::HeaderStoreReader};
+            let headers = storage.headers_store.clone();
+            let ghostdag = storage.ghostdag_store.clone();
+            sync_manager.with_mergeset_capacity(Arc::new(move |high| {
+                let daa = ghostdag.get_selected_parent(high).ok().and_then(|parent| headers.get_daa_score(parent).ok()).unwrap_or(0);
+                // A range reaching the new era can contain both widths; an old-era range
+                // retains its original contract even on a node that declares the future step.
+                if history.activation().is_active(daa) { history.upper_bound() } else { history.before() }
+            }))
+        } else {
+            sync_manager
+        };
         // **RFC-0008 v2 (sync): the EXEC blocks a chain block's anchor covers**, so that IBD lists and requests them although no block
         // names them as a parent. Installed only where the payload is armed.
         let sync_manager = if let Some(exec_v2_fence) = params.palw_exec_payload_v2_fence() {

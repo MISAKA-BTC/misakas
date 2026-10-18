@@ -1682,7 +1682,11 @@ impl ConsensusApi for Consensus {
         }
         Ok(prepared)
     }
-    fn palw_kernel_material_consent_accepted_v4(&self, root: kaspa_hashes::Hash64, consent: kaspa_hashes::Hash64) -> Result<bool, String> {
+    fn palw_kernel_material_consent_accepted_v4(
+        &self,
+        root: kaspa_hashes::Hash64,
+        consent: kaspa_hashes::Hash64,
+    ) -> Result<bool, String> {
         use kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2;
         let before = self.lkg_virtual_state.load();
         let now = self.get_virtual_daa_score();
@@ -4232,7 +4236,7 @@ impl ConsensusApi for Consensus {
     // max_blocks has to be greater than the merge set size limit
     fn get_hashes_between(&self, low: BlockHash, high: BlockHash, max_blocks: usize) -> ConsensusResult<(Vec<BlockHash>, BlockHash)> {
         let _guard = self.pruning_lock.blocking_read();
-        assert!(max_blocks as u64 > self.config.mergeset_size_limit());
+        assert!(max_blocks as u64 > self.services.sync_manager.mergeset_capacity_for(high));
         self.validate_block_exists(low)?;
         self.validate_block_exists(high)?;
 

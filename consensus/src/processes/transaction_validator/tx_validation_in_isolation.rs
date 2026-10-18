@@ -276,7 +276,29 @@ impl TransactionValidator {
         // which arms it on a card and leaves testnet-11's cap where it is. Past that fence the two
         // fan-outs are bounded at their reserved slots, so the wider cap and the tighter builder
         // are one change and must arm together.
-        let outputs_limit = self.mergeset_size_limit
+        self.check_coinbase_outputs_bound(tx, self.mergeset_size_history.map_or(self.mergeset_size_limit, |h| h.upper_bound()))?;
+
+        for (i, output) in tx.outputs.iter().enumerate() {
+            if output.script_public_key.script().len() > self.coinbase_payload_script_public_key_max_len as usize {
+                return Err(TxRuleError::CoinbaseScriptPublicKeyTooLong(i));
+            }
+        }
+        Ok(())
+    }
+
+    /// Context-free decoding uses the largest declared bound. Block validation restores the exact
+    /// historical bound at the authenticated selected parent; the expected coinbase hash is also checked.
+    pub fn check_coinbase_dag_width(&self, tx: &Transaction, selected_parent_daa: u64) -> TxResult<()> {
+        if tx.is_coinbase()
+            && let Some(history) = self.mergeset_size_history
+        {
+            self.check_coinbase_outputs_bound(tx, history.get(selected_parent_daa))?;
+        }
+        Ok(())
+    }
+
+    fn check_coinbase_outputs_bound(&self, tx: &Transaction, mergeset_size_limit: u64) -> TxResult<()> {
+        let outputs_limit = mergeset_size_limit
             + 1
             + if self.palw_validator_payout_bounds_declared {
                 kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED
@@ -291,16 +313,11 @@ impl TransactionValidator {
             }
             // RFC-0009: a V4 receipt block is paid as two outputs (the miner leg and the builder's), so a ruleset that declares the
             // redemption may carry one more per mergeset block.
-            + if self.palw_receipt_v4_declared { self.mergeset_size_limit } else { 0 };
+            + if self.palw_receipt_v4_declared { mergeset_size_limit } else { 0 };
         if tx.outputs.len() as u64 > outputs_limit {
             return Err(TxRuleError::CoinbaseTooManyOutputs(tx.outputs.len(), outputs_limit));
         }
 
-        for (i, output) in tx.outputs.iter().enumerate() {
-            if output.script_public_key.script().len() > self.coinbase_payload_script_public_key_max_len as usize {
-                return Err(TxRuleError::CoinbaseScriptPublicKeyTooLong(i));
-            }
-        }
         Ok(())
     }
 
@@ -2170,5 +2187,42 @@ mod audit_a2_isolation_tests {
         let unarmed = tv(false);
         assert_eq!(unarmed.validate_tx_in_isolation(&carrier(39)), Ok(()), "a decodable kind rides on either side of the fence");
         assert_match!(unarmed.validate_tx_in_isolation(&carrier(43)), Err(TxRuleError::InvalidPalwLifecyclePayload(_)));
+    }
+}
+
+#[cfg(test)]
+mod rfc18_width_tests {
+    use super::*;
+    use kaspa_consensus_core::config::params::{ForkActivation, ForkedParam, MAINNET_PARAMS};
+    use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionOutput, scriptvec};
+
+    #[test]
+    fn rfc18_width_coinbase_guard_uses_both_eras_in_isolation_and_exact_parent_in_context() {
+        let p = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            p.max_tx_inputs,
+            p.max_tx_outputs,
+            p.max_signature_script_len,
+            p.max_script_public_key_len,
+            p.coinbase_payload_script_public_key_max_len,
+            p.coinbase_maturity(),
+            10,
+            Default::default(),
+        )
+        .with_mergeset_size_history(ForkedParam::new(10, 30, ForkActivation::new(100)));
+        let n = 30 + 1 + kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS;
+        let tx = Transaction::new(
+            0,
+            vec![],
+            (0..n).map(|_| TransactionOutput { value: 1, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x51)) }).collect(),
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE,
+            0,
+            vec![],
+        );
+        assert!(tv.check_coinbase_in_isolation(&tx).is_ok());
+        assert!(matches!(tv.check_coinbase_dag_width(&tx, 99), Err(TxRuleError::CoinbaseTooManyOutputs(..))));
+        assert!(tv.check_coinbase_dag_width(&tx, 100).is_ok());
+        assert!(tv.check_coinbase_dag_width(&tx, 99).is_err(), "reorg restores the bound");
     }
 }

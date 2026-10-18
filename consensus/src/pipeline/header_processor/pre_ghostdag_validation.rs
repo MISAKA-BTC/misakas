@@ -39,6 +39,13 @@ impl HeaderProcessor {
 
     pub(super) fn validate_parent_relations(&self, header: &Header) -> BlockProcessResult<()> {
         self.check_parents_exist(header)?;
+        if self.max_block_parents.activation() != kaspa_consensus_core::config::params::ForkActivation::never() {
+            let parent = self.ghostdag_manager.find_selected_parent(header.direct_parents().iter().copied());
+            let limit = self.max_block_parents.get(self.headers_store.get_daa_score(parent).unwrap()) as usize;
+            if header.direct_parents().len() > limit {
+                return Err(RuleError::TooManyParents(header.direct_parents().len(), limit));
+            }
+        }
         self.check_parents_incest(header)?;
         self.check_round_lane_parents(header)?;
         Ok(())
@@ -599,7 +606,7 @@ impl HeaderProcessor {
             return Err(RuleError::NoParents);
         }
 
-        let max_block_parents = self.max_block_parents as usize;
+        let max_block_parents = self.max_block_parents.upper_bound() as usize;
         if header.direct_parents().len() > max_block_parents {
             return Err(RuleError::TooManyParents(header.direct_parents().len(), max_block_parents));
         }

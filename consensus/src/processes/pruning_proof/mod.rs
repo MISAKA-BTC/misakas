@@ -122,6 +122,7 @@ pub struct PruningProofManager {
     pruning_proof_m: u64,
     anticone_finalization_depth: u64,
     ghostdag_k: KType,
+    dag_width: Option<kaspa_consensus_core::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1>,
     skip_proof_of_work: bool,
     /// audit POW-01: BLAKE2b-SHA3 (ADR-0007 Phase 3) activation, so the
     /// pruning-proof path enforces the SAME per-DAA required-algo rule as the main
@@ -233,6 +234,7 @@ impl PruningProofManager {
             pruning_proof_m,
             anticone_finalization_depth,
             ghostdag_k,
+            dag_width: None,
             skip_proof_of_work,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -421,6 +423,11 @@ impl PruningProofManager {
     /// the search is halted and a partial chain is returned.
     ///
     /// The returned hashes are guaranteed to have GHOSTDAG data
+    pub fn with_dag_width(mut self, schedule: Option<kaspa_consensus_core::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1>) -> Self {
+        self.dag_width = schedule.filter(|f| f.activation != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
     pub(crate) fn get_ghostdag_chain_k_depth(&self, hash: BlockHash, ghostdag_k: KType) -> Vec<BlockHash> {
         let mut hashes = Vec::with_capacity(ghostdag_k as usize + 1);
         let mut current = hash;
@@ -479,7 +486,12 @@ impl PruningProofManager {
                 }
             }
 
-            let ghostdag_chain = self.get_ghostdag_chain_k_depth(anticone_block, ghostdag_k);
+            let parent = self.ghostdag_store.get_selected_parent(anticone_block).unwrap();
+            let k = self
+                .dag_width
+                .filter(|f| !parent.is_origin() && f.activation.is_active(self.headers_store.get_daa_score(parent).unwrap()))
+                .map_or(ghostdag_k, |f| f.schedule.ghostdag_k);
+            let ghostdag_chain = self.get_ghostdag_chain_k_depth(anticone_block, k);
             for hash in ghostdag_chain {
                 if let Entry::Vacant(e) = ghostdag_blocks.entry(hash) {
                     let ghostdag = self.ghostdag_store.get_data(hash).unwrap();

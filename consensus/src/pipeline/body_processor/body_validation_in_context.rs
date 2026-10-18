@@ -1,4 +1,5 @@
 use super::BlockBodyProcessor;
+use crate::model::stores::{ghostdag::GhostdagStoreReader, headers::HeaderStoreReader};
 use crate::{
     errors::{BlockProcessResult, RuleError},
     model::stores::statuses::StatusesStoreReader,
@@ -21,6 +22,13 @@ impl BlockBodyProcessor {
     pub fn validate_body_in_context(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
         self.check_parent_bodies_exist(block)?;
         self.check_coinbase_blue_score_and_subsidy(block)?;
+        if self.transaction_validator.dag_width_declared() {
+            let selected_parent = self._ghostdag_store.get_selected_parent(block.hash()).unwrap();
+            let selected_daa = self._headers_store.get_daa_score(selected_parent).unwrap();
+            if let Err(e) = self.transaction_validator.check_coinbase_dag_width(&block.transactions[0], selected_daa) {
+                return Err(RuleError::TxInContextFailed(block.transactions[0].id(), e));
+            }
+        }
         self.check_block_transactions_in_context(block)
     }
 
