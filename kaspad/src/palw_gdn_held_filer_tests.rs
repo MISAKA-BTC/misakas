@@ -52,6 +52,7 @@ fn bond(n: u64) -> PalwBondKeyV2 {
 /// The forged world: the honest view, the forged view (checkpoint `index`'s state with one byte of `(node_slot, head)`'s first
 /// demanded chunk flipped, the leg and binding re-committed), the forged state chunks the producer would disclose, and the oracle.
 pub(crate) struct World {
+    pub(crate) capture: Vec<u8>,
     pub(crate) profile: kaspa_consensus_core::palw_step::PalwShapeProfileV3,
     pub(crate) backend: Qwen36Backend,
     pub(crate) honest: Base0GdnOwnedMaterialV2,
@@ -138,6 +139,7 @@ pub(crate) fn world(forge_head: u32) -> World {
         .collect();
     let oracle = PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root()).unwrap();
     World {
+        capture: out.material,
         profile: profile.clone(),
         backend,
         honest,

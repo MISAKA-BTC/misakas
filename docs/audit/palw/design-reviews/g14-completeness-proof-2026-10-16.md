@@ -1669,3 +1669,11 @@ branch `codex/g14-native-completion`、引き継ぎ commit `ac2f69454` の workt
 修正では新しい genesis から domain を導き、funded execution / quota とその root、discovery の quota root、Final27 と queue、owning39 の execution / final / physical-service root を一緒に再計算する。`native.check(domain)` を assert する。m/k や資源上限、担保の裏付けと総額は緩めない。
 
 再実行 log は `/tmp/codex-g14-native-funded-domain.log`。結果待ちで、action 80 の成功として数えない。
+
+### 15.3 GDN service host が使用する prompt と binding(2026-10-18、検証中)
+
+service tick は、保持した最初の byte 列を capture とみなし、`gdn_accuser_view_v2(capture, None)` を呼んでいた。しかし held capture は prompt を保持しない場合があり、job ID からの推測は元の block anchor から生成した prompt と一致するとは限らない。free-prompt の保持 byte 列も capture 単体とは限らず FPC envelope である。
+
+attempt は既存の `attempt_job_for_claim` で accepted block の job と prompt を取得し、その job context と一致する capture を選ぶ。free-prompt は FPC envelope を decode し、class と executor が一致する job から既存の `fp_prompt_for_job` で hash-bound prompt を得る。service host は明示 prompt を渡し、execution root と shape profile が対象 claim と一致することも確認する。
+
+実際の graph-v8 capture を使い、正しい prompt を読めること、別 execution root と別 prompt を拒否することの対象試験を追加した。`/tmp/codex-g14-gdn-service-host.log` で build 待ち。fold E2E は `/tmp/codex-g14-gdn-fold.log` で build 中。いずれも現時点で PASS として数えない。service host の対象試験は full node / P2P E2E の代替ではない。
