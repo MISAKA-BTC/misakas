@@ -60,8 +60,9 @@ pub struct PrivateKernelPaidCheckSpecV4 {
     max_total_fetch_bytes: u64,
     max_workspace_bytes: u64,
     max_requests: u32,
-    /// Explicit permission for a funded answer obligation after a classified
-    /// remote acquisition failure. No value is inferred from a local timeout.
+    /// Explicit admission upper bound for funded availability obligations.
+    /// Each signature uses min(this bound, own DAA + native response window).
+    /// No authorization is inferred from a local timeout.
     challenge_valid_until_daa: Option<u64>,
     #[serde(skip)]
     _owner: Option<NativeDemandLeaseV1>,
@@ -251,7 +252,7 @@ fn validate_saved_object(
             || *dependency != Hash64::from_bytes(base)
             || Some(*consent) != material_consent
             || *p != provider
-            || Some(*valid_until_daa) != valid_until
+            || valid_until.is_none_or(|bound| *valid_until_daa > bound)
         {
             return Err(
                 "checker material challenge WAL differs from current native generation/actor/deadline; retained without rebinding"
@@ -301,7 +302,8 @@ fn court_action_accepted(
         // exact actor/consent/unit/deadline. The old coordinate projection and
         // a spent funding input establish no such acceptance.
         let checkpoint =
-            kaspa_consensus_core::palw_material_challenge_checkpoint_v4::material_challenge_checkpoint_from_route_v4(route, actor)?;
+            kaspa_consensus_core::palw_material_challenge_checkpoint_v4::material_challenge_checkpoint_from_route_v4(route, actor)
+                .map_err(|why| why.to_string())?;
         return checkpoint
             .map(|c| c.matches(Hash64::from_bytes(route.header.policy.network_domain), actor, action))
             .transpose()
@@ -400,6 +402,7 @@ impl PreparedKernelPaidCheckV4 {
                 mut transaction,
                 mut transaction_lease,
                 used_funding,
+                accepted_challenges,
                 observed_terminal,
                 exhausted,
                 _metadata,
@@ -532,15 +535,47 @@ impl PreparedKernelPaidCheckV4 {
                         use kaspa_consensus_core::palw_kernel_material_query_v4::{
                             PalwKernelMaterialFetchErrorV4 as E, monetary_material_challenge_object_v4,
                         };
-                        let Some((unit, cause)) = failure.into_inner() else { return Err(error.to_string()) };
+                        let Some((unit, cause)) = failure.into_inner() else {
+                            kaspa_core::debug!(
+                                "checker fresh verification/authority unknown; no new obligation or conviction: {error}"
+                            );
+                            continue;
+                        };
                         if !matches!(cause, E::Unavailable(_) | E::InvalidMaterial(_)) {
-                            return Err(format!("provider acquisition {cause}; no provider obligation or conviction"));
+                            kaspa_core::debug!("provider acquisition {cause}; no provider obligation or conviction");
+                            continue;
                         }
-                        let until = self.spec.challenge_valid_until_daa.ok_or_else(|| {
+                        match challenge_history::has_accepted_unit(
+                            &self.outbox,
+                            self.spec.max_input_bytes,
+                            self.checker,
+                            base,
+                            &accepted_challenges,
+                            &unit,
+                        ) {
+                            Ok(true) => continue,
+                            Ok(false) => {}
+                            Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                                kaspa_core::debug!("checker existing obligation unknown; exact WAL retained: {error}");
+                                continue;
+                            }
+                            Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+                        }
+                        let allowed_until = self.spec.challenge_valid_until_daa.ok_or_else(|| {
                             format!("provider unit {}:{}: {cause}; no explicit answer-obligation deadline", unit.stage, unit.position)
                         })?;
-                        if until <= api.get_virtual_daa_score() {
-                            return Err("explicit material challenge deadline already expired".into());
+                        let now = api.get_virtual_daa_score();
+                        let response_window = self
+                            .config
+                            .params
+                            .palw_monetary_material_v1
+                            .as_ref()
+                            .ok_or("checker monetary material policy absent")?
+                            .policy
+                            .response_window_daa;
+                        let until = allowed_until.min(now.checked_add(response_window).ok_or("checker admission deadline overflow")?);
+                        if until <= now {
+                            return Err("explicit material challenge authorization deadline already expired".into());
                         }
                         // Reacquire exact native generation before signing. A
                         // failed local quota/Unknown never enters this branch.
@@ -555,6 +590,31 @@ impl PreparedKernelPaidCheckV4 {
                 }
                 if exhausted {
                     return Err("checker explicit action/funding budget exhausted; immutable history retained".into());
+                }
+                if matches!(&*signed, PalwConsensusObjectV2::MonetaryMaterialActionV1 { .. }) {
+                    // Baseline survives a crash before signed-object publish;
+                    // no transaction can be relayed without both durable files.
+                    let Some(own) = api.palw_kernel_route_v1() else {
+                        kaspa_core::debug!("checker native route changed before challenge WAL; no publish");
+                        continue;
+                    };
+                    match challenge_history::ensure_base(
+                        &self.outbox,
+                        self.spec.max_input_bytes,
+                        &own,
+                        self.checker,
+                        base,
+                        enrollment,
+                        self.spec.round,
+                        None,
+                    ) {
+                        Ok(()) => {}
+                        Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                            kaspa_core::debug!("checker challenge baseline unknown; no publish: {error}");
+                            continue;
+                        }
+                        Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+                    }
                 }
                 owned_dir(&action_directory)?;
                 publish_borsh(&object_path, &*signed, self.spec.max_input_bytes)?;
@@ -701,6 +761,7 @@ impl PreparedKernelPaidCheckV4 {
 }
 
 mod outbox;
+mod challenge_history;
 
 #[cfg(test)]
 mod tests;

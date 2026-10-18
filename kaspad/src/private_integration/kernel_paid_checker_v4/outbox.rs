@@ -28,8 +28,9 @@ pub(super) struct CheckerOutboxV4 {
     pub transaction: Option<Transaction>,
     pub transaction_lease: Option<NativeDemandLeaseV1>,
     pub used_funding: [bool; 64],
-    /// Receipts, convictions and material challenges remain monitored. Only a
-    /// legacy FileDemand advances to another action in this continuation.
+    pub accepted_challenges: [bool; 64],
+    /// Receipts and negative terminal claims remain monitored. Native applied
+    /// FileDemand / challenge prefixes allow fresh checks, never approval.
     pub observed_terminal: bool,
     pub exhausted: bool,
     pub(super) _metadata: Option<NativeDemandLeaseV1>,
@@ -57,7 +58,22 @@ fn observation(
     base: Digest,
     enrollment: Digest,
     round: u32,
+    challenge_accepted: bool,
 ) -> Result<Observation, CheckerOutboxErrorV4> {
+    if let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, .. } = object {
+        let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
+            root, dependency, ..
+        } = &**action
+        else {
+            return Err("checker saved monetary subject is not a generation-bound challenge".into());
+        };
+        if *signer != actor || *root != Hash64::from_bytes(base) || *dependency != Hash64::from_bytes(base) {
+            return Err("checker saved monetary subject actor/claim differs".into());
+        }
+        // Only contiguous exact subjects matching the CURRENT native prefix
+        // authorize continuation. An older local success flag authorizes none.
+        return Ok(if challenge_accepted { Observation::DemandPresent } else { Observation::Pending });
+    }
     let decoded =
         if matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. }) { Some(saved_kernel_object(object, actor)?) } else { None };
     if let Some(decoded) = &decoded {
@@ -150,10 +166,12 @@ pub(super) fn scan_outbox(
         transaction: None,
         transaction_lease: None,
         used_funding: [false; 64],
+        accepted_challenges: [false; 64],
         observed_terminal: false,
         exhausted: true,
         _metadata: reserve_native_requests_v1(metadata).map_err(|e| e.to_string())?,
     };
+    result.accepted_challenges = super::challenge_history::accepted_actions(outbox, cap, route, actor, base, enrollment, round)?;
     let mut first_gap = None;
     let mut terminal_seen = false;
     for slot in 0..64 {
@@ -193,17 +211,19 @@ pub(super) fn scan_outbox(
         } else {
             (None, None)
         };
-        let status = observation(route, &object, actor, base, enrollment, round)?;
-        // An unaccepted receipt/proof/challenge is also the last action: only
-        // FileDemand is ever allowed to have a successor, including after a
-        // rollback. Validate that shape even when it is currently pending.
+        let status = observation(route, &object, actor, base, enrollment, round, result.accepted_challenges[slot])?;
+        // A receipt/proof is the last action. Demands and exact applied
+        // challenge subjects may have successors, including when reorg makes
+        // an older one pending again. Validate the immutable history shape.
         let is_demand = match &*object {
             PalwConsensusObjectV2::KernelRouteV1 { .. } => {
                 matches!(&*saved_kernel_object(&object, actor)?, KernelRouteObjectV1::FileDemand { .. })
             }
             _ => false,
         };
-        terminal_seen |= !is_demand;
+        let is_challenge = matches!(&*object, PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, .. }
+            if matches!(&**action, kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { .. }));
+        terminal_seen |= !is_demand && !is_challenge;
         if status == Observation::ClaimDecided || (result.object.is_none() && status != Observation::DemandPresent) {
             result.slot = slot;
             result.object = Some(object);
@@ -387,8 +407,8 @@ mod tests {
             checkpoint.encoded().unwrap().to_vec(),
         );
         let accepted = scan(outbox, &funding, &native);
-        assert_eq!(accepted.slot, 1);
-        assert!(accepted.observed_terminal);
+        assert_eq!(accepted.slot, 2);
+        assert!(accepted.exhausted && accepted.accepted_challenges[1] && !accepted.observed_terminal);
         // Native ledger cache, if any, must be dropped when changing fixture
         // rows, just as a restored/updated own route rebuilds its projection.
         let mut rollback = route(&[], &[]);
@@ -396,9 +416,13 @@ mod tests {
         let earlier = scan(outbox, &funding, &rollback);
         assert_eq!(earlier.slot, 0);
         assert!(!earlier.observed_terminal);
-        let removed = scan(outbox, &funding, &route(&[(7, actor())], &[]));
-        assert_eq!(removed.slot, 1);
-        assert!(!removed.observed_terminal, "a local persisted action is not native acceptance");
+        assert!(
+            matches!(
+                scan_outbox(outbox, &funding, CAP, &route(&[(7, actor())], &[]), actor(), BASE, ENROLLMENT, 0),
+                Err(CheckerOutboxErrorV4::NativeView(_))
+            ),
+            "a local persisted bridge is not native acceptance after its canonical prefix disappears"
+        );
     }
 
     #[test]
@@ -423,10 +447,19 @@ mod tests {
             signer: actor(),
             signature: vec![],
         };
-        assert!(matches!(observation(&route(&[], &[]), &object, actor(), BASE, [11; 64], 0), Err(CheckerOutboxErrorV4::Outbox(_))));
-        assert!(matches!(observation(&route(&[], &[]), &object, actor(), BASE, ENROLLMENT, 1), Err(CheckerOutboxErrorV4::Outbox(_))));
+        assert!(matches!(
+            observation(&route(&[], &[]), &object, actor(), BASE, [11; 64], 0, false),
+            Err(CheckerOutboxErrorV4::Outbox(_))
+        ));
+        assert!(matches!(
+            observation(&route(&[], &[]), &object, actor(), BASE, ENROLLMENT, 1, false),
+            Err(CheckerOutboxErrorV4::Outbox(_))
+        ));
         assert!(
-            matches!(observation(&route(&[], &[]), &object, actor(), BASE, ENROLLMENT, 0), Err(CheckerOutboxErrorV4::NativeView(_))),
+            matches!(
+                observation(&route(&[], &[]), &object, actor(), BASE, ENROLLMENT, 0, false),
+                Err(CheckerOutboxErrorV4::NativeView(_))
+            ),
             "own enrollment absence is unknown, never a local success marker or permanent worker stop"
         );
     }

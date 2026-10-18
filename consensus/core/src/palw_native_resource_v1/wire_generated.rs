@@ -2844,6 +2844,8 @@ wire_struct!(crate::palw_material_capacity_v1::PalwMaterialScopeV1; crate::Hash6
 wire_struct!(crate::palw_material_capacity_v1::PalwMonetaryMaterialProviderStoreV1; BTreeMap<crate::Hash64, (crate::Hash64, crate::palw_material_capacity_v1::PalwMaterialManifestV1, BTreeMap<crate::Hash64, Vec<u8>>)>);
 wire_struct!(crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1; crate::Hash64, Vec<(u32, u32, Vec<u8>)>);
 wire_struct!(crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4; u16, crate::palw_state_v2::PalwBondKeyV2, u64, u64, u64, crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4, u64, crate::Hash64);
+wire_struct!(crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryAnchorV4; u64, crate::Hash64);
+wire_struct!(crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryV4; u16, crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::Hash64);
 wire_struct!(crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2; u16, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, u64, u64, u64, u64, crate::Hash64);
 impl NativeWireScanV1 for crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {

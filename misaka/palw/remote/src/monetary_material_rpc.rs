@@ -197,7 +197,18 @@ impl MonetaryMaterialProofPagerV1 {
             {
                 return Err("challenge application checkpoint has an invalid fixed extent".into());
             }
+            let challenge_history = fragment.table == PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2
+                && fragment.key.len() == 69
+                && fragment.key[0]
+                    == kaspa_consensus_core::palw_material_challenge_history_v4::PALW_MATERIAL_CHALLENGE_HISTORY_PREFIX_V4;
+            if challenge_history
+                && fragment.row_bytes
+                    != kaspa_consensus_core::palw_material_challenge_history_v4::PALW_MATERIAL_CHALLENGE_HISTORY_BYTES_V4 as u64
+            {
+                return Err("challenge application history has an invalid fixed extent".into());
+            }
             let retain = !challenge_checkpoint
+                && !challenge_history
                 && matches!(fragment.table, PALW_MONETARY_MATERIAL_TABLE_V1 | PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2);
             if retain {
                 if (fragment.key.len() != 64

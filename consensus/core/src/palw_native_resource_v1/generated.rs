@@ -20,6 +20,8 @@ native_struct!(crate::palw_kernel_material_context_v4::PalwProspectiveKernelMate
 native_struct!(crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4; version, root, consent, dependency, provider, stage, position);
 native_enum!(crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitResponseV4; Answer { query, bytes }, Refused { query, reason });
 native_struct!(crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4; version, challenger, sequence, created_daa, applied_daa, query, valid_until_daa, statement);
+native_struct!(crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryV4; version, challenger, sequence, previous, root);
+native_struct!(crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryAnchorV4; sequence, root);
 native_struct!(crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4; version, root, context_request, previous, sequence, providers, valid_until_daa);
 native_struct!(crate::palw_step_refute::memory_v2::PalwGdnStepRefutationV2; version, step, checkpoint);
 native_struct!(misaka_palw_kernel::spec::retrieval::SliceResponseV1; items, paths);

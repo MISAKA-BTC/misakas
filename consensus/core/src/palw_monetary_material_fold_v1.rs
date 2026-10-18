@@ -357,17 +357,27 @@ fn action_inner_v4(
             PalwMaterialChallengeCheckpointV4, material_challenge_checkpoint_from_route_v4,
         };
         let route = builder.state.kernel_route().ok_or_else(|| refused("challenge checkpoint route absent"))?;
-        let previous = material_challenge_checkpoint_from_route_v4(route, *signer).map_err(refused)?;
-        Some(
-            PalwMaterialChallengeCheckpointV4::next(
-                previous,
-                Hash64::from_bytes(route.header.policy.network_domain),
-                *signer,
-                a,
-                ctx.daa_score,
-            )
-            .map_err(refused)?,
+        let previous = material_challenge_checkpoint_from_route_v4(route, *signer)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+        let previous_history = crate::palw_material_challenge_history_v4::material_challenge_history_from_route_v4(route, *signer)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+        let checkpoint = PalwMaterialChallengeCheckpointV4::next(
+            previous,
+            Hash64::from_bytes(route.header.policy.network_domain),
+            *signer,
+            a,
+            ctx.daa_score,
         )
+        .map_err(refused)?;
+        let history = crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryV4::next(
+            Hash64::from_bytes(route.header.policy.network_domain),
+            *signer,
+            previous.as_ref(),
+            previous_history.as_ref(),
+            &checkpoint,
+        )
+        .map_err(refused)?;
+        Some((checkpoint, history))
     } else {
         None
     };
@@ -715,8 +725,9 @@ fn action_inner_v4(
             return Ok(());
         }
     }
-    if let Some(checkpoint) = challenge_checkpoint {
+    if let Some((checkpoint, history)) = challenge_checkpoint {
         builder.write_material_challenge_checkpoint_v4(*signer, Some(checkpoint))?;
+        builder.write_material_challenge_history_v4(*signer, Some(history))?;
     }
     write(builder, root, Some(&row));
     Ok(())
@@ -1058,6 +1069,99 @@ mod tests {
         let restored = revert_delta_v2(&applied, &all, &params).unwrap();
         assert!(restored.bond(&bond(4)).is_some());
         assert!(read(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+    }
+    /// Direct writer/journal controls only: these do not execute signed native
+    /// challenge admission, a complete typed-unit check, or a node restart.
+    #[test]
+    fn applied_challenge_history_pair_reserves_before_mutation_and_cold_journal_rewinds_both_families() {
+        use crate::{
+            palw_material_challenge_checkpoint_v4::{
+                PalwMaterialChallengeCheckpointV4 as Checkpoint, material_challenge_checkpoint_from_route_v4 as read_checkpoint,
+            },
+            palw_material_challenge_history_v4::{
+                PalwMaterialChallengeHistoryV4 as History, material_challenge_history_from_route_v4 as read_history,
+            },
+            palw_material_release_recovery_v2::{PalwMaterialReleaseRecoveryMirrorV2, PalwMaterialReleaseRecoveryPolicyV2},
+            palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1},
+        };
+        let (state, params, _) = fixture();
+        let params = params.with_material_release_recovery_v2(Some(PalwMaterialReleaseRecoveryMirrorV2 {
+            from_daa: 1,
+            // Storage fixture only, not approved production policy values.
+            policy: PalwMaterialReleaseRecoveryPolicyV2 {
+                version: 2,
+                max_reserved_contracts: 1,
+                max_generations_per_contract: 2,
+                max_provider_streams: 4,
+                max_reserved_history_cells: 16,
+                measurement_root: h(77),
+            },
+        }));
+        let action = PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
+            root: h(9),
+            consent: h(7),
+            provider: bond(2),
+            dependency: h(9),
+            stage: 255,
+            position: 0,
+            valid_until_daa: 100,
+        };
+        let checkpoint = Checkpoint::next(None, h(1), bond(4), &action, 2).unwrap();
+        let history = History::next(h(1), bond(4), None, None, &checkpoint).unwrap();
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_material_challenge_checkpoint_v4(bond(4), Some(checkpoint)).unwrap();
+        // Preserve compatibility with a pre-A3 native A2 checkpoint. The new
+        // history cell is optional until the next explicitly paired write.
+        assert!(read_history(b.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let legacy_state = b.state.clone();
+
+        let mut refused = TransitionBuilder::new(&legacy_state, &params, false, false, false, false, &extras);
+        let before_state = refused.state.clone();
+        let before_entries = refused.entries.clone();
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+        refused.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+        assert!(matches!(
+            refused.write_material_challenge_history_v4(bond(4), Some(history)),
+            Err(PalwStateV2Error::NativeResource(_))
+        ));
+        assert_eq!(refused.state, before_state);
+        assert_eq!(refused.entries, before_entries);
+        assert_eq!(checker.outstanding(), (0, 0));
+        assert!(read_history(refused.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert_eq!(read_checkpoint(refused.state.kernel_route().unwrap(), bond(4)).unwrap(), Some(checkpoint));
+
+        b.write_material_challenge_history_v4(bond(4), Some(history)).unwrap();
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let delta = PalwStateDeltaV2 { point: ctx(2), entries: b.entries.clone() };
+        let applied = apply_delta_v2(&state, &delta, &params).unwrap();
+        assert_eq!(read_checkpoint(applied.kernel_route().unwrap(), bond(4)).unwrap(), Some(checkpoint));
+        assert_eq!(read_history(applied.kernel_route().unwrap(), bond(4)).unwrap(), Some(history));
+        let mut cold = applied.clone();
+        // Rebuild the serialized route rather than relying on a warm native
+        // projection. This is a codec/consistency fixture, not OS crash evidence.
+        cold.kernel_route = Some(borsh::from_slice(&borsh::to_vec(applied.kernel_route().unwrap()).unwrap()).unwrap());
+        cold.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        assert_eq!(read_history(cold.kernel_route().unwrap(), bond(4)).unwrap(), Some(history));
+        let restored = revert_delta_v2(&cold, &delta, &params).unwrap();
+        assert!(read_checkpoint(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert!(read_history(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+
+        b.write_bond(bond(4), None).unwrap();
+        assert!(b.state.bond(&bond(4)).is_none());
+        assert!(read_checkpoint(b.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert!(read_history(b.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let all = PalwStateDeltaV2 { point: ctx(2), entries: b.entries.clone() };
+        let removed = apply_delta_v2(&state, &all, &params).unwrap();
+        assert!(removed.bond(&bond(4)).is_none());
+        assert!(read_checkpoint(removed.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert!(read_history(removed.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        let restored = revert_delta_v2(&removed, &all, &params).unwrap();
+        assert!(restored.bond(&bond(4)).is_some());
+        assert!(read_checkpoint(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert!(read_history(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
     }
     /// Fold/storage fixture: native signature and finalized-chain authority are
     /// tested by the integration consumers, not manufactured by this unit test.

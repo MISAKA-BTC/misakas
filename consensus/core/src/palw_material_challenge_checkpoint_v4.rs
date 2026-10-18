@@ -65,6 +65,14 @@ fn statement(network: Hash64, challenger: PalwBondKeyV2, query: &Query, until: u
     Hash64::from_bytes(sink.0.finalize().as_bytes().try_into().expect("64-byte digest"))
 }
 
+/// Identity of the signed availability subject, for reconstructing an applied
+/// history against OWN native state. Computing this digest establishes no
+/// admission, payment, computation correctness, approval or finality.
+pub fn material_challenge_statement_v4(network: Hash64, challenger: PalwBondKeyV2, action: &Action) -> Result<Hash64, &'static str> {
+    let (query, until) = subject(action)?;
+    Ok(statement(network, challenger, &query, until))
+}
+
 impl PalwMaterialChallengeCheckpointV4 {
     pub fn next(
         previous: Option<Self>,
@@ -129,21 +137,39 @@ impl PalwMaterialChallengeCheckpointV4 {
     }
 }
 
+/// A fixed-key point lookup reserves its transient Vec BEFORE allocation.
+/// Restore can visit every bond's cell without an all-aux scan for each one.
+/// Its returned row borrows only the route; the temporary key and ticket die
+/// together. No reference into the temporary key escapes.
+pub(crate) fn material_challenge_fixed_row_v4<'a, const N: usize>(
+    route: &'a PalwKernelRouteStateV1,
+    table: u8,
+    key: &[u8; N],
+) -> Result<Option<&'a [u8]>, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
+    let _key_owner = reserve_native_requests_v1(N as u64)?;
+    let mut owned = Vec::new();
+    owned
+        .try_reserve_exact(N)
+        .map_err(|why| NativeCoverageV1::unsupported::<Vec<u8>>("challenge fixed-key lookup", &why.to_string()))?;
+    owned.extend_from_slice(key);
+    Ok(route.aux.get(&(table, owned)).map(Vec::as_slice))
+}
+
 /// Own accepted route only. Absence is unknown, not an accepted statement; a
 /// superseding same-key operation does not authorize rebinding an older WAL.
+/// Resource and malformed-state causes remain distinct at native consumers.
 pub fn material_challenge_checkpoint_from_route_v4(
     route: &PalwKernelRouteStateV1,
     actor: PalwBondKeyV2,
-) -> Result<Option<PalwMaterialChallengeCheckpointV4>, &'static str> {
+) -> Result<Option<PalwMaterialChallengeCheckpointV4>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
     let key = material_challenge_checkpoint_key_v4(&actor);
-    let Some(raw) = route.aux.iter().find(|((table, k), _)| *table == TABLE && k.as_slice() == key.as_slice()).map(|(_, raw)| raw)
-    else {
-        return Ok(None);
-    };
-    let row = decode_material_challenge_checkpoint_v4(raw)?;
-    row.validate(Hash64::from_bytes(route.header.policy.network_domain))?;
+    let Some(raw) = material_challenge_fixed_row_v4(route, TABLE, &key).map_err(E::Resource)? else { return Ok(None) };
+    let row = decode_material_challenge_checkpoint_v4(raw).map_err(|why| E::Decode(why.into()))?;
+    row.validate(Hash64::from_bytes(route.header.policy.network_domain)).map_err(|why| E::Decode(why.into()))?;
     if row.challenger != actor {
-        return Err("challenge checkpoint key substitutes actor");
+        return Err(E::Decode("challenge checkpoint key substitutes actor".into()));
     }
     Ok(Some(row))
 }

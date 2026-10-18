@@ -992,3 +992,4 @@ pub mod palw_kernel_material_query_v4;
 
 pub mod palw_kernel_material_replacement_v4;
 pub mod palw_material_challenge_checkpoint_v4;
+pub mod palw_material_challenge_history_v4;

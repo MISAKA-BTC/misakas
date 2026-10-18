@@ -384,6 +384,27 @@ impl PalwChainStateV2 {
                 continue;
             }
             if key.len() == 69
+                && key.first() == Some(&crate::palw_material_challenge_history_v4::PALW_MATERIAL_CHALLENGE_HISTORY_PREFIX_V4)
+            {
+                use crate::palw_material_challenge_history_v4::{
+                    decode_material_challenge_history_v4, material_challenge_history_key_v4,
+                };
+                let history = decode_material_challenge_history_v4(bytes).map_err(bad)?;
+                let checkpoint = crate::palw_material_challenge_checkpoint_v4::material_challenge_checkpoint_from_route_v4(
+                    route,
+                    history.challenger,
+                )
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |why| bad(&why)))?
+                .ok_or_else(|| bad("challenge history lacks paired native checkpoint"))?;
+                history.validate(Hash64::from_bytes(route.header.policy.network_domain), &checkpoint).map_err(bad)?;
+                if key.as_slice() != material_challenge_history_key_v4(&history.challenger).as_slice()
+                    || self.bond(&history.challenger).is_none()
+                {
+                    return Err(bad("challenge history key/owning bond differs"));
+                }
+                continue;
+            }
+            if key.len() == 69
                 && key.first() == Some(&crate::palw_material_challenge_checkpoint_v4::PALW_MATERIAL_CHALLENGE_CHECKPOINT_PREFIX_V4)
             {
                 use crate::palw_material_challenge_checkpoint_v4::{

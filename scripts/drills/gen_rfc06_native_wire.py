@@ -325,6 +325,7 @@ code+=AUX_HELPERS
 # Versioned fixed receipt namespace, separate from root64 and old A1 streams.
 # One row per existing challenger bond; restore scans no unbounded history.
 checkpoint_arm = '134 if key_bytes==69 && prefix==0xA2=>crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4::scan_native_wire_v1(frame)?,\n'
+checkpoint_arm += '134 if key_bytes==69 && prefix==0xA3=>crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryV4::scan_native_wire_v1(frame)?,\n'
 checkpoint_marker = '134=>return Err('
 if code.count(checkpoint_marker) != 1:
  raise ValueError('material checkpoint namespace requires the explicit aux134 fallback')
