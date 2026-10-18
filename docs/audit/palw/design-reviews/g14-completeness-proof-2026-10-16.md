@@ -1645,3 +1645,12 @@ branch `codex/g14-tir-completion`、元の TIR worktree を継続使用。genesi
 - 偽造系は、共謀 seat 集合が空の場合に失敗させる。TEST harness 内だけで anchor delay を 1 DAA にし、実 Panel binding の後、短い preparation 窓の中で preparation と Ready を batch 搬送し、conviction より前に licence を着地させる。課金前の担保を先に記録し、各 seat の実減額を確認する。本番 preset・m/k・経済値を変更していない。
 - **検証状態: 未完。** `CARGO_INCREMENTAL=0 cargo test -j 3 -p kaspad --lib --features private-integration-config tir_frame_node_tn1_an_honest -- --nocapture --test-threads=1` を実行中。log は `/tmp/codex-g14-tir-honest.log`。この追記時点ではビルド中で、支払い・seat slash を示した結果として数えない。偽造系の実行も必要。
 - 次に、上記 2 系の結果と 02-B の node 実行を確認し、出荷 binary の測定・fence drill と区別して報告する。G14 全体の完了・武装・配備を意味しない。
+
+
+### 14.1 02-B の node 受入経路を追加(2026-10-18、結果待ち)
+
+- 誠実系 T-N1 を、通常の `ClassSemanticsDeclaredV1` で非既定の model profile・runtime manifest・runtime class・CU ruleset を宣言する fixture にした。tokenizer は実 JSON から ID と rendering table を作り、同じ ID を PALWTIR1 container に格納する。raw JSON と `.palwtokens` は同じ artifact の隣に置き、通常の sidecar loader で読む。
+- raw 長はローカルの値を証明済みとして注入しない。実サービスの既存 inventory worker が on-chain EOF certificate を取得し、それから frame を出す経路を試す。受理 frame では 4 つの非既定 ID と inventory の実 byte 数を assert する。
+- 一致する frame の quote を positive control とし、runtime manifest 1 フィールドだけ異なる header の quote が拒否されることを assert する。実際に支払われた frame にも同じ非既定 manifest と CU ruleset が残ることを確認する。
+- 共謀系は、準備した集合と実際に bound された seat 集合の一致も必須とし、担保の事前 snapshot は card を key に保存する。
+- **ビルド成功、runtime は結果待ち。** Rust 構文解析と `git diff --check` に加え、対象 lib test のビルドが 26m28s で完了した。`/tmp/codex-g14-tir-honest.log` の対象 node 試験は実行中(PID 9789)。非既定 semantics の Final・支払い完了としてはまだ数えない。

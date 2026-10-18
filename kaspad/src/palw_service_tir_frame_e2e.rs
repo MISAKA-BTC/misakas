@@ -117,10 +117,15 @@ pub(super) struct TirFixture {
     pub class_id: Hash64,
     pub root: Hash64,
     pub layout: kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1,
+    semantic_source: Option<(Vec<u8>, kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1)>,
 }
 
 impl TirFixture {
     pub fn new(chain: &Chain) -> Self {
+        Self::new_with_semantics(chain, false)
+    }
+
+    fn new_with_semantics(chain: &Chain, declared: bool) -> Self {
         use kaspa_consensus_core::palw_step_refute::{PALW_LOGITS_TILE_LANES, tiled_logits_scheme_id_v1};
         use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
         use misaka_palw_tir::TirProgramV1;
@@ -153,17 +158,46 @@ impl TirFixture {
             commit_tiles,
             state_tiles: program.states.iter().map(|_| 4).collect(),
         };
+        let semantic_source = declared.then(|| {
+            let vocab: serde_json::Map<String, serde_json::Value> =
+                (0..program.token_bound).map(|id| (format!("token{id}"), id.into())).collect();
+            let raw = serde_json::to_vec(&serde_json::json!({"model":{"type":"BPE","vocab":vocab,"merges":[]}})).unwrap();
+            let tokenizer = misaka_palw_base0::tokenizer::QwenTokenizer::from_json(&raw).unwrap();
+            let table = kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+                entries: (0..program.token_bound).map(|id| tokenizer.token_bytes(id)).collect(),
+                eog_token_ids: Vec::new(),
+                tokenizer_id: misaka_palw_base0::artifact::Base0ArtifactV1::tokenizer_commitment_of(&raw),
+            };
+            (raw, table)
+        });
+        let tokenizer_id = semantic_source.as_ref().map_or([9; 64], |(_, table)| table.tokenizer_id.as_bytes());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dense.palwtir");
         let meta = serde_json::json!({ "model_id": "test/tn1-dense-gqa-2layer" }).to_string();
-        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&layout).unwrap(), [9; 64], meta, &mut |j, l| {
-            tensors.get(&(j, l)).cloned().ok_or_else(|| format!("no tensor {j} {l:?}"))
-        })
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&layout).unwrap(),
+            tokenizer_id,
+            meta,
+            &mut |j, l| tensors.get(&(j, l)).cloned().ok_or_else(|| format!("no tensor {j} {l:?}")),
+        )
         .expect("the container");
+        if let Some((raw, table)) = &semantic_source {
+            std::fs::write(dir.path().join("tokenizer.json"), raw).unwrap();
+            std::fs::write(
+                crate::palw_backends::token_table_sidecar_path_v1(&path),
+                kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(table),
+            )
+            .unwrap();
+        }
         let holding = Self::sdk(chain).load_artifact(&path).expect("the IR lineage loads it by its magic");
+        if semantic_source.is_some() {
+            crate::palw_backends::load_token_table_sidecars_v1(std::slice::from_ref(&holding)).unwrap();
+        }
         let entry = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&holding)).remove(0);
         let (class_id, root) = (entry.class_id(), entry.artifact_root);
-        TirFixture { _dir: dir, path, entry, class_id, root, layout }
+        TirFixture { _dir: dir, path, entry, class_id, root, layout, semantic_source }
     }
 
     fn sdk(chain: &Chain) -> misaka_palw_sdk::PalwClassSdk {
@@ -173,6 +207,33 @@ impl TirFixture {
             chain.config.params.net.to_string().into_bytes(),
         )
         .with_chain_classes_v1()
+    }
+
+    /// 02-B: an ordinary signed declaration, with an actual raw tokenizer and rendering table.
+    async fn declare_semantics(&self, chain: &mut Chain, floats: &mut [Funding]) {
+        use kaspa_consensus_core::palw_class_semantics_v1::*;
+        let (raw, table) = self.semantic_source.as_ref().expect("the non-default semantic fixture");
+        let declaration = PalwClassSemanticsDeclarationV1 {
+            version: PALW_CLASS_SEMANTICS_VERSION_V1,
+            class_id: self.class_id,
+            artifact_root: self.root,
+            model_profile_id: Hash64::from_u64_word(0x02B1),
+            runtime_manifest_hash: Hash64::from_u64_word(0x02B2),
+            runtime_class_id: Hash64::from_u64_word(0x02B3),
+            tokenizer_id: table.tokenizer_id,
+            cu_ruleset_id: Hash64::from_u64_word(0x02B4),
+            token_table_root: table.root(),
+            rendering_rule: kaspa_consensus_core::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
+            raw_tokenizer_bytes: raw.len() as u64,
+            tokenizer_key_events: kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_tokenizer_key_events_v1(raw).unwrap(),
+            prefix_state_relation: None,
+        };
+        let message = palw_class_semantics_message_v1(chain.network_domain, &declaration);
+        let object = PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {
+            declaration: Box::new(declaration),
+            signature: signed(0, message.as_byte_slice(), PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1),
+        };
+        chain.send(0, &object, &mut floats[0], &[]).await;
     }
 
     /// The class's backend as a node resolves it (the node's registry over the deployed file).
@@ -955,6 +1016,13 @@ async fn colluders_license(
     let seats: Vec<usize> = duties.iter().map(|d| chain.bonds.iter().position(|b| *b == d.seat_bond).unwrap()).collect();
     // A Panel the frame drew at acceptance prepared above; a Panel bound only later (the node's anchor delay) has no preparation lane.
     assert!(drawn.iter().all(|card| seats.contains(card)), "a drawn seat is a bound seat: drawn {drawn:?}, bound {seats:?}");
+    if !drawn.is_empty() {
+        assert_eq!(
+            drawn.iter().copied().collect::<BTreeSet<_>>(),
+            seats.iter().copied().collect::<BTreeSet<_>>(),
+            "all bound colluders must prepare and sign before conviction"
+        );
+    }
     let mut frame_out = None;
     chain
         .tc
@@ -1104,10 +1172,18 @@ async fn tn1_node(forged: bool) {
         params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
         config = Config::new(params);
     }
+    if !forged {
+        let mut params = config.params.clone();
+        params.palw_class_semantics_v1 = Some(ForkActivation::new(0));
+        config = Config::new(params);
+    }
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
-    let fixture = TirFixture::new(&chain);
+    let fixture = TirFixture::new_with_semantics(&chain, !forged);
     fixture.onboard_to_active(&mut chain, &mut floats).await;
+    if !forged {
+        fixture.declare_semantics(&mut chain, &mut floats).await;
+    }
     let outsider = register_outsider(&mut chain, &mut floats, &fixture).await;
     // The producer's frame rent (the exact native rent a TFP1 original declares and pays on top of its relay fee, at the TEST-ONLY
     // unit prices over the frame's door) is far past a card's fee float: the outside verifier's main-premine float funds the
@@ -1204,6 +1280,36 @@ async fn tn1_node(forged: bool) {
     };
     let frame = chain.tc.palw_tir_public_frame_v1(claim).unwrap().unwrap();
     eprintln!("[service-tir-frame] piece 3: framed claim {claim} accepted at DAA {}: {frame:?}", chain.daa());
+    if !forged {
+        let context = &frame.header.job_context;
+        assert_eq!(context.model_profile_id, Hash64::from_u64_word(0x02B1));
+        assert_eq!(context.runtime_manifest_hash, Hash64::from_u64_word(0x02B2));
+        assert_eq!(context.runtime_class_id, Hash64::from_u64_word(0x02B3));
+        assert_eq!(context.cu_ruleset_id, Hash64::from_u64_word(0x02B4));
+        let mut original = None;
+        chain
+            .tc
+            .palw_tir_public_read_v1(&mut |state| {
+                let semantics = state.class_semantics_v1(&fixture.class_id).expect("the signed semantic declaration");
+                assert!(semantics.matches_context(context));
+                assert_eq!(
+                    state.staged_tokenizer_inventory_v1(semantics.tokenizer_id).unwrap().actual_bytes,
+                    fixture.semantic_source.as_ref().unwrap().0.len() as u64
+                );
+                original = kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
+                    .map(|frame| frame.original_v1().clone());
+                Ok(())
+            })
+            .unwrap();
+        let original = original.unwrap();
+        assert!(chain.tc.palw_tir_public_original_quote_v1(original.clone(), frame.header.clone()).unwrap().is_some());
+        let mut wrong = frame.header.clone();
+        wrong.job_context.runtime_manifest_hash = Hash64::from_u64_word(0xBAD02B);
+        assert!(
+            chain.tc.palw_tir_public_original_quote_v1(original, wrong).is_err(),
+            "02-B: changing only the registered manifest must refuse the frame"
+        );
+    }
     // The colluding Panel prepares inside the frame's preparation window (harness-scripted adversary).
     let producer_bond = chain.bonds[0];
     let collateral_of = |chain: &Chain, bond: PalwBondKeyV2| {
@@ -1217,7 +1323,7 @@ async fn tn1_node(forged: bool) {
     };
     let before = collateral_of(&chain, producer_bond);
     let mut colluders = Vec::new();
-    let mut colluder_collateral = Vec::new();
+    let mut colluder_collateral = std::collections::BTreeMap::new();
     if forged {
         let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
         while chain.daa() < slot {
@@ -1226,7 +1332,7 @@ async fn tn1_node(forged: bool) {
         anchor_block(&mut chain).await;
         let drawn = colluders_prepare(&mut chain, &mut floats, claim).await;
         assert!(!drawn.is_empty(), "the early bound panel must prepare and sign");
-        colluder_collateral = drawn.iter().map(|c| collateral_of(&chain, chain.bonds[*c])).collect();
+        colluder_collateral = drawn.iter().map(|c| (*c, collateral_of(&chain, chain.bonds[*c]))).collect();
         colluders = colluders_license(&node, &mut chain, &mut floats, &fixture, &mut ready_at, claim, drawn).await;
         assert!(!colluders.is_empty(), "a forged claim must be licensed before conviction to exercise seat slash");
     }
@@ -1302,8 +1408,8 @@ async fn tn1_node(forged: bool) {
     }
     if forged {
         assert!(collateral_of(&chain, producer_bond) < before, "the producer is slashed");
-        for (card, before) in colluders.iter().zip(&colluder_collateral) {
-            assert!(collateral_of(&chain, chain.bonds[*card]) < *before, "colluding seat {card} is slashed");
+        for card in &colluders {
+            assert!(collateral_of(&chain, chain.bonds[*card]) < colluder_collateral[card], "colluding seat {card} is slashed");
         }
         for _ in 0..20 {
             step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
@@ -1343,6 +1449,9 @@ async fn tn1_node(forged: bool) {
             step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
         }
         let (paid_claim, block) = paid.expect("T-N1 requires an actual quantum spend, not only a payment right");
+        let paid_frame = chain.tc.palw_tir_public_frame_v1(paid_claim).unwrap().expect("the paid claim has its ORIGINAL frame");
+        assert_eq!(paid_frame.header.job_context.runtime_manifest_hash, Hash64::from_u64_word(0x02B2));
+        assert_eq!(paid_frame.header.job_context.cu_ruleset_id, Hash64::from_u64_word(0x02B4));
         let mut spent = false;
         chain
             .tc
