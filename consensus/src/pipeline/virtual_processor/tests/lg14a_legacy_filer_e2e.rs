@@ -1131,7 +1131,6 @@ async fn lg14a_a_reorg_undoes_and_returns_the_reservation_exactly() {
 /// `ruling` is always false here: the post-Final reservation this scenario makes is past X3's open cutoff (REQ-X3-4), so the X3 reorg
 /// identity needs a pre-cutoff scenario that is not written yet (ADR-0188).
 async fn reorg_undoes_the_reservation(ruling: bool) {
-    let _ = ruling;
     kaspa_core::log::try_init_logger("warn");
     let mut lg = Lg::over_with(true, ruling, TestConsensus::new);
     let (produced, _, licensed) = licensed_claim(&mut lg, true).await;
