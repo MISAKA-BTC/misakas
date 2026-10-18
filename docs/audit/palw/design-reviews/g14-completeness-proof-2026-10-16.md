@@ -1713,3 +1713,8 @@ At 17:08 JST, the read-only sample advanced to DAA 28 / 28 DAG blocks, with
 16,187 draws and 40 produced work blocks. The lane window held 101 blocks over
 DAA 0..28 (53 attempt, 47 heartbeat, 1 other); producer state remained
 `drawing`. No terminal D-02 result or seat slash was observed.
+
+At 17:09 JST, `python3 -m unittest discover -s scripts/drills/tests -p
+'test_*.py'` passed all 130 drill-driver tests. This verifies the Python
+driver and supporting plans, including the stalled-wait regression; it is not
+node-level evidence and does not close D-02 or release acceptance.
