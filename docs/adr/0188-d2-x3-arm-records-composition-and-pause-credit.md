@@ -32,5 +32,6 @@
 - `--lib` の `palw_court_model_scope_routes_v1`: 5 件を含めて PASS。
 - `--test palw_ruling_fences_2026_10_12`: 3 件 PASS。`--test t12_repin_values`: 1 件 PASS。
 - `--test g14_close_gates`: 12 件 PASS（`testnet12_identity_did_not_move`・`armable_g14_fences_refuse_without_a_measured_record` を含む）。`--test g14_close_legacy`: 8 件 PASS。`--test g14_court_capacity`: 15 件 PASS（1 件 ignored）。
-- `--lib` 全体（4,632 件を除く 4,613 件が PASS）で 7 件が FAIL: `fork_id_v1` の 2 件（`palw_tir_container_identity_v1` の probe 未登録）、`palw_lifecycle_objects_v2::tests::a2u` の 3 件（tag 175 `TirClassContainerBoundV1` が表の外）、`palw_native_resource_v1` の 1 件、`palw_state_v2::tests` の 2 件（`SeatValidLockRefused`・`None` unwrap）。いずれも本変更の対象（D2/X3 の refusal・窓・pause 返還）の外にあり、表やプローブへの変更はしていない。**ただし base（`release/t12-16000` 17cbdee9e）での再実行はしていないため、既存の失敗かどうかは未確認。**
+- `--lib` 全体で 8 件が FAIL（4,612 PASS）: `fork_id_v1` の 2 件、`palw_lifecycle_objects_v2::tests::a2u` の 3 件、`palw_native_resource_v1` の 1 件、`palw_state_v2::tests` の 2 件。**base（17cbdee9e）でも同じ 8 件が FAIL（4,609 PASS）を確認済み（2026-10-18）。本ブランチが原因ではないため修正していない。**
 - 未実施: node-level（block flow）の REQ-X3-1〜5 試験、restart / reorg 再生の同一性、R-D2-COVER、node-level の D2 full-collusion 試験、R-D2-READY の codec。
+- econ（2026-10-18、commit 4cc05d5ec）: `x3_gross_floor_*` 2 件・`c_upper_x3_*` 2 件 PASS（`c_retain` 0 の正の延長は UNKNOWN、overflow・未測定 class も拒否）。
