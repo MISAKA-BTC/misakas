@@ -199,7 +199,7 @@ pub struct PalwProducerFactsV2 {
     /// boundary the lookup missed, `unwrap_or(0)` made the budget zero, and the producer held
     /// forever.
     pub is_base_class: bool,
-    /// How long a producer must promise to keep its trace: [`palw_min_trace_retention_daa_v1`].
+    /// How long a producer must promise to keep its trace: [`palw_min_trace_retention_daa_at_v2`].
     /// The attempt's `trace_retention_daa` MUST be the block's own DAA score plus this — admission
     /// pins it by equality (ADR-0072 Decision 8), so it is not the producer's to get right but the
     /// chain's, and this is where a producer reads it.
@@ -440,6 +440,19 @@ pub fn palw_min_trace_retention_daa_v1(state_params: &PalwStateParamsV2) -> u64 
         .saturating_add(state_params.window_receipt())
         .saturating_add(state_params.window_challenge())
         .saturating_add(state_params.window_court())
+}
+
+/// Canonical signed retention at the candidate's own DAA. A finite consumer's
+/// existing material obligation must fit the producer promise before admission;
+/// the old window sum remains exact below its activation fence.
+pub fn palw_min_trace_retention_daa_at_v2(state_params: &PalwStateParamsV2, daa: u64) -> u64 {
+    let legacy = palw_min_trace_retention_daa_v1(state_params);
+    if !state_params.paid_consumer_lifecycle_active_at(daa) {
+        return legacy;
+    }
+    let policy = &state_params.paid_consumer_lifecycle().expect("active consumer mirror").policy;
+    let span = policy.service_span_daa.saturating_add(policy.dispute_tail_daa).saturating_add(policy.material_tail_daa);
+    legacy.max(span)
 }
 
 pub fn palw_producer_facts_v2(
@@ -711,6 +724,47 @@ mod tests {
 
     fn state_params() -> PalwStateParamsV2 {
         PalwStateParamsV2::new(500, 100, 100, 100, 100, 1_000, h64(1), 4, 1_000, 1_000, 100, 100).unwrap()
+    }
+
+    #[test]
+    fn finite_consumer_retention_agrees_between_producer_facts_and_the_canonical_pin() {
+        use crate::palw_bond_budget_v1::{
+            PalwBondBudgetMirrorV1, PalwBondBudgetPolicyV1, PalwPaidConsumerLifecycleMirrorV1, PalwPaidConsumerLifecyclePolicyV1,
+        };
+        let params = state_params()
+            .with_bond_budget(Some(PalwBondBudgetMirrorV1 {
+                from_daa: 0, policy: PalwBondBudgetPolicyV1::unapproved_probe_v1(), allocation: None,
+            }))
+            .with_reporter_income_from(Some(0)).with_material_income_from(Some(0))
+            .with_paid_consumer_lifecycle(Some(PalwPaidConsumerLifecycleMirrorV1 {
+                from_daa: 200,
+                policy: PalwPaidConsumerLifecyclePolicyV1 {
+                    version: 1, service_span_daa: 1_000, dispute_tail_daa: 3_000, material_tail_daa: 2_000,
+                },
+            }));
+        let legacy = palw_min_trace_retention_daa_v1(&params);
+        assert_eq!(palw_min_trace_retention_daa_at_v2(&params,199),legacy);
+        assert_eq!(palw_min_trace_retention_daa_at_v2(&params,200),6_000);
+        let state = state();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let facts = palw_producer_facts_v2(&state,&params,&admission,h64(1),200,h64(1),None,None).unwrap();
+        assert_eq!(facts.min_trace_retention_daa,6_000);
+        let trace = h64(31);
+        let mut attempt = PalwAttemptUnsignedV2 {
+            version: PALW_ATTEMPT_V2_VERSION, network_domain: h64(NET), challenge: h64(32),
+            class_id: h64(1), executor_bond: bond_outpoint(), executor_pubkey: vec![7;4], operator_id: h64(33),
+            artifact_root: h64(11), trace_root: trace, output_root: h64(34), execution_root: h64(35), pwu: facts.pwu,
+            trace_manifest_root: crate::palw_attempt_v2::attempt_trace_manifest_root_v1(trace,1),
+            trace_chunk_count: 1, trace_retention_daa: 200+facts.min_trace_retention_daa,
+        };
+        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,200).unwrap();
+        attempt.trace_retention_daa=200+legacy;
+        assert!(matches!(crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,200),
+            Err(crate::palw_admission_v2::PalwAdmissionV2Error::TraceRetentionNotDerived { .. })));
+        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,199)
+            .expect_err("the obligation is anchored at the header's own DAA");
+        attempt.trace_retention_daa=199+legacy;
+        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,199).unwrap();
     }
 
     fn bond_outpoint() -> TransactionOutpoint {

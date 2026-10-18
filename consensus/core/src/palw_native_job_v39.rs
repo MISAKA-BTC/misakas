@@ -516,6 +516,36 @@ impl NativeJobBookV39 {
         }
         self.settle(NativeJobTerminalV39::Convicted, now, proof, actual_collected)
     }
+    /// **RFC08 08-B (ADR-0184 §1): a conviction of a Final claim before its liability horizon** — only where the Final's fee was
+    /// held (the caller has the held row): the Final settlement is replaced by the conviction's, as if the Final had not happened
+    /// (the fee never left the hold), so the requester is refunded the whole escrow and the producer's reserve is collected exactly
+    /// as [`Self::convict`] does. The proof is the family's own court verdict or objective DA default.
+    pub(crate) fn convict_after_final(
+        &mut self,
+        now: u64,
+        horizon: u64,
+        proof: Digest,
+        actual_collected: u64,
+        finder_operator: Digest,
+    ) -> Result<NativeSettlementV39, String> {
+        let held_final = self
+            .settlement
+            .as_ref()
+            .is_some_and(|s| s.terminal == NativeJobTerminalV39::Final && s.producer_credit == self.original.reward);
+        if self.terminal != NativeJobTerminalV39::Final
+            || !held_final
+            || now > horizon
+            || proof == [0; 64]
+            || actual_collected > self.original.reserve
+            || finder_operator == self.original.producer_operator
+            || finder_operator == [0; 64]
+        {
+            return Err("native39 post-Final conviction lacks a held Final inside its liability horizon/independent proof".into());
+        }
+        self.settlement = None;
+        self.escrow = self.original.reward;
+        self.settle(NativeJobTerminalV39::Convicted, now, proof, actual_collected)
+    }
     fn settle(
         &mut self,
         terminal: NativeJobTerminalV39,
@@ -1411,5 +1441,27 @@ mod g14_lane_closure_tests {
         assert_eq!((s.actual_slash, s.finder_credit, s.burned, s.requester_credit), (0, 0, 0, 100));
         // Never more than the reserve.
         assert!(challengeable(1_000, 490).convict(40, [0x51; 64], 1_001, finder_operator).is_err());
+    }
+
+    /// RFC08 08-B (ADR-0184 §1): a Final whose fee was held is convicted inside its horizon as if it had not been Final — the
+    /// requester refunded its whole escrow, the reserve collected — and never past the horizon, never twice, never for a book that
+    /// is not a held Final.
+    #[test]
+    fn a_held_final_is_convicted_inside_its_horizon_only_v39() {
+        let finder_operator = [0x77; 64];
+        let final_book = || {
+            let mut b = challengeable(1_000, 490);
+            b.settle(NativeJobTerminalV39::Final, 60, [0x61; 64], 0).expect("the Final");
+            b
+        };
+        let mut b = final_book();
+        assert_eq!(b.settlement().map(|s| s.producer_credit), Some(100));
+        let s = b.convict_after_final(400, 400, [0x51; 64], 1_000, finder_operator).expect("inside the horizon");
+        assert_eq!(b.terminal(), NativeJobTerminalV39::Convicted);
+        assert_eq!((s.producer_credit, s.requester_credit, s.actual_slash, s.finder_credit), (0, 100, 1_000, 490));
+        assert!(b.convict_after_final(400, 400, [0x51; 64], 1_000, finder_operator).is_err(), "once");
+        assert!(final_book().convict_after_final(401, 400, [0x51; 64], 1_000, finder_operator).is_err(), "past the horizon");
+        assert!(final_book().convict_after_final(300, 400, [0x51; 64], 1_000, [0x17; 64]).is_err(), "the producer's operator is no finder");
+        assert!(challengeable(1_000, 490).convict_after_final(40, 400, [0x51; 64], 1_000, finder_operator).is_err(), "not a Final");
     }
 }

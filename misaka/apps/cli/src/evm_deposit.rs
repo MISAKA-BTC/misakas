@@ -214,6 +214,82 @@ pub async fn claim(ctx: &Ctx, outpoint: &str) -> CliResult {
     Ok(())
 }
 
+/// `misaka evm refund`: the signed refund of an unclaimed deposit lock past its timeout (RFC-0012 acceptance). The lock's entry is
+/// read by outpoint from the node's virtual UTXO set (op 246); the builder refuses a lock whose refund script is not this key's, or
+/// one not yet refundable — the node would refuse it too (`EvmDepositLockNotRefundableYet`).
+pub async fn refund(ctx: &Ctx, ks: &KeySource, outpoint: &str, fee: u64, yes: bool) -> CliResult {
+    let generic = |m: String| CliError::new(exit::GENERIC, m);
+    let (txid, index) = outpoint
+        .rsplit_once(':')
+        .and_then(|(t, i)| i.parse::<u32>().ok().map(|i| (t.to_string(), i)))
+        .ok_or_else(|| generic(format!("--outpoint must be 'txid_hex:index', got '{outpoint}'")))?;
+    let lock_outpoint = TransactionOutpoint::new(
+        txid.parse::<kaspa_consensus_core::tx::TransactionId>().map_err(|e| generic(format!("--outpoint txid: {e}")))?,
+        index,
+    );
+    let canonical_outpoint = format!("{}:{index}", lock_outpoint.transaction_id);
+    let nv = connect(ctx).await?;
+    let read = nv
+        .client
+        .get_palw_acceptance_reads(kaspa_rpc_core::GetPalwAcceptanceReadsRequest {
+            reserve_blocks: Vec::new(),
+            outpoints: vec![canonical_outpoint.clone()],
+        })
+        .await
+        .map_err(|e| generic(format!("getPalwAcceptanceReads: {e}")))?;
+    if !read.available {
+        return Err(generic("the node serves no outpoint read (it predates op 246)".to_string()));
+    }
+    if read.outpoints.len() != 1 || read.outpoints[0].outpoint != canonical_outpoint || !read.reserve_balances.is_empty() {
+        return Err(generic("the node's outpoint response does not match the requested refund input".to_string()));
+    }
+    let entry = read.outpoints.first().filter(|o| o.present).ok_or_else(|| {
+        generic(format!("{txid}:{index} is not in the node's virtual UTXO set (claimed, refunded, or never created)"))
+    })?;
+    let mut script = vec![0u8; entry.script_hex.len() / 2];
+    faster_hex::hex_decode(entry.script_hex.as_bytes(), &mut script).map_err(|e| generic(format!("the served script: {e}")))?;
+    let utxo = UtxoEntry::new(
+        entry.amount,
+        kaspa_consensus_core::tx::ScriptPublicKey::from_vec(entry.script_version, script),
+        entry.block_daa_score,
+        entry.is_coinbase,
+    );
+    let key = ks.load_key()?;
+    let prefix = nv.params.prefix();
+    let tx = key
+        .build_deposit_lock_refund_tx((lock_outpoint, utxo), prefix, read.virtual_daa, fee, nv.params.storage_mass_parameter)
+        .map_err(|e| generic(format!("build deposit-lock refund: {e}")))?;
+    let sent = if yes {
+        Some(
+            nv.client
+                .submit_transaction(RpcTransaction::from(&tx), false)
+                .await
+                .map_err(|e| CliError::new(exit::TX_REJECTED, format!("submit deposit-lock refund: {e}")))?
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    let to = key.funding_address(prefix);
+    match ctx.output {
+        OutputFormat::Json => println!(
+            "{}",
+            json!({ "ok": true, "dryRun": sent.is_none(), "lockOutpoint": format!("{txid}:{index}"), "to": to.to_string(),
+                    "amountSompi": entry.amount, "feeSompi": fee, "refundTxid": sent, "virtualDaa": read.virtual_daa })
+        ),
+        OutputFormat::Human => {
+            println!("Lock    : {txid}:{index} ({} BILI)", sompi_to_msk(entry.amount));
+            println!("Refund  : to {to}, fee {fee} sompi");
+            match &sent {
+                Some(t) => println!("Refund tx: {t}"),
+                None => println!("Mode    : dry-run (no submit; pass --yes to broadcast)"),
+            }
+        }
+    }
+    let _ = nv.client.disconnect().await;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

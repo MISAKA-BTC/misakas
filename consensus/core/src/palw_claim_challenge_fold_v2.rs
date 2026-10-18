@@ -219,7 +219,9 @@ fn apply_inner(
                 || live >= p.maximum_live_claims as usize
                 || used.iter().filter(|a| a.job.id() == j.id()).count() >= j.maximum_consumers as usize
                 || l.claims.contains_key(&e.base_claim)
-                || l.beacon_sources.values().any(|source| source.job == j.base_job && source.outcome.is_none())
+                // F2 (user decision 2026-10-17): with the seal-reveal policy a paid job may also be a source.
+                || (p.bootstrap_seed.is_none()
+                    && l.beacon_sources.values().any(|source| source.job == j.base_job && source.outcome.is_none()))
             {
                 return Err(refused("paid producer enrollment is late, replayed, unsigned or exceeds capacity"));
             }
@@ -561,14 +563,77 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
     // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): past the fence no seat is drawn without the producer's one
     // trap-or-null commitment, so a commitment's presence says nothing about the claim. `Ok` below the fence.
     super::palw_paid_claim_trap_fold_v1::paid_trap_lock_admits_v1(&b.state, b.params, enrollment, ctx.daa_score).map_err(refused)?;
-    let check = r.paid_claim_check_authority_v2(&a.context.id(), ctx.daa_score).map_err(refused)?;
-    let (contract, sources, promises) =
-        r.paid_beacon_material_v5(&a.context.id()).map_err(refused)?.ok_or_else(|| refused("paid source backing missing"))?;
-    let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) =
-        misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, &contract, &sources, &promises, ctx.daa_score)
-            .map_err(|e| refused(e.to_string()))?
-    else {
-        return Err(refused("future paid beacon unavailable"));
+    // **The lock's randomness** (user decisions 2026-10-17, dormant with this fence; both read `bootstrap_seed`, `None` in the probe):
+    // (F1) the commitments of the claims SEALED AFTER the target, opened after the seal window — the sources need not be Final
+    // (`collect_paid_seal_reveal_seed_v6`, whose no-grinding argument is in its doc); (bootstrap) until the first approved paid Final
+    // exists and while no seal-reveal seed is available, the network's pinned seed. Both write a marker anchor so every reader
+    // re-derives the draw from the row. With `bootstrap_seed` `None` a lock needs the locked v5 beacon exactly as before.
+    let policy = current_policy(b, ctx.daa_score)?;
+    let base_subject = || -> Result<_, PalwStateV2Error> {
+        let base = r
+            .ledger_checked_v1()
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
+            .claim_challenge_subject(&a.enrollment.base_claim)
+            .ok_or_else(|| refused("paid lock: base statement missing"))?;
+        let expected = misaka_palw_kernel::claim_paid_v2::paid_subject_with_checker_snapshot_v2(
+            &base,
+            &a.class,
+            &a.enrollment,
+            paid_checker_snapshot_root_v2(&a.checker_candidates),
+        )
+        .map_err(refused)?;
+        Ok((base, expected))
+    };
+    let seeded = |seed: Digest, anchor: Digest| -> Result<_, PalwStateV2Error> {
+        let (base, expected) = base_subject()?;
+        let sample = misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_seed_v2(&seed, &a.context, &expected.commitment_root);
+        let check = misaka_palw_kernel::claim_paid_v2::PaidClaimCheckAuthorityV2::verify_bootstrap_v2(
+            &a.class,
+            &a.enrollment,
+            &base,
+            &a.context,
+            ctx.daa_score,
+            paid_checker_snapshot_root_v2(&a.checker_candidates),
+            sample,
+        )
+        .map_err(refused)?;
+        Ok((check, anchor))
+    };
+    let seal_seed = match policy.bootstrap_seed {
+        // An unfunded source target (no `Fund`) has no seal-reveal seed: only the bootstrap draw can lock it.
+        Some(_) => match r.paid_beacon_material_v5(&a.context.id()).ok().flatten() {
+            Some((contract, sources, promises)) => misaka_palw_challenge::paid_opt_in::collect_paid_seal_reveal_seed_v6(
+                &a.context,
+                &contract,
+                &sources,
+                &promises,
+                ctx.daa_score,
+            )
+            .map_err(|e| refused(e.to_string()))?,
+            None => None,
+        },
+        None => None,
+    };
+    let (check, anchor) = match (seal_seed, policy.bootstrap_seed) {
+        (Some(seed), _) => seeded(seed, misaka_palw_kernel::claim_paid_v2::paid_claim_seal_anchor_v2())?,
+        (None, Some(seed)) if !r.paid_claim_approved_final_exists_v2() => {
+            seeded(seed, misaka_palw_kernel::claim_paid_v2::paid_claim_bootstrap_anchor_v2())?
+        }
+        (None, Some(_)) => return Err(refused("paid lock: the sources sealed after the target have not all revealed")),
+        (None, None) => {
+            let check = r.paid_claim_check_authority_v2(&a.context.id(), ctx.daa_score).map_err(refused)?;
+            let (contract, sources, promises) = r
+                .paid_beacon_material_v5(&a.context.id())
+                .map_err(refused)?
+                .ok_or_else(|| refused("paid source backing missing"))?;
+            let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) =
+                misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&a.context, &contract, &sources, &promises, ctx.daa_score)
+                    .map_err(|e| refused(e.to_string()))?
+            else {
+                return Err(refused("future paid beacon unavailable"));
+            };
+            (check, beacon.challenge_anchor)
+        }
     };
     let mut entries = std::collections::BTreeMap::new();
     for candidate in &a.checker_candidates {
@@ -594,7 +659,7 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
     let row = PalwPaidClaimLockV2 {
         enrollment: *enrollment,
         context: a.context.id(),
-        anchor: beacon.challenge_anchor,
+        anchor,
         seed: check.seed(),
         locked_daa: ctx.daa_score,
         assignment,
@@ -842,6 +907,11 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
     for ((_, key), bytes) in r.aux.range((PAID_CLAIM_LOCKS_V2, Vec::new())..(PAID_CLAIM_LOCKS_V2 + 1, Vec::new())) {
         let mut lock: PalwPaidClaimLockV2 = borsh::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
         if !lock.source_valid {
+            continue;
+        }
+        // A bootstrap or seal-reveal lock (ADR-0185) did not draw from a locked v5 beacon: its seed was fixed at the lock from the
+        // pinned seed or from sources that had all revealed, so there is no beacon whose later state could withdraw it.
+        if lock.anchor == paid_claim_bootstrap_anchor_v2() || lock.anchor == paid_claim_seal_anchor_v2() {
             continue;
         }
         let a = r.paid_claim_authority_v2(&lock.context).map_err(refused)?;

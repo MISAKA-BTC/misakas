@@ -46,7 +46,7 @@ fn arm(armed: bool) -> &'static str {
 
 /// One slot on `c`'s own virtual, whatever its sink is: `m` holders (one carrying `txs`) then `m` steps, more steps while none
 /// ticked. Nothing about the sink is asserted — under rule E a node's own block need not become its sink.
-async fn free_slot(c: &mut T12Chain, nonce: &mut u64, m: usize, txs: Vec<Transaction>) -> Vec<Block> {
+pub(super) async fn free_slot(c: &mut T12Chain, nonce: &mut u64, m: usize, txs: Vec<Transaction>) -> Vec<Block> {
     let start = c.daa_of(c.sink());
     let holders = if txs.is_empty() { m } else { 1 };
     let clock = c.ctx.simulated_time + 1_000;
@@ -62,7 +62,7 @@ async fn free_slot(c: &mut T12Chain, nonce: &mut u64, m: usize, txs: Vec<Transac
 }
 
 /// Card `card`'s attempt on `c`'s own virtual, the sink not asserted. Returns the block and its claim id.
-async fn free_attempt(c: &mut T12Chain, card: usize) -> (Block, Hash64) {
+pub(super) async fn free_attempt(c: &mut T12Chain, card: usize) -> (Block, Hash64) {
     let (block, claim) = c.build_attempt(card, 1_000, Vec::new(), &|_| true);
     let block = block.to_immutable();
     let hash = block.header.hash;

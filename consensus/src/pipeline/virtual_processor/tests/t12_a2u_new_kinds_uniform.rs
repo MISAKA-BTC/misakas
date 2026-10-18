@@ -338,6 +338,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     params.sync_palw_claim_challenge_v2();
     params.sync_palw_econ_contracts_v1();
     params.sync_palw_permissionless_panel_v1();
+    params.sync_palw_memory_routing_court_v2();
     // Every other fence a LANDED row of the central table names (formulas, state encodings, the live build's kinds judged anew):
     // a row that lands with a fence this harness does not arm fails here, so node C judges every block with it far above.
     for row in PALW_A2_KIND_FENCE_TABLE_V1.iter().filter(|row| row.landed) {
@@ -359,6 +360,10 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_claim_challenge_v2"
             | "palw_panel_lifetime_v2"
             | "palw_monetary_material_v1"
+            | "palw_material_release_recovery_v2"
+            | "palw_memory_routing_court_v2"
+            | "palw_tir_public_conviction_v1"
+            | "palw_native_mining_v39"
             | "palw_staged_tir_route_v1"
             | "palw_staged_float_constraint_v1"
             | "palw_exec_payload_v2"
@@ -392,6 +397,20 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
+            // Bare heights mirrored onto the V2 bundle the fold reads, armed as `fork_id_v1`'s probe arms them (landed after this
+            // harness was last run: validation 2026-10-17). Far above the chain they judge nothing here.
+            "palw_settlement_once_v1" => {
+                params.palw_settlement_once_v1 = Some(at);
+                params.sync_palw_settlement_once_v1();
+            }
+            "palw_paid_claim_trap_v1" => {
+                params.palw_paid_claim_trap_v1 = Some(at);
+                params.sync_palw_paid_claim_trap_v1();
+            }
+            "palw_class_registration_origin_v1" => {
+                params.palw_class_registration_origin_v1 = Some(at);
+                params.sync_palw_class_registration_origin_v1();
+            }
             // The 2026-10-12 rulings' rules (register X3, N4, D2): bare heights and X3's unapproved probe policy, mirrored onto the
             // V2 bundle the fold reads. Each keys on a claim's acceptance DAA, so far above the chain they judge nothing here.
             "palw_court_model_scope_v1" | "palw_public_evidence_reward_v1" | "palw_claim_hard_deadline_v1" => {
@@ -529,10 +548,97 @@ fn zeros<T: borsh::BorshDeserialize>() -> T {
 /// `PALW_LIFECYCLE_NEW_KINDS_V1` is carried here without an edit (a kind no near-zero body decodes to needs a hand-built sample in
 /// [`well_formed`], and the panic says so).
 fn zero_filled_kind(tag: u8) -> Obj {
-    let object: Obj = minimal_decode(&[tag])
-        .unwrap_or_else(|| panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample instead"));
+    let object: Obj = match tag {
+        170 | 171 => tir_public_sample(tag),
+        _ => minimal_decode(&[tag])
+            .unwrap_or_else(|| panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample instead")),
+    };
     assert_eq!(borsh::to_vec(&object).unwrap()[0], tag);
     object
+}
+
+/// **Kinds 170/171 (G14 original paid TIR control and atomic Valid grant/Ready, `palw_tir_public_conviction_v1`)**: their bodies
+/// fix lengths (ML-DSA-87 signatures, a bounded owned part) no near-zero body decodes to, so they take the hand-built shape core's
+/// `zero_filled_kind` uses (`palw_tir_public_carriage_v1`'s `#[cfg(test)]` fixtures, which this crate cannot reach). Shape only:
+/// nothing here is signed or admissible — below its fence the kind must ride undecided like every other new kind.
+fn tir_public_sample(tag: u8) -> Obj {
+    use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
+    use kaspa_consensus_core::palw_tir_public_carriage_v1::{
+        PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicControlV1, PalwTirPublicGrantReadyV1,
+    };
+    use kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1;
+    use kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1;
+    let h = Hash64::from_u64_word;
+    let bond = |n: u64| PalwBondKeyV2(TransactionOutpoint::new(h(n), 0));
+    let sig = || vec![2u8; MLDSA87_SIGNATURE_LEN];
+    match tag {
+        170 => Obj::TirPublicControlV1 {
+            control: Box::new(PalwTirPublicControlV1 {
+                version: 1,
+                claim: h(1),
+                allocation_id: h(2),
+                source_id: h(3),
+                target: PalwTirPublicControlTargetV1::Acquisition { owner: bond(7), reserved_daa: 10 },
+                expected_turn: 4,
+                declared_rent_sompi: 0,
+                signer: bond(8),
+                action: PalwTirPublicControlActionV1::Acquisition(PalwTirPublicOwnedActionV1::Part {
+                    demand_id: h(4),
+                    answerer: bond(8),
+                    offset: 16_384,
+                    bytes: vec![1, 2, 3],
+                }),
+                signature: sig(),
+            }),
+        },
+        171 => {
+            let receipt = kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2 {
+                claim: h(1),
+                verdict: kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                seat_bond: bond(8),
+                signed_daa: 20,
+                signature: sig(),
+            };
+            let grant = PalwTirPublicCustodyGrantV1 {
+                version: 1,
+                claim: receipt.claim,
+                seat: receipt.seat_bond,
+                signed_daa: receipt.signed_daa,
+                pledge_id: h(20),
+                valid_receipt_digest: PalwTirPublicCustodyGrantV1::receipt_digest_v1(&receipt),
+                signature: sig(),
+            };
+            let descriptor = kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+                version: 1,
+                source_id: h(3),
+                class_id: h(10),
+                artifact_root: h(11),
+                execution_root: h(12),
+                trace_root: h(13),
+                step_root: h(14),
+                step_leaf_count: 19,
+                decode_count: 3,
+                vocab: 8,
+                material_until_daa: 1000,
+                manifest_digest: h(15),
+                retained_bytes: 1024,
+            };
+            Obj::TirPublicGrantReadyV1 {
+                grant: Box::new(PalwTirPublicGrantReadyV1 {
+                    version: 1,
+                    claim: h(1),
+                    allocation_id: h(2),
+                    source_id: h(3),
+                    signer: bond(8),
+                    receipt,
+                    grant,
+                    descriptor,
+                    signature: sig(),
+                }),
+            }
+        }
+        _ => unreachable!("only kinds 170 and 171 take this sample"),
+    }
 }
 
 /// One well-formed, signed object of every kind the live build cannot decode that has a hand-built sample.
@@ -944,10 +1050,38 @@ async fn carry(a: &mut T12Chain, wallet: &mut Wallet, config: &Config, payloads:
     }
     batches.push(&payloads[start..]);
     for batch in &batches {
-        let txs: Vec<Transaction> =
+        // Each carrier spends its card's coin; a carrier held back must hand the coin back (its change never exists).
+        let coins_before = wallet.coins.clone();
+        let built: Vec<Transaction> =
             batch.iter().enumerate().map(|(card, (_, payload))| wallet.carrier(config, card, payload.clone())).collect();
+        // **Node-local template policy is not a block rule.** The H-1 gate (`palw_mempool_h1_carrier_refusal`, asked again at the
+        // template) rehearses the fold on an object the gate covers — here the objective evidence a zero-filled new kind assembles
+        // (tags 160–167) — and keeps the carrier out of THIS node's template. That never splits consensus: block validity does not
+        // ask it, and a block another node mines with the carrier is judged by the fold alone, which rides a kind below its fence
+        // unjudged. The harness keeps the template's behaviour: a refused carrier is asserted to be refused by that policy only
+        // (validation 2026-10-17: the expectation that every carrier rides THIS template was stale), and the block carries the rest.
+        let refusals = a.ctx.consensus.palw_h1_carrier_refusals_v1(&built.iter().cloned().map(Arc::new).collect::<Vec<_>>());
+        let mut txs = Vec::new();
+        let mut kept = Vec::new();
+        for (card, ((tx, (what, payload)), refusal)) in built.into_iter().zip(batch.iter()).zip(refusals).enumerate() {
+            match refusal {
+                Some(why) => {
+                    wallet.coins[card] = coins_before[card].clone();
+                    let tag = payload.get(2).copied();
+                    assert!(
+                        tag.is_some_and(|tag| PALW_LIFECYCLE_NEW_KINDS_V1.iter().any(|(t, _, _)| *t == tag)),
+                        "only a new kind below its fence may be held back by the node-local H-1 policy: {what}: {why}"
+                    );
+                    eprintln!("[a2u] {what}: kept out of this node's template by the node-local H-1 policy ({why}); not a block rule");
+                }
+                None => {
+                    txs.push(tx);
+                    kept.push(what);
+                }
+            }
+        }
         let block = a.heartbeat(ttpb, txs.clone()).await;
-        for (tx, (what, _)) in txs.iter().zip(batch.iter()) {
+        for (tx, what) in txs.iter().zip(kept) {
             assert!(block.transactions.iter().any(|t| t.id() == tx.id()), "carried, its block valid: {what}");
         }
     }
@@ -1163,10 +1297,10 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     let pfs4 = pfs4_block(&mut a, &config);
     let live = live_build_shape_refusals(&pfs4);
     let err = a.ctx.consensus.validate_and_insert_block(pfs4.clone().to_immutable()).virtual_state_task.await.expect_err("refused");
-    let header_refusal = err.to_string();
+    let pfs4_refusal = err.to_string();
     assert!(
-        live.iter().any(|e| RuleError::BadPalwCommitmentShape(e.to_string()).to_string() == header_refusal),
-        "the header path refuses a PFS4 header with the live build's gate's refusal: {header_refusal} (the gate's: {live:?})"
+        live.iter().any(|e| RuleError::BadPalwCommitmentShape(e.to_string()).to_string() == pfs4_refusal),
+        "the header path refuses a PFS4 header with the live build's gate's refusal: {pfs4_refusal} (the gate's: {live:?})"
     );
     let mut proof: Vec<Vec<Arc<kaspa_consensus_core::header::Header>>> = vec![Vec::new(); config.params.max_block_level as usize + 1];
     proof[0].push(Arc::new(pfs4.header.clone()));
@@ -1191,10 +1325,10 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     let pav3 = pav3_block(&mut a, &config);
     let live = live_build_shape_refusals(&pav3);
     let err = a.ctx.consensus.validate_and_insert_block(pav3.clone().to_immutable()).virtual_state_task.await.expect_err("refused");
-    let header_refusal = err.to_string();
+    let pav3_refusal = err.to_string();
     assert!(
-        live.iter().any(|e| RuleError::BadPalwCommitmentShape(e.to_string()).to_string() == header_refusal),
-        "the header path refuses a PAV3 header with the live build's gate's refusal: {header_refusal} (the gate's: {live:?})"
+        live.iter().any(|e| RuleError::BadPalwCommitmentShape(e.to_string()).to_string() == pav3_refusal),
+        "the header path refuses a PAV3 header with the live build's gate's refusal: {pav3_refusal} (the gate's: {live:?})"
     );
     let mut proof: Vec<Vec<Arc<kaspa_consensus_core::header::Header>>> = vec![Vec::new(); config.params.max_block_level as usize + 1];
     proof[0].push(Arc::new(pav3.header.clone()));
@@ -1214,7 +1348,9 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         "the pruning-proof path refuses a PAV3 header with the live build's gate's refusal: {a_proof}"
     );
     assert_ne!(proof_refusal(&now), a_proof, "past the fence the form is the PAV3 carriage, judged by its own decode");
-    let refused = vec![(pfs4.to_immutable(), header_refusal)];
+    // Both refused headers, each with its own refusal (validation 2026-10-17: the PAV3 section shadowed the PFS4 refusal, so the
+    // replay compared the PFS4 block against the PAV3 message).
+    let refused = vec![(pfs4.to_immutable(), pfs4_refusal), (pav3.to_immutable(), pav3_refusal)];
 
     // ---- every node agrees, block by block ----
     let blocks = chain_blocks(&a);
@@ -1227,7 +1363,7 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     }
     assert_ne!(plain_view.0, view(&a).0, "the carriers moved the chain");
     eprintln!(
-        "[a2u {tag}] {} chain blocks to DAA {}, {} carriers, 1 refused header; every node agrees",
+        "[a2u {tag}] {} chain blocks to DAA {}, {} carriers, 2 refused headers; every node agrees",
         blocks.len(),
         a.daa_of(a.sink()),
         payloads.len() + mixed.len()

@@ -1803,8 +1803,16 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         }
         OpvGateV1::Pass => {}
     }
+    // User decision 2026-10-17 (F2): a paid-enrolled job MAY be a beacon source — an approved paid claim is the one source of an event,
+    // and the paid lock reads only its sources' sealed commitments. The acyclicity rules below still refuse a target's own producer
+    // and base job and mutual producer pairs. Below the paid-claim challenge's bootstrap policy (`bootstrap_seed` `None`, the probe and
+    // every preset) the earlier exclusion holds byte for byte.
     if let KernelRouteObjectV1::OptInBeaconSource { job, .. } | KernelRouteObjectV1::OptInPaidBeaconSource { job, .. } = object {
-        if builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_job_is_enrolled_v3(job).unwrap_or(true)) {
+        let sources_admit_paid =
+            builder.params.palw_claim_challenge_v2.is_some_and(|f| f.activation.is_active(ctx.daa_score) && f.policy.bootstrap_seed.is_some());
+        if !sources_admit_paid
+            && builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_job_is_enrolled_v3(job).unwrap_or(true))
+        {
             return Err(refused("paid checker-enrolled jobs cannot be Panel-independent beacon sources"));
         }
     }
@@ -2282,6 +2290,11 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0007 §4.1 T6: held check fees past their trap reveal window (claim terminal) are released once; conviction rows past
     // their window are forgotten. A no-op below `palw_paid_claim_trap_v1`.
     super::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(builder, ctx.daa_score)?;
+    // RFC08 08-B (ADR-0184 §1): held native fees past their liability horizon, with no open dispute, are released once (the
+    // payout the Final deferred). A no-op below `palw_native_liability_horizon_v1`.
+    super::palw_native_liability_hold_fold_v1::release_held_native_fees_v1(builder, ctx.daa_score, |b, row| {
+        super::palw_native_job_fold_v39::native_dispute_open_v39(b, row)
+    })?;
     // G14 lane closure G-K1: signer locks whose claim can no longer be convicted are released (a convicted one charged), whatever
     // the ledger is doing.
     super::palw_g14_lane_closure_fold_v1::sweep_kernel_signer_locks_v1(builder, ctx.daa_score)?;

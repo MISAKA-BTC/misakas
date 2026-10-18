@@ -209,6 +209,39 @@ pub fn palw_committed_state_root_v2(state: &PalwChainStateV2, params: &Params) -
     }
 }
 
+/// An opening of the post-state in the grammar selected by its point's ruleset.
+/// The bytes retain their version; readers must verify them against a trusted root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwCommittedOpeningV2 {
+    pub leaf: Vec<u8>,
+    pub inner_root: Hash64,
+}
+
+impl PalwCommittedOpeningV2 {
+    /// Flat states carry no leaf. Past the fence, failure to construct a leaf is an error.
+    pub fn of(state: &PalwChainStateV2, params: &Params) -> Option<Self> {
+        let point = state.last_point()?;
+        let leaf = match palw_rule_e_commit_form_v1(params, point.daa_score) {
+            PalwCommitFormV1::Flat => Vec::new(),
+            _ => palw_committed_leaf_bytes_v2(state, params)?,
+        };
+        Some(Self { leaf, inner_root: state.state_root() })
+    }
+
+    pub fn committed_root(&self) -> Hash64 {
+        if self.leaf.is_empty() { self.inner_root } else { envelope(&self.leaf, &self.inner_root) }
+    }
+
+    pub fn verify(
+        &self,
+        params: &Params,
+        root: &Hash64,
+        point: &PalwForkChoicePointV1,
+    ) -> Result<PalwCommittedLeafViewV2, PalwCommittedLeafErrorV2> {
+        palw_verify_committed_leaf_v2(params, root, point, &self.leaf, &self.inner_root)
+    }
+}
+
 /// What a verified opening says: the comparator's order and, past rule E, the rule-E fields (and v3's capital total).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwCommittedLeafViewV2 {
@@ -265,7 +298,14 @@ pub fn palw_verify_committed_leaf_v2(
         }
         PalwCommitFormV1::RuleEV2 => {
             let l = PalwForkChoiceLeafV2::decode(leaf).map_err(|_| E::BadLeaf)?;
-            (l.block, l.daa_score, l.blue_score, PalwCandidateOrderV1::new(l.safe_frontier_blue_score, l.safe_weight, l.bounded_immature, l.block), Some(l.ext()), None)
+            (
+                l.block,
+                l.daa_score,
+                l.blue_score,
+                PalwCandidateOrderV1::new(l.safe_frontier_blue_score, l.safe_weight, l.bounded_immature, l.block),
+                Some(l.ext()),
+                None,
+            )
         }
         PalwCommitFormV1::RuleEV3 => {
             let l = PalwForkChoiceLeafV3::decode(leaf).map_err(|_| E::BadLeaf)?;
@@ -318,7 +358,14 @@ pub fn verify_window_suffix_v3(
     from_blue_score: u64,
     proof: &PalwRuleEWindowOpeningV1,
 ) -> Result<Vec<PalwRuleEClaimRecordV1>, PalwRuleELeafV2ErrorV1> {
-    palw_rule_e_verify_window_above_with(&leaf.ext(), from_blue_score, proof, record_leaf_v3, WINDOW_NODE_DOMAIN_V3, WINDOW_EMPTY_DOMAIN_V3)
+    palw_rule_e_verify_window_above_with(
+        &leaf.ext(),
+        from_blue_score,
+        proof,
+        record_leaf_v3,
+        WINDOW_NODE_DOMAIN_V3,
+        WINDOW_EMPTY_DOMAIN_V3,
+    )
 }
 
 /// **A v3 registry opening for one bond** — entries `(bond, collateral)` `[lo, lo + entries.len())` and the proof.
@@ -425,3 +472,123 @@ pub fn palw_rule_e_pair_from_openings_v3(
 
 #[cfg(test)]
 mod tests;
+
+/// Optional op-203 sub-openings. The caller chooses the fork's blue score and
+/// the executor bonds whose membership/capital it needs at the fork.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwForkChoiceProofQueryV2 {
+    pub from_blue_score: Option<u64>,
+    pub bonds: Vec<PalwBondKeyV2>,
+}
+
+pub const PALW_FORK_CHOICE_MAX_PROOF_BONDS_V2: usize = 256;
+
+impl PalwForkChoiceProofQueryV2 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.bonds.len() > PALW_FORK_CHOICE_MAX_PROOF_BONDS_V2 {
+            return Err(format!("at most {PALW_FORK_CHOICE_MAX_PROOF_BONDS_V2} registry bonds per request"));
+        }
+        if self.bonds.iter().collect::<BTreeSet<_>>().len() != self.bonds.len() {
+            return Err("duplicate registry bond in fork-choice request".into());
+        }
+        Ok(())
+    }
+}
+
+/// Versioned data openings. Hashes authenticate data identity only; the client
+/// still needs a trusted post-state root and applies the shared decision rule.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwForkChoiceProofV2 {
+    RuleEV2 {
+        window: Option<PalwRuleEWindowOpeningV1>,
+        registry: Vec<(PalwBondKeyV2, crate::palw_fork_choice_rule_e_leaf_v2::PalwRuleERegistryOpeningV1)>,
+    },
+    RuleEV3 {
+        window: Option<PalwRuleEWindowOpeningV1>,
+        registry: Vec<(PalwBondKeyV2, PalwRuleERegistryOpeningV3)>,
+    },
+}
+
+impl PalwForkChoiceProofV2 {
+    pub fn of(state: &PalwChainStateV2, params: &Params, query: &PalwForkChoiceProofQueryV2) -> Result<Option<Self>, String> {
+        use crate::palw_fork_choice_rule_e_leaf_v2::{prove_registry_membership_v1, prove_window_suffix_v1};
+        query.validate()?;
+        let point = state.last_point().ok_or("the genesis state has no fork-choice point")?;
+        Ok(match palw_rule_e_commit_form_v1(params, point.daa_score) {
+            PalwCommitFormV1::Flat | PalwCommitFormV1::V1 => None,
+            PalwCommitFormV1::RuleEV2 => Some(Self::RuleEV2 {
+                window: query
+                    .from_blue_score
+                    .map(|from| prove_window_suffix_v1(state, params, from).ok_or("window unavailable"))
+                    .transpose()?,
+                registry: query.bonds.iter().map(|b| (*b, prove_registry_membership_v1(state, b))).collect(),
+            }),
+            PalwCommitFormV1::RuleEV3 => {
+                let entries = palw_rule_e_registry_entries_v3(state);
+                Some(Self::RuleEV3 {
+                    window: query
+                        .from_blue_score
+                        .map(|from| prove_window_suffix_v3(state, params, from).ok_or("window unavailable"))
+                        .transpose()?,
+                    registry: query.bonds.iter().map(|b| (*b, palw_rule_e_open_registry_v3(&entries, b))).collect(),
+                })
+            }
+        })
+    }
+}
+
+/// Authenticated Rule E inputs; `None` capital is a proven absent bond, while
+/// an unrequested bond has no entry and must never be assumed absent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwForkChoiceProofViewV2 {
+    pub records: Vec<PalwRuleEClaimRecordV1>,
+    pub capital: std::collections::BTreeMap<PalwBondKeyV2, Option<u64>>,
+}
+
+impl PalwForkChoiceProofV2 {
+    /// Call after authenticating `leaf` against a trusted root with the shared
+    /// committed-leaf reader. Refuses missing, duplicate and unsolicited data.
+    pub fn verify(&self, leaf: &[u8], query: &PalwForkChoiceProofQueryV2) -> Result<PalwForkChoiceProofViewV2, String> {
+        use crate::palw_fork_choice_rule_e_leaf_v2::{verify_registry_membership_v1, verify_window_suffix_v1};
+        use std::collections::BTreeMap;
+        query.validate()?;
+        let bad = |e| format!("fork-choice sub-opening does not verify: {e:?}");
+        let mut capital = BTreeMap::new();
+        let records = match self {
+            Self::RuleEV2 { window, registry } => {
+                let leaf = PalwForkChoiceLeafV2::decode(leaf).map_err(bad)?;
+                let records = match (query.from_blue_score, window) {
+                    (None, None) => Vec::new(),
+                    (Some(from), Some(proof)) => verify_window_suffix_v1(&leaf, from, proof).map_err(bad)?,
+                    _ => return Err("missing or unsolicited fork-choice window".into()),
+                };
+                for (bond, proof) in registry {
+                    let present = verify_registry_membership_v1(&leaf, bond, proof).map_err(bad)?;
+                    if capital.insert(*bond, present.then_some(0)).is_some() {
+                        return Err("duplicate registry opening".into());
+                    }
+                }
+                records
+            }
+            Self::RuleEV3 { window, registry } => {
+                let leaf = PalwForkChoiceLeafV3::decode(leaf).map_err(bad)?;
+                let records = match (query.from_blue_score, window) {
+                    (None, None) => Vec::new(),
+                    (Some(from), Some(proof)) => verify_window_suffix_v3(&leaf, from, proof).map_err(bad)?,
+                    _ => return Err("missing or unsolicited fork-choice window".into()),
+                };
+                for (bond, proof) in registry {
+                    let value = palw_rule_e_verify_registry_v3(&leaf, bond, proof).map_err(bad)?;
+                    if capital.insert(*bond, value).is_some() {
+                        return Err("duplicate registry opening".into());
+                    }
+                }
+                records
+            }
+        };
+        if capital.keys().copied().collect::<BTreeSet<_>>() != query.bonds.iter().copied().collect() {
+            return Err("missing or unsolicited registry opening".into());
+        }
+        Ok(PalwForkChoiceProofViewV2 { records, capital })
+    }
+}

@@ -18,6 +18,9 @@ mod settlement_once_v1;
 mod settlement_liability_v1;
 // RFC-0007 §4.1 T6: paid-claim traps, the receipt signers' liability and held check fees (dormant; kernel route aux 142).
 mod paid_claim_trap_v1;
+// RFC08 08-B: native claim fees held from Final to the liability horizon (dormant; kernel route aux 144).
+mod native_liability_hold_v1;
+mod paid_consumer_retention_v1;
 // RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
 mod tir_fp_lane_v1;
 // RFC-0016 V8 (audit 2026-10-17, 16-A): capacity attestations through the fold and the attested capacity read.

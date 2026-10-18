@@ -3412,6 +3412,9 @@ message GetPalwStateProofResponseMessage {
 // RFC-0009 L2: the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203).
 message GetPalwForkChoiceOpeningRequestMessage {
   repeated string blockHashes = 1;
+  // RFC09 (v2): open each entry's v3 rule-E window above this blue score; the bonds (hex borsh) whose registry openings it carries.
+  optional uint64 ruleEWindowAboveBlue = 2;
+  repeated string registryBonds = 3;
 }
 
 message RpcPalwForkChoiceEntry {
@@ -3423,6 +3426,10 @@ message RpcPalwForkChoiceEntry {
   string innerRoot = 6;
   string committedRoot = 7;
   bool committedForm = 8;
+  // RFC09 (v2): the committed leaf in its own form, the v3 rule-E window, the v3 registry openings.
+  bytes committedLeaf = 9;
+  bytes ruleEWindow = 10;
+  repeated bytes registryOpenings = 11;
 }
 
 message GetPalwForkChoiceOpeningResponseMessage {
@@ -3610,4 +3617,35 @@ message GetPalwStateCarriageResponseMessage {
  uint64 offset=8;
  bytes bytes=9;
  RPCError error=1000;
+}
+
+// RFC-0012 acceptance (op 246): the DNS security reserve balance per block and virtual UTXO reads by outpoint (txid:index).
+message GetPalwAcceptanceReadsRequestMessage {
+  repeated string reserveBlocks = 1;
+  repeated string outpoints = 2;
+}
+
+message RpcPalwReserveBalance {
+  string blockHash = 1;
+  bool known = 2;
+  uint64 balanceSompi = 3;
+}
+
+message RpcPalwOutpointEntry {
+  string outpoint = 1;
+  bool present = 2;
+  uint64 amount = 3;
+  uint32 scriptVersion = 4;
+  string scriptHex = 5;
+  uint64 blockDaaScore = 6;
+  bool isCoinbase = 7;
+}
+
+message GetPalwAcceptanceReadsResponseMessage {
+  bool available = 1;
+  string sink = 2;
+  uint64 virtualDaa = 3;
+  repeated RpcPalwReserveBalance reserveBalances = 4;
+  repeated RpcPalwOutpointEntry outpoints = 5;
+  RPCError error = 1000;
 }

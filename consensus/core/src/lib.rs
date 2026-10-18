@@ -450,6 +450,9 @@ pub mod palw_settlement_once_v1;
 /// **RFC-0007 §4.1 T6: planted faults in paid claims and the receipt signers' liability** (dormant `palw_paid_claim_trap_v1`;
 /// kernel route aux 142; reuses the audit mesh's trap objects).
 pub mod palw_paid_claim_trap_v1;
+/// **RFC08 08-B / ADR-0184 §1: a native claim's fee held from Final to its liability horizon** (dormant
+/// `palw_native_liability_horizon_v1`; kernel route aux 144).
+pub mod palw_native_liability_hold_v1;
 /// **G14 lane closure (2026-10-16)**: the kernel route / OPV, EXEC slice and native funded lanes' closures of audit gaps G-K1, G-X1,
 /// G-N1, G-N3, G-14 (kernel route aux 143; in force only where each lane's own dormant fence is).
 pub mod palw_g14_lane_closure_v1;

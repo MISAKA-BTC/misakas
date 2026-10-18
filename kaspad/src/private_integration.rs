@@ -33,6 +33,8 @@ mod bootstrap;
 pub mod g14_drill_factory;
 pub use bootstrap::export_private_complete_bootstrap_v1;
 mod claim_paid_bootstrap;
+mod paid_request;
+pub use paid_request::generate_private_paid_request_v4;
 pub use claim_paid_bootstrap::{PrivatePaidNativeRequestV4, PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
 mod paid_claim_factory;
 pub use paid_claim_factory::private_paid_claim_params_v3;
@@ -311,6 +313,11 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
     let mut manifest = serde_json::json!({
         "version": 1,
         "kind": "rfc12-private-integration-probe",
+        "paidRequestGenerator": true,
+        "importCrashFailpoints": {
+            "available": cfg!(feature = "private-integration-config"),
+            "rendezvousVersion": 1,
+        },
         "network": config.params.net.to_string(),
         "genesis": config.params.genesis.hash.to_string(),
         "consensusParamsId": config.params.consensus_params_id().to_string(),

@@ -753,3 +753,13 @@ N=1000、k=4の独立再計算は次のとおり。
 **全18 RFCの完全完成とは判定しない。** ただし「未認定」だけで終わらせず、上記の具体的位置・修正・終了条件で作業を分解した。RFC01/10/15/17のように今回独自の新規コード欠落を特定していないものへ、架空の欠陥を追加してはいない。それらも共有経路・実行受入が未完なら、その依存を明記してrelease判定から分ける。
 
 最重要なのは、**不正を発見してslashするコードがあること**と、**claim受理→検査→証拠取得→客観裁定→実徴収→関連生成/報酬/weightの拒否が、各有効経路で端から端まで成立すること**を区別する点である。現状は後者に具体的な断絶が残る。
+
+### 2026-10-19 — Codex RFC08/09/10/12 継続状況
+
+- `origin/integ/validation-r2` は `8478ec5dcb6e9d3ad6ba4ef0fd046ca28e898e21` に進んでおり、確認時点で作業 branch `codex/rfc08-09-10-12` の HEAD `1b90a67c89f4e8e2417d851932dfffb3224bfee5` の祖先だったため、merge は Already up to date だった。
+- RFC09 は既記録の実 gRPC/wRPC socket fork 比較 **3/3**、remote miner の欠落・改ざん opening 時に署名しない試験 **1/1** が根拠。今回の追加試験ではない。64 bond 超の end-to-end と正の certified-credit fork は未検証。
+- RFC08: `native_text_service_uses_the_original_reservation_only_through_an_authenticated_horizon` **1/1**、`native_liability_hold` **12/12**。source-H helper は署名済み deadline と元の prepaid 量を変えず、従来 API の deadline 制約も維持する。これは限定試験で、text29/funded11/mining39 の post-Final H admission、court/subject retention、保留・返金経路は未完。08-B は未完了。08-C と RFC10 も未検証。
+- RFC12: private-only paid-v4 profile の service span を承認済みの 1,321 DAA とし、dispute/material tail は 3,000/2,000 DAA のまま。公開 preset/identity は変更しない。node/CLI/probe helper の各 build は成功。誤った helper を指定した試行は node を起動していない。次の試行は node 起動中に停止してしまい、`/tmp/misaka-rfc12-approved-bootstrap-v2-result.json` に FAIL として保持。120秒は factory の上限で node 全体の上限ではないと訂正し、新 salt/new appdir で1時間の workflow 上限を使う実行を開始した。A/B は起動済みだが registration/binding、session、cold reopen、full acceptance の結果はまだない。
+- 既記録の RFC12 EVM tests **60 passed / 0 failed / 1 ignored**、Python controls **133/133** は維持。署名付き返金 CLI の compile/startup 試験は実 broadcast を証明しない。受入スクリプト、reserve-flow 再構成、crash/refund/reorg の acceptance は未完了。
+- ユーザー指定の検証形式: 同一の候補 binary・private testnet で複数 node/claim を動かし、正常系と攻撃系を別 scenario として一度の統合 campaign にまとめる。現行 `scripts/drills/misaka-rfc12-acceptance.py` は network を維持する一方、honest paid-work claim は 1 件で、通常経路から不正 root/prefix を送る攻撃 scenario がない。統合 campaign plan/実行結果はまだない。
+- 修正した RFC12 private bootstrap v3 は fresh salt `d6de5084b5b35dacaa080adca7aaabe2db9c2e526b05d88ec77db3fd94583a2f`、paid-v4、fresh appdir で継続中。A/B/JOIN は起動・接続したが `/tmp/misaka-rfc12-approved-bootstrap-v3-result.json` は未生成。registration/binding・session・cold reopen・統合 acceptance の PASS 根拠には数えない。

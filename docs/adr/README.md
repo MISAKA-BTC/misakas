@@ -20,6 +20,6 @@
 | 0176 | [Bond bounds PALW claim capacity, blocks, rewards and Final weight](0176-bond-bounds-palw-production-rewards-and-final-weight.md) |
 | 0175 | [新規モデル登録は自由、登録モデルは永久不変](0175-registered-models-are-permanently-immutable.md) |
 
-この整理版の次番号は **ADR-0183**。添付ZIPの台帳に基づき追加した番号で、他ブランチの予約は統合前に照合します。既存番号は再利用・再採番していません。
+この整理版の次番号は **ADR-0185**。添付ZIPの台帳に基づき追加した番号で、他ブランチの予約は統合前に照合します。既存番号は再利用・再採番していません。
 
 詳細な旧索引・過去の置換/適用表は [整理前の索引](../history/documentation/2026-10-17/adr/README.md) に保持しています。旧表のcurrent / liveは現在の保証ではありません。

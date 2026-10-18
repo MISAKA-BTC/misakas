@@ -718,6 +718,7 @@ impl RpcApi for KaspaRpcClient {
             GetPalwStagedPreclaimQuote,
             GetPalwRouterBindingV2,
             GetPalwPaidClaim,
+            GetPalwAcceptanceReads,
             GetPalwRfc0016Report,
             GetPalwKernelClaim,
             GetPalwKernelRows,

@@ -139,6 +139,7 @@ impl Factory {
                 GetPalwStagedPreclaimQuote,
                 GetPalwRouterBindingV2,
                 GetPalwPaidClaim,
+                GetPalwAcceptanceReads,
                 GetPalwRfc0016Report,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,

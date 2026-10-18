@@ -100,6 +100,7 @@
 - [ADR-0170 — The seed anchor is a window, not a span: a merged attempt anchors, the anchor survives span boundari](0170-the-seed-anchor-is-a-window-not-a-span.md)
 - [ADR-0173 — MISAKA's purpose: public-verifier dispute completeness](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)
 - [ADR-0180 — PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md)
+- [ADR-0185 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に](0185-paid-lock-randomness-bootstrap-and-paid-sources.md)
 - [ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md)
 - [ADR-0187 — native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md)
 
@@ -204,4 +205,5 @@
 - [ADR-0166 — Verifier unavailability is not producer fraud](0166-verifier-unavailability-is-not-producer-fraud.md)
 - [ADR-0171 — Probabilistic constraint checks are the normal large-model verifier; the court resolves disputes exa](0171-probabilistic-constraint-checks-and-court-on-dispute.md)
 - [ADR-0183 — G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md)
+- [ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg](0184-native-liability-horizon-panel-record-and-single-certified-leg.md)
 

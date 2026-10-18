@@ -746,9 +746,12 @@ pub fn palw_attempt_trace_retention_daa_v1(
     daa: u64,
 ) -> u64 {
     let fused = state.class(class_id).is_some_and(|class| class.fused_attention);
+    // RFC-0008 paid consumer lifecycle (validation lane): the minimum is the canonical retention at this DAA, which past its fence
+    // covers the consumer's service, dispute and material tails; a court-demanding class owes the longer of the two.
+    let minimum = crate::palw_producer_v2::palw_min_trace_retention_daa_at_v2(params, daa);
     let base = match palw_court_demanding_retention_daa_v1(params, daa) {
-        Some(court) if fused => court,
-        _ => crate::palw_producer_v2::palw_min_trace_retention_daa_v1(params),
+        Some(court) if fused => court.max(minimum),
+        _ => minimum,
     };
     // RFC-0018 Gate C (user decision 2026-10-17): and through the latest certification and receipt lane (0 below its fence).
     base.saturating_add(crate::palw_rfc0018_v1::palw_gate_c_retention_extension_daa_v1(params, daa))

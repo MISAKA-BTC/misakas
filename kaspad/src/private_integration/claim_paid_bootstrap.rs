@@ -30,23 +30,8 @@ pub struct PrivatePaidProgramRequestV3 {
     pub producer_card: u32,
     pub parameters: BTreeMap<(u16, Option<u16>), TensorWireV1>,
 }
-/// All-target request. The original V3 Program request layout remains readable.
-#[derive(Clone, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
-pub struct PrivatePaidNativeRequestV4 {
-    pub version: u16,
-    pub header: Vec<u8>,
-    pub rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
-    pub ledger_root: Hash64,
-    pub aux_root: Hash64,
-    pub base_job: Digest,
-    pub paid_class: Digest,
-    pub paid_job: Digest,
-    pub material_consent: Digest,
-    pub not_before_daa: u64,
-    pub salt: Digest,
-    pub producer_card: u32,
-    pub inputs: NativePaidProducerInputsV3,
-}
+/// The existing V4 request bytes are shared with the live first-party generator.
+pub use misaka_palw_sdk::claim_paid_v2::all_target_bootstrap::NativePaidRequestV4 as PrivatePaidNativeRequestV4;
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut options = OpenOptions::new();
@@ -230,6 +215,39 @@ fn preflight_request_v4(bytes: &[u8]) -> Result<u128, String> {
         }
     }
     take(&mut r, 7 * 64 + 8 + 4)?; // roots, job/class/enrollment terms, anchor, card
+    preflight_producer_inputs(r, version, heap)
+}
+
+/// Allocation preflight for the separate live-generator producer-input file.
+pub(super) fn preflight_paid_inputs_v4(bytes: &[u8]) -> Result<u128, String> {
+    preflight_producer_inputs(bytes, 4, bytes.len() as u128)
+}
+
+fn preflight_producer_inputs(bytes: &[u8], version: u16, mut heap: u128) -> Result<u128, String> {
+    use std::io::Read;
+    fn blob<'a>(r: &mut &'a [u8], cap: usize) -> Result<&'a [u8], String> {
+        let mut word = [0; 4];
+        r.read_exact(&mut word).map_err(|e| e.to_string())?;
+        let n = u32::from_le_bytes(word) as usize;
+        if n > cap || n > r.len() {
+            return Err("private request field exceeds exact frame/cap".into());
+        }
+        let (value, tail) = r.split_at(n);
+        *r = tail;
+        Ok(value)
+    }
+    fn take<'a>(r: &mut &'a [u8], n: usize) -> Result<&'a [u8], String> {
+        if n > r.len() {
+            return Err("truncated private request".into());
+        }
+        let (value, tail) = r.split_at(n);
+        *r = tail;
+        Ok(value)
+    }
+    fn word(r: &mut &[u8]) -> Result<usize, String> {
+        Ok(u32::from_le_bytes(take(r, 4)?.try_into().unwrap()) as usize)
+    }
+    let mut r = bytes;
     let tensors = word(&mut r)?;
     if tensors > 16_384 {
         return Err("private artifact map exceeds 16384 instances".into());
@@ -321,6 +339,23 @@ fn preflight_request_v4(bytes: &[u8]) -> Result<u128, String> {
 #[cfg(test)]
 mod request_preflight_tests {
     use super::*;
+    #[test]
+    fn standalone_live_inputs_are_preflighted_before_collection_allocation() {
+        let empty = borsh::to_vec(&NativePaidProducerInputsV3::default()).unwrap();
+        preflight_paid_inputs_v4(&empty).unwrap();
+        for offset in [0, 4, 8] {
+            let mut bad = empty.clone();
+            bad[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(preflight_paid_inputs_v4(&bad).is_err());
+        }
+        for end in 0..empty.len() {
+            assert!(preflight_paid_inputs_v4(&empty[..end]).is_err());
+        }
+        let mut trailing = empty;
+        trailing.push(0);
+        assert!(preflight_paid_inputs_v4(&trailing).is_err());
+    }
+
     #[test]
     fn a_tiny_request_cannot_allocate_an_attacker_declared_header() {
         for version in [3u16, 4] {

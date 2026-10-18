@@ -1860,7 +1860,9 @@ fn corpus_v2_full() {
 /// the IR, the evaluators or the court names an architecture.
 #[test]
 fn no_court_or_ir_source_names_a_model() {
-    let root = crate_dir().join("..");
+    // The workspace root: the crate lives at `misaka/palw/tir/lower` since the 10-12 repository reorganisation (it was one level
+    // below the root before, so `..` scanned nothing and the tripwire passed vacuously — validation 2026-10-17: "scanned only 0").
+    let root = crate_dir().join("../../../..");
     let banned = [
         "llama",
         "qwen",

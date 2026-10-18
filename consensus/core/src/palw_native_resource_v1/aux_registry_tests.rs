@@ -439,3 +439,37 @@ fn paid_claim_trap_rows_have_their_own_exact_aux_codec() {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 }
+
+/// RFC08 08-B held native fees (aux 144, dormant): a 66-byte `0x01 ‖ family ‖ job` key reaches the held row's codec; any other
+/// shape fails closed as malformed.
+#[test]
+fn native_liability_hold_rows_have_their_own_exact_aux_codec() {
+    use crate::palw_native_liability_hold_v1::*;
+    let row = PalwNativeHeldFeeRowV1 {
+        version: PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1,
+        family: PALW_NATIVE_FAMILY_JOB_V39,
+        job: [1; 64],
+        claim: [2; 64],
+        producer: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(1), 0)),
+        queue: [3; 64],
+        payload: [4; 64],
+        amount: 5,
+        income_root: [1; 64],
+        income_kind: 11,
+        budget: [6; 64],
+        refund_payload: [7; 64],
+        final_daa: 8,
+        horizon_daa: 9,
+    };
+    let bytes = borsh::to_vec(&row).unwrap();
+    let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+    super::wire_kernel_aux::scan_native_aux_row_v1(
+        PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+        &palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_JOB_V39, &[1; 64]),
+        &mut reader,
+    )
+    .unwrap();
+    assert_eq!(reader.remaining(), 0);
+    let mut empty = NativeWireReaderV1::new(&[][..], 0);
+    assert!(super::wire_kernel_aux::scan_native_aux_row_v1(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, &[0x01; 65], &mut empty).is_err());
+}

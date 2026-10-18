@@ -1419,6 +1419,22 @@
     },
     {
       "kind": "adr",
+      "number": "0184",
+      "path": "docs/adr/0184-native-liability-horizon-panel-record-and-single-certified-leg.md",
+      "title": "ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0185",
+      "path": "docs/adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md",
+      "title": "ADR-0185 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
       "number": "0186",
       "path": "docs/adr/0186-hold-unresolved-liability-advance-independent-claims.md",
       "title": "ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める",

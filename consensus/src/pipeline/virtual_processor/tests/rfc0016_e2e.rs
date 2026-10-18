@@ -70,19 +70,25 @@ async fn script(chain: &mut T12Chain) -> (usize, Vec<u32>) {
     (held, heartbeat_bits)
 }
 
-/// H1 / H3: with every model's rights at zero, no model Attempt becomes a claim (each block stands), and the heartbeat alone keeps
-/// the DAA moving to `FENCE + SPAN` — in the same number of heartbeats as an unarmed twin fed the same script.
+/// H3 (and the floor half of H1): with every model's rights at zero, the clock reaches `FENCE + SPAN` in the same number of
+/// heartbeats as an unarmed twin fed the same script, and the FLOOR class keeps its own rule — `rfc0016_rights_admit_v1` returns `Ok`
+/// for `base_class_id` ("the floor and the heartbeat keep their own rules"), so card 0's floor Attempts are claims armed or not.
+///
+/// **Validation 2026-10-17 (stale premise fixed):** this source was written unbuilt and asserted `held == 0`, i.e. that the floor's
+/// Attempts are refused for rights; the rule exempts the floor by design, and the armed chain held 41 claims. The refusal of a
+/// NON-floor model Attempt (`ModelBlockRightsRefused`) is not exercised at node level by this harness (it registers no other model
+/// class) and stays open.
 #[tokio::test]
 async fn t12_rfc0016_zero_rights_heartbeat_keeps_the_cadence() {
     let (config, bundle, premine, floats) = armed(true);
     let mut a = t12_genesis_chain(&config, &bundle, &premine, &floats);
     let (held, beats_a) = script(&mut a).await;
-    assert_eq!(held, 0, "no right, no claim: every model Attempt is skipped (ModelBlockRightsRefused), its block standing");
-    assert!(a.daa_of(a.sink()) >= FENCE + SPAN, "the heartbeat carries the clock alone");
+    assert!(a.daa_of(a.sink()) >= FENCE + SPAN, "the clock reaches the span past the fence");
     let (config, bundle, premine, floats) = armed(false);
     let mut twin = t12_genesis_chain(&config, &bundle, &premine, &floats);
     let (held_twin, beats_twin) = script(&mut twin).await;
     assert!(held_twin > 0, "unarmed, the same attempts are claims");
+    assert_eq!(held, held_twin, "the floor class is exempt from V+ rights: armed, its Attempts are the same claims");
     assert_eq!(beats_a.len(), beats_twin.len(), "the same heartbeats reach the same DAA: rights never move the clock");
 }
 

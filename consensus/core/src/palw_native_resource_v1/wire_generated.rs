@@ -3430,6 +3430,7 @@ wire_struct!(crate::palw_native_job_v39::NativeMaximumContractV39; u16, [u8;64],
 wire_struct!(crate::palw_native_job_v39::NativeSettlementV39; u16, [u8;64], [u8;64], crate::palw_native_job_v39::NativeJobTerminalV39, Option<[u8;64]>, [u8;64], u64, u64, u64, u64, u64, u64, u64);
 wire_struct!(crate::palw_native_job_v39::NativeSingleCreditV39; u16, [u8;64], [u8;64], [u8;64], [u8;64], Option<[u8;64]>, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::Hash64, u64, u64);
 wire_struct!(crate::palw_native_job_v39::NativeTemporalV39; u16, u32, u64, u64, u64, u64, u64, u64, u64, u64);
+wire_struct!(crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1; u8, u8, [u8; 64], [u8; 64], crate::palw_state_v2::PalwBondKeyV2, [u8; 64], [u8; 64], u64, [u8; 64], u8, [u8; 64], [u8; 64], u64, u64);
 wire_struct!(crate::palw_native_master_v39::NativeMasterComponentFinalV39; crate::palw_native_master_v39::NativeMasterFundedComponentV39, [u8;64], [u8;64], [u8;64], [u8;64], crate::Hash64, crate::Hash64, u64, u64);
 wire_struct!(crate::palw_native_master_v39::NativeMasterComponentV39; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, u32, [u8;64], [u8;64]);
 wire_struct!(crate::palw_native_master_v39::NativeMasterFinalRecordV39; u16, [u8;64], [u8;64], [u8;64], [u8;64], Vec<crate::palw_native_master_v39::NativeMasterComponentFinalV39>, [u8;64], u64);

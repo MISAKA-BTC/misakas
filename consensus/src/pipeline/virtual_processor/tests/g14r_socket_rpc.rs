@@ -2,8 +2,8 @@
 //! process, in front of a test node.
 //!
 //! [`PalwSocketNode`] is an `RpcApi` whose PALW ops are exactly what the RPC service's handlers run (`rpc/service/src/service.rs`):
-//! the request parsers and response builders of `kaspa_rpc_core::convert::{palw_kernel, palw_legacy}` and the consensus API's
-//! `palw_state_proof_v1`, against the node it fronts — ops 202 (state proof), 204–206 (legacy dispute, disputes, filer status), 210–212
+//! the request parsers and response builders of `kaspa_rpc_core::convert::{palw_kernel, palw_legacy, palw_fork_choice}` and the consensus API's
+//! `palw_state_proof_v1`, against the node it fronts — ops 202 (state proof), 203 (fork-choice openings), 204–206 (legacy dispute, disputes, filer status), 210–212
 //! (kernel claim, rows, finals) and 231 (conformance evidence) — plus `getSink`, `getInfo` and `submitTransaction` (the node's mempool
 //! check, then its template; the harness mines). The full `RpcCoreService` needs a p2p flow context, a mining manager and an index
 //! processor the test node does not run, and its network must pass `validate_palw_v2`, which refuses every fence these worlds arm;
@@ -266,6 +266,16 @@ impl RpcApi for PalwSocketNode {
     }
 
     // ---- op 202: a PALW state collection proven against the header that commits it ----
+    async fn get_palw_fork_choice_opening_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwForkChoiceOpeningRequest,
+    ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
+        use kaspa_rpc_core::convert::palw_fork_choice::{parse_request, response};
+        let (blocks, extras) = parse_request(&request)?;
+        Ok(response(self.blocking(move |c| c.palw_fork_choice_openings_v2(&blocks, &extras)).await))
+    }
+
     async fn get_palw_state_proof_call(
         &self,
         _connection: Option<&DynRpcConnection>,

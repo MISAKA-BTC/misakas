@@ -314,6 +314,13 @@ pub(super) fn collect(
     if r.aux.contains_key(&(TABLE, k(COLLECTED, &id))) {
         return Err(bad("native39 original job already collected"));
     }
+    if super::palw_native_liability_hold_fold_v1::held_native_fee_v1(
+        &builder.state,
+        crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39,
+        &id,
+    ).is_some() {
+        return Err(bad("native39 collection cannot erase a job with an unpaid held fee"));
+    }
     let h = header(r, id)?;
     let terminal_book = book(r, &h)?;
     let (croot, credit): (Digest, NativeSingleCreditV39) = read(r, 23, &id, 1024)?;

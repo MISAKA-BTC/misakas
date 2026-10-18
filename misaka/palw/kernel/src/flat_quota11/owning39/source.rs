@@ -186,9 +186,31 @@ impl SourceShardV39 {
         plan: &CheckedQuotaV39,
         job: Digest,
     ) -> Result<(), String> {
+        let horizon = self.row.as_ref().ok_or("source39 obligation absent")?.deadline;
+        self.admit_valid_unit_until(p, e, plan, job, horizon)
+    }
+    /// Native-only liability service over the SAME original prepaid units.
+    /// Caller must authenticate the held Final and derive `horizon` from its
+    /// producer-signed inputs. It cannot cross the original reserved interval,
+    /// mint units, extend the stored binding or return consumed allowance.
+    pub fn admit_valid_unit_until(
+        &mut self,
+        p: &QuotaPolicyV11,
+        e: &TrustedEpochV11,
+        plan: &CheckedQuotaV39,
+        job: Digest,
+        horizon: u64,
+    ) -> Result<(), String> {
         self.context(p, e)?;
         let r = self.row.as_mut().ok_or("source39 obligation absent")?;
-        if self.subject.closed || r.retired || r.job != job || e.block_daa > r.deadline || r.units >= plan.source_plan.requests {
+        if self.subject.closed
+            || r.retired
+            || r.job != job
+            || horizon < r.deadline
+            || horizon >= e.interval_end(p)?
+            || e.block_daa > horizon
+            || r.units >= plan.source_plan.requests
+        {
             return Err("source39 original unit capacity unavailable".into());
         }
         r.units += 1;
@@ -267,6 +289,37 @@ pub fn debit_native_cached_answer_v39(
     obligation: (&SourceObligationV39, &Digest),
     carrier_bytes: u64,
 ) -> Result<SourceShardV39, String> {
+    debit_native_cached_answer_until_v39(
+        policy,
+        epoch,
+        record,
+        expected_plan,
+        global,
+        global_root,
+        producer,
+        subject,
+        obligation,
+        carrier_bytes,
+        obligation.0.deadline,
+    )
+}
+
+/// The caller authenticates a held Final and supplies its fixed signed liability
+/// horizon. This consumes the original reservation within its original interval;
+/// it changes no stored deadline, subject, grant or wire representation.
+pub fn debit_native_cached_answer_until_v39(
+    policy: &QuotaPolicyV11,
+    epoch: &TrustedEpochV11,
+    record: &SourcePlanRecordV39,
+    expected_plan: &Digest,
+    global: &QuotaGlobalRowV11,
+    global_root: &Digest,
+    producer: (&QuotaActorRowV11, &Digest),
+    subject: (&QuotaSubjectSummaryV11, &Digest),
+    obligation: (&SourceObligationV39, &Digest),
+    carrier_bytes: u64,
+    horizon: u64,
+) -> Result<SourceShardV39, String> {
     policy.check()?;
     epoch.check(policy)?;
     let selected = CheckedQuotaShardV11::from_native_rows(
@@ -312,7 +365,9 @@ pub fn debit_native_cached_answer_v39(
         || !a.active
         || s.closed
         || row.retired
-        || epoch.block_daa > row.deadline
+        || horizon < row.deadline
+        || horizon >= epoch.interval_end(policy)?
+        || epoch.block_daa > horizon
         || epoch.block_daa < g.epoch.block_daa
         || epoch.block_hash == g.epoch.block_hash && *epoch != g.epoch
         || carrier_bytes > record.answer_bytes as u64
@@ -336,4 +391,257 @@ pub fn debit_native_cached_answer_v39(
     row.consumed = row.consumed.checked_add(&record.answer)?;
     row.remaining = row.remaining.checked_sub(&record.answer)?;
     Ok(SourceShardV39 { global: g, producer: a, subject: s, row: Some(row) })
+}
+
+#[cfg(test)]
+mod liability_service_tests {
+    use super::*;
+
+    // Rooted accounting controls, not native funding/admission evidence. The
+    // caller must authenticate the actual held Final before using the new API.
+    #[test]
+    fn cached_source_answer_uses_original_reservation_through_authenticated_horizon() {
+        let cap = QuotaQuantitiesV11([1_000; 21]);
+        let policy = QuotaPolicyV11 {
+            version: 11,
+            enabled: true,
+            network_domain: [1; 64],
+            ruleset_digest: quota_ruleset_id_v11(),
+            interval_daa: 1_000,
+            plan: cap.clone(),
+            block: cap.clone(),
+            actor: cap.clone(),
+            network: cap,
+            max_subjects: 8,
+            max_actors: 8,
+            future_attempts: [2, 2, 2, 2, 2, 1],
+        };
+        let answer = QuotaQuantitiesV11([1; 21]);
+        let plan = SourcePlanRecordV39 {
+            version: 39,
+            class: [2; 64],
+            source: [3; 64],
+            maximum: [4; 64],
+            quota: [5; 64],
+            parameter: [6; 64],
+            protocol: [7; 64],
+            inventory: [8; 64],
+            requests_per_owner: 1,
+            lifetime_owners: 1,
+            ordinary_requests: 1,
+            preclaim_units: 0,
+            requests: 2,
+            answer_bytes: 128 << 10,
+            answer_parts: 4,
+            answer_attempts: 2,
+            restore_bytes: 0,
+            answer: answer.clone(),
+            total: answer.checked_mul(4).unwrap(),
+        };
+        let subject = QuotaSubjectSummaryV11 {
+            binding: SubjectBindingV11 {
+                version: 11,
+                policy_root: policy.root(),
+                class_id: plan.class,
+                class_scope9_root: [9; 64],
+                program_root: [10; 64],
+                parameter_root: plan.parameter,
+                job_id: [11; 64],
+                job_input_root: plan.maximum,
+                resource10_root: [12; 64],
+                quota_plan_root: plan.quota,
+                actual_positions: 1,
+                requester: [13; 64],
+                producer: [14; 64],
+                admitted_interval: 0,
+                deadline_daa: 20,
+            },
+            committed: QuotaQuantitiesV11::default(),
+            consumed: QuotaQuantitiesV11::default(),
+            guarantee_remaining: QuotaQuantitiesV11::default(),
+            future_attempts_used: [0; FUTURE_ACTION_KINDS_V11],
+            closed: false,
+            retained_protected_seals: 0,
+        };
+        let row = SourceObligationV39 {
+            version: 39,
+            job: subject.binding.job_id,
+            subject: subject.binding.root(),
+            plan: plan.root(),
+            producer: subject.binding.producer,
+            producer_operator: [15; 64],
+            consent: [16; 64],
+            interval: 0,
+            deadline: 20,
+            units: 1,
+            attempts: 0,
+            retired: false,
+            committed: plan.total.clone(),
+            consumed: QuotaQuantitiesV11::default(),
+            remaining: plan.total.clone(),
+        };
+        let initial = TrustedEpochV11::from_chain(&policy, [17; 64], 10).unwrap();
+        let global = QuotaGlobalRowV11 {
+            policy_root: policy.root(),
+            epoch: initial,
+            block: QuotaIntervalSummaryV11 { consumed: QuotaQuantitiesV11::default(), reserved: plan.total.clone() },
+            network: QuotaIntervalSummaryV11 { consumed: QuotaQuantitiesV11::default(), reserved: plan.total.clone() },
+            actor_count: 1,
+            subject_count: 1,
+            protected_seal_count: 0,
+        };
+        let actor = QuotaActorRowV11 {
+            actor: row.producer,
+            network_interval: 0,
+            active: true,
+            interval: global.network.clone(),
+            retained_protected_seals: 0,
+        };
+        let at_original_deadline = TrustedEpochV11::from_chain(&policy, [20; 64], 20).unwrap();
+        let legacy = debit_native_cached_answer_v39(
+            &policy,
+            &at_original_deadline,
+            &plan,
+            &plan.root(),
+            &global,
+            &global.root(),
+            (&actor, &actor.root()),
+            (&subject, &subject.row_root()),
+            (&row, &row.root()),
+            100,
+        )
+        .unwrap();
+        assert_eq!(legacy.source_row().unwrap().attempts, 1, "the existing entry point keeps its original deadline inclusive");
+        for now in [21, 40] {
+            let epoch = TrustedEpochV11::from_chain(&policy, [18; 64], now).unwrap();
+            assert!(
+                debit_native_cached_answer_v39(
+                    &policy,
+                    &epoch,
+                    &plan,
+                    &plan.root(),
+                    &global,
+                    &global.root(),
+                    (&actor, &actor.root()),
+                    (&subject, &subject.row_root()),
+                    (&row, &row.root()),
+                    100
+                )
+                .is_err()
+            );
+            let updated = debit_native_cached_answer_until_v39(
+                &policy,
+                &epoch,
+                &plan,
+                &plan.root(),
+                &global,
+                &global.root(),
+                (&actor, &actor.root()),
+                (&subject, &subject.row_root()),
+                (&row, &row.root()),
+                100,
+                40,
+            )
+            .unwrap();
+            let result = updated.source_row().unwrap();
+            assert_eq!(result.deadline, 20, "the original signed binding is not rewritten");
+            assert_eq!(result.subject, row.subject);
+            assert_eq!(result.attempts, 1);
+            assert_eq!(result.remaining, row.remaining.checked_sub(&answer).unwrap());
+            assert_eq!(updated.global_row().network.reserved, global.network.reserved.checked_sub(&answer).unwrap());
+            assert_eq!(&updated.subject, &subject);
+            let next_global = updated.global_row();
+            let next_actor = updated.producer_row();
+            let next_row = updated.source_row().unwrap();
+            let twice = debit_native_cached_answer_until_v39(
+                &policy,
+                &epoch,
+                &plan,
+                &plan.root(),
+                &next_global,
+                &next_global.root(),
+                (next_actor, &next_actor.root()),
+                (&subject, &subject.row_root()),
+                (next_row, &next_row.root()),
+                100,
+                40,
+            )
+            .unwrap();
+            assert_eq!(twice.source_row().unwrap().attempts, 2);
+            let exhausted_global = twice.global_row();
+            let exhausted_actor = twice.producer_row();
+            let exhausted_row = twice.source_row().unwrap();
+            assert!(
+                debit_native_cached_answer_until_v39(
+                    &policy,
+                    &epoch,
+                    &plan,
+                    &plan.root(),
+                    &exhausted_global,
+                    &exhausted_global.root(),
+                    (exhausted_actor, &exhausted_actor.root()),
+                    (&subject, &subject.row_root()),
+                    (exhausted_row, &exhausted_row.root()),
+                    100,
+                    40,
+                )
+                .is_err(),
+                "H never recreates an original answer attempt"
+            );
+            let mut starved = global.clone();
+            starved.network.reserved = QuotaQuantitiesV11::default();
+            assert!(
+                debit_native_cached_answer_until_v39(
+                    &policy,
+                    &epoch,
+                    &plan,
+                    &plan.root(),
+                    &starved,
+                    &starved.root(),
+                    (&actor, &actor.root()),
+                    (&subject, &subject.row_root()),
+                    (&row, &row.root()),
+                    100,
+                    40,
+                )
+                .is_err(),
+                "H cannot create missing original shared reservation"
+            );
+            for horizon in [19, 20, 1_000] {
+                assert!(
+                    debit_native_cached_answer_until_v39(
+                        &policy,
+                        &epoch,
+                        &plan,
+                        &plan.root(),
+                        &global,
+                        &global.root(),
+                        (&actor, &actor.root()),
+                        (&subject, &subject.row_root()),
+                        (&row, &row.root()),
+                        100,
+                        horizon
+                    )
+                    .is_err()
+                );
+            }
+        }
+        let after = TrustedEpochV11::from_chain(&policy, [19; 64], 41).unwrap();
+        assert!(
+            debit_native_cached_answer_until_v39(
+                &policy,
+                &after,
+                &plan,
+                &plan.root(),
+                &global,
+                &global.root(),
+                (&actor, &actor.root()),
+                (&subject, &subject.row_root()),
+                (&row, &row.root()),
+                100,
+                40
+            )
+            .is_err()
+        );
+    }
 }
