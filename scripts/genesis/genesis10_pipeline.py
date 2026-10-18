@@ -160,7 +160,7 @@ def a16_window_fit(report: dict, digest: str, context: int, tolerance: dict, win
             or calibration.get("schema") != "misaka-palw/a16-source-calibration/v1"):
         raise ValueError("the A16 comparison does not name the converted artifact and whole context")
     scale = calibration.get("logit_scale")
-    if not isinstance(scale, (int, float)) or not math.isfinite(scale) or scale <= 0:
+    if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
         raise ValueError("A16 physical logit scale is missing or invalid")
     windows = report.get("windows") or []
     if [w.get("window_start") for w in windows] != starts:
@@ -168,12 +168,14 @@ def a16_window_fit(report: dict, digest: str, context: int, tolerance: dict, win
     for w in windows:
         kl = w.get("kl") or {}
         if (w.get("window_len") != 64 or w.get("positions") != 64
-                or not isinstance(w.get("top1_agree"), int) or not 0 <= w["top1_agree"] <= 64
-                or any(not isinstance(kl.get(k), (int, float)) or not math.isfinite(kl[k]) or kl[k] < 0 for k in ("mean", "max"))
+                or type(w.get("top1_agree")) is not int or not 0 <= w["top1_agree"] <= 64
+                or any(type(kl.get(k)) not in (int, float) or not math.isfinite(kl[k]) or kl[k] < 0 for k in ("mean", "max"))
                 or kl["max"] < kl["mean"]):
             raise ValueError("incomplete or non-finite A16 window measurement")
     early, late = windows[0]["kl"]["mean"], windows[-1]["kl"]["mean"]
     ratio = late / early if early > 0 else None
+    if ratio is not None and not math.isfinite(ratio):
+        ratio = None
     drift_ok = late <= tolerance["drift_floor_kl"] or (ratio is not None and ratio <= tolerance["drift_ratio_max"])
     within = (all(w["kl"]["mean"] <= tolerance["window_kl_mean_max"]
                   and w["top1_agree"] / 64 >= tolerance["top1_min"] for w in windows) and drift_ok)
