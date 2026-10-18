@@ -420,11 +420,6 @@ fn inputs_known(
     id: Hash64,
     c: &PalwClaimStateV2,
 ) -> Result<bool, PalwStateV2Error> {
-    // Native session input certification/birth closure is a separate bridge.
-    // A mere finite horizon does not authenticate those inputs for this owner.
-    if state.exec_v2_rewards.contains_key(&id) {
-        return Ok(false);
-    }
     let Some(origin) = origin_for(state, params, id, c)? else {
         return Ok(false);
     };
