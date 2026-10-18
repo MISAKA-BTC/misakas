@@ -1702,3 +1702,9 @@ At 17:06 JST, P had advanced its lane tip to DAA 27 and reported 39 produced
 blocks and 15,812 draws. The DAG had 27 blocks and the lane window was still
 94 blocks over DAA 0..26 (50 attempt, 43 heartbeat, 1 other); no terminal D-02
 result or seat-slash observation was present. This is progress, not acceptance.
+
+At 17:07 JST, read-only RPC still reported DAA 27 / 27 DAG blocks and 39
+produced work blocks, while draws rose to 15,918. The lane window now held 98
+blocks over DAA 0..27 (52 attempt, 45 heartbeat, 1 other), with no network-lost
+blocks and the producer still drawing. No terminal D-02 result or seat slash
+was observed; this remains slow progress, not acceptance.
