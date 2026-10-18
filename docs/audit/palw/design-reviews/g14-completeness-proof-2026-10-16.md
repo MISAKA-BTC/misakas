@@ -1742,3 +1742,34 @@ The explicit C5 preflight rerun also terminated: `/tmp/codex-g14-gdn-registratio
 `HeldClassUnanswerable { why: Recurrent { layers: 3 } }` before any carrier was constructed.
 This identifies a current admission refusal, rather than treating the fixture's next missing row
 as an artifact-resolution failure. The refusal is retained; this is not a passing GDN node E2E.
+
+
+### 15.10 Capacity baseline and the remaining GDN court dependency (2026-10-18)
+
+The existing `palw_court_op_timing_harness` was executed from
+`target/debug/deps/g14_court_capacity-4f8ce125d426b319` (SHA-256
+`332bae75fc750f7d0b9a7b252e07aa68a53514c21713d7ab1647de368554b05c`),
+with `--ignored palw_court_op_timing_harness --nocapture --test-threads=1`.
+It passed 1/1 in 0.08 s; output is `/tmp/codex-g14-court-partial-timing.log`.
+This is a macOS/aarch64 **debug development-host baseline**, not the slowest supported node,
+not a shipping-binary measurement, and not an activation record.
+
+| Measured fixture operation | Carried bytes | Worst fold time |
+| --- | ---: | ---: |
+| DisputeReservedV1 (admission only) | 267 | 11,738 ns |
+| OneMove held opening | 10,218 | 1,761,084 ns |
+| 42 simultaneous held openings | 429,156 | 4,332,583 ns/block |
+| Default sweep of 42 sessions | — | 642,750 ns/block |
+
+Opening, DissectionMove, Close, all working sets and the real leaf recomputation remain
+unmeasured by this harness. Its partial measurement digest is
+`7236cbedb1e24135a7e03323444704b483cb20bef582a9971d9694c1113532c7`;
+`policy()` explicitly refuses it because every operation class needs time, bytes and working-set
+measurements. No value was pinned and no fence was armed.
+
+The GDN registration refusal cannot be fixed by dropping C5 alone. `Qwen36Backend` has no
+`attn_site_evidence_held_v1` override; its `supports_dissection()` deliberately returns false
+for held profiles under held-answerability. The new checkpoint filer does not supply the
+missing held-attention responder/challenger (the Qwen25 A16 backend implements both).
+The full GDN path must satisfy those answerability requirements as well as recurrence
+checkpoint prosecution before claiming ordinary node/P2P completion.
