@@ -57,8 +57,18 @@ tag 230 の wire 形は設計判断のため実装しない。選択肢:
 
 **ユーザーに決めてほしいこと:** A か B か。反証の 1 件あたりの費用（B は path 分だけ重い）と、digest 列の上限（draw 数）の値。どちらも arm 前の判断で、今は実装しない。
 
+## node-level 試験（2026-10-19、`consensus/src/pipeline/virtual_processor/tests/lg14a_legacy_filer_e2e.rs`）
+
+- **arm の形:** D2 と X3 は test config だけで arm する（`lg14a_config_with(armed, d2, x3)`、`sync_palw_2026_10_12_ruling_fences_v1`）。X3 の policy は `unapproved_probe_at`（probe 値、test 限定）の `resolve_daa` を **composition の値 `palw_claim_pursuit_budget_v1` に置き換える**（下の発見 1）。preset には入れない。
+- **PASS:** `x3_req_1_2_3_the_hard_deadline_is_fixed_at_acceptance_on_the_node`（期限は accepted + 合成値、min、後続ブロックで不変）、`x3_req_4_a_pursuit_starts_only_inside_its_budget_on_the_node`（許容 start は accepted から cutoff まで、cutoff+1 以後は reservation なし）、`x3_the_fixed_deadline_survives_a_restart_and_replays`（再起動後も期限・tip・delta 行が一致、fresh node が同じ root に再生）、`d2_a_reorg_undoes_and_returns_the_reservation_exactly`（D2 の reorg、旧 legacy シナリオを D2 arm で実行）。`cargo test -p kaspa-consensus --lib lg14a_legacy_filer_e2e`: **29 passed, 3 ignored**（2026-10-19、commit a9e81e94f の後）。
+- **BLOCKED（無視フラグ付きで記録）:**
+  - `d2_a_full_collusion_on_a_new_claim_is_convicted_before_final_on_the_node`、`d2_the_pursuit_survives_a_restart`（R-D2-NODE）: 新 claim の held StepLeaf の告発は mempool で拒否される（ADR-0177 D2 の「モデル bytes を強制しない」）。replacement route（`palw_d2_one_move_on_claim_part_v1` など）は node の admission に配線されていない。配線は consensus 経路の実装で、この session の範囲を超える。
+  - `x3_req_5_reaching_the_deadline_alone_never_finals_an_unresolved_claim_on_the_node`（R-X3-HOLD）: 生きた dispute reservation のある claim が、hard より前（final_daa 4204、hard 4322）に window の終わりで Final になった（record は生きたまま）。legacy の reservation による Final の保持が X3 では効かない。設計判断が要る。
+- **発見 1（期限の composition）:** probe の `resolve_daa`（200）は `B_disclose + B_court + Δ` より短く、どの pursuit も許可されない（`palw_claim_pursuit_budget_v1` は `window_court` と disclose window を含む）。registers の「X3 と L の窓」の未解決項と同じ。値の再測定が arm の前提。
+- **発見 2（held claim の期限）:** X3 を arm すると、node 上の held claim の bind 期限は legacy の `None` ではなく hard に従う（REQ-X3-2 の min）。試験は legacy 値（None）を固定する。
+
 ## 残り（この ADR の範囲外、または未実施）
 
-- node-level の REQ-X3-1〜5、D2 の node-level full-collusion、restart / reorg 再生の同一性（`consensus/src/pipeline/virtual_processor/tests`）。
+- node-level の BLOCKED 2 件（R-D2-NODE、R-X3-HOLD）。X3 の reorg 再生（pre-cutoff の reservation を使うシナリオは未作成）。REQ-X3-5 の node 版。
 - tag 230 の codec と A-2 kind-table 行（上の選択）。
 - X3 の Δ（5 項）と `c_retain` の測定・承認（未決のまま）。

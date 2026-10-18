@@ -117,7 +117,7 @@
 - **econ:** `palw_minimum_price_c_upper_x3_v1` と `PalwBeaconSourceCostBoundsV1::minimum_gross_fee_x3` が retention の価格を入れる。`c_retain = 0` で拡張が正なら UNKNOWN。
 - **R-D2-READY:** tag 230 を確定（`PALW_A2_TAG_ALLOCATIONS_V1` の既存行）。kind の codec と A-2 kind-table 行は未着手。
 - **R-D2-COVER:** 2026-10-18 に導出して記録（ADR-0188「R-D2-COVER」）。finalize の読み取り集合は評価の実行後にしか決まらない（添字が step のデータに依存）。opening は空・部分の carriage を受理し、厳密な関門は root claim の finalize（Step 8）。露出は 1 件の finalize が読む相異なる leaf に有界。試験 `r_d2_cover_…` で固定。
-- **node-level 試験（REQ-X3-1〜5、D2 full-collusion、restart/reorg）:** 未着手。harness（`lg14a_legacy_filer_e2e` の型）で X3 を arm する必要がある。次の作業。
+- **node-level 試験（2026-10-19、ADR-0188「node-level 試験」）:** `lg14a_legacy_filer_e2e` で 29 PASS / 3 ignored。PASS: REQ-X3-1・2・3（期限固定・min・不変）、REQ-X3-4（許容 start は cutoff まで）、X3 の再起動と fresh replay、D2 の reorg。BLOCKED（ignore 記録）: R-D2-NODE（新 claim の held 告発が mempool で拒否、replacement route が node admission に未配線）、R-X3-HOLD（生きた reservation のある claim が window 終わりで Final）。発見: probe の resolve は composition より短く pursuit が 0 件になる。
 - **tag 230 の codec:** 未実装。wire 形の案 A/B と A-2 への影響は ADR-0188「R-D2-READY」（Proposed、ユーザー判断待ち）。
 
 - **検証の現況（2026-10-18、同節の追記）:**
