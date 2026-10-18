@@ -53,6 +53,8 @@ fn rfc23s2_origin_real_fold_cold_restore_and_reorg_preserve_original_context() {
         f.inputs,
         vec![PalwClaimLocalInputV1::Attempt { block: point.block, execution_key: Hash64::default(), envelope: Box::new(env.clone()) }]
     );
+    let admission = s2.claim_local_admission_context_v1(&p, &point, id).unwrap().unwrap();
+    assert!(admission.native_material_binding_v3().unwrap().is_none(), "PAV2 history never invents a native manifest");
     f.validate_context_v1().unwrap();
     let prior: PalwStateCarriageV2 = borsh::from_slice(&f.prior_state).unwrap();
     let current: PalwStateCarriageV2 = borsh::from_slice(&f.current_state).unwrap();
@@ -75,6 +77,73 @@ fn rfc23s2_origin_real_fold_cold_restore_and_reorg_preserve_original_context() {
         borsh::to_vec(&PalwStateCarriageV2::from_state(&reverted)).unwrap(),
         borsh::to_vec(&PalwStateCarriageV2::from_state(&s1)).unwrap()
     );
+}
+
+#[test]
+fn rfc23s2_admission_context_recovers_the_exact_pav3_manifest_from_its_origin_header() {
+    use crate::palw_attempt_material_v3::{
+        PALW_ATTEMPT_MATERIAL_WIRE_MAGIC_V3, PalwAttemptMaterialEnvelopeV3, PalwNativeMaterialBindingV3, PalwNativeMaterialReadyV3,
+    };
+    use crate::palw_material_capacity_v1::{PalwMaterialCodecV1, PalwMaterialManifestV1, PalwMaterialScopeV1};
+
+    let p = rules();
+    let s1 = parent(&p);
+    let env = attempt(40, 1);
+    let id = attempt_id_v2(&env.attempt);
+    let point = ctx(2, 100, 2);
+    let (mut state, _) = step(&s1, &p, &point, Some(&env), &extra()).unwrap();
+    let mut f = (*frame(&state, point)).clone();
+
+    let manifest = PalwMaterialManifestV1 {
+        root: h64(701),
+        scopes: vec![PalwMaterialScopeV1 {
+            claim: id,
+            commitment: env.attempt.execution_root,
+            codec: PalwMaterialCodecV1::NativeHeldComplete,
+            bytes: 128,
+            units: 1,
+            content: h64(702),
+        }],
+    };
+    let signature = vec![7; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
+    let ready = PalwNativeMaterialReadyV3 {
+        version: 3,
+        session: manifest.root,
+        consent: h64(703),
+        binding: PalwNativeMaterialBindingV3 { claim: id, execution_key: Hash64::default(), manifest: manifest.clone() },
+        providers: vec![
+            PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h64(704), 0)),
+            PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h64(705), 0)),
+        ],
+    };
+    let envelope =
+        PalwAttemptMaterialEnvelopeV3::assemble(env.clone(), ready, vec![signature.clone(); 2], |_, _| Ok(signature.clone())).unwrap();
+    assert!(envelope.encode_wire().starts_with(&PALW_ATTEMPT_MATERIAL_WIRE_MAGIC_V3));
+    let header = crate::header::Header::new_finalized(
+        crate::constants::BLOCK_VERSION,
+        vec![vec![point.block]].try_into().unwrap(),
+        h64(706),
+        h64(707),
+        h64(708),
+        1_700_000_000_000,
+        0x1e7f_ffff,
+        9,
+        crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
+        point.daa_score,
+        10u64.into(),
+        point.blue_score,
+        h64(709),
+    )
+    .with_palw_commitment(envelope.encode_wire());
+    f.origin_headers.insert(point.block, borsh::to_vec(&header).unwrap());
+    let key = palw_claim_liability_frame_key_v1(point.block);
+    state.kernel_route.as_mut().unwrap().aux.insert((PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec()), borsh::to_vec(&f).unwrap());
+
+    let admission = state.claim_local_admission_context_v1(&p, &point, id).unwrap().unwrap();
+    let recovered = admission.native_material_binding_v3().unwrap().unwrap();
+    assert_eq!(recovered.claim, id);
+    assert_eq!(recovered.execution_key, Hash64::default());
+    assert_eq!(recovered.manifest, manifest);
 }
 
 #[test]

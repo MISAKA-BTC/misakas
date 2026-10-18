@@ -355,6 +355,92 @@ impl PalwClaimLocalAdmissionContextV1 {
     pub fn frame(&self) -> &PalwClaimLiabilityFrameV1 {
         &self.frame
     }
+
+    /// Recover the signed PAV3 manifest that was carried with this claim's
+    /// admitted attempt. The frame is read from committed state and the base
+    /// attempt is matched to the fold-derived birth before the manifest is
+    /// returned. This is provenance only: callers still authenticate the
+    /// provider archive and every material unit before treating it as evidence.
+    pub fn native_material_binding_v3(
+        &self,
+    ) -> Result<
+        Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3>>,
+        crate::palw_state_v2::PalwStateV2Error,
+    > {
+        use crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3;
+        use crate::palw_native_resource_v1::{native_value_requests_v1, preflight_native_value_v1, reserve_native_requests_v1};
+
+        let mut binding = None;
+        for input in &self.frame.inputs {
+            let PalwClaimLocalInputV1::Attempt { block, execution_key, envelope } = input else { continue };
+            if crate::palw_attempt_v2::attempt_id_v2(&envelope.attempt) != self.id {
+                continue;
+            }
+            let Some(encoded_header) = self.frame.origin_headers.get(block) else {
+                // Legacy PAV2 attempts have no native material binding. If a
+                // matching header is absent, the caller cannot infer one.
+                continue;
+            };
+            let header_shape =
+                preflight_native_value_v1::<crate::header::Header>(encoded_header.as_slice(), encoded_header.len() as u64).map_err(
+                    |e| match claim_local_decode_io_v1::<crate::header::Header>(e) {
+                        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => {
+                            crate::palw_state_v2::PalwStateV2Error::NativeResource(e)
+                        }
+                        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => {
+                            crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(e.to_string())
+                        }
+                    },
+                )?;
+            let header_lease = reserve_native_requests_v1(header_shape.logical_requests_v1())
+                .map_err(crate::palw_state_v2::PalwStateV2Error::NativeResource)?;
+            let header: crate::header::Header = borsh::from_slice(encoded_header).map_err(|e| {
+                crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(format!("claim-local origin header: {e}"))
+            })?;
+            if !PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
+                drop(header_lease);
+                continue;
+            }
+            let body = header
+                .palw_commitment
+                .strip_prefix(&crate::palw_attempt_material_v3::PALW_ATTEMPT_MATERIAL_WIRE_MAGIC_V3)
+                .expect("PAV3 magic checked above");
+            let material_shape = preflight_native_value_v1::<PalwAttemptMaterialEnvelopeV3>(body, body.len() as u64).map_err(|e| {
+                match claim_local_decode_io_v1::<PalwAttemptMaterialEnvelopeV3>(e) {
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => {
+                        crate::palw_state_v2::PalwStateV2Error::NativeResource(e)
+                    }
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => {
+                        crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(e.to_string())
+                    }
+                }
+            })?;
+            let material_lease = reserve_native_requests_v1(material_shape.logical_requests_v1())
+                .map_err(crate::palw_state_v2::PalwStateV2Error::NativeResource)?;
+            let material = PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment)
+                .map_err(|e| crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(format!("claim-local PAV3 origin: {e}")))?;
+            if material.base != **envelope
+                || material.ready.binding.claim != self.id
+                || material.ready.binding.execution_key != *execution_key
+            {
+                return Err(crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(
+                    "claim-local PAV3 binding differs from its admitted attempt".into(),
+                ));
+            }
+            if binding.is_some() {
+                return Err(crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(
+                    "claim-local birth has multiple PAV3 bindings".into(),
+                ));
+            }
+            let owned = material.ready.binding;
+            let demand = native_value_requests_v1(&owned).map_err(crate::palw_state_v2::PalwStateV2Error::NativeResource)?;
+            let binding_lease = reserve_native_requests_v1(demand).map_err(crate::palw_state_v2::PalwStateV2Error::NativeResource)?;
+            binding = Some(crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(owned, binding_lease));
+            drop(material_lease);
+            drop(header_lease);
+        }
+        Ok(binding)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
