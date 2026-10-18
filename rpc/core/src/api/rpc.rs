@@ -1119,6 +1119,18 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwStateProofResponse::default())
     }
 
+    async fn get_rfc_12_state(&self, request: GetRfc12StateRequest) -> RpcResult<GetRfc12StateResponse> {
+        self.get_rfc_12_state_call(None, request).await
+    }
+    async fn get_rfc_12_state_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetRfc12StateRequest,
+    ) -> RpcResult<GetRfc12StateResponse> {
+        let _ = (connection, request);
+        Err(RpcError::General("this node serves no RFC12 state read".into()))
+    }
+
     /// RFC-0009 L2: the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203). A node built before op 203
     /// drops the WebSocket on it: ask it last on a connection, or reconnect.
     async fn get_palw_fork_choice_opening(

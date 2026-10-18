@@ -144,6 +144,7 @@ pub enum KaspadPayloadOps {
     GetPalwCapacityShadow,
     GetPalwStateProof,
     GetPalwForkChoiceOpening,
+                GetRfc12State,
     GetPalwLegacyDispute,
     GetPalwLegacyDisputes,
     GetPalwFraudFilerStatus,

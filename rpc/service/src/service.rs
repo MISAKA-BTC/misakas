@@ -3356,6 +3356,32 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     /// (`kaspa_consensus_core::palw_fork_choice_commitment_v1`). **Nothing here is trusted by the caller** until the opening verifies
     /// against a root it trusts (an attestation from an issuer it chose, a chain child's header). The node's sink and tips are what it
     /// shows; a peer hiding a tip is caught by another peer. The DNS BFT gate facts are this node's, for an issuer to attest.
+    async fn get_rfc_12_state_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetRfc12StateRequest,
+    ) -> RpcResult<GetRfc12StateResponse> {
+        if request.outpoints.len() > 64 { return Err(RpcError::General("at most 64 outpoints per RFC12 read".into())); }
+        let block = if request.block_hash.is_empty() { None } else { Some(parse_hash64(&request.block_hash, "blockHash")?) };
+        let outpoints = request.outpoints.iter().map(|s| {
+            let (id, index) = s.rsplit_once(':').ok_or_else(|| RpcError::General("outpoint must be transaction_id:index".into()))?;
+            let index: u32 = index.parse().map_err(|_| RpcError::General("outpoint index must be u32".into()))?;
+            Ok(kaspa_consensus_core::tx::TransactionOutpoint::new(parse_hash64(id, "outpoint transaction id")?, index))
+        }).collect::<RpcResult<Vec<_>>>()?;
+        let session = self.consensus_manager.consensus().session().await;
+        let read = session.spawn_blocking(move |c| c.rfc12_state_v1(block, &outpoints)).await.map_err(RpcError::General)?;
+        let utxos: Vec<_> = read.utxos.into_iter().map(|(point, entry)| serde_json::json!({
+            "outpoint": RpcTransactionOutpoint::from(point), "utxoEntry": entry.map(RpcUtxoEntry::from),
+        })).collect();
+        let json = serde_json::json!({
+            "version": 1, "blockHash": read.block.to_string(), "blockDaa": read.block_daa,
+            "reserveBalance": read.reserve_balance,
+            "virtualSelectedParent": read.virtual_selected_parent.to_string(), "virtualDaaScore": read.virtual_daa,
+            "virtualParents": read.virtual_parents.iter().map(ToString::to_string).collect::<Vec<_>>(), "utxos": utxos,
+        });
+        Ok(GetRfc12StateResponse { snapshot_json: json.to_string() })
+    }
+
     async fn get_palw_fork_choice_opening_call(
         &self,
         _connection: Option<&DynRpcConnection>,
@@ -3369,6 +3395,15 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 request.block_hashes.len()
             )));
         }
+        let query = if request.proof_request.is_empty() { None } else {
+            if request.proof_request.len() > 32_768 {
+                return Err(RpcError::General("fork-choice proof request exceeds 32768 bytes".into()));
+            }
+            let query: kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofQueryV2 =
+                borsh::from_slice(&request.proof_request).map_err(|e| RpcError::General(format!("invalid fork-choice proof request: {e}")))?;
+            query.validate().map_err(RpcError::General)?;
+            Some(query)
+        };
         let blocks =
             request.block_hashes.iter().map(|text| parse_hash64(text.trim(), "blockHashes")).collect::<RpcResult<Vec<_>>>()?;
         let unavailable = |reason: String| GetPalwForkChoiceOpeningResponse { available: false, reason, ..Default::default() };
@@ -3376,7 +3411,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Ok(unavailable("this network has no PALW V2 state".to_string()));
         }
         let session = self.consensus_manager.consensus().unguarded_session();
-        match session.spawn_blocking(move |c| c.palw_fork_choice_openings_v1(&blocks)).await {
+        match session.spawn_blocking(move |c| match query {
+            Some(q) => c.palw_fork_choice_openings_v2(&blocks, &q),
+            None => c.palw_fork_choice_openings_v1(&blocks),
+        }).await {
             Err(reason) => Ok(unavailable(reason)),
             Ok(served) => Ok(GetPalwForkChoiceOpeningResponse {
                 available: true,
@@ -3392,10 +3430,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                             available: true,
                             reason: String::new(),
                             header: Some(RpcHeader::from(&e.header)),
-                            leaf: e.opening.leaf.encode(),
+                            leaf: if e.committed_form { e.opening.leaf } else { e.flat_diagnostic_leaf },
                             inner_root: e.opening.inner_root.to_string(),
                             committed_root: e.committed_root.to_string(),
                             committed_form: e.committed_form,
+                            rule_e_proof: e.rule_e_proof.map(|p| borsh::to_vec(&p).expect("a fork-choice proof serializes")).unwrap_or_default(),
                         },
                         Err(reason) => RpcPalwForkChoiceEntry { block_hash: block.to_string(), reason, ..Default::default() },
                     })

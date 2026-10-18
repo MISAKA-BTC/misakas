@@ -305,6 +305,24 @@ pub fn opening_from_wire_v1(leaf: &[u8], inner_root: &str) -> Option<PalwForkCho
     Some(PalwForkChoiceOpeningV1 { leaf: PalwForkChoiceLeafV1::decode(leaf)?, inner_root: inner_root.parse::<Hash64>().ok()? })
 }
 
+/// Parse an op-203 V1/V2/V3 opening without treating its contents as trusted.
+/// The shared reader checks the grammar against the client's own ruleset later.
+pub fn opening_from_wire_v2(
+    leaf: &[u8],
+    inner_root: &str,
+) -> Option<kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommittedOpeningV2> {
+    use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::PalwForkChoiceLeafV2;
+    use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::{PalwCommittedOpeningV2, PalwForkChoiceLeafV3};
+    if !leaf.is_empty()
+        && PalwForkChoiceLeafV1::decode(leaf).is_none()
+        && PalwForkChoiceLeafV2::decode(leaf).is_err()
+        && PalwForkChoiceLeafV3::decode(leaf).is_err()
+    {
+        return None;
+    }
+    Some(PalwCommittedOpeningV2 { leaf: leaf.to_vec(), inner_root: inner_root.parse().ok()? })
+}
+
 /// **RFC-0018 GAP-R4 — a header's committed opening in ANY form**, checked in the grammar the client's own ruleset (`params`)
 /// selects at `point`: flat, the v1 leaf, the rule-E leaf v2, or the rule-E leaf v3 (rule E v2 capital and Gate C certification
 /// state). The same function the node's v39 anchor verifier calls (`palw_verify_committed_leaf_v2`), so node and client accept exactly
@@ -317,8 +335,14 @@ pub fn verify_committed_opening_v2(
     leaf: &[u8],
     inner_root: &Hash64,
 ) -> Result<kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommittedLeafViewV2, String> {
-    kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_verify_committed_leaf_v2(params, committed_root, point, leaf, inner_root)
-        .map_err(|e| format!("the committed opening does not verify in the client's form: {e:?}"))
+    kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_verify_committed_leaf_v2(
+        params,
+        committed_root,
+        point,
+        leaf,
+        inner_root,
+    )
+    .map_err(|e| format!("the committed opening does not verify in the client's form: {e:?}"))
 }
 
 /// The issuer channel's file limits: at most this many attestations are read per refresh (the newest by `issuedAtDaa`), each file at
@@ -420,6 +444,55 @@ pub fn issue_attestations_v1(
             block_daa: s.daa_score,
             committed_root: s.committed_root,
             leaf_version: s.opening.leaf.leaf_version,
+            dns_gate,
+            issued_at_daa,
+            key_id: key_id.to_vec(),
+            signature: Vec::new(),
+        };
+        att.signature = sign(att.signing_digest().as_bytes().as_slice());
+        out.push(att);
+    }
+    (out, skipped)
+}
+
+/// An issuer's own node response, with the full point needed by the shared reader.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IssuerServedV2 {
+    pub point: PalwForkChoicePointV1,
+    pub opening: kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommittedOpeningV2,
+    pub committed_root: Hash64,
+    pub committed_form: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn issue_attestations_v2(
+    params: &Params,
+    ruleset: &ClientRulesetV1,
+    served: &[IssuerServedV2],
+    dns_gate: Option<PalwDnsGateFactV1>,
+    issued_at_daa: u64,
+    key_id: &[u8],
+    sign: &dyn Fn(&[u8]) -> Vec<u8>,
+) -> (Vec<ForkChoiceAttestationV1>, Vec<(Hash64, String)>) {
+    let (mut out, mut skipped) = (Vec::new(), Vec::new());
+    for s in served {
+        if !s.committed_form || s.opening.leaf.is_empty() {
+            skipped.push((s.point.block, "below the fork-choice commitment fence".into()));
+            continue;
+        }
+        if let Err(why) = s.opening.verify(params, &s.committed_root, &s.point) {
+            skipped.push((s.point.block, format!("the node's committed opening does not verify: {why:?}")));
+            continue;
+        }
+        let mut att = ForkChoiceAttestationV1 {
+            network_id: ruleset.network_id.clone(),
+            genesis: ruleset.genesis.clone(),
+            consensus_params_id: ruleset.consensus_params_id.clone(),
+            consensus_schedule_id: ruleset.consensus_schedule_id.clone(),
+            block: s.point.block,
+            block_daa: s.point.daa_score,
+            committed_root: s.committed_root,
+            leaf_version: u16::from_le_bytes(s.opening.leaf[..2].try_into().expect("a verified leaf has a version")),
             dns_gate,
             issued_at_daa,
             key_id: key_id.to_vec(),
@@ -595,6 +668,40 @@ pub fn verify_attestation_v1(
     limits: &L2LimitsV1,
     verify: &dyn Fn(&[u8], &[u8], &[u8]) -> bool,
 ) -> Result<(), String> {
+    verify_attestation_versions_v2(att, trusted, ruleset, now_daa, limits, verify, &[PALW_FORK_CHOICE_LEAF_VERSION_V1])
+}
+
+/// Authenticate the issuer and the grammar selected at the attested point.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_attestation_v2(
+    params: &Params,
+    att: &ForkChoiceAttestationV1,
+    trusted: &[(Vec<u8>, Vec<u8>)],
+    ruleset: &ClientRulesetV1,
+    now_daa: u64,
+    limits: &L2LimitsV1,
+    verify: &dyn Fn(&[u8], &[u8], &[u8]) -> bool,
+) -> Result<(), String> {
+    use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::{PalwCommitFormV1, palw_rule_e_commit_form_v1};
+    let version = match palw_rule_e_commit_form_v1(params, att.block_daa) {
+        PalwCommitFormV1::Flat => return Err("no committed leaf below the fork-choice fence".into()),
+        PalwCommitFormV1::V1 => 1,
+        PalwCommitFormV1::RuleEV2 => 2,
+        PalwCommitFormV1::RuleEV3 => 3,
+    };
+    verify_attestation_versions_v2(att, trusted, ruleset, now_daa, limits, verify, &[version])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_attestation_versions_v2(
+    att: &ForkChoiceAttestationV1,
+    trusted: &[(Vec<u8>, Vec<u8>)],
+    ruleset: &ClientRulesetV1,
+    now_daa: u64,
+    limits: &L2LimitsV1,
+    verify: &dyn Fn(&[u8], &[u8], &[u8]) -> bool,
+    versions: &[u16],
+) -> Result<(), String> {
     let (_, pubkey) =
         trusted.iter().find(|(id, _)| *id == att.key_id).ok_or_else(|| format!("issuer '{}' is not trusted", att.issuer()))?;
     if att.network_id != ruleset.network_id
@@ -604,7 +711,7 @@ pub fn verify_attestation_v1(
     {
         return Err(format!("issuer '{}' attests under another ruleset", att.issuer()));
     }
-    if att.leaf_version != PALW_FORK_CHOICE_LEAF_VERSION_V1 {
+    if !versions.contains(&att.leaf_version) {
         return Err(format!("leaf version {} is not one this client reads", att.leaf_version));
     }
     if !verify(pubkey, att.signing_digest().as_bytes().as_slice(), &att.signature) {
@@ -1041,3 +1148,6 @@ pub fn l3_root_under_l2_v1(
 
 #[cfg(test)]
 mod tests;
+
+mod v2;
+pub use v2::*;

@@ -116,6 +116,7 @@ impl Router {
                 GetPalwCapacityShadow,
                 GetPalwStateProof,
                 GetPalwForkChoiceOpening,
+                GetRfc12State,
                 GetPalwLegacyDispute,
                 GetPalwLegacyDisputes,
                 GetPalwFraudFilerStatus,

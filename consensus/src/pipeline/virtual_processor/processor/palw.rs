@@ -11093,7 +11093,16 @@ impl VirtualStateProcessor {
         &self,
         block: BlockHash,
     ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedEntryV1, String> {
-        use kaspa_consensus_core::palw_fork_choice_commitment_v1::{PalwForkChoiceOpeningV1, PalwForkChoiceServedEntryV1};
+        self.palw_fork_choice_opening_v2_impl(block, None)
+    }
+
+    pub fn palw_fork_choice_opening_v2_impl(
+        &self,
+        block: BlockHash,
+        query: Option<&kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofQueryV2>,
+    ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedEntryV1, String> {
+        use kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedEntryV1;
+        use kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommittedOpeningV2;
         if self.palw_state_params_v2.is_none() {
             return Err("this network has no PALW V2 state".to_string());
         }
@@ -11110,16 +11119,25 @@ impl VirtualStateProcessor {
             PalwWeighFaultV2::StoreUnreadable => format!("this node's own PALW store would not read for block {block}"),
             PalwWeighFaultV2::NativeCapacityUnavailable => format!("this node cannot admit native state memory for block {block}"),
         })?;
-        let opening = PalwForkChoiceOpeningV1::of(&state).ok_or_else(|| "the genesis state has no fork-choice leaf".to_string())?;
-        if opening.leaf.block != block {
-            return Err(format!("the state this node walked to names block {}, not {block}", opening.leaf.block));
+        let point = state.last_point().ok_or_else(|| "the genesis state has no fork-choice point".to_string())?;
+        if point.block != block {
+            return Err(format!("the state this node walked to names block {}, not {block}", point.block));
         }
+        let opening = PalwCommittedOpeningV2::of(&state, &self.native_redemption_params_v33)
+            .ok_or_else(|| "the state's ruleset requires a fork-choice leaf that cannot be built".to_string())?;
         let committed_root = self.palw_committed_root_v1(&state);
         let committed_form = kaspa_consensus_core::palw_fork_choice_commitment_v1::palw_fork_choice_committed_at_v1(
             self.palw_fork_choice_commitment_v1,
-            Some(opening.leaf.daa_score),
+            Some(point.daa_score),
         );
-        Ok(PalwForkChoiceServedEntryV1 { header: (*header).clone(), opening, committed_root, committed_form })
+        let flat_diagnostic_leaf = if committed_form { Vec::new() } else {
+            kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceLeafV1::of(&state)
+                .ok_or_else(|| "the state has no diagnostic fork-choice leaf".to_string())?.encode()
+        };
+        let rule_e_proof = query.map(|q| {
+            kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofV2::of(&state, &self.native_redemption_params_v33, q)
+        }).transpose()?.flatten();
+        Ok(PalwForkChoiceServedEntryV1 { header: (*header).clone(), opening, flat_diagnostic_leaf, rule_e_proof, committed_root, committed_form })
     }
 
     /// Op 203's body: the openings of `blocks` (or of the sink and every tip), with the node's sink and tips.
@@ -11129,6 +11147,17 @@ impl VirtualStateProcessor {
         sink: BlockHash,
         tips: Vec<BlockHash>,
     ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        self.palw_fork_choice_openings_v2_impl(blocks, sink, tips, None)
+    }
+
+    pub fn palw_fork_choice_openings_v2_impl(
+        &self,
+        blocks: &[BlockHash],
+        sink: BlockHash,
+        tips: Vec<BlockHash>,
+        query: Option<&kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofQueryV2>,
+    ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        if let Some(q) = query { q.validate()?; }
         use kaspa_consensus_core::palw_fork_choice_commitment_v1::{
             PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1, PalwForkChoiceServedV1,
         };
@@ -11143,7 +11172,7 @@ impl VirtualStateProcessor {
         let mut seen = std::collections::HashSet::new();
         named.retain(|b| seen.insert(*b));
         named.truncate(PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1);
-        let entries = named.into_iter().map(|block| (block, self.palw_fork_choice_opening_v1_impl(block))).collect();
+        let entries = named.into_iter().map(|block| (block, self.palw_fork_choice_opening_v2_impl(block, query))).collect();
         // The gate's inputs as this node holds them (`dns_bft_gate_refusal` reads exactly these): the rollout stage and the
         // confirmed anchor. An unreadable or unwritten DNS state is reported as nothing confirmed in Bootstrap — what the gate reads it as.
         // Past the RFC-0012 retirement at the sink the gate abstains (`dns_bft_gate_refusal` returns before reading the row), so the

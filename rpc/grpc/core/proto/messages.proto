@@ -123,6 +123,7 @@ message KaspadRequest {
     GetPalwCapacityShadowRequestMessage getPalwCapacityShadowRequest = 1216;
     GetPalwStateProofRequestMessage getPalwStateProofRequest = 1218;
     GetPalwForkChoiceOpeningRequestMessage getPalwForkChoiceOpeningRequest = 1220;
+    GetRfc12StateRequestMessage getRfc12StateRequest = 1340;
     GetPalwLegacyDisputeRequestMessage getPalwLegacyDisputeRequest = 1222;
     GetPalwLegacyDisputesRequestMessage getPalwLegacyDisputesRequest = 1224;
     GetPalwFraudFilerStatusRequestMessage getPalwFraudFilerStatusRequest = 1226;
@@ -263,6 +264,7 @@ message KaspadResponse {
     GetPalwCapacityShadowResponseMessage getPalwCapacityShadowResponse = 1217;
     GetPalwStateProofResponseMessage getPalwStateProofResponse = 1219;
     GetPalwForkChoiceOpeningResponseMessage getPalwForkChoiceOpeningResponse = 1221;
+    GetRfc12StateResponseMessage getRfc12StateResponse = 1341;
     GetPalwLegacyDisputeResponseMessage getPalwLegacyDisputeResponse = 1223;
     GetPalwLegacyDisputesResponseMessage getPalwLegacyDisputesResponse = 1225;
     GetPalwFraudFilerStatusResponseMessage getPalwFraudFilerStatusResponse = 1227;

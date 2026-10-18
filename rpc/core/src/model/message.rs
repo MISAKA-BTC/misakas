@@ -2617,3 +2617,6 @@ mod palw_monetary_material;
 pub use palw_monetary_material::*;
 mod palw_state_carriage;
 pub use palw_state_carriage::*;
+
+mod rfc12_state;
+pub use rfc12_state::*;

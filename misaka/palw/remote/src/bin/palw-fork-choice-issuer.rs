@@ -7,7 +7,7 @@
 //! ```
 //!
 //! Each round asks the node for its sink's and tips' openings (op 203, `getPalwForkChoiceOpening`), keeps only post-states committed in
-//! the fork-choice form whose served opening hashes to the served root and names the block (`misaka_palw_remote::l2::issue_attestations_v1`),
+//! the fork-choice form whose served opening hashes to the served root and names the block (`misaka_palw_remote::l2::issue_attestations_v2`),
 //! signs each with ML-DSA-87 under the attestation context, and writes `<out>/<block>.json` (atomically). A miner that chose this issuer
 //! (`palw-remote-miner --fork-choice-issuer <label>=<public key file> --fork-choice-attestations <dir>`) reads that directory, synced by
 //! any transport: the files are signed, the transport is untrusted.
@@ -28,7 +28,7 @@ use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
 };
-use misaka_palw_remote::l2::{FORK_CHOICE_ATTESTATION_MLDSA87_CONTEXT, IssuerServedV1, issue_attestations_v1, opening_from_wire_v1};
+use misaka_palw_remote::l2::{FORK_CHOICE_ATTESTATION_MLDSA87_CONTEXT, IssuerServedV2, issue_attestations_v2, opening_from_wire_v2};
 use misaka_palw_remote::verify::ClientRulesetV1;
 
 fn die(msg: impl std::fmt::Display) -> ! {
@@ -205,9 +205,10 @@ fn main() {
                 continue;
             }
         };
-        let served = match runtime.block_on(
-            client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest { block_hashes: Vec::new() }),
-        ) {
+        let served = match runtime.block_on(client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
+            block_hashes: Vec::new(),
+            proof_request: Vec::new(),
+        })) {
             Ok(r) => r,
             Err(e) => {
                 say("round-failed", serde_json::json!({ "why": format!("getPalwForkChoiceOpening: {e}") }));
@@ -228,7 +229,7 @@ fn main() {
                 .map(|a| (a, served.dns_confirmed_anchor_daa)),
         });
         let mut skipped: Vec<(String, String)> = Vec::new();
-        let entries: Vec<IssuerServedV1> = served
+        let entries: Vec<IssuerServedV2> = served
             .entries
             .iter()
             .filter_map(|e| {
@@ -245,14 +246,23 @@ fn main() {
                     skipped.push(fail("no header"));
                     return None;
                 };
-                let Some(opening) = opening_from_wire_v1(&e.leaf, &e.inner_root) else {
+                let Some(opening) = opening_from_wire_v2(&e.leaf, &e.inner_root) else {
                     skipped.push(fail(if e.committed_form { "the leaf does not decode" } else { "below the commitment fence" }));
                     return None;
                 };
-                Some(IssuerServedV1 { block, daa_score: header.daa_score, opening, committed_root, committed_form: e.committed_form })
+                Some(IssuerServedV2 {
+                    point: kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoicePointV1 {
+                        block,
+                        daa_score: header.daa_score,
+                        blue_score: header.blue_score,
+                    },
+                    opening,
+                    committed_root,
+                    committed_form: e.committed_form,
+                })
             })
             .collect();
-        let (attestations, refused) = issue_attestations_v1(&ours, &entries, dns_gate, now_daa, key_id.as_bytes(), &sign);
+        let (attestations, refused) = issue_attestations_v2(&params, &ours, &entries, dns_gate, now_daa, key_id.as_bytes(), &sign);
         skipped.extend(refused.into_iter().map(|(b, why)| (b.to_string(), why)));
         let mut written = Vec::new();
         for att in &attestations {

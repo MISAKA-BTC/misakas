@@ -2761,6 +2761,20 @@ enum EvmCmd {
         #[command(flatten)]
         key: KeyArgs,
     },
+    /// Refund an unclaimed deposit after its signed timeout (dry-run unless --yes).
+    DepositRefund {
+        #[arg(long)]
+        outpoint: String,
+        /// Destination address; defaults to the deposit owner's funding address.
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long)]
+        fee: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
     /// Queue the claim of a deposit lock on this node (`submitEvmDepositClaim`); run it against a
     /// mining node so the claim is included.
     Claim {
@@ -3421,6 +3435,9 @@ async fn run_cli() -> std::process::ExitCode {
                 evm_deposit::deposit_lock(ctx, &key.source(), &evm_address, amount, claim_tip, timeout_daa_delta, fee, yes).await
             })
         }
+        Command::Evm(EvmCmd::DepositRefund { outpoint, to, fee, yes, key }) => Box::pin(async move {
+            evm_deposit::deposit_refund(ctx, &key.source(), &outpoint, to.as_deref(), fee, yes).await
+        }),
         Command::Evm(EvmCmd::Claim { outpoint }) => Box::pin(async move { evm_deposit::claim(ctx, &outpoint).await }),
         Command::Evm(EvmCmd::Balance { address }) => Box::pin(async move { eth::balance(ctx, &address) }),
         Command::Evm(EvmCmd::Nonce { address }) => Box::pin(async move { eth::nonce(ctx, &address) }),

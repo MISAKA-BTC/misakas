@@ -650,3 +650,6 @@ pub mod native_receipt_windows_v39;
 pub mod native_redemption_v39;
 pub mod native_request_composer_v39;
 pub mod native_upstream_material_v39;
+
+#[cfg(feature = "native-rpc")]
+pub mod state_carriage_rpc;

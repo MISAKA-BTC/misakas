@@ -10,13 +10,13 @@ use kaspad_lib::{
     args::Args,
     daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
     private_integration::{
-        PrivateKernelPaidCheckSpecV4, PrivateKernelPaidReplaceSpecV4, PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4,
-        create_private_integration_core_with_kernel_paid_consumers_v4, create_private_integration_core_with_native_custody_v3,
-        create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
-        export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
-        export_private_paid_program_work_v3, prepare_private_integration_probe, private_complete_check_params_v1,
-        private_late_retirement_params_v1, private_native_settlement_params_v1, private_paid_claim_params_v3,
-        private_paid_claim_params_v4, private_probe_manifest,
+        PrivateKernelPaidCheckSpecV4, PrivateKernelPaidReplaceSpecV4, PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3,
+        PrivateRecoveryAckFeeSpecV4, create_private_integration_core_with_kernel_paid_consumers_v4,
+        create_private_integration_core_with_native_custody_v3, create_private_integration_core_with_native_custody_v4,
+        create_private_integration_core_with_runtime, export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3,
+        export_private_paid_bootstrap_v4, export_private_paid_program_work_v3, generate_private_paid_request_v4,
+        prepare_private_integration_probe, private_complete_check_params_v1, private_late_retirement_params_v1,
+        private_native_settlement_params_v1, private_paid_claim_params_v3, private_paid_claim_params_v4, private_probe_manifest,
     },
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
@@ -28,6 +28,9 @@ Any profile: --private-probe-retirement-daa=N (N >= 2) arms palw_dns_retirement_
   height is part of the profile's identity: every node, export and print of one run must name the same N.
 Read-only mode: --print-private-probe-profile
 Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1, paid-v3 or paid-v4)
+Generate authenticated live paid-v4 request:
+  --private-probe-request-rpc=ws://127.0.0.1:PORT --private-probe-request-block=PINNED_HASH
+  --private-probe-request-spec=JSON --private-probe-request-inputs=BORSH --private-probe-generate-paid-request=NEW_FILE
 Offline actual paid Program work: --private-probe-paid-request=FILE --private-probe-export-paid-work=FRESH_DIRECTORY
 paid-v3/paid-v4 node mode, RFC-0008 PAV3 native custody (unverified, unapproved mechanics):
   --private-probe-native-provider-keys=SEED_FILE@TXID:INDEX,SEED_FILE@TXID:INDEX[,...] (fixture seats, >=2 operators)
@@ -99,6 +102,11 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-kernel-paid-check"
                         | "--private-probe-kernel-replace"
                         | "--private-probe-retirement-daa"
+                        | "--private-probe-request-rpc"
+                        | "--private-probe-request-block"
+                        | "--private-probe-request-spec"
+                        | "--private-probe-request-inputs"
+                        | "--private-probe-generate-paid-request"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -141,6 +149,15 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let bootstrap = flags.values.remove("--private-probe-export-bootstrap");
     let paid_request = flags.values.remove("--private-probe-paid-request");
     let paid_output = flags.values.remove("--private-probe-export-paid-work");
+    let generate = flags.values.remove("--private-probe-generate-paid-request");
+    let request_rpc = flags.values.remove("--private-probe-request-rpc");
+    let request_block = flags.values.remove("--private-probe-request-block");
+    let request_spec = flags.values.remove("--private-probe-request-spec");
+    let request_inputs = flags.values.remove("--private-probe-request-inputs");
+    let request_parts = [request_rpc.is_some(), request_block.is_some(), request_spec.is_some(), request_inputs.is_some()];
+    if (generate.is_some() && !request_parts.iter().all(|v| *v)) || (generate.is_none() && request_parts.iter().any(|v| *v)) {
+        return Err("request generation requires its RPC, pinned block, spec, inputs and fresh output together".into());
+    }
     let native = PrivateNativeCustodySpecV3::parse(
         flags.values.remove("--private-probe-native-provider-keys").as_deref(),
         flags.values.remove("--private-probe-native-provider-listen").as_deref(),
@@ -258,6 +275,31 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let mut config = Config::new(params);
     config.palw_drill_genesis_salt = Some(salt);
     config.private_population = population;
+    if let Some(output) = generate {
+        if profile != "paid-v4"
+            || flags.print
+            || bootstrap.is_some()
+            || paid_output.is_some()
+            || native.is_some()
+            || kernel_work.is_some()
+            || kernel_checker.is_some()
+            || kernel_replace.is_some()
+            || ack_fees.is_some()
+            || !recovery_providers.is_empty()
+        {
+            return Err("request generation is an exclusive paid-v4 tooling mode".into());
+        }
+        let report = generate_private_paid_request_v4(
+            &config,
+            request_rpc.as_deref().unwrap(),
+            request_block.as_deref().unwrap(),
+            Path::new(request_spec.as_deref().unwrap()),
+            Path::new(request_inputs.as_deref().unwrap()),
+            Path::new(&output),
+        )?;
+        println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
     if flags.print {
         println!("{}", serde_json::to_string_pretty(&private_probe_manifest(&config)).map_err(|e| e.to_string())?);
         return Ok(());

@@ -322,3 +322,90 @@ run (not re-run).
 | x8 assertions written for OPV timeout Finals: signed root expiries shorter than the paid Final, collateral deltas that now include covenant and source reservations, Final due later | completed-worker, withheld-slice, kernel-finals restart/reorg, second-real-root, honest-slices (`WindowClosed` at the paid window end), OPV-settlement (the slice leaves `Pending` earlier), native-Final ×3; competing-claim: a paid job holds its one claim, so the competing claim is refused at commit (the property the test guards holds more strongly; its inclusion assertion needs rewriting) | per-test: lengthen signed lifetimes inside the max, recompute the economic deltas from the rows, wait for the paid Final |
 | no seam (RFC08 08-C): the class is `Candidate` under the model registry | native paid-material window | the no-seam EXEC fixture (item 2) |
 | not diagnosed | native happy-Final (`card 1's attempt block` disqualified) | read its disqualification (`G14_LOG=…virtual_processor=info`) |
+
+
+## Codex handover 3 — 2026-10-18 (in progress)
+
+User authorized base `042e5e759` and branch `codex/rfc08-09-10-12`, with RFC09/RFC12 first. RFC08 08-B/08-C and RFC10 remain
+waiting for a newer `integ/validation-r2` commit to merge. Validation-lane changes win any conflict; the touched paths must be
+identified in the merge/fix commit message. No preset, activation height, identity or frozen design is changed.
+
+**RFC09 implementation in progress:** op 203 builds the committed leaf using the full node's V1/V2/V3 grammar and exposes bounded,
+versioned window/registry sub-openings. Empty proof requests retain request-v1 bytes; below the commitment fence the RPC retains
+its legacy diagnostic leaf separately from authenticated openings. The issuer checks openings through the common reader before
+signing. The remote Rule E path uses that reader, selected-parent walks, authenticated window suffixes and fork-registry
+membership/absence/capital, the shared Rule E accumulator/decision functions, and the finality/provenance guards. Missing or
+invalid evidence refuses the Rule E path before signing.
+
+**Verification:** tests added, not yet reported as passing: core grammar/root/point tampering and sub-opening completeness;
+RPC v1 compatibility / v2 round trips; remote issuer grammar/version binding; actual-node op-203 V2/V3 reads; a two-branch node
+comparison under Rule E + Gate C (the no-certified-credit case), including missing and tampered evidence. Initial targeted core
+build is in progress. No RFC completion claim is made. Socket-level RPC, populated certified-work fork behavior and the miner's
+signing refusal still require verification; RFC12's four capabilities, signed refund CLI and acceptance run are not implemented
+by this change.
+
+**RFC12 partial implementation (same handover, unverified):** added the non-default `rfc12-import-failpoints` build feature,
+which reuses the environment-and-owned-directory armed OS-kill rendezvous previously available only in unit tests. Existing
+UTXO clear/copy and import-completion checkpoints are included, together with before/after synchronous barriers for session
+begin and PALW/EVM/legacy sidecars. The private profile manifest advertises whether the feature is compiled. Default node builds
+retain no pause/environment path. Acceptance-driver wiring and the crash/restart run remain outstanding; this does not close
+checkbox 3 or the other three node-tool gaps.
+
+**Verified core subset (2026-10-18):** `palw_fork_choice_rule_e_leaf_v3::tests` **5/5 pass**, including the two new RFC09 tests
+and the three existing V3 root/certification/compatibility tests. Command-local core test optimization is disabled; the first
+execution at the default 2 MiB test-thread stack aborted with stack overflow. The unchanged test binary passes with
+`RUST_MIN_STACK=67108864` (the validation lane's documented debug-stack setting). RPC/remote/node tests remain unverified at
+this checkpoint; no end-to-end completion is claimed.
+
+
+### Codex handover 3 continuation — 2026-10-18 (implementation, acceptance pending)
+
+- RFC09: core leaf/opening tests 5/5 and RPC V1/V2 transport tests 2/2 passed. A check of RPC service, gRPC core, remote
+  binaries (`rpc` feature) and CLI passed before the subsequent RFC12 additions; current-tip verification is still required.
+  The real-node tests have not run yet: their first compile found a missing `VirtualStateStoreReader` trait import in the new
+  RFC12 read, now corrected. No socket-level or populated certified-work fork result is claimed.
+- RFC12: added read-only op 214 (`getRfc12State`) for block reserve balances and up to 64 exact UTXO points, retaining a single
+  virtual-generation lock for all requested points and propagating store errors. A missing reserve row is a known zero only
+  with retained validation data/genesis, or is read from the matching pruning snapshot; unavailable history stays unknown.
+  Added `evm deposit-refund` and an owner/timeout-bound ML-DSA builder; script-engine and tamper tests are written, not yet
+  reported passing. The request generator runs inside the exact private paid-v4 factory, checks node genesis/params identity
+  and authenticates the complete carriage against an explicitly pinned live header before creating a V4 request. The V4
+  request codec is shared with the exporter without changing its bytes.
+- RFC12 acceptance driver: exact WAL rendezvous is armed after genesis initialization and before the owned import link;
+  restart clears arming. Bridge checks now read original inputs and materialized outputs by outpoint, link the refund to its
+  original input/body and check value conservation, and compare those rights after restart/reorg/join. Python controls:
+  existing acceptance tests 52/52, new point-read controls 4/4, exact-WAL protocol controls 4/4 pass (synthetic unit controls,
+  not real-process observations). Full acceptance, reserve accrual/drip reconciliation and all runtime tests remain open.
+- All changes remain dormant with respect to shipped consensus presets. No RFC08/RFC10 implementation has started; the fetched
+  validation branch still names `042e5e759`, so the required newer validation commit has not yet been merged.
+
+### 2026-10-18 — RFC09/RFC12 follow-up verification
+
+- Actual consensus harness `t12_fork_choice_commitment`: **4/4 pass** (V1 fence compatibility, V2/V3 op203
+  openings/subproofs, two real no-credit forks under Rule E + Gate C + capital, exact UTXO and known-zero reserve reads).
+  The two-fork fixture now copies each full node's served DNS gate facts into the issuer's attestation. Missing subproofs
+  and substituted committed roots refuse. This is an API harness, not socket-RPC or populated certified-credit coverage.
+- `rfc12_refund_is_timeout_bound_owned_and_validates_with_the_real_script_engine`: **1/1 pass** through the real script engine,
+  with changed output/amount/timeout, wrong key, early refund and excessive-fee refusal controls. No private-node
+  broadcast/reorg/restart refund run has been recorded yet.
+- Private paid-v4 node with EVM and `rfc12-import-failpoints`: compile check passed. The generator additionally shares the
+  exporter's producer-input allocation preflight and receives the acceptance driver's pinned `{REQUEST_BLOCK}`. Current-tip
+  CLI/gRPC checks, standalone input preflight tests, V3 miner signing-refusal controls and positive reserve/drip API assertions
+  are still being verified; compilation alone is not runtime acceptance.
+- Python exact-WAL controls **5/5 pass**; an exact rendezvous cannot share its launch with a coarse import-phase kill.
+  The earlier 52 acceptance controls and four point-read controls remain unit controls only. Full acceptance and independent
+  reserve-flow reconciliation remain open. Documentation checks report zero new issues (43 existing baseline occurrences).
+- A fresh fetch still names validation base `042e5e759`; RFC08 08-B/08-C and RFC10 remain gated on the required newer merge.
+
+- Follow-up results: current private node + CLI + gRPC client compile check passed. The actual-chain
+  `pos_v2_reserve_drip_pays_finalized_epoch` test passes **1/1**, checking op214's consensus read against the
+  independently calculated positive slash split, its later coinbase drip, and the unchanged historical balance.
+  The retirement acceptance phase now records bounded per-block reserve reads; independent process-level flow
+  reconstruction remains open. Retirement reconciliation controls pass **13/13**; acceptance controls remain **52/52**.
+
+- Remote results: `l2::tests` **17 pass, 1 ignored** (the ignored item is the existing cost benchmark), and
+  `miner::tests` **17/17 pass**. The latter includes the new V3 successful-publication control and missing/tampered
+  opening refusals before execution/signing. These are scripted remote-node controls, separate from the real-chain
+  two-fork API test above. Relevant legacy DNS anchors are walked through authenticated selected-parent openings,
+  including anchors before the Rule E fork point. A mixed pre-Rule-E fork still fails closed rather than using a
+  cross-activation comparator; no activation or complete migration acceptance is claimed.

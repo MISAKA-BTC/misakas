@@ -976,6 +976,17 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// RFC12 acceptance read: historical reserve and point UTXOs from one virtual
+    /// generation. Missing rows are distinct from storage errors.
+    fn rfc12_state_v1(
+        &self,
+        block: Option<BlockHash>,
+        outpoints: &[TransactionOutpoint],
+    ) -> Result<Rfc12StateV1, String> {
+        let _ = (block, outpoints);
+        Err("this consensus serves no RFC12 state read".into())
+    }
+
     /// Point lookup of a single outpoint in the virtual UTXO set (kaspa-pq EVM
     /// Lane §9.2: a depositor submits a lock outpoint; the node resolves the
     /// `EVM_DEPOSIT_LOCK` entry to build + validate a `DepositClaim`). `None` if
@@ -2378,6 +2389,16 @@ pub trait ConsensusApi: Send + Sync {
         Err("this consensus serves no fork-choice opening".to_string())
     }
 
+    /// Op 203's bounded Rule E window and fork-registry sub-openings.
+    fn palw_fork_choice_openings_v2(
+        &self,
+        blocks: &[BlockHash],
+        query: &crate::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofQueryV2,
+    ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let _ = (blocks, query);
+        Err("this consensus serves no Rule E fork-choice sub-openings".into())
+    }
+
     /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
     fn import_pruning_point_overlay_snapshot(
         &self,
@@ -2854,3 +2875,16 @@ pub trait ConsensusApi: Send + Sync {
 }
 
 pub type DynConsensus = Arc<dyn ConsensusApi>;
+
+
+/// Read-only observation; no consensus rule consumes this structure.
+#[derive(Clone, Debug)]
+pub struct Rfc12StateV1 {
+    pub block: BlockHash,
+    pub block_daa: u64,
+    pub reserve_balance: Option<u64>,
+    pub virtual_selected_parent: BlockHash,
+    pub virtual_daa: u64,
+    pub virtual_parents: Vec<BlockHash>,
+    pub utxos: Vec<(TransactionOutpoint, Option<UtxoEntry>)>,
+}

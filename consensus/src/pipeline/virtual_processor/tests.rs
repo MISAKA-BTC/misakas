@@ -6581,6 +6581,11 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     let reserve_accrued = ctx.consensus.virtual_processor().reserve_balance_store.get(reserve_settle.header.hash).unwrap_or(0);
     assert_eq!(reserve_accrued, dist.security_reserve_sompi, "A's slash accrues its reserve share to the pool");
     assert!(reserve_accrued > 0, "the reserve must be non-zero to drip");
+    assert_eq!(
+        ctx.consensus.rfc12_state_v1(Some(reserve_settle.header.hash), &[]).unwrap().reserve_balance,
+        Some(dist.security_reserve_sompi),
+        "RFC12 reads the actual positive balance, independently checked against the slashed principal's split"
+    );
 
     // ── Mine until epoch E's DAA-finalization; the drip pays B in that block's coinbase ─────────
     let target_final_daa =
@@ -6603,6 +6608,16 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     let drip_out = drip_block.transactions[0].outputs.iter().find(|o| o.script_public_key == spk_b).expect("drip pays B");
     // The sole included validator B receives the WHOLE reserve (cap is u64::MAX): accrued-in == dripped-out.
     assert_eq!(drip_out.value, reserve_accrued, "the entire accrued reserve drips to the lone included validator B");
+    assert_eq!(
+        ctx.consensus.rfc12_state_v1(Some(drip_block.header.hash), &[]).unwrap().reserve_balance,
+        Some(0),
+        "RFC12 reports known zero after the independently observed coinbase drip exhausts the reserve"
+    );
+    assert_eq!(
+        ctx.consensus.rfc12_state_v1(Some(reserve_settle.header.hash), &[]).unwrap().reserve_balance,
+        Some(reserve_accrued),
+        "a later drip does not change the historical block's reserve balance"
+    );
 }
 
 /// kaspa-pq ADR-0016 §D.2 — the bond-UTXO spend-gate races the slashing side-effect (audit M-01). A

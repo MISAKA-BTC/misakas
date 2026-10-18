@@ -260,3 +260,50 @@ fence); the legacy `safe` arm of `update_evm_canonical_heads` (below the fence o
 (pre-fence entitlements, settled once); `dns_params`/`dns_bft_gate` in `Params` and their fingerprint bytes (identity of the
 live presets); the validator workers and `misaka validator *` (t12 runs DNS-BFT until the fence); DNS seeders and peer
 discovery (unrelated to the finality overlay).
+
+## RFC12 observation tools — 2026-10-18 implementation in progress
+
+`getRfc12State` (wRPC op 214 and gRPC) accepts `blockHash` (empty selects the
+current virtual selected parent) and at most 64 `outpoints` (`txid:index`). Its
+versioned `snapshotJson` names the requested reserve block and the locked
+virtual generation. `reserveBalance: null` means unavailable history; a point's
+`utxoEntry: null` means that exact point is absent from that virtual UTXO set.
+Read failures are errors, never absent points or zero balances. This read has
+no consensus effect and assigns no activation height.
+
+The private paid-v4 node can create an exporter request from a live pinned
+header with these tooling-only flags (plus the usual private profile, salt,
+and optional retirement DAA):
+
+```text
+--private-probe-request-rpc=ws://127.0.0.1:PORT
+--private-probe-request-block=PINNED_HEADER_HASH
+--private-probe-request-spec=SPEC_JSON
+--private-probe-request-inputs=PRODUCER_INPUTS_BORSH
+--private-probe-generate-paid-request=NEW_REQUEST_BORSH
+```
+
+The JSON spec supplies `baseJob`, `paidClass`, `paidJob`, `materialConsent`,
+`notBeforeDaa`, `salt`, and `producerCard`. Producer inputs use
+`NativePaidProducerInputsV3`; their allocation preflight is shared with the
+existing V4 exporter. The generator checks the node's genesis and parameter
+identity, downloads bounded carriage pages, verifies their canonical state
+against the caller-pinned header under its own exact private ruleset, and
+creates a new mode-0600 V4 request. It does not create missing jobs, approvals,
+receipts, or Panel membership. Acceptance plans can pass `{REQUEST_BLOCK}`,
+which the driver pins from a generation-bracketed live read before invoking
+`usefulWork.requestCommand`; `{WORK_DIR}` is fresh for each paid-work cycle.
+
+`misaka evm deposit-refund --outpoint=TXID:INDEX --key-file=KEY [--to=ADDRESS]
+[--fee=SOMPI] [--yes]` reads the original lock by outpoint and signs the actual
+lock amount/script only when its timeout and refund owner match. Without
+`--yes` it previews. Normal admission resolves a raced spend or claim.
+
+Exact import crash rendezvous require the nondefault private-only
+`rfc12-import-failpoints` feature. A plan's `import-wal` trigger names one of
+the 16 literal import checkpoints. The owned parent arms it after genesis,
+waits for the exact fsynced marker, sends SIGKILL, clears arming, and restarts.
+One bounded run covers one such checkpoint; it cannot combine that rendezvous
+with a coarse import-phase kill. Compilation and synthetic protocol controls
+are separate from actual process recovery evidence. Full acceptance and
+independent reserve accrual/drip reconciliation remain outstanding.

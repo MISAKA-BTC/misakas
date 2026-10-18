@@ -128,6 +128,7 @@ impl Factory {
                 GetPalwCapacityShadow,
                 GetPalwStateProof,
                 GetPalwForkChoiceOpening,
+                GetRfc12State,
                 GetPalwLegacyDispute,
                 GetPalwLegacyDisputes,
                 GetPalwFraudFilerStatus,

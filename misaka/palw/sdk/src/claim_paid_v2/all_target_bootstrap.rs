@@ -25,6 +25,25 @@ pub struct NativePaidProducerInputsV3 {
     /// Full public snapshots, authenticated by recomputing their native roots.
     pub snapshots: BTreeMap<Digest, Vec<RetrievalItemV1>>,
 }
+/// Private-work request codec V4, shared by the live snapshot generator and
+/// offline exporter. This is tooling input, never a consensus object or receipt.
+#[derive(Clone, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct NativePaidRequestV4 {
+    pub version: u16,
+    pub header: Vec<u8>,
+    pub rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    pub ledger_root: kaspa_hashes::Hash64,
+    pub aux_root: kaspa_hashes::Hash64,
+    pub base_job: Digest,
+    pub paid_class: Digest,
+    pub paid_job: Digest,
+    pub material_consent: Digest,
+    pub not_before_daa: u64,
+    pub salt: Digest,
+    pub producer_card: u32,
+    pub inputs: NativePaidProducerInputsV3,
+}
+
 fn bad(e: impl ToString) -> Refusal {
     Refusal::new("BOOTSTRAP_NATIVE", e.to_string())
 }

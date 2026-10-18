@@ -282,6 +282,7 @@ impl RemoteNode for WrpcNode<'_> {
             .runtime
             .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
                 block_hashes: blocks.iter().map(|b| b.to_string()).collect(),
+                proof_request: Vec::new(),
             }))
             .map_err(|e| format!("getPalwForkChoiceOpening: {e}"))?;
         if !served.available {
@@ -292,6 +293,52 @@ impl RemoteNode for WrpcNode<'_> {
             .iter()
             .filter(|e| e.available)
             .filter_map(|e| misaka_palw_remote::l2::opening_from_wire_v1(&e.leaf, &e.inner_root))
+            .collect())
+    }
+
+    fn committed_fork_choice_openings(
+        &self,
+        blocks: &[Hash64],
+    ) -> Result<Vec<kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommittedOpeningV2>, String> {
+        let response = self
+            .runtime
+            .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
+                block_hashes: blocks.iter().map(ToString::to_string).collect(),
+                proof_request: Vec::new(),
+            }))
+            .map_err(|e| e.to_string())?;
+        if !response.available {
+            return Err(response.reason);
+        }
+        Ok(response
+            .entries
+            .iter()
+            .filter(|e| e.available)
+            .filter_map(|e| misaka_palw_remote::l2::opening_from_wire_v2(&e.leaf, &e.inner_root))
+            .collect())
+    }
+
+    fn fork_choice_proofs(
+        &self,
+        block: Hash64,
+        query: &kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofQueryV2,
+    ) -> Result<Vec<kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofV2>, String> {
+        query.validate()?;
+        let response = self
+            .runtime
+            .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
+                block_hashes: vec![block.to_string()],
+                proof_request: borsh::to_vec(query).map_err(|e| e.to_string())?,
+            }))
+            .map_err(|e| e.to_string())?;
+        if !response.available {
+            return Err(response.reason);
+        }
+        Ok(response
+            .entries
+            .iter()
+            .filter(|e| e.available && e.block_hash == block.to_string())
+            .filter_map(|e| borsh::from_slice(&e.rule_e_proof).ok())
             .collect())
     }
 
@@ -732,6 +779,7 @@ fn main() {
                 // directory, ML-DSA-87; the fork-choice rules are this build's own (the drill's params on a drill). Without: L2 stays
                 // the checkpoint rule.
                 fork_choice: args.fork_choice_dir.clone().map(|dir| misaka_palw_remote::miner::RemoteForkChoiceV1 {
+                    params: Some(params.clone()),
                     rules: misaka_palw_remote::l2::ForkChoiceRulesV1::of(&params),
                     limits: args.fork_choice_limits,
                     issuers: args.fork_choice_issuers.clone(),

@@ -350,8 +350,8 @@ def legacy_exit_paid_once(record):
 
 
 def reserve_balance(view):
-    raise J.NotObservable('the DNS security reserve balance (reserve_balance_store) is served by no read; reserve drip '
-                          'outputs are classified above, the balance itself is not reconciled')
+    raise J.NotObservable('reserve balance reads are available through getRfc12State, but no independent per-block '
+                          'accrual/drip trace was supplied; balance deltas alone are not flow reconciliation')
 
 
 # ---- bounded node reads -------------------------------------------------------------------------

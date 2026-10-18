@@ -71,7 +71,7 @@ fn inventory() -> BTreeMap<&'static str, Why> {
         // Stale-stake preferred tip: `None` past the retirement.
         ("dns_stake_preferred_tip", Gated),
         // Op 203: serves the abstaining gate facts past the retirement (lane R12).
-        ("palw_fork_choice_openings_v1_impl", Gated),
+        ("palw_fork_choice_openings_v2_impl", Gated),
         // The EVM template's Pause policy asks the gated freshness read.
         ("build_block_template_with_selector_provider", Delegates(&["bridge_finality_is_fresh"])),
         // ConsensusApi reads: `None` / empty past the retirement.

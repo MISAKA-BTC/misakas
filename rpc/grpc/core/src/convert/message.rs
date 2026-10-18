@@ -1873,7 +1873,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, protowire::GetPalwForkChoiceOpeningRequestMessage, {
-    Self { block_hashes: item.block_hashes.clone() }
+    Self { block_hashes: item.block_hashes.clone(), proof_request: item.proof_request.clone() }
 });
 from!(item: &kaspa_rpc_core::RpcPalwForkChoiceEntry, protowire::RpcPalwForkChoiceEntry, {
     Self {
@@ -1885,6 +1885,7 @@ from!(item: &kaspa_rpc_core::RpcPalwForkChoiceEntry, protowire::RpcPalwForkChoic
         inner_root: item.inner_root.clone(),
         committed_root: item.committed_root.clone(),
         committed_form: item.committed_form,
+        rule_e_proof: item.rule_e_proof.clone(),
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, protowire::GetPalwForkChoiceOpeningResponseMessage, {
@@ -4394,7 +4395,7 @@ try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kasp
     }
 });
 try_from!(item: &protowire::GetPalwForkChoiceOpeningRequestMessage, kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, {
-    Self { block_hashes: item.block_hashes.clone() }
+    Self { block_hashes: item.block_hashes.clone(), proof_request: item.proof_request.clone() }
 });
 try_from!(item: &protowire::RpcPalwForkChoiceEntry, kaspa_rpc_core::RpcPalwForkChoiceEntry, {
     Self {
@@ -4406,6 +4407,7 @@ try_from!(item: &protowire::RpcPalwForkChoiceEntry, kaspa_rpc_core::RpcPalwForkC
         inner_root: item.inner_root.clone(),
         committed_root: item.committed_root.clone(),
         committed_form: item.committed_form,
+        rule_e_proof: item.rule_e_proof.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwForkChoiceOpeningResponseMessage, RpcResult<kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, {
@@ -6427,3 +6429,16 @@ mod monetary_material_grpc_tests {
         assert_eq!((back.available, back.total_bytes, back.offset, back.bytes), (true, 9000, 4096, vec![5; 7]));
     }
 }
+
+from!(item: &kaspa_rpc_core::GetRfc12StateRequest, protowire::GetRfc12StateRequestMessage, {
+    Self { block_hash: item.block_hash.clone(), outpoints: item.outpoints.clone() }
+});
+try_from!(item: &protowire::GetRfc12StateRequestMessage, kaspa_rpc_core::GetRfc12StateRequest, {
+    Self { block_hash: item.block_hash.clone(), outpoints: item.outpoints.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetRfc12StateResponse>, protowire::GetRfc12StateResponseMessage, {
+    Self { snapshot_json: item.snapshot_json.clone(), error: None }
+});
+try_from!(item: &protowire::GetRfc12StateResponseMessage, RpcResult<kaspa_rpc_core::GetRfc12StateResponse>, {
+    Self { snapshot_json: item.snapshot_json.clone() }
+});

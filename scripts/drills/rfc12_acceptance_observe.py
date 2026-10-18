@@ -363,3 +363,49 @@ def log_lines(paths, maximum_bytes=64 << 20):
                     rows.append(dict(source='owned-file', kind=kind, file=str(path), line=line.strip()[:1000],
                                      lineNumber=number, groups=list(match.groups()), authoritative=False))
     return rows
+
+
+def rfc12_state_value(rpc, outpoints=(), block_hash=''):
+    """Exact point/reserve read; a failed read is never an absent/spent UTXO."""
+    if len(outpoints) > 64 or len(set(outpoints)) != len(outpoints):
+        raise NotObservable('RFC12 point read needs at most 64 distinct outpoints')
+    for point in outpoints:
+        if not isinstance(point, str) or not re.fullmatch(r'[0-9a-f]{128}:[0-9]+', point) \
+                or int(point.rsplit(':', 1)[1]) > 2**32 - 1:
+            raise NotObservable('RFC12 point read contains a malformed outpoint')
+    try:
+        response = rpc.call('getRfc12State', dict(blockHash=block_hash, outpoints=list(outpoints)))
+        value = json.loads(response['snapshotJson'])
+    except (OSError, RuntimeError, KeyError, TypeError, ValueError) as error:
+        raise NotObservable('RFC12 reserve/outpoint read unavailable: %s' % error) from error
+    if type(value.get('version')) is not int or value['version'] != 1 or not isinstance(value.get('utxos'), list):
+        raise NotObservable('unsupported RFC12 state snapshot')
+    if type(value.get('virtualDaaScore')) is not int or not 0 <= value['virtualDaaScore'] < 2**64:
+        raise NotObservable('RFC12 snapshot virtual DAA is not an exact u64')
+    if any(not isinstance(value.get(k), str) or not re.fullmatch(r'[0-9a-f]{128}', value[k])
+           for k in ('blockHash', 'virtualSelectedParent')):
+        raise NotObservable('RFC12 snapshot omits its exact block/virtual generation')
+    reserve = value.get('reserveBalance')
+    if reserve is not None and (type(reserve) is not int or not 0 <= reserve < 2**64):
+        raise NotObservable('reserve balance is not an exact u64')
+    if block_hash and norm(value.get('blockHash')) != norm(block_hash):
+        raise NotObservable('reserve snapshot names another block')
+    found = {}
+    for row in value['utxos']:
+        point = row.get('outpoint') or {}
+        index = point.get('index')
+        if type(index) is not int or not 0 <= index < 2**32:
+            raise NotObservable('outpoint response index is not u32')
+        key = '%s:%d' % (norm(point.get('transactionId')), index)
+        if key not in outpoints or key in found or 'utxoEntry' not in row:
+            raise NotObservable('missing, duplicate or unsolicited outpoint response')
+        entry = row['utxoEntry']
+        if entry is not None and (not isinstance(entry, dict) or type(entry.get('amount')) is not int
+                                  or not 0 < entry['amount'] < 2**64 or type(entry.get('isCoinbase')) is not bool
+                                  or 'scriptPublicKey' not in entry):
+            raise NotObservable('outpoint response omits the exact UTXO value/script')
+        found[key] = entry
+    if set(found) != set(outpoints):
+        raise NotObservable('outpoint response omits a requested point')
+    value['pointStates'] = found
+    return value

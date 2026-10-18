@@ -304,6 +304,8 @@ pub enum RpcApiOps {
     /// G14 lane D / RFC-0015: every Final the kernel route holds, in canonical order, with the beacon's `WorkFinalEventV1` for it
     /// (an OPV Final is `PanelIndependent`: the fact RFC-0010's Panel-assignment beacon needs). Appended at the tail.
     GetPalwKernelFinals = 212,
+    /// RFC12 acceptance reserve/outpoint read. No consensus authority.
+    GetRfc12State = 214,
     /// RFC-0002 P0 (lane RFC02-T): one bond's candidate-refutation seal rows (kernel route aux table 64, inner 36) — slot, seal, clock,
     /// deposit and whether it is live — and the fence's state. Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwModelRefutationSeals = 213,

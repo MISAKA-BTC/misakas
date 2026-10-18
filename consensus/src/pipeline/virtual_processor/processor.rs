@@ -5868,9 +5868,10 @@ impl VirtualStateProcessor {
         self.db.write_opt(batch, &options).expect("persisting a pruning import recovery barrier cannot fail");
     }
 
-    /// Test-only OS-kill rendezvous. Production builds contain no environment
-    /// switch or pause path. The exact child process owns the rendezvous directory.
-    #[cfg(test)]
+    /// OS-kill rendezvous for unit tests or an explicitly built private acceptance
+    /// artifact. Default/release builds contain no environment switch or pause path.
+    /// The exact child process owns and arms the rendezvous directory.
+    #[cfg(any(test, feature = "rfc12-import-failpoints"))]
     fn pruning_import_crash_checkpoint(&self, label: &str) {
         if std::env::var("MISAKA_RFC12_IMPORT_CRASH_STAGE").ok().as_deref() != Some(label) {
             return;
@@ -5937,7 +5938,11 @@ impl VirtualStateProcessor {
         let mut batch = WriteBatch::default();
         meta.set_import_session(&mut batch, &state).map_err(unavailable)?;
         meta.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(unavailable)?;
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
+        self.pruning_import_crash_checkpoint("session-begin-before-barrier");
         self.write_pruning_import_barrier(batch);
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
+        self.pruning_import_crash_checkpoint("session-begin-after-barrier");
         Ok(token)
     }
 
@@ -6046,10 +6051,10 @@ impl VirtualStateProcessor {
         }
         meta.set_pruning_utxoset_stable_flag(&mut batch, false).expect("staging an incomplete UTXO import cannot fail");
         self.write_pruning_import_barrier(batch);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
         self.pruning_import_crash_checkpoint("utxo-before-clear");
         meta.utxo_set.clear().expect("clearing an authorized UTXO import cannot fail");
-        #[cfg(test)]
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
         self.pruning_import_crash_checkpoint("utxo-after-clear");
         Ok(())
     }
@@ -6133,19 +6138,19 @@ impl VirtualStateProcessor {
         }
         {
             // Copy the pruning-point UTXO set into virtual's UTXO set.
-            #[cfg(test)]
+            #[cfg(any(test, feature = "rfc12-import-failpoints"))]
             self.pruning_import_crash_checkpoint("utxo-before-virtual-copy");
             virtual_write.utxo_set.clear().unwrap();
-            #[cfg(test)]
+            #[cfg(any(test, feature = "rfc12-import-failpoints"))]
             self.pruning_import_crash_checkpoint("utxo-after-virtual-clear");
             for chunk in &pruning_meta_read.utxo_set.iterator().map(|iter_result| iter_result.unwrap()).chunks(1000) {
                 virtual_write.utxo_set.write_from_iterator_without_cache(chunk).unwrap();
-                #[cfg(test)]
+                #[cfg(any(test, feature = "rfc12-import-failpoints"))]
                 self.pruning_import_crash_checkpoint("utxo-mid-virtual-copy");
             }
             // ADR-0109 Decision 1: the set was replaced wholesale; the index follows it wholesale.
             self.rebuild_evm_deposit_lock_index(&virtual_write.utxo_set);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "rfc12-import-failpoints"))]
             self.pruning_import_crash_checkpoint("utxo-after-virtual-copy");
         }
 
@@ -6271,10 +6276,10 @@ impl VirtualStateProcessor {
         // Store writers update caches as they stage the batch. A failed durable
         // commit is fatal, like the other consensus writes; returning would expose
         // the cached true marker without its durable completion.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
         self.pruning_import_crash_checkpoint("import-before-complete");
         self.write_pruning_import_barrier(batch);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
         self.pruning_import_crash_checkpoint("import-after-complete");
         Ok(())
     }
@@ -6424,7 +6429,11 @@ impl VirtualStateProcessor {
         // crash here must make IBD retry all sidecars, never reuse old stable UTXOs.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
+        self.pruning_import_crash_checkpoint("evm-sidecar-before-barrier");
         self.write_pruning_import_barrier(batch);
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
+        self.pruning_import_crash_checkpoint("evm-sidecar-after-barrier");
         drop(pruning_meta_write);
         *readiness_memo = None;
         drop(pruning_point_read);
@@ -6743,7 +6752,11 @@ impl VirtualStateProcessor {
         // crash between those steps must leave a durable incomplete-import flag.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(context_error)?;
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
+        self.pruning_import_crash_checkpoint("palw-sidecar-before-barrier");
         self.write_pruning_import_barrier(batch);
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
+        self.pruning_import_crash_checkpoint("palw-sidecar-after-barrier");
         drop(pruning_meta_write);
         drop(class_store);
         drop(store);
@@ -6983,7 +6996,11 @@ impl VirtualStateProcessor {
         // Mark recovery incomplete in its batch, even if no UTXOs were cleared yet.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
+        self.pruning_import_crash_checkpoint("legacy-sidecar-before-barrier");
         self.write_pruning_import_barrier(batch);
+        #[cfg(any(test, feature = "rfc12-import-failpoints"))]
+        self.pruning_import_crash_checkpoint("legacy-sidecar-after-barrier");
         overlay_commit.committed();
         drop(pruning_meta_write);
         Ok(())

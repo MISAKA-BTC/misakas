@@ -389,12 +389,16 @@ impl PalwForkChoiceOpeningV1 {
 pub const PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1: usize = 16;
 
 /// **What a node serves for one block** (op 203): the block's header, the opening of its post-state, and the root that post-state is
-/// committed as (in the form its point's fence says). Nothing here is trusted by a client until checked (`PalwForkChoiceOpeningV1::verify`
+/// committed as (in the form its point's fence says). Nothing here is trusted by a client until checked (`palw_verify_committed_leaf_v2`
 /// against an attested root, a chain child's header, or both).
 #[derive(Clone, Debug)]
 pub struct PalwForkChoiceServedEntryV1 {
     pub header: crate::header::Header,
-    pub opening: PalwForkChoiceOpeningV1,
+    pub opening: crate::palw_fork_choice_rule_e_leaf_v3::PalwCommittedOpeningV2,
+    /// Legacy op-203 diagnostic bytes below the commitment fence. These are
+    /// unauthenticated and must never be used as a committed-leaf opening.
+    pub flat_diagnostic_leaf: Vec<u8>,
+    pub rule_e_proof: Option<crate::palw_fork_choice_rule_e_leaf_v3::PalwForkChoiceProofV2>,
     pub committed_root: Hash64,
     /// True when the committed root is the envelope (the fence is in force at the post-state's point); false: the flat ADR-0043 root,
     /// and the opening proves nothing about it.
