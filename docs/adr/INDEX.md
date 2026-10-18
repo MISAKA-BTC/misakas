@@ -182,4 +182,6 @@
 | ADR-0180 | [PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md) | Accepted / BFT不使用の設計 |
 | ADR-0181 | [採用済み設計を原則凍結し、重大問題時のみ新規 RFC・ADR で変更する](0181-design-freeze-and-controlled-change.md) | Accepted / 原則凍結 |
 | ADR-0182 | [画像・動画経路とモデル改善を mainnet 後へ延期し、当面無効にする](0182-defer-media-and-model-improvement-until-post-mainnet.md) | Accepted / 延期・無効化方針 |
+| ADR-0183 | [G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md) | 原文と後続改定を参照 |
 | ADR-0186 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md) | 原文と後続改定を参照 |
+| ADR-0187 | [native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md) | 原文と後続改定を参照 |

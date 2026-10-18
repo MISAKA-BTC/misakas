@@ -24,7 +24,7 @@ use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, MutableBlock, TemplateBuildMode};
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::config::params::ForkActivation;
-use kaspa_consensus_core::config::{Config, ConfigBuilder};
+use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_model_registry_v1::{PalwModelLifecycleV1, PalwSeatReadinessRowV1};
 use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
@@ -45,7 +45,13 @@ fn parts(sibling_fence: bool) -> Parts {
         params.palw_dag_sibling_attribution_v1 = Some(ForkActivation::always());
         params.sync_palw_rfc0018_v1();
     }
-    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    // Armed the way every kernel-route harness arms a dormant fence: `ConfigBuilder::build` runs `validate_palw_v2`, which refuses
+    // every RFC-0018 fence by design, so the config is constructed directly (the shipping validation still refuses it).
+    params.skip_proof_of_work = true;
+    if sibling_fence {
+        assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the sibling fence");
+    }
+    let config = Config::new(params);
     let bundle = match &config.params.palw_consensus_mode {
         PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => unreachable!("testnet-12 is ConsensusV2"),
@@ -111,6 +117,9 @@ impl Rig {
             let row = carriage.model_lifecycles.get_mut(class).expect("the model row");
             row.state = PalwModelLifecycleV1::Active;
             row.profile.max_inflight_claims = row.profile.max_inflight_claims.max(16);
+            // Inside the launched receipt window (the class verify deadline, ADR on measured rows): a fixture's model row whose derived
+            // verify deadline exceeds the window has no measured row and every attempt of it is refused (`ClassDeadlineUnmeasured`).
+            row.work.verification_ccu = row.work.verification_ccu.min(1);
             for bond in &self.c.bonds {
                 carriage.seat_readiness.insert(
                     (*bond, *class),
@@ -188,8 +197,24 @@ impl Rig {
         .expect("ML-DSA-87 sign over a 64-byte attempt id")
         .as_ref()
         .to_vec();
-        t.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
+        let envelope = PalwAttemptEnvelopeV2 { attempt, signature };
+        t.block.header.palw_commitment = envelope.encode_wire();
         t.block.header.finalize();
+        // Diagnostic: the block's own attempt folded on the tip as the pipeline folds it (a refusal names why it is not merged).
+        {
+            let (_, tip) = self.c.tip_state();
+            let params = self.c.vp().palw_state_params_v2.clone().expect("ConsensusV2");
+            let last = tip.last_point().expect("a folded tip");
+            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: t.block.header.hash,
+                daa_score: t.block.header.daa_score,
+                blue_score: last.blue_score + 1,
+                subsidy: 0,
+            };
+            if let Err(why) = self.c.vp().palw_v2_fold_attempt_for_tests(&tip, &params, &point, &[], &envelope, &t.block.header) {
+                eprintln!("rfc18 sibling diagnostic: card {card}'s attempt of class {class} is refused by the fold: {why:?}");
+            }
+        }
         (t.block, claim_id)
     }
 

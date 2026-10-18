@@ -3539,10 +3539,15 @@ pub(crate) mod test_support {
     }
 
     fn program_and_params() -> (TirProgramV1, MapParams) {
-        let mut pb = ProgramBuilder::new(8, HISTORY_BOUND_V1_SMALL);
-        let embed = pb.param("embed", DType::I8, &[8, 4], false);
+        program_and_params_with_vocab(8)
+    }
+
+    /// [`program_and_params`] over a `vocab`-word vocabulary (the logits node's leaf holds `min(vocab, 4096)` lanes).
+    fn program_and_params_with_vocab(vocab: usize) -> (TirProgramV1, MapParams) {
+        let mut pb = ProgramBuilder::new(vocab as u32, HISTORY_BOUND_V1_SMALL);
+        let embed = pb.param("embed", DType::I8, &[vocab as u32, 4], false);
         let w = pb.param("w", DType::I8, &[4, 4], true);
-        let head = pb.param("head", DType::I8, &[8, 4], false);
+        let head = pb.param("head", DType::I8, &[vocab as u32, 4], false);
         let sum = pb.fixed_state("sum", DType::I32, &[4], -1000, 1000, true);
         let carry = vec![TensorType::fixed(DType::I32, &[4])];
         let pre = {
@@ -3565,7 +3570,7 @@ pub(crate) mod test_support {
             let x = b.reshape_fixed(Ref::CarryIn(0), &[4, 1]);
             let l = b.matmul(head, x, DType::I64);
             let l = b.clamp(l, i32::MIN as i64, i32::MAX as i64, DType::I32);
-            let l = b.reshape_fixed(l, &[8]);
+            let l = b.reshape_fixed(l, &[vocab as u32]);
             let l = b.commit(l);
             let Ref::Node(i) = l else { unreachable!() };
             (b.finish(&[]), i)
@@ -3574,9 +3579,9 @@ pub(crate) mod test_support {
         program.logits_scheme_id.copy_from_slice(crate::palw_step_refute::tiled_logits_scheme_id_v1().as_byte_slice());
         let mut params = MapParams::default();
         let fill = |n: usize, k: i128| (0..n as i128).map(|i| ((i * 37 + k) % 255) - 127).collect::<Vec<_>>();
-        params.tensors.insert((0, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 5)).unwrap());
+        params.tensors.insert((0, None), Tensor::new(DType::I8, vec![vocab, 4], fill(vocab * 4, 5)).unwrap());
         params.tensors.insert((1, Some(0)), Tensor::new(DType::I8, vec![4, 4], fill(16, 11)).unwrap());
-        params.tensors.insert((2, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 17)).unwrap());
+        params.tensors.insert((2, None), Tensor::new(DType::I8, vec![vocab, 4], fill(vocab * 4, 17)).unwrap());
         (program, params)
     }
 
@@ -3647,7 +3652,37 @@ pub(crate) mod test_support {
         forge: Option<(usize, usize)>,
         select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
     ) -> TinyExecution {
-        let (program, params) = program_and_params();
+        tiny_execution_selecting_in_vocab(ctx_of, forge, select, 8)
+    }
+
+    /// **The tiny class over a 4,096-word vocabulary** — the same program, its logits leaf a full 4,096-lane (16 KiB) tile: a
+    /// genuinely computed wide leaf for the acquisition's multi-part fixtures (G14 audit §11 (a) bounds every answer by the
+    /// job's ACTUAL leaves, so a part-spanning leaf has to be a real one). Returns the execution and that leaf's index.
+    pub(crate) fn tiny_execution_wide() -> (TinyExecution, u64) {
+        let x = tiny_execution_selecting_in_vocab(
+            |class, class_id, prompt| {
+                let mut ctx = tiny_execution(None).binding.job_context;
+                ctx.shape_profile_id = class_id;
+                ctx.tokenizer_id = class.tokenizer_id;
+                ctx.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(prompt);
+                ctx
+            },
+            None,
+            &|_, row, _| base0_decode_token_select_v1(row) as u32,
+            4096,
+        );
+        let wide = (0..x.preimages.len()).max_by_key(|i| (x.preimages[*i].values_le.len(), usize::MAX - *i)).unwrap() as u64;
+        assert_eq!(x.preimages[wide as usize].values_le.len(), 4 * 4096, "the logits leaf is a full tile");
+        (x, wide)
+    }
+
+    fn tiny_execution_selecting_in_vocab(
+        ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
+        forge: Option<(usize, usize)>,
+        select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
+        vocab: usize,
+    ) -> TinyExecution {
+        let (program, params) = program_and_params_with_vocab(vocab);
         let bytes = program.encode();
         let class = PalwTirClassV1 {
             version: PALW_TIR_CLASS_VERSION_V1,

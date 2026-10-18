@@ -296,5 +296,70 @@ class Catalog(unittest.TestCase):
             self.assertEqual(len(cat["editions"][0]["models"]), 7, "the tentative #3 is left out unless asked")
 
 
+class UploadGateTest(unittest.TestCase):
+    """User decision 2026-10-18: a genesis upload needs a MEASURED fit within tolerance, short and long."""
+
+    def test_unmeasured_or_out_of_tolerance_fits_never_upload(self):
+        good_long = {"measured": True, "within": True}
+        self.assertIsNone(gp.upload_refusal({"measured": True, "within": True, "long": good_long}))
+        for fit in (None, {}, {"measured": False, "reason": "source evicted"},
+                    {"measured": True, "within": False, "long": good_long},
+                    {"measured": True, "within": True},
+                    {"measured": True, "within": True, "long": {"measured": False, "reason": "--no-fit-long"}},
+                    {"measured": True, "within": True, "long": {}},
+                    {"measured": True, "within": True, "long": {"measured": True, "within": False}}):
+            self.assertIsNotNone(gp.upload_refusal(fit), fit)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class A16Windows(unittest.TestCase):
+    def setUp(self):
+        self.tol = gp.load_registry()["calibration_texts"]["fit_tolerance"]
+        self.digest = "ab" * 64
+        self.report = {
+            "sequence_tokens": 32768, "a16_artifact_digest": self.digest,
+            "calibration": {"schema": "misaka-palw/a16-source-calibration/v1", "artifact_digest": self.digest,
+                            "n_ctx": 32768, "logit_scale": 0.01},
+            "windows": [{"window_start": start, "window_len": 64, "positions": 64,
+                         "top1_agree": 60, "kl": {"mean": 0.002, "max": 0.004}}
+                        for start in gp.a16_window_starts(32768, 32)]}
+
+    def test_all_32_absolute_windows_use_existing_tolerance_and_keep_scope_explicit(self):
+        fit = gp.a16_window_fit(self.report, self.digest, 32768, self.tol)
+        self.assertIsNone(gp.upload_refusal(fit))
+        self.assertEqual(fit["long"]["sequence_tokens"], 32768)
+        self.assertEqual(fit["long"]["positions"], 2048)
+        self.assertEqual(len(fit["long"]["windows"]), 32)
+        self.assertEqual(fit["long"]["windows"][-1]["window_start"], 32704)
+        self.assertIn("whole prefix", fit["long"]["measurement_scope"])
+
+    def test_bad_late_window_is_not_hidden_by_good_aggregate(self):
+        self.report["windows"][-1]["kl"] = {"mean": 0.2, "max": 0.3}
+        self.assertIsNotNone(gp.upload_refusal(gp.a16_window_fit(self.report, self.digest, 32768, self.tol)))
+        self.report["windows"][-1]["kl"] = {"mean": 0.002, "max": 0.004}
+        self.report["windows"][-1]["top1_agree"] = 10
+        self.assertIsNotNone(gp.upload_refusal(gp.a16_window_fit(self.report, self.digest, 32768, self.tol)))
+
+    def test_incomplete_foreign_and_nonfinite_measurements_are_refused(self):
+        import copy
+        for change in [lambda r: r["windows"].pop(),
+                       lambda r: r.update(a16_artifact_digest="cd" * 64),
+                       lambda r: r["calibration"].update(artifact_digest="cd" * 64),
+                       lambda r: r["calibration"].update(logit_scale=0),
+                       lambda r: r["calibration"].update(logit_scale=True),
+                       lambda r: r["windows"][0].update(top1_agree=True),
+                       lambda r: r["windows"][0].update(positions=63),
+                       lambda r: r["windows"][0]["kl"].update(mean=float("nan")),
+                       lambda r: r["windows"][0]["kl"].update(max=float("inf"))]:
+            report = copy.deepcopy(self.report)
+            change(report)
+            with self.assertRaises(ValueError):
+                gp.a16_window_fit(report, self.digest, 32768, self.tol)
+
+    def test_late_drift_cannot_pass_by_zero_early_kl(self):
+        self.report["windows"][0]["kl"] = {"mean": 0.0, "max": 0.0}
+        self.report["windows"][-1]["kl"] = {"mean": 0.02, "max": 0.03}
+        self.assertFalse(gp.a16_window_fit(self.report, self.digest, 32768, self.tol)["within"])

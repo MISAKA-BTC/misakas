@@ -19,9 +19,13 @@ use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
 use kaspa_consensus_core::palw_offence_attribution_v1::{PalwFalseValidReceiptV1, PalwPanelFalseValidEvidenceV2, palw_false_valid_offence_id_v2};
 use kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1;
 
-/// A test arm-readiness record (never pinned in the binary): one distinct non-zero digest per requirement, a review, a commit.
+/// A test arm-readiness record (never pinned in the binary): one distinct non-zero digest per requirement, a review, a commit — the
+/// court-capacity record's measured-values evidence being its measurement record's digest.
 fn record(fence: PalwG14GatedFenceV1, genesis: Hash64, at: u64) -> PalwG14ArmingRecordV1 {
-    let evidence: Vec<[u8; 32]> = (0..fence.requirements().len()).map(|i| [0x60 + i as u8; 32]).collect();
+    let mut evidence: Vec<[u8; 32]> = (0..fence.requirements().len()).map(|i| [0x60 + i as u8; 32]).collect();
+    if fence == PalwG14GatedFenceV1::CourtCapacityV1 {
+        evidence[kaspa_consensus_core::palw_court_capacity_v1::PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1] = measured_court().digest();
+    }
     PalwG14ArmingRecordV1 {
         version: PALW_G14_ARMING_RECORD_VERSION_V1,
         fence,
@@ -33,9 +37,48 @@ fn record(fence: PalwG14GatedFenceV1, genesis: Hash64, at: u64) -> PalwG14Arming
     }
 }
 
+/// **The court-capacity measurement record this suite arms with (lane g14-court-capacity) — a TEST-ONLY config, never a network's
+/// record.** It has the format a network's record takes (`PalwCourtMeasurementV1`), its policy derived by
+/// `PalwCourtMeasurementV1::policy` exactly as validation re-derives it, its digest carried as the TEST arm-readiness record's
+/// measured-values evidence. The one-move time and sizes are this branch's DEVELOPMENT-MACHINE timings (macOS aarch64, debug build,
+/// 2026-10-16; the `[court-op timing]` line of the run below re-prints them), not the slowest supported node's; the other classes are
+/// NOT measured at all:
+/// * one-move: the real floor leaf recompute of `legacy_v2_attempt_full_collusion_outside_bond_convicts` (`[court-op timing]`, its
+///   object's encoded size);
+/// * opening, dissection move, close: not driven by any harness yet — each is given the block's whole allotment (one per block, today's
+///   rule), and the opening's size is the held opening of `palw_court_op_timing_harness`;
+/// * working set: NOT measured — one byte per encoded byte (a floor, not a measurement);
+/// * block allotment: 42 one-move verdicts' time, which keeps testnet-12's 42 slots; ρ_court 1,000 sompi (a test economic value).
+pub(super) fn measured_court() -> kaspa_consensus_core::palw_court_capacity_v1::PalwCourtMeasurementV1 {
+    use kaspa_consensus_core::palw_court_capacity_v1::*;
+    const ONE_MOVE_NS: u64 = 213_458;
+    const ONE_MOVE_BYTES: u64 = 35_669;
+    const OPENING_BYTES: u64 = 10_218;
+    let block_court_ns = 42 * ONE_MOVE_NS;
+    PalwCourtMeasurementV1 {
+        version: PALW_COURT_MEASUREMENT_VERSION_V1,
+        class_ns: [ONE_MOVE_NS, block_court_ns, block_court_ns, block_court_ns],
+        class_bytes: [ONE_MOVE_BYTES, OPENING_BYTES, ONE_MOVE_BYTES, ONE_MOVE_BYTES],
+        class_memory: [ONE_MOVE_BYTES, OPENING_BYTES, ONE_MOVE_BYTES, ONE_MOVE_BYTES],
+        block_court_ns,
+        block_court_bytes: 42 * ONE_MOVE_BYTES.max(OPENING_BYTES),
+        block_court_memory: 42 * ONE_MOVE_BYTES.max(OPENING_BYTES),
+        rho_sompi: 1_000,
+        ticket_window_daa: 0,
+        // Round 2 (g14-court-capacity-r2): 42 one-move verdicts' time and bytes on their own budget; half the capacity reserved.
+        block_one_move_ns: block_court_ns,
+        block_one_move_bytes: 42 * ONE_MOVE_BYTES.max(OPENING_BYTES),
+        reserve_permille: 500,
+    }
+}
+
 /// **The network**: the parent's harness (testnet-12 as launched, harness cards, the main premine on the newcomer's key) with LG14-A,
-/// LG14-B and option (b) armed at genesis through the `Params` — validated with their records, never set on a mirror alone.
-fn g14_close_config() -> (Config, PalwConsensusParamsV2, Premine, Premine, (TransactionOutpoint, UtxoEntry)) {
+/// LG14-B and option (b) armed at genesis through the `Params` — validated with their records, never set on a mirror alone. With
+/// `full`, G14 FULLY armed for the legacy route (user decision 2026-10-16): the court-capacity fence too (`palw_court_capacity_v1`, the
+/// policy [`measured_court`] derives, its record carrying that measurement's digest — the acceptance walk then holds the policy's court
+/// budget instead of one court move a block, and the fused-leaf classes count as routed under option (b)) and the reward liability
+/// horizon (`palw_reward_liability_horizon_v1`).
+fn g14_close_config(full: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine, (TransactionOutpoint, UtxoEntry)) {
     let (config, _, mut premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
     let main = premine_outpoint_for(params.net, MAIN_PREMINE_INDEX);
@@ -55,15 +98,20 @@ fn g14_close_config() -> (Config, PalwConsensusParamsV2, Premine, Premine, (Tran
     params.sync_palw_legacy_public_filer_v1();
     params.palw_legacy_held_da_v2 = at;
     params.palw_g14_route_required_v1 = at;
+    let mut fences =
+        vec![PalwG14GatedFenceV1::LegacyPublicFilerV1, PalwG14GatedFenceV1::LegacyHeldDaV2, PalwG14GatedFenceV1::G14RouteRequiredV1];
+    if full {
+        params.palw_court_capacity_v1 = Some(
+            kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCapacityFenceV1::measured_at(ForkActivation::new(0), measured_court())
+                .expect("the measurement derives a policy"),
+        );
+        params.sync_palw_court_capacity_v1();
+        fences.push(PalwG14GatedFenceV1::CourtCapacityV1);
+        params.palw_reward_liability_horizon_v1 = at;
+        fences.push(PalwG14GatedFenceV1::RewardLiabilityHorizonV1);
+    }
     params.sync_palw_g14_gates_v1();
-    let records: Vec<PalwG14ArmingRecordV1> = [
-        PalwG14GatedFenceV1::LegacyPublicFilerV1,
-        PalwG14GatedFenceV1::LegacyHeldDaV2,
-        PalwG14GatedFenceV1::G14RouteRequiredV1,
-    ]
-    .into_iter()
-    .map(|fence| record(fence, params.genesis.hash, 0))
-    .collect();
+    let records: Vec<PalwG14ArmingRecordV1> = fences.into_iter().map(|fence| record(fence, params.genesis.hash, 0)).collect();
     params
         .validate_palw_v2_with_arming_records_v1(&records)
         .unwrap_or_else(|e| panic!("the armed ruleset passes the whole validation with its test records: {e:?}"));
@@ -81,7 +129,16 @@ fn g14_close_config() -> (Config, PalwConsensusParamsV2, Premine, Premine, (Tran
 }
 
 fn g14_lg() -> Lg {
-    let (config, bundle, premine, floats, newcomer_funding) = g14_close_config();
+    g14_lg_on(false)
+}
+
+fn g14_lg_on(full: bool) -> Lg {
+    let (config, bundle, premine, floats, newcomer_funding) = g14_close_config(full);
+    assert_eq!(
+        bundle.state.court_capacity_v1().map(|m| m.policy),
+        full.then(|| measured_court().policy().expect("a policy")),
+        "the court-capacity mirror"
+    );
     let chain = t12_genesis_chain_on(TestConsensus::new(&config), &config, &bundle, &premine, &floats);
     let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
         config.params.net.to_string().as_bytes(),
@@ -209,8 +266,21 @@ async fn pursue_to_terminal(v: &mut Verifier, lg: &mut Lg, produced: &Produced, 
 /// reaches the same roots.
 #[tokio::test]
 async fn legacy_v2_attempt_full_collusion_outside_bond_convicts() {
+    full_collusion_outside_bond_convicts(false).await;
+}
+
+/// **The same headline case with G14 fully armed** (lane g14-court-capacity: the court-capacity fence with its measured config, the
+/// reward liability horizon): every court object rides the node's acceptance walk under the policy's block budget (no longer one court
+/// move a block), the one-move accusation is charged its work units, and the outsider's conviction, the seats' slashes and the replay
+/// are unchanged.
+#[tokio::test]
+async fn legacy_v2_attempt_full_collusion_outside_bond_convicts_with_court_capacity() {
+    full_collusion_outside_bond_convicts(true).await;
+}
+
+async fn full_collusion_outside_bond_convicts(court: bool) {
     kaspa_core::log::try_init_logger("warn");
-    let mut lg = g14_lg();
+    let mut lg = g14_lg_on(court);
     lg.beat(3).await;
     let newcomer = lg.register_newcomer().await;
     let produced = lg.real_attempt(EXECUTOR, true).await;
@@ -272,6 +342,49 @@ async fn legacy_v2_attempt_full_collusion_outside_bond_convicts() {
     lg.rnd = lg.rnd.wrapping_add(1);
     accusation.signature =
         sign(NEWCOMER, sid.as_byte_slice(), kaspa_consensus_core::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, lg.rnd);
+    // `[court-op timing]` (the court-capacity fence's timing harness, its node half): the one-move verdict — the leaf recompute on
+    // the verifier's real model rows — timed here on this machine and build. NOT a measured record (that is the slowest supported
+    // node's, release build, at each class's maximum profile).
+    {
+        let (_, state) = lg.chain.tip_state();
+        let class_id = state.claim(&id).expect("the claim").class_id;
+        let bound_to = kaspa_consensus_core::palw_shard_court_v1::PalwOneMoveClaimV2 {
+            execution_root: view.execution_root,
+            class_id,
+            artifact_root: state.class(&class_id).expect("the class").artifact_root,
+        };
+        let daa = lg.daa();
+        let ladder = kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
+            &lg.bundle.court,
+            lg.config.params.palw_court_ladder_active_at(daa),
+        );
+        let mut samples: Vec<u128> = (0..5)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                let verdict =
+                    kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_verdict_at_v2(&accusation, &bound_to, ladder, true);
+                let elapsed = t.elapsed().as_nanos();
+                assert!(
+                    matches!(verdict, Ok(kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty)),
+                    "{verdict:?}"
+                );
+                elapsed
+            })
+            .collect();
+        samples.sort_unstable();
+        let object = Obj::ShardCourtAccused { accusation: Box::new(accusation.clone()) };
+        eprintln!(
+            "[court-op timing] one-move verdict (floor class, real rows): {} B object, {} rows; ns min {} median {} max {} — {}-{} {} build, NOT a measured record",
+            borsh::to_vec(&object).map(|b| b.len()).unwrap_or(0),
+            own_rows.len(),
+            samples[0],
+            samples[samples.len() / 2],
+            samples[samples.len() - 1],
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            if cfg!(debug_assertions) { "debug" } else { "release" },
+        );
+    }
     lg.send(vec![(NEWCOMER, Obj::ShardCourtAccused { accusation: Box::new(accusation) })]).await;
     let view = lg.view(id);
     eprintln!("[g14-close] {} demands; lie at {lie}; phase {:?}", v.demands, view.phase);
@@ -414,4 +527,119 @@ async fn legacy_v2_attempt_held_da_withholding_ends_in_da_default() {
     assert!(state.vesting_row(&id).is_none());
     assert!(lg.view(id).record.is_none(), "the default released the reservation");
     assert_eq!(lg.exposure(NEWCOMER), 0, "the outsider is made whole");
+}
+
+// The external audit's acceptance tests D, E, F and G (2026-10-17, lane integ/g14-drill) over this module's validated network.
+mod g14_acceptance;
+
+/// **An honest V2 Attempt under G14 fully armed reaches `Final` and is paid after the liability-horizon hold** (user decision
+/// 2026-10-16: the testnet-12 fence moves only once G14 is fully armed with option (b) kept AND PALW rewards, block production and
+/// `Final` proceed normally). LG14-A, LG14-B, option (b), the court-capacity fence (the measured config [`measured_court`]) and the
+/// reward liability horizon are armed at genesis and validated with their records. Asserted on the node: option (b) counts the floor
+/// AND the fused-leaf classes as routed (court capacity in force); a real honest floor attempt is admitted with its reward, bound,
+/// licensed by every seat, and reaches `Final` at its own deadline with safe weight; its vesting row holds the reward to
+/// `F + window_court` (the liability horizon) — nothing moves before — and once both clocks are met the row matures and the producer's
+/// leg is minted by a real coinbase; blocks keep coming throughout.
+/// One more honest licensed claim (its Final settles an anchor): the chain is live, not heartbeat-only.
+async fn keep_live(lg: &mut Lg) {
+    let produced = lg.real_attempt(EXECUTOR, false).await;
+    let seats = lg.bind(produced.claim_id).await;
+    lg.license(produced.claim_id, &seats).await;
+}
+
+#[tokio::test]
+async fn legacy_v2_attempt_honest_claim_is_final_and_paid_under_full_g14() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut lg = g14_lg_on(true);
+    // Option (b) under the full arming: every genesis class is routed, the fused ones because court capacity is in force.
+    {
+        let (_, state) = lg.chain.tip_state();
+        let daa = lg.daa();
+        let mut fused = 0;
+        for class_id in state.classes_iter().map(|(id, _)| *id).collect::<Vec<_>>() {
+            let is_fused = state.class(&class_id).is_some_and(|c| c.fused_attention);
+            fused += usize::from(is_fused);
+            assert_eq!(
+                kaspa_consensus_core::palw_g14_gates_v1::palw_g14_route_attempt_refusal_for_class_v1(&lg.bundle.state, daa, is_fused),
+                None,
+                "class {class_id} (fused {is_fused}) is routed under the full arming"
+            );
+        }
+        assert!(fused > 0, "testnet-12 has fused-leaf classes, and they are routed");
+    }
+    let (produced, seats, licensed) = licensed_claim(&mut lg, false).await;
+    let id = produced.claim_id;
+    let (_, state) = lg.chain.tip_state();
+    let claim = state.claim(&id).expect("the claim").clone();
+    assert!(claim.escrowed_reward > 0, "an admitted honest attempt carries its reward");
+    let safe_before = state.safe_weight();
+    // Final at its own deadline (nothing holds it: no reservation, no court).
+    let deadline = state.deadline_of(&id).expect("a licensed claim owes its Final deadline");
+    assert!(deadline >= licensed, "{deadline} ≥ {licensed}");
+    lg.beat_to(deadline + 1).await;
+    let (_, state) = lg.chain.tip_state();
+    let PalwClaimPhaseV2::Final { final_daa } = state.claim(&id).expect("the claim").phase else {
+        panic!("Final at its deadline: {:?}", state.claim(&id).map(|c| &c.phase))
+    };
+    assert!(state.safe_weight() > safe_before, "Final adds the claim's safe weight");
+    let wc = lg.bundle.state.window_court();
+    let row = state.vesting_row(&id).expect("a Final names a vesting row").clone();
+    assert_eq!(row.expiry_daa, final_daa + wc, "the reward is held to the liability horizon F + window_court");
+    assert!(row.matured_at.is_none());
+    let key = kaspa_consensus_core::palw_vesting_v1::palw_vesting_payout_key_v1(&id);
+    let moved_before = state.vesting_counters().moved;
+    // The chain stays LIVE (acceptance test G): an honest producer keeps licensing claims, so a settled anchor lands well inside every
+    // `2 × window_court` and the second clock is not in a licence halt (V-4(b): on heartbeat-only history nothing economic concludes —
+    // `PALW_T12_SETTLED_ANCHOR_DEPTH`'s rule — so a heartbeat-only wait never pays any reward, honest or not).
+    let live_every = wc * 2 / 3;
+    let stop_live = row.expiry_daa + 2 * wc - live_every / 2;
+    let mut next_live = lg.daa() + live_every;
+    // Nothing moves before the horizon.
+    while lg.daa() < final_daa + wc - 1 {
+        if lg.daa() >= next_live {
+            keep_live(&mut lg).await;
+            next_live = lg.daa() + live_every;
+        } else {
+            lg.beat(1).await;
+        }
+    }
+    let (_, state) = lg.chain.tip_state();
+    assert!(state.vesting_row(&id).is_some_and(|r| r.matured_at.is_none()), "held until F + window_court");
+    assert!(state.pending_payout(&key).is_none());
+    assert_eq!(state.vesting_counters().moved, moved_before);
+    // Past it, once the second clock is met (its licences or its liveness escape), the row matures and the producer's leg — fixed at
+    // Final — is minted by a real coinbase (the block that moves it, or the next).
+    let leg = row.producer.amount;
+    assert!(leg > 0, "the producer's leg carries the reward");
+    let bound = row.expiry_daa + 2 * wc + 64;
+    let ttpb = lg.ttpb();
+    let mut moved_at = None;
+    let mut paid_at = None;
+    while paid_at.is_none() {
+        assert!(lg.daa() <= bound, "the row matures by its second clock's bound ({bound})");
+        if moved_at.is_none() && lg.daa() >= next_live && lg.daa() < stop_live {
+            keep_live(&mut lg).await;
+            next_live = lg.daa() + live_every;
+            continue;
+        }
+        let block = lg.chain.heartbeat(ttpb, Vec::new()).await;
+        let (_, state) = lg.chain.tip_state();
+        if moved_at.is_none() && state.vesting_row(&id).is_none() {
+            moved_at = Some(lg.daa());
+        }
+        if moved_at.is_some() && block.transactions[0].outputs.iter().any(|o| o.value == leg) {
+            assert!(state.pending_payout(&key).is_none(), "the minted leg leaves the queue");
+            paid_at = Some(lg.daa());
+        }
+        assert!(moved_at.is_none_or(|at| lg.daa() <= at + 3), "a moved leg is minted within a block or two");
+    }
+    let (_, state) = lg.chain.tip_state();
+    assert!(state.vesting_counters().moved > moved_before, "the row's reward moved to payment");
+    eprintln!(
+        "[g14-full] honest claim {id}: licensed {licensed}, Final {final_daa}, held to {} (F + {wc}), matured at {:?}, producer leg {leg} sompi minted at {}; {} seats",
+        row.expiry_daa,
+        moved_at,
+        paid_at.unwrap(),
+        seats.len()
+    );
 }

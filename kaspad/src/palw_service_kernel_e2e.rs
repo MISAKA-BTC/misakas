@@ -579,6 +579,19 @@ fn start_kernel_service(
     model: &std::path::Path,
     keep: &mut Vec<kaspa_database::utils::DbLifetime>,
 ) -> KNode {
+    start_kernel_service_as(chain, dir, bond, None, funding, model, keep)
+}
+
+/// [`start_kernel_service`] for genesis card `card`'s bond, signing with that card's key (`None`: the outsider's key).
+fn start_kernel_service_as(
+    chain: &Chain,
+    dir: &std::path::Path,
+    bond: PalwBondKeyV2,
+    card: Option<usize>,
+    funding: &Funding,
+    model: &std::path::Path,
+    keep: &mut Vec<kaspa_database::utils::DbLifetime>,
+) -> KNode {
     let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))).unwrap());
     let config = Arc::new(chain.config.clone());
     let tick = Arc::new(TickService::new());
@@ -620,6 +633,11 @@ fn start_kernel_service(
         rules,
     ));
     let mut panel = panel_config(chain, dir, bond, funding);
+    if let Some(card) = card {
+        let mut seed = [0xB0; 32];
+        seed[0] += card as u8;
+        std::fs::write(&panel.key_path, faster_hex::hex_string(&seed)).unwrap();
+    }
     panel.kernel_models = vec![model.to_path_buf()];
     let service = Arc::new(PalwPanelService::new(panel, manager.clone(), flow.clone(), config));
     assert!(service.keypair.is_some());
@@ -750,14 +768,6 @@ async fn g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_th
         let when = if pre.contains(id) { "pre-Final" } else { "post-Final" };
         eprintln!("[service-kernel] {lie:?} ({when}): convicted by the service; carried {carried:?}");
     }
-    for (p, before) in &producer_before {
-        let n = after_final.iter().chain(before_final.iter()).filter(|(_, q, ..)| q == p).count() as u64;
-        assert_eq!(
-            collateral_of(&w.chain, w.chain.bonds[*p]).0,
-            before - n * policy.claim_collateral,
-            "card {p}: each conviction slashed its real bond"
-        );
-    }
     // G14 lane closure G-K1: each colluding seat is charged its signer liability lock once per convicted claim it covered (the
     // honest twin's seats are not). The jobs' poster (card 1) also pays one thing in the meantime: the honest twin's Final reward, out
     // of its job escrow (GAP-5: user-pays; the bond's `slashed` records the escrow spend). No convicted claim is paid.
@@ -766,6 +776,16 @@ async fn g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_th
         kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1,
     );
     let convicted_seats: Vec<Vec<usize>> = after_final.iter().chain(before_final.iter()).map(|(.., s)| s.clone()).collect();
+    // A producer is also a colluding SEAT of the other producers' lies it covered: each such conviction charges it its lock too.
+    for (p, before) in &producer_before {
+        let n = after_final.iter().chain(before_final.iter()).filter(|(_, q, ..)| q == p).count() as u64;
+        let covered = convicted_seats.iter().filter(|seats| seats.contains(p)).count() as u64;
+        assert_eq!(
+            collateral_of(&w.chain, w.chain.bonds[*p]).0,
+            before - n * policy.claim_collateral - covered * lock,
+            "card {p}: each conviction slashed its real bond (and each covered lie its seat lock)"
+        );
+    }
     for (card, before) in &seat_slashed {
         if !producers.contains(card) {
             let paid = if *card == REGISTRANT { policy.claim_reward } else { 0 };
@@ -818,3 +838,122 @@ async fn g14k_the_kernel_service_resumes_after_a_restart_without_a_second_seal()
     let mut running = second.running;
     running.finish().await;
 }
+
+/// **Lane g14-court-capacity-r2: the kernel route's interim seats are real services** (the user's liveness requirement: honest work is
+/// paid normally). Two claims are committed — an honest one and a MatMul lie by another producer — and NOBODY signs a receipt by
+/// hand: every bond drawn as a seat of either claim runs kaspad's actual `PalwPanelService` (its own mempool, its own key, the
+/// registered model as a `PALWKM01` file). Each seat re-executes the claim from the public commitments, checks its assigned scope
+/// against its own trace and signs a passing receipt only when both pass. The honest claim is covered by its seats, passes its
+/// window, reaches Final and is paid (the job's escrow pays the claim reward); the lie gets NO receipt from any seat, and the public
+/// verifier pass of those same services files and convicts it, slashing the producer's real bond.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn g14r2_kernel_interim_seats_run_as_services_pay_the_honest_claim_and_refuse_the_lie() {
+    kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
+    let mut w = KWorld::new().await;
+    let honest = w.commit_claim(0, None).await;
+    let lie = w.commit_claim(2, Some(Lie::MatMul)).await;
+    let route = route_of(&w.chain);
+    let seats_of = |id: &Digest| -> Vec<usize> {
+        route
+            .assignment_of(id)
+            .expect("an interim assignment")
+            .seats
+            .iter()
+            .map(|s| w.chain.bonds.iter().position(|b| *b == s.bond).expect("a seat is a genesis card"))
+            .collect()
+    };
+    let (honest_seats, lie_seats) = (seats_of(&honest), seats_of(&lie));
+    let mut cards: Vec<usize> = honest_seats.iter().chain(&lie_seats).copied().collect();
+    cards.sort_unstable();
+    cards.dedup();
+    eprintln!("[service-kernel seats] honest claim seats {honest_seats:?}, lie seats {lie_seats:?}");
+    let policy = ledger_of(&w.chain).policy;
+    let poster_before = collateral_of(&w.chain, w.chain.bonds[REGISTRANT]).1;
+    let liar_before = collateral_of(&w.chain, w.chain.bonds[2]).0;
+    let dir = tempfile::tempdir().unwrap();
+    let model = w.model_file(dir.path());
+    let mut keep = Vec::new();
+    let nodes: Vec<KNode> = cards
+        .iter()
+        .map(|card| {
+            let sub = dir.path().join(format!("seat-{card}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            start_kernel_service_as(&w.chain, &sub, w.chain.bonds[*card], Some(*card), &w.floats[*card], &model, &mut keep)
+        })
+        .collect();
+    // Mine whatever any seat's service submits (each has its own mempool), otherwise a heartbeat about every service tick.
+    let deadline = std::time::Instant::now() + Duration::from_secs(900);
+    let mut idle = 0u32;
+    let done = |chain: &Chain| {
+        let ledger = ledger_of(chain);
+        matches!(ledger.claims[&honest].life.state, ClaimStateV1::Final { .. }) && ledger.claims[&lie].convicted
+    };
+    let mut honest_receipts = 0usize;
+    let mut passed = false;
+    while !done(&w.chain) {
+        honest_receipts = honest_receipts.max(route_of(&w.chain).receipts_of(&honest).len());
+        passed |= matches!(state_of(&w.chain, &honest), ClaimStateV1::ProbabilisticPass { .. });
+        assert!(std::time::Instant::now() < deadline, "no progress by DAA {}: honest {:?}, lie {:?}", w.chain.daa(),
+            state_of(&w.chain, &honest), state_of(&w.chain, &lie));
+        let mut mined = false;
+        for node in &nodes {
+            assert!(!node.running.task.as_ref().unwrap().is_finished(), "a seat's service stopped by itself");
+            let (pending, _) = node.pool.clone().get_all_transactions(TransactionQuery::TransactionsOnly).await;
+            if !pending.is_empty() {
+                pool_heartbeat(&mut w.chain, &node.manager, &node.pool).await;
+                pool_heartbeat(&mut w.chain, &node.manager, &node.pool).await;
+                mined = true;
+            }
+        }
+        // No seat ever passes the lie.
+        assert!(
+            route_of(&w.chain).receipts_of(&lie).is_empty(),
+            "a seat signed a receipt for the lie: {:?}",
+            route_of(&w.chain).receipts_of(&lie)
+        );
+        if !mined {
+            idle += 1;
+            if idle >= 16 {
+                pool_heartbeat(&mut w.chain, &nodes[0].manager, &nodes[0].pool).await;
+                idle = 0;
+            }
+        } else {
+            idle = 0;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    // The receipts the blocks carried (the route drops its receipt rows once a claim is covered): every one by an honest-claim seat.
+    let carried: Vec<(Digest, Digest)> = w
+        .chain
+        .history
+        .iter()
+        .flat_map(|b| b.transactions.iter())
+        .filter_map(|t| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&t.payload).ok())
+        .filter_map(|p| match p.object {
+            PalwConsensusObjectV2::KernelConstraintReceiptV1 { receipt, .. } => Some((receipt.claim_id, receipt.seat_bond)),
+            _ => None,
+        })
+        .collect();
+    let honest_kernel_seats: Vec<Digest> = honest_seats.iter().map(|c| palw_kernel_bond_id_v1(&w.chain.bonds[*c])).collect();
+    let on_honest: Vec<&Digest> = carried.iter().filter(|(c, _)| *c == honest).map(|(_, s)| s).collect();
+    eprintln!(
+        "[service-kernel seats] honest claim: {} receipts carried by the seats' services (live rows seen {honest_receipts}, pass seen \
+         {passed}); Final at DAA {}",
+        on_honest.len(),
+        w.chain.daa()
+    );
+    assert!(on_honest.len() >= kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1 as usize, "a quorum of the seats receipted the honest claim");
+    assert!(on_honest.iter().all(|s| honest_kernel_seats.contains(s)), "only its own seats");
+    assert!(!carried.iter().any(|(c, _)| *c == lie), "no seat ever carried a receipt for the lie");
+    assert_eq!(
+        collateral_of(&w.chain, w.chain.bonds[REGISTRANT]).1,
+        poster_before + policy.claim_reward,
+        "the honest claim's reward is paid out of the job's escrow at Final"
+    );
+    assert_eq!(collateral_of(&w.chain, w.chain.bonds[2]).0, liar_before - policy.claim_collateral, "the liar's real bond is slashed");
+    for node in nodes {
+        let mut running = node.running;
+        running.finish().await;
+    }
+}
+

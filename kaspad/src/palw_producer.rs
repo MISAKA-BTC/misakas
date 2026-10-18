@@ -58,6 +58,54 @@ use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
 
+/// **DRILL ONLY (`--palw-drill-tamper-auto-leaf`, the G14 collusion drill): the sentinel `drill_tamper_leaf` value that picks the
+/// lie's leaf per draw** — the first step leaf in the second half of the honest run that the capture holds, that has canonical step
+/// coordinates and that is not a fused-attention leaf (the in-process E2E's choice, `lg14a_legacy_filer_e2e::real_attempt`), so the
+/// public descent ends at a leaf recompute (LG14-B tag 159) rather than a held dissection.
+pub const PALW_DRILL_TAMPER_AUTO_LEAF_V1: u64 = u64::MAX;
+
+/// The leaf [`PALW_DRILL_TAMPER_AUTO_LEAF_V1`] names for one honest capture (`None` when the capture is not tile material or holds
+/// no such leaf).
+pub(crate) fn palw_drill_auto_lie_leaf_v1(material: &[u8]) -> Option<u64> {
+    let (binding, tiles, ..) = misaka_palw_base0::produce::base0_material_decode_v1(material).ok()?;
+    let held: std::collections::BTreeSet<u64> = tiles.iter().map(|(i, _)| *i).collect();
+    let n = binding.step_leaf_count;
+    held.range(n / 2..n).copied().find(|leaf| {
+        kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, *leaf).is_some()
+            && !kaspa_consensus_core::palw_da_rcore_v1::palw_da_step_leaf_is_fused_v1(&binding, *leaf)
+    })
+}
+
+/// **DRILL ONLY (`--palw-drill-sparse-fault-seed`, G14 audit G-17 / §5.1): the sparse fault's leaf** — drawn uniformly, from `seed` and
+/// the honest capture's own execution root (so a new job draws anew, and nothing about any challenge is known yet), over every step
+/// leaf the capture holds that has canonical step coordinates and is not a fused-attention leaf: exactly one of those `N` candidates is
+/// wrong, so a check sampling `k` distinct intervals finds it with probability about `k / N` (the audit's `D = 1` row). Returns the
+/// leaf and `N`; `None` when the capture is not tile material or holds no candidate.
+pub(crate) fn palw_drill_sparse_lie_leaf_v1(material: &[u8], seed: u64) -> Option<(u64, u64)> {
+    let (binding, tiles, ..) = misaka_palw_base0::produce::base0_material_decode_v1(material).ok()?;
+    let held: std::collections::BTreeSet<u64> = tiles.iter().map(|(i, _)| *i).collect();
+    let candidates: Vec<u64> = held
+        .into_iter()
+        .filter(|leaf| {
+            kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, *leaf).is_some()
+                && !kaspa_consensus_core::palw_da_rcore_v1::palw_da_step_leaf_is_fused_v1(&binding, *leaf)
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut preimage = Vec::with_capacity(8 + 64 + 64);
+    preimage.extend_from_slice(&seed.to_le_bytes());
+    preimage.extend_from_slice(binding.committed_execution_root.as_byte_slice());
+    let digest = kaspa_hashes::blake2b_512_keyed(b"MISAKA/PALW-DRILL/G17-SPARSE-FAULT/V1", &preimage);
+    let mut word = [0u8; 16];
+    word.copy_from_slice(&digest.as_byte_slice()[..16]);
+    let n = candidates.len() as u128;
+    // A 128-bit draw reduced mod N: the bias is below 2^-64 for any capture this lane holds.
+    let at = (u128::from_le_bytes(word) % n) as usize;
+    Some((candidates[at], candidates.len() as u64))
+}
+
 #[derive(Clone, Debug)]
 pub struct PalwProducerConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed whose verification key the genesis bond registered.
@@ -100,6 +148,12 @@ pub struct PalwProducerConfig {
     /// commitment re-derived — so a court can be shown convicting on a live chain. The daemon
     /// refuses to set it on a network carrying value.
     pub drill_tamper_leaf: Option<u64>,
+    /// **DRILL ONLY (`--palw-drill-fault`, G14 audit G-17): the attempt-lane lie of another kind** — committed through the family's own
+    /// drill path (`execute_with_drill_fault`), every root re-derived. The daemon refuses it off a private drill chain.
+    pub drill_fault: Option<kaspa_consensus_core::palw_backend::PalwDrillFaultV1>,
+    /// **DRILL ONLY (`--palw-drill-sparse-fault-seed`, G14 audit G-17)**: lie at one uniformly drawn leaf
+    /// ([`palw_drill_sparse_lie_leaf_v1`]). The daemon refuses it off a private drill chain.
+    pub drill_sparse_fault_seed: Option<u64>,
     /// **DRILL ONLY (`--palw-drill-answer-only`): announce the answer envelope, never the capture**
     /// — as the panel serves its pulls under the same flag — so no seat holds this node's capture
     /// whatever its size, and a claim is judged by replay and pursued through the executor's served
@@ -1876,6 +1930,7 @@ impl PalwProducerService {
         };
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
         let tamper = self.config.drill_tamper_leaf;
+        let (drill_fault, drill_sparse_seed) = (self.config.drill_fault, self.config.drill_sparse_fault_seed);
         // ADR-0112 Decision 8: what one draw reads from storage, printed beside the draw. The
         // number that said the fleet's draws were page faults, made a line an operator can watch.
         let storage_before = crate::palw_backends::storage_snapshot_v1(&self.class_holdings);
@@ -1887,7 +1942,34 @@ impl PalwProducerService {
             &self.shutdown.listener,
             tokio::task::spawn_blocking(move || {
                 let run = match tamper {
+                    // G14 audit G-17: a lie of another kind, through the family's own drill path.
+                    None if drill_fault.is_some() => {
+                        let fault = drill_fault.expect("checked");
+                        warn!("PALW DRILL (G-17): this draw commits the lie {fault:?}");
+                        backend.execute_with_drill_fault(&job_for_blocking, &prompt_for_blocking, fault)
+                    }
+                    // G14 audit G-17, the sparse fault: one uniformly drawn leaf, fixed before any challenge exists.
+                    None if drill_sparse_seed.is_some() => {
+                        let honest = backend.execute(&job_for_blocking, &prompt_for_blocking)?;
+                        let (leaf, of) = palw_drill_sparse_lie_leaf_v1(&honest.material, drill_sparse_seed.expect("checked"))
+                            .ok_or_else(|| "PALW DRILL: the honest capture holds no openable, non-fused leaf to lie at".to_string())?;
+                        warn!("PALW DRILL (G-17 sparse): this draw lies at step leaf {leaf}, one of {of} candidates");
+                        backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf)
+                    }
                     None => backend.execute(&job_for_blocking, &prompt_for_blocking),
+                    Some(PALW_DRILL_TAMPER_AUTO_LEAF_V1) => {
+                        let honest = backend.execute(&job_for_blocking, &prompt_for_blocking)?;
+                        let leaf = palw_drill_auto_lie_leaf_v1(&honest.material).ok_or_else(|| {
+                            "PALW DRILL: the honest capture holds no openable, non-fused leaf in its second half to lie at".to_string()
+                        })?;
+                        warn!(
+                            "PALW DRILL: this draw commits a lie at step leaf {leaf} of {} (auto: held, openable, non-fused)",
+                            misaka_palw_base0::produce::base0_material_decode_v1(&honest.material)
+                                .map(|(b, ..)| b.step_leaf_count)
+                                .unwrap_or_default()
+                        );
+                        backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf)
+                    }
                     Some(leaf) => backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf),
                 }?;
                 // The answer's ids, read back off the capture by the family that wrote it — for the
@@ -2401,7 +2483,10 @@ pub(crate) fn palw_dissection_refusal_v1(
     daa_score: u64,
     class_id: kaspa_consensus_core::Hash64,
 ) -> Option<String> {
-    (backend.has_fused_site() && !backend.supports_dissection() && params.palw_kary_court_active_at(daa_score)).then(|| {
+    let memory_route = params.palw_memory_routing_court_v2_fence().is_some_and(|f| f.is_active(daa_score));
+    (backend.has_fused_site()
+        && !backend.supports_dissection_with_memory_routing_v2(memory_route)
+        && params.palw_kary_court_active_at(daa_score)).then(|| {
         format!(
             "this node will not produce for class {class_id}: its fused attention site cannot be dissected by this build, and a \
              claim disputed down to that leaf is convicted by the silence it could not answer (ADR-0093){}",

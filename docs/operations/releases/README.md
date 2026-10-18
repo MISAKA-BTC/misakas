@@ -8,3 +8,4 @@
 
 - [mainnet-readiness.md](mainnet-readiness.md)
 - [release-process.md](release-process.md)
+- [release-notes-pending.md](release-notes-pending.md)

@@ -131,6 +131,24 @@ pub fn native_mining_receipt_view_v39(
     (rroot == r.root() && croot == c.root() && r.id == receipt.as_bytes() && c.id == r.claim && c.closed == Some((r.established_daa, true)))
         .then_some((r, c))
 }
+/// **G14 lane closure G-N2: an open post-Final accusation of `claim`** (a demand on a credited component's material awaiting its
+/// answer). While one is open the claim's certification decision waits (Gate C pending) and no receipt quantum is spent.
+pub fn native_mining_accusation_pending_v39(state: &PalwChainStateV2, claim: &Hash64) -> bool {
+    state.kernel_route_state_v1().is_some_and(|route| {
+        route
+            .aux_row::<NativeMiningAccusationCountsV39>(
+                MINING_TABLE_V39,
+                &native_mining_row_key_v39(MINING_ACCUSATION_COUNT_KIND_V39, &claim.as_bytes()),
+            )
+            .is_some_and(|c| c.open > 0)
+    })
+}
+/// G-N2: has `claim` been convicted (its tombstone exists)?
+pub fn native_mining_convicted_v39(state: &PalwChainStateV2, claim: &Hash64) -> bool {
+    state.kernel_route_state_v1().is_some_and(|route| {
+        route.aux.contains_key(&(MINING_TABLE_V39, native_mining_row_key_v39(MINING_CONVICTED_KIND_V39, &claim.as_bytes())))
+    })
+}
 pub fn native_mining_quantum_spent_v39(state: &PalwChainStateV2, receipt: &Hash64, index: u32) -> bool {
     native_mining_receipt_view_v39(state, receipt).is_none_or(|(r, _)| r.is_spent(index))
 }
@@ -186,6 +204,10 @@ where
     }
     if !crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39(params, state, &claim.claim_hash(), claim.admitted_daa) {
         return Err("native39 receipt's mining claim is not SecurityCertified (Gate C)".into());
+    }
+    // G-N2: while a post-Final accusation is open no quantum is spent (the fold refuses the same).
+    if native_mining_accusation_pending_v39(state, &claim.claim_hash()) {
+        return Err("native39 receipt's mining claim has an open post-Final accusation".into());
     }
     if !state.bond_budget_native_receipt_fits_v39(params, &native_mining_budget_id_v39(&claim.id), point.daa_score, carve) {
         return Err("native39 receipt's budget reservation cannot pay this block (ADR-0176, 0.51 export)".into());

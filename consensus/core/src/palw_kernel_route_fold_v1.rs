@@ -636,6 +636,135 @@ fn opv_gate_v1(
     }
 }
 
+/// **The detection facts of a kernel claim commit** (lane g14-court-capacity-r2): its class and the facts its policy plans on, for
+/// EVERY claim kind, N from the claim's priced structure — its evaluated positions:
+///
+/// | kind | `work_leaves` (what the claim commits) | `context_priced_leaves` (what its job prices) |
+/// |---|---|---|
+/// | single-program (plain, salted) | `commitments.len()` (one entry per evaluated position) | `prompt + generated − 1` (the job's stream) |
+/// | segmented (K2-TIR v4/v5) | `prompt_len + generated − 1` | the same (the tiled job's stream; its evidence carries segment roots) |
+/// | pipeline | `Σ` stages `commitments.len()` | the same (each stage's evaluated positions) |
+/// | typed `Memory` | `Σ` chunk lengths (every step runs over its chunk) | the same |
+/// | typed `Retrieval` | `max(1, result.len())` (one scored entry each) | the same |
+/// | typed `Composite` | `Σ` model stages' `commitments.len()` + `Σ` retrieval stages' `result.len()` | the same |
+///
+/// A plain claim whose committed positions are not its job's stream is refused by the policy's price check (`NotAtTheClaimsPrice`),
+/// as a free-prompt claim's is. The collateral is the route's per-claim reservation (`claim_collateral`, what a conviction slashes).
+/// `None` for an object that commits no claim, or one whose job the ledger does not know (the kernel refuses it by its own rule).
+fn kernel_claim_detection_facts_v1(
+    ledger: &KernelLedgerV1,
+    object: &KernelRouteObjectV1,
+) -> Option<(misaka_palw_kernel::hash::Digest, crate::palw_detection_policy_v1::PalwDetectionClaimFactsV1)> {
+    use misaka_palw_kernel::route::SaltedCommitV1 as C;
+    use misaka_palw_kernel::spec::{SpecClaimV1 as SC, SpecJobV1 as SJ};
+    let u32_of = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let facts = |work: u64, context: u64, prompt: usize, decode: usize| crate::palw_detection_policy_v1::PalwDetectionClaimFactsV1 {
+        attempt_lane: false,
+        work_leaves: work,
+        context_priced_leaves: Some(context),
+        prompt_tokens: u32_of(prompt),
+        decode_tokens_executed: u32_of(decode),
+        collateral_sompi: u128::from(ledger.policy.claim_collateral),
+    };
+    let stream = |prompt: usize, generated: usize| (prompt as u64 + generated as u64).saturating_sub(1);
+    match object {
+        KernelRouteObjectV1::CommitClaim { claim, commitments, .. }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Claim { claim, commitments, .. }, .. } => {
+            let job = ledger.jobs.get(&claim.job_id)?;
+            let context = stream(job.prompt.len(), claim.generated.len());
+            Some((job.class_binding_id, facts(commitments.len() as u64, context, job.prompt.len(), claim.generated.len())))
+        }
+        KernelRouteObjectV1::CommitSegmentedClaim { claim, .. }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Segmented { claim, .. }, .. } => {
+            let row = ledger.tiled_jobs.get(&claim.job_id)?;
+            let positions = stream(row.job.prompt_len as usize, claim.generated.len());
+            Some((row.job.class_binding_id, facts(positions, positions, row.job.prompt_len as usize, claim.generated.len())))
+        }
+        KernelRouteObjectV1::CommitPipelineClaim { claim, stages, .. }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Pipeline { claim, stages, .. }, .. } => {
+            let job = ledger.pipeline_jobs.get(&claim.job_id)?;
+            let positions: u64 = stages.iter().map(|s| s.commitments.len() as u64).sum();
+            Some((job.class_binding_id, facts(positions, positions, job.facts.prompt.len(), claim.generated.len())))
+        }
+        KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Spec { claim }, .. } => {
+            let job = ledger.typed.jobs.get(&claim.job_id())?;
+            let (class, positions, prompt, decode) = match (job, claim) {
+                (SJ::Memory(j), SC::Memory(c)) => {
+                    (j.class, j.chunks.iter().map(|c| c.len() as u64).sum::<u64>(), 0, c.generated.len())
+                }
+                (SJ::Retrieval(j), SC::Retrieval(c)) => (j.class, (c.result.len() as u64).max(1), 0, 0),
+                (SJ::Composite(j), SC::Composite(c)) => {
+                    use misaka_palw_kernel::spec::composite::StageClaimV1 as S;
+                    let units = c
+                        .stages
+                        .iter()
+                        .map(|s| match s {
+                            S::Model { commitments, .. } => commitments.len() as u64,
+                            S::Retrieval { result, .. } => result.len() as u64,
+                        })
+                        .sum::<u64>();
+                    (j.class, units, j.prompt.len(), 0)
+                }
+                // A claim of another kind than its job: the kernel refuses it by its own rule.
+                _ => return None,
+            };
+            Some((class, facts(positions, positions, prompt, decode)))
+        }
+        _ => None,
+    }
+}
+
+/// **The detection policy at the kernel route's claim door** (`palw_detection_policy_v1`, lane g14-court-capacity-r2; g14-detection-
+/// policy §10 item 2): past the fence a kernel claim commit of ANY kind is DROPPED (nothing written, as `opv_gate_v1` drops an
+/// ineligible class's claim: no claim, no reward, weight or consensus credit) when its class has no armed policy, or when the
+/// policy's full plan refuses it on the facts its priced structure gives ([`kernel_claim_detection_facts_v1`]): collateral below the
+/// deterrence bound, N above `n_max`, a draw its declared resources cannot carry, committed positions not at its job's price. `false`
+/// below the fence and for every other object. The kernel route adjudicates in its own ledger court, so the policy's declared court
+/// / DA needs stand (`palw_court_claim_budget_v1` is the V2 route's reservation).
+fn detection_drops_kernel_claim_v1(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    ledger: &KernelLedgerV1,
+    object: &KernelRouteObjectV1,
+) -> bool {
+    let Some(fence) = builder.params.detection_policy_v1() else { return false };
+    if !fence.activation.is_active(ctx.daa_score) {
+        return false;
+    }
+    let Some((class, facts)) = kernel_claim_detection_facts_v1(ledger, object) else { return false };
+    if crate::palw_detection_policy_v1::palw_detection_claim_refusal_with_budget_v1(
+        builder.params,
+        &Hash64::from_bytes(class),
+        ctx.daa_score,
+        &facts,
+        None,
+    )
+    .is_some()
+    {
+        return true;
+    }
+    // **No public checker, no reward** (G14, lane g14-court-capacity-r2): the node's public kernel verifier
+    // (`kaspad::palw_kernel_verifier`) re-executes single-program, segmented and typed `Memory` claims; a pipeline, a typed
+    // `Composite` or a typed `Retrieval` claim needs more than one model (or a snapshot) and no node service checks or files on it.
+    // Past the fence such a claim is not reward-bearing until a checker exists — the option (b) rule for a route with no public
+    // conviction path.
+    !kernel_claim_kind_publicly_checked_v1(object)
+}
+
+/// **Does a node's public kernel verifier check this claim kind?** Single-program (plain, salted), segmented and typed `Memory`:
+/// yes; pipeline, typed `Composite` and typed `Retrieval`: no (`kaspad::palw_kernel_verifier`'s module doc).
+fn kernel_claim_kind_publicly_checked_v1(object: &KernelRouteObjectV1) -> bool {
+    use misaka_palw_kernel::route::SaltedCommitV1 as C;
+    use misaka_palw_kernel::spec::SpecClaimV1 as SC;
+    match object {
+        KernelRouteObjectV1::CommitPipelineClaim { .. } | KernelRouteObjectV1::CommitClaimSalted { commit: C::Pipeline { .. }, .. } => false,
+        KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } }
+        | KernelRouteObjectV1::CommitClaimSalted { commit: C::Spec { claim }, .. } => matches!(claim, SC::Memory(_)),
+        _ => true,
+    }
+}
+
 /// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them. The ledger is then
 /// cached on the route state (GAP 8) as the rows' own ledger, so the next object of the chain loads it without rebuilding it.
 pub(super) fn flush(
@@ -1318,11 +1447,11 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
                 || e.stage_execution_v28.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
         }
-        Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=79)) => {
+        Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=80)) => {
             e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
                 || e.native_execution39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
                 // Mining actions 73–79: their own dormant fence too (A-2: unjudged below it, no state effect).
-                || matches!(bytes.get(2), Some(73..=79))
+                || matches!(bytes.get(2), Some(73..=80))
                     && e.native_mining39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
         }
         _ => false,
@@ -1344,7 +1473,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, a.action, a.body);
         }
         Ok(Some(a)) if a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => {
-            if (41..=79).contains(&a.action) {
+            if (41..=80).contains(&a.action) {
                 return super::palw_native_job_fold_v39::apply(builder, ctx, signer, a.action, a.body);
             }
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, a.action, a.body);
@@ -1410,7 +1539,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, *action, body);
         }
         KernelRouteObjectV1::StageExecutionV14 { action, body } => {
-            if (41..=79).contains(action) {
+            if (41..=80).contains(action) {
                 return super::palw_native_job_fold_v39::apply(builder, ctx, signer, *action, body);
             }
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, *action, body);
@@ -1451,6 +1580,10 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 return result;
             }
             return super::palw_model_eligibility_fold_v1::apply_attest_eligibility_exam_v1(builder, ctx, signer, attestation);
+        }
+        // RFC-0016 V8 (inner 76, audit 16-A): a verifier's capacity attestation, past `palw_elastic_final_capacity_v1`.
+        KernelRouteObjectV1::AttestCapacityV1 { attestation } => {
+            return super::palw_rfc0016_fold_v1::apply_attest_capacity_v1(builder, ctx, signer, attestation);
         }
         KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } => {
             return super::palw_panel_source_fee_fold_v2::fund_panel_sources_v2(builder, ctx, signer, *epoch, terms);
@@ -1655,6 +1788,10 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         return Ok(());
     }
     let before = loaded_rows(builder, &ledger)?;
+    // Lane g14-court-capacity-r2: the detection policy's claim door (dormant `palw_detection_policy_v1`).
+    if detection_drops_kernel_claim_v1(builder, ctx, &ledger, object) {
+        return Ok(());
+    }
     match opv_gate_v1(builder, ctx, &ledger, object) {
         OpvGateV1::Drop => return Ok(()),
         OpvGateV1::Admit(classes) => {

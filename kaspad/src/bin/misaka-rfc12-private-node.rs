@@ -15,14 +15,18 @@ use kaspad_lib::{
         create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
         export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
         export_private_paid_program_work_v3, prepare_private_integration_probe, private_complete_check_params_v1,
-        private_late_retirement_params_v1, private_native_settlement_params_v1, private_paid_claim_params_v3,
-        private_paid_claim_params_v4, private_probe_manifest,
+        private_g14_drill_params_v1, private_late_retirement_params_v1, private_native_settlement_params_v1,
+        private_paid_claim_params_v3, private_paid_claim_params_v4, private_probe_manifest,
     },
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 const USAGE: &str = "misaka-rfc12-private-node (requires --features private-integration-config)
---private-probe-profile=native-v1|population-v1|complete-v1|paid-v3|paid-v4 --private-probe-salt=HEX --testnet --netsuffix=12
+--private-probe-profile=native-v1|population-v1|complete-v1|paid-v3|paid-v4|g14-v1 --private-probe-salt=HEX --testnet --netsuffix=12
 population-v1 additionally requires --private-probe-bonds=N (actual funded registry only).
+g14-v1 (the G14 collusion drill, scripts/drills/g14_collusion_drill.py): --private-probe-g14-at=N (0: every G14 fence from
+  genesis; N > 0: testnet-12's shipped rules below N and the DAA-14,000 candidate set from N), --private-probe-g14-set=full|
+  route-required-only (default full), --private-probe-panel-seats=3..5 (default 3; R-core+ fixes the quorum at 3). Armed through drill arming records naming
+  this genesis and height, never pinned; the shipped validation still refuses the ruleset.
 Any profile: --private-probe-retirement-daa=N (N >= 2) arms palw_dns_retirement_v1 at DAA N instead of DAA 1, so a private
   run accumulates DNS-validator history before the fence (RFC-0012 §4.4); Rule E and its commitment stay at DAA 1. The
   height is part of the profile's identity: every node, export and print of one run must name the same N.
@@ -99,6 +103,9 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-kernel-paid-check"
                         | "--private-probe-kernel-replace"
                         | "--private-probe-retirement-daa"
+                        | "--private-probe-g14-at"
+                        | "--private-probe-g14-set"
+                        | "--private-probe-panel-seats"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -138,6 +145,27 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .remove("--private-probe-retirement-daa")
         .map(|n| n.parse::<u64>().map_err(|_| "private retirement DAA must be u64".to_owned()))
         .transpose()?;
+    let g14_at = flags
+        .values
+        .remove("--private-probe-g14-at")
+        .map(|n| n.parse::<u64>().map_err(|_| "the G14 drill height must be u64".to_owned()))
+        .transpose()?;
+    let g14_set = match flags.values.remove("--private-probe-g14-set").as_deref() {
+        None | Some("full") => kaspad_lib::private_integration::g14_drill_factory::PrivateG14DrillSetV1::Full,
+        Some("route-required-only") => kaspad_lib::private_integration::g14_drill_factory::PrivateG14DrillSetV1::RouteRequiredOnly,
+        Some(other) => return Err(format!("unknown G14 drill set {other} (full | route-required-only)")),
+    };
+    let panel_seats = flags
+        .values
+        .remove("--private-probe-panel-seats")
+        .map(|n| n.parse::<u16>().map_err(|_| "the G14 drill Panel size must be u16".to_owned()))
+        .transpose()?;
+    if profile == "g14-v1" && g14_at.is_none() {
+        return Err("the g14-v1 profile requires --private-probe-g14-at (0: genesis mode)".into());
+    }
+    if profile != "g14-v1" && (g14_at.is_some() || panel_seats.is_some()) {
+        return Err("--private-probe-g14-at / --private-probe-panel-seats belong to the g14-v1 profile".into());
+    }
     let bootstrap = flags.values.remove("--private-probe-export-bootstrap");
     let paid_request = flags.values.remove("--private-probe-paid-request");
     let paid_output = flags.values.remove("--private-probe-export-paid-work");
@@ -245,6 +273,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         "population-v1" => {
             private_native_settlement_params_v1(derive_private_population_v1(&salt, population.expect("size checked"))?.params)?
         }
+        "g14-v1" => private_g14_drill_params_v1(&salt, g14_at.expect("height checked"), g14_set, panel_seats.unwrap_or(3))?,
         _ => return Err("unallocated private profile".into()),
     };
     // RFC-0012 §4.4: only the retirement height moves; the DAA-1 profile is unchanged when the option is absent.

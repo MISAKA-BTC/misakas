@@ -69,6 +69,8 @@ impl<'a> TransitionBuilder<'a> {
             heavy_prompt_claims: BTreeSet::new(),
             panel_v3_beacons: Vec::new(),
             paid_lifetime_admission_v1: None,
+            court_cost_spent: Default::default(),
+            court_one_move_spent: Default::default(),
         })
     }
 
@@ -4291,7 +4293,10 @@ impl<'a> TransitionBuilder<'a> {
         if self.params.rcore_plus_active_at(now_daa) {
             let distinct: BTreeSet<PalwBondKeyV2> = seats.iter().map(|seat| seat.bond).collect();
             let prices = self.read().rcore_bind_prices(&claim_id, claim, distinct.len(), now_daa);
-            let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi());
+            let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+                self.params.min_collateral_sompi(),
+                self.params.legacy_public_filer_active_at(now_daa),
+            );
             for seat in &distinct {
                 // ADR-0160 lane liab (AG-3): a frozen bond is not a seat (the draw never seats one; the
                 // map is empty below the fence).
@@ -6705,7 +6710,10 @@ impl<'a> TransitionBuilder<'a> {
         if a == 0 {
             return Ok(());
         }
-        let panel_floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi());
+        let panel_floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+            self.params.min_collateral_sompi(),
+            self.params.legacy_public_filer_active_at(ctx.daa_score),
+        );
         let slots = (terms.prep_payee_cap as usize).saturating_sub(pool.prep_paid.len()).min((pool.prep_sompi / a) as usize);
         let mut payees: Vec<(Hash64, Hash64)> = Vec::new();
         for (operator, bonds) in &jury.drawn {
@@ -8838,7 +8846,18 @@ impl<'a> TransitionBuilder<'a> {
     // ---- deadline index (never in the delta: rebuilt facts, not primary data) ----
 
     pub(super) fn arm_deadline(&mut self, deadline: u64, claim: Hash64) -> Result<(), PalwStateV2Error> {
-        let deadline = self.state.staged_retirement_floor_v1(&claim, deadline);
+        // The staged material horizon floors a terminal claim's RETIREMENT, never its operational release (the abandon hold or the
+        // obligation release: a collateral clock) — exactly `terminal_deadline_with_material_v1`, the form DL-1 rebuilds. Flooring
+        // the release here armed a free-prompt `BindTimeout` of a TIR-framed claim at its frame's material horizon while DL-1
+        // rebuilt it at `voided + fp_abandon_hold` (the DL-1 drift the node T-N1 harness hit, 2026-10-17).
+        let operational = self
+            .state
+            .claims
+            .get(&claim)
+            .map(|c| super::terminal_operational_release_at_v1(c, self.params, None))
+            .transpose()?
+            .flatten();
+        let deadline = if operational == Some(deadline) { deadline } else { self.state.staged_retirement_floor_v1(&claim, deadline) };
         // **ADR-0152 DL-1's DA rows (M3), at the one primitive every arm site calls**: a live claim a
         // seat session pauses owes no deadline, a terminal claim with a session open owes none (its
         // retirement waits), and a retirement arms no earlier than one DAA after the last close —

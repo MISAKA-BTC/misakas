@@ -263,6 +263,11 @@ mod tir_dissect;
 mod tir_shard;
 #[cfg(test)]
 mod tir_shard_e2e;
+/// RFC-0006 06-A: the held-GDN filer on the service tick.
+mod gdn_filer_tick;
+/// RFC-0018 (iv): the single in-flight carrier's wait across many classes.
+#[cfg(test)]
+mod carrier_wait_many_classes;
 
 /// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
 /// phase differs from the one `seen` last recorded, in the operator's stage names. A claim seen for
@@ -3094,6 +3099,22 @@ pub(crate) fn palw_readiness_lane_takes_v1(main_takes: bool, lane_inflight: usiz
     !main_takes && lane_inflight < PALW_READINESS_LANE_INFLIGHT_V1
 }
 
+/// **RFC-0018 (iv), 2026-10-18: how many per-class receipt lanes a seat runs at most.** Each needs its own spare output under the
+/// seat's script (scanned at most once a DAA per lane); the bound keeps a seat on many classes from scanning without end.
+pub(crate) const PALW_RECEIPT_LANES_MAX_V1: usize = 16;
+
+/// **Does an own receipt the main slot cannot take ride its class's lane?** One in flight per lane, as the readiness lane (V07):
+/// each lane spends its own CONFIRMED output — never a child of another chain's carrier, which relay drops (why the main cap is
+/// one). A class with no lane yet opens one only while fewer than [`PALW_RECEIPT_LANES_MAX_V1`] exist. Measured by
+/// `carrier_wait_many_classes`: behind a court queue that never empties the main slot never reaches the OwnReceipts site, so
+/// without a lane a seat's own receipts miss their window at any class count.
+pub(crate) fn palw_receipt_lane_takes_v1(lane_inflight: Option<usize>, lanes: usize) -> bool {
+    match lane_inflight {
+        Some(inflight) => inflight < PALW_READINESS_LANE_INFLIGHT_V1,
+        None => lanes < PALW_RECEIPT_LANES_MAX_V1,
+    }
+}
+
 /// **The readiness lane's funding chain** (V07), carried across ticks like the main chain's: a
 /// confirmed output it resolved, or the change of its proof in flight.
 #[derive(Clone, Debug, Default)]
@@ -4033,6 +4054,19 @@ pub enum PalwDrillTirFrameFaultV1 {
     NoTfp1,
 }
 
+/// **DRILL ONLY (G14 audit G-17): the lie this node's canonical free-prompt claims commit** (`--palw-drill-fp-fault`). `Backend` is one of
+/// the families' own free-prompt drill verbs (`execute_free_prompt_with_drill_fault_v2`: a forged KV cache row — the state fault — or a
+/// forged fused attention output, every root re-derived); `SkipAll` commits an execution root no computation reproduces, the claim
+/// of a producer that computed nothing. The daemon refuses the flag off a private drill chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillFpFaultV1 {
+    Backend(kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1),
+    SkipAll,
+}
+
+/// The execution root a [`PalwDrillFpFaultV1::SkipAll`] claim commits — a drill constant no run reproduces.
+pub const PALW_DRILL_SKIP_ALL_EXECUTION_ROOT_WORD_V1: u64 = 0x5C1F_A11C_0DE5_C1F0;
+
 #[derive(Clone)]
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
@@ -4102,6 +4136,18 @@ pub struct PalwPanelConfig {
     pub drill_answer_only: bool,
     /// DRILL ONLY (devnet/simnet): refuse every leaf-evidence request, so the slow path runs.
     pub drill_refuse_leaf_evidence: bool,
+    /// **DRILL ONLY (the G14 collusion drill; the daemon refuses it off a private drill chain)**: the producer bonds this seat
+    /// colludes with (`--palw-drill-collude-with`). Empty: an honest node, as before.
+    pub drill_collude_with: Vec<PalwBondKeyV2>,
+    /// **DRILL ONLY (the G14 collusion drill D-11)**: never answer a legacy held DA unit (`--palw-drill-withhold-held-da`).
+    pub drill_withhold_held_da: bool,
+    /// **DRILL ONLY (G14 audit G-17 / D-11)**: answer no DA unit of any kind (`--palw-drill-withhold-all-da`).
+    pub drill_withhold_all_da: bool,
+    /// **DRILL ONLY (G14 audit G-17)**: the canonical free-prompt claims' lie (`--palw-drill-fp-fault`). See [`PalwDrillFpFaultV1`].
+    pub drill_fp_fault: Option<PalwDrillFpFaultV1>,
+    /// **DRILL ONLY (G14 audit G-17, the sparse fault)**: canonical free-prompt claims lie at one leaf drawn from this seed and the
+    /// honest run (`--palw-drill-sparse-fault-seed`; `palw_producer::palw_drill_sparse_lie_leaf_v1`).
+    pub drill_sparse_fault_seed: Option<u64>,
     /// **RFC-0004 (A10): evaluate** (`--palw-improve-evaluate`): run the evaluation jobs of every governed
     /// line's open epoch whose subject class this node holds, and carry their claims.
     pub improve_evaluate: bool,
@@ -4247,6 +4293,9 @@ enum CaptureSamplesV1 {
 
 pub struct PalwPanelService {
     worker_running: std::sync::atomic::AtomicBool,
+    /// **DRILL ONLY (`--palw-drill-extra-seat`)**: this service's own copy of the node's gossip inbox, fanned out by the daemon when
+    /// several seat identities share the process; `None` takes the node's inbox as before.
+    drill_inbox: std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<kaspa_p2p_flows::palw_gossip::PalwGossipEvent>>>,
     /// Read-only test observation of real completed replay verdicts; never drives the service.
     #[cfg(test)]
     fraud_filer_honest_replays: std::sync::Mutex<HashSet<Hash64>>,
@@ -4441,7 +4490,38 @@ impl PalwPanelService {
         class_id: Hash64,
         artifact_root: Hash64,
     ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String> {
-        self.backends().resolve_or_chain(class_id, artifact_root, |id| self.chain_carriage_v1(session, id))
+        let mut backend = self.backends().resolve_or_chain(class_id, artifact_root, |id| self.chain_carriage_v1(session, id))?;
+        // **Audit 02-B (RFC-0002 Phase H): the class's registered runtime semantics, read off this node's accepted state**, on every
+        // backend this door resolves — so a free-prompt context this node builds (producer and seat alike) carries the chain's
+        // statement, never the backend's defaults. Absent a statement (every shipped chain: the semantics fence is dormant, and the
+        // read answers only past the TIR frame's fence) nothing is set and the backend is what it was.
+        if let Some(facts) = Self::registered_class_facts_v1(session, class_id, artifact_root) {
+            backend.set_registered_class_facts_v1(facts);
+        }
+        Ok(backend)
+    }
+
+    /// The registered semantics of `class_id` over `artifact_root` as free-prompt class facts (`None`: no statement, or the read
+    /// is not in force).
+    fn registered_class_facts_v1(
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+    ) -> Option<kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3> {
+        let mut facts = None;
+        let read = session.palw_tir_public_read_v1(&mut |state| {
+            facts = state.class_semantics_v1(&class_id).filter(|s| s.artifact_root == artifact_root).map(|s| {
+                kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
+                    model_profile_id: s.model_profile_id,
+                    runtime_manifest_hash: s.runtime_manifest_hash,
+                    runtime_class_id: s.runtime_class_id,
+                    shape_profile_id: class_id,
+                    cu_ruleset_id: s.cu_ruleset_id,
+                }
+            });
+            Ok(())
+        });
+        read.ok().filter(|in_force| *in_force).and(facts)
     }
 
     /// **The executor's backend for a class** (ADR-0110 §9.5): the kept instance when it was
@@ -4613,6 +4693,16 @@ impl PalwPanelService {
         }
     }
 
+    /// **DRILL ONLY**: hand this service its own copy of the gossip inbox (`--palw-drill-extra-seat`), before the worker starts.
+    pub(crate) fn drill_attach_inbox_v1(&self, inbox: tokio::sync::mpsc::Receiver<kaspa_p2p_flows::palw_gossip::PalwGossipEvent>) {
+        *self.drill_inbox.lock().unwrap() = Some(inbox);
+    }
+
+    /// The configuration this service runs (`--palw-drill-extra-seat` clones it for another seat identity in the same process).
+    pub(crate) fn drill_config_v1(&self) -> &PalwPanelConfig {
+        &self.config
+    }
+
     pub fn new(
         config: PalwPanelConfig,
         consensus_manager: Arc<ConsensusManager>,
@@ -4682,6 +4772,7 @@ impl PalwPanelService {
         };
         Self {
             worker_running: std::sync::atomic::AtomicBool::new(false),
+            drill_inbox: std::sync::Mutex::new(None),
             #[cfg(test)]
             fraud_filer_honest_replays: std::sync::Mutex::new(HashSet::new()),
             config,
@@ -5957,6 +6048,16 @@ impl PalwPanelService {
     /// (RBF, `submit_rpc_transaction_replacement`), and the opening records it; every other carrier
     /// is submitted exactly as before. `Err` carries the pool's refusal for the site to log.
     async fn submit_carrier_v1(&self, session: &kaspa_consensusmanager::ConsensusProxy, tx: Transaction) -> Result<(), String> {
+        // DRILL ONLY (the G14 collusion drill): a colluding seat files nothing against its producer — no accusation, demand,
+        // disclosure or filing leaves this node; its receipts, readiness proofs and bond objects do.
+        if !self.config.drill_collude_with.is_empty()
+            && let Err(kind) = palw_drill_collusion_allows_v1(&tx)
+        {
+            crate::palw_backends::note_throttled_v1("drill-collusion-filter", || {
+                format!("[{PALW_PANEL}] PALW DRILL (G14 collusion): this colluding seat files no {kind}; the carrier is not submitted")
+            });
+            return Err(format!("PALW DRILL (G14 collusion): a colluding seat files no {kind}"));
+        }
         let opening = self.carrier_replacement.lock().unwrap().as_ref().filter(|opening| opening.is_replaced_by(&tx)).cloned();
         let Some(opening) = opening else {
             return self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await.map_err(|e| e.to_string());
@@ -6913,6 +7014,18 @@ impl PalwPanelService {
                 failed_minimum = Some(failed);
             }
             let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| *inflight < MAX_INFLIGHT_CARRIERS) else {
+                // Lane g14-court-capacity-r2: the funding scan failed at this object's minimum — a FEE SHORTFALL, not a busy UTXO:
+                // the G14 funnel counts it against the claim this node detected (`detection_loss_once(.., FeeShortfall)`).
+                if failed_minimum.is_some_and(|failed| minimum >= failed)
+                    && let Some(claim) = palw_court_object_claim_v1(&object)
+                    && let Some(class) = self.config.telemetry.detection_watched_class(&claim)
+                {
+                    self.config.telemetry.detection_loss_once(
+                        class,
+                        claim,
+                        kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1::FeeShortfall,
+                    );
+                }
                 // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
                 // dropped here is a dispute that never happens.
                 unsent.push((session_id, round, mine_is_responder, object));
@@ -7818,9 +7931,13 @@ impl PalwPanelService {
         // states the anchor's prompt as its own (`USER` mode, the same ids) and the original rides its `TFP1` frame below (G-03).
         // Below the fence, and for every legacy class, the canonical job is what it was.
         if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_some_and(|f| f.is_active(current_daa))
-            && session.palw_tir_class_record_v1(class_id).is_some()
+            && let Some(record) = session.palw_tir_class_record_v1(class_id)
         {
             job.prompt_mode = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER;
+            // The registered class's own tokenizer (its record binds it): the frame's source resolution refuses a job context whose
+            // tokenizer is not the record's (`resolve_registered_layout_v1`), so a default id here made every IR canonical claim
+            // unbuildable (T-N1 node harness, 2026-10-17).
+            job.tokenizer_id = record.tokenizer_id;
         }
         // The anchor is a function of the job's own facts, not of its prompt — so the prompt
         // can be derived from it and then written into the job.
@@ -7845,8 +7962,29 @@ impl PalwPanelService {
             Some(PalwDrillTirFrameFaultV1::Selection { position }) => Some(position),
             _ => None,
         };
+        // G14 audit G-17: the canonical claim's backend lie (KV / attention) and the sparse single-leaf lie.
+        let drill_fp_backend = match self.config.drill_fp_fault {
+            Some(PalwDrillFpFaultV1::Backend(fault)) => Some(fault),
+            _ => None,
+        };
+        let drill_sparse_seed = self.config.drill_sparse_fault_seed;
         let (_backend, executed) = offload(backend, move |b| {
-            let run = match drill_fault_leaf {
+            let sparse_leaf = match drill_sparse_seed {
+                Some(seed) => {
+                    let honest = b.execute_free_prompt(&job_for_run, &prompt_for_run)?;
+                    let (leaf, of) = crate::palw_producer::palw_drill_sparse_lie_leaf_v1(&honest.outcome.material, seed)
+                        .ok_or_else(|| "PALW DRILL: the honest free-prompt capture holds no openable, non-fused leaf to lie at".to_string())?;
+                    warn!("[{PALW_PANEL}] PALW DRILL (G-17 sparse): this canonical claim lies at step leaf {leaf}, one of {of} candidates");
+                    Some(leaf)
+                }
+                None => None,
+            };
+            let run = match drill_fault_leaf.or(sparse_leaf) {
+                None if drill_fp_backend.is_some() => b.execute_free_prompt_with_drill_fault_v2(
+                    &job_for_run,
+                    &prompt_for_run,
+                    drill_fp_backend.expect("checked"),
+                )?,
                 None if drill_selection.is_some() => b.execute_free_prompt_with_selection_fault_v1(
                     &job_for_run,
                     &prompt_for_run,
@@ -7880,7 +8018,12 @@ impl PalwPanelService {
         if let Some(position) = drill_selection {
             warn!("[{PALW_PANEL}] PALW DRILL (D-06): this canonical claim commits a token at decode position {position} its job's rule does not select");
         }
-        // G14 drill D-07: the commitment names an output root its own committed trace's ids do not reproduce.
+        // G14 audit G-17 (skip-all-compute): the commitment names an execution root no computation reproduces.
+        if self.config.drill_fp_fault == Some(PalwDrillFpFaultV1::SkipAll) {
+            commitment.execution_root = Hash64::from_u64_word(PALW_DRILL_SKIP_ALL_EXECUTION_ROOT_WORD_V1);
+            warn!("[{PALW_PANEL}] PALW DRILL (G-17 skip-all): this canonical claim commits an execution root no computation reproduces");
+        }
+                // G14 drill D-07: the commitment names an output root its own committed trace's ids do not reproduce.
         if tir_drill == Some(PalwDrillTirFrameFaultV1::Output) {
             commitment.output_root = Hash64::from_u64_word(0xD07D_07D0_7D07_D07D);
             warn!("[{PALW_PANEL}] PALW DRILL (D-07): this canonical claim commits a substituted output root");
@@ -8540,7 +8683,8 @@ impl PalwPanelService {
             return;
         };
         let bond_key = PalwBondKeyV2(bond);
-        let Some(mut inbox) = self.flow_context.palw_gossip().take_inbox() else {
+        let drill_inbox = self.drill_inbox.lock().unwrap().take();
+        let Some(mut inbox) = drill_inbox.or_else(|| self.flow_context.palw_gossip().take_inbox()) else {
             warn!("[{PALW_PANEL}] the gossip inbox was already taken — panel service disabled");
             self.public_cache_retirement_worker_v1().await;
             return;
@@ -8845,6 +8989,12 @@ impl PalwPanelService {
         let mut inflight: usize = 0;
         // V07: the readiness lane's own funding chain — possession proofs the main slot cannot take.
         let mut readiness_lane = PalwReadinessLaneV1::default();
+        // RFC-0018 (iv), 2026-10-18: the per-class receipt lanes — a seat's own supplementary receipt the main slot cannot take
+        // rides its class's lane (its own confirmed output, one in flight; `palw_receipt_lane_takes_v1`).
+        let mut receipt_lanes: BTreeMap<Hash64, PalwReadinessLaneV1> = BTreeMap::new();
+        let mut own_receipt_class: HashMap<Hash64, Hash64> = HashMap::new();
+        // RFC-0006 06-A: the held-GDN filer's cases (dormant below `palw_memory_routing_court_v2`).
+        let mut gdn_book = crate::palw_gdn_held_filer::PalwGdnHeldBookV1::default();
         // ADR-0135: a possession proof that found no carrier slot waits for the next one, and the
         // receipts yield until it lands — a seat whose proofs starve behind its own receipt traffic
         // counts as no seat at all (measured on the devnet: receipts filled the eight-carrier chain
@@ -8958,7 +9108,17 @@ impl PalwPanelService {
                     // ADR-0077 Decision 8. Held, not judged: the seat binds an opening to the
                     // claim's roots and replays the interval before believing anything in it.
                     PalwGossipEvent::IntervalOpening { claim, interval_index, bytes } => {
-                        Self::pool_interval_opening(&mut interval_openings, claim, interval_index, bytes);
+                        // G14 detection policy: the pair ceiling follows the largest k the armed policies draw (512 without one).
+                        let pairs = kaspa_consensus_core::palw_detection_policy_v1::palw_detection_retention_pairs_v1(
+                            self.consensus_config.params.palw_detection_policy_v1.as_ref(),
+                        ) as usize;
+                        if !Self::pool_interval_opening(&mut interval_openings, claim, interval_index, bytes, pairs) {
+                            // Counted, never silent: a dropped opening the seat drew is a capacity refusal, not a sampling miss.
+                            self.config.telemetry.detection_loss(
+                                Hash64::default(),
+                                kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1::CapacityRefusal,
+                            );
+                        }
                     }
                 }
             }
@@ -10045,7 +10205,9 @@ impl PalwPanelService {
                             continue;
                         }
                     };
-                    if !backend.supports_dissection() {
+                    let memory_route = self.consensus_config.params.palw_memory_routing_court_v2_fence()
+                        .is_some_and(|f| f.is_active(current_daa));
+                    if !backend.supports_dissection_with_memory_routing_v2(memory_route) {
                         *court_stalls
                             .entry("this class's family cannot take a dissection's turn in this build — the clock will decide")
                             .or_default() += 1;
@@ -11082,6 +11244,28 @@ impl PalwPanelService {
                     if !palw_disclosure_due_v1(duty, current_daa) {
                         continue;
                     }
+                    // DRILL ONLY (G14 audit G-17 / D-11, `--palw-drill-withhold-all-da`): no unit of any kind is answered.
+                    if self.config.drill_withhold_all_da {
+                        crate::palw_backends::note_throttled_v1("drill-withhold-all-da", || {
+                            format!(
+                                "[{PALW_PANEL}] PALW DRILL (G14 D-11): withholding DA unit {:?} of claim {} (every demand runs to its deadline)",
+                                duty.unit, duty.claim_id
+                            )
+                        });
+                        continue;
+                    }
+                    // DRILL ONLY (the G14 collusion drill D-11, `--palw-drill-withhold-held-da`): a legacy held unit is never answered.
+                    if self.config.drill_withhold_held_da
+                        && matches!(duty.unit, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(_))
+                    {
+                        crate::palw_backends::note_throttled_v1("drill-withhold-held-da", || {
+                            format!(
+                                "[{PALW_PANEL}] PALW DRILL (G14 D-11): withholding legacy held unit {:?} of claim {} (the demand runs to its deadline)",
+                                duty.unit, duty.claim_id
+                            )
+                        });
+                        continue;
+                    }
                     if flat_queued.contains(&duty.claim_id)
                         && kaspa_consensus_core::palw_da_rcore_v1::palw_da_flat_answers_unit_v1(&duty.unit, duty.in_run_rows)
                     {
@@ -11640,6 +11824,8 @@ impl PalwPanelService {
                 // and this seat files nothing), or nothing at all. Never `Valid`.
                 let duty_key = seat_duty_panel_key_v1(duty);
                 let mut sampled_now = false;
+                // DRILL ONLY (the G14 collusion drill): a seat colluding with this claim's producer signs Valid without judging it.
+                let colluding = self.config.drill_collude_with.contains(&duty.executor_bond);
                 if let Some(running) = s3_samplings.get(&duty_key) {
                     if !running.is_finished() {
                         continue;
@@ -11651,7 +11837,8 @@ impl PalwPanelService {
                         Ok(PalwSeatS3SampleV1::Faulted) => self.note_seat_fault_v1(duty.claim_id, 0, 0),
                         Ok(PalwSeatS3SampleV1::Unchecked) | Err(_) => {}
                     }
-                } else if !s3_sampled.contains(&duty_key)
+                } else if !colluding
+                    && !s3_sampled.contains(&duty_key)
                     && palw_seat_sampled_due_v1(
                         seat_r,
                         self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
@@ -11688,6 +11875,7 @@ impl PalwPanelService {
                 // segment but not the whole replay could never pass (the second pass, finding 4).
                 if !(seat_r && (seat_replays.holds_claim(&duty.claim_id) || seat_r_duty.role == PalwSeatRRoleV1::PartialResumes))
                     && !sampled_now
+                    && !colluding
                     && let Err(why) = self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))
                 {
                     crate::palw_backends::note_throttled_v1("panel-replay-budget", || {
@@ -11709,6 +11897,32 @@ impl PalwPanelService {
                     // Q-7: a finished S3 sampling is this duty's answer (above).
                     if sampled_now {
                         break 'verdict Some(PalwReceiptVerdictV2::Sampled);
+                    }
+                    // DRILL ONLY (the G14 collusion drill, `--palw-drill-collude-with`): every seat of this Panel is the producer's, so
+                    // the claim is signed Valid as a reproduced replay would sign it — the whole job (V2) and the seat's own mask (V3) —
+                    // and nothing about it is judged or filed. What the drill then shows is that one bond OUTSIDE the Panel still
+                    // convicts it from public material, and that each of these Valid signatures is charged.
+                    if colluding {
+                        // As the seat's own role would license it: a full seat by its replay, a partial seat (SEAT-S4) by a verified
+                        // resume over exactly its assigned mask.
+                        if seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {
+                            licensed_by_verified_resume = true;
+                            segments_attested = Some(
+                                kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
+                                    duty.panel_anchor,
+                                    duty.claim_id,
+                                    duty.panel_seat_count.max(1),
+                                )
+                                .mask_of(duty.seat_index as u16),
+                            );
+                        } else {
+                            licensed_by_replay = true;
+                        }
+                        info!(
+                            "[{PALW_PANEL}] PALW DRILL (G14 collusion): claim {} of colluding producer {}:{} — signed Valid without judging it",
+                            duty.claim_id, duty.executor_bond.0.transaction_id, duty.executor_bond.0.index
+                        );
+                        break 'verdict Some(PalwReceiptVerdictV2::Valid);
                     }
                     // **Class capability is decided BEFORE looking at deliveries.** This resolve
                     // lived inside the per-material loop, so a seat that received NOTHING never
@@ -12535,6 +12749,14 @@ impl PalwPanelService {
                                         // P2-8: kind 4 through the reporter filer first, the accusation
                                         // kept as its fallback; else the accusation, as below the fence.
                                         let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));
+                                        if court_key.is_some() {
+                                            use kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionStageV1 as St;
+                                            // G14 funnel: this seat localised a leaf and queued its accusation.
+                                            for stage in [St::Eligible, St::Checked, St::Detected, St::Localized, St::Filed] {
+                                                self.config.telemetry.detection_stage_once(duty.class_id, duty.claim_id, stage);
+                                            }
+                                            self.config.telemetry.detection_watch(duty.class_id, duty.claim_id);
+                                        }
                                         self.capture_arm_files_v1(
                                             &session,
                                             &mut reporter_filer,
@@ -13335,6 +13557,7 @@ impl PalwPanelService {
                 // deadline the chain takes it by.
                 if valid && let Some(carried) = whole.clone().or_else(|| segmented.as_ref().map(|r| r.receipt.clone())) {
                     own_receipts.insert(duty.claim_id, (carried, deadline));
+                    own_receipt_class.insert(duty.claim_id, duty.class_id);
                 }
                 let beside = segmented.is_some();
                 if let Some(receipt) = segmented {
@@ -13642,6 +13865,18 @@ impl PalwPanelService {
                     &mut court_moved,
                 )
                 .await;
+            // RFC-0006 06-A: the held-GDN filer — a forged recurrence checkpoint of a held hybrid claim this bond may dispute.
+            self.gdn_held_filer_tick_v1(
+                &session,
+                &mut gdn_book,
+                &materials,
+                current_daa,
+                network_domain,
+                bond_key,
+                &mut court_pending,
+                &mut court_due,
+            )
+            .await;
             // P2-8c (N10): the replay's contradiction proves the claim's liable `Valid` signers false too.
             if let Some((refuted, bound_daa)) = &replay_made {
                 false_valid.note_executor_refuted_v1(
@@ -13879,6 +14114,24 @@ impl PalwPanelService {
                 } else {
                     readiness_lane.settle(false, false, false);
                 }
+                // RFC-0018 (iv): every receipt lane's funding, read the same way.
+                for lane in receipt_lanes.values_mut() {
+                    if let Some((lane_tip, _)) = lane.funding.clone() {
+                        let pool = self.flow_context.mining_manager().clone();
+                        let confirmed = session.get_virtual_utxo_entry(lane_tip).is_some();
+                        let spent_in_pool = confirmed && pool.outpoint_is_spent_in_mempool(&lane_tip);
+                        let kept = confirmed
+                            || pool
+                                .has_transaction(
+                                    lane_tip.transaction_id,
+                                    kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly,
+                                )
+                                .await;
+                        lane.settle(confirmed, spent_in_pool, kept);
+                    } else {
+                        lane.settle(false, false, false);
+                    }
+                }
                 let mut held = inflight >= MAX_INFLIGHT_CARRIERS;
                 // **Our own tip carrier, unconfirmed since it was sent, and for how long** (the pre-t12
                 // drill of 2026-09-25). Held means the checks above found it neither mined nor gone:
@@ -14025,7 +14278,12 @@ impl PalwPanelService {
                         // ordinary proofs rode the lane while the one about to lapse waited (the int-4
                         // audit of 2026-09-26, the n1 x n2 composition).
                         let main: Vec<TransactionOutpoint> =
-                            funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();
+                            funding
+                            .iter()
+                            .chain(chained_funding.iter())
+                            .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
+                            .map(|(outpoint, _)| *outpoint)
+                            .collect();
                         readiness_waiting =
                             !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;
                     }
@@ -14044,7 +14302,12 @@ impl PalwPanelService {
                 {
                     // V07: the main slot cannot take the escalated proof this tick — the lane can.
                     let main: Vec<TransactionOutpoint> =
-                        funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();
+                        funding
+                            .iter()
+                            .chain(chained_funding.iter())
+                            .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
+                            .map(|(outpoint, _)| *outpoint)
+                            .collect();
                     if self.carry_on_readiness_lane_v1(&session, &duties[at], current_daa, &mut readiness_lane, &main).await {
                         duties.remove(at);
                         readiness_waiting = false;
@@ -14269,7 +14532,12 @@ impl PalwPanelService {
                     if funding.is_none() || !slots.offers(PalwCarrierSiteV1::Own, inflight) {
                         // V07: the main slot cannot take it this tick — the readiness lane can, past R-core+.
                         let main: Vec<TransactionOutpoint> =
-                            funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();
+                            funding
+                            .iter()
+                            .chain(chained_funding.iter())
+                            .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
+                            .map(|(outpoint, _)| *outpoint)
+                            .collect();
                         if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)
                             && self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await
                         {
@@ -14725,15 +14993,71 @@ impl PalwPanelService {
                     own_receipts.iter().map(|(claim, (receipt, _))| (*claim, receipt.clone())).collect();
                 own.sort_by_key(|(claim, _)| *claim);
                 for (claim, receipt) in own {
-                    if !slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight) || readiness_waiting {
-                        break;
-                    }
-                    let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
                     if let Some(at) = supplementary_submitted.get(&claim)
                         && current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA)
                     {
                         continue;
                     }
+                    let main_takes = slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight) && !readiness_waiting && funding.is_some();
+                    if !main_takes {
+                        // RFC-0018 (iv): the main slot is taken (one carrier in flight, a court storm, a waiting possession proof):
+                        // the receipt rides its class's lane, if this seat holds a spare output for it.
+                        let Some(class) = own_receipt_class.get(&claim).copied() else { continue };
+                        if !palw_receipt_lane_takes_v1(receipt_lanes.get(&class).map(|l| l.inflight), receipt_lanes.len()) {
+                            continue;
+                        }
+                        let held: Vec<TransactionOutpoint> = funding
+                            .iter()
+                            .chain(chained_funding.iter())
+                            .chain(readiness_lane.funding.iter())
+                            .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
+                            .map(|(outpoint, _)| *outpoint)
+                            .collect();
+                        let lane = receipt_lanes.entry(class).or_default();
+                        if lane.funding.is_none() {
+                            if lane.unfunded_at == Some(current_daa) {
+                                continue;
+                            }
+                            lane.funding = self.resolve_readiness_lane_funding_v1(&session, &held).await;
+                            if lane.funding.is_none() {
+                                lane.unfunded_at = Some(current_daa);
+                                continue;
+                            }
+                        }
+                        let Some(object) = session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt]) else { continue };
+                        let Some((lane_outpoint, lane_entry)) = lane.funding.clone() else { continue };
+                        match self.build_lifecycle_tx(&object, lane_outpoint, &lane_entry) {
+                            Ok(tx) => {
+                                let txid = tx.id();
+                                let change = tx.outputs[0].clone();
+                                match self.submit_carrier_v1(&session, tx).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[{PALW_PANEL}] submitted this seat's own receipt for claim {claim} on class {class}'s lane in tx {txid}"
+                                        );
+                                        lane.funding = Some((
+                                            TransactionOutpoint::new(txid, 0),
+                                            UtxoEntry {
+                                                amount: change.value,
+                                                script_public_key: change.script_public_key,
+                                                block_daa_score: current_daa,
+                                                is_coinbase: false,
+                                            },
+                                        ));
+                                        lane.inflight = 1;
+                                        supplementary_submitted.insert(claim, current_daa);
+                                    }
+                                    Err(e) => {
+                                        warn!("[{PALW_PANEL}] the mempool refused the lane receipt for claim {claim}: {e}");
+                                        lane.funding = None;
+                                    }
+                                }
+                            }
+                            Err(e) => warn!("[{PALW_PANEL}] cannot build the lane carrier for claim {claim}: {e}"),
+                        }
+                        continue;
+                    }
+                    let Some((funding_outpoint, funding_entry)) = funding.clone() else { continue };
                     let Some(object) = session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt]) else { continue };
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
@@ -14936,6 +15260,29 @@ impl PalwPanelService {
                     }
                 }
             }
+            // **G14 funnel: follow every claim this node detected to its chain outcome** (accepted, convicted / defaulted, collected,
+            // invalidated; deadline and unassigned losses). One read of this seat's rows, only while something is followed.
+            // `collected` is inferred from the fold's void-and-slash of a claim that reserved collateral (the row carries no slash
+            // amount); a node-local metric, never a consensus input.
+            let watched = self.config.telemetry.detection_watched();
+            if !watched.is_empty() {
+                let rows = self
+                    .consensus_manager
+                    .consensus()
+                    .unguarded_session()
+                    .spawn_blocking(move |c| {
+                        c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat, true, 4_096)
+                    })
+                    .await
+                    .map(|read| read.rows)
+                    .unwrap_or_default();
+                for claim in watched {
+                    if let Some(row) = rows.iter().find(|row| row.claim_id == claim) {
+                        let outcome = kaspa_consensus_core::palw_detection_policy_v1::palw_detection_chain_outcome_v1(&row.phase);
+                        self.config.telemetry.detection_follow(claim, outcome, row.reserved > 0);
+                    }
+                }
+            }
             // The foreign retention keeps what a live claim may still ask for: a C7 claim's window
             // (13,995 DAA on testnet-12 past §4-quater, once the 2M row opens) outlives the directory's
             // age bound.
@@ -14975,6 +15322,8 @@ impl PalwPanelService {
             // ADR-0124 Decision 2: a receipt this seat may still carry itself lives exactly as long
             // as its window; the chain refuses anything past `receipt_deadline` regardless.
             own_receipts.retain(|_, (_, deadline)| current_daa <= *deadline);
+            own_receipt_class.retain(|claim, _| own_receipts.contains_key(claim));
+            receipt_lanes.retain(|class, lane| lane.funding.is_some() || own_receipt_class.values().any(|c| c == class));
             supplementary_submitted.retain(|claim, _| own_receipts.contains_key(claim));
             supplementary_v3_submitted
                 .retain(|claim, _| receipt_pool_v3.contains_claim(claim) || receipt_pool_v2.contains_claim(claim));
@@ -15244,6 +15593,17 @@ enum CarrierFate {
 }
 
 /// The verdict, from the three facts the node already holds.
+/// **Lane g14-court-capacity-r2: the claim a prosecution object pursues** (for the G14 funnel's fee-shortfall count): the one-move
+/// and held accusations, a court opening, a DA accusation and a dispute reservation; `None` for any other court-lane object.
+pub(crate) fn palw_court_object_claim_v1(object: &PalwConsensusObjectV2) -> Option<Hash64> {
+    match object {
+        PalwConsensusObjectV2::ShardCourtAccused { accusation } => Some(accusation.claim),
+        PalwConsensusObjectV2::CourtOpened { claim, .. } | PalwConsensusObjectV2::DefaultAccused { claim, .. } => Some(*claim),
+        PalwConsensusObjectV2::DisputeReservedV1 { reservation, .. } => Some(reservation.claim),
+        _ => None,
+    }
+}
+
 fn carrier_fate(mined: bool, in_mempool: bool, funding_unspent: bool) -> CarrierFate {
     match (mined, in_mempool, funding_unspent) {
         // Mined wins: a mempool copy alongside a mined transaction is incidental.
@@ -15283,6 +15643,39 @@ fn verdict_name(verdict: &PalwReceiptVerdictV2) -> &'static str {
 /// object for court session X round 0" is true of a challenger opening a case and of the accused
 /// answering it, and reading a fleet's court traffic meant guessing which. The catch-all is gone
 /// on purpose, so a new object cannot be added without deciding what it is called here.
+/// **DRILL ONLY (the G14 collusion drill): what a colluding seat may carry** — its seat receipts and licences, its readiness proofs,
+/// its bond objects and the binding of a Panel; `Err(kind)` names the first other object in `tx` (an accusation, demand, disclosure,
+/// filing, court move or chunk of one), which a seat that colludes with the producer never files.
+fn palw_drill_collusion_allows_v1(tx: &Transaction) -> Result<(), &'static str> {
+    const ALLOWED: &[&str] = &[
+        "SeatReadinessProved",
+        "SeatReadinessProvedV2",
+        "TirSeatReadinessProved",
+        "BondRegistered",
+        "BondCapabilityDeclared",
+        "BondShardsDeclared",
+        "BondRetireRequested",
+        "PanelBound",
+        "PanelBeaconProofV3",
+        "ReceiptLicensed",
+        "ReceiptLicensedV2",
+        "ReceiptLicensedBatchV1",
+        "ShardReceiptLicensed",
+        "TirShardReceiptLicensed",
+        "OptimisticLicensed",
+        "VerificationVertexV1",
+        "AttemptRidersV1",
+    ];
+    let extracted = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx));
+    for carried in &extracted.objects {
+        let kind = object_name(&carried.object);
+        if !ALLOWED.contains(&kind) {
+            return Err(kind);
+        }
+    }
+    Ok(())
+}
+
 fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
     match object {
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",
@@ -15296,6 +15689,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => "PublicCourtStreamMoveV1",
         PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
         PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
+        PalwConsensusObjectV2::TirClassContainerBoundV1 { .. } => "TirClassContainerBoundV1",
         PalwConsensusObjectV2::TirPublicControlV1 { .. } => "TirPublicControlV1",
         PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. } => "TirPublicGrantReadyV1",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
@@ -16425,22 +16819,35 @@ impl PalwPanelService {
     /// right way round here, unlike the material pool: the seat asked for these, it re-asks on its
     /// own cadence, and evicting an older pair would discard an answer to a request that is still
     /// open.
-    fn pool_interval_opening(pool: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>, claim: Hash64, interval_index: u32, bytes: Vec<u8>) {
-        /// `PALW_FP_SEAT_INTERVAL_SAMPLES_V1` intervals for each of 128 claims in flight.
-        const PAIRS: usize = 512;
+    ///
+    /// `pairs` is the pair ceiling: [`kaspa_consensus_core::palw_detection_policy_v1::palw_detection_retention_pairs_v1`] — the
+    /// legacy 512 (`PALW_FP_SEAT_INTERVAL_SAMPLES_V1` intervals for each of 128 claims in flight) unless an armed detection policy
+    /// draws more. Returns `false` when a NEW pair was refused for want of room (the caller counts it as a capacity refusal); a
+    /// full per-pair slot is not a refusal — that pair is already held.
+    fn pool_interval_opening(
+        pool: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        claim: Hash64,
+        interval_index: u32,
+        bytes: Vec<u8>,
+        pairs: usize,
+    ) -> bool {
         /// The lane's own per-pair slot ceiling, mirrored so this map cannot outgrow it if the
         /// transport's changes.
         const PER_PAIR: usize = 4;
         let key = (claim, interval_index);
-        if !pool.contains_key(&key) && pool.len() >= PAIRS {
-            return;
+        if !pool.contains_key(&key) && pool.len() >= pairs {
+            warn!(
+                "[{PALW_PANEL}] claim {claim}: no room to hold an opening of interval {interval_index} ({pairs} pairs held) — counted as a capacity refusal"
+            );
+            return false;
         }
         let slot = pool.entry(key).or_default();
         if slot.len() >= PER_PAIR {
-            return;
+            return true;
         }
         info!("[{PALW_PANEL}] claim {claim}: holding a served opening of interval {interval_index} ({} bytes)", bytes.len());
         slot.push(bytes);
+        true
     }
 
     /// **The answer's ids, as the claim committed them, bound to the chain** — what ADR-0082
@@ -16782,20 +17189,87 @@ impl PalwPanelService {
         let counts =
             PalwFpChainCountsV1 { prompt_tokens: ctx.declared_prefill_tokens, decode_tokens_executed: ctx.exact_decode_tokens };
         let priced = backend.fp_context_work_leaves_v1(ctx);
-        let Some(draw) =
-            crate::palw_fp_seat::palw_fp_seat_draw_at_the_claims_price_v1(backend.as_ref(), network_domain, duty, counts, priced)
-        else {
-            if kaspa_consensus_core::palw_backend::palw_claim_prices_work_v1(duty.work_leaves)
-                && priced.is_some_and(|leaves| leaves != duty.work_leaves)
-            {
-                warn!(
-                    "[{PALW_PANEL}] claim {}: the served job's context prices at {:?} leaves and the chain priced this claim at {} — \
-                     this is not the claim's job, and no interval of it is drawn (ADR-0074 Decision 5)",
-                    duty.claim_id, priced, duty.work_leaves
-                );
-            }
-            return None;
+        // **G14 detection policy** (`palw_detection_policy_v1`, dormant; keyed at the panel's bind DAA): below the fence the legacy
+        // draw, unchanged; past it the class's policy draws its k in the v2 domain, and a class with no policy has no interval duty.
+        use kaspa_consensus_core::palw_detection_policy_v1::{
+            PalwDetectionLossV1, PalwDetectionRefusalV1, PalwDetectionRegimeV1, PalwDetectionStageV1, palw_detection_regime_v1,
         };
+        let telemetry = self.config.telemetry.clone();
+        let regime =
+            palw_detection_regime_v1(self.consensus_config.params.palw_detection_policy_v1.as_ref(), &duty.class_id, 0, duty.bound_daa);
+        let draw = match regime {
+            PalwDetectionRegimeV1::LegacyV1 => {
+                let Some(draw) =
+                    crate::palw_fp_seat::palw_fp_seat_draw_at_the_claims_price_v1(backend.as_ref(), network_domain, duty, counts, priced)
+                else {
+                    if kaspa_consensus_core::palw_backend::palw_claim_prices_work_v1(duty.work_leaves)
+                        && priced.is_some_and(|leaves| leaves != duty.work_leaves)
+                    {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: the served job's context prices at {:?} leaves and the chain priced this claim at {} — \
+                             this is not the claim's job, and no interval of it is drawn (ADR-0074 Decision 5)",
+                            duty.claim_id, priced, duty.work_leaves
+                        );
+                    }
+                    return None;
+                };
+                draw
+            }
+            PalwDetectionRegimeV1::NoPolicy => {
+                telemetry.detection_loss_once(duty.class_id, duty.claim_id, PalwDetectionLossV1::PolicyRefused);
+                info!(
+                    "[{PALW_PANEL}] claim {}: past palw_detection_policy_v1 the class has no detection policy — no interval duty",
+                    duty.claim_id
+                );
+                return None;
+            }
+            PalwDetectionRegimeV1::Policy(policy) => {
+                match crate::palw_fp_seat::palw_fp_seat_draw_under_policy_v2(backend.as_ref(), network_domain, duty, counts, priced, policy) {
+                    Ok((draw, plan))
+                        if !telemetry.detection_take_duty_v1(
+                            duty.class_id,
+                            duty.claim_id,
+                            duty.bound_daa,
+                            policy.resources.claims_in_flight,
+                            duty.bound_daa.saturating_add(policy.deadlines.inspection_deadline_daa),
+                        ) =>
+                    {
+                        // Lane g14-court-capacity-r2: the policy's `claims_in_flight` bounds what this seat holds at once (its
+                        // retention was sized for that many); a duty past it is refused and counted, never silently dropped.
+                        let _ = (draw, plan);
+                        telemetry.detection_loss_once(duty.class_id, duty.claim_id, PalwDetectionLossV1::CapacityRefusal);
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: the seat already holds {} interval duties of this class (its policy's \
+                             claims_in_flight) — no duty taken",
+                            duty.claim_id, policy.resources.claims_in_flight
+                        );
+                        return None;
+                    }
+                    Ok((draw, plan)) => {
+                        info!(
+                            "[{PALW_PANEL}] claim {}: detection policy {} — N {}, D_min {}, k {} (miss at D_min <= {} ppm)",
+                            duty.claim_id,
+                            policy.id(),
+                            plan.n,
+                            plan.d_min,
+                            plan.k_round,
+                            plan.miss_at_d_min_ppm_ceil
+                        );
+                        draw
+                    }
+                    Err(refusal) => {
+                        let loss = match refusal {
+                            PalwDetectionRefusalV1::GeometryMismatch { .. } => PalwDetectionLossV1::GeometryMismatch,
+                            _ => PalwDetectionLossV1::PolicyRefused,
+                        };
+                        telemetry.detection_loss_once(duty.class_id, duty.claim_id, loss);
+                        warn!("[{PALW_PANEL}] claim {}: the detection policy draws nothing here: {refusal}", duty.claim_id);
+                        return None;
+                    }
+                }
+            }
+        };
+        telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Eligible);
         let roots = PalwClaimRootsV1 {
             execution_root: duty.execution_root,
             trace_root: duty.trace_root,
@@ -16988,6 +17462,9 @@ impl PalwPanelService {
                         // it the seat's strongest detector — and it was being thrown away. `(0, 0)`
                         // is a fault with no leaf address; the court's bisection finds the leaf.
                         self.note_seat_fault_v1(duty.claim_id, 0, 0);
+                        telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Checked);
+                        telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Detected);
+                        telemetry.detection_watch(duty.class_id, duty.claim_id);
                         return None;
                     }
                 }
@@ -17035,6 +17512,10 @@ impl PalwPanelService {
                             duty.claim_id
                         );
                         self.note_seat_fault_v1(duty.claim_id, leaf_index, 1);
+                        for stage in [PalwDetectionStageV1::Checked, PalwDetectionStageV1::Detected, PalwDetectionStageV1::Localized] {
+                            telemetry.detection_stage_once(duty.class_id, duty.claim_id, stage);
+                        }
+                        telemetry.detection_watch(duty.class_id, duty.claim_id);
                         return None;
                     }
                     PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {
@@ -17044,6 +17525,10 @@ impl PalwPanelService {
                             duty.claim_id
                         );
                         self.note_seat_fault_v1(duty.claim_id, first_leaf_index, leaf_count);
+                        for stage in [PalwDetectionStageV1::Checked, PalwDetectionStageV1::Detected, PalwDetectionStageV1::Localized] {
+                            telemetry.detection_stage_once(duty.class_id, duty.claim_id, stage);
+                        }
+                        telemetry.detection_watch(duty.class_id, duty.claim_id);
                         // ADR-0086 Decision 6: ask for the block's leaves on the same lane, and name
                         // the leaf from them once they are held — the fault at leaf granularity is
                         // what a court narrows to. The level is the one the opening this seat just
@@ -17220,8 +17705,10 @@ impl PalwPanelService {
                     draw.intervals.len()
                 );
             }
+            telemetry.detection_stage_once(duty.class_id, duty.claim_id, PalwDetectionStageV1::Checked);
             return Some(PalwReceiptVerdictV2::Valid);
         }
+        telemetry.detection_loss_once(duty.class_id, duty.claim_id, PalwDetectionLossV1::MissingMaterial);
         // Ask for what is missing and conclude nothing this round. The caller's tail is unchanged:
         // an interval that never arrives ends in the two-sided quorum's `Unavailable` arm at the
         // half-window, exactly as capture withholding does today.

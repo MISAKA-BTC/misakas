@@ -3594,6 +3594,13 @@ impl VirtualStateProcessor {
             if forfeited.as_ref().is_some_and(|roots| roots.contains(&claim.execution_root)) {
                 continue;
             }
+            // RFC-0018 18-A (Gate C): an uncertified governed claim is not spendable (the admission refuses it), and a certified one's
+            // draw slot counts from its certification — the same predicate the admission and the fold read.
+            let Ok(final_daa) =
+                kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(state_params, &state, claim_id, claim, final_daa)
+            else {
+                continue;
+            };
             // ADR-0148: the admission's own target expression for the claim's era — the pooled
             // target scaled by the compute a quantum carries, or the class's target below the fence.
             let target = match pricing.as_ref() {
@@ -6456,7 +6463,7 @@ impl VirtualStateProcessor {
                 Some(0..=18) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::StageExecutionV14, daa),
                 Some(19..=40) => self.palw_stage_execution_v28.as_ref().is_some_and(|f| active(f.activation)) && final27(),
                 // Owning39 mining needs its own fence besides native39 (RFC-0002 §II.14, dormant).
-                Some(73..=79) => {
+                Some(73..=80) => {
                     self.palw_native_mining_v39.as_ref().is_some_and(|f| active(f.activation))
                         && self.palw_native_execution_v39.as_ref().is_some_and(|f| active(f.activation))
                         && final27()
@@ -6512,6 +6519,7 @@ impl VirtualStateProcessor {
                         .as_ref()
                         .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
                     // Mining actions 73–79 also ride unjudged below their own fence (mirrors the fold's early return).
+                    // G-N2's action 80 is not unjudged: below the mining fence it stays refused exactly as before (A-2).
                     || matches!(bytes.get(2), Some(73..=79))
                         && !self
                             .palw_native_mining_v39
@@ -6747,8 +6755,28 @@ impl VirtualStateProcessor {
         // unless that fence is in force** — below it a build without the kind refuses it at the kernel's decode, the block standing.
         // RFC-0015's registrations under a verification mode (inner 13 / 14) are `palw_panel_free_v1`'s: the network declares the OPV
         // policy or it does not; the ledger refuses the rest (admission, economics, carriers).
+        // Inner 75 already dispatches claim certification before legacy model exams in
+        // the fold. Mirror that exact existing-row distinction at signature preflight.
+        // An unknown id still belongs to the disabled eligibility-exam route.
+        let claim_certification_attestation = match &object {
+            misaka_palw_kernel::route::KernelRouteObjectV1::AttestEligibilityExamV1 { attestation }
+                if self.palw_state_params_v2.as_ref().is_some_and(|p| {
+                    p.rfc0018_v1().is_some_and(|m| m.gate_c_at(daa_score))
+                }) => {
+                    use kaspa_consensus_core::palw_security_certification_v1::{
+                        PALW_SECURITY_CERTIFICATION_TABLE_V1, PalwClaimCertificationRowV1,
+                        certification_claim_key_v1, certification_native_key_v39,
+                    };
+                    state.kernel_route_state_v1().is_some_and(|route| {
+                        [certification_claim_key_v1(&attestation.exam), certification_native_key_v39(&attestation.exam)]
+                            .iter().any(|key| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, key).is_some())
+                    })
+                }
+            _ => false,
+        };
         if let Some(fence) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_kernel_route_inner_fence_v1(&object)
             && !self.palw_kernel_inner_fence_at(fence, daa_score)
+            && !claim_certification_attestation
         {
             return Err(match fence {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ClaimChallengeV2 => {
@@ -6774,6 +6802,9 @@ impl VirtualStateProcessor {
                 }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelEligibilityV1 => {
                     "an eligibility exam object is refused: palw_model_eligibility_v1 is not in force at this block (RFC-0017)".into()
+                }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ElasticCapacityV1 => {
+                    "a capacity attestation is refused: palw_elastic_final_capacity_v1 is not in force at this block (RFC-0016)".into()
                 }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => {
                     "a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)"
@@ -6855,6 +6886,10 @@ impl VirtualStateProcessor {
             // RFC-0017 (inner 74/75): the mirrored dormant eligibility fence.
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelEligibilityV1 => {
                 self.palw_state_params_v2.as_ref().is_some_and(|p| p.model_eligibility_v1_at(daa_score).is_some())
+            }
+            // RFC-0016 V8 (inner 76): the mirrored dormant elastic-capacity fence.
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ElasticCapacityV1 => {
+                self.palw_state_params_v2.as_ref().is_some_and(|p| p.rfc0016_capacity_active_at(daa_score))
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
                 self.palw_beacon_source_fee_v1.is_some_and(|f| {
@@ -7937,8 +7972,9 @@ impl VirtualStateProcessor {
     ) -> kaspa_consensus_core::palw_panel_v2::PalwPanelDrawPolicyV1 {
         let economy = if self.palw_panel_economy_active_at(anchor_daa) {
             self.palw_state_params_v2.as_ref().map(|state| kaspa_consensus_core::palw_panel_economy_v1::PalwSeatEconomyV1 {
-                panel_floor_sompi: kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(
+                panel_floor_sompi: kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
                     state.min_collateral_sompi(),
+                    state.legacy_public_filer_active_at(anchor_daa),
                 ),
                 max_exposure_ratio_permille: state.fp_max_exposure_ratio_permille(),
                 // ADR-0130: the floor at the same anchor, so the headroom the draw checks is the
@@ -9989,6 +10025,13 @@ impl VirtualStateProcessor {
         let kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
             return Err(format!("claim {} is not certified at this chain point", envelope.spend.claim_id));
         };
+        // **RFC-0018 18-A (Gate C)**: a governed free-prompt claim licenses no receipt block until `SecurityCertified`, and its lane's
+        // clock starts at certification — the ONE predicate the fold, the admission items and the spendable RPC read, asked here against
+        // the PARENT state so an own block is disqualified and a merged one unentitled (no coinbase worker share) for the reason the
+        // fold would refuse it. Below Gate C's fence (every shipped network): `final_daa`, unchanged.
+        let final_daa =
+            kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(state_params, state, &envelope.spend.claim_id, claim, final_daa)
+                .map_err(|e| e.to_string())?;
         // 2026-09-24 DoS audit #5: the fold's own refusal (`ReceiptRightsForfeited`), asked here at
         // the same fence against the PARENT state, so an own block is disqualified — and a merged one
         // unentitled — for the reason the fold would refuse it. A conviction carried by this very
@@ -10054,6 +10097,7 @@ impl VirtualStateProcessor {
                 v4,
                 |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
                 self.palw_fp_pricing().as_ref(),
+                Some(state_params),
             )
             .map_err(|e| e.to_string())?;
             let _ = state_params;
@@ -10073,6 +10117,7 @@ impl VirtualStateProcessor {
             |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
             // ADR-0148: a compute-era claim draws against the lane's pooled target.
             self.palw_fp_pricing().as_ref(),
+            Some(state_params),
         )
         .map_err(|e| e.to_string())?;
         let _ = state_params;

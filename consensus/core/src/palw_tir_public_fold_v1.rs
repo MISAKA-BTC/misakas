@@ -25,13 +25,31 @@ fn source(
         .ok_or_else(|| refused("TIR original registered layout is absent"))?;
     frame.source_v1(record, layout, frame.descriptor_v1().maximum_leaves).map_err(refused)
 }
-fn native_frame(b: &TransitionBuilder<'_>, claim: Hash64, allocation: Hash64, source_id: Hash64) -> Result<Frame, PalwStateV2Error> {
+/// The CURRENT rooted original frame of `claim`, shared (an `Arc` clone, not a deep copy of every credit).
+///
+/// **Audit §10 (the frame pricing fix): the full structure check runs only where the fold re-reads the whole frame** — an outside
+/// owner's Open and a conviction filing (`full`), whose prices carry one measured full-frame pass each. Every other control checks
+/// the frame's immutable identity (claim, allocation, source) here and its own row in its transition: the rooted frame is written
+/// only by its install and its custody writes, each of which checks the whole frame it writes, and the state root authenticates it
+/// in between. Measured before the fix: every Demand / Begin / Part / Finish re-checked it (2.3 ms at a 2.7 MB frame, 0.12 ms at
+/// 63 KB) and its price assumed 32 such passes.
+fn native_frame(
+    b: &TransitionBuilder<'_>,
+    claim: Hash64,
+    allocation: Hash64,
+    source_id: Hash64,
+    full: bool,
+) -> Result<crate::palw_staged_court_state_v1::PalwSharedCourtV1<Frame>, PalwStateV2Error> {
     rules(b)?;
-    let frame = palw_tir_public_claim_v1(&b.state, claim).ok_or_else(|| refused("TIR control has no paid original frame"))?;
-    if frame.plan_v1().allocation_id != allocation || frame.plan_v1().source_id != source_id {
+    let Some(Row::TirClaim(frame)) = b.state.staged_court_row_v1(&Key::TirClaim(claim)) else {
+        return Err(refused("TIR control has no paid original frame"));
+    };
+    if frame.plan_v1().allocation_id != allocation || frame.plan_v1().source_id != source_id || frame.key_v1() != Key::TirClaim(claim) {
         return Err(refused("TIR control substitutes original allocation or source"));
     }
-    frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
+    if full {
+        frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
+    }
     Ok(frame.clone())
 }
 /// **Who may own (Open / Demand / Collect) on an ORIGINAL frame** — any Active above-floor bond that is not liable on the claim:
@@ -181,7 +199,11 @@ fn original_plan_v1(
     if b.state.claim(&claim).is_some() || b.state.staged_court_row_v1(&Key::TirClaim(claim)).is_some() {
         return Err(refused("TIR original allocation cannot be attached to an existing claim"));
     }
-    let upper = b.state.staged_maximum_custodians_v1(original.job.class_id, now_daa, b.params, b.extras)?;
+    // G14 audit §11 (d): a frame's custodians are the flat Panel's credited seats and the producer (no typed licence reaches it).
+    if b.state.tir_class_v1(&original.job.class_id).is_none() {
+        return Err(refused("TIR original class is not registered"));
+    }
+    let upper = crate::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(now_daa, b.params, b.extras)?;
     if native.maximum_custodians != upper {
         return Err(refused("TIR original quote does not use the actual native custodian upper"));
     }
@@ -607,12 +629,64 @@ fn reclaim_owner_slot_v1(
     let mut row = old.as_ref().clone();
     let deposit = row.owned.contract_v1().terms.plan.deposit_sompi;
     let mut owned = row.owned.as_ref().clone();
-    owned.retire_idle_v1(ctx.daa_score).map_err(refused)?;
+    if tir_owner_fair_start_v1(b, ctx) {
+        // Round 2: an admitted row's idleness counts from its admission (`staged_tir_idle_admitted_owners_v1` chose it), and the
+        // reclamation is stamped as its release so the next waiting row is admitted from now.
+        owned.retire_admitted_idle_v1().map_err(refused)?;
+        owned.stamp_release_v1(ctx.daa_score);
+    } else {
+        owned.retire_idle_v1(ctx.daa_score).map_err(refused)?;
+    }
     row.owned = Box::new(owned).into();
     row.check_structure_v1(&key).map_err(refused)?;
     b.write_staged_row_v1(key, Some(Row::TirAcquisition(Box::new(row).into())))?;
     b.slash_bond(owner, u128::from(deposit))?;
     Ok(())
+}
+
+fn tir_owner_tenure_v1(frame: &Frame, grace: u64) -> u64 {
+    crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_v1(frame, grace)
+}
+
+/// **Lane g14-court-capacity-r2: rotate the owner queue at `now`** — every admitted row past its tenure while a row waits yields its
+/// slot (no forfeit), and every idle admitted row is reclaimed (its deposit burned) when some row waits. Called by an Open and by a
+/// waiting row's Demand, before admission is read.
+fn rotate_owner_queue_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, frame: &Frame) -> Result<(), PalwStateV2Error> {
+    let claim = frame.plan_v1().original_claim;
+    let now = ctx.daa_score;
+    let waiting = b.state.staged_tir_owner_queue_v1(&claim).iter().any(|(_, _, admitted, _)| !admitted);
+    if !waiting {
+        return Ok(());
+    }
+    for (idle_key, idle_owner) in b.state.staged_tir_idle_admitted_owners_v1(&claim, now) {
+        reclaim_owner_slot_v1(b, ctx, idle_key, idle_owner)?;
+    }
+    let grace = b
+        .state
+        .staged_tir_owner_queue_v1(&claim)
+        .first()
+        .and_then(|(key, ..)| match b.state.staged_court_row_v1(key) {
+            Some(Row::TirAcquisition(row)) => Some(row.owned.owner_idle_grace_daa_v1()),
+            _ => None,
+        })
+        .unwrap_or(1);
+    for (key, _) in b.state.staged_tir_overstayed_owners_v1(&claim, now, tir_owner_tenure_v1(frame, grace)) {
+        let Some(Row::TirAcquisition(old)) = b.state.staged_court_row_v1(&key) else { continue };
+        let mut row = old.as_ref().clone();
+        let mut owned = row.owned.as_ref().clone();
+        owned.retire_admitted_idle_v1().map_err(refused)?;
+        owned.stamp_release_v1(now);
+        row.owned = Box::new(owned).into();
+        row.check_structure_v1(&key).map_err(refused)?;
+        b.write_staged_row_v1(key, Some(Row::TirAcquisition(Box::new(row).into())))?;
+    }
+    Ok(())
+}
+
+/// **Lane g14-court-capacity-r2: the owner fair start is in force** — past `palw_court_capacity_v1` (dormant; `false` on every
+/// shipped network, where `open_v1` refuses an Open at K_owner exactly as before).
+fn tir_owner_fair_start_v1(b: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> bool {
+    b.params.court_capacity_at_v1(ctx.daa_score).is_some()
 }
 
 fn open_v1(
@@ -622,6 +696,21 @@ fn open_v1(
     owner: PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
     independent(b, frame, owner)?;
+    // **Lane g14-court-capacity-r2 (past `palw_court_capacity_v1`): the owner fair start.** An Open is never refused for the K_owner
+    // cap: past the cap it WAITS in the claim's owner queue (arrival order; `staged_tir_owner_queue_v1`), imposes no custodian load,
+    // and is admitted — may demand — as the rows ahead release their slots (turns spent, or an idle admitted row reclaimed: its
+    // deposit burned, as below). The concurrent custodian load stays K_owner; an Open filed later never starts before this one.
+    let claim = frame.plan_v1().original_claim;
+    let fair_start = tir_owner_fair_start_v1(b, ctx);
+    if fair_start && b.state.staged_tir_owner_count_v1(&claim) >= Frame::MAXIMUM_OWNERS_V1 {
+        // Every admitted idle row is reclaimed (deposit burned) when the new row would wait.
+        for (idle_key, idle_owner) in b.state.staged_tir_idle_admitted_owners_v1(&claim, ctx.daa_score) {
+            reclaim_owner_slot_v1(b, ctx, idle_key, idle_owner)?;
+        }
+    }
+    if fair_start {
+        rotate_owner_queue_v1(b, ctx, frame)?;
+    }
     // **K_owner (Lead default, pending user review): refuse an excess owner before ANY custodian duty is created.** The frame's
     // liable custodians answer at most `custodian_load_bound_v1` across the owners holding slots at once; each owner below pays
     // only its own rent and deposit (`owner_terms_v1`), never the producer's prepaid preparation pool.
@@ -631,8 +720,7 @@ fn open_v1(
     // last progress, `owner_idle_at_v1`): that row is retired (its open demand closed, its turns spent — it can never demand again),
     // and its deposit is forfeited (burned through `slash_bond`, credited to nobody, so reclaiming pays no one). Only when every
     // holder is still making progress is the Open refused. Atomic with the Open (the caller's checkpoint).
-    let claim = frame.plan_v1().original_claim;
-    if b.state.staged_tir_owner_count_v1(&claim) >= Frame::MAXIMUM_OWNERS_V1 {
+    if !fair_start && b.state.staged_tir_owner_count_v1(&claim) >= Frame::MAXIMUM_OWNERS_V1 {
         let Some((idle_key, idle_owner)) = b.state.staged_tir_idle_owner_v1(&claim, ctx.daa_score) else {
             return Err(refused("TIR original frame already carries its K_owner outside owners, all still active; custodian load is bounded"));
         };
@@ -662,6 +750,7 @@ fn open_v1(
         &original_source,
         &others,
         frame.descriptor_v1().native_config,
+        frame.descriptor_v1().native_clock,
         frame.descriptor_v1().native_custodian_upper,
         ctx.daa_score,
         funded,
@@ -702,9 +791,11 @@ fn apply_control_inner_v1(
     network_domain: Hash64,
     control: &crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1,
 ) -> Result<(), PalwStateV2Error> {
-    let frame = native_frame(b, control.claim, control.allocation_id, control.source_id)?;
+    use crate::palw_tir_public_carriage_v1::PalwTirPublicControlActionV1 as A;
+    let full = matches!(control.action, A::Open | A::Convict(_));
+    let frame = native_frame(b, control.claim, control.allocation_id, control.source_id, full)?;
     control.validate_native_signature_v1(network_domain, &b.state).map_err(refused)?;
-    apply_verified_control_v1(b, ctx, frame, control)
+    apply_verified_control_v1(b, ctx, &frame, control)
 }
 
 /// Everything a control does once its literal signer's ML-DSA signature verified under the native network domain: the frame is
@@ -713,7 +804,7 @@ fn apply_control_inner_v1(
 fn apply_verified_control_v1(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
-    frame: Frame,
+    frame: &Frame,
     control: &crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1,
 ) -> Result<(), PalwStateV2Error> {
     use crate::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
@@ -764,6 +855,19 @@ fn apply_verified_control_v1(
             control.check_owned_scope_v1(&row.owned).map_err(refused)?;
             if matches!(action, Action::Demand { .. } | Action::Reacquire { .. } | Action::Collect { .. }) {
                 independent(b, &frame, control.signer)?;
+            }
+            // Lane g14-court-capacity-r2: a WAITING owner row (beyond the first K_owner of the owner queue) demands nothing until the
+            // rows ahead release their slots — the queue is rotated first (overstayed rows yield, idle ones are reclaimed).
+            if matches!(action, Action::Demand { .. } | Action::Reacquire { .. }) && tir_owner_fair_start_v1(b, ctx) {
+                let claim = frame.plan_v1().original_claim;
+                if !b.state.staged_tir_owner_admitted_v1(&claim, &key) {
+                    rotate_owner_queue_v1(b, ctx, &frame)?;
+                }
+                if !b.state.staged_tir_owner_admitted_v1(&claim, &key) {
+                    return Err(refused(
+                        "TIR owner row is waiting in the owner queue: it demands once the rows ahead release their slots",
+                    ));
+                }
             }
             crate::palw_tir_public_state_v1::palw_tir_public_transition_v1(
                 &b.state,
@@ -1163,7 +1267,9 @@ fn apply_grant_ready_inner_v1(
     network_domain: Hash64,
     movement: &crate::palw_tir_public_carriage_v1::PalwTirPublicGrantReadyV1,
 ) -> Result<(), PalwStateV2Error> {
-    let mut frame = native_frame(b, movement.claim, movement.allocation_id, movement.source_id)?;
+    // A custody write: the whole frame is checked (here and again before it is written back).
+    let shared = native_frame(b, movement.claim, movement.allocation_id, movement.source_id, true)?;
+    let mut frame: Frame = (*shared).clone();
     movement.validate_native_signature_v1(network_domain, &b.state).map_err(refused)?;
     if b.state.panel_duties_of(&movement.claim).and_then(|d| d.get(&movement.signer)).copied() != Some(0) {
         return Err(refused("TIR raw grant must carry the literal newly credited Valid in this same atomic object"));
@@ -1349,15 +1455,20 @@ mod conviction_e2e_tests {
 
     /// The frame with the WHOLE drawn Panel frozen and every colluder holding an exact credited Valid custody grant + Ready.
     fn credited_frame(fx: &PalwTirPublicFrameFixtureV1) -> Frame {
+        credited_frame_with(fx, &colluders(), &drawn())
+    }
+    /// [`credited_frame`] over `credited` seats (each with an exact credited Valid custody grant + Ready) of the drawn Panel `drawn`.
+    fn credited_frame_with(fx: &PalwTirPublicFrameFixtureV1, credited: &[PalwBondKeyV2], drawn: &[PalwBondKeyV2]) -> Frame {
         let frame = fx.frame.clone();
         let plan = frame.plan_v1().clone();
         let header = frame.header_v1().clone();
         let original = frame.original_v1().clone();
         let pledge = frame.custody_v1().pledge_v1().clone();
         let bound = plan.terms.accepted_daa;
-        let panel = PalwTirPublicOriginalPanelV1 { anchor: h(0xA0), bound_daa: bound, seats: drawn().into_iter().collect() };
-        let credited = colluders()
-            .into_iter()
+        let panel = PalwTirPublicOriginalPanelV1 { anchor: h(0xA0), bound_daa: bound, seats: drawn.iter().copied().collect() };
+        let credited = credited
+            .iter()
+            .copied()
             .map(|seat| {
                 let receipt = crate::palw_panel_v2::PalwSeatReceiptV2 {
                     claim: plan.original_claim,
@@ -1405,6 +1516,14 @@ mod conviction_e2e_tests {
     /// The accepted world the colluders built: the licensed claim, its drawn Panel, the colluders' native S4 locks, the registered
     /// class and the rooted frame (its indices — producer exposure and the liable signers' exit holds — rebuilt from the rows).
     fn world(fx: &PalwTirPublicFrameFixtureV1, frame: &Frame) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1) {
+        world_with(fx, frame, &drawn())
+    }
+    /// [`world`] with the drawn Panel `drawn`.
+    fn world_with(
+        fx: &PalwTirPublicFrameFixtureV1,
+        frame: &Frame,
+        drawn: &[PalwBondKeyV2],
+    ) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1) {
         // R-core+ in force from genesis: the route's fence requires it (the conviction tiers, the `CourtConviction` record and the
         // exit-lock lattice a collectible debit needs).
         let params = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 600)
@@ -1419,7 +1538,7 @@ mod conviction_e2e_tests {
         let claim_id = plan.original_claim;
         let producer = frame.custody_v1().pledge_v1().producer;
         let class_id = frame.descriptor_v1().class_id;
-        for (n, key) in std::iter::once(producer).chain(drawn()).chain(std::iter::once(outsider())).enumerate() {
+        for (n, key) in std::iter::once(producer).chain(drawn.iter().copied()).chain(std::iter::once(outsider())).enumerate() {
             state.bonds.insert(key, bond_state(n as u64));
         }
         state.set_class_for_tests(
@@ -1474,7 +1593,7 @@ mod conviction_e2e_tests {
         state.reserved_exposure.insert(producer, held);
         let panel = PalwPanelStateV2 {
             anchor: h(0xA0),
-            seats: drawn().into_iter().map(|seat| PalwPanelSeatV2 { bond: seat, operator_id: h(0x77) }).collect(),
+            seats: drawn.iter().map(|seat| PalwPanelSeatV2 { bond: *seat, operator_id: h(0x77) }).collect(),
             bound_daa: plan.terms.accepted_daa,
         };
         state.set_false_valid_rows_for_tests(claim_id, Some(claim), Some(panel), None, 0);
@@ -1577,13 +1696,13 @@ mod conviction_e2e_tests {
         // Liable parties cannot file; nothing moves.
         for liable in std::iter::once(producer).chain(colluders()) {
             let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-            assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, liable, cone(&fx))).is_err());
+            assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, liable, cone(&fx))).is_err());
             assert_eq!(b.state.state_root(), root_before);
         }
 
         // One bond OUTSIDE the Panel convicts, with no Panel signature, vote or majority.
         let mut outside = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut outside, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).unwrap();
+        apply_verified_control_v1(&mut outside, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).unwrap();
         let (phase, collateral, consumed) = outcome(&outside.state, &frame);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
         assert!(collateral[0] < COLLATERAL, "the producer is actually debited (its reservation at least)");
@@ -1602,12 +1721,12 @@ mod conviction_e2e_tests {
         assert!(!matches!(outside.state.claims.get(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
 
         // Once only: the same or another filer, the same or another valid proof, finds the conviction recorded.
-        let again = apply_verified_control_v1(&mut outside, &at(&frame, 6), frame.clone(), &filing(&frame, honest_seat(), cone(&fx)));
+        let again = apply_verified_control_v1(&mut outside, &at(&frame, 6), &frame, &filing(&frame, honest_seat(), cone(&fx)));
         assert!(again.is_err());
 
         // The honest drawn seat files the SAME object and reaches the SAME verdict (the common filer).
         let mut seat = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut seat, &at(&frame, 5), frame.clone(), &filing(&frame, honest_seat(), cone(&fx))).unwrap();
+        apply_verified_control_v1(&mut seat, &at(&frame, 5), &frame, &filing(&frame, honest_seat(), cone(&fx))).unwrap();
         assert_eq!(outcome(&seat.state, &frame), outcome(&outside.state, &frame));
 
         // Reorg: reverting the block's journal restores the pre-verdict root exactly.
@@ -1621,7 +1740,7 @@ mod conviction_e2e_tests {
         let mut late = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         let door = terms.collect_until_daa - terms.accepted_daa;
         assert!(
-            apply_verified_control_v1(&mut late, &at(&frame, door), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err()
+            apply_verified_control_v1(&mut late, &at(&frame, door), &frame, &filing(&frame, outsider(), cone(&fx))).is_err()
         );
     }
 
@@ -1633,7 +1752,7 @@ mod conviction_e2e_tests {
         let (state, params, extras) = world(&fx, &frame);
         let root = state.state_root();
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).is_err());
         assert_eq!(b.state.state_root(), root);
         assert!(matches!(
             b.state.claims.get(&frame.plan_v1().original_claim).unwrap().phase,
@@ -1642,7 +1761,7 @@ mod conviction_e2e_tests {
         // A wrong burn is refused before adjudication (the frame's native terminal rent is exact).
         let mut cheap = filing(&frame, outsider(), cone(&fx));
         cheap.declared_rent_sompi = frame.conviction_rent_v1() - 1;
-        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &cheap).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &cheap).is_err());
     }
 
     #[test]
@@ -1660,7 +1779,7 @@ mod conviction_e2e_tests {
         let root = state.state_root();
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         assert!(
-            apply_verified_control_v1(&mut b, &at(&honest, 5), honest.clone(), &filing(&honest, outsider(), output(ids.clone())))
+            apply_verified_control_v1(&mut b, &at(&honest, 5), &honest, &filing(&honest, outsider(), output(ids.clone())))
                 .is_err()
         );
         // A truncated sequence authenticates nothing.
@@ -1668,7 +1787,7 @@ mod conviction_e2e_tests {
         short.pop();
         if !short.is_empty() {
             assert!(
-                apply_verified_control_v1(&mut b, &at(&honest, 5), honest.clone(), &filing(&honest, outsider(), output(short)))
+                apply_verified_control_v1(&mut b, &at(&honest, 5), &honest, &filing(&honest, outsider(), output(short)))
                     .is_err()
             );
         }
@@ -1678,7 +1797,7 @@ mod conviction_e2e_tests {
         let lying = credited_frame(&lying_fx);
         let (state, params, extras) = world(&lying_fx, &lying);
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &filing(&lying, outsider(), output(ids.clone()))).unwrap();
+        apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &filing(&lying, outsider(), output(ids.clone()))).unwrap();
         let (phase, collateral, consumed) = outcome(&b.state, &lying);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
         assert_eq!(collateral[3], COLLATERAL);
@@ -1687,7 +1806,7 @@ mod conviction_e2e_tests {
         let (mut state, params, extras) = world(&lying_fx, &lying);
         state.claims.get_mut(&lying.plan_v1().original_claim).unwrap().output_root = h(0xBAE);
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &filing(&lying, outsider(), output(ids))).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &filing(&lying, outsider(), output(ids))).is_err());
     }
 
     #[test]
@@ -1725,7 +1844,7 @@ mod conviction_e2e_tests {
                 signature: vec![5; SIG],
             };
             control.check_v1().unwrap();
-            let result = apply_verified_control_v1(&mut b, &at(&frame, offset), frame.clone(), &control);
+            let result = apply_verified_control_v1(&mut b, &at(&frame, offset), &frame, &control);
             (result, b)
         };
         // Before the producer's door closes nothing is owed.
@@ -1785,14 +1904,14 @@ mod conviction_e2e_tests {
         };
         let claim_id = lying.plan_v1().original_claim;
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(split, encoded.len())).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &part(split, encoded.len())).is_err());
         let mut free = part(0, split);
         free.declared_rent_sompi = 0;
-        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &free).is_err());
-        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(0, split)).unwrap();
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &free).is_err());
+        apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &part(0, split)).unwrap();
         assert!(b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())).is_some());
         assert!(matches!(b.state.claims.get(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
-        apply_verified_control_v1(&mut b, &at(&lying, 6), lying.clone(), &part(split, encoded.len())).unwrap();
+        apply_verified_control_v1(&mut b, &at(&lying, 6), &lying, &part(split, encoded.len())).unwrap();
         let (phase, _, consumed) = outcome(&b.state, &lying);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
         assert_eq!(consumed, vec![true, true, true, false]);
@@ -1839,7 +1958,7 @@ mod conviction_e2e_tests {
             }
         };
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(0, split)).unwrap();
+        apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &part(0, split)).unwrap();
         let archival = b.state.clone();
         let bytes = borsh::to_vec(&crate::palw_state_v2::PalwStateCarriageV2::from_state(&archival)).unwrap();
         let fresh = borsh::from_slice::<crate::palw_state_v2::PalwStateCarriageV2>(&bytes)
@@ -1865,7 +1984,7 @@ mod conviction_e2e_tests {
             .into_iter()
             .map(|node| {
                 let mut b = TransitionBuilder::new(node, &params, false, false, false, false, &extras);
-                apply_verified_control_v1(&mut b, &at(&lying, 6), lying.clone(), &part(split, encoded.len())).unwrap();
+                apply_verified_control_v1(&mut b, &at(&lying, 6), &lying, &part(split, encoded.len())).unwrap();
                 let (phase, _, consumed) = outcome(&b.state, &lying);
                 assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
                 assert_eq!(consumed, vec![true, true, true, false]);
@@ -1942,8 +2061,8 @@ mod conviction_e2e_tests {
             retained_bytes: 1,
         };
         let mut b = TransitionBuilder::new(state, params, false, false, false, false, extras);
-        apply_verified_control_v1(&mut b, &at(frame, 1), frame.clone(), &prep(Owned::WorkDebit(debit))).unwrap();
-        apply_verified_control_v1(&mut b, &at(frame, 2), frame.clone(), &prep(Owned::PreparationReady { descriptor })).unwrap();
+        apply_verified_control_v1(&mut b, &at(frame, 1), &frame, &prep(Owned::WorkDebit(debit))).unwrap();
+        apply_verified_control_v1(&mut b, &at(frame, 2), &frame, &prep(Owned::PreparationReady { descriptor })).unwrap();
         b.state.clone()
     }
 
@@ -2015,7 +2134,7 @@ mod conviction_e2e_tests {
             signature: vec![5; SIG],
         };
         let mut b = TransitionBuilder::new(state, params, false, false, false, false, extras);
-        apply_verified_control_v1(&mut b, &at(frame, offset), frame.clone(), &control).map(|()| b.state.clone())
+        apply_verified_control_v1(&mut b, &at(frame, offset), &frame, &control).map(|()| b.state.clone())
     }
 
     /// The owner's open demand on `frame`: `(demand, respond_until, turn, producer's finished body)`.
@@ -2320,7 +2439,7 @@ mod conviction_e2e_tests {
             let frame = credited_frame(&lying);
             let (state, params, extras) = world(&lying, &frame);
             let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-            apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), evidence))
+            apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), evidence))
                 .unwrap_or_else(|e| panic!("{name}: the selection filing convicts: {e:?}"));
             let (phase, collateral, consumed) = outcome(&b.state, &frame);
             assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{name}: {phase:?}");
@@ -2344,7 +2463,7 @@ mod conviction_e2e_tests {
             };
             let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
             assert!(
-                apply_verified_control_v1(&mut b, &at(&honest_frame, 5), honest_frame.clone(), &filing(&honest_frame, outsider(), evidence))
+                apply_verified_control_v1(&mut b, &at(&honest_frame, 5), &honest_frame, &filing(&honest_frame, outsider(), evidence))
                     .is_err(),
                 "{name}: another claim's pin does not authenticate against this claim"
             );
@@ -2367,7 +2486,7 @@ mod conviction_e2e_tests {
         let frame = credited_frame(&lying);
         let (state, params, extras) = world(&lying, &frame);
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), Evidence::Output { rows_root, ids }))
+        apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), Evidence::Output { rows_root, ids }))
             .expect("the stop-rule filing convicts");
         let (phase, collateral, consumed) = outcome(&b.state, &frame);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
@@ -2551,12 +2670,168 @@ mod conviction_e2e_tests {
             action: A::Open,
             signature: vec![5; SIG],
         };
-        apply_verified_control_v1(&mut b, &at(&frame, late), frame.clone(), &control).unwrap();
+        apply_verified_control_v1(&mut b, &at(&frame, late), &frame, &control).unwrap();
         let mut reverted = b.state.clone();
         for entry in b.entries.iter().rev() {
             apply_delta_entry(&mut reverted, entry, true).unwrap();
         }
         assert_eq!(reverted.state_root(), state.state_root());
+    }
+
+    /// **Lane g14-court-capacity-r2 (audit 2026-10-17 §6.2 / §7 P0(2)): eight colluding ACTIVE owners cannot lock an honest newcomer
+    /// out, and the newcomer convicts in time.** Past `palw_court_capacity_v1` (the owner fair start): eight colluding bonds take every
+    /// owner slot the moment the frame opens and keep them ACTIVE (each demand answered inside its clock by the colluding producer, the
+    /// next demand at once — never idle, so idle reclamation never fires). An honest outsider's Open is NOT refused: it waits in the
+    /// claim's owner queue, imposes no custodian load (its Demand is refused while it waits), and eight more coalition Opens filed after
+    /// it queue BEHIND it (the refill). When the first colluder has spent its prepaid turns its slot passes to the outsider — never to a
+    /// later coalition row — and the outsider demands the leaf its replay disagrees with, reads the producer's accepted answer and files
+    /// the conviction: `CourtFraud`, the producer debited, inside the frame's collection door. Custodian load never exceeds K_owner.
+    /// Below the fence the same Open at K_owner is refused (T-N4's world).
+    #[test]
+    fn g14r2_eight_active_colluding_owners_cannot_lock_out_a_newcomer_who_convicts_in_time() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx = palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF, 1)), 4);
+        let frame = fx.frame.clone();
+        let colluders = squatters(Frame::MAXIMUM_OWNERS_V1);
+        let late_coalition: Vec<PalwBondKeyV2> = (0..Frame::MAXIMUM_OWNERS_V1).map(|i| bond(500 + i)).collect();
+        let mut extra = colluders.clone();
+        extra.extend(late_coalition.iter().copied());
+        let (mut state, params, extras, open_at) = open_world(&fx, &frame, &extra);
+        // Below the fence (T-N4's world) the outsider is refused at K_owner; past it, the fair start.
+        let below = params.clone();
+        let params = params.with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 {
+            from_daa: 0,
+            policy: crate::palw_court_capacity_v1::palw_court_capacity_placeholder_policy_v1(),
+        }));
+        let claim_id = frame.plan_v1().original_claim;
+        let base = frame.plan_v1().terms.accepted_daa;
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let terms = frame.plan_v1().terms;
+        for owner in &colluders {
+            state = open(&frame, &state, &params, &extras, open_at, *owner).expect("a colluder takes a slot");
+        }
+        let max_turns = owner_row(&state, &frame, colluders[0], base + open_at).contract_v1().plan.maximum_turns;
+        eprintln!(
+            "[G14 r2 TIR] open_at {open_at}, open_until {}, collect_until {}, maximum_turns {max_turns}",
+            terms.open_until_daa - base,
+            terms.collect_until_daa - base
+        );
+        assert_eq!(state.staged_tir_owner_count_v1(&claim_id), Frame::MAXIMUM_OWNERS_V1);
+        assert!(open(&frame, &state, &below, &extras, open_at + 1, outsider()).is_err(), "below the fence: refused at K_owner");
+        // The colluders go active: each demands at once (the producer answers inside the clock below).
+        let mut offset = open_at + 1;
+        let leaf_of = |_: usize| FORGED_LEAF as u64;
+        for (i, owner) in colluders.iter().enumerate() {
+            let target = T::Acquisition { owner: *owner, reserved_daa: base + open_at };
+            let request = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: leaf_of(i) };
+            state = control_step(&frame, &state, &params, &extras, offset, *owner, target, A::Acquisition(Owned::Demand { request }), 0, 0)
+                .expect("a colluder demands");
+        }
+        // The honest newcomer: not refused — it waits; its Demand is refused while it waits.
+        offset += 1;
+        let arrived = offset;
+        state = open(&frame, &state, &params, &extras, offset, outsider()).expect("never refused for the K_owner cap past the fence");
+        let mine = T::Acquisition { owner: outsider(), reserved_daa: base + arrived };
+        let mine_key = owner_key(&frame, outsider(), base + arrived).unwrap();
+        assert!(!state.staged_tir_owner_admitted_v1(&claim_id, &mine_key), "it waits behind the eight");
+        let forged = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: FORGED_LEAF as u64 };
+        let refused =
+            control_step(&frame, &state, &params, &extras, offset + 1, outsider(), mine, A::Acquisition(Owned::Demand { request: forged }), 0, 0)
+                .expect_err("a waiting row demands nothing");
+        assert!(format!("{refused}").contains("waiting in the owner queue"), "{refused}");
+        // The refill: eight more coalition Opens AFTER the newcomer queue behind it.
+        offset += 1;
+        for owner in &late_coalition {
+            state = open(&frame, &state, &params, &extras, offset, *owner).expect("the coalition queues too");
+        }
+        // Keep the colluders active (every open demand answered inside its clock, the next demand at once); every block the newcomer
+        // tries its Demand, which rotates the queue: no colluder is ever idle, but an admitted row past its tenure yields to it.
+        // Custodian load (demands open at once) never exceeds K_owner.
+        offset += 1;
+        let mut turns = vec![1u64; colluders.len()];
+        let mut admitted_at = None;
+        while admitted_at.is_none() {
+            assert!(base + offset < terms.open_until_daa, "the newcomer must get its slot inside the open window");
+            for (i, owner) in colluders.iter().enumerate() {
+                let target = T::Acquisition { owner: *owner, reserved_daa: base + open_at };
+                let key = owner_key(&frame, *owner, base + open_at).unwrap();
+                let Some(Row::TirAcquisition(row)) = state.staged_court_row_v1(&key) else { panic!("colluder row") };
+                if !row.owned.holds_owner_slot_v1() {
+                    continue;
+                }
+                if row.owned.active_v1().is_some_and(|p| p.slots.get(&producer).and_then(|s| s.finished.as_ref()).is_none()) {
+                    let (answered, next) = producer_answers(&fx, &frame, &state, &params, &extras, target, leaf_of(i) as usize, offset);
+                    state = answered;
+                    offset = offset.max(next);
+                }
+                if turns[i] < max_turns {
+                    let request = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: leaf_of(i) };
+                    state = control_step(&frame, &state, &params, &extras, offset, *owner, target, A::Acquisition(Owned::Demand { request }), 0, turns[i])
+                        .expect("the colluder stays active");
+                    turns[i] += 1;
+                }
+            }
+            assert!(state.staged_tir_idle_admitted_owners_v1(&claim_id, base + offset).is_empty(), "the colluders are never idle");
+            offset += 1;
+            // The node's owner worker asks this before it signs a Demand; it must agree with the fold, block by block.
+            let grace = owner_row(&state, &frame, outsider(), base + arrived).owner_idle_grace_daa_v1();
+            let tenure = crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_v1(&frame, grace);
+            let predicted = state.staged_tir_owner_demand_admits_v1(&claim_id, &mine_key, base + offset, tenure);
+            match control_step(&frame, &state, &params, &extras, offset, outsider(), mine, A::Acquisition(Owned::Demand { request: forged }), 0, 0) {
+                Ok(next) => {
+                    assert!(predicted, "the worker's predicate admits exactly when the fold does");
+                    state = next;
+                    admitted_at = Some(offset);
+                }
+                Err(why) => {
+                    assert!(!predicted, "the worker would have wasted a Demand: {why}");
+                    assert!(format!("{why}").contains("waiting in the owner queue"), "{why}");
+                }
+            }
+            let open_demands = state
+                .staged_tir_owner_queue_v1(&claim_id)
+                .iter()
+                .filter(|(key, ..)| matches!(state.staged_court_row_v1(key), Some(Row::TirAcquisition(r)) if r.owned.active_v1().is_some()))
+                .count() as u64;
+            assert!(open_demands <= Frame::MAXIMUM_OWNERS_V1, "custodian load bounded by K_owner: {open_demands}");
+        }
+        let admitted_at = admitted_at.unwrap();
+        // Every colluder past its tenure yielded, with no forfeit (they were active); the slots went in arrival order — the newcomer
+        // first — and the last of the later coalition Opens still waits.
+        let yielded: Vec<_> = colluders
+            .iter()
+            .filter(|o| !owner_row(&state, &frame, **o, base + open_at).holds_owner_slot_v1())
+            .collect();
+        assert!(!yielded.is_empty(), "slots rotated");
+        assert!(yielded.iter().all(|o| state.bonds.get(*o).unwrap().slashed == 0), "an active owner yields without forfeit");
+        let queue = state.staged_tir_owner_queue_v1(&claim_id);
+        let position = queue.iter().position(|(k, ..)| *k == mine_key).expect("the newcomer is queued");
+        assert!(queue[..position].iter().all(|(_, owner, ..)| colluders.contains(owner)), "nobody filed later is ahead of it");
+        eprintln!("[G14 r2 TIR] {} colluders yielded at the tenure; queue position {position} of {}", yielded.len(), queue.len());
+        // The newcomer's demand of the forged leaf is in; the producer answers, and the newcomer files the conviction.
+        let (mut answered, next) = producer_answers(&fx, &frame, &state, &params, &extras, mine, FORGED_LEAF, admitted_at + 1);
+        answered.last_point = Some(at(&frame, next - 1));
+        let reference = owner_pending(&frame, &answered, mine).3.expect("the producer's finished body");
+        assert!(
+            crate::palw_tir_public_state_v1::palw_tir_public_finished_material_v1(&answered, &reference, frame.descriptor_v1().maximum_leaves)
+                .unwrap()
+                .is_some(),
+            "the newcomer's own authenticated material"
+        );
+        let before = answered.bonds.get(&producer).unwrap().collateral;
+        assert!(base + next < terms.collect_until_daa, "inside the collection door");
+        let convicted = control_step(&frame, &answered, &params, &extras, next, outsider(), T::Conviction, A::Convict(cone(&fx)), frame.conviction_rent_v1(), 0)
+            .expect("the newcomer's filing convicts");
+        eprintln!(
+            "[G14 r2 TIR] newcomer arrived at +{arrived}, admitted at +{admitted_at}, convicted at +{next} (open_until +{}, collect_until +{})",
+            terms.open_until_daa - base,
+            terms.collect_until_daa - base
+        );
+        assert!(matches!(
+            convicted.claims.get(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+        ));
+        assert!(convicted.bonds.get(&producer).unwrap().collateral < before, "the producer is slashed");
     }
 
     /// **T-N5 `g14_tir_frame_replays_without_derived_work_prompt_ids`** (G-T3). On a ruleset where `palw_fp_derived_work` priced
@@ -2669,13 +2944,13 @@ mod conviction_e2e_tests {
         lost.slashable_locks.remove(&(colluders()[1], claim_id));
         let root = lost.state_root();
         let mut b = TransitionBuilder::new(&lost, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).is_err());
         assert_eq!(b.state.state_root(), root);
         // Expired at this block: refused likewise.
         let mut expired = state.clone();
         expired.slashable_locks.get_mut(&(colluders()[0], claim_id)).unwrap().expiry_daa = now;
         let mut b = TransitionBuilder::new(&expired, &params, false, false, false, false, &extras);
-        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err());
+        assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).is_err());
         // A seat whose false-Valid offence another route already consumed is not asked again (once across every route).
         let mut consumed = lost.clone();
         let offence = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&colluders()[1].0, &claim_id);
@@ -2683,11 +2958,11 @@ mod conviction_e2e_tests {
         if let Some(record) = any {
             consumed.consumed_offences.insert(offence, record);
             let mut b = TransitionBuilder::new(&consumed, &params, false, false, false, false, &extras);
-            assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_ok());
+            assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).is_ok());
         }
         // Every lock in place: each is taken and each seat debited at least its lock.
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).unwrap();
+        apply_verified_control_v1(&mut b, &at(&frame, 5), &frame, &filing(&frame, outsider(), cone(&fx))).unwrap();
         for seat in colluders() {
             assert!(!b.state.slashable_locks.contains_key(&(seat, claim_id)));
             assert!(b.state.bonds.get(&seat).unwrap().collateral <= COLLATERAL - LOCK as u64);
@@ -2730,5 +3005,238 @@ mod conviction_e2e_tests {
         assert!(convicted.bonds.get(&producer).unwrap().collateral < before);
         assert!(convicted.consumed_offences.contains_key(&palw_court_conviction_offence_id_v1(&producer.0, &claim_id)));
         assert!(convicted.legacy_disputes.is_empty(), "the conviction created no legacy-route state either");
+    }
+
+    /// **What each accepting frame action really does, measured** (the frame pricing proposal, 2026-10-16). For custodian uppers
+    /// 6, 33 and 257 — every seat of the drawn Panel holding an exact credited Valid custody grant, so the rooted frame is at its
+    /// largest — the outside owner's Open, Demand and the producer's Begin / Part / Finish answer, the producer's preparation debit
+    /// and Ready, and the conviction filing are applied through the verified native fold (`apply_verified_control_v1`), and each is
+    /// timed. Beside them: one full-frame pass (`check_structure_v1`, a deep clone, the Borsh encode) at the same size. If an
+    /// action's time grows with the frame, it re-reads the whole frame; if it stays flat, it touches only its own data.
+    ///
+    /// Timings are wall-clock on THIS host and build (recorded, never pinned). Set `MISAKA_TIR_FOLD_MEASURE_OUT=<file>` to write
+    /// the canonical JSON record. Counts and byte sizes are deterministic.
+    #[test]
+    fn tir_frame_accepting_actions_are_measured_across_custodian_uppers() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        use std::time::Instant;
+        const ROUNDS: usize = 5;
+        // The median of ROUNDS applications of `control` to `state` (each from the same pre-state).
+        let timed = |frame: &Frame,
+                     state: &PalwChainStateV2,
+                     params: &PalwStateParamsV2,
+                     extras: &PalwTransitionExtrasV1,
+                     offset: u64,
+                     control: &Control|
+         -> (u64, PalwChainStateV2) {
+            let mut samples = Vec::new();
+            let mut last = None;
+            for _ in 0..ROUNDS {
+                let mut b = TransitionBuilder::new(state, params, false, false, false, false, extras);
+                let start = Instant::now();
+                apply_verified_control_v1(&mut b, &at(frame, offset), &frame, control).expect("the measured action applies");
+                samples.push(start.elapsed().as_nanos() as u64);
+                last = Some(b.state.clone());
+            }
+            samples.sort_unstable();
+            (samples[ROUNDS / 2], last.unwrap())
+        };
+        fn median(f: &mut dyn FnMut() -> u64) -> u64 {
+            let mut samples: Vec<u64> = (0..ROUNDS).map(|_| f()).collect();
+            samples.sort_unstable();
+            samples[ROUNDS / 2]
+        }
+        let control_of = |frame: &Frame, target: T, action: A, signer: PalwBondKeyV2, rent: u64, turn: u64| {
+            let plan = frame.plan_v1();
+            Control {
+                version: 1,
+                claim: plan.original_claim,
+                allocation_id: plan.allocation_id,
+                source_id: plan.source_id,
+                target,
+                expected_turn: turn,
+                declared_rent_sompi: rent,
+                signer,
+                action,
+                signature: vec![5; SIG],
+            }
+        };
+        let mut rows = Vec::new();
+        for upper in [6u64, 33, 257] {
+            let fx = palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF, 1)), upper);
+            let seats: Vec<PalwBondKeyV2> = (0..upper - 1).map(|i| bond(10_000 + i)).collect();
+            let frame = credited_frame_with(&fx, &seats, &seats);
+            let frame_bytes = borsh::to_vec(&frame).unwrap().len() as u64;
+            // One full-frame pass, by part.
+            let check_ns = median(&mut || {
+                let start = Instant::now();
+                frame.check_structure_v1(&frame.key_v1()).unwrap();
+                start.elapsed().as_nanos() as u64
+            });
+            let clone_ns = median(&mut || {
+                let start = Instant::now();
+                std::hint::black_box(frame.clone());
+                start.elapsed().as_nanos() as u64
+            });
+            let encode_ns = median(&mut || {
+                let start = Instant::now();
+                std::hint::black_box(borsh::to_vec(&frame).unwrap());
+                start.elapsed().as_nanos() as u64
+            });
+            // The accepted world: the credited frame installed at its acceptance, the producer prepared and Ready.
+            let (mut state, params, extras) = world_with(&fx, &frame, &seats);
+            state.staged_courts.remove(&frame.key_v1());
+            super::super::palw_staged_court_fold_v1::rebuild_indices(&mut state);
+            let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            install_original_v1(&mut b, &at(&frame, 0), frame.clone(), &prompt_row(&fx, &frame)).unwrap();
+            let installed = b.state.clone();
+            let ready = producer_ready(&frame, &installed, &params, &extras);
+            let plan = frame.plan_v1();
+            let base = plan.terms.accepted_daa;
+            let producer = frame.custody_v1().pledge_v1().producer;
+            let open_at = plan.preparation_until_daa - base;
+            let rent = owner_terms_v1(&frame).unwrap().plan.rent_sompi;
+            let (open_ns, opened) = timed(
+                &frame,
+                &ready,
+                &params,
+                &extras,
+                open_at,
+                &control_of(&frame, T::OwnerOpen { owner: outsider() }, A::Open, outsider(), rent, 0),
+            );
+            let target = T::Acquisition { owner: outsider(), reserved_daa: base + open_at };
+            let request = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: FORGED_LEAF as u64 };
+            let (demand_ns, demanded) = timed(
+                &frame,
+                &opened,
+                &params,
+                &extras,
+                open_at + 1,
+                &control_of(&frame, target, A::Acquisition(Owned::Demand { request }), outsider(), 0, 0),
+            );
+            let (demand_id, _, turn, _) = owner_pending(&frame, &demanded, target);
+            let body = borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+                preimage: fx.execution.preimages[FORGED_LEAF].clone(),
+                opening: crate::palw_step_leg::step_opening_v1(&fx.execution.hashes, FORGED_LEAF as u64).unwrap(),
+            })
+            .unwrap();
+            let begin = Owned::Begin {
+                demand_id,
+                answerer: producer,
+                total_bytes: body.len() as u64,
+                body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body),
+            };
+            let (begin_ns, mut answered) = timed(
+                &frame,
+                &demanded,
+                &params,
+                &extras,
+                open_at + 2,
+                &control_of(&frame, target, A::Acquisition(begin), producer, 0, turn),
+            );
+            let mut part_ns = Vec::new();
+            let mut offset = open_at + 3;
+            for (i, bytes) in body.chunks(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).enumerate() {
+                let part = Owned::Part {
+                    demand_id,
+                    answerer: producer,
+                    offset: (i * crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) as u64,
+                    bytes: bytes.to_vec(),
+                };
+                let (took, next) =
+                    timed(&frame, &answered, &params, &extras, offset, &control_of(&frame, target, A::Acquisition(part), producer, 0, turn));
+                part_ns.push(took);
+                answered = next;
+                offset += 1;
+            }
+            let finish = Owned::Finish { demand_id, answerer: producer };
+            let (finish_ns, answered) =
+                timed(&frame, &answered, &params, &extras, offset, &control_of(&frame, target, A::Acquisition(finish), producer, 0, turn));
+            let filing_control = filing(&frame, outsider(), cone(&fx));
+            let filing_bytes = borsh::to_vec(&filing_control).unwrap().len() as u64;
+            let (filing_ns, _) = timed(&frame, &answered, &params, &extras, offset + 1, &filing_control);
+            // The producer's preparation debit and Ready on the installed world, timed the same way.
+            let prep_ns = {
+                let mut samples = Vec::new();
+                for _ in 0..ROUNDS {
+                    let start = Instant::now();
+                    std::hint::black_box(producer_ready(&frame, &installed, &params, &extras));
+                    samples.push(start.elapsed().as_nanos() as u64);
+                }
+                samples.sort_unstable();
+                samples[ROUNDS / 2]
+            };
+            let row = serde_json::json!({
+                "upper": upper,
+                "credited_seats": seats.len(),
+                "frame_bytes": frame_bytes,
+                "charged_parser_steps_per_owner_action": frame_bytes.saturating_mul(32 * 32),
+                "full_frame_pass_ns": { "check_structure": check_ns, "deep_clone": clone_ns, "borsh_encode": encode_ns },
+                "action_ns": {
+                    "open": open_ns, "demand": demand_ns, "begin": begin_ns, "part": part_ns, "finish": finish_ns,
+                    "filing": filing_ns, "preparation_debit_and_ready_incl_state_clone": prep_ns,
+                },
+                "answer_body_bytes": body.len(),
+                "filing_control_bytes": filing_bytes,
+            });
+            eprintln!("[tir-fold-measure] {row}");
+            rows.push(row);
+        }
+        // One ML-DSA-87 verification (every control's native signature check), timed the same way.
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x3A; 32]);
+        let message = [0x5Au8; 64];
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, &message, b"misaka-measure", [0x11; 32]).unwrap();
+        let verify_ns = median(&mut || {
+            let start = Instant::now();
+            libcrux_ml_dsa::ml_dsa_87::verify(&kp.verification_key, &message, b"misaka-measure", &signature).unwrap();
+            start.elapsed().as_nanos() as u64
+        });
+        // **The cost units these measurements give** (audit §10), at the largest measured frame: the parse rate of one full-frame pass
+        // (`check_structure`, at the existing tariff of 32 parser steps a byte), the slowest read action plus one signature check in
+        // those steps, and the full-frame passes an Open or a filing costs. Recorded beside the raw times; never pinned here.
+        let (smallest, largest) = (rows.first().unwrap(), rows.last().unwrap());
+        let frame_bytes = largest["frame_bytes"].as_u64().unwrap();
+        let pass_ns = largest["full_frame_pass_ns"]["check_structure"].as_u64().unwrap().max(1);
+        let steps_per_ns = (32.0 * frame_bytes as f64) / pass_ns as f64;
+        let read = |row: &serde_json::Value| {
+            let ns = |k: &str| row["action_ns"][k].as_u64().unwrap();
+            ["demand", "begin", "finish"]
+                .into_iter()
+                .map(ns)
+                .chain(row["action_ns"]["part"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()))
+                .max()
+                .unwrap()
+        };
+        let (upper_lo, upper_hi) = (smallest["upper"].as_u64().unwrap(), largest["upper"].as_u64().unwrap());
+        let (read_lo, read_hi) = (read(smallest), read(largest));
+        // A read action's time fitted as `a + b × upper` through the smallest and largest uppers (b rounded up), plus one signature.
+        let per_custodian_ns = (read_hi.saturating_sub(read_lo) as f64 / (upper_hi - upper_lo) as f64).max(0.0);
+        let intercept_ns = (read_hi as f64 - per_custodian_ns * upper_hi as f64).max(read_lo as f64 - per_custodian_ns * upper_lo as f64);
+        let action_parser_steps = ((intercept_ns + verify_ns as f64) * steps_per_ns).ceil() as u64;
+        let action_parser_steps_per_custodian = (per_custodian_ns * steps_per_ns).ceil() as u64;
+        let read_ns = read_hi;
+        let ns = |k: &str| largest["action_ns"][k].as_u64().unwrap();
+        let frame_passes_per_check = ns("open").max(ns("filing")).div_ceil(pass_ns).max(1);
+        let record = serde_json::json!({
+            "record": "misaka-palw/tir-fold-measure/v1",
+            "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+            "host": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
+                      "threads": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+                      "label": std::env::var("MISAKA_MEASURE_HOST").unwrap_or_default() },
+            "status": "not arming evidence: wall-clock of this host and build; the tiny court fixture's class",
+            "uppers": rows,
+            "mldsa87_verify_ns": verify_ns,
+            "derived": {
+                "parser_steps_per_ns": steps_per_ns,
+                "slowest_read_action_ns": read_ns,
+                "action_parser_steps": action_parser_steps,
+                "action_parser_steps_per_custodian": action_parser_steps_per_custodian,
+                "frame_passes_per_check": frame_passes_per_check,
+            },
+        });
+        eprintln!("[tir-fold-measure] derived {}", record["derived"]);
+        if let Ok(out) = std::env::var("MISAKA_TIR_FOLD_MEASURE_OUT") {
+            std::fs::write(out, serde_json::to_string(&record).unwrap()).unwrap();
+        }
     }
 }

@@ -506,6 +506,11 @@ impl<B: PalwExecutionBackendV1 + ?Sized> PalwCaptureLeafProverV1 for PalwPerInde
 }
 
 pub trait PalwExecutionBackendV1: Send + Sync {
+    /// **The concrete backend, for a node-side consumer that needs a family's own API** (RFC-0006 06-A: the held-GDN filer reads
+    /// the Qwen3.6 hybrid's accuser view and recompute kernels). `None` by default; no consensus rule reads it.
+    fn as_any_v1(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
     /// A human-readable identity for logs — the model id for a converted class, the floor's name
     /// for the derived one. Never used for dispatch: the chain's `class_id` is.
     fn model_id(&self) -> &str;
@@ -523,6 +528,14 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// so its producer, its seats and the chain's identity checks read one rule. A family whose Legacy
     /// rule IS `CoreV1` (the floor) keeps the default no-op.
     fn set_attempt_rules_v1(&mut self, _rules: crate::palw_attempt_rules_v1::PalwAttemptRulesV1) {}
+
+    /// **RFC-0002 Phase H / audit 02-B: the class's REGISTERED runtime semantics** (`PalwClassSemanticsV1`: model profile, runtime
+    /// manifest and class, CU ruleset), which a free-prompt context this instance builds carries and the TIR frame matches the
+    /// public header's context against (`PalwClassSemanticsV1::matches_context`). A node reads them from its accepted chain state
+    /// and sets them on every backend it resolves for that class, so a class registered with non-default semantics is run under
+    /// its own statement rather than the backend's defaults. A family whose free-prompt contexts carry no such ids keeps the
+    /// default no-op.
+    fn set_registered_class_facts_v1(&mut self, _facts: crate::palw_fp_execution_v3::PalwFpClassFactsV3) {}
 
     /// **The attempt rule this instance runs** ([`Self::set_attempt_rules_v1`]); `Legacy` for a
     /// backend that never takes one. A seat's checks that exist only under `CoreV1` read it
@@ -1198,6 +1211,13 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// `misaka-palw-base0` fails on it.
     fn supports_dissection(&self) -> bool {
         false
+    }
+
+    /// Versioned held-memory route, resolved by the caller at the active height.
+    /// Existing backends retain their old advertisement unless they implement
+    /// the new evidence builders and override this capability explicitly.
+    fn supports_dissection_with_memory_routing_v2(&self, _active: bool) -> bool {
+        self.supports_dissection()
     }
 
     /// **Does this backend's class commit a fused attention site at all?** (ADR-0093 as built.) A

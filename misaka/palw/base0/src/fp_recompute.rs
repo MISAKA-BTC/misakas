@@ -482,7 +482,6 @@ impl<'a> Qwen36RecomputeKernelsV1<'a> {
     /// committed checkpoint's chunks restored through the class's map
     /// (`qwen36_cache_from_checkpoint_chunks_v1`), and the next forward is the position after it —
     /// so a resumed walk and a walk from row zero can be compared chunk for chunk.
-    #[cfg(test)]
     pub(crate) fn with_cache(
         artifact: &'a crate::qwen36::Qwen36ArtifactV1,
         plan: &'a crate::qwen36_plan::Qwen36ProfilePlanV1,

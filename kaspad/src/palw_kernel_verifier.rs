@@ -58,6 +58,10 @@ pub(super) const PALW_KERNEL_VERIFIER_ROUND_V1: u32 = u32::MAX - 19;
 /// An object queued this many DAA ago and still not on chain (nor in this node's mempool) is offered again.
 pub(super) const PALW_KERNEL_VERIFIER_RESEND_DAA_V1: u64 = 6;
 
+/// **Lane g14-court-capacity-r2: the court queue's round of this bond's kernel interim-seat receipts** — distinct from the verifier's
+/// filings (`PALW_KERNEL_VERIFIER_ROUND_V1`) and every other lane's.
+pub(super) const PALW_KERNEL_SEAT_ROUND_V1: u32 = u32::MAX - 20;
+
 /// How far below a segmented claim's commitment the block walk looks for its job's prompt tiles (a tiled job's tiles are posted
 /// before the claim commits; a job older than this is not followed — reported, never guessed).
 pub(super) const PALW_KERNEL_VERIFIER_PROMPT_LOOKBACK_DAA_V1: u64 = 4_000;
@@ -124,6 +128,9 @@ pub(super) struct PalwKernelVerifierBookV1 {
     /// What was queued, by the object's hash, and the DAA it was queued at.
     queued: HashMap<Hash64, u64>,
     last_daa: Option<u64>,
+    /// Lane g14-court-capacity-r2: the interim-seat duties this bond has decided, claim → `true` signed a passing receipt /
+    /// `false` refused it (its own check found a fault: the public verifier below files it).
+    seat_decided: HashMap<Digest, bool>,
 }
 
 impl PalwKernelVerifierBookV1 {
@@ -267,6 +274,34 @@ impl PalwPanelService {
             })
             .map(|(id, _)| *id)
             .collect();
+        // Lane g14-court-capacity-r2 (`palw_detection_policy_v1`, dormant): the verifier holds at most its class policy's
+        // `claims_in_flight` claims of a class at once — the oldest commits first (closest to their horizons); a claim past the cap
+        // waits for a slot and is counted (`CapacityRefusal`), never dropped silently.
+        let candidates = palw_kernel_verifier_admit_v1(
+            candidates,
+            |id| {
+                let row = &ledger.claims[id];
+                (Hash64::from_bytes(row.class_binding_id), row.committed_daa)
+            },
+            |class| {
+                match kaspa_consensus_core::palw_detection_policy_v1::palw_detection_regime_v1(
+                    params.palw_detection_policy_v1.as_ref(),
+                    class,
+                    0,
+                    next,
+                ) {
+                    kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionRegimeV1::Policy(p) => Some(p.resources.claims_in_flight),
+                    _ => None,
+                }
+            },
+            |class, id| {
+                self.config.telemetry.detection_loss_once(
+                    class,
+                    Hash64::from_bytes(id),
+                    kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1::CapacityRefusal,
+                )
+            },
+        );
         book.cases.retain(|id, _| ledger.claims.contains_key(id));
         if candidates.is_empty() {
             return;
@@ -320,6 +355,45 @@ impl PalwPanelService {
             .filter_map(|p| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&p.tx.payload).ok())
             .map(|payload| palw_kernel_object_key_v1(&payload.object))
             .collect();
+        // **Lane g14-court-capacity-r2: the kernel route's interim SEAT on real nodes.** For every open single-program claim whose
+        // Panel assignment names this bond, before the assignment's deadline and not yet receipted by it: the claim is re-executed
+        // from the public commitments with the registered model (the public verifier's own replay, cached below), and this bond's
+        // assigned scope is checked against its OWN re-executed trace (`FreshVerifierV1::check` — every value authenticated against
+        // the claim's commitments, the claim's public challenge). Only a clean replay AND a passing scope check signs a passing
+        // receipt; a fault signs nothing (the verifier pass below files it). The policy's `claims_in_flight` bounds the duties held.
+        let base_class = match &params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
+            _ => None,
+        };
+        let operator = match base_class {
+            Some(base) => session
+                .clone()
+                .spawn_blocking(move |c| c.palw_producer_facts_v2(base, Some(bond_key.0)))
+                .await
+                .and_then(|facts| facts.bond)
+                .map(|b| b.operator_id),
+            None => None,
+        };
+        if let Some(operator) = operator {
+            let seat_salt = misaka_palw_kernel::hash::id(b"misaka-palw/kaspad/kernel-seat/salt/v1", &me);
+            for claim in &candidates {
+                let Some(object) =
+                    self.kernel_seat_receipt_v1(book, &route, &ledger, claim, bond_key, operator, current_daa, seat_salt, &objects)
+                else {
+                    continue;
+                };
+                let key = palw_kernel_object_key_v1(&object);
+                let queued = court_pending.iter().any(|(_, round, _, o)| *round == PALW_KERNEL_SEAT_ROUND_V1 && *o == object);
+                if queued || in_pool.contains(&key) {
+                    continue;
+                }
+                let session_key = Hash64::from_bytes(*claim);
+                info!("[{PALW_PANEL}] claim {session_key}: this interim seat queues its passing receipt (kernel route, G14-K)");
+                let deadline = route.assignment_of(claim).map_or(current_daa, |a| a.deadline_daa);
+                court_due.insert((session_key, PALW_KERNEL_SEAT_ROUND_V1, false), deadline);
+                court_pending.push((session_key, PALW_KERNEL_SEAT_ROUND_V1, false, object));
+            }
+        }
         let salt = misaka_palw_kernel::hash::id(b"misaka-palw/kaspad/kernel-verifier/salt/v1", &me);
         for claim in candidates {
             let row = &ledger.claims[&claim];
@@ -474,6 +548,114 @@ impl PalwPanelService {
         }
     }
 
+    /// **This bond's passing receipt for its interim-seat duty on `claim`, if it owes one now and its checks pass** (lane
+    /// g14-court-capacity-r2). `None`: not a seat of this claim, past the deadline, already receipted (on chain or decided here), the
+    /// duty refused for `claims_in_flight`, or a check that did not pass (a fault is logged and left to the public verifier's filing).
+    #[allow(clippy::too_many_arguments)]
+    fn kernel_seat_receipt_v1(
+        &self,
+        book: &mut PalwKernelVerifierBookV1,
+        route: &kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1,
+        ledger: &KernelLedgerV1,
+        claim: &Digest,
+        bond_key: PalwBondKeyV2,
+        operator: Hash64,
+        current_daa: u64,
+        salt: Digest,
+        objects: &[PalwConsensusObjectV2],
+    ) -> Option<PalwConsensusObjectV2> {
+        use misaka_palw_kernel::receipt::{CONSTRAINT_RECEIPT_MLDSA87_CONTEXT_V1, ReceiptInputsV1, receipt_for_v1};
+        use misaka_palw_kernel::verify::ScopeVerdictV1;
+        let assignment = route.assignment_of(claim)?;
+        let seat = assignment.seats.iter().find(|s| s.bond == bond_key)?.clone();
+        if current_daa >= assignment.deadline_daa || book.seat_decided.contains_key(claim) {
+            return None;
+        }
+        if route.receipts_of(claim).iter().any(|r| r.seat_bond == seat.kernel_bond) {
+            book.seat_decided.insert(*claim, true);
+            return None;
+        }
+        let row = ledger.claims.get(claim)?;
+        let ClaimBodyV1::Program { claim: kernel_claim, evidence, .. } = &row.body else { return None };
+        // Receipts count only while the claim awaits its Panel's coverage.
+        if !matches!(row.life.state, ClaimStateV1::Committed | ClaimStateV1::ChallengeBound { .. } | ClaimStateV1::Checking { .. }) {
+            return None;
+        }
+        let class = ledger.classes.get(&row.class_binding_id)?;
+        // The policy's `claims_in_flight`: the seat holds at most that many duties of a class (to their deadlines).
+        let class_key = Hash64::from_bytes(row.class_binding_id);
+        if let kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionRegimeV1::Policy(policy) =
+            kaspa_consensus_core::palw_detection_policy_v1::palw_detection_regime_v1(
+                self.consensus_config.params.palw_detection_policy_v1.as_ref(),
+                &class_key,
+                0,
+                current_daa.saturating_add(1),
+            )
+            && !self.config.telemetry.detection_take_duty_v1(
+                class_key,
+                Hash64::from_bytes(*claim),
+                current_daa,
+                policy.resources.claims_in_flight,
+                assignment.deadline_daa,
+            )
+        {
+            self.config.telemetry.detection_loss_once(
+                class_key,
+                Hash64::from_bytes(*claim),
+                kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1::CapacityRefusal,
+            );
+            return None;
+        }
+        let root = class.param_commitments.root();
+        let model = book.model_for(&root)?;
+        // 1. The whole claim, re-executed from the public commitments (the verifier's replay, cached per claim).
+        let refuted = match self.kernel_verifier_goal_v1(book, ledger, claim, model.as_ref(), salt, objects) {
+            Ok(goal) => goal.is_some(),
+            Err(why) => {
+                warn!("[{PALW_PANEL}] kernel seat: claim {} is not checkable here: {why} — no receipt", Hash64::from_bytes(*claim));
+                return None;
+            }
+        };
+        // 2. The assigned scope, checked against this seat's own re-executed trace.
+        let job = ledger.jobs.get(&row.job_id)?;
+        let fed = kernel_claim.generated.len().saturating_sub(1);
+        let stream: Vec<u32> = job.prompt.iter().chain(&kernel_claim.generated[..fed]).copied().collect();
+        let verdict = (!refuted)
+            .then(|| misaka_palw_kernel::trace::trace_v1(&class.program, model.as_ref(), &stream).ok())
+            .flatten()
+            .and_then(|trace| {
+                let (record, header) = ledger.public_record(claim)?;
+                let fresh =
+                    misaka_palw_kernel::public::FreshVerifierV1::from_public_bytes(&record.to_bytes(), &ledger.known, header).ok()?;
+                Some(fresh.check(&misaka_palw_kernel::verify::TraceMaterialV1 { trace: &trace, params: model.as_ref() }, &seat.scope))
+            });
+        let Some(verdict @ ScopeVerdictV1::Pass { .. }) = verdict else {
+            warn!(
+                "[{PALW_PANEL}] kernel seat: claim {}: its own check does not pass ({}) — this seat signs nothing; the public verifier \
+                 files (G14-K)",
+                Hash64::from_bytes(*claim),
+                if refuted { "the replay refutes it".to_string() } else { format!("{verdict:?}") }
+            );
+            book.seat_decided.insert(*claim, false);
+            return None;
+        };
+        let inputs = ReceiptInputsV1 {
+            descriptor: &class.descriptor,
+            evidence,
+            claim_id: *claim,
+            assignment_root: assignment.assignment_root,
+            challenge_anchor: assignment.challenge_anchor,
+            sample_seed: assignment.sample_seed,
+            seat_bond: seat.kernel_bond,
+            seat_operator: operator.as_bytes(),
+            signed_daa: current_daa,
+        };
+        let receipt = receipt_for_v1(&inputs, &seat.scope, &verdict)?;
+        let signature = self.sign(receipt.signing_message().as_ref(), CONSTRAINT_RECEIPT_MLDSA87_CONTEXT_V1)?;
+        book.seat_decided.insert(*claim, true);
+        Some(PalwConsensusObjectV2::KernelConstraintReceiptV1 { receipt: Box::new(receipt), signature })
+    }
+
     /// `object` as a `KernelRouteV1` carrier object of `bond`, signed deterministically (`None`: the service holds no key).
     fn kernel_route_signed_v1(
         &self,
@@ -489,6 +671,34 @@ impl PalwPanelService {
 }
 
 /// The DAA a step's objects must land by (the planner's deadline), for the court lane's EDF.
+/// **Lane g14-court-capacity-r2: the claims the kernel verifier takes this tick** — per class with a detection policy, the
+/// `claims_in_flight` oldest (by commit DAA, then id); the rest are reported through `refused`. A class with no policy (below the
+/// fence) is not capped. Pure.
+pub(crate) fn palw_kernel_verifier_admit_v1(
+    mut candidates: Vec<Digest>,
+    facts: impl Fn(&Digest) -> (Hash64, u64),
+    cap_of: impl Fn(&Hash64) -> Option<u32>,
+    mut refused: impl FnMut(Hash64, Digest),
+) -> Vec<Digest> {
+    candidates.sort_by_key(|id| (facts(id).1, *id));
+    let mut taken: std::collections::BTreeMap<Hash64, u32> = std::collections::BTreeMap::new();
+    candidates
+        .into_iter()
+        .filter(|id| {
+            let (class, _) = facts(id);
+            let Some(cap) = cap_of(&class) else { return true };
+            let n = taken.entry(class).or_default();
+            if *n < cap {
+                *n += 1;
+                true
+            } else {
+                refused(class, *id);
+                false
+            }
+        })
+        .collect()
+}
+
 pub(super) fn palw_kernel_step_due_v1(step: &KernelPursuitStepV1) -> Option<u64> {
     match step {
         KernelPursuitStepV1::Seal { by_daa, .. }
@@ -507,5 +717,34 @@ pub(super) fn palw_kernel_object_name_v1(object: &PalwConsensusObjectV2) -> Stri
         }
         PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, .. } => format!("KernelRouteChunkV1 {}/{}", chunk.index + 1, chunk.count),
         other => object_name(other).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod claims_in_flight_tests {
+    use super::*;
+
+    /// **The kernel verifier takes no more claims of a class than its policy's `claims_in_flight`**, oldest commits first; the rest are
+    /// reported (counted as `CapacityRefusal`); a class with no policy is not capped.
+    #[test]
+    fn g14r2_the_kernel_verifier_respects_claims_in_flight() {
+        let d = |n: u8| [n; 64];
+        let capped = Hash64::from_u64_word(1);
+        let free = Hash64::from_u64_word(2);
+        let facts = |id: &Digest| match id[0] {
+            1 => (capped, 30),
+            2 => (capped, 10),
+            3 => (capped, 20),
+            _ => (free, 5),
+        };
+        let mut refused = Vec::new();
+        let taken = palw_kernel_verifier_admit_v1(
+            vec![d(1), d(2), d(3), d(4), d(5)],
+            facts,
+            |class| (*class == capped).then_some(2),
+            |class, id| refused.push((class, id)),
+        );
+        assert_eq!(taken, vec![d(4), d(5), d(2), d(3)], "the two oldest of the capped class, every claim of the free one");
+        assert_eq!(refused, vec![(capped, d(1))], "the newest capped claim waits and is counted");
     }
 }

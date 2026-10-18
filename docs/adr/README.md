@@ -10,6 +10,7 @@
 
 | 番号 | 内容 |
 | --- | --- |
+| 0183 | [G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md) |
 | 0182 | [画像・動画経路とモデル改善を mainnet 後へ延期し、当面無効にする](0182-defer-media-and-model-improvement-until-post-mainnet.md) |
 | 0181 | [採用済み設計を原則凍結し、重大問題時のみ新規 RFC・ADR で変更する](0181-design-freeze-and-controlled-change.md) |
 | 0180 | [PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md) |

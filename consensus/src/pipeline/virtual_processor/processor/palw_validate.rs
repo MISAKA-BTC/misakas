@@ -1398,9 +1398,10 @@ impl VirtualStateProcessor {
                     // only where its attention lie is attributable — its dissection answerable
                     // (`palw_held_class_unanswerable_v1`: the context bound, a recurrent layer, a
                     // compute turn past the cap — a pure function of the profile).
-                    kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v1(
+                    kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v2(
                         &carriage.profile,
                         self.palw_offence_attribution_at(point.daa_score),
+                        self.palw_memory_routing_court_v2_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                     // **ADR-0152 v3.1 addendum §4-bis.8: every claim of the class must be
@@ -2723,7 +2724,7 @@ impl VirtualStateProcessor {
                         // fold refuses it (`ShardCourtHeldSiteUnanswerable`) off the same mirror.
                         Ok(kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection)
                             if self.palw_offence_attribution_at(point.daa_score)
-                                && state_params.held_class_is_unanswerable_v1(&claim.class_id) =>
+                                && state.held_claim_is_unanswerable_v2(state_params, claim) =>
                         {
                             return Err(format!(
                                 "claim {claim_id}: leaf {} is a fused-attention site of held class {}, whose dissection no honest \
@@ -4388,6 +4389,30 @@ impl VirtualStateProcessor {
                 }
                 // **Lane BUDGET (tag 140): a bond's capital assignment** — the fence, an Active signer, its signature; ADR-0177 D3's rules
                 // are the fold's.
+                // RFC-0002 02-A (tag 175): a TIR class's container binding, signed by the class's original registrant. A-2: below
+                // its owning fence the kind rides unjudged. The opening, the class and immutability are the fold's.
+                Obj::TirClassContainerBoundV1 { binding, signature } => {
+                    use kaspa_consensus_core::palw_tir_container_v1 as container;
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        continue;
+                    }
+                    let class = state.class(&binding.class_id).ok_or("a container binding names an unknown class")?;
+                    let registrant =
+                        class.registrant_bond.as_ref().ok_or("a sentinel registration has no signing registrant for a container binding")?;
+                    let bond = state.bond(registrant).ok_or("the signing registrant is not a public bond")?;
+                    if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err("the signing registrant is not Active".into());
+                    }
+                    let message = container::palw_tir_container_binding_message_v1(self.palw_network_domain_v2(), binding);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &bond.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        container::PALW_TIR_CONTAINER_BINDING_SIGNATURE_CONTEXT_V1,
+                    ) {
+                        return Err("the original class registrant did not sign this TIR container binding".into());
+                    }
+                }
                 Obj::ClassSemanticsDeclaredV1 { declaration, signature } => {
                     use kaspa_consensus_core::palw_class_semantics_v1 as semantics;
                     if !self.palw_class_semantics_v1.is_some_and(|f| f.is_active(point.daa_score)) {

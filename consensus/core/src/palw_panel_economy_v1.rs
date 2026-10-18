@@ -71,6 +71,31 @@ pub fn palw_panel_collateral_floor_v1(min_collateral_sompi: u64) -> u64 {
     min_collateral_sompi.saturating_mul(PALW_PANEL_COLLATERAL_MULTIPLE_V1)
 }
 
+/// **The Panel floor under G-13's lock rule** (user decision 2026-10-17; g14-completeness-proof §11.3 / §11.11): **240,000 MSK**.
+///
+/// Past `palw_legacy_public_filer_v1` a relied-on `Valid` lock lives to the liability horizon `F + window_court` (G-13), so a seat's
+/// collateral backs each claim far longer than under V02's `F + 1,000`. The smallest seat collateral that sustains testnet-12's healthy
+/// per-seat claim rate under that rule (with the Active/Resolved split, `palw_panel_liability_v1`) is re-derived from the measured
+/// per-claim values by `g13_panel_liability::capital_efficiency_against_the_old_rule`:
+///
+/// ```text
+/// λ_seat   = 0.6 claims/DAA × 5/9 seats per claim                    (healthy, docs/design/palw/t12-panel-backlog-1001.md §2.3)
+/// ledger   = e · T_active + ℓ · (window_court)                        (eligibility e, lock ℓ, bind → Final T_active: measured)
+/// C_min    = min(λ·ledger / r, max(λ·e·T_active / r, reserve + λ·ledger))   (r: the work ceiling's share of collateral)
+///          = 238,119 MSK  (measured 2026-10-16)  →  rounded up to 240,000 MSK
+/// ```
+///
+/// A bond below it stays `Active` (nothing it holds changes) but is not drawn as a seat past the fence — the existing floor pattern
+/// (`palw_bond_may_take_work_v2` at the panel floor, ADR-0124 Decision 4). Below the fence: [`palw_panel_collateral_floor_v1`].
+pub const PALW_PANEL_FLOOR_UNDER_G13_SOMPI_V1: u64 = 240_000 * crate::constants::SOMPI_PER_KASPA;
+
+/// **The Panel floor at a DAA** — ten producer floors, raised to [`PALW_PANEL_FLOOR_UNDER_G13_SOMPI_V1`] where G-13's lock rule
+/// (`palw_legacy_public_filer_v1`) is in force (`g13_in_force`). The one function every draw, bind and room asks.
+pub fn palw_panel_collateral_floor_at_v1(min_collateral_sompi: u64, g13_in_force: bool) -> u64 {
+    let base = palw_panel_collateral_floor_v1(min_collateral_sompi);
+    if g13_in_force { base.max(PALW_PANEL_FLOOR_UNDER_G13_SOMPI_V1) } else { base }
+}
+
 /// What one seat reserves on one claim below ADR-0130's floor, saturating.
 pub fn palw_seat_exposure_v1(claim_reserved: u128) -> u128 {
     claim_reserved.saturating_mul(PALW_SEAT_EXPOSURE_MULTIPLE_V1)

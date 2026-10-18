@@ -137,6 +137,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::BondRetireRequested { .. }
         | O::ClassRegistered { .. }
         | O::ClassSemanticsDeclaredV1 { .. }
+        // RFC-0002 02-A (tag 175): a TIR class's container binding is registration traffic, like the declaration above.
+        | O::TirClassContainerBoundV1 { .. }
         // RFC-0002 Phase F (tag 61): an IR registration is a registration, like the one above.
         | O::ClassRegisteredTirV1 { .. }
         // RFC-0003 (tag 68): a generative registration, likewise.

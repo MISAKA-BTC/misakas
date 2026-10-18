@@ -110,7 +110,7 @@ pub fn palw_tir_public_source_for_preparation_row_v1(
     }
     let source = PalwTirPublicSourceV1::new_v1(record, layout, header, original.execution_root, original.trace_root, maximum_leaves)?;
     let acquisition =
-        crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1::derive_v1(&source, d.native_custodian_upper, d.native_config)?;
+        crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1::derive_v1(&source, d.native_custodian_upper, d.native_config, d.native_clock)?;
     let allocation = crate::palw_tir_public_owned_v1::derive_tir_public_preparation_work_allocation_v1(
         record,
         layout,
@@ -199,6 +199,8 @@ pub struct PalwTirPublicSourceDescriptorV1 {
     pub source_id: Hash64,
     pub maximum_leaves: u64,
     pub native_config: PalwStagedPublicCourtConfigV1,
+    /// The frame's measured clock (audit §10), fixed with the config at the claim's acceptance.
+    pub native_clock: crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1,
     pub native_custodian_upper: u64,
     pub work_rules: Option<crate::palw_tir_public_owned_v1::PalwTirPublicWorkRulesV1>,
 }
@@ -381,7 +383,7 @@ fn source_for_frame(
     let record = state.tir_class_v1(&frame.descriptor_v1().class_id).ok_or("original TIR full frame lost registered class")?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id)
         .ok_or("original TIR full frame lost authenticated layout")?;
-    frame.source_v1(record, layout, maximum_leaves)
+    frame.source_identity_v1(record, layout, maximum_leaves)
 }
 
 fn check_source(row: &PalwTirPublicAcquisitionRowV1, source: &PalwTirPublicSourceV1) -> Result<(), String> {
@@ -393,7 +395,7 @@ fn check_source(row: &PalwTirPublicAcquisitionRowV1, source: &PalwTirPublicSourc
     {
         return Err("TIR sidecar source differs from immutable descriptor".into());
     }
-    row.owned.contract_v1().check_native_config_v1(source, d.native_config, d.native_custodian_upper)?;
+    row.owned.contract_v1().check_native_config_v1(source, d.native_config, d.native_clock, d.native_custodian_upper)?;
     row.owned.check_v1(source)
 }
 
@@ -1196,7 +1198,7 @@ fn check_work_input<'a>(
 mod tests {
     use super::*;
     use crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1;
-    use crate::palw_step_leg::{step_merkle_root_v1, step_opening_v1};
+    use crate::palw_step_leg::step_opening_v1;
     use crate::palw_tir_public_owned_v1::{PalwTirPublicOwnedPlanV1, palw_tir_public_body_hash_v1};
     use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1, PalwTirPublicResponseV1};
     use std::collections::BTreeSet;
@@ -1207,21 +1209,12 @@ mod tests {
     // Preadmitted kernel fixture only: it is NOT a native paid-claim acceptance
     // test. Full SUM, literal grants, admission and holds are still unconnected.
     fn fixture() -> (PalwTirPublicSourceV1, BTreeMap<Key, Row>, Key, Vec<u8>) {
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        // A genuinely computed 4,096-lane logits leaf (two parts): G14 audit §11 (a) bounds answers by the job's actual leaves.
+        let (x, wide) = crate::palw_tir_court_v1::test_support::tiny_execution_wide();
         let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
-        let mut header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&x.binding);
-        let mut leaf = x.preimages[0].clone();
-        leaf.values_le = vec![0xA5; 16_384];
-        let mut hashes = x.hashes.clone();
-        hashes[0] = crate::palw_step_leg::step_tile_leaf_hash_v1(&header.job_context.context_hash(), &record.facts.class_id, &leaf);
-        header.step_merkle_root = step_merkle_root_v1(&hashes).unwrap();
-        header.committed_execution_root = crate::palw_tir_step_v1::palw_tir_execution_root_v1(
-            &header.job_context.context_hash(),
-            &header.full_logits_trace_root,
-            &record.facts.class_id,
-            header.step_leaf_count,
-            &header.step_merkle_root,
-        );
+        let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&x.binding);
+        let leaf = x.preimages[wide as usize].clone();
+        let hashes = x.hashes.clone();
         let maximum_leaves = 1 << 40;
         let source = PalwTirPublicSourceV1::new_v1(
             &record,
@@ -1233,7 +1226,7 @@ mod tests {
         )
         .unwrap();
         let config = PalwStagedPublicCourtConfigV1::network_v1();
-        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config).unwrap();
+        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock).unwrap();
         let terms = PalwRenderingClaimTermsV1::derive(
             10,
             plan.envelope,
@@ -1255,7 +1248,7 @@ mod tests {
         };
         let capital = terms.plan.rent_sompi.checked_add(terms.plan.deposit_sompi).unwrap();
         let owned =
-            PalwTirPublicOwnedV1::admit_native_v1(contract, &source, &BTreeSet::from([bond(2), bond(3)]), config, 3, 11, capital)
+            PalwTirPublicOwnedV1::admit_native_v1(contract, &source, &BTreeSet::from([bond(2), bond(3)]), config, crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock, 3, 11, capital)
                 .unwrap();
         let row = PalwTirPublicAcquisitionRowV1 {
             descriptor: PalwTirPublicSourceDescriptorV1 {
@@ -1265,15 +1258,19 @@ mod tests {
                 source_id: source.source_id_v1(),
                 maximum_leaves,
                 native_config: config,
+                native_clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
                 native_custodian_upper: 3,
                 work_rules: None,
             },
             owned: Box::new(owned).into(),
         };
         let key = row.key_v1().unwrap();
-        let body = borsh::to_vec(&PalwTirPublicResponseV1::StepLeaf { preimage: leaf, opening: step_opening_v1(&hashes, 0).unwrap() })
+        let body = borsh::to_vec(&PalwTirPublicResponseV1::StepLeaf { preimage: leaf, opening: step_opening_v1(&hashes, wide).unwrap() })
             .unwrap();
         (source, BTreeMap::from([(key, Row::TirAcquisition(Box::new(row).into()))]), key, body)
+    }
+    fn wide_leaf() -> u64 {
+        crate::palw_tir_court_v1::test_support::tiny_execution_wide().1
     }
     fn owned(rows: &BTreeMap<Key, Row>, key: Key) -> &PalwSharedCourtV1<PalwTirPublicAcquisitionRowV1> {
         let Row::TirAcquisition(row) = rows.get(&key).unwrap() else { panic!("metadata") };
@@ -1312,7 +1309,7 @@ mod tests {
             rows,
             key,
             bond(7),
-            &PalwTirPublicOwnedActionV1::Demand { request: PalwTirPublicRequestV1::StepLeaf { index: 0 } },
+            &PalwTirPublicOwnedActionV1::Demand { request: PalwTirPublicRequestV1::StepLeaf { index: wide_leaf() } },
         );
         let demand_id = owned(rows, key).owned.active_v1().unwrap().demand_id;
         commit(

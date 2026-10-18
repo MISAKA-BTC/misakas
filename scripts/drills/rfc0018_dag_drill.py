@@ -359,15 +359,46 @@ class Drill:
             assert norm(field(row, 'bond', 'executorBond')) == norm(miner['bond']), '%s: attributed to its own bond' % name
             assert norm(field(row, 'classId', 'class')) == norm(miner['model']), '%s: recorded under its own model' % name
             report['claims'][name] = row
-        # Panels: each claim binds its own Panel (seed keyed on the claim), never a sibling's.
+        # Panels (RFC18 audit D-numbers, 2026-10-17): each claim binds ITS OWN Panel, verified per claim — missing data FAILS (never a
+        # default seat list or the requested id echoed back), and the binding, the seats, the verification result and the state
+        # transition that follows are each asserted.
         self.fixture('advance_to_binding')
         panels = {}
         for name in siblings:
             claim_id = norm(field(report['claims'][name], 'claimId', 'id'))
             panel = self.call(roles[0], 'getPalwPanelAssignments', {'claimId': claim_id})
-            panels[name] = json.dumps(field(panel, 'seats', 'assignments', default=[]), sort_keys=True)
-            assert field(panel, 'claimId', default=claim_id) in (claim_id, '0x' + claim_id), '%s: the panel answers for its own claim' % name
-        report['panelsDistinctByClaim'] = len(set(panels.values())) == len(panels)
+            answered = field(panel, 'claimId')
+            if answered is None:
+                raise AssertionError('%s: the panel read names no claim id (missing data is a failure, not the requested id)' % name)
+            assert norm(answered) == claim_id, '%s: the panel answers for its own claim, not %s' % (name, answered)
+            seats = field(panel, 'seats', 'assignments')
+            if not seats:
+                raise AssertionError('%s: the panel read carries no seats (missing data is a failure, never [])' % name)
+            row = self.claim_rows(self.probe(roles[0])).get(claim_id)
+            assert row is not None, '%s: its claim row is still served' % name
+            assert field(row, 'phase') in ('panel_bound', 'receipt_licensed', 'final', 'voided'), \
+                '%s: the claim is bound (phase %s)' % (name, field(row, 'phase'))
+            row_seats = sorted(norm(x) for x in (field(row, 'seats', default=[]) or []))
+            read_seats = sorted(norm(field(x, 'bond', 'seatBond') if isinstance(x, dict) else x) for x in seats)
+            assert row_seats and row_seats == read_seats, '%s: the claim row binds exactly the seats the panel read names' % name
+            assert norm(field(row, 'bond', 'executorBond')) not in read_seats, '%s: the producer never sits its own panel' % name
+            panels[name] = {'claim': claim_id, 'seats': read_seats, 'boundDaa': field(row, 'boundDaa')}
+        # Verification and the transition after it, per claim: a licence (or a void naming the reason) is observed for each.
+        self.fixture('advance_to_verdict')
+        for name, panel in panels.items():
+            def verdict(panel=panel):
+                r = self.claim_rows(self.probe(roles[0])).get(panel['claim'])
+                return r if r is not None and field(r, 'phase') in ('receipt_licensed', 'final', 'voided') else None
+            r = self.wait(verdict, '%s: its panel verifies and the claim moves on' % name)
+            panel['phase'] = field(r, 'phase')
+            panel['voidReason'] = field(r, 'voidReason')
+            if panel['phase'] == 'voided':
+                assert panel['voidReason'], '%s: a void names its reason' % name
+        # A real per-claim check (each claim bound to its own derived panel above), and the cross-claim disjointness reported apart.
+        report['panelsBoundPerClaim'] = len(panels) == len(siblings) and all(p['seats'] for p in panels.values())
+        report['panelsDistinctByClaim'] = report['panelsBoundPerClaim']
+        report['panelSeatSetsDisjoint'] = len({json.dumps(p['seats']) for p in panels.values()}) == len(panels)
+        report['panels'] = panels
         self.report = report
 
     def scenario_partition(self, retired=False):

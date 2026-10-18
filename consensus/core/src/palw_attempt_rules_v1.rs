@@ -277,6 +277,23 @@ pub fn palw_registration_attribution_v1(
     Ok(())
 }
 
+/// Versioned shared preflight matching the processor's C5 and immutable class
+/// checks. The historical V1 entry point remains unchanged for old callers.
+pub fn palw_registration_attribution_v2(
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    offence_attribution: bool,
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    memory_routing_court: bool,
+) -> Result<(), PalwRegistrationAttributionErrorV1> {
+    crate::palw_class_admission_v2::palw_held_class_is_attributable_v2(profile, offence_attribution, memory_routing_court)
+        .map_err(PalwRegistrationAttributionErrorV1::Held)?;
+    if offence_attribution {
+        palw_attributable_class_v1(profile, canonical, false, network_form).map_err(PalwRegistrationAttributionErrorV1::Class)?;
+    }
+    Ok(())
+}
+
 /// **The canonical job `(prefill, decode)` a class is attempted at, as the chain derives it.**
 ///
 /// The base class's is [`crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL`], the job every floor
@@ -972,6 +989,8 @@ mod tests {
                             }
                         });
                     assert_eq!(palw_registration_attribution_v1(profile, canonical, armed, form), processor, "{label}, armed {armed}");
+                    assert_eq!(palw_registration_attribution_v2(profile, canonical, armed, form, false), processor,
+                        "dormant new route preserves legacy: {label}, armed {armed}");
                 }
             }
         }
@@ -1011,8 +1030,8 @@ mod tests {
         let arm = &arm[..arm.find("Obj::ReceiptLicensed { claim, receipts }").expect("the arm ends")];
         let held = arm
             .find(
-                "kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v1(\n                        \
-                 &carriage.profile,\n                        self.palw_offence_attribution_at(point.daa_score),\n                    )",
+                "kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v2(\n                        \
+                 &carriage.profile,\n                        self.palw_offence_attribution_at(point.daa_score),\n                        self.palw_memory_routing_court_v2_at(point.daa_score),\n                    )",
             )
             .expect("the held check, with the fence at the block");
         let fence = arm.find("if self.palw_offence_attribution_at(point.daa_score) {").expect("the attribution check is fenced");
@@ -1025,13 +1044,13 @@ mod tests {
             .expect("the attribution check, with is_base false and the form at the block");
         assert!(held < fence && fence < class, "held first, then the fenced attribution check");
         assert_eq!(arm.matches("palw_attributable_class_v1(").count(), 1, "one call");
-        assert_eq!(arm.matches("palw_held_class_is_attributable_v1(").count(), 1, "one call");
+        assert_eq!(arm.matches("palw_held_class_is_attributable_v2(").count(), 1, "one call");
         // And the shared gate calls the same two, in the same order, with the same arguments.
         let this = include_str!("palw_attempt_rules_v1.rs");
-        let gate = &this[this.find("pub fn palw_registration_attribution_v1(").expect("the gate")..];
+        let gate = &this[this.find("pub fn palw_registration_attribution_v2(").expect("the gate")..];
         let gate = &gate[..gate.find("\n}\n").expect("its end")];
         let g_held = gate
-            .find("crate::palw_class_admission_v2::palw_held_class_is_attributable_v1(profile, offence_attribution)")
+            .find("crate::palw_class_admission_v2::palw_held_class_is_attributable_v2(profile, offence_attribution, memory_routing_court)")
             .expect("the held check");
         let g_fence = gate.find("if offence_attribution {").expect("fenced");
         let g_class = gate.find("palw_attributable_class_v1(profile, canonical, false, network_form)").expect("the attribution check");
@@ -1041,6 +1060,7 @@ mod tests {
         let admission = include_str!("palw_class_admission_v2.rs");
         assert!(admission.contains("offence_attribution: params.palw_offence_attribution_active_at(daa_score),"));
         assert!(admission.contains("prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),"));
+        assert!(admission.contains("memory_routing_court: params.palw_memory_routing_court_v2_fence().is_some_and(|f| f.is_active(daa_score)),"));
     }
 
     /// **testnet-12's genesis rows are attributable** (addendum §4-bis.8: "genesis rows already

@@ -13,6 +13,7 @@
 //! | | `0x02 ‖ epoch ‖ model` (73 B) | `escrow_paid_sompi u64` |
 //! | | `0x03 ‖ kernel claim (64)` (65 B) | `model Hash64` |
 //! | | `0x04 ‖ epoch ‖ model` (73 B) | `(dequeued u64, wait_sum_daa u64, wait_max_daa u64)` |
+//! | | `0x05 ‖ class (64) ‖ verifier kernel id (64)` (129 B) | V8 capacity attestation: `(verifier PalwBondKeyV2, (compute u128, memory u64, DA u64, court u64), (window_from u64, window_to u64, expires u64), evidence_root Hash64)` |
 
 use crate::Hash64;
 
@@ -25,6 +26,21 @@ pub const PALW_RFC0016_TELEMETRY_HEARTBEAT_PREFIX_V1: u8 = 0x01;
 pub const PALW_RFC0016_TELEMETRY_ESCROW_PREFIX_V1: u8 = 0x02;
 pub const PALW_RFC0016_TELEMETRY_CLAIM_MODEL_PREFIX_V1: u8 = 0x03;
 pub const PALW_RFC0016_TELEMETRY_QUEUE_WAIT_PREFIX_V1: u8 = 0x04;
+/// RFC-0016 V8 (audit 16-A, 2026-10-17): a verifier's capacity attestation for one class (inner 76). Not telemetry: never pruned by
+/// epoch, only at its expiry or by its verifier's revocation.
+pub const PALW_RFC0016_CAPACITY_ATTESTATION_PREFIX_V1: u8 = 0x05;
+
+/// The stored V8 attestation row (table 135, prefix 0x05).
+pub type PalwCapacityAttestationRowV1 = (crate::palw_state_v2::PalwBondKeyV2, (u128, u64, u64, u64), (u64, u64, u64), Hash64);
+
+/// `0x05 ‖ class ‖ verifier kernel id` (129 B): one row per (class, verifier) — a re-attestation replaces it.
+pub fn capacity_attestation_key_v1(class: &Hash64, verifier_kernel_id: &[u8; 64]) -> Vec<u8> {
+    let mut k = Vec::with_capacity(129);
+    k.push(PALW_RFC0016_CAPACITY_ATTESTATION_PREFIX_V1);
+    k.extend_from_slice(class.as_byte_slice());
+    k.extend_from_slice(verifier_kernel_id);
+    k
+}
 
 /// The snapshot's "taken" marker model (no real model id is all zero bytes).
 pub const PALW_RFC0016_SNAPSHOT_MARKER_V1: Hash64 = Hash64::from_bytes([0u8; 64]);
@@ -88,6 +104,7 @@ mod tests {
         assert_eq!(telemetry_heartbeat_key_v1(3).len(), 9);
         assert_eq!(telemetry_model_key_v1(PALW_RFC0016_TELEMETRY_ESCROW_PREFIX_V1, 3, &m).len(), 73);
         assert_eq!(telemetry_claim_model_key_v1(&[1u8; 64]).len(), 65);
+        assert_eq!(capacity_attestation_key_v1(&m, &[2u8; 64]).len(), 129);
         // FIFO: the queue key orders by class, then by queued DAA (big-endian), then by claim.
         assert!(queue_key_v1(&m, 9, &m) < queue_key_v1(&m, 10, &Hash64::from_u64_word(1)));
     }

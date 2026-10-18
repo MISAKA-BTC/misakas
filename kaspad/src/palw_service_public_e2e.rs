@@ -43,8 +43,12 @@ use std::{collections::BTreeSet, sync::Arc, thread::JoinHandle, time::Duration};
 mod staged_tokenizer;
 #[path = "palw_service_terminal_e2e.rs"]
 mod terminal;
+#[path = "palw_service_gdn_e2e.rs"]
+mod gdn;
 #[path = "palw_service_tiled_e2e.rs"]
 mod tiled;
+#[path = "palw_service_tir_frame_e2e.rs"]
+mod tir_frame;
 
 pub(super) struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
@@ -517,6 +521,11 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         drill_challenge_all: false,
         drill_answer_only: false,
         drill_refuse_leaf_evidence: false,
+        drill_collude_with: Vec::new(),
+        drill_withhold_held_da: false,
+        drill_withhold_all_da: false,
+        drill_fp_fault: None,
+        drill_sparse_fault_seed: None,
         improve_evaluate: false,
         tir_shard_hold: vec![],
         tir_shard_declare: None,

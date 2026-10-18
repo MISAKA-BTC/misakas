@@ -252,12 +252,28 @@ impl PalwChainStateV2 {
     /// bundle lists as unanswerable (the 2M row) keeps the mercy, and below the fence this is v1.
     pub(crate) fn court_root_evidence_is_buildable_v2(
         &self,
-        class_id: &Hash64,
+        claim: &PalwClaimStateV2,
         offence_attribution_active: bool,
         params: &PalwStateParamsV2,
     ) -> bool {
-        self.court_root_evidence_is_buildable_v1(class_id)
-            || (offence_attribution_active && !params.held_class_is_unanswerable_v1(class_id))
+        self.court_root_evidence_is_buildable_v1(&claim.class_id)
+            || (offence_attribution_active && !self.held_claim_is_unanswerable_v2(params, claim))
+    }
+
+    /// Keep pre-fence claims on their original mercy reading. Only a claim
+    /// accepted under the memory/routing court reads the new held route from its
+    /// immutable registered profile. Missing held profile data fails closed.
+    pub fn held_claim_is_unanswerable_v2(&self, params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
+        if !params.memory_routing_court_from_daa().is_some_and(|at| claim.accepted_daa >= at) {
+            return params.held_class_is_unanswerable_v1(&claim.class_id);
+        }
+        match self.fp_work_profile_of(&claim.class_id) {
+            Some(profile) if profile.shape_profile_id() == claim.class_id => {
+                crate::palw_class_admission_v2::palw_held_class_unanswerable_v2(profile, true).is_some()
+            }
+            Some(_) => true,
+            None => params.held_class_is_unanswerable_v1(&claim.class_id) || self.class_is_held_v1(&claim.class_id),
+        }
     }
 
     /// ADR-0071 SA-3: the production fact recorded under `key`, if the chain holds one.
@@ -1868,6 +1884,15 @@ impl PalwChainStateV2 {
         self.model_lifecycles.insert(class_id, row);
     }
 
+    /// RFC-0023 tests: put a claim into / take it out of the unresolved index (the fold keeps it in lockstep with every claim write).
+    #[cfg(test)]
+    pub(crate) fn set_unresolved_for_tests(&mut self, blue_score: u64, claim_id: Hash64, open: bool) {
+        if open {
+            self.unresolved.insert((blue_score, claim_id));
+        } else {
+            self.unresolved.remove(&(blue_score, claim_id));
+        }
+    }
     /// Tests only: the rows ADR-0152 v2's adjudicator resolves a false-Valid target from — a
     /// claim, its bound panel, its liability row — and the session indices that make it wait, for
     /// `palw_offence_attribution_v1`'s tests, which judge evidence against state without folding a
@@ -2612,6 +2637,10 @@ impl PalwChainStateV2 {
 
     /// **RFC-0018 §7.7**: the accepted blue score of the oldest unresolved claim (`None`: nothing unresolved) — the pruning-progress
     /// rule's first bound.
+    /// The open claims in acceptance order (`(accepted blue score, claim)`), for RFC-0023 stage 1's resolved prefix.
+    pub fn unresolved_iter(&self) -> impl Iterator<Item = (u64, &Hash64)> + '_ {
+        self.unresolved.iter().map(|(blue_score, id)| (*blue_score, id))
+    }
     pub fn unresolved_first_blue_score_v1(&self) -> Option<u64> {
         self.unresolved.iter().next().map(|(blue_score, _)| *blue_score)
     }

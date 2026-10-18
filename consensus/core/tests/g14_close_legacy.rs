@@ -62,6 +62,18 @@ fn record(fence: PalwG14GatedFenceV1, genesis: Hash64, at: u64) -> PalwG14Arming
     }
 }
 
+/// Lane g14-court-capacity's validation (appendix E.2): with LG14-A beside `palw_final_lock_life`, lane V02's full-collateral fence
+/// must be in force at or below the later of the two — armed here at that height when the ruleset has a lock-life fence.
+fn full_collateral_beside_lock_life(p: &mut Params, filer_at: u64) {
+    if let Some(life) = p.palw_final_lock_life.filter(|f| *f != ForkActivation::never()) {
+        let later = life.daa_score().max(filer_at);
+        if p.palw_final_lock_full_collateral.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > later) {
+            p.palw_final_lock_full_collateral = Some(ForkActivation::new(later));
+            p.sync_palw_final_lock_full_collateral();
+        }
+    }
+}
+
 /// `p` with LG14-A (and, with `held`, LG14-B; with `route`, option (b)) armed at `at`, every mirror synced, and the records the
 /// arming needs. The ruleset is asserted to pass the whole validation with them and to be refused without them.
 fn arm_legacy(mut p: Params, at: u64, held: bool, route: bool) -> (Params, Vec<PalwG14ArmingRecordV1>) {
@@ -69,6 +81,7 @@ fn arm_legacy(mut p: Params, at: u64, held: bool, route: bool) -> (Params, Vec<P
     let mut records = vec![record(PalwG14GatedFenceV1::LegacyPublicFilerV1, p.genesis.hash, at)];
     p.palw_legacy_public_filer_v1 = fence;
     p.sync_palw_legacy_public_filer_v1();
+    full_collateral_beside_lock_life(&mut p, at);
     if held {
         p.palw_legacy_held_da_v2 = fence;
         records.push(record(PalwG14GatedFenceV1::LegacyHeldDaV2, p.genesis.hash, at));
@@ -190,6 +203,47 @@ fn fp_recoverable_families_have_no_remaining_lg14a_dependency() {
     p.palw_staged_public_court_v1 = at;
     p.palw_staged_tir_route_v1 = at;
     p.palw_tir_public_conviction_v1 = at;
+    // Audit §10: the frame needs a measured cost model a record names (here the TEST-ONLY config and a test record).
+    let mut cost = kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    let PalwConsensusMode::ConsensusV2(t12_bundle) = &t12.palw_consensus_mode else { unreachable!() };
+    let horizon = t12_bundle.state.window_challenge_at(RELEASE) + t12_bundle.state.window_court();
+    // The longest accepted pursuit must end inside the liability horizon (external audit 10-17 §7 P0(3)): one DAA past it is refused.
+    cost.clock.maximum_door_daa = horizon + 1;
+    p.palw_tir_frame_cost_v1 = Some(cost);
+    let past = [kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1 {
+        version: kaspa_consensus_core::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
+        genesis: t12.genesis.hash,
+        activation_daa: RELEASE,
+        source_commit: [0x5C; 20],
+        measurement: [0x5D; 32],
+        review: [0x5E; 32],
+        cost,
+    }];
+    p.palw_g14_route_required_v1 = at;
+    p.sync_palw_g14_gates_v1();
+    let past_records: Vec<PalwG14ArmingRecordV1> = [
+        PalwG14GatedFenceV1::LegacyPublicFilerV1,
+        PalwG14GatedFenceV1::StagedPublicCourtV1,
+        PalwG14GatedFenceV1::StagedTirRouteV1,
+        PalwG14GatedFenceV1::TirPublicConvictionV1,
+        PalwG14GatedFenceV1::G14RouteRequiredV1,
+    ]
+    .into_iter()
+    .map(|fence| record(fence, t12.genesis.hash, RELEASE))
+    .collect();
+    let why = p.validate_palw_v2_with_arming_and_cost_records_v1(&past_records, &past).expect_err("door past the horizon");
+    assert!(format!("{why:?}").contains("liability horizon"), "{why:?}");
+    cost.clock.maximum_door_daa = horizon;
+    p.palw_tir_frame_cost_v1 = Some(cost);
+    let cost_records = [kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1 {
+        version: kaspa_consensus_core::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
+        genesis: t12.genesis.hash,
+        activation_daa: RELEASE,
+        source_commit: [0x5C; 20],
+        measurement: [0x5D; 32],
+        review: [0x5E; 32],
+        cost,
+    }];
     p.palw_g14_route_required_v1 = at;
     p.sync_palw_g14_gates_v1();
     let records: Vec<PalwG14ArmingRecordV1> = [
@@ -202,11 +256,14 @@ fn fp_recoverable_families_have_no_remaining_lg14a_dependency() {
     .into_iter()
     .map(|fence| record(fence, t12.genesis.hash, RELEASE))
     .collect();
-    p.validate_palw_v2_with_arming_records_v1(&records).unwrap_or_else(|e| panic!("the FP route ruleset validates with its records: {e:?}"));
+    p.validate_palw_v2_with_arming_and_cost_records_v1(&records, &cost_records)
+        .unwrap_or_else(|e| panic!("the FP route ruleset validates with its records: {e:?}"));
+    let why = p.validate_palw_v2_with_arming_records_v1(&records).expect_err("no pinned frame cost record");
+    assert!(format!("{why:?}").contains("TIR frame cost"), "{why:?}");
     // Without LG14-A's record the staged court's prerequisite cannot be armed (G-18 stands; only the record unlocks it).
     let without_filer: Vec<PalwG14ArmingRecordV1> =
         records.iter().copied().filter(|r| r.fence != PalwG14GatedFenceV1::LegacyPublicFilerV1).collect();
-    let why = p.validate_palw_v2_with_arming_records_v1(&without_filer).expect_err("LG14-A unrecorded");
+    let why = p.validate_palw_v2_with_arming_and_cost_records_v1(&without_filer, &cost_records).expect_err("LG14-A unrecorded");
     assert!(format!("{why:?}").contains("palw_legacy_public_filer_v1"), "{why:?}");
     let mirror = bundle(&p).state.g14_route_required_v1().expect("option (b)");
     eprintln!("[FP] route mirror at {RELEASE}: {mirror:?}");
@@ -535,6 +592,9 @@ fn g07_a_coalition_cannot_spend_the_outsiders_budget() {
 /// the outsider's dissection on the lying claim is then refused for capacity — while its reservation still holds that claim's `Final`.
 /// A per-bond budget or a partition does not stop a multi-bond coalition, and lifting the cap breaks the slot guarantee that keeps an
 /// honest mover from defaulting; closing it needs a measured per-block court budget or a priced slot (audit appendix C).
+///
+/// This pins the behaviour BELOW `palw_court_capacity_v1` (lane g14-court-capacity): past that fence the same 43rd prosecution queues
+/// under its deadline guarantee and is granted the first freed slot (`g14_court_capacity.rs`).
 #[test]
 fn g07_residual_the_network_court_cap_is_shared() {
     let probe = bundle(&palw_t12_launch_params_v1()).state;
@@ -651,6 +711,7 @@ fn genesis_ruleset(held: bool) -> Params {
     p.sync_palw_final_lock_life();
     p.palw_legacy_public_filer_v1 = at;
     p.sync_palw_legacy_public_filer_v1();
+    full_collateral_beside_lock_life(&mut p, 0);
     if held {
         p.palw_legacy_held_da_v2 = at;
     }

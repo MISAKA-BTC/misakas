@@ -98,6 +98,7 @@ impl PalwTirPublicClaimV1 {
             source_id: source.source_id_v1(),
             maximum_leaves: rules.maximum_leaves,
             native_config: rules.config,
+            native_clock: rules.clock,
             native_custodian_upper: rules.maximum_custodians,
             work_rules: Some(plan.owner_work.rules),
         };
@@ -177,6 +178,7 @@ impl PalwTirPublicClaimV1 {
             || d.header_digest != header_digest(&self.header)?
             || d.source_id != self.plan.source_id
             || d.native_config != self.plan.acquisition.config
+            || d.native_clock != self.plan.acquisition.clock
             || d.native_custodian_upper != p.maximum_custodians
             || d.work_rules != Some(self.plan.owner_work.rules)
             || d.maximum_leaves == 0
@@ -224,6 +226,18 @@ impl PalwTirPublicClaimV1 {
         maximum_leaves: u64,
     ) -> Result<PalwTirPublicSourceV1, String> {
         self.check_structure_v1(&self.key_v1())?;
+        self.source_identity_v1(record, layout, maximum_leaves)
+    }
+
+    /// **The rooted frame's source without re-checking the whole frame** (audit §10): the per-action path of an owner's acquisition
+    /// (Demand, answers, debits), on a frame the fold checked in full when it wrote it (install and every custody write) and the
+    /// state root authenticates since. Checks the class, layout, leaf ceiling and source identity it builds from.
+    pub fn source_identity_v1(
+        &self,
+        record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        maximum_leaves: u64,
+    ) -> Result<PalwTirPublicSourceV1, String> {
         if maximum_leaves != self.descriptor.maximum_leaves
             || record.facts.class_id != self.descriptor.class_id
             || record.layout_digest != self.descriptor.layout_digest
@@ -275,6 +289,21 @@ impl PalwTirPublicClaimV1 {
 /// residual: a colluder can pre-empt the slots by paying K owners' rent and deposit; slot recycling for idle owners is a
 /// follow-up decision (recorded in the remaining-work document).
 pub const PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1: u64 = 8;
+
+/// **Lane g14-court-capacity-r2: an admitted owner's tenure while others wait** — the larger of the idle grace and the frame's own
+/// Open window (`open_until − preparation_until`) over `2 × K_owner`, so the owner queue turns over at least `2 × K_owner` times
+/// inside the window: a verifier with `q` rows ahead of it is admitted within `⌈(q + 1) / K_owner⌉` tenures of its Open. Past
+/// `palw_court_capacity_v1` only (the fold's `rotate_owner_queue_v1`; a node's owner worker reads the same number).
+pub fn palw_tir_owner_tenure_v1(frame: &PalwTirPublicClaimV1, grace: u64) -> u64 {
+    let plan = frame.plan_v1();
+    palw_tir_owner_tenure_of_window_v1(plan.terms.open_until_daa.saturating_sub(plan.preparation_until_daa), grace)
+}
+
+/// [`palw_tir_owner_tenure_v1`] of an Open window — the ONE tenure rule: the fold's queue rotation reads it through the frame, and the
+/// frame's own door (`palw_tir_frame_cost_v1::tir_public_owner_queue_wait_v1`) reads it before the frame exists.
+pub fn palw_tir_owner_tenure_of_window_v1(open_window: u64, grace: u64) -> u64 {
+    grace.max(open_window / (2 * PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1)).max(1)
+}
 
 /// The bound on what one liable custodian of a frame can be asked to answer (see [`PalwTirPublicClaimV1::custodian_load_bound_v1`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -522,6 +551,7 @@ mod tests {
             dissection: true,
             prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+            clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
         };
         let PalwTirPublicAllocationQuoteV1::Complete(plan) =
             derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, None, None, rules).unwrap()
@@ -672,6 +702,7 @@ mod tests {
             dissection: true,
             prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+            clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
         };
         let PalwTirPublicAllocationQuoteV1::Complete(plan) =
             derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, None, None, rules).unwrap()

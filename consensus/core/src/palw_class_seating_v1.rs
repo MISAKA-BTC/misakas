@@ -111,7 +111,7 @@ pub(super) fn palw_base_population_v1<'a>(
     let cutoff = span_now.saturating_sub(1).saturating_mul(span_daa);
     let base = params.base_class_id();
     let floor = if activation_pool {
-        crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(params.min_collateral_sompi())
+        crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(params.min_collateral_sompi(), params.legacy_public_filer_active_at(daa))
     } else {
         params.min_collateral_sompi()
     };

@@ -2430,6 +2430,16 @@ pub struct Params {
     /// Original paid TIR public-conviction allocations and signed controls.
     /// Independent and dormant on every shipped preset; never reprices old claims.
     pub palw_tir_public_conviction_v1: Option<ForkActivation>,
+    /// **RFC-0002 / genesis 8 audit 02-A: a TIR class's `PALWART3` container identity** ([`crate::palw_tir_container_v1`]): past it
+    /// the registrant binds the class to the container whose root commits its inventory root and program (tag 175), and a framed
+    /// TIR claim of an unbound class is refused. Dormant (None) on every shipped preset; hashed Some-only.
+    pub palw_tir_container_identity_v1: Option<ForkActivation>,
+    /// **The TIR public frame's measured cost model** (G14 audit §10, [`crate::palw_tir_frame_cost_v1`]): the court config (windows,
+    /// margin, restarts, prices) and the measured clock (cost units per accepting action, full-frame passes, parallel inclusion
+    /// capacity) every frame of `palw_tir_public_conviction_v1` is priced and clocked with. `None` on every shipped preset; hashed
+    /// Some-only in both fingerprints. Arming the frame needs it AND a pinned frame cost record naming this network, height and
+    /// value (`PALW_TIR_FRAME_COST_RECORDS_V1`, empty); without it the frame route resolves no rules.
+    pub palw_tir_frame_cost_v1: Option<crate::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
     /// G14 greedy Float32 Constraint staged route (rooted f32 row court and Float32 sources).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_float_constraint_v1: Option<ForkActivation>,
@@ -3196,6 +3206,17 @@ pub struct Params {
     /// still void the claim. Keyed on the claim's acceptance DAA. `None` on every preset; hashed Some-only; refused when armed until
     /// its arm-readiness record is pinned.
     pub palw_reward_liability_horizon_v1: Option<ForkActivation>,
+    /// **palw_court_capacity_v1** — the audit's G-07 court capacity (user direction 2026-10-16, [`crate::palw_court_capacity_v1`]):
+    /// past it court admission reads the challenger's LG14-A reservation, a block's court operations are bounded by a deterministic
+    /// cost-unit budget, occupancy is time-priced (ρ_court × occupied DAA × weight, escrowed up front) and a reserved prosecution
+    /// queues under a deadline-aware worst-case guarantee instead of being refused at a fixed concurrency cap. Its policy values are
+    /// measured values. `None` on every preset; hashed Some-only with its policy; refused when armed until an arm-readiness record is
+    /// pinned, and never armable with the placeholder policy.
+    pub palw_court_capacity_v1: Option<crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1>,
+    /// **palw_unresolved_bound_v1** — RFC-0023 / ADR-0186 stage 1 ([`crate::palw_unresolved_bound_v1`]): an open claim ends the
+    /// resolved prefix only within its own liability bound; past it the claim keeps its liability, earns no credit, and no longer
+    /// holds the shared frontier. `None` on every preset; refused when armed.
+    pub palw_unresolved_bound_v1: Option<ForkActivation>,
     /// **palw_model_block_rights_v1** — RFC-0016 V+ ([`crate::palw_rfc0016_v1`]): past it a model-class Attempt is admitted only
     /// when it consumes one of its model's pre-issued per-epoch block rights (`⌊P_m · N_exp⌋`, the entrant reserve deducted from
     /// the fixed total; σ-capped mid-epoch reissue). **Dormant, with no activation height**: `None` on every preset and in no
@@ -3223,6 +3244,14 @@ pub struct Params {
     /// on every preset, Some-only in both fingerprints (lists and values beside the height), collapsed from `Some(never())`, refused
     /// when armed ([`Self::validate_palw_model_tier_v1`]).
     pub palw_model_tier_v1: Option<crate::palw_model_tier_v1::PalwModelTierFenceV1>,
+    /// **palw_detection_policy_v1** — G14 per-class detection policy ([`crate::palw_detection_policy_v1`]; external audit 2026-10-17
+    /// §7 P1): past it (keyed at the panel's bind DAA for a seat, the acceptance DAA for admission) a claim of a class is checked under
+    /// that class's policy — N from priced work, k from (ε, D_min) by the exact hypergeometric, the v2 post-commit draw distinct across
+    /// rounds, resources coupled to k — and refused when the class has none, when its collateral is below the deterrence bound or when
+    /// its draw does not fit the budgets. Below it the legacy `k = 4` draw is unchanged. **Dormant**: `None` on every preset, in no
+    /// flag-day list, Some-only in both fingerprints (each policy id beside the height), collapsed from `Some(never())`, refused when
+    /// armed ([`Self::validate_palw_detection_policy_v1`]).
+    pub palw_detection_policy_v1: Option<crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1>,
     /// **palw_dag_sibling_attribution_v1** — RFC-0018 §4 ([`crate::palw_rfc0018_v1`]): past it (the ACCEPTING block's DAA) the merged
     /// attempts of one chain block are admitted in a canonical order — a round robin over model classes, each class by
     /// `H(domain ‖ execution key)` — independent of GHOSTDAG colour and merge order, so which concurrent sibling wins a contended
@@ -4999,6 +5028,16 @@ impl Params {
     /// R-core+ (the conviction tiers, vesting and the exit-lock lattice a collectible debit needs) and ADR-0160's aggregate
     /// liability (the intent-class forfeiture and freeze that take a convicted producer's block opportunity, so admission and the
     /// producer's readiness refuse it). `None` on every shipped preset (the field is `None` there).
+    /// **The TIR container identity's effective fence** (02-A): the field on a `ConsensusV2` network whose TIR lane is armed,
+    /// `never()` read as absence. `None` on every shipped preset.
+    pub fn palw_tir_container_identity_v1_fence(&self) -> Option<ForkActivation> {
+        let never = ForkActivation::never();
+        match (&self.palw_consensus_mode, self.palw_tir_container_identity_v1.filter(|f| *f != never), self.palw_tir_v1.as_ref()) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(at), Some(_)) => Some(at),
+            _ => None,
+        }
+    }
+
     pub fn palw_tir_public_conviction_v1_fence(&self) -> Option<ForkActivation> {
         let never = ForkActivation::never();
         match (
@@ -5380,7 +5419,10 @@ impl Params {
         }
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return None };
         Some(crate::palw_panel_economy_v1::PalwSeatEconomyV1 {
-            panel_floor_sompi: crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(bundle.state.min_collateral_sompi()),
+            panel_floor_sompi: crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+                bundle.state.min_collateral_sompi(),
+                self.palw_legacy_public_filer_active_at(daa_score),
+            ),
             max_exposure_ratio_permille: bundle.state.fp_max_exposure_ratio_permille(),
             // ADR-0130: the floor where it is in force at the same score.
             reward_multiple_permille: self.palw_panel_reward_multiple_permille_at(daa_score),
@@ -6062,6 +6104,8 @@ impl Params {
             palw_staged_public_court_v1: self.palw_staged_public_court_v1,
             palw_staged_tir_route_v1: self.palw_staged_tir_route_v1,
             palw_tir_public_conviction_v1: self.palw_tir_public_conviction_v1,
+            palw_tir_container_identity_v1: self.palw_tir_container_identity_v1,
+            palw_tir_frame_cost_v1: self.palw_tir_frame_cost_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
@@ -6149,10 +6193,13 @@ impl Params {
             palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1: self.palw_g14_route_required_v1,
             palw_reward_liability_horizon_v1: self.palw_reward_liability_horizon_v1,
+            palw_court_capacity_v1: self.palw_court_capacity_v1,
+            palw_unresolved_bound_v1: self.palw_unresolved_bound_v1,
             palw_model_block_rights_v1: self.palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1: self.palw_model_eligibility_v1,
             palw_model_tier_v1: self.palw_model_tier_v1.clone(),
+            palw_detection_policy_v1: self.palw_detection_policy_v1.clone(),
             palw_dag_sibling_attribution_v1: self.palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1: self.palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2: self.palw_rule_e_participation_v2,
@@ -7224,6 +7271,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_container_identity_v1: None,
+    palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7307,10 +7356,13 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
+    palw_court_capacity_v1: None,
+    palw_unresolved_bound_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
     palw_model_tier_v1: None,
+    palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -7578,6 +7630,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_container_identity_v1: None,
+    palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7661,10 +7715,13 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
+    palw_court_capacity_v1: None,
+    palw_unresolved_bound_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
     palw_model_tier_v1: None,
+    palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -7914,6 +7971,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_container_identity_v1: None,
+    palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7997,10 +8056,13 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
+    palw_court_capacity_v1: None,
+    palw_unresolved_bound_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
     palw_model_tier_v1: None,
+    palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -13183,6 +13245,9 @@ pub fn palw_v2_params_on_base(
     // RFC-0006 R6-CELL round 4's coverage closure, likewise.
     params.sync_palw_cell_coverage_closure_v1();
     // The cross-lane G14 gates' mirrors (option (b) and the reward liability horizon), likewise.
+    // The court-capacity fence's mirror (read by option (b)'s route mirror below), likewise.
+    params.sync_palw_court_capacity_v1();
+    params.sync_palw_unresolved_bound_v1();
     params.sync_palw_g14_gates_v1();
     // RFC-0006's memory/routing court consumer v2, likewise.
     params.sync_palw_memory_routing_court_v2();
@@ -13197,6 +13262,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_model_eligibility_v1();
     // ADR-0179's model tiers, likewise.
     params.sync_palw_model_tier_v1();
+    // G14's per-class detection policy, likewise.
+    params.sync_palw_detection_policy_v1();
     // RFC-0018's mirror (sibling attribution, permissionless anchor, rule E v2, Gate C), likewise.
     params.sync_palw_rfc0018_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
@@ -13423,6 +13490,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
     palw_tir_public_conviction_v1: None,
+    palw_tir_container_identity_v1: None,
+    palw_tir_frame_cost_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -13524,10 +13593,13 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
     palw_reward_liability_horizon_v1: None,
+    palw_court_capacity_v1: None,
+    palw_unresolved_bound_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
     palw_model_tier_v1: None,
+    palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,

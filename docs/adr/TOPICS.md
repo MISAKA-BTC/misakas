@@ -101,6 +101,7 @@
 - [ADR-0173 — MISAKA's purpose: public-verifier dispute completeness](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)
 - [ADR-0180 — PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md)
 - [ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md)
+- [ADR-0187 — native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md)
 
 ## EVM / wallet
 
@@ -202,4 +203,5 @@
 - [ADR-0153 — (draft) — 2M verification by shards: the implementation plan](0153-2m-verification-sharding-plan.md)
 - [ADR-0166 — Verifier unavailability is not producer fraud](0166-verifier-unavailability-is-not-producer-fraud.md)
 - [ADR-0171 — Probabilistic constraint checks are the normal large-model verifier; the court resolves disputes exa](0171-probabilistic-constraint-checks-and-court-on-dispute.md)
+- [ADR-0183 — G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md)
 

@@ -51,6 +51,7 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
+import math
 import os
 import platform
 import shlex
@@ -124,6 +125,75 @@ def anon_env() -> dict:
     env.pop("HF_TOKEN", None)
     env.pop("HUGGING_FACE_HUB_TOKEN", None)
     return env
+
+
+def upload_refusal(fit: dict | None) -> str | None:
+    """**The upload gate (user decision 2026-10-18):** a genesis artifact is uploaded only after its fit was MEASURED and is
+    within tolerance — the short fit and the long-context fit both. "Not measured" (an evicted source, --no-fit, --no-fit-long,
+    a host too small) stops the run; it is never a pass. Returns the refusal, or None when the upload may proceed."""
+    fit = fit or {}
+    if not fit.get("measured"):
+        return f"the fit was not measured ({fit.get('reason', 'no fit recorded')}); a genesis upload needs a measured fit"
+    if not fit.get("within"):
+        return f"the fit is out of tolerance (KL {fit.get('kl_mean')}, top-1 {fit.get('top1_agreement')})"
+    long = fit.get("long")
+    if not isinstance(long, dict) or not long.get("measured"):
+        return f"the long-context fit was not measured ({(long or {}).get('reason', 'no long fit recorded')})"
+    if long.get("within") is not True:
+        return "the long-context fit is out of tolerance"
+    return None
+
+
+def a16_window_starts(context: int, count: int) -> list[int]:
+    if context < 64 or count < 2:
+        raise ValueError("A16 windows need a full 64-token window and at least two drift samples")
+    return sorted({i * (context - 64) // (count - 1) for i in range(count)})
+
+
+def a16_window_fit(report: dict, digest: str, context: int, tolerance: dict, window_count: int = 32) -> dict:
+    """Score sampled absolute-position windows; never describe these as every-position scores."""
+    starts = a16_window_starts(context, window_count)
+    calibration = report.get("calibration") or {}
+    if (context < 64 or report.get("sequence_tokens") != context
+            or report.get("a16_artifact_digest") != digest
+            or calibration.get("artifact_digest") != digest or calibration.get("n_ctx") != context
+            or calibration.get("schema") != "misaka-palw/a16-source-calibration/v1"):
+        raise ValueError("the A16 comparison does not name the converted artifact and whole context")
+    scale = calibration.get("logit_scale")
+    if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
+        raise ValueError("A16 physical logit scale is missing or invalid")
+    windows = report.get("windows") or []
+    if [w.get("window_start") for w in windows] != starts:
+        raise ValueError("missing, duplicated or foreign A16 comparison windows")
+    for w in windows:
+        kl = w.get("kl") or {}
+        if (w.get("window_len") != 64 or w.get("positions") != 64
+                or type(w.get("top1_agree")) is not int or not 0 <= w["top1_agree"] <= 64
+                or any(type(kl.get(k)) not in (int, float) or not math.isfinite(kl[k]) or kl[k] < 0 for k in ("mean", "max"))
+                or kl["max"] < kl["mean"]):
+            raise ValueError("incomplete or non-finite A16 window measurement")
+    early, late = windows[0]["kl"]["mean"], windows[-1]["kl"]["mean"]
+    ratio = late / early if early > 0 else None
+    if ratio is not None and not math.isfinite(ratio):
+        ratio = None
+    drift_ok = late <= tolerance["drift_floor_kl"] or (ratio is not None and ratio <= tolerance["drift_ratio_max"])
+    within = (all(w["kl"]["mean"] <= tolerance["window_kl_mean_max"]
+                  and w["top1_agree"] / 64 >= tolerance["top1_min"] for w in windows) and drift_ok)
+    first = windows[0]
+    long = {"measured": True, "within": within, "positions": 64 * len(windows), "sequence_tokens": context,
+            "measurement_scope": "absolute-position windows after advancing the whole prefix",
+            "kl_mean": sum(w["kl"]["mean"] for w in windows) / len(windows),
+            "kl_max": max(w["kl"]["max"] for w in windows),
+            "top1_agreement": sum(w["top1_agree"] for w in windows) / (64 * len(windows)),
+            "window_kl_mean_max": max(w["kl"]["mean"] for w in windows),
+            "drift_ratio": ratio, "kl_early": early, "kl_late": late, "windows": windows}
+    within = within and long["kl_mean"] <= tolerance["kl_mean_max"]
+    long["within"] = within
+    return {"measured": True, "within": within, "positions": 64,
+            "measurement_scope": "first absolute-position window of the held-out long sequence",
+            "kl_mean": first["kl"]["mean"], "kl_max": first["kl"]["max"],
+            "top1_agreement": first["top1_agree"] / 64, "artifact_digest": digest,
+            "tolerance": tolerance, "long": long}
 
 
 def upload_env() -> dict:
@@ -624,7 +694,7 @@ class Pipeline:
         needed = (["palwart"] if is_legacy_wrap(m) else ["qwen25-convert", "palwart"] if is_a16(m)
                   else ["qwen36-convert", "palwart"] if is_palwq36(m) else ["palw-tir-convert", "palwart"])
         if self.fit_plan(m)[0]:
-            needed.append("palw-tir-fidelity")
+            needed.append("qwen25-window-compare" if is_a16(m) else "palw-tir-fidelity")
         for t in needed:
             if not self.a.dry_run and not Path(self.tool(t)).is_file():
                 problems.append(f"binary {self.tool(t)} is missing (cargo build --release -p … --bin {t})")
@@ -1093,11 +1163,14 @@ class Pipeline:
         """#1: `qwen25-convert <src> --a16 --n-ctx N --out FILE` (the legacy base0 A16 converter; the width is part of the
         artifact digest). Reused when a previous run recorded this file. Returns what the manifest records."""
         prev = st.data.get("a16") or {}
+        calibration_report = d["base"] / "a16-calibration-report.json"
         if not self.a.dry_run and out.exists() and prev.get("sha256") and prev.get("n_ctx") == opts["n_ctx"] \
-                and sha256_file(out) == prev["sha256"]:
+                and sha256_file(out) == prev["sha256"] and calibration_report.exists() \
+                and sha256_file(calibration_report) == prev.get("calibration_report_sha256"):
             log(f"#{m['id']} A16 file {out.name} reused ({prev['sha256'][:16]}…)")
             return prev
-        argv = [self.tool("qwen25-convert"), str(d["src"]), "--a16", "--n-ctx", str(opts["n_ctx"]), "--out", str(out)]
+        argv = [self.tool("qwen25-convert"), str(d["src"]), "--a16", "--n-ctx", str(opts["n_ctx"]), "--out", str(out),
+                "--calibration-report", str(calibration_report)]
         if self.a.dry_run:
             self.r.run(argv)
             return {}
@@ -1113,6 +1186,9 @@ class Pipeline:
         info = {"n_ctx": opts["n_ctx"], "file": out.name, "bytes": out.stat().st_size, "sha256": sha256_file(out),
                 "artifact_digest": (pick("a16 artifact") or "").split()[0] or None,
                 "faithful": {k: pick(k) for k in ("a16 top-1 agree", "a16 top-5 contains", "a16 rank corr (100)", "a16 FAITHFUL")}}
+        if not calibration_report.exists():
+            raise SystemExit("qwen25-convert did not produce its artifact-bound calibration report")
+        info["calibration_report_sha256"] = sha256_file(calibration_report)
         st.data["a16"] = info
         st.save()
         return info
@@ -1199,8 +1275,7 @@ class Pipeline:
         if is_legacy_wrap(m):
             return False, "a wrapped legacy file: nothing was converted here"
         if is_a16(m):
-            return False, ("the A16 route's check is qwen25-convert's own FAITHFUL report over its 57-token prompt (in the manifest); "
-                           "no long-context check exists for the A16 engine")
+            return (False, "--no-fit or --no-fit-long") if self.a.no_fit or self.a.no_fit_long else (True, "")
         if is_palwq36(m):
             return False, ("PALWQ361 at 32K is not measurable on this Mac: no tool compares the legacy engine with the f32 reference "
                            "at windows along a long sequence (qwen36-run --reference scores the converter's 8-token prompt only), "
@@ -1233,6 +1308,12 @@ class Pipeline:
             if st.data.get("record") is not None:
                 st.data["record"]["fit"] = fit
             st.mark("fit", {"measured": False}, self.a.dry_run)
+            if not self.a.dry_run:
+                # User decision 2026-10-18: an unmeasured fit stops a genesis run; it never proceeds to the upload.
+                raise SystemExit(f"#{m['id']}: FIT NOT MEASURED ({why}) — the run stops; nothing is uploaded")
+            return
+        if is_a16(m):
+            self.fit_a16(m, st)
             return
         opts = effective_options(m, self.a.context)
         texts = self.reg["calibration_texts"]
@@ -1266,12 +1347,59 @@ class Pipeline:
         log(f"#{m['id']} fit: mean KL {kl}, top-1 {top1} (tolerance KL <= {tol['kl_mean_max']}, top-1 >= {tol['top1_min']})")
         if within:
             fit["long"] = self.fit_long(m, opts, d, model_path)
-            within = fit["long"].get("within", True)
+            within = fit["long"].get("within") is True
             fit["within"] = within
         if not within:
             st.save()
             raise SystemExit(f"#{m['id']}: FIT OUT OF TOLERANCE — the index, manifest and card are not uploaded "
                              f"(reports: {d['base'] / 'fit-report.json'}, {d['base'] / 'fit-long-report.json'})")
+        st.mark("fit", {"measured": True, "within": True})
+
+    def fit_a16(self, m: dict, st: State) -> None:
+        d = model_dirs(self.work, m)
+        opts = effective_options(m, self.a.context)
+        context = opts["n_ctx"]
+        spec = dict(self.reg["calibration_texts"]["long_evaluation"], len=context)
+        tokens_path = d["calib"] / "eval-a16-long-tokens.json"
+        token_meta = self.tokens_file(spec, d["src"] / "tokenizer.json", tokens_path)
+        flat = d["calib"] / "eval-a16-long-sequence.json"
+        report_path = d["base"] / "fit-a16-window-report.json"
+        calibration_report = d["base"] / "a16-calibration-report.json"
+        starts = a16_window_starts(context, spec["drift_windows"])
+        argv = [self.tool("qwen25-window-compare"), str(d["src"]), "--a16", str(d["legacy"] / opts["a16_file"]),
+                "--tokens", str(flat), "--window-len", "64", "--windows", ",".join(map(str, starts)),
+                "--calibration-report", str(calibration_report), "--control", "--out", str(report_path)]
+        if self.a.dry_run:
+            self.r.run(argv)
+            return
+        # Invalidate a stale prior score before the process can fail or be interrupted.
+        st.data["fit"] = {"measured": False, "reason": "A16 whole-prefix window comparison is pending"}
+        if st.data.get("record") is not None:
+            st.data["record"]["fit"] = st.data["fit"]
+        st.data.get("steps", {}).pop("fit", None)
+        st.save()
+        a16 = st.data.get("a16") or {}
+        if not calibration_report.exists() or sha256_file(calibration_report) != a16.get("calibration_report_sha256"):
+            raise SystemExit("A16 calibration report missing or changed; rerun conversion before fit")
+        sequences = json.loads(tokens_path.read_text())["sequences"]
+        if len(sequences) != 1:
+            raise SystemExit("A16 window fit requires exactly one pinned held-out sequence")
+        flat.write_text(json.dumps(sequences[0], separators=(",", ":")) + "\n")
+        self.r.run(argv, env=anon_env())
+        try:
+            fit = a16_window_fit(json.loads(report_path.read_text()), a16["artifact_digest"], context,
+                                 self.reg["calibration_texts"]["fit_tolerance"], spec["drift_windows"])
+        except (ValueError, KeyError, TypeError) as error:
+            raise SystemExit(f"A16 comparison report refused: {error}") from error
+        fit["evaluation_tokens_sha256"] = token_meta["tokens_sha256"]
+        fit["window_report_sha256"] = sha256_file(report_path)
+        fit["long"]["evaluation_tokens_sha256"] = token_meta["tokens_sha256"]
+        st.data["fit"] = fit
+        if st.data.get("record") is not None:
+            st.data["record"]["fit"] = fit
+        st.save()
+        if not fit["within"]:
+            raise SystemExit("A16 fit out of tolerance; no index or card is uploaded")
         st.mark("fit", {"measured": True, "within": True})
 
     def fit_long(self, m: dict, opts: dict, d: dict, model_path: Path) -> dict:
@@ -1370,10 +1498,12 @@ class Pipeline:
             return
         rec = st.data.get("record") or {}
         fit = st.data.get("fit") or {}
-        if fit.get("measured") and not fit.get("within"):
-            raise SystemExit(f"#{m['id']}: the fit is out of tolerance (KL {fit.get('kl_mean')}, top-1 {fit.get('top1_agreement')}); "
-                             "the index is not uploaded")
+        refusal = upload_refusal(fit)
+        if refusal is not None and not self.a.dry_run:
+            raise SystemExit(f"#{m['id']}: {refusal}; the index is not uploaded")
         if self.a.dry_run:
+            if refusal is not None:
+                log(f"#{m['id']} upload would be refused: {refusal}")
             self.ensure_repo(m)
             self.r.run([self.hf, "upload", m["target_repo"], "<stage dir>", m.get("upload_prefix", "").rstrip("/") or ".",
                         "--commit-message", f"genesis8 #{m['id']}: PALWART3 index and card"])

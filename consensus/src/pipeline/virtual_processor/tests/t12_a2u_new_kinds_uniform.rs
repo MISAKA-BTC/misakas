@@ -251,6 +251,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                         Some(kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at));
                 }
             }
+            // RFC-0002 02-A (tag 175): the TIR container binding, in force where the TIR lane is (`palw_tir_v1` is armed above).
+            PalwLifecycleKindFenceV1::TirContainerIdentityV1 => params.palw_tir_container_identity_v1 = Some(at),
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {
@@ -327,9 +329,12 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             // RFC-0017 (inner 74/75): a bare height, mirrored below.
             PalwKernelInnerFenceV1::ModelEligibilityV1 => params.palw_model_eligibility_v1 = Some(at),
+            // RFC-0016 V8 (inner 76): a bare height, mirrored below.
+            PalwKernelInnerFenceV1::ElasticCapacityV1 => params.palw_elastic_final_capacity_v1 = Some(at),
         }
     }
     params.sync_palw_model_eligibility_v1();
+    params.sync_palw_rfc0016_v1();
     params.sync_palw_claim_challenge_v2();
     params.sync_palw_econ_contracts_v1();
     params.sync_palw_permissionless_panel_v1();
