@@ -1691,3 +1691,11 @@ attempt は既存の `attempt_job_for_claim` で accepted block の job と prom
 Added `palw_service_gdn_e2e.rs`: write a tiny hybrid artifact with Qwen36Writer, carry a normal signed ClassRegistered through mempool/template, and independently resolve its backend through the node SDK loader and chain class resolver. This is the registration/holding foundation for the prosecution E2E; it does not demonstrate conviction or slash. Not yet built or run.
 
 The GDN fold and service-host builds were interrupted when available disk reached 24,974,090,240 bytes, below the 25 GB limit. Only our cargo processes 13968 / 16947 and their orphan compiler were interrupted. This is incomplete validation due to capacity, not a test failure or pass. TIR node tests, native G-N2, genesis #2 fit and run 12 remain running. Resume the same targeted commands after recovering capacity.
+
+### 15.6 Native anchor passes; inner-75 preflight disagrees with Gate C fold (2026-10-18)
+
+The funded/domain-corrected G-N2 run completed after 717.42s with 0 passed / 1 failed (`/tmp/codex-g14-native-funded-domain.log`). The anchor attempt was accepted at DAA 7635 with no skipped objects, and the mining certification row was drawn. The next carrier failed signature preflight because inner 75 was gated only by the disabled model-eligibility fence. The fold already dispatches an inner-75 attestation naming an existing claim certification row to Gate C first.
+
+Preflight now mirrors that existing dispatch: only when Gate C is active and a decoded certification row exists under the exact attested id (chain claim or native mining claim), it admits the claim attestation to ordinary signature/fold validation. Unknown ids still require the legacy eligibility fence. Neither model review nor a new interpretation of the wire kind is introduced; the existing claim dispatch becomes reachable. The node test also tries an unknown id and requires the old exam refusal, restoring its unspent fixture funding after the rejected carrier.
+
+Rerun queued in `/tmp/codex-g14-native-claim-attestation.log`; no PASS yet. The workspace was briefly moved to Trash and restored externally; all edits continue at the original path.

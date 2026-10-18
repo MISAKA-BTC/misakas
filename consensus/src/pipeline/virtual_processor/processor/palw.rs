@@ -6755,8 +6755,28 @@ impl VirtualStateProcessor {
         // unless that fence is in force** — below it a build without the kind refuses it at the kernel's decode, the block standing.
         // RFC-0015's registrations under a verification mode (inner 13 / 14) are `palw_panel_free_v1`'s: the network declares the OPV
         // policy or it does not; the ledger refuses the rest (admission, economics, carriers).
+        // Inner 75 already dispatches claim certification before legacy model exams in
+        // the fold. Mirror that exact existing-row distinction at signature preflight.
+        // An unknown id still belongs to the disabled eligibility-exam route.
+        let claim_certification_attestation = match &object {
+            misaka_palw_kernel::route::KernelRouteObjectV1::AttestEligibilityExamV1 { attestation }
+                if self.palw_state_params_v2.as_ref().is_some_and(|p| {
+                    p.rfc0018_v1().is_some_and(|m| m.gate_c_at(daa_score))
+                }) => {
+                    use kaspa_consensus_core::palw_security_certification_v1::{
+                        PALW_SECURITY_CERTIFICATION_TABLE_V1, PalwClaimCertificationRowV1,
+                        certification_claim_key_v1, certification_native_key_v39,
+                    };
+                    state.kernel_route_state_v1().is_some_and(|route| {
+                        [certification_claim_key_v1(&attestation.exam), certification_native_key_v39(&attestation.exam)]
+                            .iter().any(|key| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, key).is_some())
+                    })
+                }
+            _ => false,
+        };
         if let Some(fence) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_kernel_route_inner_fence_v1(&object)
             && !self.palw_kernel_inner_fence_at(fence, daa_score)
+            && !claim_certification_attestation
         {
             return Err(match fence {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ClaimChallengeV2 => {

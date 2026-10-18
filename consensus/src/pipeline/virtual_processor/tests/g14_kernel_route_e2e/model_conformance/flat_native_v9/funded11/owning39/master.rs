@@ -448,6 +448,16 @@ async fn attest_all(net: &mut Net, c: &NativeMiningClaimRecordV39, except: &[usi
             transcript: [0xA0 | card as u8; 64],
             claim_mismatches: vec![],
         };
+        if cards.is_empty() {
+            let mut unknown = attestation.clone();
+            unknown.exam = [0xFD; 64];
+            let object = net.route(card, &K::AttestEligibilityExamV1 { attestation: unknown });
+            let funding = net.funding[card].clone();
+            let tx = net.carrier(card, &object);
+            let error = net.mempool(&tx).expect_err("unknown ids cannot reopen the disabled model-exam route");
+            net.funding[card] = funding;
+            assert!(error.to_string().contains("eligibility exam object is refused"), "unexpected refusal: {error}");
+        }
         let o = net.route(card, &K::AttestEligibilityExamV1 { attestation });
         net.send(vec![(card, o)]).await;
         cards.push(card);
