@@ -228,9 +228,25 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 
 ---
 
+## 9. モデルの二階層とモデル審査の不採用（2026-10-15、ユーザー凍結前提）
+
+**モデル単位の検証・審査は採用しない。** モデルの検証で何を信頼するかという問題は解決しないため、審査・再審や代替のモデル評価制度を追加しない。この節は、旧文書のモデル資格審査・Probation・昇格・更新・失効・試行手数料や、モデル審査の合格を登録・配分の前提とする記述に優先する。
+
+- genesis と年次フォーク（年1回程度のソフト/ハードフォーク）で指定されたモデルは **1.0**。
+- 後から登録したモデルは、登録した時点から審査なしで **0.3** に固定する。昇格・更新・失効・試行手数料はない。
+- 後から登録したモデルが 1.0 になる経路は、年次フォークでの指定だけである。
+- **claim 単位の検証は全モデルで維持する。** court、Gate C / SecurityCertified、claim ごとの抽選検証者認証を、モデルの階層を理由に省略しない。1.0 という指定自体は claim の正しさの承認ではない。
+- material のデータ同一性、claim の実行条件・取得・資源上限の確認を、モデル単位の資格審査や階層の変更に転用しない。§8 の禁止と認証の前提も引き続き適用する。
+
+この節はユーザーの決定の記録である。RFC-0016・0017・ADR の実装作業は Claude の担当であり、RFC-0006〜0008・0012 の作業で引き取らない。
+
+---
+
 ## 付録 — この前提が現在の作業をどう縛るか (Lead, 2026-10-09)
 
 This appendix records where the principle already decides open work. It is a pointer, not part of the principle.
+
+**2026-10-15 追補:** 以下の旧モデル資格・Probation に関する説明は §9 により置き換えられた。モデル審査や審査合格による配分開始の要件として用いない。claim 単位の検証と裁定・資源の条件は全モデルに維持する。
 
 - **§6 is the gate for earning.** A class, kernel or plan that does not meet all seven conditions may stay registered, but it earns no reward and no consensus work weight. The devnet showed that the V2 lifecycle today lets a class reach Probation on seat readiness alone. Closing that is a release blocker (readiness matrix, "G14-for-rewards").
 - **§2 and §4 decide the real-scale question** for large models, where reading a whole claim is not feasible (the soundness review dossier's SG-06 and reviewer question Q-01). A plan earns only if:
