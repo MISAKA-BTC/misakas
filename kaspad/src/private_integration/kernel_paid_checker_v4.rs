@@ -23,7 +23,9 @@ use misaka_palw_kernel::{
 };
 use misaka_palw_sdk::claim_paid_v2::{
     VerifiedPaidClaimSourcesV2, paid_claim_round_sources_from_route_v3, paid_claim_sources_from_route_v2,
-    private_bootstrap::ProgramPaidBootstrapWorkV3, provider_reader_v4::ProviderReaderLimitsV4,
+    private_bootstrap::ProgramPaidBootstrapWorkV3,
+    provider_actions_v4::{objective_action_from_provider_check_v4, sign_provider_objective_action_v4},
+    provider_reader_v4::ProviderReaderLimitsV4,
 };
 use std::{
     fs::{self, OpenOptions},
@@ -54,6 +56,9 @@ pub struct PrivateKernelPaidCheckSpecV4 {
     max_total_fetch_bytes: u64,
     max_workspace_bytes: u64,
     max_requests: u32,
+    /// Explicit permission for a funded answer obligation after a classified
+    /// remote acquisition failure. No value is inferred from a local timeout.
+    challenge_valid_until_daa: Option<u64>,
     #[serde(skip)]
     _owner: Option<NativeDemandLeaseV1>,
 }
@@ -203,6 +208,130 @@ fn receipt_from_saved(object: &PalwConsensusObjectV2, checker: PalwBondKeyV2) ->
         _ => Err("checker WAL is not a paid seat receipt".into()),
     }
 }
+fn saved_kernel_object(object: &PalwConsensusObjectV2, actor: PalwBondKeyV2) -> Result<NativeRetainedV1<KernelRouteObjectV1>, String> {
+    let PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, .. } = object else {
+        return Err("checker saved action is not a kernel carrier".into());
+    };
+    if *signer != actor {
+        return Err("checker saved action signer differs".into());
+    }
+    let raw = bytes.get(1..).ok_or("checker saved action route version absent")?;
+    preflight_native_value_v1::<KernelRouteObjectV1>(raw, raw.len() as u64).map_err(|e| e.to_string())?;
+    retain_native_value_decode_v1(raw, || KernelRouteObjectV1::decode(bytes)).map_err(|e| e.to_string())
+}
+fn validate_saved_object(
+    object: &PalwConsensusObjectV2,
+    actor: PalwBondKeyV2,
+    base: Digest,
+    enrollment: Digest,
+    round: u32,
+    source: &VerifiedPaidClaimSourcesV2,
+    provider: PalwBondKeyV2,
+    valid_until: Option<u64>,
+) -> Result<(), String> {
+    if let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, .. } = object {
+        let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
+            root,
+            consent,
+            provider: p,
+            dependency,
+            valid_until_daa,
+            ..
+        } = &**action
+        else {
+            return Err("checker WAL is not its explicitly funded current-generation challenge".into());
+        };
+        if *signer != actor
+            || *root != Hash64::from_bytes(base)
+            || *dependency != Hash64::from_bytes(base)
+            || *consent != Hash64::from_bytes(source.authority().enrollment.material_consent)
+            || *p != provider
+            || Some(*valid_until_daa) != valid_until
+        {
+            return Err("checker material challenge WAL differs from explicit exact generation/actor/deadline".into());
+        }
+        return Ok(());
+    }
+    let decoded = saved_kernel_object(object, actor)?;
+    let bond = palw_kernel_bond_id_v1(&actor);
+    match &*decoded {
+        KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::Receipt { .. } | PaidClaimObjectV2::RoundReceipt { .. } } => {
+            let receipt = receipt_from_saved(object, actor)?;
+            if receipt.enrollment != enrollment
+                || receipt.round != round
+                || receipt.assignment != source.lock().assignment
+                || receipt.source_context != source.lock().context
+                || receipt.sample_seed != source.lock().seed
+                || receipt.signer != bond
+            {
+                return Err("checker receipt WAL belongs to another source/assignment; retained without rebinding".into());
+            }
+        }
+        KernelRouteObjectV1::FileProof { accuser, claim, .. } if *accuser == bond && *claim == base => {}
+        KernelRouteObjectV1::FileDemand { demander, claim, stage, .. } if *demander == bond && *claim == base && *stage < 254 => {}
+        _ => return Err("checker WAL is not this actor's exact claim receipt/objective filing".into()),
+    }
+    Ok(())
+}
+fn court_action_accepted(
+    route: &PalwKernelRouteStateV1,
+    object: &PalwConsensusObjectV2,
+    actor: PalwBondKeyV2,
+    base: Digest,
+) -> Result<bool, String> {
+    if let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, .. } = object {
+        let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
+            root,
+            provider,
+            dependency,
+            stage,
+            position,
+            ..
+        } = &**action
+        else {
+            return Ok(false);
+        };
+        if *signer != actor || *root != Hash64::from_bytes(base) || *dependency != Hash64::from_bytes(base) {
+            return Err("checker saved material challenge identity differs".into());
+        }
+        let raw = route
+            .aux
+            .iter()
+            .find(|((table, key), _)| {
+                *table == kaspa_consensus_core::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_TABLE_V1
+                    && key.as_slice() == root.as_byte_slice()
+            })
+            .map(|(_, bytes)| bytes.as_slice());
+        let Some(raw) = raw else { return Ok(false) };
+        preflight_native_value_v1::<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>(raw, raw.len() as u64)
+            .map_err(|e| e.to_string())?;
+        let row = retain_native_value_decode_v1(raw, || {
+            borsh::from_slice::<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>(raw)
+        })
+        .map_err(|e| e.to_string())?;
+        return Ok(row.challenges.iter().any(|c| {
+            c.provider == *provider
+                && c.dependency == *dependency
+                && c.stage == *stage
+                && c.position == *position
+                && c.challenger == actor
+        }));
+    }
+    let decoded = saved_kernel_object(object, actor)?;
+    match &*decoded {
+        KernelRouteObjectV1::FileProof { claim, accuser, .. } if *claim == base && *accuser == palw_kernel_bond_id_v1(&actor) => {
+            let ledger = route.ledger()?;
+            Ok(ledger.claims.get(&base).is_some_and(|row| row.convicted))
+        }
+        KernelRouteObjectV1::FileDemand { claim, demander, stage, position }
+            if *claim == base && *demander == palw_kernel_bond_id_v1(&actor) =>
+        {
+            let ledger = route.ledger()?;
+            Ok(ledger.demands.get(&(base, *stage, *position)).is_some_and(|row| row.demanders.iter().any(|(d, _)| d == demander)))
+        }
+        _ => Ok(false),
+    }
+}
 impl PreparedKernelPaidCheckV4 {
     pub fn start(self) -> Result<(), String> {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
@@ -273,6 +402,15 @@ impl PreparedKernelPaidCheckV4 {
             if a.enrollment.base_claim != base {
                 return Err("checker opening belongs to another enrolled claim".into());
             }
+            if let Some(signed) = &object {
+                if court_action_accepted(&route, signed, self.checker, base)? {
+                    kaspa_core::info!(
+                        "private objective court action accepted: {} (not a computation approval)",
+                        self.spec.enrollment
+                    );
+                    return Ok(());
+                }
+            }
             if receipt_accepted(&route, &a, self.spec.round, palw_kernel_bond_id_v1(&self.checker))? {
                 kaspa_core::info!(
                     "private selected checker receipt accepted: {} round {} (not aggregate Final)",
@@ -304,6 +442,7 @@ impl PreparedKernelPaidCheckV4 {
                 ));
             }
             if object.is_none() {
+                let failure = std::cell::RefCell::new(None);
                 let query = |stage, position| {
                     let query = PalwKernelMaterialUnitQueryV4 {
                         version: 4,
@@ -315,7 +454,15 @@ impl PreparedKernelPaidCheckV4 {
                         position,
                     };
                     let authority = api.palw_kernel_material_query_authority_v4(&query, self.checker, self.key.public_key())?;
-                    client.as_ref().ok_or("explicit checker query client absent")?.fetch_kernel_material_unit_v4(&query, &authority)
+                    client
+                        .as_ref()
+                        .ok_or("explicit checker query client absent")?
+                        .fetch_kernel_material_unit_classified_v4(&query, &authority)
+                        .map_err(|error| {
+                            let message = error.to_string();
+                            *failure.borrow_mut() = Some((query, error));
+                            message
+                        })
                 };
                 let limits = ProviderReaderLimitsV4 {
                     max_unit_bytes: self.spec.max_unit_bytes,
@@ -323,7 +470,7 @@ impl PreparedKernelPaidCheckV4 {
                     max_workspace_bytes: self.spec.max_workspace_bytes,
                     max_units: self.spec.max_requests,
                 };
-                let checked = if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
+                let checked_result = if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
                     let policy =
                         self.config.params.palw_claim_compact_v4.as_ref().ok_or("checker compact private policy absent")?.policy;
                     source.verify_compact_using_provider_v4(
@@ -335,22 +482,36 @@ impl PreparedKernelPaidCheckV4 {
                     )
                 } else {
                     source.verify_using_provider_v4(&work.material, limits, query)
-                }
-                .map_err(|e| e.to_string())?;
-                let now = api.get_virtual_daa_score();
-                let inner = checked.receipt(&source, palw_kernel_bond_id_v1(&self.checker), now).map_err(|e| e.to_string())?;
-                // The receipt is fixed-width. Reserve inner/outer bytes and
-                // MLDSA output before signing; the independently held checker
-                // acquisition owner remains alive until this operation ends.
-                let n = borsh::object_length(&inner).map_err(|e| e.to_string())? as u64;
-                let _sign = reserve_native_requests_v1(
-                    n.checked_mul(4)
-                        .and_then(|n| n.checked_add(kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64))
-                        .ok_or("checker signing size overflow")?,
-                )
-                .map_err(|e| e.to_string())?;
-                let signed = misaka_palw_sdk::claim_paid_v2::sign_paid_claim_object_v2(&self.key, domain, self.checker, &inner)?;
-                let signed = NativeRetainedV1::retain_existing_v1(signed).map_err(|e| e.to_string())?;
+                };
+                let signed = match checked_result {
+                    Ok(checked) => {
+                        let action =
+                            objective_action_from_provider_check_v4(&source, &checked, self.checker, api.get_virtual_daa_score(), 0)
+                                .map_err(|e| e.to_string())?;
+                        sign_provider_objective_action_v4(&self.key, domain, self.checker, &action).map_err(|e| e.to_string())?
+                    }
+                    Err(error) => {
+                        use kaspa_consensus_core::palw_kernel_material_query_v4::{
+                            PalwKernelMaterialFetchErrorV4 as E, monetary_material_challenge_object_v4,
+                        };
+                        let Some((unit, cause)) = failure.into_inner() else { return Err(error.to_string()) };
+                        if !matches!(cause, E::Unavailable(_) | E::InvalidMaterial(_)) {
+                            return Err(format!("provider acquisition {cause}; no provider obligation or conviction"));
+                        }
+                        let until = self.spec.challenge_valid_until_daa.ok_or_else(|| {
+                            format!("provider unit {}:{}: {cause}; no explicit answer-obligation deadline", unit.stage, unit.position)
+                        })?;
+                        if until <= api.get_virtual_daa_score() {
+                            return Err("explicit material challenge deadline already expired".into());
+                        }
+                        // Reacquire exact native generation before signing. A
+                        // failed local quota/Unknown never enters this branch.
+                        api.palw_kernel_material_query_authority_v4(&unit, self.checker, self.key.public_key())?;
+                        monetary_material_challenge_object_v4(domain, &unit, until, self.checker, |message, context| {
+                            Some(self.key.sign_with_context(message, context).to_vec())
+                        })?
+                    }
+                };
                 if !matches!(api.palw_object_rehearsal_v1(&signed), Some(PalwObjectRehearsalV1::Accepted)) {
                     continue;
                 }
@@ -358,25 +519,48 @@ impl PreparedKernelPaidCheckV4 {
                 object = Some(signed);
             }
             let signed = object.as_ref().ok_or("checker receipt WAL absent")?;
-            let receipt = receipt_from_saved(signed, self.checker)?;
-            if receipt.enrollment != enrollment
-                || receipt.round != self.spec.round
-                || receipt.assignment != source.lock().assignment
-                || receipt.source_context != source.lock().context
-                || receipt.sample_seed != source.lock().seed
-                || receipt.signer != palw_kernel_bond_id_v1(&self.checker)
-            {
-                return Err("checker WAL belongs to a different native source/assignment; retained without rebinding".into());
-            }
-            let PalwConsensusObjectV2::KernelRouteV1 { bytes, signature, .. } = &**signed else { unreachable!() };
-            let message = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_message_v1(domain, &self.checker, bytes);
-            if !kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3(
-                self.key.public_key(),
-                message.as_byte_slice(),
-                signature,
-                kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
-            ) {
-                return Err("checker WAL signature differs from configured native key".into());
+            validate_saved_object(
+                signed,
+                self.checker,
+                base,
+                enrollment,
+                self.spec.round,
+                &source,
+                self.provider,
+                self.spec.challenge_valid_until_daa,
+            )?;
+            let signature_ok = match &**signed {
+                PalwConsensusObjectV2::KernelRouteV1 { bytes, signature, .. } => {
+                    let message =
+                        kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_message_v1(domain, &self.checker, bytes);
+                    kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3(
+                        self.key.public_key(),
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
+                    )
+                }
+                PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signature, .. } => {
+                    let _payload = reserve_native_requests_v1(borsh::object_length(&**action).map_err(|e| e.to_string())? as u64)
+                        .map_err(|e| e.to_string())?;
+                    let payload = borsh::to_vec(&**action).map_err(|e| e.to_string())?;
+                    let message = kaspa_consensus_core::palw_provider_court_v1::palw_provider_court_message_v1(
+                        domain,
+                        242,
+                        &self.checker,
+                        &payload,
+                    );
+                    kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3(
+                        self.key.public_key(),
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_provider_court_v1::PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1,
+                    )
+                }
+                _ => false,
+            };
+            if !signature_ok {
+                return Err("checker WAL signature differs from configured native key/purpose".into());
             }
             if !matches!(api.palw_object_rehearsal_v1(signed), Some(PalwObjectRehearsalV1::Accepted)) {
                 continue;
@@ -458,3 +642,6 @@ impl PreparedKernelPaidCheckV4 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

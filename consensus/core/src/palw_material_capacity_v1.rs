@@ -40,6 +40,8 @@ pub struct PalwMaterialManifestV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwMaterialCapacityErrorV1 {
+    #[error("local native material resource: {0}")]
+    LocalResource(crate::palw_native_resource_v1::NativeCoverageV1),
     #[error("material exceeds its signed byte/unit/scope capacity")]
     Capacity,
     #[error("material is missing a required original/continuation/unit")]
@@ -515,6 +517,38 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         }
         .map_err(|_| PalwMaterialCapacityErrorV1::Capacity)?;
         self.admit_verified(consent, material.manifest(), max_bytes, total_capacity, vec![(scope, bytes)])
+    }
+    fn admit_replacement_kernel_v4(
+        &mut self,
+        consent: Hash64,
+        material: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+        bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        max_bytes: u64,
+        total_capacity: u64,
+    ) -> Result<(), PalwMaterialCapacityErrorV1> {
+        let crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4::TypedKernelV4(bundle) = bundle else {
+            return Err(PalwMaterialCapacityErrorV1::Substitution);
+        };
+        let scope = bundle.verify(material.candidate_ledger(), max_bytes)?;
+        let raw = borsh::to_vec(bundle).map_err(|_| PalwMaterialCapacityErrorV1::Capacity)?;
+        self.admit_verified(consent, material.manifest(), max_bytes, total_capacity, vec![(scope, raw)])
+    }
+    fn discard_expired_kernel_capsule_v4(
+        &mut self,
+        capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+        mut native: impl FnMut(&crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2) -> Result<bool, String>,
+    ) -> Result<bool, PalwMaterialCapacityErrorV1> {
+        let (enrollment, consent, _) = crate::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(capsule)
+            .map_err(PalwMaterialCapacityErrorV1::Authentication)?;
+        let Some((_, manifest, _)) = self.contracts.get(&consent) else { return Ok(false) };
+        if enrollment.terms.material_manifest.as_ref() != Some(manifest) || enrollment.terms.root != manifest.root {
+            return Err(PalwMaterialCapacityErrorV1::Substitution);
+        }
+        if !native(capsule).map_err(PalwMaterialCapacityErrorV1::Authentication)? {
+            return Ok(false);
+        }
+        self.contracts.remove(&consent);
+        Ok(true)
     }
     pub fn answer_action(
         &self,

@@ -669,6 +669,7 @@ pub mod palw_step_leg;
 /// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
 pub mod palw_step_refute;
 pub mod palw_gdn_state_map_v2;
+pub mod palw_gdn_court_v2;
 pub mod palw_task_heads_v1;
 pub mod palw_terminal;
 pub mod palw_terminal_carriage_v1;
@@ -988,3 +989,5 @@ pub mod palw_kernel_material_context_v4;
 pub mod palw_kernel_producer_candidate_v4;
 
 pub mod palw_kernel_material_query_v4;
+
+pub mod palw_kernel_material_replacement_v4;

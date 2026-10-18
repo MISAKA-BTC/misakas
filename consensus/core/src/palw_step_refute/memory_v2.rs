@@ -12,6 +12,9 @@ use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, TirN
 use crate::palw_state_chunk_map as maps;
 use crate::palw_step_leg as leg;
 
+mod capture;
+pub use capture::gdn_refutation_from_capture_v2;
+
 pub const PALW_GDN_STEP_EVIDENCE_VERSION_V2: u16 = 2;
 
 /// Merkle membership of existing state bytes. This is not a proof of the
@@ -573,4 +576,4 @@ pub fn check_gdn_step_refutation_v2(
 
 #[cfg(test)]
 #[path = "memory_v2_tests.rs"]
-mod tests;
+pub(crate) mod tests;

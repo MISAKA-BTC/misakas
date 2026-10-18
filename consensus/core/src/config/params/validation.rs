@@ -207,6 +207,7 @@ impl Params {
         self.validate_palw_2026_10_12_ruling_fences_v1()?;
         // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed.
         self.validate_palw_cell_coverage_closure_v1()?;
+        self.validate_palw_memory_routing_court_v2()?;
         // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
         self.validate_palw_model_eligibility_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
@@ -2846,11 +2847,12 @@ impl Params {
             ("palw_staged_float_constraint_v1", self.palw_staged_float_constraint_v1, self.palw_staged_float_constraint_v1_fence()),
         ] {
             let Some(fence) = fence.filter(|f| *f != ForkActivation::never()) else { continue };
-            if armed.is_none()
-                || !self.palw_staged_public_court_v1_fence().is_some_and(|court| court.daa_score() <= fence.daa_score())
+            if armed.is_none() || !self.palw_staged_public_court_v1_fence().is_some_and(|court| court.daa_score() <= fence.daa_score())
             {
                 let _ = name;
-                return Err(InvalidParams("a staged route extension requires ConsensusV2 and palw_staged_public_court_v1 at or below it"));
+                return Err(InvalidParams(
+                    "a staged route extension requires ConsensusV2 and palw_staged_public_court_v1 at or below it",
+                ));
             }
         }
         Ok(())

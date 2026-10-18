@@ -10,12 +10,13 @@ use kaspad_lib::{
     args::Args,
     daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
     private_integration::{
-        PrivateKernelPaidCheckSpecV4, PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4,
-        create_private_integration_core_with_kernel_paid_consumers_v4, create_private_integration_core_with_native_custody_v3,
-        create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
-        export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
-        export_private_paid_program_work_v3, prepare_private_integration_probe, private_complete_check_params_v1,
-        private_native_settlement_params_v1, private_paid_claim_params_v3, private_paid_claim_params_v4, private_probe_manifest,
+        PrivateKernelMaterialReplacementSpecV4, PrivateKernelPaidCheckSpecV4, PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3,
+        PrivateRecoveryAckFeeSpecV4, create_private_integration_core_with_kernel_paid_replacement_v4,
+        create_private_integration_core_with_native_custody_v3, create_private_integration_core_with_native_custody_v4,
+        create_private_integration_core_with_runtime, export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3,
+        export_private_paid_bootstrap_v4, export_private_paid_program_work_v3, prepare_private_integration_probe,
+        private_complete_check_params_v1, private_native_settlement_params_v1, private_paid_claim_params_v3,
+        private_paid_claim_params_v4, private_probe_manifest,
     },
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
@@ -41,6 +42,8 @@ paid-v4 hosted providers additionally require an explicit ACK carrier fee payer:
     separate producer carrier payer/funding and input/material/workspace/fee limits; never native acceptance by itself)
   --private-probe-kernel-paid-check=ABSOLUTE_JSON (explicit assigned checker bond/key, provider endpoint,
     acquisition limits and separate receipt payer/funding; checker-only mode needs no producer exchange)
+  --private-probe-kernel-material-replacement=ABSOLUTE_JSON (original producer's explicit replacement sender,
+    immutable context/bundle/intent, input byte/heap limits and durable proposal WAL; provider funds its carrier)
 Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
 --nodnsseed --outpeers=0 --disable-upnp. Ordinary node flags are parsed by the shipped Args parser.
 The manifest exposes exact policy/monetary identity and releaseApproval=false; it does not prove
@@ -90,6 +93,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-native-recovery-providers"
                         | "--private-probe-kernel-paid-work"
                         | "--private-probe-kernel-paid-check"
+                        | "--private-probe-kernel-material-replacement"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -170,6 +174,21 @@ fn run(raw: Vec<String>) -> Result<(), String> {
                 return Err("kernel checker specification path must be absolute".into());
             }
             PrivateKernelPaidCheckSpecV4::read(path)
+        })
+        .transpose()?;
+    let kernel_replacement_file = flags.values.remove("--private-probe-kernel-material-replacement");
+    if kernel_replacement_file.is_some()
+        && (profile != "paid-v4" || native.is_none() || flags.print || bootstrap.is_some() || paid_output.is_some())
+    {
+        return Err("kernel material replacement requires an explicit paid-v4 custody producer node".into());
+    }
+    let kernel_replacement = kernel_replacement_file
+        .map(|file| {
+            let path = Path::new(&file);
+            if !path.is_absolute() {
+                return Err("kernel material replacement specification path must be absolute".into());
+            }
+            PrivateKernelMaterialReplacementSpecV4::read(path)
         })
         .transpose()?;
     if !recovery_providers.is_empty()
@@ -263,8 +282,8 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .filter(|n| *n > 0)
         .ok_or("private file descriptor budget exhausted")?;
     let runtime = Runtime::from_args(&args);
-    let (core, rpc) = if kernel_work.is_some() || kernel_checker.is_some() {
-        create_private_integration_core_with_kernel_paid_consumers_v4(
+    let (core, rpc) = if kernel_work.is_some() || kernel_checker.is_some() || kernel_replacement.is_some() {
+        create_private_integration_core_with_kernel_paid_replacement_v4(
             &runtime,
             &args,
             budget,
@@ -274,6 +293,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             recovery_providers,
             kernel_work,
             kernel_checker,
+            kernel_replacement,
         )?
     } else {
         match native {

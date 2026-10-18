@@ -685,7 +685,8 @@ impl LoopbackNativeProviderV3 {
         let api = self.consensus_manager.consensus().unguarded_session_blocking();
         let applied = match row.purpose {
             NativeCarrierPurposeV4::Enrollment { root, consent, recovery, until_daa, .. }
-            | NativeCarrierPurposeV4::KernelEnrollmentV4 { root, consent, recovery, until_daa } => {
+            | NativeCarrierPurposeV4::KernelEnrollmentV4 { root, consent, recovery, until_daa }
+            | NativeCarrierPurposeV4::KernelReplacementV4 { root, consent, recovery, until_daa } => {
                 api.palw_material_recovery_enrollment_finalized_v4(root, consent, recovery)?
                     || api.palw_material_recovery_finalized_daa_v4()?.is_some_and(|daa| daa > until_daa)
             }
@@ -977,6 +978,25 @@ fn request_nonce_v3(body: &[u8]) -> [u8; 32] {
 }
 
 impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
+    fn replace_kernel_material_v4(
+        &self,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+        grant: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+    ) -> Result<(), String> {
+        self.replace_kernel_v4(context, bundle, intent, grant)
+    }
+    fn fetch_kernel_material_unit_classified_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        authority: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>,
+        kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4,
+    > {
+        self.fetch_kernel_classified_v4(query, authority)
+    }
     fn fetch_kernel_material_unit_v4(
         &self,
         query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
@@ -1123,6 +1143,10 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
     }
     if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialQueryV4 {
         kernel_query_v4::handle_query_v4(&mut stream, service, &request);
+        return;
+    }
+    if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialReplacementV4 {
+        kernel_replacement_v4::handle_replacement_v4(&mut stream, service, &request);
         return;
     }
     let native = match service.authenticate(&request) {
@@ -1555,3 +1579,6 @@ mod recovery_runtime_v4;
 
 #[path = "native_kernel_material_query_v4.rs"]
 mod kernel_query_v4;
+
+#[path = "native_kernel_material_replacement_v4.rs"]
+mod kernel_replacement_v4;

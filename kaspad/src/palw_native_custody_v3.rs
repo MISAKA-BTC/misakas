@@ -96,6 +96,29 @@ pub trait NativeReadyExchangeV3: Send + Sync {
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>, String> {
         Err("explicit authenticated kernel material reader unavailable".into())
     }
+    /// Legacy adapters cannot attribute their String error to a provider.
+    fn fetch_kernel_material_unit_classified_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        authority: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>,
+        kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4,
+    > {
+        self.fetch_kernel_material_unit_v4(query, authority)
+            .map_err(kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4::Unknown)
+    }
+    /// Explicit newly funded replacement; never silently changes an active
+    /// roster. A transport success still requires own native generation read.
+    fn replace_kernel_material_v4(
+        &self,
+        _context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        _intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+        _grant: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+    ) -> Result<(), String> {
+        Err("explicit bounded kernel provider replacement unavailable".into())
+    }
     /// Queue a fully signed prospective contract; the caller must wait for its
     /// OWN coherent native prior-state admission before any execution/draw.
     fn ensure_recovery_session_v4(

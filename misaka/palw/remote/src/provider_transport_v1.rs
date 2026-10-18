@@ -52,6 +52,8 @@ pub enum ProviderTransportPurposeV1 {
     KernelMaterialIngressV4,
     /// Read one already-retained complete kernel unit; no new credit or liability.
     KernelMaterialQueryV4,
+    /// Original immutable context plus a new native deadline-bound provider generation.
+    KernelMaterialReplacementV4,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -472,7 +474,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Provide
     ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
         r.step()?;
         match r.byte()? {
-            0 | 1 | 2 | 3 => Ok(Default::default()),
+            0 | 1 | 2 | 3 | 4 => Ok(Default::default()),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown provider transport purpose")),
         }
     }

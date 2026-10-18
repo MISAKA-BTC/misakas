@@ -7336,6 +7336,11 @@ pub enum PalwConsensusObjectV2 {
         signer: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 242,
+    /// Versioned recurrence-state local accusation. Old step/court payloads keep
+    /// their encoding. Dormant behind palw_memory_routing_court_v2.
+    GdnStepAccusedV2 {
+        accusation: Box<crate::palw_gdn_court_v2::PalwGdnCourtAccusationV2>,
+    } = 243,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -18475,6 +18480,7 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         // RFC08: the mirror of `palw_monetary_material_v1` (merged 2026-10-15; this arm was missing on both parents).
         K::Fence(F::MonetaryMaterialV1) => builder.params.monetary_material_at_v1(ctx.daa_score).is_some(),
         K::Fence(F::MaterialReleaseRecoveryV2) => builder.params.material_release_recovery_at_v2(ctx.daa_score).is_some(),
+        K::Fence(F::MemoryRoutingCourtV2) => builder.extras.memory_routing_court.is_some(),
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
         K::Fence(F::StagedFloatConstraintV1) => {
@@ -19408,6 +19414,9 @@ pub struct PalwTransitionExtrasV1 {
     /// object existed. The ladder rides here because the fold holds no bundle and must derive the
     /// same verdict the acceptance layer derived.
     pub shard_court_ladder: Option<u64>,
+    /// RFC06 version-2 recurrence/routing court, resolved per carrying block.
+    /// This is a runtime mirror, not persistent state or a credit approval.
+    pub memory_routing_court: Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2>,
     /// ADR-0100 Decision 4: `Some` exactly when `Params::palw_shard_licensing` is active at the
     /// block — one shard's seats and quorum, which the fold needs to slice a stratified panel and
     /// count a part, and does not otherwise hold. `None` refuses all three sharding objects and is

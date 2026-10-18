@@ -419,6 +419,12 @@ impl PreparedKernelPaidWorkV4 {
                 let PalwMaterialRecoveryActionV2::FundedEnroll { monetary, .. } = &*grant.enrollment else {
                     return Err("kernel funding draft absent".into());
                 };
+                // Producer-owned recovery artifacts. Publish the immutable
+                // authenticated context and complete actual bundle before the
+                // dependent claim is signed; replacement must not rewrite the
+                // old intent/roster or trust an arbitrary peer projection.
+                publish_borsh(&path.join("material-context-v4.borsh"), &*grant.context, self.spec.max_input_bytes)?;
+                publish_borsh(&path.join("material-bundle-v4.borsh"), &request.bundle, self.spec.max_material_bytes)?;
                 let copy = NativeRetainedV1::try_from_clone_v1(&request.intent.commit).map_err(|e| e.to_string())?;
                 let (commit, _copy_lease) = copy.into_parts_v1();
                 let inner = misaka_palw_sdk::claim_paid_v2::paid_claim_commit_object_v2(

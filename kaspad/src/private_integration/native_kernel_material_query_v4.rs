@@ -4,14 +4,44 @@ use super::*;
 use kaspa_consensus_core::{
     palw_kernel_material_query_v4::{
         PALW_KERNEL_MATERIAL_QUERY_FRAME_BYTES_V4 as FRAME, PALW_KERNEL_MATERIAL_QUERY_REQUEST_BYTES_V4 as REQUEST,
-        PalwKernelMaterialQueryAuthorityV4 as Authority, PalwKernelMaterialUnitQueryV4 as Query,
-        PalwKernelMaterialUnitResponseV4 as Response, kernel_material_query_response_v4, take_kernel_material_query_bytes_v4,
+        PalwKernelMaterialFetchErrorV4 as FetchError, PalwKernelMaterialQueryAuthorityV4 as Authority,
+        PalwKernelMaterialUnitQueryV4 as Query, PalwKernelMaterialUnitResponseV4 as Response, kernel_material_query_response_v4,
+        take_kernel_material_query_bytes_v4,
     },
     palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
     palw_native_resource_v1::{
-        NativeRetainedV1, preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_v1,
+        NativeDecodeErrorV1, NativeRetainedV1, preflight_native_value_v1, reserve_native_requests_v1,
+        retain_native_value_decode_classified_v1, retain_native_value_decode_v1,
     },
 };
+fn query_shape_error_v4(e: std::io::Error) -> FetchError {
+    if e.kind() == std::io::ErrorKind::Unsupported {
+        FetchError::LocalCapacity(e.to_string())
+    } else {
+        FetchError::InvalidMaterial(e.to_string())
+    }
+}
+fn query_decode_error_v4<E: std::fmt::Display>(e: NativeDecodeErrorV1<E>) -> FetchError {
+    match e {
+        NativeDecodeErrorV1::Resource(e) => FetchError::LocalCapacity(e.to_string()),
+        NativeDecodeErrorV1::Decode(e) => FetchError::InvalidMaterial(e.to_string()),
+    }
+}
+fn read_query_frame_v4(stream: &mut impl Read, cap: u64) -> Result<NativeProviderFrameV3, FetchError> {
+    let mut length = [0u8; 8];
+    stream.read_exact(&mut length).map_err(|e| FetchError::Unavailable(e.to_string()))?;
+    let length = u64::from_le_bytes(length);
+    if length > cap || length > FRAME {
+        return Err(FetchError::InvalidMaterial("query response frame exceeds its admitted bound".into()));
+    }
+    let lease = reserve_native_requests_v1(length).map_err(|e| FetchError::LocalCapacity(e.to_string()))?;
+    let extent = usize::try_from(length).map_err(|e| FetchError::LocalCapacity(e.to_string()))?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(extent).map_err(|e| FetchError::LocalCapacity(e.to_string()))?;
+    bytes.resize(extent, 0);
+    stream.read_exact(&mut bytes).map_err(|e| FetchError::Unavailable(e.to_string()))?;
+    Ok(NativeProviderFrameV3 { bytes, _lease: lease })
+}
 impl AuthenticatedSocketExchangeV3 {
     /// Separate explicit checker identity. No producer/provider key is silently
     /// reused and no caller-supplied public key becomes native authority.
@@ -24,22 +54,32 @@ impl AuthenticatedSocketExchangeV3 {
         Self { addr, policy, sender: requester, key, recovery_roster: Vec::new() }
     }
     pub(super) fn fetch_kernel_v4(&self, query: &Query, authority: &Authority) -> Result<NativeRetainedV1<Vec<u8>>, String> {
-        query.validate()?;
+        self.fetch_kernel_classified_v4(query, authority).map_err(|e| e.to_string())
+    }
+    pub(super) fn fetch_kernel_classified_v4(
+        &self,
+        query: &Query,
+        authority: &Authority,
+    ) -> Result<NativeRetainedV1<Vec<u8>>, FetchError> {
+        query.validate().map_err(FetchError::Unknown)?;
         if authority.query() != query
             || self.sender != authority.requester()
             || self.key.public_key() != authority.requester_pubkey()
             || self.policy.domain != authority.network()
         {
-            return Err("kernel query differs from own native authority/checker key/network".into());
+            return Err(FetchError::Unknown("kernel query differs from own native authority/checker key/network".into()));
         }
         // Raw response, outer and inner Borsh owners have distinct tickets.
         // This workspace covers canonical output buffers, key/signature frames,
         // and verification scratch while those typed owners remain live.
         let cap = authority.max_response_frame_bytes();
-        let _wire = reserve_native_requests_v1(cap.checked_mul(6).ok_or("kernel query wire overflow")?).map_err(|e| e.to_string())?;
-        let body = borsh::to_vec(query).map_err(|e| e.to_string())?;
+        let _wire = reserve_native_requests_v1(
+            cap.checked_mul(6).ok_or_else(|| FetchError::LocalCapacity("kernel query wire overflow".into()))?,
+        )
+        .map_err(|e| FetchError::LocalCapacity(e.to_string()))?;
+        let body = borsh::to_vec(query).map_err(|e| FetchError::Unknown(e.to_string()))?;
         if body.len() as u64 != REQUEST {
-            return Err("kernel query fixed wire differs".into());
+            return Err(FetchError::Unknown("kernel query fixed wire differs".into()));
         }
         let request = provider_transport_request_v1(
             ProviderTransportPurposeV1::KernelMaterialQueryV4,
@@ -52,28 +92,38 @@ impl AuthenticatedSocketExchangeV3 {
             authority.daa_score(),
             body,
             |m, c| Ok(self.key.sign_with_context(m, c).to_vec()),
-        )?;
-        let mut socket = TcpStream::connect_timeout(&self.addr, Duration::from_secs(10)).map_err(|e| e.to_string())?;
-        socket.set_read_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
-        socket.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
-        write_frame_v3(&mut socket, &borsh::to_vec(&request).map_err(|e| e.to_string())?)?;
-        let frame = read_frame_capped_v4(&mut socket, cap)?;
-        preflight_native_value_v1::<ProviderTransportResponseV1>(&frame, frame.len() as u64).map_err(|e| e.to_string())?;
-        let envelope = retain_native_value_decode_v1(&frame, || borsh::from_slice::<ProviderTransportResponseV1>(&frame))
-            .map_err(|e| e.to_string())?;
+        )
+        .map_err(FetchError::Unknown)?;
+        let mut socket =
+            TcpStream::connect_timeout(&self.addr, Duration::from_secs(10)).map_err(|e| FetchError::Unavailable(e.to_string()))?;
+        socket.set_read_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| FetchError::Unavailable(e.to_string()))?;
+        socket.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| FetchError::Unavailable(e.to_string()))?;
+        write_frame_v3(&mut socket, &borsh::to_vec(&request).map_err(|e| FetchError::Unknown(e.to_string()))?)
+            .map_err(FetchError::Unavailable)?;
+        let frame = read_query_frame_v4(&mut socket, cap)?;
+        preflight_native_value_v1::<ProviderTransportResponseV1>(&frame, frame.len() as u64).map_err(query_shape_error_v4)?;
+        let envelope = retain_native_value_decode_classified_v1(&frame, || borsh::from_slice::<ProviderTransportResponseV1>(&frame))
+            .map_err(query_decode_error_v4)?;
         let keys = [(query.provider, authority.provider_pubkey().to_vec())];
-        let responders = provider_transport_verify_response_v1(&envelope, &request.header, &keys, &self.policy, now_unix_ms())?;
+        let responders = provider_transport_verify_response_v1(&envelope, &request.header, &keys, &self.policy, now_unix_ms())
+            .map_err(FetchError::InvalidMaterial)?;
         if responders.as_slice() != [query.provider] {
-            return Err("kernel query provider differs".into());
+            return Err(FetchError::InvalidMaterial("kernel query provider differs".into()));
         }
-        preflight_native_value_v1::<Response>(&envelope.body, envelope.body.len() as u64).map_err(|e| e.to_string())?;
-        let answer = retain_native_value_decode_v1(&envelope.body, || borsh::from_slice::<Response>(&envelope.body))
-            .map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Response>(&envelope.body, envelope.body.len() as u64).map_err(query_shape_error_v4)?;
+        let answer = retain_native_value_decode_classified_v1(&envelope.body, || borsh::from_slice::<Response>(&envelope.body))
+            .map_err(query_decode_error_v4)?;
         // Transfers the admitted byte owner without cloning or discarding its
         // lease when the response envelope and frame are dropped.
-        let bytes = take_kernel_material_query_bytes_v4(answer, query)?;
+        if let Response::Refused { query: echo, reason } = &*answer {
+            if echo != query || reason.len() > 1024 {
+                return Err(FetchError::InvalidMaterial("kernel query refusal substitutes request/bound".into()));
+            }
+            return Err(FetchError::Unavailable(reason.clone()));
+        }
+        let bytes = take_kernel_material_query_bytes_v4(answer, query).map_err(FetchError::InvalidMaterial)?;
         if bytes.len() as u64 > authority.scope().bytes {
-            return Err("kernel query unit exceeds the entire accepted signed scope".into());
+            return Err(FetchError::InvalidMaterial("kernel query unit exceeds the entire accepted signed scope".into()));
         }
         Ok(bytes)
     }

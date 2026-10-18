@@ -613,6 +613,20 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<(), String> {
         Err("current native material generation authority unavailable".into())
     }
+    fn palw_kernel_material_replacement_v4(
+        &self,
+        _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        _intent: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
+        Err("own native bounded replacement preparation unavailable".into())
+    }
+    fn palw_kernel_material_capsule_unused_finalized_v4(
+        &self,
+        _capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        Err("own native exact generation expiry unavailable".into())
+    }
     fn palw_kernel_material_query_authority_v4(
         &self,
         _query: &crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,

@@ -56,11 +56,22 @@ pub enum NativeCarrierPurposeV4 {
         recovery: Hash64,
         until_daa: u64,
     },
+    KernelReplacementV4 {
+        root: Hash64,
+        consent: Hash64,
+        recovery: Hash64,
+        until_daa: u64,
+    },
+}
+/// One pending carrier cell per root, shared by retry/reorg/deadline attempts.
+pub fn kernel_replacement_carrier_id_v4(root: Hash64) -> Hash64 {
+    Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/KERNEL-REPLACEMENT-CARRIER/V4", &root))
 }
 impl NativeCarrierPurposeV4 {
     fn id(&self) -> Hash64 {
         match self {
             Self::Enrollment { root, .. } | Self::KernelEnrollmentV4 { root, .. } => *root,
+            Self::KernelReplacementV4 { root, .. } => kernel_replacement_carrier_id_v4(*root),
             Self::Answer { event, .. } => *event,
             Self::Release { root, .. } => {
                 Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-CARRIER/V4", root))
@@ -106,6 +117,19 @@ impl NativeCarrierPurposeV4 {
                 }
                 _ => false,
             },
+            (Self::KernelReplacementV4 { root, consent, recovery, until_daa }, M::RecoveryV2(r)) => match &**r {
+                R::ReplaceBeforeV4 { valid_until_daa, recovery: actual, replacement, .. } => {
+                    replacement.root == *root
+                        && replacement.enrollment.terms.root == *root
+                        && replacement.enrollment.terms.sponsor == *signer
+                        && *actual == *recovery
+                        && *valid_until_daa == *until_daa
+                        && r.bounded_replacement_consent_v4() == Some(*consent)
+                        && replacement.enrollment.terms.native_session.is_none()
+                        && replacement.enrollment.terms.material_manifest.as_ref().is_some_and(|m| m.root == *root)
+                }
+                _ => false,
+            },
             (Self::Answer { provider, stream, sequence, event, deadline_daa }, M::RecoveryV2(r)) => match &**r {
                 R::AnswerAndCheckpoint { answer, stream: s, sequence: n, challenge_deadline_daa: d, .. } => {
                     signer == provider
@@ -140,7 +164,7 @@ impl NativeWireScanV1 for NativeCarrierPurposeV4 {
             0 => <(Hash64, PalwBondKeyV2, Hash64, Hash64, Hash64, u64)>::scan_native_wire_v1(r),
             1 => <(PalwBondKeyV2, Hash64, u64, Hash64, u64)>::scan_native_wire_v1(r),
             2 => <(Hash64, Hash64, Hash64)>::scan_native_wire_v1(r),
-            3 => <(Hash64, Hash64, Hash64, u64)>::scan_native_wire_v1(r),
+            3 | 4 => <(Hash64, Hash64, Hash64, u64)>::scan_native_wire_v1(r),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "native carrier purpose unknown")),
         }
     }

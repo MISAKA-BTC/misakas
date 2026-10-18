@@ -2458,6 +2458,42 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
                 }
+                Obj::GdnStepAccusedV2 { accusation } => {
+                    if !self.palw_memory_routing_court_v2_at(point.daa_score) {
+                        return Err("GDN version-2 court is dormant on this network".into());
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("GDN accusation without V2 court parameters")?;
+                    let claim = state.claim(&accusation.claim).ok_or("GDN accusation names an absent native claim")?;
+                    let ladder = state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
+                    accusation.validate_shape(ladder)?;
+                    if accusation.encoded_bytes()? > court.max_close_bytes() {
+                        return Err("GDN accusation exceeds the current close-byte ceiling".into());
+                    }
+                    if claim.bond != accusation.executor_bond
+                        || claim.execution_root != accusation.execution_root
+                        || claim.trace_root != accusation.trace_root
+                    {
+                        return Err("GDN accusation executor/roots are not the actual native claim's".into());
+                    }
+                    state.class(&claim.class_id).ok_or("GDN accusation class is absent")?;
+                    let signer = state.bond(&accusation.accuser_bond).ok_or("GDN accuser bond is absent")?;
+                    let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let message = kaspa_consensus_core::palw_gdn_court_v2::palw_gdn_court_session_id_v2(network, accusation);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &signer.pubkey,
+                        message.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_gdn_court_v2::PALW_GDN_COURT_MLDSA87_CONTEXT_V2,
+                    ) {
+                        return Err("GDN accusation is not signed by its registered accuser".into());
+                    }
+                    // Full deterministic adjudication runs in the typed fold.
+                    // This String-only walk must not turn a local workspace
+                    // refusal into a skipped invalid peer object.
+                }
                 Obj::ShardCourtAccused { accusation } => {
                     let claim_id = accusation.claim;
                     if !self.palw_shard_court_at(point.daa_score) {
@@ -3579,19 +3615,29 @@ impl VirtualStateProcessor {
                             return Err("monetary material tail is not finalized on the carrying block's selected chain".into());
                         }
                     } else {
-                        if let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(recovery) = action.as_ref() {
+                        if let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(recovery) =
+                            action.as_ref()
+                        {
                             if state_params.material_release_recovery_at_v2(point.daa_score).is_none() {
                                 return Err("release recovery own V2 gate is dormant".into());
                             }
                             let payload = recovery.payload();
                             for provider in recovery.provider_signatures() {
-                                self.palw_provider_court_signature_ok(state, point.daa_score, 242, &provider.provider, &payload, &provider.signature)?;
+                                self.palw_provider_court_signature_ok(
+                                    state,
+                                    point.daa_score,
+                                    242,
+                                    &provider.provider,
+                                    &payload,
+                                    &provider.signature,
+                                )?;
                             }
                             if let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::FundedEnroll {monetary,sponsor_signature,..}=recovery.as_ref() {
                                 let payload=monetary.payload();self.palw_provider_court_signature_ok(state,point.daa_score,240,&monetary.terms.sponsor,&payload,sponsor_signature)?;
                                 for offer in &monetary.offers {self.palw_provider_court_signature_ok(state,point.daa_score,240,&offer.provider,&payload,&offer.signature)?;}
                             }
-                            if let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::Replace {replacement,sponsor_signature,..} = recovery.as_ref() {
+                            if let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::Replace {replacement,sponsor_signature,..}
+                                | kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::ReplaceBeforeV4 {replacement,sponsor_signature,..} = recovery.as_ref() {
                                 let payload=replacement.payload();
                                 self.palw_provider_court_signature_ok(state, point.daa_score, 241, &replacement.enrollment.terms.sponsor, &payload, sponsor_signature)?;
                                 for offer in &replacement.enrollment.offers {

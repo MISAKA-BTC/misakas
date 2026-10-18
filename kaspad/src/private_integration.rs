@@ -48,6 +48,8 @@ mod kernel_paid_producer_v4;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
 mod kernel_paid_checker_v4;
 pub use kernel_paid_checker_v4::PrivateKernelPaidCheckSpecV4;
+mod kernel_material_replacement_worker_v4;
+pub use kernel_material_replacement_worker_v4::PrivateKernelMaterialReplacementSpecV4;
 pub use recovery_ack_carrier_v4::PrivateRecoveryAckFeeSpecV4;
 
 pub fn parse_private_recovery_provider_roster_v4(
@@ -477,6 +479,7 @@ pub fn create_private_integration_core_with_native_custody_v4(
         recovery_providers,
         None,
         None,
+        None,
     )
 }
 
@@ -506,6 +509,7 @@ pub fn create_private_integration_core_with_kernel_paid_work_v4(
         recovery_providers,
         Some(work),
         None,
+        None,
     )
 }
 
@@ -523,10 +527,48 @@ pub fn create_private_integration_core_with_kernel_paid_consumers_v4(
     work: Option<PrivateKernelPaidWorkSpecV4>,
     checker: Option<PrivateKernelPaidCheckSpecV4>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    if work.is_some() && (!args.palw_produce || native.is_none()) {
-        return Err("kernel paid work requires the configured producer and authenticated custody exchange".into());
-    }
-    create_private_native_custody_v4_inner(runtime, args, fd_total_budget, config, native, ack_fees, recovery_providers, work, checker)
+    create_private_integration_core_with_kernel_paid_replacement_v4(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        native,
+        ack_fees,
+        recovery_providers,
+        work,
+        checker,
+        None,
+    )
+}
+
+/// Explicit replacement sender; the original producer signs through its own
+/// authenticated custody exchange. Provider carrier funding remains separate.
+/// The older consumers constructor preserves its checker-only contract.
+#[allow(clippy::too_many_arguments)]
+pub fn create_private_integration_core_with_kernel_paid_replacement_v4(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: Option<PrivateNativeCustodySpecV3>,
+    ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
+    recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    work: Option<PrivateKernelPaidWorkSpecV4>,
+    checker: Option<PrivateKernelPaidCheckSpecV4>,
+    replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    create_private_native_custody_v4_inner(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        native,
+        ack_fees,
+        recovery_providers,
+        work,
+        checker,
+        replacement,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -540,12 +582,17 @@ fn create_private_native_custody_v4_inner(
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     kernel_work: Option<PrivateKernelPaidWorkSpecV4>,
     kernel_checker: Option<PrivateKernelPaidCheckSpecV4>,
+    kernel_replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    if (kernel_work.is_some() || kernel_replacement.is_some()) && (!args.palw_produce || native.is_none()) {
+        return Err("kernel work/replacement requires the configured producer and authenticated custody exchange".into());
+    }
     paid_v4_factory::validate_private_paid_claim_relations_v4(&config.params)?;
     if let Some(native) = &native {
         native.check_fixture(&config, args)?;
     } else if kernel_checker.is_none()
         || kernel_work.is_some()
+        || kernel_replacement.is_some()
         || ack_fees.is_some()
         || !recovery_providers.is_empty()
         || args.palw_produce
@@ -578,14 +625,21 @@ fn create_private_native_custody_v4_inner(
         // consumes the context. An uploaded file supplies work, not authority.
         let producer = kernel_work.map(|work| work.prepare(&ctx)).transpose()?;
         let checker = kernel_checker.map(|checker| checker.prepare(&ctx)).transpose()?;
+        let replacement = kernel_replacement.map(|replacement| replacement.prepare(&ctx)).transpose()?;
         recovery_observation_v4::start(&ctx)?;
         let exchange = hook(ctx)?;
+        if (producer.is_some() || replacement.is_some()) && exchange.is_none() {
+            return Err("kernel work/replacement requires an explicit authenticated provider exchange".into());
+        }
         if let Some(producer) = producer {
             producer
                 .start(exchange.as_ref().ok_or("kernel paid work requires an explicit authenticated provider exchange")?.clone())?;
         }
         if let Some(checker) = checker {
             checker.start()?;
+        }
+        if let Some(replacement) = replacement {
+            replacement.start(exchange.as_ref().ok_or("replacement provider exchange is absent")?.clone())?;
         }
         Ok(exchange)
     });

@@ -56,6 +56,31 @@ impl DurableMonetaryMaterialProviderV1 {
         self.publish(candidate)?;
         Ok(enrollment.id())
     }
+    /// New native quote authenticates the original work and accepted obligation;
+    /// newly signed replacement still cannot answer before native acceptance.
+    pub fn prepare_replacement_kernel_v4(
+        &mut self,
+        provider: PalwBondKeyV2,
+        material: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+    ) -> Result<Hash64, String> {
+        let (e, consent, _) =
+            kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&material.proposal)?;
+        if !e.offers.iter().any(|p| p.provider == provider)
+            || e.terms.root != context.intent.manifest.root
+            || e.terms.material_manifest.as_ref() != Some(&context.intent.manifest)
+            || material.manifest() != &context.intent.manifest
+            || e.terms.max_material_bytes > self.max_contract_bytes
+        {
+            return Err("replacement publication substitutes own exact grant".into());
+        }
+        let candidate =
+            self.store.provider_admit_replacement_kernel_v4(material, bundle, e.terms.max_material_bytes, self.total_capacity)?;
+        self.contexts.as_mut().ok_or("replacement metadata capacities absent")?.insert(context, &material.proposal)?;
+        self.publish(candidate)?;
+        Ok(consent)
+    }
     pub fn persist_kernel_signatures_v4(
         &mut self,
         context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
@@ -296,10 +321,10 @@ impl DurableMonetaryMaterialProviderV1 {
                 if let Some(archive) = contexts.as_ref() {
                     kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::<PalwMonetaryMaterialProviderStoreV1>::recover_provider_retaining_kernel_v4(&bytes,max_contract_bytes,total_capacity,authority,|consent,scope,_|{
                         let record=archive.get(consent)?.ok_or("kernel retention context missing; no answers authorized")?;
-                        let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::FundedEnroll{monetary,..}=&record.capsule else{return Err("kernel retention capsule is not funded identity".into())};
+                        let (monetary,identity,_)=kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&record.capsule)?;
                         let length=borsh::object_length(&record.capsule).map_err(|e|e.to_string())? as u64;
                         let _scratch=kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(length.checked_mul(4).ok_or("kernel retention identity scratch overflow")?).map_err(|e|e.to_string())?;
-                        if monetary.id()!=consent || monetary.terms.material_manifest.as_ref()!=Some(&record.context.intent.manifest) || record.context.intent.manifest.scope(scope.claim)!=Some(scope){return Err("kernel retained bytes substitute exact saved identity".into())}
+                        if identity!=consent || monetary.terms.material_manifest.as_ref()!=Some(&record.context.intent.manifest) || record.context.intent.manifest.scope(scope.claim)!=Some(scope){return Err("kernel retained bytes substitute exact saved identity".into())}
                         // Retention only: this local identity cannot authorize a
                         // response, GC, funding or a native accepted claim.
                         Ok(())
@@ -500,41 +525,36 @@ impl DurableMonetaryMaterialProviderV1 {
         let Some(consent) = pending.map(|(id, _, _)| id).or_else(|| archive.next_consent(self.expiry_cursor)) else { return Ok(()) };
         self.expiry_cursor = Some(consent);
         let record = archive.get(consent)?;
-        let (root, until) = if let Some(record) = &record {
-            let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::FundedEnroll {
-                monetary, ..
-            } = &record.capsule
-            else {
-                return Err("kernel expiry capsule kind differs".into());
-            };
-            if monetary.id() != consent {
-                return Err("kernel expiry capsule id differs".into());
+        let Some(record) = record else {
+            // A durable expiry intent is published before deleting raw bytes,
+            // and metadata is deleted only after raw publication. Missing
+            // metadata can finish that intent, never authorize a fresh delete.
+            if pending.is_none() || self.store.holds_material_consent_v4(consent) {
+                return Err("expiry metadata missing while material remains".into());
             }
-            (monetary.terms.root, monetary.terms.enrollment_until_daa)
-        } else {
-            let (_, root, until) = pending.ok_or("kernel expiry context absent without intent")?;
-            (root, until)
+            self.contexts.as_mut().unwrap().finish_expiry(consent)?;
+            return Ok(());
         };
-        if pending.is_some_and(|(_, r, u)| r != root || u != until) {
-            return Err("kernel expiry intent substitutes original signed lifetime".into());
+        let (enrollment, id, until) =
+            kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&record.capsule)?;
+        let root = enrollment.terms.root;
+        if id != consent || pending.is_some_and(|(_, r, u)| r != root || u != until) {
+            return Err("kernel expiry intent substitutes exact signed generation/deadline".into());
         }
-        if !native.palw_monetary_material_unused_offer_finalized_v1(root, until)? {
+        if !native.palw_kernel_material_capsule_unused_finalized_v4(&record.capsule)? {
             return Ok(());
         }
-        if let Some(record) = record {
-            let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::FundedEnroll {
-                monetary, ..
-            } = &record.capsule
-            else {
-                unreachable!()
-            };
-            if self.store.holds_material_consent_v4(consent) {
-                self.discard_expired_offer(monetary, |r, u| native.palw_monetary_material_unused_offer_finalized_v1(r, u))?;
+        self.contexts.as_mut().unwrap().begin_expiry(consent, root, until)?;
+        if self.store.holds_material_consent_v4(consent) {
+            let (candidate, expired) = self.store.provider_discard_expired_kernel_capsule_v4(&record.capsule, |capsule| {
+                native.palw_kernel_material_capsule_unused_finalized_v4(capsule)
+            })?;
+            if !expired {
                 return Ok(());
             }
+            self.publish(candidate)?;
         }
         let archive = self.contexts.as_mut().unwrap();
-        archive.begin_expiry(consent, root, until)?;
         archive.remove_after_verified_gc(consent)?;
         archive.finish_expiry(consent)?;
         Ok(())
