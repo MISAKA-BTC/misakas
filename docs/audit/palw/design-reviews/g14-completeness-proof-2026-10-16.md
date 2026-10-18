@@ -2481,3 +2481,33 @@ drills, RFC18 multi-model acceptance, the full genesis sequence, reference-node
 measurements and final fence/main integration remain outstanding. Historical
 lane section numbers above are retained with their branch-qualified headings;
 matching numbers from separate lane records do not replace one another.
+
+
+### 16.1 TIR ordinary payment run fails; supply the receipt beacon (2026-10-18)
+
+The owner-fixed ordinary payment process 61855 terminated with exit 134. Its
+first panic is `T-N1 requires an actual quantum spend, not only a payment right`
+at the end of the 1,800-iteration observation loop. The later DB-lifetime
+assertions occur during panic cleanup and do not replace this first failure.
+Log: `/tmp/codex-g14-tir-default-payment-owner-fixed.log`. The original claim
+`ffc297600ff579465c3cbc519ccd0fe16cdb4111a3c07968fb314ecbd0d6975039be9fe731bd8e3c4db4318096c958b12767a6354901ad66df8e5e5015e66d90`
+was licensed at DAA 2330 and reached Final; no actual payment is demonstrated.
+
+The payment loop called `Node::step`, which adds heartbeat blocks. Receipt
+beacons instead require an attempt-class block at/after the mature slot
+(`palw_beacon_fact_of_candidate`). The harness supplied a panel anchor before
+Final, but no explicit post-maturity attempt. Added `supply_receipt_beacon`:
+read the accepted receipt clock (including Gate C), derive mature slots from
+the unchanged free-prompt params, and produce an actual independently executed,
+signed IR attempt using the existing honest backend path. A supplied slot is
+remembered regardless of its receipt outcome; receipt tickets are never queried
+while choosing the attempt, and losing claims are never rerolled.
+
+The original quantum-consumption assertion, producer-collateral assertion,
+1,800-iteration bound and wall-clock deadline remain. The consolidated rerun is
+building with `CARGO_INCREMENTAL=0 cargo test -j1 -p kaspad --lib
+--no-default-features -- tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum
+--nocapture --test-threads=1`, log `/tmp/codex-g14-integrated-tir-payment-beacon.log`.
+This fixes a source-level missing beacon path; a passing payment result and any
+further cause of refusal remain unverified until the rerun completes. The forged
+process and inherited fit continue separately.

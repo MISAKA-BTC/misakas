@@ -412,11 +412,9 @@ impl TirFixture {
         eprintln!("[service-tir-frame] {:?} at DAA {}", self.lifecycle(chain), chain.daa());
     }
 
-    /// **A probation probe of the IR class by card `card`, mined through the production template** (piece 1c). As the parent harness
-    /// does for its floor attempts, the probe commits roots it did not compute and is licensed by the harness's colluding Panel: the
-    /// class lottery prices a win at `W / CCU` forwards (≈ 5.2 M for this tiny class on testnet-12, ~7 h of debug-build inference),
-    /// so the walk draws the ticket over the attempt's own free fields (its trace root) instead. The registry's probation counts a
-    /// probe that goes `Final`; nothing about the frame route below rests on these probes. Returns the claim id.
+    /// An honest IR attempt through the production template and execution backend.
+    /// Used for probation and for the attempt-class blocks that supply receipt beacons.
+    /// Every candidate executes its own public anchor before the ordinary class lottery.
     pub async fn ir_attempt(&self, chain: &mut Chain, card: usize) -> Option<Hash64> {
         use kaspa_consensus_core::palw_attempt_v2::*;
         // **An HONEST probe**: the job its template's anchor implies, executed by the class's own backend, its roots the run's
@@ -877,6 +875,39 @@ fn framed_claims(chain: &Chain) -> Vec<Hash64> {
 async fn anchor_block(chain: &mut Chain) {
     let (anchor, _) = chain.build_attempt_drawn(7, chain.config.params.target_time_per_block(), vec![], &|_| true, true);
     chain.insert(anchor).await;
+}
+
+/// Heartbeats carry transactions and advance DAA, but never supply a receipt
+/// beacon. Add an actual executed attempt for each newly matured set of slots.
+/// The attempt's own class lottery is solved normally; no receipt ticket is
+/// inspected while selecting the block, and a slot is never rerolled on a loss.
+async fn supply_receipt_beacon(
+    chain: &mut Chain,
+    fixture: &TirFixture,
+    supplied: &mut BTreeSet<u64>,
+) {
+    let candidates = framed_claims(chain);
+    let mut due = BTreeSet::new();
+    chain.tc.palw_tir_public_read_v1(&mut |state| {
+        for candidate in &candidates {
+            let Some(claim) = state.claim(candidate) else { continue };
+            let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { continue };
+            let Ok(clock) = kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(
+                &chain.bundle.state, state, candidate, claim, final_daa,
+            ) else { continue };
+            let Some(slot) = kaspa_consensus_core::palw_freeprompt_v3::fp_draw_slot_v3(
+                clock, chain.bundle.freeprompt.receipt_maturity_daa(),
+            ) else { continue };
+            if slot <= chain.daa() && !supplied.contains(&slot) {
+                due.insert(slot);
+            }
+        }
+        Ok(())
+    }).expect("receipt clocks read accepted claim state");
+    if !due.is_empty() && let Some(attempt) = fixture.ir_attempt(chain, PROBER).await {
+        eprintln!("[service-tir-frame] honest attempt {attempt} supplies receipt beacon slots {due:?} at DAA {}", chain.daa());
+        supplied.extend(due);
+    }
 }
 
 /// **One quantum of `claim` spent into a receipt block** (the producer's payment: the receipt lane's block, as
@@ -1434,8 +1465,10 @@ async fn tn1_node(forged: bool, declared: bool) {
         let kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, spent } = &source else { panic!("a free-prompt claim: {source:?}") };
         assert!(*quanta >= 1 && spent.is_empty() && pwu > 0, "the Final claim holds unspent priced quanta: {source:?} pwu {pwu}");
         let mut paid = None;
+        let mut beacon_slots = BTreeSet::new();
         for _ in 0..1_800 {
             assert!(std::time::Instant::now() < deadline, "no honest framed claim paid before the test deadline");
+            supply_receipt_beacon(&mut chain, &fixture, &mut beacon_slots).await;
             for candidate in framed_claims(&chain) {
                 if matches!(chain.view(candidate).phase, PalwClaimPhaseV2::Final { .. })
                     && let Some(block) = spend_one_quantum(&mut chain, 0, candidate).await
