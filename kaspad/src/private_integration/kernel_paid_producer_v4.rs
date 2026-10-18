@@ -141,7 +141,7 @@ pub(super) fn owned_dir(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn publish_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(super) fn publish_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path.exists() {
         return Err("kernel paid outbox already contains this immutable record".into());
     }
@@ -407,7 +407,8 @@ impl PreparedKernelPaidWorkV4 {
             if matches!(self.tick.tick(Duration::from_secs(2)).await, kaspa_core::task::tick::TickReason::Shutdown) {
                 return Ok(());
             }
-            let api = self.manager.consensus().unguarded_session();
+            let instance = self.manager.consensus();
+            let api = instance.unguarded_session_blocking();
             let Some(route) = api.palw_kernel_route_v1() else {
                 kaspa_core::debug!("kernel producer own native route unavailable; immutable WAL retained");
                 continue;
@@ -627,7 +628,11 @@ impl PreparedKernelPaidWorkV4 {
                 super::recovery_ack_carrier_v4::reserve_carrier_build_v4(signed, &entry, self.payer.verification_key.as_ref().len())?;
             match tokio::time::timeout(
                 Duration::from_secs(10),
-                self.flow.submit_rpc_transaction(&api, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden),
+                self.flow.submit_rpc_transaction(
+                    &instance.unguarded_session(),
+                    tx.clone(),
+                    kaspa_mining::mempool::tx::Orphan::Forbidden,
+                ),
             )
             .await
             {

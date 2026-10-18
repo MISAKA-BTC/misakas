@@ -134,6 +134,7 @@ def main():
             identityChecks=drill.integrity_records, pinVerificationCosts=frozen.integrity_costs,
             fixtureCommands=drill.command_observations, resolvedCommandDigests=drill.resolved_commands,
             nodeObservations=drill.observations, kernelWorkMilestones=drill.kernel_observations,
+            nativePaidObservations=drill.paid_observations,
             resourceLimitsMet=resources_passed)
         result['status'] = final_status(scenarios, gates, base_passed, resources_passed, fatal)
         if fatal is not None:

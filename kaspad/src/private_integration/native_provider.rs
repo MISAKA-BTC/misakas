@@ -961,7 +961,7 @@ impl LoopbackNativeProviderV3 {
         {
             return Err("V2 native Ready requires exactly its one explicit routed scope".into());
         }
-        let session = self.consensus_manager.consensus().unguarded_session();
+        let session = self.consensus_manager.consensus().unguarded_session_blocking();
         let authority = session.palw_native_material_provider_authority_v4(request.checkpoint, &request.header, &request.envelope)?;
         let params = &self.config.params;
         let registry = crate::palw_backends::PalwBackendRegistry::for_node_v1(
@@ -1026,7 +1026,7 @@ impl LoopbackNativeProviderV3 {
             }
             // Re-read actual own candidate authority before publication/signing.
             // A persisted pre-admission row never replaces the native reader.
-            let session = self.consensus_manager.consensus().unguarded_session();
+            let session = self.consensus_manager.consensus().unguarded_session_blocking();
             let current =
                 session.palw_native_material_provider_authority_v4(request.checkpoint, &request.header, &request.envelope)?;
             if current.material.record() != authority.material.record() || current.row != authority.row {

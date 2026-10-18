@@ -58,7 +58,7 @@ pub struct NativePaidLockObservationV5 {
 pub struct NativePaidLatestDrainV5 {
     pub source_claim: Hash64,
     pub source_context: Hash64,
-    pub recipient: PalwBondKeyV2,
+    pub recipient: crate::tx::TransactionOutpoint,
     pub entitlement: Hash64,
     pub income: Hash64,
     pub queue: Hash64,
@@ -454,7 +454,7 @@ fn observe_source_fees(
         let observed = NativePaidLatestDrainV5 {
             source_claim: Hash64::from_bytes(claim),
             source_context: Hash64::from_bytes(context),
-            recipient: bond,
+            recipient: bond.0,
             entitlement,
             income,
             queue,

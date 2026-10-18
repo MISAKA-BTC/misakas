@@ -374,7 +374,8 @@ impl PreparedKernelPaidCheckV4 {
             if matches!(self.tick.tick(Duration::from_secs(2)).await, kaspa_core::task::tick::TickReason::Shutdown) {
                 return Ok(());
             }
-            let api = self.manager.consensus().unguarded_session();
+            let instance = self.manager.consensus();
+            let api = instance.unguarded_session_blocking();
             let Some(route) = api.palw_kernel_route_v1() else {
                 kaspa_core::debug!("checker own native route unavailable; exact WAL retained");
                 continue;
@@ -801,7 +802,11 @@ impl PreparedKernelPaidCheckV4 {
                 super::recovery_ack_carrier_v4::reserve_carrier_build_v4(signed, &entry, self.payer.verification_key.as_ref().len())?;
             match tokio::time::timeout(
                 Duration::from_secs(10),
-                self.flow.submit_rpc_transaction(&api, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden),
+                self.flow.submit_rpc_transaction(
+                    &instance.unguarded_session(),
+                    tx.clone(),
+                    kaspa_mining::mempool::tx::Orphan::Forbidden,
+                ),
             )
             .await
             {

@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 import time
+import rfc08_native_paid_observation as paid_observations
 
 SCHEMA = 1
 KIND = 'misaka-rfc-integration-campaign-v1'
@@ -21,7 +22,7 @@ STAGES = frozenset(
         'source-body-pruned', 'fresh-pruned-join', 'cold-pruned-join')])
 # These are evidence contracts, not endpoints invented by the plan. The current
 # public RPC has only the claim identity collector implemented below.
-NATIVE_KINDS = frozenset(('native-claim-observed', 'selected-verifier-approval', 'native-fee-settlement',
+NATIVE_KINDS = frozenset(('native-claim-observed', 'native-paid-observed', 'native-paid-assigned-quorum', 'selected-verifier-approval', 'native-fee-settlement',
     'reader-router-court', 'all-model-cost-boundaries', 'independent-source-availability',
     'cumulative-soundness-review', '128-bit-review', 'adapter-interoperability',
     'all-rewards-once', 'material-all-path-bounds', 'restart-reorg-atomicity', 'market-accounting',
@@ -44,7 +45,8 @@ GATES = {
     'rfc12-market': 'market-accounting',
 }
 SOURCE_LEAVES = ('misaka-rfc-integration-campaign.py', 'rfc_integration_campaign.py', 'misaka-rfc12-multiprocess.py',
-    'rfc12_owned_resources.py', 'misaka_wrpc_json.py', 'rfc12_kernel_consumers.py', 'rfc12_native_recovery_observation.py')
+    'rfc12_owned_resources.py', 'misaka_wrpc_json.py', 'rfc12_kernel_consumers.py', 'rfc12_native_recovery_observation.py',
+    'rfc08_native_paid_observation.py')
 BUILD_TOOLS = frozenset(('cargo', 'rustc', 'rustup', 'make', 'cmake', 'ninja', 'meson', 'git', 'rebase', 'reset'))
 IDENTIFIER = re.compile(r'[a-z0-9][a-z0-9._-]{0,95}\Z')
 
@@ -186,12 +188,19 @@ def validate_campaign(plan, drill):
     require(set(drill['nodes']) == ROLES, 'one campaign requires exactly the same A/B/JOIN node inventory')
     for role, node in drill['nodes'].items():
         validate_argv(node['argv'])
+        paid_observations.claims(node['argv'])
         require(node['argv'][0] == plan['candidate']['path'], 'every node/restart must launch the exact same candidate path')
         require(node['wrpc'].startswith('127.0.0.1:') and node['p2p'].startswith('127.0.0.1:') and node['eth'].startswith('http://127.0.0.1:'),
             'campaign must use driver-owned loopback endpoints')
         require('--nodnsseed' in node['argv'] and '--outpeers=0' in node['argv'], 'peer discovery must remain driver controlled')
         require([arg for arg in node['argv'] if arg.startswith('--appdir=')] == ['--appdir={' + role + '_APPDIR}'],
             'scenario cannot replace the one root DB path for a role')
+    source_policies = [paid_observations.source_policy(node['argv']) for node in drill['nodes'].values()]
+    if any(policy is not None for policy in source_policies):
+        require(all(policy is not None for policy in source_policies) and len(set(source_policies)) == 1,
+            'all source-paid-v1 nodes including JOIN must use the same exact operator policy input')
+        require(source_policies[0] in {pin.get('path') for pin in plan['pinnedInputs'] if isinstance(pin, dict)},
+            'source-paid-v1 policy must have an independently frozen content pin')
     endpoints = []
     for node in drill['nodes'].values():
         for key in ('wrpc', 'p2p', 'eth', 'grpc'):
@@ -248,6 +257,14 @@ def validate_campaign(plan, drill):
                 require(isinstance(fact['expected']['producerBond'], str) and len(fact['expected']['producerBond']) <= 160, 'native producer scope absent')
                 require(type(fact['expected']['expectedConvicted']) is bool, 'expected conviction must be a predeclared boolean')
                 u64(fact['expected']['maximumRecordBytes'], 'maximumRecordBytes', 1)
+            if fact['kind'] in paid_observations.PAID_KINDS:
+                enabled = paid_observations.claims(drill['nodes'][fact['role']]['argv'])
+                if enabled or fact['kind'].startswith('native-paid-'):
+                    require(fact['claimId'] in enabled, 'paid requirement must name an exact claim enabled in its frozen role argv')
+                require(set(fact['expected']) <= {'enrollment', 'context', 'checkerSnapshot'},
+                    'paid requirements may pin authority identities, not redefine approval/settlement facts')
+                for key, value in fact['expected'].items():
+                    hash_text(value, 128, 'paid expected ' + key)
             requirements.add(fact['kind'])
         require({fact['claimId'] for fact in scenario['requirements']} == set(scenario['claims']),
             'every declared claim must have its own evidence requirements')
@@ -517,6 +534,18 @@ def make_campaign_drill(base):
             self.integrity('stage.after.' + name)
 
         def fact(self, requirement):
+            if requirement['kind'] in paid_observations.PAID_KINDS:
+                role = requirement['role']
+                # Unconfigured legacy plans retain UNKNOWN without opening a
+                # file or treating fixture/Final/receipt-count JSON as authority.
+                if requirement['claimId'] not in paid_observations.claims(self.plan['nodes'][role]['argv']):
+                    return unknown_fact(requirement, 'exact paid claim observation flag is not enabled for this owned role')
+                try:
+                    observed = paid_observations.observe(self, role, requirement['claimId'], base.import_stamp,
+                        base.probe_context, self.frozen.plan['network']['consensusParamsId'], self.frozen.plan['network']['genesisHash'])
+                    return paid_observations.fact(requirement, observed)
+                except (ValueError, OSError, KeyError, TypeError, RuntimeError) as error:
+                    return unknown_fact(requirement, 'current own paid observation unavailable: ' + str(error))
             if requirement['kind'] != 'native-claim-observed':
                 return unknown_fact(requirement, 'no reviewed native collector exists for this exact capability; old RPC/Final/WAL/fixture output cannot substitute')
             role = requirement['role']
@@ -557,7 +586,8 @@ def make_campaign_drill(base):
                         deadline = time.monotonic() + min(scenario['observationTimeoutSeconds'], self.remaining())
                         while True:
                             fact = self.fact(requirement)
-                            if fact['status'] != 'UNKNOWN' or requirement['kind'] != 'native-claim-observed' or time.monotonic() >= deadline:
+                            if fact['status'] != 'UNKNOWN' or requirement['kind'] not in (
+                                    'native-claim-observed', 'native-paid-observed', 'native-paid-assigned-quorum') or time.monotonic() >= deadline:
                                 break
                             self.remaining()
                             time.sleep(.2)

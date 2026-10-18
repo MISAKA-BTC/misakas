@@ -26,6 +26,7 @@ import urllib.request
 from misaka_wrpc_json import WsRpc
 from rfc12_owned_resources import OwnedResourceSampler, ResourceLimitExceeded
 import rfc12_kernel_consumers as kernel_consumers
+import rfc08_native_paid_observation as paid_observations
 
 
 class Blocked(RuntimeError):
@@ -235,6 +236,13 @@ class Drill:
         kernel_consumers.validate_request(plan)
         self.kernel_consumers = None
         self.kernel_observations = []
+        self.paid_observation_claims = {role: paid_observations.claims(node['argv']) for role, node in plan['nodes'].items()}
+        source_policies = [paid_observations.source_policy(node['argv']) for node in plan['nodes'].values()]
+        if any(policy is not None for policy in source_policies) and (
+                any(policy is None for policy in source_policies) or len(set(source_policies)) != 1):
+            raise ValueError('all source-paid-v1 roles including JOIN must declare the same explicit operator policy')
+        self.paid_observation_processes = {}
+        self.paid_observations = []
 
     def activate_kernel_consumers(self):
         if self.plan.get('nativeKernelConsumers') is None:
@@ -264,6 +272,7 @@ class Drill:
 
     def kernel_checkpoint(self, label, roles, require_present=True):
         if self.kernel_consumers is None:
+            self.paid_checkpoint(label, roles)
             return None
         def observe():
             rows = {role: kernel_consumers.observe(self, role, self.kernel_consumers, probe_context) for role in roles}
@@ -277,7 +286,26 @@ class Drill:
         self.kernel_observations.append(dict(milestone=label, observations=rows,
             status='ACTUAL_CLAIM_OBSERVED' if all(row is not None for row in rows.values()) else 'UNKNOWN',
             selectedVerifierApprovalStatus='UNKNOWN', settledFeeStatus='UNKNOWN', releaseApproval=False))
+        self.paid_checkpoint(label, roles)
         return rows
+
+    def paid_checkpoint(self, label, roles):
+        for role in roles:
+            for claim in self.paid_observation_claims.get(role, ()):
+                try:
+                    row = paid_observations.observe(self, role, claim, import_stamp, probe_context,
+                        self.plan['ruleset_id'], self.rpc_genesis(role))
+                    row['status'] = 'OWN_NATIVE_ROWS_OBSERVED_APPROVAL_UNKNOWN' if row['available'] else 'UNKNOWN'
+                except (OSError, ValueError, AssertionError, KeyError, RuntimeError) as error:
+                    row = dict(role=role, claimId=claim, status='UNKNOWN', reason=str(error), releaseApproval=False)
+                self.paid_observations.append(dict(milestone=label, **row))
+
+    def rpc_genesis(self, role):
+        rpc = self.rpc(role)
+        try:
+            return rpc.call('getPalwNodeStatus')['genesisHash']
+        finally:
+            rpc.close()
 
     def kernel_checker_crash(self, winner):
         if self.kernel_consumers is None:
@@ -303,6 +331,7 @@ class Drill:
         self.kernel_observations.append(dict(milestone='checker-os-crash', role=worker['role'], before=before, after=after,
             actualOsKill=True, immutableCheckerWalObserved=bool(before), selectedVerifierApprovalStatus='UNKNOWN',
             status='IMMUTABLE_WAL_OBSERVED' if before else 'UNKNOWN'))
+        self.paid_checkpoint('checker-os-crash', (worker['role'], peer))
 
     def argv(self, template):
         assert isinstance(template, list) and template and all(isinstance(x, str) for x in template), 'commands must be argv lists'
@@ -316,6 +345,7 @@ class Drill:
         if role in self.processes:
             raise Blocked('owned child handle still exists before restart: ' + role)
         kernel_consumers.revalidate(self.kernel_consumers, role)
+        paid_observations.invalidate(self, role)
         folder = self.root / role
         appdir = Path(self.values[role + '_APPDIR'])
         if any(path.is_symlink() for path in (folder, appdir) + tuple(appdir.parents)):
@@ -336,6 +366,8 @@ class Drill:
             raise
         self.logs[role] = log
         self.processes[role] = process
+        if self.paid_observation_claims.get(role):
+            self.paid_observation_processes[role] = process
 
     def kill(self, role):
         process = self.processes[role]
@@ -346,6 +378,7 @@ class Drill:
             process.kill()  # actual OS kill, never graceful RPC shutdown
         process.wait(timeout=20)
         del self.processes[role]
+        self.paid_observation_processes.pop(role, None)
         self.logs.pop(role).close()
         return running
 
@@ -669,9 +702,10 @@ def main():
               'workflowTimeoutSeconds': plan['workflow_timeout_s'], 'nativeKernelConsumersRequested': plan.get('nativeKernelConsumers') is not None}
     try:
         drill.run()
+        drill.paid_checkpoint('run.after', tuple(drill.processes))
         # Typed paid receipt/source approval is not exposed by the old public
         # claim RPC. Observed work/process mechanics cannot certify that gate.
-        result['status'] = 'SCENARIOS_OBSERVED_APPROVAL_UNKNOWN' if drill.kernel_consumers else 'SCENARIOS_PASS'
+        result['status'] = 'SCENARIOS_OBSERVED_APPROVAL_UNKNOWN' if drill.kernel_consumers or any(drill.paid_observation_claims.values()) else 'SCENARIOS_PASS'
     except Blocked as error:
         result.update(status='BLOCKED', reason=str(error))
     except Exception as error:
@@ -686,6 +720,10 @@ def main():
         result.update(observations=drill.observations, probeLatenciesMs=drill.latencies)
         result['fixtureCommands'] = drill.command_observations
         result['requiredNodeLaunchSamples'] = drill.node_launches
+        if any(drill.paid_observation_claims.values()):
+            result['nativePaidObservations'] = drill.paid_observations
+            result['selectedVerifierApprovalStatus'] = 'UNKNOWN'
+            result['oneTimeFeeSettlementStatus'] = 'UNKNOWN'
         if plan.get('nativeKernelConsumers') is not None:
             result['nativeKernelConsumers'] = drill.kernel_consumers
             result['kernelWorkMilestones'] = drill.kernel_observations

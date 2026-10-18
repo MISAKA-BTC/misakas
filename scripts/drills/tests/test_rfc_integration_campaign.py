@@ -118,9 +118,36 @@ class ActualEvidenceCounterexamples(unittest.TestCase):
         drill_type = campaign.make_campaign_drill(base)
         requirement = dict(id='approval', kind='selected-verifier-approval', role='A', claimId=h(3),
             expected=dict(state='Final', receiptCount=100))
-        result = drill_type.fact(object(), requirement)
+        reader = SimpleNamespace(plan=dict(nodes=dict(A=dict(argv=[]))))
+        result = drill_type.fact(reader, requirement)
         self.assertEqual(result['status'], 'UNKNOWN')
         self.assertFalse(result['nativeAuthorityEstablished'])
+
+    def test_paid_scope_requires_exact_role_claim_flag_and_cannot_replace_approval_gate(self):
+        plan, drill = plan_and_drill()
+        request = dict(id='paid.rows', kind='native-paid-observed', role='A', claimId=h(3), expected={})
+        plan['scenarios'][0]['requirements'].append(request)
+        with self.assertRaises(campaign.CampaignError):
+            campaign.validate_campaign(plan, drill)
+        drill['nodes']['A']['argv'] += ['--private-probe-profile=paid-v4',
+            '--private-probe-paid-observe-claims=' + h(3)]
+        campaign.validate_campaign(plan, drill)
+        plan['gates']['rfc07-selected-approval'] = ['paid.rows']
+        with self.assertRaises(campaign.CampaignError):
+            campaign.validate_campaign(plan, drill)
+
+    def test_source_paid_policy_is_explicit_pinned_and_identical_even_for_idle_join(self):
+        plan, drill = plan_and_drill()
+        policy = '/frozen/source-policy.borsh'
+        for node in drill['nodes'].values():
+            node['argv'] += ['--private-probe-profile=source-paid-v1', '--private-probe-source-policy=' + policy]
+        with self.assertRaises(campaign.CampaignError):
+            campaign.validate_campaign(plan, drill)
+        plan['pinnedInputs'].append(dict(path=policy, sha256='aa' * 32))
+        campaign.validate_campaign(plan, drill)
+        drill['nodes']['JOIN']['argv'][-1] = '--private-probe-source-policy=/frozen/other-policy.borsh'
+        with self.assertRaises(campaign.CampaignError):
+            campaign.validate_campaign(plan, drill)
 
     def test_missing_import_or_timeout_never_counts_as_a_defensive_success(self):
         scenarios = [dict(id='attack', status='UNKNOWN', reason='submission/import timeout', facts=[])]

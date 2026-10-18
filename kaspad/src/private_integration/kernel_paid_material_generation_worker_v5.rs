@@ -288,7 +288,8 @@ impl PreparedKernelPaidMaterialGenerationV5 {
             if matches!(self.tick.tick(Duration::from_secs(2)).await, kaspa_core::task::tick::TickReason::Shutdown) {
                 return Ok(());
             }
-            let api = self.manager.consensus().unguarded_session();
+            let instance = self.manager.consensus();
+            let api = instance.unguarded_session_blocking();
             let Some(route) = api.palw_kernel_route_v1() else { continue };
             self.validate_original(&route)?;
             if let Some(saved) = &object {
@@ -471,7 +472,7 @@ impl PreparedKernelPaidMaterialGenerationV5 {
     }
     fn usable(
         &self,
-        api: &kaspa_consensusmanager::ConsensusProxy,
+        api: &kaspa_consensusmanager::ConsensusSessionBlocking<'_>,
         point: TransactionOutpoint,
         entry: &kaspa_consensus_core::tx::UtxoEntry,
         payer: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
@@ -502,7 +503,8 @@ impl PreparedKernelPaidMaterialGenerationV5 {
         if tx.inputs.len() != 1 {
             return Err("V5 prior/current carrier is not a single declared input".into());
         }
-        let api = self.manager.consensus().unguarded_session();
+        let instance = self.manager.consensus();
+        let api = instance.unguarded_session_blocking();
         let point = tx.inputs[0].previous_outpoint;
         let Some(entry) = api.get_virtual_utxo_entry(point) else { return Ok(()) };
         if !self.usable(&api, point, &entry, payer, api.get_virtual_daa_score()) {
@@ -512,7 +514,7 @@ impl PreparedKernelPaidMaterialGenerationV5 {
         let _relay = super::recovery_ack_carrier_v4::reserve_carrier_build_v4(signed, &entry, payer.verification_key.as_ref().len())?;
         match tokio::time::timeout(
             Duration::from_secs(10),
-            self.flow.submit_rpc_transaction(&api, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden),
+            self.flow.submit_rpc_transaction(&instance.unguarded_session(), tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden),
         )
         .await
         {
