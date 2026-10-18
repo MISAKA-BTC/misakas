@@ -1138,6 +1138,7 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
     a.api()
         .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
         .unwrap();
+    a.api().set_pruning_utxoset_stable_flag(true).expect("fixture retains the already verified UTXO ledger");
     let header = a.api().get_evm_header_of(pp).unwrap().expect("the EVM header");
     let snapshot = a.api().get_evm_state_snapshot_of(pp).unwrap().expect("the EVM state");
     let publication = a.vp().evm_heads_store.read().native_finalized_publication().unwrap();
@@ -1568,6 +1569,7 @@ async fn rfc12_import_conflicting_existing_rows_preserve_incident_and_flat_head(
     a.api()
         .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
         .unwrap();
+    a.api().set_pruning_utxoset_stable_flag(true).expect("fixture retains the already verified UTXO ledger");
     let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
     let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
     let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(pp, header.evm_number, header.state_root, &state);
@@ -1787,6 +1789,7 @@ async fn rfc12_cache_a_former_pruning_boundary_cannot_hide_missing_delta_after_c
     assert_eq!(a.vp().native_evaluate(sink).snapshot, baseline.snapshot, "a checkpoint needs no own delta");
     // Actual context entry with fixture history, not a full adopted pruning proof or real GC.
     a.api().import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap()]).unwrap();
+    a.api().set_pruning_utxoset_stable_flag(true).expect("fixture retains the already verified UTXO ledger");
     let warm = a.vp().native_evaluate(sink).snapshot;
     a.vp().native_rows.lock().clear();
     let cold = a.vp().native_evaluate(sink);
@@ -1822,6 +1825,7 @@ async fn rfc12_cache_readiness_observes_a_new_pruning_context_at_the_same_sink()
     a.api()
         .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(next).unwrap()])
         .unwrap();
+    a.api().set_pruning_utxoset_stable_flag(true).expect("fixture retains the already verified UTXO ledger");
     let warm = readiness_of(&a);
     a.vp().native_readiness_memo.lock().take();
     let cold = readiness_of(&a);
