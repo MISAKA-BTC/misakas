@@ -117,7 +117,10 @@ impl GdnFixture {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn registered_gdn_class_passes_normal_registration_and_host_resolution() {
     let (config, bundle, premine, mut floats) = fixture_config_with(false, true, true, false, false);
-    let mut chain = Chain::new(config, bundle, &premine);
+    // This graph reaches the token-lift kernel; the ordinary admission gate requires its fence.
+    let mut params = config.params.clone();
+    params.palw_token_lift = Some(ForkActivation::new(0));
+    let mut chain = Chain::new(Config::new(params), bundle, &premine);
     chain.advance(2).await;
     let fixture = GdnFixture::new(&chain);
     fixture.register(&mut chain, &mut floats).await;

@@ -142,7 +142,7 @@ pub(crate) fn world(forge_head: u32) -> World {
     let mut retained = misaka_palw_base0::produce::base0_fp_material_decode_v2(&out.material).expect("held folded retention");
     retained.binding = forged.binding.clone();
     retained.checkpoint_leaves = forged.checkpoint_leaves.clone();
-    retained.checkpoint_chunks[index as usize] = state.chunks.clone();
+    // Held retention omits state chunks; the forged bytes are disclosed through the court below.
     let mut forged_capture = misaka_palw_base0::produce::PALW_BASE0_FP_MATERIAL_MAGIC_V2.to_vec();
     forged_capture.extend(borsh::to_vec(&retained).unwrap());
     World {

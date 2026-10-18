@@ -1699,3 +1699,9 @@ The funded/domain-corrected G-N2 run completed after 717.42s with 0 passed / 1 f
 Preflight now mirrors that existing dispatch: only when Gate C is active and a decoded certification row exists under the exact attested id (chain claim or native mining claim), it admits the claim attestation to ordinary signature/fold validation. Unknown ids still require the legacy eligibility fence. Neither model review nor a new interpretation of the wire kind is introduced; the existing claim dispatch becomes reachable. The node test also tries an unknown id and requires the old exam refusal, restoring its unspent fixture funding after the rejected carrier.
 
 Rerun queued in `/tmp/codex-g14-native-claim-attestation.log`; no PASS yet. The workspace was briefly moved to Trash and restored externally; all edits continue at the original path.
+
+### 15.7 First compiled GDN tests: fixture failures (2026-10-18)
+
+The no-default-features kaspad lib-test build completed in 37m08s. The service-host test then failed in 1.62s at the fixture's checkpoint chunk assignment (empty vector, index 15). Held folded retention deliberately carries leaves without state chunks; the real forged bytes remain in the fixture's producer disclosure source. Removed the invalid assignment while preserving the forged checkpoint commitment and court disclosure bytes. Rerun queued in `/tmp/codex-g14-gdn-service-host-held.log`.
+
+The independently cloned executable `/tmp/codex-g14-gdn-built-test` ran the registered-artifact test, which failed in 0.57s because ClassRegistered had not produced a registry row. Its graph reaches the token-lift kernel while the fixture had not armed that kernel's admission fence at its start height. The test now explicitly arms that dormant fence at DAA 0; shipped presets are unchanged. This explanation remains to be verified by rerun. The registration test and fold E2Es remain incomplete; no node prosecution success is claimed.
