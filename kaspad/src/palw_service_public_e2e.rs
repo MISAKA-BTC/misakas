@@ -241,7 +241,11 @@ impl Chain {
             ) {
                 assert!(
                     self.wall_deadline.is_none_or(|deadline| std::time::Instant::now() < deadline),
-                    "the original service wall deadline expired while waiting for the native clock lead cap"
+                    "the original service wall deadline expired while waiting for the native clock lead cap: block DAA {}, block time {}, allowed through {}, wall now {}",
+                    block.header.daa_score,
+                    block.header.timestamp,
+                    latest,
+                    kaspa_core::time::unix_now()
                 );
                 tokio::time::sleep(Duration::from_millis(block.header.timestamp.saturating_sub(latest).min(1_000))).await;
             }
@@ -1770,7 +1774,12 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                 || (running.task.is_none() && recovery.as_ref().is_some_and(|r| r.verifier_paused())),
             "production worker unexpectedly stopped"
         );
-        assert!(std::time::Instant::now() < deadline, "service made no objective progress: {:?}", chain.view(claim));
+        assert!(
+            std::time::Instant::now() < deadline,
+            "service made no objective progress at DAA {}: {:?}",
+            chain.daa(),
+            chain.view(claim)
+        );
         let (pending, _) = pool.clone().get_all_transactions(TransactionQuery::TransactionsOnly).await;
         if let Some(recovery) = recovery.as_mut() {
             recovery

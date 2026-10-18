@@ -432,3 +432,19 @@ Only a subsequent native read with its accepted EOF certificate can finish setup
 It checks actual byte length and a finite movement bound, never inserts a certificate
 or loosens the prospective quote. All four staged cases require a fresh runtime run
 after this change. Updated tir-lower admission meanwhile passes **4 / 4**.
+
+### 2026-10-18 — EVM C-items completed
+
+All four `rfc12_c_items` pass with `evm`: the normal run passed C1-a, C1-b and
+C2-a (8.48 s); C1-c was explicitly executed with `--ignored` and passed (707.05 s).
+The claim was Final at DAA 145; its original retention floor was 5403 and retirement
+floor 3145. The test verified no safe prefix one DAA before 5403 and the exact safe
+anchor at 5403 through the processor. No fixture clock or safe predicate was relaxed.
+C2-a's documented limits still apply: in-process public sidecar import, not socket
+IBD or a chunk-served pruning UTXO set. The separate import-generation test is pending.
+
+For the next service/network run the timeout diagnostics now include the current
+native DAA, source/receiver progress and the native clock lead bound. The existing
+360 s / 30 s limits are unchanged until an actual failure establishes the cause.
+The A2 matrix releases its completed post-fence refusal node before independent
+history replays, preserving every comparison with only two resident nodes.

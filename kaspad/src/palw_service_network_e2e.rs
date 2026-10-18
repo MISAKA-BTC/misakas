@@ -203,7 +203,14 @@ impl NetworkRun {
         self.relay(chain).await;
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while self.receiver.tc.get_sink() != chain.tc.get_sink() {
-            assert!(std::time::Instant::now() < deadline, "socket relay never validated the complete public suffix");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "socket relay never validated the complete public suffix: receiver DAA {}, source DAA {}, relayed {} blocks, target {}",
+                self.receiver.daa(),
+                chain.daa(),
+                self.relayed,
+                chain.tc.get_sink()
+            );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         if !material_answered {

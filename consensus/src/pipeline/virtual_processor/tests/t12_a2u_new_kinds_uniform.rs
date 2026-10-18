@@ -1368,6 +1368,9 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         "the pruning-proof path refuses a PAV3 header with the live build's gate's refusal: {a_proof}"
     );
     assert_ne!(proof_refusal(&now), a_proof, "past the fence the form is the PAV3 carriage, judged by its own decode");
+    // The post-fence refusal node has finished its work. Release it before each
+    // independent history replay so this matrix needs only two resident nodes.
+    drop(now);
     // Both refused headers, each with its own refusal (validation 2026-10-17: the PAV3 section shadowed the PFS4 refusal, so the
     // replay compared the PFS4 block against the PAV3 message).
     let refused = vec![(pfs4.to_immutable(), pfs4_refusal), (pav3.to_immutable(), pav3_refusal)];
