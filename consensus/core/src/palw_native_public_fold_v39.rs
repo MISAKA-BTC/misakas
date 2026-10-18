@@ -92,7 +92,7 @@ fn source(
     )
     .map_err(bad)
 }
-fn check_demand(
+pub(super) fn check_demand(
     builder: &TransitionBuilder<'_>,
     p: &NativeExecutionPoliciesV39,
     h: &JobHeader,

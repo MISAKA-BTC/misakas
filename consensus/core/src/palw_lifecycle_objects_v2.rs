@@ -1838,11 +1838,13 @@ pub enum PalwKernelInnerFenceV1 {
     BeaconBootstrapV1,
     /// `Params::palw_model_eligibility_v1` (RFC-0017): an eligibility exam commit (inner 74) or a drawn verifier's attestation (inner 75).
     ModelEligibilityV1,
+    /// `Params::palw_elastic_final_capacity_v1` (RFC-0016 V8): a verifier's capacity attestation (inner 76).
+    ElasticCapacityV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
@@ -1859,6 +1861,7 @@ impl PalwKernelInnerFenceV1 {
         Self::MinimumPriceV1,
         Self::BeaconBootstrapV1,
         Self::ModelEligibilityV1,
+        Self::ElasticCapacityV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1879,6 +1882,7 @@ impl PalwKernelInnerFenceV1 {
             Self::MinimumPriceV1 => "palw_minimum_price_v1",
             Self::BeaconBootstrapV1 => "palw_beacon_bootstrap_v1",
             Self::ModelEligibilityV1 => "palw_model_eligibility_v1",
+            Self::ElasticCapacityV1 => "palw_elastic_final_capacity_v1",
         }
     }
 }
@@ -1963,6 +1967,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::SignMinimumPriceContractV1 { .. } => Some(PalwKernelInnerFenceV1::MinimumPriceV1),
         K::BootstrapExactV1 { .. } => Some(PalwKernelInnerFenceV1::BeaconBootstrapV1),
         K::CommitEligibilityExamV1 { .. } | K::AttestEligibilityExamV1 { .. } => Some(PalwKernelInnerFenceV1::ModelEligibilityV1),
+        K::AttestCapacityV1 { .. } => Some(PalwKernelInnerFenceV1::ElasticCapacityV1),
         K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
             Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
         }
@@ -2046,6 +2051,8 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     // RFC-0017 (2026-10-15): the model eligibility exam commit and drawn-verifier attestation.
     (74, "CommitEligibilityExamV1", Some(PalwKernelInnerFenceV1::ModelEligibilityV1)),
     (75, "AttestEligibilityExamV1", Some(PalwKernelInnerFenceV1::ModelEligibilityV1)),
+    // RFC-0016 V8 (2026-10-17, audit 16-A): a verifier's capacity attestation.
+    (76, "AttestCapacityV1", Some(PalwKernelInnerFenceV1::ElasticCapacityV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2480,6 +2487,22 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::KernelInner { lo: 74, hi: 75 },
         "palw_model_eligibility_v1",
         "RFC-0017 model eligibility exam commit (74) and drawn-verifier attestation (75)",
+        true,
+    ),
+    // RFC-0016 V8 (2026-10-17, audit 16-A): a verifier's capacity attestation and its row (aux135 0x05).
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 76, hi: 76 },
+        "palw_elastic_final_capacity_v1",
+        "RFC-0016 V8 verifier capacity attestation (76)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux135 0x05 capacity attestations: (verifier bond, compute/memory/DA/court, window and expiry, \
+                   evidence root) per (class, verifier)",
+        },
+        "palw_elastic_final_capacity_v1",
+        "RFC-0016 V8 capacity attestation state",
         true,
     ),
     a2_row(

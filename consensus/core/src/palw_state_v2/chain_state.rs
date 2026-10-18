@@ -1868,6 +1868,15 @@ impl PalwChainStateV2 {
         self.model_lifecycles.insert(class_id, row);
     }
 
+    /// RFC-0023 tests: put a claim into / take it out of the unresolved index (the fold keeps it in lockstep with every claim write).
+    #[cfg(test)]
+    pub(crate) fn set_unresolved_for_tests(&mut self, blue_score: u64, claim_id: Hash64, open: bool) {
+        if open {
+            self.unresolved.insert((blue_score, claim_id));
+        } else {
+            self.unresolved.remove(&(blue_score, claim_id));
+        }
+    }
     /// Tests only: the rows ADR-0152 v2's adjudicator resolves a false-Valid target from — a
     /// claim, its bound panel, its liability row — and the session indices that make it wait, for
     /// `palw_offence_attribution_v1`'s tests, which judge evidence against state without folding a
@@ -2612,6 +2621,10 @@ impl PalwChainStateV2 {
 
     /// **RFC-0018 §7.7**: the accepted blue score of the oldest unresolved claim (`None`: nothing unresolved) — the pruning-progress
     /// rule's first bound.
+    /// The open claims in acceptance order (`(accepted blue score, claim)`), for RFC-0023 stage 1's resolved prefix.
+    pub fn unresolved_iter(&self) -> impl Iterator<Item = (u64, &Hash64)> + '_ {
+        self.unresolved.iter().map(|(blue_score, id)| (*blue_score, id))
+    }
     pub fn unresolved_first_blue_score_v1(&self) -> Option<u64> {
         self.unresolved.iter().next().map(|(blue_score, _)| *blue_score)
     }

@@ -197,7 +197,12 @@ struct Net {
 
 impl Net {
     async fn new(typed: bool) -> Net {
-        let (config, bundle, premine, floats) = typed_config(typed);
+        Net::over(typed_config(typed)).await
+    }
+
+    /// The network over `parts` (the typed config, possibly with more fences armed).
+    async fn over(parts: (Config, PalwConsensusParamsV2, Premine, Premine)) -> Net {
+        let (config, bundle, premine, floats) = parts;
         let chain = t12_genesis_chain_on(TestConsensus::new(&config), &config, &bundle, &premine, &floats);
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             config.params.net.to_string().as_bytes(),
@@ -372,6 +377,24 @@ impl Net {
         self.send(vec![(card, o)]).await;
         assert!(self.ledger().claims.contains_key(&id), "the claim committed over its seal");
         id
+    }
+
+    /// [`Self::commit`] without the commit assertion (a gate may drop the reveal).
+    async fn commit_try(&mut self, card: usize, claim: SpecClaimV1) {
+        let (id, job) = (claim.id(), claim.job_id());
+        let ledger = self.ledger();
+        let salted = ledger.salted_seals_from().is_some_and(|at| ledger.daa.saturating_add(1) >= at);
+        let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+        let seal = if salted { misaka_palw_kernel::ledger::claim_seal_v2(&id, &salt) } else { claim_seal_v1(&id) };
+        let seal = K::SealClaim { producer: self.kid(card), job, seal };
+        let o = self.route(card, &seal);
+        self.send(vec![(card, o)]).await;
+        let o = if salted {
+            self.route(card, &K::CommitClaimSalted { salt, commit: misaka_palw_kernel::ledger::SaltedCommitV1::Spec { claim } })
+        } else {
+            self.spec(card, SpecObjectV1::CommitClaim { claim })
+        };
+        self.send(vec![(card, o)]).await;
     }
 
     async fn file(&mut self, card: usize, claim: Digest, fault: SpecFaultV1) {
@@ -554,7 +577,10 @@ struct MemWorld {
 
 impl MemWorld {
     async fn new() -> MemWorld {
-        let mut net = Net::new(true).await;
+        MemWorld::on(Net::new(true).await).await
+    }
+
+    async fn on(mut net: Net) -> MemWorld {
         let class = net.register(memory_spec()).await;
         assert!(net.ledger().opv.classes.contains(&class), "an OPV class");
         MemWorld { net, fx: memory_fx(), class, jobs: 0 }
@@ -834,3 +860,61 @@ mod g14c;
 // Lane G14-K: the kernel service's typed pipeline (the same `pursuit` functions kaspad's verifier calls) — memory step lies pre- and
 // post-Final, an honest claim left alone.
 mod g14k;
+
+/// **Lane g14-court-capacity-r2: a TYPED (`Memory`) kernel claim meets its detection policy's full plan**, its N from its priced
+/// structure (the job's chunk lengths: every step runs over its chunk — 5 positions here). An adequate policy admits the claim; a
+/// policy whose `n_max` is below 5, or whose deterrence bound the route's collateral does not meet, drops it (no claim, no reward).
+#[tokio::test]
+async fn g14r2_a_typed_kernel_claim_meets_its_policys_full_plan() {
+    use super::g14_kernel_route_e2e::{kernel_detection_policy, with_detection_policies};
+    kaspa_core::log::try_init_logger("warn");
+    let class = Hash64::from_bytes(memory_spec().class_id().unwrap());
+    let run = |policy: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1| async move {
+        let net = Net::over(with_detection_policies(typed_config(true), vec![policy])).await;
+        let mut m = MemWorld::on(net).await;
+        let collateral = m.net.ledger().policy.claim_collateral;
+        let job = m.job(vec![vec![3, 17, 9], vec![5, 2]]).await;
+        let p = m.produce(&job, 0, &m.m0(), |_, _| {});
+        let claim = SpecClaimV1::Memory(p.claim);
+        let id = claim.id();
+        m.net.commit_try(0, claim).await;
+        (m.net.ledger().claims.contains_key(&id), collateral)
+    };
+    let (committed, collateral) = run(kernel_detection_policy(class, 1)).await;
+    assert!(committed, "an adequate policy admits the typed claim");
+    let mut narrow = kernel_detection_policy(class, 1);
+    narrow.n_max = 4;
+    assert!(!run(narrow).await.0, "N = 5 above n_max: dropped");
+    assert!(!run(kernel_detection_policy(class, collateral)).await.0, "collateral below the deterrence bound: dropped");
+}
+
+
+/// **Lane g14-court-capacity-r2: no public checker, no reward.** A typed `Composite` claim — a kind no node's public kernel verifier
+/// re-executes (it needs a model and a snapshot) — is dropped past `palw_detection_policy_v1` even under an adequate policy for its
+/// class; below the fence (the composite tests above) it commits as before.
+#[tokio::test]
+async fn g14r2_a_composite_claim_no_node_checks_is_not_reward_bearing_past_the_fence() {
+    use super::g14_kernel_route_e2e::{kernel_detection_policy, with_detection_policies};
+    kaspa_core::log::try_init_logger("warn");
+    let class_id = Hash64::from_bytes(composite_spec().class_id().unwrap());
+    let mut net = Net::over(with_detection_policies(typed_config(true), vec![kernel_detection_policy(class_id, 1)])).await;
+    let tool = net.register(retrieval_spec(2)).await;
+    let model = net.register(model_spec()).await;
+    let class = net.register(composite_spec()).await;
+    let data = corpus();
+    let model_fx = wide128_v1(7);
+    let l = net.ledger();
+    let SpecClassKindV1::Retrieval { root } = &l.typed.classes[&tool].kind else { panic!() };
+    let row = l.classes[&model].clone();
+    let job = CompositeJobV1 { class, prompt: vec![3, 17], query: vec![2, -1, 1, 3], nonce: [9; 64] };
+    let jid = net.post(SpecJobV1::Composite(job.clone())).await;
+    let result = data.retrieve(root, &job.query).unwrap();
+    let payloads: Vec<Vec<u32>> = result.iter().map(|e| data.items[e.id as usize].payload.clone()).collect();
+    let prompt: Vec<u32> = job.prompt.iter().copied().chain(payloads.iter().flatten().copied()).collect();
+    let (model_stage, _) = produce_model_stage_v1(&model, &row, &jid, 1, prompt, 2, &net.kid(0), &model_fx.params, 2, |_| {}).unwrap();
+    let tool_stage = StageClaimV1::Retrieval { query: job.query.clone(), result, payloads };
+    let claim = SpecClaimV1::Composite(CompositeClaimV1 { job_id: jid, producer_bond: net.kid(0), stages: vec![tool_stage, model_stage] });
+    let id = claim.id();
+    net.commit_try(0, claim).await;
+    assert!(!net.ledger().claims.contains_key(&id), "no node checks a composite: past the fence it takes no claim (no reward)");
+}

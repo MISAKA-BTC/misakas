@@ -54,6 +54,8 @@ pub enum PalwG14GatedFenceV1 {
     LegacyPublicFilerV1,
     /// LG14-B `palw_legacy_held_da_v2` (lane g14-close-legacy, 2026-10-16): likewise, and it needs LG14-A at or below it.
     LegacyHeldDaV2,
+    /// `palw_court_capacity_v1` (lane g14-court-capacity, audit G-07): the court budget, time price and deadline-aware queue.
+    CourtCapacityV1,
 }
 
 /// The G14 validation steps V1–V7 (`g14-objective-conviction-remaining-2026-10-15.md` §5), one evidence digest each.
@@ -122,8 +124,24 @@ pub const PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1: &[&str] = &[
     "drill D-02 / D-11: the shipped binary crosses the fence; a withheld unit defaults on the real network",
 ];
 
+/// **The court-capacity fence's arm-readiness requirements** (audit G-07; user direction 2026-10-16 §1, §3). Every value of its
+/// policy is a measurement: the per-operation work units and the block budget on the slowest supported node, ρ_court, and the drills
+/// that show an honest prosecution reaches a verdict under a saturating and a continuously refilling coalition.
+pub const PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "V1 build, regressions and boundary decode (g14_court_capacity fold suite; the dispute record's appended court rows)",
+    "measured: each court operation class's verification time, evidence bytes and working set on the slowest supported node \
+     (palw_court_op_timing_harness and the node E2E's [court-op timing]), with the block allotments, as a PalwCourtMeasurementV1 \
+     whose digest is THIS evidence entry and from which the armed policy derives exactly (validated)",
+    "measured: rho_court (sompi per occupied DAA per weight unit) and the session weight, with the occupancy economics reported",
+    "V3 drill: a coalition holds every court slot; a further honest independent verifier reaches its verdict inside its claim's \
+     hard deadline",
+    "V3 drill: a coalition refills every slot as it frees; the queued honest prosecution is granted first and convicts in time",
+    "V5 drill: maximum load — every block's court operations at the budget; node verification time and memory under the bound",
+    "V7 restart / IBD / pruned / reorg mid-queue: identical reservations, deadlines, fees and releases",
+];
+
 impl PalwG14GatedFenceV1 {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::StagedPublicCourtV1,
         Self::StagedTirRouteV1,
         Self::StagedFloatConstraintV1,
@@ -133,6 +151,7 @@ impl PalwG14GatedFenceV1 {
         Self::RewardLiabilityHorizonV1,
         Self::LegacyPublicFilerV1,
         Self::LegacyHeldDaV2,
+        Self::CourtCapacityV1,
     ];
 
     /// The `Params` field's name.
@@ -147,6 +166,7 @@ impl PalwG14GatedFenceV1 {
             Self::RewardLiabilityHorizonV1 => "palw_reward_liability_horizon_v1",
             Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
             Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
+            Self::CourtCapacityV1 => "palw_court_capacity_v1",
         }
     }
 
@@ -161,6 +181,7 @@ impl PalwG14GatedFenceV1 {
             Self::RewardLiabilityHorizonV1 => PALW_REWARD_LIABILITY_ARMING_REQUIREMENTS_V1,
             Self::LegacyPublicFilerV1 => PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1,
             Self::LegacyHeldDaV2 => PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1,
+            Self::CourtCapacityV1 => PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1,
         }
     }
 
@@ -176,6 +197,7 @@ impl PalwG14GatedFenceV1 {
                 | Self::TirPublicConvictionV1
                 | Self::LegacyPublicFilerV1
                 | Self::LegacyHeldDaV2
+                | Self::CourtCapacityV1
         )
     }
 
@@ -191,6 +213,7 @@ impl PalwG14GatedFenceV1 {
             Self::RewardLiabilityHorizonV1 => p.palw_reward_liability_horizon_v1,
             Self::LegacyPublicFilerV1 => p.palw_legacy_public_filer_v1,
             Self::LegacyHeldDaV2 => p.palw_legacy_held_da_v2,
+            Self::CourtCapacityV1 => p.palw_court_capacity_v1.map(|f| f.activation),
         };
         raw.filter(|f| *f != ForkActivation::never())
     }
@@ -234,6 +257,11 @@ impl PalwG14GatedFenceV1 {
             Self::LegacyHeldDaV2 => {
                 "palw_legacy_held_da_v2 cannot be armed: no arm-readiness record (LG14-B: held-DA node E2E, measured descent budget, \
                  fence-crossing drill) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 is empty; audit G-01 option (a))"
+            }
+            Self::CourtCapacityV1 => {
+                "palw_court_capacity_v1 cannot be armed: no arm-readiness record (measured court operation costs and block budget, \
+                 rho_court, saturation / refill / maximum-load drills) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 \
+                 is empty; audit G-07)"
             }
         }
     }
@@ -458,6 +486,7 @@ impl Params {
             legacy_held_da_from: height(self.palw_legacy_held_da_v2),
             staged_court_from: height(self.palw_staged_public_court_v1_fence()),
             tir_conviction_from: height(self.palw_tir_public_conviction_v1_fence()),
+            court_capacity_from: self.palw_court_capacity_v1_fence().map(|f| f.activation.daa_score()),
         })
     }
 
@@ -512,6 +541,8 @@ pub struct PalwG14RouteMirrorV1 {
     pub staged_court_from: Option<u64>,
     /// `palw_tir_public_conviction_v1`, resolved (the later of its prerequisites).
     pub tir_conviction_from: Option<u64>,
+    /// `palw_court_capacity_v1` (audit G-07): the court-capacity guarantee the fused-leaf adjudication route depends on.
+    pub court_capacity_from: Option<u64>,
 }
 
 fn in_force(height: Option<u64>, daa: u64) -> bool {
@@ -530,6 +561,11 @@ impl PalwG14RouteMirrorV1 {
         let d = accepted_daa;
         match family {
             PalwG14RouteFamilyV1::LegacyPanelAttempt => in_force(self.legacy_filer_from, d) && in_force(self.legacy_held_da_from, d),
+            // User direction 2026-10-16 (§1): the fused-leaf route (KernelWitness → ShardCourtAccused → held dissection) needs a court
+            // slot, so it is not a G14 route until the court-capacity guarantee is armed as well.
+            PalwG14RouteFamilyV1::LegacyFusedLeaf => {
+                self.route_armed(PalwG14RouteFamilyV1::LegacyPanelAttempt, d, framed) && in_force(self.court_capacity_from, d)
+            }
             PalwG14RouteFamilyV1::FpSelection => framed && in_force(self.tir_conviction_from, d),
             PalwG14RouteFamilyV1::FpConstraint | PalwG14RouteFamilyV1::FpPrefix | PalwG14RouteFamilyV1::FpTokenizer => {
                 in_force(self.staged_court_from, d) && in_force(self.legacy_filer_from, d)
@@ -544,6 +580,7 @@ impl PalwG14RouteMirrorV1 {
 /// | family | claims | G14 public-conviction route (every fence in force at the claim's acceptance) |
 /// |---|---|---|
 /// | `LegacyPanelAttempt` | every V2 Attempt (floor, model, TIR v1, gen v1, shard classes) | LG14-A `palw_legacy_public_filer_v1` + LG14-B `palw_legacy_held_da_v2` |
+/// | `LegacyFusedLeaf` | a V2 Attempt whose class has fused-attention leaves (their lies are adjudicated only through a court session) | `LegacyPanelAttempt`'s + `palw_court_capacity_v1` (user direction 2026-10-16) |
 /// | `FpSelection` | every FP job decoded under a selection rule (V3, V4, constraint, prefix) | the TIR public frame: `palw_tir_public_conviction_v1` AND the commitment carries its TFP1 frame |
 /// | `FpConstraint` | FP Job V6 (constraint) | the staged Constraint family: `palw_staged_public_court_v1` + LG14-A |
 /// | `FpPrefix` | prefix state / inherit (11 / 12) | the staged PublicPrefix family: `palw_staged_public_court_v1` + LG14-A |
@@ -555,6 +592,7 @@ impl PalwG14RouteMirrorV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PalwG14RouteFamilyV1 {
     LegacyPanelAttempt,
+    LegacyFusedLeaf,
     FpSelection,
     FpConstraint,
     FpPrefix,
@@ -584,8 +622,30 @@ pub fn palw_g14_fp_route_families_v1(job: &PalwFreePromptJobV3) -> Vec<PalwG14Ro
     families
 }
 
-/// **Option (b) on a V2 Attempt accepted at `accepted_daa`**: `None` below the fence (or where no network arms it), or when the legacy
-/// Panel route's G14 route is armed; else `Some(why)`, refused at the claim gate with [`PALW_G14_ROUTE_ABSENT_CODE_V1`].
+/// **Option (b) on a V2 Attempt of a class WITH fused-attention leaves** (lane g14-court-capacity, user direction 2026-10-16 §1):
+/// [`palw_g14_route_attempt_refusal_v1`] and, past it, the fused-leaf route — whose adjudication needs a court session — counts only
+/// once `palw_court_capacity_v1` is in force at the claim's acceptance. `fused` is `PalwClassStateV2::fused_attention`. This is the
+/// one the class gate asks; below option (b)'s fence `None`, byte for byte.
+pub fn palw_g14_route_attempt_refusal_for_class_v1(params: &PalwStateParamsV2, accepted_daa: u64, fused: bool) -> Option<String> {
+    if let Some(why) = palw_g14_route_attempt_refusal_v1(params, accepted_daa) {
+        return Some(why);
+    }
+    let mirror = params.g14_route_required_v1()?;
+    if !fused || !mirror.governs(accepted_daa) || mirror.route_armed(PalwG14RouteFamilyV1::LegacyFusedLeaf, accepted_daa, false) {
+        return None;
+    }
+    Some(
+        "palw_g14_route_required_v1: this V2 Attempt's class has fused-attention leaves, whose lies are adjudicated only through a \
+         court session (KernelWitness, ShardCourtAccused, held dissection); that route counts as a G14 route only once \
+         palw_court_capacity_v1 guarantees an honest prosecution court capacity before its deadline: no reward, weight or consensus \
+         credit"
+            .to_string(),
+    )
+}
+
+/// **Option (b) on a V2 Attempt accepted at `accepted_daa`** (the class-agnostic half: a class with no fused-attention leaf): `None`
+/// below the fence (or where no network arms it), or when the legacy Panel route's G14 route is armed; else `Some(why)`, refused at
+/// the claim gate with [`PALW_G14_ROUTE_ABSENT_CODE_V1`].
 pub fn palw_g14_route_attempt_refusal_v1(params: &PalwStateParamsV2, accepted_daa: u64) -> Option<String> {
     let mirror = params.g14_route_required_v1()?;
     if !mirror.governs(accepted_daa) || mirror.route_armed(PalwG14RouteFamilyV1::LegacyPanelAttempt, accepted_daa, false) {
@@ -694,6 +754,9 @@ pub fn palw_g14_genesis_test_params_v1() -> Params {
     p.palw_legacy_public_filer_v1 = at;
     p.sync_palw_legacy_public_filer_v1();
     p.palw_legacy_held_da_v2 = at;
+    // Lane g14-court-capacity: the court-capacity guarantee at 0 too (its placeholder policy is admissible only on an isolated genesis).
+    p.palw_court_capacity_v1 = Some(crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1::placeholder_at(ForkActivation::new(0)));
+    p.sync_palw_court_capacity_v1();
     p.palw_staged_public_court_v1 = at;
     p.palw_staged_tir_route_v1 = at;
     p.palw_staged_float_constraint_v1 = at;

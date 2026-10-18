@@ -46,6 +46,10 @@ pub const PALW_KERNEL_SIGNER_LOCK_PREFIX_V1: u8 = 0x01;
 /// ([`PalwServedMaterialRowV1`]). Served segment parts are kept only in block bodies, so pruning may not pass that block while the
 /// claim can still be convicted.
 pub const PALW_SERVED_MATERIAL_PREFIX_V1: u8 = 0x02;
+/// `0x03 ‖ attestor kernel bond ‖ mining claim` (129 bytes): G-N2 — a Reproduced attestor's lock on an owning39 mining claim
+/// ([`PalwKernelSignerLockRowV1`]), counted with the signer locks in the committed ledger, charged at the claim's conviction,
+/// released at its collection.
+pub const PALW_NATIVE_ATTESTOR_LOCK_PREFIX_V1: u8 = 0x03;
 /// The rows' version.
 pub const PALW_G14_LANE_CLOSURE_ROW_VERSION_V1: u8 = 1;
 
@@ -93,6 +97,14 @@ pub fn palw_kernel_signer_lock_key_v1(seat: &[u8; 64], claim: &[u8; 64]) -> Vec<
     key
 }
 
+/// The key of `attestor`'s G-N2 lock on mining claim `claim` (129 bytes).
+pub fn palw_native_attestor_lock_key_v1(attestor: &[u8; 64], claim: &[u8; 64]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(129);
+    key.push(PALW_NATIVE_ATTESTOR_LOCK_PREFIX_V1);
+    key.extend_from_slice(attestor);
+    key.extend_from_slice(claim);
+    key
+}
 /// The prefix of every lock `seat` holds (65 bytes).
 pub fn palw_kernel_signer_lock_seat_prefix_v1(seat: &[u8; 64]) -> Vec<u8> {
     let mut key = Vec::with_capacity(65);

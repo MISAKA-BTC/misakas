@@ -63,3 +63,32 @@
 - A が後で有罪になったとき、A と A に依存した claim だけが slash・credit 取消を受け、B は影響を受けない。
 - 未解決 A の資料は pruning・IBD・restart・reorg の後も取得でき、外部の正直な検証者 1 人が反証を完成できる。
 - 全ノードが同じ checkpoint・未解決集合・決済状態に収束する。fence の前は byte 単位で同じ動作。
+
+## 7. 実装メモ(段階 1、2026-10-17、branch `integ/g14-court-capacity-r2`)
+
+- **fence。** `palw_unresolved_bound_v1`(`Params` の Some-only fence。identity・schedule・fork-id の各所に名前つきで入る)。全 preset で `None`、validation は武装を拒否する。state params への mirror は `unresolved_bound_from_daa`。testnet-12 の identity は不変。
+- **未解決期限。** `bound(c) = c.trace_retention_daa` とした。受理時に固定される producer の約束で、`palw_court_capacity_v1` 以後は court を要する class で 4W + W_disclose(licence 起点)以上、Gate C 以後は認証の延長分を含む。新しい告発で動かない。`L_class = bound − 受理 DAA`。
+- **受理時の保証。** court 容量の bounded admission と reserve pool(本書の対である G14 完全性証明 §11.1)が、`bound − W_disclose` までに admit された行の裁定を保証する。保証できない class の claim は、`CourtClaimAdmissionFull` と `COURT_RETENTION_BELOW_GUARANTEE` で報酬対象にならない。
+- **resolved prefix。** `palw_resolved_through_v1` は、期限内の最古の未解決 claim の位置 − 1 を返す。期限を過ぎた未解決 claim は prefix を止めない。
+  - その claim は `unresolved` に残る。pruning の上限は止まったままで、証拠は保持される。予約・担保・係争にも触らない。
+  - fence 未満では従来どおり、最古の未解決 claim の位置 − 1 である。
+- **credit。** 期限より後に `Final` になった claim は frontier にならず(`palw_gate_c_advances_frontier_v1`)、certification は `Withdrawn` になる。held reward は名指されない。slash はしない。
+- **floor(F05)。** 退役による floor の引き上げは prefix の内側に限る。prefix より上の退役は deferred floor の行(`'f'`、最も高いもの 1 つ)に置く。prefix がそこへ届いた block で適用する。floor が期限内の未解決 claim を越えることはない。
+- **試験(core、pass)。**
+  - `rfc23s1_the_resolved_prefix_skips_only_open_claims_past_their_own_bound_and_is_the_identity_below_the_fence`
+  - `rfc23s1_a_claim_final_only_after_its_bound_earns_no_frontier_credit`
+  - `rfc23s1_a_continuous_hand_over_lags_the_frontier_by_at_most_one_bound`
+  - `rfc23s1_floor_horizons_late_conviction_and_restore_as_one_set`
+- **継続攻撃の測定(模擬、§3.4)。**
+  - 条件:L = 14,568 DAA(testnet-12 の court 用 retention)、攻撃 claim の投入間隔 600 DAA、正直な claim の認証まで 120 DAA。
+  - fence 以後の定常遅れは 14,999 DAA(L + 間隔の範囲内)。fence 未満では、最初の攻撃 claim が全期間 frontier を止めた(170,001 DAA)。
+  - 原因別の内訳(資料応答の遅延、正当な court、虚偽告発、再抽選、容量飽和)は、この模擬では区別していない。どれも期限 L の内側に収まる、という上限だけを確かめた。原因別の実測は未実施。
+- **床の不変条件の試験の内容。**
+  - fence 未満では、短い horizon の B の退役が、開いている長い horizon の A を越えて floor を上げる(F05 の穴を再現した)。
+  - fence 以後は deferred になり、A の期限を過ぎてから適用される。
+  - その後の C の late conviction で、frontier は floor まで戻る。
+  - carriage は open claim と floor の行を運ぶ。
+- **追補(2026-10-18)。**
+  - 原因別の定常遅れを測った(`rfc23s1_per_cause_steady_state_lag_is_bounded_by_min_hold_and_l_plus_gap`)。6 原因とも min(保持時間, L) + 間隔 + 認証時間 以内。上限のない虚偽告発と再抽選の連鎖は、段階 1 が L で切る(fence 未満では 140,001 DAA 止まる)。数値は [G14 完全性証明 §13.8](../audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md)。
+  - node の restart と genesis からの replay(IBD の経路)が、fence をまたいで resolved prefix まで一致した(`rfc23s1_node_restart_and_genesis_replay_agree_on_the_resolved_prefix_across_the_fence`)。
+- **未実施。** node 上の drill(fence をまたぐ出荷 binary)、`settled`・native safe の段階別の実測(§3.3)、段階 2(別 fence)の全部。

@@ -22,6 +22,10 @@ pub const ISSUE_RECEIPT_ACTION_V39: u8 = 77;
 /// work (header carriage `PNR9`, `palw_native_receipt_v39`), never as an object.
 pub const SPEND_RECEIPT_ACTION_V39: u8 = 78;
 pub const COLLECT_MINING_ACTION_V39: u8 = 79;
+/// **G14 lane closure G-N2: the post-Final public accusation of a mining claim** (stage action 80, `NativeMiningAccusationWireV39`):
+/// kind 0 a self-contained filing against one credited component, kind 1 a post-Final demand on the component's retained material,
+/// kind 2 the producer's answer part, kind 3 the default of an unanswered demand. Dormant with `palw_native_mining_v39`.
+pub const ACCUSE_MINING_ACTION_V39: u8 = 80;
 pub const MINING_TABLE_V39: u8 = 112;
 // Table-112 kinds under the owning `(39, kind, ..)` prefix (grepped free 2026-10-15).
 pub const MINING_MODEL_KIND_V39: u8 = 100;
@@ -36,6 +40,104 @@ pub const MINING_MODEL_SEQUENCE_KIND_V39: u8 = 109;
 pub const MINING_PRODUCER_SEQUENCE_KIND_V39: u8 = 110;
 pub const MINING_MODEL_COUNT_KIND_V39: u8 = 113;
 pub const MINING_COLLECTED_KIND_V39: u8 = 114;
+/// G-N2 rows (table 112, `(39, kind, ..)`; grepped free 2026-10-17).
+/// `(claim)` → the conviction tombstone [`NativeMiningConvictionV39`].
+pub const MINING_CONVICTED_KIND_V39: u8 = 115;
+/// `(receipt)` → `u128`: the safe weight this receipt's spent quanta granted (revoked whole at a conviction).
+pub const MINING_RECEIPT_GRANTED_KIND_V39: u8 = 116;
+/// `(component job)` → `(mining claim, liability_until)`: the component's material is retained (collection 53 refused) while the
+/// claim crediting it is live and accusable.
+pub const MINING_JOB_HOLD_KIND_V39: u8 = 117;
+/// `(claim)` → [`NativeMiningAccusationCountsV39`].
+pub const MINING_ACCUSATION_COUNT_KIND_V39: u8 = 118;
+/// `(demand id)` → [`NativeMiningDemandV39`].
+pub const MINING_ACCUSATION_DEMAND_KIND_V39: u8 = 119;
+/// `(demand id, index)` → one 32-KiB answer part; `(demand id, u16::MAX)` the assembled public reply.
+pub const MINING_ACCUSATION_REPLY_KIND_V39: u8 = 120;
+/// Post-Final demands one mining claim may compel over its whole liability, and at once. The producer's committed answer obligation
+/// for a mining claim is therefore at most this many replies (it chose to commit the claim); no value here is a measured one.
+pub const MINING_ACCUSATION_DEMANDS_PER_CLAIM_V39: u32 = 8;
+pub const MINING_ACCUSATION_OPEN_PER_CLAIM_V39: u32 = 2;
+/// One answer part (as every owning39 page) and the most parts of one reply.
+pub const MINING_ACCUSATION_PART_BYTES_V39: usize = 32 << 10;
+pub const MINING_ACCUSATION_PARTS_MAX_V39: u32 = 64;
+/// The largest accusation wire (a filing, a demand, or a part with its 134-byte header): bounded like a proof part.
+pub const MINING_ACCUSATION_MAX_BYTES_V39: usize = (32 << 10) + 256;
+
+/// **G-N2: until when a mining claim answers for its components** — its admission plus the whole certification life (draw, attest,
+/// prosecution), the receipt's life, and one more prosecution window after the last quantum could be spent. Accusations are open,
+/// the components' material is held, the attestors' locks are held and the claim cannot be collected through this DAA. Derived from
+/// existing policy values only.
+pub fn palw_native_mining_liability_until_v39(
+    admitted_daa: u64,
+    policy: &NativeMiningPolicyV39,
+    certification: &crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+) -> u64 {
+    admitted_daa
+        .saturating_add(certification.lifetime_daa())
+        .saturating_add(policy.receipt_lifetime_daa)
+        .saturating_add(certification.prosecution_window_daa)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeMiningAccusationWireV39 {
+    pub version: u16,
+    pub kind: u8,
+    pub claim: Digest,
+    pub stage: u16,
+    pub body: Vec<u8>,
+}
+impl NativeMiningAccusationWireV39 {
+    pub fn from_bytes(raw: &[u8]) -> Result<Self, String> {
+        if raw.len() > MINING_ACCUSATION_MAX_BYTES_V39 {
+            return Err("mining39 accusation extent".into());
+        }
+        let v: Self = borsh::from_slice(raw).map_err(|e| e.to_string())?;
+        if v.version != 39 || v.kind > 3 || v.claim == [0; 64] || v.body.is_empty() {
+            return Err("mining39 accusation original grammar".into());
+        }
+        Ok(v)
+    }
+}
+/// Per-claim accusation counters (lifetime demands, open demands).
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeMiningAccusationCountsV39 {
+    pub demands: u32,
+    pub open: u32,
+}
+/// One post-Final demand on a credited component's retained material.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeMiningDemandV39 {
+    pub version: u16,
+    pub id: Digest,
+    pub claim: Digest,
+    pub stage: u16,
+    pub job: Digest,
+    pub demand: Vec<u8>,
+    pub accuser: crate::palw_state_v2::PalwBondKeyV2,
+    pub accuser_operator: Digest,
+    pub accuser_payout: crate::Hash64,
+    pub bond: u64,
+    pub opened: u64,
+    pub deadline: u64,
+    pub settled: bool,
+}
+/// The conviction tombstone: when, what was collected of the producer's exposure, who found it (none for a default's finder share
+/// to the demander is recorded the same way).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeMiningConvictionV39 {
+    pub version: u16,
+    pub claim: Digest,
+    pub stage: u16,
+    pub proof: Digest,
+    pub established: u64,
+    pub collected: u64,
+    pub finder: Option<crate::palw_state_v2::PalwBondKeyV2>,
+    pub finder_credit: u64,
+    pub revoked_weight: u128,
+    pub attestors_charged: u64,
+}
+
 pub const MINING_POLICY_VERSION_V39: u16 = 39;
 fn add(a: u128, b: u128) -> Result<u128, String> {
     a.checked_add(b).ok_or("mining39 work addition overflow".into())

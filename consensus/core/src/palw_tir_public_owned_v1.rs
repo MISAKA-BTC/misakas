@@ -1869,6 +1869,16 @@ impl PalwTirPublicOwnedV1 {
     /// **Retire an idle owner's slot** (the next Open reclaims it): its open demand, answered or lapsed, is closed and its turn
     /// budget is spent, so it can never demand again — K_owner stays the bound on concurrent custodian load. Its accepted answers
     /// (rooted chunks, the accepted-rows pointer, the history frontier) are untouched. Refused for an owner that is not idle.
+    /// **Lane g14-court-capacity-r2: retire an admitted row the owner queue found idle** (its idleness counted from its admission by
+    /// `staged_tir_idle_admitted_owners_v1`, which this row's own clock cannot see) — exactly [`Self::retire_idle_v1`]'s effect.
+    pub fn retire_admitted_idle_v1(&mut self) -> Result<(), String> {
+        if !self.holds_owner_slot_v1() {
+            return Err("TIR owner holds no slot; nothing to reclaim".into());
+        }
+        self.pending = None;
+        self.spent.turns = self.contract.plan.maximum_turns;
+        Ok(())
+    }
     pub fn retire_idle_v1(&mut self, now: u64) -> Result<(), String> {
         if !self.owner_idle_at_v1(now) {
             return Err("TIR owner is not idle; its slot cannot be reclaimed".into());
@@ -1876,6 +1886,11 @@ impl PalwTirPublicOwnedV1 {
         self.pending = None;
         self.spent.turns = self.contract.plan.maximum_turns;
         Ok(())
+    }
+    /// **Lane g14-court-capacity-r2: stamp a reclaimed slot's release** — past `palw_court_capacity_v1` the reclamation is the row's
+    /// last progress, so the owner queue admits the next waiting row from this DAA (never from a stale earlier move).
+    pub fn stamp_release_v1(&mut self, now: u64) {
+        self.spent.last_progress_daa = self.spent.last_progress_daa.max(now);
     }
     pub fn work_v1(&self) -> Option<&PalwTirPublicWorkStateV1> {
         self.work.as_ref()

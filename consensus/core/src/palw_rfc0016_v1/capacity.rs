@@ -311,29 +311,171 @@ pub fn palw_capacity_claims_per_span_v1(capability: &PalwCapacityResourcesV1, lo
     claims
 }
 
-/// **V8: the verifier supply the water-filling reads, from attestations** — ONE budget per verifier however many models it attests
-/// for (its largest valid compute, never the sum: the same hardware attested to N models is still one machine), its classes the
-/// models whose load fits its resources jointly. Expired, unproven or non-fitting attestations count nothing. The water-filling then
-/// splits that one budget across the models ([`palw_waterfill_capacity_v1`]) — no verifier counted twice.
-pub fn palw_capacity_supply_from_attestations_v1(
+/// **V8: one verifier's valid attestations at `now_daa`, folded to one machine** — the resources (component-wise MINIMUM over its
+/// valid attestations: the same hardware attested to N models is one machine, and where two of its own attestations disagree the
+/// smaller figure is the one both measurements support) and the models whose load fits those resources jointly (at least one whole
+/// claim per span). Expired, unproven, load-less or non-fitting attestations count nothing.
+fn verifier_machines_v1(
     attestations: &[PalwCapacityAttestationV1],
     now_daa: u64,
     load_of: impl Fn(&Hash64) -> Option<PalwClaimLoadV1>,
-) -> Vec<PalwVerifierSupplyV1> {
-    let mut by_verifier: BTreeMap<PalwBondKeyV2, (u128, BTreeSet<Hash64>)> = BTreeMap::new();
+) -> BTreeMap<PalwBondKeyV2, PalwVerifierResourceSupplyV1> {
+    let mut machines: BTreeMap<PalwBondKeyV2, (PalwCapacityResourcesV1, BTreeMap<Hash64, PalwClaimLoadV1>)> = BTreeMap::new();
     for a in attestations {
         if palw_capacity_attestation_check_v1(a, now_daa).is_err() {
             continue;
         }
         let Some(load) = load_of(&a.model) else { continue };
-        if palw_capacity_claims_per_span_v1(&a.capability, &load) == 0 {
+        match machines.get_mut(&a.verifier) {
+            None => {
+                machines.insert(a.verifier, (a.capability, [(a.model, load)].into_iter().collect()));
+            }
+            Some((resources, loads)) => {
+                resources.compute_ccu_per_span = resources.compute_ccu_per_span.min(a.capability.compute_ccu_per_span);
+                resources.memory_bytes = resources.memory_bytes.min(a.capability.memory_bytes);
+                resources.da_bytes_per_span = resources.da_bytes_per_span.min(a.capability.da_bytes_per_span);
+                resources.court_permille_per_span = resources.court_permille_per_span.min(a.capability.court_permille_per_span);
+                loads.insert(a.model, load);
+            }
+        }
+    }
+    machines
+        .into_iter()
+        .filter_map(|(verifier, (resources, loads))| {
+            let loads: BTreeMap<Hash64, PalwClaimLoadV1> =
+                loads.into_iter().filter(|(_, load)| palw_capacity_claims_per_span_v1(&resources, load) > 0).collect();
+            (!loads.is_empty()).then_some((verifier, PalwVerifierResourceSupplyV1 { resources, loads }))
+        })
+        .collect()
+}
+
+/// **V8: one verifier as the multi-resource account sees it** — its machine's resources and the per-claim load of each model it is
+/// ready for (the models whose load fits jointly).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwVerifierResourceSupplyV1 {
+    pub resources: PalwCapacityResourcesV1,
+    pub loads: BTreeMap<Hash64, PalwClaimLoadV1>,
+}
+
+impl PalwVerifierResourceSupplyV1 {
+    /// **The conservative single budget** (RFC-0016 16-B): the smallest of its models' whole-claim joint bounds, in CCU per span —
+    /// `min_m ⌊min_r R_r / l_{m,r}⌋ · c_m`. ANY split of this budget across its models stays inside every resource: for each model
+    /// `l_{m,r}/c_m ≤ R_r / bound_m ≤ R_r / budget`, so `Σ_m x_m · l_{m,r}/c_m ≤ R_r · Σ x_m / budget ≤ R_r`. A single-model verifier
+    /// gets exactly its joint bound (the DA / court bottleneck is kept, never the bare compute figure).
+    pub fn conservative_per_span(&self) -> u128 {
+        self.loads
+            .values()
+            .map(|load| palw_capacity_claims_per_span_v1(&self.resources, load).saturating_mul(load.compute_ccu))
+            .min()
+            .unwrap_or(0)
+    }
+}
+
+/// **V8: the multi-resource supply, from attestations** — one entry per verifier (never one per model), its resources kept whole.
+pub fn palw_capacity_resource_supply_from_attestations_v1(
+    attestations: &[PalwCapacityAttestationV1],
+    now_daa: u64,
+    load_of: impl Fn(&Hash64) -> Option<PalwClaimLoadV1>,
+) -> Vec<PalwVerifierResourceSupplyV1> {
+    verifier_machines_v1(attestations, now_daa, load_of).into_values().collect()
+}
+
+/// **V8: the verifier supply the single-budget water-filling reads, from attestations** — ONE budget per verifier however many models
+/// it attests for, and that budget is [`PalwVerifierResourceSupplyV1::conservative_per_span`]: the DA, court and memory limits
+/// survive the conversion (RFC-0016 audit 16-B: the budget was the bare compute figure, so a DA- or court-bound verifier was credited
+/// its whole compute). The water-filling then splits that one budget across the models ([`palw_waterfill_capacity_v1`]) — no
+/// verifier counted twice, and every split feasible in every resource. [`palw_waterfill_resources_v1`] is the exact (less
+/// conservative) multi-resource split.
+pub fn palw_capacity_supply_from_attestations_v1(
+    attestations: &[PalwCapacityAttestationV1],
+    now_daa: u64,
+    load_of: impl Fn(&Hash64) -> Option<PalwClaimLoadV1>,
+) -> Vec<PalwVerifierSupplyV1> {
+    verifier_machines_v1(attestations, now_daa, load_of)
+        .into_values()
+        .map(|m| PalwVerifierSupplyV1 { per_span: m.conservative_per_span(), classes: m.loads.keys().copied().collect() })
+        .filter(|s| s.per_span > 0)
+        .collect()
+}
+
+/// `⌊a · b / c⌋` (`c > 0`) without overflow where the exact product fits after splitting `a = q·c + r`; on overflow it saturates the
+/// whole part and drops the remainder — never above the exact value except at `u128::MAX` saturation, which no realistic resource
+/// figure reaches.
+fn mul_div_floor(a: u128, b: u128, c: u128) -> u128 {
+    if c == 0 {
+        return 0;
+    }
+    if let Some(p) = a.checked_mul(b) {
+        return p / c;
+    }
+    let whole = (a / c).saturating_mul(b);
+    let part = (a % c).checked_mul(b).map(|x| x / c).unwrap_or(0);
+    whole.saturating_add(part)
+}
+
+/// `⌈a · b / c⌉` (`c > 0`), saturating — the conservative (over-) estimate of a resource USE.
+fn mul_div_ceil(a: u128, b: u128, c: u128) -> u128 {
+    if c == 0 {
+        return u128::MAX;
+    }
+    match a.checked_mul(b) {
+        Some(p) => p.div_ceil(c),
+        None => (a / c).saturating_add(1).saturating_mul(b),
+    }
+}
+
+/// The fixed-point scale of the per-CCU resource use `l_{m,r} / c_m`.
+const RESOURCE_FP_V1: u128 = 1 << 32;
+
+/// **V8: the exact multi-resource water-filling** (RFC-0016 audit 16-B). For each verifier, its classes' weights `w_m` (their demand;
+/// equal where none has demand) are scaled by ONE factor `s` — the largest every resource admits: compute `C / Σ w`, and for DA and
+/// court `R_r / Σ_m w_m · l_{m,r}/c_m` — and class `m` receives `s · w_m` CCU per span. The shared DA and court of a verifier are
+/// therefore spent once across its classes (never a per-class minimum summed), each class's allocation is at most what its load
+/// fits, and `Σ_m alloc_m · l_{m,r}/c_m ≤ R_r` for every resource (the per-CCU use is rounded UP, the allocation DOWN). Returns each
+/// class's capacity per span in CCU, summed over verifiers.
+pub fn palw_waterfill_resources_v1(
+    verifiers: &[PalwVerifierResourceSupplyV1],
+    demand: &BTreeMap<Hash64, u128>,
+) -> BTreeMap<Hash64, u128> {
+    let mut capacity: BTreeMap<Hash64, u128> = BTreeMap::new();
+    for v in verifiers {
+        if v.loads.is_empty() || v.resources.compute_ccu_per_span == 0 {
             continue;
         }
-        let entry = by_verifier.entry(a.verifier).or_default();
-        entry.0 = entry.0.max(a.capability.compute_ccu_per_span);
-        entry.1.insert(a.model);
+        let total: u128 = v.loads.keys().map(|c| demand.get(c).copied().unwrap_or(0)).fold(0u128, u128::saturating_add);
+        let weights: Vec<(Hash64, u128, PalwClaimLoadV1)> = v
+            .loads
+            .iter()
+            .map(|(class, load)| (*class, if total == 0 { 1 } else { demand.get(class).copied().unwrap_or(0) }, *load))
+            .filter(|(_, w, load)| *w > 0 && load.compute_ccu > 0)
+            .collect();
+        let w_sum: u128 = weights.iter().map(|(_, w, _)| *w).fold(0u128, u128::saturating_add);
+        if w_sum == 0 {
+            continue;
+        }
+        // Σ_m w_m · l_{m,r}/c_m in fixed point, rounded up per class (the use is over-estimated, so the allocation is safe).
+        let use_fp = |per_claim: fn(&PalwClaimLoadV1) -> u64| -> u128 {
+            weights
+                .iter()
+                .map(|(_, w, load)| mul_div_ceil(*w, (per_claim(load) as u128).saturating_mul(RESOURCE_FP_V1), load.compute_ccu))
+                .fold(0u128, u128::saturating_add)
+        };
+        let da_use = use_fp(|l| l.da_bytes);
+        let court_use = use_fp(|l| l.court_permille);
+        for (class, w, _) in &weights {
+            let mut share = mul_div_floor(v.resources.compute_ccu_per_span, *w, w_sum);
+            if da_use > 0 {
+                share = share.min(mul_div_floor((v.resources.da_bytes_per_span as u128).saturating_mul(RESOURCE_FP_V1), *w, da_use));
+            }
+            if court_use > 0 {
+                share =
+                    share.min(mul_div_floor((v.resources.court_permille_per_span as u128).saturating_mul(RESOURCE_FP_V1), *w, court_use));
+            }
+            let slot = capacity.entry(*class).or_insert(0);
+            *slot = slot.saturating_add(share);
+        }
     }
-    by_verifier.into_values().map(|(per_span, classes)| PalwVerifierSupplyV1 { per_span, classes }).collect()
+    capacity
 }
 
 /// The verdict of the pre-lottery quote.
@@ -499,6 +641,114 @@ mod tests {
         assert!(capacity.values().sum::<u128>() <= total_budget);
         // An expired attestation counts nothing.
         assert!(palw_capacity_supply_from_attestations_v1(&atts, 1_000, |_| Some(load)).is_empty());
+    }
+
+    /// **RFC-0016 audit 16-B (the audit's proposed regression, adapted)**: a single model, compute 1,000 / DA 50 / court 3,000 and a
+    /// claim costing (10 CCU, 10 bytes, 1,000 ‰): three claims per span fit, so at most 30 CCU may be supplied — the conversion used
+    /// to hand on the whole 1,000 CCU and admit a ten-claim demand.
+    #[test]
+    fn v8_supply_keeps_nonzero_da_and_court_bottlenecks() {
+        let mut a = attestation(1, 1, 1_000);
+        a.capability =
+            PalwCapacityResourcesV1 { compute_ccu_per_span: 1_000, memory_bytes: 100, da_bytes_per_span: 50, court_permille_per_span: 3_000 };
+        let load = PalwClaimLoadV1 { compute_ccu: 10, memory_bytes: 100, da_bytes: 10, court_permille: 1_000 };
+        let joint_claims = palw_capacity_claims_per_span_v1(&a.capability, &load);
+        assert_eq!(joint_claims, 3);
+        let supply = palw_capacity_supply_from_attestations_v1(&[a], 500, |_| Some(load));
+        let demand: BTreeMap<Hash64, u128> = [(h(1), 10 * load.compute_ccu)].into_iter().collect();
+        let allocated = palw_waterfill_capacity_v1(&supply, &demand);
+        assert!(allocated[&h(1)] <= joint_claims * load.compute_ccu, "court/DA constraints disappeared in the attestation-to-supply conversion");
+        assert_eq!(allocated[&h(1)], 30);
+        assert!(!palw_capacity_fits_v1(allocated[&h(1)], demand[&h(1)]));
+        assert!(palw_capacity_fits_v1(allocated[&h(1)], 3 * load.compute_ccu), "three claims still fit");
+        // The exact multi-resource split agrees for one model.
+        let exact = palw_waterfill_resources_v1(&palw_capacity_resource_supply_from_attestations_v1(&[a], 500, |_| Some(load)), &demand);
+        assert_eq!(exact[&h(1)], 30);
+    }
+
+    /// Joint feasibility: what `alloc` (CCU per class) asks of each resource of `v` is within it.
+    fn assert_within(v: &PalwVerifierResourceSupplyV1, alloc: &BTreeMap<Hash64, u128>) {
+        let (mut ccu, mut da, mut court) = (0u128, 0u128, 0u128);
+        for (class, load) in &v.loads {
+            let x = alloc.get(class).copied().unwrap_or(0);
+            ccu += x;
+            // x / c_m claims, each using l_{m,r}: compare x · l_r ≤ R_r · c_m summed over a common denominator (exact, in u128).
+            da += x * load.da_bytes as u128 * 1_000_000 / load.compute_ccu;
+            court += x * load.court_permille as u128 * 1_000_000 / load.compute_ccu;
+        }
+        assert!(ccu <= v.resources.compute_ccu_per_span, "compute {ccu} > {}", v.resources.compute_ccu_per_span);
+        assert!(da <= v.resources.da_bytes_per_span as u128 * 1_000_000, "DA over-allocated");
+        assert!(court <= v.resources.court_permille_per_span as u128 * 1_000_000, "court over-allocated");
+    }
+
+    /// 16-B: each resource alone binds (DA only, court only, memory only), several models with different loads share ONE verifier's DA
+    /// and court (never a per-model minimum summed), an expired attestation supplies nothing, and every allocation — the conservative
+    /// single budget split by demand and the exact split — is inside every resource of every verifier.
+    #[test]
+    fn v8_each_resource_binds_and_shared_da_and_court_are_spent_once() {
+        let rich = PalwCapacityResourcesV1 {
+            compute_ccu_per_span: 10_000,
+            memory_bytes: 1 << 30,
+            da_bytes_per_span: 1 << 40,
+            court_permille_per_span: 1 << 40,
+        };
+        let load = PalwClaimLoadV1 { compute_ccu: 100, memory_bytes: 1 << 20, da_bytes: 1_000, court_permille: 500 };
+        let one = |cap: PalwCapacityResourcesV1| {
+            let mut a = attestation(1, 1, cap.compute_ccu_per_span);
+            a.capability = cap;
+            palw_capacity_supply_from_attestations_v1(&[a], 500, |_| Some(load))
+        };
+        assert_eq!(one(rich)[0].per_span, 10_000, "compute binds: 100 claims");
+        assert_eq!(one(PalwCapacityResourcesV1 { da_bytes_per_span: 5_000, ..rich })[0].per_span, 500, "DA alone binds: 5 claims");
+        assert_eq!(one(PalwCapacityResourcesV1 { court_permille_per_span: 1_500, ..rich })[0].per_span, 300, "court alone: 3 claims");
+        assert!(one(PalwCapacityResourcesV1 { memory_bytes: (1 << 20) - 1, ..rich }).is_empty(), "memory alone: the load does not fit");
+
+        // Two models on one verifier: A is DA-heavy, B court-heavy. The machine's DA and court are each spent once.
+        let machine =
+            PalwCapacityResourcesV1 { compute_ccu_per_span: 10_000, memory_bytes: 1 << 30, da_bytes_per_span: 10_000, court_permille_per_span: 10_000 };
+        let la = PalwClaimLoadV1 { compute_ccu: 100, memory_bytes: 1, da_bytes: 1_000, court_permille: 100 };
+        let lb = PalwClaimLoadV1 { compute_ccu: 50, memory_bytes: 1, da_bytes: 100, court_permille: 2_000 };
+        let loads = |m: &Hash64| if *m == h(1) { Some(la) } else if *m == h(2) { Some(lb) } else { None };
+        let mut a1 = attestation(1, 1, 10_000);
+        a1.capability = machine;
+        let mut a2 = attestation(2, 1, 10_000);
+        a2.capability = machine;
+        // A second verifier, compute-rich, attests only model B.
+        let mut b2 = attestation(2, 2, 2_000);
+        b2.capability = PalwCapacityResourcesV1 { compute_ccu_per_span: 2_000, ..rich };
+        let atts = [a1, a2, b2];
+        let resources = palw_capacity_resource_supply_from_attestations_v1(&atts, 500, loads);
+        assert_eq!(resources.len(), 2, "one entry per verifier, not per model");
+        for demand in [
+            [(h(1), 1_000u128), (h(2), 1_000u128)].into_iter().collect::<BTreeMap<_, _>>(),
+            [(h(1), 100_000), (h(2), 1)].into_iter().collect(),
+            [(h(1), 1), (h(2), 100_000)].into_iter().collect(),
+            BTreeMap::new(),
+        ] {
+            // Exact split: inside every resource of every verifier (verifier by verifier).
+            for v in &resources {
+                assert_within(v, &palw_waterfill_resources_v1(std::slice::from_ref(v), &demand));
+                // Conservative single budget split by the compute water-filling: also inside every resource.
+                let single = PalwVerifierSupplyV1 { per_span: v.conservative_per_span(), classes: v.loads.keys().copied().collect() };
+                assert_within(v, &palw_waterfill_capacity_v1(std::slice::from_ref(&single), &demand));
+            }
+        }
+        // Summing per-model minimums would credit verifier 1 with A's 10 claims (DA) AND B's 5 claims (court) at once; the exact split
+        // under equal demand gives each a share of the same DA and court.
+        let even: BTreeMap<Hash64, u128> = [(h(1), 1_000u128), (h(2), 1_000u128)].into_iter().collect();
+        let v1 = resources.iter().find(|v| v.loads.len() == 2).expect("verifier 1 holds both models");
+        let split = palw_waterfill_resources_v1(std::slice::from_ref(v1), &even);
+        let summed_minimums = palw_capacity_claims_per_span_v1(&machine, &la) * la.compute_ccu
+            + palw_capacity_claims_per_span_v1(&machine, &lb) * lb.compute_ccu;
+        assert!(split.values().sum::<u128>() < summed_minimums, "{split:?} vs {summed_minimums}");
+        // Expired: nothing.
+        assert!(palw_capacity_resource_supply_from_attestations_v1(&atts, 1_000, loads).is_empty());
+        assert!(palw_capacity_supply_from_attestations_v1(&atts, 1_000, loads).is_empty());
+        // A verifier's own disagreeing attestations: the smaller figure of each resource is its machine.
+        let mut small = a2;
+        small.capability = PalwCapacityResourcesV1 { da_bytes_per_span: 1_000, ..machine };
+        let m = palw_capacity_resource_supply_from_attestations_v1(&[a1, small], 500, loads);
+        assert_eq!(m[0].resources.da_bytes_per_span, 1_000);
     }
 
     /// V7 (user decision 2026-10-15): the queue's fair share follows bond capital (3:1 capital → 3:1 share of `L`).

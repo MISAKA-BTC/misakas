@@ -151,6 +151,10 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         135 if key_bytes == 73 && prefix == 0x02 => <u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         135 if key_bytes == 65 && prefix == 0x03 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         135 if key_bytes == 73 && prefix == 0x04 => <(u64, u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        // RFC-0016 V8 (audit 16-A): a capacity attestation row (0x05 ‖ class ‖ verifier kernel id).
+        135 if key_bytes == 129 && prefix == crate::palw_rfc0016_v1::ledger::PALW_RFC0016_CAPACITY_ATTESTATION_PREFIX_V1 => {
+            <crate::palw_rfc0016_v1::ledger::PalwCapacityAttestationRowV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?
+        }
         // Codex material release recovery V2 (aux 137) and the retired compact claim V4 (aux 138), renumbered 2026-10-15 from
         // 134/135, which RFC-0016 holds. Aux 138 keeps fail-closed decoders for wire identity only (PRINCIPLES §8).
         137 if key_bytes == 64 => {

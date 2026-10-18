@@ -456,6 +456,16 @@ pub fn palw_claim_security_certified_v1(state: &PalwChainStateV2, claim_id: &Has
         .is_some_and(|(outcome, _)| outcome.certifies())
 }
 
+/// The DAA at which `claim_id`'s certification row decided a certifying outcome (`None`: no row, undecided, or not certifying).
+pub fn palw_claim_certified_daa_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Option<u64> {
+    let key = certification_claim_key_v1(&palw_certification_id_v1(claim_id));
+    state
+        .kernel_route_state_v1()
+        .and_then(|route| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
+        .and_then(|row| row.outcome)
+        .and_then(|(outcome, daa)| outcome.certifies().then_some(daa))
+}
+
 /// **A claim's certification state as the RPC names it** (`not-governed`, `pending`, `certified`, `public-check-certified`,
 /// `not-certified`, `vetoed`, `no-population`, `expired`, `withdrawn`). `not-governed` below the fence (every shipped network);
 /// `pending` for a governed claim with no decided row (not yet `Final`, or committed and undecided).

@@ -190,6 +190,12 @@ impl PalwChainStateV2 {
             if record.live.keys().any(|bond| *bond == claim.bond) {
                 return bad(format!("claim {claim_id}'s producer holds a reservation on it"));
             }
+            // Lane g14-court-capacity: a court row only beside its reserver's live reservation, and only past its fence.
+            if record.courts.keys().any(|bond| !record.live.contains_key(bond))
+                || (!record.courts.is_empty() && params.court_capacity_v1().is_none())
+            {
+                return bad(format!("claim {claim_id}'s court rows name no live reservation, or exist below palw_court_capacity_v1"));
+            }
             for bond in record.live.keys() {
                 *live_per_bond.entry(*bond).or_default() += 1;
             }
@@ -317,6 +323,27 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
+    /// **Lane g14-court-capacity-r2: withhold a Final claim's unpaid vesting** (the unserved rule's post-Final branch): every leg's
+    /// recipient cancelled, the row burned (`vesting_burned`), noted `UnservedBurned` — accusing nobody. A no-op without a row.
+    pub(super) fn withhold_unserved_vesting_v1(&mut self, claim_id: Hash64) -> Result<(), PalwStateV2Error> {
+        let Some(row) = self.state.vesting.get(&claim_id).cloned() else { return Ok(()) };
+        for (bond, _) in &row.seats {
+            self.cancel_native_recipient_v1(claim_id, *bond, 1)?;
+        }
+        self.cancel_native_recipient_v1(claim_id, row.producer_bond, 0)?;
+        let mut counters = self.state.vesting_counters;
+        counters.burned =
+            counters.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("unserved vesting burned"))?;
+        self.write_vesting(claim_id, None)?;
+        self.write_vesting_counters(counters)?;
+        super::palw_exec_v2_rewards_v1::burn(self, claim_id)?;
+        self.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::UnservedBurned {
+            claim_id,
+            sompi: row.total_sompi(),
+            legs: row.legs().collect(),
+        })
+    }
+
     /// **The hold ended** (the last live reservation closed): DL-1 re-derives the claim's deadline from its own anchors — no time
     /// is credited (the hold is the challenger's), and a deadline that passed during it is swept in the next block.
     fn legacy_dispute_hold_ended_v1(&mut self, claim_id: Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
@@ -335,6 +362,12 @@ impl TransitionBuilder<'_> {
             if let Some(row) = record.live.remove(bond) {
                 record.closed.insert(*bond);
                 record.dismissed_held.push((*bond, row.deposit));
+            }
+            // Lane g14-court-capacity: its court row settles with it — an open session is charged to its backstop (the slot stays
+            // held for it), anything else to now. Empty below `palw_court_capacity_v1`.
+            if let Some(court) = record.courts.remove(bond) {
+                let until = super::palw_court_capacity_fold_v1::court_row_held_until_v1(&self.state, &court, now_daa);
+                super::palw_court_capacity_fold_v1::settle_court_row_v1(self, &claim_id, *bond, &court, until, false)?;
             }
         }
         self.write_legacy_dispute(claim_id, Some(record))?;
@@ -356,6 +389,12 @@ impl TransitionBuilder<'_> {
         let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
         let held = record.holds();
         let live: Vec<PalwBondKeyV2> = record.live.keys().copied().collect();
+        // Lane g14-court-capacity: every court row settles to now with the claim's outcome — on a conviction or a DA default the
+        // producer reimburses the prosecution's occupancy from its own collateral first. Empty below `palw_court_capacity_v1`.
+        let courts = std::mem::take(&mut record.courts);
+        for (reserver, court) in &courts {
+            super::palw_court_capacity_fold_v1::settle_court_row_v1(self, &claim_id, *reserver, court, now_daa, convicted)?;
+        }
         record.live.clear();
         record.reacquiring.clear();
         record.closed.extend(live);
@@ -646,6 +685,35 @@ pub(super) fn sweep_legacy_disputes(builder: &mut TransitionBuilder<'_>, ctx: &P
             builder.state.legacy_dispute_deadlines.remove(&(deadline, claim_id));
             continue;
         }
+        // **Lane g14-court-capacity-r2: unserved = unpaid.** A pre-Final claim whose live reservation still has a court row WAITING
+        // (queued or ticketed) though it was admitted a whole service window before the hard deadline is voided `PanelUnavailable`
+        // (no reward, weight or credit; nobody slashed; every deposit and escrow returned) instead of released toward Final — a court
+        // that could not serve a prosecution in time never lets the claim it accuses be paid. `false` below the fence.
+        let unserved = builder.state.legacy_disputes.get(&claim_id).is_some_and(|record| {
+            super::palw_court_capacity_fold_v1::court_unserved_at_lapse_v1(builder.params, record, ctx.daa_score)
+        });
+        if unserved && let Some(claim) = builder.state.claims.get(&claim_id).cloned() {
+            match claim.phase {
+                PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. } => {
+                    builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::PanelUnavailable)?;
+                }
+                // **The post-Final branch** (a reservation filed in the claim's open post-Final stage — its unmatured vesting is
+                // what held it): the Final is reversed (its safe weight, Gate C credit and usage taken back, the claim `Voided`
+                // `PanelUnavailable`, so kind 3 names it against no signer), its minted round rights forfeited, and every unpaid
+                // vesting leg withheld (burned, `UnservedBurned` — no offence, nobody slashed). What a coinbase already paid stays
+                // paid (the rule withholds, it does not claw back).
+                PalwClaimPhaseV2::Final { .. } => {
+                    builder.reverse_convicted_final(ctx, claim_id, PalwVoidReasonV2::PanelUnavailable)?;
+                    builder.forfeit_minted_round_rights_of_claim(&claim_id)?;
+                    builder.withhold_unserved_vesting_v1(claim_id)?;
+                    builder.da_release_all_v1(claim_id, false, ctx.daa_score)?;
+                }
+                _ => {}
+            }
+            if !builder.state.legacy_dispute_deadlines.contains(&(deadline, claim_id)) {
+                continue;
+            }
+        }
         let x3 = builder
             .state
             .claims
@@ -664,6 +732,9 @@ pub(super) fn sweep_legacy_disputes(builder: &mut TransitionBuilder<'_>, ctx: &P
         }
         builder.legacy_dispute_dismiss_v1(claim_id, &live, ctx.daa_score)?;
     }
+    // Lane g14-court-capacity (audit G-07): ended sessions and expired tickets settle, then freed capacity is granted to the queue —
+    // before any object of the block. A no-op below `palw_court_capacity_v1`.
+    super::palw_court_capacity_fold_v1::sweep_court_capacity_v1(builder, ctx)?;
     Ok(())
 }
 

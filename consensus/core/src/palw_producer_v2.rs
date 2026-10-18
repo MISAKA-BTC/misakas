@@ -661,7 +661,9 @@ pub fn palw_producer_facts_v4(
         is_base_class: class_id == state_params.base_class_id(),
         fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
             || state.fp_lane_certification(&class_id).is_some(),
-        min_trace_retention_daa: palw_min_trace_retention_daa_v1(state_params),
+        // Lane g14-court-capacity-r2: a court-demanding (fused-attention) class past `palw_court_capacity_v1` promises the longer
+        // retention its court guarantee needs; every other class the minimum.
+        min_trace_retention_daa: crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(state, state_params, &class_id, daa_score),
         witness_chunks: if state_params.witness_manifest_active_at(daa_score) {
             state.mesh_witness_profile_v1(&class_id).map_or(0, |profile| profile.chunks)
         } else {

@@ -535,6 +535,21 @@ impl CheckedQuotaShardV11 {
     ) -> Result<(), String> {
         self.state.accept_protected_fragment(policy, epoch, self.actor, plan, paid)
     }
+    /// **G14 lane closure G-N1:** release the selected owner's lapsed seal
+    /// ([`QuotaStateV11::release_lapsed_protected_seal_v41`]); the retained
+    /// counters (global, owner, job) fall by one. Native persists every row and
+    /// deletes the seal row in the same transition.
+    pub fn release_lapsed_protected_seal_v41(&mut self, policy: &QuotaPolicyV11, epoch: &TrustedEpochV11) -> Result<(), String> {
+        let key = self.seal_key.ok_or("quota shard lapsed selected seal absent")?;
+        if self.global_seal_count == 0 || self.retained_actor_seals == 0 {
+            return Err("quota shard lapse lost its retained counters".into());
+        }
+        self.state.release_lapsed_protected_seal_v41(policy, epoch, &key)?;
+        self.global_seal_count -= 1;
+        self.retained_actor_seals -= 1;
+        self.seal_key = None;
+        Ok(())
+    }
     /// Collect the selected owner's expired seal. Its native row membership,
     /// original terminal/nonce witness and owner-counter row are authenticated
     /// before loading this shard. Public third-party collection needs a separate

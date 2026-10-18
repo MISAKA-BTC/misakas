@@ -20,6 +20,8 @@ mod settlement_liability_v1;
 mod paid_claim_trap_v1;
 // RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
 mod tir_fp_lane_v1;
+// RFC-0016 V8 (audit 2026-10-17, 16-A): capacity attestations through the fold and the attested capacity read.
+mod rfc0016_capacity_attestation_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;
@@ -30639,6 +30641,8 @@ mod anchor_window_v1;
 // Lane BUDGET (ADR-0176 / ADR-0177): the bond budget through the fold — the unarmed fold byte for byte, the engine's creation,
 // its deltas and carriage, the capital assignment, and (milestone 3) every reward path's reservation and consumption.
 mod bond_budget_fold_v1;
+// RFC-0023 stage 1: the unresolved bound through the fold's floor rows.
+mod unresolved_bound_v1;
 
 /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
 /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's

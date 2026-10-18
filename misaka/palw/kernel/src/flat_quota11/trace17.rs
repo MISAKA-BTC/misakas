@@ -501,6 +501,29 @@ impl TraceShardV17 {
         self.global.epoch = epoch.clone();
         Ok(())
     }
+    /// **G14 lane closure G-N1:** retire a lapsed seal's unused restoration supplement in its own interval. The remaining
+    /// guarantee is consumed (spent, never refunded); a supplement that already restored a request keeps no different rule — it is
+    /// retired the same way, its spent attempts stay spent.
+    pub fn retire_lapsed_v41(&mut self, quota: &QuotaPolicyV11, epoch: &TrustedEpochV11, plan: &TracePlanV17, key: &Digest) -> Result<(), String> {
+        self.context(quota, epoch, plan)?;
+        let mut r = self.row.clone().ok_or("lapsed trace supplement absent")?;
+        if r.retired || r.key != *key || r.role != 1 {
+            return Err("lapsed trace supplement differs from its seal".into());
+        }
+        let spent = r.remaining.clone();
+        let block = self.block(epoch).consume(&spent, &quota.block)?;
+        let network = self.global.network.consume(&spent, &quota.network)?;
+        let actor = self.actor.interval.consume(&spent, &quota.actor)?;
+        r.retired = true;
+        r.consumed = r.committed.clone();
+        r.remaining = QuotaQuantitiesV11::default();
+        self.global.block = block;
+        self.global.network = network;
+        self.global.epoch = epoch.clone();
+        self.actor.interval = actor;
+        self.row = Some(r);
+        Ok(())
+    }
     /// Conversion preserves original paid capacity and spent attempts.
     pub fn handoff_discovery(&mut self, quota:&QuotaPolicyV11, epoch:&TrustedEpochV11, plan:&TracePlanV17, original:&Digest, checked:&CheckedTraceAdmissionV17)->Result<(),String> {
         self.context(quota,epoch,plan)?;

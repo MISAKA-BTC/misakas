@@ -23,6 +23,8 @@ pub mod palw_economics;
 pub mod palw_exec_slice_producer;
 /// ADR-0152 v3.1 N10 / §7.3 P2-8c: the automatic `PanelFalseValidV2` filer. See the module's own header.
 pub mod palw_filer_false_valid;
+/// RFC-0006 06-A: the automatic held-GDN checkpoint filer (dormant with `palw_memory_routing_court_v2`). See the module's header.
+pub mod palw_gdn_held_filer;
 mod palw_flat_public_source;
 mod palw_public_token_table;
 /// ADR-0077 Decision 8's seat: the interval draw, the signed opening request, the exact replay,

@@ -378,6 +378,13 @@ pub(super) fn palw_held_rehearsal_step_v1(rehearsal: &PalwObjectRehearsalV1) -> 
             | PalwStateV2Error::HeldDissectionFurtherSessionRefused { .. }
             | PalwStateV2Error::DuplicateSession(_),
         ) => PalwSeatAccuseStepV1::Retry,
+        // Lane g14-court-capacity-r2 (past `palw_court_capacity_v1`): the prosecution is queued (it re-files with its ticket), its
+        // ticket lapsed (dropped at the next sweep, then a filing queues anew), its reservation has not landed, or the block's court
+        // budget is spent — each a wait, never a reason to abandon a prosecution the court will still serve. The decoy price is an
+        // escrow on the free half: `AccusationExposureCeiling` above.
+        PalwObjectRehearsalV1::Refused(refusal) if kaspa_consensus_core::palw_state_v2::palw_court_refusal_waits_v1(refusal) => {
+            PalwSeatAccuseStepV1::Retry
+        }
         PalwObjectRehearsalV1::Refused(_) | PalwObjectRehearsalV1::NotAccepted(_) => PalwSeatAccuseStepV1::Settle,
     }
 }
@@ -946,6 +953,25 @@ mod tests {
             "C5's unanswerable class"
         );
         assert_eq!(step(R::NotAccepted("the signature does not verify".into())), PalwSeatAccuseStepV1::Settle);
+        // Lane g14-court-capacity-r2: the court-capacity waits retry; a refusal the court will never lift settles.
+        use kaspa_consensus_core::palw_state_v2::{
+            PALW_COURT_REFUSAL_NO_RESERVATION_V1, PALW_COURT_REFUSAL_QUEUED_V1, PALW_COURT_REFUSAL_TICKET_EXPIRED_V1,
+        };
+        for wait in [PALW_COURT_REFUSAL_QUEUED_V1, PALW_COURT_REFUSAL_TICKET_EXPIRED_V1, PALW_COURT_REFUSAL_NO_RESERVATION_V1] {
+            assert_eq!(step(R::Refused(PalwStateV2Error::CourtCapacityRefused(wait.to_string()))), PalwSeatAccuseStepV1::Retry, "{wait}");
+        }
+        assert_eq!(
+            step(R::Refused(PalwStateV2Error::CourtCapacityRefused("the block's court budget … cannot take this operation".into()))),
+            PalwSeatAccuseStepV1::Retry,
+            "the block's budget is spent: the next block"
+        );
+        assert_eq!(
+            step(R::Refused(PalwStateV2Error::CourtCapacityRefused(
+                "a court session opened now could outlast the claim's hard deadline".into()
+            ))),
+            PalwSeatAccuseStepV1::Settle,
+            "too late for this claim: no wait helps"
+        );
     }
 
     /// **The restart rebuild**: the book is a function of the chain's court duties — a fresh book (a

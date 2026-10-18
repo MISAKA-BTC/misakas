@@ -37,6 +37,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The canonical sibling order's key domain.
 pub const PALW_RFC0018_SIBLING_ORDER_DOMAIN_V1: &[u8] = b"misaka-palw/rfc0018/sibling-order/v1";
+/// The class rank of the canonical merged-attempt order (long-run fairness, 2026-10-18; dormant with the sibling fence).
+pub const PALW_RFC0018_SIBLING_CLASS_ORDER_DOMAIN_V1: &[u8] = b"misaka-palw/rfc0018/sibling-class-order/v1";
 /// The permissionless anchor's aggregate-seed domain.
 pub const PALW_RFC0018_ANCHOR_AGGREGATE_DOMAIN_V1: &[u8] = b"misaka-palw/rfc0018/anchor-aggregate/v1";
 /// The DAG width schedule's id domain.
@@ -75,6 +77,9 @@ pub struct PalwRfc0018MirrorV1 {
     pub gate_c_from_daa: Option<u64>,
     pub gate_c_rule: PalwGateCRuleV1,
     pub certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+    /// **The free-prompt receipt lane's tail** past certification (`receipt_maturity + receipt_use_window` of the network's FP bundle):
+    /// a governed FP claim must still exist that long after its certification can be decided (RFC-0018 18-A; user decision 10-17).
+    pub fp_receipt_tail_daa: u64,
 }
 
 impl PalwRfc0018MirrorV1 {
@@ -109,6 +114,32 @@ impl PalwRfc0018MirrorV1 {
 /// The mirror's readers on the state params (`None`: every shipped preset).
 pub fn palw_rfc0018_mirror_v1(params: &PalwStateParamsV2) -> Option<&PalwRfc0018MirrorV1> {
     params.rfc0018_v1()
+}
+
+/// **Gate C's retirement floor** (user decision 2026-10-17): a governed claim does not retire before its certification can be decided
+/// and, for a free-prompt claim, its receipt lane run: `final + certification lifetime (certify_by + attest window, at least the
+/// prosecution window) + the FP receipt tail`. `retire_at` unchanged for a claim Gate C does not govern (every shipped network), and
+/// for a claim that is not `Final` (a void retires as before: it earns nothing).
+pub fn palw_gate_c_retirement_floor_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, retire_at: u64) -> u64 {
+    let Some(mirror) = palw_rfc0018_mirror_v1(params).filter(|m| m.gate_c_governs(claim.accepted_daa)) else { return retire_at };
+    let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { return retire_at };
+    let tail = match claim.source {
+        PalwClaimSourceV2::FreePrompt { .. } => mirror.fp_receipt_tail_daa,
+        PalwClaimSourceV2::Attempt => 0,
+    };
+    retire_at.max(final_daa.saturating_add(mirror.certification.lifetime_daa()).saturating_add(tail))
+}
+
+/// **Gate C's trace-retention extension** (user decision 2026-10-17): past Gate C's fence a claim accepted at `daa` promises its trace
+/// for the released minimum PLUS the certification lifetime and the FP receipt tail, so its material is still fetchable when its
+/// certification is decided at the latest and through its receipt lane — the same span its retirement floor
+/// ([`palw_gate_c_retirement_floor_v1`]) keeps the claim. The released minimum already reaches the claim's latest Final plus its court
+/// window, so `acceptance + minimum + extension ≥ final + lifetime + tail`. One value for both lanes (no second canonical value);
+/// `0` below the fence and on every shipped network.
+pub fn palw_gate_c_retention_extension_daa_v1(params: &PalwStateParamsV2, daa: u64) -> u64 {
+    palw_rfc0018_mirror_v1(params)
+        .filter(|m| m.gate_c_governs(daa))
+        .map_or(0, |m| m.certification.lifetime_daa().saturating_add(m.fp_receipt_tail_daa))
 }
 
 /// Whether Gate C governs `claim` (its acceptance DAA past the fence).
@@ -232,7 +263,54 @@ pub fn palw_gate_c_advances_frontier_v1(
 ) -> bool {
     let governs = palw_gate_c_governs_v1(params, claim);
     let certified = governs && palw_independently_work_certified_v1(claim_id, claim, &PalwGateCViewV1::of(params, chain));
+    // RFC-0023 stage 1: a claim Final only after its unresolved bound never stands as the frontier (the `now` is irrelevant for a
+    // Final claim; the predicate reads its own `final_daa`).
+    if crate::palw_unresolved_bound_v1::palw_claim_lapsed_bound_v1(params, claim, 0) {
+        return false;
+    }
     crate::palw_security_certification_v1::palw_consensus_credit_anchor_v1(governs, certified, &claim.source, &claim.phase)
+}
+
+/// **Gate C's receipt-lane refusal** (RFC-0018 18-A): a governed free-prompt claim that is `Final` but not `SecurityCertified` licenses no
+/// receipt block. `status` is the RPC's certification state (`pending`, `no-population`, `not-certified`, `vetoed`, `expired`,
+/// `withdrawn`, `revoked`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("free-prompt claim {claim} is Final but not SecurityCertified ({status}): Gate C licenses no receipt block before certification")]
+pub struct PalwFpReceiptUncertifiedV1 {
+    pub claim: Hash64,
+    pub status: &'static str,
+}
+
+/// **The receipt lane's clock under Gate C** (RFC-0018 18-A) — the ONE predicate the receipt pre-check (own block and merged
+/// entitlement, so the coinbase worker share), the stateless-admission items, the spendable RPC (the producer's template source) and the
+/// fold read for a `Final` free-prompt claim at `final_daa`:
+///
+/// * not governed (no mirror, or the claim accepted below Gate C's fence — every claim on every shipped network): `Ok(final_daa)`, the
+///   released draw slot `final + receipt_maturity`, byte for byte;
+/// * governed and `SecurityCertified` ([`palw_independently_work_certified_v1`]): `Ok(max(final_daa, certified_daa))` — the lane opens at
+///   certification, so its draw beacon lies after the decision and the use window is not consumed while certification is pending (an
+///   honest claim is paid in full once certified);
+/// * governed and not certified (pending, no population, rejected, voided — a late conviction voids the claim, so its later quanta
+///   are refused here too): `Err` — no receipt block, no coinbase worker share. Weight 0 alone was not enough: the block right and the
+///   worker share are paid outside the weight.
+///
+/// The answer is read from the chain state at the candidate's point, so siblings and reorgs read the certification their own chain holds.
+pub fn palw_fp_receipt_clock_v1(
+    params: &PalwStateParamsV2,
+    chain: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    final_daa: u64,
+) -> Result<u64, PalwFpReceiptUncertifiedV1> {
+    if !palw_gate_c_governs_v1(params, claim) {
+        return Ok(final_daa);
+    }
+    if !palw_independently_work_certified_v1(claim_id, claim, &PalwGateCViewV1::of(params, chain)) {
+        let status = crate::palw_security_certification_v1::palw_claim_certification_status_v1(chain, params, claim_id, claim);
+        return Err(PalwFpReceiptUncertifiedV1 { claim: *claim_id, status });
+    }
+    let certified_daa = crate::palw_security_certification_v1::palw_claim_certified_daa_v1(chain, claim_id).unwrap_or(final_daa);
+    Ok(final_daa.max(certified_daa))
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -307,8 +385,8 @@ pub fn palw_sibling_priority_v1(execution_key: &Hash64) -> Hash64 {
 /// **The canonical order of one accepting block's merged works** — a permutation of `0..works.len()`.
 ///
 /// Non-attempt works keep their positions (their order is the consensus order, as before). The attempt positions are refilled in a
-/// round robin over model classes: classes ordered by their first member's priority, each class's attempts by priority, one attempt per
-/// class per round. The result depends only on the SET of `(class, execution key)` pairs at the attempt positions — not on GHOSTDAG
+/// round robin over model classes: classes ordered by `H(domain ‖ set seed ‖ class)` (the set seed hashes the mergeset's sorted
+/// attempt priorities), each class's attempts by priority, one attempt per class per round. The result depends only on the SET of `(class, execution key)` pairs at the attempt positions — not on GHOSTDAG
 /// colour, blue work or merge order — so concurrent siblings of different models share a contended per-block cap round by round, and
 /// the same mergeset yields the same admitted set on every node and every arrival order. Ties (equal priority: the same execution key,
 /// which the fold dedups anyway) fall back to the original index.
@@ -319,14 +397,35 @@ pub fn palw_sibling_canonical_order_v1(works: &[PalwSiblingKeyV1]) -> Vec<usize>
         let w = works[i];
         by_class.entry(w.class_id.expect("attempt slot")).or_default().push((palw_sibling_priority_v1(&w.execution_key), i));
     }
-    let mut classes: Vec<Vec<(Hash64, usize)>> = by_class
+    let by_class_ids: Vec<Hash64> = by_class.keys().copied().collect();
+    let classes: Vec<Vec<(Hash64, usize)>> = by_class
         .into_values()
         .map(|mut members| {
             members.sort();
             members
         })
         .collect();
-    classes.sort_by(|a, b| a[0].cmp(&b[0]));
+    // Long-run fairness (2026-10-18): the class order is `H(domain ‖ set seed ‖ class)`, never the class's best member. Ranked by its
+    // first member, a class with more attempts in the mergeset has a smaller minimum and comes first more often, so with more classes
+    // than a contended cap admits (the 16-carve emission budget) a flooding set of models starves a one-attempt model outright
+    // (`rfc18_long_run_fairness_*`). The set seed is the hash of the mergeset's sorted attempt priorities: still a function of the
+    // SET only, and no class's attempt count moves its own rank in expectation.
+    let mut seed = keyed(PALW_RFC0018_SIBLING_CLASS_ORDER_DOMAIN_V1);
+    let mut all: Vec<Hash64> = classes.iter().flat_map(|c| c.iter().map(|(p, _)| *p)).collect();
+    all.sort();
+    for p in &all {
+        seed.update(p.as_byte_slice());
+    }
+    let seed = finish(seed);
+    let rank = |class: &Hash64| {
+        let mut h = keyed(PALW_RFC0018_SIBLING_CLASS_ORDER_DOMAIN_V1);
+        h.update(seed.as_byte_slice());
+        h.update(class.as_byte_slice());
+        finish(h)
+    };
+    let mut classes: Vec<(Hash64, Vec<(Hash64, usize)>)> = by_class_ids.into_iter().zip(classes).map(|(c, m)| (rank(&c), m)).collect();
+    classes.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1[0].cmp(&b.1[0])));
+    let classes: Vec<Vec<(Hash64, usize)>> = classes.into_iter().map(|(_, m)| m).collect();
     let mut ordered = Vec::with_capacity(attempt_slots.len());
     let mut round = 0usize;
     while ordered.len() < attempt_slots.len() {
@@ -561,6 +660,12 @@ impl Params {
             certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(
                 (86_400_000u64 / self.target_time_per_block().max(1)).max(1),
             ),
+            fp_receipt_tail_daa: match &self.palw_consensus_mode {
+                PalwConsensusMode::ConsensusV2(bundle) => {
+                    bundle.freeprompt.receipt_maturity_daa().saturating_add(bundle.freeprompt.receipt_use_window_daa())
+                }
+                _ => 0,
+            },
         };
         (!mirror.is_empty()).then_some(mirror)
     }

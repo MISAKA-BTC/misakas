@@ -304,6 +304,14 @@ fn set(p: &mut Params, fence: PalwG14GatedFenceV1, at: Option<ForkActivation>) {
             p.sync_palw_legacy_public_filer_v1();
             p.palw_legacy_held_da_v2 = at;
         }
+        // Lane g14-court-capacity: the court-capacity fence (with LG14-A at or below it; the placeholder policy, which a real network
+        // is refused even with a record).
+        PalwG14GatedFenceV1::CourtCapacityV1 => {
+            p.palw_legacy_public_filer_v1 = at;
+            p.sync_palw_legacy_public_filer_v1();
+            p.palw_court_capacity_v1 = at.map(kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCapacityFenceV1::placeholder_at);
+            p.sync_palw_court_capacity_v1();
+        }
     }
     p.sync_palw_g14_gates_v1();
 }
@@ -511,8 +519,13 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
     // Only LG14-A armed: still no complete route.
     let half = route_sp(&p, FENCE, PalwG14RouteMirrorV1 { legacy_filer_from: Some(0), ..none });
     assert!(attempt_at(&half, FENCE).is_err(), "LG14-A without LG14-B is not the legacy route's G14 path");
-    // LG14-A + LG14-B armed: the family regains reward with no other change.
-    let routed = route_sp(&p, FENCE, PalwG14RouteMirrorV1 { legacy_filer_from: Some(0), legacy_held_da_from: Some(FENCE), ..none });
+    // LG14-A + LG14-B armed (and, for a class with fused-attention leaves, the court-capacity fence — lane g14-court-capacity): the
+    // family regains reward with no other change.
+    let routed = route_sp(
+        &p,
+        FENCE,
+        PalwG14RouteMirrorV1 { legacy_filer_from: Some(0), legacy_held_da_from: Some(FENCE), court_capacity_from: Some(FENCE), ..none },
+    );
     let s2 = attempt_at(&routed, FENCE).expect("the armed route restores admission");
     assert!(s2.claim(&id).is_some());
     palw_class_admits_claim_v1(&s, &routed, &extras(&p, FENCE), &floor, FENCE).expect("and the pre-check");
