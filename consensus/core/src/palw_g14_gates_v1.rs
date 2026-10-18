@@ -470,6 +470,18 @@ impl Params {
         Ok(())
     }
 
+    /// **ADR-0191 step B gate (DORMANT).** `palw_tir_designated_answers_v1` needs the TIR public conviction fence, because its rules
+    /// only answer a conviction path. It needs no record: nothing consumes it on any shipped preset.
+    pub fn validate_palw_tir_designated_answers_in_v1(&self) -> Result<(), PalwModeV2Error> {
+        if self.palw_tir_designated_answers_v1_fence().is_none() {
+            return Ok(());
+        }
+        if self.palw_tir_public_conviction_v1_fence().is_none() {
+            return Err(PalwModeV2Error::Invalid("palw_tir_designated_answers_v1 needs palw_tir_public_conviction_v1"));
+        }
+        Ok(())
+    }
+
     /// **The TIR frame cost gate** (audit §10): `Ok` when `palw_tir_public_conviction_v1` is not armed; otherwise the ruleset must
     /// carry a well-formed `palw_tir_frame_cost_v1` and — unless its genesis is an isolated G14 test genesis — a record in `records`
     /// must name this network, the fence's height and exactly that model.

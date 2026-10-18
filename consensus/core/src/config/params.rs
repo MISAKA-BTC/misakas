@@ -2444,6 +2444,9 @@ pub struct Params {
     /// ([`crate::palw_tir_frame_cost_v1::tir_public_localization_path_bounded_v1`]) and prices its door from those spans. `None` on
     /// every shipped preset; hashed Some-only. Arming needs `palw_tir_frame_cost_v1` and a pinned record, and the gather bound.
     pub palw_tir_bounded_door_v1: Option<ForkActivation>,
+    /// **ADR-0191 step B designated custodian answers and owner tenure split (DORMANT).** `None` on every shipped preset; hashed
+    /// Some-only. Pure rules in [`crate::palw_tir_designated_answers_v1`]; no shipped path consumes them yet.
+    pub palw_tir_designated_answers_v1: Option<ForkActivation>,
     /// G14 greedy Float32 Constraint staged route (rooted f32 row court and Float32 sources).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_float_constraint_v1: Option<ForkActivation>,
@@ -5052,6 +5055,11 @@ impl Params {
         self.palw_tir_bounded_door_v1.filter(|f| *f != ForkActivation::never())
     }
 
+    /// ADR-0191 designated-answers fence (dormant: `None` on every shipped preset).
+    pub fn palw_tir_designated_answers_v1_fence(&self) -> Option<ForkActivation> {
+        self.palw_tir_designated_answers_v1.filter(|f| *f != ForkActivation::never())
+    }
+
     pub fn palw_tir_public_conviction_v1_fence(&self) -> Option<ForkActivation> {
         let never = ForkActivation::never();
         match (
@@ -6121,6 +6129,7 @@ impl Params {
             palw_tir_container_identity_v1: self.palw_tir_container_identity_v1,
             palw_tir_frame_cost_v1: self.palw_tir_frame_cost_v1,
             palw_tir_bounded_door_v1: self.palw_tir_bounded_door_v1,
+            palw_tir_designated_answers_v1: self.palw_tir_designated_answers_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
@@ -7291,6 +7300,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
     palw_tir_bounded_door_v1: None,
+    palw_tir_designated_answers_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7653,6 +7663,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
     palw_tir_bounded_door_v1: None,
+    palw_tir_designated_answers_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7997,6 +8008,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
     palw_tir_bounded_door_v1: None,
+    palw_tir_designated_answers_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -13521,6 +13533,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
     palw_tir_bounded_door_v1: None,
+    palw_tir_designated_answers_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
