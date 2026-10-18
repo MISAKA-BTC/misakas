@@ -205,7 +205,7 @@ fn request(
         object_id(b"misaka-palw/native/original-public-demand-id/v39", &(job, unit, *signer, operator, paid, ctx.block.as_bytes()));
     let e = epoch(p, ctx)?;
     let mut source = source(builder, ctx, p, &h, &q)?;
-    source.admit_valid_unit(&p.execution.quota, &e, &q, job).map_err(bad)?;
+    source.admit_valid_unit_until(&p.execution.quota, &e, &q, job, horizon).map_err(bad)?;
     write_source(builder, &source, job)?;
     let v = Pending {
         version: 39,
@@ -476,7 +476,7 @@ pub(super) fn debit_cached_answer(
         .filter(|raw| raw.len() < 4096)
         .ok_or_else(|| bad("native39 original producer obligation absent"))?;
     let (root, row): (Digest, SourceObligationV39) = borsh::from_slice(raw).map_err(|_| bad("native39 source obligation grammar"))?;
-    let updated = debit_native_cached_answer_v39(
+    let updated = debit_native_cached_answer_until_v39(
         &p.execution.quota,
         &e,
         &plan,
@@ -487,6 +487,7 @@ pub(super) fn debit_cached_answer(
         (subject, &subject.row_root()),
         (&row, &root),
         bytes,
+        super::accusation_horizon_v39(builder, h),
     )
     .map_err(bad)?;
     write_source(builder, &updated, h.id)?;

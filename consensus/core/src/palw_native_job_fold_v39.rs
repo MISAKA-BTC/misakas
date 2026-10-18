@@ -738,6 +738,15 @@ fn commit_after_paid(
     // is dropped successfully, so a nested decoder cannot roll back the tariff.
     let Ok(w) = NativeCommitWireV39::from_bytes(body, h.original.maximum_positions) else { return Ok(()) };
     let (mut book, _, class, max, quota, _) = restore_job(builder, p, &h)?;
+    // The original producer source guarantee is reserved in one quota interval.
+    // A new liable claim must fit its whole signed H in that SAME interval;
+    // accepting it first and dropping answers at the old deadline is unsound.
+    if super::palw_native_liability_hold_fold_v1::native_hold_applies_v1(builder.params, ctx.daa_score) {
+        let horizon = super::palw_native_liability_hold_fold_v1::native_horizon_v1(builder.params, h.original.deadline);
+        if horizon >= epoch(p, ctx)?.interval_end(&p.execution.quota).map_err(bad)? {
+            return Err(bad("native39 full liability service exceeds its originally reserved quota interval"));
+        }
+    }
     let r = builder.state.kernel_route.as_ref().unwrap();
     let reader = NativeMaterialReader { route: r };
     let inputs = match ActualInputResolverV39::derive(class.source(), &max, &w.generated, &reader) {
