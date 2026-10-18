@@ -54,6 +54,18 @@ fn the_hold_applies_only_to_claims_committed_past_the_fence() {
 }
 
 #[test]
+fn a_final_after_the_signed_horizon_needs_no_new_hold_or_extended_deadline() {
+    let p = armed();
+    let deadline = 1_000;
+    let horizon = native_horizon_v1(&p, deadline);
+    assert!(native_fee_needs_hold_v1(&p, 100, horizon - 1, deadline));
+    assert!(native_fee_needs_hold_v1(&p, 100, horizon, deadline));
+    assert!(!native_fee_needs_hold_v1(&p, 100, horizon + 1, deadline));
+    assert!(!native_fee_needs_hold_v1(&p, 99, horizon, deadline));
+    assert!(!native_fee_needs_hold_v1(&params(), 100, horizon, deadline));
+}
+
+#[test]
 fn a_held_fee_is_queued_only_past_its_horizon_and_never_while_a_dispute_is_open() {
     let p = armed();
     let extras = PalwTransitionExtrasV1::default();

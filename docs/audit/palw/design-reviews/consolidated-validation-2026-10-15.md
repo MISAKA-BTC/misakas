@@ -491,3 +491,16 @@ Merged validation 8478ec5dc, newer than required base 042e5e759. Incoming implem
   hold the fee at Final, keep collectible reservation and accusation/source rights until the horizon, and close them on
   release/refund. Funded11, mining vesting, job39 end-to-end evidence, 08-C and RFC10 remain open. The helper alone does
   not complete 08-B and is not reachable from a new public wire path.
+
+- Follow-up in progress: added `native_fee_needs_hold_v1` and connected job39's Final credit to it. A valid Final after the
+  already-fixed signed horizon should take the mature payment path rather than constructing a row rejected for H < Final;
+  H is not recomputed from the actual Final. Added below-fence / H-1 / H / H+1 controls. This change is not yet counted tested.
+- Free space later recovered to 34 GiB. A single owned verification chain is running with a fresh 25 GiB stop guard:
+  `/tmp/misaka-rfc0912-run-config/verify-core-and-remote.py`. It builds the core test executable, runs only text-book and
+  native-hold controls, then checks the canonical issuer and runs the single-tip V3 miner control. Results are pending;
+  logs use `/tmp/misaka-rfc08-core-no-run.log`, `rfc08-text-book-current`, `rfc08-hold-current`, `rfc09-issuer-check-current`
+  and `rfc09-miner-single-current` log names. This is not the EVM/runtime acceptance run.
+
+- RFC12 refund CLI follow-up: require exactly the requested canonical outpoint and no unsolicited reserve rows in op246; use the response virtual DAA for timeout validation and JSON output. This closes the previous first-row assumption and separate-connection-DAA mismatch. Compilation/runtime verification of this CLI follow-up is pending; the node atomic-read work and live acceptance remain open.
+
+- Verification result (2026-10-18): core test executable compiled successfully with incremental disabled, core opt-level 0/debug 0 and `-j 3`. `palw_native_text_stop_v29::tests`: **4 passed** (including held-Final conviction and invalid-conviction immutability); `native_liability_hold`: **8 passed** (including the new fixed-horizon maturity control). Logs: `/tmp/misaka-rfc08-text-book-current.log`, `/tmp/misaka-rfc08-hold-current.log`; command/evidence summary: `/tmp/misaka-rfc08-core-book-hold-summary.json`. These are bounded book/hold controls; full 08-B, 08-C and RFC10 remain unverified. The later CLI change was not part of these tests. Documentation check: no new issues, 43 existing baseline occurrences.

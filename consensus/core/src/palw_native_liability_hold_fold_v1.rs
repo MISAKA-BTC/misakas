@@ -24,6 +24,13 @@ pub(super) fn native_horizon_v1(params: &PalwStateParamsV2, signed_deadline: u64
     super::palw_settlement_liability_fold_v1::native_claim_hard_deadline_v1(params, signed_deadline)
 }
 
+/// A Final that arrives after the fixed signed horizon is already mature.
+/// Do not try to create an invalid H < Final hold, and never extend H from
+/// the actual Final time. The caller still validates the family's closure.
+pub(super) fn native_fee_needs_hold_v1(params: &PalwStateParamsV2, committed_daa: u64, final_daa: u64, signed_deadline: u64) -> bool {
+    native_hold_applies_v1(params, committed_daa) && final_daa <= native_horizon_v1(params, signed_deadline)
+}
+
 /// The held fee of `(family, job)`, if any.
 pub(super) fn held_native_fee_v1(state: &PalwChainStateV2, family: u8, job: &[u8; 64]) -> Option<PalwNativeHeldFeeRowV1> {
     state
@@ -34,7 +41,12 @@ pub(super) fn held_native_fee_v1(state: &PalwChainStateV2, family: u8, job: &[u8
 }
 
 /// **Is `(family, job)` still accusable after its Final at `now`?** A held fee whose horizon has not passed.
-pub(super) fn native_accusable_after_final_v1(state: &PalwChainStateV2, family: u8, job: &[u8; 64], now: u64) -> Option<PalwNativeHeldFeeRowV1> {
+pub(super) fn native_accusable_after_final_v1(
+    state: &PalwChainStateV2,
+    family: u8,
+    job: &[u8; 64],
+    now: u64,
+) -> Option<PalwNativeHeldFeeRowV1> {
     held_native_fee_v1(state, family, job).filter(|row| now <= row.horizon_daa)
 }
 
@@ -46,7 +58,11 @@ pub(super) fn hold_native_fee_v1(builder: &mut TransitionBuilder<'_>, row: &Palw
     if row.horizon_daa < row.final_daa {
         return Err(refused("a native claim's liability horizon precedes its Final"));
     }
-    builder.write_kernel_row_encoded_v1(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, &palw_native_held_fee_key_v1(row.family, &row.job), Some(row))
+    builder.write_kernel_row_encoded_v1(
+        PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+        &palw_native_held_fee_key_v1(row.family, &row.job),
+        Some(row),
+    )
 }
 
 fn delete_v1(builder: &mut TransitionBuilder<'_>, row: &PalwNativeHeldFeeRowV1) -> Result<(), PalwStateV2Error> {
@@ -59,13 +75,25 @@ fn delete_v1(builder: &mut TransitionBuilder<'_>, row: &PalwNativeHeldFeeRowV1) 
 
 /// **Release one held fee** (the row first, so it is released once whatever follows): exactly the writes the Final would have
 /// made — the native income paid (finished), the payout row queued, the producer's budget reservation closed.
-pub(super) fn release_native_fee_v1(builder: &mut TransitionBuilder<'_>, row: &PalwNativeHeldFeeRowV1, now: u64) -> Result<(), PalwStateV2Error> {
+pub(super) fn release_native_fee_v1(
+    builder: &mut TransitionBuilder<'_>,
+    row: &PalwNativeHeldFeeRowV1,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
     delete_v1(builder, row)?;
     let queue = Hash64::from_bytes(row.queue);
     if builder.state.pending_payouts.contains_key(&queue) {
         return Err(refused("the held native fee's payout queue already exists"));
     }
-    builder.pay_native_recipient_v1(Hash64::from_bytes(row.income_root), row.producer, row.income_kind, now, row.amount, queue, true)?;
+    builder.pay_native_recipient_v1(
+        Hash64::from_bytes(row.income_root),
+        row.producer,
+        row.income_kind,
+        now,
+        row.amount,
+        queue,
+        true,
+    )?;
     builder.write_payout(queue, Some(PalwPayoutV2 { payload: Hash64::from_bytes(row.payload), amount: row.amount }))?;
     builder.bond_budget_close_v1(&Hash64::from_bytes(row.budget), now)?;
     Ok(())

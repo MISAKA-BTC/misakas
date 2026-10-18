@@ -774,10 +774,10 @@ pub(super) fn apply(
         _ => Err(bad("native39 action has no implemented current native transition")),
     }
 }
-#[path = "palw_native_collect_fold_v39.rs"]
-pub(super) mod collect;
 #[path = "palw_native_job_audit_fold_v39.rs"]
 mod audit;
+#[path = "palw_native_collect_fold_v39.rs"]
+pub(super) mod collect;
 pub(super) use audit::audit_policies_v39;
 
 #[path = "palw_native_protected_fold_v39.rs"]
@@ -838,7 +838,14 @@ fn credit(
     // it, and released by the closing tick or refunded to the requester on a post-Final conviction.
     let held = s.producer_credit != 0
         && s.terminal == NativeJobTerminalV39::Final
-        && book.claim().is_some_and(|c| super::palw_native_liability_hold_fold_v1::native_hold_applies_v1(builder.params, c.committed));
+        && book.claim().is_some_and(|c| {
+            super::palw_native_liability_hold_fold_v1::native_fee_needs_hold_v1(
+                builder.params,
+                c.committed,
+                ctx.daa_score,
+                h.original.deadline,
+            )
+        });
     if held {
         let horizon = super::palw_native_liability_hold_fold_v1::native_horizon_v1(builder.params, h.original.deadline);
         super::palw_native_liability_hold_fold_v1::hold_native_fee_v1(
@@ -967,7 +974,8 @@ pub(super) fn credit_after_final_conviction(
     {
         return Err(bad("native39 post-Final conviction settlement differs"));
     }
-    let row = super::palw_native_liability_hold_fold_v1::refund_native_fee_v1(builder, PALW_NATIVE_FAMILY_JOB_V39, &h.id, ctx.daa_score)?;
+    let row =
+        super::palw_native_liability_hold_fold_v1::refund_native_fee_v1(builder, PALW_NATIVE_FAMILY_JOB_V39, &h.id, ctx.daa_score)?;
     if row.amount != h.original.reward {
         return Err(bad("native39 held fee differs from the original escrow"));
     }
@@ -981,8 +989,10 @@ pub(super) fn credit_after_final_conviction(
         }
         let payout = bond.payout_payload;
         if builder.params.reporter_income_active_at(ctx.daa_score) {
-            let award =
-                Hash64::from_bytes(object_id(b"misaka-palw/native/post-final-collected-finder/v39", &(h.id, h.original.root(), s.proof, finder)));
+            let award = Hash64::from_bytes(object_id(
+                b"misaka-palw/native/post-final-collected-finder/v39",
+                &(h.id, h.original.root(), s.proof, finder),
+            ));
             builder.stage_reporter_recipient_v1(award, finder, ctx.daa_score, s.finder_credit, Hash64::from_bytes(h.id))?;
         } else {
             builder.add_kernel_payout(payout, s.finder_credit)?;
@@ -1008,7 +1018,10 @@ pub(super) fn credit_after_final_conviction(
 
 /// **Does a held fee's job still have an open dispute?** (the release waits for its verdict): a native39 job's pending demands or
 /// live proof owners. Other families hold nothing open past their Final here.
-pub(super) fn native_dispute_open_v39(builder: &TransitionBuilder<'_>, row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1) -> bool {
+pub(super) fn native_dispute_open_v39(
+    builder: &TransitionBuilder<'_>,
+    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
+) -> bool {
     if row.family != crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39 {
         return false;
     }
