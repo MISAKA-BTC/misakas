@@ -175,6 +175,51 @@ pub(super) fn publish_borsh<T: borsh::BorshSerialize>(path: &Path, value: &T, ca
     borsh::to_writer(&mut bytes, value).map_err(|e| e.to_string())?;
     publish_new(path, &bytes)
 }
+
+/// Recovery artifacts precede the signed claim WAL. A crash between these
+/// publications must accept an EXACT existing artifact, never overwrite it or
+/// accept a filename alone. Compare the canonical encoding directly against
+/// the file with fixed stack scratch; do not duplicate a whole material bundle.
+fn publish_artifact_or_match<T: borsh::BorshSerialize>(path: &Path, value: &T, cap: u64) -> Result<(), String> {
+    if !path.exists() {
+        return publish_borsh(path, value, cap);
+    }
+    regular(path)?;
+    let length = borsh::object_length(value).map_err(|e| e.to_string())? as u64;
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    if length > cap || file.metadata().map_err(|e| e.to_string())?.len() != length {
+        return Err("existing kernel recovery artifact extent differs; immutable artifact retained".into());
+    }
+    struct Compare {
+        file: fs::File,
+        remaining: u64,
+    }
+    impl Write for Compare {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() as u64 > self.remaining {
+                return Err(std::io::Error::other("kernel recovery artifact encoding grew"));
+            }
+            let mut scratch = [0u8; 4096];
+            for part in bytes.chunks(scratch.len()) {
+                self.file.read_exact(&mut scratch[..part.len()])?;
+                if part != &scratch[..part.len()] {
+                    return Err(std::io::Error::other("kernel recovery artifact differs"));
+                }
+            }
+            self.remaining -= bytes.len() as u64;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut compare = Compare { file, remaining: length };
+    borsh::to_writer(&mut compare, value).map_err(|e| format!("immutable kernel recovery artifact retained: {e}"))?;
+    if compare.remaining != 0 || compare.file.metadata().map_err(|e| e.to_string())?.len() != length {
+        return Err("kernel recovery artifact changed during comparison".into());
+    }
+    Ok(())
+}
 impl PrivateKernelPaidWorkSpecV4 {
     pub fn read(path: &Path) -> Result<Self, String> {
         let (bytes, _raw_lease) = read_bounded(path, 1024 * 1024)?;
@@ -357,13 +402,24 @@ impl PreparedKernelPaidWorkV4 {
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
             &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
         );
+        let mut observed_enrollment = false;
         loop {
             if matches!(self.tick.tick(Duration::from_secs(2)).await, kaspa_core::task::tick::TickReason::Shutdown) {
                 return Ok(());
             }
             let api = self.manager.consensus().unguarded_session();
-            let route = api.palw_kernel_route_v1().ok_or("own native paid route unavailable")?;
-            if let Some(authority) = route.paid_claim_for_base_v2(&root)? {
+            let Some(route) = api.palw_kernel_route_v1() else {
+                kaspa_core::debug!("kernel producer own native route unavailable; immutable WAL retained");
+                continue;
+            };
+            let authority = match route.paid_claim_for_base_v2(&root) {
+                Ok(authority) => authority,
+                Err(error) => {
+                    kaspa_core::debug!("kernel producer own enrollment unknown; immutable WAL retained: {error}");
+                    continue;
+                }
+            };
+            if let Some(authority) = authority {
                 if authority.enrollment.class != class
                     || authority.enrollment.job != job
                     || authority.enrollment.producer
@@ -371,9 +427,16 @@ impl PreparedKernelPaidWorkV4 {
                 {
                     return Err("existing native paid authority differs from explicit work".into());
                 }
-                kaspa_core::info!("private kernel paid enrollment accepted: {}", faster_hex::hex_string(&root));
-                return Ok(());
+                if !observed_enrollment {
+                    kaspa_core::info!("private kernel paid enrollment accepted: {}", faster_hex::hex_string(&root));
+                }
+                observed_enrollment = true;
+                // Current application is reversible. Continue observing so a
+                // rollback reuses the original signed object and exact spend.
+                // This is neither Final nor permission to retire the WAL.
+                continue;
             }
+            observed_enrollment = false;
             if object.is_none() {
                 if handoff.is_none() {
                     let candidate = api.palw_kernel_producer_candidate_v4(
@@ -423,8 +486,8 @@ impl PreparedKernelPaidWorkV4 {
                 // authenticated context and complete actual bundle before the
                 // dependent claim is signed; replacement must not rewrite the
                 // old intent/roster or trust an arbitrary peer projection.
-                publish_borsh(&path.join("material-context-v4.borsh"), &*grant.context, self.spec.max_input_bytes)?;
-                publish_borsh(&path.join("material-bundle-v4.borsh"), &request.bundle, self.spec.max_material_bytes)?;
+                publish_artifact_or_match(&path.join("material-context-v4.borsh"), &*grant.context, self.spec.max_input_bytes)?;
+                publish_artifact_or_match(&path.join("material-bundle-v4.borsh"), &request.bundle, self.spec.max_material_bytes)?;
                 let copy = NativeRetainedV1::try_from_clone_v1(&request.intent.commit).map_err(|e| e.to_string())?;
                 let (commit, _copy_lease) = copy.into_parts_v1();
                 let inner = misaka_palw_sdk::claim_paid_v2::paid_claim_commit_object_v2(
@@ -469,8 +532,13 @@ impl PreparedKernelPaidWorkV4 {
             ) {
                 return Err("kernel cached carrier signature invalid".into());
             }
-            if !api.palw_kernel_material_consent_accepted_v4(Hash64::from_bytes(root), consent)? {
-                continue;
+            match api.palw_kernel_material_consent_accepted_v4(Hash64::from_bytes(root), consent) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    kaspa_core::debug!("kernel producer own consent unknown; immutable WAL retained: {error}");
+                    continue;
+                }
             }
 
             if !matches!(api.palw_object_rehearsal_v1(signed), Some(PalwObjectRehearsalV1::Accepted)) {
@@ -529,6 +597,9 @@ impl PreparedKernelPaidWorkV4 {
             }
             let _hold = &transaction_lease;
             let tx = transaction.as_ref().ok_or("kernel durable transaction absent")?;
+            if !self.funding.contains(&tx.inputs[0].previous_outpoint) {
+                return Err("kernel saved carrier funding is outside current explicit authorization; WAL retained".into());
+            }
             if self
                 .flow
                 .mining_manager()
@@ -540,12 +611,20 @@ impl PreparedKernelPaidWorkV4 {
             }
             // Retain the original owner while reserving the independent relay
             // transaction copy. Cold restart always resends this exact spend.
-            let _relay = super::recovery_ack_carrier_v4::reserve_carrier_build_v4(
-                signed,
-                &api.get_virtual_utxo_entry(tx.inputs[0].previous_outpoint)
-                    .ok_or("kernel original funding absent; durable transaction retained")?,
-                self.payer.verification_key.as_ref().len(),
-            )?;
+            let Some(entry) = api.get_virtual_utxo_entry(tx.inputs[0].previous_outpoint) else {
+                kaspa_core::debug!("kernel original funding unavailable; exact transaction retained");
+                continue;
+            };
+            let fee = tx
+                .outputs
+                .iter()
+                .try_fold(0u64, |sum, output| sum.checked_add(output.value))
+                .and_then(|outputs| entry.amount.checked_sub(outputs));
+            if entry.script_public_key != script || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi) {
+                return Err("kernel saved carrier exceeds current payer/fee authorization; WAL retained".into());
+            }
+            let _relay =
+                super::recovery_ack_carrier_v4::reserve_carrier_build_v4(signed, &entry, self.payer.verification_key.as_ref().len())?;
             match tokio::time::timeout(
                 Duration::from_secs(10),
                 self.flow.submit_rpc_transaction(&api, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden),
@@ -590,4 +669,31 @@ fn validate_saved(
         return Err("saved paid commit substitutes explicit operator work".into());
     }
     Ok(Hash64::from_bytes(enrollment.material_consent))
+}
+
+#[cfg(test)]
+mod recovery_artifact_controls {
+    use super::*;
+
+    #[test]
+    fn crash_before_claim_wal_reuses_only_exact_artifact_and_preserves_mismatches() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("material-bundle-v4.borsh");
+        let value = vec![37u8; 9000]; // Exercises multiple fixed comparison chunks.
+        let cap = 10000;
+        publish_artifact_or_match(&path, &value, cap).unwrap();
+        let original = fs::read(&path).unwrap();
+        // Reopen after the artifact publication but before any signed claim.
+        publish_artifact_or_match(&path, &value, cap).unwrap();
+        let mut changed = value.clone();
+        changed[4097] ^= 1;
+        assert!(publish_artifact_or_match(&path, &changed, cap).is_err());
+        assert!(publish_artifact_or_match(&path, &value, 8000).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let mut trailing = original.clone();
+        trailing.push(0);
+        fs::write(&path, &trailing).unwrap();
+        assert!(publish_artifact_or_match(&path, &value, cap).is_err());
+        assert_eq!(fs::read(&path).unwrap(), trailing, "mismatch is retained, never silently overwritten");
+    }
 }
