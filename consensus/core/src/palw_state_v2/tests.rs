@@ -5,6 +5,7 @@
 mod kernel_route_locator_v1;
 mod public_filer_targeting_v1;
 mod claim_local_v1;
+mod claim_local_rewards_v1;
 // RFC-0017: model eligibility through the actual fold (claim gate, commit-then-draw, fee, promotion, lapse, renewal).
 mod model_eligibility_fold_v1;
 mod public_prefix_fold_v1;

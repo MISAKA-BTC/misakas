@@ -112,11 +112,21 @@ impl PalwClaimLocalPolicyContextV1 {
     }
 }
 
+/// A scheduling hint for an unpaid certified claim. It is not a credit or
+/// approval capability; the monetary owner rechecks dependencies before pay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwClaimLocalRewardHoldV1 {
+    pub accepted_daa: u64,
+    pub accepted_blue_score: u64,
+    pub until: u64,
+}
+
 /// Table numbers are owner-local: EXEC table 1 is not the kernel bond table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 pub enum PalwClaimLocalRowOwnerV1 {
     KernelRoute,
     ExecV2,
+    ChainClaims,
 }
 
 /// Exact native row events from the executing journal. Registry/model rows
@@ -169,7 +179,7 @@ impl PalwClaimLiabilityFrameV1 {
         prior: &crate::palw_state_v2::PalwStateCarriageV2,
         current: &crate::palw_state_v2::PalwStateCarriageV2,
     ) -> Result<(), PalwClaimCheckpointErrorV1> {
-        use crate::palw_native_resource_v1::{btree_node_envelope_bytes_v1, reserve_native_requests_v1, NativeCoverageV1};
+        use crate::palw_native_resource_v1::{NativeCoverageV1, btree_node_envelope_bytes_v1, reserve_native_requests_v1};
         if self.native_changes.is_empty() {
             return Ok(());
         }
@@ -304,6 +314,12 @@ fn claim_local_row_matches_v1(
             _ => false,
         })
     }
+    if *owner == PalwClaimLocalRowOwnerV1::ChainClaims {
+        if *table != 0 {
+            return Err("claim journal names an unallocated table".into());
+        }
+        return matches(&state.claims, raw_key, bytes);
+    }
     match *table {
         PALW_EXEC_V2_TABLE_ROOTS_V1 => matches(&state.exec_v2.roots, raw_key, bytes),
         PALW_EXEC_V2_TABLE_SLICES_V1 => matches(&state.exec_v2.slices, raw_key, bytes),
@@ -427,7 +443,7 @@ impl PalwClaimLocalCheckpointV1 {
         if self.point != *point || self.records != *expected || self.liability_state != expected_liability_state {
             return Err("checkpoint differs from the fold's liability state".into());
         }
-        use crate::palw_native_resource_v1::{reserve_native_requests_v1, NativeHeapV1};
+        use crate::palw_native_resource_v1::{NativeHeapV1, reserve_native_requests_v1};
         // Record envelopes dominate the vertex maps/queue; input/material set
         // envelopes dominate dedup sets and twice-grown consumer vectors. Four
         // copies cover both validation and the largest subsequent graph read.
@@ -587,11 +603,11 @@ pub fn palw_decode_claim_liability_frame_v1(
     decode_claim_local_value_v1(bytes)
 }
 
-fn decode_claim_local_value_v1<T: BorshDeserialize + BorshSerialize + crate::palw_native_resource_v1::NativeWireScanV1>(
+pub(crate) fn decode_claim_local_value_v1<T: BorshDeserialize + BorshSerialize + crate::palw_native_resource_v1::NativeWireScanV1>(
     bytes: &[u8],
 ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<T>, crate::palw_native_resource_v1::NativeDecodeErrorV1<std::io::Error>> {
     use crate::palw_native_resource_v1::{
-        preflight_native_value_v1, reserve_native_requests_v1, NativeDecodeErrorV1 as D, NativeRetainedV1,
+        NativeDecodeErrorV1 as D, NativeRetainedV1, preflight_native_value_v1, reserve_native_requests_v1,
     };
     // Unconditional shape validation also protects configurations without a
     // local quota. A huge nested count in a short frame never reaches Borsh.
@@ -818,7 +834,7 @@ mod tests {
 
     #[test]
     fn rfc23s2_checkpoint_native_decode_covers_real_heap_and_rejects_hostile_counts() {
-        use crate::palw_native_resource_v1::{preflight_native_value_v1, NativeHeapV1};
+        use crate::palw_native_resource_v1::{NativeHeapV1, preflight_native_value_v1};
         let c = fixture();
         let bytes = borsh::to_vec(&c).unwrap();
         let shape = preflight_native_value_v1::<PalwClaimLocalCheckpointV1>(bytes.as_slice(), bytes.len() as u64).unwrap();
@@ -881,7 +897,7 @@ impl crate::config::params::Params {
 #[cfg(test)]
 mod fence_tests {
     use crate::config::params::{
-        palw_t12_shipped_params, ForkActivation, DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS,
+        DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_t12_shipped_params,
     };
     #[test]
     fn rfc23s2_fence_is_dormant_some_only_and_never_armable_without_measurements() {

@@ -100,7 +100,7 @@ impl PalwChainStateV2 {
                     if !has_input {
                         return Err("claim admission lost its presented original input".into());
                     }
-                    use crate::palw_native_resource_v1::{native_value_requests_v1, reserve_native_requests_v1, NativeRetainedV1};
+                    use crate::palw_native_resource_v1::{NativeRetainedV1, native_value_requests_v1, reserve_native_requests_v1};
                     let demand = native_value_requests_v1(claim).map_err(PalwClaimCheckpointErrorV1::Resource)?;
                     let lease = reserve_native_requests_v1(demand).map_err(PalwClaimCheckpointErrorV1::Resource)?;
                     Ok(Some(NativeRetainedV1::from_owner_reserved_v1(claim.clone(), lease)))
@@ -121,6 +121,28 @@ impl PalwChainStateV2 {
         };
         for ((table, key), bytes) in &route.aux {
             if *table != PALW_CLAIM_LOCAL_TABLE_V1 {
+                continue;
+            }
+            if key.first() == Some(&b'R') {
+                if key.len() != 65 {
+                    return Err(PalwStateV2Error::CarriageInconsistent("bad reward hold key".into()));
+                }
+                let hold = crate::palw_claim_local_v1::decode_claim_local_value_v1::<PalwClaimLocalRewardHoldV1>(bytes).map_err(
+                    |e| match e {
+                        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),
+                        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => {
+                            PalwStateV2Error::CarriageInconsistent(e.to_string())
+                        }
+                    },
+                )?;
+                let id = Hash64::from_bytes(key[1..].try_into().expect("fixed key"));
+                if self
+                    .claims
+                    .get(&id)
+                    .is_none_or(|c| c.accepted_daa != hold.accepted_daa || c.accepted_blue_score != hold.accepted_blue_score)
+                {
+                    return Err(PalwStateV2Error::CarriageInconsistent("reward hold lost its claim birth".into()));
+                }
                 continue;
             }
             let frame = palw_decode_claim_liability_frame_v1(bytes).map_err(|why| match why {
@@ -177,6 +199,15 @@ pub(super) fn retain_changed_claim_context_v1(
                 PalwDeltaEntryV2::ExecV2Row { key, old, new, .. } => {
                     q.copy(key)?.copy(old)?.copy(new)?;
                 }
+                PalwDeltaEntryV2::Claim { old, new, .. } => {
+                    q.exact::<u8>(64)?;
+                    if let Some(row) = old {
+                        q.encoded(row)?;
+                    }
+                    if let Some(row) = new {
+                        q.encoded(row)?;
+                    }
+                }
                 _ => {}
             }
         }
@@ -202,7 +233,14 @@ pub(super) fn retain_changed_claim_context_v1(
             });
         }
         match entry {
-            PalwDeltaEntryV2::Claim { key, .. } => {
+            PalwDeltaEntryV2::Claim { key, old, new } => {
+                native_changes.push(PalwClaimLocalNativeChangeV1 {
+                    owner: PalwClaimLocalRowOwnerV1::ChainClaims,
+                    table: 0,
+                    key: key.as_byte_slice().to_vec(),
+                    old: old.as_ref().map(|r| borsh::to_vec(r).expect("canonical original claim")),
+                    new: new.as_ref().map(|r| borsh::to_vec(r).expect("canonical current claim")),
+                });
                 claims.insert(*key);
             }
             PalwDeltaEntryV2::KernelRouteRow { table, key, old, new }

@@ -2,26 +2,28 @@
 //! visitors; semantic authority comes from the executed liability fold.
 use crate::palw_claim_local_v1::{
     PalwClaimLiabilityFrameV1, PalwClaimLocalCheckpointV1, PalwClaimLocalInputV1, PalwClaimLocalNativeChangeV1,
-    PalwClaimLocalRecordV1, PalwClaimLocalRowOwnerV1,
+    PalwClaimLocalRecordV1, PalwClaimLocalRewardHoldV1, PalwClaimLocalRowOwnerV1,
 };
 use crate::palw_native_resource_v1::wire::wire_struct;
-use crate::palw_native_resource_v1::{native_enum, native_struct};
 use crate::palw_native_resource_v1::{
-    preflight_native_carriage_v1, NativeCoverageV1, NativeHeapV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1,
+    NativeCoverageV1, NativeHeapV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, preflight_native_carriage_v1,
 };
-use crate::{palw_state_v2::PalwBlockContextV2, Hash64};
+use crate::palw_native_resource_v1::{native_enum, native_struct};
+use crate::{Hash64, palw_state_v2::PalwBlockContextV2};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
+native_struct!(PalwClaimLocalRewardHoldV1; accepted_daa, accepted_blue_score, until);
+wire_struct!(PalwClaimLocalRewardHoldV1; u64, u64, u64);
 native_struct!(PalwClaimLocalRecordV1; claim, accepted_daa, accepted_blue_score, accepting_block, anchors, inputs,
     execution_root, reservations, final_claim, certified, voided, liability_closed, material);
 native_struct!(PalwClaimLocalCheckpointV1; point, records, liability_state, material);
-native_enum!(PalwClaimLocalRowOwnerV1; KernelRoute, ExecV2);
+native_enum!(PalwClaimLocalRowOwnerV1; KernelRoute, ExecV2, ChainClaims);
 impl NativeWireScanV1 for PalwClaimLocalRowOwnerV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 | 1 => Ok(NativeWireShapeV1::default()),
+            0 | 1 | 2 => Ok(NativeWireShapeV1::default()),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown liability row owner")),
         }
     }

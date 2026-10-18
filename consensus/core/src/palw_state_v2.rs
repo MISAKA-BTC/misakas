@@ -247,6 +247,8 @@ pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
 mod palw_security_certification_fold_v1;
 #[path = "palw_claim_local_fold_v1.rs"]
 mod palw_claim_local_fold_v1;
+#[path = "palw_claim_local_rewards_v1.rs"]
+mod palw_claim_local_rewards_v1;
 // RFC-0008: the once-only settlement registry (dormant `palw_settlement_once_v1`; kernel route aux 140) — every settlement consumer
 // checks and writes its exact obligation's marker in the same transition before any value moves.
 #[path = "palw_settlement_once_fold_v1.rs"]
@@ -11167,7 +11169,12 @@ fn terminal_deadline_with_material_v1(
     // The staged court's material horizon floors the retirement (integration, `25a9253d5`); the operational release above is a
     // collateral clock, not a retirement, and is not floored (R6781-F merge).
     palw_exec_v2_rewards_v1::retirement(state, params, id, terminal_deadline_at_v1(claim, params, last_daa)?, claim)
-        .map(|at| at.map(|at| state.staged_retirement_floor_v1(id, at)))
+        .map(|at| at.map(|at| {
+            let at=state.staged_retirement_floor_v1(id,at);
+            if params.claim_local_settlement_active_at(claim.accepted_daa) && matches!(claim.phase,PalwClaimPhaseV2::Final{..}) {
+                at.max(palw_claim_local_rewards_v1::hold_hint_v1(state,*id,claim).unwrap_or(0))
+            } else {at}
+        }))
 }
 
 /// Only the still-pending first terminal deadline; after its sweep, retirement
