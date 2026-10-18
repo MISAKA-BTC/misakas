@@ -131,7 +131,7 @@ pub(super) fn refund_native_fee_v1(
 
 /// **The closing tick's sweep** (a no-op below the fence): held fees whose horizon has passed and whose job has no open dispute
 /// (`open(builder, row)`: the family's own pending demands or proof owners) are released, at most
-/// [`PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1`] a block, in key order. A held fee with an open dispute waits for its verdict.
+/// [`PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1`] a block, in key order. Open disputes do not consume release slots or starve later payable fees.
 pub(super) fn release_held_native_fees_v1(
     builder: &mut TransitionBuilder<'_>,
     now: u64,
@@ -152,15 +152,13 @@ pub(super) fn release_held_native_fees_v1(
         if row.version != PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1
             || *key != palw_native_held_fee_key_v1(row.family, &row.job)
             || row.horizon_daa >= now
+            || open(builder, &row)
         {
             continue;
         }
         due.push(row);
     }
     for row in due {
-        if open(builder, &row) {
-            continue;
-        }
         release_native_fee_v1(builder, &row, now)?;
     }
     Ok(())

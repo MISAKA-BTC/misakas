@@ -1017,17 +1017,17 @@ pub(super) fn credit_after_final_conviction(
 }
 
 /// **Does a held fee's job still have an open dispute?** (the release waits for its verdict): a native39 job's pending demands or
-/// live proof owners. Other families hold nothing open past their Final here.
+/// live proof owners. Unknown families or unavailable job/status rows cannot authorize a payment.
 pub(super) fn native_dispute_open_v39(
     builder: &TransitionBuilder<'_>,
     row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
 ) -> bool {
     if row.family != crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39 {
-        return false;
+        return true;
     }
-    let Some(r) = builder.state.kernel_route.as_ref() else { return false };
-    let Ok(h) = header(r, row.job) else { return false };
-    protected::status(r, &h).is_ok_and(|st| !st.pending.is_empty() || st.owners.iter().any(|id| *id != [0; 64]))
+    let Some(r) = builder.state.kernel_route.as_ref() else { return true };
+    let Ok(h) = header(r, row.job) else { return true };
+    protected::status(r, &h).map_or(true, |st| !st.pending.is_empty() || st.owners.iter().any(|id| *id != [0; 64]))
 }
 
 /// **Is the job still accusable at `now`?** Challengeable, or (RFC08 08-B) Final with its fee held inside the liability horizon.

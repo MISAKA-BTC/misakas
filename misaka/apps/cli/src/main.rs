@@ -2947,10 +2947,21 @@ enum EvmTxCmd {
     },
 }
 
+fn main() -> std::process::ExitCode {
+    // Even boxed command futures have construction/poll temporaries in debug builds.
+    // Run the dispatcher on a bounded stack of its own so normal CLI invocations do
+    // not depend on an operator changing the process stack limit (including --help).
+    match std::thread::Builder::new().name("misaka-cli".into()).stack_size(64 * 1024 * 1024).spawn(cli_main) {
+        Ok(worker) => worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        Err(error) => {
+            eprintln!("error: cannot start CLI dispatcher: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> std::process::ExitCode {
-    // The command dispatcher contains large branch futures. Keep it on the heap so its
-    // storage is not duplicated on the process stack by the runtime's main wrapper.
+async fn cli_main() -> std::process::ExitCode {
     Box::pin(run_cli()).await
 }
 

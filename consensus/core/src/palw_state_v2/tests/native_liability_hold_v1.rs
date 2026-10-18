@@ -127,3 +127,63 @@ fn below_the_fence_the_sweep_reads_nothing() {
     release_held_native_fees_v1(&mut b, 1_000, |_, _| false).unwrap();
     assert!(held_native_fee_v1(&b.state, PALW_NATIVE_FAMILY_JOB_V39, &JOB).is_some(), "dormant: untouched");
 }
+
+#[test]
+fn open_disputes_do_not_starve_a_later_payable_fee() {
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let mut payable = row(500);
+    for i in 0..=PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1 {
+        let mut item = row(500);
+        item.job[..8].copy_from_slice(&(i as u64).to_be_bytes());
+        item.income_root = item.job;
+        item.queue = h64(1000 + i as u64).as_bytes();
+        hold_native_fee_v1(&mut b, &item).unwrap();
+        payable = item;
+    }
+    release_held_native_fees_v1(&mut b, 501, |_, item| item.job != payable.job).unwrap();
+    assert_eq!(queued(&b.state, payable.queue), Some((h64(0xB1), 7_000)));
+    assert!(held_native_fee_v1(&b.state, payable.family, &payable.job).is_none());
+    let still_held =
+        b.state.kernel_route.as_ref().unwrap().aux.keys().filter(|(table, _)| *table == PALW_NATIVE_LIABILITY_HOLD_TABLE_V1).count();
+    assert_eq!(still_held, PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1);
+}
+
+#[test]
+fn an_unreadable_job_cannot_release_a_held_fee() {
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let item = row(500);
+    hold_native_fee_v1(&mut b, &item).unwrap();
+    release_held_native_fees_v1(&mut b, 501, |builder, item| {
+        super::super::palw_native_job_fold_v39::native_dispute_open_v39(builder, item)
+    })
+    .unwrap();
+    assert!(held_native_fee_v1(&b.state, item.family, &item.job).is_some());
+    assert!(queued(&b.state, item.queue).is_none());
+}
+
+#[test]
+fn payable_backlog_still_releases_at_most_the_per_block_bound() {
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    for i in 0..=PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1 {
+        let mut item = row(500);
+        item.job[..8].copy_from_slice(&(i as u64).to_be_bytes());
+        item.income_root = item.job;
+        item.queue = h64(1000 + i as u64).as_bytes();
+        hold_native_fee_v1(&mut b, &item).unwrap();
+    }
+    release_held_native_fees_v1(&mut b, 501, |_, _| false).unwrap();
+    assert_eq!(b.state.pending_payouts.len(), PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1);
+    release_held_native_fees_v1(&mut b, 502, |_, _| false).unwrap();
+    assert_eq!(b.state.pending_payouts.len(), PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1 + 1);
+    release_held_native_fees_v1(&mut b, 503, |_, _| false).unwrap();
+    assert_eq!(b.state.pending_payouts.len(), PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1 + 1);
+}
