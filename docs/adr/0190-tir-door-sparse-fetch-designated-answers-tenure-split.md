@@ -77,3 +77,46 @@ cannot pass under the current structure.
 - The 32K maximum door is not measured; only derived from the analyser lane.
 - Gather/model-parameter reads are uncovered (above).
 - Whole collusion plus one external verifier, default on missing answers, and restart/reorg/IBD identity are not tested.
+
+## Chosen design (Proposed; not implemented)
+
+- **Bounded rounds.** The disputed step's read set is fetched in R = 2 serial rounds, independent of the run count. Round 1: one batched
+  request for the whole derived operand closure of the disputed leaf. Round 2: only the value-dependent follow-ups that the window rule
+  cannot pre-compute (Gather index, Select branch, TopK selection). Bytes per round are bounded by carrier capacity; a round that exceeds it
+  is split into parts inside the same round, not into more rounds.
+- **Designated answers.** Each request has a designated custodian recorded in consensus state with obligation, deadline, handover order and
+  default. Authenticated bodies are reused only for the same claim, root and coordinates. Signers of a false Valid stay liable even if they
+  did not carry the body. Silence of every designated custodian gives DA default and reward/credit refusal at a finite deadline.
+- **Tenure split.** Evidence retention and slot occupancy are separate periods. An honest owner waiting for an answer is not idle. Handover
+  keeps pursuit state, evidence and charges.
+- **Output/stop and reorg.** Priced at their own request spans (trace tile 69 DAA or a leaf), never at the widest span of the path.
+
+## Door formula (every term)
+
+Door = prep + acq + margin_round(R) + transport(round 1 bytes, shared once per authenticated body) + transport(round 2 bytes)
+     + output_check_span + reorg_span + owner_queue + descent + rows/tiles + IDs + filing
+     + **uncovered: gather/param operand bytes (not bounded, explicit)**
+     + auth paths + signatures + control carriers + retention + re-fetch
+
+Only the terms with a measured or derived value can be filled. The remaining ones are named and not assumed zero.
+
+## Numbers from arithmetic (not from tests)
+
+| case | read-set body | transport (shared once) | transport (56 chains) |
+|---|---:|---:|---:|
+| measured short job, observed max 97 leaves | 794,624 B | 7 DAA | 356 DAA |
+| 32K maximum, derived window 4,915,476 leaves | 40,267,579,392 B | 322,141 DAA | 18,039,876 DAA |
+
+Threshold: 3,120 DAA at 125,000 B/DAA allows 390,000,000 B shared once, which is 47,607 leaves. The derived 32K window is about 103 times
+that. The dominant term at 32K is the transport of the read-set bytes, not the rounds.
+
+## Concrete unmet condition
+
+The 32K maximum door is not under 3,120 under the current analyser bound. The condition to meet is a demand-driven operand-closure byte bound
+for the disputed step of at most 390 MB (shared once) at 32K, or the bound must be shown to be at most 47,607 leaves. The analyser gives only
+the window superset, and gather/param reads are not bounded. Until that is derived, 3,120 cannot be shown at the 32K maximum.
+
+## What was not done in this lane
+
+- No implementation of the rounds, designation state, tenure split, or dormant fence.
+- The baseline test `door_breakdown_on_a_real_class` (run `b99g16ncm`) had not finished under the shared lock when this was written.
