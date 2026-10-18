@@ -7540,6 +7540,11 @@ pub enum PalwConsensusObjectV2 {
     MemoryRoutingV2 {
         object: Box<crate::palw_memory_routing_v2::PalwMemoryRoutingObjectV2>,
     } = 244,
+    /// ADR-0191 step B: a designated-custodian event (`crate::palw_tir_designated_answers_v1`). Tag 245. Dormant behind
+    /// `palw_tir_designated_answers_v1`: below it the live build's undecodable payload (A-2); the fold writes nothing below it.
+    TirDesignatedEventV1 {
+        event: crate::palw_tir_designated_answers_v1::PalwTirDesignatedEventV1,
+    } = 245,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -18962,6 +18967,9 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::MonetaryMaterialV1) => builder.params.monetary_material_at_v1(ctx.daa_score).is_some(),
         K::Fence(F::MaterialReleaseRecoveryV2) => builder.params.material_release_recovery_at_v2(ctx.daa_score).is_some(),
         K::Fence(F::MemoryRoutingCourtV2) => builder.extras.memory_routing_court.is_some(),
+        // ADR-0191 step B: no mirror of `palw_tir_designated_answers_v1` in the bundle yet, so the fold never treats tag 245 as in force
+        // (undecodable, skipped): no state write on any network, armed or not.
+        K::Fence(F::TirDesignatedAnswersV1) => false,
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
         K::Fence(F::TirPublicConvictionV1) => {

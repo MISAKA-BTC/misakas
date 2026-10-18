@@ -2528,6 +2528,14 @@ impl VirtualStateProcessor {
                 // RFC-0006 consumer v2 (tag 244): the fence, the close ceiling and the signer — the class registrant for a router
                 // binding (like `ClassSemanticsDeclaredV1`), the accuser for an accusation (like tag 243). Adjudication and the
                 // binding's graph checks run in the typed fold.
+                // ADR-0191 step B (tag 245): the same shape as tag 244 below. Below `palw_tir_designated_answers_v1` it is the dormant
+                // payload (A-2); armed, the registry is not yet a state field, so it stays refused (dormant everywhere).
+                Obj::TirDesignatedEventV1 { .. } => {
+                    if !self.palw_tir_designated_answers_v1_at(point.daa_score) {
+                        return Err("the designated-custodian event is dormant on this network".into());
+                    }
+                    return Err("the designated-custodian registry is not wired into the consensus state".into());
+                }
                 Obj::MemoryRoutingV2 { object } => {
                     use kaspa_consensus_core::palw_memory_routing_v2 as mr;
                     if !self.palw_memory_routing_court_v2_at(point.daa_score) {

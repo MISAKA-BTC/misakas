@@ -244,3 +244,9 @@ existing step machinery and is not re-derived here; no check is skipped and no h
 
 Adopt the log-round, block-bounded dispute as the design for the long-context door (replacing the per-claim read set of ADR-0190),
 after the unmet conditions 1–3 are closed. No arming is requested by this ADR.
+
+## Implementation
+
+Carrier: `PalwConsensusObjectV2` tag 245 `TirDesignatedEventV1` (`PALW_TIR_DESIGNATED_EVENT_TAG_V1`), dormant behind `palw_tir_designated_answers_v1`. A-2 pattern as `MemoryRoutingV2` (tag 244): the kind is owned by the new fence slot `PalwLifecycleKindFenceV1::TirDesignatedAnswersV1`, and below the fence it rides unjudged as the dormant payload (the validate walk, the fold and `may_ride` treat it as tag 244 does). The fold's in-force check is `false` on every network, so the fold never writes it.
+
+Unmet: the designated registry is not a field of the consensus state, so an event that reaches the validate walk while the fence is armed is refused with "not wired into the consensus state". Dormant everywhere: no shipped preset arms `palw_tir_designated_answers_v1`, and no rule is applied yet.

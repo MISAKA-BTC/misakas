@@ -24,6 +24,10 @@ pub type PalwTirCustodianIdV1 = [u8; 32];
 /// A 32-byte digest (a claim id, a root, or an authenticated body digest). Digests identify data; they do not prove computation.
 pub type PalwTirDigestV1 = [u8; 32];
 
+/// The consensus object tag of [`PalwTirDesignatedEventV1`] (`PalwConsensusObjectV2::TirDesignatedEventV1`). Dormant behind
+/// `palw_tir_designated_answers_v1`: below it the live build reads the bytes as undecodable and skips them (A-2).
+pub const PALW_TIR_DESIGNATED_EVENT_TAG_V1: u8 = 245;
+
 /// The most designated custodians one request names (a bound on the handover chain).
 pub const PALW_TIR_DESIGNATED_MAX_CUSTODIANS_V1: usize = 8;
 
@@ -81,7 +85,7 @@ pub struct PalwTirDesignatedRegistryV1 {
 }
 
 /// An event on the designated-answer path.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwTirDesignatedEventV1 {
     Open(PalwTirDesignatedRequestV1),
     Answer { key: PalwTirRequestKeyV1, custodian: PalwTirCustodianIdV1, body: PalwTirDigestV1, at_daa: u64 },

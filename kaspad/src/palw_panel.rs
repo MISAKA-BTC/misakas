@@ -15754,6 +15754,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // RFC-0006 consumer v2 (tags 243, 244).
         PalwConsensusObjectV2::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
         PalwConsensusObjectV2::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
+        PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => "TirDesignatedEventV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

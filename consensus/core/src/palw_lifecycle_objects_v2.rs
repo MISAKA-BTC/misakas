@@ -572,6 +572,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         }
         // RFC-0006 consumer v2 (tag 244): a signed binding declaration, or a signed accusation under the close-byte ceiling.
         PalwConsensusObjectV2::MemoryRoutingV2 { object } => object.may_ride(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES),
+        // ADR-0191 step B (tag 245): a designated-custodian event; its bounds are checked by the rules, and the fence gate routes it below.
+        PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => Ok(()),
         // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
         // registrant and by the bond, checked at acceptance against their registered keys — and
         // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
@@ -1202,11 +1204,13 @@ pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_tir_container_identity_v1` — RFC-0002 / genesis 8 audit 02-A: a TIR class's `PALWART3` container binding
     /// (tag 175). Local activation-table slot (not wire).
     TirContainerIdentityV1 = 17,
+    /// `Params::palw_tir_designated_answers_v1` — ADR-0191 step B's designated-custodian events (tag 245). Local slot (not wire).
+    TirDesignatedAnswersV1 = 18,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1225,6 +1229,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::TirPublicConvictionV1,
         Self::MemoryRoutingCourtV2,
         Self::TirContainerIdentityV1,
+        Self::TirDesignatedAnswersV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1248,6 +1253,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
             Self::TirPublicConvictionV1 => "palw_tir_public_conviction_v1",
             Self::TirContainerIdentityV1 => "palw_tir_container_identity_v1",
+            Self::TirDesignatedAnswersV1 => "palw_tir_designated_answers_v1",
         }
     }
 }
@@ -1472,6 +1478,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
             PalwLifecycleKindOwnerV1::Fence(F::TirPublicConvictionV1)
         }
         O::TirClassContainerBoundV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirContainerIdentityV1),
+        // ADR-0191 step B: the designated-custodian event (tag 245), dormant behind its own fence.
+        O::TirDesignatedEventV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirDesignatedAnswersV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
@@ -1625,6 +1633,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (242, "MonetaryMaterialActionV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (243, "GdnStepAccusedV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (244, "MemoryRoutingV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
+    (245, "TirDesignatedEventV1", PalwLifecycleKindFenceV1::TirDesignatedAnswersV1),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (170, "TirPublicControlV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
@@ -1729,6 +1738,7 @@ impl crate::config::params::Params {
                     }
                     PalwLifecycleKindFenceV1::TirPublicConvictionV1 => self.palw_tir_public_conviction_v1_fence(),
                     PalwLifecycleKindFenceV1::TirContainerIdentityV1 => self.palw_tir_container_identity_v1_fence(),
+                    PalwLifecycleKindFenceV1::TirDesignatedAnswersV1 => self.palw_tir_designated_answers_v1_fence(),
                 },
             )
         })
@@ -4018,6 +4028,14 @@ pub(crate) mod tests {
                 },
                 171 => PalwConsensusObjectV2::TirPublicGrantReadyV1 {
                     grant: Box::new(crate::palw_tir_public_carriage_v1::palw_tir_public_grant_fixture_v1()),
+                },
+                245 => PalwConsensusObjectV2::TirDesignatedEventV1 {
+                    event: crate::palw_tir_designated_answers_v1::PalwTirDesignatedEventV1::Answer {
+                        key: crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1 { claim: [0; 32], root: [0; 32], coordinates: 0 },
+                        custodian: [0; 32],
+                        body: [0; 32],
+                        at_daa: 0,
+                    },
                 },
                 _ => minimal_decode(&[tag]).unwrap_or_else(|| {
                 panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample in the A2U sweeps instead")

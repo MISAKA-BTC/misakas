@@ -8788,6 +8788,11 @@ impl VirtualStateProcessor {
         self.palw_memory_routing_court_v2.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// ADR-0191 step B: `palw_tir_designated_answers_v1`'s mirror, the same shape as tag 244's fence.
+    pub(super) fn palw_tir_designated_answers_v1_at(&self, daa_score: u64) -> bool {
+        self.palw_tir_designated_answers_v1.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **ADR-0100 Decision 4, resolved in exactly one place.**
     pub(super) fn palw_shard_licensing_at(&self, daa_score: u64) -> bool {
         self.palw_shard_licensing.is_some_and(|fence| fence.is_active(daa_score))

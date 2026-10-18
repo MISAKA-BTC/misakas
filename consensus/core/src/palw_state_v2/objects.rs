@@ -670,6 +670,12 @@ fn apply_object_inner(
         PalwConsensusObjectV2::MemoryRoutingV2 { object } => {
             super::palw_memory_routing_fold_v2::apply_memory_routing_v2(builder, ctx, object)?;
         }
+        // ADR-0191 step B (tag 245). The lifecycle gate routes it by `palw_tir_designated_answers_v1`: below that fence it never
+        // reaches this fold (A-2, no state write). The registry is not yet a field of the fold state, so an in-force event is refused
+        // rather than applied to a throwaway registry; the wiring is the open step.
+        PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => {
+            return Err(PalwStateV2Error::InvalidParams("TirDesignatedEventV1: the designated registry is not wired into the fold state"));
+        }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
                 return Err(PalwStateV2Error::ShardCourtDormant);
