@@ -244,23 +244,42 @@ mod tests {
         let mut claim = crate::palw_gdn_held_filer::tests::claim_of(&w.honest, &w);
         assert!(capture_names_claim_v1(&w.capture, claim.execution_root, claim.shape_profile_id));
         assert!(!capture_names_claim_v1(&w.capture, Hash64::from_u64_word(0xBAD), claim.shape_profile_id));
+        let forged_claim = crate::palw_gdn_held_filer::tests::claim_of(&w.forged, &w);
+        let forged_capture = w.forged_capture.clone();
         let prompt = w.honest.prompt_token_ids.clone();
         assert!(!prompt.is_empty());
+        let mut outsider = claim.executor;
+        outsider.0.index += 1;
         let sign = |_: &[u8], _: &[u8]| None;
         let mut host = ServiceGdnHostV1 {
             entries: vec![(claim.clone(), Box::new(w.backend), w.capture, prompt.clone())],
             objects: HashMap::new(),
             window: 8,
-            bond: claim.executor,
+            bond: outsider,
             domain: Hash64::from_u64_word(0),
             sign: &sign,
         };
         let owned = host.material(&claim).expect("the actual claim prompt decodes the held capture");
         assert_eq!(owned.prompt_token_ids, prompt);
+        let mut honest_book = PalwGdnHeldBookV1::default();
+        assert!(palw_gdn_held_filer_tick_v1(&host, &mut honest_book, 1).is_empty());
+        assert_eq!(honest_book.settled.get(&claim.claim), Some(&"honest"));
+        host.entries[0].0 = forged_claim.clone();
+        host.entries[0].2 = forged_capture;
+        let forged = host.material(&forged_claim).expect("checkpoint mismatch is readable for GDN accusation");
+        assert_ne!(forged.binding.checkpoint_merkle_root, owned.binding.checkpoint_merkle_root);
+        let mut expected_step_binding = owned.binding.clone();
+        expected_step_binding.checkpoint_merkle_root = forged.binding.checkpoint_merkle_root;
+        expected_step_binding.committed_execution_root =
+            kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&expected_step_binding);
+        assert_eq!(forged.binding, expected_step_binding);
+        let mut forged_book = PalwGdnHeldBookV1::default();
+        let _ = palw_gdn_held_filer_tick_v1(&host, &mut forged_book, 1);
+        assert!(forged_book.cases.contains_key(&forged_claim.claim), "the service host opens the forged checkpoint case");
         claim.execution_root = Hash64::from_u64_word(0xBAD);
         host.entries[0].0 = claim.clone();
         assert!(host.material(&claim).is_err(), "a capture of another execution cannot supply evidence");
-        host.entries[0].0.execution_root = owned.binding.committed_execution_root;
+        host.entries[0].0.execution_root = forged.binding.committed_execution_root;
         host.entries[0].3[0] ^= 1;
         assert!(host.material(&host.entries[0].0).is_err(), "a different prompt cannot supply evidence");
     }

@@ -53,6 +53,7 @@ fn bond(n: u64) -> PalwBondKeyV2 {
 /// demanded chunk flipped, the leg and binding re-committed), the forged state chunks the producer would disclose, and the oracle.
 pub(crate) struct World {
     pub(crate) capture: Vec<u8>,
+    pub(crate) forged_capture: Vec<u8>,
     pub(crate) profile: kaspa_consensus_core::palw_step::PalwShapeProfileV3,
     pub(crate) backend: Qwen36Backend,
     pub(crate) honest: Base0GdnOwnedMaterialV2,
@@ -138,8 +139,15 @@ pub(crate) fn world(forge_head: u32) -> World {
         .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
         .collect();
     let oracle = PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root()).unwrap();
+    let mut retained = misaka_palw_base0::produce::base0_fp_material_decode_v2(&out.material).expect("held folded retention");
+    retained.binding = forged.binding.clone();
+    retained.checkpoint_leaves = forged.checkpoint_leaves.clone();
+    retained.checkpoint_chunks[index as usize] = state.chunks.clone();
+    let mut forged_capture = misaka_palw_base0::produce::PALW_BASE0_FP_MATERIAL_MAGIC_V2.to_vec();
+    forged_capture.extend(borsh::to_vec(&retained).unwrap());
     World {
         capture: out.material,
+        forged_capture,
         profile: profile.clone(),
         backend,
         honest,

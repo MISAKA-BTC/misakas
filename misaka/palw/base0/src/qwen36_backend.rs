@@ -1051,6 +1051,16 @@ impl Qwen36Backend {
         &self,
         material: &crate::produce::Base0FpMaterialV2,
     ) -> Result<crate::produce::Base0ExecutionV1, String> {
+        self.dense_capture_from_fold_for_checkpoint_dispute_v2(material, false)
+    }
+
+    // Only the GDN accuser may read a checkpoint-mismatching capture. Its step tiles must
+    // still reproduce the committed step tree; ordinary verification keeps full equality.
+    fn dense_capture_from_fold_for_checkpoint_dispute_v2(
+        &self,
+        material: &crate::produce::Base0FpMaterialV2,
+        checkpoint_dispute: bool,
+    ) -> Result<crate::produce::Base0ExecutionV1, String> {
         let (Some(plan), Some(_)) = (&self.plan, &self.profile) else {
             return Err("this backend serves no registered graph, so it cannot re-execute a folded capture".to_string());
         };
@@ -1087,7 +1097,12 @@ impl Qwen36Backend {
                 id
             },
         )?;
-        if run.binding.committed_execution_root != material.binding.committed_execution_root {
+        let mut expected = run.binding.clone();
+        if checkpoint_dispute {
+            expected.checkpoint_merkle_root = material.binding.checkpoint_merkle_root;
+            expected.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&expected);
+        }
+        if expected != material.binding {
             return Err("the retained fold and its re-execution are not one execution".to_string());
         }
         Ok(run)
@@ -1319,19 +1334,38 @@ impl Qwen36Backend {
         material: &[u8],
         carried: Option<&[u32]>,
     ) -> Result<crate::gdn_evidence_v2::Base0GdnOwnedMaterialV2, String> {
-        let prepared = self.prepare_whole_capture_v1(material, carried, None)?;
         let retention =
             crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let (binding, tiles, prompt_token_ids) = match &retention {
+            crate::produce::Base0RetentionV1::Folded(m) => {
+                let prompt = carried.unwrap_or(&m.prompt_token_ids);
+                if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                    self.prompt_ids_form,
+                    prompt,
+                    &m.binding.job_context.prompt_token_ids_hash,
+                ) {
+                    return Err("the GDN capture's prompt is not the committed job's".into());
+                }
+                let mut replay = m.clone();
+                replay.prompt_token_ids = prompt.to_vec();
+                let run = self.dense_capture_from_fold_for_checkpoint_dispute_v2(&replay, true)?;
+                (m.binding.clone(), run.tiles, prompt.to_vec())
+            }
+            crate::produce::Base0RetentionV1::Dense(_) => {
+                let prepared = self.prepare_whole_capture_v1(material, carried, None)?;
+                (prepared.binding, prepared.step_tiles, prepared.prompt_token_ids)
+            }
+        };
         let checkpoint_leaves = match &retention {
             crate::produce::Base0RetentionV1::Folded(m) => m.checkpoint_leaves.clone(),
             crate::produce::Base0RetentionV1::Dense(_) => Vec::new(),
         };
         Ok(crate::gdn_evidence_v2::Base0GdnOwnedMaterialV2 {
-            binding: prepared.binding,
-            tiles: prepared.step_tiles,
+            binding,
+            tiles,
             checkpoint_leaves,
             served_chunks: retention.checkpoint_chunks().to_vec(),
-            prompt_token_ids: prepared.prompt_token_ids,
+            prompt_token_ids,
             output_token_ids: retention.generated_token_ids().to_vec(),
             prompt_ids_form: self.prompt_ids_form,
             max_leaves: self.network_ladder,
@@ -1346,7 +1380,10 @@ impl Qwen36Backend {
         let profile = self.profile.as_ref().ok_or_else(|| "this backend serves no registered profile".to_string())?;
         let inventory = crate::inventory::qwen36_inventory_v1(&self.artifact, profile).map_err(|e| format!("{e:?}"))?;
         let openings = (0..inventory.operands().len())
-            .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).ok_or_else(|| format!("inventory row {i} has no opening")))
+            .map(|i| {
+                kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32)
+                    .ok_or_else(|| format!("inventory row {i} has no opening"))
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok((openings, inventory.root()))
     }
@@ -2277,7 +2314,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         crate::float_public_source::write_float_public_source_v1(material, out)
     }
 
-    fn public_execution_binding_header_v1(&self,material:&[u8])->Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,String> {
+    fn public_execution_binding_header_v1(
+        &self,
+        material: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1, String> {
         crate::flat_public_source::original_public_binding_header_v1(material)
     }
 

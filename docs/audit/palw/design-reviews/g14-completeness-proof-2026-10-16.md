@@ -1679,3 +1679,9 @@ attempt は既存の `attempt_job_for_claim` で accepted block の job と prom
 実際の graph-v8 capture を使い、正しい prompt を読めること、別 execution root と別 prompt を拒否することの対象試験を追加した。`/tmp/codex-g14-gdn-service-host.log` で build 待ち。fold E2E は `/tmp/codex-g14-gdn-fold.log` で build 中。いずれも現時点で PASS として数えない。service host の対象試験は full node / P2P E2E の代替ではない。
 
 15.3 補足: pool の最初の capture が別 claim のものでも、後の適切な capture を妨げないよう、選択時点で chain の execution root と class ID に一致する binding を選ぶ。対象試験にも正しい capture の受理と別 root の拒否を追加した。build・runtime 結果は引き続き未確定。
+
+### 15.4 GDN 読み取りが checkpoint 不一致を先に拒否していた問題(2026-10-18、検証中)
+
+`gdn_accuser_view_v2` は folded capture の tile 再構成に通常の full-execution 一致検査を使用していた。checkpoint root だけが偽造された capture でも全 root が不一致となるため、GDN 検出に届く前に拒否される。GDN 専用の読み取りでは、再実行した binding の checkpoint Merkle root だけを対象 capture の値に置換し、execution commitment を再計算した後、他の全 field が一致することを必須にした。通常の capture 検証は full binding の一致を要する。告発の決定論的裁定や consensus の受理条件は変更しない。
+
+対象試験は、既存の graph-v8 実行から本物の folded capture を保持し、state chunk 1 byte と checkpoint tree を偽造して再 commit した serialized capture を service host に渡す。正直な capture は `honest`、偽造 checkpoint は case を開くことを必須とした。結果は `/tmp/codex-g14-gdn-service-host.log` 待ちであり、まだ PASS として計上しない。これは service host の対象試験で、full node E2E は依然必要。
