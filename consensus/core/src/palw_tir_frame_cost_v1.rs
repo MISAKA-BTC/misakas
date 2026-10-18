@@ -563,6 +563,52 @@ pub fn tir_public_localization_path_bounded_v1(
     })
 }
 
+/// **ADR-0191 dispute door (DORMANT, derivation).** Every term is declared: the span fit `span(B) = 44 + ceil(B / 920)` (from ADR-0190's
+/// two measured one-round points), one bisection round of 46 DAA, the preparation (16) and the output check (53) of ADR-0191.
+pub const PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1: u64 = 44;
+pub const PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1: u64 = 920;
+pub const PALW_TIR_DISPUTE_ROUND_DAA_V1: u64 = 46;
+pub const PALW_TIR_DISPUTE_PREP_DAA_V1: u64 = 16;
+pub const PALW_TIR_DISPUTE_OUTPUT_DAA_V1: u64 = 53;
+/// The bisection arity of every level (ADR-0191 (1)).
+pub const PALW_TIR_DISPUTE_ARITY_V1: u64 = 16;
+
+/// The dispute door for one adjudication shape, with `levels` extra bisection levels below the shape's own rounds.
+///
+/// * `rounds`: the dependent rounds before the adjudication (positions, attention tiles, step ops, vocabulary tiles);
+/// * `reduction_blocks`: the byte sizes of the divisible operand blocks (attention tile, GDN state block, matmul block); each one
+///   shrinks by `PALW_TIR_DISPUTE_ARITY_V1` per extra level, rounded up;
+/// * `floor_bytes`: the indivisible part (one leaf and one logits tile), which no level shrinks;
+/// * `contenders`: owners per claim (`K_owner`), each of whose queued adjudication waits one budget;
+/// * the door is `prep + (rounds + levels)·round + output + (K + 1)·span(B)`: own adjudication, restart, and the `(K − 1)` queued budgets.
+///
+/// Returns `None` on overflow. The adjudication itself is still a deterministic recomputation of the block from authenticated
+/// operands; this function only prices it.
+pub fn palw_tir_dispute_door_fit_v1(rounds: u64, levels: u32, reduction_blocks: &[u64], floor_bytes: u64, contenders: u64) -> Option<u64> {
+    let mut block = floor_bytes;
+    let divisor = PALW_TIR_DISPUTE_ARITY_V1.checked_pow(levels)?;
+    for bytes in reduction_blocks {
+        block = block.checked_add(bytes.div_ceil(divisor))?;
+    }
+    let span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1.checked_add(block.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1))?;
+    let rounds = rounds.checked_add(u64::from(levels))?.checked_mul(PALW_TIR_DISPUTE_ROUND_DAA_V1)?;
+    let fixed = PALW_TIR_DISPUTE_PREP_DAA_V1.checked_add(PALW_TIR_DISPUTE_OUTPUT_DAA_V1)?;
+    let carriers = contenders.checked_add(1)?.checked_mul(span)?;
+    fixed.checked_add(rounds)?.checked_add(carriers)
+}
+
+/// The extra levels in `0..=max_levels` that minimise the door, with the door (ties take the fewer levels).
+pub fn palw_tir_dispute_door_minimum_v1(rounds: u64, reduction_blocks: &[u64], floor_bytes: u64, contenders: u64, max_levels: u32) -> Option<(u32, u64)> {
+    let mut best: Option<(u32, u64)> = None;
+    for levels in 0..=max_levels {
+        let door = palw_tir_dispute_door_fit_v1(rounds, levels, reduction_blocks, floor_bytes, contenders)?;
+        if best.is_none_or(|(_, d)| door < d) {
+            best = Some((levels, door));
+        }
+    }
+    best
+}
+
 /// **The filing allowance** after the stream door: the filer's witness parts (in order) and its conviction, at the measured capacity.
 pub fn tir_public_filing_daa_v1(
     witness_moves: u64,
@@ -630,6 +676,26 @@ mod tests {
         // 257 custodians add only their inclusion at the parallel capacity, not 257 serial chains.
         assert_eq!(wide, 2 + 6 + (258 * 8 * (4 * 8_192 + 700u64)).div_ceil(64 << 10));
         assert!(wide < 258 * 4 * 8, "not end to end");
+    }
+
+    #[test]
+    fn the_dispute_door_is_within_3120_at_32k_and_2m_at_the_minimising_level() {
+        // ADR-0191: attention tile 65,536 B, GDN state block 65,536 B, matmul block 131,072 B; one leaf + one logits tile (16,384 B) floor.
+        let blocks = [65_536u64, 65_536, 131_072];
+        let floor = 16_384u64;
+        // The declared fit reproduces the ADR's values.
+        assert_eq!(palw_tir_dispute_door_fit_v1(12, 0, &blocks, floor, 8), Some(3_744), "32K, no extra level: over 3,120");
+        assert_eq!(palw_tir_dispute_door_fit_v1(16, 0, &blocks, floor, 8), Some(3_928), "2M, no extra level: over 3,120");
+        // The minimising extra level is the same at both sizes (two levels: block 17,408 B).
+        assert_eq!(palw_tir_dispute_door_minimum_v1(12, &blocks, floor, 8, 7), Some((2, 1_280)), "32K minimum");
+        assert_eq!(palw_tir_dispute_door_minimum_v1(16, &blocks, floor, 8, 7), Some((2, 1_464)), "2M minimum");
+        assert!(palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap() <= 3_120, "2M fits 3,120 at the minimum");
+        // Fewer owners is NOT the fix (ADR-0191 decision): K = 8 is kept above.
+        assert!(palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap() > palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 4).unwrap());
+        // The floor is never shrunk: more levels stop helping once only the floor remains.
+        let at7 = palw_tir_dispute_door_fit_v1(16, 7, &blocks, floor, 8).unwrap();
+        let at2 = palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap();
+        assert!(at7 > at2, "extra levels past the minimum only add rounds");
     }
 
     #[test]
