@@ -7,7 +7,7 @@
 - **前提とする RFC:** [RFC-0024](0024-court-door-3200-to-ctx-2m.md)(A=最終裁定の 1 位置化、B=2 段先読み開示、C=先行取得と強制開示、付録 C=逐次 step 搬送の削減)。本文中の「前版」は RFC-0024 を指す。
 - **関連する既存実装:** `consensus/core/src/palw_court_capacity_v1.rs`(休眠。court 専用の block 予算・予約枠・期限順の割当・新規 claim の受付制限・囮の価格・未裁定は無報酬。値は仮)。本 RFC の §5〜§7 はこれを一般化・強化する位置づけで、統合時に対応を照合する(§15 段階 0)。
 - **非変更:** ZK・SNARK/STARK・zkVM・PCS による計算の正しさの証明は使わない([PRINCIPLES](../PRINCIPLES.md) §8)。モデル単位の審査は行わない(PRINCIPLES §9)。本文 §15 段階 1 の「モデル profile を審査」は、claim 受付前に class の形状が証拠上限に収まるかを決定論的に判定することであり、モデルの品質・公開状況の審査ではない。
-- **付属資料:** 原稿に付いていた ADR 草案・`source-audit-v2.md`・`capacity_planner.py`(27 試験)は、本登録時点では受け取っていない。本文中のそれらへのリンクは、受領後に `0025-assets/` へ置く。
+- **付属資料:** [0025-assets/](0025-assets/README.md)(ADR 草案、source-audit-v2、capacity_planner.py と 27 試験。登録時に 27 試験の合格を再確認)。前版の資料は RFC-0024 の [0024-assets/](0024-assets/)。
 
 ---
 
