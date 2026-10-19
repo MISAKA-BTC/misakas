@@ -17,6 +17,7 @@ pub mod evidence;
 pub mod inventory;
 pub mod mapped;
 pub mod memory;
+pub mod partial;
 mod own_source;
 mod public_source;
 pub mod residency;
