@@ -28,7 +28,7 @@ only; it does not assert the door is at or below 3,120.
 
 ### 125,000 B/DAA (sensitivity baseline)
 
-| term | 32K (N = 32,768, 2,048 tiles) | 2M (N = 2,097,152, 65,536 tiles) |
+| term | 32K (N = 32,768, 2,048 tiles) | 2M (N = 2,097,152, 131,072 tiles) |
 |---|---:|---:|
 | rounds R (R_pos + R_hist + R_op + R_tile) | 4 + 3 + 3 + 2 = 12 | 6 + 5 + 3 + 2 = 16 |
 | prep (`PALW_TIR_DISPUTE_PREP_DAA_V1`) | 16 | 16 |
@@ -68,7 +68,7 @@ only; it does not assert the door is at or below 3,120.
   these assumptions.
 - At 1/10 bandwidth, door_A is 3,012 (32K) and 3,196 (2M): the 2M value is 76 DAA above 3,120. door_B is above 3,120 at both sizes.
 - The dominant terms are the `(K + 1) × span(B_adj)` carrier count (567 at full bandwidth, 2,106 at 1/10) and the bisection rounds
-  (644 / 782). The step block size is the lever: it is the term the 1/10 case is most sensitive to.
+  (644 / 828). The step block size is the lever: it is the term the 1/10 case is most sensitive to.
 - The 2M row uses 131,072 history tiles (2,097,152 / 16, `R_hist = 5`), so R = 16 and the core door 1,464 matches the ADR-0191 table. The earlier 65,536-tile figure was an error and is withdrawn.
 
 ## Unmet conditions
