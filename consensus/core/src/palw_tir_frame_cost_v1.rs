@@ -726,6 +726,8 @@ mod tests {
         let carry_sum: u64 = carry_over.iter().map(|(_, v)| v).sum();
         // Terminal history read (given: ~135.6 KB; not recomputed here). Own adjudication plus one restart.
         let terminal_bytes = 135_600u64;
+        // Position terminal (one more round, then one position): given ~12 KB, not derived from the shape.
+        const POSITION_TERMINAL_BYTES_GIVEN: u64 = 12_000;
         let vocab_tiles = 248_320u64.div_ceil(4_096);
         let r_op = ceil_log16(1_024);
         let r_tile = ceil_log16(vocab_tiles);
@@ -775,6 +777,21 @@ mod tests {
                 println!("[{label}]   terminal history span(B={terminal_s}) = 44 + ceil(B/920) = {terminal_span}; own + restart = {terminal_extra}");
                 println!("[{label}]   door_B (with terminal) = {door_b}");
                 println!("[{label}]   replaced, not added: shipped trace 4,209, output 2,346, reorg 2,346, owner queue 1,536");
+                // **Position terminal row (DORMANT, derived_upper).** The history bisection localises one tile, then ONE more
+                // b = 16 round over its 16 slot partials localises one position; the terminal recomputes that position from
+                // its query row, K row and V row. The round adds one to R; the terminal is ~12 KB (given, not derived).
+                let position_rounds = rounds + 1;
+                let core_p = palw_tir_dispute_door_fit_v1(position_rounds, levels, &blocks_s, floor_s, k).expect("the door fits in u64");
+                assert_eq!(core_p, core + PALW_TIR_DISPUTE_ROUND_DAA_V1, "one extra round adds exactly one round of DAA");
+                let door_a_p = core_p + carry_sum;
+                let position_span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + (POSITION_TERMINAL_BYTES_GIVEN * scale).div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
+                let door_b_p = door_a_p + 2 * position_span;
+                println!("[{label}] --- position terminal, {tag} ---");
+                println!("[{label}]   rounds = {position_rounds} (R + 1: one position round over 16 slots)");
+                println!("[{label}]   core door (rounds + 1) = {core_p}");
+                println!("[{label}]   door_A_position (no terminal) = {door_a_p}");
+                println!("[{label}]   position terminal span({} B) = 44 + ceil(B/920) = {position_span}; own + restart = {}", POSITION_TERMINAL_BYTES_GIVEN * scale, 2 * position_span);
+                println!("[{label}]   door_B_position (with position terminal) = {door_b_p}");
             }
         }
     }

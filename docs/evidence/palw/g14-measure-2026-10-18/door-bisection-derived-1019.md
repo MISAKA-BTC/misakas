@@ -62,6 +62,30 @@ only; it does not assert the door is at or below 3,120.
 | terminal own + restart | 3,036 | 3,036 |
 | **door_B** | **6,048** | **6,232** |
 
+## Position terminal: one more round, then one position (dormant, derived_upper)
+
+The history bisection localises one tile of 16 positions. One more b = 16 round over that tile's slot partials localises
+one position (`palw_tir_history_position_round_v1`), and the terminal recomputes only that position from its query row, its K row
+and its V row (`palw_tir_position_operands_v1`, `adjudicate_position_terminal_v1`). Each slot partial is the existing A16 tile
+kernel on a one-row tile, and the tile partial is the exact fold of its slots, so no new arithmetic is introduced. The old
+terminal (135,600 B tile read) stays in the tables above and is not removed.
+
+The position round adds one to R (the core door uses `rounds + 1`). The terminal is **~12,000 B, as given** (q row + K row + V row);
+it is not derived from the program shape. At 12,500 B/DAA it is 120,000 B, and the span is `44 + ceil(B / 920)`.
+
+| term | 32K, 125,000 B/DAA | 2M, 125,000 B/DAA | 32K, 12,500 B/DAA | 2M, 12,500 B/DAA |
+|---|---:|---:|---:|---:|
+| rounds R + 1 | 13 | 17 | 13 | 17 |
+| core door (rounds + 1) | 1,326 | 1,510 | 2,865 | 3,049 |
+| door_A_position (no terminal, + carry-over 193) | 1,519 | 1,703 | **3,058** | **3,242** |
+| position terminal span(12,000 B / 120,000 B) | 58 | 58 | 175 | 175 |
+| position terminal own + restart | 116 | 116 | 350 | 350 |
+| door_B_position (with position terminal) | **1,635** | **1,819** | **3,408** | **3,592** |
+
+Compared with the table above at 1/10 bandwidth, door_B falls from 6,048 / 6,232 to 3,408 / 3,592. door_A rises by the one extra
+round (46 DAA): 3,012 / 3,196 becomes 3,058 / 3,242. The 32K door_A is now under 3,120 (by 62); the 2M door_A is 122 over it, and
+the 2M door_B is 472 over it. These values are formula outputs (`derived_upper`), not measurements.
+
 ## Reading the numbers (not a pass or fail claim)
 
 - At the 125,000 B/DAA sensitivity, door_A is 1,473 (32K) and 1,657 (2M); door_B is 1,857 and 2,041. Both are under 3,120 under
@@ -75,7 +99,7 @@ only; it does not assert the door is at or below 3,120.
 
 1. **No release-binary measured span.** Every span is the fit `44 + ceil(B / 920)`; the 17 KB and 135.6 KB points are outside the
    two fit points (0.8 MB, 2.1 MB), so the intercept dominates and the result depends on it.
-2. **No live-node E2E.** The terminal 135.6 KB value is not recomputed from the step program; the carry-over constants come from
+2. **No live-node E2E.** The terminal 135.6 KB value (old path) and the ~12 KB position terminal (new path) are both not recomputed from the step program; the carry-over constants come from
    `door-breakdown-1018`, a measurement of the shipped 32K class, not of the bisection path.
 3. Shape constants (kv row, state block, matmul block) of the 2M program are declared, not derived.
 4. The M = 1 admission rule is the dormant `palw_tir_adjudication_slot_v1`; its wait is `(K − 1) × span` by construction.
