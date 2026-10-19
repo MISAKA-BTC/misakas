@@ -591,3 +591,10 @@ carrier の wire 番号、state version、delta codec、API 名の正式割当�
 | 1,000 件同時の court | どの claim も締切超過ゼロを試験 |
 | chain 外の認証経路 | 共通経路を重複排除(multiproof) |
 | IBD | 10,000 DAA ごとの checkpoint と安全な pruning を検証 |
+
+## 整合性修正 — 2026-10-19(RFC 全件整合性監査)
+
+- door ≤ 3,200 は**対象 profile の性能目標**で、主契約(RFC-0014 2026-10-19 改定の 3,120 / 10,000)とは別に管理する([RFC-0026](0026-court-policy-master-contract.md) §2.1)。付録 C.3 の「同時 N 件で max door ≤ 3,120」は、この主契約の申立て窓ではなく性能の受入条件として読む。
+- **本文 B の各 round の数値 fold 検査を現行の規範として維持する。付録 C.2 の commitment(hash)中心の局所化は未採用の研究・設計候補。** 親 100・子 40 と 50 がすべて正しく認証されていても `40 + 50 ≠ 100` の集約不正は残り、最終 leaf だけの検査ではこれを見落とす。採用するなら内部の親子 fold 不正を局所的に反証できる証拠と完結性の証明が先(F06、RFC-0026 §7.2)。
+- 最終裁定の約 12 KB は 1 位置の見込みで、court 全体の証拠量ではない(RFC-0026 §7.1)。
+- 土台に挙げた `palw_court_capacity_v1` は別 branch(`release/t12-16000`)の休眠実装で、`pre` には未統合(F10、RFC-0026 §8.1)。

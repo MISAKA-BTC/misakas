@@ -696,3 +696,10 @@ E_max / effective-terms / retention / escrow / pricing / exposure
 - [RFC 2212 — Specification of Guaranteed Quality of Service](https://www.rfc-editor.org/rfc/rfc2212.html), 1997-09。帯域予約・流量制御・遅延上限を組み合わせる設計と、その経路条件を参考にした。
 - [OP Stack Specification — Fault Dispute Game](https://specs.optimism.io/fault-proof/stage-one/fault-dispute-game.html), 参照2026-10-19。単一stepの認証済み入力、ゲーム時計の有界延長、裁定とbond分配までの確定待ちの分離を比較対象とする。既存実装の移植ではない。
 - [Kaspa Research — Pruning safety in the vProgs architecture](https://research.kas.pa/t/pruning-safety-in-the-vprogs-architecture/411), 初回投稿2025-08-25。pruned dataを後続検証が暗黙に要求しないことの論点を参考にした**研究提案**。採用済みの一般規則や、このRFCのIBD検証の根拠としては扱わない。
+
+## 整合性修正 — 2026-10-19(RFC 全件整合性監査)
+
+- **混雑延長は hard deadline の内側に限る。** ユーザーが採用した RFC-0014 2026-10-19 改定の `a + 10,000` を主契約とし、`a + 3,200 + E_i ≤ a + 10,000`(`E_max ≤ 6,800`)と読み替える。これを超える延長は採用していない別の将来方針。10,000 の内側で処理できない負荷は、original claim の受付で抑制する([RFC-0026](0026-court-policy-master-contract.md) §2.1・§3)。本書 §4.3 の「`E_max` を一律 10,000 で埋めない」は、この上限の内側で容量から導く、という意味に限る。
+- **SC64 は現行 profile の達成値ではない。** 既存の各手番の署名(ML-DSA-87、4,627 B)を残すと、2M・4 分岐では署名だけで 19 × 4,627 = 87,913 B となり 64 KiB を超える(算術上の下限)。SC64 は認証方式・投稿数を含めて別 profile として検証する目標(F05、RFC-0026 §7.1)。
+- §0 の「既存の休眠実装」`palw_court_capacity_v1.rs` は別 branch(`release/t12-16000`)にあり、`pre` には未統合(F10、RFC-0026 §8.1)。
+- 「本書を上位とする」は Draft どうしの参照関係であり、採択済みの規範に対する置換ではない。正式な置換は RFC-0021・凍結規程どおり ADR と置換節で行う(F11、RFC-0026 §8.2)。

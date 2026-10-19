@@ -63,3 +63,7 @@
 - A が後で有罪になったとき、A と A に依存した claim だけが slash・credit 取消を受け、B は影響を受けない。
 - 未解決 A の資料は pruning・IBD・restart・reorg の後も取得でき、外部の正直な検証者 1 人が反証を完成できる。
 - 全ノードが同じ checkpoint・未解決集合・決済状態に収束する。fence の前は byte 単位で同じ動作。
+
+## 整合性修正 — 2026-10-19(RFC 全件整合性監査)
+
+- service 前提が崩れて default できず責任を保留した claim が、共有 frontier をどこまで止めるかを、終了理由ごとの効果表で明示する([RFC-0026](0026-court-policy-master-contract.md) §4.3、F08)。段階 2 が未有効なら、その独立進行を段階 1 の可用性の説明に借りない。service 障害中も `L_class` 以内という保証は要求しない(本書もネットワーク停止中の前進は保証しない)。期限だけで未解決 claim を Final にしない。

@@ -9,6 +9,9 @@
 - [RFC-0008 — PALW EXEC lane — claim-backed work slices and transaction execution](0008-palw-claim-backed-consensus-blocks.md)
 - [RFC-0013 — Reproducible layouts and resource-bounded model onboarding tools](0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md)
 - [RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0023-unresolved-claim-liability-and-independent-progress.md)
+- [RFC-0024 — ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計](0024-court-door-3200-to-ctx-2m.md)
+- [RFC-0025 — モデルが増え court が大量発生しても処理を継続できる客観的 court](0025-scalable-objective-court-many-models-mass-disputes.md)
+- [RFC-0026 — court の主契約:時計・帰責・責任期間・置換関係の一本化](0026-court-policy-master-contract.md)
 
 ## EVM / wallet
 

@@ -324,3 +324,7 @@ readiness/RPCは予算残高、共通reuse_not_before、残存責任headroomとr
 [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## 整合性修正 — 2026-10-19(RFC 全件整合性監査)
+
+- 「計算と署名が終われば PC を止められる」は、既存の TIR court で root claim と各 round に Miner の claim bond の鍵の署名が要ることと、そのままでは両立しない。provider は bytes を持っていても Miner の署名を作れず、第三者 relay は作成済みの署名しか運べない。profile ごとに、資料を保持する者・新しい応答を署名する者・投稿を中継する者・不履行の責任者を明記し、現行の署名方式を保つなら court の義務が終わるまで利用可能な court signer を残す。PC の完全停止を保つなら、限定された応答権限の委任か、追加署名なしで提出できる認証済みの終了証拠の経路を別仕様として採択・検証する([RFC-0026](0026-court-policy-master-contract.md) §6、F04)。資金移動用の鍵を provider に渡すことを解決策にしない。
