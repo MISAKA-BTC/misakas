@@ -2033,7 +2033,7 @@ fn partial_read_on_fixture_classes() {
         let inv = PalwTirInventoryIndexV1::new(&space.program).unwrap();
         let reader = TirPartialReaderV1::new(&artifact).unwrap();
         let piece_len = |leaf: u32| inv.piece_of(leaf).unwrap().3 as u64;
-        let mut full_cache: BTreeMap<(u16, Option<u16>), Vec<u8>> = BTreeMap::new();
+        let mut full_cache: std::collections::BTreeMap<(u16, Option<u16>), Vec<u8>> = std::collections::BTreeMap::new();
         let (mut class_trials, mut class_before, mut class_leaves) = (0u64, 0u64, BTreeSet::new());
         for i in 0..n {
             let l = space.leaf_at(&ctx, i).unwrap();
