@@ -14,7 +14,7 @@ only; it does not assert the door is at or below 3,120.
 - `b = 16`, `M = 1` (one adjudication slot per claim), `K_owner = 8`, `L = 2` extra levels (step block 17,408 B, ADR-0191 final terms).
 - Span fit `span(B) = 44 + ceil(B / 920)` from ADR-0190's two one-round points. A fit, not re-measured on the shipped binary.
 - Rounds: `R = R_pos + R_hist + R_op + R_tile`. `R_pos = ceil(log16 N)`, `R_op = ceil(log16 1024) = 3`, `R_tile = ceil(log16 61) = 2`
-  (vocabulary 248,320 / 4,096 lanes). `R_hist = palw_tir_history_rounds_v1(tiles)`: 2,048 tiles → 3, 65,536 tiles → 4.
+  (vocabulary 248,320 / 4,096 lanes). `R_hist = palw_tir_history_rounds_v1(tiles)`: 2,048 tiles → 3, 131,072 tiles → 5 (2M = 2,097,152 / 16).
 - Terminal history read ≈ 135,600 B: the value given for this step, **not recomputed here**. It is priced as its own adjudication
   carrier (own + one restart), added on top of the 17,408 B step block (door_B). door_A excludes it.
 - Non-cone carry-over (declared, from `door-breakdown-1018.md`): IDs/leaf 106, filing allowance 82, open window 5. Replaced and
@@ -30,47 +30,46 @@ only; it does not assert the door is at or below 3,120.
 
 | term | 32K (N = 32,768, 2,048 tiles) | 2M (N = 2,097,152, 65,536 tiles) |
 |---|---:|---:|
-| rounds R (R_pos + R_hist + R_op + R_tile) | 4 + 3 + 3 + 2 = 12 | 6 + 4 + 3 + 2 = 15 |
+| rounds R (R_pos + R_hist + R_op + R_tile) | 4 + 3 + 3 + 2 = 12 | 6 + 5 + 3 + 2 = 16 |
 | prep (`PALW_TIR_DISPUTE_PREP_DAA_V1`) | 16 | 16 |
-| bisection (R + 2) × 46 | 14 × 46 = 644 | 17 × 46 = 782 |
+| bisection (R + 2) × 46 | 14 × 46 = 644 | 18 × 46 = 828 |
 | output check | 53 | 53 |
 | step block B_adj = 16,384 + 256 + 256 + 512 | 17,408 B | 17,408 B |
 | span(B_adj) | 63 | 63 |
 | admission queue + own + restart, (K + 1) × span | 9 × 63 = 567 | 9 × 63 = 567 |
-| **core door** (`palw_tir_dispute_door_fit_v1`) | **1,280** | **1,418** |
+| **core door** (`palw_tir_dispute_door_fit_v1`) | **1,280** | **1,464** |
 | carry-over IDs / leaf | 106 | 106 |
 | carry-over filing allowance | 82 | 82 |
 | carry-over open window | 5 | 5 |
-| **door_A** (no terminal) | **1,473** | **1,611** |
+| **door_A** (no terminal) | **1,473** | **1,657** |
 | terminal span(135,600 B) = 44 + ceil(B / 920) | 192 | 192 |
 | terminal own + restart | 384 | 384 |
-| **door_B** (with terminal) | **1,857** | **1,995** |
+| **door_B** (with terminal) | **1,857** | **2,041** |
 
 ### 12,500 B/DAA (1/10 sensitivity, bytes × 10)
 
 | term | 32K | 2M |
 |---|---:|---:|
-| rounds R | 12 | 15 |
-| bisection (R + 2) × 46 | 644 | 782 |
+| rounds R | 12 | 16 |
+| bisection (R + 2) × 46 | 644 | 828 |
 | step block B_adj | 174,080 B | 174,080 B |
 | span(B_adj) | 234 | 234 |
 | admission queue + own + restart, 9 × span | 2,106 | 2,106 |
-| **core door** | **2,819** | **2,957** |
+| **core door** | **2,819** | **3,003** |
 | carry-over (106 + 82 + 5) | 193 | 193 |
-| **door_A** | **3,012** | **3,150** |
+| **door_A** | **3,012** | **3,196** |
 | terminal span(1,356,000 B) | 1,518 | 1,518 |
 | terminal own + restart | 3,036 | 3,036 |
-| **door_B** | **6,048** | **6,186** |
+| **door_B** | **6,048** | **6,232** |
 
 ## Reading the numbers (not a pass or fail claim)
 
-- At the 125,000 B/DAA sensitivity, door_A is 1,473 (32K) and 1,611 (2M); door_B is 1,857 and 1,995. Both are under 3,120 under
+- At the 125,000 B/DAA sensitivity, door_A is 1,473 (32K) and 1,657 (2M); door_B is 1,857 and 2,041. Both are under 3,120 under
   these assumptions.
-- At 1/10 bandwidth, door_A is 3,012 (32K) and 3,150 (2M): the 2M value is 30 DAA above 3,120. door_B is above 3,120 at both sizes.
+- At 1/10 bandwidth, door_A is 3,012 (32K) and 3,196 (2M): the 2M value is 76 DAA above 3,120. door_B is above 3,120 at both sizes.
 - The dominant terms are the `(K + 1) × span(B_adj)` carrier count (567 at full bandwidth, 2,106 at 1/10) and the bisection rounds
   (644 / 782). The step block size is the lever: it is the term the 1/10 case is most sensitive to.
-- Round count changes from the ADR-0191 table: 2M had R = 16 with `R_attn = 5` at 131,072 tiles; this record uses 65,536 tiles
-  (`R_hist = 4`), so R = 15. The tile count is taken as given; the tile size that yields it (h = 32 at 2M) is not re-derived here.
+- The 2M row uses 131,072 history tiles (2,097,152 / 16, `R_hist = 5`), so R = 16 and the core door 1,464 matches the ADR-0191 table. The earlier 65,536-tile figure was an error and is withdrawn.
 
 ## Unmet conditions
 

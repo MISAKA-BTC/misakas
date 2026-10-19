@@ -729,7 +729,7 @@ mod tests {
         let vocab_tiles = 248_320u64.div_ceil(4_096);
         let r_op = ceil_log16(1_024);
         let r_tile = ceil_log16(vocab_tiles);
-        let cases = [("32K", 32_768u64, 2_048u64), ("2M", 2_097_152u64, 65_536u64)];
+        let cases = [("32K", 32_768u64, 2_048u64), ("2M", 2_097_152u64, 131_072u64)];
         for (label, positions, tiles) in cases {
             let r_pos = ceil_log16(positions);
             let r_hist = u64::from(palw_tir_history_rounds_v1(tiles));
