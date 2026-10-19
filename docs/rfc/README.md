@@ -21,6 +21,6 @@
 | 0004 | [PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR](0004-palw-model-improvement.md) |
 | 0003 | [PALW Generative Model Classes — one job, determinism and output layer, and the class profiles on top of it](0003-palw-generative-model-classes.md) |
 
-この整理版の次番号は **RFC-0023**。添付ZIPの台帳に基づき追加した番号で、他ブランチの予約は統合前に照合します。既存番号は再利用・再採番していません。
+この整理版の次番号は **RFC-0026**。添付ZIPの台帳に基づき追加した番号で、他ブランチの予約は統合前に照合します。既存番号は再利用・再採番していません。
 
 詳細な旧索引・過去の置換/適用表は [整理前の索引](../history/documentation/2026-10-17/rfc/README.md) に保持しています。旧表のcurrent / liveは現在の保証ではありません。
