@@ -1397,3 +1397,107 @@ async fn x3_the_fixed_deadline_survives_a_restart_and_replays() {
         assert_eq!(root_at(&z, hash), root_at(&lg.chain, hash), "the replaying node's root at {hash}");
     }
 }
+
+/// **REQ-X3-5 reorg on the node (2026-10-19)**: the reservation and its open DA session are created on branch A after the fork point
+/// and before the open cutoff. A heavier branch B from that fork carries neither and reorgs past the claim's floor (the claim is Final
+/// there, unheld). Then A returns. On every tip the reservation, the open-session count and the claim's phase follow the winning branch
+/// exactly: no stale hold on B, no lost hold on the return to A.
+#[tokio::test]
+#[ignore = "UNVERIFIED: never completed. Branch B must out-weigh A's post-fork blocks, so its stamps run hours past the wall clock and the node's 132 s clock-lead cap refuses them; waiting real time does not finish. Needs a harness clock the node reads (not a relaxed cap)."]
+async fn x3_req_5c_a_reorg_moves_the_open_session_hold_exactly_with_the_branch() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut lg = Lg::over_with(true, false, true, TestConsensus::new);
+    lg.beat(3).await;
+    lg.register_newcomer().await;
+    let produced = lg.real_attempt(EXECUTOR, true).await;
+    let id = produced.claim_id;
+    // The fork point: the claim is accepted, no reservation yet, and the open cutoff is still ahead.
+    let fork = lg.chain.sink();
+    let claim = lg.chain.tip_state().1.claim(&id).expect("on the tip").clone();
+    let deadlines = palw_claim_deadlines_v1(&lg.bundle.state, &claim).expect("X3 governs the claim");
+    assert!(lg.chain.daa_of(fork) <= deadlines.open_cutoff_daa, "the fork is before the open cutoff");
+    // Branch A: the reservation, the bind and the license, then an open held DA session (the same pursuit as REQ-X3-5).
+    let seats = lg.bind(id).await;
+    let _licensed = lg.license(id, &seats).await;
+    let mut v = Verifier::check(&lg, NEWCOMER, id);
+    let withhold = |unit: &PalwDaUnitV1| matches!(unit, PalwDaUnitV1::LegacyHeldV2(_));
+    for _ in 0..8 {
+        if v.binding.is_some() {
+            break;
+        }
+        v.step(&mut lg, &produced, &withhold).await;
+    }
+    let binding = v.binding.clone().expect("the binding, read off the producer's authenticated answer");
+    let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
+    let unit = kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 };
+    let object = v.demand(&mut lg, PalwLegacyProbeV1::HeldNode { unit });
+    lg.send(vec![(NEWCOMER, object)]).await;
+    let newcomer = lg.bond(NEWCOMER);
+    assert!(lg.view(id).record.is_some(), "A: the reservation is live");
+    assert!(
+        lg.view(id).sessions.iter().any(|(accuser, session)| *accuser == newcomer && session.units.contains(&PalwDaUnitV1::LegacyHeldV2(unit))),
+        "A: the reserved held session is open"
+    );
+    let hold = |c: &T12Chain| {
+        let state = c.tip_state().1;
+        (
+            state.legacy_dispute_v1(&id).is_some_and(|r| r.holds()),
+            state.da_claim(&id).map_or(0, |r| r.open_sessions()),
+            std::mem::discriminant(&state.claim(&id).expect("on the tip").phase),
+        )
+    };
+    let a_hold = hold(&lg.chain);
+    assert_eq!(a_hold.1, 1, "A: one open session");
+    // Z follows A.
+    let z = t12_genesis_chain_on(TestConsensus::new(&lg.config), &lg.config, &lg.bundle, &lg.premine, &lg.floats);
+    for block in chain_blocks(&lg.chain, lg.chain.sink()) {
+        arrive(&z, block, "A's block").await;
+    }
+    assert_eq!(z.tip_state().1.state_root(), lg.chain.tip_state().1.state_root(), "Z on A");
+    assert_eq!(hold(&z), a_hold, "Z on A: the hold and the session follow A");
+    // Branch B: from the fork, without the reservation or the session, heavier and past the floor.
+    let mut b = t12_genesis_chain_on(TestConsensus::new(&lg.config), &lg.config, &lg.bundle, &lg.premine, &lg.floats);
+    let up_to_fork = chain_blocks(&lg.chain, fork);
+    let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;
+    for block in up_to_fork {
+        arrive(&b, block, "a block up to the fork").await;
+    }
+    b.ctx.simulated_time = fork_timestamp;
+    let ttpb = lg.ttpb();
+    let a_work = lg.chain.ctx.consensus.get_block(lg.chain.sink()).unwrap().header.blue_work;
+    let mut b_blocks = Vec::new();
+    while b.ctx.consensus.get_block(b.sink()).unwrap().header.blue_work <= a_work {
+        // B needs more blocks past the fork than A has, so its stamps run ahead of the wall clock; wait them inside the real
+        // clock-lead cap (132 s) instead of relaxing it.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let lead = (b.ctx.simulated_time + ttpb).saturating_sub(now + 100_000);
+        if lead > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(lead)).await;
+        }
+        b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
+    }
+    // B stays inside the real shallow-tie window: a deeper branch is not a reorg the node takes (and outruns the clock lead cap).
+    let shallow = kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1;
+    assert!(b.daa_of(b.sink()) - b.daa_of(fork) <= shallow, "B must remain inside the real shallow-tie window");
+    for block in &b_blocks {
+        arrive(&z, block.clone(), "B's block").await;
+    }
+    assert_eq!(z.sink(), b.sink(), "Z reorgs onto B");
+    assert_eq!(z.tip_state().1.state_root(), b.tip_state().1.state_root(), "Z on B: B's own root");
+    let b_hold = hold(&z);
+    assert_eq!(b_hold.0, false, "B: no reservation, no stale hold");
+    assert_eq!(b_hold.1, 0, "B: no open session, no stale hold");
+    // Branch A returns: heavier again, with the same reservation and session.
+    let old_len = chain_blocks(&lg.chain, lg.chain.sink()).len();
+    let b_work = b.ctx.consensus.get_block(b.sink()).unwrap().header.blue_work;
+    while lg.chain.ctx.consensus.get_block(lg.chain.sink()).unwrap().header.blue_work <= b_work {
+        lg.beat(1).await;
+    }
+    for block in chain_blocks(&lg.chain, lg.chain.sink()).into_iter().skip(old_len) {
+        arrive(&z, block, "A's later block").await;
+    }
+    assert_eq!(z.sink(), lg.chain.sink(), "Z back on A");
+    assert_eq!(z.tip_state().1.state_root(), lg.chain.tip_state().1.state_root(), "Z on A: A's root");
+    assert_eq!(hold(&z), hold(&lg.chain), "Z back on A: the hold and the session equal A's exactly");
+    assert_eq!(hold(&z).1, 1, "the open session returns with A");
+}
