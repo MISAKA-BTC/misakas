@@ -698,6 +698,87 @@ mod tests {
         assert!(at7 > at2, "extra levels past the minimum only add rounds");
     }
 
+    /// **derived_upper (formula, not measured).** The bounded TIR public door for the Huihui-Qwen3.5-2B 32K class and its 2M
+    /// extension under ADR-0191: b = 16 bisection, M = 1 admission, L = 2 extra levels (17,408 B step block), history-tile
+    /// bisection (2,048 tiles = 3 rounds at 32K, 65,536 tiles = 4 rounds at 2M), and the terminal history read of ~135.6 KB.
+    /// Only the existing formula functions and constants are used; nothing is measured and no rule or constant is changed.
+    /// Prints every term. Asserts only arithmetic identities, never that the door is at or below 3,120.
+    #[test]
+    fn bounded_door_derived_upper_32k_and_2m_prints_every_term() {
+        use crate::palw_tir_history_bisection_v1::palw_tir_history_rounds_v1;
+        let ceil_log16 = |n: u64| -> u64 {
+            let (mut rounds, mut reach) = (0u64, 1u64);
+            while reach < n {
+                reach = reach.saturating_mul(16);
+                rounds += 1;
+            }
+            rounds
+        };
+        let k = PALW_TIR_FRAME_CONCURRENT_OWNERS_V1;
+        let levels = 2u32;
+        // Step reduction blocks (attention tile, GDN state block, matmul block) and the indivisible floor (one leaf + one logits tile).
+        let blocks = [65_536u64, 65_536, 131_072];
+        let floor = 16_384u64;
+        // Non-cone carry-over terms of the shipped door that the dispute door does not replace (door-breakdown-1018): IDs 106,
+        // filing allowance 82, open window 5. The shipped trace tiles (4,209), output (2,346), reorg (2,346) and the owner queue
+        // (1,536) are replaced by the dispute formula's own terms, so they are not added here.
+        let carry_over = [("IDs / leaf (door-breakdown-1018)", 106u64), ("filing allowance (door-breakdown-1018)", 82), ("open window", 5)];
+        let carry_sum: u64 = carry_over.iter().map(|(_, v)| v).sum();
+        // Terminal history read (given: ~135.6 KB; not recomputed here). Own adjudication plus one restart.
+        let terminal_bytes = 135_600u64;
+        let vocab_tiles = 248_320u64.div_ceil(4_096);
+        let r_op = ceil_log16(1_024);
+        let r_tile = ceil_log16(vocab_tiles);
+        let cases = [("32K", 32_768u64, 2_048u64), ("2M", 2_097_152u64, 65_536u64)];
+        for (label, positions, tiles) in cases {
+            let r_pos = ceil_log16(positions);
+            let r_hist = u64::from(palw_tir_history_rounds_v1(tiles));
+            assert_eq!(r_hist, ceil_log16(tiles), "history rounds are ceil(log16 tiles)");
+            let rounds = r_pos + r_hist + r_op + r_tile;
+            println!("[{label}] derived_upper (formula, not measured)");
+            println!("[{label}] positions {positions}, history tiles {tiles}, vocab tiles {vocab_tiles}, K_owner {k}, M 1, b 16");
+            println!("[{label}] rounds: R_pos {r_pos} + R_hist {r_hist} + R_op {r_op} + R_tile {r_tile} = {rounds}");
+            // The scale 1 is the stated 125,000 B/DAA sensitivity; the scale 10 is 1/10 of it (bytes multiplied by 10).
+            for scale in [1u64, 10] {
+                let blocks_s = blocks.map(|b| b * scale);
+                let floor_s = floor * scale;
+                let terminal_s = terminal_bytes * scale;
+                let adj_block = floor_s + blocks_s.iter().map(|b| b.div_ceil(16u64.pow(levels))).sum::<u64>();
+                let span_adj = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + adj_block.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
+                let terminal_span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + terminal_s.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
+                let core = palw_tir_dispute_door_fit_v1(rounds, levels, &blocks_s, floor_s, k).expect("the door fits in u64");
+                // Identity: prep + (R + L)·46 + output + (K + 1)·span(B_adj).
+                assert_eq!(
+                    core,
+                    PALW_TIR_DISPUTE_PREP_DAA_V1
+                        + (rounds + u64::from(levels)) * PALW_TIR_DISPUTE_ROUND_DAA_V1
+                        + PALW_TIR_DISPUTE_OUTPUT_DAA_V1
+                        + (k + 1) * span_adj,
+                    "core door identity"
+                );
+                let door_a = core + carry_sum;
+                let terminal_extra = 2 * terminal_span;
+                let door_b = door_a + terminal_extra;
+                let tag = if scale == 1 { "125,000 B/DAA (sensitivity)" } else { "12,500 B/DAA (1/10 sensitivity)" };
+                println!("[{label}] --- {tag}, bytes scaled x{scale} ---");
+                println!("[{label}]   step block B_adj = {adj_block} B (floor {floor_s} + blocks {blocks_s:?} / 16^{levels} rounded up)");
+                println!("[{label}]   span(B_adj) = 44 + ceil(B/920) = {span_adj}");
+                println!("[{label}]   prep = {PALW_TIR_DISPUTE_PREP_DAA_V1}");
+                println!("[{label}]   bisection = (R + L) x 46 = {} x 46 = {}", rounds + u64::from(levels), (rounds + u64::from(levels)) * PALW_TIR_DISPUTE_ROUND_DAA_V1);
+                println!("[{label}]   output check = {PALW_TIR_DISPUTE_OUTPUT_DAA_V1}");
+                println!("[{label}]   admission queue + own + restart = (K + 1) x span(B_adj) = {} x {span_adj} = {}", k + 1, (k + 1) * span_adj);
+                println!("[{label}]   core door (existing fn palw_tir_dispute_door_fit_v1) = {core}");
+                for (name, v) in carry_over {
+                    println!("[{label}]   carry-over {name} = {v}");
+                }
+                println!("[{label}]   door_A (no terminal) = {door_a}");
+                println!("[{label}]   terminal history span(B={terminal_s}) = 44 + ceil(B/920) = {terminal_span}; own + restart = {terminal_extra}");
+                println!("[{label}]   door_B (with terminal) = {door_b}");
+                println!("[{label}]   replaced, not added: shipped trace 4,209, output 2,346, reorg 2,346, owner queue 1,536");
+            }
+        }
+    }
+
     #[test]
     fn owner_queue_wait_scales_with_the_open_capacity_bound() {
         let mut cost = palw_tir_frame_test_only_cost_v1();
