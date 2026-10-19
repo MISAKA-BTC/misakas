@@ -10,6 +10,7 @@
 
 | 番号 | 内容 |
 | --- | --- |
+| 0025 | [モデルが増え court が大量発生しても処理を継続できる客観的 court(Draft)](0025-scalable-objective-court-many-models-mass-disputes.md) |
 | 0022 | [初期 mainnet から画像・動画・モデル改善を外す適用範囲](0022-post-mainnet-media-and-model-improvement-scope.md) |
 | 0021 | [設計凍結・例外変更手続きと文書の役割分離](0021-design-freeze-and-documentation-governance.md) |
 | 0020 | [長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない](0020-long-context-calibration-memory.md) |
