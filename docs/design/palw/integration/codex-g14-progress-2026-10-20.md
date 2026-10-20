@@ -51,3 +51,7 @@ cargo test --release -p kaspa-consensus-core \
 `0336b6cea` の予約部品を加え、上記コマンドに `--test palw_court_service_v1` を追加して release で **32 passed / 0 failed / 0 ignored**。既存 29 件と、新規予約の原子性・入力順不変性・予算/重複/期限の拒否 3 件。T04/T05 の統合試験・測定とは区別する。
 
 文書の欠落参照 6 件は、旧ドラフト名 3 箇所を現行の RFC 本文へ修正し、別 branch の evidence と元監査の欠落 JSON は「未同梱・未検証」と明記した。元の digest・測定結果・manifest は変更していない。修正後 `check_docs.py`: **PASS — no-new-regressions / new_issue_occurrences = 0**。既知の欠落参照 43 件は残るため strict clean ではない。baseline 未変更。
+
+### 原資料保持の訂正
+
+`d08bfb25c` の欠落参照修正のうち、4 つの imported asset 文書は元 package manifest の対象だったため、内容を `7fe073ec2` の bytes に戻した。元資料の再現性を優先し、manifest/digest を更新して整合したように表示しない。現行 RFC-0024 本文の未同梱 evidence 注記は維持する。従って現在の `check_docs.py` は既存 assets 由来の 5 件で FAIL。上の PASS はリンクを変更した中間版の記録で、最終版の結果ではない。baseline 未変更。

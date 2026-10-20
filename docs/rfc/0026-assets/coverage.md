@@ -41,4 +41,4 @@ PRINCIPLES、設計凍結規程、RFCのREADME/INDEX/TOPICS、該当Spec、統�
 
 ## 監査の再現資料
 
-全ファイルの行数・bytes・SHA-256・見出しは `inventory.json`、全文横断照合のヒットは `cross-rfc-normative-scan.json`（いずれも元監査の参照名。この snapshot には欠落しており、再生成・検証済みとは扱わない）、算術・参照存在の結果は [checks.json](checks.json)。
+全ファイルの行数・bytes・SHA-256・見出しは [inventory.json](inventory.json)、全文横断照合のヒットは [cross-rfc-normative-scan.json](cross-rfc-normative-scan.json)、算術・参照存在の結果は [checks.json](checks.json)。
