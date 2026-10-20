@@ -39,3 +39,5 @@ All cargo and release executable runs below used `/Users/wata/.cache/misaka-heav
 | [core-companion-replay-release.log](core-companion-replay-release.log) | 9 | `c6f284df064dce5879a0ee666853d66eb92a76a9cc6a9c4b7ddb100ad0bf59f7` |
 
 Documentation check remains FAIL on the same five imported missing references (43 baseline-known occurrences). No new authored reference defect was added; the baseline and raw imported material were not rewritten.
+
+Candidate implementation checkpoint: `b9c6d0656`. Full imported diff whitespace inspection reports original raw asset/log formatting, including trailing blank lines. Those source bytes and digests are intentionally preserved. The authored consensus, ADR, design, maintenance and revised normative-document diff passes `git diff --check`; this is not a claim that raw imported material was normalized.
