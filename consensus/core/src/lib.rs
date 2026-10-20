@@ -1072,3 +1072,6 @@ pub mod palw_kernel_producer_candidate_v4;
 pub mod palw_kernel_material_query_v4;
 
 pub mod palw_kernel_material_replacement_v4;
+
+/// RFC-0026 checked clock derivation; not a live fold or wire format.
+pub mod palw_court_policy_v1;
