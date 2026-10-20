@@ -2263,9 +2263,9 @@ mod conviction_e2e_tests {
         extras: &PalwTransitionExtrasV1,
         acquisition: T,
         leaf: usize,
-        mut offset: u64,
+        offset: u64,
     ) -> (PalwChainStateV2, u64) {
-        use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART, PalwTirPublicOwnedActionV1 as Owned};
+        use crate::palw_court_tir_requests_v1::TirNativeDemandSetV1;
         let producer = frame.custody_v1().pledge_v1().producer;
         let (demand, _, turn, _) = owner_pending(frame, state, acquisition);
         let body = borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
@@ -2273,25 +2273,18 @@ mod conviction_e2e_tests {
             opening: crate::palw_step_leg::step_opening_v1(&fx.execution.hashes, leaf as u64).unwrap(),
         })
         .unwrap();
-        let begin = Owned::Begin {
-            demand_id: demand,
-            answerer: producer,
-            total_bytes: body.len() as u64,
-            body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body),
-        };
-        let mut answered =
-            control_step(frame, state, params, extras, offset, producer, acquisition, A::Acquisition(begin), 0, turn).expect("Begin");
-        offset += 1;
-        for (i, bytes) in body.chunks(PART).enumerate() {
-            let part = Owned::Part { demand_id: demand, answerer: producer, offset: (i * PART) as u64, bytes: bytes.to_vec() };
-            answered = control_step(frame, &answered, params, extras, offset, producer, acquisition, A::Acquisition(part), 0, turn)
-                .expect("Part");
-            offset += 1;
+        let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+        // A synthetic namespace for this shape/dispatcher fixture, never an adopted service profile.
+        let demands = TirNativeDemandSetV1::new(frame, &source, Hash64::from_u64_word(0x73)).unwrap();
+        let graph = demands.response_for(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index:leaf as u64 }).unwrap();
+        let branch = graph.branch(body.len() as u64).unwrap();
+        let mut answered = state.clone();
+        for ordinal in 0..branch.len() {
+            let action = branch.action_at(ordinal,demand,producer,&body).unwrap();
+            answered = control_step(frame,&answered,params,extras,offset+ordinal,producer,acquisition,
+                A::Acquisition(action),0,turn).expect("the derived response stage passes the existing native dispatcher");
         }
-        let finish = Owned::Finish { demand_id: demand, answerer: producer };
-        answered = control_step(frame, &answered, params, extras, offset, producer, acquisition, A::Acquisition(finish), 0, turn)
-            .expect("Finish authenticates the committed leaf against the original step root");
-        (answered, offset + 1)
+        (answered, offset + branch.len())
     }
 
     #[test]

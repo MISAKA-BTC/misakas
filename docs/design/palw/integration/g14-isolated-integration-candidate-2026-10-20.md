@@ -31,3 +31,7 @@ Joint component success does not discharge the original handover. Remaining work
 ## Verification checkpoint
 
 Final selected joint-build tests: **93 passed / 0 failed / 0 ignored**. See the separate [candidate evidence](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md) for exact commands, executable/log hashes, intermediate failures, synthetic scopes and unrun R-D2-NODE cases. This completes the first selective-port regression checkpoint; it does not complete G14, service admission/supply or the all-branch node campaign.
+
+## Native response derivation checkpoint
+
+Existing source ID chunks are distinguished from the owned route’s one all-ID logical request. Body/RAM bounds come from the native validator; declared-body branches yield Begin, canonical Parts and Finish. The native fixture helper now uses generated actions, tested through existing dispatcher/body authentication. Selected checks 57 passed, non-test consensus check succeeded; scope and unresolved full graph are recorded in [the response derivation](rfc26-native-response-graph-2026-10-20.md). Original query IDs and all protocol caps/clocks/tags are retained.

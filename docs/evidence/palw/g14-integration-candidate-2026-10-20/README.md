@@ -41,3 +41,21 @@ All cargo and release executable runs below used `/Users/wata/.cache/misaka-heav
 Documentation check remains FAIL on the same five imported missing references (43 baseline-known occurrences). No new authored reference defect was added; the baseline and raw imported material were not rewritten.
 
 Candidate implementation checkpoint: `b9c6d0656`. Full imported diff whitespace inspection reports original raw asset/log formatting, including trailing blank lines. Those source bytes and digests are intentionally preserved. The authored consensus, ADR, design, maintenance and revised normative-document diff passes `git diff --check`; this is not a claim that raw imported material was normalized.
+
+## Native logical requests and response subgraph
+
+After `aef0d55e0`, source queries retain their IDs. A separate native logical-request set collapses the source ID chunks into the existing owned route's all-ID `Ids{0}` body, using `request_body_bound_v1`. Native response stage generation uses the existing part bound and body hash. The prior native producer-answer helper now sends the generated actions through the actual dispatcher, rooted chunk rows and Finish authentication.
+
+Final shared-lock runs:
+
+- `cargo test --release -p kaspa-consensus-core --lib court_tir_`: **5 passed** (includes the 2 existing source-query tests).
+- The SAME freshly built `target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1`: **26 passed**. This is a release executable replay, not another compile.
+- Fresh `cargo test --release -p kaspa-consensus-core --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move`: **26 passed**; followed under the same lock by `cargo check --release -p kaspa-consensus`, success with warnings.
+
+Selected **57 passed / 0 failed / 0 ignored** for this change; earlier checkpoint counts are not added. [Derivation and scope](../../../design/palw/integration/rfc26-native-response-graph-2026-10-20.md). Exact logical body bounds and fragment dependencies are not a complete interactive service graph, measured capacity, signer eligibility, adopted profile or node T05. Synthetic length/ID/maximum-integer checks are not model measurements. Existing clocks, caps, tags, source query IDs and identity expectations are unchanged. Documentation check has the same five raw imported reference defects.
+
+| Raw log | Passed | SHA-256 |
+| --- | --- | --- |
+| [native-demand-graph-release.log](native-demand-graph-release.log) | 5 | `430405ede9b83348c8d0e8e68e4cb031b9542c7f54cc40b38ba8906a0933c377` |
+| [native-demand-dispatch-replay.log](native-demand-dispatch-replay.log) | 26 | `797c5a55ad85d2420e1599c39f76d5b7f48827344f5501f6001ac143fa2190ad` |
+| [native-demand-identities-check.log](native-demand-identities-check.log) | 26 | `696c1fd8faad63b16c82d255dde37ae75f08af3ca21919613c83cd764ce0e751` |

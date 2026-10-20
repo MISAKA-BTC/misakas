@@ -36,6 +36,13 @@ impl Geometry {
         let total = families.iter().try_fold(0, |sum, &count| add(sum, count))?;
         Ok(Self { n, d, tiles, families, total })
     }
+    fn native_demands(&self) -> Result<Self, String> {
+        let mut geometry = self.clone();
+        // Native owned Ids{0} concatenates the complete source ID sequence.
+        geometry.families[6] = u64::from(geometry.families[6] != 0);
+        geometry.total = geometry.families.iter().try_fold(0, |sum, &n| add(sum, n))?;
+        Ok(geometry)
+    }
     fn at(&self, mut ordinal: u64) -> Result<Request, String> {
         if ordinal >= self.total { return Err("shared request ordinal is outside complete set".into()); }
         let mut family = 0;
@@ -92,6 +99,110 @@ impl<'a> TirSharedRequestSetV1<'a> {
             self.source.source_id_v1(), self.request_at(ordinal)?)).map_err(|e| e.to_string())?;
         Ok(Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/shared-tir-request/v1")
             .hash(&bytes).as_bytes().try_into().expect("64")))
+    }
+}
+
+/// Logical requests on the EXISTING native owned route, not source-level ID
+/// chunks. No owner slot, eligibility, funded service or future turn is inferred.
+pub struct TirNativeDemandSetV1<'a> {
+    queries: TirSharedRequestSetV1<'a>,
+    geometry: Geometry,
+}
+impl<'a> TirNativeDemandSetV1<'a> {
+    pub fn new(frame: &PalwTirPublicClaimV1, source: &'a Source, shared_profile: Hash64) -> Result<Self, String> {
+        let queries = TirSharedRequestSetV1::new(frame, source, shared_profile)?;
+        let geometry = queries.geometry.native_demands()?;
+        Ok(Self { queries, geometry })
+    }
+    pub fn len(&self) -> u64 { self.geometry.total }
+    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn request_at(&self, ordinal: u64) -> Result<Request, String> {
+        let request = self.geometry.at(ordinal)?;
+        crate::palw_tir_public_owned_v1::request_body_bound_v1(self.queries.source, request)?;
+        Ok(request)
+    }
+    pub fn response_at(&self, ordinal: u64) -> Result<TirNativeResponseGraphV1, String> {
+        self.response_for(self.request_at(ordinal)?)
+    }
+    /// Exact existing native bound, including ALL source ID chunks. This is
+    /// only the response subgraph: preparation, warm work, demand, reacquire,
+    /// collect, witness and physical/carrier costs are separate obligations.
+    pub fn response_for(&self, request: Request) -> Result<TirNativeResponseGraphV1, String> {
+        let (maximum_body_bytes, maximum_resident_ram_bytes) =
+            crate::palw_tir_public_owned_v1::request_body_bound_v1(self.queries.source, request)?;
+        let q = &self.queries;
+        let bytes = borsh::to_vec(&(1u16, q.claim, q.allocation, q.native_rules, q.shared_profile,
+            q.source.source_id_v1(), request)).map_err(|e| e.to_string())?;
+        let logical_id = Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64)
+            .key(b"misaka-palw/shared-tir-native-demand/v1").hash(&bytes).as_bytes().try_into().expect("64"));
+        Ok(TirNativeResponseGraphV1 { logical_id, request, maximum_body_bytes, maximum_resident_ram_bytes })
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TirNativeResponseGraphV1 {
+    pub logical_id: Hash64,
+    pub request: Request,
+    pub maximum_body_bytes: u64,
+    pub maximum_resident_ram_bytes: u64,
+}
+/// A declared body-length branch of the response subgraph. Not an assertion
+/// that bytes authenticate, its signer is liable, or it has service capacity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TirNativeResponseBranchV1 { total_bytes: u64, parts: u64 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TirNativeResponseStageV1 {
+    Begin { total_bytes: u64 },
+    Part { offset: u64, bytes: u64 },
+    Finish,
+}
+impl TirNativeResponseGraphV1 {
+    pub fn branch(&self, total_bytes: u64) -> Result<TirNativeResponseBranchV1, String> {
+        if total_bytes == 0 || total_bytes > self.maximum_body_bytes {
+            return Err("native response branch exceeds its actual request body bound".into());
+        }
+        let parts = total_bytes.div_ceil(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64);
+        parts.checked_add(2).ok_or("native response stage count overflow")?;
+        Ok(TirNativeResponseBranchV1 { total_bytes, parts })
+    }
+    pub fn maximum_stages(&self) -> Result<u64, String> { Ok(self.branch(self.maximum_body_bytes)?.len()) }
+}
+impl TirNativeResponseBranchV1 {
+    pub fn len(&self) -> u64 { self.parts + 2 }
+    pub fn is_empty(&self) -> bool { false }
+    /// Exactly one accepted predecessor before each Part/Finish. This serial
+    /// dependence is not removed by parallel signers or a third-party relay.
+    pub fn predecessor(&self, ordinal: u64) -> Result<Option<u64>, String> {
+        self.stage_at(ordinal)?;
+        Ok(ordinal.checked_sub(1))
+    }
+    pub fn stage_at(&self, ordinal: u64) -> Result<TirNativeResponseStageV1, String> {
+        if ordinal >= self.len() { return Err("native response stage ordinal is outside its branch".into()); }
+        if ordinal == 0 { return Ok(TirNativeResponseStageV1::Begin { total_bytes: self.total_bytes }); }
+        if ordinal == self.len() - 1 { return Ok(TirNativeResponseStageV1::Finish); }
+        let part = crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
+        let offset = (ordinal - 1).checked_mul(part).ok_or("native response part offset overflow")?;
+        Ok(TirNativeResponseStageV1::Part { offset, bytes: part.min(self.total_bytes - offset) })
+    }
+    /// Construct the existing native action from actual bytes; native signature,
+    /// accepting clock, work permits, chunk lookup and Finish authentication are
+    /// still mandatory. Never changes the protocol's part size or action tags.
+    pub fn action_at(&self, ordinal: u64, demand_id: Hash64,
+        answerer: crate::palw_state_v2::PalwBondKeyV2, body: &[u8])
+        -> Result<crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1, String> {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as A;
+        if u64::try_from(body.len()).map_err(|_| "native body length overflow")? != self.total_bytes {
+            return Err("native response body differs from its declared branch".into());
+        }
+        Ok(match self.stage_at(ordinal)? {
+            TirNativeResponseStageV1::Begin { total_bytes } => A::Begin { demand_id, answerer, total_bytes,
+                body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(body) },
+            TirNativeResponseStageV1::Part { offset, bytes } => {
+                let lo = usize::try_from(offset).map_err(|_| "native part index overflow")?;
+                let len = usize::try_from(bytes).map_err(|_| "native part length overflow")?;
+                A::Part { demand_id, answerer, offset, bytes: body[lo..lo+len].to_vec() }
+            },
+            TirNativeResponseStageV1::Finish => A::Finish { demand_id, answerer },
+        })
     }
 }
 
@@ -162,4 +273,97 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn court_tir_native_demands_match_owned_validator_and_native_body_bounds() {
+        use std::collections::BTreeSet;
+        let fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 4);
+        let source = fx.frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+        let profile = Hash64::from_u64_word(21);
+        let queries = TirSharedRequestSetV1::new(&fx.frame, &source, profile).unwrap();
+        let native = TirNativeDemandSetV1::new(&fx.frame, &source, profile).unwrap();
+        let oracle: BTreeSet<_> = (0..queries.len()).filter_map(|i| {
+            let q = queries.request_at(i).unwrap();
+            crate::palw_tir_public_owned_v1::request_body_bound_v1(&source, q).ok()
+                .map(|bound| (borsh::to_vec(&q).unwrap(), bound))
+        }).collect();
+        let mut actual = BTreeSet::new(); let mut ids = BTreeSet::new();
+        for i in 0..native.len() {
+            let graph = native.response_at(i).unwrap();
+            actual.insert((borsh::to_vec(&graph.request).unwrap(), (graph.maximum_body_bytes, graph.maximum_resident_ram_bytes)));
+            assert!(ids.insert(graph.logical_id));
+            assert_eq!(graph.request, native.request_at(i).unwrap());
+            assert_ne!(graph.logical_id, queries.request_id(i).unwrap(), "source query and logical native request have separate namespaces");
+            assert!(graph.branch(0).is_err());
+            assert!(graph.branch(graph.maximum_body_bytes+1).is_err());
+            let branch = graph.branch(graph.maximum_body_bytes).unwrap();
+            assert_eq!(branch.len(), graph.maximum_stages().unwrap());
+        }
+        assert_eq!(actual,oracle); assert_eq!(actual.len() as u64,native.len());
+        assert!(native.request_at(native.len()).is_err());
+        assert!(native.response_for(Request::Ids { offset: 1024 }).is_err());
+        let other = TirNativeDemandSetV1::new(&fx.frame,&source,Hash64::from_u64_word(22)).unwrap();
+        assert_ne!(native.response_at(0).unwrap().logical_id,other.response_at(0).unwrap().logical_id);
+        // Arithmetic-only large ID geometry, not an executed/benchmarked model.
+        for d in [1,1024,1025,2048,2049,20_000] {
+            let queries = Geometry::new(3,d,4097,true).unwrap();
+            let native = queries.native_demands().unwrap();
+            assert_eq!(queries.families[6],d.div_ceil(1024));
+            assert_eq!(native.families[6],1);
+            assert_eq!(queries.total-native.total,queries.families[6]-1);
+            assert_eq!(native.at(native.total-1).unwrap(),Request::Ids { offset:0 });
+        }
+    }
+    #[test]
+    fn court_tir_response_graph_preserves_every_canonical_fragment_and_predecessor() {
+        // Synthetic branch arithmetic only; no response authentication or cost.
+        let graph = TirNativeResponseGraphV1 { logical_id:Hash64::from_u64_word(1),
+            request:Request::StepLeaf { index:0 },maximum_body_bytes:32_770,maximum_resident_ram_bytes:0 };
+        let part = crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
+        for total in 1..=graph.maximum_body_bytes {
+            let branch = graph.branch(total).unwrap();
+            assert_eq!(branch.stage_at(0).unwrap(),TirNativeResponseStageV1::Begin { total_bytes:total });
+            assert_eq!(branch.predecessor(0).unwrap(),None);
+            let mut cursor=0;
+            for i in 1..branch.len()-1 {
+                let TirNativeResponseStageV1::Part { offset,bytes }=branch.stage_at(i).unwrap() else { panic!("part") };
+                assert_eq!(offset,cursor); assert!(bytes>0 && bytes<=part);
+                assert_eq!(bytes,(total-offset).min(part)); cursor+=bytes;
+                assert_eq!(branch.predecessor(i).unwrap(),Some(i-1));
+            }
+            assert_eq!(cursor,total); assert_eq!(branch.stage_at(branch.len()-1).unwrap(),TirNativeResponseStageV1::Finish);
+            assert_eq!(branch.predecessor(branch.len()-1).unwrap(),Some(branch.len()-2));
+            assert!(branch.stage_at(branch.len()).is_err()); assert!(branch.predecessor(u64::MAX).is_err());
+        }
+        let mut huge=graph.clone();huge.maximum_body_bytes=u64::MAX;
+        let branch=huge.branch(u64::MAX).unwrap();
+        let TirNativeResponseStageV1::Part { offset,bytes }=branch.stage_at(branch.len()-2).unwrap() else { panic!("last part") };
+        assert_eq!(offset.checked_add(bytes),Some(u64::MAX));
+    }
+
+    #[test]
+    fn court_tir_response_graph_actions_match_native_body_hash_and_chunk_bytes() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as A;
+        let fx=crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None,4);
+        let signer=fx.frame.custody_v1().pledge_v1().producer;
+        let body:Vec<_>=(0..32_770).map(|i| (i%251) as u8).collect();
+        // A multi-part synthetic body, deliberately not claimed as authenticated evidence.
+        let graph=TirNativeResponseGraphV1 { logical_id:Hash64::from_u64_word(3),request:Request::StepLeaf { index:0 },
+            maximum_body_bytes:body.len() as u64,maximum_resident_ram_bytes:0 };
+        let branch=graph.branch(body.len() as u64).unwrap();let demand=Hash64::from_u64_word(4);
+        assert!(matches!(branch.action_at(0,demand,signer,&body).unwrap(),A::Begin { demand_id,answerer,total_bytes,body_hash }
+            if demand_id==demand && answerer==signer && total_bytes==body.len() as u64
+            && body_hash==crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body)));
+        let mut assembled=Vec::new();
+        for (i,chunk) in body.chunks(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).enumerate() {
+            let A::Part { demand_id,answerer,offset,bytes }=branch.action_at(i as u64+1,demand,signer,&body).unwrap() else { panic!("part") };
+            assert_eq!((demand_id,answerer,offset),(demand,signer,assembled.len() as u64));
+            assert_eq!(bytes,chunk);assembled.extend(bytes);
+        }
+        assert_eq!(assembled,body);
+        assert!(matches!(branch.action_at(branch.len()-1,demand,signer,&body).unwrap(),A::Finish { demand_id,answerer }
+            if demand_id==demand && answerer==signer));
+        assert!(branch.action_at(0,demand,signer,&body[..body.len()-1]).is_err());
+        assert!(branch.action_at(branch.len(),demand,signer,&body).is_err());
+    }
+
 }

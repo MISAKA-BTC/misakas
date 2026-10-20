@@ -39,3 +39,7 @@ Original atomic admission, actual accepting-block supply, fair inclusion assumpt
 ## Test scope
 
 The small native frame/source fixture enumerates a deliberately larger rectangular candidate space, filters it with the actual `check_request_v1`, and compares the full canonical serialized set to ordinal enumeration. It checks uniqueness, profile namespace separation, zero-profile refusal and terminal ordinal refusal. Separate arithmetic-only geometries test odd boundaries, partial ID chunks, disabled trace families, large synthetic N and checked overflow. Those synthetic cases are not measured models or network capacity, and this component test does not constitute node T05.
+
+## Native logical-request distinction — integration candidate
+
+The set above remains the source-query set. On the existing owned route, only `Ids { offset: 0 }` is a legal logical Demand; it carries the concatenation of every source ID chunk. The candidate now derives a separate native logical-request set and response subgraph, preserving these query IDs. See [native response derivation and limits](rfc26-native-response-graph-2026-10-20.md). Source-query cardinality must not be substituted for funded native obligation count or first-chunk bytes for the all-ID body ceiling.
