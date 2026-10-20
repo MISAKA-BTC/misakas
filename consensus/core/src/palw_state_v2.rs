@@ -3267,6 +3267,7 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
         .fold(0u128, u128::saturating_add);
     // Lane LG14-A: a reservation's deposit (live or held) sits on the free half as a session's exposure does; zero below the fence.
     courts
+        .saturating_add(state.court_archive_pending_exposure_v1(bond))
         .saturating_add(da)
         .saturating_add(state.legacy_dispute_exposure_v1(bond))
         .saturating_add(state.staged_tir_acquisition_exposure_v1(bond))
@@ -8879,9 +8880,9 @@ pub fn palw_court_close_min_fee_v1(chunks: u64) -> u64 {
 /// one that did removes itself first ([`TransitionBuilder::end_close_group_delivered`]), which is
 /// the whole of "junk pays; honesty is refunded" with nothing moved at declaration time.
 ///
-/// `slash_bond` clamps to the collateral that is actually there, and the declaration gate refuses a
-/// deposit its bond cannot cover, so the clamp is a belt on a rule already checked rather than the
-/// rule itself. A group with a zero deposit — every group written before W10 — is charged nothing,
+/// `slash_bond` clamps to the collateral actually left. The declaration arm explicitly does
+/// NOT refuse an already-poor bond, so this is a nominal charge, not an escrow or a guarantee
+/// that the whole amount remains available. A group with a zero deposit — every group written before W10 — is charged nothing,
 /// so this is inert on any state that predates the fields.
 fn forfeit_close_deposit_v1(
     builder: &mut TransitionBuilder<'_>,
@@ -8965,9 +8966,34 @@ fn convict_close_declarer_v1(
     session_id: Hash64,
     side: PalwCourtSideV1,
 ) -> Result<(), PalwStateV2Error> {
+    let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?;
+    if !builder.state.court_service_holds_claim_v1(&session.claim) { return convict_close_declarer_inner_v1(builder, ctx, session_id, side); }
+    let saved = builder.try_checkpoint()?;
+    let previous = builder.court_settled_deposit;
+    let result = convict_close_declarer_inner_v1(builder, ctx, session_id, side);
+    builder.court_settled_deposit = previous;
+    if result.is_err() {builder.restore(saved);}
+    result
+}
+fn convict_close_declarer_inner_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, session_id: Hash64, side: PalwCourtSideV1) -> Result<(), PalwStateV2Error> {
     let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
     let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
-    // **The deposit is not taken here any more, and that is the fix rather than an omission**
+    if builder.state.court_service_holds_claim_v1(&session.claim) {
+        let group = builder.state.court_close_groups.get(&(session_id,side))
+            .ok_or_else(||PalwStateV2Error::CarriageInconsistent("service close declaration missing".into()))?;
+        if !group.is_complete() {return Err(PalwStateV2Error::CarriageInconsistent("unresolved service cannot authorize an assembly timeout default".into()));}
+        // Only this completed malformed assembly is established. The opposite
+        // side's missing response remains a pending charge, never a default.
+        let declarer = group.declarer;
+        let before = builder.state.bond(&declarer).ok_or(PalwStateV2Error::MissingBond(declarer))?.collateral;
+        forfeit_close_deposit_v1(builder,session_id,side)?;
+        let after = builder.state.bond(&declarer).ok_or(PalwStateV2Error::MissingBond(declarer))?.collateral;
+        builder.court_settled_deposit = Some((session_id,side,before-after));
+    }
+    // For service-absent legacy sessions, the deposit is collected by the
+    // common removal writer. The isolated service branch above instead settles
+    // only the objectively malformed complete side and archives all other debts.
+    // **The legacy deposit is not taken here any more**
     // (audit H-2b/L-9). This used to call `forfeit_close_deposit_v1` for `side` alone and then
     // remove the session, which meant two things: every OTHER ending of a session collected
     // nothing, and where both sides had declared, the side this conviction does not route to had
@@ -9006,6 +9032,25 @@ pub fn palw_court_close_chunk_digest_v1(bytes: &[u8]) -> Hash64 {
     state.update(bytes);
     finish(state)
 }
+
+/// Hash the existing close-byte domain without a temporary serialization buffer.
+pub fn palw_court_close_object_digest_v1(object:&PalwConsensusObjectV2)->std::io::Result<Hash64> {
+    struct Sink<'a>(&'a mut blake2b_simd::State);
+    impl std::io::Write for Sink<'_> {
+        fn write(&mut self,bytes:&[u8])->std::io::Result<usize>{self.0.update(bytes);Ok(bytes.len())}
+        fn flush(&mut self)->std::io::Result<()>{Ok(())}
+    }
+    let n=u64::try_from(borsh::object_length(object)?).map_err(|_|std::io::Error::new(std::io::ErrorKind::InvalidData,"close object length overflow"))?;
+    let mut h=keyed(PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK);h.update(&n.to_le_bytes());
+    borsh::BorshSerialize::serialize(object,&mut Sink(&mut h))?;Ok(finish(h))
+}
+pub fn palw_court_close_group_digest_v1(group:&PalwCourtCloseGroupV2)->std::io::Result<Hash64> {
+    let n=group.chunks.values().try_fold(0u64,|n,v|n.checked_add(v.len() as u64))
+        .ok_or_else(||std::io::Error::new(std::io::ErrorKind::InvalidData,"close group length overflow"))?;
+    let mut h=keyed(PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK);h.update(&n.to_le_bytes());
+    for bytes in group.chunks.values(){h.update(bytes);}Ok(finish(h))
+}
+
 
 /// **Is this dissection move court CPU a block has to spend before it can be relayed?** (ADR-0080
 /// design A W9, extended by ADR-0082 Decision 2; audit C-1.)
@@ -11119,6 +11164,8 @@ pub struct PalwChainStateV2 {
 }
 
 mod chain_state;
+#[path = "palw_court_end_archive_fold_v1.rs"]
+mod palw_court_end_archive_fold_v1;
 
 /// Shape-level helper for `assert_internal_consistency`: does this
 /// claim, in this phase with this many open courts, owe the index a deadline entry at all?
@@ -13031,6 +13078,9 @@ impl PalwBondRegistrationIndexV1 {
 struct TransitionBuilder<'a> {
     native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
     monetary_native_ready: BTreeMap<Hash64, (Hash64, crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
+    court_end_evidence: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::CourtEndEvidenceV1>>,
+    court_settled_deposit: Option<(Hash64, PalwCourtSideV1, u64)>,
+    court_fulfilled_group: Option<(Hash64, PalwCourtSideV1, crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwCourtCloseGroupV2>)>,
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
     entries: Vec<PalwDeltaEntryV2>,

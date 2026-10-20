@@ -604,7 +604,7 @@ impl PalwChainStateV2 {
         Ok((page, None))
     }
     pub fn staged_bond_exit_held_v1(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
-        if self.court_service_holds_bond_v1(bond) { return true; }
+        if self.court_service_holds_bond_v1(bond) || self.court_archive_holds_bond_v1(bond) { return true; }
         now.checked_add(1).is_some_and(|after| {
             self.staged_holds
                 .range((*bond, after, PalwStagedCourtKeyV1::Claim(ZERO_HASH64))..)
@@ -973,6 +973,15 @@ impl TransitionBuilder<'_> {
     }
 
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        if let PalwStagedCourtKeyV1::CourtEndArchive(_) = key {
+            if let Some(old) = self.state.staged_court_row_v1(&key) {
+                if Some(old) != new.as_ref() { return Err(PalwStateV2Error::CarriageInconsistent("unresolved court archive is immutable".into())); }
+            }
+            let Some(PalwStagedCourtRowV1::CourtEndArchive(a)) = &new else {
+                return Err(PalwStateV2Error::CarriageInconsistent("court archive cannot be removed or retyped".into()));
+            };
+            a.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
         match &new {
             Some(PalwStagedCourtRowV1::CourtSharedResponse(r)) => {
                 r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
@@ -3340,6 +3349,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtSharedQuery(q) => (q.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedIds(ids) => (ids.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedResponse(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtEndArchive(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
@@ -3674,6 +3684,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtSharedQuery(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedIds(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedResponse(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtEndArchive(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
             _ => None,

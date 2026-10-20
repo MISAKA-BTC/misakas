@@ -1,8 +1,8 @@
 # RFC-0030 — court終了効果と未解決責任の保存
 
-Status: **Draft / Proposed / Review Required** (2026-10-21)。利用者はAの詳細仕様化・隔離実装を指示。本番採択・実装済み・有効化を意味しない。
+Status: **Draft / Proposed / Review Required** (2026-10-21)。利用者はAの詳細仕様化・隔離実装を指示。本番採択・全条件の実装済み・有効化を意味しない。
 
-正本は[RFC-0026 §4.3](0026-court-policy-master-contract.md)、[RFC-0014](0014-panel-independent-fraud-prosecution.md)、[RFC-0023](0023-unresolved-claim-liability-and-independent-progress.md)。[ADR-0197](../adr/0197-court-end-effects-and-pending-liability-archive.md)で新候補の方式を比較する。source基準は隔離候補`c54ba38fd`。既存の署名責任・料金・wireを変更する採択ではない。
+正本は[RFC-0026 §4.3](0026-court-policy-master-contract.md)、[RFC-0014](0014-panel-independent-fraud-prosecution.md)、[RFC-0023](0023-unresolved-claim-liability-and-independent-progress.md)。[ADR-0197](../adr/0197-court-end-effects-and-pending-liability-archive.md)で新候補の方式を比較する。問題調査のsource基準は隔離候補`c54ba38fd`、§8の隔離実装の親は`494361118`。既存の署名責任・料金・wireを変更する採択ではない。
 
 ## 1. 問題と実コードの境界
 
@@ -44,7 +44,7 @@ Status: **Draft / Proposed / Review Required** (2026-10-21)。利用者はAの�
 
 ## 4. 推奨A:裁定とpending保存を原子的に分離する
 
-別のversioned namespace `court-end-archive/v1`を候補とする。wire ordinal/table IDは本RFCでは未割当。旧key、row、tag230、X3 container、profile identityを読み替えない。
+別のversioned namespace `court-end-archive/v1`を候補とする。§8の隔離実装では末尾key 20 / row 26を使用するが、公開schemaの採択ではない。旧key、row、tag230、X3 container、profile identityを読み替えない。
 
 1. 通常native verifierが証拠を検証し、実際のaccepting block/DAAと当事者/claim/original/rulesetを確定する。呼出者が渡した`guilty`や`can_default`だけでarchiveや徴収を作らない。
 2. active sessionを削除する前に、元session、embedded phaseと別tableのTIR phase、両sideの残存groupと受理済みchunks、宣言者/outpoint/deposit、署名済み元契約、確定した終了証拠の実bytesまたは同じ保持保証のある認証済み参照を捕捉する。digestだけでは資料の取得可能性を満たさない。
@@ -54,7 +54,7 @@ Status: **Draft / Proposed / Review Required** (2026-10-21)。利用者はAの�
 6. snapshot/restart/pruned IBDは、元claim/frame/service binding、終了point、phase/chunk/署名のscope、確定/未決の排他性、全金融holdと索引を再構築する。undoは元active状態と資本へ、replayは同じarchive/rootへ戻す。受理済みblock全体の証拠bytesを参照するなら、その保存/取得保証もprofileに含める。
 7. pruning/closeを、裁定終了・金融精算・外部提供期限・state資料保持の別条件で検査する。全条件を満たすまでarchive削除やbond exitをしない。既存署名の約束より長い外部提供/課金を遡及導入しない。
 
-これは方式の具体化であり、現実装の紹介ではない。現在の候補にarchive row、financial migration、public coordinator、解除validatorは存在しない。
+以上は目標契約である。§8の部分実装はarchive rowと名目exposure/exit holdを接続するが、完全な金融予約移行、public coordinator、解除validatorは未実装である。
 
 ## 5. original受付と資本・容量の条件
 
@@ -74,7 +74,7 @@ Bはdeclaration時の実費前払と違反罰を別料金にする案。実在�
 
 A/Bとも新ruleset/profileの候補で、旧claimの経済規則を変更しない。詳細仕様化・隔離実装の判断、本番採択、pre統合、有効化、配備を別々に記録する。採択まで現行候補の拒否gateを維持する。
 
-## 7. 検証条件（未実施）
+## 7. 検証条件（全条件の合格は未達）
 
 以下は既存T01–T15を置換しないF08の追加条件である。
 
@@ -88,3 +88,35 @@ A/Bとも新ruleset/profileの候補で、旧claimの経済規則を変更しな
 - E08: 元complete証拠が取得不能なのにdigest/部分prefixだけで保存済みとしない。全保持/pruning条件とtyped heap/wire preflightを同時検査。
 - E09: serviceなしの旧claimは既存のW10/ADR-0152等に従い、t12 identity/preset/codecをrepinしない。
 - E10: 同じrelease buildでT01–T15・実モデルdoor≤3,120・完全有料graphの条件を満たすまでG14完了にしない。
+
+## 8. A案の隔離実装 — 2026-10-21
+
+親`494361118`から、service bindingのあるcourt削除にprivate archive adapterを加える。新key 20 / row 26を既存enumの末尾へ追加し、`court-end-archive/v1`と元service profileからarchive identityを導く。既存ordinal、X3 key 11 / row 17、service key 12 / row 18、tag230、preset/identity pinは変更しない。このidentityは料金・容量が校正されたprofileの認証ではない。
+
+共通`write_court(None)`は、元session・embedded/別table phase・両sideの残存groupと受理済みchunkを捕捉してから、active索引とphase/groupを除きarchiveを作る。全体をcheckpointで戻せる。正常なnative `CourtClosed`は実objectと受理pointを、直接/分割TIR convictionは最後のfragmentだけでなく検証された全decoded evidenceとpointを保持する。元宣言の全raw署名は旧group rowに保存されておらず、このadapterが署名契約全体の保存を達成したとはしない。
+
+完成した不整合assemblyでは、最終chunkも原子的に保存してから、当該sideの既存徴収を一度適用する。`applied_deposit_debits`は残存collateralでclampされた**実際のdeposit徴収額**であり、名目額の全額確保や他の既存罰の総額ではない。反対sideの未完groupを同時に徴収しない。正常に完成してnative closeを通ったgroupもraw bytesを残し、`fulfilled_groups`で未決depositから区別する。chunk全体のhashと宣言scopeを検査し、typed objectの再encodeが同じbytesになることを新しい受理条件にはしない。旧readerが許す表現を勝手に狭めない。
+
+終了causeをまだ捕捉していない内部経路は`Uncaptured`を明示し、未知の判決・受理pointを補わない。この場合と、当該courtの裁定まで確定しない関連native causeでは、元claimの実reserved court stakeを名目holdへ残す。archiveのread-only dispositionはdefault・credit・解除の許可証ではない。snapshot検査もnative adjudicatorの再実行全体を代替しない。
+
+archiveの未決group名目額を既存accuser exposureへ加え、該当bondのexitを止める。これは同額のescrow口座を新設・入金したことでも、全金融入口の資本保存則を満たしたことでもない。元claim/frame/service bindingと最低material期限をcontext検査し、旧hard/material TTLを過ぎても保持する。未決archiveの上書き・削除・型置換、同じsession IDの再利用を拒否する。料金、署名済み期限、hard、上限値を変更しない。
+
+追加5試験は、小型のverified-half native fixtureで、実際のlocal legacy v2 adjudicatorによるCourtClosed、完成不整合chunk、正常完成groupのraw保存、Uncapturedのstake保持、分割TIR反証の全証拠保存を検査する。nodeはv5でheld context/各fork fence等も検査しており、この小型fixtureがその公開受付を通ったとはしない。将来のarchive resolverも元の適用規則を束縛し、v2への降格で置換しない。各経路でcarriage復元、typed heap/wire reader、期限後保持、元rootへの全undoとreplayを確認する。fixtureのservice cost・carrier署名・元declaration設置は実資金original受付の証拠ではなく、E01–E10全体や最大合法phase群の成功を主張しない。
+
+**次の未完:** 終了後の反対sideが、元宣言に束縛された完成bytesを提示し未決を解消するvalidator/経路が必要。現adapterではactive sessionがないため旧CourtCloseChunkへ出せず、holdが続く。元rulesetのCourtParams/fee/署名scopeを取得できなければ、現在のdefault paramsや仮値で再裁定しない。全金融入口、全合法分岐の予約、実署名の保存、資料提供と保持費用、qualified settlement/pruning、実供給・公開ingress、最大family/phase、T01–T15と実doorは未完。無期限保持を完成と呼ばず、未校正の保持期間/費用を0や10,000で置き換えない。
+
+
+| 条件 | 現在の検証範囲 | 残る条件 |
+| --- | --- | --- |
+| E01 | direct close、完成不整合、streamed TIR fraudの小型native fixture | 全6理由と全actorのfield別効果 |
+| E02 | 両groupと完成raw bytes、full decoded TIR evidence | 実署名・実資金受付、最大prefix、embedded/別TIR phase全family |
+| E03 | archive改変/削除/再利用拒否、重複chunkのrollback | 各書込・金融移行点の資源失敗を注入した原子性 |
+| E04 | 同じsession IDの再利用拒否 | 全合法branch/並行性/重複統合の予約、無限archive生成対策 |
+| E05 | pending nominalのexposureとexit hold、実deposit debit | 全役割/他claim/全金融入口と資金保存則 |
+| E06 | hard/material後の保持とTTL sweep | notice/最終応答/配送収録/元契約境界、適格な解除 |
+| E07 | 小型fixtureのcarriage復元・全undo/replay/root一致 | 実DB restart/pruned IBDのarchive経路、各孤立・欠損の否定試験 |
+| E08 | 実raw chunk/全decoded evidence、typed heapとwire scanner | 完全な元署名契約、全原資/最大資源/保持・取得保証 |
+| E09 | 既存ordinary courtとt12同一性の回帰対象 | 公開service受付導入時にも旧claim分離を検証 |
+| E10 | 有効化拒否を維持 | T01–T15、実door、全有料graphの元の完了条件 |
+
+「全family/全合法分岐」は当面有効な経路の範囲であり、延期中のRFC-0003画像・動画とRFC-0004モデル改善を有効化・迂回開放する意味ではない。

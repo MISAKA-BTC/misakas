@@ -1253,7 +1253,16 @@ fn apply_conviction_v1(
         b.charge_covering_signers_v1(&conv, claim_id, &credited, g)?;
     }
     // 2. The producer, through the one funnel for a proven verdict (void / Final reversal, Gate C revocation, CourtConviction).
-    b.convict_by_court_verdict_v1(ctx, claim_id, &claim, filer, None)?;
+    if b.state.court_service_holds_claim_v1(&claim_id) {
+        // The assembled evidence is retained, not just the last fragment or a digest.
+        let previous = b.court_end_evidence.clone();
+        b.prepare_tir_court_end_cause_v1(ctx, claim_id, filer, evidence)?;
+        let result = b.convict_by_court_verdict_v1(ctx, claim_id, &claim, filer, None);
+        b.court_end_evidence = previous;
+        result?;
+    } else {
+        b.convict_by_court_verdict_v1(ctx, claim_id, &claim, filer, None)?;
+    }
     // 3. An execution-proving fault forfeits by ROOT (siblings sharing the convicted execution).
     if let Some(root) = by_root {
         b.forfeit_minted_round_rights(&root)?;
@@ -3167,6 +3176,185 @@ mod conviction_e2e_tests {
 
     /// Synthetic verified-half fixture: native sweep/index/journal behavior,
     /// not signed court admission, supplied block capacity or default authority.
+    // Verified-half archive fixtures: original admission, carrier signatures,
+    // service costs and declaration funding remain synthetic, not node E02.
+    fn archive_service(b: &mut TransitionBuilder<'_>, frame: &Frame) {
+        use crate::palw_court_service_v1::{ServiceCost,ServicePacket,ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2,ServiceClaimBinding,court_service_profile_id_v2};
+        let p=frame.plan_v1();let cost=ServiceCost {bytes:1,work:1,io:1,controls:1};
+        let mut book=ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket {id:[61;64],release_daa:p.terms.accepted_daa+1,
+            service_before:p.terms.accepted_daa+2,cost}],p.terms.accepted_daa+10_000).unwrap();
+        let service=CourtServiceStateV2 {version:2,source_profile_id:h(62),profile_id:court_service_profile_id_v2(h(62)),book,
+            claims:BTreeMap::from([(p.original_claim,ServiceClaimBinding {claim:p.original_claim,allocation_id:p.allocation_id,
+                source_id:p.source_id,original_accepted_daa:p.terms.accepted_daa,hard_deadline_daa:p.terms.accepted_daa+10_000,
+                packet_ids:std::collections::BTreeSet::from([[61;64]])})])};
+        b.write_staged_row_v1(Key::CourtService,Some(Row::CourtService(Box::new(service).into()))).unwrap();
+    }
+    fn archive_session(b: &mut TransitionBuilder<'_>, frame: &Frame) -> (Hash64,PalwCourtSessionStateV2) {
+        use crate::palw_bisect::{PalwBisectLadderV1,PalwBisectSpaceV1};
+        let p=frame.plan_v1();let claim=b.state.claim(&p.original_claim).unwrap();let opened=p.terms.accepted_daa+3;
+        let ladder=PalwBisectLadderV1::open_at_named_leaf(&p.original_claim,&claim.trace_root,
+            &crate::palw_court_v2::court_party_id_v2(&outsider()),&crate::palw_court_v2::court_party_id_v2(&claim.bond),
+            PalwBisectSpaceV1::StepLeaves,frame.header_v1().step_leaf_count,FORGED_LEAF as u64,opened,opened+1).unwrap();
+        let id=ladder.session_id();let session=PalwCourtSessionStateV2 {claim:p.original_claim,challenger_bond:outsider(),
+            opened_daa:opened,deadline_daa:opened+100,ladder,dissection:None};
+        b.write_court(id,Some(session.clone())).unwrap();
+        for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {
+            let declarer=if side==PalwCourtSideV1::Executor {frame.custody_v1().pledge_v1().producer}else{outsider()};
+            let first=vec![7;16];let last=vec![8;16];let mut all=first.clone();all.extend_from_slice(&last);
+            let declared=opened+1;
+            let group=PalwCourtCloseGroupV2 {declarer,count:2,chunk_digests:vec![palw_court_close_chunk_digest_v1(&first),palw_court_close_chunk_digest_v1(&last)],
+                close_digest:palw_court_close_chunk_digest_v1(&all),verdict:PalwCourtVerdictV2::ExecutorGuilty,declared_daa:declared,
+                assembly_deadline_daa:declared+palw_close_assembly_daa_v1(2),present:1,deposit_outpoint:declarer.0,
+                deposit:palw_close_assembly_deposit_v1(2),chunks:BTreeMap::from([(0,first)])};
+            b.write_court_close_group((id,side),Some(group)).unwrap();
+        }
+        (id,session)
+    }
+    fn archive_roundtrip(b: &mut TransitionBuilder<'_>, params: &PalwStateParamsV2, frame: &Frame, id: Hash64, point: PalwBlockContextV2, parent: Hash64) {
+        use crate::palw_native_resource_v1::{NativeHeapV1,NativeWireScanV1,NativeWireReaderV1};
+        let old=b.state.last_point;b.state.last_point=Some(point);
+        b.entries.push(PalwDeltaEntryV2::LastPoint {old,new:Some(point)});
+        let archive=b.state.court_end_archive_v1(id).unwrap().clone();archive.check_loaded_context(&b.state).unwrap();
+        let row=b.state.staged_court_row_v1(&Key::CourtEndArchive(id)).unwrap();let bytes=borsh::to_vec(row).unwrap();
+        assert_eq!(bytes[0],26);assert_eq!(borsh::to_vec(&Key::CourtEndArchive(id)).unwrap()[0],20);
+        let mut reader=NativeWireReaderV1::new(bytes.as_slice(),bytes.len() as u64);
+        let shape=Row::scan_native_wire_v1(&mut reader).unwrap();assert_eq!(reader.remaining(),0);
+        assert!(shape.heap>=row.native_heap_v1("archive test").bytes().unwrap());
+        let restored:Row=borsh::from_slice(&bytes).unwrap();assert_eq!(&restored,row);
+        let mut short=NativeWireReaderV1::new(&bytes[..bytes.len()-1],(bytes.len()-1) as u64);
+        assert!(Row::scan_native_wire_v1(&mut short).is_err());
+        let before=b.state.clone();let journal=b.entries.len();
+        assert!(b.write_staged_row_v1(Key::CourtEndArchive(id),None).is_err());
+        let mut changed=archive.clone();changed.groups.clear();
+        assert!(b.write_staged_row_v1(Key::CourtEndArchive(id),Some(Row::CourtEndArchive(Box::new(changed).into()))).is_err());
+        assert_eq!(b.state,before);assert_eq!(b.entries.len(),journal);
+        let past=at(frame,archive.material_until_daa-frame.plan_v1().terms.accepted_daa+1);
+        super::super::palw_staged_court_fold_v1::sweep(b,&past).unwrap();
+        assert!(b.state.court_end_archive_v1(id).is_some());
+        let old=b.state.last_point;b.state.last_point=Some(past);
+        b.entries.push(PalwDeltaEntryV2::LastPoint {old,new:Some(past)});
+        let saved=b.state.clone();let wire=borsh::to_vec(&PalwStateCarriageV2::from_state(&saved)).unwrap();
+        let fresh=borsh::from_slice::<PalwStateCarriageV2>(&wire).unwrap().into_state(params,Some(saved.state_root())).unwrap();
+        assert_eq!(fresh.state_root(),saved.state_root());assert_eq!(fresh.court_end_archive_v1(id),saved.court_end_archive_v1(id));
+        let mut backwards=saved.clone();for e in b.entries.iter().rev(){apply_delta_entry(&mut backwards,e,true).unwrap();}
+        assert!(backwards.court_end_archive_v1(id).is_none());
+        assert_eq!(backwards.state_root(),parent,"undo returns to the actual native parent root");
+        for e in &b.entries{apply_delta_entry(&mut backwards,e,false).unwrap();}
+        assert_eq!(backwards.state_root(),saved.state_root());
+    }
+    #[test]
+    fn rooted_court_end_archive_native_verdict_preserves_other_side() {
+        let fx=palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF,1)),4);let frame=fx.frame.clone();
+        let (state,params,extras)=world(&fx,&frame);let params=params.with_tir_from_daa(Some(0));
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        archive_service(&mut b,&frame);let (id,session)=archive_session(&mut b,&frame);
+        let Evidence::Arithmetic {proof}=cone(&fx) else {unreachable!()};
+        let court=crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap();
+        assert_eq!(crate::palw_court_v2::adjudicate_court_close_v2(&b.state,&id,&proof,&court,frame.header_v1().step_leaf_count,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).unwrap(),PalwCourtVerdictV2::ExecutorGuilty);
+        let object=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:PalwCourtVerdictV2::ExecutorGuilty,proof:*proof};
+        let before=b.state.bond(&outsider()).unwrap().collateral;let point=at(&frame,5);
+        super::super::objects::apply_object(&mut b,&point,&object).unwrap();
+        assert!(b.state.court_session(&id).is_none());let a=b.state.court_end_archive_v1(id).unwrap();
+        assert_eq!(a.session,session);assert_eq!(a.groups.len(),2);assert!(a.applied_deposit_debits.is_empty());
+        assert!(matches!(a.evidence.as_ref(),crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native {object:o,point:p} if **o==object && *p==point));
+        assert_eq!(b.state.bond(&outsider()).unwrap().collateral,before);
+        assert_eq!(b.state.court_archive_pending_exposure_v1(&outsider()),u128::from(palw_close_assembly_deposit_v1(2)));
+        assert_eq!(palw_accuser_exposure_v1(&b.state,&outsider()),u128::from(palw_close_assembly_deposit_v1(2)));
+        assert_eq!(a.adjudication(),crate::palw_court_end_archive_v1::CourtEndDispositionV1::NativeCourtVerdict(PalwCourtVerdictV2::ExecutorGuilty));
+        assert!(b.state.staged_bond_exit_held_v1(&outsider(),frame.plan_v1().terms.material_until_daa+1));
+        let saved=b.state.clone();assert!(b.write_court(id,Some(session)).is_err());assert_eq!(b.state,saved);
+        archive_roundtrip(&mut b,&params,&frame,id,point,state.state_root());
+    }
+    #[test]
+    fn rooted_court_end_archive_complete_malformed_side_is_settled_once() {
+        let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=fx.frame.clone();
+        let (state,params,extras)=world(&fx,&frame);let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        archive_service(&mut b,&frame);let (id,_)=archive_session(&mut b,&frame);
+        let producer=frame.custody_v1().pledge_v1().producer;let collateral=b.state.bond(&producer).unwrap().collateral;
+        let own_before=b.state.bond(&outsider()).unwrap().collateral;let side=PalwCourtSideV1::Challenger;
+        let point=at(&frame,5);let deposit=palw_close_assembly_deposit_v1(2);
+        let object=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:vec![8;16]};
+        super::super::objects::apply_object(&mut b,&point,&object).unwrap();
+        let a=b.state.court_end_archive_v1(id).unwrap();assert_eq!(a.applied_deposit_debits.get(&side),Some(&deposit.min(own_before)));
+        assert!(a.groups[&side].is_complete());assert_eq!(a.pending_nominal(&outsider()),0);
+        assert_eq!(a.pending_nominal(&producer),u128::from(deposit));
+        assert_eq!(b.state.bond(&producer).unwrap().collateral,collateral);
+        let saved=b.state.clone();assert!(super::super::objects::apply_object(&mut b,&point,&object).is_err());assert_eq!(b.state,saved);
+        archive_roundtrip(&mut b,&params,&frame,id,point,state.state_root());
+    }
+    #[test]
+    fn rooted_court_end_archive_fulfilled_close_keeps_raw_material_without_pending_charge() {
+        let fx=palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF,1)),4);let frame=fx.frame.clone();
+        let (state,params,extras)=world(&fx,&frame);let params=params.with_tir_from_daa(Some(0));
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        archive_service(&mut b,&frame);let (id,_)=archive_session(&mut b,&frame);
+        let Evidence::Arithmetic {proof}=cone(&fx) else {unreachable!()};
+        let court=crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap();
+        let verdict=crate::palw_court_v2::adjudicate_court_close_v2(&b.state,&id,&proof,&court,frame.header_v1().step_leaf_count,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).unwrap();
+        let close=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict,proof:*proof};let bytes=borsh::to_vec(&close).unwrap();
+        assert_eq!(palw_court_close_object_digest_v1(&close).unwrap(),palw_court_close_chunk_digest_v1(&bytes));
+        let split=bytes.len()/2;assert!(split>0 && bytes.len()-split<=PALW_COURT_CLOSE_CHUNK_MAX_BYTES);
+        let side=PalwCourtSideV1::Challenger;
+        let mut group=b.state.court_close_group(&id,side).unwrap().clone();
+        group.chunk_digests=vec![palw_court_close_chunk_digest_v1(&bytes[..split]),palw_court_close_chunk_digest_v1(&bytes[split..])];
+        group.close_digest=palw_court_close_chunk_digest_v1(&bytes);group.chunks=BTreeMap::from([(0,bytes[..split].to_vec())]);
+        b.write_court_close_group((id,side),Some(group)).unwrap();
+        let point=at(&frame,5);let object=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:bytes[split..].to_vec()};
+        super::super::objects::apply_object(&mut b,&point,&object).unwrap();
+        let a=b.state.court_end_archive_v1(id).unwrap();assert!(a.fulfilled_groups.contains(&side));
+        assert!(a.applied_deposit_debits.is_empty());assert_eq!(a.pending_nominal(&outsider()),0);
+        assert_eq!(a.groups[&side].chunks.values().flatten().copied().collect::<Vec<_>>(),bytes);
+        assert!(matches!(a.evidence.as_ref(),crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native {object,..} if **object==close));
+        archive_roundtrip(&mut b,&params,&frame,id,point,state.state_root());
+    }
+    #[test]
+    fn rooted_court_end_archive_uncaptured_removal_retains_nominal_court_stake() {
+        let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=fx.frame.clone();let (state,params,extras)=world(&fx,&frame);
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        archive_service(&mut b,&frame);let (id,_)=archive_session(&mut b,&frame);
+        let stake=b.state.claim(&frame.plan_v1().original_claim).unwrap().reserved;let before=b.state.bond(&outsider()).unwrap().collateral;
+        b.write_court(id,None).unwrap();let a=b.state.court_end_archive_v1(id).unwrap();
+        assert_eq!(a.adjudication(),crate::palw_court_end_archive_v1::CourtEndDispositionV1::Uncaptured);
+        assert_eq!(a.court_stake_nominal,stake);
+        // A cause receipt alone cannot resolve THIS court's stake. This is a
+        // read-only projection counterexample, not an accepted native object.
+        let mut related=a.clone();
+        related.evidence=Box::new(crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native {
+            point:at(&frame,5),object:Box::new(PalwConsensusObjectV2::CourtCloseChunk {
+                session_id:id,side:PalwCourtSideV1::Challenger,index:0,bytes:vec![7;16],
+            }),
+        }).into();
+        assert_eq!(related.adjudication(),crate::palw_court_end_archive_v1::CourtEndDispositionV1::RelatedNativeTransition);
+        assert_eq!(related.pending_nominal(&outsider()),a.pending_nominal(&outsider()));
+        assert_eq!(palw_accuser_exposure_v1(&b.state,&outsider()),stake+u128::from(palw_close_assembly_deposit_v1(2)));
+        assert_eq!(b.state.bond(&outsider()).unwrap().collateral,before);
+        archive_roundtrip(&mut b,&params,&frame,id,at(&frame,5),state.state_root());
+    }
+    #[test]
+    fn rooted_court_end_archive_streamed_fraud_keeps_complete_evidence() {
+        use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part,palw_tir_public_witness_digest_v1};
+        let honest=palw_tir_public_frame_fixture_v1(None,4);let fx=crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_lying_output_v1(4,h(0xBAD));
+        let frame=fx.frame.clone();let (state,params,mut extras)=world(&fx,&frame);extras.offence_attribution_active=true;
+        let evidence=Evidence::Output {rows_root:crate::palw_step_refute::tiled_logits_rows_root_v1(&honest.execution.binding.job_context,&honest.execution.rows).unwrap(),ids:honest.execution.generated.clone()};
+        let encoded=borsh::to_vec(&evidence).unwrap();let split=encoded.len()/2;let digest=palw_tir_public_witness_digest_v1(&encoded);
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);archive_service(&mut b,&frame);
+        let (id,_)=archive_session(&mut b,&frame);let before=b.state.bond(&outsider()).unwrap().collateral;
+        let p=frame.plan_v1();
+        for (offset,end,at_offset) in [(0,split,5),(split,encoded.len(),6)] {
+            let control=Control {version:1,claim:p.original_claim,allocation_id:p.allocation_id,source_id:p.source_id,
+                target:T::ConvictionWitness,expected_turn:0,declared_rent_sompi:if offset==0 {frame.conviction_rent_v1()}else{0},
+                signer:outsider(),action:A::WitnessPart(Part {total_bytes:encoded.len() as u64,digest,offset:offset as u64,bytes:encoded[offset..end].to_vec()}),signature:vec![5;SIG]};
+            apply_verified_control_v1(&mut b,&at(&frame,at_offset),&frame,&control).unwrap();
+        }
+        assert!(matches!(b.state.claim(&p.original_claim).unwrap().phase,PalwClaimPhaseV2::Voided {reason:PalwVoidReasonV2::CourtFraud,..}));
+        assert_eq!(b.state.bond(&outsider()).unwrap().collateral,before);
+        let a=b.state.court_end_archive_v1(id).unwrap();assert_eq!(a.groups.len(),2);
+        assert!(matches!(a.evidence.as_ref(),crate::palw_court_end_archive_v1::CourtEndEvidenceV1::TirConviction {evidence:e,point,..} if **e==evidence && *point==at(&frame,6)));
+        archive_roundtrip(&mut b,&params,&frame,id,at(&frame,6),state.state_root());
+    }
+
     #[test]
     fn rooted_service_court_sweeps_skip_held_without_starving_cleanup() {
         use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};

@@ -90,3 +90,12 @@ semantic/historyの無応答課金は`staged_selected_default_charge_v1`へ集�
 追加候補の`CourtServiceStateV2::check_retains_unresolved`は、元profile/予算、bindingとpacketの契約、供給記録、前向きclockを保存する。旧slotへの事後供給の挿入を拒否する。既存assignmentは、観測clockより前に供給されず、再割当先がそのclockより後の場合だけ動かせる。新packetは元観測clock後のreleaseを要する。これはbookの前向きwriteの不変条件で、供給の真正性・有料original受付・終了許可を生成するvalidatorではない。bookを縮小する汎用更新をterminal resolverの代わりにしない。journalによるundoは前向きwriterを経由せず、元の有効な状態へ戻す。
 
 新archive候補については[RFC-0030](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md)を参照。現depositの名目額は前払escrowではなく、残存collateralと他claim責任を考慮する必要がある。Aの隔離実装指示を、未決責任の解除や新Account Bondの実装・価格採択へ広げない。
+
+
+## F08 A案のprivate archive adapter
+
+親`494361118`からの候補。[RFC-0030 §8](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#8-a案の隔離実装--2026-10-21)と[ADR-0197](../../../adr/0197-court-end-effects-and-pending-liability-archive.md)に従い、`write_court(None)`のservice分岐で元session・phase・両group・全終了証拠を保存し、他sideの未完groupを自動徴収しない。直接close、完成chunk、分割TIR convictionをnative fixtureで部分検査する。正常完成groupのraw bytesを消さずfulfilledと区別し、不整合完成側は既存collateralから実際に徴収したdepositを記録する。
+
+archive key 20 / row 26は新しいprivate末尾ordinalで、既存X3/service/tag230の意味を変えない。名目pending chargeを既存accuser exposureとbond exit holdへ加える。終了causeが未接続、または単に関連するnative処理であるだけなら元court stakeも保持する。実費入金・新Account Bondの資本額・全財源の確保を意味しない。未校正のコピー/hash/snapshot/IO/byte-DAAと全archive走査の仕事を追加profileへ含める必要がある。
+
+未完groupの終了後提出・元CourtParams/署名scopeでの再検査・qualified settlement/pruningは未実装で、現行のholdだけをG14完成にしない。旧group rowは元declarationの全署名を保持していない。全actor金融入口、実署名のoriginal全分岐予約、実供給/公開ingress、最大family/phaseとE01–E10全条件、T01–T15、実doorは別の未完である。hardや最低material horizonを責任の自動解放時刻へ変えない。

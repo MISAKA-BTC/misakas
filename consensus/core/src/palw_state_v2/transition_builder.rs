@@ -46,6 +46,9 @@ impl<'a> TransitionBuilder<'a> {
             native_reservation,
             params,
             monetary_native_ready: BTreeMap::new(),
+            court_end_evidence: None,
+            court_settled_deposit: None,
+            court_fulfilled_group: None,
             state,
             entries: Vec::new(),
             registration_index: None,
@@ -8662,6 +8665,21 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_court(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) -> Result<(), PalwStateV2Error> {
+        if new.is_some() && self.state.court_end_archive_v1(key).is_some() { return Err(PalwStateV2Error::DuplicateSession(key)); }
+        let archive = new.is_none() && self.state.court_sessions.get(&key).is_some_and(|s|
+            self.state.claims.contains_key(&s.claim) && self.state.court_service_holds_claim_v1(&s.claim));
+        if !archive { return self.write_court_inner_v1(key,new,false); }
+        let saved = self.try_checkpoint()?;
+        let result = (|| {
+            let pending = self.build_pending_court_archive_v1(key)?;
+            self.write_court_inner_v1(key,new,true)?;
+            self.write_staged_row_v1(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtEndArchive(key),
+                Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtEndArchive(Box::new(pending).into())))
+        })();
+        if result.is_err() {self.restore(saved);}
+        result
+    }
+    fn write_court_inner_v1(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>, archived: bool) -> Result<(), PalwStateV2Error> {
         if let Some(record) = &new {
             self.state.require_paid_consumer_backstop_v1(&record.claim, record.deadline_daa)?;
             if !self.state.court_sessions.contains_key(&key) {
@@ -8759,7 +8777,7 @@ impl<'a> TransitionBuilder<'a> {
         if removed {
             for side in [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor] {
                 if self.state.court_close_groups.contains_key(&(key, side)) {
-                    forfeit_close_deposit_v1(self, key, side)?;
+                    if !archived {forfeit_close_deposit_v1(self, key, side)?;}
                     self.write_court_close_group((key, side), None)?;
                 }
             }

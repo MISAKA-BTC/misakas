@@ -7,6 +7,20 @@ pub(super) fn apply_object(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
+    if builder.state.court_service_state_v1().is_some_and(|s| !s.claims.is_empty()) {
+        let saved = builder.try_checkpoint()?;
+        let previous = builder.court_end_evidence.clone();
+        let result = (|| {
+            builder.prepare_native_court_end_cause_v1(ctx, object)?;
+            apply_object_with_pair_v1(builder, ctx, object)
+        })();
+        builder.court_end_evidence = previous;
+        if result.is_err() { builder.restore(saved); }
+        return result;
+    }
+    apply_object_with_pair_v1(builder, ctx, object)
+}
+fn apply_object_with_pair_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, object: &PalwConsensusObjectV2) -> Result<(), PalwStateV2Error> {
     // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` every court operation is charged its deterministic cost
     // against the block's court budget before its arm runs. A no-op below the fence.
     palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
@@ -2612,9 +2626,18 @@ fn apply_object_inner(
                 builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone())?;
                 return Ok(());
             }
+            let service_archive=builder.state.court_sessions.get(session_id)
+                .is_some_and(|s|builder.state.court_service_holds_claim_v1(&s.claim));
+            if service_archive {
+                // Unlike legacy delete-only endings, the archive must retain
+                // the final accepted bytes too. The outer checkpoint includes
+                // this arrival if decode/adjudication/archive later refuses.
+                builder.write_court_close_chunk((*session_id,*side),*index,bytes.clone())?;
+            }
             // **W7: the chunk that COMPLETES a group assembles it, and the close happens here.**
             //
-            // Not written back first: every path below removes the session, and `write_court`
+            // Legacy: not written back first. The service archive branch above retains
+            // the final chunk. Every legacy path below removes the session, and `write_court`
             // removes its groups with it, so writing the completed row would be a state entry
             // whose only reader is the delete two lines later.
             //
@@ -2689,6 +2712,16 @@ fn apply_object_inner(
             // a session's removal, and the `CourtClosed` applied on the next line removes this
             // one — so an honest assembly that stayed in the table would be charged for the row it
             // just filed. This is the single ending that owes nothing.
+            if service_archive {
+                let previous=builder.court_fulfilled_group.clone();
+                let result=(||{
+                    builder.prepare_fulfilled_court_group_v1(*session_id,*side,&group)?;
+                    builder.end_close_group_delivered((*session_id,*side))?;
+                    apply_object(builder,ctx,&close)
+                })();
+                builder.court_fulfilled_group=previous;
+                return result;
+            }
             builder.end_close_group_delivered((*session_id, *side))?;
             // **Through the arm, never beside it.** The decoded object is a `CourtClosed` and is
             // applied by re-entering this function, so a split close and a whole close are the same

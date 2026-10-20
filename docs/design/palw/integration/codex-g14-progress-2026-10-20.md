@@ -293,3 +293,17 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 
 
 このbook保持修正の最終選択も **98 passed / 0 failed / 0 ignored**（native33 + public-prefix17 + 通常court13 + service/policy/G14/activation/t12同一性35）。targeted1と前ターン98は重複として加算しない。non-test consensus release checkはexit0。追加fixtureは構造/context-validな置換をnative writerで拒否する検査であり、実署名のoriginal受付・実供給やarchiveのE01–E10の成功ではない。[source/実行file/log/検証範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/service-book-retention-artifact.json)。文書検査は同じimport済み欠損5件・baseline既知43件を残す。次はAの新archive、実際の金融hold/証拠移行、qualified settlementと全分岐の有料受付を接続する。G14未完・有効化保留を維持する。
+
+
+## F08 A案：rooted archiveの部分実装
+
+親`494361118`。利用者のA判断に従い、[RFC-0030 §8](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#8-a案の隔離実装--2026-10-21)のprivate adapterを追加。serviceに束縛されたcourtの終了時に、元session・phase・残存両group・完成raw bytes・全decoded TIR終了証拠をarchiveへ原子的に移す。反対側の未完groupを自動徴収せず、完成不整合側の実deposit debitと正常完成groupのfulfilled状態を区別する。未決名目額を既存accuser exposureとexit holdへ接続する。未接続/関連causeだけの終了では元court stakeを保持し、未知の裁定/pointを作らない。
+
+新private key 20 / row 26を末尾へ追加し、旧X3/service/tag230の意味を変更しない。namespace identityは校正済み有料profileではない。全金融入口への原資予約、元署名全文、終了後の未完group提出とqualified settlement/pruning、全分岐original受付・実供給・公開ingressは未実装。保留の継続だけをF08/G14完成としない。
+
+新5試験は小型verified-half fixtureで、二つのcloseはlocal legacy v2 adjudicatorを使う。nodeのv5/held-regime/signature受付を通った試験ではない。native raw完成経路、分割TIR証拠全体、carriage・heap/wire・期限後保持・全undo/replay/root一致を対象とする。関連causeのstake検査はread-only counterexampleで、偽の受理済みnode recordではない。元service cost/署名/宣言設置のfixture入力を実料金・資金確保・全最大phaseの測定へ昇格させない。
+
+[終了後提出経路のsource調査](../../../evidence/palw/g14-integration-candidate-2026-10-20/court-end-archive-followup-audit.json)では、旧CourtCloseChunkがactive groupを前提とし、完成時にv5と実CourtParams/各fork条件を検査することを確認。将来のresolverは元の適用規則に束縛し、仮params・v2への降格・任意row上書きで解除しない。T01–T15、全owner占有/埋め直し、実door、全金融/資料/依存graph、R-D2/tag230の残件と有効化保留を維持する。
+
+
+最終選択は **103 passed / 0 failed / 0 ignored**（同じ最終core executableのnative38＋public-prefix17＋通常court13、integration35）。targeted5は38に含み、途中103・初回1成功/2失敗・過去98等を加算しない。non-test consensus release checkもexit0。途中のcompile101/初回2失敗は当時のsource patch/hash/logを保存し、全4版をpatchから再構成してhash一致を確認した。[最終実行・source/実行file/log hashとfixtureの限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/court-end-archive-artifact.json)。文書検査は同じimport済み欠損5件によりFAIL/exit1で、baseline既知43件も残す。今回の新規リンク欠損は0。過去service-book-retention artifactのdocs exit0は元FAILログと不整合であり、今回の直接実行でexit1と訂正する（元ログは変更しない）。G14未完・有効化保留を維持し、次は元規則を束縛した未決解消validatorと全分岐の原子的有料受付へ進む。

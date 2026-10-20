@@ -1,6 +1,6 @@
 # ADR-0197 — court終了効果と未解決責任の保存方式
 
-Status: **Proposed / Review Required** (2026-10-21)。利用者はAの詳細仕様化・隔離実装を指示。archiveは未実装。本番規則の採択・統合・有効化ではない。
+Status: **Proposed / Review Required** (2026-10-21)。利用者はAの詳細仕様化・隔離実装を指示。RFC-0030 §8のprivate adapterのみ部分実装し、全金融予約・qualified settlementは未実装。本番規則の採択・統合・有効化ではない。
 
 Source: 隔離候補`c54ba38fd`。[RFC-0030](../rfc/0030-court-end-effects-and-pending-liability-archive.md)で、field別終了効果、具体的な原子移行、資本・容量・署名条件、追加検証を示す。正本は[RFC-0026 §4.3](../rfc/0026-court-policy-master-contract.md)。
 
@@ -22,9 +22,9 @@ ADR-0192 A/Aはserviceと共有frontierの詳細仕様化、ADR-0194 AはX3/serv
 
 ## 今回のレビュー対象
 
-RFC-0030 §2–5が具体案である。特に「裁定終了と責任解消を別fieldにする」「archiveより前に新originalで金融/容量/署名を予約する」「署名済み旧期限を延長しない」「終了証拠はdigestだけでなく実bytesまたは同じ保持保証を持つ参照」「全未決解消までpruning/exitを許可しない」を一体で検討する。金額・duration・wire ordinalは選んでいない。
+RFC-0030 §2–5が具体案である。特に「裁定終了と責任解消を別fieldにする」「archiveより前に新originalで金融/容量/署名を予約する」「署名済み旧期限を延長しない」「終了証拠はdigestだけでなく実bytesまたは同じ保持保証を持つ参照」「全未決解消までpruning/exitを許可しない」を一体で検討する。金額・duration・公開wire ordinalは採択していない。隔離実装の末尾ordinalはRFC-0030 §8に記録する。
 
-現コードのソース調査はF08の必要性を示す証拠であり、新archiveの動作・資金保存則・node検証の成功ではない。実装前のE01–E10は未実施、T01–T15も既存の完了条件のままとする。
+現コードのソース調査はF08の必要性を示す証拠であり、新archiveの動作・資金保存則・node検証の成功ではない。E01–E10全条件の合格は未達、T01–T15も既存の完了条件のままとする。
 
 ## 判断と採択の範囲
 
@@ -34,3 +34,9 @@ RFC-0030 §2–5が具体案である。特に「裁定終了と責任解消を�
 ## 利用者の判断 — 2026-10-21
 
 利用者回答「A：裁定と未決責任のarchiveを分離（推奨）」により、Aの詳細仕様化・隔離実装を進める。旧claimの移行、価格/期間/wireの本番採択、pre統合・武装・配備の承認を含まない。上の未回答を前提とする選択肢説明は判断前の経緯である。資本とarchiveの実装が未完であることは、この指示によって完了へ変わらない。
+
+## 隔離実装の進捗 — 2026-10-21
+
+[RFC-0030 §8](../rfc/0030-court-end-effects-and-pending-liability-archive.md#8-a案の隔離実装--2026-10-21)に部分実装を記録した。rooted archive、実終了object/全TIR evidence、未完groupの保存、完成sideの実deposit徴収とfulfilled raw groupの区別、名目exposure/exit holdを追加する。これは本番の資金確保・全署名契約の保存・有料original graphの完了ではない。Uncaptured/関連causeだけの経路では元court stakeを残し、未知の判決を作らない。
+
+終了後の未完groupを完成させる経路、元rulesetに従うqualified settlementとpruningはまだない。元署名scopeとCourtParamsを確定できない経路を、仮paramsで裁定・自動返還しない。5件の追加native fixtureは動作の部分検証であり、全E01–E10/T01–T15・実容量・実doorや公開採択の代替ではない。
