@@ -330,3 +330,14 @@ wire CPU予算/shape算術・OOMをNativeResourceとして伝播し、切断さ�
 最終選択 **105 passed / 0 failed / 0 ignored**（native40＋public-prefix17＋通常court13＋integration35）。新しいparametric試験1件は40に含み、途中compile checkや過去104/103を加算しない。小型の正常/不正TIR cone、held flag false/true、正誤の署名verdictの8組、実署名、native宣言/prefix/終了、TTL後の再検査・carriage/全undo/replay、実reader予算エラーを検証した。held/fused phaseや最大全familyの検証ではなく、原本/資金/serviceはfixtureの前提を残す。non-test consensus release checkとcore tests型検査もexit0。[実行・source/実行file/log hash・詳細な限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/archive-v5-artifact.json)。
 
 現在は検査view用に全state copyをquote/cloneしており、全有料graphの追加費用・物理容量は未校正である。per-claimの予約上限を閉じるため、借用したsession/phaseを既存v5の共通kernelへ渡し、global state copyを避ける検討が必要。公開受付で適用する時点/規則、金融精算・pruning、全actorの資本、全分岐original予約・実供給、P2局所化/準備/容量、T01–T15・R-D2/tag230・実doorは未完。G14の完成や武装/統合/配備ではない。
+
+
+## Archive再検査の全state copyを除去する候補
+
+親`54c0081d6`。公開native v5と保存済みrecordのprivate再検査を同じkernelへ接続し、archive経路のglobal state/session/phase cloneと一時active行の設置を除く。既存のcost gateをstate参照前に維持し、別phaseの取得先3箇所以外のkernel本文は変更前とbyte単位で一致する。出力group・署名message・assembly・decodeのquoteは残す。[RFC-0030 §11](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#11-借用recordを使う共通v5-kernel)を参照。
+
+元rootのhash、署名、内側のlegacy allocation/CPUと物理容量はなお全profileの未校正費用。全original分岐の有料受付、公開ingress、実供給、金融精算/解除/pruningを実装したという意味ではない。最終検証の結果と正確な範囲は[artifact](../../../evidence/palw/g14-integration-candidate-2026-10-20/borrowed-v5-artifact.json)へ保存する。G14全体・武装・統合・配備は未完/保留を維持する。
+
+Final borrowed-v5 selection: 134 unique passes (native40 + public-prefix17 + ordinary13 + kernel23 + integration41). Targeted1 overlaps native40; historical105 is excluded. Six F7 cases use a toy corpus and do not demonstrate measured real-model door or funded public archive admission.
+
+Core test type-check and non-test consensus release check both exited 0. Documentation checking remains FAIL/exit1 with the same five imported missing references and43 baseline-known occurrences; no newly authored missing link or baseline update. All three changed runtime files were reconstructed from the parent and saved patch and matched SHA-256.

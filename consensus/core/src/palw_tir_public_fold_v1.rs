@@ -3433,6 +3433,18 @@ mod conviction_e2e_tests {
             let actual=crate::palw_court_v2::adjudicate_court_close_v5(&b.state,&id,&proof,&rules.court,rules.step_ladder,
                 crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,held,true,None,None,None).unwrap();
             assert_eq!(actual,if forged {PalwCourtVerdictV2::ExecutorGuilty}else{PalwCourtVerdictV2::ChallengerDefeated});
+            let session=b.state.court_session(&id).unwrap();
+            let judge_borrowed=|sid:&Hash64,court:&crate::palw_mode_v2::PalwCourtParamsV2| {
+                crate::palw_court_v2::adjudicate_court_close_borrowed_v5(&b.state,sid,session,b.state.tir_dissection_v1(&id),
+                    &proof,court,rules.step_ladder,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,held,true,None,None,None)
+            };
+            assert_eq!(judge_borrowed(&id,&rules.court).unwrap(),actual);
+            let other=h(0x882);assert_ne!(other,id);
+            assert!(matches!(judge_borrowed(&other,&rules.court),Err(crate::palw_court_v2::PalwCourtV2Error::BindingInvalid(_))));
+            let small=crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(rules.court.max_step_leaf_count(),
+                rules.court.turn_deadline_daa(),rules.court.terminal_rounds(),1,rules.court.max_terminal_macs(),rules.court.max_operand_count()).unwrap();
+            assert!(matches!(judge_borrowed(&other,&small),Err(crate::palw_court_v2::PalwCourtV2Error::CloseTooLarge {..})),
+                "cost refusal precedes even borrowed scope/state inspection");
             let stated=if wrong_verdict {if forged {PalwCourtVerdictV2::ChallengerDefeated}else{PalwCourtVerdictV2::ExecutorGuilty}}else{actual};
             let correct=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:actual,proof:*proof.clone()};
             let committed=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:stated,proof:*proof};

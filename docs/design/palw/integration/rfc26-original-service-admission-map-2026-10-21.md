@@ -104,3 +104,8 @@ archive key 20 / row 26は新しいprivate末尾ordinalで、既存X3/service/ta
 ## Archive v5検査と有料originalの境界
 
 親`c153ecc02`の後のprivate検査は、保存した署名・native条件・session/phaseから既存v5を呼び、元state rootに束縛した局所結果を返す。[RFC-0030 §10](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#10-保存した入力によるprivate-v5再検査候補)。旧公開受付の適用時点を置換せず、wire/fee/financial writerへ接続していない。quote/cloneする全state検査scratchはglobal state量に依存するため、全original graphのper-claim上限が閉じたとはしない。借用contextによる共通native v5 kernelへの接続、内側のlegacy allocation/CPU、署名/hash、原子性と物理容量を含めて原本受付へ積算する必要がある。局所resource不足は不正/defaultにせずNativeResourceとして扱う。
+
+
+## 借用recordによるarchive v5 kernel
+
+親`54c0081d6`後の候補は、上記の検査scratch全state copyを除き、認証した元session/phaseを共通v5 kernelへ借用する。public active入口と同じ裁定本文を使い、費用検査の順序を維持する。group/message/assembly/decodeのquoteは残す。元state rootのhashや内側のlegacy v5 allocation/CPU等は未校正で、全有料graphのper-claim上限が閉じたとはしない。[実装範囲と最終検証](../../../evidence/palw/g14-integration-candidate-2026-10-20/borrowed-v5-artifact.json)。金融writer/公開受付/期限採択は接続しない。

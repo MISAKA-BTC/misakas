@@ -50,3 +50,8 @@ RFC-0030 §2–5が具体案である。特に「裁定終了と責任解消を�
 ## Private v5再検査
 
 [RFC-0030 §10](../rfc/0030-court-end-effects-and-pending-liability-archive.md#10-保存した入力によるprivate-v5再検査候補)に、保存した署名/chunk/session/phase/native入力で既存v5を呼ぶ候補を追加する。state rootに束縛した非serialized結果を返すだけで、元の金融・credit・責任状態を変更しない。公開受付の適用時点や金融解除を、このprivate再検査によって採択しない。局所の予算/OOM不足はNativeResourceであり、不正/defaultの根拠にしない。全有料graphとqualified settlementは未完である。
+
+
+## 共通v5 kernelと検査用state copyの除去
+
+[RFC-0030 §11](../rfc/0030-court-end-effects-and-pending-liability-archive.md#11-借用recordを使う共通v5-kernel)は、同じ裁定本体へ通常sessionまたは認証済みretained session/phaseを渡す実装上の整理である。公開入口のcost gate・裁定規則、旧preset/identity、金融権限を変えず、archiveの全state copyを除く。新しいprofileの単価・期限・公開late規則の選択ではない。全資金/物理費用と有料original graphは未完である。

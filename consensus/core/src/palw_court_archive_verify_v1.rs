@@ -67,19 +67,15 @@ impl TransitionBuilder<'_> {
             {return Err(refusal("archive completion chunk digest/size mismatch"));}
             total=total.checked_add(bytes.len() as u64).ok_or_else(||refusal("archive completion length overflow"))?;
         }
-        let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {
-            Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>return Err(refusal("original signed native close receipt missing")),
-        };
-        // Admit scratch, copies and BTree memberships before signature-message
-        // construction, assembly, or restoring the local inspection view.
+        if !matches!(self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)),Some(Row::CourtCloseReceipt(_))) {
+            return Err(refusal("original signed native close receipt missing"));
+        }
+        // Admit retained output and scratch before signature-message
+        // construction, assembly, and decoding. Session/phase are borrowed.
         if self.native_writers_tracking_v1(){
             let mut q=native_writers::NativeWriteQuoteV1::new("archive complete signed v5 replay before buffers");
-            q.copy(candidate)?.exact::<PalwCourtCloseGroupV2>(1)?.copy(&receipt.session)?
-                .member::<Hash64,PalwCourtSessionStateV2>(1)?
+            q.copy(candidate)?.exact::<PalwCourtCloseGroupV2>(1)?
                 .exact::<Hash64>(2*u64::from(candidate.count))?.exact::<u8>(256)?.exact::<u8>(total)?;
-            if let Some(phase)=&receipt.tir_phase {
-                q.copy(phase)?.member::<Hash64,Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>(1)?;
-            }
             self.admit_native_write_v1(q)?;
         }
         let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>unreachable!()};
@@ -106,15 +102,11 @@ impl TransitionBuilder<'_> {
             || (proof.is_constrained_decode_v1() && !rules.constraint_active)
             || (crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(&close) && !rules.task_heads_active)
         {return Err(refusal("archive proof family was dormant in its retained native context"));}
-        // The checkpoint owner admits the actual complete state copy. This view
-        // is local inspection scratch: it is not a valid new chain state and is
-        // never journalled, committed, or used to mint credit or settle money.
-        let (mut view,_)=self.try_checkpoint()?;
+        // Borrow authenticated retained records directly. No global state copy,
+        // temporary active row, derived-index changes, or inspection-state writes.
         let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>unreachable!()};
-        view.court_sessions.insert(id,receipt.session.clone());
-        if let Some(phase)=&receipt.tir_phase {view.tir_dissections.insert(id,phase.clone());}
         let prompt=if rules.prompt_ids_merkle {crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1}else{crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat};
-        let derived=crate::palw_court_v2::adjudicate_court_close_v5(&view,&id,proof,&rules.court,rules.step_ladder,prompt,
+        let derived=crate::palw_court_v2::adjudicate_court_close_borrowed_v5(&self.state,&id,&receipt.session,receipt.tir_phase.as_deref(),proof,&rules.court,rules.step_ladder,prompt,
             rules.held_regime,rules.decode_close_convicts_only,rules.fp_decode_from_daa,rules.cell_closure_from_daa,rules.memory_routing_from_daa)
             .map_err(|e|refusal(format!("archived v5 close does not adjudicate: {e}")))?;
         if derived!=*verdict {return Err(refusal("archived v5 result differs from the signed declaration"));}

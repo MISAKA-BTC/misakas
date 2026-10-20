@@ -148,3 +148,12 @@ native入力がないfixture/内部経路は`rules=None`を明示し、current/d
 メッセージ/組立buffer・group/session/phase cloneとBTree membership、decoded proof、全stateの検査用copyを事前quoteし、native trackingが有効な場合は既存のconstruction ownerへadmitする。実readerのCPU予算超過・shape算術/メモリ不足は`NativeResource`として伝播し、証拠不正やabsence slashへ変えない。syntax/truncationは構造上の拒否である。RSS/allocator/全familyの物理上限や実CPU費用が校正されたという主張ではなく、全有料profileへの費用追加が必要である。
 
 これは宣言時の条件による**privateな履歴再検査**であり、旧公開nodeが後日の検証blockの条件を読む規則を置換する採択ではない。終了後の公開受付で適用する時点/規則、遡及しない署名責任、精算・pruning・資本経路は未決のまま残す。wire、schema ordinal、cap、fee、署名期限、preset/identityを変えず、武装/統合/配備を行わない。
+
+
+## 11. 借用recordを使う共通v5 kernel
+
+親`54c0081d6`。§10の初版で検査用に全stateをcopyした部分を、session/別table phaseの借用へ置換する。通常の公開`adjudicate_court_close_v5`入口は既存のcost gateとsession/claim解決を維持する。private借用入口も同じcost gateを先に実行し、session/phaseのscopeとclaimを確認する。両入口は一つのv5裁定本体へ進み、TIR/Gen/Eval dissectionの3箇所だけ、phaseの取得先を引数へ置き換える。embedded attention phaseは元sessionから読む。延期中のfamilyを有効化する変更ではない。
+
+archive adapterは、署名済みRooted receiptを認証した後にそのsession/phaseを借用し、全state copy・一時active行・session/phase cloneを作らない。宣言raw bytes、受理済みprefix、元のnative条件、Rootに束縛した結果と無金融効果の条件は維持する。借用入口自体はadmissionや署名責任の認証器ではなく、呼出元がRooted recordのscopeを検査する。callerの任意recordを金融権限へ変えない。
+
+初版のv5本体と現共通kernelを、3箇所のphase lookupを戻してbyte単位で照合するsource auditを残す。これは全familyの実行試験や物理容量の代替ではない。group/メッセージ/組立/decodeの事前quoteは残し、Root hashing、署名/IO、内部のlegacy v5 allocationとCPUの全費用は依然として校正・全分岐予約へ含める必要がある。金融解除、公開late規則の適用時点、pruning、有料original全graphを採択したものではない。
