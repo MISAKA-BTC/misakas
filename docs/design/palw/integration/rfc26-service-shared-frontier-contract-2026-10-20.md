@@ -8,7 +8,7 @@
 
 1. claim/ruleset/source root/profile を固定し、当該 claim について許容する要求の閉じた集合と、その canonical な導出手順を固定する。モデルの審査・取得可能性判定は行わない。
 2. 開示・各手番・最終 fragment・検証・回復・保持の最大資源を求める。bytes、検証 work、IO、保持 byte-DAA、control 数を別次元で検査する。未導出の項が一つでもあれば容量保証は未完成。
-3. `a + 10,000` と後続責任を最短の署名済み依存 horizon が覆うことを確認する。bond の別 claim、Gate C、post-Final 告発、monetary material の責任を残す。
+3. `a + 10,000` と後続責任・証拠保持を最短の署名済み依存 horizon が覆うことを確認する。`max(hard + required_followup, hard + reorg_retention)` を checked arithmetic で導出し、一方が短いことで他方を省かない。bond の別 claim、Gate C、post-Final 告発、monetary material の責任を残す。
 4. 既存予約を移動せず、全許容分岐と最遅申立てを含む候補予約を追加できることを検査する。全 claim が同時に争われる場合を計上し、期待参加率や確率的 overbooking で代替しない。
 5. claim、予約、課金、保持責任、signer、通常窓、hard deadline を一つの状態遷移で記録する。途中失敗では一部を残さない。
 
@@ -101,3 +101,7 @@ native の `recover_court_service_supply_v1(ctx)` は book の観測 DAA が nat
 この候補は **既存の適格区間内** の retry だけを扱う。応答 deadline の補正・全時計の原子的な更新、完成済みの適格応答との対応、署名済み依存 horizon、old/new ruleset の fence、hard 後の recovery と終了効果は未完了。元の区間内で不可能な場合に deadline を黙って延長しない。成功しても binding・Final・担保・証拠の hold と default 拒否は解除しない。実供給/inclusion の全条件と全 owner 共謀下の経路を完成したとは扱わない。
 
 current book の assignment は再割当先を表す。変更前後は native journal の旧/新 row で保持するが、current snapshot だけが全 retry 履歴を格納する schema ではない。履歴の保持期間、node restart/pruned IBD、費用と物理容量の検証は引き続き必要で、fixture の round-trip をその代替にしない。
+
+## 11. 依存 horizon の受付検査に向けた監査
+
+[実コード参照の監査](rfc26-dependency-horizon-audit-2026-10-20.md)で、producer/main custody、semantic history custody、EXEC の最短 path 制約、provider lease の live 状態と exact subject を分離した。`CourtClockBounds` の保持分の検査不足は修正したが、単一の最短 horizon 引数が全依存契約を列挙した証拠にはならない。報酬・担保用の最大 horizon や、ordinary path の欠落時成功を新規 admission の保証に流用しない。全依存集合の canonical 導出、実契約の認証と live 検査、原子的な受付への接続、T09 は未完了。

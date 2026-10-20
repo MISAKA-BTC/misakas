@@ -125,3 +125,11 @@ X3 起点 `05fcf7b5c` の現行実装を確認すると、preparation は whole 
 X3 でも全 preset の frame-cost は None、pinned cost record は空で、actual measured network profile と door ≤ 3,120 はまだない。また実 filer は staged witness の accepted offset を読んで次の part を送る。byte throughput と別にこの直列待ちを計上する補助案を ADR-0193（別 branch、Proposed）へ記録している。十分長い collection window が待ちを覆う場合もあり、全既存 plan の期限不足を主張しない。候補 version 2 は旧 version 1 の意味と bytes を保持し、同じ既存 maximum door を越える plan を拒否する。採択・武装・統合・配備や G14 完了ではない。
 
 X3 候補 commit は `0c3cb9f93`。release native plan 2 件 + t12/G14/activation/release/transport/version discrimination 回帰 29 件 = **31 passed / 0 failed / 0 ignored**、consensus release check 成功。旧 fixture の byte-for-byte plan 再導出、collection window が待ちを覆う場合、同一の既存 test-only 設定での collect/material/bond 反映、元 door cap の拒否を確認した。初回の試験想定の失敗と最終版の生ログ/SHA-256 は別 branch の `docs/evidence/palw/filing-clock-v2-2026-10-20/README.md` に保存。X3 の文書検査は新規 0 件/既知 43 件で PASS、本 branch は imported assets 由来の同じ 5 件で FAIL。baseline と元 assets は変更していない。これらのコードを本 branch や pre へ統合していない。
+
+## 依存 horizon の保持期間検査を修正
+
+`CourtClockBounds` は hard + followup のみを検査し、hard + retention が長い場合に短い依存契約を許す不足があった。両方の最大を checked arithmetic で検査するよう修正。境界 −1 / 一致 / +1 を保持優位・followup 優位・同値・ゼロの 4 条件で検証し、別 claim の bond 責任は解放期限だけに残す。release 対象 **29 passed / 0 failed / 0 ignored**（t12 同一性を含む）。生ログと SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)へ保存。production caller は未接続。
+
+[依存契約の実コード監査](rfc26-dependency-horizon-audit-2026-10-20.md)では、EXEC 報酬用の最大 horizon と session 用の最短 path、main/semantic の別 pledge、provider exact subject/live 状態を区別した。欠落 lookup や単一の最短 horizon 引数を完全な依存集合の保証にしない。実受付での全依存集合の導出・認証、原子的な受付への接続、T09 は未完了。
+
+ユーザー側の結果の再確認では `2026-10-19-devnet-payload-carrier.md` は見つからず、release 作業場所の `2026-10-19-rothschild-mldsa-payload.md` はノード受理・bytes/mass が未測定と記載している。これを actual carrier capacity として使っていない。測定ジョブの状態を推定するものではない。文書検査は imported assets の同じ欠落参照 5 件で FAIL、baseline・元資料の bytes は変更していない。

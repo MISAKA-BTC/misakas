@@ -6,15 +6,24 @@ use kaspa_consensus_core::palw_g14_gates_v1::*;
 
 #[test]
 fn dependency_horizon_boundary_and_shared_bond_liability() {
-    for delta in [-1_i64, 0, 1] {
-        let result = CourtClockBounds::derive(100, 50, 20, (10_120_i64 + delta) as u64, 20_000);
-        if delta < 0 {
-            assert_eq!(result, Err(CourtPolicyError::DependencyTooShort));
-        } else {
-            assert_eq!(
-                result.unwrap(),
-                CourtClockBounds { notice_boundary: 3_220, hard_deadline: 10_100, material_until: 10_150, bond_exit_after: 20_000 }
-            );
+    // Neither a short followup nor a short retention may hide the longer
+    // obligation. Other claims' liabilities keep the bond, not this path.
+    for (retention, followup, required) in [(50, 20, 10_150), (20, 50, 10_150), (50, 50, 10_150), (0, 0, 10_100)] {
+        for delta in [-1_i64, 0, 1] {
+            let result = CourtClockBounds::derive(100, retention, followup, (required + delta) as u64, 20_000);
+            if delta < 0 {
+                assert_eq!(result, Err(CourtPolicyError::DependencyTooShort));
+            } else {
+                assert_eq!(
+                    result.unwrap(),
+                    CourtClockBounds {
+                        notice_boundary: 3_220,
+                        hard_deadline: 10_100,
+                        material_until: 10_100 + retention,
+                        bond_exit_after: 20_000,
+                    }
+                );
+            }
         }
     }
 }

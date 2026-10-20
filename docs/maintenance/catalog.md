@@ -373,6 +373,7 @@
 - [design/palw/integration/rfc-0015-implementation-status-2026-10-15.md](../design/palw/integration/rfc-0015-implementation-status-2026-10-15.md)
 - [design/palw/integration/rfc-0016-implementation-status-2026-10-15.md](../design/palw/integration/rfc-0016-implementation-status-2026-10-15.md)
 - [design/palw/integration/rfc-0018-implementation-status-2026-10-15.md](../design/palw/integration/rfc-0018-implementation-status-2026-10-15.md)
+- [design/palw/integration/rfc26-dependency-horizon-audit-2026-10-20.md](../design/palw/integration/rfc26-dependency-horizon-audit-2026-10-20.md)
 - [design/palw/integration/rfc26-service-shared-frontier-contract-2026-10-20.md](../design/palw/integration/rfc26-service-shared-frontier-contract-2026-10-20.md)
 - [design/palw/integration/rfc26-shared-frontier-volume-2026-10-20.md](../design/palw/integration/rfc26-shared-frontier-volume-2026-10-20.md)
 - [design/palw/integration/t12-daa14000-release-plan-2026-10-15.md](../design/palw/integration/t12-daa14000-release-plan-2026-10-15.md)

@@ -88,3 +88,11 @@ All commands used the shared heavy build lock. Two uncompleted compiler runs wer
 | [service-repair-native-release.log](service-repair-native-release.log) | `ed1437863e9a0c2b1da3cfd61326555e7ac6c63112f33e45c6e6164030c5fb12` |
 | [service-repair-regressions-release.log](service-repair-regressions-release.log) | `623b2363031bb166b4c4fe0e5c1c34d4f0f9ea107311a87a61da2f977b17a028` |
 | [service-repair-consensus-check.log](service-repair-consensus-check.log) | `6bf16608cc7c1e666d804403b637fb6e190ef25056954f9e644245e9a061b5a8` |
+
+## Dependency horizon covers material retention
+
+After `4f55a837d`, `CourtClockBounds` now requires the minimum signed dependency horizon to cover both hard + followup and hard + retention. The earlier component accepted 10,120 even when material lasted through 10,150. Other claims' same-bond liabilities still affect collateral release independently. No production caller, wire, preset or existing signed terms changed.
+
+Shared-lock command: `cargo test --release -p kaspa-consensus-core --test palw_court_policy_v1 --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test g14_close_gates`. Result: **29 passed / 0 failed / 0 ignored** (policy 3 including twelve horizon boundary cases, release 9, activation 5, gates 12 including t12 identity). This is not T09 node acceptance.
+
+[Raw release log](dependency-retention-release.log), SHA-256 `7b173688d0dd5fcc7ad7189d594955f14cc8f517100c3c482f3802fae923a087`. [Source audit and remaining admission contract](../../../design/palw/integration/rfc26-dependency-horizon-audit-2026-10-20.md).
