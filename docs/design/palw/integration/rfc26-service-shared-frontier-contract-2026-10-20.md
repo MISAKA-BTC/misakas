@@ -53,3 +53,13 @@ original acceptance で固定した閉じた要求集合について、誰でも
 まず義務 identity / 閉じた要求集合の導出、予約と供給の state、同一 DAA・DAA skip・同一 block の処理順を実装する。次に予約会計と実 codec bytes、専用 block budget、local pre-auth queue/work 上限を接続する。最後に default / 保留 / 復旧、Final・bond・証拠・pruning、snapshot / IBD を一貫させる。
 
 T02/T03 で永久沈黙・偽署名・架空完了を分離し、T04 で通常 tx・有料 court・不正 codec flood を分離する。T05 は全 owner 枠の共謀占有・埋め直し・全許容 choice・重複 root のもとで、未完成証拠の外部者が開示から裁定まで進めることを実証する。T06/T07 は最大合法遅延と各境界、T09/T13/T14/T15 は契約 horizon・責任・復旧・旧 claim を検証する。単体 scheduler の試験を node-level 達成と表示しない。
+
+## 7. 供給会計部品の実装境界
+
+`palw_court_service_v1` の `observe_block` は、予約済み packet の全 quota を専用 court budget から差し引いた後、他の court 操作の実コストが残余に収まることを検査する部品。合意で観測できる accepting DAA と block identity を記録し、同じ DAA の追加 block は供給回数を増やさない。未供給 DAA を飛び越しても走査せず、割当先に記録がない obligation を `MissingSupply` と判定する。予約のない DAA は clock だけを進め、履歴 row を確保しない。これにより supply row 数は予約された packet 数を越えない。
+
+既に最初の block を観測した DAA へ予約を後付けすることを拒否する。新規 original acceptance が同一 DAA の後続 block に載る場合、profile は次の未観測の供給単位以降へ予約し、original acceptance 起点の 3,120 / 10,000 は変更しない。予約への追加と block 観測の失敗はどちらも部品の state を変更しない。
+
+`assess` の `OpportunityProvided` は全 default 条件ではない。署名・手番・応答の適格性・inclusion 前提を確認せず slash する API は追加していない。`MissingSupply` は責任帰属に使えず、実 fold では Final/担保/証拠の保持と復旧へ接続する必要がある。
+
+この部品の `unreserved_court_cost` は producer/Panel の申告値を受理する wire ではない。実 codec からのコスト導出、通常 tx と court quota の物理的分離、予約 packet の scope と実コスト検査、snapshot/journal、補正期限・Final hold の fold 接続は未実装。この接続前に quota が実提供されたと本番で認定してはならず、武装拒否 gate は維持する。clone による部品の rollback 試験を node の reorg / restart / pruned IBD の検証と混同しない。

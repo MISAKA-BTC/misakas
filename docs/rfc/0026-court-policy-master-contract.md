@@ -145,6 +145,7 @@ RFC-0024 本文(B)の各 round の数値 fold 検査を、現行の規範とし�
 | F02/F03 未完による武装拒否 | 別 branch の実装 `62ac3c55f`。readiness record による迂回を拒否。release 部品・回帰試験 29 件通過、実経路・敵対的統合試験は未完、有効化なし |
 | §2/§3.3 の時計・依存 horizon 導出部品 | 別 branch の実装 `62ac3c55f`。state/fold 未接続。原子的期限更新・T06/T09 完了を意味しない |
 | F02/F03 予約 scheduler 部品 | 別 branch `0336b6cea`、release 部品・回帰 32 件通過。全分岐の導出、供給会計、block admission、T04/T05 は未接続・未検証。有効化なし |
+| F02 供給会計部品 | 別 branch `0ea164766`、release 部品・回帰 36 件通過。同一 DAA/skip/予約 quota を検査。state/fold/codec/snapshot、期限補正と Final hold は未接続。有効化なし |
 | 本書 §2〜§7 の残りの規範 | 設計だけ。F02/F03 の選択肢は [ADR-0192](../adr/0192-court-service-opportunity-and-shared-pursuit.md)（Proposed） |
 
 「設計だけ / 別 branch 実装 / 統合済み / build 済み / 敵対的試験済み / 有効化済み」を別々に記し、設計メモ・別 branch のコード・toy test を混ぜて「完了」と表示しない。

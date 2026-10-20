@@ -19,3 +19,15 @@ X3 reorg は同じ DAA / blue work の浅い tie における予約・session ro
 | [x3-lg14a-release.log](x3-lg14a-release.log) | `5364231ecb9b767291d132d2652e6b598b862ba959f4a63d2c093f4138c160c8` |
 | [x3-clock-cap-release.log](x3-clock-cap-release.log) | `bef99f7659f2e6bce3ff76df79c4315cbfa997903a97e78cbd5a5ee826f499dd` |
 | [x3-identity-release.log](x3-identity-release.log) | `412a340bbaf399b040e713780a568bc1b8e6e14a16e12e503ef16aaba55dfe22` |
+
+## 供給会計と共有 frontier の追加記録
+
+- `0ea164766`: `cargo test --release -p kaspa-consensus-core --test palw_court_service_v1 --test palw_court_policy_v1 --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test g14_close_gates` → **36 passed / 0 failed / 0 ignored**。サービス部品は 7 件。他の 29 件は前の検証と重なる。
+- `4a8d862f6`: `cargo test --release -p kaspa-consensus-core --test palw_court_shared_frontier_volume` → **2 passed / 0 failed**。geometry/codec の試験で、実モデル・実帯域を測定していない。
+
+供給会計は state/fold/codec/snapshot 未接続。`MissingSupply` と quota 提供を区別し、default の全条件や Final 保留の実装完了とは表示しない。clone の rollback は node reorg の試験ではない。容量の条件付き導出は [調査](../../../design/palw/integration/rfc26-shared-frontier-volume-2026-10-20.md)を参照。
+
+| ログ | SHA-256 |
+| --- | --- |
+| [core-supply-release.log](core-supply-release.log) | `5161fb3c7d49540203ef907285504e5acd7a562ad56f38f9ed08846b4f832efd` |
+| [shared-frontier-volume-release.log](shared-frontier-volume-release.log) | `0bbefd1e44dd67974187bce382da47ea049a6e6410e5deb410d08eec71b0103d` |

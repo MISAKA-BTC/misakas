@@ -67,3 +67,15 @@ cargo test --release -p kaspa-consensus-core \
 release `x3_req_5` 対象 **4 passed / 0 failed / 0 ignored**。同じ release binary の `t12_validation_clock_preserves_the_lead_cap_and_retry` **1 passed**。LG14-A 関連 suite は **33 passed / 0 failed / 2 ignored**、この branch の t12 同一性は指定 3 系統を含む **26 passed / 0 failed / 0 ignored**。R-D2-NODE の 2 件と tag 230 の codec 判断は解消していない。
 
 生ログ・SHA-256・コマンドは [release 試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)に保存。
+
+## 供給会計の追加と、全共有分岐の量の確認
+
+`0ea164766` で、最初の accepting block / 同一 DAA の追加 block / DAA skip を区別する供給会計部品を実装。他の court 操作が予約 quota を使った block は供給として認定しない。予約のある DAA だけ履歴を持ち、空 block・永久沈黙でも観測 clock は進む。`MissingSupply` から相手の default を認定する API はない。予約後付けや逆行 DAA、予算超過は state を変更せず拒否する。
+
+対象 release **36 passed / 0 failed / 0 ignored**。このうちサービス部品 7 件は予約の原子性、費用の各次元、重複 DAA、供給欠損、部品の rollback/replay を確認。codec の実費用導出、物理 block budget、署名・手番・inclusion 前提、実 fold の期限補正/Final hold、snapshot/IBD は未接続・未検証。P0 完了とはしない。
+
+`4a8d862f6` の release 試験 **2 passed** で、現行 TIR codec の全 canonical 末端 frontier は `N` leaf nodes を分割し、frontier 値だけで `64N` B を運ぶことを確認。`N` は context 長ではなく `step_leaf_count`。synthetic `N=2,000,000`、条件付き `B=12,500 B/DAA` ならこの部分だけで 10,240 DAA。実モデル・実帯域の測定値や一般的な不可能性ではない。[条件と未被覆](rfc26-shared-frontier-volume-2026-10-20.md)を明記した。一経路の door が小さいことを F03 の全分岐容量へ転用しない。
+
+devnet 結果ファイル `docs/measurements/2026-10-19-devnet-payload-carrier.md` は、2026-10-20 の再確認でも release/t12-16000 の作業場所、pre-rfc24、pre-integration の 3 箇所にはない。ユーザー側の測定ジョブの停止・失敗を意味しない。
+
+次は、actual public profile から owner に依存しない packet identity と閉じた合法要求集合を導出し、実 codec の費用・versioned journal・block admission・Final/担保/証拠の保持へ接続する。F03 の範囲と全分岐の byte/work/IO/control/保持が閉じるまで武装拒否を維持する。P1-1〜P1-5、P2、T01〜T15 の残り、R-D2-NODE、tag 230、実モデル door の完了条件を縮小しない。
