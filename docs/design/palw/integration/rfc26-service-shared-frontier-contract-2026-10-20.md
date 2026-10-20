@@ -32,7 +32,7 @@ DAA 単位の供給を保証する profile では、同じ DAA の最初の acce
 
 ## 4. 手番と default の判定順
 
-同一 block では、canonical object 順で適格応答を適用し、共有開示の再利用と手番の完了を判定し、その後に期限 sweep を行う案とする。各期限の等号は別の境界表で採択する。既存 `collect_until` の排他的境界を notice の等号へ黙って流用しない。
+同一 block では、まず block 開始時の義務・供給会計から期限と適格区間を固定する。応答自身による deadline 更新より先に、各 object がその元の適格区間に入ることを検査する。次に canonical object 順で適格応答を適用し、共有開示の再利用と手番の完了を判定し、その後に期限 sweep を行う案とする。遅い応答で次手番の期限を先に作って default を逃れない。既存 fold は `sweep_deadlines` / `sweep_court_deadlines` を object 適用前に実行するので、この順序を旧 claim に適用しない。新しい profile/fence の受理規則として境界試験を通す。各期限の等号は別の境界表で採択する。既存 `collect_until` の排他的境界を notice の等号へ黙って流用しない。
 
 default に必要なのは (i) 受理済み義務と鍵・資源・予約・完了条件、(ii) 合意で再計算した十分な供給、(iii) 明示した inclusion 前提の保証範囲内、(iv) 適格な応答不在と期限超過の全て。clock は応答不在でも進む。既に義務を果たした Miner を Panel の最終証拠不提出で slash しない。
 
