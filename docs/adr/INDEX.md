@@ -184,3 +184,4 @@
 | ADR-0182 | [画像・動画経路とモデル改善を mainnet 後へ延期し、当面無効にする](0182-defer-media-and-model-improvement-until-post-mainnet.md) | Accepted / 延期・無効化方針 |
 | ADR-0186 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md) | 原文と後続改定を参照 |
 | ADR-0192 | [court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md) | 原文と後続改定を参照 |
+| ADR-0193 | [Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md) | 原文と後続改定を参照 |

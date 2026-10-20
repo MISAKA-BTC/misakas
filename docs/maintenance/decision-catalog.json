@@ -1426,6 +1426,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0193",
+      "path": "docs/adr/0193-miner-account-bond-for-panel-incentives.md",
+      "title": "ADR-0193 — Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける",
+      "topic": "Economics / budgets",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1631,6 +1639,14 @@
       "path": "docs/rfc/0026-court-policy-master-contract.md",
       "title": "RFC-0026 — court の主契約:時計・帰責・責任期間・置換関係の一本化",
       "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0027",
+      "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "title": "RFC-0027 — Miner Account Bond と Panel 追及報酬: 10万の基礎担保、責任連動の追加拘束、REAL継続性",
+      "topic": "Economics / budgets",
       "status": "原文と後続改定を参照"
     }
   ]

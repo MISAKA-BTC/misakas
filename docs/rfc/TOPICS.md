@@ -17,6 +17,7 @@
 ## Economics / budgets
 
 - [RFC-0016 — bond加重のブロック生成機会と弾力的Final容量: 物理ブロック機会をbondへ接続する](0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)
+- [RFC-0027 — Miner Account Bond と Panel 追及報酬: 10万の基礎担保、責任連動の追加拘束、REAL継続性](0027-miner-account-bond-and-panel-incentives.md)
 
 ## Governance / release scope
 

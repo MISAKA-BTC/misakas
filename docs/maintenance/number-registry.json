@@ -1,20 +1,22 @@
 {
   "schema_version": 1,
-  "scope": "uploaded ZIP only; integration-branch reservations unverified; ADR-0192 reserved on RFC14/G14 completion worktree (2026-10-20), 0183–0191 remain separate-branch allocations; ADR-0193 reserved separately on codex/rfc14-x3-reorg-clock (2026-10-20), not imported",
+  "scope": "uploaded ZIP only; integration-branch reservations unverified; ADR-0192 reserved on RFC14/G14 completion worktree (2026-10-20), 0183–0191 remain separate-branch allocations; ADR-0193 reserved separately on codex/rfc14-x3-reorg-clock (2026-10-20), not imported; uploaded Account Bond ADR-0193 is distinct from separate X3 filing-clock ADR-0193; filenames and histories retained",
   "allocated_here": {
     "adr": [
       "0181",
       "0182",
-      "0192"
+      "0192",
+      "0193"
     ],
     "rfc": [
       "0021",
-      "0022"
+      "0022",
+      "0027"
     ]
   },
   "next_local": {
     "adr": "0194",
-    "rfc": "0023"
+    "rfc": "0028"
   },
   "legacy_duplicates": {
     "adr": {

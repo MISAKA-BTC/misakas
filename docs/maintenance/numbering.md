@@ -31,3 +31,7 @@ RFC-0010/0012のdormant implementationは主RFCではなくdesignへ移しまし
 ## 2026-10-20 の別 branch 予約
 
 ADR-0192 は本 branch の Proposed。ADR-0193 (`docs/adr/0193-sequential-witness-filing-clock.md`) は `codex/rfc14-x3-reorg-clock` の Proposed で、本 branch へ本文を統合していない。0183–0191 の別 branch 割当と併せて再使用せず、ADR の次ローカル番号は 0194 とする。冒頭の ZIP 時点の次番号は履歴であり、現在の全 branch の未使用を示さない。
+
+## Account Bond package addition (2026-10-20)
+
+[RFC-0027](../rfc/0027-miner-account-bond-and-panel-incentives.md) and [Account Bond ADR-0193](../adr/0193-miner-account-bond-for-panel-incentives.md) are imported as Proposed. Separate X3 branch also has a filing-clock ADR-0193 under a different filename; histories and paths are preserved and must be distinguished. Next local numbers: ADR-0194 / RFC-0028. Package shared indexes/registry were not blindly applied.

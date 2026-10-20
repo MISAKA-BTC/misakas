@@ -125,6 +125,7 @@
 - [ADR-0167 — The ×1000 capacity package: a fixed per-DAA PALW reward budget, riders, a lower-only breaker, and th](0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md)
 - [ADR-0176 — Bond bounds PALW claim capacity, blocks, rewards and Final weight](0176-bond-bounds-palw-production-rewards-and-final-weight.md)
 - [ADR-0178 — The fork choice heals a partition on bonded participation: one search over every tip, economic keys ](0178-fork-choice-heals-a-partition-on-bonded-participation.md)
+- [ADR-0193 — Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md)
 
 ## Governance / release scope
 
