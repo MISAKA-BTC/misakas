@@ -105,6 +105,7 @@
 - [ADR-0187 — native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md)
 - [ADR-0188 — D2・X3 の休眠 fence を G14 の arm-readiness record で閉じ、X3 の期限を窓の合成で定める](0188-d2-x3-arm-records-composition-and-pause-credit.md)
 - [ADR-0194 — 休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md)
+- [ADR-0196 — owner 非依存の TIR 要求と認証済み公開データ](0196-owner-independent-shared-tir-query-data.md)
 
 ## EVM / wallet
 

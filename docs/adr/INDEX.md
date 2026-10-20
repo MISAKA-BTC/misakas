@@ -193,3 +193,4 @@
 | ADR-0193 | [sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md) | 原文と後続改定を参照 |
 | ADR-0194 | [休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md) | 原文と後続改定を参照 |
 | ADR-0195 | [native court 応答の前提受理時刻を保持する](0195-rooted-court-response-eligibility-history.md) | 原文と後続改定を参照 |
+| ADR-0196 | [owner 非依存の TIR 要求と認証済み公開データ](0196-owner-independent-shared-tir-query-data.md) | 原文と後続改定を参照 |

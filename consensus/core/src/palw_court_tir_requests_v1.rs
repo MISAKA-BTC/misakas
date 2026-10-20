@@ -85,6 +85,54 @@ impl<'a> TirSharedRequestSetV1<'a> {
             u64::from(source.vocab_v1()), source.supports_tiled_trace_v1())?, claim: p.original_claim,
             allocation: p.allocation_id, native_rules: p.rules_id, shared_profile })
     }
+    /// Identity of the complete closed source-query universe, not a funded
+    /// admission certificate. Existing per-query IDs remain unchanged.
+    pub fn scope_id(&self) -> Result<Hash64, String> {
+        let bytes=borsh::to_vec(&(1u16,self.claim,self.allocation,self.native_rules,self.shared_profile,
+            self.source.source_id_v1(),self.geometry.total)).map_err(|e|e.to_string())?;
+        Ok(Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64)
+            .key(b"misaka-palw/shared-tir-query-universe/v1").hash(&bytes).as_bytes().try_into().expect("64")))
+    }
+    pub fn source_id(&self) -> Hash64 { self.source.source_id_v1() }
+    pub fn decode_count(&self) -> u32 { self.source.decode_count_v1() }
+    /// A conservative SUM for every legal source query, without enumerating the
+    /// O(N*256 + rows*tiles) universe. This is source data/parser/hash/RAM only,
+    /// NOT a full service graph, signature/IO/fee or physical capacity bound.
+    pub fn source_data_upper(&self) -> Result<TirSharedSourceDataUpperV1, String> {
+        let mut result=TirSharedSourceDataUpperV1::default();
+        let mut charge=|count:u64,q:Request| -> Result<(),String> {
+            if count==0 { return Ok(()); }
+            result.add(count,self.source.unit_bound_v1(&q)?)
+        };
+        // At each level the first node is full or the only partial node. Its
+        // frontier is maximal; the ragged last node never has more children.
+        for level in 1..=height(self.geometry.n) {
+            charge(width(self.geometry.n,level).ok_or("shared node geometry")?,Request::StepNode {level,index:0})?;
+        }
+        charge(self.geometry.n,Request::StepLeaf {index:0})?;
+        for count in 1..=self.geometry.n.min(u64::from(PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)) {
+            charge(self.geometry.n-(count-1),Request::StepRun {first:0,count:count as u32})?;
+        }
+        if self.geometry.families[3..].iter().any(|&n| n!=0) && self.geometry.d!=0 {
+            let d=self.geometry.d;
+            for level in 1..=height(d) {
+                charge(width(d,level).ok_or("shared rows geometry")?,Request::RowsNode {level,index:0})?;
+            }
+            for level in 1..=height(self.geometry.tiles) {
+                charge(mul(d,width(self.geometry.tiles,level).ok_or("shared tile geometry")?)?,
+                    Request::TileNode {row:0,level,index:0})?;
+            }
+            let last=self.geometry.tiles-1;
+            charge(mul(d,last)?,Request::TraceTile {row:0,tile:0})?;
+            charge(d,Request::TraceTile {row:0,tile:u32::try_from(last).map_err(|_|"shared tile overflow")?})?;
+            let chunks=d.div_ceil(u64::from(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1));
+            charge(chunks-1,Request::Ids {offset:0})?;
+            charge(1,Request::Ids {offset:u32::try_from(mul(chunks-1,u64::from(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1))?)
+                .map_err(|_|"shared ID offset overflow")?})?;
+        }
+        if result.queries!=self.len() { return Err("shared source bound omitted a legal family".into()); }
+        Ok(result)
+    }
     pub fn len(&self) -> u64 { self.geometry.total }
     pub fn is_empty(&self) -> bool { self.len() == 0 }
     pub fn request_at(&self, ordinal: u64) -> Result<Request, String> {
@@ -99,6 +147,23 @@ impl<'a> TirSharedRequestSetV1<'a> {
             self.source.source_id_v1(), self.request_at(ordinal)?)).map_err(|e| e.to_string())?;
         Ok(Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/shared-tir-request/v1")
             .hash(&bytes).as_bytes().try_into().expect("64")))
+    }
+}
+
+/// Sum of the existing native source-unit bounds. Values are derived upper
+/// components, never measured CPU or an adopted complete reservation profile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TirSharedSourceDataUpperV1 {
+    pub queries:u64, pub response_bytes:u64, pub parser_steps:u64,
+    pub hash_input_bytes:u64, pub resident_ram_bytes_sum:u64,
+}
+impl TirSharedSourceDataUpperV1 {
+    fn add(&mut self,count:u64,b:crate::palw_tir_public_source_v1::PalwTirPublicUnitBoundV1) -> Result<(),String> {
+        let next=Self { queries:add(self.queries,count)?,response_bytes:add(self.response_bytes,mul(count,b.maximum_response_bytes)?)?,
+            parser_steps:add(self.parser_steps,mul(count,b.maximum_parser_steps)?)?,
+            hash_input_bytes:add(self.hash_input_bytes,mul(count,b.maximum_hash_input_bytes)?)?,
+            resident_ram_bytes_sum:add(self.resident_ram_bytes_sum,mul(count,b.resident_ram_bytes)?)? };
+        *self=next;Ok(())
     }
 }
 
@@ -317,6 +382,41 @@ pub fn tir_native_response_duty_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn court_tir_shared_source_data_upper_covers_every_native_unit() {
+        let fx=crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None,4);
+        let source=fx.frame.source_v1(&fx.record,&fx.layout,fx.rules.maximum_leaves).unwrap();
+        let set=TirSharedRequestSetV1::new(&fx.frame,&source,Hash64::from_u64_word(1)).unwrap();
+        let bound=set.source_data_upper().unwrap();let mut actual=TirSharedSourceDataUpperV1::default();
+        for i in 0..set.len() {actual.add(1,source.unit_bound_v1(&set.request_at(i).unwrap()).unwrap()).unwrap();}
+        assert_eq!(actual.queries,bound.queries);assert_eq!(bound.queries,set.len());
+        assert!(actual.response_bytes<=bound.response_bytes && actual.parser_steps<=bound.parser_steps
+            && actual.hash_input_bytes<=bound.hash_input_bytes && actual.resident_ram_bytes_sum<=bound.resident_ram_bytes_sum);
+        let other=TirSharedRequestSetV1::new(&fx.frame,&source,Hash64::from_u64_word(2)).unwrap();
+        assert_ne!(set.scope_id().unwrap(),other.scope_id().unwrap());
+        assert_eq!(bound,other.source_data_upper().unwrap(),"profile namespace cannot invent a cheaper source body");
+    }
+    #[test]
+    fn court_tir_shared_node_first_frontier_dominates_ragged_last_nodes() {
+        for n in [2,3,1023,1024,1025,4097,65_537] {
+            for level in 1..=height(n) {
+                let (_,first,end)=crate::palw_tir_court_v1::palw_tir_step_node_frontier_v1(n,level,0).unwrap();
+                for index in 0..width(n,level).unwrap() {
+                    let (_,lo,hi)=crate::palw_tir_court_v1::palw_tir_step_node_frontier_v1(n,level,index).unwrap();
+                    assert!(hi-lo<=end-first,"n={n}, level={level}, index={index}");
+                }
+            }
+        }
+    }
+    #[test]
+    fn court_tir_shared_source_cost_overflow_is_atomic() {
+        use crate::palw_tir_public_source_v1::PalwTirPublicUnitBoundV1 as B;
+        let unit=B {maximum_response_bytes:1,maximum_parser_steps:0,maximum_hash_input_bytes:0,resident_ram_bytes:0};
+        let mut total=TirSharedSourceDataUpperV1::default();total.add(u64::MAX,unit).unwrap();let old=total;
+        assert!(total.add(1,unit).is_err());assert_eq!(old,total);
+        let mut total=TirSharedSourceDataUpperV1::default();
+        assert!(total.add(2,B {maximum_response_bytes:u64::MAX,..unit}).is_err());assert_eq!(total,TirSharedSourceDataUpperV1::default());
+    }
     #[test]
     fn court_tir_shared_requests_match_native_validator_and_bind_scope() {
         use std::collections::BTreeSet;

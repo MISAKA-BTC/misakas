@@ -34,3 +34,4 @@
 | RFC-0026 | [court の主契約:時計・帰責・責任期間・置換関係の一本化](0026-court-policy-master-contract.md) | 原文と後続改定を参照 |
 | RFC-0027 | [Miner Account Bond と Panel 追及報酬: 10万の基礎担保、責任連動の追加拘束、REAL継続性](0027-miner-account-bond-and-panel-incentives.md) | 原文と後続改定を参照 |
 | RFC-0028 | [rooted court response eligibility history](0028-rooted-court-response-eligibility-history.md) | 原文と後続改定を参照 |
+| RFC-0029 | [owner-independent shared TIR query data](0029-owner-independent-shared-tir-query-data.md) | 原文と後続改定を参照 |

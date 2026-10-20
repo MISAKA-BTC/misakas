@@ -193,3 +193,13 @@ Legacy funded relay now checks actual virtual UTXOs and full selected-block repl
 選択結果は **64 passed / 0 failed / 0 ignored**（fresh native 30、fresh codec/service 8、fresh identity/gate/activation/release 26）。targeted 2 と intermediate 1 は30に含み加算しない。non-test consensus check と再生成一致も成功。[コマンド・raw log・hash・対象範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#exclusive-hard-boundary-verification)。文書検査は同じ imported 5件で FAIL、baseline/元資料は未変更。
 
 verified-half fixture と in-memory carriage/journal の検証であり、node ingress/restart/pruned-IBD、全 WorkDebit/restart 分岐、全 causal graph、original 全分岐予約、owner 非依存 public frontier、実 supply、費用・物理校正、依存/終了規則、T01–T15 と G14 全体は未完。最後の stage の eligibility だけで免責・責任を決めず、default guard は閉じたまま。公開 schema/数値の採択・pre 統合・武装・配備なし。
+
+## Shared source-query data primitive (2026-10-21)
+
+`705b27616` 後の隔離候補で、owner/relay/先着順から独立した全 query scope、実 ML-DSA の request intent、重複統合・別 choice の共存、認証済み公開 unit と full-ID seal 後だけの共有を追加。別 source/profile/network/key/context/coordinate の代入を拒否する。全 source-unit の body/parser/hash/RAM 上限成分を query 全列挙なしで導出し、native tiny oracle・ragged tree・overflow で確認した。未知の署名/搬送/IO/保持/全対話費用は未完で、ゼロでも完全な予約証明でもない。
+
+[ADR-0196](../../../adr/0196-owner-independent-shared-tir-query-data.md) / [RFC-0029](../../../rfc/0029-owner-independent-shared-tir-query-data.md) は Proposed。旧 tag245 の digest registry は read-only 監査し、native source/署名/accepting-clock の代替にせず、取り込み・再解釈・武装はしない。新 primitive は in-memory、native の lifecycle/有料受付/応答義務には未接続。
+
+選択結果 **67 passed / 0 failed / 0 ignored**（11 + fresh identity/gate 26 + fresh core native replay 30）。non-test consensus check・既存生成器の一致も成功。[raw log・初期失敗・hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#owner-independent-shared-source-data-candidate)。初期 private-field compile 失敗と verifier の message/signature 逆順による9 pass/2 fail は保存し、最終件数へ加算しない。
+
+登録・original は fixture、実 node の全 owner 共謀/埋め直し T05・funding/UTXO・原子的 original 全分岐予約・public ingress・実 supply・新鮮な signer 可用性・依存/終了規則・R-D2-NODE・tag230・実 door <=3,120・T01–T15 と G14 全体は未完。モデル審査、cap/clock 引上げ、数値採択、pre 統合・武装・配備なし。
