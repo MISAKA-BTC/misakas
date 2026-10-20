@@ -79,3 +79,15 @@ release `x3_req_5` 対象 **4 passed / 0 failed / 0 ignored**。同じ release b
 devnet 結果ファイル `docs/measurements/2026-10-19-devnet-payload-carrier.md` は、2026-10-20 の再確認でも release/t12-16000 の作業場所、pre-rfc24、pre-integration の 3 箇所にはない。ユーザー側の測定ジョブの停止・失敗を意味しない。
 
 次は、actual public profile から owner に依存しない packet identity と閉じた合法要求集合を導出し、実 codec の費用・versioned journal・block admission・Final/担保/証拠の保持へ接続する。F03 の範囲と全分岐の byte/work/IO/control/保持が閉じるまで武装拒否を維持する。P1-1〜P1-5、P2、T01〜T15 の残り、R-D2-NODE、tag 230、実モデル door の完了条件を縮小しない。
+
+## Rooted service ledger と native default の拒否検査
+
+`palw_court_service_state_v1` の候補は、global な予約/供給 book と immutable original scope / `+10,000` / packet 集合の binding を一つの `staged_courts` row に保持する。packet の claim 間使い回しと残余 quota の不整合を拒否する。key 11 / row 17 は内部 enum の末尾追加で、旧 tag・lifecycle tag 230 の意味は変更しない。native heap 会計と allocation-free wire scanner を追加した。採択済みの codec/fence として本番に有効化したものではない。
+
+native TIR default の pure transition が返った後、row と経済効果の書き込み前に、この book に binding のある claim を検査する。欠損・未完了では default を拒否し、全 quota が供給済みでも未採択の duty eligibility / inclusion 前提を満たしたとは扱わず拒否する。binding のない旧 claim は変更しない。
+
+release の `rooted_service_guard_denies_default_and_native_undo_restores_legacy` は **1 passed / 0 failed / 0 ignored**。同じ沈黙から旧経路では native default が実行される一方、service binding のある経路では供給欠損・供給済みの双方で default を拒否し、状態を一切変えないことを確認。row の Borsh 復元と、実 native `StagedCourtSeed`（delta 200）の undo / forward replay による root 一致も確認した。carrier の署名は fixture の verified-half を使っており、実署名の ingress/node 検証ではない。
+
+原子的 original admission と実 accepting-block のコストからこの row を作成・更新する production writer は未実装。現在の owner demand と owner 非依存義務の対応、専用 fence/profile、Final/担保/証拠/pruning の保留・復旧、全 claim の容量保証、full snapshot / restart / pruned IBD は残る。default 拒否の試験を P0 完了へ読み替えない。別 branch `4f41081ee` の搬送会計も未統合で、その bytes/work/memory と service の bytes/work/IO/control は単純な読み替えができない。
+
+追加の release 回帰試験は **39 passed / 0 failed / 0 ignored**（候補 row の codec/native heap/wire preflight、binding/残余 quota の改変拒否 3 件、既存部品・G14 gates・t12/release 同一性 36 件）。上の native journal 試験 1 件と合わせて 40 件。`cargo check --release -p kaspa-consensus` も成功。生ログと SHA-256 は既存の [release 試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)に追加した。文書検査は imported assets の同じ欠落参照 5 件が残り、baseline を変更していない。

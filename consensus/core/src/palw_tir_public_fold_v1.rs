@@ -800,6 +800,11 @@ fn apply_verified_control_v1(
         Effect::PreparationDefault(default) => Some(std::iter::once(default.actor).collect()),
         _ => None,
     };
+    if unpaid.is_some() {
+        if let Some(Row::CourtService(service)) = b.state.staged_court_row_v1(&Key::CourtService) {
+            service.default_hold(&frame).map_err(refused)?;
+        }
+    }
     if let Some(unpaid) = &unpaid {
         let liable = frame.custody_v1().liable_signers_v1();
         if unpaid.is_empty() || !unpaid.is_subset(&liable) {
@@ -2072,6 +2077,60 @@ mod conviction_e2e_tests {
         answered = control_step(frame, &answered, params, extras, offset, producer, acquisition, A::Acquisition(finish), 0, turn)
             .expect("Finish authenticates the committed leaf against the original step root");
         (answered, offset + 1)
+    }
+
+    #[test]
+    fn rooted_service_guard_denies_default_and_native_undo_restores_legacy() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v1::{CourtServiceState, ServiceClaimBinding};
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras, acquisition, _) = demanded_world(&fx, &frame, 0);
+        let (demand_id, until, turn, _) = owner_pending(&frame, &state, acquisition);
+        let base = frame.plan_v1().terms.accepted_daa;
+        let ctx = at(&frame, until - base);
+        let control = Control { version: 1, claim: frame.plan_v1().original_claim,
+            allocation_id: frame.plan_v1().allocation_id, source_id: frame.plan_v1().source_id,
+            target: acquisition, expected_turn: turn, declared_rent_sompi: 0, signer: outsider(),
+            action: A::Acquisition(Owned::Collect { demand_id }), signature: vec![5; SIG] };
+        // Test the verified half of the native control dispatcher. Fixture setup
+        // and carrier signatures here are synthetic, not node-ingress evidence.
+        let mut legacy = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        apply_verified_control_v1(&mut legacy, &ctx, frame.clone(), &control).expect("legacy silence still defaults");
+        assert_ne!(legacy.state.state_root(), state.state_root());
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        for supplied in [false, true] {
+            let mut book = ServiceReservations::new(cost).unwrap();
+            book.reserve(&[ServicePacket { id: [1; 64], release_daa: base + 1, service_before: base + 2, cost }], base + 10_000).unwrap();
+            if supplied { book.observe_block(base + 1, [11; 64], Default::default()).unwrap(); }
+            book.observe_block(base + 2, [12; 64], Default::default()).unwrap();
+            let service = CourtServiceState { version: 1, profile_id: Hash64::from_u64_word(42), book,
+                claims: std::collections::BTreeMap::from([(control.claim, ServiceClaimBinding {
+                    claim: control.claim, allocation_id: control.allocation_id, source_id: control.source_id,
+                    original_accepted_daa: base, hard_deadline_daa: base + 10_000,
+                    packet_ids: std::collections::BTreeSet::from([[1; 64]]) })]) };
+            let row = Row::CourtService(Box::new(service).into());
+            row.check(&Key::CourtService).unwrap();
+            let encoded = borsh::to_vec(&row).unwrap();
+            let decoded: Row = borsh::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, row, "snapshot row preserves the entire book");
+            let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            b.write_staged_row_v1(Key::CourtService, Some(decoded)).unwrap();
+            let protected = b.state.clone();
+            let err = apply_verified_control_v1(&mut b, &ctx, frame.clone(), &control).unwrap_err();
+            let message = format!("{err:?}");
+            assert!(message.contains(if supplied { "inclusion assumptions" } else { "supply is missing" }), "{message}");
+            assert_eq!(b.state, protected, "a denied default cannot debit, close, advance or replace a row");
+            // This is the real native StagedCourtSeed journal (delta tag 200),
+            // not a clone-only service-book rollback.
+            let mut undone = protected;
+            for entry in b.entries.iter().rev() { apply_delta_entry(&mut undone, entry, true).unwrap(); }
+            assert_eq!(undone.state_root(), state.state_root());
+            let mut replayed = undone;
+            for entry in &b.entries { apply_delta_entry(&mut replayed, entry, false).unwrap(); }
+            assert_eq!(replayed.state_root(), b.state.state_root());
+        }
     }
 
     /// **G14 R5: an honest custodian that answers an outside owner's demand inside its clock is never defaulted or charged** —

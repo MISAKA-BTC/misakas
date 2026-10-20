@@ -4586,6 +4586,7 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV
                 sum = sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            11 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4709,6 +4710,7 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV
                 > as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            17 => <crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_service_state_v1::CourtServiceState> as NativeWireScanV1>::scan_native_wire_v1(reader),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -11506,3 +11508,10 @@ impl NativeWireScanV1 for misaka_palw_tir::types::Dim {
     }
 }
 wire_struct!(misaka_palw_tir::types::TensorType; misaka_palw_tir::types::DType, Vec<misaka_palw_tir::types::Dim>);
+
+wire_struct!(crate::palw_court_service_v1::ServiceCost; u64, u64, u64, u64);
+wire_struct!(crate::palw_court_service_v1::ServicePacket; [u8; 64], u64, u64, crate::palw_court_service_v1::ServiceCost);
+wire_struct!(crate::palw_court_service_v1::ServiceSupply; [u8; 64], crate::palw_court_service_v1::ServiceCost);
+wire_struct!(crate::palw_court_service_v1::ServiceReservations; crate::palw_court_service_v1::ServiceCost, BTreeMap<u64, crate::palw_court_service_v1::ServiceCost>, BTreeMap<[u8; 64], u64>, BTreeMap<[u8; 64], crate::palw_court_service_v1::ServicePacket>, BTreeMap<u64, crate::palw_court_service_v1::ServiceSupply>, Option<u64>);
+wire_struct!(crate::palw_court_service_state_v1::ServiceClaimBinding; crate::Hash64, crate::Hash64, crate::Hash64, u64, u64, BTreeSet<[u8; 64]>);
+wire_struct!(crate::palw_court_service_state_v1::CourtServiceState; u16, crate::Hash64, crate::palw_court_service_v1::ServiceReservations, BTreeMap<crate::Hash64, crate::palw_court_service_state_v1::ServiceClaimBinding>);

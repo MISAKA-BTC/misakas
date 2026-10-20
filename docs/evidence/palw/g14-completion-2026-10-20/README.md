@@ -31,3 +31,19 @@ X3 reorg は同じ DAA / blue work の浅い tie における予約・session ro
 | --- | --- |
 | [core-supply-release.log](core-supply-release.log) | `5161fb3c7d49540203ef907285504e5acd7a562ad56f38f9ed08846b4f832efd` |
 | [shared-frontier-volume-release.log](shared-frontier-volume-release.log) | `0bbefd1e44dd67974187bce382da47ea049a6e6410e5deb410d08eec71b0103d` |
+
+## Rooted service deny-only adapter
+
+`codex/rfc14-g14-completion`, base `6edf8243b`. No integration with `pre` or the separate transport branch, no arming/deployment. These are fixture correctness tests, not capacity/CPU/IO measurements.
+
+- `cargo test --release -p kaspa-consensus-core --lib rooted_service_guard_denies_default_and_native_undo_restores_legacy`: **1 passed**. The existing verified-half native TIR dispatcher refuses default before state/economic writes for a bound claim with missing supply; even supplied quota does not replace unadopted inclusion assumptions. An unbound legacy claim retains its existing default. Borsh row restoration and real native delta-200 undo/forward replay preserve roots. Carrier signatures and original setup are synthetic; no node ingress, full snapshot import or pruned IBD is claimed.
+- `cargo test --release -p kaspa-consensus-core --test palw_court_service_state_v1 --test palw_court_service_v1 --test palw_court_policy_v1 --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test g14_close_gates`: **39 passed / 0 failed / 0 ignored** (3 new persisted codec/resource/binding tests, 36 existing component/gate/release regressions, including pinned t12 identity).
+- `cargo check --release -p kaspa-consensus`: **success**, existing warnings remain.
+
+All commands used the shared heavy build lock. An initial integration-test compile used a private module path; it was corrected to the existing public re-exports before the final successful test command. No resource limit, golden value, imported audit asset or baseline was changed. Production original-admission/block-supply writers, exact owner-independent duties, Final/bond/evidence/pruning recovery, physical budget closure and full node lifecycle tests remain open. The new internal row schema is Proposed, not adopted.
+
+| Raw log | SHA-256 |
+| --- | --- |
+| [rooted-service-native-release.log](rooted-service-native-release.log) | `4fb7df751d829cd0611ed7cd295ff41a2861dcf3a67441b9e9787e5d0701425d` |
+| [rooted-service-regressions-release.log](rooted-service-regressions-release.log) | `62330a3f3d432c59ea2f84be811766ef366093b3112f41268895fc4d6f1c5b18` |
+| [rooted-service-consensus-check.log](rooted-service-consensus-check.log) | `3a6877fc7b0c7e74b74510fdbba941d9db30d0532ebb9468a3c7f74fee7ac73e` |

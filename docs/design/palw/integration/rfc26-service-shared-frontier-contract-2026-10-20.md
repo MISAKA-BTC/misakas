@@ -62,4 +62,16 @@ T02/T03 で永久沈黙・偽署名・架空完了を分離し、T04 で通常 t
 
 `assess` の `OpportunityProvided` は全 default 条件ではない。署名・手番・応答の適格性・inclusion 前提を確認せず slash する API は追加していない。`MissingSupply` は責任帰属に使えず、実 fold では Final/担保/証拠の保持と復旧へ接続する必要がある。
 
-この部品の `unreserved_court_cost` は producer/Panel の申告値を受理する wire ではない。実 codec からのコスト導出、通常 tx と court quota の物理的分離、予約 packet の scope と実コスト検査、snapshot/journal、補正期限・Final hold の fold 接続は未実装。この接続前に quota が実提供されたと本番で認定してはならず、武装拒否 gate は維持する。clone による部品の rollback 試験を node の reorg / restart / pruned IBD の検証と混同しない。
+この部品の `unreserved_court_cost` は producer/Panel の申告値を受理する wire ではない。実 codec からのコスト導出、通常 tx と court quota の物理的分離、予約 packet の scope と実コスト検査、book の候補 row/journal は §8 で追加したが、production admission・供給記録・full snapshot/IBD、補正期限・Final hold の接続は未実装。この接続前に quota が実提供されたと本番で認定してはならず、武装拒否 gate は維持する。clone による部品の rollback 試験を node の reorg / restart / pruned IBD の検証と混同しない。
+
+## 8. Rooted deny-only adapter の実装候補
+
+`palw_court_service_state_v1` は一つの global な `ServiceReservations` と、元の claim/allocation/source/acceptance、固定 `+10,000` hard deadline、packet 集合の binding を保持する候補。予約 packet を複数 claim の保証へ使い回さず、未 binding の packet や残余 quota の不整合を拒否する。復元時の `check` は割当と各資源の残余を再計算し、記録された残余を信用しない。
+
+既存 `staged_courts` へ、key tag 11 / row tag 17 を末尾追加した候補である。既存 tag、lifecycle tag 230、旧 frame codec の意味は変更しない。typed native heap 会計と allocation-free wire shape preflight も追加。native writer の journal は既存 delta 200 を使い、row の書き換え・undo/replay を同じ経路で扱う。これは新 schema の採択ではなく、休眠した実装候補。preset、原子的 original admission、accepting-block 供給会計からこの row を作成・更新する production 経路はまだない。
+
+native TIR fold では、pure default transition が返った後、row の書き換え・経済効果の前に、この ledger に binding のある claim を検査する。供給欠損・未完了・不整合では default を拒否する。全 packet が供給済みでも、duty ごとの適格応答と採択済み inclusion 前提が未実装なので default を許可しない。wire の bool や Panel の申告でその拒否を解除する経路はない。binding のない既存 claim は従来の規則を維持する。
+
+この段階の対象は **default を実行しない検査と、その参照 state の永続化**。現在の owner demand と owner 非依存の義務 identity の導出、Final/担保/証拠/pruning の保留、残余容量内の再割当、hard 到達後の未解決・非 credit 状態、全 claim の admission、実ノードの restart/pruned IBD は未完了である。default 拒否だけで Final 保留や P0 完了まで実装したとは表示しない。原子的 admission と専用 fence/profile の採択前にこの schema を本番で生成・受理するルールへ接続しない。
+
+別 branch `codex/rfc14-x3-reorg-clock` / `4f41081ee` の transport 会計も未統合。そちらは bytes/work/memory、この予約部品は bytes/work/IO/control の独立次元である。memory を IO に読み替えず、両方の費用・保持 byte-DAA と物理容量を含む profile を導出する必要がある。

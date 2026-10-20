@@ -1,12 +1,14 @@
-//! RFC-0026 service reservation component. Not wired to state, block admission,
-//! codecs, default, or any preset. The caller must derive the COMPLETE canonical
+//! RFC-0026 service reservation component. Persistable in a proposed rooted
+//! deny-only adapter; not wired to original admission, actual block supply,
+//! default permission or any preset. The caller must derive the COMPLETE canonical
 //! packet set from an adopted profile, including every allowed hostile branch.
 //! A successful reservation does not establish network/inclusion assumptions.
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Independent deterministic capacity dimensions; never measured runtime CPU.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ServiceCost {
     pub bytes: u64,
     pub work: u64,
@@ -27,7 +29,7 @@ impl ServiceCost {
 
 /// An atomic codec packet, NOT an entire potentially fragmented response. IDs
 /// bind claim/ruleset/root/coordinate/turn/packet in the future profile adapter.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ServicePacket {
     pub id: [u8; 64],
     pub release_daa: u64,
@@ -52,7 +54,7 @@ pub enum ServiceRefusal {
 
 /// A qualified empty block still offers service under the explicit inclusion
 /// assumption. This is resource accounting, never evidence of personal delivery.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ServiceSupply {
     pub accepting_block: [u8; 64],
     pub reserved: ServiceCost,
@@ -76,14 +78,14 @@ pub enum ServiceAssessment {
     MissingSupply,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ServiceReservations {
-    budget: ServiceCost,
-    remaining: BTreeMap<u64, ServiceCost>,
-    assignments: BTreeMap<[u8; 64], u64>,
-    packets: BTreeMap<[u8; 64], ServicePacket>,
-    supply: BTreeMap<u64, ServiceSupply>,
-    last_observed_daa: Option<u64>,
+    pub(crate) budget: ServiceCost,
+    pub(crate) remaining: BTreeMap<u64, ServiceCost>,
+    pub(crate) assignments: BTreeMap<[u8; 64], u64>,
+    pub(crate) packets: BTreeMap<[u8; 64], ServicePacket>,
+    pub(crate) supply: BTreeMap<u64, ServiceSupply>,
+    pub(crate) last_observed_daa: Option<u64>,
 }
 
 impl ServiceReservations {
@@ -191,6 +193,33 @@ impl ServiceReservations {
         }
         let Some(assigned) = self.assignments.get(id) else { return ServiceAssessment::UnknownObligation };
         if self.supply.contains_key(assigned) { ServiceAssessment::OpportunityProvided } else { ServiceAssessment::MissingSupply }
+    }
+
+    /// Validate persisted accounting; never trust cached residual quota from a snapshot.
+    pub fn check(&self) -> Result<(), &'static str> {
+        let mut rebuilt = Self::new(self.budget).map_err(|_| "invalid service budget")?;
+        if self.assignments.len() != self.packets.len() { return Err("service packet/assignment mismatch"); }
+        for (id, packet) in &self.packets {
+            if id != &packet.id || packet.release_daa >= packet.service_before
+                || packet.service_before - packet.release_daa > crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA
+                || packet.cost.controls != 1 || packet.cost.bytes == 0 || packet.cost.work == 0 {
+                return Err("invalid service packet");
+            }
+            let assigned = *self.assignments.get(id).ok_or("missing service assignment")?;
+            if !(packet.release_daa..packet.service_before).contains(&assigned) { return Err("assignment outside service interval"); }
+            let remaining = rebuilt.remaining.get(&assigned).copied().unwrap_or(self.budget)
+                .subtract(packet.cost).ok_or("overbooked persisted service")?;
+            rebuilt.remaining.insert(assigned, remaining);
+        }
+        if rebuilt.remaining != self.remaining { return Err("forged residual service quota"); }
+        for (daa, supplied) in &self.supply {
+            if self.last_observed_daa.is_none_or(|last| *daa > last) { return Err("service supply beyond observed clock"); }
+            let remaining = self.remaining.get(daa).ok_or("unreserved service history")?;
+            if supplied.reserved != self.budget.subtract(*remaining).ok_or("invalid service residual")? {
+                return Err("service supply differs from reservation");
+            }
+        }
+        Ok(())
     }
 
     pub fn assigned_daa(&self, id: &[u8; 64]) -> Option<u64> {
