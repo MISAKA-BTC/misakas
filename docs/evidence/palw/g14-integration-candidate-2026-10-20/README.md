@@ -70,7 +70,7 @@ After `bc4f3caa0`, the response duty reader derives literal Ready actor, origina
 
 Final shared-lock runs:
 
-- `cargo test --release -p kaspa-consensus-core --lib palw_tir_public_fold_v1`: **27 passed**. Existing actual native response fixtures read each current duty before dispatching the generated action and check completion after Finish; the additional boundary/provenance test rejects missing original frame/preparation, owner-as-custodian substitution and key/profile confusion, while expiry alone preserves owed identity.
+- `cargo test --release -p kaspa-consensus-core --lib palw_tir_public_fold_v1`: **27 passed**. Existing actual native response fixtures read each current duty before dispatching the generated action and check completion after Finish; the additional boundary/provenance test rejects missing original frame/preparation, owner-as-custodian substitution and invalid keys, and checks profile namespace separation, while expiry alone preserves owed identity.
 - The SAME freshly built `target/release/deps/kaspa_consensus_core-cd85ed321316b157 court_tir_`: **5 passed**, executable replay.
 - Fresh `cargo test --release -p kaspa-consensus-core --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move`: **26 passed**, followed under the lock by `cargo check --release -p kaspa-consensus`, success with warnings.
 
