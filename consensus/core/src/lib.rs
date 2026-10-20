@@ -1106,4 +1106,5 @@ pub mod palw_court_tir_requests_v1;
 pub mod palw_court_shared_tir_frontier_v1;
 pub mod palw_court_shared_tir_stream_v1;
 pub mod palw_court_shared_tir_stream_state_v1;
+pub mod palw_court_shared_tir_response_v1;
 pub mod palw_court_shared_tir_state_v1;

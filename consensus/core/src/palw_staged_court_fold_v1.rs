@@ -974,6 +974,12 @@ impl TransitionBuilder<'_> {
 
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
         match &new {
+            Some(PalwStagedCourtRowV1::CourtSharedResponse(r)) => {
+                r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared data response is immutable".into()));
+                }
+            },
             Some(PalwStagedCourtRowV1::CourtSharedStream(s)) => {
                 s.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
                 let old=match self.state.staged_court_row_v1(&key) {
@@ -3297,6 +3303,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtSharedContext(c) => (c.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedQuery(q) => (q.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedIds(ids) => (ids.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedResponse(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
@@ -3630,6 +3637,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtSharedContext(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedQuery(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedIds(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedResponse(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
             _ => None,

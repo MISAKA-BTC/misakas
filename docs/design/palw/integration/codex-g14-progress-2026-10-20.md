@@ -227,3 +227,11 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 初回のtiny fixtureでは16,385-byte不正本文が実際のsource上限を超えるという試験側の仮定誤りを検出。狭いケースを残し、既存4096幅実行を正規のoriginal contextへ組み立てた複数Partケースも検証した。さらに小さいchunkのcodec試験が、shared/standard Arcのwire preflightと既存typed heapのalignment余裕の不一致を検出した。hard capやtyped heap側を変えず、preflightを既存の保守的会計へ揃えた。
 
 最終選択 **86 passed / 0 failed / 0 ignored**（wire11 + codec/identity28 + 同じ最終core executableのnative32 + query/frontier15）。non-test consensus checkと生成物一致も成功。[初期失敗・source patch・hash・範囲・重複除外](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#rooted-signed-shared-stream-native-adapter)。原子的EOF失敗、公開前prefix、全IDs、改変/欠損拒否、journal undo/replay、carriage再読込、元hard境界・保持を検査した。これはverified-half original/Readyとsynthetic service bookを使うin-memory fixtureであり、有料node ingress・本物のkey rotation・全分岐予約・実供給・fresh duty・pruned IBD・T05/G14完了ではない。武装・pre統合・配備なし。
+
+## Explicit fresh data reply (2026-10-21)
+
+`fa1104eed` 後に、データ共有とliteral signer自身のデータ応答を分ける候補を接続。署名を実受理queryのblock/DAA・元scope・認証済みデータに束縛し、別の受理contextへ移せない。候補key/row19/25は末尾追加。Ready/current bond、データ、署名を実状態から検査し、receiptの再送では時刻を変えない。署名付きEOFだけでは応答済みにせず、default/credit/責任解放にも使わない。
+
+データ未完成の間はresource起点を未確定にし、完成後はquery/Ready/dataの実受理DAAのmax+1を導出する。これは新しい有料義務や応答期限の採択ではない。過去のupload/preparation違反を免責する判断にも使わない。
+
+最終選択 **89 passed / 0 failed / 0 ignored**（G14/activation/codec/identity29 + 同じ最終core executableのnative32 + query17 + wire11）。non-test consensus check・生成物一致も成功。[source hash・生ログ・別受理context/再送/改変拒否の範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#explicit-fresh-data-response-native-candidate)。targeted2や過去86等は加算しない。原本/Ready/資金/contextはverified-half fixtureであり、有料node ingress・完全予約・全semantic duty/fresh signer availability・実供給・node T05/T01–T15は未完。武装・pre統合・配備なし。

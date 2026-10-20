@@ -57,3 +57,19 @@ fn shared_stream_chunk_append_tags_and_preserve_bounded_decode_shape() {
     prefix.extend(0u64.to_le_bytes());prefix.extend(borsh::to_vec(&Hash64::default()).unwrap());prefix.extend(u32::MAX.to_le_bytes());
     assert_eq!(<SharedTirChunkV1 as borsh::BorshDeserialize>::deserialize_reader(&mut prefix.as_slice()).unwrap_err().kind(),std::io::ErrorKind::InvalidData);
 }
+
+#[test]
+fn shared_data_response_appends_tags_and_has_native_codec_coverage() {
+    use kaspa_consensus_core::palw_court_shared_tir_response_v1::SharedDataResponseV1;
+    let h=Hash64::from_u64_word;let signer=PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(1),0));
+    let key=Key::CourtSharedResponse(h(2),signer);
+    let row=Row::CourtSharedResponse(Box::new(SharedDataResponseV1 {version:1,claim:h(3),scope_id:h(4),request_id:h(2),signer,
+        query_block:h(5),query_daa:100,data_digest:h(6),accepted_block:h(7),accepted_daa:101,intent_digest:h(8),material_until_daa:20_000}));
+    row.check(&key).unwrap();let wire=borsh::to_vec(&row).unwrap();
+    assert_eq!(borsh::to_vec(&key).unwrap()[0],19);assert_eq!(wire[0],25);
+    assert_eq!(borsh::from_slice::<Row>(&wire).unwrap(),row);
+    let mut scan=NativeWireReaderV1::new(wire.as_slice(),wire.len() as u64);let shape=Row::scan_native_wire_v1(&mut scan).unwrap();
+    assert_eq!(scan.remaining(),0);assert!(shape.heap>=row.native_heap_v1("response").bytes().unwrap());
+    let mut cut=NativeWireReaderV1::new(&wire[..wire.len()-1],(wire.len()-1) as u64);assert!(Row::scan_native_wire_v1(&mut cut).is_err());
+    let mut unsupported=wire;unsupported[1..3].copy_from_slice(&2u16.to_le_bytes());assert!(borsh::from_slice::<Row>(&unsupported).unwrap().check(&key).is_err());
+}

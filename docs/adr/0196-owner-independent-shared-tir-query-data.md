@@ -56,3 +56,9 @@ Rooted adapter の選択結果は **69 passed / 0 failed / 0 ignored**（native3
 Ready資格でactor集合を元契約に束縛しても、正直な署名者の可用性や外部1人の全訴追経路を証明したことにはならない。完全予約・費用・全合法restart/失敗分岐・実供給・T05と公開採択は未完。Proposed / Review Required・有効化保留を維持する。
 
 小さなchunkのcodec検査で、既存shared/standard Arcのwire preflightにtyped heap側のalignment余裕が含まれていない不一致を検出。typed heap側・hard cap・wire/hashを変えず、preflightの必要予約を既存会計へ揃える。任意の上限引き上げやcapacity採択で試験を通す修正ではない。
+
+## Explicit fresh data response candidate
+
+[RFC-0029 §10](../rfc/0029-owner-independent-shared-tir-query-data.md#10-explicit-fresh-data-response-candidate-after-fa1104eed) に、共有データの存在とliteral signer自身の応答を区別する候補を追加する。署名は実受理queryのblock/DAAと認証済みデータに束縛し、別branchで再受理された同じquery IDへ移せない。要求を含む同じblockへの自己参照署名は受理せず、次のblockが同じDAAであることは妨げない。候補key/row19/25を末尾追加し、有料lifecycleは未割当。
+
+データ未完成なら応答処理のresource起点は未確定とし、完成後はquery/Ready/dataの実受理DAAのmax+1から導出する。これは処理機会・応答期限・新たな合法義務の採択ではない。元契約の完全な有料予約・実供給・fresh署名者可用性・全semantic court dutyが揃うまで、データ応答receiptからdefault・credit・責任解放を導かない。Proposed / Review Requiredと有効化保留を維持する。

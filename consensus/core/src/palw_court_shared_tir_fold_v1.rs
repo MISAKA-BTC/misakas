@@ -171,3 +171,39 @@ fn stream_control_inner(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
         },
     }
 }
+
+/// Records an explicit fresh data response by a literal Ready signer. It does
+/// not infer completion from uploads, transfer a semantic duty, or permit fault.
+pub(super) fn data_response(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
+    response:&crate::palw_court_shared_tir_response_v1::SignedSharedDataResponseV1)->Result<bool,PalwStateV2Error> {
+    use crate::palw_court_shared_tir_response_v1 as reply;
+    let saved=b.try_checkpoint()?;
+    let result=(|| {
+        let q=reply::query(&b.state,response.request_id).map_err(refused)?;
+        if response.claim!=q.claim {return Err(refused("shared response claim substitution"));}
+        let stage=reply::shared_data_response_stage_v1(&b.state,response.request_id,response.signer).map_err(refused)?;
+        let c=shared::context(&b.state,q.claim).map_err(refused)?;clock(c,ctx)?;
+        if response.scope_id!=stage.scope_id || response.query_block!=stage.query_block || response.query_daa!=stage.query_daa
+            || stage.data.as_ref().is_none_or(|data|data.digest!=response.data_digest || ctx.daa_score<data.daa)
+            || ctx.daa_score<stage.query_daa || ctx.daa_score<stage.ready_daa
+            || ctx.block==stage.query_block {
+            return Err(refused("shared response lacks fresh native query/data context"));
+        }
+        let network=b.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+        response.validate_bond_signature(network,&b.state).map_err(refused)?;
+        let bond=b.state.bond(&response.signer).ok_or(PalwStateV2Error::MissingBond(response.signer))?;
+        if !matches!(bond.status,PalwBondStatusV2::Active) || bond.collateral<b.params.min_collateral_sompi() {
+            return Err(refused("shared data responder is not active/above existing floor"));
+        }
+        if let Some(old)=stage.response {
+            if ctx.daa_score<old.accepted_daa {return Err(refused("shared response replay predates accepted fact"));}return Ok(false);
+        }
+        let row=reply::SharedDataResponseV1 {version:1,claim:response.claim,scope_id:response.scope_id,request_id:response.request_id,
+            signer:response.signer,query_block:response.query_block,query_daa:response.query_daa,data_digest:response.data_digest,
+            accepted_block:ctx.block,accepted_daa:ctx.daa_score,intent_digest:response.signing_message(network).map_err(refused)?,
+            material_until_daa:c.material_until_daa};
+        b.write_staged_row_v1(Key::CourtSharedResponse(row.request_id,row.signer),Some(Row::CourtSharedResponse(Box::new(row))))?;
+        Ok(true)
+    })();
+    if result.is_err() {b.restore(saved);}result
+}

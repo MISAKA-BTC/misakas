@@ -2526,6 +2526,19 @@ mod conviction_e2e_tests {
             control.signature=libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key,control.signing_message(extras.tir_public_network_domain_v1.unwrap()).unwrap().as_byte_slice(),
                 SHARED_STREAM_CONTEXT_V1,[32;32]).unwrap().as_ref().to_vec();control
         };
+        use crate::palw_court_shared_tir_response_v1::{self as response,SignedSharedDataResponseV1,SHARED_DATA_RESPONSE_CONTEXT_V1};
+        let request_id=set.request_id(first).unwrap();
+        let make_response=|node:&PalwChainStateV2,actor,seed:u8,digest:Hash64| {
+            let q=response::query(node,request_id).unwrap();let kp=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([seed;32]);
+            let mut r=SignedSharedDataResponseV1 {version:1,claim,scope_id:q.scope_id,request_id,signer:actor,
+                query_block:q.opened_block,query_daa:q.opened_daa,data_digest:digest,signature:vec![]};
+            r.signature=libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key,r.signing_message(extras.tir_public_network_domain_v1.unwrap()).unwrap().as_byte_slice(),
+                SHARED_DATA_RESPONSE_CONTEXT_V1,[33;32]).unwrap().as_ref().to_vec();r
+        };
+        let stage=response::shared_data_response_stage_v1(&b.state,request_id,producer).unwrap();
+        assert!(stage.data.is_none() && stage.response.is_none() && stage.resource_first_eligible_daa.is_none());
+        let before=b.state.state_root();let missing_data=make_response(&b.state,producer,31,Hash64::default());
+        assert!(fold::data_response(&mut b,&at(frame,offset+2),&missing_data).is_err());assert_eq!(b.state.state_root(),before);
         let stream_target=StreamTarget::Unit {ordinal:first,request_id:set.request_id(first).unwrap()};
         let begin=StreamAction::Begin {total_bytes:body.len() as u64,body_hash:crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body)};
         let control=sign_stream(stream_target.clone(),producer,31,begin.clone());let slot=control.slot_id().unwrap();
@@ -2561,6 +2574,10 @@ mod conviction_e2e_tests {
         let claim_before_stream=b.state.claim(&claim).cloned();assert!(fold::stream_control(&mut b,&ctx,&finish).unwrap());
         assert_eq!(b.state.claim(&claim),claim_before_stream.as_ref(),"data EOF never certifies computation");
         let finished=b.state.state_root();assert!(!fold::stream_control(&mut b,&ctx,&finish).unwrap());assert_eq!(b.state.state_root(),finished);
+        let data_stage=response::shared_data_response_stage_v1(&b.state,request_id,producer).unwrap();
+        assert!(data_stage.data.is_some() && data_stage.response.is_none(),"signed upload EOF is not a fresh query response");
+        assert_eq!(data_stage.resource_first_eligible_daa,Some(ctx.daa_score+1));
+
         // The wide fixture exercises full-size + final-ragged parts with a source-bounded but
         // invalid run body. EOF failure retains exactly the accepted prefix.
         let run_count=source.leaf_count_v1().min(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1 as u64) as u32;
@@ -2610,6 +2627,32 @@ mod conviction_e2e_tests {
         assert!(!fold::share_ids(&mut b,&ctx,claim,rows,&fx.execution.generated).unwrap());
         assert!(matches!(shared::read_shared_data_v1(&b.state,claim,ids_ordinal).unwrap(),Some(RootedSharedDataV1::Ids {rows_root,ids})
             if rows_root==rows && ids==fx.execution.generated.as_slice()));
+        let data=response::shared_data_fingerprint_v1(&b.state,request_id).unwrap().unwrap();
+        let signed_response=make_response(&b.state,producer,31,data);let reply_ctx=at(frame,offset+2);
+        let before=b.state.state_root();let entries=b.entries.len();
+        assert!(fold::data_response(&mut b,&ctx,&signed_response).is_err(),"response binds an already accepted query block");
+        let non_ready=make_response(&b.state,outsider(),11,data);assert!(fold::data_response(&mut b,&reply_ctx,&non_ready).is_err());
+        let mut wrong=signed_response.clone();wrong.signature[0]^=1;
+        assert!(fold::data_response(&mut b,&reply_ctx,&wrong).is_err());
+        let wrong_data=make_response(&b.state,producer,31,Hash64::default());assert!(fold::data_response(&mut b,&reply_ctx,&wrong_data).is_err());
+        assert_eq!(b.state.state_root(),before);assert_eq!(b.entries.len(),entries);
+        let claim_before_reply=b.state.claim(&claim).cloned();assert!(fold::data_response(&mut b,&reply_ctx,&signed_response).unwrap());
+        assert_eq!(b.state.claim(&claim),claim_before_reply.as_ref());
+        let replied=b.state.state_root();let n=b.entries.len();
+        assert!(!fold::data_response(&mut b,&at(frame,offset+3),&signed_response).unwrap());assert_eq!(b.state.state_root(),replied);assert_eq!(b.entries.len(),n);
+        let stage=response::shared_data_response_stage_v1(&b.state,request_id,producer).unwrap();
+        assert_eq!(stage.response.as_ref().unwrap().accepted_block,reply_ctx.block);
+        assert!(b.state.court_service_state_v1().unwrap().default_hold(frame).is_err(),"data receipt never authorizes default");
+        // A reaccepted query on an alternate branch has the same shared query
+        // ID/data but a different accepting block. Old response signatures fail.
+        let mut alt=TransitionBuilder::new(&installed,&params,false,false,false,false,&extras);
+        let alt_open=at(frame,offset+4);fold::request(&mut alt,&alt_open,claim,&make(first,outsider(),11)).unwrap();
+        fold::share_body(&mut alt,&alt_open,claim,first,&body).unwrap();
+        let alt_root=alt.state.state_root();assert!(fold::data_response(&mut alt,&at(frame,offset+5),&signed_response).is_err());assert_eq!(alt.state.state_root(),alt_root);
+        let replacement=make_response(&alt.state,producer,31,response::shared_data_fingerprint_v1(&alt.state,request_id).unwrap().unwrap());
+        assert!(fold::data_response(&mut alt,&at(frame,offset+5),&replacement).unwrap(),"data uploaded by a helper still needs the designated signer's own fresh response");
+        assert!(fold::data_response(&mut b,&at(frame,10_000),&signed_response).is_err());
+        assert!(b.write_staged_row_v1(Key::CourtSharedResponse(request_id,producer),None).is_err());
         let accepted=b.state.clone();let mut undone=accepted.clone();
         for entry in b.entries.iter().rev() {apply_delta_entry(&mut undone,entry,true).unwrap();}
         assert_eq!(undone.state_root(),state.state_root());
@@ -2631,6 +2674,12 @@ mod conviction_e2e_tests {
         assert!(b.write_staged_row_v1(chunk_key,None).is_err());
 
         assert_eq!(fresh.state_root(),accepted.state_root());
+        let mut wrong_reply=fresh.clone();let response_key=Key::CourtSharedResponse(request_id,producer);
+        let Some(Row::CourtSharedResponse(row))=wrong_reply.staged_courts.get_mut(&response_key) else {panic!()};row.data_digest=Hash64::default();
+        assert!(reload(&wrong_reply).is_err(),"response metadata must reauthenticate actual public data");
+        let mut wrong_opening=fresh.clone();let Some(Row::CourtSharedResponse(row))=wrong_opening.staged_courts.get_mut(&response_key) else {panic!()};
+        row.query_block=Hash64::from_u64_word(999);assert!(reload(&wrong_opening).is_err(),"receipt cannot move to another accepted query context");
+
         assert!(shared::read_shared_data_v1(&fresh,claim,first).unwrap().is_some());
         let query_key=Key::CourtSharedQuery(set.request_id(first).unwrap());
         let mut poisoned=fresh.clone();let Some(Row::CourtSharedQuery(row))=poisoned.staged_courts.get_mut(&query_key) else {panic!()};
