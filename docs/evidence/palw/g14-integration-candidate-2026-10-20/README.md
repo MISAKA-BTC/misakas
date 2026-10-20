@@ -63,3 +63,21 @@ Selected **57 passed / 0 failed / 0 ignored** for this change; earlier checkpoin
 ## Devnet observations now available
 
 The operator's source `799a058fa` report and 1,180-line raw log are imported verbatim. [Reaggregation audit](../../../measurements/2026-10-19-devnet-payload-carrier-audit.md) separates source claims from directly reproduced observations, including duplicate stage-boundary block IDs, total-block versus floor-only bytes, first-mempool versus sender timestamps and header versus native accepting clocks. The reaggregation script was run twice with identical derived JSON; input blobs match the pinned source. This is not a new devnet run or capacity calibration and does not add node-test passes to any total.
+
+## Actual native response-duty binding
+
+After `bc4f3caa0`, the response duty reader derives literal Ready actor, original source/allocation, actual owner-scoped demand/turn, response clock, body stage/cursor and remaining native moves from native state. It preserves expired pending metadata as a record, without extending clocks or granting late-response authority. The native default guard for a service-bound acquisition now requires each purported unpaid actor to have this actual outstanding duty and a response deadline inside original hard, before reaching the existing denial-only service guard. Other routes and the missing complete profile are not bypassed.
+
+Final shared-lock runs:
+
+- `cargo test --release -p kaspa-consensus-core --lib palw_tir_public_fold_v1`: **27 passed**. Existing actual native response fixtures read each current duty before dispatching the generated action and check completion after Finish; the additional boundary/provenance test rejects missing original frame/preparation, owner-as-custodian substitution and key/profile confusion, while expiry alone preserves owed identity.
+- The SAME freshly built `target/release/deps/kaspa_consensus_core-cd85ed321316b157 court_tir_`: **5 passed**, executable replay.
+- Fresh `cargo test --release -p kaspa-consensus-core --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move`: **26 passed**, followed under the lock by `cargo check --release -p kaspa-consensus`, success with warnings.
+
+Selected **58 passed / 0 failed / 0 ignored**; historical overlapping totals are not added. [Scope, authority and unpriced additional validation work](../../../design/palw/integration/rfc26-native-response-duty-2026-10-20.md). This is not packet-to-duty reservation admission, service-supply recording, a complete interaction graph, a portable admission certificate, default permission or node T05/T08. The owner-scoped current duty ID must not be used as an owner-independent shared packet ID. Physical delivery, full dependency/end policy, all-branch graph and adopted numeric profiles remain open; clocks, caps, tags, empty real-network arming records and identity expectations remain unchanged.
+
+| Raw log | Passed | SHA-256 |
+| --- | --- | --- |
+| [native-duty-dispatch-release.log](native-duty-dispatch-release.log) | 27 | `43a8af8d2d3d5f9e2661bb0f1e24ad62296213dff392fd6f32bb33cb5e577323` |
+| [native-duty-graph-replay.log](native-duty-graph-replay.log) | 5 | `3844bc48445f4baedd96f1a3497d9841c9989eb5dc32496bf8d8a44284e30721` |
+| [native-duty-identities-check.log](native-duty-identities-check.log) | 26 | `ba6bc2633cb5ad4a4fe2b60a5230cd4469efb0d8cb96d1d457f8cb62ad4e92c9` |

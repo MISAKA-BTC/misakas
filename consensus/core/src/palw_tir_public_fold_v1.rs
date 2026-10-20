@@ -906,6 +906,19 @@ fn apply_verified_control_v1(
     };
     if unpaid.is_some() {
         if let Some(Row::CourtService(service)) = b.state.staged_court_row_v1(&Key::CourtService) {
+            if service.claims.contains_key(&frame.plan_v1().original_claim) {
+                if let T::Acquisition { owner, reserved_daa } = control.target {
+                    let key = owner_key(frame, owner, reserved_daa)?;
+                    for actor in unpaid.as_ref().expect("default effect was matched") {
+                        let duty = crate::palw_court_tir_requests_v1::tir_native_response_duty_v1(
+                            &b.state, ctx, key, *actor, service.profile_id).map_err(refused)?
+                            .ok_or_else(|| refused("service default has no outstanding native response duty"))?;
+                        if !duty.response_fits_original_hard {
+                            return Err(refused("native response exceeds original service hard bound; no party default"));
+                        }
+                    }
+                }
+            }
             service.default_hold(&frame).map_err(refused)?;
         }
     }
@@ -2278,12 +2291,30 @@ mod conviction_e2e_tests {
         let demands = TirNativeDemandSetV1::new(frame, &source, Hash64::from_u64_word(0x73)).unwrap();
         let graph = demands.response_for(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index:leaf as u64 }).unwrap();
         let branch = graph.branch(body.len() as u64).unwrap();
+        let T::Acquisition { owner, reserved_daa } = acquisition else { unreachable!() };
+        let key = owner_key(frame,owner,reserved_daa).unwrap();
         let mut answered = state.clone();
+        let mut previous_duty = None;
         for ordinal in 0..branch.len() {
+            let point = at(frame,offset+ordinal);
+            let duty = crate::palw_court_tir_requests_v1::tir_native_response_duty_v1(
+                &answered,&point,key,producer,Hash64::from_u64_word(0x73)).unwrap().unwrap();
+            assert_eq!((duty.logical_id,duty.demand_id,duty.turn),(graph.logical_id,demand,turn));
+            assert_eq!(duty.clock,crate::palw_court_tir_requests_v1::TirNativeDutyClockV1::ResponseWindow);
+            assert!(duty.remaining_response_stages_upper>=branch.len()-ordinal);
+            assert_ne!(previous_duty,Some(duty.id)); previous_duty=Some(duty.id);
             let action = branch.action_at(ordinal,demand,producer,&body).unwrap();
+            use crate::palw_court_tir_requests_v1::TirNativeDutyStageV1 as Stage;
+            use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+            assert!(matches!((&duty.stage,&action),
+                (Stage::Begin { .. },Owned::Begin { .. }) |
+                (Stage::Part { .. },Owned::Part { .. }) |
+                (Stage::Finish { .. },Owned::Finish { .. })));
             answered = control_step(frame,&answered,params,extras,offset+ordinal,producer,acquisition,
                 A::Acquisition(action),0,turn).expect("the derived response stage passes the existing native dispatcher");
         }
+        assert!(crate::palw_court_tir_requests_v1::tir_native_response_duty_v1(
+            &answered,&at(frame,offset+branch.len()),key,producer,Hash64::from_u64_word(0x73)).unwrap().is_none());
         (answered, offset + branch.len())
     }
 
@@ -2352,6 +2383,34 @@ mod conviction_e2e_tests {
             state = next.unwrap();
         }
         assert!(owner_pending(frame, &state, target).3.is_some(), "relayed Finish authenticates the original body");
+    }
+
+    #[test]
+    fn native_response_duty_reads_original_state_and_never_erases_expired_obligations() {
+        use crate::palw_court_tir_requests_v1::{tir_native_response_duty_v1 as duty,TirNativeDutyClockV1 as Clock};
+        let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=&fx.frame;
+        let (state,_,_,target,offset)=demanded_world(&fx,frame,0);
+        let T::Acquisition { owner,reserved_daa }=target else { unreachable!() };
+        let key=owner_key(frame,owner,reserved_daa).unwrap();let actor=frame.custody_v1().pledge_v1().producer;
+        let profile=Hash64::from_u64_word(0x73);
+        let first=duty(&state,&at(frame,offset),key,actor,profile).unwrap().unwrap();
+        assert_eq!(first.clock,Clock::ResponseWindow);assert!(first.response_fits_original_hard);
+        let end=first.respond_until_daa-frame.plan_v1().terms.accepted_daa;
+        let before=duty(&state,&at(frame,end-1),key,actor,profile).unwrap().unwrap();
+        let expired=duty(&state,&at(frame,end),key,actor,profile).unwrap().unwrap();
+        assert_eq!(before.clock,Clock::ResponseWindow);assert_eq!(expired.clock,Clock::ResponseExpired);
+        assert_eq!(first.id,expired.id,"elapsed time cannot replace the owed response identity");
+        assert_eq!(first.stage,expired.stage,"expiration is not fulfillment or permission to slash");
+        let collection_end=match state.staged_court_row_v1(&key).unwrap() { Row::TirAcquisition(r)=>r.owned.contract_v1().terms.collect_until_daa,_=>unreachable!() };
+        assert_eq!(duty(&state,&at(frame,collection_end-frame.plan_v1().terms.accepted_daa),key,actor,profile)
+            .unwrap().unwrap().clock,Clock::CollectionClosed);
+        assert!(duty(&state,&at(frame,offset),key,owner,profile).is_err(),"a voluntary owner response is not a literal custody debt");
+        assert_ne!(first.id,duty(&state,&at(frame,offset),key,actor,Hash64::from_u64_word(0x74)).unwrap().unwrap().id);
+        let mut missing=state.clone();missing.staged_courts.remove(&frame.preparation_key_v1());
+        assert!(duty(&missing,&at(frame,offset),key,actor,profile).is_err());
+        let mut missing=state.clone();missing.staged_courts.remove(&frame.key_v1());
+        assert!(duty(&missing,&at(frame,offset),key,actor,profile).is_err(),"cannot silently fall back to an old bundle");
+        assert!(duty(&state,&at(frame,offset),frame.preparation_key_v1(),actor,profile).is_err());
     }
 
     #[test]

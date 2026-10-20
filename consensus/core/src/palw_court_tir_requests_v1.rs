@@ -206,6 +206,114 @@ impl TirNativeResponseBranchV1 {
     }
 }
 
+/// Observed native response duty, not service/default authorization. In
+/// particular its owner-scoped identity is NOT a shared-frontier packet ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TirNativeResponseDutyV1 {
+    pub id: Hash64,
+    pub logical_id: Hash64,
+    pub key: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+    pub claim: Hash64,
+    pub allocation_id: Hash64,
+    pub source_id: Hash64,
+    pub answerer: crate::palw_state_v2::PalwBondKeyV2,
+    pub demand_id: Hash64,
+    pub turn: u64,
+    pub opened_daa: u64,
+    pub respond_until_daa: u64,
+    pub original_hard_daa: u64,
+    pub response_fits_original_hard: bool,
+    pub clock: TirNativeDutyClockV1,
+    pub stage: TirNativeDutyStageV1,
+    pub remaining_response_stages_upper: u64,
+    pub remaining_native_moves: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TirNativeDutyClockV1 { BeforeResponse, ResponseWindow, ResponseExpired, CollectionClosed }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TirNativeDutyStageV1 {
+    Begin { maximum_body_bytes: u64 },
+    Part { body_hash: Hash64, total_bytes: u64, offset: u64, bytes: u64, accepted_head: Hash64 },
+    Finish { body_hash: Hash64, total_bytes: u64, accepted_head: Hash64 },
+}
+/// Reads ORIGINAL frame, accepted owner row and current Ready set. No caller
+/// supplies a source, turn, body cursor, custody set or native leaf ceiling.
+/// `ctx` is the native caller's accepting context, not a wall-clock timestamp.
+/// Expired/unfunded-in-moves duties remain visible: absence of a usable route
+/// is not silently interpreted as personal default. None means this row has no
+/// uncollected unfinished response for this actor, not that a claim can Final.
+pub fn tir_native_response_duty_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    ctx: &crate::palw_state_v2::PalwBlockContextV2,
+    key: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+    answerer: crate::palw_state_v2::PalwBondKeyV2,
+    shared_profile: Hash64,
+) -> Result<Option<TirNativeResponseDutyV1>, String> {
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    let Key::TirAcquisition(claim, ..) = key else { return Err("response duty needs an original native acquisition key".into()); };
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
+        .ok_or("response duty has no retained ORIGINAL frame")?;
+    let Some(Row::TirAcquisition(row)) = state.staged_court_row_v1(&key) else {
+        return Err("response duty has no accepted native acquisition".into());
+    };
+    row.check_structure_v1(&key)?;
+    let source = crate::palw_tir_public_state_v1::palw_tir_public_source_for_row_v1(
+        state, row, frame.descriptor_v1().maximum_leaves)?;
+    if let Some(reference) = row.owned.preparation_v1() {
+        let Some(Row::TirPreparation(prep)) = state.staged_court_row_v1(&Key::TirPreparation(reference.claim, reference.allocation_id)) else {
+            return Err("response duty lost its original Ready state".into());
+        };
+        crate::palw_tir_public_state_v1::palw_tir_public_source_for_preparation_row_v1(
+            state, prep, frame.descriptor_v1().maximum_leaves)?;
+        row.owned.check_preparation_v1(&prep.preparation)?;
+    } else {
+        return Err("response duty is not bound to original claim-wide preparation".into());
+    }
+    if !row.owned.response_custodians_v1().contains(&answerer) {
+        return Err("actor has no literal Ready response duty; an owner response is voluntary".into());
+    }
+    let Some(pending) = row.owned.active_v1() else { return Ok(None); };
+    if pending.collected || pending.slots.get(&answerer).is_some_and(|slot| slot.finished.is_some()) { return Ok(None); }
+    let plan = frame.plan_v1();
+    let graph = TirNativeDemandSetV1::new(frame, &source, shared_profile)?.response_for(pending.request)?;
+    let hard = plan.terms.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+        .ok_or("response duty original hard deadline overflow")?;
+    let part_size = crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
+    let (stage, remaining, stage_scope) = match pending.slots.get(&answerer) {
+        None => (TirNativeDutyStageV1::Begin { maximum_body_bytes: graph.maximum_body_bytes }, graph.maximum_stages()?,
+            (0u8, graph.maximum_body_bytes, 0u64, 0u64, Hash64::default(), Hash64::default())),
+        Some(slot) => {
+            graph.branch(slot.total_bytes)?;
+            if slot.accepted_offset < slot.total_bytes {
+                let left = slot.total_bytes - slot.accepted_offset;
+                let bytes = left.min(part_size);
+                (TirNativeDutyStageV1::Part { body_hash:slot.body_hash,total_bytes:slot.total_bytes,
+                    offset:slot.accepted_offset,bytes,accepted_head:slot.head },
+                    left.div_ceil(part_size).checked_add(1).ok_or("response duty stages overflow")?,
+                    (1u8,slot.total_bytes,slot.accepted_offset,bytes,slot.body_hash,slot.head))
+            } else {
+                (TirNativeDutyStageV1::Finish { body_hash:slot.body_hash,total_bytes:slot.total_bytes,accepted_head:slot.head },1,
+                    (2u8,slot.total_bytes,slot.accepted_offset,0u64,slot.body_hash,slot.head))
+            }
+        },
+    };
+    let clock = if ctx.daa_score < pending.opened_daa { TirNativeDutyClockV1::BeforeResponse }
+        else if ctx.daa_score < pending.respond_until_daa { TirNativeDutyClockV1::ResponseWindow }
+        else if ctx.daa_score < row.owned.contract_v1().terms.collect_until_daa { TirNativeDutyClockV1::ResponseExpired }
+        else { TirNativeDutyClockV1::CollectionClosed };
+    let moves = row.owned.contract_v1().plan.envelope.maximum_moves.checked_sub(row.owned.spent_v1().moves)
+        .ok_or("response duty native move budget is inconsistent")?;
+    let scope = borsh::to_vec(&(1u16, graph.logical_id,key,answerer,pending.demand_id,pending.turn,
+        pending.opened_daa,pending.respond_until_daa,hard,stage_scope)).map_err(|e|e.to_string())?;
+    let id = Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64)
+        .key(b"misaka-palw/native-tir-response-duty/v1").hash(&scope).as_bytes().try_into().expect("64"));
+    Ok(Some(TirNativeResponseDutyV1 { id,logical_id:graph.logical_id,key,claim,allocation_id:plan.allocation_id,
+        source_id:plan.source_id,answerer,demand_id:pending.demand_id,turn:pending.turn,opened_daa:pending.opened_daa,
+        respond_until_daa:pending.respond_until_daa,original_hard_daa:hard,
+        response_fits_original_hard:pending.respond_until_daa<=hard,clock,stage,
+        remaining_response_stages_upper:remaining,remaining_native_moves:moves }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
