@@ -1048,6 +1048,31 @@ impl TransitionBuilder<'_> {
         if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
             service.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
+        if let PalwStagedCourtKeyV1::Claim(claim) = key
+            && let Some(binding) = self.state.court_service_state_v1().and_then(|s| s.claims.get(&claim))
+        {
+            let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, claim)
+                .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service semantic update lost original frame".into()))?;
+            if frame.plan_v1().semantic.is_some()
+                && let Some(row) = new.as_ref()
+            {
+                let PalwStagedCourtRowV1::ClaimBundle(bundle) = row else {
+                    return Err(PalwStateV2Error::CarriageInconsistent("service semantic dependency cannot change row type".into()));
+                };
+                row.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                let old = self.state.staged_bundle_contract_v1(claim)
+                    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service semantic update lost signed dependency".into()))?;
+                if old.history_custody.pledge != bundle.history_custody.pledge
+                    || old.original_binding != bundle.original_binding
+                {
+                    return Err(PalwStateV2Error::CarriageInconsistent("service semantic original pledge/binding is immutable".into()));
+                }
+                let until = crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame, binding.hard_deadline_daa)
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                crate::palw_court_service_state_v2::require_tir_service_semantic_custody_v1(frame, bundle, until)
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
         if new.is_none() && self.state.court_service_holds_material_v1(&key) {
             return Err(PalwStateV2Error::CarriageInconsistent("unresolved court service retains original evidence".into()));
         }

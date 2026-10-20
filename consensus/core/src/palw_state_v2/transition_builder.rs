@@ -3016,6 +3016,15 @@ impl<'a> TransitionBuilder<'a> {
                 "retained source default changes producer, independent winner or literal signer roles".into(),
             ));
         }
+        // Absence is not an objective fraud finding. Every semantic/history
+        // collector uses this common economic leg; quota, expired clocks and a
+        // literal unpaid set do not supply the missing service/inclusion policy.
+        // Refuse before both producer and signer-only branches mutate anything.
+        if self.state.court_service_holds_claim_v1(&claim_id) {
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "unresolved court service has no adopted semantic default permission".into(),
+            ));
+        }
         let covering: std::collections::BTreeSet<PalwBondKeyV2> = unpaid.iter().copied().filter(|bond| *bond != producer).collect();
         if !unpaid.contains(&producer) {
             // The producer answered to EOF: no void, no producer record, no session release.

@@ -2965,7 +2965,7 @@ mod conviction_e2e_tests {
         use crate::palw_court_service_state_v2::require_tir_service_custody_window_v1 as check;
         use crate::palw_staged_bundle_v1::{PalwStagedBundlePlanV1, PalwStagedFamilyV1, PalwStagedBundleContractV1};
         let fx = palw_tir_public_frame_fixture_v1(None, 4);
-        let (mut state, _, _, _, _) = demanded_world(&fx, &fx.frame, 0);
+        let (mut state, params, extras, _, _) = demanded_world(&fx, &fx.frame, 0);
         let terms = fx.frame.plan_v1().terms;
         let semantic = PalwStagedBundlePlanV1::derive_v1(terms.accepted_daa,
             vec![(PalwStagedFamilyV1::Constraint, terms.plan)], fx.rules.config).unwrap();
@@ -3032,6 +3032,73 @@ mod conviction_e2e_tests {
             assert_eq!(service.check_context(&state).is_ok(), horizon >= required,
                 "service must cover actual retained original material: {horizon} vs {required}");
         }
+        // A shape-valid semantic contract still uses the guard-only original
+        // fixture above (not native original admission or a signature test).
+        let mut retained = bundle.clone();
+        let cu = frame.header_v1().job_context.cu_ruleset_id;
+        retained.history_custody.pledge.cu_ruleset_id = cu;
+        retained.history_custody.custody.cu_ruleset_id = cu;
+        retained.claim.prefix_custody.as_mut().unwrap().cu_ruleset_id = cu;
+        retained.history_custody.pledge.material_until_daa = required.max(retained.claim.terms.material_until_daa);
+        let dependency = Key::Claim(claim);
+        let row = Row::ClaimBundle(Box::new(retained.clone()));
+        row.check(&dependency).unwrap();
+        state.staged_courts.insert(dependency, row.clone());
+        let owner_key = Key::Owner(claim, outsider());
+        let owner_row = Row::OwnerBundle(Box::new(crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1 {
+            claim, owner: outsider(), reserved_daa: terms.accepted_daa + 1,
+            execution_root: frame.original_v1().execution_root, plan: retained.plan.clone(), inventory: None,
+            selected: None, selected_context: None, selected_native: None, flat: None, flat_context: None,
+            float: None, float_context: None, history_recovery: Default::default(), active: None, opened: Vec::new(),
+        }).into());
+        owner_row.check(&owner_key).unwrap();
+        state.staged_courts.insert(owner_key, owner_row.clone());
+        super::super::palw_staged_court_fold_v1::rebuild_indices(&mut state);
+        let ttl = retained.claim.terms.bond_exit_after_daa.max(terms.material_until_daa) + 1;
+        let point = at(&frame, ttl - terms.accepted_daa);
+        let mut old = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        super::super::palw_staged_court_fold_v1::sweep(&mut old, &point).unwrap();
+        assert!(old.state.staged_court_row_v1(&dependency).is_none(), "old claim keeps finite TTL");
+        assert!(old.state.staged_court_row_v1(&owner_key).is_none(), "old owner keeps finite TTL");
+        let mut held = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        held.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service.clone()).into()))).unwrap();
+        let root = held.state.state_root(); let entries = held.entries.len();
+        assert!(held.write_staged_row_v1(dependency, None).is_err());
+        let mut short = retained.clone(); short.history_custody.pledge.material_until_daa = required - 1;
+        assert!(held.write_staged_row_v1(dependency, Some(Row::ClaimBundle(Box::new(short)))).is_err());
+        assert!(held.write_staged_row_v1(dependency, Some(Row::Claim(retained.claim.clone()))).is_err());
+        let mut longer = retained.clone(); longer.history_custody.pledge.material_until_daa += 1;
+        assert!(held.write_staged_row_v1(dependency, Some(Row::ClaimBundle(Box::new(longer)))).is_err(),
+            "even a longer replacement promise is not the accepted signed pledge");
+        let mut rebound = retained.clone();
+        let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &mut rebound.original_binding else { unreachable!() };
+        header.step_merkle_root = Hash64::default();
+        assert!(held.write_staged_row_v1(dependency, Some(Row::ClaimBundle(Box::new(rebound)))).is_err());
+        let mut foreign = retained.clone(); foreign.history_custody.pledge.resource_plan_id = Hash64::default();
+        assert!(held.write_staged_row_v1(dependency, Some(Row::ClaimBundle(Box::new(foreign)))).is_err());
+        assert_eq!(held.state.state_root(), root); assert_eq!(held.entries.len(), entries);
+        super::super::palw_staged_court_fold_v1::sweep(&mut held, &point).unwrap();
+        assert_eq!(held.state.staged_court_row_v1(&dependency), Some(&row));
+        assert_eq!(held.state.staged_court_row_v1(&owner_key), Some(&owner_row));
+        held.state.court_service_state_v1().unwrap().check_context(&held.state).unwrap();
+        // The actual native panel callback may still update retained membership;
+        // blanket immutability of the dependency would break this legitimate path.
+        let panel = held.state.panel(&claim).unwrap().clone();
+        held.record_staged_panel_v1(claim, &panel).unwrap();
+        assert_eq!(held.state.staged_bundle_contract_v1(claim).unwrap().claim.panel,
+            panel.seats.iter().map(|s| s.bond).collect());
+        held.state.staged_court_row_v1(&dependency).unwrap().check(&dependency).unwrap();
+        assert!(held.state.court_service_holds_material_v1(&owner_key));
+        // Owner material is retained, not a blanket ban on its normal updates.
+        held.write_staged_row_v1(owner_key, Some(owner_row.clone())).unwrap();
+        let live = held.state.claim(&claim).unwrap().clone();
+        let silent = panel.seats[0].bond;
+        for unpaid in [BTreeSet::from([producer, silent]), BTreeSet::from([silent])] {
+            let root = held.state.state_root(); let entries = held.entries.len();
+            assert!(held.staged_selected_default_charge_v1(&point, claim, &live, producer, &unpaid, outsider()).is_err());
+            assert_eq!(held.state.state_root(), root); assert_eq!(held.entries.len(), entries);
+        }
+        held.state.court_service_state_v1().unwrap().check_context(&held.state).unwrap();
         for field in 0..5 {
             let mut row = bundle.clone();
             let p = &mut row.history_custody.pledge;

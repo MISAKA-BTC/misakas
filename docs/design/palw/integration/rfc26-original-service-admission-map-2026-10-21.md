@@ -55,4 +55,20 @@ service bindingの`check_context`が署名custodyをhardだけに照合してい
 
 semantic回帰は、既存のguard-only synthetic semantic rowを使い、hardへ届くpledgeでも最低materialへ1 DAA足りなければ拒否し、一致/+1なら同じcontext検査が通ることを確認する。元frameやhistory署名のnative admissionを実行したという証拠ではない。[検証・hash・native回帰の正確な範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/service-material-floor-artifact.json)。
 
-未解決後の保持・終了効果は別途閉じる必要がある。現在の`court_service_holds_material_v1`はTIR frame/acquisition/preparation/witness/raw bytes等を扱うが、この最低horizon検査だけではClaimBundleやsemantic ownerの全保持・pruning・正当なclose後のarchiveを実装したことにならない。semantic行のあらゆる削除を一律拒否して正しい裁定まで止める修正も、その代替にしない。実契約を使うsemantic admission/close/reorg/pruned IBDと、必要な全material/担保責任を含む終了graphは未完として残す。
+未解決後の保持・終了効果は別途閉じる必要がある。`d4896737c`時点の`court_service_holds_material_v1`はTIR frame/acquisition/preparation/witness/raw bytes等を扱うが、この最低horizon検査だけではClaimBundleやsemantic ownerの全保持・pruning・正当なclose後のarchiveを実装したことにならない。semantic行のあらゆる削除を一律拒否して正しい裁定まで止める修正も、その代替にしない。実契約を使うsemantic admission/close/reorg/pruned IBDと、必要な全material/担保責任を含む終了graphは未完として残す。
+
+## Semantic material・署名契約・無応答課金の補強候補
+
+`d4896737c`後の候補では、semanticを宣言した元frameに結び付く`Key::Claim`契約と`Key::Owner` materialを未解決serviceの保持対象へ加える。TTL/default sweepで削除・処罰する入口を保留し、nativeの通常更新は止めない。finished rowも未解決の間はその型のまま保持する。この保持をもって終了理由ごとの精算・archive規則の完成とはしない。
+
+保持中のClaimBundle更新は、既存rowの構造検査、元の署名済みhistory pledgeとoriginal bindingの同一性、元frameのscopeと最低material horizonを検査する。長い別pledgeへ置き換えて契約を延長したことにしない。通常のPanel/qualification更新は可能で、native Panel記録callbackを回帰で実行する。署名済みpromiseの固定と、行全体の不変化は別である。
+
+semantic/historyの無応答課金は`staged_selected_default_charge_v1`へ集約される。現在のserviceは実供給・inclusion・duty適格性を採択していないため、service bindingがあるclaimについてはproducer不応答分岐とsignerだけの不応答分岐の両方を、状態・journal変更前に拒否する。客観的な計算反証やfalse-Validの証拠裁定をこの無応答guardへ読み替えない。serviceを持たない既存claimの経済規則は維持する。
+
+回帰fixtureは既存のguard-only originalを使う。semantic契約/OwnerBundle自体は構造検査を通る形にし、同じ行の通常TTL削除とservice下の保持、破壊的write/型変更/短い・長い別pledge/別original bindingの拒否、Panel更新、両無応答課金分岐の無変更を検査する。これは実署名のsemantic original受付、実fees、全対話、全familyの正しいclose、node/pruned IBDを証明しない。追加の構造検査・保持・比較・index/journal等の費用は、完成profileへ含める未校正項であり0ではない。
+
+**次に閉じるP0経路:** `palw_state_v2/deadlines.rs::sweep_court_deadlines`の通常court ladder/backstopは、このsemantic共通課金関数を通らない。現時点ではservice保留guardがなく、F02全体のdefault拒否完成とは表示できない。held sessionを保ったまま後続のunheld deadlineを処理できる索引走査、responding/challenging/terminalの各欠席、通常caseとorphan cleanup、正しい客観的closeを検証する必要がある。単にwhileの先頭をcontinueして索引を残すと無限反復になるため、その実装はしない。
+
+また、現original quote/prepareは`job.tail.is_some()`を拒否する。Constraint/Prefixもそのtail enumを使うため、全semantic jobのnative original経路を既に通したという根拠はない。既存の別ClaimBundle経路の成功と混同しない。未知のtailを通す一括解除や、延期済みV5画像/Gen/Evalの解放で迂回せず、対象text経路を各々の本物の契約・費用・courtで検証する必要がある。モデルの除外や数値上限変更でG14達成にしない。
+
+[検証・source/hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/semantic-contract-retention-artifact.json)。原子的な全分岐予約・公開有料ingress・実供給・全依存/bond/終了graph、T01–T15、tag230と実モデルdoor≤3,120の条件は全て残る。

@@ -263,3 +263,11 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 [受付監査の修正と限界](rfc26-original-service-admission-map-2026-10-21.md#最低material期限の接続修正)。これは全依存graphの完了ではなく、既存契約から確定できる最低保持条件の接続。完全な有料original予約、全後続義務/裁定/供給/公開ingress、T01–T15と実doorの元条件は継続する。
 
 最終選択は **67 passed / 0 failed / 0 ignored**（native32＋service codec6＋policy3＋gate12＋activation5＋release identity9）。targeted1は32に含まれ、過去31/62/89等は加算しない。non-test consensus release checkも成功。[実コマンド・source/実行file/log hash・fixtureの限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#minimum-signed-service-material-horizon)。完全なsemantic保持/終了graphの代替とはしない。
+
+## Semantic保持と無応答経済入口 — 2026-10-21
+
+`d4896737c`後に、semantic依存契約/Owner materialがservice保留に含まれない不足と、semantic/history共通の無応答課金入口にservice guardがない不足を修正する候補を追加。元pledge・original bindingを固定し、native Panel更新は許容、TTL/破壊的削除は保留する。無応答のproducer/signer-only両課金を状態変更前に拒否する。客観的反証の裁定経路は別に維持する。
+
+[実装監査・fixtureの限界・次のP0](rfc26-original-service-admission-map-2026-10-21.md#semantic-material署名契約無応答課金の補強候補)。通常courtの`deadlines::sweep_court_deadlines`は別経路でservice guard未接続と確認したため、F02の全面完了とはしない。text Constraint/Prefixのnative originalもtail拒否との対応が未検証。全G14条件を縮小せず継続する。
+
+最終選択 **84 passed / 0 failed / 0 ignored**（同じcore executableのnative32＋public-prefix17、別integration35）。targeted1と過去67/31/62/89等は加算しない。non-test consensus release checkも成功。[中止した旧build・source・hash・検証の限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#semantic-dependency-retention-and-source-default-guard)。次は未接続の通常court deadline/no-show経路を修正する。F02/F03・G14全体の完成ではない。

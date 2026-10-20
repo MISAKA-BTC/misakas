@@ -90,23 +90,39 @@ pub(crate) fn require_tir_service_custody_window_v1(
 ) -> Result<(), String> {
     let plan = frame.plan_v1();
     if frame.custody_v1().pledge_v1().material_until_daa < required_until {
-        return Err("service hard deadline exceeds signed TIR custody".into());
+        return Err("service material horizon exceeds signed TIR custody".into());
     }
     if plan.semantic.is_some() {
         let bundle = state.staged_bundle_contract_v1(plan.original_claim)
             .ok_or("service semantic dependency contract is missing")?;
-        let pledge = &bundle.history_custody.pledge;
-        if pledge.claim != plan.original_claim
-            || Some(pledge.resource_plan_id) != plan.semantic_resource_plan_id
-            || pledge.execution_root != frame.original_v1().execution_root
-            || pledge.job_identity != crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1())
-            || pledge.producer != frame.custody_v1().pledge_v1().producer
-        {
-            return Err("service semantic custody substitutes its original scope".into());
-        }
-        if pledge.material_until_daa < required_until {
-            return Err("service hard deadline exceeds signed semantic custody".into());
-        }
+        require_tir_service_semantic_custody_v1(frame, bundle, required_until)?;
+    }
+    Ok(())
+}
+
+/// Validate a proposed replacement semantic contract against its retained
+/// original. Native panel/qualification updates remain possible; replacing the
+/// dependency's scope or shortening its signed horizon does not.
+pub(crate) fn require_tir_service_semantic_custody_v1(
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    bundle: &crate::palw_staged_bundle_v1::PalwStagedBundleContractV1,
+    required_until: u64,
+) -> Result<(), String> {
+    let plan = frame.plan_v1();
+    if plan.semantic.is_none() {
+        return Err("service original has no semantic dependency".into());
+    }
+    let pledge = &bundle.history_custody.pledge;
+    if pledge.claim != plan.original_claim
+        || Some(pledge.resource_plan_id) != plan.semantic_resource_plan_id
+        || pledge.execution_root != frame.original_v1().execution_root
+        || pledge.job_identity != crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1())
+        || pledge.producer != frame.custody_v1().pledge_v1().producer
+    {
+        return Err("service semantic custody substitutes its original scope".into());
+    }
+    if pledge.material_until_daa < required_until {
+        return Err("service material horizon exceeds signed semantic custody".into());
     }
     Ok(())
 }
@@ -180,6 +196,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     pub fn court_service_holds_material_v1(&self, key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1) -> bool {
         use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
         let claim = match key {
+            // Keep semantic dependencies and their owner material across TTL.
+            // Native moves/closures still mutate rows; only destructive removal
+            // and automatic default/TTL sweeps are deferred while unresolved.
+            Key::Claim(claim) | Key::Owner(claim, _) if crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)
+                .is_none_or(|frame| frame.plan_v1().semantic.is_some()) => Some(*claim),
             Key::TirClaim(claim) | Key::TirAcquisition(claim, ..) | Key::TirPreparation(claim, ..) | Key::TirWitness(claim, ..) => {
                 Some(*claim)
             }
