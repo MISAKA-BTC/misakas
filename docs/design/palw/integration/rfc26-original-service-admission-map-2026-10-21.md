@@ -1,0 +1,48 @@
+# RFC-0026 — original service admission接続のsource監査
+
+状態: 2026-10-21、実装監査。新規則の採択・完全graphの証明・容量測定ではない。対象候補 `0988d4279`。[source hash](../../../evidence/palw/g14-integration-candidate-2026-10-20/preparation-source-scope-audit.json)。[契約案](rfc26-service-shared-frontier-contract-2026-10-20.md)の原子的original acceptanceを満たすための接続点を、現コードに対応づける。
+
+## 現在の原子的入口
+
+`palw_tir_public_fold_v1::prepare_original_v1` は実登録class/layout/native rules、original署名、custody pledgeとsemantic bundleを検査する。通常FPのnative validation/reservation後に `install_original_v1` が呼ばれ、同じ受理DAA・claim/root/producerを照合し、producerのwork roomから既存full depositを検査する。既存full-SUM rentはtransaction minimum fee側で徴収する前提で、fold自体はfeeを再徴収しない。semantic bundle、prompt保持、preparation、frameの書込みは既存の外側dispatcherの原子性に含まれる。
+
+これを共有protocolの有料受付済みと見なしてはいけない。shared context・query・stream・responseはこのinstallerで作られず、実block supply由来のservice bookも設置されない。従来rent/depositと新費用の二重徴収・未徴収の両方を防ぐには、元のallocation identityから各資源成分を一度だけ導出し、実fee規則・exposureと同じ受理遷移へ結ぶ必要がある。
+
+## 実feeの検査点
+
+`consensus/src/pipeline/virtual_processor/processor/palw_accept.rs` の `palw_tir_public_minimum_rent_v1` と、そのcallerを直接確認した。
+
+| 対象 | owedの実導出 |
+| --- | --- |
+| original FP envelope | native preclaim quoteの`plan.terms.plan.rent_sompi`。1 carrierにoriginal allocationは1個 |
+| `OwnerOpen/Open` | 現在のframe/allocation/sourceを照合し、`owner_terms_v1()?.plan.rent_sompi` |
+| `Conviction/Convict`、`ConvictionWitness/WitnessPart(offset=0)` | 同じscope照合後に`frame.conviction_rent_v1()` |
+| 他の継続control | この追加rent helperはNone。通常transaction費用まで免除する意味ではない |
+
+callerは実際のouter UTXO由来`carrier_fee`がunpricedまたはowed未満なら、そのallocationをfold前にdropする。control側はOpen/Convict/最初のWitnessPartに非zeroの宣言を要求し、foldは正確な額と一致を検査する。他のprepaid continuationの宣言rentは0。`PalwTirPublicControlActionV1::Convict` の古いコメントに「never carries rent」とあるが、実行される`check_payload_v1`・`conviction_unsigned_v1`・node helper・foldは上記の有料規則で一致しており、そのコメントを規則の根拠にしない。
+
+新しい共有予約のうち何をoriginalで前払いし、どの増分を要求/終端carrierで負担するかは、この実経路と元allocationの各componentを突き合わせて固定する必要がある。元planとnew shared profileの双方をただ加算することも、old rentの支払いだけでnew費用まで予約済みとすることも、まだ正当化されていない。
+
+## controlと費用の対応
+
+| 現在の実体 | 導出/予約へ含める対象 | 接続上の未完 |
+| --- | --- | --- |
+| PreparationのWorkDebit、PreparationReady、PreparationCollect | whole-passのwork、全restart、durable generation、Readyと欠損経路、literal actor別lane | grant数だけでCPU/IO/公開bytesを置換しない。shared側の費用との再利用境界が未確定 |
+| OwnedのDemand、Reacquire | 全合法座標/choice、既公開bodyの再認証・history opening・nonce | owner8枠を共有経路の資格にせず、別要求のcoalescingと全分岐量を元契約から導出する接続が未完 |
+| OwnedのBegin、Part、Finish、Collect | actual body bound、canonical fragment、認証、失敗prefix、未応答/欠損時の保持 | old ownedの各actor予算を、新sharedの供給済み記録と同一視しない |
+| Shared request | 元source/profileからの閉じたquery、署名・現在bond、最初の受理context | private native関数のみ。実carrier fee・UTXO・timely initial noticeと予約のdispatcher接続が未完 |
+| Shared signed Begin/Part/Finish | literal Ready、固定slot、bounded chunk、EOF decode/source認証、全IDsのouter-root検査 | 全Ready actor、合法retry/失敗と再取得、codec/signature/IO/保持費用を全て含むprofileが未完 |
+| Shared fresh data response | query block/DAAと認証済みfingerprintに対するliteral signature、receipt、適格起点 | データ段階の応答。semantic turn/witness/court義務の完了・default許可へは未接続 |
+| Convictionおよびsplit witness、semantic bundle court | 最終fragmentから実裁定までの全work/bytes、semantic branch、後続責任 | 原子的な全clock更新、依存horizon、終了理由ごとの効果と全legal graphが未完 |
+
+この表はsourceに存在する入口の監査であり、全合法graphが閉じたというcertificateではない。duplicate/invalid carrierの負荷も無限の予約義務と混同せず、実blockの受理前検査予算・通常費用・予約済み正規義務の各々で処理する規則が必要。callerが任意のpacket集合や費用を渡して「complete」とする入口を作らない。
+
+## 次の実装が通すべき条件
+
+採択済みの元class/layout/source/rulesを読み、preparationから最終裁定・回復までの全合法分岐の閉包とactual codec費用を導出する。未導出の項は0にせず拒否する。全claimの同時負荷、既存予約を移動しない追加予約、実際のfees/funding/exposure、最短の署名済み依存horizon、hard+followupとhard+retentionの最大、signerとholdを一つのoriginal受理遷移で検査・設置する。失敗では全てを戻す。
+
+source-data upper、quota book、データreceiptの各々だけではこの条件を満たさない。first-blockの物理/専用/無効入力予算と明示したdelivery/inclusion前提も別途必須。全owner占有下の外部1人の実node訴追、T01–T15、tag230、実モデルdoor≤3,120の元の受入条件は維持する。
+
+## 確認記録
+
+既存current-clock release回帰5件と、G14 gate12・activation5・release identity9の31件が成功した。[実コマンド・生ログhashとsource hash](../../../evidence/palw/g14-integration-candidate-2026-10-20/preparation-source-scope-audit.json)。この回帰はclock version/serial witness依存/既存turn span/queue/cost recordを対象とし、この表の全対話予約・実fee統合やphysical capacityを実行したものではない。production・test source、旧wire、数値、presetは未変更。

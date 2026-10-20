@@ -247,3 +247,11 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 [生ログ・最終結果・source hash・限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#d2-node-claim-part-replacement-and-isolated-component-fixtures)。これはBase0のnode component試験であり、daemon全体・全family/fused分岐・TIR owner占有/埋め直しT05・物理容量・実door・R-D2最終承認・G14完成ではない。P0/P1/P2と本番武装拒否を維持する。
 
 最終選択は **62 passed / 0 failed / 0 ignored**。同じ最終node executableの関連36件と、G14 gate12・t12 activation5・release identity9。旧ignored D2 2件も通常実行し、13件のchild fixtureも実際の動作まで成功した。初回1成功や途中23成功/13失敗、過去89等は加算しない。変更は試験3ファイルと文書/証拠に限定し、production source・数値・schema・arming recordは未変更。
+
+## Original受付の接続監査 — 2026-10-21
+
+[準備clockの単独調査](rfc26-shared-frontier-volume-2026-10-20.md)に、12,420 DAA下界のsourceが旧main `0f808b81d`であることを明記。既存進捗のX3区別を単独文書にも反映し、現候補へ古い式を適用しない。現行は1pass/1WorkDebit、serial chain＋parallel inclusionの式を使う。work/IO/公開費用や全対話を削除したという意味ではない。
+
+[Original受付と各control/feeの対応監査](rfc26-original-service-admission-map-2026-10-21.md)を追加。original rent、owner Open rent、Convict/最初のWitnessPart rentの実node helperとfoldの関係、shared private primitiveがまだ有料original admissionへ接続されていない点を固定した。全合法graphの証明ではなく、未導出費用のゼロ化・新旧費用の重複加算の両方を防ぐためのsource根拠である。
+
+今回は文書/source監査で、production/test source変更なし。既存clock回帰5＋t12関連26の31件成功。過去62等は加算せず、実容量・実door・完全予約・本番有効化は未達として継続する。

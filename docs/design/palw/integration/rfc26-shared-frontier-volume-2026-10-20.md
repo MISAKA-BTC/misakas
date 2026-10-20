@@ -42,9 +42,9 @@ release 試験 `palw_court_shared_frontier_volume` は上の geometry を `N = 2
 3. 全量が収まると確認できるまで `OneOutsiderCapacityIncomplete` を解除しない。モデルの除外、上限の引き上げ、unknown 項のゼロ化を達成手段にしない。
 4. 未達なら、その負荷で G14 未達と報告する。SC64、現行 4 分岐、16 分岐候補、先読み profile の数字を混ぜない。数値 fold 検査は維持する。
 
-## 追加調査: legacy preparation clock の起点
+## 追加調査: 旧 main snapshot の preparation clock の起点
 
-再割当の native fixture で、既存 owner acquisition を待ってから作った packet 区間が original `+10,000` を越え、`InvalidInterval` で拒否された。hard を引き上げず、この拒否を回帰試験に残した。以下は **`PalwStagedPublicCourtConfigV1::network_v1()` を使う legacy quote に限定した静的導出**。CPU・ネットワーク・実モデルの測定値でも、全ての future profile の下界でもない。
+再割当の native fixture で、既存 owner acquisition を待ってから作った packet 区間が original `+10,000` を越え、`InvalidInterval` で拒否された。hard を引き上げず、この拒否を回帰試験に残した。以下は **旧 main `0f808b81d` の `PalwStagedPublicCourtConfigV1::network_v1()` を使う quote に限定した静的導出**。現統合候補の式ではない。CPU・ネットワーク・実モデルの測定値でも、全ての future profile の下界でもない。
 
 - `palw_rendering_resources_v1::network_v1`: `acquisition_daa = 4,096`、`inclusion_margin_daa = 4`、`reorg_replay_moves = 64`。
 - `palw_tir_public_owned_v1::work_allocation_from_lanes_v1` は `maximum_restarts` をその `reorg_replay_moves` から取る。`preparation_lanes_v1` も一致を検査して同じ値を持つ。
@@ -56,3 +56,20 @@ release 試験 `palw_court_shared_frontier_volume` は上の geometry を `N = 2
 `palw_tir_public_allocation_v1::derive_tir_public_allocation_v1` が `original_acceptance + preparation_daa` を `preparation_until_daa` として固定する。`PalwTirPublicOwnedV1::bind_preparation_v1` は owner の `reserved_daa < preparation_until_daa` を拒否する。よって、この legacy quote を RFC-0026 の original `+10,000` にそのまま接続して、owner 経路が成立したとは表示できない。最遅 owner の demand/response/localization/terminal はこの後であり、ここではその費用すら下界に足していない。
 
 再割当 journal の成功 fixture は同じ original frame の準備区間で book を動かすもので、owner 経路の成功を代替しない。次に必要なのは、actual native profile がどの config を固定するかの区別、logical walk / prepared publication / WorkDebit control の対応、canonical chain clock と再実行予算の対応、公開 frame の局所化による資源削減の検証である。clock の差し替えや batch 化は未採択の別 version/profile として検証し、既存の signed plan・ID の意味を変更しない。再実行数・上限・費用を根拠なく削ったり、扱うモデルを減らして達成したことにしない。
+
+## 現統合候補との対応 — 2026-10-21
+
+進捗記録では既に旧mainとX3の違いを区別していたが、この単独調査文書にはsource commitの明示が不足していた。上の旧式・値は履歴として保持し、現候補 `0988d4279` へ適用しない。[旧/現sourceのhashと監査範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/preparation-source-scope-audit.json)。
+
+現行 `derive_tir_public_preparation_plan_v1` は `passes = maximum_restarts + 1`、`maximum_slices_per_actor = passes × PALW_TIR_FRAME_PREPARATION_DEBITS_PER_PASS_V1` とし、定数は1。grant数を論理leaf数や16KiB durable slice数と同一視しない。workの総量、公開・再読込・IO、各actorのlane限度、restart限度は別途保持される。grantをまとめたことはその計算や保持を無料にすることではない。
+
+現行 `tir_public_preparation_door_v1` の導出は次のとおり。`U`はcustodian upper、`R`はreorg replay moves、`M`はinclusion margin、`A`はacquisition DAA、`C`はcontrol bytes、`B`はparallel bytes/DAA。
+
+```
+S = (R + 1) × 1 + 1  // passごとのdebitと最後のReady
+preparation_daa = A + S×M + ceil(U×S×C / B)
+```
+
+これはclock.checkとchecked arithmeticを通るprofileに対する現コードの式。上の旧network入力のうちA=4,096、R=64、M=4だけを代入しても、現式の既知部分は4,360であり、旧式の12,420ではない。U/C/Bは当該profileの実際の値が必要で、未知の並列項をゼロにして完成時間を作らない。この代入は本番profileの採択でも実機の時間測定でもない。準備後の応答・局所化・witness・裁定はさらに別の項である。
+
+全量のsource公開量の条件付き64N下限は、上記の全末端要求を合法に引き受けるという前提の下で別途残る。1passのgrant集約やserial/parallelの区別だけでは、all-owner共謀下の全要求集合、実供給、fresh signerの可用性、元の完全な予約/料金、3,120/10,000の全経路は証明されない。[現行controlと予約対象の接続監査](rfc26-original-service-admission-map-2026-10-21.md)へ進む。
