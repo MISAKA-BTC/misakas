@@ -41,6 +41,29 @@ pub enum CourtEndDispositionV1 {
     CompletedAssemblyFault(PalwCourtSideV1), RelatedNativeTransition,
 }
 impl PendingCourtArchiveV1 {
+    /// Forward material append only. Neither completion nor elapsed time is a
+    /// settlement capability: every contract, disposition and nominal hold stays.
+    pub(crate) fn check_material_extension(&self, old:&Self)->Result<(),String>{
+        if self.version!=old.version || self.session_id!=old.session_id
+            || self.service_profile_id!=old.service_profile_id || self.archive_profile_id!=old.archive_profile_id
+            || self.allocation_id!=old.allocation_id || self.source_id!=old.source_id || self.producer!=old.producer
+            || self.material_until_daa!=old.material_until_daa || self.session!=old.session
+            || self.court_stake_nominal!=old.court_stake_nominal || self.tir_phase!=old.tir_phase
+            || self.applied_deposit_debits!=old.applied_deposit_debits || self.fulfilled_groups!=old.fulfilled_groups
+            || self.evidence!=old.evidence || self.groups.len()!=old.groups.len()
+        {return Err("archive material append changes original contract or responsibility".into());}
+        for (side,previous) in &old.groups {
+            let next=self.groups.get(side).ok_or("archive material append removes a side")?;
+            if next.declarer!=previous.declarer || next.count!=previous.count || next.chunk_digests!=previous.chunk_digests
+                || next.close_digest!=previous.close_digest || next.verdict!=previous.verdict
+                || next.declared_daa!=previous.declared_daa || next.assembly_deadline_daa!=previous.assembly_deadline_daa
+                || next.deposit_outpoint!=previous.deposit_outpoint || next.deposit!=previous.deposit
+                || previous.present & !next.present!=0
+                || previous.chunks.iter().any(|(i,bytes)|next.chunks.get(i)!=Some(bytes))
+            {return Err("archive material append changes accepted contract or prefix".into());}
+        }
+        self.check(&Key::CourtEndArchive(self.session_id))
+    }
     pub fn adjudication(&self)->CourtEndDispositionV1 {
         if let Some(side)=self.applied_deposit_debits.keys().next(){return CourtEndDispositionV1::CompletedAssemblyFault(*side);}
         match self.evidence.as_ref(){

@@ -1,0 +1,6 @@
+{
+  "consensus/core/src/palw_court_archive_verify_v1.rs": "2341e5df6a7fd79184a58b6dfdd2e627ce895c1366e21f6b8bec840e5c737874",
+  "consensus/core/src/palw_court_end_archive_v1.rs": "e8cbc6a657e7de1e35fac1070b50c793079c520f40c12b663de983a9e40b0eaf",
+  "consensus/core/src/palw_staged_court_fold_v1.rs": "ab1c3db0c93977f3d27efd21dc90144081a7be2cb95ff63001d924fdd74e5460",
+  "consensus/core/src/palw_tir_public_fold_v1.rs": "742724b3583c4537a04f91bde575ddb52cc2e83d179ea06d0fe97a8bd0fa1b3f"
+}

@@ -3490,6 +3490,35 @@ mod conviction_e2e_tests {
             let root=b.state.state_root();let journal=b.entries.len();
             assert_eq!(b.verify_archived_close_v1(id,side,&candidate).is_ok(),!wrong_verdict);
             assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
+            // After TTL, relay the signed missing material without changing any
+            // original deadline, adjudication, balance or nominal responsibility.
+            let before=b.state.court_end_archive_v1(id).unwrap().clone();
+            let exposure=b.state.court_archive_pending_exposure_v1(&outsider());
+            let bond=b.state.bond(&outsider()).unwrap().clone();
+            let claim=b.state.claim(&frame.plan_v1().original_claim).unwrap().clone();
+            for (index,bytes) in [(0,raw[..split].to_vec()),(2,raw[split..].to_vec()),(1,vec![]),(1,vec![0xAB])]{
+                assert!(b.append_archived_close_chunk_v1(id,side,index,&bytes).is_err());
+                assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
+            }
+            b.append_archived_close_chunk_v1(id,side,1,&raw[split..]).unwrap();
+            let after=b.state.court_end_archive_v1(id).unwrap();
+            assert_eq!(after.groups[&side],candidate);after.check_material_extension(&before).unwrap();
+            assert!(!after.fulfilled_groups.contains(&side));assert!(!after.applied_deposit_debits.contains_key(&side));
+            assert_eq!(b.state.court_archive_pending_exposure_v1(&outsider()),exposure);
+            assert_eq!(b.state.bond(&outsider()),Some(&bond));assert_eq!(b.state.claim(&frame.plan_v1().original_claim),Some(&claim));
+            let appended=b.state.state_root();let entries=b.entries.len();
+            assert!(b.append_archived_close_chunk_v1(id,side,1,&raw[split..]).is_err());
+            for mutate in 0..5 {
+                let mut changed=b.state.court_end_archive_v1(id).unwrap().clone();
+                match mutate {0=>changed.material_until_daa+=1,1=>{changed.fulfilled_groups.insert(side);},
+                    2=>{changed.groups.get_mut(&side).unwrap().chunks.remove(&1);changed.groups.get_mut(&side).unwrap().present^=2;},
+                    3=>changed.groups.get_mut(&side).unwrap().deposit+=1,_=>changed.court_stake_nominal+=1}
+                assert!(b.write_staged_row_v1(Key::CourtEndArchive(id),Some(Row::CourtEndArchive(Box::new(changed).into()))).is_err());
+                assert_eq!(b.state.state_root(),appended);assert_eq!(b.entries.len(),entries);
+            }
+            assert_eq!(b.verify_archived_close_v1(id,side,&candidate).is_ok(),!wrong_verdict);
+            let tip=*b.state.last_point().unwrap();
+            archive_roundtrip(&mut b,&params,&frame,id,tip,state.state_root());
         }}}
     }
 

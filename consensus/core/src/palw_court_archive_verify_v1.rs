@@ -42,6 +42,38 @@ pub(super) fn inspection_io_error(stage:&str,error:std::io::Error)->PalwStateV2E
     }else{refusal(format!("{stage}: {error}"))}
 }
 impl TransitionBuilder<'_> {
+    /// Retain only a missing precommitted chunk after active court termination.
+    /// This private material path admits no new declaration, clock, fulfilment,
+    /// penalty or financial release. A completed malformed object is evidence to
+    /// retain, not permission to punish its signer or to discard its last bytes.
+    #[allow(dead_code)]
+    pub(super) fn append_archived_close_chunk_v1(&mut self,id:Hash64,side:PalwCourtSideV1,index:u8,bytes:&[u8])
+        ->Result<(),PalwStateV2Error>{
+        let archive=self.state.court_end_archive_v1(id).ok_or_else(||refusal("court archive missing"))?;
+        archive.check_context(&self.state).map_err(refusal)?;
+        let group=archive.groups.get(&side).ok_or_else(||refusal("archived declaration missing"))?;
+        if archive.fulfilled_groups.contains(&side) || archive.applied_deposit_debits.contains_key(&side)
+            || index>=group.count || group.has(index) || bytes.is_empty() || bytes.len()>PALW_COURT_CLOSE_CHUNK_MAX_BYTES
+            || palw_court_close_chunk_digest_v1(bytes)!=group.chunk_digests[usize::from(index)]
+        {return Err(refusal("archive chunk is not missing declared material"));}
+        if self.native_writers_tracking_v1(){
+            let mut q=native_writers::NativeWriteQuoteV1::new("archive material append before copy and signature message");
+            q.copy(archive)?.exact::<crate::palw_court_end_archive_v1::PendingCourtArchiveV1>(2)?
+                .exact::<u8>((2*std::mem::size_of::<usize>()+std::mem::align_of::<crate::palw_court_end_archive_v1::PendingCourtArchiveV1>()) as u64)?
+                .exact::<u8>(bytes.len() as u64)?.member::<u8,Vec<u8>>(1)?
+                .exact::<Hash64>(2*u64::from(group.count))?.exact::<u8>(256)?;
+            self.admit_native_write_v1(q)?;
+        }
+        let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {
+            Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>return Err(refusal("original signed close receipt missing")),
+        };
+        receipt.check_context(&self.state).map_err(refusal)?;
+        let mut next=self.state.court_end_archive_v1(id).expect("validated archive").clone();
+        let group=next.groups.get_mut(&side).expect("validated side");
+        group.chunks.insert(index,bytes.to_vec());group.present|=1u64<<index;
+        self.write_staged_row_v1(Key::CourtEndArchive(id),Some(Row::CourtEndArchive(Box::new(next).into())))
+    }
+
     /// A private verifier, not a public ingestion or paid-admission endpoint.
     /// The candidate can add only the precommitted missing bytes. No clock,
     /// policy, signature, verdict, contract or previously accepted byte changes.

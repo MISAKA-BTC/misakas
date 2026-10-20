@@ -992,12 +992,15 @@ impl TransitionBuilder<'_> {
             r.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
         if let PalwStagedCourtKeyV1::CourtEndArchive(_) = key {
-            if let Some(old) = self.state.staged_court_row_v1(&key) {
-                if Some(old) != new.as_ref() { return Err(PalwStateV2Error::CarriageInconsistent("unresolved court archive is immutable".into())); }
-            }
             let Some(PalwStagedCourtRowV1::CourtEndArchive(a)) = &new else {
                 return Err(PalwStateV2Error::CarriageInconsistent("court archive cannot be removed or retyped".into()));
             };
+            if let Some(old) = self.state.staged_court_row_v1(&key) {
+                let PalwStagedCourtRowV1::CourtEndArchive(old)=old else {
+                    return Err(PalwStateV2Error::CarriageInconsistent("court archive foreign row".into()));
+                };
+                a.check_material_extension(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
             a.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
         match &new {

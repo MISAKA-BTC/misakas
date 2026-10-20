@@ -341,3 +341,10 @@ wire CPU予算/shape算術・OOMをNativeResourceとして伝播し、切断さ�
 Final borrowed-v5 selection: 134 unique passes (native40 + public-prefix17 + ordinary13 + kernel23 + integration41). Targeted1 overlaps native40; historical105 is excluded. Six F7 cases use a toy corpus and do not demonstrate measured real-model door or funded public archive admission.
 
 Core test type-check and non-test consensus release check both exited 0. Documentation checking remains FAIL/exit1 with the same five imported missing references and43 baseline-known occurrences; no newly authored missing link or baseline update. All three changed runtime files were reconstructed from the parent and saved patch and matched SHA-256.
+## 終了後の署名済みmaterial追加候補
+
+親`2fcbcac6a`。[RFC-0030 §12](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#12-private-append-of-precommitted-archive-material)のprivate内部経路で、元宣言が指定した未受理chunkだけをarchiveへ追加する。署名・index・size・digestを確認し、元scope/session/phase/終了証拠・受理済みbytes・期限・stake/deposit・徴収済み/fulfilled状態を変えない。既存journal writerの前向き更新を、materialの追加に限定して許可する。wire/row/key/schemaの変更はない。
+
+完成しても履行済みや適時応答と認定せず、名目責任・担保・claimを維持する。不整合な宣言の実bytesも保存し、既存private v5再検査の拒否結果と区別する。実費予約を伴う公開入口、公開late適用時点、適格な金融精算・解除・pruning、全original graph・実供給・P2・T01–T15/実doorは未完。単なる無期限holdを完成にせず、これらへの後続接続に必要な実materialを保存する段階である。
+今回の最終選択は134件（native40＋prefix17＋通常court13＋kernel23＋integration41）。既存8組の試験を拡張したため、新規test件数として加算しない。targeted1・過去134等も除外する。[実行コマンド・hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/archive-material-artifact.json)に保存する。最初の型検査は試験引数の参照型不一致によりexit101で、修正前source/patch/logを別保存した。実行試験0である。
+Non-test consensus release check exited0. The four changed runtime sources were reconstructed from parent plus patch and matched SHA-256. Documentation remains FAIL/exit1 with the same five imported missing references and43 baseline-known occurrences; no new authored missing reference or baseline update. Full G14 and activation remain incomplete.
