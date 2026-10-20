@@ -141,7 +141,7 @@ RFC-0024 本文(B)の各 round の数値 fold 検査を、現行の規範とし�
 |---|---|
 | `palw_court_capacity_v1`(court 専用 block 予算・予約枠・期限順の割当・新規 claim 受付制限) | **別 branch の実装**(`release/t12-16000` に存在。`pre` には未統合)。休眠、値は仮。新しい提出保証が実装で閉じたとは言えない |
 | 履歴 tile 二分探索・1 位置化・tag 245 登録簿 | 別 branch(`g14/door-design`)、休眠、単体試験のみ |
-| X3 の固定期限・open session による Final 保留 | 別 branch(`codex-free/d2-x3`)、node 試験あり。reorg の node 試験(`x3_req_5c`)は未完 |
+| X3 の固定期限・open session による Final 保留 | 別 branch `e27771b96`（起点 `05fcf7b5c`）。合法な浅い reorg の予約/session rollback と復元を release node 試験で確認。関連 suite 33 passed / R-D2-NODE 2 ignored、t12 同一性 26 passed。未統合・有効化なし。詳細は [記録](../evidence/palw/g14-completion-2026-10-20/README.md) |
 | F02/F03 未完による武装拒否 | 別 branch の実装 `62ac3c55f`。readiness record による迂回を拒否。release 部品・回帰試験 29 件通過、実経路・敵対的統合試験は未完、有効化なし |
 | §2/§3.3 の時計・依存 horizon 導出部品 | 別 branch の実装 `62ac3c55f`。state/fold 未接続。原子的期限更新・T06/T09 完了を意味しない |
 | F02/F03 予約 scheduler 部品 | 別 branch `0336b6cea`、release 部品・回帰 32 件通過。全分岐の導出、供給会計、block admission、T04/T05 は未接続・未検証。有効化なし |

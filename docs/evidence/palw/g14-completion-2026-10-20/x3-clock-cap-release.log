@@ -1,0 +1,12 @@
+
+running 1 test
+2026-10-20 18:01:55.039+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-20 18:01:55.041+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-20 18:01:55.042+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-20 18:01:55.042+09:00 [INFO ] Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message
+2026-10-20 18:01:55.046+09:00 [INFO ] [dns-bft] sink=ff52601f2932eb2b7a06f42bd71ab3ab69c224c719e60029b17688c94c0d7a32ac9e030f5f152d602a32ff5173b989689dd23c602815fa7330d2fee4bfd08d25 epoch=0 anchor=e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708 counted=0 validators=0 W=0 leaked=0 attested=0 precommitted=0 round1=no final=no
+2026-10-20 18:01:55.048+09:00 [INFO ] [dns-bft] sink=9666289420322c0e5240e1dabd2b5ab0e34c0f31d6cdfcf27f38c7cf5d34d0189854590f9531c7e2d1408a9ce4169cd91b11ecc1e821e54f2c6e6c127ea22309 epoch=1 anchor=4ab8f46a570265fe39fc65f2854efec9ad95aa29de9bb9b4bdca1854dbe472f9943a90a40878995239f876c3ccd40db4f28945595cda2fc98533d37b66967cb2 counted=0 validators=0 W=0 leaked=0 attested=0 precommitted=0 round1=no final=no
+test pipeline::virtual_processor::tests::t12_clock_floor::t12_validation_clock_preserves_the_lead_cap_and_retry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1062 filtered out; finished in 0.03s
+

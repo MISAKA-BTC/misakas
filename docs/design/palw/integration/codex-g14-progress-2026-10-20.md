@@ -55,3 +55,15 @@ cargo test --release -p kaspa-consensus-core \
 ### 原資料保持の訂正
 
 `d08bfb25c` の欠落参照修正のうち、4 つの imported asset 文書は元 package manifest の対象だったため、内容を `7fe073ec2` の bytes に戻した。元資料の再現性を優先し、manifest/digest を更新して整合したように表示しない。現行 RFC-0024 本文の未同梱 evidence 注記は維持する。従って現在の `check_docs.py` は既存 assets 由来の 5 件で FAIL。上の PASS はリンクを変更した中間版の記録で、最終版の結果ではない。baseline 未変更。
+
+## X3 の別 branch 修正
+
+`codex/rfc14-x3-reorg-clock` / `e27771b96`（起点 `05fcf7b5c`、未統合）で、header の未来時刻検査と virtual/template が読む instance-local な試験時計を追加。production の時計・132 秒 cap・fork choice・preset は変更しない。
+
+元の `x3_req_5c` は fork が bind 前で、A だけが重い attempt を持つため B の heartbeat work 追跡が長期化する。さらに pre-Final hold を heartbeat だけで Final branch より優先させる return は既存の経済的 fork choice と両立しない。初回実行は時計拒否を除いても長期化し、中断した。成功とは数えない。
+
+修正では予約と session の rollback を別々のテストにし、fork より後の変更を既存の 2 DAA 内に限定。両枝は同じ DAA / blue work とし、正規の `SortableBlock` の hash tie-break を満たす枝を作る。A/B 各 root、予約、session、phase の rollback と復元を node で確認する。B を Final にしてから hold 付き A が heartbeat だけで勝つという旧シナリオは、達成済みと表示しない。
+
+release `x3_req_5` 対象 **4 passed / 0 failed / 0 ignored**。同じ release binary の `t12_validation_clock_preserves_the_lead_cap_and_retry` **1 passed**。LG14-A 関連 suite は **33 passed / 0 failed / 2 ignored**、この branch の t12 同一性は指定 3 系統を含む **26 passed / 0 failed / 0 ignored**。R-D2-NODE の 2 件と tag 230 の codec 判断は解消していない。
+
+生ログ・SHA-256・コマンドは [release 試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)に保存。

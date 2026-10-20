@@ -573,6 +573,7 @@
 - [evidence/hf-onboarding/20261011-smolvlm-256m-l1/README.md](../evidence/hf-onboarding/20261011-smolvlm-256m-l1/README.md)
 - [evidence/hf-onboarding/20261011-smolvlm-256m-l1/reproduction.md](../evidence/hf-onboarding/20261011-smolvlm-256m-l1/reproduction.md)
 - [evidence/hf-onboarding/20261011-smolvlm-256m-l1/summary.md](../evidence/hf-onboarding/20261011-smolvlm-256m-l1/summary.md)
+- [evidence/palw/g14-completion-2026-10-20/README.md](../evidence/palw/g14-completion-2026-10-20/README.md)
 - [evidence/palw/implementation-records/README.md](../evidence/palw/implementation-records/README.md)
 - [evidence/palw/implementation-records/adversarial-e2e-record.md](../evidence/palw/implementation-records/adversarial-e2e-record.md)
 - [evidence/palw/implementation-records/beacon-conformance-record.md](../evidence/palw/implementation-records/beacon-conformance-record.md)
