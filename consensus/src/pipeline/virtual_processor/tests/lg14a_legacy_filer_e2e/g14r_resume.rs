@@ -9,7 +9,7 @@ use super::*;
 
 impl Lg {
     /// This network's actors around another node's chain (a replay / a reorged / an imported node), with `funding` as their outputs.
-    fn on_chain(&self, chain: T12Chain, funding: BTreeMap<usize, (TransactionOutpoint, UtxoEntry)>) -> Lg {
+    pub(super) fn on_chain(&self, chain: T12Chain, funding: BTreeMap<usize, (TransactionOutpoint, UtxoEntry)>) -> Lg {
         Lg {
             chain,
             config: self.config.clone(),
@@ -27,7 +27,7 @@ impl Lg {
     }
 
     /// A node replaying every block of this one's selected chain from genesis (a full IBD).
-    async fn ibd(&self) -> T12Chain {
+    pub(super) async fn ibd(&self) -> T12Chain {
         let z = t12_genesis_chain_on(TestConsensus::new(&self.config), &self.config, &self.bundle, &self.premine, &self.floats);
         for block in chain_blocks(&self.chain, self.chain.sink()) {
             arrive(&z, block, "a block of the first node").await;

@@ -27,7 +27,7 @@ Only the response controls use real cryptographic signature verification; the or
 
 ## Remaining closure
 
-T08 still needs actual funded third-party carriers through mempool, block acceptance and native fold, original custody/credit admission with real signatures, source-holder and signer availability over all turns, signed dependency horizon, failure/recovery behavior and restart/reorg. The all-owner outsider path, physical inclusion supply and default attribution remain separate unfinished P0 conditions. A funded relay of complete evidence cannot substitute for obtaining the evidence under collusion.
+Complete TIR-original T08 still needs funded third-party carriers through its mempool, block acceptance and native fold, original custody/credit admission with real signatures, source-holder and signer availability over all turns, signed dependency horizon, failure/recovery behavior and restart/reorg. The all-owner outsider path, physical inclusion supply and default attribution remain separate unfinished P0 conditions. A funded relay of complete evidence cannot substitute for obtaining the evidence under collusion.
 
 ## Funded legacy-node relay scenario
 
@@ -36,3 +36,9 @@ T08 still needs actual funded third-party carriers through mempool, block accept
 Assertions cover unchanged signed payload in carrying blocks, newcomer funding rather than producer funding, unchanged producer collateral/funding, duty discharge and the independent filer's authenticated binding read. This is the legacy MaterialDisclosedV2 path, not TIR original/TFP1 acceptance or full T08. It uses the documented LG14-A harness differences (isolated test genesis/cards, skipped PoW and directly configured dormant legacy fence); no network preset or live fence is armed. It does not represent an external process PC shutdown or guarantee fresh adaptive signatures after signer loss.
 
 The funded legacy test passed, as did the existing producer-paid non-seat pursuit case on the same freshly built node test executable. Its exact evidence scope and logs are in the [release evidence record](../../../evidence/palw/g14-completion-2026-10-20/README.md). Thus funded legacy third-party carriage has direct node evidence; TIR original/TFP1 and complete T08 remain open.
+
+## Real UTXO and full-IBD extension
+
+The same funded legacy-node case now queries `get_virtual_utxo_entry` directly for the producer's original output, the relayer's consumed input and its new change. It compares amount/script of remaining outputs to the expected funding chain, rather than relying only on the harness map. A fresh `TestConsensus` node receives every selected-chain block from genesis via the normal block acceptance path. Both the consensus state root and the same funding/duty predicates are checked there. A new verifier, starting with no learned binding, reads the accepted relay evidence again.
+
+This extension covers full block replay inside the existing in-process node harness. It is not process shutdown/reopen, network sync, pruned snapshot import, the proposed service ledger's IBD or TIR original/TFP1 acceptance. It must not be substituted for those remaining T08/T14 requirements. Earlier evidence sections that did not assert direct UTXO/full IBD describe the earlier commit's narrower test.

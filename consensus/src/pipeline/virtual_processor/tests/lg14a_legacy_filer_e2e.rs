@@ -859,6 +859,27 @@ async fn lg14a_a_newcomer_funds_and_relays_another_bonds_signed_answer() {
         "native fold discharged the producer's answered duty");
     assert!(verifier.learn(&lg, probe), "the independent verifier learns the authenticated binding");
     assert!(verifier.binding.is_some());
+    // Query the real ledger, independently of the helper's funding map.
+    let relay_change = lg.funding[&NEWCOMER].clone();
+    let check_utxos = |chain: &T12Chain| {
+        let original = chain.ctx.consensus.get_virtual_utxo_entry(producer_funding.0).expect("producer's actual UTXO remains");
+        assert_eq!((original.amount, &original.script_public_key), (producer_funding.1.amount, &producer_funding.1.script_public_key));
+        assert!(chain.ctx.consensus.get_virtual_utxo_entry(newcomer_input).is_none(), "relayer's actual input is spent");
+        let change = chain.ctx.consensus.get_virtual_utxo_entry(relay_change.0).expect("relayer's actual change exists");
+        assert_eq!((change.amount, &change.script_public_key), (relay_change.1.amount, &relay_change.1.script_public_key));
+    };
+    check_utxos(&lg.chain);
+    // Full block replay into a fresh node, carrying no verifier-local cache.
+    // This is full IBD in the in-process harness, not pruned import/process restart.
+    let imported = lg.ibd().await;
+    check_utxos(&imported);
+    assert_eq!(imported.tip_state().1.state_root(), lg.chain.tip_state().1.state_root());
+    assert!(!imported.ctx.consensus.palw_disclosure_duties_v1(vec![producer]).duties.iter().any(|d| d.claim_id == id));
+    let resumed = lg.on_chain(imported, lg.funding.clone());
+    let mut fresh_verifier = Verifier::check(&resumed, NEWCOMER, id);
+    assert!(fresh_verifier.binding.is_none());
+    assert!(fresh_verifier.learn(&resumed, probe), "fresh verifier relearns only accepted relay evidence");
+    assert!(fresh_verifier.binding.is_some());
 }
 
 /// **G14 C1 / C5 / C7 / C8, before Final**: a non-seat bond registered after genesis convicts a self-consistent computation lie that

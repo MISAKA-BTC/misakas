@@ -173,3 +173,7 @@ release 新 node 試験 1、同じ新 binary の既存追及回帰 1、以前の
 最終 release 部品 2 + fresh t12/G14/activation/release 回帰 26 = **28 passed / 0 failed / 0 ignored**、non-test consensus release check 成功。実 tiny source の validator を oracle にした完全集合比較、重複なし、source 差し替え、各 family の境界、最大 Run、profile 分離、端数と overflow を確認した。大きい N の例は synthetic arithmetic で、モデルや帯域の実測ではない。生ログ/SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)。
 
 [適用範囲](rfc26-shared-tir-request-set-2026-10-20.md)のとおり query identity だけであり、全合法対話 graph、response role/turn/fragment、実 codec/work/IO/memory/保持、原子的 admission、public ingress、実供給と T05 は残る。gate は解除せず、上限・wire・preset は変更していない。文書検査は同じ imported assets の 5 件で FAIL、baseline/元資料は未変更。
+
+## Funded relay UTXO / full-IBD extension
+
+Legacy funded relay now checks actual virtual UTXOs and full selected-block replay into a fresh consensus instance, including equal roots and a fresh verifier read. Extended node test 1 passed; existing release identity executable replay 26 passed. This does not cover process restart, pruned import, TIR-original ingress or service supply. See the evidence README for exact commands, hashes and scope.

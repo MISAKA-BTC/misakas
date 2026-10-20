@@ -1,6 +1,6 @@
 # ADR-0194 — 休眠 G14 統合候補と service namespace
 
-Status: **Proposed / Review Required** (2026-10-20)。統合・schema 採択・武装・配備の承認ではない。
+Status: **Proposed / Review Required** (2026-10-20)。利用者は A 案の隔離候補内での実装・検証を承認済み。公開 schema 採択・pre 統合・武装・配備は未承認。
 
 ## 判断の対象
 
@@ -60,3 +60,7 @@ A の場合も branch 全体を無条件 merge しない。main の service poli
 [引き継ぎ §6](../design/palw/integration/codex-handover-court-rfc14-2026-10-20.md) は「fence の武装、統合、配備は行わず、ユーザーの承認を待つこと。」と指示している。ADR-0192 A/A の詳細仕様化の指示は統合承認ではない。この文書と source 比較までは実施し、branch を混ぜる操作はまだ行っていない。
 
 ここで求める判断は **A を隔離候補 branch 内で実装・検証してよいか**。承認されても pre への merge、公開 schema/費用/inclusion 前提の採択、武装、配備の承認へ広げない。
+
+## 利用者の判断 — 2026-10-20
+
+利用者回答「A：隔離候補で実装・検証（推奨）」により A の作業を開始する。X3 の既存 tag を保持し、service は別 version / namespace とする。承認範囲は新しい専用 branch の実装・検証であり、pre 統合・武装・配備・本番規則の採択を含まない。上記の未実施・承認要求の記述は判断前の経緯である。

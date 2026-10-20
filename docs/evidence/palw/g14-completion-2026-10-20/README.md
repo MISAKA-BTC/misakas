@@ -182,3 +182,14 @@ The actual tiny native source validator is the oracle over a larger candidate sp
 | [shared-requests-native-release.log](shared-requests-native-release.log) | `8aa995c84c1276cb0d5835b54816fbaa5f9a17e0034ba5dd7010e85506c7e6aa` |
 | [shared-requests-identities-release.log](shared-requests-identities-release.log) | `d00bacfe53d03e7837078e2740e66792acc2e3e38fd2f7beab79d577f01c91b8` |
 | [shared-requests-consensus-check.log](shared-requests-consensus-check.log) | `3297e70c637923af56c5ff111c4e6018e385c4a0451ead404e6fa3efd922a9f4` |
+
+## Funded relay: actual UTXOs and full block replay
+
+The extended legacy node test checks producer funding remains unspent, the newcomer's carrier input is spent, and the actual change UTXO has the expected amount and script. A fresh in-process consensus instance imports the full selected block history; its state root, UTXOs, cleared producer duty and independently read authenticated disclosure agree. This is full block replay, not process restart, pruned import or TIR-original/service-ledger coverage.
+
+Shared-lock `cargo test --release -p kaspa-consensus --lib lg14a_a_newcomer_funds_and_relays`: **1 passed / 0 failed / 0 ignored** (67.81 s test runtime, not a throughput measurement). The three previously compiled release identity executables named in the preceding funded-relay section were replayed under the lock: **26 passed**. Selected total **27 passed**; no production code changed. Earlier narrower scope statements describe the previous test version.
+
+| Raw log | SHA-256 |
+| --- | --- |
+| [funded-relay-utxo-ibd-node-release.log](funded-relay-utxo-ibd-node-release.log) | `4e5560b0d24e6aa49d1ef4650ca30ba8b616beaff57f2bee3e3d3801b053aac7` |
+| [funded-relay-utxo-ibd-identities-release.log](funded-relay-utxo-ibd-identities-release.log) | `19a0c8c386d18544393661dd4578949f23c252b8d17c19e795bc38b8b43bb58f` |
