@@ -1418,6 +1418,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0192",
+      "path": "docs/adr/0192-court-service-opportunity-and-shared-pursuit.md",
+      "title": "ADR-0192 — court の正規処理機会と共有訴追経路",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1599,6 +1607,30 @@
       "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
       "title": "RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める",
       "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0024",
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "title": "RFC-0024 — ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計(単一位置裁定・先読み開示・先行取得)",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0025",
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "title": "RFC-0025 — モデルが増え、不正に対する court が大量発生しても処理を継続できる客観的 court",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0026",
+      "path": "docs/rfc/0026-court-policy-master-contract.md",
+      "title": "RFC-0026 — court の主契約:時計・帰責・責任期間・置換関係の一本化",
+      "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     }
   ]

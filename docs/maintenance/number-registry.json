@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
-  "scope": "uploaded ZIP only; integration-branch reservations unverified",
+  "scope": "uploaded ZIP only; integration-branch reservations unverified; ADR-0192 reserved on RFC14/G14 completion worktree (2026-10-20), 0183–0191 remain separate-branch allocations",
   "allocated_here": {
     "adr": [
       "0181",
-      "0182"
+      "0182",
+      "0192"
     ],
     "rfc": [
       "0021",
