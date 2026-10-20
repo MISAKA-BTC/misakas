@@ -146,3 +146,30 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         claim.is_some_and(|claim| self.court_service_holds_claim_v1(&claim))
     }
 }
+
+/// Recovery report only; not a wire permission, terminal effect or default verdict.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimServiceRecovery {
+    pub claim: Hash64,
+    pub result: Result<usize, crate::palw_court_service_v1::ServiceRefusal>,
+}
+impl CourtServiceState {
+    /// A canonical sweep, not a requester-selected queue. Failure is atomic per
+    /// claim; it cannot evict another claim or keep a smaller recoverable claim
+    /// from using residual quota. All unresolved holds remain in either case.
+    pub fn repair_missing_supply(&mut self) -> Result<Vec<ClaimServiceRecovery>, String> {
+        self.check()?;
+        let mut order: Vec<_> =
+            self.claims.values().map(|binding| (binding.hard_deadline_daa, binding.original_accepted_daa, binding.claim)).collect();
+        order.sort();
+        let mut report = Vec::new();
+        for (hard, _, claim) in order {
+            let result = self.book.repair_missing(&self.claims[&claim].packet_ids, hard);
+            if result != Ok(0) {
+                report.push(ClaimServiceRecovery { claim, result });
+            }
+        }
+        self.check()?;
+        Ok(report)
+    }
+}

@@ -110,3 +110,73 @@ fn rollback_restores_the_missing_service_assessment() {
     prefix.observe_block(101, [2; 64], ServiceCost::default()).unwrap();
     assert_eq!(prefix, served);
 }
+
+#[test]
+fn repair_uses_only_future_residual_quota_and_keeps_packet_contracts() {
+    let mut book = ServiceReservations::new(cost()).unwrap();
+    let original = packet(1, 100, 110);
+    book.reserve(&[original.clone(), packet(2, 102, 103)], 110).unwrap();
+    book.observe_block(101, [11; 64], Default::default()).unwrap();
+    assert_eq!(book.repair_missing(&std::collections::BTreeSet::from([[1; 64], [2; 64]]), 110), Ok(1));
+    assert_eq!(book.assigned_daa(&[1; 64]), Some(103));
+    assert_eq!(book.assigned_daa(&[2; 64]), Some(102));
+    assert_eq!(book.packet(&[1; 64]), Some(&original));
+    assert!(book.supply_at(100).is_none());
+    book.check().unwrap();
+    let repaired = book.clone();
+    assert_eq!(book.repair_missing(&std::collections::BTreeSet::from([[1; 64]]), 110), Ok(0));
+    assert_eq!(book, repaired, "a future reservation cannot be shifted by repeated repair");
+    book.observe_block(102, [12; 64], Default::default()).unwrap();
+    book.observe_block(103, [13; 64], Default::default()).unwrap();
+    book.observe_block(110, [14; 64], Default::default()).unwrap();
+    assert_eq!(book.assess(&[1; 64]), ServiceAssessment::OpportunityProvided);
+    assert_eq!(book.assess(&[2; 64]), ServiceAssessment::OpportunityProvided);
+    let restored: ServiceReservations = borsh::from_slice(&borsh::to_vec(&book).unwrap()).unwrap();
+    assert_eq!(book, restored);
+    restored.check().unwrap();
+}
+#[test]
+fn repair_is_atomic_when_only_part_of_a_claim_would_fit() {
+    let mut book = ServiceReservations::new(cost()).unwrap();
+    book.reserve(&[packet(1, 100, 105), packet(2, 100, 105), packet(3, 104, 105)], 105).unwrap();
+    book.observe_block(102, [12; 64], Default::default()).unwrap();
+    let before = book.clone();
+    assert_eq!(book.repair_missing(&std::collections::BTreeSet::from([[1; 64], [2; 64]]), 105), Err(ServiceRefusal::NoCapacity));
+    assert_eq!(book, before, "the first tentative move cannot survive failure of the second");
+    assert_eq!(book.assigned_daa(&[3; 64]), Some(104));
+}
+#[test]
+fn hard_or_packet_deadline_exhaustion_never_extends_a_contract() {
+    let mut book = ServiceReservations::new(cost()).unwrap();
+    book.reserve(&[packet(1, 100, 102)], 102).unwrap();
+    book.observe_block(102, [12; 64], Default::default()).unwrap();
+    let before = book.clone();
+    assert_eq!(book.repair_missing(&std::collections::BTreeSet::from([[1; 64]]), 102), Err(ServiceRefusal::DeadlineExhausted));
+    assert_eq!(book.repair_missing(&std::collections::BTreeSet::from([[1; 64]]), 10_000), Err(ServiceRefusal::DeadlineExhausted));
+    assert_eq!(book, before);
+    assert_eq!(book.assess(&[1; 64]), ServiceAssessment::MissingSupply);
+}
+#[test]
+fn offered_supply_is_never_erased_or_reassigned_by_silence() {
+    let mut book = ServiceReservations::new(cost()).unwrap();
+    book.reserve(&[packet(1, 100, 110)], 110).unwrap();
+    book.observe_block(100, [10; 64], Default::default()).unwrap();
+    book.observe_block(101, [11; 64], Default::default()).unwrap();
+    let before = book.clone();
+    assert_eq!(book.repair_missing(&std::collections::BTreeSet::from([[1; 64]]), 110), Ok(0));
+    assert_eq!(book, before);
+    assert_eq!(book.supply_at(100).unwrap().accepting_block, [10; 64]);
+}
+#[test]
+fn shared_missing_slot_refunds_only_the_moving_packets_dimensions() {
+    let mut book = ServiceReservations::new(ServiceCost { bytes: 20, work: 40, io: 60, controls: 2 }).unwrap();
+    book.reserve(&[packet(1, 100, 110), packet(2, 100, 110)], 110).unwrap();
+    book.observe_block(101, [11; 64], Default::default()).unwrap();
+    book.repair_missing(&std::collections::BTreeSet::from([[1; 64]]), 110).unwrap();
+    assert_eq!(book.assigned_daa(&[2; 64]), Some(100));
+    book.check().unwrap();
+    book.repair_missing(&std::collections::BTreeSet::from([[2; 64]]), 110).unwrap();
+    assert_eq!(book.assigned_daa(&[1; 64]), Some(102));
+    assert_eq!(book.assigned_daa(&[2; 64]), Some(102));
+    book.check().unwrap();
+}

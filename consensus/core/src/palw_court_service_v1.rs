@@ -50,6 +50,8 @@ pub enum ServiceRefusal {
     DaaWentBackwards,
     /// A historical reservation cannot be added after its service unit occurred.
     ReservationInThePast,
+    InvalidState,
+    DeadlineExhausted,
 }
 
 /// A qualified empty block still offers service under the explicit inclusion
@@ -198,28 +200,109 @@ impl ServiceReservations {
     /// Validate persisted accounting; never trust cached residual quota from a snapshot.
     pub fn check(&self) -> Result<(), &'static str> {
         let mut rebuilt = Self::new(self.budget).map_err(|_| "invalid service budget")?;
-        if self.assignments.len() != self.packets.len() { return Err("service packet/assignment mismatch"); }
+        if self.assignments.len() != self.packets.len() {
+            return Err("service packet/assignment mismatch");
+        }
         for (id, packet) in &self.packets {
-            if id != &packet.id || packet.release_daa >= packet.service_before
+            if id != &packet.id
+                || packet.release_daa >= packet.service_before
                 || packet.service_before - packet.release_daa > crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA
-                || packet.cost.controls != 1 || packet.cost.bytes == 0 || packet.cost.work == 0 {
+                || packet.cost.controls != 1
+                || packet.cost.bytes == 0
+                || packet.cost.work == 0
+            {
                 return Err("invalid service packet");
             }
             let assigned = *self.assignments.get(id).ok_or("missing service assignment")?;
-            if !(packet.release_daa..packet.service_before).contains(&assigned) { return Err("assignment outside service interval"); }
-            let remaining = rebuilt.remaining.get(&assigned).copied().unwrap_or(self.budget)
-                .subtract(packet.cost).ok_or("overbooked persisted service")?;
+            if !(packet.release_daa..packet.service_before).contains(&assigned) {
+                return Err("assignment outside service interval");
+            }
+            let remaining = rebuilt
+                .remaining
+                .get(&assigned)
+                .copied()
+                .unwrap_or(self.budget)
+                .subtract(packet.cost)
+                .ok_or("overbooked persisted service")?;
             rebuilt.remaining.insert(assigned, remaining);
         }
-        if rebuilt.remaining != self.remaining { return Err("forged residual service quota"); }
+        if rebuilt.remaining != self.remaining {
+            return Err("forged residual service quota");
+        }
         for (daa, supplied) in &self.supply {
-            if self.last_observed_daa.is_none_or(|last| *daa > last) { return Err("service supply beyond observed clock"); }
+            if self.last_observed_daa.is_none_or(|last| *daa > last) {
+                return Err("service supply beyond observed clock");
+            }
             let remaining = self.remaining.get(daa).ok_or("unreserved service history")?;
             if supplied.reserved != self.budget.subtract(*remaining).ok_or("invalid service residual")? {
                 return Err("service supply differs from reservation");
             }
         }
         Ok(())
+    }
+
+    /// Retry only slots that the accepted clock has PASSED without supply.
+    /// Packet identity, cost and original eligibility interval do not change.
+    /// All selected missing packets move atomically; other assignments and all
+    /// supplied history remain untouched. This does not authorize default.
+    pub fn repair_missing(&mut self, ids: &BTreeSet<[u8; 64]>, hard_deadline: u64) -> Result<usize, ServiceRefusal> {
+        self.check().map_err(|_| ServiceRefusal::InvalidState)?;
+        let Some(now) = self.last_observed_daa else {
+            if ids.iter().any(|id| !self.packets.contains_key(id)) {
+                return Err(ServiceRefusal::InvalidState);
+            }
+            return Ok(0);
+        };
+        let mut missing = Vec::new();
+        for id in ids {
+            let packet = self.packets.get(id).ok_or(ServiceRefusal::InvalidState)?;
+            let assigned = *self.assignments.get(id).ok_or(ServiceRefusal::InvalidState)?;
+            if packet.service_before > hard_deadline {
+                return Err(ServiceRefusal::InvalidInterval);
+            }
+            if assigned < now && !self.supply.contains_key(&assigned) {
+                missing.push(packet.clone());
+            }
+        }
+        if missing.is_empty() {
+            return Ok(0);
+        }
+        let next = now.checked_add(1).ok_or(ServiceRefusal::DeadlineExhausted)?;
+        if missing.iter().any(|packet| next >= packet.service_before) {
+            return Err(ServiceRefusal::DeadlineExhausted);
+        }
+        missing.sort_by_key(|packet| (packet.service_before, packet.id));
+        let mut candidate = self.clone();
+        for packet in &missing {
+            let old = candidate.assignments[&packet.id];
+            let left = candidate.remaining.get(&old).copied().ok_or(ServiceRefusal::InvalidState)?;
+            let returned = ServiceCost {
+                bytes: left.bytes.checked_add(packet.cost.bytes).ok_or(ServiceRefusal::InvalidState)?,
+                work: left.work.checked_add(packet.cost.work).ok_or(ServiceRefusal::InvalidState)?,
+                io: left.io.checked_add(packet.cost.io).ok_or(ServiceRefusal::InvalidState)?,
+                controls: left.controls.checked_add(packet.cost.controls).ok_or(ServiceRefusal::InvalidState)?,
+            };
+            candidate.budget.subtract(returned).ok_or(ServiceRefusal::InvalidState)?;
+            if returned == candidate.budget {
+                candidate.remaining.remove(&old);
+            } else {
+                candidate.remaining.insert(old, returned);
+            }
+            let (slot, residual) = (next.max(packet.release_daa)..packet.service_before)
+                .find_map(|daa| {
+                    candidate.remaining.get(&daa).copied().unwrap_or(candidate.budget).subtract(packet.cost).map(|left| (daa, left))
+                })
+                .ok_or(ServiceRefusal::NoCapacity)?;
+            candidate.remaining.insert(slot, residual);
+            candidate.assignments.insert(packet.id, slot);
+        }
+        candidate.check().map_err(|_| ServiceRefusal::InvalidState)?;
+        *self = candidate;
+        Ok(missing.len())
+    }
+
+    pub fn packet(&self, id: &[u8; 64]) -> Option<&ServicePacket> {
+        self.packets.get(id)
     }
 
     pub fn assigned_daa(&self, id: &[u8; 64]) -> Option<u64> {

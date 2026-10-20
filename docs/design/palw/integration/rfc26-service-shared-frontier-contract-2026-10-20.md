@@ -87,3 +87,17 @@ book の writer と state の整合性検査は、binding が元 frame と claim
 これは保持を接続する実装候補で、正常終了時の解除や不足分の再割当を完成したものではない。解除の責任判定、正当な裁定ごとの解消、hard 後の明示的な復旧、actual original admission での契約 horizon 検査と profile/fence の固定、node の restart/pruned IBD、費用・保持上限の計測は残る。永久に止めることを G14 の達成へすり替えない。production writer は依然なく、旧 claim に新しい署名責任を後付けする入口は設けない。
 
 保持中の分割 witness も、全体を assemble/decode したら従来どおり deterministic fraud 裁定へ進む。保持を理由に裁定そのものを拒否しない。新 codec へ黙って読み替えず、V1 が禁止する completed witness row は生成しない。保持中の既存 partial prefix は残し、完成した evidence を裁定へ渡す。binding のない旧 claim では従来どおり row を消費する。裁定後の prefix の archive/解除は未採択の復旧・終了効果契約に残し、partial prefix が完成証拠全体の永続保存であるとは表示しない。
+
+## 10. 供給欠損の再割当候補
+
+`ServiceReservations::repair_missing` は book の観測 DAA より前に割り当てられ、供給 row のない packet だけを対象にする。現在/将来の予約と供給済みの機会は移動せず、供給記録も消さない。再割当先は観測 DAA の次以降で、元の `release_daa..service_before` 内、かつ original hard 以下。packet の identity、費用、適格区間、hard を変更しない。過去の未供給 quota を戻しても `reserve` の後付け禁止は変わらず、過去枠を再販売する経路にはならない。
+
+同じ claim の不足 packet は全件成功時だけ移動する。一部だけ仮割当できても残りが収まらなければ候補を捨てる。`NoCapacity` / `DeadlineExhausted` は未解決のまま保持するための結果で、Miner/Panel の勝敗・guilt・無罪・返還を表さない。他の予約を追い出したり、区間や物理予算を広げて成功扱いにしない。
+
+`CourtServiceState::repair_missing_supply` は全 binding を original hard、original acceptance、claim ID の順、各 claim の不足 packet を `service_before`、packet ID の順に処理する候補。group ごとの原子性と保守的な first-fit を用い、最適な充填や全義務の期限内回復を保証するアルゴリズムとは表示しない。一つの claim の回復失敗後も、他 claim の既存予約は保持し、残余に入る回復だけを記録できる。これは quota 会計の更新であり、RFC-0023 段階 2 の独立決済や shared prefix の解放ではない。この group 優先順位は Proposed の詳細案で、global な packet EDF の最適性を採択したものではない。
+
+native の `recover_court_service_supply_v1(ctx)` は book の観測 DAA が native accepting context と一致しなければ拒否する。古い supply clock から、実際には過ぎた枠を将来枠と見なさない。成功時の global book 書き換えは一つの既存 delta 200 を使い、変化がなければ新しい journal row を出さない。report は wire の権限や completion flag ではない。production block/admission からの caller はまだなく、actual admitted codec/resource から供給を導出する接続も残る。
+
+この候補は **既存の適格区間内** の retry だけを扱う。応答 deadline の補正・全時計の原子的な更新、完成済みの適格応答との対応、署名済み依存 horizon、old/new ruleset の fence、hard 後の recovery と終了効果は未完了。元の区間内で不可能な場合に deadline を黙って延長しない。成功しても binding・Final・担保・証拠の hold と default 拒否は解除しない。実供給/inclusion の全条件と全 owner 共謀下の経路を完成したとは扱わない。
+
+current book の assignment は再割当先を表す。変更前後は native journal の旧/新 row で保持するが、current snapshot だけが全 retry 履歴を格納する schema ではない。履歴の保持期間、node restart/pruned IBD、費用と物理容量の検証は引き続き必要で、fixture の round-trip をその代替にしない。

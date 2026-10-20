@@ -67,3 +67,24 @@ These checks do not prove expiry/pruning correctness across all terminal reasons
 | [service-holds-regressions-release.log](service-holds-regressions-release.log) | `1bd56ce29765736dcfaa54c3de51aa96a8ac6da827f009f82cfcfa04cb838aa1` |
 | [service-holds-legacy-witness-release.log](service-holds-legacy-witness-release.log) | `34a430772bd841b5895c5fe4ec248e0b4ca271982137fd1151367855643424ab` |
 | [service-holds-consensus-check.log](service-holds-consensus-check.log) | `3b921f7a57d99a455c20c0fa1bb35bcbf80c76d87794fd0fa6558f93da5597cb` |
+
+## Missing-supply repair candidate
+
+Base `d4fbc4073`, same dormant branch. No production caller or admission/supply adapter, no arming/integration/deployment. This is bounded quota repair, not a successful owner prosecution profile.
+
+- `cargo test --release -p kaspa-consensus-core --test palw_court_service_state_v1 --test palw_court_service_v1 --test palw_court_policy_v1 --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test g14_close_gates`: **45 passed / 0 failed / 0 ignored**. Includes per-claim atomic repair failure, shared-slot dimensional refunds, no movement of supplied/future reservations, original interval/hard preservation, canonical multi-claim recovery, and the unchanged t12/release regressions.
+- Final `cargo test --release -p kaspa-consensus-core --lib rooted_service_ -- --nocapture`: **4 passed / 0 failed / 0 ignored**. Native delta-200 repair, stale-clock refusal against native accepting context, no hold/default permission release, repeat without another write, undo/replay and full carriage reconstruction. Existing three native hold/fraud cases overlap the previous record. All signatures/original worlds remain synthetic verified-half fixtures; no live node ingress/IBD or performance measurement is claimed.
+- `cargo check --release -p kaspa-consensus`: **success**, existing warnings remain. Non-test code did not change after that check and the 45-target run; the later correction was to the native test's prefix/time setup.
+
+The initial native owner-based case **failed: 3 passed / 1 failed**, at reservation admission with `InvalidInterval`. It used the real legacy fixture's post-preparation owner interval outside original `+10,000`. This failure is retained below; it is NOT counted as a pass or hidden by widening hard or modifying model/resource limits. The final test explicitly asserts the same rejection, then tests the journal on the SAME original frame during preparation, AFTER the fixture's licence. This narrower journal check does not substitute for owner-path completion.
+
+Final emitted geometry (deterministically derived fixture clocks, NOT CPU/network or actual-model measurements): accepted `100`, preparation-until `220000`, owner interval `220003..220013`, hard `10100`, refusal `InvalidInterval`. The static legacy-network quote bound and its scope are in the [clock-origin investigation](../../../design/palw/integration/rfc26-shared-frontier-volume-2026-10-20.md). The current owned route remains incompatible with the target clock; a versioned real profile, actual response/deadline mapping, source horizons, all allowed branches and node lifecycle tests remain required.
+
+All commands used the shared heavy build lock. Two uncompleted compiler runs were explicitly interrupted when adding accepting-clock validation and correcting the fixture's accepting point to follow its licence; neither is counted as successful verification. Supply history is never erased by repair. Current assignment moves only after missing supply; retry history is in old/new native journal rows, not a new history field in the current snapshot. Retention/pruned-import closure remains open.
+
+| Raw log | SHA-256 |
+| --- | --- |
+| [service-repair-owned-window-failed.log](service-repair-owned-window-failed.log) | `fecd06d5ba998895355468458a7add9fd8d46a1c5982f5c9f12e58c6338f0514` |
+| [service-repair-native-release.log](service-repair-native-release.log) | `ed1437863e9a0c2b1da3cfd61326555e7ac6c63112f33e45c6e6164030c5fb12` |
+| [service-repair-regressions-release.log](service-repair-regressions-release.log) | `623b2363031bb166b4c4fe0e5c1c34d4f0f9ea107311a87a61da2f977b17a028` |
+| [service-repair-consensus-check.log](service-repair-consensus-check.log) | `6bf16608cc7c1e666d804403b637fb6e190ef25056954f9e644245e9a061b5a8` |

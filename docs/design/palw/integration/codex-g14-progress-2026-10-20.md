@@ -105,3 +105,15 @@ book の writer と snapshot の整合性検査は、binding が元 frame/claim 
 正常応答・正当な裁定ごとの解除、残余容量内の再割当、hard 後の明示的 recovery、actual admission/block supply、全 owner 共謀下の共有経路、依存契約 horizon、物理容量と保持費用、node の restart/pruned IBD は依然として残る。binding が永久に unresolved で止まるだけの候補を G14 完成とはしない。武装・統合・配備なし。
 
 最終コードの回帰 39 件と同じ release binary の旧 witness 消費 1 件も成功し、今回の対象は native 3 + 回帰 39 + 旧 witness 1 = **43 passed / 0 failed / 0 ignored**。t12 identity / release pin を変更していない。最新ソースの `cargo check --release -p kaspa-consensus` 成功。生ログ・コマンド・SHA-256 を [release 試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)へ追加。T01–T15 や G14 全体の完了数ではなく、保持候補の限定した回帰結果である。
+
+## 供給不足の再割当と legacy clock の不成立確認
+
+`repair_missing` は過ぎた未供給 slot だけを元の適格区間内の将来残余へ移し、packet ID/費用/区間/hard、供給済み履歴、他の予約を変えない。同一 claim の全不足分が入らなければ一部の仮割当も残さない。global wrapper は original hard/acceptance/claim ID の順の候補で、回復失敗 claim は保持したまま、残余で可能な他 claim の quota 修復を記録する。決済 prefix の独立進行を意味せず、最適充填や全義務の回復保証ではない。
+
+native helper は book の観測 DAA が native accepting context と一致しなければ書き換えず拒否。成功時だけ既存 delta 200 の一つの global row を更新し、変化がなければ journal も増やさない。binding、Final、担保、証拠の hold と default 拒否は成功時も保持する。actual reply deadline は動かしておらず、原子的な期限補正と適格応答との対応は残る。production caller も未接続。
+
+release 回帰 **45 passed**、最終 native `rooted_service_ --nocapture` **4 passed**、合計の今回対象 **49 passed / 0 failed / 0 ignored**。native ケースは journal の undo/replay、carriage からの復元、stale clock の拒否、保持の継続を検証する fixture である。最新 non-test コードの `cargo check --release -p kaspa-consensus` も成功。生ログと SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)に保存した。
+
+ただし最初の owner-based native case は **InvalidInterval で失敗**。同じ tiny fixture の導出値は original `a=100`、`preparation_until=220000`、owner 用に選んだ区間 `220003..220013` に対して hard `10100`。hard を広げず、その拒否を回帰条件として残した。journal の成功 fixture は同じ frame の licence 後・準備区間での book 更新であり、owner 経路の成功とはしない。
+
+[準備 clock の起点調査](rfc26-shared-frontier-volume-2026-10-20.md)では、legacy `network_v1` の 4,096/4/64 と式から、quoted preparation の保守的下界だけで **12,420 DAA > 10,000** になることを確認した。これは runtime の測定下界ではない。既存 quote の流用では新 clock を満たせず、次は actual profile/config と logical walk・publication・WorkDebit の対応、および公開 frame 局所化の資源と clock を分けて検証する。既存 ID、signed horizon、再実行数、モデル範囲、上限を無断変更して通さない。P0/P1/P2、T01–T15、R-D2-NODE、tag 230、actual door は未完了のまま維持する。

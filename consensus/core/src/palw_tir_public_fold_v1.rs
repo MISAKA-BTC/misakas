@@ -2238,6 +2238,93 @@ mod conviction_e2e_tests {
         assert_eq!(palw_tir_public_claim_v1(&restored, plan.original_claim).unwrap().plan_v1().terms, plan.terms);
     }
 
+    #[test]
+    fn rooted_service_repair_journals_without_releasing_holds() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v1::{CourtServiceState, ServiceClaimBinding};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (_, _, _, _, owner_offset) = demanded_world(&fx, &frame, 0);
+        let plan = frame.plan_v1();
+        let hard = plan.terms.accepted_daa + 10_000;
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        // The legacy owned acquisition is NOT a valid +10,000 profile. Keep
+        // that rejection visible instead of enlarging the hard deadline or
+        // labelling an earlier synthetic reservation as a successful owner path.
+        let owner_start = plan.terms.accepted_daa + owner_offset + 1;
+        let mut rejected = ServiceReservations::new(cost).unwrap();
+        let unchanged = rejected.clone();
+        let refusal = rejected.reserve(&[ServicePacket { id:[50;64], release_daa:owner_start,
+            service_before:owner_start+10, cost }],hard);
+        eprintln!("legacy-owner fixture geometry (not runtime/network measurement): accepted={}, preparation_until={}, owner_interval={}..{}, hard={}, refusal={:?}",
+            plan.terms.accepted_daa,plan.preparation_until_daa,owner_start,owner_start+10,hard,refusal);
+        assert_eq!(refusal,Err(crate::palw_court_service_v1::ServiceRefusal::InvalidInterval));
+        assert_eq!(rejected,unchanged);
+        // Exercise only the rooted quota/journal adapter on the SAME original
+        // frame, in its preparation interval. No owner response, real profile
+        // cost derivation or owner-path deadline guarantee is claimed here.
+        let (state, params, extras) = world(&fx, &frame);
+        let licensed = match &state.claim(&plan.original_claim).unwrap().phase {
+            PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => *licensed_daa,
+            _ => unreachable!("the fixture starts licensed"),
+        };
+        let start = licensed + 1;
+        let now = start + 1;
+        let first = ServicePacket { id: [51;64], release_daa:start, service_before:start+10, cost };
+        let other = ServicePacket { id: [52;64], release_daa:start+2, service_before:start+3, cost };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[first.clone(), other.clone()], plan.terms.accepted_daa+10_000).unwrap();
+        book.observe_block(now, [53;64], Default::default()).unwrap();
+        let service = CourtServiceState { version:1, profile_id:Hash64::from_u64_word(54), book,
+            claims: std::collections::BTreeMap::from([(plan.original_claim, ServiceClaimBinding {
+                claim:plan.original_claim, allocation_id:plan.allocation_id, source_id:plan.source_id,
+                original_accepted_daa:plan.terms.accepted_daa, hard_deadline_daa:plan.terms.accepted_daa+10_000,
+                packet_ids:std::collections::BTreeSet::from([first.id,other.id]) })]) };
+        let point = at(&frame, now-plan.terms.accepted_daa);
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        assert!(b.recover_court_service_supply_v1(&point).unwrap().is_empty());
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        let old_point = b.state.last_point;
+        b.state.last_point = Some(point);
+        b.entries.push(PalwDeltaEntryV2::LastPoint { old:old_point, new:Some(point) });
+        let before = b.state.clone();
+        let stale = at(&frame, now-plan.terms.accepted_daa+1);
+        assert!(b.recover_court_service_supply_v1(&stale).is_err());
+        assert_eq!(b.state,before,"a stale supply clock must not move reservations");
+        let journal_start = b.entries.len();
+        let report = b.recover_court_service_supply_v1(&point).unwrap();
+        assert_eq!(report.len(),1);
+        assert_eq!(report[0].claim,plan.original_claim);
+        assert_eq!(report[0].result,Ok(1));
+        let recovered = b.state.court_service_state_v1().unwrap();
+        assert_eq!(recovered.book.assigned_daa(&first.id),Some(start+3));
+        assert_eq!(recovered.book.assigned_daa(&other.id),Some(start+2));
+        assert_eq!(recovered.book.packet(&first.id),Some(&first));
+        assert_eq!(recovered.book.packet(&other.id),Some(&other));
+        assert_eq!(recovered.claims, before.court_service_state_v1().unwrap().claims);
+        assert!(b.state.court_service_holds_claim_v1(&plan.original_claim));
+        assert!(b.state.staged_bond_exit_held_v1(&frame.custody_v1().pledge_v1().producer,now));
+        assert!(recovered.default_hold(&frame).is_err(),"repair cannot authorize default");
+        assert_eq!(b.state.claim(&plan.original_claim), before.claim(&plan.original_claim));
+        assert_eq!(b.state.deadlines,before.deadlines);
+        let after = b.state.clone();
+        let entries = b.entries[journal_start..].to_vec();
+        assert_eq!(entries.len(),1,"one native delta-200 row commits the atomic repair");
+        assert!(b.recover_court_service_supply_v1(&point).unwrap().is_empty());
+        assert_eq!(b.entries.len(),journal_start+1,"repeat does not emit another write");
+        let mut reverted = after.clone();
+        for entry in entries.iter().rev() { apply_delta_entry(&mut reverted,entry,true).unwrap(); }
+        assert_eq!(reverted.state_root(),before.state_root());
+        for entry in &entries { apply_delta_entry(&mut reverted,entry,false).unwrap(); }
+        assert_eq!(reverted.state_root(),after.state_root());
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&after)).unwrap();
+        let fresh = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap()
+            .into_state(&params,Some(after.state_root())).unwrap();
+        assert_eq!(fresh.state_root(),after.state_root());
+        assert_eq!(fresh.court_service_state_v1(),after.court_service_state_v1());
+        assert!(fresh.court_service_holds_claim_v1(&plan.original_claim));
+    }
+
     /// **G14 R5: an honest custodian that answers an outside owner's demand inside its clock is never defaulted or charged** —
     /// the owner's Collect past the clock finds nobody missing and is refused; the producer's collateral and claim are untouched.
     /// The charge is live, only unearned: the same producer silent on the owner's next demand IS collected once its clock passes.

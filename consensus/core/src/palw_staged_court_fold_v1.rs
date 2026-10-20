@@ -870,6 +870,26 @@ impl TransitionBuilder<'_> {
             },
         }))))
     }
+    /// Proposed native journal adapter. Production block/admission callers are
+    /// still absent. Recovery cannot clear a binding, move a duty deadline,
+    /// release collateral, or turn quota into default permission.
+    pub(super) fn recover_court_service_supply_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+    ) -> Result<Vec<crate::palw_court_service_state_v1::ClaimServiceRecovery>, PalwStateV2Error> {
+        let Some(old) = self.state.court_service_state_v1() else { return Ok(Vec::new()) };
+        if old.book.last_observed_daa != Some(ctx.daa_score) {
+            return Err(PalwStateV2Error::CarriageInconsistent("court service recovery needs the current accepting-block supply clock".into()));
+        }
+        let mut next = old.clone();
+        let report = next.repair_missing_supply().map_err(PalwStateV2Error::CarriageInconsistent)?;
+        if &next != old {
+            self.write_staged_row_v1(PalwStagedCourtKeyV1::CourtService,
+                Some(PalwStagedCourtRowV1::CourtService(Box::new(next).into())))?;
+        }
+        Ok(report)
+    }
+
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
         if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
             service.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
