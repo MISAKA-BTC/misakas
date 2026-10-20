@@ -120,7 +120,7 @@ impl HeaderProcessor {
         if self.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(header.daa_score))
             && clock.lead_capped(header.pow_algo_id)
             && let Err(latest) =
-                kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(header.timestamp, kaspa_core::time::unix_now())
+                kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(header.timestamp, self.validation_now())
         {
             return Err(RuleError::ClockLeadTooFarAhead(header.hash, header.timestamp, latest));
         }

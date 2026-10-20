@@ -8,7 +8,6 @@ use kaspa_consensus_core::BlockLevel;
 use kaspa_consensus_core::blockhash::BlockHashExtensions;
 use kaspa_consensus_core::blockstatus::BlockStatus::StatusInvalid;
 use kaspa_consensus_core::header::Header;
-use kaspa_core::time::unix_now;
 use kaspa_database::prelude::StoreResultExt;
 
 impl HeaderProcessor {
@@ -594,7 +593,7 @@ pub(crate) fn palw_carriage_stateless_v1(
 impl HeaderProcessor {
     fn check_block_timestamp_in_isolation(&self, header: &Header) -> BlockProcessResult<()> {
         // Timestamp deviation tolerance is in seconds so we multiply by 1000 to get milliseconds (without BPS dependency)
-        let max_block_time = unix_now() + self.timestamp_deviation_tolerance * 1000;
+        let max_block_time = self.validation_now() + self.timestamp_deviation_tolerance * 1000;
         if header.timestamp > max_block_time {
             return Err(RuleError::TimeTooFarIntoTheFuture(header.timestamp, max_block_time));
         }

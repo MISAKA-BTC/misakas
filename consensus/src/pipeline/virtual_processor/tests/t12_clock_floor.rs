@@ -1375,3 +1375,37 @@ async fn t12_pptake_a_proof_is_held_to_its_declared_work_and_weighed_from_its_ow
         "a claim lighter than the held chain is refused, got {verdict:?}"
     );
 }
+
+/// Instance-local validation time preserves the production 132 s cap and retry.
+#[tokio::test]
+async fn t12_validation_clock_preserves_the_lead_cap_and_retry() {
+    use kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS as CAP;
+    kaspa_core::log::try_init_logger("info");
+    let (mut ctx, _config) = t12_clock(true);
+    let now = kaspa_core::time::unix_now();
+    ctx.consensus.set_validation_time_for_test(now);
+    let step = stepped_at(&mut ctx, now - 100_000, 1).await;
+    let slot = step.header.timestamp + I;
+    let (built, _) = beat(&ctx, 900, slot);
+    let holder = accepted(&mut ctx, built, "the beat that holds the slot, 20 s ahead: inside the cap").await;
+    // The step over it, stamped 1.5 s past the cap — well inside the 1,620 s tolerance.
+    let ahead = now + CAP + 1_500;
+    assert!(ahead >= slot, "stamped at or past the slot, so the floor admits it");
+    let (built, _) = beat(&ctx, 901, ahead);
+    assert_eq!(built.header.timestamp, ahead);
+    let hash = built.header.hash;
+    match submit(&mut ctx, built.clone()).await {
+        Err(RuleError::ClockLeadTooFarAhead(h, stamped, latest)) => {
+            assert_eq!((h, stamped), (hash, ahead), "refused for its own stamp");
+            assert!(latest < ahead && ahead - latest <= 1_500, "the bound is the node's clock plus 132 s");
+        }
+        other => panic!("a step 1.5 s past the cap answered {other:?}"),
+    }
+    assert_eq!(ctx.consensus.get_block_status(hash), None, "not stored, and above all not StatusInvalid");
+    assert_eq!(daa_of(&ctx, ctx.consensus.get_sink()), daa_of(&ctx, holder.header.hash), "the clock did not tick");
+    // This instance's wall clock catches up; the SAME block is admitted and ticks.
+    ctx.consensus.set_validation_time_for_test(ahead - CAP);
+    let admitted = accepted(&mut ctx, built, "the same step once the clock caught up").await;
+    assert_eq!(admitted.header.hash, hash);
+    assert_eq!(daa_of(&ctx, hash), daa_of(&ctx, holder.header.hash) + 1, "and it ticks the clock");
+}

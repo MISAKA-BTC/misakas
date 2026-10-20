@@ -1198,6 +1198,11 @@ mod palw_validate;
 mod template;
 
 impl VirtualStateProcessor {
+    #[cfg(test)]
+    pub(crate) fn set_template_time_for_test(&self, now: u64) {
+        self.template_clock.fetch_max(now, std::sync::atomic::Ordering::Relaxed);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,

@@ -94,6 +94,9 @@ impl HeaderProcessingContext {
 }
 
 pub struct HeaderProcessor {
+    /// Instance-local test wall clock; absent from production builds.
+    #[cfg(test)]
+    pub(crate) validation_clock: std::sync::atomic::AtomicU64,
     // Channels
     receiver: Receiver<BlockProcessingMessage>,
     body_sender: Sender<BlockProcessingMessage>,
@@ -219,6 +222,17 @@ pub struct HeaderProcessor {
 }
 
 impl HeaderProcessor {
+    pub(super) fn validation_now(&self) -> u64 {
+        #[cfg(test)]
+        {
+            let now = self.validation_clock.load(Ordering::Relaxed);
+            if now != 0 {
+                return now;
+            }
+        }
+        kaspa_core::time::unix_now()
+    }
+
     pub fn new(
         receiver: Receiver<BlockProcessingMessage>,
         body_sender: Sender<BlockProcessingMessage>,
@@ -231,6 +245,8 @@ impl HeaderProcessor {
         counters: Arc<ProcessingCounters>,
     ) -> Self {
         Self {
+            #[cfg(test)]
+            validation_clock: Default::default(),
             receiver,
             body_sender,
             thread_pool,

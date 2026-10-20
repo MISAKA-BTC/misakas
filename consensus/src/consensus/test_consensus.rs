@@ -672,6 +672,20 @@ impl TestConsensus {
         &self.consensus.body_processor
     }
 
+    /// Opt this node into an instance-local wall clock for header validation and
+    /// template/virtual policy. No tolerance or consensus rule is changed.
+    #[cfg(test)]
+    pub(crate) fn set_validation_time_for_test(&self, now: u64) {
+        let previous = self.consensus.header_processor.validation_clock.fetch_max(now, std::sync::atomic::Ordering::Relaxed);
+        let now = now.max(previous);
+        self.consensus.virtual_processor.set_template_time_for_test(now);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_validation_time_for_test(&self) -> bool {
+        self.consensus.header_processor.validation_clock.load(std::sync::atomic::Ordering::Relaxed) != 0
+    }
+
     pub fn virtual_processor(&self) -> &Arc<VirtualStateProcessor> {
         &self.consensus.virtual_processor
     }

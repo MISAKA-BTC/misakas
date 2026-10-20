@@ -347,6 +347,9 @@ impl T12Chain {
     /// An ordinary inert lane still re-stamps after the build. The builder takes
     /// `max(past median + 1, clock)` as its stamp and the lane executes against it.
     fn arm_clock(&self) {
+        if self.ctx.consensus.has_validation_time_for_test() {
+            self.ctx.consensus.set_validation_time_for_test(self.ctx.simulated_time);
+        }
         if self.config.params.is_evm_active(self.sink_daa())
             || self.vp().template_clock.load(std::sync::atomic::Ordering::Relaxed) != 0
         {
