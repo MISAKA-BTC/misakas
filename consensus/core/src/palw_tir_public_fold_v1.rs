@@ -2151,6 +2151,68 @@ mod conviction_e2e_tests {
         (p.demand_id, p.respond_until_daa, p.turn, p.slots.get(&producer).and_then(|slot| slot.finished.clone()))
     }
 
+    #[test]
+    fn transport_budget_counts_signed_native_parts_and_preserves_old_claims() {
+        use crate::palw_court_capacity_v1::{PalwCourtCapacityMirrorV1, palw_court_capacity_placeholder_policy_v1};
+        use crate::palw_court_transport_v1::{PalwCourtTransportFenceV1, PalwCourtTransportMirrorV1, palw_court_transport_cost_v1};
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let (state, params, extras, acquisition, offset) = demanded_world(&fx, &frame, 0);
+        let (demand_id, _, turn, _) = owner_pending(&frame, &state, acquisition);
+        let body = borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage: fx.execution.preimages[0].clone(),
+            opening: crate::palw_step_leg::step_opening_v1(&fx.execution.hashes, 0).unwrap(),
+        }).unwrap();
+        assert!(body.len() <= crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1);
+        // Trusted fixture setup only; the incoming Part/Finish below use real signatures and native dispatch.
+        let mut ready = control_step(&frame, &state, &params, &extras, offset, producer, acquisition,
+            A::Acquisition(Owned::Begin { demand_id, answerer: producer, total_bytes: body.len() as u64,
+                body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) }), 0, turn).unwrap();
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x42; 32]);
+        ready.bonds.get_mut(&producer).unwrap().pubkey = kp.verification_key.as_ref().to_vec();
+        let signed = |action| {
+            let mut control = Control { version: 1, claim: frame.plan_v1().original_claim,
+                allocation_id: frame.plan_v1().allocation_id, source_id: frame.plan_v1().source_id,
+                target: acquisition, expected_turn: turn, declared_rent_sompi: 0, signer: producer,
+                action: A::Acquisition(action), signature: vec![0; SIG] };
+            let digest = control.signing_message_v1(extras.tir_public_network_domain_v1.unwrap()).unwrap();
+            control.signature = libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, digest.as_byte_slice(),
+                crate::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1, [0x43; 32]).unwrap().as_ref().to_vec();
+            PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) }
+        };
+        let part = signed(Owned::Part { demand_id, answerer: producer, offset: 0, bytes: body });
+        let finish = signed(Owned::Finish { demand_id, answerer: producer });
+        let ctx = at(&frame, offset + 1);
+        let mirror = PalwCourtTransportMirrorV1 { from_daa: frame.plan_v1().terms.accepted_daa,
+            policy: PalwCourtTransportFenceV1::unapproved_probe_at(crate::config::params::ForkActivation::never()).policy };
+        let cost = palw_court_transport_cost_v1(&ready, Some(mirror), ctx.daa_score, &part).unwrap().unwrap();
+        let mut policy = palw_court_capacity_placeholder_policy_v1();
+        policy.block_budget = cost;
+        policy.one_move_budget = Default::default();
+        let active = params.clone().with_court_capacity_v1(Some(PalwCourtCapacityMirrorV1 { from_daa: 0, policy }))
+            .with_court_transport_v1(Some(mirror));
+        let mut b = TransitionBuilder::new(&ready, &active, false, false, false, false, &extras);
+        super::super::apply_object(&mut b, &ctx, &part).expect("native signed Part fits exactly");
+        assert_eq!(b.court_cost_spent, cost);
+        assert_eq!(b.court_one_move_spent, Default::default());
+        let before = b.state.clone();
+        let error = super::super::apply_object(&mut b, &ctx, &finish).unwrap_err();
+        assert!(format!("{error:?}").contains("CourtCapacityRefused"));
+        assert_eq!(b.state, before);
+        assert!(owner_pending(&frame, &b.state, acquisition).3.is_none());
+        // A dormant fence or a claim originally accepted before it retains the old accounting.
+        for old in [None, Some(PalwCourtTransportMirrorV1 { from_daa: mirror.from_daa + 1, ..mirror })] {
+            let old_params = active.clone().with_court_transport_v1(old);
+            let mut b = TransitionBuilder::new(&ready, &old_params, false, false, false, false, &extras);
+            super::super::apply_object(&mut b, &ctx, &part).unwrap();
+            super::super::apply_object(&mut b, &ctx, &finish).unwrap();
+            assert_eq!(b.court_cost_spent, Default::default());
+            assert!(owner_pending(&frame, &b.state, acquisition).3.is_some());
+        }
+    }
+
     /// The producer answers the open demand from its committed material — Begin, the canonical Part(s), Finish — one accepted
     /// move per DAA from `offset`. Returns the state and the next free offset.
     #[allow(clippy::too_many_arguments)]

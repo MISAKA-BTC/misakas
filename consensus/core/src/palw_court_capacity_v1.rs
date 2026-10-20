@@ -80,6 +80,14 @@ pub struct PalwCourtCostV1 {
 }
 
 impl PalwCourtCostV1 {
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        Some(Self {
+            work: self.work.checked_add(other.work)?,
+            bytes: self.bytes.checked_add(other.bytes)?,
+            memory: self.memory.checked_add(other.memory)?,
+        })
+    }
+
     pub fn saturating_add(self, other: Self) -> Self {
         Self {
             work: self.work.saturating_add(other.work),

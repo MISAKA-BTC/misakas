@@ -984,6 +984,9 @@ mod tests {
             "palw_court_capacity_v1" => {
                 params.palw_court_capacity_v1 = Some(crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1::placeholder_at(at))
             }
+            "palw_court_transport_v1" => {
+                params.palw_court_transport_v1 = Some(crate::palw_court_transport_v1::PalwCourtTransportFenceV1::unapproved_probe_at(at))
+            }
             // RFC-0016's two dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_unresolved_bound_v1" => params.palw_unresolved_bound_v1 = Some(at),
             "palw_claim_local_settlement_v1" => params.palw_claim_local_settlement_v1 = Some(at),

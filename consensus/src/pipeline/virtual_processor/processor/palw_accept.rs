@@ -1642,20 +1642,24 @@ impl VirtualStateProcessor {
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
                 || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
             let court_policy = state_params.court_capacity_at_v1(point.daa_score);
-            let court_cost = court_policy
-                .as_ref()
-                .and_then(|policy| kaspa_consensus_core::palw_court_capacity_v1::palw_court_op_cost_v1(policy, &folded, &object));
-            let court_one_move = matches!(
-                kaspa_consensus_core::palw_court_capacity_v1::palw_court_op_class_v1(&folded, &object),
-                Some(kaspa_consensus_core::palw_court_capacity_v1::PalwCourtOpClassV1::OneMove)
-            );
+            let accounted = match kaspa_consensus_core::palw_court_transport_v1::palw_court_accounted_op_v1(
+                &folded, state_params, point.daa_score, &object,
+            ) {
+                Ok(accounted) => accounted,
+                Err(why) => {
+                    info!("Block {block}: court cost refused: {why}; the object is dropped and the block stands");
+                    continue;
+                }
+            };
+            let court_cost = accounted.map(|(cost, _)| cost);
+            let court_one_move = accounted.is_some_and(|(_, one_move)| one_move);
             if let (Some(policy), Some(cost)) = (court_policy.as_ref(), court_cost) {
                 let (spent, budget) = if court_one_move {
                     (court_one_move_spent, policy.one_move_budget)
                 } else {
                     (court_cost_spent, policy.block_budget)
                 };
-                if !spent.saturating_add(cost).fits_within(&budget) {
+                if spent.checked_add(cost).is_none_or(|total| !total.fits_within(&budget)) {
                     info!(
                         "Block {block}: a court operation was dropped, and the block stands: the block's court budget {budget:?} is \
                          spent ({spent:?} of it; palw_court_capacity_v1)"
@@ -1824,9 +1828,9 @@ impl VirtualStateProcessor {
                         Ok(next) => {
                             if let Some(cost) = court_cost {
                                 if court_one_move {
-                                    court_one_move_spent = court_one_move_spent.saturating_add(cost);
+                                    court_one_move_spent = court_one_move_spent.checked_add(cost).expect("court cost prechecked");
                                 } else {
-                                    court_cost_spent = court_cost_spent.saturating_add(cost);
+                                    court_cost_spent = court_cost_spent.checked_add(cost).expect("court cost prechecked");
                                 }
                             }
                             // **AC-SLOT past the fence: the slot is spent only by a move that

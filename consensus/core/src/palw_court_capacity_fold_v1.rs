@@ -91,14 +91,14 @@ pub(super) fn charge_court_op_v1(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
-    let Some(policy) = builder.params.court_capacity_at_v1(ctx.daa_score) else { return Ok(()) };
-    let Some(class) = palw_court_op_class_v1(&builder.state, object) else { return Ok(()) };
-    let Some(cost) = palw_court_op_cost_v1(&policy, &builder.state, object) else { return Ok(()) };
-    // Round 2 (limit 3): a one-move accusation spends its own budget, every session operation the session budget.
-    let one_move = class == PalwCourtOpClassV1::OneMove;
-    let budget = policy.budget_of(class);
+    let Some((cost, one_move)) = crate::palw_court_transport_v1::palw_court_accounted_op_v1(
+        &builder.state, builder.params, ctx.daa_score, object,
+    ).map_err(refused)? else { return Ok(()) };
+    let policy = builder.params.court_capacity_at_v1(ctx.daa_score)
+        .ok_or_else(|| refused("court operation has no active capacity budget"))?;
+    let budget = if one_move { policy.one_move_budget } else { policy.block_budget };
     let already = if one_move { builder.court_one_move_spent } else { builder.court_cost_spent };
-    let spent = already.saturating_add(cost);
+    let spent = already.checked_add(cost).ok_or_else(|| refused("the block's court budget accumulation overflows"))?;
     if !spent.fits_within(&budget) {
         return Err(refused(format!(
             "the block's court budget {budget:?} ({}) cannot take this operation ({cost:?}; {already:?} already spent)",

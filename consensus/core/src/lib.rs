@@ -1089,3 +1089,6 @@ pub mod palw_kernel_producer_candidate_v4;
 pub mod palw_kernel_material_query_v4;
 
 pub mod palw_kernel_material_replacement_v4;
+
+/// Dormant court payload transport accounting.
+pub mod palw_court_transport_v1;

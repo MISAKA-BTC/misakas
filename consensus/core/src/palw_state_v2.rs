@@ -1990,6 +1990,8 @@ pub struct PalwStateParamsV2 {
     /// `Params::sync_palw_court_capacity_v1`: its height and its policy. `None` on every shipped preset.
     #[borsh(skip)]
     court_capacity_v1: Option<crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1>,
+    #[borsh(skip)]
+    court_transport_v1: Option<crate::palw_court_transport_v1::PalwCourtTransportMirrorV1>,
     /// **G14's per-class detection policy** (`crate::palw_detection_policy_v1`), written by `Params::sync_palw_detection_policy_v1`
     /// (and by fixtures): the fence's height and policies, which the claim gates read. `None` on every shipped preset.
     #[borsh(skip)]

@@ -186,6 +186,7 @@ impl PalwStateParamsV2 {
             claim_hard_deadline_v1: None,
             g14_route_required_v1: None,
             court_capacity_v1: None,
+            court_transport_v1: None,
             detection_policy_v1: None,
             reward_liability_horizon_from_daa: None,
             cell_coverage_closure_from_daa: None,
@@ -2176,5 +2177,15 @@ impl PalwStateParamsV2 {
         self.palw_claim_compact_v4.as_ref()
             .filter(|f| f.activation.is_active(daa) && self.claim_challenge_v2_at(daa).is_some())
             .map(|f| &f.policy)
+    }
+}
+
+impl PalwStateParamsV2 {
+    pub fn with_court_transport_v1(mut self, mirror: Option<crate::palw_court_transport_v1::PalwCourtTransportMirrorV1>) -> Self {
+        self.court_transport_v1 = mirror;
+        self
+    }
+    pub fn court_transport_v1(&self) -> Option<crate::palw_court_transport_v1::PalwCourtTransportMirrorV1> {
+        self.court_transport_v1
     }
 }
