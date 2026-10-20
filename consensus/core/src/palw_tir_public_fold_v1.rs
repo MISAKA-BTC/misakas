@@ -2457,11 +2457,20 @@ mod conviction_e2e_tests {
     }
 
     #[test]
-    fn rooted_shared_query_works_with_all_native_owner_slots_occupied_and_reloads_data() {
+    fn rooted_shared_query_and_signed_streams_work_with_all_native_owner_slots_occupied_and_reload() {
+        exercise_rooted_shared_streams(palw_tir_public_frame_fixture_v1(Some((7,1)),4),7,false);
+    }
+    #[test]
+    fn rooted_shared_wide_leaf_stream_crosses_part_boundary_and_reloads() {
+        let fx=crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_wide_v1(Some((7,1)),4);
+        let leaf=fx.execution.preimages.iter().enumerate().max_by_key(|(_,p)|p.values_le.len()).unwrap().0;
+        exercise_rooted_shared_streams(fx,leaf,true);
+    }
+    fn exercise_rooted_shared_streams(fx:PalwTirPublicFrameFixtureV1,leaf_index:usize,multipart:bool) {
         use crate::palw_court_shared_tir_state_v1::{self as shared,RootedSharedDataV1};
         use crate::palw_court_shared_tir_frontier_v1::{SignedSharedRequestV1,SharedRequestEffectV1,SHARED_REQUEST_CONTEXT_V1};
         use super::super::palw_court_shared_tir_fold_v1 as fold;
-        let fx=palw_tir_public_frame_fixture_v1(Some((7,1)),4);let frame=&fx.frame;let claim=frame.plan_v1().original_claim;
+        let frame=&fx.frame;let claim=frame.plan_v1().original_claim;
         let colluders=squatters(Frame::MAXIMUM_OWNERS_V1);
         let (mut state,params,extras,offset)=open_world(&fx,frame,&colluders);
         for owner in &colluders {state=open(frame,&state,&params,&extras,offset,*owner).unwrap();}
@@ -2471,6 +2480,11 @@ mod conviction_e2e_tests {
         let colluder=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([12;32]);
         state.bonds.get_mut(&outsider()).unwrap().pubkey=honest.verification_key.as_ref().to_vec();
         state.bonds.get_mut(&colluders[0]).unwrap().pubkey=colluder.verification_key.as_ref().to_vec();
+        let producer=frame.custody_v1().pledge_v1().producer;
+        let publisher=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([31;32]);
+        // Existing Ready/original installation is a verified-half fixture, not
+        // a key-rotation or real registration transaction. New controls use real signatures.
+        state.bonds.get_mut(&producer).unwrap().pubkey=publisher.verification_key.as_ref().to_vec();
         state=bind_clock_service(&state,frame,&params,&extras);
         let profile=shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
         let source=frame.source_v1(&fx.record,&fx.layout,fx.rules.maximum_leaves).unwrap();
@@ -2484,7 +2498,7 @@ mod conviction_e2e_tests {
         b.write_staged_row_v1(Key::CourtSharedContext(claim),Some(Row::CourtSharedContext(Box::new(context)))).unwrap();
         let installed=b.state.clone();
         let find=|query| (0..set.len()).find(|&i|set.request_at(i).unwrap()==query).unwrap();
-        let first=find(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf {index:7});
+        let first=find(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf {index:leaf_index as u64});
         let next=find(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepRun {first:0,count:1});
         let ids_ordinal=find(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::Ids {offset:0});
         let make=|ordinal,actor,seed:u8| {
@@ -2503,15 +2517,78 @@ mod conviction_e2e_tests {
         assert_eq!(fold::request(&mut b,&ctx,claim,&make(next,outsider(),11)).unwrap(),SharedRequestEffectV1::Opened);
         assert_eq!(b.state.staged_tir_owner_count_v1(&claim),Frame::MAXIMUM_OWNERS_V1,"shared query did not claim/evict an owner slot");
         let body=borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
-            preimage:fx.execution.preimages[7].clone(),opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,7).unwrap()}).unwrap();
+            preimage:fx.execution.preimages[leaf_index].clone(),opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,leaf_index as u64).unwrap()}).unwrap();
+        if multipart {assert!(body.len()>crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1,"wide original must actually require multiple parts");}
+        use crate::palw_court_shared_tir_stream_v1::{SignedSharedStreamV1,SharedStreamTargetV1 as StreamTarget,SharedStreamActionV1 as StreamAction,SHARED_STREAM_CONTEXT_V1};
+        let sign_stream=|target:StreamTarget,actor,seed:u8,action:StreamAction| {
+            let kp=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([seed;32]);
+            let mut control=SignedSharedStreamV1 {version:1,claim,scope:set.scope_id().unwrap(),target,signer:actor,action,signature:vec![]};
+            control.signature=libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key,control.signing_message(extras.tir_public_network_domain_v1.unwrap()).unwrap().as_byte_slice(),
+                SHARED_STREAM_CONTEXT_V1,[32;32]).unwrap().as_ref().to_vec();control
+        };
+        let stream_target=StreamTarget::Unit {ordinal:first,request_id:set.request_id(first).unwrap()};
+        let begin=StreamAction::Begin {total_bytes:body.len() as u64,body_hash:crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body)};
+        let control=sign_stream(stream_target.clone(),producer,31,begin.clone());let slot=control.slot_id().unwrap();
+        let stream_id=control.declared_stream_id(body.len() as u64,crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body)).unwrap();
+        let before=b.state.state_root();let n=b.entries.len();
+        assert!(fold::stream_control(&mut b,&ctx,&sign_stream(stream_target.clone(),outsider(),11,begin)).is_err(),"active signer without original Ready cannot upload");
+        let mut forged=control.clone();forged.signature[0]^=1;
+        assert!(fold::stream_control(&mut b,&ctx,&forged).is_err());assert_eq!(b.state.state_root(),before);assert_eq!(b.entries.len(),n);
+        assert!(fold::stream_control(&mut b,&ctx,&control).unwrap());
+        let begun=b.state.state_root();assert!(!fold::stream_control(&mut b,&at(frame,offset+2),&control).unwrap());assert_eq!(b.state.state_root(),begun,"Begin retry cannot redate");
+        let replacement=sign_stream(stream_target.clone(),producer,31,StreamAction::Begin {total_bytes:1,body_hash:Hash64::default()});
+        assert!(fold::stream_control(&mut b,&ctx,&replacement).is_err());assert_eq!(b.state.state_root(),begun);
+        let finish=sign_stream(stream_target.clone(),producer,31,StreamAction::Finish {stream_id});
+        assert!(fold::stream_control(&mut b,&ctx,&finish).is_err());assert_eq!(b.state.state_root(),begun,"incomplete EOF rolls back");
+        let mut cursor=0u64;
+        for part in body.chunks(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) {
+            let part_control=sign_stream(stream_target.clone(),producer,31,StreamAction::Part {stream_id,offset:cursor,bytes:part.to_vec()});
+            let mut wrong=part_control.clone();wrong.action=StreamAction::Part {stream_id,offset:cursor+1,bytes:part.to_vec()};
+            wrong.signature=libcrux_ml_dsa::ml_dsa_87::sign(&publisher.signing_key,wrong.signing_message(extras.tir_public_network_domain_v1.unwrap()).unwrap().as_byte_slice(),SHARED_STREAM_CONTEXT_V1,[32;32]).unwrap().as_ref().to_vec();
+            let before=b.state.state_root();assert!(fold::stream_control(&mut b,&ctx,&wrong).is_err());assert_eq!(b.state.state_root(),before);
+            assert!(fold::stream_control(&mut b,&ctx,&part_control).unwrap());let prefix=b.state.state_root();
+            assert!(!fold::stream_control(&mut b,&ctx,&part_control).unwrap());assert_eq!(b.state.state_root(),prefix);
+            cursor+=part.len() as u64;
+        }
+        // Full-state checkpoints must share all retained chunk payloads.
+        // Box storage would copy the growing prefix at every operation.
+        let checkpoint=b.try_checkpoint().unwrap();
+        let Some(Row::CourtSharedChunk(live))=b.state.staged_court_row_v1(&Key::CourtSharedChunk(slot,0)) else {panic!()};
+        let Some(Row::CourtSharedChunk(saved))=checkpoint.0.staged_court_row_v1(&Key::CourtSharedChunk(slot,0)) else {panic!()};
+        assert_eq!(live.bytes.as_ptr(),saved.bytes.as_ptr(),"checkpoint must not deep-copy retained prefix bytes");
+        drop(checkpoint);
+        assert!(shared::read_shared_data_v1(&b.state,claim,first).unwrap().is_none(),"prefix is not authenticated public data");
+        let claim_before_stream=b.state.claim(&claim).cloned();assert!(fold::stream_control(&mut b,&ctx,&finish).unwrap());
+        assert_eq!(b.state.claim(&claim),claim_before_stream.as_ref(),"data EOF never certifies computation");
+        let finished=b.state.state_root();assert!(!fold::stream_control(&mut b,&ctx,&finish).unwrap());assert_eq!(b.state.state_root(),finished);
+        // The wide fixture exercises full-size + final-ragged parts with a source-bounded but
+        // invalid run body. EOF failure retains exactly the accepted prefix.
+        let run_count=source.leaf_count_v1().min(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1 as u64) as u32;
+        let run_query=crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepRun {first:0,count:run_count};
+        let run_ordinal=find(run_query);fold::request(&mut b,&ctx,claim,&make(run_ordinal,outsider(),11)).unwrap();
+        let run_target=StreamTarget::Unit {ordinal:run_ordinal,request_id:set.request_id(run_ordinal).unwrap()};
+        let invalid_len=source.unit_bound_v1(&run_query).unwrap().maximum_response_bytes.min((crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1+1) as u64) as usize;
+        let invalid_body=vec![0;invalid_len];
+        if multipart {assert!(invalid_len>crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1); }
+        let bad_begin=sign_stream(run_target.clone(),producer,31,StreamAction::Begin {total_bytes:invalid_body.len() as u64,body_hash:crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&invalid_body)});
+        let bad_stream=bad_begin.declared_stream_id(invalid_body.len() as u64,crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&invalid_body)).unwrap();
+        assert!(fold::stream_control(&mut b,&ctx,&bad_begin).unwrap());
+        for (i,part) in invalid_body.chunks(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).enumerate() {
+            assert!(fold::stream_control(&mut b,&ctx,&sign_stream(run_target.clone(),producer,31,StreamAction::Part {stream_id:bad_stream,offset:(i*crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) as u64,bytes:part.to_vec()})).unwrap());
+        }
+        let invalid_prefix=b.state.state_root();let invalid_entries=b.entries.len();
+        assert!(fold::stream_control(&mut b,&ctx,&sign_stream(run_target,producer,31,StreamAction::Finish {stream_id:bad_stream})).is_err());
+        assert_eq!(b.state.state_root(),invalid_prefix);assert_eq!(b.entries.len(),invalid_entries);
+        assert!(shared::read_shared_data_v1(&b.state,claim,run_ordinal).unwrap().is_none());
         let before=b.state.state_root();let n=b.entries.len();
         assert!(fold::share_body(&mut b,&ctx,claim,first,&body[..body.len()-1]).is_err());
         assert_eq!(b.state.state_root(),before);assert_eq!(b.entries.len(),n);
         let claim_before=b.state.claim(&claim).cloned();
-        // The committed leaf is arithmetically false in this fixture. Public
+        // The narrow case shares the forged leaf; the wide case shares the
+        // widest leaf of an execution containing a committed lie. Public
         // source authentication must retain it for semantic refutation, never
         // certify computation or advance credit merely because it is available.
-        assert!(fold::share_body(&mut b,&ctx,claim,first,&body).unwrap());
+        assert!(!fold::share_body(&mut b,&ctx,claim,first,&body).unwrap(),"signed EOF already installed this data");
         assert_eq!(b.state.claim(&claim),claim_before.as_ref());
         assert!(!fold::share_body(&mut b,&ctx,claim,first,&body).unwrap());
         assert!(matches!(shared::read_shared_data_v1(&b.state,claim,first).unwrap(),Some(RootedSharedDataV1::Unit(unit))
@@ -2520,7 +2597,17 @@ mod conviction_e2e_tests {
         let rows=crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context,&fx.execution.rows).unwrap();
         let mut bad_ids=fx.execution.generated.clone();bad_ids[0]^=1;
         let before=b.state.state_root();assert!(fold::share_ids(&mut b,&ctx,claim,rows,&bad_ids).is_err());assert_eq!(b.state.state_root(),before);
-        assert!(fold::share_ids(&mut b,&ctx,claim,rows,&fx.execution.generated).unwrap());
+        let ids_body=crate::palw_tir_public_owned_v1::palw_tir_public_ids_body_v1(&source,rows,&fx.execution.generated).unwrap();
+        let ids_hash=crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&ids_body);
+        let ids_begin=sign_stream(StreamTarget::FullIds,producer,31,StreamAction::Begin {total_bytes:ids_body.len() as u64,body_hash:ids_hash});
+        let ids_stream=ids_begin.declared_stream_id(ids_body.len() as u64,ids_hash).unwrap();
+        assert!(fold::stream_control(&mut b,&ctx,&ids_begin).unwrap());
+        for (i,part) in ids_body.chunks(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).enumerate() {
+            assert!(fold::stream_control(&mut b,&ctx,&sign_stream(StreamTarget::FullIds,producer,31,StreamAction::Part {stream_id:ids_stream,offset:(i*crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) as u64,bytes:part.to_vec()})).unwrap());
+        }
+        assert!(shared::read_shared_data_v1(&b.state,claim,ids_ordinal).unwrap().is_none());
+        assert!(fold::stream_control(&mut b,&ctx,&sign_stream(StreamTarget::FullIds,producer,31,StreamAction::Finish {stream_id:ids_stream})).unwrap());
+        assert!(!fold::share_ids(&mut b,&ctx,claim,rows,&fx.execution.generated).unwrap());
         assert!(matches!(shared::read_shared_data_v1(&b.state,claim,ids_ordinal).unwrap(),Some(RootedSharedDataV1::Ids {rows_root,ids})
             if rows_root==rows && ids==fx.execution.generated.as_slice()));
         let accepted=b.state.clone();let mut undone=accepted.clone();
@@ -2533,14 +2620,24 @@ mod conviction_e2e_tests {
                 .into_state(&params,Some(node.state_root()))
         };
         let fresh=reload(&accepted).unwrap();
+        let mut bad_prefix=accepted.clone();
+        let chunk_key=Key::CourtSharedChunk(slot,0);
+        let Some(Row::CourtSharedChunk(chunk))=bad_prefix.staged_courts.get_mut(&chunk_key) else {panic!()};chunk.bytes[0]^=1;
+        assert!(reload(&bad_prefix).is_err(),"raw prefix must reproduce retained head and original EOF");
+        let mut orphan=accepted.clone();orphan.staged_courts.remove(&chunk_key);assert!(reload(&orphan).is_err());
+        let before=b.state.state_root();
+        assert!(fold::stream_control(&mut b,&at(frame,10_000),&finish).is_err());assert_eq!(b.state.state_root(),before);
+        assert!(b.write_staged_row_v1(Key::CourtSharedStream(slot),None).is_err());
+        assert!(b.write_staged_row_v1(chunk_key,None).is_err());
+
         assert_eq!(fresh.state_root(),accepted.state_root());
         assert!(shared::read_shared_data_v1(&fresh,claim,first).unwrap().is_some());
         let query_key=Key::CourtSharedQuery(set.request_id(first).unwrap());
         let mut poisoned=fresh.clone();let Some(Row::CourtSharedQuery(row))=poisoned.staged_courts.get_mut(&query_key) else {panic!()};
-        let body=row.body.as_mut().unwrap();let mut leaf=fx.execution.preimages[7].clone();leaf.values_le[0]^=1;
+        let body=row.body.as_mut().unwrap();let mut leaf=fx.execution.preimages[leaf_index].clone();leaf.values_le[0]^=1;
         body.bytes=borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
-            preimage:leaf,opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,7).unwrap()}).unwrap();
-        assert!(source.decode_response_v1(&crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf {index:7},&body.bytes).is_ok());
+            preimage:leaf,opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,leaf_index as u64).unwrap()}).unwrap();
+        assert!(source.decode_response_v1(&crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf {index:leaf_index as u64},&body.bytes).is_ok());
         body.digest=shared::shared_body_digest_v1(&body.bytes);
         row.check(&query_key).unwrap();assert!(reload(&poisoned).is_err(),"matching stored digest cannot replace original-root authentication");
         let mut wrong_ids=fresh.clone();let Some(Row::CourtSharedIds(ids))=wrong_ids.staged_courts.get_mut(&Key::CourtSharedIds(claim)) else {panic!()};

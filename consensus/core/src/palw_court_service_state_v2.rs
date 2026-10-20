@@ -163,6 +163,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 Some(*claim)
             }
             Key::CourtSharedContext(claim) | Key::CourtSharedIds(claim) => Some(*claim),
+            Key::CourtSharedStream(_) | Key::CourtSharedChunk(..) => match self.staged_court_row_v1(key) {
+                Some(Row::CourtSharedStream(s))=>Some(s.claim),Some(Row::CourtSharedChunk(c))=>Some(c.claim),_=>None,
+            },
             Key::CourtSharedQuery(_) => match self.staged_court_row_v1(key) {
                 Some(Row::CourtSharedQuery(q))=>Some(q.claim),_=>None,
             },

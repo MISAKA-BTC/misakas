@@ -1,5 +1,6 @@
 //! RFC-0029 isolated signed stream envelope. No lifecycle, rooted stream writer,
 //! Ready authorization, paid admission, data authentication or duty completion.
+//! The private rooted adapter is separate; this type alone grants no authority.
 use crate::{Hash64,palw_state_v2::{PalwBondKeyV2,PalwChainStateV2}};
 use borsh::{BorshDeserialize,BorshSerialize};
 use std::io::{self,Read};
@@ -46,8 +47,16 @@ impl BorshDeserialize for SignedSharedStreamV1 {
         Ok(Self {version,claim,scope,target,signer,action,signature})
     }
 }
-fn digest(domain:&[u8],bytes:&[u8])->Hash64 {
-    Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(domain).hash(bytes).as_bytes().try_into().expect("64"))
+/// Borsh directly into the hash state: no temporary copy of Part bytes.
+pub(crate) fn stream_digest<T:BorshSerialize>(domain:&[u8],value:&T)->Result<Hash64,String> {
+    struct Sink<'a>(&'a mut blake2b_simd::State);
+    impl std::io::Write for Sink<'_> {
+        fn write(&mut self,bytes:&[u8])->io::Result<usize> {self.0.update(bytes);Ok(bytes.len())}
+        fn flush(&mut self)->io::Result<()> {Ok(())}
+    }
+    let mut hash=blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
+    value.serialize(&mut Sink(&mut hash)).map_err(|e|e.to_string())?;
+    Ok(Hash64::from_bytes(hash.finalize().as_bytes().try_into().expect("64")))
 }
 impl SignedSharedStreamV1 {
     fn check_shape(&self)->Result<(),String> {
@@ -62,18 +71,15 @@ impl SignedSharedStreamV1 {
     /// another slot. Native authorization and immutable Begin remain required.
     pub fn slot_id(&self)->Result<Hash64,String> {
         self.check_shape()?;
-        Ok(digest(b"misaka-palw/shared-stream-slot/v1",&borsh::to_vec(&(
-            self.version,self.claim,self.scope,&self.target,self.signer)).map_err(|e|e.to_string())?))
+        stream_digest(b"misaka-palw/shared-stream-slot/v1",&(self.version,self.claim,self.scope,&self.target,self.signer))
     }
     pub fn declared_stream_id(&self,total_bytes:u64,body_hash:Hash64)->Result<Hash64,String> {
         if total_bytes==0 {return Err("empty shared stream".into());}
-        Ok(digest(b"misaka-palw/shared-stream-body/v1",&borsh::to_vec(&(
-            self.slot_id()?,total_bytes,body_hash)).map_err(|e|e.to_string())?))
+        stream_digest(b"misaka-palw/shared-stream-body/v1",&(self.slot_id()?,total_bytes,body_hash))
     }
     pub fn signing_message(&self,network:Hash64)->Result<Hash64,String> {
         self.check_shape()?;
-        Ok(digest(b"misaka-palw/shared-stream-control/v1",&borsh::to_vec(&(
-            network,self.version,self.claim,self.scope,&self.target,self.signer,&self.action)).map_err(|e|e.to_string())?))
+        stream_digest(b"misaka-palw/shared-stream-control/v1",&(network,self.version,self.claim,self.scope,&self.target,self.signer,&self.action))
     }
     /// Only authenticates the bond key. Does NOT authorize a current Ready
     /// custodian, original source/profile, stream cursor, window or paid work.
@@ -151,6 +157,12 @@ mod tests {
             c.action=action;c.signature=libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key,c.signing_message(h(10)).unwrap().as_byte_slice(),
                 SHARED_STREAM_CONTEXT_V1,[22;32]).unwrap().as_ref().to_vec();
             c.validate_bond_signature(h(10),&state).unwrap();
+            // Preserve the previous byte-serialization message identity while
+            // hashing directly from Borsh avoids copying Part payloads.
+            let baseline=borsh::to_vec(&(h(10),c.version,c.claim,c.scope,&c.target,c.signer,&c.action)).unwrap();
+            assert_eq!(c.signing_message(h(10)).unwrap().as_byte_slice(),blake2b_simd::Params::new().hash_length(64)
+                .key(b"misaka-palw/shared-stream-control/v1").hash(&baseline).as_bytes());
+
             for n in 0..8 {let mut b=c.clone();let mut network=h(10);match n {
                 0=>network=h(11),1=>b.claim=h(11),2=>b.scope=h(11),3=>b.target=SharedStreamTargetV1::FullIds,
                 4=>b.signer.0.index=1,5=>b.version=2,6=>b.signature[0]^=1,_=>b.action=SharedStreamActionV1::Begin {total_bytes:1,body_hash:h(11)}}

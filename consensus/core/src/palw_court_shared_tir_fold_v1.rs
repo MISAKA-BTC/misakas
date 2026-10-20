@@ -89,3 +89,85 @@ pub(super) fn share_ids(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,cla
     })();
     if result.is_err() {b.restore(saved);}result
 }
+
+/// Private signed-data stream, not a production ingress or signed duty result.
+pub(super) fn stream_control(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
+    control:&crate::palw_court_shared_tir_stream_v1::SignedSharedStreamV1)->Result<bool,PalwStateV2Error> {
+    let saved=b.try_checkpoint()?;let result=stream_control_inner(b,ctx,control);
+    if result.is_err() {b.restore(saved);}result
+}
+fn stream_control_inner(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
+    control:&crate::palw_court_shared_tir_stream_v1::SignedSharedStreamV1)->Result<bool,PalwStateV2Error> {
+    use crate::palw_court_shared_tir_stream_v1::{SharedStreamActionV1 as Action,SharedStreamTargetV1 as Target};
+    use crate::palw_court_shared_tir_stream_state_v1 as stream;
+    let c=shared::context(&b.state,control.claim).map_err(refused)?;clock(c,ctx)?;
+    if control.scope!=c.scope_id {return Err(refused("shared stream native scope mismatch"));}
+    let source=c.source(&b.state).map_err(refused)?;
+    stream::ready_at(&b.state,c,&control.signer,ctx.daa_score).map_err(refused)?;
+    let network=b.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+    control.validate_bond_signature(network,&b.state).map_err(refused)?;
+    let bond=b.state.bond(&control.signer).ok_or(PalwStateV2Error::MissingBond(control.signer))?;
+    if !matches!(bond.status,PalwBondStatusV2::Active) || bond.collateral<b.params.min_collateral_sompi() {
+        return Err(refused("shared stream signer is not active/above existing floor"));
+    }
+    let (maximum,_)=stream::target_bound(&b.state,c,&source,&control.target).map_err(refused)?;
+    let slot=control.slot_id().map_err(refused)?;let key=Key::CourtSharedStream(slot);
+    let old=match b.state.staged_court_row_v1(&key) {
+        Some(Row::CourtSharedStream(row))=>Some((**row).clone()),None=>None,_=>return Err(refused("shared stream foreign row")),
+    };
+    if old.as_ref().is_some_and(|s|ctx.daa_score<s.last_daa || s.finished.as_ref().is_some_and(|f|ctx.daa_score<f.daa)) {
+        return Err(refused("shared stream replay predates accepted prefix/EOF"));
+    }
+    match &control.action {
+        Action::Begin {total_bytes,body_hash}=>{
+            if *total_bytes==0 || *total_bytes>maximum {return Err(refused("shared stream declaration exceeds original bound"));}
+            let id=control.declared_stream_id(*total_bytes,*body_hash).map_err(refused)?;
+            if let Some(old)=old {
+                if old.stream_id!=id {return Err(refused("shared stream declaration is immutable"));}return Ok(false);
+            }
+            if let Target::Unit {request_id,..}=&control.target {
+                let Some(Row::CourtSharedQuery(q))=b.state.staged_court_row_v1(&Key::CourtSharedQuery(*request_id)) else {return Err(refused("shared query missing"));};
+                if q.opened_daa>ctx.daa_score {return Err(refused("shared stream precedes request"));}
+            }
+            let row=stream::SharedTirStreamV1 {version:1,claim:control.claim,scope_id:control.scope,target:control.target.clone(),signer:control.signer,
+                slot_id:slot,stream_id:id,total_bytes:*total_bytes,body_hash:*body_hash,begun_block:ctx.block,begun_daa:ctx.daa_score,
+                begin_intent:control.signing_message(network).map_err(refused)?,last_block:ctx.block,last_daa:ctx.daa_score,
+                accepted_bytes:0,head:Hash64::default(),finished:None,material_until_daa:c.material_until_daa};
+            b.write_staged_row_v1(key,Some(Row::CourtSharedStream(Box::new(row))))?;Ok(true)
+        },
+        Action::Part {stream_id,offset,bytes}=>{
+            let mut old=old.ok_or_else(||refused("shared Part has no Begin"))?;
+            if old.stream_id!=*stream_id {return Err(refused("shared Part stream substitution"));}
+            let chunk_key=Key::CourtSharedChunk(slot,*offset);
+            if let Some(Row::CourtSharedChunk(chunk))=b.state.staged_court_row_v1(&chunk_key) {
+                chunk.check_context(&b.state).map_err(refused)?;
+                if chunk.bytes!=*bytes {return Err(refused("shared Part retry changed bytes"));}return Ok(false);
+            }
+            if old.finished.is_some() {return Err(refused("shared Part after EOF"));}
+            let end=crate::palw_court_shared_tir_stream_v1::check_shared_stream_part_v1(old.total_bytes,old.accepted_bytes,*offset,bytes.len()).map_err(refused)?;
+            let mut q=crate::palw_native_resource_v1::TirNativeRequestsV1::new();q.exact_v1::<u8>(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+            let _raw=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+            let chunk=stream::SharedTirChunkV1 {version:1,claim:control.claim,slot_id:slot,stream_id:*stream_id,offset:*offset,previous:old.head,
+                bytes:bytes.to_vec(),block:ctx.block,daa:ctx.daa_score,intent:control.signing_message(network).map_err(refused)?,material_until_daa:old.material_until_daa};
+            old.head=chunk.digest().map_err(refused)?;old.accepted_bytes=end;old.last_block=ctx.block;old.last_daa=ctx.daa_score;
+            b.write_staged_row_v1(chunk_key,Some(Row::CourtSharedChunk(Box::new(chunk).into())))?;
+            b.write_staged_row_v1(key,Some(Row::CourtSharedStream(Box::new(old))))?;Ok(true)
+        },
+        Action::Finish {stream_id}=>{
+            let mut old=old.ok_or_else(||refused("shared Finish has no Begin"))?;
+            if old.stream_id!=*stream_id {return Err(refused("shared Finish stream substitution"));}
+            let bytes=old.body(&b.state).map_err(refused)?;
+            old.authenticate_eof(&b.state,&source,&bytes).map_err(refused)?;
+            if old.finished.is_some() {return Ok(false);}
+            match &old.target {
+                Target::Unit {ordinal,..}=>{share_body(b,ctx,old.claim,*ordinal,&bytes)?;},
+                Target::FullIds=>{
+                    let ids=stream::decode_ids_body(&source,&bytes).map_err(refused)?;
+                    share_ids(b,ctx,old.claim,ids.rows_root_v1(),ids.ids_v1())?;
+                },
+            }
+            old.finished=Some(stream::SharedStreamFinishedV1 {block:ctx.block,daa:ctx.daa_score});
+            b.write_staged_row_v1(key,Some(Row::CourtSharedStream(Box::new(old))))?;Ok(true)
+        },
+    }
+}

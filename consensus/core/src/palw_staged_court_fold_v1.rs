@@ -974,6 +974,24 @@ impl TransitionBuilder<'_> {
 
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
         match &new {
+            Some(PalwStagedCourtRowV1::CourtSharedStream(s)) => {
+                s.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                let old=match self.state.staged_court_row_v1(&key) {
+                    Some(PalwStagedCourtRowV1::CourtSharedStream(old))=>Some(old.as_ref()),None=>None,
+                    _=>return Err(PalwStateV2Error::CarriageInconsistent("shared stream foreign key".into())),
+                };
+                s.check_advance(&self.state,old).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            },
+            Some(PalwStagedCourtRowV1::CourtSharedChunk(c)) => {
+                c.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                let s=crate::palw_court_shared_tir_stream_state_v1::stream(&self.state,c.slot_id).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                c.check_binding(s).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                if let Some(old)=self.state.staged_court_row_v1(&key) {
+                    if Some(old)!=new.as_ref() {return Err(PalwStateV2Error::CarriageInconsistent("shared chunk immutable".into()));}
+                } else if s.finished.is_some() || c.offset!=s.accepted_bytes || c.previous!=s.head || c.daa<s.last_daa {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared chunk does not advance current prefix".into()));
+                }
+            },
             Some(PalwStagedCourtRowV1::CourtSharedContext(c)) => {
                 c.check(&key).and_then(|()| c.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
                 if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
@@ -3279,6 +3297,8 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtSharedContext(c) => (c.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedQuery(q) => (q.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedIds(ids) => (ids.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::TirAcquisition(row) => {
             let c = row.owned.contract_v1();
@@ -3610,6 +3630,8 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtSharedContext(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedQuery(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedIds(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
             _ => None,
         };
         if let Some(until) = tir_until {

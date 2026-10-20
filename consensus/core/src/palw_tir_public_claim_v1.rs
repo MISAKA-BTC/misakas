@@ -446,6 +446,12 @@ pub(crate) fn palw_tir_public_frame_fixture_v1(forge: Option<(usize, usize)>, ma
     tests::fixture_in(forge, maximum_custodians)
 }
 
+/// Existing 4096-wide test execution reconstructed in its actual original job context.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_frame_fixture_wide_v1(forge:Option<(usize,usize)>,maximum_custodians:u64)->PalwTirPublicFrameFixtureV1 {
+    tests::fixture_with_vocab(forge,maximum_custodians,|_|{},None,None,true)
+}
+
 /// **G14 G-T2 test support:** [`palw_tir_public_frame_fixture_v1`] over a job `edit_job` shapes (a seeded V3 job, a V4 job with
 /// penalties or stop sequences, ...), whose execution decodes by THAT job's own selection rule — except at decode position
 /// `wrong_at`, where it commits the best lane the rule does not choose (a selection violation over honest arithmetic).
@@ -491,10 +497,17 @@ mod tests {
         wrong_at: Option<u32>,
         output_root: Option<Hash64>,
     ) -> super::PalwTirPublicFrameFixtureV1 {
+        fixture_with_vocab(forge,maximum_custodians,edit_job,wrong_at,output_root,false)
+    }
+    pub(super) fn fixture_with_vocab(
+        forge:Option<(usize,usize)>,maximum_custodians:u64,
+        edit_job:impl FnOnce(&mut crate::palw_freeprompt_v3::PalwFreePromptJobV3),wrong_at:Option<u32>,output_root:Option<Hash64>,wide:bool,
+    )->super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_public_allocation_v1::*;
-        let honest = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let honest = if wide {crate::palw_tir_court_v1::test_support::tiny_execution_wide().0}
+            else {crate::palw_tir_court_v1::test_support::tiny_execution(None)};
         let class_id = honest.binding.class.class_id(&honest.binding.artifact_root);
         let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
         job.version = PALW_FP_V3_VERSION;
@@ -528,7 +541,8 @@ mod tests {
         let select = |position: u32, row: &[i32], before: &[u32]| {
             crate::palw_tir_court_v1::test_support::select_by_rule(&rule, row, before, wrong_at == Some(position))
         };
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), forge, &select);
+        let x = if wide {crate::palw_tir_court_v1::test_support::tiny_execution_selecting_wide_in(|_,_,_|context.clone(),forge,&select)}
+            else {crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), forge, &select)};
         let binding = x.binding.clone();
         let original = PalwFreePromptCommitmentV3 {
             job,

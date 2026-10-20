@@ -3895,7 +3895,9 @@ impl PalwChainStateV2 {
             match row {
                 R::CourtSharedContext(c)=>c.check_context(self),
                 R::CourtSharedQuery(q)=>q.check_context(self),
-                R::CourtSharedIds(ids)=>ids.check_context(self),_=>Ok(()),
+                R::CourtSharedIds(ids)=>ids.check_context(self),
+                R::CourtSharedStream(s)=>s.check_context(self),
+                R::CourtSharedChunk(c)=>c.check_context(self),_=>Ok(()),
             }.map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.

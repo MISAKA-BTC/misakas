@@ -3658,6 +3658,11 @@ pub(crate) mod test_support {
     /// **The tiny class over a 4,096-word vocabulary** — the same program, its logits leaf a full 4,096-lane (16 KiB) tile: a
     /// genuinely computed wide leaf for the acquisition's multi-part fixtures (G14 audit §11 (a) bounds every answer by the
     /// job's ACTUAL leaves, so a part-spanning leaf has to be a real one). Returns the execution and that leaf's index.
+    /// Test-only wider class through the same execution/commitment builder.
+    pub(crate) fn tiny_execution_selecting_wide_in(
+        ctx_of: impl FnOnce(&PalwTirClassV1,Hash64,&[u32])->PalwJobContextV2,
+        forge:Option<(usize,usize)>,select:&dyn Fn(u32,&[i32],&[u32])->u32,
+    )->TinyExecution {tiny_execution_selecting_in_vocab(ctx_of,forge,select,4096)}
     pub(crate) fn tiny_execution_wide() -> (TinyExecution, u64) {
         let x = tiny_execution_selecting_in_vocab(
             |class, class_id, prompt| {

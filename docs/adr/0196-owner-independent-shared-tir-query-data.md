@@ -48,3 +48,11 @@ Rooted adapter の選択結果は **69 passed / 0 failed / 0 ignored**（native3
 [RFC-0029 §8](../rfc/0029-owner-independent-shared-tir-query-data.md#8-signed-bounded-stream-envelope-candidate) に、署名付き Begin/Part/Finish の候補を追加する。既存16,384-byte part 上限と ML-DSA-87 を維持する。枠は claim/scope/target/literal signer で固定し、異なる body 宣言で枠数を増やさない。全IDsは scope ごとに一つの対象とし、各 ID chunk ごとに全列を再提出しない。署名は identity のみで、Ready資格・元データ・応答義務の履行を代替しない。
 
 この段階は codec/署名/checked geometry のみ。rooted prefix、現在のReady資格、EOF認証、rollback/再読込、完全予約・実供給・有料搬送は未接続。再試行・中断・再開を全合法分岐へ積算する規則も未採択。固定枠という構成要素だけで受付・費用・訴追可能性の完成としない。Proposed と有効化保留を維持する。
+
+## Rooted signed-prefix candidate
+
+[RFC-0029 §9](../rfc/0029-owner-independent-shared-tir-query-data.md#9-rooted-signed-prefix-candidate-after-33738ea26) は隔離候補に、元preparationのliteral Ready照合と固定stream行・bounded chunk行、実受理clock、EOF認証・原子的公開・復元時再認証を追加する。新しい候補key/rowは17/23・18/24、lifecycleは未割当。Begin/Partの再送は既存時刻を変えず、途中データは認証済みデータにしない。成功EOFも計算credit・応答義務完了・bond返還・defaultの効果を持たない。
+
+Ready資格でactor集合を元契約に束縛しても、正直な署名者の可用性や外部1人の全訴追経路を証明したことにはならない。完全予約・費用・全合法restart/失敗分岐・実供給・T05と公開採択は未完。Proposed / Review Required・有効化保留を維持する。
+
+小さなchunkのcodec検査で、既存shared/standard Arcのwire preflightにtyped heap側のalignment余裕が含まれていない不一致を検出。typed heap側・hard cap・wire/hashを変えず、preflightの必要予約を既存会計へ揃える。任意の上限引き上げやcapacity採択で試験を通す修正ではない。

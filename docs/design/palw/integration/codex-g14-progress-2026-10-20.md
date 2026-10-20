@@ -219,3 +219,11 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 最終選択 **73 passed / 0 failed / 0 ignored**（query/frontier15、codec/identity27、同じ最終core executableのnative31）。初回4・途中native31・過去69等は加算しない。non-test consensus check と生成物一致も成功。[raw logs・hash・source patch・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#signed-bounded-shared-stream-envelope-candidate)。
 
 搬送形式だけのcheckpointであり、Ready照合、rooted prefix/chunk、EOF再認証と原子的rollback、再読込/reorg/prune、完全予約・fee・実供給・T05は未接続。現行whole-body内部adapterを本番入口へ出していない。[Draft仕様](../../../rfc/0029-owner-independent-shared-tir-query-data.md#8-signed-bounded-stream-envelope-candidate)とADR-0196へ境界を明記。G14全体は継続中、有効化なし。
+
+## Rooted signed shared-stream (2026-10-21)
+
+`33738ea26` 後に、元preparationのliteral Ready・現在のActive bond・実ML-DSA署名の照合、固定stream行とbounded chunk行、実受理clock、EOF元データ認証・原子的公開を接続。候補key/row17/23・18/24を末尾追加し、旧tag/codec/期限/上限を維持した。chunk本文はcheckpoint間で共有し、prefix全体の再コピーを避ける。全状態/map/indexや他の行のコピー費用がゼロになったとは扱わない。
+
+初回のtiny fixtureでは16,385-byte不正本文が実際のsource上限を超えるという試験側の仮定誤りを検出。狭いケースを残し、既存4096幅実行を正規のoriginal contextへ組み立てた複数Partケースも検証した。さらに小さいchunkのcodec試験が、shared/standard Arcのwire preflightと既存typed heapのalignment余裕の不一致を検出した。hard capやtyped heap側を変えず、preflightを既存の保守的会計へ揃えた。
+
+最終選択 **86 passed / 0 failed / 0 ignored**（wire11 + codec/identity28 + 同じ最終core executableのnative32 + query/frontier15）。non-test consensus checkと生成物一致も成功。[初期失敗・source patch・hash・範囲・重複除外](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#rooted-signed-shared-stream-native-adapter)。原子的EOF失敗、公開前prefix、全IDs、改変/欠損拒否、journal undo/replay、carriage再読込、元hard境界・保持を検査した。これはverified-half original/Readyとsynthetic service bookを使うin-memory fixtureであり、有料node ingress・本物のkey rotation・全分岐予約・実供給・fresh duty・pruned IBD・T05/G14完了ではない。武装・pre統合・配備なし。

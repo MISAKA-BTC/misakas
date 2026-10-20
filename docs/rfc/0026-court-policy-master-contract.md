@@ -149,6 +149,7 @@ RFC-0024 本文(B)の各 round の数値 fold 検査を、現行の規範とし�
 | ADR-0194 A の隔離統合候補 | `codex/rfc14-g14-integration-candidate` の `b9c6d0656` で main/X3 の選択部分を統合。選択 joint release 93件。pre未統合・公開採択なし・有効化なし。[範囲と後続記録](../evidence/palw/g14-integration-candidate-2026-10-20/README.md) |
 | rooted service v2 / native duty clock | 隔離候補 `705b27616` までで key/row 12/18・13/19、native duty/prerequisite clock、journal/保持・default拒否を接続。選択64件。実供給・原子的な全分岐受付・帰責の完成ではない |
 | owner非依存の rooted query/data | 隔離候補 `b980f5788`、候補key/row 14/20〜16/22。build済み、選択69件の限定敵対的fixture検証済み（全8owner占有、原データ改変拒否、undo/reload等）。有料lifecycle/Ready応答/全分岐予約/T05は未完、有効化なし。[Draft RFC-0029](0029-owner-independent-shared-tir-query-data.md) |
+| Ready照合・永続signed stream/EOF | 隔離候補 `33738ea26` 後、候補key/row17/23・18/24。build・限定敵対的fixture検証86件、non-test check成功。[source hash・生ログ・範囲](../evidence/palw/g14-integration-candidate-2026-10-20/README.md#rooted-signed-shared-stream-native-adapter)。共有chunkのcheckpoint再コピーとArc preflight会計不一致を修正。公開lifecycle・完全予約/fee・fresh duty・実供給・T05/G14は未完、有効化なし |
 | 本書 §2〜§7 の残りの規範 | 設計だけ。F02/F03 の選択肢は [ADR-0192](../adr/0192-court-service-opportunity-and-shared-pursuit.md)（Proposed） |
 
 上表の旧 branch の件数は各checkpointの履歴であり、隔離候補の件数に加算しない。「設計だけ / 別 branch 実装 / 統合済み / build 済み / 敵対的試験済み / 有効化済み」を別々に記し、設計メモ・別 branch のコード・toy test を混ぜて「完了」と表示しない。
