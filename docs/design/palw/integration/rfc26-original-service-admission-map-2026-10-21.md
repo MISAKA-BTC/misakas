@@ -46,3 +46,13 @@ source-data upper、quota book、データreceiptの各々だけではこの条�
 ## 確認記録
 
 既存current-clock release回帰5件と、G14 gate12・activation5・release identity9の31件が成功した。[実コマンド・生ログhashとsource hash](../../../evidence/palw/g14-integration-candidate-2026-10-20/preparation-source-scope-audit.json)。この回帰はclock version/serial witness依存/既存turn span/queue/cost recordを対象とし、この表の全対話予約・実fee統合やphysical capacityを実行したものではない。production・test source、旧wire、数値、presetは未変更。
+
+## 最低material期限の接続修正
+
+service bindingの`check_context`が署名custodyをhardだけに照合していた不足を補う候補。元frameのdescriptorに固定されたnative reorg保持期間を読み、`max(frame.terms.material_until_daa, hard + native_reorg_retention_daa)` をchecked arithmeticで導出し、既存のTIR custodyとsemantic history custodyの検査へ渡す。hard自体も元受理DAA+10,000との一致を要求する。
+
+これは現在の元契約から確定できる最低値。全後続semantic turn・裁定後責任・delivery/inclusion・最終follow-up graphの導出を完了したものではない。別claimのbond holdをこの署名契約の代わりにしない。短い既存pledgeを書き換えず、新service bindingのwriteとcarriage context検査を拒否する。serviceを持たない旧claimの処理や全default拒否は変更しない。wire/schema/preset/実測値の変更ではない。
+
+semantic回帰は、既存のguard-only synthetic semantic rowを使い、hardへ届くpledgeでも最低materialへ1 DAA足りなければ拒否し、一致/+1なら同じcontext検査が通ることを確認する。元frameやhistory署名のnative admissionを実行したという証拠ではない。[検証・hash・native回帰の正確な範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/service-material-floor-artifact.json)。
+
+未解決後の保持・終了効果は別途閉じる必要がある。現在の`court_service_holds_material_v1`はTIR frame/acquisition/preparation/witness/raw bytes等を扱うが、この最低horizon検査だけではClaimBundleやsemantic ownerの全保持・pruning・正当なclose後のarchiveを実装したことにならない。semantic行のあらゆる削除を一律拒否して正しい裁定まで止める修正も、その代替にしない。実契約を使うsemantic admission/close/reorg/pruned IBDと、必要な全material/担保責任を含む終了graphは未完として残す。

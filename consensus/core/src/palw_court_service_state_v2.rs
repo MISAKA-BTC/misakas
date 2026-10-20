@@ -111,6 +111,26 @@ pub(crate) fn require_tir_service_custody_window_v1(
     Ok(())
 }
 
+/// Minimum material horizon already implied by this original and the existing
+/// native reorg-retention rule. This is not the still-incomplete follow-up graph:
+/// a future complete admission coordinator must also include every later duty.
+/// Never extends a signed contract or substitutes another claim's collateral hold.
+pub(crate) fn tir_service_required_material_until_v1(
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    hard_deadline_daa: u64,
+) -> Result<u64, String> {
+    let plan = frame.plan_v1();
+    if plan.terms.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+        != Some(hard_deadline_daa)
+    {
+        return Err("service material horizon substitutes original hard deadline".into());
+    }
+    let after_reorg = hard_deadline_daa
+        .checked_add(frame.descriptor_v1().native_config.reorg_retention_daa)
+        .ok_or("service hard plus native retention overflows")?;
+    Ok(after_reorg.max(plan.terms.material_until_daa))
+}
+
 impl CourtServiceStateV2 {
     /// Contextual validation is separate from the standalone row codec check.
     /// A recovery binding may not outlive or substitute its immutable frame.
@@ -125,7 +145,8 @@ impl CourtServiceStateV2 {
             {
                 return Err("service recovery substitutes original frame".into());
             }
-            require_tir_service_custody_window_v1(state, frame, binding.hard_deadline_daa)?;
+            let material_until = tir_service_required_material_until_v1(frame, binding.hard_deadline_daa)?;
+            require_tir_service_custody_window_v1(state, frame, material_until)?;
             let claim = state.claim(&binding.claim).ok_or("service recovery lost its claim")?;
             if matches!(claim.phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }) {
                 return Err("unresolved service claim cannot already be Final".into());

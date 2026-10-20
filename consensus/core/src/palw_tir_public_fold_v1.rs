@@ -3001,6 +3001,37 @@ mod conviction_e2e_tests {
             state.staged_courts.insert(Key::Claim(claim), Row::ClaimBundle(Box::new(row).into()));
             assert_eq!(check(&state, &frame, until).is_ok(), delta >= 0);
         }
+        // A pledge reaching hard alone used to pass service-context validation.
+        // The real original's material horizon and native hard+reorg floor must
+        // both be covered. These remain guard-only synthetic semantic rows, not
+        // a claim that the native semantic admission/signatures were exercised.
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding,
+            tir_service_required_material_until_v1};
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        let required = tir_service_required_material_until_v1(&frame, until).unwrap();
+        assert!(required > until, "fixture exposes the missing post-hard material obligation");
+        assert!(frame.custody_v1().pledge_v1().material_until_daa >= required,
+            "test uses the existing TIR promise without extending it");
+        assert!(tir_service_required_material_until_v1(&frame, until - 1).is_err());
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id: [0x53; 64], release_daa: terms.accepted_daa + 1,
+            service_before: terms.accepted_daa + 2, cost }], until).unwrap();
+        let profile = h(0x53f);
+        let service = CourtServiceStateV2 { version: 2, source_profile_id: profile,
+            profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(profile), book,
+            claims: BTreeMap::from([(claim, ServiceClaimBinding { claim, allocation_id: frame.plan_v1().allocation_id,
+                source_id: frame.plan_v1().source_id, original_accepted_daa: terms.accepted_daa,
+                hard_deadline_daa: until, packet_ids: BTreeSet::from([[0x53; 64]]) })]) };
+        state.staged_courts.insert(Key::TirClaim(claim), Row::TirClaim(Box::new(frame.clone()).into()));
+        for horizon in [until, required - 1, required, required + 1] {
+            let mut row = bundle.clone();
+            row.history_custody.pledge.material_until_daa = horizon;
+            state.staged_courts.insert(Key::Claim(claim), Row::ClaimBundle(Box::new(row).into()));
+            assert!(check(&state, &frame, until).is_ok(), "old hard-only constraint accepts this promise");
+            assert_eq!(service.check_context(&state).is_ok(), horizon >= required,
+                "service must cover actual retained original material: {horizon} vs {required}");
+        }
         for field in 0..5 {
             let mut row = bundle.clone();
             let p = &mut row.history_custody.pledge;

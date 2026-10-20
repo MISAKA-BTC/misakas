@@ -255,3 +255,11 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 [Original受付と各control/feeの対応監査](rfc26-original-service-admission-map-2026-10-21.md)を追加。original rent、owner Open rent、Convict/最初のWitnessPart rentの実node helperとfoldの関係、shared private primitiveがまだ有料original admissionへ接続されていない点を固定した。全合法graphの証明ではなく、未導出費用のゼロ化・新旧費用の重複加算の両方を防ぐためのsource根拠である。
 
 今回は文書/source監査で、production/test source変更なし。既存clock回帰5＋t12関連26の31件成功。過去62等は加算せず、実容量・実door・完全予約・本番有効化は未達として継続する。
+
+## Serviceの最低material期限を受付検査へ接続 — 2026-10-21
+
+原子的original受付への準備中、service context検査がcustodyをhardまでしか要求していない不足を確認。元frameのmaterialと、hard+元native reorg保持期間の最大をcheckedで求め、TIR/semantic両custodyへ適用する候補を追加した。native writerとcarriage context検査の既存経路を使い、短い署名契約の延長・hard変更・責任解放・default許可は行わない。
+
+[受付監査の修正と限界](rfc26-original-service-admission-map-2026-10-21.md#最低material期限の接続修正)。これは全依存graphの完了ではなく、既存契約から確定できる最低保持条件の接続。完全な有料original予約、全後続義務/裁定/供給/公開ingress、T01–T15と実doorの元条件は継続する。
+
+最終選択は **67 passed / 0 failed / 0 ignored**（native32＋service codec6＋policy3＋gate12＋activation5＋release identity9）。targeted1は32に含まれ、過去31/62/89等は加算しない。non-test consensus release checkも成功。[実コマンド・source/実行file/log hash・fixtureの限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#minimum-signed-service-material-horizon)。完全なsemantic保持/終了graphの代替とはしない。
