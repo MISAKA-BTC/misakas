@@ -117,3 +117,9 @@ release 回帰 **45 passed**、最終 native `rooted_service_ --nocapture` **4 p
 ただし最初の owner-based native case は **InvalidInterval で失敗**。同じ tiny fixture の導出値は original `a=100`、`preparation_until=220000`、owner 用に選んだ区間 `220003..220013` に対して hard `10100`。hard を広げず、その拒否を回帰条件として残した。journal の成功 fixture は同じ frame の licence 後・準備区間での book 更新であり、owner 経路の成功とはしない。
 
 [準備 clock の起点調査](rfc26-shared-frontier-volume-2026-10-20.md)では、legacy `network_v1` の 4,096/4/64 と式から、quoted preparation の保守的下界だけで **12,420 DAA > 10,000** になることを確認した。これは runtime の測定下界ではない。既存 quote の流用では新 clock を満たせず、次は actual profile/config と logical walk・publication・WorkDebit の対応、および公開 frame 局所化の資源と clock を分けて検証する。既存 ID、signed horizon、再実行数、モデル範囲、上限を無断変更して通さない。P0/P1/P2、T01–T15、R-D2-NODE、tag 230、actual door は未完了のまま維持する。
+
+## X3 の現行 clock と legacy 下界の適用範囲
+
+X3 起点 `05fcf7b5c` の現行実装を確認すると、preparation は whole pass ごと、owner/response は turn ごとの WorkDebit に既にまとめられている。`palw_tir_frame_cost_v1` の de-stacked clock と `kaspad/src/palw_tir_public_custodian.rs` の pass budget は、上記 legacy `network_v1` quote と区別する。12,420 DAA は legacy 式の条件付き下界であり、X3 の現行 profile や全ての許容設計に同じ下界があることを証明しない。既存の元資料・数値を変更していない。
+
+X3 でも全 preset の frame-cost は None、pinned cost record は空で、actual measured network profile と door ≤ 3,120 はまだない。また実 filer は staged witness の accepted offset を読んで次の part を送る。byte throughput と別にこの直列待ちを計上する補助案を ADR-0193（別 branch、Proposed）へ記録している。十分長い collection window が待ちを覆う場合もあり、全既存 plan の期限不足を主張しない。候補 version 2 は旧 version 1 の意味と bytes を保持し、同じ既存 maximum door を越える plan を拒否する。採択・武装・統合・配備や G14 完了ではない。

@@ -27,3 +27,7 @@ RFC-0010/0012のdormant implementationは主RFCではなくdesignへ移しまし
 - [18-inference-surface.md](../spec/palw/18-inference-surface.md)
 - [18-layer-sharded-panels.md](../spec/palw/18-layer-sharded-panels.md)
 - [18-verification-certificates.md](../spec/palw/18-verification-certificates.md)
+
+## 2026-10-20 の別 branch 予約
+
+ADR-0192 は本 branch の Proposed。ADR-0193 (`docs/adr/0193-sequential-witness-filing-clock.md`) は `codex/rfc14-x3-reorg-clock` の Proposed で、本 branch へ本文を統合していない。0183–0191 の別 branch 割当と併せて再使用せず、ADR の次ローカル番号は 0194 とする。冒頭の ZIP 時点の次番号は履歴であり、現在の全 branch の未使用を示さない。
