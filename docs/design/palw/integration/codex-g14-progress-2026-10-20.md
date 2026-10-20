@@ -157,3 +157,11 @@ release 対象は新 guard 1 + 既存 native 4、同一性/G14/activation/releas
 対象は新試験 **1 passed** と、既存 release executable の t12/G14/activation/release 再実行 **26 passed**、計 **27 passed / 0 failed / 0 ignored**。production code は未変更であり、同一性の 26 件は新規 cargo compile とは記録しない。生ログ・コマンド・SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)。
 
 original/custody の fixture は verified-half、outer inputs は未資金化の codec/native 試験であり、mempool・block の UTXO/手数料・native original の実署名受付・実 PC 停止の T08 達成ではない。新しい適応的応答には authorized court signer が必要で、既署名の relay から signer 常時不要とは結論しない。F02/F03、実容量、全依存集合と G14 の残件は維持する。
+
+## 資金付き legacy relay の node 受理
+
+LG14-A harness に、producer の署名済み応答を newcomer が別の資金 UTXO で運ぶケースを追加した。正直な legacy claim の実生成・bind/license、newcomer の登録、署名済み reserve/demand を経て応答を作成し、その後は newcomer の carrier 署名だけで mempool、node template、block 受理、native fold を通す。元 payload の不変、producer の担保と fixture funding entry の不変、node の回答義務解消、公開 read からの binding 学習を確認した。直接の virtual UTXO 保持照会や実 PC 停止はまだ検証していない。
+
+release 新 node 試験 1、同じ新 binary の既存追及回帰 1、以前の release executables による同一性/G14/activation/release 回帰 26、計 **28 passed / 0 failed / 0 ignored**。production code は未変更。最初の回帰 driver の binary 名誤指定（試験未実行・exit 127）と修正後のログを含め、[試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)に生ログ/SHA-256/コマンドを保存した。
+
+これは隔離 LG14-A harness（genesis/test keys、PoW 省略、既存 legacy fence の test-only 設定）での MaterialDisclosedV2 経路。TIR original/TFP1、全許容分岐、signer 不在での新しい適応的応答、T08 全体、F02/F03 や実容量の完成とはしない。[signer/relay の対象と残件](rfc26-court-signer-relay-audit-2026-10-20.md)を維持。文書検査は同じ imported assets の 5 件で FAIL、baseline と元資料は未変更。武装・統合・配備なし。

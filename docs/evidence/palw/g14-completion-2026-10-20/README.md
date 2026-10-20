@@ -144,3 +144,19 @@ Shared-lock command `cargo test --release -p kaspa-consensus-core --lib court_re
 | --- | --- |
 | [court-relay-native-release.log](court-relay-native-release.log) | `b024579ce3a3f6bf25e142e6c5e912cf4a908dd006c7ce7f8a7bdb07998a8d5e` |
 | [court-relay-identities-release.log](court-relay-identities-release.log) | `e225f397aa925dc5a4c6febe8333ee2ae2ba8f77292008627b61d3a60d201685` |
+
+## Funded third-party relay through legacy node acceptance
+
+After `0af29566b`, the isolated LG14-A harness separates signed producer response preparation from carrier submission. The existing producer-paid wrapper is preserved. The new test creates an actual honest legacy claim, binds/licenses it, registers the newcomer, opens a real signed reservation/demand, prepares the producer's signed disclosure, and has the newcomer fund/sign the outer carrier. Mempool, node template inclusion, carrying block acceptance and subsequent native fold all succeed. Exact signed payload bytes are carried unchanged; the filer's read learns the authenticated binding and the node's producer duty disappears. Producer collateral and the harness's producer funding entry are unchanged. Direct virtual-UTXO retention checks, process shutdown and restart/IBD are not asserted by this new test.
+
+Shared-lock command: `cargo test --release -p kaspa-consensus --lib lg14a_a_newcomer_funds_and_relays` — **1 passed / 0 failed / 0 ignored**. Existing real-node pursuit regression on the SAME freshly built executable `target/release/deps/kaspa_consensus-b46a428bb295fa5b lg14a_a_non_seat_newcomer_convicts_a_computation_lie_before_final` — **1 passed**. Previously compiled identity executables `g14_close_gates-07a58aeba402f266`, `palw_activation_pool_is_t12_only-19bd1d2a52f9c5c6`, `palw_the_release_did_not_move-c8b47338cdf2801d` rerun under the lock — **26 passed**. Production code has not changed. Final selected total **28 passed / 0 failed / 0 ignored**. This is not a performance measurement or all-G14 count.
+
+The first regression driver named the separate X3 worktree's executable instead of this build's new filename and exited 127 before any test. The corrected driver used the `Running unittests` path from the build log; no build or node test was restarted because of an observation timeout.
+
+Harness differences remain exactly those documented in LG14-A: isolated re-keyed genesis and funded test actors, skipped PoW and a directly configured dormant legacy fence bypassing real-network activation validation. No live network, preset, deployment or arming changed. This is legacy MaterialDisclosedV2, not TIR original/TFP1 acceptance, all legal branches or complete T08. Fresh adaptive answers still require the authorized court signer. [Detailed scope](../../../design/palw/integration/rfc26-court-signer-relay-audit-2026-10-20.md).
+
+| Raw log | SHA-256 |
+| --- | --- |
+| [funded-relay-node-release.log](funded-relay-node-release.log) | `6f90c51aa9b15b12a2c463d2e4694b1dea99e2f2f5e9ed5586b804ccaa73bc2b` |
+| [funded-relay-regressions-release.log](funded-relay-regressions-release.log) | `6fd1af4381035e8bf31d2bd48aa78154aa9429f0851f13896aff9797c73f09b5` |
+| [funded-relay-driver-before-binary-correction.log](funded-relay-driver-before-binary-correction.log) | `33a8179ed448676a3685accfe8e50285174817073aec4a408ceb7211826906d2` |

@@ -28,3 +28,11 @@ Only the response controls use real cryptographic signature verification; the or
 ## Remaining closure
 
 T08 still needs actual funded third-party carriers through mempool, block acceptance and native fold, original custody/credit admission with real signatures, source-holder and signer availability over all turns, signed dependency horizon, failure/recovery behavior and restart/reorg. The all-owner outsider path, physical inclusion supply and default attribution remain separate unfinished P0 conditions. A funded relay of complete evidence cannot substitute for obtaining the evidence under collusion.
+
+## Funded legacy-node relay scenario
+
+`lg14a_a_newcomer_funds_and_relays_another_bonds_signed_answer` extends the existing isolated LG14-A node harness. The honest legacy claim is actually produced, bound and licensed, the newcomer is registered on funded carriers, and a real signed reservation and binding demand create the producer's disclosure duty. The existing response builder is split into preparation and submission, preserving its old producer-paid wrapper. The new case signs the answer as the producer first, then uses only newcomer-funded outer carriers through mempool validation, the node's template and the subsequent native block fold.
+
+Assertions cover unchanged signed payload in carrying blocks, newcomer funding rather than producer funding, unchanged producer collateral/funding, duty discharge and the independent filer's authenticated binding read. This is the legacy MaterialDisclosedV2 path, not TIR original/TFP1 acceptance or full T08. It uses the documented LG14-A harness differences (isolated test genesis/cards, skipped PoW and directly configured dormant legacy fence); no network preset or live fence is armed. It does not represent an external process PC shutdown or guarantee fresh adaptive signatures after signer loss.
+
+The funded legacy test passed, as did the existing producer-paid non-seat pursuit case on the same freshly built node test executable. Its exact evidence scope and logs are in the [release evidence record](../../../evidence/palw/g14-completion-2026-10-20/README.md). Thus funded legacy third-party carriage has direct node evidence; TIR original/TFP1 and complete T08 remain open.
