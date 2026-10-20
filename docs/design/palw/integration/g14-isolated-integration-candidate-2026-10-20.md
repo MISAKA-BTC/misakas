@@ -35,3 +35,9 @@ Final selected joint-build tests: **93 passed / 0 failed / 0 ignored**. See the 
 ## Native response derivation checkpoint
 
 Existing source ID chunks are distinguished from the owned route’s one all-ID logical request. Body/RAM bounds come from the native validator; declared-body branches yield Begin, canonical Parts and Finish. The native fixture helper now uses generated actions, tested through existing dispatcher/body authentication. Selected checks 57 passed, non-test consensus check succeeded; scope and unresolved full graph are recorded in [the response derivation](rfc26-native-response-graph-2026-10-20.md). Original query IDs and all protocol caps/clocks/tags are retained.
+
+## Devnet source update received — 2026-10-20
+
+The operator supplied `release/t12-16000` / `799a058fa` with the previously missing [report](../../../measurements/2026-10-19-devnet-payload-carrier.md) and raw 1,180-line log. They are imported byte-identically; earlier “no result file yet” statements describe the state before this update. The operator reports that the recording agent stopped before producing the summary and that the devnet has since been shut down and temporary keys/directories removed. This does not authorize a new deployment.
+
+[Reaggregation audit and corrections](../../../measurements/2026-10-19-devnet-payload-carrier-audit.md): seven first-mempool observations pair with seven included records; intended load/saturation was not achieved. There are 35 block-observation rows / 33 distinct recorded block prefixes. Both maximum 111,927-byte rows include a measured tx, so a floor-only 111,927-byte maximum is not established; the largest whole-block observation with zero measured txs is 87,095 bytes. Sender timestamps, per-tx bytes/mass, selected-chain acceptance time and reserved court supply are absent. No observed or inferred rate is adopted. Full F02/F03 and real-model door/capacity work remains open.

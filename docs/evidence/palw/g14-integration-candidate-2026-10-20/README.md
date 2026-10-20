@@ -59,3 +59,7 @@ Selected **57 passed / 0 failed / 0 ignored** for this change; earlier checkpoin
 | [native-demand-graph-release.log](native-demand-graph-release.log) | 5 | `430405ede9b83348c8d0e8e68e4cb031b9542c7f54cc40b38ba8906a0933c377` |
 | [native-demand-dispatch-replay.log](native-demand-dispatch-replay.log) | 26 | `797c5a55ad85d2420e1599c39f76d5b7f48827344f5501f6001ac143fa2190ad` |
 | [native-demand-identities-check.log](native-demand-identities-check.log) | 26 | `696c1fd8faad63b16c82d255dde37ae75f08af3ca21919613c83cd764ce0e751` |
+
+## Devnet observations now available
+
+The operator's source `799a058fa` report and 1,180-line raw log are imported verbatim. [Reaggregation audit](../../../measurements/2026-10-19-devnet-payload-carrier-audit.md) separates source claims from directly reproduced observations, including duplicate stage-boundary block IDs, total-block versus floor-only bytes, first-mempool versus sender timestamps and header versus native accepting clocks. The reaggregation script was run twice with identical derived JSON; input blobs match the pinned source. This is not a new devnet run or capacity calibration and does not add node-test passes to any total.
