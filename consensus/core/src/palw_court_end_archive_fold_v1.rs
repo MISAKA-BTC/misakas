@@ -4,6 +4,39 @@ use super::*;
 use crate::palw_court_end_archive_v1::{CourtEndEvidenceV1 as Evidence, PendingCourtArchiveV1 as Archive};
 use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key};
 impl TransitionBuilder<'_> {
+    pub(super) fn retain_native_close_declaration_v1(&mut self,ctx:&PalwBlockContextV2,object:&PalwConsensusObjectV2)->Result<(),PalwStateV2Error>{
+        use crate::palw_court_close_receipt_v1::CourtCloseReceiptV1 as Receipt;
+        let PalwConsensusObjectV2::CourtCloseDeclared {session_id,side,count,..}=object else {
+            return Err(PalwStateV2Error::CarriageInconsistent("native close declaration expected".into()));
+        };
+        let session=self.state.court_session(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?;
+        if !self.state.court_service_holds_claim_v1(&session.claim){return Ok(());}
+        let claim=session.claim;
+        let group=self.state.court_close_group(session_id,*side).ok_or(PalwStateV2Error::MissingSession(*session_id))?;
+        let declarer=group.declarer;
+        let bond=self.state.bond(&declarer).ok_or(PalwStateV2Error::MissingBond(declarer))?;
+        if self.native_writers_tracking_v1(){
+            let mut q=native_writers::NativeWriteQuoteV1::new("retain original signed court declaration and native rules");
+            q.copy(object)?.copy(session)?.copy(&bond.pubkey)?.exact::<Receipt>(2)?.exact::<usize>(2)?;
+            if let Some(p)=self.state.tir_dissections.get(session_id){q.copy(p)?;}
+            // The existing declaration-message constructor clones its bounded
+            // hash list and encodes it. Include both buffers before verification.
+            q.exact::<Hash64>(2*u64::from(*count))?.exact::<u8>(256)?;
+            self.admit_native_write_v1(q)?;
+        }
+        let service=self.state.court_service_state_v1().unwrap();
+        let binding=&service.claims[&claim];
+        let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state,claim)
+            .ok_or_else(||PalwStateV2Error::CarriageInconsistent("close receipt original frame missing".into()))?;
+        let material=crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame,binding.hard_deadline_daa)
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let receipt=Receipt {version:1,service_profile_id:service.profile_id,allocation_id:binding.allocation_id,source_id:binding.source_id,
+            material_until_daa:material,point:*ctx,session:self.state.court_session(session_id).unwrap().clone(),
+            tir_phase:self.state.tir_dissections.get(session_id).cloned(),declarer,declarer_pubkey:self.state.bond(&declarer).unwrap().pubkey.clone(),
+            declaration:Box::new(object.clone()),rules:self.extras.native_court_rules_v1};
+        self.write_staged_row_v1(Key::CourtCloseReceipt(*session_id,*side),Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtCloseReceipt(Box::new(receipt).into())))
+    }
+
     pub(super) fn prepare_fulfilled_court_group_v1(&mut self,id:Hash64,side:PalwCourtSideV1,group:&PalwCourtCloseGroupV2)->Result<(),PalwStateV2Error>{
         if self.native_writers_tracking_v1(){
             let mut q=native_writers::NativeWriteQuoteV1::new("fulfilled court group retained before removal");

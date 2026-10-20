@@ -973,6 +973,24 @@ impl TransitionBuilder<'_> {
     }
 
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        if let PalwStagedCourtKeyV1::CourtCloseReceipt(..) = key {
+            if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
+                return Err(PalwStateV2Error::CarriageInconsistent("signed close receipt is immutable".into()));
+            }
+            let Some(PalwStagedCourtRowV1::CourtCloseReceipt(r))=&new else {
+                return Err(PalwStateV2Error::CarriageInconsistent("signed close receipt cannot be removed or retyped".into()));
+            };
+            if self.state.staged_court_row_v1(&key).is_none() {
+                if r.rules!=self.extras.native_court_rules_v1 {
+                    return Err(PalwStateV2Error::CarriageInconsistent("receipt rules are not the accepting native context".into()));
+                }
+                if !matches!(self.court_end_evidence.as_deref(),Some(crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native {point,object})
+                    if *point==r.point && object.as_ref()==r.declaration.as_ref()) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("close receipt is not this native declaration event".into()));
+                }
+            }
+            r.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
         if let PalwStagedCourtKeyV1::CourtEndArchive(_) = key {
             if let Some(old) = self.state.staged_court_row_v1(&key) {
                 if Some(old) != new.as_ref() { return Err(PalwStateV2Error::CarriageInconsistent("unresolved court archive is immutable".into())); }
@@ -3350,6 +3368,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtSharedIds(ids) => (ids.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedResponse(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtEndArchive(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtCloseReceipt(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
@@ -3685,6 +3704,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtSharedIds(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedResponse(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtEndArchive(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtCloseReceipt(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
             _ => None,

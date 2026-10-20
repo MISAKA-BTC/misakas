@@ -40,3 +40,8 @@ RFC-0030 §2–5が具体案である。特に「裁定終了と責任解消を�
 [RFC-0030 §8](../rfc/0030-court-end-effects-and-pending-liability-archive.md#8-a案の隔離実装--2026-10-21)に部分実装を記録した。rooted archive、実終了object/全TIR evidence、未完groupの保存、完成sideの実deposit徴収とfulfilled raw groupの区別、名目exposure/exit holdを追加する。これは本番の資金確保・全署名契約の保存・有料original graphの完了ではない。Uncaptured/関連causeだけの経路では元court stakeを残し、未知の判決を作らない。
 
 終了後の未完groupを完成させる経路、元rulesetに従うqualified settlementとpruningはまだない。元署名scopeとCourtParamsを確定できない経路を、仮paramsで裁定・自動返還しない。5件の追加native fixtureは動作の部分検証であり、全E01–E10/T01–T15・実容量・実doorや公開採択の代替ではない。
+
+
+## 宣言時資料の保存候補
+
+親`e2e367e98`から、[RFC-0030 §9](../rfc/0030-court-end-effects-and-pending-liability-archive.md#9-宣言時の署名native裁定入力の保存候補)のprivate receiptを追加する。旧groupにない署名全文・公開鍵・元phaseとnative v5入力を宣言時に捕捉する。資料の保存は終了後の担保解除権限ではなく、旧宣言へ新しい義務/期限を後付けしない。過去のgroupに欠けた入力を仮値で補わず、`None`は未被覆として残す。新key 21 / row 27は隔離候補だけの末尾ordinalであり、本番採択を含まない。

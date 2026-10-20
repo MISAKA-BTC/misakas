@@ -307,3 +307,15 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 
 
 最終選択は **103 passed / 0 failed / 0 ignored**（同じ最終core executableのnative38＋public-prefix17＋通常court13、integration35）。targeted5は38に含み、途中103・初回1成功/2失敗・過去98等を加算しない。non-test consensus release checkもexit0。途中のcompile101/初回2失敗は当時のsource patch/hash/logを保存し、全4版をpatchから再構成してhash一致を確認した。[最終実行・source/実行file/log hashとfixtureの限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/court-end-archive-artifact.json)。文書検査は同じimport済み欠損5件によりFAIL/exit1で、baseline既知43件も残す。今回の新規リンク欠損は0。過去service-book-retention artifactのdocs exit0は元FAILログと不整合であり、今回の直接実行でexit1と訂正する（元ログは変更しない）。G14未完・有効化保留を維持し、次は元規則を束縛した未決解消validatorと全分岐の原子的有料受付へ進む。
+
+
+## F08：元declaration署名とnative v5入力の保存
+
+親`e2e367e98`。[RFC-0030 §9](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#9-宣言時の署名native裁定入力の保存候補)のprivate receiptをnative CourtCloseDeclared経路へ接続する。元object/署名/公開鍵、宣言時のsession/embedded・別TIR phase、実point、native processor由来のv5入力を保存する。署名再検査と現group契約の一致、forward immutable、実declarationイベントとextrasの一致により、過去の署名へ任意のnative条件を後付けしない。入力のない旧groupは未被覆のまま、`rules=None`はdefault paramsの代用ではない。
+
+新key 21 / row 27は末尾の隔離候補で、archive20/26とX3/service/tag230を変えない。native extrasの入力追加はpresetのBorsh/identity/feeやfenceの変更ではない。資料を保存するだけで新配送義務・無応答default・担保解除・pruningを許可しない。元の署名はnative fork条件への追加署名ではなく、native条件は別の合意受理履歴として保持する。
+
+全料金/資本・original graph・公開node ingress、終了後v5再検査とqualified settlement、最大phase/family、T01–T15と実doorは引き続き未完。延期中の機能は無効を維持する。
+
+
+最終選択 **104 passed / 0 failed / 0 ignored**（native39＋public-prefix17＋通常court13＋integration35）。実署名の新試験1件は39に含まれ、過去103やcompile checkを加算しない。core testsの型検査と最終non-test consensus checkもexit0。途中のcompile101二件は実行試験0件としてsource patch/hash/logを保存した。[実行・source/実行file/log hash・正確な限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/court-close-receipt-artifact.json)。文書検査は同じimport済み欠損5件でFAIL/exit1、baseline既知43件を残し、新規著者リンク欠損は0。元署名とnative条件の保持は前進したが、終了後v5検査・金融精算・全分岐original予約・G14の完成を意味しない。

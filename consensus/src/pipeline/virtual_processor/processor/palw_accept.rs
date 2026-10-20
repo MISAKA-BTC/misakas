@@ -1976,6 +1976,21 @@ impl VirtualStateProcessor {
             _ => None,
         };
         let mut extras = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+            native_court_rules_v1: self.palw_court_params_v2.map(|court| kaspa_consensus_core::palw_court_close_receipt_v1::NativeCourtRulesV1 {
+                network_domain:self.palw_network_domain_v2(),at:*point,court,
+                step_ladder:self.palw_court_step_ladder_at(daa_score,&court),
+                prompt_ids_merkle:match self.palw_prompt_ids_form_at(daa_score) {
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat=>false,
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1=>true,
+                },held_regime:self.palw_held_context_at(daa_score),
+                decode_close_convicts_only:self.palw_offence_attribution_at(daa_score),
+                fp_decode_from_daa:self.palw_fp_decode_rules.filter(|f|*f!=kaspa_consensus_core::config::params::ForkActivation::never()).map(|f|f.daa_score()),
+                cell_closure_from_daa:self.palw_state_params_v2.as_ref().and_then(|p|p.cell_coverage_closure_from_daa()),
+                memory_routing_from_daa:self.palw_state_params_v2.as_ref().and_then(|p|p.memory_routing_court_from_daa()),
+                tir_active:self.palw_tir_at(daa_score),gen_active:self.palw_gen_at(daa_score),
+                task_heads_active:self.palw_task_heads_at(daa_score),improvement_active:self.palw_improvement_at(daa_score),
+                constraint_active:self.palw_fp_decode_constraint_at(daa_score),
+            }),
             claim_local_rule_context_v1: self.palw_state_params_v2.as_ref()
                 .filter(|params| params.claim_local_settlement_active_at(daa_score))
                 .map(|_| (self.palw_kernel_route_ruleset_id.as_bytes(),

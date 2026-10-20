@@ -2447,6 +2447,7 @@ fn apply_object_inner(
                     chunks: BTreeMap::new(),
                 }),
             )?;
+            builder.retain_native_close_declaration_v1(ctx,object)?;
         }
         PalwConsensusObjectV2::SeatReadinessProved { bond, class_id, span, opening, signature: _ } => {
             // ADR-0133 §11.2: past readiness V2 the one-leaf proof is not evidence any more.

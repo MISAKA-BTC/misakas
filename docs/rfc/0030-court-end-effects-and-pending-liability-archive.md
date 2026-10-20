@@ -120,3 +120,18 @@ archiveの未決group名目額を既存accuser exposureへ加え、該当bondの
 | E10 | 有効化拒否を維持 | T01–T15、実door、全有料graphの元の完了条件 |
 
 「全family/全合法分岐」は当面有効な経路の範囲であり、延期中のRFC-0003画像・動画とRFC-0004モデル改善を有効化・迂回開放する意味ではない。
+
+
+## 9. 宣言時の署名・native裁定入力の保存候補
+
+親`e2e367e98`。終了後の未決解消validatorに先立ち、新しいprivate `CourtCloseReceipt`（末尾key 21 / row 27）でnative受付時の契約資料を保持する。archive key 20 / row 26を含む既存ordinalは変更しない。Aの隔離実装の続きであり、公開schemaや終了後受付の本番採択ではない。
+
+serviceに束縛された`CourtCloseDeclared`が通常のnative署名検査を通る経路で、完全な署名済みobject、宣言者の当時の公開鍵、実point、元session、embedded/別table phase、original/service scope、最低material horizonを保存する。receiptは署名のdomainを既存のdeclaration contextで再確認し、元groupのcount・各digest・whole digest・verdict・時刻・当事者と一致させる。active courtとarchiveのいずれか一方に対応するgroupが必要で、別のnative処理や任意row置換で過去のreceiptを捏造しない。receiptは前向き上書き・削除・retypeを許さず、service未解決の間はTTL後も保持する。
+
+native processorは、実際のv5呼出しが読むCourtParams、leaf ladder、prompt形、held regime、offence-attribution、FP decode/cell closure/memory routingのfork境界と、TIR/各proof-familyの有効条件を、その受理pointとnetwork domainからextrasへ渡す。carrierの自己申告を使わない。元の証拠を異なる条件で後から裁定しないための履歴入力であり、この記録だけで新しい配送義務・無応答default・遡及罰・返還を発生させない。旧nodeの「後日のblockで証拠を検査する」規則を新しい固定条件へ置換する採択でもない。
+
+native入力がないfixture/内部経路は`rules=None`を明示し、current/default paramsへfallbackしない。旧groupに署名や条件を後付けし、完全なreceiptとして扱う経路は作らない。条件の保存と、その条件を使う権限ある終了後validator、実費予約・決済、pruningは別の段階である。元宣言資料の保存に加え、将来のresolverでphase・class/claim binding・native feature gate・v5裁定・全金融効果を一体で検査する必要がある。
+
+追加の署名再検査、署名/公開鍵/session/phaseのcloneとserialized保存、root/journal、snapshot/reorg、保持byte-DAAは全分岐profileの追加費用で、0としない。料金・上限・署名期限・preset/identity pinを変更せず、全original予約/公開ingress・E01–E10全条件・T01–T15・実doorが閉じるまで有効化保留を維持する。
+
+署名が認証するのは既存declarationのfieldであり、保存したnative rulesは合意上の受理履歴である。宣言者が料金・fork条件・終了後の新しい外部義務へ追加署名したと見なさない。gen/improvement等の条件を記録しても、延期中の機能を有効化する効果はない。

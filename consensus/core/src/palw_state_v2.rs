@@ -19949,6 +19949,8 @@ pub fn palw_model_refund_payout_key_v1(carrier: &crate::tx::TransactionId) -> Ha
 /// transition before the struct existed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwTransitionExtrasV1 {
+    /// Effective native v5 inputs at this block; never imported from a carrier.
+    pub native_court_rules_v1: Option<crate::palw_court_close_receipt_v1::NativeCourtRulesV1>,
     /// Original stable network identity and forks fired at this accepting DAA.
     /// Future scheduled forks cannot alter a historical liability frame.
     pub claim_local_rule_context_v1: Option<([u8; 32], [u8; 32])>,

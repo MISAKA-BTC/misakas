@@ -3332,6 +3332,72 @@ mod conviction_e2e_tests {
         assert_eq!(b.state.bond(&outsider()).unwrap().collateral,before);
         archive_roundtrip(&mut b,&params,&frame,id,at(&frame,5),state.state_root());
     }
+    /// Real declaration signatures and native fold, still synthetic original
+    /// funding/service inputs. No v5 proof verdict or node ingress is claimed.
+    #[test]
+    fn rooted_court_close_receipt_preserves_signed_native_inputs() {
+        use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
+        use crate::palw_court_v2::{palw_court_close_declaration_message_v1 as message,
+            PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT as DOMAIN};
+        use crate::palw_native_resource_v1::{NativeHeapV1,NativeWireScanV1,NativeWireReaderV1};
+        for retain_rules in [false,true] {
+            let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=fx.frame.clone();
+            let (mut state,params,mut extras)=world(&fx,&frame);
+            let producer=frame.custody_v1().pledge_v1().producer;
+            let keys=[libcrux_ml_dsa::ml_dsa_87::generate_key_pair([71;32]),libcrux_ml_dsa::ml_dsa_87::generate_key_pair([72;32])];
+            for (who,key) in [producer,outsider()].into_iter().zip(&keys) {state.bonds.get_mut(&who).unwrap().pubkey=key.verification_key.as_ref().to_vec();}
+            let point=at(&frame,5);
+            if retain_rules {extras.native_court_rules_v1=Some(NativeCourtRulesV1 {
+                network_domain:h(0x771),at:point,court:crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap(),
+                step_ladder:frame.header_v1().step_leaf_count,prompt_ids_merkle:false,held_regime:false,decode_close_convicts_only:false,
+                fp_decode_from_daa:None,cell_closure_from_daa:None,memory_routing_from_daa:None,
+                tir_active:false,gen_active:false,task_heads_active:false,improvement_active:false,constraint_active:false,
+            });}
+            let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+            archive_service(&mut b,&frame);let (id,_)=archive_session(&mut b,&frame);
+            // Remove only synthetic fixture groups, then declare through the arm.
+            for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {b.write_court_close_group((id,side),None).unwrap();}
+            let bytes=vec![0x99;16];let digest=palw_court_close_chunk_digest_v1(&bytes);
+            for (i,side) in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger].into_iter().enumerate() {
+                let verdict=PalwCourtVerdictV2::ExecutorGuilty;
+                let sig=libcrux_ml_dsa::ml_dsa_87::sign(&keys[i].signing_key,&message(&id,side,1,&[digest],&digest,verdict),DOMAIN,[73;32]).unwrap().as_ref().to_vec();
+                let object=PalwConsensusObjectV2::CourtCloseDeclared {session_id:id,side,count:1,chunk_digests:vec![digest],close_digest:digest,verdict,signature:sig};
+                crate::palw_court_v2::check_close_declared_chunk_count_v2(&id,1,&crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap()).unwrap();
+                if let PalwConsensusObjectV2::CourtCloseDeclared {signature,..}=&object {
+                    crate::palw_court_v2::check_court_close_declaration_acceptance_v2(&b.state,&id,side,1,&[digest],&digest,verdict,signature,
+                        crate::palw_attempt_material_v3::verify_ready_signature_v3).unwrap();
+                }
+                let mut bad=object.clone();if let PalwConsensusObjectV2::CourtCloseDeclared {signature,..}=&mut bad {signature[0]^=1;}
+                let root=b.state.state_root();let n=b.entries.len();
+                assert!(super::super::objects::apply_object(&mut b,&point,&bad).is_err());
+                assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),n);
+                super::super::objects::apply_object(&mut b,&point,&object).unwrap();
+                let key=Key::CourtCloseReceipt(id,side);let row=b.state.staged_court_row_v1(&key).unwrap().clone();
+                let Row::CourtCloseReceipt(receipt)=&row else {panic!()};
+                assert_eq!(receipt.declaration.as_ref(),&object);assert_eq!(receipt.rules,extras.native_court_rules_v1);
+                assert_eq!(receipt.declarer_pubkey,keys[i].verification_key.as_ref());receipt.check_context(&b.state).unwrap();
+                let wire=borsh::to_vec(&row).unwrap();assert_eq!(wire[0],27);assert_eq!(borsh::to_vec(&key).unwrap()[0],21);
+                let mut reader=NativeWireReaderV1::new(std::io::Cursor::new(&wire),wire.len() as u64);
+                let shape=Row::scan_native_wire_v1(&mut reader).unwrap();assert_eq!(reader.remaining(),0);
+                assert!(shape.heap>=row.native_heap_v1("receipt").bytes().unwrap());
+                assert_eq!(borsh::from_slice::<Row>(&wire).unwrap(),row);
+                assert!(b.write_staged_row_v1(key,None).is_err());
+                let mut modified=receipt.as_ref().clone();modified.rules=None;
+                if retain_rules {assert!(b.write_staged_row_v1(key,Some(Row::CourtCloseReceipt(Box::new(modified).into()))).is_err());}
+                // Even a genuine old signed declaration is not a fresh event.
+                let mut absent=b.state.clone();absent.staged_courts.remove(&key);
+                let mut forged=TransitionBuilder::new(&absent,&params,false,false,false,false,&extras);
+                let root=forged.state.state_root();assert!(forged.write_staged_row_v1(key,Some(row)).is_err());assert_eq!(forged.state.state_root(),root);
+            }
+            super::super::objects::apply_object(&mut b,&at(&frame,6),&PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side:PalwCourtSideV1::Executor,index:0,bytes}).unwrap();
+            for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {
+                let Row::CourtCloseReceipt(r)=b.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)).unwrap() else {panic!()};r.check_context(&b.state).unwrap();
+            }
+            archive_roundtrip(&mut b,&params,&frame,id,at(&frame,6),state.state_root());
+            for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {assert!(b.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)).is_some());}
+        }
+    }
+
     #[test]
     fn rooted_court_end_archive_streamed_fraud_keeps_complete_evidence() {
         use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part,palw_tir_public_witness_digest_v1};
