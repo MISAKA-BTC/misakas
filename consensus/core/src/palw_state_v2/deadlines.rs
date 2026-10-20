@@ -3,11 +3,28 @@
 use super::*;
 
 pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    while let Some(&(deadline, session_id)) = builder.state.court_deadlines.iter().next() {
+    // A held first entry must not starve unrelated expired sessions. Keep the
+    // persisted clocks intact; this cursor is only for this sweep invocation.
+    let mut after_held = None;
+    loop {
+        let next = match after_held {
+            None => builder.state.court_deadlines.iter().next(),
+            Some(cursor) => builder.state.court_deadlines.range((std::ops::Bound::Excluded(cursor), std::ops::Bound::Unbounded)).next(),
+        }.copied();
+        let Some((deadline, session_id)) = next else { break };
+
         if deadline >= ctx.daa_score {
             break;
         }
-        let mut session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+        let record = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?;
+        // Quota and elapsed time do not establish a delivered opportunity. No
+        // semantic rung, phase, assembly or backstop default is authorized yet.
+        // Missing claims still take the defensive cleanup path below.
+        if builder.state.claims.contains_key(&record.claim) && builder.state.court_service_holds_claim_v1(&record.claim) {
+            after_held = Some((deadline, session_id));
+            continue;
+        }
+        let mut session = record.clone();
         // **A missing claim drops the session; it does not fail the block.** `retire_claim` closes
         // a claim's sessions with it, so this should be unreachable — and it is written to be
         // survivable anyway, because the alternative failure mode is a chain that stops forever on

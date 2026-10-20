@@ -3114,6 +3114,127 @@ mod conviction_e2e_tests {
         }
     }
 
+    /// Synthetic verified-half fixture: native sweep/index/journal behavior,
+    /// not signed court admission, supplied block capacity or default authority.
+    #[test]
+    fn rooted_service_court_sweeps_skip_held_without_starving_cleanup() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1, PalwBisectTurnV1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras) = world(&fx, &frame);
+        let plan = frame.plan_v1();
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id: [41; 64], release_daa: plan.terms.accepted_daa + 1,
+            service_before: plan.terms.accepted_daa + 2, cost }], plan.terms.accepted_daa + 10_000).unwrap();
+        book.observe_block(plan.terms.accepted_daa + 2, [42; 64], Default::default()).unwrap();
+        let service = CourtServiceStateV2 { version: 2, source_profile_id: Hash64::from_u64_word(43), profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(43)), book,
+            claims: std::collections::BTreeMap::from([(plan.original_claim, ServiceClaimBinding {
+                claim: plan.original_claim, allocation_id: plan.allocation_id, source_id: plan.source_id,
+                original_accepted_daa: plan.terms.accepted_daa, hard_deadline_daa: plan.terms.accepted_daa + 10_000,
+                packet_ids: std::collections::BTreeSet::from([[41; 64]]) })]) };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        let service_state = b.state.clone();
+        let opened = plan.terms.accepted_daa + 3;
+        let ctx = at(&frame, 20_000);
+        // Responder, challenger and terminal/backstop all lack permission to
+        // default. These are ladder-machine states, not signed court admission.
+        for turn in [PalwBisectTurnV1::AwaitDisclosure, PalwBisectTurnV1::AwaitVerdict, PalwBisectTurnV1::Terminal] {
+            let mut ladder = PalwBisectLadderV1::open(
+                &frame.header_v1().job_context.context_hash(), &frame.original_v1().execution_root,
+                &h(0xC1), &h(0xC2), PalwBisectSpaceV1::StepLeaves,
+                frame.header_v1().step_leaf_count, opened, opened + 1,
+            ).unwrap();
+            if turn == PalwBisectTurnV1::AwaitVerdict {
+                ladder.apply_disclosure(&crate::palw_bisect::PalwBisectDisclosureV1 {
+                    version: 1, session_id: ladder.session_id(), round: 0,
+                    midpoint: ladder.expected_midpoint().unwrap(), mid_state: h(0xD1),
+                }, opened + 1, 1).unwrap();
+            } else if turn == PalwBisectTurnV1::Terminal {
+                ladder = PalwBisectLadderV1::open_at_named_leaf(
+                    &frame.header_v1().job_context.context_hash(), &frame.original_v1().execution_root,
+                    &h(0xC1), &h(0xC2), PalwBisectSpaceV1::StepLeaves,
+                    frame.header_v1().step_leaf_count, 0, opened, opened + 1,
+                ).unwrap();
+            }
+            assert_eq!(ladder.turn(), turn);
+            let session = PalwCourtSessionStateV2 {
+                claim: plan.original_claim, challenger_bond: outsider(), opened_daa: opened,
+                deadline_daa: opened + 10, ladder, dissection: None,
+            };
+            let held_id = h(0xC3);
+            let orphan_id = h(0xC4);
+            let mut held = TransitionBuilder::new(&service_state, &params, false, false, false, false, &extras);
+            held.write_court(held_id, Some(session.clone())).unwrap();
+            let mut orphan = session.clone();
+            orphan.claim = h(0xC5);
+            orphan.deadline_daa += 1;
+            // Both index keys are deliberately ordered: held first, orphan next.
+            held.write_court(orphan_id, Some(orphan)).unwrap();
+            let before = held.state.clone();
+            let journal = held.entries.len();
+            super::super::sweep_court_deadlines(&mut held, &ctx).unwrap();
+            assert_eq!(held.state.court_sessions.get(&held_id), before.court_sessions.get(&held_id));
+            assert!(!held.state.court_sessions.contains_key(&orphan_id));
+            assert_eq!(held.state.claims, before.claims);
+            assert_eq!(held.state.bonds, before.bonds);
+            assert_eq!(held.state.court_deadlines.len(), 1);
+            assert_eq!(held.state.court_deadlines.iter().next(), before.court_deadlines.iter().next());
+            assert!(held.entries.len() > journal, "orphan cleanup must progress past the held head");
+            let settled = held.state.clone();
+            let journal = held.entries.len();
+            super::super::sweep_court_deadlines(&mut held, &ctx).unwrap();
+            assert_eq!(held.state, settled);
+            assert_eq!(held.entries.len(), journal, "repeated sweep does not refresh a held clock");
+            // The independent assembly sweep must also skip a held head,
+            // preserving its charged deposit while cleaning up a later orphan.
+            if turn == PalwBisectTurnV1::Terminal {
+                let group = PalwCourtCloseGroupV2 {
+                    declarer: frame.custody_v1().pledge_v1().producer, count: 1,
+                    chunk_digests: vec![h(0xD2)], close_digest: h(0xD3),
+                    verdict: PalwCourtVerdictV2::ExecutorGuilty, declared_daa: opened,
+                    assembly_deadline_daa: opened + 2, present: 0,
+                    deposit_outpoint: TransactionOutpoint::new(h(0xD4), 0),
+                    deposit: 7, chunks: Default::default(),
+                };
+                let key = (held_id, PalwCourtSideV1::Executor);
+                held.write_court_close_group(key, Some(group.clone())).unwrap();
+                let orphan_key = (orphan_id, PalwCourtSideV1::Executor);
+                let mut orphan_group = group.clone();
+                orphan_group.assembly_deadline_daa += 1;
+                orphan_group.deposit = 0;
+                held.write_court_close_group(orphan_key, Some(orphan_group)).unwrap();
+                let before = held.state.clone();
+                super::super::sweep_court_close_deadlines(&mut held, &ctx).unwrap();
+                assert_eq!(held.state.court_close_groups.get(&key), Some(&group));
+                assert!(!held.state.court_close_groups.contains_key(&orphan_key));
+                assert_eq!(held.state.bonds, before.bonds);
+                assert_eq!(held.state.claims, before.claims);
+                assert_eq!(held.state.court_sessions, before.court_sessions);
+                assert_eq!(held.state.court_close_deadlines.len(), 1);
+                let settled = held.state.clone();
+                let journal = held.entries.len();
+                super::super::sweep_court_close_deadlines(&mut held, &ctx).unwrap();
+                assert_eq!(held.state, settled);
+                assert_eq!(held.entries.len(), journal);
+                let mut ordinary = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+                ordinary.write_court(held_id, Some(session.clone())).unwrap();
+                ordinary.write_court_close_group(key, Some(group)).unwrap();
+                super::super::sweep_court_close_deadlines(&mut ordinary, &ctx).unwrap();
+                assert!(!ordinary.state.court_sessions.contains_key(&held_id));
+                assert!(!ordinary.state.court_close_groups.contains_key(&key));
+            }
+            // Same expired session without service follows the existing ending.
+            let mut ordinary = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            ordinary.write_court(held_id, Some(session)).unwrap();
+            super::super::sweep_court_deadlines(&mut ordinary, &ctx).unwrap();
+            assert!(!ordinary.state.court_sessions.contains_key(&held_id));
+        }
+    }
+
     #[test]
     fn rooted_service_hold_retains_final_collateral_and_material_past_hard() {
         use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};

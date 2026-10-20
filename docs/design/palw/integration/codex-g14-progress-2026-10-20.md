@@ -271,3 +271,13 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 [実装監査・fixtureの限界・次のP0](rfc26-original-service-admission-map-2026-10-21.md#semantic-material署名契約無応答課金の補強候補)。通常courtの`deadlines::sweep_court_deadlines`は別経路でservice guard未接続と確認したため、F02の全面完了とはしない。text Constraint/Prefixのnative originalもtail拒否との対応が未検証。全G14条件を縮小せず継続する。
 
 最終選択 **84 passed / 0 failed / 0 ignored**（同じcore executableのnative32＋public-prefix17、別integration35）。targeted1と過去67/31/62/89等は加算しない。non-test consensus release checkも成功。[中止した旧build・source・hash・検証の限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#semantic-dependency-retention-and-source-default-guard)。次は未接続の通常court deadline/no-show経路を修正する。F02/F03・G14全体の完成ではない。
+
+
+## 通常courtの自動無応答処理の保留（`7aa640a8f`後の隔離候補）
+
+`deadlines::sweep_court_deadlines`のladder/phase/backstopと、先行する`sweep_court_close_deadlines`の組立期限に、既存claimの未解決service bindingのguardを追加する。署名済み期限は動かさず、session/group/depositを保持する。呼出し内の索引cursorで保留行を飛ばし、後続の通常処理・孤立行の掃除を続ける。現bookだけで実処理機会・default許可があると扱わない。
+
+[source mapの追加調査](rfc26-original-service-admission-map-2026-10-21.md#通常courtの自動期限処理の保留候補)に、残る別経路を記載した。`write_court(None)`は客観的裁定後を含むsession削除時に残存close groupのdepositを徴収・削除する。配送/収録機会と区別した費用/帰責、未解決責任の精算・material archiveは未完で、自動期限のguardだけをF02/G14完了にしない。正常なfraud closeを全拒否して解決とする変更もしていない。全分岐の原子的有料受付、公開ingress、供給、全依存graph、T01–T15、tag230、doorの実測条件は残る。
+
+
+今回の最終選択は **98 passed / 0 failed / 0 ignored**。native全体33、public-prefix17、通常court13、codec/policy/G14gate/activation/t12同一性35。targeted1・先行native31・過去の件数は加算しない。non-test consensus release checkもexit0。途中のfixture型誤りによるcompile101は修正前patch/logとともに別記し、試験失敗や成功へ数えない。[検証・hash・正確な範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/court-service-deadline-artifact.json)。文書検査は同じimport済み欠損5件とbaseline既知43件を残し、新規著者リンク欠損は0。G14全体は未完で、有効化保留を維持する。

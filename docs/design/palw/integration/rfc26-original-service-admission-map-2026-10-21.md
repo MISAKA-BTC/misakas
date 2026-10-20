@@ -67,8 +67,17 @@ semantic/historyの無応答課金は`staged_selected_default_charge_v1`へ集�
 
 回帰fixtureは既存のguard-only originalを使う。semantic契約/OwnerBundle自体は構造検査を通る形にし、同じ行の通常TTL削除とservice下の保持、破壊的write/型変更/短い・長い別pledge/別original bindingの拒否、Panel更新、両無応答課金分岐の無変更を検査する。これは実署名のsemantic original受付、実fees、全対話、全familyの正しいclose、node/pruned IBDを証明しない。追加の構造検査・保持・比較・index/journal等の費用は、完成profileへ含める未校正項であり0ではない。
 
-**次に閉じるP0経路:** `palw_state_v2/deadlines.rs::sweep_court_deadlines`の通常court ladder/backstopは、このsemantic共通課金関数を通らない。現時点ではservice保留guardがなく、F02全体のdefault拒否完成とは表示できない。held sessionを保ったまま後続のunheld deadlineを処理できる索引走査、responding/challenging/terminalの各欠席、通常caseとorphan cleanup、正しい客観的closeを検証する必要がある。単にwhileの先頭をcontinueして索引を残すと無限反復になるため、その実装はしない。
+**`7aa640a8f`時点の残P0経路:** `palw_state_v2/deadlines.rs::sweep_court_deadlines`の通常court ladder/backstopは、このsemantic共通課金関数を通らない。現時点ではservice保留guardがなく、F02全体のdefault拒否完成とは表示できない。held sessionを保ったまま後続のunheld deadlineを処理できる索引走査、responding/challenging/terminalの各欠席、通常caseとorphan cleanup、正しい客観的closeを検証する必要がある。単にwhileの先頭をcontinueして索引を残すと無限反復になるため、その実装はしない。
 
 また、現original quote/prepareは`job.tail.is_some()`を拒否する。Constraint/Prefixもそのtail enumを使うため、全semantic jobのnative original経路を既に通したという根拠はない。既存の別ClaimBundle経路の成功と混同しない。未知のtailを通す一括解除や、延期済みV5画像/Gen/Evalの解放で迂回せず、対象text経路を各々の本物の契約・費用・courtで検証する必要がある。モデルの除外や数値上限変更でG14達成にしない。
 
 [検証・source/hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/semantic-contract-retention-artifact.json)。原子的な全分岐予約・公開有料ingress・実供給・全依存/bond/終了graph、T01–T15、tag230と実モデルdoor≤3,120の条件は全て残る。
+
+
+## 通常courtの自動期限処理の保留候補
+
+`7aa640a8f`後の隔離候補で、`deadlines::sweep_court_deadlines`と、それより先に実行される`sweep_court_close_deadlines`の両方に未解決serviceのguardを追加する。前者はladder/phase/backstop、後者はclose組立窓の無応答を扱う。合意された実供給・配送/収録前提・義務の適格性が未接続の現bookを、帰責の許可にしない。現存するclaimにservice bindingがあれば自動欠席処理を保留し、元の期限、session、close group、depositを保持する。quota達成やhard通過で解除しない。
+
+保留した索引要素を上書き・延長せず、呼出し内のcursorで次の要素へ進む。後続の未保留要素やmissing-claim/sessionの既存掃除を止めない。索引全体のVec化や新しい永続cursorは追加しない。通常courtの既存refresh分岐は現在DAA以降のbackstopへ再索引するため、処理した未保留行がcursor前の期限へ再挿入される経路ではない。close sweepの通常処理はsession/groupsを削除する。走査の追加比較・lookup・保持/再訪の費用は完成profileに含める未校正項で、0や実測容量とはしない。
+
+**終了効果はなお未完:** `TransitionBuilder::write_court(id, None)`は、正しい客観的裁定を含むsession削除時に、残存close groupのdepositを徴収してgroup/dissectionを消す。自動期限のguardだけでは、この経路の配送欠如と経費/違反帰責の区別、未解決material/責任の精算・archiveは閉じない。正しいfraudのclose全体を禁止したり、徴収だけ飛ばして責任を削除したり、親を失ったgroupを残したりして解決済みとしない。既存のstreamed TIR fraud検証は別の経路の回帰であり、この通常courtの全終了graphの証拠ではない。F02/F03やG14完成、武装可能とは表示しない。

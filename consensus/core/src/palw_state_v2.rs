@@ -16341,7 +16341,16 @@ pub(crate) fn court_next_deadline_v2(state: &PalwChainStateV2, session: &PalwCou
 /// The backstop's `failed_declarer_side` block stays where it is and is now a belt: a group can
 /// only reach it if its window and the backstop are the same DAA and this sweep did not run first.
 fn sweep_court_close_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    while let Some(&(deadline, key)) = builder.state.court_close_deadlines.iter().next() {
+    // As with the session sweep, skip held rows without changing their clocks
+    // or starving later unheld rows. No unreserved snapshot of the index.
+    let mut after_held = None;
+    loop {
+        let next = match after_held {
+            None => builder.state.court_close_deadlines.iter().next(),
+            Some(cursor) => builder.state.court_close_deadlines.range((std::ops::Bound::Excluded(cursor), std::ops::Bound::Unbounded)).next(),
+        }.copied();
+        let Some((deadline, key)) = next else { break };
+
         if deadline >= ctx.daa_score {
             break;
         }
@@ -16357,6 +16366,11 @@ fn sweep_court_close_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBl
         if !convictable {
             forfeit_close_deposit_v1(builder, session_id, side)?;
             builder.write_court_close_group(key, None)?;
+            continue;
+        }
+        let session = builder.state.court_sessions.get(&session_id).expect("convictable session exists");
+        if builder.state.court_service_holds_claim_v1(&session.claim) {
+            after_held = Some((deadline, key));
             continue;
         }
         convict_close_declarer_v1(builder, ctx, session_id, side)?;
