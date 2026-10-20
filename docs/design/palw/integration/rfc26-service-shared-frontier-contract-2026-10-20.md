@@ -105,3 +105,7 @@ current book の assignment は再割当先を表す。変更前後は native jo
 ## 11. 依存 horizon の受付検査に向けた監査
 
 [実コード参照の監査](rfc26-dependency-horizon-audit-2026-10-20.md)で、producer/main custody、semantic history custody、EXEC の最短 path 制約、provider lease の live 状態と exact subject を分離した。`CourtClockBounds` の保持分の検査不足は修正したが、単一の最短 horizon 引数が全依存契約を列挙した証拠にはならない。報酬・担保用の最大 horizon や、ordinary path の欠落時成功を新規 admission の保証に流用しない。全依存集合の canonical 導出、実契約の認証と live 検査、原子的な受付への接続、T09 は未完了。
+
+## 12. Binding の署名済み custody 下限
+
+候補 row の context 検査へ、main custody pledge が original hard を覆う条件を追加した。semantic component がある場合は、別の受理済み ClaimBundle/history pledge の存在・claim/source scope・署名済み horizon も検査する。欠落を「依存なし」と扱わず拒否する。binding の書き込みと復元が通るための最小条件であり、実 original admission の完了や followup/retention 全体の保証ではない。既存 unbound claim の規則と署名済みの値は変更しない。実コードの対象と残件は [依存監査](rfc26-dependency-horizon-audit-2026-10-20.md)を参照。

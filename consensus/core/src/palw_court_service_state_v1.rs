@@ -80,6 +80,36 @@ impl CourtServiceState {
     }
 }
 
+/// A minimum signed-custody constraint for the proposed service binding, not
+/// complete dependency admission. Reads accepted contracts; never extends them.
+pub(crate) fn require_tir_service_custody_window_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    required_until: u64,
+) -> Result<(), String> {
+    let plan = frame.plan_v1();
+    if frame.custody_v1().pledge_v1().material_until_daa < required_until {
+        return Err("service hard deadline exceeds signed TIR custody".into());
+    }
+    if plan.semantic.is_some() {
+        let bundle = state.staged_bundle_contract_v1(plan.original_claim)
+            .ok_or("service semantic dependency contract is missing")?;
+        let pledge = &bundle.history_custody.pledge;
+        if pledge.claim != plan.original_claim
+            || Some(pledge.resource_plan_id) != plan.semantic_resource_plan_id
+            || pledge.execution_root != frame.original_v1().execution_root
+            || pledge.job_identity != crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1())
+            || pledge.producer != frame.custody_v1().pledge_v1().producer
+        {
+            return Err("service semantic custody substitutes its original scope".into());
+        }
+        if pledge.material_until_daa < required_until {
+            return Err("service hard deadline exceeds signed semantic custody".into());
+        }
+    }
+    Ok(())
+}
+
 impl CourtServiceState {
     /// Contextual validation is separate from the standalone row codec check.
     /// A recovery binding may not outlive or substitute its immutable frame.
@@ -94,6 +124,7 @@ impl CourtServiceState {
             {
                 return Err("service recovery substitutes original frame".into());
             }
+            require_tir_service_custody_window_v1(state, frame, binding.hard_deadline_daa)?;
             let claim = state.claim(&binding.claim).ok_or("service recovery lost its claim")?;
             if matches!(claim.phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }) {
                 return Err("unresolved service claim cannot already be Final".into());

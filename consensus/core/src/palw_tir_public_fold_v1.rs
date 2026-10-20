@@ -2177,6 +2177,14 @@ mod conviction_e2e_tests {
         let (state, _) = producer_answers(&fx, &frame, &demanded, &params, &extras, acquisition, 0, offset);
         let plan = frame.plan_v1();
         let claim = state.claim(&plan.original_claim).unwrap().clone();
+        // The candidate may retain state, but cannot manufacture a longer
+        // signed service promise. Boundary is on the actual accepted pledge.
+        let signed_until = frame.custody_v1().pledge_v1().material_until_daa;
+        for until in [signed_until - 1, signed_until] {
+            crate::palw_court_service_state_v1::require_tir_service_custody_window_v1(&state, &frame, until).unwrap();
+        }
+        assert!(crate::palw_court_service_state_v1::require_tir_service_custody_window_v1(
+            &state, &frame, signed_until.checked_add(1).unwrap()).unwrap_err().contains("signed TIR custody"));
         let now = plan.terms.material_until_daa.max(plan.terms.bond_exit_after_daa).max(plan.terms.accepted_daa + 10_000) + 1;
         let ctx = at(&frame, now - plan.terms.accepted_daa);
         // The old path retains its finite TTL; no old signed deadline is rewritten.

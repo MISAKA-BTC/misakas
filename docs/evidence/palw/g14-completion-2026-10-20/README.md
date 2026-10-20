@@ -96,3 +96,25 @@ After `4f55a837d`, `CourtClockBounds` now requires the minimum signed dependency
 Shared-lock command: `cargo test --release -p kaspa-consensus-core --test palw_court_policy_v1 --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test g14_close_gates`. Result: **29 passed / 0 failed / 0 ignored** (policy 3 including twelve horizon boundary cases, release 9, activation 5, gates 12 including t12 identity). This is not T09 node acceptance.
 
 [Raw release log](dependency-retention-release.log), SHA-256 `7b173688d0dd5fcc7ad7189d594955f14cc8f517100c3c482f3802fae923a087`. [Source audit and remaining admission contract](../../../design/palw/integration/rfc26-dependency-horizon-audit-2026-10-20.md).
+
+## Minimum signed custody for rooted service binding
+
+After `6f99abc74`, the proposed service context guard checks the main accepted custody pledge against original hard. When the frame has a semantic component it also requires the actual accepted bundle and matching history pledge scope/horizon. Missing dependency is not absence of a dependency. No signature, signed horizon, preset, identity or old unbound claim is changed.
+
+Shared-lock commands:
+
+```sh
+cargo test --release -p kaspa-consensus-core --lib rooted_service_
+cargo test --release -p kaspa-consensus-core --test palw_court_service_state_v1 --test palw_court_service_v1 --test palw_court_policy_v1 --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test g14_close_gates
+cargo check --release -p kaspa-consensus
+```
+
+Final native 4 + regressions 45 = **49 passed / 0 failed / 0 ignored**. Non-test consensus release check succeeded, warnings remain. The native main-custody boundary uses the existing synthetic verified-half original/frame fixture (not real signature ingress): actual pledge field minus one and equality pass, plus one refuses. Existing native cases still cover default refusal, Final/collateral/material holds, streamed fraud adjudication, recovery and native journal/carriage replay. This count overlaps previous suites; do not add them as new unique tests.
+
+Dedicated semantic missing/wrong-scope/short-horizon admission tests, full signed-dependency enumeration, profile followup/retention, atomic original admission and T09 remain incomplete. This minimum guard is not G14 completion or a node restart/pruned IBD result. Document validation still fails on the same five imported-asset references; baseline and original package bytes remain unchanged.
+
+| Raw log | SHA-256 |
+| --- | --- |
+| [service-custody-native-release.log](service-custody-native-release.log) | `633cc971761c97cff1e4431877e0a814d4ae63097c306b42073b62532f6f52ba` |
+| [service-custody-regressions-release.log](service-custody-regressions-release.log) | `ceaa60e8ba1496da9194aeb4a2695a3ae11e5e85bcc2d58346c5d20b5b39468e` |
+| [service-custody-consensus-check.log](service-custody-consensus-check.log) | `b210e0482a6ed0a8aa70b983e5cc8ae40115a348f445bba401c4bae300535f48` |

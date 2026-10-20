@@ -133,3 +133,13 @@ X3 候補 commit は `0c3cb9f93`。release native plan 2 件 + t12/G14/activatio
 [依存契約の実コード監査](rfc26-dependency-horizon-audit-2026-10-20.md)では、EXEC 報酬用の最大 horizon と session 用の最短 path、main/semantic の別 pledge、provider exact subject/live 状態を区別した。欠落 lookup や単一の最短 horizon 引数を完全な依存集合の保証にしない。実受付での全依存集合の導出・認証、原子的な受付への接続、T09 は未完了。
 
 ユーザー側の結果の再確認では `2026-10-19-devnet-payload-carrier.md` は見つからず、release 作業場所の `2026-10-19-rothschild-mldsa-payload.md` はノード受理・bytes/mass が未測定と記載している。これを actual carrier capacity として使っていない。測定ジョブの状態を推定するものではない。文書検査は imported assets の同じ欠落参照 5 件で FAIL、baseline・元資料の bytes は変更していない。
+
+## Service binding と実 custody の下限接続
+
+`CourtServiceState::check_context` に、main の受理済み custody pledge が original hard を覆う検査を追加した。semantic component のある frame は、実際の受理済み bundle/history pledge の存在、claim/resource/job/producer scope、horizon も必須とする。row writer と carriage/state 復元の既存 context 検査がこの下限を呼ぶ。期限や署名の書き換え、unbound な旧 claim の変更はない。
+
+実コード調査では、現行 original 入口が全 tail 付き job を拒否しており、original.execution_root を EXEC root として扱う経路は作れないことも確認した。これを新しいモデル/claim 除外による達成へ転用せず、実際にその依存を持つ native admission ごとの導出を続ける。詳しくは [依存監査](rfc26-dependency-horizon-audit-2026-10-20.md)。
+
+release native 4 + 回帰 45 = **49 passed / 0 failed / 0 ignored**（t12 identity を含む）。main pledge の境界 −1 / 一致 / +1、既存の Final/担保/証拠 hold、default 拒否、fraud 裁定、native journal/carriage、再割当を確認。non-test consensus release check も成功。native fixture は従来の synthetic verified-half で、署名 ingress・実容量の測定ではない。生ログと SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)に保存。
+
+semantic 分岐の専用受入試験、profile の後続責任/retention 全体、全 EXEC/provider 依存集合、原子的 original admission、T09 と G14 全体は未完了。この最低 hard 検査で署名済みの配送義務を延長しない。文書検査は同じ imported assets の 5 件で FAIL、baseline・元資料は未変更。武装・統合・配備なし。
