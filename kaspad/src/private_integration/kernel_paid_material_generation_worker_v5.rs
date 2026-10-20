@@ -55,6 +55,9 @@ struct OriginalFunding {
     maximum_fee_sompi: u64,
     payer_key: PathBuf,
     source_lock_funding_outpoint: Option<String>,
+    maximum_source_lock_fee_sompi: Option<u64>,
+    max_input_bytes: u64,
+    max_workspace_bytes: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OriginalFamily {
@@ -183,7 +186,13 @@ impl PrivateKernelPaidMaterialGenerationSpecV5 {
         )
         .map_err(|e| e.to_string())?;
         let original_config: OriginalFunding = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
-        if original_config.funding_outpoints.is_empty() || original_config.maximum_fee_sompi == 0 {
+        if original_config.funding_outpoints.is_empty()
+            || original_config.maximum_fee_sompi == 0
+            || original_config.max_input_bytes == 0
+            || original_config.max_workspace_bytes == 0
+            || original_config.source_lock_funding_outpoint.is_some() != original_config.maximum_source_lock_fee_sompi.is_some()
+            || original_config.maximum_source_lock_fee_sompi == Some(0)
+        {
             return Err("V5 original funding declaration is empty".into());
         }
         for point in &original_config.funding_outpoints {
@@ -227,6 +236,21 @@ impl PrivateKernelPaidMaterialGenerationSpecV5 {
         self.validate_family(family)?;
         generation.validate(enrollment)?;
         if let OriginalFamily::ApprovedV7(source_policy) = family {
+            let lock = crate::palw_producer::parse_outpoint(
+                original_config
+                    .source_lock_funding_outpoint
+                    .as_deref()
+                    .ok_or("V7 continuation requires the original explicit source-lock input and fee authority")?,
+            )?;
+            if lock == producer.0
+                || kaspa_consensus_core::config::drill::palw_t12_public_genesis_txid_v1(&lock.transaction_id)
+                || original_config
+                    .funding_outpoints
+                    .iter()
+                    .any(|point| crate::palw_producer::parse_outpoint(point).is_ok_and(|p| p == lock))
+            {
+                return Err("original V7 source-lock input aliases producer/claim funding".into());
+            }
             let fence = ctx.config.params.palw_paid_bootstrap_source_v6.ok_or("V7 requires explicit approved source policy")?;
             if source_policy != fence.policy.id() {
                 return Err("V7 original source policy differs from configured namespace".into());
@@ -271,6 +295,7 @@ impl PrivateKernelPaidMaterialGenerationSpecV5 {
             old_payer,
             funding,
             original_config,
+            original_outbox: old,
             original,
             old_transaction,
             input_requests: requests,
@@ -331,6 +356,7 @@ pub struct PreparedKernelPaidMaterialGenerationV5 {
     old_payer: libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
     funding: TransactionOutpoint,
     original_config: OriginalFunding,
+    original_outbox: PathBuf,
     original: NativeRetainedV1<Object>,
     old_transaction: Option<(Transaction, Option<NativeDemandLeaseV1>)>,
     input_requests: u64,
@@ -428,8 +454,41 @@ impl PreparedKernelPaidMaterialGenerationV5 {
             match route.paid_claim_for_base_v2(&self.generation.root) {
                 Ok(Some(authority)) => {
                     require_same_accepted_enrollment_v5(&self.generation, authority.enrollment.id())?;
-                    // Current acceptance is reversible. Observe forever; never
-                    // recreate an accepted source, lock, snapshot or receipt.
+                    // The existing enrollment keeps its fixed native source
+                    // binding/draw. Finish only its original fundless Lock action
+                    // under this SAME producer.lock and immutable WAL namespace.
+                    if self.spec.version == 7 {
+                        let point = crate::palw_producer::parse_outpoint(
+                            self.original_config
+                                .source_lock_funding_outpoint
+                                .as_deref()
+                                .ok_or("original V7 source-lock funding authority absent")?,
+                        )?;
+                        super::kernel_paid_producer_v4::drive_paid_source_lock_v6(
+                            super::kernel_paid_producer_v4::PaidSourceLockContextV6 {
+                                manager: &self.manager,
+                                flow: &self.flow,
+                                config: &self.config,
+                                producer: self.producer,
+                                key: &self.key,
+                                payer: &self.old_payer,
+                                funding: point,
+                                maximum_fee_sompi: self
+                                    .original_config
+                                    .maximum_source_lock_fee_sompi
+                                    .ok_or("original V7 source-lock fee authority absent")?,
+                                maximum_input_bytes: self.spec.max_input_bytes.min(self.original_config.max_input_bytes),
+                                maximum_workspace_bytes: remaining(&self.spec, requests)?
+                                    .min(self.original_config.max_workspace_bytes),
+                            },
+                            route,
+                            &authority,
+                            &self.original_outbox,
+                        )
+                        .await?;
+                    }
+                    // Acceptance is reversible. Keep observing; never create
+                    // another enrollment, draw, replacement fee or receipt.
                     continue;
                 }
                 Err(_) => continue,
