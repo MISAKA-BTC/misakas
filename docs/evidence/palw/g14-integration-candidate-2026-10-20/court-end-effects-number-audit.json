@@ -1,0 +1,14 @@
+{
+  "kind": "Read-only local refs and active worktree namespace audit; not remote fetch or global reservation",
+  "local_unique_heads_checked": 822,
+  "local_ref_hits": [],
+  "worktree_hits": [
+    {
+      "worktree": "/Users/wata/.codex/worktrees/rfc14-g14-integration-candidate/MISAKA-testnet",
+      "paths": [
+        "/Users/wata/.codex/worktrees/rfc14-g14-integration-candidate/MISAKA-testnet/docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+        "/Users/wata/.codex/worktrees/rfc14-g14-integration-candidate/MISAKA-testnet/docs/adr/0197-court-end-effects-and-pending-liability-archive.md"
+      ]
+    }
+  ]
+}

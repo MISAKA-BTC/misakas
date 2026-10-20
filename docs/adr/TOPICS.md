@@ -213,4 +213,5 @@
 - [ADR-0192 — court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md)
 - [ADR-0193 — sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md)
 - [ADR-0195 — native court 応答の前提受理時刻を保持する](0195-rooted-court-response-eligibility-history.md)
+- [ADR-0197 — court終了効果と未解決責任の保存方式](0197-court-end-effects-and-pending-liability-archive.md)
 

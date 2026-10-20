@@ -51,4 +51,5 @@
 - [RFC-0024 — ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計(単一位置裁定・先読み開示・先行取得)](0024-court-door-3200-to-ctx-2m.md)
 - [RFC-0026 — court の主契約:時計・帰責・責任期間・置換関係の一本化](0026-court-policy-master-contract.md)
 - [RFC-0028 — rooted court response eligibility history](0028-rooted-court-response-eligibility-history.md)
+- [RFC-0030 — court終了効果と未解決責任の保存](0030-court-end-effects-and-pending-liability-archive.md)
 

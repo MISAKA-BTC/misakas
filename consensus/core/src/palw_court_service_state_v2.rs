@@ -55,6 +55,56 @@ impl CourtServiceStateV2 {
         }
         Ok(())
     }
+    /// Transition guard after structural/context validation. An unresolved
+    /// original cannot be discharged by replacing the book, even before any
+    /// shared context or duty-clock row exists. Undo/replay uses the journal,
+    /// not this forward writer. No terminal/release permission is introduced.
+    pub(crate) fn check_retains_unresolved(&self, old: &Self) -> Result<(), String> {
+        if (self.version, self.profile_id, self.source_profile_id, self.book.budget)
+            != (old.version, old.profile_id, old.source_profile_id, old.book.budget)
+        {
+            return Err("unresolved service profile and capacity are immutable".into());
+        }
+        for (claim, binding) in &old.claims {
+            if self.claims.get(claim) != Some(binding) {
+                return Err("unresolved original service binding is immutable".into());
+            }
+        }
+        if old.book.last_observed_daa.is_some_and(|old_daa| self.book.last_observed_daa.is_none_or(|now| now < old_daa)) {
+            return Err("service observation cannot roll back through the forward writer".into());
+        }
+        for (daa, supplied) in &old.book.supply {
+            if self.book.supply.get(daa) != Some(supplied) {
+                return Err("accepted service supply history is immutable".into());
+            }
+        }
+        for daa in self.book.supply.keys() {
+            if old.book.last_observed_daa.is_some_and(|last| *daa <= last) && !old.book.supply.contains_key(daa) {
+                return Err("service update cannot invent supply in a skipped historical slot".into());
+            }
+        }
+        for (id, packet) in &old.book.packets {
+            if self.book.packets.get(id) != Some(packet) {
+                return Err("accepted service packet promise is immutable".into());
+            }
+            let before = old.book.assigned_daa(id);
+            let after = self.book.assigned_daa(id);
+            if before != after {
+                let now = self.book.last_observed_daa.ok_or("service reassignment needs an observed clock")?;
+                let before = before.ok_or("old service assignment is missing")?;
+                let after = after.ok_or("service update erased an assignment")?;
+                if before >= now || after <= now || old.book.supply.contains_key(&before) || self.book.supply.contains_key(&before) {
+                    return Err("only a passed unsupplied assignment can move to future service".into());
+                }
+            }
+        }
+        for (id, packet) in &self.book.packets {
+            if !old.book.packets.contains_key(id) && old.book.last_observed_daa.is_some_and(|last| packet.release_daa <= last) {
+                return Err("new service packet cannot reserve historical capacity".into());
+            }
+        }
+        Ok(())
+    }
     /// Only a denial guard: signatures, response eligibility and adopted
     /// inclusion assumptions are NOT replaced by a ServiceAssessment.
     pub fn default_hold(&self, frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1) -> Result<(), &'static str> {

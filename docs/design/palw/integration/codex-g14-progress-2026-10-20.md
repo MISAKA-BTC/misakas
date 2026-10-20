@@ -281,3 +281,15 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 
 
 今回の最終選択は **98 passed / 0 failed / 0 ignored**。native全体33、public-prefix17、通常court13、codec/policy/G14gate/activation/t12同一性35。targeted1・先行native31・過去の件数は加算しない。non-test consensus release checkもexit0。途中のfixture型誤りによるcompile101は修正前patch/logとともに別記し、試験失敗や成功へ数えない。[検証・hash・正確な範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/court-service-deadline-artifact.json)。文書検査は同じimport済み欠損5件とbaseline既知43件を残し、新規著者リンク欠損は0。G14全体は未完で、有効化保留を維持する。
+
+
+## F08終了効果のA案と、service bookの前向き消去の修正候補
+
+`c54ba38fd`後、[RFC-0030](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md) / [ADR-0197](../../../adr/0197-court-end-effects-and-pending-liability-archive.md)に、RFC-0026 §4.3の全6終了理由と完成assembly不整合のfield別効果を具体化した。利用者は2026-10-21にA（裁定と未決責任のarchiveを分離）の詳細仕様化・隔離実装を指示した。本番採択・pre統合・武装・配備ではない。archive row、全金融hold移行、解除validatorと有料original全分岐graphはまだ実装していない。
+
+[ソース調査](../../../evidence/palw/g14-integration-candidate-2026-10-20/court-end-effects-source-audit.json)では、現close depositはdeclaration時に送金されたescrowではなく、残存collateralから後で徴収する額であることを確認した。archiveに額を保存しただけでは資金が確保されたとはならない。`offence_attribution_active`時の中立voidも、共通session削除writerを通り残存groupの徴収/削除へ到達する。正常なfraudの成立を止めて回避しない。
+
+方式選択に依存しない修正として、shared context/duty clockの作成前でも、native service writerが未解決bookの削除・型置換・空bookへの置換を拒否する。受理済みのprofile/容量、original binding/packetの約束、既存供給履歴と観測clockを保存する。過去に飛ばされたslotへの供給の後付けを拒否し、assignmentを動かせるのは経過済み未供給slotから観測clock後への修復だけとする。新claimの将来予約、前向き観測、従来の修復とjournal undo/replayを禁止する規則ではない。既存の署名期限、実供給の認証、defaultの許可、terminal解消・pruning条件を新たに採択したものではない。
+
+
+このbook保持修正の最終選択も **98 passed / 0 failed / 0 ignored**（native33 + public-prefix17 + 通常court13 + service/policy/G14/activation/t12同一性35）。targeted1と前ターン98は重複として加算しない。non-test consensus release checkはexit0。追加fixtureは構造/context-validな置換をnative writerで拒否する検査であり、実署名のoriginal受付・実供給やarchiveのE01–E10の成功ではない。[source/実行file/log/検証範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/service-book-retention-artifact.json)。文書検査は同じimport済み欠損5件・baseline既知43件を残す。次はAの新archive、実際の金融hold/証拠移行、qualified settlementと全分岐の有料受付を接続する。G14未完・有効化保留を維持する。

@@ -1506,6 +1506,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0197",
+      "path": "docs/adr/0197-court-end-effects-and-pending-liability-archive.md",
+      "title": "ADR-0197 — court終了効果と未解決責任の保存方式",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1735,6 +1743,14 @@
       "path": "docs/rfc/0029-owner-independent-shared-tir-query-data.md",
       "title": "RFC-0029 — owner-independent shared TIR query data",
       "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0030",
+      "path": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+      "title": "RFC-0030 — court終了効果と未解決責任の保存",
+      "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     }
   ]

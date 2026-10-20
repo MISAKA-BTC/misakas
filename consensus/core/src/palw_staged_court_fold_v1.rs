@@ -1030,6 +1030,17 @@ impl TransitionBuilder<'_> {
             }
         }
         if key == PalwStagedCourtKeyV1::CourtService {
+            if let Some(old) = self.state.court_service_state_v1() {
+                match &new {
+                    Some(PalwStagedCourtRowV1::CourtService(service)) => {
+                        service.check_retains_unresolved(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                    }
+                    _ if !old.claims.is_empty() => {
+                        return Err(PalwStateV2Error::CarriageInconsistent("unresolved service book cannot be removed or retyped".into()));
+                    }
+                    _ => {}
+                }
+            }
             for row in self.state.staged_courts.values() {
                 if let PalwStagedCourtRowV1::CourtSharedContext(c)=row {
                     let Some(PalwStagedCourtRowV1::CourtService(service))=&new else {

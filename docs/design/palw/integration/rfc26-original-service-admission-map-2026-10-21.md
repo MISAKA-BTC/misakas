@@ -81,3 +81,12 @@ semantic/historyの無応答課金は`staged_selected_default_charge_v1`へ集�
 保留した索引要素を上書き・延長せず、呼出し内のcursorで次の要素へ進む。後続の未保留要素やmissing-claim/sessionの既存掃除を止めない。索引全体のVec化や新しい永続cursorは追加しない。通常courtの既存refresh分岐は現在DAA以降のbackstopへ再索引するため、処理した未保留行がcursor前の期限へ再挿入される経路ではない。close sweepの通常処理はsession/groupsを削除する。走査の追加比較・lookup・保持/再訪の費用は完成profileに含める未校正項で、0や実測容量とはしない。
 
 **終了効果はなお未完:** `TransitionBuilder::write_court(id, None)`は、正しい客観的裁定を含むsession削除時に、残存close groupのdepositを徴収してgroup/dissectionを消す。自動期限のguardだけでは、この経路の配送欠如と経費/違反帰責の区別、未解決material/責任の精算・archiveは閉じない。正しいfraudのclose全体を禁止したり、徴収だけ飛ばして責任を削除したり、親を失ったgroupを残したりして解決済みとしない。既存のstreamed TIR fraud検証は別の経路の回帰であり、この通常courtの全終了graphの証拠ではない。F02/F03やG14完成、武装可能とは表示しない。
+
+
+## 未解決bookの置換による保持消去
+
+`c54ba38fd`の`write_staged_row_v1(CourtService)`は、既存のshared context/duty clockがあれば逆参照を検査する。しかし、それらの作成前には、元bindingを消した構造/context-validな空bookで置換できる。元の未解決claimをFinal・担保・資料保持のpredicateから外せるため、archive方式の選択に関係なく閉じる必要がある。
+
+追加候補の`CourtServiceStateV2::check_retains_unresolved`は、元profile/予算、bindingとpacketの契約、供給記録、前向きclockを保存する。旧slotへの事後供給の挿入を拒否する。既存assignmentは、観測clockより前に供給されず、再割当先がそのclockより後の場合だけ動かせる。新packetは元観測clock後のreleaseを要する。これはbookの前向きwriteの不変条件で、供給の真正性・有料original受付・終了許可を生成するvalidatorではない。bookを縮小する汎用更新をterminal resolverの代わりにしない。journalによるundoは前向きwriterを経由せず、元の有効な状態へ戻す。
+
+新archive候補については[RFC-0030](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md)を参照。現depositの名目額は前払escrowではなく、残存collateralと他claim責任を考慮する必要がある。Aの隔離実装指示を、未決責任の解除や新Account Bondの実装・価格採択へ広げない。

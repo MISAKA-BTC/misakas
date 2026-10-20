@@ -2944,6 +2944,57 @@ mod conviction_e2e_tests {
             assert_eq!(decoded, row, "snapshot row preserves the entire book");
             let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
             b.write_staged_row_v1(Key::CourtService, Some(decoded)).unwrap();
+            // Before any shared context/duty clock is installed, the service
+            // writer itself must retain obligations. A shape-valid empty book
+            // used to remove this claim's holds without a terminal decision.
+            let accepted = b.state.court_service_state_v1().unwrap().clone();
+            let protected = b.state.clone();
+            let journal = b.entries.len();
+            assert!(b.write_staged_row_v1(Key::CourtService, None).is_err());
+            let retyped = b.state.staged_court_row_v1(&frame.key_v1()).unwrap().clone();
+            assert!(b.write_staged_row_v1(Key::CourtService, Some(retyped)).is_err());
+            let mut candidates = Vec::new();
+            let mut empty = accepted.clone();
+            empty.claims.clear(); empty.book = ServiceReservations::new(cost).unwrap();
+            candidates.push(empty);
+            let mut profile = accepted.clone();
+            profile.source_profile_id = Hash64::from_u64_word(43);
+            profile.profile_id = crate::palw_court_service_state_v2::court_service_profile_id_v2(profile.source_profile_id);
+            candidates.push(profile);
+            let mut promise = accepted.clone();
+            promise.book.packets.get_mut(&[1;64]).unwrap().service_before += 1;
+            candidates.push(promise);
+            let mut capacity = accepted.clone();
+            capacity.book.budget.bytes += 1;
+            for left in capacity.book.remaining.values_mut() { left.bytes += 1; }
+            candidates.push(capacity);
+            let mut clock = accepted.clone();
+            clock.book.supply.clear(); clock.book.last_observed_daa = None;
+            candidates.push(clock);
+            if supplied {
+                let mut erased = accepted.clone(); erased.book.supply.clear(); candidates.push(erased);
+                let mut rewritten = accepted.clone();
+                rewritten.book.supply.get_mut(&(base+1)).unwrap().accepting_block = [99;64];
+                candidates.push(rewritten);
+            } else {
+                let mut invented = accepted.clone();
+                invented.book.supply.insert(base+1, crate::palw_court_service_v1::ServiceSupply {
+                    accepting_block:[99;64], reserved:cost,
+                });
+                candidates.push(invented);
+            }
+            for changed in candidates {
+                changed.check_context(&b.state).expect("counterexample is independently shape/context-valid");
+                assert!(b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(changed).into()))).is_err());
+                assert_eq!(b.state, protected);
+                assert_eq!(b.entries.len(), journal, "refusal precedes canonical state/journal writes");
+            }
+            assert_eq!(b.state, protected);
+            // A monotone accounting observation still works. This fixture
+            // update is not an authenticated production block-supply adapter.
+            let mut advanced = accepted.clone();
+            advanced.book.observe_block(base+3, [13;64], Default::default()).unwrap();
+            b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(advanced).into()))).unwrap();
             let protected = b.state.clone();
             let err = apply_verified_control_v1(&mut b, &ctx, &frame, &control).unwrap_err();
             let message = format!("{err:?}");

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Isolated RFC14 G14 integration candidate, X3 0c3cb9f93 plus selected main 0f808b81d; ADR-0193 collision preserved by full path (2026-10-20); ADR-0195/RFC-0028 stage eligibility history Draft allocated after available local-ref path audit (2026-10-21); ADR-0196/RFC-0029 shared TIR query data Draft allocated after local refs and active-worktree path audit (2026-10-21)",
+  "scope": "Isolated RFC14 G14 integration candidate, X3 0c3cb9f93 plus selected main 0f808b81d; ADR-0193 collision preserved by full path (2026-10-20); ADR-0195/RFC-0028 stage eligibility history Draft allocated after available local-ref path audit (2026-10-21); ADR-0196/RFC-0029 shared TIR query data Draft allocated after local refs and active-worktree path audit (2026-10-21); ADR-0197/RFC-0030 end effects Draft allocated after 822 local unique heads and active-worktree path audit (2026-10-21)",
   "allocated_here": {
     "adr": [
       "0181",
@@ -13,7 +13,8 @@
       "0193",
       "0194",
       "0195",
-      "0196"
+      "0196",
+      "0197"
     ],
     "rfc": [
       "0021",
@@ -24,12 +25,13 @@
       "0026",
       "0027",
       "0028",
-      "0029"
+      "0029",
+      "0030"
     ]
   },
   "next_local": {
-    "adr": "0197",
-    "rfc": "0030"
+    "adr": "0198",
+    "rfc": "0031"
   },
   "legacy_duplicates": {
     "adr": {
