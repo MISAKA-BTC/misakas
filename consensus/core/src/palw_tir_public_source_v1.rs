@@ -342,6 +342,31 @@ impl PalwTirPublicSourceV1 {
         self.check_response_bound_v1(request, &response)?;
         Ok(response)
     }
+    /// Rooted shared-data reload: original identity only, never model validity.
+    /// Reserve the concrete temporary ID-byte writer before hashing.
+    pub(crate) fn validate_complete_ids_v1(&self, rows_root: Hash64, ids: &[u32]) -> Result<(), String> {
+        self.trace()?;
+        if ids.len() != self.decode_count_v1() as usize { return Err("shared IDs have no exact original EOF".into()); }
+        let mut q=crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        q.exact_v1::<u8>((ids.len() as u64).checked_mul(4).ok_or("shared ID byte count overflow")?)
+            .map_err(|e|e.to_string())?;
+        let _scratch=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e|e.to_string())?;
+        if crate::palw_step_refute::tiled_logits_outer_root_v1(&self.header.job_context,
+            u64::from(self.decode_count_v1()),&rows_root,ids) != self.header.full_logits_trace_root {
+            return Err("shared complete IDs do not reach original outer trace root".into());
+        }
+        Ok(())
+    }
+    /// The returned allocation ticket remains attached to the non-wire capability.
+    pub(crate) fn retain_complete_ids_v1(&self, rows_root: Hash64, ids: &[u32])
+        -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, String> {
+        self.validate_complete_ids_v1(rows_root,ids)?;
+        let mut q=crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        q.exact_v1::<u32>(ids.len() as u64).map_err(|e|e.to_string())?;
+        let lease=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e|e.to_string())?;
+        Ok(crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(
+            PalwTirPublicAuthenticatedIdsV1 {source_id:self.source_id,rows_root,ids:ids.to_vec()},lease))
+    }
     fn ids<'a>(&self, ids: Option<&'a PalwTirPublicAuthenticatedIdsV1>) -> Result<&'a PalwTirPublicAuthenticatedIdsV1, String> {
         self.trace()?;
         ids.filter(|ids| ids.source_id == self.source_id && ids.ids.len() == self.decode_count_v1() as usize)

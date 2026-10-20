@@ -203,3 +203,11 @@ verified-half fixture と in-memory carriage/journal の検証であり、node i
 選択結果 **67 passed / 0 failed / 0 ignored**（11 + fresh identity/gate 26 + fresh core native replay 30）。non-test consensus check・既存生成器の一致も成功。[raw log・初期失敗・hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#owner-independent-shared-source-data-candidate)。初期 private-field compile 失敗と verifier の message/signature 逆順による9 pass/2 fail は保存し、最終件数へ加算しない。
 
 登録・original は fixture、実 node の全 owner 共謀/埋め直し T05・funding/UTXO・原子的 original 全分岐予約・public ingress・実 supply・新鮮な signer 可用性・依存/終了規則・R-D2-NODE・tag230・実 door <=3,120・T01–T15 と G14 全体は未完。モデル審査、cap/clock 引上げ、数値採択、pre 統合・武装・配備なし。
+
+## Rooted shared-data adapter (2026-10-21)
+
+`b318ea946` 後、RFC-0029 の native data adapter 候補を接続。別 key/row 14/20・15/21・16/22、payload1 を末尾追加し、actual original/class/layout/source/service-derived profile から scope を再構成する。実 requester 署名・既存 floor を検査し、actual accepting block/DAA を保存。raw body/全IDs は write/read/carriage で再認証し、保存 digest や認証済み bool に依存しない。履歴・data・context と既存 journal/indices/保持を接続した。
+
+選択結果 **69 passed / 0 failed / 0 ignored**（native31、query11、codec1、fresh identity26）。targeted1 と初回 honest fixture1 は31に含むので加算しない。non-test consensus check・再生成一致も成功。[コマンド・raw log・hash・source patch・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#rooted-shared-data-native-adapter-candidate)。8 owner は既存 verified-half Open で占有し、outsider の owner Open が拒否されても共有 query は独立に記録・共有・復元できた。不正計算でも正しく commit されたデータは保持し claim/credit は変更せず、codec/digest 正常でも original-root に合わない改変は復元時に拒否した。
+
+original/context/登録/payment は fixture、lifecycle 未割当・production installer/dispatcher はなし。timely notice・完全な原子的 original 予約・funded/streaming ingress・全敵対分岐/埋め直し/最遅応答・fresh court signer・実 supply・費用/物理校正・依存/終了規則・R-D2-NODE・tag230・実 door<=3,120・T01–T15・node T05/G14 は未完。元の cap/clock/t12 と本番 arming records は変更せず、数値/公開 schema の採択、pre 統合・武装・配備なし。文書検査は同じ imported5件で FAIL、baseline/元資料は未変更。

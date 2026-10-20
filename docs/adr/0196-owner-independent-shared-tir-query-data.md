@@ -36,3 +36,9 @@ original acceptance で全許容分岐を原子的に予約できるまで本番
 ## 選択した検証結果
 
 source/query/frontier 11、fresh t12/G14/activation/release 26、同じ fresh core executable の native 回帰30、計 **67 passed / 0 failed / 0 ignored**。non-test consensus check と既存生成器の一致も成功。[raw log・初期失敗・hash・対象範囲](../evidence/palw/g14-integration-candidate-2026-10-20/README.md#owner-independent-shared-source-data-candidate)。署名は実 ML-DSA、登録・original は fixture。native の有料 ingress・全 owner 共謀下の T05・全分岐予約・実供給の完了ではない。
+
+## Rooted data candidate
+
+`b318ea946` 後に [RFC-0029 §7](../rfc/0029-owner-independent-shared-tir-query-data.md#7-rooted-native-data-candidate-after-b318ea946) の内部 native adapter を追加して検証する。候補 key/row 14/20・15/21・16/22 は末尾追加で、lifecycle は未割当。context は完全予約・timely notice・有料受付の証明ではない。raw body/全 IDs の再認証、actual accepting clock、journal と保持を接続し、署名済み応答義務の履行や default とは分ける。前節67件は過去 checkpoint の対象であり、この拡張の検証済み件数へ足さない。
+
+Rooted adapter の選択結果は **69 passed / 0 failed / 0 ignored**（native31 + query11 + codec1 + identity26）。targeted1・過去の67/64等は加算しない。non-test consensus check と再生成一致も成功。[fixture/未完を含む記録](../evidence/palw/g14-integration-candidate-2026-10-20/README.md#rooted-shared-data-native-adapter-candidate)。公開採択・本番入口・完全予約・T05/G14 完了ではない。

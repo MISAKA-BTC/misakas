@@ -2456,6 +2456,111 @@ mod conviction_e2e_tests {
         assert!(owner_pending(frame, &state, target).3.is_some(), "relayed Finish authenticates the original body");
     }
 
+    #[test]
+    fn rooted_shared_query_works_with_all_native_owner_slots_occupied_and_reloads_data() {
+        use crate::palw_court_shared_tir_state_v1::{self as shared,RootedSharedDataV1};
+        use crate::palw_court_shared_tir_frontier_v1::{SignedSharedRequestV1,SharedRequestEffectV1,SHARED_REQUEST_CONTEXT_V1};
+        use super::super::palw_court_shared_tir_fold_v1 as fold;
+        let fx=palw_tir_public_frame_fixture_v1(Some((7,1)),4);let frame=&fx.frame;let claim=frame.plan_v1().original_claim;
+        let colluders=squatters(Frame::MAXIMUM_OWNERS_V1);
+        let (mut state,params,extras,offset)=open_world(&fx,frame,&colluders);
+        for owner in &colluders {state=open(frame,&state,&params,&extras,offset,*owner).unwrap();}
+        assert_eq!(state.staged_tir_owner_count_v1(&claim),Frame::MAXIMUM_OWNERS_V1);
+        assert!(open(frame,&state,&params,&extras,offset+1,outsider()).is_err());
+        let honest=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([11;32]);
+        let colluder=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([12;32]);
+        state.bonds.get_mut(&outsider()).unwrap().pubkey=honest.verification_key.as_ref().to_vec();
+        state.bonds.get_mut(&colluders[0]).unwrap().pubkey=colluder.verification_key.as_ref().to_vec();
+        state=bind_clock_service(&state,frame,&params,&extras);
+        let profile=shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
+        let source=frame.source_v1(&fx.record,&fx.layout,fx.rules.maximum_leaves).unwrap();
+        let set=crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame,&source,profile).unwrap();
+        let p=frame.plan_v1();let context=shared::SharedTirContextV1 {version:1,claim,allocation_id:p.allocation_id,
+            source_id:p.source_id,rules_id:p.rules_id,profile_id:profile,scope_id:set.scope_id().unwrap(),queries:set.len(),
+            original_accepted_daa:p.terms.accepted_daa,hard_daa:p.terms.accepted_daa+10_000,material_until_daa:p.terms.material_until_daa};
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        // Trusted internal context fixture, NOT a complete paid original or a
+        // timely initial court notice; the synthetic unit-cost book is unchanged.
+        b.write_staged_row_v1(Key::CourtSharedContext(claim),Some(Row::CourtSharedContext(Box::new(context)))).unwrap();
+        let installed=b.state.clone();
+        let find=|query| (0..set.len()).find(|&i|set.request_at(i).unwrap()==query).unwrap();
+        let first=find(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf {index:7});
+        let next=find(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepRun {first:0,count:1});
+        let ids_ordinal=find(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::Ids {offset:0});
+        let make=|ordinal,actor,seed:u8| {
+            let kp=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([seed;32]);
+            let mut intent=SignedSharedRequestV1 {version:1,scope:set.scope_id().unwrap(),ordinal,
+                request_id:set.request_id(ordinal).unwrap(),signer:actor,signature:vec![]};
+            intent.signature=libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key,
+                intent.signing_message(extras.tir_public_network_domain_v1.unwrap()).unwrap().as_byte_slice(),
+                SHARED_REQUEST_CONTEXT_V1,[13;32]).unwrap().as_ref().to_vec();intent
+        };
+        let ctx=at(frame,offset+1);
+        assert_eq!(fold::request(&mut b,&ctx,claim,&make(first,colluders[0],12)).unwrap(),SharedRequestEffectV1::Opened);
+        let after_first=b.state.state_root();let entries=b.entries.len();
+        assert_eq!(fold::request(&mut b,&ctx,claim,&make(first,outsider(),11)).unwrap(),SharedRequestEffectV1::Coalesced);
+        assert_eq!(b.state.state_root(),after_first);assert_eq!(b.entries.len(),entries);
+        assert_eq!(fold::request(&mut b,&ctx,claim,&make(next,outsider(),11)).unwrap(),SharedRequestEffectV1::Opened);
+        assert_eq!(b.state.staged_tir_owner_count_v1(&claim),Frame::MAXIMUM_OWNERS_V1,"shared query did not claim/evict an owner slot");
+        let body=borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage:fx.execution.preimages[7].clone(),opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,7).unwrap()}).unwrap();
+        let before=b.state.state_root();let n=b.entries.len();
+        assert!(fold::share_body(&mut b,&ctx,claim,first,&body[..body.len()-1]).is_err());
+        assert_eq!(b.state.state_root(),before);assert_eq!(b.entries.len(),n);
+        let claim_before=b.state.claim(&claim).cloned();
+        // The committed leaf is arithmetically false in this fixture. Public
+        // source authentication must retain it for semantic refutation, never
+        // certify computation or advance credit merely because it is available.
+        assert!(fold::share_body(&mut b,&ctx,claim,first,&body).unwrap());
+        assert_eq!(b.state.claim(&claim),claim_before.as_ref());
+        assert!(!fold::share_body(&mut b,&ctx,claim,first,&body).unwrap());
+        assert!(matches!(shared::read_shared_data_v1(&b.state,claim,first).unwrap(),Some(RootedSharedDataV1::Unit(unit))
+            if unit.source_id_v1()==p.source_id && borsh::to_vec(unit.response_v1()).unwrap()==body));
+        fold::request(&mut b,&ctx,claim,&make(ids_ordinal,outsider(),11)).unwrap();
+        let rows=crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context,&fx.execution.rows).unwrap();
+        let mut bad_ids=fx.execution.generated.clone();bad_ids[0]^=1;
+        let before=b.state.state_root();assert!(fold::share_ids(&mut b,&ctx,claim,rows,&bad_ids).is_err());assert_eq!(b.state.state_root(),before);
+        assert!(fold::share_ids(&mut b,&ctx,claim,rows,&fx.execution.generated).unwrap());
+        assert!(matches!(shared::read_shared_data_v1(&b.state,claim,ids_ordinal).unwrap(),Some(RootedSharedDataV1::Ids {rows_root,ids})
+            if rows_root==rows && ids==fx.execution.generated.as_slice()));
+        let accepted=b.state.clone();let mut undone=accepted.clone();
+        for entry in b.entries.iter().rev() {apply_delta_entry(&mut undone,entry,true).unwrap();}
+        assert_eq!(undone.state_root(),state.state_root());
+        for entry in &b.entries {apply_delta_entry(&mut undone,entry,false).unwrap();}
+        assert_eq!(undone.state_root(),accepted.state_root());
+        let reload=|node:&PalwChainStateV2| {
+            borsh::from_slice::<PalwStateCarriageV2>(&borsh::to_vec(&PalwStateCarriageV2::from_state(node)).unwrap()).unwrap()
+                .into_state(&params,Some(node.state_root()))
+        };
+        let fresh=reload(&accepted).unwrap();
+        assert_eq!(fresh.state_root(),accepted.state_root());
+        assert!(shared::read_shared_data_v1(&fresh,claim,first).unwrap().is_some());
+        let query_key=Key::CourtSharedQuery(set.request_id(first).unwrap());
+        let mut poisoned=fresh.clone();let Some(Row::CourtSharedQuery(row))=poisoned.staged_courts.get_mut(&query_key) else {panic!()};
+        let body=row.body.as_mut().unwrap();let mut leaf=fx.execution.preimages[7].clone();leaf.values_le[0]^=1;
+        body.bytes=borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage:leaf,opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,7).unwrap()}).unwrap();
+        assert!(source.decode_response_v1(&crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf {index:7},&body.bytes).is_ok());
+        body.digest=shared::shared_body_digest_v1(&body.bytes);
+        row.check(&query_key).unwrap();assert!(reload(&poisoned).is_err(),"matching stored digest cannot replace original-root authentication");
+        let mut wrong_ids=fresh.clone();let Some(Row::CourtSharedIds(ids))=wrong_ids.staged_courts.get_mut(&Key::CourtSharedIds(claim)) else {panic!()};
+        ids.ids[0]^=1;assert!(reload(&wrong_ids).is_err(),"raw persisted IDs are reauthenticated, not trusted as a sealed flag");
+        let mut no_requester=fresh.clone();no_requester.bonds.remove(&outsider());
+        let Some(Row::CourtSharedQuery(q))=no_requester.staged_court_row_v1(&Key::CourtSharedQuery(set.request_id(next).unwrap())) else {panic!()};
+        q.check_context(&no_requester).unwrap();
+        let mut changed=TransitionBuilder::new(&fresh,&params,false,false,false,false,&extras);
+        assert!(changed.write_staged_row_v1(Key::CourtSharedContext(claim),None).is_err());
+        assert!(changed.write_staged_row_v1(Key::CourtService,None).is_err());
+        let past=at(frame,p.terms.material_until_daa-p.terms.accepted_daa+1);
+        super::super::palw_staged_court_fold_v1::sweep(&mut changed,&past).unwrap();
+        assert!(changed.state.staged_court_row_v1(&query_key).is_some());
+        let hard=at(frame,10_000);let before=changed.state.state_root();
+        assert!(fold::request(&mut changed,&hard,claim,&make(first,outsider(),11)).is_err());assert_eq!(changed.state.state_root(),before);
+        // Source/signature/native journal fixture only; no actual lifecycle,
+        // original all-branch funding, refilling/late adversary campaign or node T05.
+        assert!(installed.staged_tir_owner_count_v1(&claim)==Frame::MAXIMUM_OWNERS_V1);
+    }
+
     fn bind_clock_service(state: &PalwChainStateV2, frame: &Frame, params: &PalwStateParamsV2, extras: &PalwTransitionExtrasV1) -> PalwChainStateV2 {
         use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding, court_service_profile_id_v2};
         use crate::palw_court_service_v1::{ServiceCost,ServicePacket,ServiceReservations};

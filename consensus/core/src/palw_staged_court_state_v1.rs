@@ -63,6 +63,9 @@ pub enum PalwStagedCourtKeyV1 {
     CourtService,
     /// RFC-0028 candidate prerequisite history; appended key tag 13.
     CourtDutyClock(Hash64),
+    CourtSharedContext(Hash64),
+    CourtSharedQuery(Hash64),
+    CourtSharedIds(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -99,6 +102,9 @@ pub enum PalwStagedCourtRowV1 {
     TirContainer(Box<crate::palw_tir_container_v1::PalwTirContainerRowV1>),
     CourtService(PalwSharedCourtV1<crate::palw_court_service_state_v2::CourtServiceStateV2>),
     CourtDutyClock(Box<crate::palw_court_duty_clock_v1::CourtDutyClockV1>),
+    CourtSharedContext(Box<crate::palw_court_shared_tir_state_v1::SharedTirContextV1>),
+    CourtSharedQuery(Box<crate::palw_court_shared_tir_state_v1::SharedTirQueryV1>),
+    CourtSharedIds(Box<crate::palw_court_shared_tir_state_v1::SharedTirIdsV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -106,7 +112,7 @@ impl PalwStagedCourtRowV1 {
             Self::OwnerBundle(bundle) => bundle.active_v1(),
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) => None,
+            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) => None,
             _ => Some(self),
         }
     }
@@ -115,7 +121,7 @@ impl PalwStagedCourtRowV1 {
             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) => None,
+            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) => None,
             _ => Some(self),
         }
     }
@@ -233,6 +239,9 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::TirWitness(claim, filer), Self::TirWitness(row)) => row.check_structure_v1(*claim, *filer),
             (PalwStagedCourtKeyV1::CourtService, Self::CourtService(row)) => row.check(),
             (PalwStagedCourtKeyV1::CourtDutyClock(_), Self::CourtDutyClock(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::CourtSharedContext(_), Self::CourtSharedContext(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::CourtSharedQuery(_), Self::CourtSharedQuery(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::CourtSharedIds(_), Self::CourtSharedIds(row)) => row.check(key),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

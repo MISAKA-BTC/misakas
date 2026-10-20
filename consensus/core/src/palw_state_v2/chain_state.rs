@@ -3891,6 +3891,12 @@ impl PalwChainStateV2 {
             if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtDutyClock(clock) = row {
                 clock.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
+            use crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 as R;
+            match row {
+                R::CourtSharedContext(c)=>c.check_context(self),
+                R::CourtSharedQuery(q)=>q.check_context(self),
+                R::CourtSharedIds(ids)=>ids.check_context(self),_=>Ok(()),
+            }.map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;

@@ -200,6 +200,8 @@ mod palw_legacy_public_filer_fold_v1;
 mod palw_court_capacity_fold_v1;
 #[path = "palw_staged_court_fold_v1.rs"]
 mod palw_staged_court_fold_v1;
+#[path = "palw_court_shared_tir_fold_v1.rs"]
+mod palw_court_shared_tir_fold_v1;
 #[path = "palw_tir_public_fold_v1.rs"]
 mod palw_tir_public_fold_v1;
 pub use palw_tir_public_fold_v1::{
