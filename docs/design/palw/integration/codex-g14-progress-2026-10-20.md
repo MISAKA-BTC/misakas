@@ -9,6 +9,12 @@ Source: `7fe073ec2`、専用 worktree `rfc14-g14-completion`。武装・他 bran
 - P1-1 / P1-2 の導出部品: original acceptance から notice boundary 3,120 / hard deadline 10,000 を導出。最短署名済み依存 horizon と後続責任を検査。保持と bond の別 claim を含む最大責任を checked arithmetic で求める。state/fold 未接続、T06/T09 未達。
 - [ADR-0192](../../../adr/0192-court-service-opportunity-and-shared-pursuit.md): F02/F03 の選択肢と推奨案。Proposed、未採択。新しい数値・notice 等号・tag 230 は決めていない。
 
+## A/A 詳細仕様化（ユーザー指示後）
+
+2026-10-20、ユーザーが推奨 A/A の詳細仕様化を指示。[詳細契約案](rfc26-service-shared-frontier-contract-2026-10-20.md)に、original acceptance の原子性、義務 identity、供給単位と実供給、inclusion 前提の限界、default の判定順、共有開示、全許容分岐の費用を記載した。提案した同一 DAA の最初の accepting block という供給単位と各境界は未採択。
+
+`palw_court_service_v1`（commit `0336b6cea`）は未接続の予約部品。canonical packet identity の期限順に、既存の割当を一切動かさず first-fit で追加する。過負荷は候補全体を拒否し一部の予約を残さない。bytes/work/IO/control の独立した予算を検査する。予約可能性の十分条件のみであり、全ての可行な schedule を発見する最適 scheduler ではない。profile の全分岐集合の導出、実供給会計、codec と block budget の接続、inclusion 前提、node 試験は未完。G14 完成や T04/T05 通過とは表示しない。
+
 ## 静的調査
 
 ### TIR 局所化の起点
@@ -39,3 +45,9 @@ cargo test --release -p kaspa-consensus-core \
 
 内訳: 新規契約部品 3、release identity 9、activation pool 5、G14 gates 12（`testnet12_identity_did_not_move` を含む）。これは部品と既存 gate の回帰検証であり、T01–T15 の統合受入や負荷測定の通過ではない。
 `check_docs.py` は既存の欠落参照 6 件で FAIL。対象は RFC-0024 assets の旧ドラフト名 / 測定 evidence directory、RFC-0025 assets の旧ドラフト名 2 箇所、RFC-0026 assets の `inventory.json` / `cross-rfc-normative-scan.json`。今回の ADR に由来する欠落参照なし。索引を再生成し stale index を解消。baseline 未変更。
+
+### 追加検証
+
+`0336b6cea` の予約部品を加え、上記コマンドに `--test palw_court_service_v1` を追加して release で **32 passed / 0 failed / 0 ignored**。既存 29 件と、新規予約の原子性・入力順不変性・予算/重複/期限の拒否 3 件。T04/T05 の統合試験・測定とは区別する。
+
+文書の欠落参照 6 件は、旧ドラフト名 3 箇所を現行の RFC 本文へ修正し、別 branch の evidence と元監査の欠落 JSON は「未同梱・未検証」と明記した。元の digest・測定結果・manifest は変更していない。修正後 `check_docs.py`: **PASS — no-new-regressions / new_issue_occurrences = 0**。既知の欠落参照 43 件は残るため strict clean ではない。baseline 未変更。
