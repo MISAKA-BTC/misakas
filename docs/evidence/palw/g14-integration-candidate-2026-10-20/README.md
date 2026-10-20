@@ -194,3 +194,19 @@ These are native fold/source and in-memory carriage fixtures, NOT real transacti
 | [rooted-shared-authenticity-release.log](rooted-shared-authenticity-release.log) | final false-committed-data / valid-codec tamper fixture: [1] | `3480103e9f4a29383d2f09527b7253bb2ef53bb334fefb3eef6819ec9cfe3ccc` |
 | [rooted-shared-final-regressions-check.log](rooted-shared-final-regressions-check.log) | final codec/identities, non-test consensus and native/query replay: [12, 5, 1, 9, 31, 11] | `001794ab66679ac32f58152dd674b8d5ac794b26eff120127a11f4c129eb4bd2` |
 | [rooted-shared-wire.log](rooted-shared-wire.log) | initial schema generation: [] | `cfe33da42547d4fd9d6e08c511bb94436527f6f3d92158b0b7ac6f78505b2b49` |
+
+## Signed bounded shared-stream envelope candidate
+
+Parent `b980f5788`. [Source patch](shared-stream-runtime.patch) and [machine-readable commands, hashes and result groups](shared-stream-artifact.json). This checkpoint implements only a separate signed Begin/Part/Finish envelope, fixed actor/target slot identity and checked canonical part geometry. Existing 16,384-byte part and ML-DSA-87 signature limits remain. All network/claim/scope/target/signer/action fields are signed, including part bytes/offset/stream identity. FullIds is one target per scope rather than one full sequence per canonical ID chunk. A declaration change does not allocate a new actor slot.
+
+Final selected **73 passed / 0 failed / 0 ignored**:
+
+- [Final query/frontier release log](shared-stream-final-query-tests.log): 15, including 4 new stream tests. Real signatures cover all variant fields, wrong signer/network/context, and substitutions. Codec tests reject oversized payload/signature prefixes before payload reads, plus malformed versions, truncation/trailing bytes. Geometry covers full/final/ragged/empty/overrun/offset cases and checked u64 end.
+- [Codec/identities and non-test consensus check](shared-stream-identities-check-native.log): first four groups 12 + 5 + 1 + 9 = 27; non-test check exit 0. Its earlier 31-native group is excluded.
+- [Native replay after the final query build](shared-stream-final-native-replay.log): 31, using the same freshly rebuilt core unit executable as final query tests.
+
+[Initial 4-test release log](shared-stream-envelope-tests.log) is intermediate and excluded: tests were subsequently strengthened to mutate every action field and check exact decode error kinds. These 4 are already within final 15. Do not add previous 69/67/64/93 totals. [Wire/heap generator consistency](shared-stream-wire-idempotent.log) succeeds with unchanged generated output. All cargo/release runs used the shared heavy lock.
+
+No lifecycle tag or rooted stream/chunk row was introduced. Bond-key signature validity is not current Ready eligibility, original source/profile/cursor authentication, paid admission, EOF completion or a signer-duty effect. The whole-body adapter remains separate. Linked rooted chunks/typed leases, actual accepting clocks, EOF source authentication/atomic rollback, reload/reorg/pruning, full fee/capacity accounting and original all-branch reservation remain to connect. Part bytes are not total carrier bytes; signature/fixed fields and transaction overhead need separate accounting. Quiet-devnet 17,408-byte payload observations do not validate this envelope under load. No production fence/preset, cap, deadline, old wire meaning or identity expectation changed. This is not T05 or full G14 completion.
+
+[Documentation check](shared-stream-docs-check.log) retains the same five imported missing references and 43 baseline-known occurrences; no baseline or original evidence was rewritten.

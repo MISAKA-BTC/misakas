@@ -42,3 +42,9 @@ source/query/frontier 11、fresh t12/G14/activation/release 26、同じ fresh co
 `b318ea946` 後に [RFC-0029 §7](../rfc/0029-owner-independent-shared-tir-query-data.md#7-rooted-native-data-candidate-after-b318ea946) の内部 native adapter を追加して検証する。候補 key/row 14/20・15/21・16/22 は末尾追加で、lifecycle は未割当。context は完全予約・timely notice・有料受付の証明ではない。raw body/全 IDs の再認証、actual accepting clock、journal と保持を接続し、署名済み応答義務の履行や default とは分ける。前節67件は過去 checkpoint の対象であり、この拡張の検証済み件数へ足さない。
 
 Rooted adapter の選択結果は **69 passed / 0 failed / 0 ignored**（native31 + query11 + codec1 + identity26）。targeted1・過去の67/64等は加算しない。non-test consensus check と再生成一致も成功。[fixture/未完を含む記録](../evidence/palw/g14-integration-candidate-2026-10-20/README.md#rooted-shared-data-native-adapter-candidate)。公開採択・本番入口・完全予約・T05/G14 完了ではない。
+
+## Signed stream envelope candidate
+
+[RFC-0029 §8](../rfc/0029-owner-independent-shared-tir-query-data.md#8-signed-bounded-stream-envelope-candidate) に、署名付き Begin/Part/Finish の候補を追加する。既存16,384-byte part 上限と ML-DSA-87 を維持する。枠は claim/scope/target/literal signer で固定し、異なる body 宣言で枠数を増やさない。全IDsは scope ごとに一つの対象とし、各 ID chunk ごとに全列を再提出しない。署名は identity のみで、Ready資格・元データ・応答義務の履行を代替しない。
+
+この段階は codec/署名/checked geometry のみ。rooted prefix、現在のReady資格、EOF認証、rollback/再読込、完全予約・実供給・有料搬送は未接続。再試行・中断・再開を全合法分岐へ積算する規則も未採択。固定枠という構成要素だけで受付・費用・訴追可能性の完成としない。Proposed と有効化保留を維持する。

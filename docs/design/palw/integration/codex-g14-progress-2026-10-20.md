@@ -211,3 +211,11 @@ verified-half fixture と in-memory carriage/journal の検証であり、node i
 選択結果 **69 passed / 0 failed / 0 ignored**（native31、query11、codec1、fresh identity26）。targeted1 と初回 honest fixture1 は31に含むので加算しない。non-test consensus check・再生成一致も成功。[コマンド・raw log・hash・source patch・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#rooted-shared-data-native-adapter-candidate)。8 owner は既存 verified-half Open で占有し、outsider の owner Open が拒否されても共有 query は独立に記録・共有・復元できた。不正計算でも正しく commit されたデータは保持し claim/credit は変更せず、codec/digest 正常でも original-root に合わない改変は復元時に拒否した。
 
 original/context/登録/payment は fixture、lifecycle 未割当・production installer/dispatcher はなし。timely notice・完全な原子的 original 予約・funded/streaming ingress・全敵対分岐/埋め直し/最遅応答・fresh court signer・実 supply・費用/物理校正・依存/終了規則・R-D2-NODE・tag230・実 door<=3,120・T01–T15・node T05/G14 は未完。元の cap/clock/t12 と本番 arming records は変更せず、数値/公開 schema の採択、pre 統合・武装・配備なし。文書検査は同じ imported5件で FAIL、baseline/元資料は未変更。
+
+## Signed shared-stream envelope (2026-10-21)
+
+`b980f5788` 後に独立した署名付き Begin/Part/Finish codec と fixed actor/target slot identity、checked canonical part geometry を実装。実 ML-DSA で全action fieldを束縛し、宣言変更で枠を増やさない。FullIdsは一つの対象でありchunkごとに全列を再提出しない。既存16,384-byte part上限を維持し、署名・固定項目・carrier費用は別途積算する。
+
+最終選択 **73 passed / 0 failed / 0 ignored**（query/frontier15、codec/identity27、同じ最終core executableのnative31）。初回4・途中native31・過去69等は加算しない。non-test consensus check と生成物一致も成功。[raw logs・hash・source patch・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#signed-bounded-shared-stream-envelope-candidate)。
+
+搬送形式だけのcheckpointであり、Ready照合、rooted prefix/chunk、EOF再認証と原子的rollback、再読込/reorg/prune、完全予約・fee・実供給・T05は未接続。現行whole-body内部adapterを本番入口へ出していない。[Draft仕様](../../../rfc/0029-owner-independent-shared-tir-query-data.md#8-signed-bounded-stream-envelope-candidate)とADR-0196へ境界を明記。G14全体は継続中、有効化なし。
