@@ -807,6 +807,25 @@ fn apply_verified_control_v1(
     frame: &Frame,
     control: &crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1,
 ) -> Result<(), PalwStateV2Error> {
+    // The service candidate adds several rooted writes to one prerequisite
+    // transition. Keep the verified-half boundary atomic too (not just its
+    // signature-checking caller), including marker/index/quota refusal. This
+    // extra candidate checkpoint is not priced or adopted by a real profile.
+    if b.state.court_service_holds_claim_v1(&control.claim) {
+        let saved = b.try_checkpoint()?;
+        let result = apply_verified_control_inner_v1(b, ctx, frame, control);
+        if result.is_err() { b.restore(saved); }
+        result
+    } else {
+        apply_verified_control_inner_v1(b, ctx, frame, control)
+    }
+}
+fn apply_verified_control_inner_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    frame: &Frame,
+    control: &crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1,
+) -> Result<(), PalwStateV2Error> {
     use crate::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
     let maximum_leaves = frame.descriptor_v1().maximum_leaves;
     let transition = match (&control.target, &control.action) {
@@ -945,6 +964,37 @@ fn apply_verified_control_v1(
             }
         }
     }
+    // Candidate history is recorded only for real prerequisite transitions of
+    // an already bound claim. A later binding/read/WorkDebit never backfills it.
+    let duty_clock_scope = match (&control.target, &control.action) {
+        (T::Acquisition { owner, reserved_daa }, A::Acquisition(action @ (
+            Action::Demand { .. } | Action::Reacquire { .. } | Action::Begin { .. } | Action::Part { .. }))) => {
+            if let Some(service) = b.state.court_service_state_v1().filter(|s| s.claims.contains_key(&control.claim)) {
+                let key = owner_key(frame, *owner, *reserved_daa)?;
+                let Some(Row::TirAcquisition(row)) = b.state.staged_court_row_v1(&key) else {
+                    return Err(refused("duty clock lost current acquisition"));
+                };
+                match action {
+                    Action::Begin { answerer, .. } | Action::Part { answerer, .. } => {
+                        // Only the literal answerer's cursor can change. An
+                        // owner's voluntary answer creates no Ready debt.
+                        if row.owned.response_custodians_v1().contains(answerer) {
+                            let previous = crate::palw_court_tir_requests_v1::tir_native_response_duty_v1(
+                                &b.state, ctx, key, *answerer, service.profile_id).map_err(refused)?.map(|d| d.id);
+                            Some((key, service.profile_id, row.clone(), Some((*answerer, previous))))
+                        } else { None }
+                    },
+                    _ => {
+                        // Successful Demand/Reacquire cannot erase any owed
+                        // response (native new_demand enforces this). Their new
+                        // demand/turn introduces Begin for every Ready actor.
+                        Some((key, service.profile_id, row.clone(), None))
+                    },
+                }
+            } else { None }
+        },
+        _ => None,
+    };
     for change in transition.changes_v1() {
         if b.state.staged_court_row_v1(&change.key) != change.old.as_ref() {
             return Err(refused("TIR transition changes a noncurrent native row"));
@@ -952,6 +1002,21 @@ fn apply_verified_control_v1(
     }
     for change in transition.changes_v1() {
         b.write_staged_row_v1(change.key, change.new.clone())?;
+    }
+    if let Some((key, profile, prior, selected)) = duty_clock_scope {
+        // Arc-clone the already admitted immutable owner row, rather than
+        // allocate an unreserved vector of all actors/old duty IDs.
+        for actor in prior.owned.response_custodians_v1().iter().copied() {
+            if selected.is_some_and(|(selected_actor, _)| selected_actor != actor) { continue; }
+            let previous_id = selected.and_then(|(_, id)| id);
+            if let Some(duty) = crate::palw_court_tir_requests_v1::tir_native_response_duty_v1(
+                &b.state, ctx, key, actor, profile).map_err(refused)? {
+                if previous_id == Some(duty.id) { continue; }
+                let clock = crate::palw_court_duty_clock_v1::CourtDutyClockV1::from_native(
+                    &duty, ctx, profile, frame.plan_v1().terms.material_until_daa).map_err(refused)?;
+                b.write_staged_row_v1(Key::CourtDutyClock(duty.id), Some(Row::CourtDutyClock(Box::new(clock))))?;
+            }
+        }
     }
     if let Some(unpaid) = unpaid {
         let claim = b.state.claim(&control.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(control.claim))?;
@@ -2126,6 +2191,11 @@ mod conviction_e2e_tests {
         frame: &Frame,
         leaf: u64,
     ) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, T, u64) {
+        demanded_world_inner(fx, frame, leaf, false)
+    }
+    fn demanded_world_inner(
+        fx: &PalwTirPublicFrameFixtureV1, frame: &Frame, leaf: u64, bind_before_demand: bool,
+    ) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, T, u64) {
         use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
         let (mut state, params, extras) = world(fx, frame);
         state.staged_courts.remove(&frame.key_v1());
@@ -2140,6 +2210,7 @@ mod conviction_e2e_tests {
         let opened =
             control_step(frame, &ready, &params, &extras, open_at, outsider(), T::OwnerOpen { owner: outsider() }, A::Open, rent, 0)
                 .expect("an outside bond opens its own acquisition after the preparation door");
+        let opened = if bind_before_demand { bind_clock_service(&opened, frame, &params, &extras) } else { opened };
         let acquisition = T::Acquisition { owner: outsider(), reserved_daa: plan.terms.accepted_daa + open_at };
         let request = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: leaf };
         let demanded = control_step(
@@ -2383,6 +2454,135 @@ mod conviction_e2e_tests {
             state = next.unwrap();
         }
         assert!(owner_pending(frame, &state, target).3.is_some(), "relayed Finish authenticates the original body");
+    }
+
+    fn bind_clock_service(state: &PalwChainStateV2, frame: &Frame, params: &PalwStateParamsV2, extras: &PalwTransitionExtrasV1) -> PalwChainStateV2 {
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding, court_service_profile_id_v2};
+        use crate::palw_court_service_v1::{ServiceCost,ServicePacket,ServiceReservations};
+        let p=frame.plan_v1();let cost=ServiceCost { bytes:1,work:1,io:1,controls:1 };
+        let mut book=ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id:[71;64],release_daa:p.terms.accepted_daa+1,
+            service_before:p.terms.accepted_daa+2,cost }],p.terms.accepted_daa+10_000).unwrap();
+        let source_profile_id=Hash64::from_u64_word(72);
+        let service=CourtServiceStateV2 { version:2,source_profile_id,profile_id:court_service_profile_id_v2(source_profile_id),book,
+            claims:std::collections::BTreeMap::from([(p.original_claim,ServiceClaimBinding {
+                claim:p.original_claim,allocation_id:p.allocation_id,source_id:p.source_id,
+                original_accepted_daa:p.terms.accepted_daa,hard_deadline_daa:p.terms.accepted_daa+10_000,
+                packet_ids:std::collections::BTreeSet::from([[71;64]]) })]) };
+        let mut b=TransitionBuilder::new(state,params,false,false,false,false,extras);
+        b.write_staged_row_v1(Key::CourtService,Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        b.state.clone()
+    }
+    #[test]
+    fn native_duty_clock_records_actual_stages_and_survives_native_restore() {
+        use crate::palw_court_tir_requests_v1::tir_native_response_duty_v1 as duty;
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=&fx.frame;
+        let (old,params,extras,target,offset)=demanded_world(&fx,frame,0);
+        let state=bind_clock_service(&old,frame,&params,&extras);
+        let T::Acquisition { owner,reserved_daa }=target else { unreachable!() };
+        let key=owner_key(frame,owner,reserved_daa).unwrap();let actor=frame.custody_v1().pledge_v1().producer;
+        let profile=state.court_service_state_v1().unwrap().profile_id;let ctx=at(frame,offset);
+        let initial=duty(&state,&ctx,key,actor,profile).unwrap().unwrap();
+        assert!(state.staged_court_row_v1(&Key::CourtDutyClock(initial.id)).is_none(),"binding cannot backfill an old demand");
+        let body=borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage:fx.execution.preimages[0].clone(),opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,0).unwrap() }).unwrap();
+        let begin=Owned::Begin { demand_id:initial.demand_id,answerer:actor,total_bytes:body.len() as u64,
+            body_hash:crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) };
+        let make=|action| Control { version:1,claim:initial.claim,allocation_id:initial.allocation_id,source_id:initial.source_id,
+            target,expected_turn:initial.turn,declared_rent_sompi:0,signer:actor,action:A::Acquisition(action),signature:vec![5;SIG] };
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        apply_verified_control_v1(&mut b,&ctx,frame,&make(begin.clone())).unwrap();
+        let part=duty(&b.state,&ctx,key,actor,profile).unwrap().unwrap();let part_key=Key::CourtDutyClock(part.id);
+        let Some(Row::CourtDutyClock(first))=b.state.staged_court_row_v1(&part_key) else { panic!("Begin did not record Part prerequisite") };
+        assert_eq!((first.predecessor_block,first.predecessor_daa),(ctx.block,ctx.daa_score));
+        assert!(!first.stage_started_before_unit(ctx.daa_score));assert!(first.stage_started_before_unit(ctx.daa_score+1));
+        // Later acceptance of the same native stage must retain different history.
+        let late=control_step(frame,&state,&params,&extras,offset+3,actor,target,A::Acquisition(begin),0,initial.turn).unwrap();
+        let Some(Row::CourtDutyClock(later))=late.staged_court_row_v1(&part_key) else { panic!() };
+        assert_ne!(first.predecessor_daa,later.predecessor_daa);
+        assert!(!later.stage_started_before_unit(ctx.daa_score+1));
+        // Deliberately inject contradictory historical provenance as a writer
+        // failure fixture, NOT a claimed valid node history. The real verified
+        // boundary must undo preceding stage writes when the marker conflicts.
+        let retained=first.clone();
+        let mut collision=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        collision.write_staged_row_v1(part_key,Some(Row::CourtDutyClock(later.clone()))).unwrap();
+        let collision_root=collision.state.state_root();let entries=collision.entries.len();
+        let err=apply_verified_control_v1(&mut collision,&ctx,frame,&make(Owned::Begin {
+            demand_id:initial.demand_id,answerer:actor,total_bytes:body.len() as u64,
+            body_hash:crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) })).unwrap_err();
+        assert!(format!("{err:?}").contains("immutable"));
+        assert_eq!(collision.state.state_root(),collision_root);assert_eq!(collision.entries.len(),entries);
+        assert!(b.write_staged_row_v1(Key::CourtService,None).is_err());
+        let mut wrong_profile=b.state.court_service_state_v1().unwrap().clone();
+        wrong_profile.source_profile_id=Hash64::from_u64_word(73);
+        wrong_profile.profile_id=crate::palw_court_service_state_v2::court_service_profile_id_v2(wrong_profile.source_profile_id);
+        assert!(b.write_staged_row_v1(Key::CourtService,Some(Row::CourtService(Box::new(wrong_profile).into()))).is_err());
+
+        // Existing native controls may advance at the same block and DAA. The
+        // accounting successor must not impose an extra native response delay.
+        apply_verified_control_v1(&mut b,&ctx,frame,&make(Owned::Part { demand_id:initial.demand_id,answerer:actor,offset:0,bytes:body })).unwrap();
+        let finish=duty(&b.state,&ctx,key,actor,profile).unwrap().unwrap();let finish_key=Key::CourtDutyClock(finish.id);
+        assert!(b.state.staged_court_row_v1(&finish_key).is_some());
+        apply_verified_control_v1(&mut b,&ctx,frame,&make(Owned::Finish { demand_id:initial.demand_id,answerer:actor })).unwrap();
+        assert!(duty(&b.state,&ctx,key,actor,profile).unwrap().is_none());
+        assert_eq!(b.state.staged_court_row_v1(&part_key),Some(&Row::CourtDutyClock(retained)));
+        let accepted=b.state.clone();let mut undone=accepted.clone();
+        for entry in b.entries.iter().rev() { apply_delta_entry(&mut undone,entry,true).unwrap(); }
+        assert_eq!(undone.state_root(),state.state_root());
+        for entry in &b.entries { apply_delta_entry(&mut undone,entry,false).unwrap(); }
+        assert_eq!(undone.state_root(),accepted.state_root());
+        let bytes=borsh::to_vec(&crate::palw_state_v2::PalwStateCarriageV2::from_state(&accepted)).unwrap();
+        let fresh=borsh::from_slice::<crate::palw_state_v2::PalwStateCarriageV2>(&bytes).unwrap()
+            .into_state(&params,Some(accepted.state_root())).unwrap();
+        assert_eq!(fresh.staged_court_row_v1(&finish_key),accepted.staged_court_row_v1(&finish_key));
+        let mut swept=TransitionBuilder::new(&fresh,&params,false,false,false,false,&extras);
+        let past=at(frame,frame.plan_v1().terms.material_until_daa-frame.plan_v1().terms.accepted_daa+1);
+        super::super::palw_staged_court_fold_v1::sweep(&mut swept,&past).unwrap();
+        assert!(swept.state.staged_court_row_v1(&finish_key).is_some(),"unresolved original retains prerequisite evidence beyond TTL");
+        assert!(swept.write_staged_row_v1(finish_key,None).is_err());
+        let mut substituted=fresh.clone();substituted.staged_courts.remove(&Key::CourtService);
+        let Some(Row::CourtDutyClock(clock))=fresh.staged_court_row_v1(&finish_key) else { panic!() };
+        assert!(clock.check_context(&substituted).is_err());
+    }
+
+    #[test]
+    fn native_duty_clock_demand_and_latest_parts_keep_the_original_deadline() {
+        use crate::palw_court_tir_requests_v1::tir_native_response_duty_v1 as duty;
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=&fx.frame;
+        let (state,params,extras,target,offset)=demanded_world_inner(&fx,frame,0,true);
+        let T::Acquisition { owner,reserved_daa }=target else { unreachable!() };
+        let key=owner_key(frame,owner,reserved_daa).unwrap();let actor=frame.custody_v1().pledge_v1().producer;
+        let profile=state.court_service_state_v1().unwrap().profile_id;
+        let original=duty(&state,&at(frame,offset),key,actor,profile).unwrap().unwrap();
+        let Some(Row::CourtDutyClock(opened))=state.staged_court_row_v1(&Key::CourtDutyClock(original.id)) else { panic!("actual Demand must record Begin provenance") };
+        let demand_context=at(frame,offset-1);
+        assert_eq!((opened.predecessor_block,opened.predecessor_daa),(demand_context.block,demand_context.daa_score));
+        assert_eq!(opened.first_eligible_daa,original.opened_daa+1);
+        let end=original.respond_until_daa-frame.plan_v1().terms.accepted_daa;
+        let body=borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage:fx.execution.preimages[0].clone(),opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,0).unwrap() }).unwrap();
+        let begun=control_step(frame,&state,&params,&extras,end-2,actor,target,A::Acquisition(Owned::Begin {
+            demand_id:original.demand_id,answerer:actor,total_bytes:body.len() as u64,
+            body_hash:crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) }),0,original.turn).unwrap();
+        let partial=control_step(frame,&begun,&params,&extras,end-1,actor,target,A::Acquisition(Owned::Part {
+            demand_id:original.demand_id,answerer:actor,offset:0,bytes:body }),0,original.turn).unwrap();
+        let finish=duty(&partial,&at(frame,end),key,actor,profile).unwrap().unwrap();
+        assert_eq!(finish.respond_until_daa,original.respond_until_daa);
+        let Some(Row::CourtDutyClock(clock))=partial.staged_court_row_v1(&Key::CourtDutyClock(finish.id)) else { panic!() };
+        assert_eq!(clock.first_eligible_daa,original.respond_until_daa);
+        assert!(!clock.stage_started_before_unit(original.respond_until_daa),"legal latest Part creates no invented future Finish opportunity");
+        assert!(control_step(frame,&partial,&params,&extras,end,actor,target,A::Acquisition(Owned::Finish {
+            demand_id:original.demand_id,answerer:actor }),0,original.turn).is_err(),"clock recording never extends native response authority");
+        let mut b=TransitionBuilder::new(&partial,&params,false,false,false,false,&extras);
+        let control=Control { version:1,claim:original.claim,allocation_id:original.allocation_id,source_id:original.source_id,
+            target,expected_turn:original.turn,declared_rent_sompi:0,signer:owner,
+            action:A::Acquisition(Owned::Collect { demand_id:original.demand_id }),signature:vec![5;SIG] };
+        let before=b.state.state_root();let entries=b.entries.len();
+        assert!(apply_verified_control_v1(&mut b,&at(frame,end),frame,&control).is_err(),"timing marker never bypasses the service default denial");
+        assert_eq!(b.state.state_root(),before);assert_eq!(b.entries.len(),entries);
     }
 
     #[test]

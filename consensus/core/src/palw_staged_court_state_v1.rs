@@ -61,6 +61,8 @@ pub enum PalwStagedCourtKeyV1 {
     TirContainer(Hash64),
     /// Proposed service ledger; appended tag, no existing tag changes.
     CourtService,
+    /// RFC-0028 candidate prerequisite history; appended key tag 13.
+    CourtDutyClock(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -96,6 +98,7 @@ pub enum PalwStagedCourtRowV1 {
     /// A registered TIR class's `PALWART3` container, bound once by its registrant (behind `palw_tir_container_identity_v1`).
     TirContainer(Box<crate::palw_tir_container_v1::PalwTirContainerRowV1>),
     CourtService(PalwSharedCourtV1<crate::palw_court_service_state_v2::CourtServiceStateV2>),
+    CourtDutyClock(Box<crate::palw_court_duty_clock_v1::CourtDutyClockV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -103,7 +106,7 @@ impl PalwStagedCourtRowV1 {
             Self::OwnerBundle(bundle) => bundle.active_v1(),
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) => None,
+            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) => None,
             _ => Some(self),
         }
     }
@@ -112,7 +115,7 @@ impl PalwStagedCourtRowV1 {
             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) => None,
+            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) => None,
             _ => Some(self),
         }
     }
@@ -229,6 +232,7 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::TirClaim(..), Self::TirClaim(frame)) => frame.check_structure_v1(key),
             (PalwStagedCourtKeyV1::TirWitness(claim, filer), Self::TirWitness(row)) => row.check_structure_v1(*claim, *filer),
             (PalwStagedCourtKeyV1::CourtService, Self::CourtService(row)) => row.check(),
+            (PalwStagedCourtKeyV1::CourtDutyClock(_), Self::CourtDutyClock(row)) => row.check(key),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

@@ -3887,6 +3887,11 @@ impl PalwChainStateV2 {
         if let Some(service) = self.court_service_state_v1() {
             service.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
+        for row in self.staged_courts.values() {
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtDutyClock(clock) = row {
+                clock.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;

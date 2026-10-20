@@ -487,8 +487,8 @@ native_struct!(crate::palw_model_registry_v1::PalwSeatReadinessRowV1; proved_daa
 native_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; opened_daa, hard_deadline_daa, live, closed, dismissed_held, reacquiring, courts, court_reserve_used);
 native_struct!(crate::palw_class_semantics_v1::PalwClassSemanticsV1; version, class_id, artifact_root, bound_from_daa, model_profile_id, runtime_manifest_hash, runtime_class_id, tokenizer_id, cu_ruleset_id, token_table_root, rendering_rule, raw_tokenizer_bytes, tokenizer_key_events, prefix_state_relation);
 native_struct!(crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2; declaration, deadline_daa, parts);
-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService);
-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0));
+native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService, CourtDutyClock(f0));
+native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0), CourtDutyClock(f0));
 native_struct!(crate::palw_terminal_carriage_v1::PalwPendingTerminalV1; declaration, deadline_daa, parts);
 native_struct!(crate::palw_state_v2::PalwPanelDutyRowV1; seats, seat_exposure);
 native_struct!(crate::palw_execution_lane_v1::PalwExecFinalV1; domain, bond, operator_id, claim_id, execution_root, credit, accepted_blue_score);
@@ -849,6 +849,7 @@ native_struct!(crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1; d
 native_struct!(crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessRowV1; claim, filer, allocation_id, total_bytes, digest, until_daa, received);
 native_struct!(crate::palw_tir_container_v1::PalwTirContainerRowV1; container_root, manifest_digest, weights_section, inner_leaf_count, bound_daa);
 native_struct!(crate::palw_court_service_state_v2::CourtServiceStateV2; version, profile_id, source_profile_id, book, claims);
+native_struct!(crate::palw_court_duty_clock_v1::CourtDutyClockV1; version, profile_id, duty_id, claim, allocation_id, source_id, acquisition, answerer, demand_id, turn, predecessor_block, predecessor_daa, first_eligible_daa, response_deadline_daa, original_hard_daa, material_until_daa);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetBondRowV1; window, open_claims, latest_release_daa, open_liability_sompi, open_final_weight, liability_hold_until);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetClaimRowV1; bond, model, accepted_daa, reuse_not_before, reserved, consumed, open, in_window, live, origin, liability_sompi);
 native_struct!(crate::palw_bond_budget_v1::PalwCapitalAssignmentRowV1; sequence, effective, pending, pending_since_epoch);

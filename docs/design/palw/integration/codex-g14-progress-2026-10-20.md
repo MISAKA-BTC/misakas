@@ -185,3 +185,11 @@ Legacy funded relay now checks actual virtual UTXOs and full selected-block repl
 [ADR-0195](../../../adr/0195-rooted-court-response-eligibility-history.md) / [RFC-0028](../../../rfc/0028-rooted-court-response-eligibility-history.md) を Proposed として追加。新 marker runtime は未実装。最後の段階の遅れだけで免責・責任を決めず、全 causal path、original admission、実 supply、配送前提の未完を維持する。production Rust と既存 wire/clock/cap/t12 固定値は未変更。
 
 重複を除く選択結果は **54 passed / 0 failed / 0 ignored**（fresh core native 28、以前の identity/gate executables 再実行 26）。targeted 1 は 28 に含む。[raw log・コマンド・SHA-256](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#retained-stage-timing-counterexample)。文書検査は同じ imported 5 件で FAIL、baseline は未変更。G14 全体の完了・有効化ではない。
+
+## Native prerequisite history runtime candidate (2026-10-21)
+
+`e82921ee1` 後の隔離候補で RFC-0028 の rooted marker を実装。別 key/row 13/19、payload 1 に actual native context を保持し、実段階変更時だけ記録する。後付け binding や WorkDebit/read で時刻を補完せず、旧タグ・期限・t12 固定値を維持。stage/marker は同じ journal に入り、失敗時に共に巻き戻る。未解決 binding に必要な履歴を TTL 後も保持し、binding/profile の矛盾する更新を拒否する。
+
+選択結果は **64 passed / 0 failed / 0 ignored**（fresh native 30、fresh codec/service 8、fresh identity/gate/activation/release 26）。targeted 2 と intermediate 1 は30に含み加算しない。non-test consensus check と再生成一致も成功。[コマンド・raw log・hash・対象範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#exclusive-hard-boundary-verification)。文書検査は同じ imported 5件で FAIL、baseline/元資料は未変更。
+
+verified-half fixture と in-memory carriage/journal の検証であり、node ingress/restart/pruned-IBD、全 WorkDebit/restart 分岐、全 causal graph、original 全分岐予約、owner 非依存 public frontier、実 supply、費用・物理校正、依存/終了規則、T01–T15 と G14 全体は未完。最後の stage の eligibility だけで免責・責任を決めず、default guard は閉じたまま。公開 schema/数値の採択・pre 統合・武装・配備なし。

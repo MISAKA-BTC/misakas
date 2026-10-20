@@ -37,6 +37,10 @@ A を隔離候補で具体化することを推奨する。既存の service v2�
 
 ## 検証済みの範囲
 
-反例 1 件は、fresh core executable の native 回帰 28 件にも含まれる。同じ lock 下の既存 identity/G14/activation/release executables の再実行 26 件と合わせ、重複を除く選択結果は **54 passed / 0 failed / 0 ignored**。production Rust は未変更、marker runtime は未実装。コマンド、raw log、SHA-256 と重複の扱いは [試験記録](../evidence/palw/g14-integration-candidate-2026-10-20/README.md#retained-stage-timing-counterexample)を参照。
+反例 1 件は、fresh core executable の native 回帰 28 件にも含まれる。同じ lock 下の既存 identity/G14/activation/release executables の再実行 26 件と合わせ、重複を除く選択結果は **54 passed / 0 failed / 0 ignored**。この反例 checkpoint では production Rust は未変更、marker runtime は未実装。コマンド、raw log、SHA-256 と重複の扱いは [試験記録](../evidence/palw/g14-integration-candidate-2026-10-20/README.md#retained-stage-timing-counterexample)を参照。
 
 `g14/door-design` の local ref `2a6ea1a4ff934635978144a84f8ec96351d2bdb8` の capacity scheduler と owned response formats も読み取り確認した。予約/待ち行列会計や WorkDebit receipt の accepted DAA は、Begin/Part 自体の受理時刻を与えない。third branch の統合・schema 採択を行ったという意味ではない。
+
+## 隔離候補の実装状況
+
+`e82921ee1` 後の候補で A 案の履歴 row、native prerequisite transition、journal、保持・復元の実装を追加し、選択した検証を実行した。公開採択ではない。最新の対象と残件は [RFC-0028 §8](../rfc/0028-rooted-court-response-eligibility-history.md#8-isolated-runtime-candidate-2026-10-21) を参照。今回の選択結果は **64 passed / 0 failed / 0 ignored**、non-test consensus check と生成器再生成一致も成功。前節の54件や targeted 2件を加算しない。全義務 graph・original admission・実 supply・物理校正・node 全体は未完で、実装済みと全体検証済みを混同しない。

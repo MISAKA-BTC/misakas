@@ -3,7 +3,7 @@
 - Status: **Draft / Proposed / Review Required** (2026-10-21).
 - Decision companion: [ADR-0195](../adr/0195-rooted-court-response-eligibility-history.md).
 - Governing contract: [RFC-0026](0026-court-policy-master-contract.md), [ADR-0192](../adr/0192-court-service-opportunity-and-shared-pursuit.md).
-- Implementation status: design and information-loss counterexample; marker runtime path is not implemented by this document.
+- Implementation status: isolated candidate runtime with selected verification after `e82921ee1`; public schema/rules are not adopted. The previously committed information-loss counterexample remains valid for unbound retained TIR metadata.
 
 ## 1. Required fact
 
@@ -32,7 +32,7 @@ The fixed-size marker needs the following data, derived by the native fold rathe
 - first eligible service DAA, derived by checked successor of that accepting DAA;
 - original response deadline, original hard bound and original material-retention horizon.
 
-Exact field order must be fixed with Borsh/typed-heap/allocation-free scanner tests before candidate implementation is considered verified. An auxiliary marker authenticates history/data identity, never correctness of model computation.
+The candidate fixes field order in §8 and checks Borsh/typed heap/allocation-free scanner together; public schema adoption remains pending. An auxiliary marker authenticates history/data identity, never correctness of model computation.
 
 ## 3. Recording rule
 
@@ -75,3 +75,18 @@ Retain required marker history while the original service binding is unresolved,
 7. Keep preparation, shared ingress, full graph, original admission, physical calibration, signer availability, R-D2-NODE and T01–T15 open until their own evidence proves completion.
 
 The current quiet-devnet observations do not calibrate the new costs or a guaranteed reserved service rate. No numeric fee, turn duration, mass limit, model restriction or public activation is introduced by this Draft.
+
+
+## 8. Isolated runtime candidate (2026-10-21)
+
+`CourtDutyClockV1` fixes Borsh field order as: version `u16`; profile, duty, claim, allocation and source `Hash64`; full native acquisition key; literal answerer bond; demand `Hash64`; turn `u64`; predecessor `BlockHash`; predecessor DAA, first eligible DAA, response deadline, original hard and material horizon (`u64` each). The acquisition key must be the existing `TirAcquisition` variant for the same claim. The full field type is written explicitly so the native inventory generator does not resolve a local `Key` alias from an unrelated module. Appended staged key/row tags are 13/19; payload version is 1. Old service/container variants are unchanged.
+
+For an already service-bound acquisition, successful Demand/Reacquire/Begin/Part compares actual duty IDs before and after the native transition for the literal Ready response actors. Only newly appearing/changed duties get a clock from the real native context. WorkDebit, Finish, reads and a later service-binding installation do not stamp an unchanged or vanished duty. Same-block/same-DAA native responses remain valid. A marker can have its first eligible accounting DAA at the exclusive response deadline: it records the fact without inventing a usable future slot.
+
+The candidate writes stage/chunk changes and clocks through `StagedCourtSeed` journal entries. A checkpoint at the service-bound verified-half boundary restores both on failure, in addition to the existing signature caller's transaction boundary. This added checkpoint, actual source/duty reads, comparisons, marker writes, derived indices and snapshot context validation all have costs; they are **not calibrated or adopted**, and are not treated as free in a service profile. The resource reservation primitive still admits typed state ownership before cloning. The original all-branch admission and profile costing remain incomplete.
+
+Marker pruning uses its original material horizon, and the unresolved service binding retains it beyond that ordinary TTL. This is retained evidence; no extra signed service promise is manufactured. No new Final/release/default permission, court signer authority, carrier kind, production binding, admission or supply hook is introduced here. Full node pruned/restart/IBD campaigns and the remaining verification in §7 are still required.
+
+Selected verification: **64 passed / 0 failed / 0 ignored**, plus non-test consensus check and generator idempotence. [Commands, raw logs, hashes, overlap and fixture scope](../evidence/palw/g14-integration-candidate-2026-10-20/README.md#exclusive-hard-boundary-verification). This partially verifies §7; original admission, packet correspondence, full causal/default policy, actual node ingress/forks/pruned restart, all WorkDebit/restart branches and calibrated costs remain incomplete.
+
+The service timing predicate uses the exclusive interval `first_eligible_daa <= unit_daa < min(response_deadline_daa, original_hard_daa)`, consistent with the existing packet `service_before` contract. This does not change native response acceptance for an old native deadline beyond the service envelope. A marker alone still grants no opportunity/default authority. The unit-cost reservation in `bind_clock_service` is a synthetic metadata fixture, not a measured or adopted capacity/fee profile.

@@ -973,6 +973,22 @@ impl TransitionBuilder<'_> {
     }
 
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        if let Some(PalwStagedCourtRowV1::CourtDutyClock(clock)) = &new {
+            clock.check(&key).and_then(|()| clock.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if self.state.staged_court_row_v1(&key).is_some_and(|old| Some(old) != new.as_ref()) {
+                return Err(PalwStateV2Error::CarriageInconsistent("native duty clock is immutable".into()));
+            }
+        }
+        if key == PalwStagedCourtKeyV1::CourtService {
+            for row in self.state.staged_courts.values() {
+                if let PalwStagedCourtRowV1::CourtDutyClock(clock) = row {
+                    let Some(PalwStagedCourtRowV1::CourtService(service)) = &new else {
+                        return Err(PalwStateV2Error::CarriageInconsistent("unresolved duty history retains service binding".into()));
+                    };
+                    clock.check_service_binding(service).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                }
+            }
+        }
         if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
             service.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
@@ -3227,6 +3243,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) | PalwStagedCourtRowV1::TirContainer(_) | PalwStagedCourtRowV1::CourtService(_) => {
             (u64::MAX, Vec::new())
         }
+        PalwStagedCourtRowV1::CourtDutyClock(c) => (c.material_until_daa, Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::TirAcquisition(row) => {
             let c = row.owned.contract_v1();
@@ -3554,6 +3571,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::TirPreparation(row) => Some(row.preparation.contract_v1().material_until_daa),
             PalwStagedCourtRowV1::TirClaim(frame) => Some(frame.plan_v1().terms.material_until_daa),
             PalwStagedCourtRowV1::TirWitness(row) => Some(row.until_daa),
+            PalwStagedCourtRowV1::CourtDutyClock(row) => Some(row.material_until_daa),
             _ => None,
         };
         if let Some(until) = tir_until {

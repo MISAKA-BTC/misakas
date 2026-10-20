@@ -162,6 +162,10 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             Key::TirClaim(claim) | Key::TirAcquisition(claim, ..) | Key::TirPreparation(claim, ..) | Key::TirWitness(claim, ..) => {
                 Some(*claim)
             }
+            Key::CourtDutyClock(_) => match self.staged_court_row_v1(key) {
+                Some(Row::CourtDutyClock(clock)) => Some(clock.claim),
+                _ => None,
+            },
             Key::TirRawChunk(_) | Key::TirAcceptedBody(_) => {
                 let acquisition = match self.staged_court_row_v1(key) {
                     Some(Row::TirRawChunk(row)) => Some(row.acquisition),

@@ -99,3 +99,46 @@ Targeted fresh cargo build: **1 passed**, included again in the freshly compiled
 
 
 Documentation check still reports the same five imported missing references plus 43 baseline-known occurrences; no baseline or raw imported evidence was rewritten. The current authored diff passes whitespace checks.
+
+## Rooted native prerequisite history candidate
+
+After `e82921ee1`, [RFC-0028](../../../rfc/0028-rooted-court-response-eligibility-history.md) has an isolated runtime candidate. `CourtDutyClockV1` payload 1 uses appended key/row tags 13/19, preserving service 12/18, X3 container 11/17 and old action/lifecycle tags. It records actual native context when a service-bound Demand/Reacquire/Begin/Part creates a different Ready duty. Late binding cannot backfill; voluntary owner answers create no Ready debt. WorkDebit, Finish and reads do not restamp history. Original service/profile/acquisition/actor scope is checked on writes and snapshot consistency. Markers are immutable; their binding cannot be silently removed/substituted.
+
+Stage and marker writes share the existing `StagedCourtSeed` journal. A checkpoint restores both on failure at the bound verified-half boundary. The added checkpoint, source/duty reads, writes, scans, indices and retained bytes have uncalibrated costs; no free work or adopted profile is assumed. Original material TTL stays unchanged; unresolved service holds retain historical rows beyond it without extending any signed service promise.
+
+Before the exclusive-hard-bound correction, selected **64 passed / 0 failed / 0 ignored** (source preserved in [the prior patch](duty-clock-pre-hard-boundary.patch)):
+
+- Fresh targeted native build: **2 passed**, ALREADY contained in the same freshly built core unit executable's native replay **30 passed**. Do not add the targeted 2, intermediate 1 or historical checkpoints.
+- Fresh marker codec/heap/scanner **2**, existing service-state **6**, identity/G14/activation/release **26**: **34 passed**, rebuilt against this candidate.
+- `cargo check --release -p kaspa-consensus`: success, with warnings.
+- Generator idempotence: success, including comparison with staged outputs. Its raw “committed” wording refers to the Git index at execution; those bytes are included here.
+
+The native fixtures check actual Demand provenance, absent old-stage history on late binding, early/late accepting contexts, same-block/same-DAA responses, latest legal Part leaving no eligible future Finish unit, unchanged deadline, denied default, history retention after Finish/TTL, immutable-marker refusal with stage/journal rollback, binding/profile substitution refusal, journal undo/replay and full in-memory carriage reload. The conflicting-history failure deliberately injects contradictory provenance as a writer-failure fixture, not a claimed valid accepted node history. Signatures/original admission use the existing verified-half harness. Actual node ingress, signer outage, process restart, pruned import, full fork campaign, flood and all legal WorkDebit/restart paths are not established here.
+
+Initial compilation failed because the generated layout resolved the wire field's short `Key` alias to an unrelated local alias, also traversing an already owner-local type and producing duplicate trait implementations. Using the canonical field type fixes the graph. Regeneration reports zero unresolved types; no hand deletion of generated visitors was used as the fix. The intermediate single native case predates the final binding/atomicity/boundary additions. These logs are retained and excluded from the final total. The first metadata-save attempt used `hashlib.file_digest`, unavailable in system Python; portable streaming SHA-256 completed the artifact without changing source or measurement data.
+
+[Commands, source/executable hashes, counts and scope](duty-clock-artifact.json).
+
+| Raw log | Scope / passed groups | SHA-256 |
+| --- | --- | --- |
+| [duty-clock-first-release.log](duty-clock-first-release.log) | initial compile failure: [] | `9a4898fda620d19ca6c596fb83ecc492e12182b300069aa38f339b89db74594a` |
+| [duty-clock-native-release.log](duty-clock-native-release.log) | intermediate prototype: [1] | `4b78ba7d98a3cb70f843d568230e0d49cd4b8d9c282a75aa5dcb71ddbcb65c6b` |
+| [duty-clock-final-native-release.log](duty-clock-final-native-release.log) | final targeted native: [2] | `1acad35704e0b377a296508c2636dc8ecdb7967626a4c82f383eb630ca0a04ff` |
+| [duty-clock-components-check-release.log](duty-clock-components-check-release.log) | final components and non-test check: [12, 5, 2, 6, 9] | `64ba0c865b0d220cfda50fbcd88cd16b5168c67f4dacfc806bd4b7dc1fcae6db` |
+| [duty-clock-full-native-replay.log](duty-clock-full-native-replay.log) | final native replay: [30] | `60bedf8033097ddeab48abbbb662adc281db5c0f41ef53d5d68cd0388eb2a2da` |
+| [duty-clock-wire-idempotent.log](duty-clock-wire-idempotent.log) | generator idempotence: [] | `f37ab49c54bf5b109caa581b2e6b1535ca0dc30de9442d0b7df178ef441dfb02` |
+
+Timing history is necessary input, not slash permission. Delay of earlier stages is not automatically a defense, and aggregate reserved capacity is not blame. Full causal graph/original all-branch reservation, owner-independent shared ingress, actual supplies, physical calibration/delivery assumptions, signer/dependency/end policy and T01–T15 remain open. No cap, clock, identity expectation, adopted numeric profile, real-network arming record, pre integration or deployment changed.
+
+## Exclusive hard-boundary verification
+
+Final review found that the auxiliary timing predicate included the original hard DAA while the existing service packet interval excludes its `service_before` upper bound. The candidate now uses `first_eligible <= unit < min(response_deadline, original_hard)`, with an explicit equal-hard negative fixture. This changes no native response deadline or admission rule and grants no default authority. The unit-cost book in `bind_clock_service` is a synthetic metadata fixture, not measured/adopted capacity or fees.
+
+After that correction, fresh targeted native **2 passed**, fresh integrations **34 passed** (marker 2, service 6, identity/gates 26), non-test consensus check succeeded, and the SAME freshly built unit executable replayed the full native module **30 passed**. Unique selected **64 passed / 0 failed / 0 ignored**; the targeted 2 are contained in 30. Do not add the earlier 64 or historical totals. Source fields did not change; a repeated generator check also succeeded against the staged outputs. [Final commands, hashes, source patch, counts and scope](duty-clock-hard-bound-artifact.json). The prior artifact/source patch and all raw logs are retained.
+
+| Final raw log | Passed groups | SHA-256 |
+| --- | --- | --- |
+| [duty-clock-hard-bound-native-release.log](duty-clock-hard-bound-native-release.log) | [2] | `d16f6b5fe993ab74d73ba20f8d3592b1839633d8118378857eaeae5c12ad2c58` |
+| [duty-clock-hard-bound-components-replay.log](duty-clock-hard-bound-components-replay.log) | [12, 5, 2, 6, 9, 30] | `9b00dee4efb1eaa09fd6ddb0db460e45f1240c2eef7e899afa759e9f3ce3b6a3` |
+
+The scope and all incomplete contracts in the preceding section remain unchanged. Documentation check still reports the same five imported missing references and 43 baseline-known occurrences; no baseline/raw material was rewritten.
