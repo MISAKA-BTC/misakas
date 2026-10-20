@@ -165,3 +165,11 @@ LG14-A harness に、producer の署名済み応答を newcomer が別の資金 
 release 新 node 試験 1、同じ新 binary の既存追及回帰 1、以前の release executables による同一性/G14/activation/release 回帰 26、計 **28 passed / 0 failed / 0 ignored**。production code は未変更。最初の回帰 driver の binary 名誤指定（試験未実行・exit 127）と修正後のログを含め、[試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)に生ログ/SHA-256/コマンドを保存した。
 
 これは隔離 LG14-A harness（genesis/test keys、PoW 省略、既存 legacy fence の test-only 設定）での MaterialDisclosedV2 経路。TIR original/TFP1、全許容分岐、signer 不在での新しい適応的応答、T08 全体、F02/F03 や実容量の完成とはしない。[signer/relay の対象と残件](rfc26-court-signer-relay-audit-2026-10-20.md)を維持。文書検査は同じ imported assets の 5 件で FAIL、baseline と元資料は未変更。武装・統合・配備なし。
+
+## Native source からの共有 query 集合
+
+`palw_court_tir_requests_v1` を追加。実 frame/source の全 7 種の query shape を checked cardinality と ordinal に導出し、全 level、leaf、重なりを含む全合法 run、row/tile/IDs を含める。全 query の Vec を事前作成せず、指定 ordinal だけを native validator でも確認する。identity は claim、native allocation instance、native rules、source、shared profile に結び付き、owner/relay/先着順は入力にしない。
+
+最終 release 部品 2 + fresh t12/G14/activation/release 回帰 26 = **28 passed / 0 failed / 0 ignored**、non-test consensus release check 成功。実 tiny source の validator を oracle にした完全集合比較、重複なし、source 差し替え、各 family の境界、最大 Run、profile 分離、端数と overflow を確認した。大きい N の例は synthetic arithmetic で、モデルや帯域の実測ではない。生ログ/SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)。
+
+[適用範囲](rfc26-shared-tir-request-set-2026-10-20.md)のとおり query identity だけであり、全合法対話 graph、response role/turn/fragment、実 codec/work/IO/memory/保持、原子的 admission、public ingress、実供給と T05 は残る。gate は解除せず、上限・wire・preset は変更していない。文書検査は同じ imported assets の 5 件で FAIL、baseline/元資料は未変更。

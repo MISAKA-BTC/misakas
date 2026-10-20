@@ -109,3 +109,9 @@ current book の assignment は再割当先を表す。変更前後は native jo
 ## 12. Binding の署名済み custody 下限
 
 候補 row の context 検査へ、main custody pledge が original hard を覆う条件を追加した。semantic component がある場合は、別の受理済み ClaimBundle/history pledge の存在・claim/source scope・署名済み horizon も検査する。欠落を「依存なし」と扱わず拒否する。binding の書き込みと復元が通るための最小条件であり、実 original admission の完了や followup/retention 全体の保証ではない。既存 unbound claim の規則と署名済みの値は変更しない。実コードの対象と残件は [依存監査](rfc26-dependency-horizon-audit-2026-10-20.md)を参照。
+
+## 13. Owner 非依存の query 集合の候補
+
+[Native TIR 要求集合](rfc26-shared-tir-request-set-2026-10-20.md)を、実 source の全許可 query shape から導出する部品として追加した。全 interior level、全 leaf、全合法 run の start/count、row/tile/IDs を列挙可能な ordinal にし、claim/source/native rules/shared profile の identity に固定する。owner/relay/先着順は入力にしない。
+
+これは全応答義務・service packet・合法対話の全遷移 graph の完成ではない。元 source validator より狭い reachable set を採るなら、実 protocol から全敵対 choice を含めて導出する必要がある。重なる query の公開データ再利用を計上してよいが、変換・opening・署名・保持費用を省かない。実費用、応答者/turn/fragment、予約・ingress・期限/供給会計への接続と T05 は未完了であり、gate を解除しない。

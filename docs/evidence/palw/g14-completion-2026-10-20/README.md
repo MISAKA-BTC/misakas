@@ -160,3 +160,25 @@ Harness differences remain exactly those documented in LG14-A: isolated re-keyed
 | [funded-relay-node-release.log](funded-relay-node-release.log) | `6f90c51aa9b15b12a2c463d2e4694b1dea99e2f2f5e9ed5586b804ccaa73bc2b` |
 | [funded-relay-regressions-release.log](funded-relay-regressions-release.log) | `6fd1af4381035e8bf31d2bd48aa78154aa9429f0851f13896aff9797c73f09b5` |
 | [funded-relay-driver-before-binary-correction.log](funded-relay-driver-before-binary-correction.log) | `33a8179ed448676a3685accfe8e50285174817073aec4a408ceb7211826906d2` |
+
+## Source-derived owner-independent TIR request universe
+
+After `e7b357485`, the dormant component counts and indexes all seven current native request families without materializing the complete set. Scope binds original claim, native allocation instance, native rules, source and shared profile, without owner/relayer/queue. This is not a service-packet identity, adoption record, admission, funded obligation graph or physical capacity guarantee.
+
+Final shared-lock runs:
+
+```sh
+cargo test --release -p kaspa-consensus-core --lib court_tir_shared_requests
+cargo test --release -p kaspa-consensus-core --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move
+cargo check --release -p kaspa-consensus
+```
+
+Final component **2 passed**, fresh identity/gate/activation/release **26 passed**, selected total **28 passed / 0 failed / 0 ignored**. Non-test consensus release check succeeded, warnings remain. An earlier intermediate component run passed before final scope and boundary cases were added; only the final verified log below is counted.
+
+The actual tiny native source validator is the oracle over a larger candidate space, checking set equality and uniqueness. Additional cases check wrong-source scope, shared-profile namespace, invalid ordinals, every family boundary, largest allowed run, closed-form run count, odd/partial geometry and overflow. Large synthetic arithmetic geometries are not measured models or network throughput. [Scope and unresolved integration](../../../design/palw/integration/rfc26-shared-tir-request-set-2026-10-20.md). Full hostile interaction graph, signer/turn/fragment, actual cost and paid admission/supply and node T05 remain open. No fence or limit was changed.
+
+| Raw log | SHA-256 |
+| --- | --- |
+| [shared-requests-native-release.log](shared-requests-native-release.log) | `8aa995c84c1276cb0d5835b54816fbaa5f9a17e0034ba5dd7010e85506c7e6aa` |
+| [shared-requests-identities-release.log](shared-requests-identities-release.log) | `d00bacfe53d03e7837078e2740e66792acc2e3e38fd2f7beab79d577f01c91b8` |
+| [shared-requests-consensus-check.log](shared-requests-consensus-check.log) | `3297e70c637923af56c5ff111c4e6018e385c4a0451ead404e6fa3efd922a9f4` |

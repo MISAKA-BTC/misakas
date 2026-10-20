@@ -1080,3 +1080,6 @@ pub mod palw_court_policy_v1;
 pub mod palw_court_service_v1;
 
 pub mod palw_court_service_state_v1;
+
+/// Proposed complete native TIR request set; not admission or activation.
+pub mod palw_court_tir_requests_v1;
