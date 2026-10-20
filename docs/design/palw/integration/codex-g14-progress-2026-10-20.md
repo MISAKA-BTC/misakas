@@ -143,3 +143,9 @@ X3 候補 commit は `0c3cb9f93`。release native plan 2 件 + t12/G14/activatio
 release native 4 + 回帰 45 = **49 passed / 0 failed / 0 ignored**（t12 identity を含む）。main pledge の境界 −1 / 一致 / +1、既存の Final/担保/証拠 hold、default 拒否、fraud 裁定、native journal/carriage、再割当を確認。non-test consensus release check も成功。native fixture は従来の synthetic verified-half で、署名 ingress・実容量の測定ではない。生ログと SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)に保存。
 
 semantic 分岐の専用受入試験、profile の後続責任/retention 全体、全 EXEC/provider 依存集合、原子的 original admission、T09 と G14 全体は未完了。この最低 hard 検査で署名済みの配送義務を延長しない。文書検査は同じ imported assets の 5 件で FAIL、baseline・元資料は未変更。武装・統合・配備なし。
+
+## Semantic custody guard の分岐検査
+
+`rooted_service_semantic_custody_guard_rejects_missing_short_and_substituted_contracts` を追加。bundle 欠落、semantic pledge の期限 −1 / 一致 / +1、claim/resource/execution root/job pin/producer の独立した差し替えを検査した。既存 main frame に明示的な guard-only semantic fixture を加えた試験で、native original の署名・課金・credit・snapshot 受付の成功とはしない。production code/params は今回変更なし。
+
+release 対象は新 guard 1 + 既存 native 4、同一性/G14/activation/release 回帰 26 の **31 passed / 0 failed / 0 ignored**。t12 の固定値は変更していない。生ログ・コマンド・SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)へ保存。文書検査は imported assets の同じ 5 件で FAIL、baseline と元資料は未変更。実 semantic original の受付、全依存集合、T09、P0/P1/P2 と G14 全体の未完条件は維持する。

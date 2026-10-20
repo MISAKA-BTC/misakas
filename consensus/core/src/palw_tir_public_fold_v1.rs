@@ -2168,6 +2168,62 @@ mod conviction_e2e_tests {
     }
 
     #[test]
+    fn rooted_service_semantic_custody_guard_rejects_missing_short_and_substituted_contracts() {
+        use crate::palw_court_service_state_v1::require_tir_service_custody_window_v1 as check;
+        use crate::palw_staged_bundle_v1::{PalwStagedBundlePlanV1, PalwStagedFamilyV1, PalwStagedBundleContractV1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let (mut state, _, _, _, _) = demanded_world(&fx, &fx.frame, 0);
+        let terms = fx.frame.plan_v1().terms;
+        let semantic = PalwStagedBundlePlanV1::derive_v1(terms.accepted_daa,
+            vec![(PalwStagedFamilyV1::Constraint, terms.plan)], fx.rules.config).unwrap();
+        let resource = Hash64::from_u64_word(0x53e);
+        // Explicit guard-only synthetic injection, NOT native semantic admission.
+        let frame = fx.frame.clone().with_service_semantic_guard_fixture_v1(semantic.clone(), resource);
+        let claim = frame.plan_v1().original_claim;
+        let until = terms.accepted_daa + 10_000;
+        assert!(check(&state, &frame, until).unwrap_err().contains("missing"));
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let custody = crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1::new(
+            frame.original_v1().execution_root, crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1()),
+            Hash64::from_u64_word(1), &semantic.terms);
+        let pledge = crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1 {
+            version: 1, claim, producer, execution_root: frame.original_v1().execution_root,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1()),
+            cu_ruleset_id: Hash64::from_u64_word(1), resource_plan_id: resource, maximum_records: 1,
+            maximum_custodians: 4, accept_until_daa: terms.accepted_daa + 1, material_until_daa: until,
+            signature: vec![2; SIG],
+        };
+        let bundle = PalwStagedBundleContractV1 {
+            claim: crate::palw_staged_court_state_v1::PalwStagedClaimContractV1 {
+                terms: semantic.terms, producer, panel: Default::default(), prefix_custody: Some(custody.clone()) },
+            plan: semantic, config: fx.rules.config,
+            history_custody: crate::palw_history_custody_v1::PalwHistoryCustodyContractV1 {
+                pledge, producer, maximum_records: 1, maximum_custodians: 4, custody },
+            original_binding: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(frame.header_v1().clone()),
+            producer_custodian: None,
+        };
+        for delta in [-1_i64, 0, 1] {
+            let mut row = bundle.clone();
+            row.history_custody.pledge.material_until_daa = (until as i64 + delta) as u64;
+            state.staged_courts.insert(Key::Claim(claim), Row::ClaimBundle(Box::new(row).into()));
+            assert_eq!(check(&state, &frame, until).is_ok(), delta >= 0);
+        }
+        for field in 0..5 {
+            let mut row = bundle.clone();
+            let p = &mut row.history_custody.pledge;
+            match field {
+                0 => p.claim = Hash64::default(),
+                1 => p.resource_plan_id = Hash64::default(),
+                2 => p.execution_root = Hash64::default(),
+                3 => p.job_identity = Hash64::default(),
+                _ => p.producer = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::default(), 99)),
+            }
+            state.staged_courts.insert(Key::Claim(claim), Row::ClaimBundle(Box::new(row).into()));
+            assert!(check(&state, &frame, until).unwrap_err().contains("scope"));
+        }
+    }
+
+    #[test]
     fn rooted_service_hold_retains_final_collateral_and_material_past_hard() {
         use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
         use crate::palw_court_service_state_v1::{CourtServiceState, ServiceClaimBinding};

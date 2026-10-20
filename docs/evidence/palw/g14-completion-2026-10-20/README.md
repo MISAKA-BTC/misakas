@@ -118,3 +118,16 @@ Dedicated semantic missing/wrong-scope/short-horizon admission tests, full signe
 | [service-custody-native-release.log](service-custody-native-release.log) | `633cc971761c97cff1e4431877e0a814d4ae63097c306b42073b62532f6f52ba` |
 | [service-custody-regressions-release.log](service-custody-regressions-release.log) | `ceaa60e8ba1496da9194aeb4a2695a3ae11e5e85bcc2d58346c5d20b5b39468e` |
 | [service-custody-consensus-check.log](service-custody-consensus-check.log) | `b210e0482a6ed0a8aa70b983e5cc8ae40115a348f445bba401c4bae300535f48` |
+
+## Semantic custody guard branch checks
+
+After `f286cd394`, test-only changes add one explicit synthetic semantic guard case. Production code and parameters are unchanged. The main native frame fixture is extended through an explicitly named guard-only helper; its composite semantic frame/bundle is not claimed to pass native signature, payment, credit, serialization or original admission. The semantic family resource plan uses the existing derivation.
+
+The new case refuses absent bundle, required horizon minus one, and each substituted claim/resource/execution/job/producer scope. Equality and plus one pass. This does not let a long main pledge replace a short semantic pledge.
+
+Shared-lock commands: `cargo test --release -p kaspa-consensus-core --lib rooted_service_` (5 passed: new guard 1 + existing native 4) and `cargo test --release -p kaspa-consensus-core --test g14_close_gates --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only` (26 passed including t12 identity). Final selected total **31 passed / 0 failed / 0 ignored**. These overlap prior suites and are not a G14/T09 closure count. Native semantic original admission, complete dependency enumeration, node restart/pruned IBD and actual costs remain unproven.
+
+| Raw log | SHA-256 |
+| --- | --- |
+| [semantic-service-guard-release.log](semantic-service-guard-release.log) | `66cd5cc9f1b96630311b2c1cef8cdcd23038afa3b6bcd1a3b0e0a0827034bf6a` |
+| [semantic-service-identities-release.log](semantic-service-identities-release.log) | `e1aacfd03d558290396031c59e28497dde66b8f1780195c0376769d8e7979f9c` |
