@@ -12,4 +12,6 @@
 | ファイル | 内容 |
 |---|---|
 | [2026-10-19-t12-passive-daa-blocks.md](2026-10-19-t12-passive-daa-blocks.md) | 稼働中の t12 の DAA の進み(中央値 184 秒/DAA)とブロックの tx bytes(観測最大 111,949 B)、受動的観測 |
+| [2026-10-19-devnet-payload-carrier.md](2026-10-19-devnet-payload-carrier.md) | 隔離 devnet で 17,408 B payload の ML-DSA-87 tx 7 本が 0〜1 DAA で取り込まれた。意図した負荷はかからず、混雑下は未測定 |
+| [2026-10-19-court-verify-cpu.md](2026-10-19-court-verify-cpu.md) | court の証拠検証 CPU(fixture)、1,000 件で合計約 3 秒 |
 | (測定後に追加) | |
