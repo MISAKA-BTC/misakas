@@ -149,3 +149,11 @@ semantic 分岐の専用受入試験、profile の後続責任/retention 全体�
 `rooted_service_semantic_custody_guard_rejects_missing_short_and_substituted_contracts` を追加。bundle 欠落、semantic pledge の期限 −1 / 一致 / +1、claim/resource/execution root/job pin/producer の独立した差し替えを検査した。既存 main frame に明示的な guard-only semantic fixture を加えた試験で、native original の署名・課金・credit・snapshot 受付の成功とはしない。production code/params は今回変更なし。
 
 release 対象は新 guard 1 + 既存 native 4、同一性/G14/activation/release 回帰 26 の **31 passed / 0 failed / 0 ignored**。t12 の固定値は変更していない。生ログ・コマンド・SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)へ保存。文書検査は imported assets の同じ 5 件で FAIL、baseline と元資料は未変更。実 semantic original の受付、全依存集合、T09、P0/P1/P2 と G14 全体の未完条件は維持する。
+
+## Court signer と既署名応答 relay の確認
+
+[実受理経路の監査](rfc26-court-signer-relay-audit-2026-10-20.md)では、literal court signer の bond 鍵での payload 認証と、外側 carrier の UTXO/手数料を区別した。新しい署名方式や鍵委任は追加していない。実 ML-DSA で先に署名した Begin/Part/Finish を、異なる carrier inputs から抽出し、実署名検証を含む native apply に渡す試験を追加。署名鍵を relay 前に drop しても同じ native root へ進み、wrong domain は state 不変で拒否し、Finish で元 leaf body を認証した。
+
+対象は新試験 **1 passed** と、既存 release executable の t12/G14/activation/release 再実行 **26 passed**、計 **27 passed / 0 failed / 0 ignored**。production code は未変更であり、同一性の 26 件は新規 cargo compile とは記録しない。生ログ・コマンド・SHA-256 は [試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)。
+
+original/custody の fixture は verified-half、outer inputs は未資金化の codec/native 試験であり、mempool・block の UTXO/手数料・native original の実署名受付・実 PC 停止の T08 達成ではない。新しい適応的応答には authorized court signer が必要で、既署名の relay から signer 常時不要とは結論しない。F02/F03、実容量、全依存集合と G14 の残件は維持する。

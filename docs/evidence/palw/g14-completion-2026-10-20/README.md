@@ -131,3 +131,16 @@ Shared-lock commands: `cargo test --release -p kaspa-consensus-core --lib rooted
 | --- | --- |
 | [semantic-service-guard-release.log](semantic-service-guard-release.log) | `66cd5cc9f1b96630311b2c1cef8cdcd23038afa3b6bcd1a3b0e0a0827034bf6a` |
 | [semantic-service-identities-release.log](semantic-service-identities-release.log) | `e1aacfd03d558290396031c59e28497dde66b8f1780195c0376769d8e7979f9c` |
+
+## Real-signature presigned TIR response relay
+
+After `ed1723fc1`, a test-only native case uses real ML-DSA signatures for Begin/Part/Finish, with all three responses signed before the key is dropped. Two distinct illustrative carrier inputs extract the exact same signed control and reach identical native roots. Wrong-domain signatures refuse without mutation, and relayed Finish authenticates the original committed leaf. Original/custody setup remains verified-half and the illustrative outer carriers are unfunded: no UTXO/mempool/block fee acceptance or node T08 completion is claimed.
+
+Shared-lock command `cargo test --release -p kaspa-consensus-core --lib court_relay_presigned`: **1 passed**. The prior release test executables were rerun under the same lock (production code has not changed): `target/release/deps/g14_close_gates-07a58aeba402f266`, `target/release/deps/palw_activation_pool_is_t12_only-19bd1d2a52f9c5c6`, `target/release/deps/palw_the_release_did_not_move-c8b47338cdf2801d`: **26 passed**, including pinned t12 identity. Total selected **27 passed / 0 failed / 0 ignored**. The identity replay is explicitly not a fresh cargo compilation of those targets. All code changes in this step are cfg(test).
+
+[Signer/relay source audit and remaining T08 work](../../../design/palw/integration/rfc26-court-signer-relay-audit-2026-10-20.md). Availability for fresh adaptive responses still requires the authorized signer. No delegation, terminal unsigned evidence rule or funding-key transfer is introduced.
+
+| Raw log | SHA-256 |
+| --- | --- |
+| [court-relay-native-release.log](court-relay-native-release.log) | `b024579ce3a3f6bf25e142e6c5e912cf4a908dd006c7ce7f8a7bdb07998a8d5e` |
+| [court-relay-identities-release.log](court-relay-identities-release.log) | `e225f397aa925dc5a4c6febe8333ee2ae2ba8f77292008627b61d3a60d201685` |

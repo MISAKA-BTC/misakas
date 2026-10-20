@@ -2114,6 +2114,73 @@ mod conviction_e2e_tests {
     }
 
     #[test]
+    fn court_relay_presigned_custody_response_uses_literal_signer_not_carrier_inputs() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        use crate::palw_lifecycle_objects_v2::{PalwLifecycleTxPayloadV2, PALW_LIFECYCLE_TX_VERSION_V2,
+            palw_lifecycle_objects_from_accepted_txs_v2};
+        use crate::tx::{Transaction, TransactionInput, TransactionOutpoint};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = &fx.frame;
+        let (mut state, params, extras, target, offset) = demanded_world(&fx, frame, 0);
+        let plan = frame.plan_v1();
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let network = frame.original_v1().job.network_domain;
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x71; 32]);
+        // The original fixture is verified-half. Only these controls use the
+        // real registered key and real native signature verification.
+        state.bonds.get_mut(&producer).unwrap().pubkey = kp.verification_key.as_ref().to_vec();
+        let (demand_id, _, turn, _) = owner_pending(frame, &state, target);
+        let bytes = borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage: fx.execution.preimages[0].clone(),
+            opening: crate::palw_step_leg::step_opening_v1(&fx.execution.hashes, 0).unwrap(),
+        }).unwrap();
+        assert!(bytes.len() <= crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1);
+        let actions = [Owned::Begin { demand_id, answerer: producer, total_bytes: bytes.len() as u64,
+            body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&bytes) },
+            Owned::Part { demand_id, answerer: producer, offset: 0, bytes },
+            Owned::Finish { demand_id, answerer: producer }];
+        let controls: Vec<_> = actions.into_iter().map(|action| {
+            let mut c = Control { version: 1, claim: plan.original_claim, allocation_id: plan.allocation_id,
+                source_id: plan.source_id, target, expected_turn: turn, declared_rent_sompi: 0,
+                signer: producer, action: A::Acquisition(action), signature: vec![0; SIG] };
+            c.signature = libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key,
+                c.signing_message_v1(network).unwrap().as_byte_slice(),
+                crate::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1, [0; 32]).unwrap().as_ref().to_vec();
+            c
+        }).collect();
+        drop(kp); // No online signer is used for any later relay operation.
+        for (index, control) in controls.iter().enumerate() {
+            let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2,
+                object: PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control.clone()) } }).unwrap();
+            let carriers: Vec<_> = [0x81, 0x82].into_iter().map(|payer| Transaction::new(0,
+                vec![TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(payer), 0), vec![], 0, 0)],
+                vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE.clone(), 0, payload.clone())).collect();
+            // Codec/native relay check only: these illustrative carrier inputs
+            // are not funded or validated as UTXO transactions in this fixture.
+            assert_ne!(carriers[0].id(), carriers[1].id());
+            let mut roots = Vec::new();
+            let mut next = None;
+            for tx in carriers {
+                assert_ne!(tx.inputs[0].previous_outpoint, producer.0);
+                let extracted = palw_lifecycle_objects_from_accepted_txs_v2(&[tx]);
+                assert!(extracted.skipped.is_empty());
+                let PalwConsensusObjectV2::TirPublicControlV1 { control: carried } = &extracted.objects[0].object else { panic!("control") };
+                assert_eq!(carried.as_ref(), control);
+                let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+                let before = b.state.state_root();
+                assert!(apply_control_v1(&mut b, &at(frame, offset + index as u64), Hash64::default(), carried).is_err());
+                assert_eq!(b.state.state_root(), before, "wrong-domain relay cannot mutate state");
+                apply_control_v1(&mut b, &at(frame, offset + index as u64), network, carried).unwrap();
+                roots.push(b.state.state_root());
+                next = Some(b.state.clone());
+            }
+            assert_eq!(roots[0], roots[1], "carrier identity cannot change the signed court response");
+            state = next.unwrap();
+        }
+        assert!(owner_pending(frame, &state, target).3.is_some(), "relayed Finish authenticates the original body");
+    }
+
+    #[test]
     fn rooted_service_guard_denies_default_and_native_undo_restores_legacy() {
         use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
         use crate::palw_court_service_state_v1::{CourtServiceState, ServiceClaimBinding};
