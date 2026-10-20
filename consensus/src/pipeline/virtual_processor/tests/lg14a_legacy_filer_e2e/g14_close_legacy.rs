@@ -1,11 +1,9 @@
-//! **Lane g14-close-legacy (2026-10-16) on the real node: the legacy V2 Attempt route G14-complete with LG14-A + LG14-B armed.**
+//! Legacy V2 Attempt component tests on the explicitly isolated G14 test genesis.
 //!
-//! Unlike the parent suite (whose harness sets the dormant fence on its mirror WITHOUT validation — audit G-19), every network here is
-//! testnet-12 as launched with the parent's harness cards and re-addressed premine, with `palw_legacy_public_filer_v1` (LG14-A),
-//! `palw_legacy_held_da_v2` (LG14-B) and `palw_g14_route_required_v1` (option (b), user decision 2026-10-16) armed at genesis on the
-//! `Params`, each mirror written by its own `sync_*`, and the ruleset asserted to pass the WHOLE validation
-//! (`Params::validate_palw_v2_with_arming_records_v1`) with a test arm-readiness record per fence naming this genesis and height —
-//! and to be refused by `validate_palw_v2` (no record is pinned in the binary).
+//! These cases use the existing marked genesis mechanism and normal `Params::validate_palw_v2`.
+//! They create no arm-readiness records. The same armed parameters on an unmarked genesis must
+//! still be refused by the F02/F03 production guard. Passing these component cases does not
+//! establish service opportunity, all-owner outsider capacity, or full G14 completion.
 //!
 //! The scenario is the parent's: the producer and EVERY seat collude (all `Valid`); ONE bond registered after genesis through a real
 //! `0x4b` carrier, never a seat, prosecutes from what the node's read API and accepted blocks show and its own copy of the floor model.
@@ -13,34 +11,15 @@
 use super::*;
 use kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1;
 use kaspa_consensus_core::palw_g14_gates_v1::{
-    PALW_G14_ARMING_RECORD_VERSION_V1, PalwG14ArmingRecordV1, PalwG14GatedFenceV1, PalwG14RouteFamilyV1, palw_g14_route_attempt_refusal_v1,
+    PalwG14RouteFamilyV1, palw_g14_route_attempt_refusal_v1, palw_isolated_g14_genesis_v1,
 };
 use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
 use kaspa_consensus_core::palw_offence_attribution_v1::{PalwFalseValidReceiptV1, PalwPanelFalseValidEvidenceV2, palw_false_valid_offence_id_v2};
 use kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1;
 
-/// A test arm-readiness record (never pinned in the binary): one distinct non-zero digest per requirement, a review, a commit — the
-/// court-capacity record's measured-values evidence being its measurement record's digest.
-fn record(fence: PalwG14GatedFenceV1, genesis: Hash64, at: u64) -> PalwG14ArmingRecordV1 {
-    let mut evidence: Vec<[u8; 32]> = (0..fence.requirements().len()).map(|i| [0x60 + i as u8; 32]).collect();
-    if fence == PalwG14GatedFenceV1::CourtCapacityV1 {
-        evidence[kaspa_consensus_core::palw_court_capacity_v1::PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1] = measured_court().digest();
-    }
-    PalwG14ArmingRecordV1 {
-        version: PALW_G14_ARMING_RECORD_VERSION_V1,
-        fence,
-        genesis,
-        activation_daa: at,
-        source_commit: [0x14; 20],
-        evidence: Box::leak(evidence.into_boxed_slice()),
-        review: [0xEE; 32],
-    }
-}
-
 /// **The court-capacity measurement record this suite arms with (lane g14-court-capacity) — a TEST-ONLY config, never a network's
 /// record.** It has the format a network's record takes (`PalwCourtMeasurementV1`), its policy derived by
-/// `PalwCourtMeasurementV1::policy` exactly as validation re-derives it, its digest carried as the TEST arm-readiness record's
-/// measured-values evidence. The one-move time and sizes are this branch's DEVELOPMENT-MACHINE timings (macOS aarch64, debug build,
+/// `PalwCourtMeasurementV1::policy` exactly as validation re-derives it, used only on the isolated test genesis. The one-move time and sizes are this branch's DEVELOPMENT-MACHINE timings (macOS aarch64, debug build,
 /// 2026-10-16; the `[court-op timing]` line of the run below re-prints them), not the slowest supported node's; the other classes are
 /// NOT measured at all:
 /// * one-move: the real floor leaf recompute of `legacy_v2_attempt_full_collusion_outside_bond_convicts` (`[court-op timing]`, its
@@ -72,12 +51,9 @@ pub(super) fn measured_court() -> kaspa_consensus_core::palw_court_capacity_v1::
     }
 }
 
-/// **The network**: the parent's harness (testnet-12 as launched, harness cards, the main premine on the newcomer's key) with LG14-A,
-/// LG14-B and option (b) armed at genesis through the `Params` — validated with their records, never set on a mirror alone. With
-/// `full`, G14 FULLY armed for the legacy route (user decision 2026-10-16): the court-capacity fence too (`palw_court_capacity_v1`, the
-/// policy [`measured_court`] derives, its record carrying that measurement's digest — the acceptance walk then holds the policy's court
-/// budget instead of one court move a block, and the fused-leaf classes count as routed under option (b)) and the reward liability
-/// horizon (`palw_reward_liability_horizon_v1`).
+/// Isolated G14 component configuration, validated normally. `full` also exercises the
+/// historical test-only court-cost policy and reward-liability horizon; it is not an adoption
+/// or a new measurement of supported-node capacity.
 fn g14_close_config(full: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine, (TransactionOutpoint, UtxoEntry)) {
     let (config, _, mut premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
@@ -98,25 +74,25 @@ fn g14_close_config(full: bool) -> (Config, PalwConsensusParamsV2, Premine, Prem
     params.sync_palw_legacy_public_filer_v1();
     params.palw_legacy_held_da_v2 = at;
     params.palw_g14_route_required_v1 = at;
-    let mut fences =
-        vec![PalwG14GatedFenceV1::LegacyPublicFilerV1, PalwG14GatedFenceV1::LegacyHeldDaV2, PalwG14GatedFenceV1::G14RouteRequiredV1];
     if full {
         params.palw_court_capacity_v1 = Some(
             kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCapacityFenceV1::measured_at(ForkActivation::new(0), measured_court())
                 .expect("the measurement derives a policy"),
         );
         params.sync_palw_court_capacity_v1();
-        fences.push(PalwG14GatedFenceV1::CourtCapacityV1);
         params.palw_reward_liability_horizon_v1 = at;
-        fences.push(PalwG14GatedFenceV1::RewardLiabilityHorizonV1);
     }
     params.sync_palw_g14_gates_v1();
-    let records: Vec<PalwG14ArmingRecordV1> = fences.into_iter().map(|fence| record(fence, params.genesis.hash, 0)).collect();
-    params
-        .validate_palw_v2_with_arming_records_v1(&records)
-        .unwrap_or_else(|e| panic!("the armed ruleset passes the whole validation with its test records: {e:?}"));
-    let unpinned = params.validate_palw_v2().expect_err("no record is pinned in this binary: a real network stays refused");
-    assert!(format!("{unpinned:?}").contains("no arm-readiness record"), "{unpinned:?}");
+    let unisolated = params.validate_palw_v2().expect_err("an unmarked genesis must still refuse production arming");
+    assert!(format!("{unisolated:?}").contains("no arm-readiness record"), "{unisolated:?}");
+    let incomplete = params.validate_palw_court_policy_completeness_v1(
+        kaspa_consensus_core::palw_g14_gates_v1::PalwG14GatedFenceV1::LegacyHeldDaV2,
+    ).expect_err("missing F02/F03 policy independently refuses an unmarked genesis");
+    assert!(format!("{incomplete:?}").contains("OneOutsiderCapacityIncomplete"), "{incomplete:?}");
+    params.genesis = palw_isolated_g14_genesis_v1(&params.genesis, Hash64::from_bytes([0x14; 64]))
+        .expect("bounded, explicit isolated test genesis");
+    assert!(params.has_isolated_g14_genesis_v1());
+    params.validate_palw_v2().expect("normal validation on the isolated G14 genesis");
     // Harness only (not a PALW rule): proof of work is not what is measured.
     params.skip_proof_of_work = true;
     let config = Config::new(params);

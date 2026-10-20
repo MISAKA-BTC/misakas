@@ -9,9 +9,11 @@
 //! floor's registered model (ADR-0177: the property is conditional on that copy). It never reads the producer's capture, heap or
 //! keys. The producer's answers are built from the producer's own capture — its obligation, not the verifier's material.
 //!
-//! **The fence is armed WITHOUT its validation.** `palw_legacy_public_filer_v1` is refused on every real height
+//! **Historical LG14-A tests arm the fence WITHOUT its validation.** `palw_legacy_public_filer_v1` is refused on every real height
 //! (`Params::validate_palw_legacy_public_filer_v1`), so nothing here runs on a network; the config is the harness's testnet-12 with the
 //! fence and its bundle mirror set directly (as `g14_kernel_route_e2e` arms its own fence).
+//! The two D2 pursuit tests instead use the existing marked isolated G14 genesis and normal validation;
+//! they exercise the claim-only KernelWitness and the verifier-supplied model rows on the real node.
 //!
 //! **Harness differences, none of them a rule**: testnet-12 as launched with harness keys on the eight genesis cards
 //! (`t12_round_lane_e2e`); the main premine output re-addressed to the newcomer's harness key (the genesis commitment recomputed, as
@@ -198,7 +200,40 @@ impl Lg {
     }
 
     fn over_with(armed: bool, d2: bool, x3: bool, make: impl FnOnce(&Config) -> TestConsensus) -> Lg {
-        let (config, bundle, premine, floats, newcomer_funding) = lg14a_config_with(armed, d2, x3);
+        Self::from_config(lg14a_config_with(armed, d2, x3), make)
+    }
+
+    /// Exercise D2 and LG14-B on the existing, explicitly isolated G14 network. Normal validation
+    /// must accept the configuration; no readiness record or shipped-network fence is bypassed.
+    fn over_d2_isolated(make: impl FnOnce(&Config) -> TestConsensus) -> Lg {
+        let (config, _, premine, floats, funding) = lg14a_config_with(false, false, false);
+        let mut params = config.params.clone();
+        params.genesis =
+            kaspa_consensus_core::palw_g14_gates_v1::palw_isolated_g14_genesis_v1(&params.genesis, Hash64::from_bytes([0xd2; 64]))
+                .expect("an isolated D2 test genesis");
+        params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(0));
+        params.palw_legacy_held_da_v2 = Some(ForkActivation::new(0));
+        params.palw_court_model_scope_v1 = Some(ForkActivation::new(0));
+        params.sync_palw_legacy_public_filer_v1();
+        params.sync_palw_2026_10_12_ruling_fences_v1();
+        assert!(params.has_isolated_g14_genesis_v1());
+        params.validate_palw_v2().expect("normal validation accepts only the isolated G14 configuration");
+        let config = Config::new(params);
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+        let bundle = bundle.clone();
+        Self::from_config((config, bundle, premine, floats, funding), make)
+    }
+
+    fn from_config(
+        (config, bundle, premine, floats, newcomer_funding): (
+            Config,
+            PalwConsensusParamsV2,
+            Premine,
+            Premine,
+            (TransactionOutpoint, UtxoEntry),
+        ),
+        make: impl FnOnce(&Config) -> TestConsensus,
+    ) -> Lg {
         let chain = t12_genesis_chain_on(make(&config), &config, &bundle, &premine, &floats);
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             config.params.net.to_string().as_bytes(),
@@ -534,6 +569,40 @@ impl Lg {
         let work_leaves = self.view(produced.claim_id).work_leaves;
         let mut objects = Vec::new();
         for duty in duties.duties.iter().filter(|d| d.claim_id == produced.claim_id && !withhold(&d.unit)) {
+            if let PalwDaUnitV1::LegacyHeldV2(
+                unit @ kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::KernelWitness { leaf },
+            ) = duty.unit
+            {
+                use kaspa_consensus_core::palw_legacy_held_da_v2::*;
+                let (binding, disclosure) = palw_da_held_disclosure_from_capture_v1(
+                    &self.backend,
+                    &produced.material,
+                    &produced.prompt,
+                    produced.roots,
+                    work_leaves,
+                    PalwHeldMissingV1::StepLeaf { leaf },
+                    form,
+                    || self.backend.disclose_trace_event(&produced.material, u32::MAX, u8::MAX).map(|d| d.binding().clone()),
+                )
+                .expect("the producer opens its own committed leaf");
+                let PalwHeldDisclosureV1::StepLeaf { evidence } = disclosure else { unreachable!() };
+                // No artifact rows go on this defendant's answer. D2 never demands its model copy.
+                let witness =
+                    PalwCommittedKernelWitnessV2 { refutation: evidence.refutation, prompt_ids_opening: evidence.prompt_ids_opening };
+                let mut carriage = PalwLegacyHeldAnswerCarriageV2 {
+                    version: PALW_LEGACY_HELD_VERSION_V2,
+                    claim: produced.claim_id,
+                    unit,
+                    binding,
+                    answer: PalwLegacyHeldAnswerV2::KernelWitness(Box::new(witness)),
+                    discloser: duty.discloser,
+                    signature: Vec::new(),
+                };
+                let message = palw_legacy_held_answer_message_v2(self.domain.as_byte_slice(), &carriage);
+                carriage.signature = self.signed(EXECUTOR, message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
+                objects.push((EXECUTOR, Obj::LegacyHeldAnsweredV2 { answer: Box::new(carriage) }));
+                continue;
+            }
             let answer = match duty.unit {
                 PalwDaUnitV1::Event { row, tile } => PalwDaAnswerV1::Event(
                     self.backend.disclose_trace_event(&produced.material, row, tile).expect("the capture opens the event"),
@@ -781,6 +850,11 @@ impl Verifier {
             PalwFilerActionV1::Demand(probe) => {
                 // **Shared progress (RFC-0014 §7.4)**: a unit the chain already holds the answer to — this verifier's before a
                 // restart, or anybody's — is read, never demanded again.
+                if let PalwLegacyProbeV1::Terminal { leaf } = probe
+                    && lg.bundle.state.court_model_scope_from_daa().is_some_and(|from| lg.view(self.claim).accepted_daa >= from)
+                {
+                    return self.d2_terminal(lg, produced, leaf, withhold).await;
+                }
                 if self.learn(lg, probe) {
                     return None;
                 }
@@ -804,6 +878,86 @@ impl Verifier {
                 panic!("leaf {leaf} is fused: LG14-B's route (the fixture picks a non-fused lie)")
             }
         }
+    }
+
+    /// D2: read the accepted claim-only witness, then supply rows from this verifier's own model.
+    /// This runs existing tags 157/158 and ShardCourtAccused through the real paid carrier path.
+    async fn d2_terminal(
+        &mut self,
+        lg: &mut Lg,
+        produced: &Produced,
+        leaf: u64,
+        withhold: &dyn Fn(&PalwDaUnitV1) -> bool,
+    ) -> Option<PalwFilerPhaseV1> {
+        use kaspa_consensus_core::palw_legacy_held_da_v2::*;
+        use kaspa_consensus_core::palw_shard_court_v1::*;
+        let unit = PalwLegacyHeldUnitV2::KernelWitness { leaf };
+        let da_unit = PalwDaUnitV1::LegacyHeldV2(unit);
+        let view = lg.view(self.claim);
+        let witness = if view.answered.contains(&da_unit) {
+            lg.recent_objects(512).into_iter().find_map(|object| match object {
+                Obj::LegacyHeldAnsweredV2 { answer } if answer.claim == self.claim && answer.unit == unit => {
+                    palw_legacy_held_check_answer_v3(
+                        &view.execution_root,
+                        &unit,
+                        &answer.binding,
+                        &answer.answer,
+                        lg.bundle.court.max_step_leaf_count(),
+                        lg.config.params.palw_prompt_ids_form_at(lg.daa()),
+                    )
+                    .ok()?;
+                    match answer.answer {
+                        PalwLegacyHeldAnswerV2::KernelWitness(w) => Some(w),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+        } else {
+            None
+        };
+        if let Some(witness) = witness {
+            let claim_part = PalwLeafEvidenceV1 {
+                refutation: witness.refutation,
+                artifact_openings: Vec::new(),
+                prompt_ids_opening: witness.prompt_ids_opening,
+            };
+            let rows = lg.backend.operand_openings_for(&claim_part.refutation).expect("the verifier's own model opens its rows");
+            let bound = PalwOneMoveClaimV2 {
+                execution_root: view.execution_root,
+                class_id: view.class_id,
+                artifact_root: misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the fixture's pinned class root"),
+            };
+            assert_eq!(
+                kaspa_consensus_core::palw_court_model_scope_routes_v1::palw_d2_one_move_on_claim_part_v1(
+                    &claim_part,
+                    &rows,
+                    &bound,
+                    lg.bundle.court.max_step_leaf_count(),
+                )
+                .expect("the bound one-move court reads the witness and our own rows"),
+                PalwShardCourtVerdictV1::ExecutorGuilty
+            );
+            let evidence = PalwLeafEvidenceV1 { artifact_openings: rows, ..claim_part };
+            let mut accusation =
+                evidence.into_accusation_v1(self.claim, view.execution_root, view.trace_root, view.producer, lg.bond(self.card));
+            let message = palw_shard_court_session_id_v1(lg.domain.as_byte_slice(), &accusation);
+            accusation.signature = lg.signed(self.card, message.as_byte_slice(), PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT);
+            lg.send(vec![(self.card, Obj::ShardCourtAccused { accusation: Box::new(accusation) })]).await;
+        } else {
+            // The supported replacement does not weaken the original D2 veto, on this same node.
+            let forbidden = self.demand(lg, PalwLegacyProbeV1::Terminal { leaf });
+            let funding = lg.funding[&self.card].clone();
+            let tx = lg.carrier(self.card, &forbidden);
+            let refusal = lg.mempool(&tx).expect_err("D2 must still refuse the old held StepLeaf demand");
+            lg.funding.insert(self.card, funding);
+            assert!(refusal.to_string().contains("no court compels them"), "{refusal}");
+            let object = self.demand(lg, PalwLegacyProbeV1::HeldNode { unit });
+            lg.send(vec![(self.card, object)]).await;
+            self.demands += 1;
+            lg.producer_answers(produced, withhold).await;
+        }
+        None
     }
 
     /// The engine run to its verdict, at most `cap` steps.
@@ -927,17 +1081,17 @@ async fn lg14a_a_non_seat_newcomer_convicts_a_computation_lie_before_final() {
     conviction_before_final(false).await
 }
 
-/// **D2 (REQ-T6-4) on the node**: the same full collusion, on a claim accepted with D2 (and X3, with its probe policy) armed from
-/// genesis: producer and every seat sign `Valid`, and the non-seat convicts from public material only, before Final.
+/// **D2 (REQ-T6-4) on the isolated node**: D2 and LG14-B pass normal configuration validation.
+/// Every seat signs `Valid`; the outsider obtains only the committed witness and supplies its own model rows.
+/// X3 and real-network activation are outside this test.
 #[tokio::test]
-#[ignore = "BLOCKED (ADR-0188 R-D2-NODE): a new claim's held StepLeaf accusation is refused at the mempool (ADR-0177 D2); the replacement route is not wired into node admission"]
 async fn d2_a_full_collusion_on_a_new_claim_is_convicted_before_final_on_the_node() {
     conviction_before_final(true).await
 }
 
 async fn conviction_before_final(d2: bool) {
     kaspa_core::log::try_init_logger("warn");
-    let mut lg = Lg::over_with(true, d2, false, TestConsensus::new);
+    let mut lg = if d2 { Lg::over_d2_isolated(TestConsensus::new) } else { Lg::over(true, TestConsensus::new) };
     lg.beat(3).await;
     lg.register_newcomer().await;
     let produced = lg.real_attempt(EXECUTOR, true).await;
@@ -972,6 +1126,16 @@ async fn conviction_before_final(d2: bool) {
         lg.daa()
     );
     assert_eq!(verdict, PalwFilerPhaseV1::Convicted);
+    if d2 {
+        let accepted = lg.recent_objects(512);
+        assert!(accepted.iter().any(|o| matches!(o, Obj::LegacyHeldDemandedV2 { demand }
+            if demand.claim == id && matches!(demand.unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::KernelWitness { .. }))));
+        assert!(accepted.iter().any(|o| matches!(o, Obj::LegacyHeldAnsweredV2 { answer } if answer.claim == id)));
+        assert!(accepted.iter().any(|o| matches!(o, Obj::ShardCourtAccused { accusation } if accusation.claim == id)));
+        assert!(!accepted.iter().any(|o| matches!(o, Obj::DefaultAccusedHeld { accusation }
+            if accusation.claim == id && matches!(accusation.missing, PalwHeldMissingV1::StepLeaf { .. }))),
+            "no forbidden held StepLeaf demand reached the accepted chain");
+    }
     assert!(view.court_convicted || view.executor_refuted, "a recorded conviction");
     assert_eq!(v.bisect.located(), produced.lie_leaf, "the located leaf is the lie");
     assert!(lg.daa() > licensed + lg.bundle.state.window_challenge_at(licensed) + 1, "past the Final floor, never Final");
@@ -1161,7 +1325,6 @@ async fn reserved_then_licensed(lg: &mut Lg, lie: bool) -> (Produced, u64) {
 /// **D2 restart identity on the node (2026-10-18)**: the same stop-and-reopen with D2 armed; the pursuit survives and a fresh node
 /// replays the same roots.
 #[tokio::test]
-#[ignore = "BLOCKED (ADR-0188 R-D2-NODE): same as the D2 conviction node test (the held accusation is refused by D2)"]
 async fn d2_the_pursuit_survives_a_restart() {
     restart_mid_pursuit(true).await
 }
@@ -1171,7 +1334,8 @@ async fn restart_mid_pursuit(d2: bool) {
     kaspa_core::log::try_init_logger("warn");
     let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, receiver) = async_channel::unbounded();
-    let mut lg = Lg::over_with(true, d2, false, |c| TestConsensus::with_db(db.clone(), c, sender));
+    let make = |c: &Config| TestConsensus::with_db(db.clone(), c, sender);
+    let mut lg = if d2 { Lg::over_d2_isolated(make) } else { Lg::over(true, make) };
     lg._keep.push(Box::new(receiver));
     let produced = licensed_claim(&mut lg, true).await.0;
     let id = produced.claim_id;
@@ -1203,6 +1367,14 @@ async fn restart_mid_pursuit(d2: bool) {
     let mut v = Verifier::check(&lg, NEWCOMER, id);
     let verdict = v.pursue(&mut lg, &produced, &|_| false, 400).await;
     assert_eq!(verdict, PalwFilerPhaseV1::Convicted, "convicted after the restart");
+    if d2 {
+        let fresh = t12_genesis_chain_on(TestConsensus::new(&lg.config), &lg.config, &lg.bundle, &lg.premine, &lg.floats);
+        for block in chain_blocks(&lg.chain, lg.chain.sink()) {
+            let hash = block.header.hash;
+            arrive(&fresh, block, "D2 block after restart").await;
+            assert_eq!(root_at(&fresh, hash), root_at(&lg.chain, hash), "fresh node reproduces restarted D2 root at {hash}");
+        }
+    }
 }
 
 /// **G14 C8, reorg**: an admissible shallow fork omits a post-Final reservation; switching back restores its exact rows and hold.

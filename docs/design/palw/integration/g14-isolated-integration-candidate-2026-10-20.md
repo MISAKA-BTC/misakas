@@ -45,3 +45,7 @@ The operator supplied `release/t12-16000` / `799a058fa` with the previously miss
 ## Native current-duty binding checkpoint
 
 The service-bound acquisition default guard now verifies each unpaid actor against its actual retained original frame, Ready state, current native demand/turn and body cursor before the continuing service default denial. Actor/row duties remain visible as expired metadata without extending their signed clock or releasing claim holds. Selected checks **58 passed**, consensus non-test release check succeeded. [Derivation, limits and extra cost to calibrate](rfc26-native-response-duty-2026-10-20.md). Full packet-to-duty admission and actual supply/inclusion remain incomplete; this checkpoint does not establish F02/F03 or node T05/T08.
+
+## D2 node component checkpoint — 2026-10-21
+
+The two previously ignored D2 pursuit cases now exercise the already implemented claim-only KernelWitness and outsider-supplied model rows through real funded node carriers on the existing isolated genesis, with normal parameter validation. They also assert the forbidden old demand remains refused. Old positive legacy child fixtures remove fabricated readiness records and use the same existing isolation mechanism, retaining the unmarked-genesis production rejection. [Evidence and precise remaining scope](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#d2-node-claim-part-replacement-and-isolated-component-fixtures). This is test-side component coverage; daemon/full-family R-D2 signoff and the original G14 obligations remain open.

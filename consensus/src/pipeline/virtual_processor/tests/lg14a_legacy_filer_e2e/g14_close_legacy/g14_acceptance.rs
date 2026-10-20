@@ -1,6 +1,6 @@
 //! **The external audit's DAA-16,000 acceptance tests D, E, F and G (2026-10-17, `docs/design/palw/g14-external-audit-2026-10-17/
 //! rfc1_20_audit_ja.md` §8) on the real node, for the legacy V2 Attempt route with LG14-A + LG14-B + option (b) armed through
-//! validated `Params` and test arm-readiness records** (the parent's `g14_close_config`, never a mirror-only bypass).
+//! normal validated `Params` on the existing marked isolated G14 genesis** (the parent's `g14_close_config`, never a mirror-only bypass).
 //!
 //! Test A (every seat `Valid`, one bond registered after genesis outside the Panel convicts from the node's read API, accepted blocks
 //! and its own model copy, never the producer's instance) is the parent's `legacy_v2_attempt_full_collusion_outside_bond_convicts`;
@@ -582,8 +582,8 @@ async fn g14_accept_f_under_g15_an_unpaid_reward_past_its_expiry_is_still_prosec
 
 // ---- G ---------------------------------------------------------------------------------------------------------------------------
 
-/// The parent's network with the G14 set (LG14-A, LG14-B, option (b)) armed at `at` instead of genesis — validated with records at
-/// that height, refused by the shipped validation.
+/// The isolated component network with LG14-A, LG14-B and option (b) active at `at`.
+/// Normal validation accepts the marked test genesis and refuses the unmarked control.
 fn g14_cross_lg(at: u64) -> Lg {
     let (config, _, mut premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
@@ -605,18 +605,16 @@ fn g14_cross_lg(at: u64) -> Lg {
     params.palw_legacy_held_da_v2 = fence;
     params.palw_g14_route_required_v1 = fence;
     params.sync_palw_g14_gates_v1();
-    let records: Vec<PalwG14ArmingRecordV1> = [
-        PalwG14GatedFenceV1::LegacyPublicFilerV1,
-        PalwG14GatedFenceV1::LegacyHeldDaV2,
-        PalwG14GatedFenceV1::G14RouteRequiredV1,
-    ]
-    .into_iter()
-    .map(|f| record(f, params.genesis.hash, at))
-    .collect();
-    params
-        .validate_palw_v2_with_arming_records_v1(&records)
-        .unwrap_or_else(|e| panic!("the ruleset armed at DAA {at} passes the whole validation with its records: {e:?}"));
-    assert!(params.validate_palw_v2().is_err(), "no record is pinned in this binary");
+    let unisolated = params.validate_palw_v2().expect_err("unmarked genesis still refuses production arming");
+    assert!(format!("{unisolated:?}").contains("no arm-readiness record"), "{unisolated:?}");
+    let incomplete = params.validate_palw_court_policy_completeness_v1(
+        kaspa_consensus_core::palw_g14_gates_v1::PalwG14GatedFenceV1::LegacyHeldDaV2,
+    ).expect_err("missing F02/F03 policy independently refuses an unmarked genesis");
+    assert!(format!("{incomplete:?}").contains("OneOutsiderCapacityIncomplete"), "{incomplete:?}");
+    params.genesis = palw_isolated_g14_genesis_v1(&params.genesis, Hash64::from_bytes([0x15; 64]))
+        .expect("bounded isolated fence-boundary test genesis");
+    assert!(params.has_isolated_g14_genesis_v1());
+    params.validate_palw_v2().expect("normal isolated G14 validation at the boundary fence");
     params.skip_proof_of_work = true;
     let config = Config::new(params);
     let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!("testnet-12 is ConsensusV2") };

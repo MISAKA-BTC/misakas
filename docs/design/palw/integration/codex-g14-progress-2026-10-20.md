@@ -235,3 +235,15 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 データ未完成の間はresource起点を未確定にし、完成後はquery/Ready/dataの実受理DAAのmax+1を導出する。これは新しい有料義務や応答期限の採択ではない。過去のupload/preparation違反を免責する判断にも使わない。
 
 最終選択 **89 passed / 0 failed / 0 ignored**（G14/activation/codec/identity29 + 同じ最終core executableのnative32 + query17 + wire11）。non-test consensus check・生成物一致も成功。[source hash・生ログ・別受理context/再送/改変拒否の範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#explicit-fresh-data-response-native-candidate)。targeted2や過去86等は加算しない。原本/Ready/資金/contextはverified-half fixtureであり、有料node ingress・完全予約・全semantic duty/fresh signer availability・実供給・node T05/T01–T15は未完。武装・pre統合・配備なし。
+
+## D2 node claim-part replacement (2026-10-21)
+
+`11734c11b` の旧ignored試験を明示実行し、新D2 claimへの禁止済みStepLeaf要求がmempoolで拒否されることを再現。既存nodeにはKernelWitness(tag157/158)、ShardCourtAccused(tag38)、非fused再計算(tag159)の経路があり、「代替node受理がすべて未実装」という説明は広すぎた。今回の変更は試験側のみで、daemon/admission/codec/上限/本番パラメーターは変更しない。
+
+2件のD2試験を既存の隔離G14 genesisと通常設定検査へ移し、被告のclaim-only witnessと外部検証者自身のモデル行による実funded carrierの裁定経路を使う。旧StepLeafの実mempool拒否も残して検証する。全Panel Valid共謀、Final保持、返還、DB再起動後の再発見と継続、fresh nodeの全block再生/root/RPC一致を対象にする。
+
+関連試験の初回拡張実行は23成功・13失敗。13件はF02/F03未完成による武装拒否で、旧child fixtureが架空readiness recordで正の設定検査に通るという古い前提だった。このrecord生成を削除し、既存隔離genesisでは通常検査に通り、未隔離genesisでは同じ拒否が残る構成へ修正した。過去のtest-only cost入力を実測・採択値へ昇格させない。
+
+[生ログ・最終結果・source hash・限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#d2-node-claim-part-replacement-and-isolated-component-fixtures)。これはBase0のnode component試験であり、daemon全体・全family/fused分岐・TIR owner占有/埋め直しT05・物理容量・実door・R-D2最終承認・G14完成ではない。P0/P1/P2と本番武装拒否を維持する。
+
+最終選択は **62 passed / 0 failed / 0 ignored**。同じ最終node executableの関連36件と、G14 gate12・t12 activation5・release identity9。旧ignored D2 2件も通常実行し、13件のchild fixtureも実際の動作まで成功した。初回1成功や途中23成功/13失敗、過去89等は加算しない。変更は試験3ファイルと文書/証拠に限定し、production source・数値・schema・arming recordは未変更。
