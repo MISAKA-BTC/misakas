@@ -198,6 +198,7 @@
 - [adr/0193-miner-account-bond-for-panel-incentives.md](../adr/0193-miner-account-bond-for-panel-incentives.md)
 - [adr/0193-sequential-witness-filing-clock.md](../adr/0193-sequential-witness-filing-clock.md)
 - [adr/0194-dormant-g14-integration-and-service-schema.md](../adr/0194-dormant-g14-integration-and-service-schema.md)
+- [adr/0195-rooted-court-response-eligibility-history.md](../adr/0195-rooted-court-response-eligibility-history.md)
 - [adr/INDEX.md](../adr/INDEX.md)
 - [adr/README.md](../adr/README.md)
 - [adr/TOPICS.md](../adr/TOPICS.md)
@@ -368,6 +369,7 @@
 - [design/palw/integration/g14-handover-to-codex.md](../design/palw/integration/g14-handover-to-codex.md)
 - [design/palw/integration/g14-integration-followup-2026-10-15.md](../design/palw/integration/g14-integration-followup-2026-10-15.md)
 - [design/palw/integration/g14-integration-matrix.md](../design/palw/integration/g14-integration-matrix.md)
+- [design/palw/integration/g14-isolated-integration-candidate-2026-10-20.md](../design/palw/integration/g14-isolated-integration-candidate-2026-10-20.md)
 - [design/palw/integration/g14-objective-conviction-remaining-2026-10-15.md](../design/palw/integration/g14-objective-conviction-remaining-2026-10-15.md)
 - [design/palw/integration/genesis8-status.md](../design/palw/integration/genesis8-status.md)
 - [design/palw/integration/handover-g14-drill-2026-10-18.md](../design/palw/integration/handover-g14-drill-2026-10-18.md)
@@ -390,6 +392,8 @@
 - [design/palw/integration/rfc-0018-implementation-status-2026-10-15.md](../design/palw/integration/rfc-0018-implementation-status-2026-10-15.md)
 - [design/palw/integration/rfc26-court-signer-relay-audit-2026-10-20.md](../design/palw/integration/rfc26-court-signer-relay-audit-2026-10-20.md)
 - [design/palw/integration/rfc26-dependency-horizon-audit-2026-10-20.md](../design/palw/integration/rfc26-dependency-horizon-audit-2026-10-20.md)
+- [design/palw/integration/rfc26-native-response-duty-2026-10-20.md](../design/palw/integration/rfc26-native-response-duty-2026-10-20.md)
+- [design/palw/integration/rfc26-native-response-graph-2026-10-20.md](../design/palw/integration/rfc26-native-response-graph-2026-10-20.md)
 - [design/palw/integration/rfc26-service-shared-frontier-contract-2026-10-20.md](../design/palw/integration/rfc26-service-shared-frontier-contract-2026-10-20.md)
 - [design/palw/integration/rfc26-shared-frontier-volume-2026-10-20.md](../design/palw/integration/rfc26-shared-frontier-volume-2026-10-20.md)
 - [design/palw/integration/rfc26-shared-tir-request-set-2026-10-20.md](../design/palw/integration/rfc26-shared-tir-request-set-2026-10-20.md)
@@ -595,6 +599,7 @@
 - [evidence/palw/court-transport-2026-10-20/README.md](../evidence/palw/court-transport-2026-10-20/README.md)
 - [evidence/palw/filing-clock-v2-2026-10-20/README.md](../evidence/palw/filing-clock-v2-2026-10-20/README.md)
 - [evidence/palw/g14-completion-2026-10-20/README.md](../evidence/palw/g14-completion-2026-10-20/README.md)
+- [evidence/palw/g14-integration-candidate-2026-10-20/README.md](../evidence/palw/g14-integration-candidate-2026-10-20/README.md)
 - [evidence/palw/g14-measure-2026-10-18/README.md](../evidence/palw/g14-measure-2026-10-18/README.md)
 - [evidence/palw/implementation-records/README.md](../evidence/palw/implementation-records/README.md)
 - [evidence/palw/implementation-records/adversarial-e2e-record.md](../evidence/palw/implementation-records/adversarial-e2e-record.md)
@@ -777,6 +782,11 @@
 - [maintenance/path-map.md](path-map.md)
 - [maintenance/validation-report.md](validation-report.md)
 
+## measurements
+
+- [measurements/2026-10-19-devnet-payload-carrier-audit.md](../measurements/2026-10-19-devnet-payload-carrier-audit.md)
+- [measurements/2026-10-19-devnet-payload-carrier.md](../measurements/2026-10-19-devnet-payload-carrier.md)
+
 ## operations
 
 - [operations/README.md](../operations/README.md)
@@ -877,6 +887,7 @@
 - [rfc/0027-assets/source-review.md](../rfc/0027-assets/source-review.md)
 - [rfc/0027-assets/validation.md](../rfc/0027-assets/validation.md)
 - [rfc/0027-miner-account-bond-and-panel-incentives.md](../rfc/0027-miner-account-bond-and-panel-incentives.md)
+- [rfc/0028-rooted-court-response-eligibility-history.md](../rfc/0028-rooted-court-response-eligibility-history.md)
 - [rfc/INDEX.md](../rfc/INDEX.md)
 - [rfc/README.md](../rfc/README.md)
 - [rfc/TOPICS.md](../rfc/TOPICS.md)

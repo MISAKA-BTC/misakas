@@ -2386,6 +2386,48 @@ mod conviction_e2e_tests {
     }
 
     #[test]
+    fn service_stage_eligibility_is_not_recoverable_from_current_tir_cursor_alone() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        use crate::palw_court_tir_requests_v1::tir_native_response_duty_v1 as duty;
+        let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=&fx.frame;
+        let (state,params,extras,target,offset)=demanded_world(&fx,frame,0);
+        let T::Acquisition { owner,reserved_daa }=target else { unreachable!() };
+        let key=owner_key(frame,owner,reserved_daa).unwrap();
+        let actor=frame.custody_v1().pledge_v1().producer;
+        let (demand_id,until,turn,_)=owner_pending(frame,&state,target);
+        let body=borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage:fx.execution.preimages[0].clone(),
+            opening:crate::palw_step_leg::step_opening_v1(&fx.execution.hashes,0).unwrap() }).unwrap();
+        assert!(body.len()<=crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1);
+        let begin=Owned::Begin { demand_id,answerer:actor,total_bytes:body.len() as u64,
+            body_hash:crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) };
+        let part=Owned::Part { demand_id,answerer:actor,offset:0,bytes:body };
+        let run=|begin_at,part_at| {
+            let begun=control_step(frame,&state,&params,&extras,begin_at,actor,target,A::Acquisition(begin.clone()),0,turn).unwrap();
+            control_step(frame,&begun,&params,&extras,part_at,actor,target,A::Acquisition(part.clone()),0,turn).unwrap()
+        };
+        let early_part_daa=frame.plan_v1().terms.accepted_daa+offset+1;
+        let late_part_daa=frame.plan_v1().terms.accepted_daa+offset+4;
+        assert!(late_part_daa<until);
+        let early=run(offset,offset+1);let late=run(offset+3,offset+4);
+        assert_eq!(early.staged_court_row_v1(&key),late.staged_court_row_v1(&key),
+            "the retained acquisition cursor contains no predecessor accepting DAA");
+        let profile=Hash64::from_u64_word(0x73);let common=at(frame,offset+5);
+        let early_duty=duty(&early,&common,key,actor,profile).unwrap().unwrap();
+        let late_duty=duty(&late,&common,key,actor,profile).unwrap().unwrap();
+        assert_eq!(early_duty,late_duty,"the current duty view cannot recover the erased prerequisite timing");
+        assert!(matches!(early_duty.stage,crate::palw_court_tir_requests_v1::TirNativeDutyStageV1::Finish { .. }));
+        let assigned_daa=early_part_daa+1;
+        assert!(early_part_daa<assigned_daa && late_part_daa>=assigned_daa,
+            "one identical current cursor was eligible at that unit's start; the other was not");
+        // Actual native controls above use different accepting contexts. This is
+        // a retained-TIR-metadata counterexample, not a pair of identical node
+        // block histories or a throughput measurement. Full journals could
+        // distinguish the histories, but their lookup/retention is not a field
+        // of the current book or duty view.
+    }
+
+    #[test]
     fn native_response_duty_reads_original_state_and_never_erases_expired_obligations() {
         use crate::palw_court_tir_requests_v1::{tir_native_response_duty_v1 as duty,TirNativeDutyClockV1 as Clock};
         let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=&fx.frame;

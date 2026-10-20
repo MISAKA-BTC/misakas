@@ -1490,6 +1490,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0195",
+      "path": "docs/adr/0195-rooted-court-response-eligibility-history.md",
+      "title": "ADR-0195 — native court 応答の前提受理時刻を保持する",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1703,6 +1711,14 @@
       "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
       "title": "RFC-0027 — Miner Account Bond と Panel 追及報酬: 10万の基礎担保、責任連動の追加拘束、REAL継続性",
       "topic": "Economics / budgets",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0028",
+      "path": "docs/rfc/0028-rooted-court-response-eligibility-history.md",
+      "title": "RFC-0028 — rooted court response eligibility history",
+      "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     }
   ]

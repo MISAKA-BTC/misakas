@@ -1,0 +1,35 @@
+{
+  "date": "2026-10-21",
+  "candidate_parent": "11a9b2b0e",
+  "scope": "retained native TIR metadata timing counterexample; fixture native dispatcher, not full node histories or runtime marker implementation",
+  "production_rust_changed": false,
+  "selected_unique_passes": 54,
+  "targeted_test_already_in_native_28": true,
+  "regressions_core": "freshly compiled by targeted cargo test",
+  "regressions_identity": "replay of prior actual-duty checkpoint release executables; not freshly compiled",
+  "logs": [
+    {
+      "path": "stage-clock-counterexample-release.log",
+      "sha256": "b88a0bfe17328b82c66a8ac7c677839d27b1b7b2b017e15f1cba86467321dc9c",
+      "passed_groups": [
+        1
+      ]
+    },
+    {
+      "path": "stage-clock-counterexample-regressions.log",
+      "sha256": "56a2d8d4cb9b089787ca086da07b502a90b3b49ecd63b182a1c16ee4006d9385",
+      "passed_groups": [
+        28,
+        12,
+        5,
+        9
+      ]
+    }
+  ],
+  "commands": [
+    "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib service_stage_eligibility_is_not_recoverable",
+    "/Users/wata/.cache/misaka-heavy-lock.sh /bin/bash -c 'target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1 && target/release/deps/g14_close_gates-07a58aeba402f266 && target/release/deps/palw_activation_pool_is_t12_only-19bd1d2a52f9c5c6 && target/release/deps/palw_the_release_did_not_move-c8b47338cdf2801d'"
+  ],
+  "runtime_marker_implemented": false,
+  "full_g14_complete": false
+}

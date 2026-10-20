@@ -177,3 +177,11 @@ release 新 node 試験 1、同じ新 binary の既存追及回帰 1、以前の
 ## Funded relay UTXO / full-IBD extension
 
 Legacy funded relay now checks actual virtual UTXOs and full selected-block replay into a fresh consensus instance, including equal roots and a fresh verifier read. Extended node test 1 passed; existing release identity executable replay 26 passed. This does not cover process restart, pruned import, TIR-original ingress or service supply. See the evidence README for exact commands, hashes and scope.
+
+## Retained stage timing prerequisite (2026-10-21)
+
+隔離候補 `codex/rfc14-g14-integration-candidate` で、native Begin/Part の受理時刻が異なっても retained owner row/current duty が同じになる反例を確認。割当 DAA の開始時に前提が成立済みかを current metadata だけで判定できない。全 node history が同一という主張ではない。
+
+[ADR-0195](../../../adr/0195-rooted-court-response-eligibility-history.md) / [RFC-0028](../../../rfc/0028-rooted-court-response-eligibility-history.md) を Proposed として追加。新 marker runtime は未実装。最後の段階の遅れだけで免責・責任を決めず、全 causal path、original admission、実 supply、配送前提の未完を維持する。production Rust と既存 wire/clock/cap/t12 固定値は未変更。
+
+重複を除く選択結果は **54 passed / 0 failed / 0 ignored**（fresh core native 28、以前の identity/gate executables 再実行 26）。targeted 1 は 28 に含む。[raw log・コマンド・SHA-256](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#retained-stage-timing-counterexample)。文書検査は同じ imported 5 件で FAIL、baseline は未変更。G14 全体の完了・有効化ではない。

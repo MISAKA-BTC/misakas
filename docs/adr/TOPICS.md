@@ -211,4 +211,5 @@
 - [ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg](0184-native-liability-horizon-panel-record-and-single-certified-leg.md)
 - [ADR-0192 — court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md)
 - [ADR-0193 — sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md)
+- [ADR-0195 — native court 応答の前提受理時刻を保持する](0195-rooted-court-response-eligibility-history.md)
 

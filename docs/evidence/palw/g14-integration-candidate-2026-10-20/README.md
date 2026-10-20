@@ -81,3 +81,21 @@ Selected **58 passed / 0 failed / 0 ignored**; historical overlapping totals are
 | [native-duty-dispatch-release.log](native-duty-dispatch-release.log) | 27 | `43a8af8d2d3d5f9e2661bb0f1e24ad62296213dff392fd6f32bb33cb5e577323` |
 | [native-duty-graph-replay.log](native-duty-graph-replay.log) | 5 | `3844bc48445f4baedd96f1a3497d9841c9989eb5dc32496bf8d8a44284e30721` |
 | [native-duty-identities-check.log](native-duty-identities-check.log) | 26 | `ba6bc2633cb5ad4a4fe2b60a5230cd4469efb0d8cb96d1d457f8cb62ad4e92c9` |
+
+## Retained stage timing counterexample
+
+Only a cfg(test) native fixture was added after `11a9b2b0e`; production Rust is unchanged. Early and late valid Begin/Part transitions yield equal retained acquisition rows and current duty views, but straddle the assigned service DAA. This demonstrates missing predecessor timing in those retained fields, not identical full node histories, impossibility of journal replay, measured throughput or a violation by the existing resource-only service book.
+
+[ADR-0195](../../../adr/0195-rooted-court-response-eligibility-history.md) and [RFC-0028](../../../rfc/0028-rooted-court-response-eligibility-history.md) propose a separate rooted history. Runtime markers are **not implemented**, and the Proposed design does not authorize defaults, schema adoption or arming. Whole-path causality and original complete admission remain necessary.
+
+Targeted fresh cargo build: **1 passed**, included again in the freshly compiled core executable's native **28 passed**. Prior checkpoint identity/gate/activation/release executables were replayed (**12 + 5 + 9 passed**), not freshly compiled now. Unique selected total: **54 passed / 0 failed / 0 ignored**; do not add the targeted 1 or historical checkpoints. Every release run used the shared heavy lock. [Commands and counts](stage-clock-counterexample-artifact.json).
+
+| Raw log | Passed groups | SHA-256 |
+| --- | --- | --- |
+
+| [stage-clock-counterexample-release.log](stage-clock-counterexample-release.log) | 1 | `b88a0bfe17328b82c66a8ac7c677839d27b1b7b2b017e15f1cba86467321dc9c` |
+
+| [stage-clock-counterexample-regressions.log](stage-clock-counterexample-regressions.log) | 28 + 12 + 5 + 9 | `56a2d8d4cb9b089787ca086da07b502a90b3b49ecd63b182a1c16ee4006d9385` |
+
+
+Documentation check still reports the same five imported missing references plus 43 baseline-known occurrences; no baseline or raw imported evidence was rewritten. The current authored diff passes whitespace checks.
