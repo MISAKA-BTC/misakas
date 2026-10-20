@@ -99,3 +99,8 @@ semantic/historyの無応答課金は`staged_selected_default_charge_v1`へ集�
 archive key 20 / row 26は新しいprivate末尾ordinalで、既存X3/service/tag230の意味を変えない。名目pending chargeを既存accuser exposureとbond exit holdへ加える。終了causeが未接続、または単に関連するnative処理であるだけなら元court stakeも保持する。実費入金・新Account Bondの資本額・全財源の確保を意味しない。未校正のコピー/hash/snapshot/IO/byte-DAAと全archive走査の仕事を追加profileへ含める必要がある。
 
 未完groupの終了後提出・元CourtParams/署名scopeでの再検査・qualified settlement/pruningは未実装で、現行のholdだけをG14完成にしない。旧group rowは元declarationの全署名を保持していない。全actor金融入口、実署名のoriginal全分岐予約、実供給/公開ingress、最大family/phaseとE01–E10全条件、T01–T15、実doorは別の未完である。hardや最低material horizonを責任の自動解放時刻へ変えない。
+
+
+## Archive v5検査と有料originalの境界
+
+親`c153ecc02`の後のprivate検査は、保存した署名・native条件・session/phaseから既存v5を呼び、元state rootに束縛した局所結果を返す。[RFC-0030 §10](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#10-保存した入力によるprivate-v5再検査候補)。旧公開受付の適用時点を置換せず、wire/fee/financial writerへ接続していない。quote/cloneする全state検査scratchはglobal state量に依存するため、全original graphのper-claim上限が閉じたとはしない。借用contextによる共通native v5 kernelへの接続、内側のlegacy allocation/CPU、署名/hash、原子性と物理容量を含めて原本受付へ積算する必要がある。局所resource不足は不正/defaultにせずNativeResourceとして扱う。

@@ -319,3 +319,14 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 
 
 最終選択 **104 passed / 0 failed / 0 ignored**（native39＋public-prefix17＋通常court13＋integration35）。実署名の新試験1件は39に含まれ、過去103やcompile checkを加算しない。core testsの型検査と最終non-test consensus checkもexit0。途中のcompile101二件は実行試験0件としてsource patch/hash/logを保存した。[実行・source/実行file/log hash・正確な限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/court-close-receipt-artifact.json)。文書検査は同じimport済み欠損5件でFAIL/exit1、baseline既知43件を残し、新規著者リンク欠損は0。元署名とnative条件の保持は前進したが、終了後v5検査・金融精算・全分岐original予約・G14の完成を意味しない。
+
+
+## F08：保存した入力によるprivate v5再検査
+
+親`c153ecc02`。[RFC-0030 §10](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#10-保存した入力によるprivate-v5再検査候補)に、元の署名/contract/chunk prefixと完成raw bytesを照合し、保存したnative入力とsession/phaseで既存v5を呼ぶprivate verifierを追加した。現在のextrasやv2へfallbackせず、実結果と署名verdictの不一致を拒否する。非Borsh・非Cloneの結果は元state root/session/side/raw group/decoded closeへ束縛する。元state・担保・credit・journalは変更せず、解除/精算/defaultを許可しない。
+
+wire CPU予算/shape算術・OOMをNativeResourceとして伝播し、切断された構造入力と区別するため、最初の自分のrelease buildを実PID確認後に明示SIGINTした（exit130、実行試験0）。timeoutで停止と推測した再起動ではない。中間source/patch/logを保存し、修正後に型検査とrelease試験を行った。原本ログを変更していない。
+
+最終選択 **105 passed / 0 failed / 0 ignored**（native40＋public-prefix17＋通常court13＋integration35）。新しいparametric試験1件は40に含み、途中compile checkや過去104/103を加算しない。小型の正常/不正TIR cone、held flag false/true、正誤の署名verdictの8組、実署名、native宣言/prefix/終了、TTL後の再検査・carriage/全undo/replay、実reader予算エラーを検証した。held/fused phaseや最大全familyの検証ではなく、原本/資金/serviceはfixtureの前提を残す。non-test consensus release checkとcore tests型検査もexit0。[実行・source/実行file/log hash・詳細な限界](../../../evidence/palw/g14-integration-candidate-2026-10-20/archive-v5-artifact.json)。
+
+現在は検査view用に全state copyをquote/cloneしており、全有料graphの追加費用・物理容量は未校正である。per-claimの予約上限を閉じるため、借用したsession/phaseを既存v5の共通kernelへ渡し、global state copyを避ける検討が必要。公開受付で適用する時点/規則、金融精算・pruning、全actorの資本、全分岐original予約・実供給、P2局所化/準備/容量、T01–T15・R-D2/tag230・実doorは未完。G14の完成や武装/統合/配備ではない。

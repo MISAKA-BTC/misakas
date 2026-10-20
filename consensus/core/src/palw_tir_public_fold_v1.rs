@@ -3398,6 +3398,89 @@ mod conviction_e2e_tests {
         }
     }
 
+    /// Actual v5 results for a tiny honest/forged cone and real declaration
+    /// signatures. Original/service/capital remain verified-half fixtures.
+    #[test]
+    fn rooted_archive_v5_replays_signed_bytes_without_state_or_money_changes() {
+        // Exercise real wire CPU/arithmetic errors, not a caller permission flag.
+        use crate::palw_native_resource_v1::{NativeWireReaderV1,NativeWireShapeV1,NativeWireScanV1};
+        use super::super::palw_court_archive_verify_v1::inspection_io_error;
+        let overflow=NativeWireShapeV1::default().allocation(u64::MAX,16).unwrap_err();
+        assert!(matches!(inspection_io_error("actual wire overflow",overflow),PalwStateV2Error::NativeResource(_)));
+        let mut reader=NativeWireReaderV1::new(&[][..],0);
+        let timeout=loop {if let Err(e)=reader.step(){break e;}};
+        assert!(matches!(inspection_io_error("actual wire CPU bound",timeout),PalwStateV2Error::NativeResource(_)));
+        let mut reader=NativeWireReaderV1::new(&[][..],0);
+        let truncated=PalwConsensusObjectV2::scan_native_wire_v1(&mut reader).unwrap_err();
+        assert!(matches!(inspection_io_error("truncated proof",truncated),PalwStateV2Error::CarriageInconsistent(_)));
+        use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
+        use crate::palw_court_v2::{palw_court_close_declaration_message_v1 as message,
+            PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT as DOMAIN};
+        for forged in [false,true] {for held in [false,true] {for wrong_verdict in [false,true] {
+            let fx=palw_tir_public_frame_fixture_v1(if forged {Some((FORGED_LEAF,1))}else{None},4);let frame=fx.frame.clone();
+            let (mut state,params,mut extras)=world(&fx,&frame);let params=params.with_tir_from_daa(Some(0));
+            let keys=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([81;32]);state.bonds.get_mut(&outsider()).unwrap().pubkey=keys.verification_key.as_ref().to_vec();
+            let rules=NativeCourtRulesV1 {network_domain:h(0x881),at:at(&frame,5),
+                court:crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap(),
+                step_ladder:frame.header_v1().step_leaf_count,prompt_ids_merkle:false,held_regime:held,decode_close_convicts_only:true,
+                fp_decode_from_daa:None,cell_closure_from_daa:None,memory_routing_from_daa:None,
+                tir_active:true,gen_active:false,task_heads_active:false,improvement_active:false,constraint_active:false};
+            extras.native_court_rules_v1=Some(rules);extras.offence_attribution_active=true;
+            let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+            archive_service(&mut b,&frame);let (id,_)=archive_session(&mut b,&frame);
+            for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {b.write_court_close_group((id,side),None).unwrap();}
+            let Evidence::Arithmetic {proof}=cone(&fx) else {unreachable!()};
+            let actual=crate::palw_court_v2::adjudicate_court_close_v5(&b.state,&id,&proof,&rules.court,rules.step_ladder,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,held,true,None,None,None).unwrap();
+            assert_eq!(actual,if forged {PalwCourtVerdictV2::ExecutorGuilty}else{PalwCourtVerdictV2::ChallengerDefeated});
+            let stated=if wrong_verdict {if forged {PalwCourtVerdictV2::ChallengerDefeated}else{PalwCourtVerdictV2::ExecutorGuilty}}else{actual};
+            let correct=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:actual,proof:*proof.clone()};
+            let committed=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:stated,proof:*proof};
+            let raw=borsh::to_vec(&committed).unwrap();let split=raw.len()/2;assert!(split>0 && raw.len()-split<=PALW_COURT_CLOSE_CHUNK_MAX_BYTES);
+            let digests=vec![palw_court_close_chunk_digest_v1(&raw[..split]),palw_court_close_chunk_digest_v1(&raw[split..])];let digest=palw_court_close_chunk_digest_v1(&raw);
+            let side=PalwCourtSideV1::Challenger;
+            crate::palw_court_v2::check_close_declared_chunk_count_v2(&id,2,&rules.court).unwrap();
+            let signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,&message(&id,side,2,&digests,&digest,stated),DOMAIN,[82;32]).unwrap().as_ref().to_vec();
+            let declared=PalwConsensusObjectV2::CourtCloseDeclared {session_id:id,side,count:2,chunk_digests:digests,close_digest:digest,verdict:stated,signature};
+            super::super::objects::apply_object(&mut b,&at(&frame,5),&declared).unwrap();
+            super::super::objects::apply_object(&mut b,&at(&frame,6),&PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:0,bytes:raw[..split].to_vec()}).unwrap();
+            super::super::objects::apply_object(&mut b,&at(&frame,7),&correct).unwrap();
+            assert!(b.state.court_session(&id).is_none());
+            let mut candidate=b.state.court_end_archive_v1(id).unwrap().groups[&side].clone();
+            candidate.chunks.insert(1,raw[split..].to_vec());candidate.present=PalwCourtCloseGroupV2::full_mask(2);
+            let root=b.state.state_root();let journal=b.entries.len();
+            let result=b.verify_archived_close_v1(id,side,&candidate);
+            if wrong_verdict {assert!(result.unwrap_err().to_string().contains("v5 result differs"));}
+            else {
+                let token=result.unwrap();assert_eq!(token.verdict(),actual);assert_eq!(token.session_id(),id);assert_eq!(token.side(),side);
+                assert!(token.matches_state(&b.state));assert_eq!(token.group(),&candidate);assert_eq!(token.close(),&committed);
+                let mut changed=b.state.clone();changed.last_point=Some(at(&frame,8));assert!(!token.matches_state(&changed));
+            }
+            assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
+            for mutation in 0..4 {
+                let mut bad=candidate.clone();
+                match mutation {0=>{bad.chunks.get_mut(&0).unwrap()[0]^=1;},1=>{bad.deposit+=1;},2=>{bad.present^=1;},_=>{bad.chunks.remove(&1);}}
+                assert!(b.verify_archived_close_v1(id,side,&bad).is_err());assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
+            }
+            // Explicit denial counterexamples, not accepted native mutations:
+            // current extras are valid, but retained policy is missing/dormant.
+            for missing in [false,true] {
+                let mut bad_state=b.state.clone();let key=Key::CourtCloseReceipt(id,side);
+                let Row::CourtCloseReceipt(row)=bad_state.staged_court_row_v1(&key).unwrap() else {panic!()};let mut row=row.as_ref().clone();
+                if missing {row.rules=None;}else{row.rules.as_mut().unwrap().tir_active=false;}
+                bad_state.staged_courts.insert(key,Row::CourtCloseReceipt(Box::new(row).into()));
+                let mut refused=TransitionBuilder::new(&bad_state,&params,false,false,false,false,&extras);
+                let before=refused.state.state_root();let err=refused.verify_archived_close_v1(id,side,&candidate).unwrap_err().to_string();
+                assert!(err.contains(if missing {"inputs missing"}else{"family was dormant"}),"{err}");
+                assert_eq!(refused.state.state_root(),before);assert!(refused.entries.is_empty());
+            }
+            archive_roundtrip(&mut b,&params,&frame,id,at(&frame,7),state.state_root());
+            let root=b.state.state_root();let journal=b.entries.len();
+            assert_eq!(b.verify_archived_close_v1(id,side,&candidate).is_ok(),!wrong_verdict);
+            assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
+        }}}
+    }
+
     #[test]
     fn rooted_court_end_archive_streamed_fraud_keeps_complete_evidence() {
         use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part,palw_tir_public_witness_digest_v1};

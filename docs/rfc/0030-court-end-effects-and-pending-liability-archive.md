@@ -135,3 +135,16 @@ native入力がないfixture/内部経路は`rules=None`を明示し、current/d
 追加の署名再検査、署名/公開鍵/session/phaseのcloneとserialized保存、root/journal、snapshot/reorg、保持byte-DAAは全分岐profileの追加費用で、0としない。料金・上限・署名期限・preset/identity pinを変更せず、全original予約/公開ingress・E01–E10全条件・T01–T15・実doorが閉じるまで有効化保留を維持する。
 
 署名が認証するのは既存declarationのfieldであり、保存したnative rulesは合意上の受理履歴である。宣言者が料金・fork条件・終了後の新しい外部義務へ追加署名したと見なさない。gen/improvement等の条件を記録しても、延期中の機能を有効化する効果はない。
+
+
+## 10. 保存した入力によるprivate v5再検査候補
+
+親`c153ecc02`。`verify_archived_close_v1`は、元archiveの未決side、署名済みreceiptとnative入力が存在する場合だけ完成groupを検査する。count、各digest、whole digest、宣言者、outpoint、verdict、deposit、元の期限を変更できず、既に受理したchunk prefixを消去・差替えできない。完成bitmap/全index・各chunkの既存サイズ上限を確認する。native入力があるreceiptには、既存nodeと同じ宣言chunk数の上限検査も追加する。上限の変更ではない。
+
+完全なraw bytesを署名済みhashと照合し、native wire readerでheap shapeを調べてからdecodeする。typed objectの再encode一致を新しい条件にはしない。元のscopeとverdict、TIR/各familyの有効条件を検査し、宣言時のsessionとembedded/別table phaseを一時viewへ戻して、保存した全入力で**既存のadjudicate_court_close_v5**を呼ぶ。v2へfallbackせず、現在のextrasで欠けた入力を補わない。返った裁定が宣言と異なる場合は拒否する。
+
+一時viewはlocal inspection用で、active/archiveが共存し得る検査scratchである。新しい合意状態としてcommit・journal化せず、元state、担保、claim credit、service/frontier、責任の未決/確定状態を変更しない。結果はprivate constructorだけを持つ非Borsh・非Cloneの型で、元state root、session/side、raw group、decoded close、実v5結果を束縛する。将来の金融writerはstate rootの再確認に加え、独立した有料契約・実費/原資・一度だけの終了効果を検査しなければならない。この型や一致したlocal replayだけでSecurityCertified・credit・default・解除を許可しない。
+
+メッセージ/組立buffer・group/session/phase cloneとBTree membership、decoded proof、全stateの検査用copyを事前quoteし、native trackingが有効な場合は既存のconstruction ownerへadmitする。実readerのCPU予算超過・shape算術/メモリ不足は`NativeResource`として伝播し、証拠不正やabsence slashへ変えない。syntax/truncationは構造上の拒否である。RSS/allocator/全familyの物理上限や実CPU費用が校正されたという主張ではなく、全有料profileへの費用追加が必要である。
+
+これは宣言時の条件による**privateな履歴再検査**であり、旧公開nodeが後日の検証blockの条件を読む規則を置換する採択ではない。終了後の公開受付で適用する時点/規則、遡及しない署名責任、精算・pruning・資本経路は未決のまま残す。wire、schema ordinal、cap、fee、署名期限、preset/identityを変えず、武装/統合/配備を行わない。

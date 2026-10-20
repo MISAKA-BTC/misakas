@@ -1,0 +1,19 @@
+{
+  "parent": "c153ecc02f70b31e9e49a645cbb87dbcff5892e8",
+  "source_sha256": {
+    "consensus/core/src/palw_court_close_receipt_v1.rs": "125fd6b87114939ecd7c331317d3bd5c4a49fcf45f05c190db483957539add9a",
+    "consensus/core/src/palw_state_v2.rs": "f17413cc70a91bc81d948fe3db36a7c0ef7452b43676112efcde736bfee4938b",
+    "consensus/core/src/palw_court_archive_verify_v1.rs": "d48ae16f66bb69af7a7b69c388da8eb7b0b23d5db221eec97650e9cc26660d01"
+  },
+  "command": [
+    "cargo",
+    "check",
+    "--release",
+    "-p",
+    "kaspa-consensus-core",
+    "--lib"
+  ],
+  "exit_code": 0,
+  "executed_tests": 0,
+  "scope": "Initial private generic v5 archive verifier; before runtime fixtures."
+}

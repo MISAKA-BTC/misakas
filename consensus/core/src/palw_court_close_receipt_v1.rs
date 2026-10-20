@@ -56,7 +56,11 @@ impl CourtCloseReceiptV1 {
             || *count==0 || *count>PALW_COURT_CLOSE_MAX_CHUNKS || chunk_digests.len()!=usize::from(*count)
             || self.point.daa_score.checked_add(palw_close_assembly_daa_v1(*count)).is_none_or(|d|d>self.session.deadline_daa)
         {return Err("close receipt changes declaration/session scope".into());}
-        if let Some(rules)=&self.rules {rules.check()?;if rules.at!=self.point {return Err("receipt rules belong to another native point".into());}}
+        if let Some(rules)=&self.rules {
+            rules.check()?;
+            if rules.at!=self.point {return Err("receipt rules belong to another native point".into());}
+            crate::palw_court_v2::check_close_declared_chunk_count_v2(session_id,*count,&rules.court).map_err(|e|e.to_string())?;
+        }
         if self.declarer_pubkey.len()!=crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN || signature.len()!=crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {return Err("close receipt key/signature length".into());}
         let message=crate::palw_court_v2::palw_court_close_declaration_message_v1(session_id,*side,*count,chunk_digests,close_digest,*verdict);
         if !crate::palw_attempt_material_v3::verify_ready_signature_v3(&self.declarer_pubkey,&message,signature,

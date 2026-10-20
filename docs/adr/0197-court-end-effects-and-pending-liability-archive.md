@@ -45,3 +45,8 @@ RFC-0030 §2–5が具体案である。特に「裁定終了と責任解消を�
 ## 宣言時資料の保存候補
 
 親`e2e367e98`から、[RFC-0030 §9](../rfc/0030-court-end-effects-and-pending-liability-archive.md#9-宣言時の署名native裁定入力の保存候補)のprivate receiptを追加する。旧groupにない署名全文・公開鍵・元phaseとnative v5入力を宣言時に捕捉する。資料の保存は終了後の担保解除権限ではなく、旧宣言へ新しい義務/期限を後付けしない。過去のgroupに欠けた入力を仮値で補わず、`None`は未被覆として残す。新key 21 / row 27は隔離候補だけの末尾ordinalであり、本番採択を含まない。
+
+
+## Private v5再検査
+
+[RFC-0030 §10](../rfc/0030-court-end-effects-and-pending-liability-archive.md#10-保存した入力によるprivate-v5再検査候補)に、保存した署名/chunk/session/phase/native入力で既存v5を呼ぶ候補を追加する。state rootに束縛した非serialized結果を返すだけで、元の金融・credit・責任状態を変更しない。公開受付の適用時点や金融解除を、このprivate再検査によって採択しない。局所の予算/OOM不足はNativeResourceであり、不正/defaultの根拠にしない。全有料graphとqualified settlementは未完である。

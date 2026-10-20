@@ -1,0 +1,254 @@
+diff --git a/consensus/core/src/palw_court_close_receipt_v1.rs b/consensus/core/src/palw_court_close_receipt_v1.rs
+index b55ec1854..7b783ed40 100644
+--- a/consensus/core/src/palw_court_close_receipt_v1.rs
++++ b/consensus/core/src/palw_court_close_receipt_v1.rs
+@@ -56,7 +56,11 @@ impl CourtCloseReceiptV1 {
+             || *count==0 || *count>PALW_COURT_CLOSE_MAX_CHUNKS || chunk_digests.len()!=usize::from(*count)
+             || self.point.daa_score.checked_add(palw_close_assembly_daa_v1(*count)).is_none_or(|d|d>self.session.deadline_daa)
+         {return Err("close receipt changes declaration/session scope".into());}
+-        if let Some(rules)=&self.rules {rules.check()?;if rules.at!=self.point {return Err("receipt rules belong to another native point".into());}}
++        if let Some(rules)=&self.rules {
++            rules.check()?;
++            if rules.at!=self.point {return Err("receipt rules belong to another native point".into());}
++            crate::palw_court_v2::check_close_declared_chunk_count_v2(session_id,*count,&rules.court).map_err(|e|e.to_string())?;
++        }
+         if self.declarer_pubkey.len()!=crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN || signature.len()!=crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {return Err("close receipt key/signature length".into());}
+         let message=crate::palw_court_v2::palw_court_close_declaration_message_v1(session_id,*side,*count,chunk_digests,close_digest,*verdict);
+         if !crate::palw_attempt_material_v3::verify_ready_signature_v3(&self.declarer_pubkey,&message,signature,
+diff --git a/consensus/core/src/palw_state_v2.rs b/consensus/core/src/palw_state_v2.rs
+index eaa0211ce..56a676ac1 100644
+--- a/consensus/core/src/palw_state_v2.rs
++++ b/consensus/core/src/palw_state_v2.rs
+@@ -11166,6 +11166,8 @@ pub struct PalwChainStateV2 {
+ mod chain_state;
+ #[path = "palw_court_end_archive_fold_v1.rs"]
+ mod palw_court_end_archive_fold_v1;
++#[path = "palw_court_archive_verify_v1.rs"]
++mod palw_court_archive_verify_v1;
+ 
+ /// Shape-level helper for `assert_internal_consistency`: does this
+ /// claim, in this phase with this many open courts, owe the index a deadline entry at all?
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index 54004287b..1f3b1e83e 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -3398,6 +3398,89 @@ mod conviction_e2e_tests {
+         }
+     }
+ 
++    /// Actual v5 results for a tiny honest/forged cone and real declaration
++    /// signatures. Original/service/capital remain verified-half fixtures.
++    #[test]
++    fn rooted_archive_v5_replays_signed_bytes_without_state_or_money_changes() {
++        // Exercise real wire CPU/arithmetic errors, not a caller permission flag.
++        use crate::palw_native_resource_v1::{NativeWireReaderV1,NativeWireShapeV1,NativeWireScanV1};
++        use super::super::palw_court_archive_verify_v1::inspection_io_error;
++        let overflow=NativeWireShapeV1::default().allocation(u64::MAX,16).unwrap_err();
++        assert!(matches!(inspection_io_error("actual wire overflow",overflow),PalwStateV2Error::NativeResource(_)));
++        let mut reader=NativeWireReaderV1::new(&[][..],0);
++        let timeout=loop {if let Err(e)=reader.step(){break e;}};
++        assert!(matches!(inspection_io_error("actual wire CPU bound",timeout),PalwStateV2Error::NativeResource(_)));
++        let mut reader=NativeWireReaderV1::new(&[][..],0);
++        let truncated=PalwConsensusObjectV2::scan_native_wire_v1(&mut reader).unwrap_err();
++        assert!(matches!(inspection_io_error("truncated proof",truncated),PalwStateV2Error::CarriageInconsistent(_)));
++        use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
++        use crate::palw_court_v2::{palw_court_close_declaration_message_v1 as message,
++            PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT as DOMAIN};
++        for forged in [false,true] {for held in [false,true] {for wrong_verdict in [false,true] {
++            let fx=palw_tir_public_frame_fixture_v1(if forged {Some((FORGED_LEAF,1))}else{None},4);let frame=fx.frame.clone();
++            let (mut state,params,mut extras)=world(&fx,&frame);let params=params.with_tir_from_daa(Some(0));
++            let keys=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([81;32]);state.bonds.get_mut(&outsider()).unwrap().pubkey=keys.verification_key.as_ref().to_vec();
++            let rules=NativeCourtRulesV1 {network_domain:h(0x881),at:at(&frame,5),
++                court:crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap(),
++                step_ladder:frame.header_v1().step_leaf_count,prompt_ids_merkle:false,held_regime:held,decode_close_convicts_only:true,
++                fp_decode_from_daa:None,cell_closure_from_daa:None,memory_routing_from_daa:None,
++                tir_active:true,gen_active:false,task_heads_active:false,improvement_active:false,constraint_active:false};
++            extras.native_court_rules_v1=Some(rules);extras.offence_attribution_active=true;
++            let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
++            archive_service(&mut b,&frame);let (id,_)=archive_session(&mut b,&frame);
++            for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {b.write_court_close_group((id,side),None).unwrap();}
++            let Evidence::Arithmetic {proof}=cone(&fx) else {unreachable!()};
++            let actual=crate::palw_court_v2::adjudicate_court_close_v5(&b.state,&id,&proof,&rules.court,rules.step_ladder,
++                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,held,true,None,None,None).unwrap();
++            assert_eq!(actual,if forged {PalwCourtVerdictV2::ExecutorGuilty}else{PalwCourtVerdictV2::ChallengerDefeated});
++            let stated=if wrong_verdict {if forged {PalwCourtVerdictV2::ChallengerDefeated}else{PalwCourtVerdictV2::ExecutorGuilty}}else{actual};
++            let correct=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:actual,proof:*proof.clone()};
++            let committed=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:stated,proof:*proof};
++            let raw=borsh::to_vec(&committed).unwrap();let split=raw.len()/2;assert!(split>0 && raw.len()-split<=PALW_COURT_CLOSE_CHUNK_MAX_BYTES);
++            let digests=vec![palw_court_close_chunk_digest_v1(&raw[..split]),palw_court_close_chunk_digest_v1(&raw[split..])];let digest=palw_court_close_chunk_digest_v1(&raw);
++            let side=PalwCourtSideV1::Challenger;
++            crate::palw_court_v2::check_close_declared_chunk_count_v2(&id,2,&rules.court).unwrap();
++            let signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,&message(&id,side,2,&digests,&digest,stated),DOMAIN,[82;32]).unwrap().as_ref().to_vec();
++            let declared=PalwConsensusObjectV2::CourtCloseDeclared {session_id:id,side,count:2,chunk_digests:digests,close_digest:digest,verdict:stated,signature};
++            super::super::objects::apply_object(&mut b,&at(&frame,5),&declared).unwrap();
++            super::super::objects::apply_object(&mut b,&at(&frame,6),&PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:0,bytes:raw[..split].to_vec()}).unwrap();
++            super::super::objects::apply_object(&mut b,&at(&frame,7),&correct).unwrap();
++            assert!(b.state.court_session(&id).is_none());
++            let mut candidate=b.state.court_end_archive_v1(id).unwrap().groups[&side].clone();
++            candidate.chunks.insert(1,raw[split..].to_vec());candidate.present=PalwCourtCloseGroupV2::full_mask(2);
++            let root=b.state.state_root();let journal=b.entries.len();
++            let result=b.verify_archived_close_v1(id,side,&candidate);
++            if wrong_verdict {assert!(result.unwrap_err().to_string().contains("v5 result differs"));}
++            else {
++                let token=result.unwrap();assert_eq!(token.verdict(),actual);assert_eq!(token.session_id(),id);assert_eq!(token.side(),side);
++                assert!(token.matches_state(&b.state));assert_eq!(token.group(),&candidate);assert_eq!(token.close(),&committed);
++                let mut changed=b.state.clone();changed.last_point=Some(at(&frame,8));assert!(!token.matches_state(&changed));
++            }
++            assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
++            for mutation in 0..4 {
++                let mut bad=candidate.clone();
++                match mutation {0=>{bad.chunks.get_mut(&0).unwrap()[0]^=1;},1=>{bad.deposit+=1;},2=>{bad.present^=1;},_=>{bad.chunks.remove(&1);}}
++                assert!(b.verify_archived_close_v1(id,side,&bad).is_err());assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
++            }
++            // Explicit denial counterexamples, not accepted native mutations:
++            // current extras are valid, but retained policy is missing/dormant.
++            for missing in [false,true] {
++                let mut bad_state=b.state.clone();let key=Key::CourtCloseReceipt(id,side);
++                let Row::CourtCloseReceipt(row)=bad_state.staged_court_row_v1(&key).unwrap() else {panic!()};let mut row=row.as_ref().clone();
++                if missing {row.rules=None;}else{row.rules.as_mut().unwrap().tir_active=false;}
++                bad_state.staged_courts.insert(key,Row::CourtCloseReceipt(Box::new(row).into()));
++                let mut refused=TransitionBuilder::new(&bad_state,&params,false,false,false,false,&extras);
++                let before=refused.state.state_root();let err=refused.verify_archived_close_v1(id,side,&candidate).unwrap_err().to_string();
++                assert!(err.contains(if missing {"inputs missing"}else{"family was dormant"}),"{err}");
++                assert_eq!(refused.state.state_root(),before);assert!(refused.entries.is_empty());
++            }
++            archive_roundtrip(&mut b,&params,&frame,id,at(&frame,7),state.state_root());
++            let root=b.state.state_root();let journal=b.entries.len();
++            assert_eq!(b.verify_archived_close_v1(id,side,&candidate).is_ok(),!wrong_verdict);
++            assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
++        }}}
++    }
++
+     #[test]
+     fn rooted_court_end_archive_streamed_fraud_keeps_complete_evidence() {
+         use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part,palw_tir_public_witness_digest_v1};
+diff --git a/consensus/core/src/palw_court_archive_verify_v1.rs b/consensus/core/src/palw_court_archive_verify_v1.rs
+new file mode 100644
+index 000000000..b5a525199
+--- /dev/null
++++ b/consensus/core/src/palw_court_archive_verify_v1.rs
+@@ -0,0 +1,124 @@
++//! RFC-0030 private archive verification: native v5 replay of the declared
++//! bytes under retained native inputs. It neither changes chain state nor
++//! releases money, grants credit, manufactures supply, or authorizes default.
++use super::*;
++use crate::palw_native_resource_v1::{NativeWireReaderV1,NativeWireScanV1};
++use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key,PalwStagedCourtRowV1 as Row};
++
++/// Only this verifier constructs the result. No Borsh/Clone/from-bool path.
++/// A later financial transition must also check the bound state root and its
++/// own funded contract/once-only effects; this result alone settles nothing.
++#[allow(dead_code)]
++#[derive(Debug)]
++pub(super) struct VerifiedArchivedCloseV1 {
++    state_root:Hash64,
++    session_id:Hash64,
++    side:PalwCourtSideV1,
++    verdict:PalwCourtVerdictV2,
++    group:Box<PalwCourtCloseGroupV2>,
++    close:Box<PalwConsensusObjectV2>,
++}
++#[allow(dead_code)]
++impl VerifiedArchivedCloseV1 {
++    pub(super) fn verdict(&self)->PalwCourtVerdictV2{self.verdict}
++    pub(super) fn session_id(&self)->Hash64{self.session_id}
++    pub(super) fn side(&self)->PalwCourtSideV1{self.side}
++    pub(super) fn matches_state(&self,state:&PalwChainStateV2)->bool{self.state_root==state.state_root()}
++    pub(super) fn group(&self)->&PalwCourtCloseGroupV2{&self.group}
++    pub(super) fn close(&self)->&PalwConsensusObjectV2{&self.close}
++}
++fn same_contract(a:&PalwCourtCloseGroupV2,b:&PalwCourtCloseGroupV2)->bool {
++    a.declarer==b.declarer && a.count==b.count && a.chunk_digests==b.chunk_digests
++        && a.close_digest==b.close_digest && a.verdict==b.verdict && a.declared_daa==b.declared_daa
++        && a.assembly_deadline_daa==b.assembly_deadline_daa && a.deposit_outpoint==b.deposit_outpoint && a.deposit==b.deposit
++}
++fn refusal(message:impl Into<String>)->PalwStateV2Error {PalwStateV2Error::CarriageInconsistent(message.into())}
++/// Local construction limits must never turn a valid proof into misconduct.
++/// Syntax/truncation remains a semantic refusal; budget/OOM is retryable local
++/// NativeResource, including the wire reader's actual CPU/arithmetic limits.
++pub(super) fn inspection_io_error(stage:&str,error:std::io::Error)->PalwStateV2Error {
++    if matches!(error.kind(),std::io::ErrorKind::TimedOut | std::io::ErrorKind::OutOfMemory) {
++        native_writers::native_err_v1(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwConsensusObjectV2>(stage,&error.to_string()))
++    }else{refusal(format!("{stage}: {error}"))}
++}
++impl TransitionBuilder<'_> {
++    /// A private verifier, not a public ingestion or paid-admission endpoint.
++    /// The candidate can add only the precommitted missing bytes. No clock,
++    /// policy, signature, verdict, contract or previously accepted byte changes.
++    #[allow(dead_code)]
++    pub(super) fn verify_archived_close_v1(&mut self,id:Hash64,side:PalwCourtSideV1,candidate:&PalwCourtCloseGroupV2)
++        ->Result<VerifiedArchivedCloseV1,PalwStateV2Error>{
++        let archive=self.state.court_end_archive_v1(id).ok_or_else(||refusal("court archive missing"))?;
++        archive.check_context(&self.state).map_err(refusal)?;
++        let original=archive.groups.get(&side).ok_or_else(||refusal("archived declaration missing"))?;
++        if archive.fulfilled_groups.contains(&side) || archive.applied_deposit_debits.contains_key(&side) {
++            return Err(refusal("archived declaration already discharged"));
++        }
++        if !same_contract(original,candidate) || !candidate.is_complete()
++            || candidate.chunks.len()!=usize::from(candidate.count)
++            || candidate.present!=PalwCourtCloseGroupV2::full_mask(candidate.count)
++            || original.chunks.iter().any(|(i,bytes)|candidate.chunks.get(i)!=Some(bytes))
++        {return Err(refusal("completed archive group changes its accepted contract/prefix"));}
++        let mut total=0u64;
++        for i in 0..candidate.count {
++            let bytes=candidate.chunks.get(&i).ok_or_else(||refusal("archive completion has a chunk hole"))?;
++            if bytes.is_empty() || bytes.len()>PALW_COURT_CLOSE_CHUNK_MAX_BYTES
++                || palw_court_close_chunk_digest_v1(bytes)!=candidate.chunk_digests[usize::from(i)]
++            {return Err(refusal("archive completion chunk digest/size mismatch"));}
++            total=total.checked_add(bytes.len() as u64).ok_or_else(||refusal("archive completion length overflow"))?;
++        }
++        let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {
++            Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>return Err(refusal("original signed native close receipt missing")),
++        };
++        // Admit scratch, copies and BTree memberships before signature-message
++        // construction, assembly, or restoring the local inspection view.
++        if self.native_writers_tracking_v1(){
++            let mut q=native_writers::NativeWriteQuoteV1::new("archive complete signed v5 replay before buffers");
++            q.copy(candidate)?.exact::<PalwCourtCloseGroupV2>(1)?.copy(&receipt.session)?
++                .member::<Hash64,PalwCourtSessionStateV2>(1)?
++                .exact::<Hash64>(2*u64::from(candidate.count))?.exact::<u8>(256)?.exact::<u8>(total)?;
++            if let Some(phase)=&receipt.tir_phase {
++                q.copy(phase)?.member::<Hash64,Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>(1)?;
++            }
++            self.admit_native_write_v1(q)?;
++        }
++        let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>unreachable!()};
++        receipt.check_context(&self.state).map_err(refusal)?;
++        let rules=receipt.rules.ok_or_else(||refusal("original native v5 inputs missing; no default fallback"))?;
++        crate::palw_court_v2::check_close_declared_chunk_count_v2(&id,candidate.count,&rules.court).map_err(|e|refusal(e.to_string()))?;
++        let total=usize::try_from(total).map_err(|_|refusal("archive completion cannot fit native address space"))?;
++        let mut assembled=Vec::with_capacity(total);
++        for i in 0..candidate.count {assembled.extend_from_slice(&candidate.chunks[&i]);}
++        if palw_court_close_chunk_digest_v1(&assembled)!=candidate.close_digest {return Err(refusal("archive completion whole digest mismatch"));}
++        let mut reader=NativeWireReaderV1::new(assembled.as_slice(),assembled.len() as u64);
++        let shape=PalwConsensusObjectV2::scan_native_wire_v1(&mut reader).map_err(|e|inspection_io_error("archive close wire shape",e))?;
++        if reader.remaining()!=0 {return Err(refusal("archive close has trailing material"));}
++        if self.native_writers_tracking_v1(){
++            let mut q=native_writers::NativeWriteQuoteV1::new("archive v5 proof decode before allocation");
++            q.exact::<u8>(shape.heap)?.exact::<PalwConsensusObjectV2>(1)?;
++            self.admit_native_write_v1(q)?;
++        }
++        let close:PalwConsensusObjectV2=borsh::from_slice(&assembled).map_err(|e|inspection_io_error("archive close decode",e))?;
++        let PalwConsensusObjectV2::CourtClosed {session_id,verdict,proof}=&close else {return Err(refusal("archive bytes are not a court close"));};
++        if *session_id!=id || *verdict!=candidate.verdict {return Err(refusal("archive close changes declared session/verdict"));}
++        if (proof.is_tir_v1() && !rules.tir_active) || (proof.is_gen_v1() && !rules.gen_active)
++            || (proof.is_eval_v1() && !rules.improvement_active)
++            || (proof.is_constrained_decode_v1() && !rules.constraint_active)
++            || (crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(&close) && !rules.task_heads_active)
++        {return Err(refusal("archive proof family was dormant in its retained native context"));}
++        // The checkpoint owner admits the actual complete state copy. This view
++        // is local inspection scratch: it is not a valid new chain state and is
++        // never journalled, committed, or used to mint credit or settle money.
++        let (mut view,_)=self.try_checkpoint()?;
++        let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>unreachable!()};
++        view.court_sessions.insert(id,receipt.session.clone());
++        if let Some(phase)=&receipt.tir_phase {view.tir_dissections.insert(id,phase.clone());}
++        let prompt=if rules.prompt_ids_merkle {crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1}else{crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat};
++        let derived=crate::palw_court_v2::adjudicate_court_close_v5(&view,&id,proof,&rules.court,rules.step_ladder,prompt,
++            rules.held_regime,rules.decode_close_convicts_only,rules.fp_decode_from_daa,rules.cell_closure_from_daa,rules.memory_routing_from_daa)
++            .map_err(|e|refusal(format!("archived v5 close does not adjudicate: {e}")))?;
++        if derived!=*verdict {return Err(refusal("archived v5 result differs from the signed declaration"));}
++        Ok(VerifiedArchivedCloseV1 {state_root:self.state.state_root(),session_id:id,side,verdict:derived,
++            group:Box::new(candidate.clone()),close:Box::new(close)})
++    }
++}

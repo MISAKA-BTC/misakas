@@ -11166,6 +11166,8 @@ pub struct PalwChainStateV2 {
 mod chain_state;
 #[path = "palw_court_end_archive_fold_v1.rs"]
 mod palw_court_end_archive_fold_v1;
+#[path = "palw_court_archive_verify_v1.rs"]
+mod palw_court_archive_verify_v1;
 
 /// Shape-level helper for `assert_internal_consistency`: does this
 /// claim, in this phase with this many open courts, owe the index a deadline entry at all?
