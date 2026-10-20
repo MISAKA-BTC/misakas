@@ -354,3 +354,8 @@ ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bond�
 ### 本文との関係
 
 §4の会計表と§7のgateは本節で補完される。旧記述を削除せず、衝突する場合は本節と[実装仕様](../design/palw/execution/rfc-0008-implementation-spec.md) §§12–15を優先する。設計監査の旧記述「実際に回収可能なmarket feeとissuanceの合計を`R_max`に含める」は、v1では2026-10-11のユーザー判断（market feeは`R_max`外）で置き換えられたものとして扱う。
+
+## 整合性修正 — 2026-10-19(RFC 全件整合性監査)
+
+- R8-WINDOW(依存 path の最短の署名済み horizon を越えて延長しない)は維持する。RFC-0014 2026-10-19 改定の係争延長(最大 `a + 10,000`)とは、**新しい original claim の受付時に、依存契約が `a + 10,000` と必要な後続責任を既に覆っていることを検査し、覆わない claim を受け付けない**ことで両立させる([RFC-0026](0026-court-policy-master-contract.md) §3.3、F07)。延長のたびに依存先の同意を取り直さない。
+- clock machinery が court 停止中も進むこと自体は、応答機会があった証明にならない(RFC-0026 §4.1)。

@@ -1475,6 +1475,7 @@ impl PalwChainStateV2 {
     pub fn palw_accusation_pending_v1(&self, claim_id: &Hash64) -> bool {
         // Lane LG14-A: a live dispute reservation is a pending accusation (empty below `palw_legacy_public_filer_v1`).
         self.palw_legacy_dispute_holds_v1(claim_id)
+            || self.court_service_holds_claim_v1(claim_id)
             || self.da_claims.get(claim_id).is_some_and(|record| record.open_sessions() > 0)
             || self.open_courts_by_claim.get(claim_id).is_some_and(|open| *open > 0)
             || matches!(self.claims.get(claim_id).map(|claim| &claim.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
@@ -3883,6 +3884,9 @@ impl PalwChainStateV2 {
             return Err(PalwStateV2Error::CarriageInconsistent("artifact inventory owner index differs from paid attempts".into()));
         }
         self.assert_tir_acquisition_indices_v1()?;
+        if let Some(service) = self.court_service_state_v1() {
+            service.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;
@@ -3902,7 +3906,7 @@ impl PalwChainStateV2 {
                 continue;
             }
             // Lane LG14-A: a claim a live dispute reservation holds owes none (DL-1's reservation row; empty below the fence).
-            if self.palw_legacy_dispute_holds_v1(id) {
+            if self.palw_legacy_dispute_holds_v1(id) || self.court_service_holds_claim_v1(id) {
                 continue;
             }
             // RFC-0010: the engine clocks a claim it tracks until the claim is licensed (it owes no V2 deadline).
@@ -4371,6 +4375,7 @@ impl PalwChainStateV2 {
         }
         let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
+            if self.court_service_holds_claim_v1(id) { continue; }
             let open_courts = self.open_courts_by_claim.get(id).copied().unwrap_or(0);
             match claim.phase {
                 PalwClaimPhaseV2::Provisional => {

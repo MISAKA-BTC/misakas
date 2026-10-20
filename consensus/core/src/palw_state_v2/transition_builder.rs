@@ -8866,7 +8866,7 @@ impl<'a> TransitionBuilder<'a> {
         // `palw_rcore_plus`, where this is the plain insert it always was.
         let mut deadline = deadline;
         // Lane LG14-A: DL-1's dispute-reservation row, at the same primitive — a claim a live reservation holds owes none.
-        if self.state.palw_legacy_dispute_holds_v1(&claim) {
+        if self.state.palw_legacy_dispute_holds_v1(&claim) || self.state.court_service_holds_claim_v1(&claim) {
             return Ok(());
         }
         // **RFC-0008 v2: a licensed claim whose work session is not ready owes no `Final` deadline** — the same pause a DA session
@@ -9580,6 +9580,7 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
+        if self.state.court_service_holds_claim_v1(&id) { return Ok(()); }
         if self.state.staged_claim_contract_v1(&id).and_then(|c| c.prefix_custody.as_ref()).is_some_and(|c| !c.qualified()) {
             // Refusal to opt into prospective custody buys no Final/activation credit and
             // creates no retroactive DA guilt. Pending accusations keep their existing route.
@@ -10109,6 +10110,7 @@ impl<'a> TransitionBuilder<'a> {
     /// The panel goes with it: `write_panel` had no `None` caller anywhere, so a bound claim's
     /// panel outlived the claim by exactly forever and grew at the same one-per-block rate.
     pub(super) fn retire_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+        if self.state.court_service_holds_claim_v1(&id) { return Ok(()); }
         let now = self.state.last_point.map_or(0, |p| p.daa_score);
         super::palw_claim_local_rewards_v1::clear_hold_v1(self, now, id)?;
         self.forget_paid_consumer_v1(id)?;

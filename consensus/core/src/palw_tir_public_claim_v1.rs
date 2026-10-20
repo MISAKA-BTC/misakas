@@ -431,6 +431,16 @@ pub(crate) struct PalwTirPublicFrameFixtureV1 {
     pub object: crate::palw_state_v2::PalwConsensusObjectV2,
 }
 
+// Guard-only injection: deliberately not a native admission/serialization fixture.
+#[cfg(test)]
+impl PalwTirPublicClaimV1 {
+    pub(crate) fn with_service_semantic_guard_fixture_v1(mut self, semantic: crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1, id: Hash64) -> Self {
+        self.plan.semantic = Some(semantic);
+        self.plan.semantic_resource_plan_id = Some(id);
+        self
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn palw_tir_public_frame_fixture_v1(forge: Option<(usize, usize)>, maximum_custodians: u64) -> PalwTirPublicFrameFixtureV1 {
     tests::fixture_in(forge, maximum_custodians)

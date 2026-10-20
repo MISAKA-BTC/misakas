@@ -10,6 +10,10 @@
 
 | 番号 | 内容 |
 | --- | --- |
+| 0026 | [court の主契約:時計・帰責・責任期間・置換関係の一本化(Draft、current court policy)](0026-court-policy-master-contract.md) |
+| 0025 | [モデルが増え court が大量発生しても処理を継続できる客観的 court(Draft)](0025-scalable-objective-court-many-models-mass-disputes.md) |
+| 0024 | [ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計(Draft)](0024-court-door-3200-to-ctx-2m.md) |
+| 0023 | [未解決 claim の責任を保持し、依存しない claim を進める](0023-unresolved-claim-liability-and-independent-progress.md) |
 | 0022 | [初期 mainnet から画像・動画・モデル改善を外す適用範囲](0022-post-mainnet-media-and-model-improvement-scope.md) |
 | 0021 | [設計凍結・例外変更手続きと文書の役割分離](0021-design-freeze-and-documentation-governance.md) |
 | 0020 | [長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない](0020-long-context-calibration-memory.md) |
@@ -20,6 +24,6 @@
 | 0004 | [PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR](0004-palw-model-improvement.md) |
 | 0003 | [PALW Generative Model Classes — one job, determinism and output layer, and the class profiles on top of it](0003-palw-generative-model-classes.md) |
 
-この整理版の次番号は **RFC-0023**。添付ZIPの台帳に基づき追加した番号で、他ブランチの予約は統合前に照合します。既存番号は再利用・再採番していません。
+この整理版の次番号は **RFC-0027**。添付ZIPの台帳に基づき追加した番号で、他ブランチの予約は統合前に照合します。既存番号は再利用・再採番していません。
 
 詳細な旧索引・過去の置換/適用表は [整理前の索引](../history/documentation/2026-10-17/rfc/README.md) に保持しています。旧表のcurrent / liveは現在の保証ではありません。

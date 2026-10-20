@@ -527,8 +527,8 @@ impl Lg {
 
     /// **The colluding producer answers every unit it owes** (it cannot do otherwise without defaulting): the duty list its node
     /// reads (`palw_disclosure_duties_v1`), each unit opened from ITS capture by the node's builders. `withhold` names units it keeps
-    /// silent on. Returns whether anything was sent.
-    async fn producer_answers(&mut self, produced: &Produced, withhold: &dyn Fn(&PalwDaUnitV1) -> bool) -> bool {
+    /// silent on. Returns the signed response objects before any carrier is funded.
+    fn signed_producer_answer_objects(&mut self, produced: &Produced, withhold: &dyn Fn(&PalwDaUnitV1) -> bool) -> Vec<(usize, Obj)> {
         let duties = self.chain.ctx.consensus.palw_disclosure_duties_v1(vec![self.chain.bonds[EXECUTOR]]);
         let form = self.config.params.palw_prompt_ids_form_v1();
         let work_leaves = self.view(produced.claim_id).work_leaves;
@@ -568,6 +568,11 @@ impl Lg {
             .unwrap_or_else(|e| panic!("the node's builder builds the answer: {e}"));
             objects.push((EXECUTOR, object));
         }
+        objects
+    }
+
+    async fn producer_answers(&mut self, produced: &Produced, withhold: &dyn Fn(&PalwDaUnitV1) -> bool) -> bool {
+        let objects = self.signed_producer_answer_objects(produced, withhold);
         if objects.is_empty() {
             return false;
         }
@@ -836,6 +841,80 @@ async fn licensed_claim(lg: &mut Lg, lie: bool) -> (Produced, Vec<usize>, u64) {
     let seats = lg.bind(produced.claim_id).await;
     let licensed = lg.license(produced.claim_id, &seats).await;
     (produced, seats, licensed)
+}
+
+/// Funded third-party relay on the legacy route, not complete TIR-original T08.
+/// The producer signs its answer before the newcomer pays for and submits it.
+#[tokio::test]
+async fn lg14a_a_newcomer_funds_and_relays_another_bonds_signed_answer() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut lg = Lg::new(true);
+    let (produced, _, _) = licensed_claim(&mut lg, false).await;
+    let id = produced.claim_id;
+    let newcomer = lg.bond(NEWCOMER);
+    let producer = lg.bond(EXECUTOR);
+    let reservation = palw_fraud_filer_reservation_v1(&lg.view(id), newcomer);
+    let object = palw_dispute_reserved_object_v1(lg.domain, reservation, |m| {
+        sign(NEWCOMER, m, kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1, 0x71)
+    });
+    lg.send(vec![(NEWCOMER, object)]).await;
+    let mut verifier = Verifier::check(&lg, NEWCOMER, id);
+    let probe = PalwLegacyProbeV1::Binding { row: 0, tile: 0 };
+    let demand = verifier.demand(&mut lg, probe);
+    lg.send(vec![(NEWCOMER, demand)]).await;
+    let prepared = lg.signed_producer_answer_objects(&produced, &|_| false);
+    assert!(!prepared.is_empty(), "the actual node exposes the producer's duty");
+    for (signer, object) in &prepared {
+        assert_eq!(*signer, EXECUTOR);
+        let Obj::MaterialDisclosedV2 { discloser, claim, .. } = object else { panic!("signed disclosure") };
+        assert_eq!((*discloser, *claim), (producer, id));
+    }
+    let producer_funding = lg.funding[&EXECUTOR].clone();
+    let producer_collateral = lg.collateral(EXECUTOR);
+    let newcomer_input = lg.funding[&NEWCOMER].0;
+    let bytes: Vec<_> = prepared.iter().map(|(_, object)| borsh::to_vec(&PalwLifecycleTxPayloadV2 {
+        version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).unwrap()).collect();
+    // After preparation, send only constructs/signs NEWCOMER's outer UTXO
+    // carriers. It does not ask the producer to re-sign a court response.
+    let (carrying, _) = lg.send(prepared.into_iter().map(|(_, object)| (NEWCOMER, object)).collect()).await;
+    let mut seen = 0;
+    for block in carrying {
+        for tx in block.transactions.iter() {
+            if bytes.contains(&tx.payload) {
+                if seen == 0 { assert_eq!(tx.inputs[0].previous_outpoint, newcomer_input); }
+                assert_ne!(tx.inputs[0].previous_outpoint, producer_funding.0);
+                seen += 1;
+            }
+        }
+    }
+    assert_eq!(seen, bytes.len(), "the node template included every unchanged signed answer");
+    assert_eq!(lg.funding[&EXECUTOR], producer_funding, "producer's funding UTXO was not spent");
+    assert_eq!(lg.collateral(EXECUTOR), producer_collateral, "a correct relayed answer does not slash its signer");
+    assert!(!lg.chain.ctx.consensus.palw_disclosure_duties_v1(vec![producer]).duties.iter().any(|d| d.claim_id == id),
+        "native fold discharged the producer's answered duty");
+    assert!(verifier.learn(&lg, probe), "the independent verifier learns the authenticated binding");
+    assert!(verifier.binding.is_some());
+    // Query the real ledger, independently of the helper's funding map.
+    let relay_change = lg.funding[&NEWCOMER].clone();
+    let check_utxos = |chain: &T12Chain| {
+        let original = chain.ctx.consensus.get_virtual_utxo_entry(producer_funding.0).expect("producer's actual UTXO remains");
+        assert_eq!((original.amount, &original.script_public_key), (producer_funding.1.amount, &producer_funding.1.script_public_key));
+        assert!(chain.ctx.consensus.get_virtual_utxo_entry(newcomer_input).is_none(), "relayer's actual input is spent");
+        let change = chain.ctx.consensus.get_virtual_utxo_entry(relay_change.0).expect("relayer's actual change exists");
+        assert_eq!((change.amount, &change.script_public_key), (relay_change.1.amount, &relay_change.1.script_public_key));
+    };
+    check_utxos(&lg.chain);
+    // Full block replay into a fresh node, carrying no verifier-local cache.
+    // This is full IBD in the in-process harness, not pruned import/process restart.
+    let imported = lg.ibd().await;
+    check_utxos(&imported);
+    assert_eq!(imported.tip_state().1.state_root(), lg.chain.tip_state().1.state_root());
+    assert!(!imported.ctx.consensus.palw_disclosure_duties_v1(vec![producer]).duties.iter().any(|d| d.claim_id == id));
+    let resumed = lg.on_chain(imported, lg.funding.clone());
+    let mut fresh_verifier = Verifier::check(&resumed, NEWCOMER, id);
+    assert!(fresh_verifier.binding.is_none());
+    assert!(fresh_verifier.learn(&resumed, probe), "fresh verifier relearns only accepted relay evidence");
+    assert!(fresh_verifier.binding.is_some());
 }
 
 /// **G14 C1 / C5 / C7 / C8, before Final**: a non-seat bond registered after genesis convicts a self-consistent computation lie that

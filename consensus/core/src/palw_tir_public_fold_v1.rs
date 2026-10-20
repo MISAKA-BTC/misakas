@@ -904,6 +904,11 @@ fn apply_verified_control_v1(
         Effect::PreparationDefault(default) => Some(std::iter::once(default.actor).collect()),
         _ => None,
     };
+    if unpaid.is_some() {
+        if let Some(Row::CourtService(service)) = b.state.staged_court_row_v1(&Key::CourtService) {
+            service.default_hold(&frame).map_err(refused)?;
+        }
+    }
     if let Some(unpaid) = &unpaid {
         let liable = frame.custody_v1().liable_signers_v1();
         if unpaid.is_empty() || !unpaid.is_subset(&liable) {
@@ -1239,9 +1244,13 @@ fn apply_witness_part_v1(
     }
     let evidence =
         crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::decode_staged_v1(&row.received).map_err(refused)?;
-    if existing.is_some() {
+    if existing.is_some() && !b.state.court_service_holds_material_v1(&key) {
         b.write_staged_row_v1(key, None)?;
     }
+    // A recovery hold retains the existing partial row, without changing the
+    // V1 codec's ban on completed rows. It must not prevent the assembled,
+    // verified evidence from reaching adjudication. Terminal release/archive
+    // of that retained prefix still needs the adopted recovery contract.
     apply_conviction_v1(b, ctx, frame, filer, &evidence)
 }
 
@@ -1870,6 +1879,13 @@ mod conviction_e2e_tests {
     /// part is refused, and the completed witness convicts exactly as the same evidence filed directly (the row is consumed).
     #[test]
     fn g14_staged_witness_assembles_in_order_and_convicts_once() {
+        staged_witness_with_service_hold(false);
+    }
+    #[test]
+    fn rooted_service_hold_does_not_block_streamed_fraud_conviction() {
+        staged_witness_with_service_hold(true);
+    }
+    fn staged_witness_with_service_hold(service_hold: bool) {
         use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part, palw_tir_public_witness_digest_v1};
         let fx = palw_tir_public_frame_fixture_v1(None, 4);
         let ids = fx.execution.generated.clone();
@@ -1904,6 +1920,22 @@ mod conviction_e2e_tests {
         };
         let claim_id = lying.plan_v1().original_claim;
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        if service_hold {
+            use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+            use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+            let plan = lying.plan_v1();
+            let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+            let mut book = ServiceReservations::new(cost).unwrap();
+            book.reserve(&[ServicePacket { id: [31; 64], release_daa: plan.terms.accepted_daa + 1,
+                service_before: plan.terms.accepted_daa + 2, cost }], plan.terms.accepted_daa + 10_000).unwrap();
+            book.observe_block(plan.terms.accepted_daa + 2, [32; 64], Default::default()).unwrap();
+            let service = CourtServiceStateV2 { version: 2, source_profile_id: h(33), profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(h(33)), book,
+                claims: std::collections::BTreeMap::from([(claim_id, ServiceClaimBinding { claim: claim_id,
+                    allocation_id: plan.allocation_id, source_id: plan.source_id, original_accepted_daa: plan.terms.accepted_daa,
+                    hard_deadline_daa: plan.terms.accepted_daa + 10_000,
+                    packet_ids: std::collections::BTreeSet::from([[31; 64]]) })]) };
+            b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        }
         assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), &lying, &part(split, encoded.len())).is_err());
         let mut free = part(0, split);
         free.declared_rent_sompi = 0;
@@ -1915,7 +1947,14 @@ mod conviction_e2e_tests {
         let (phase, _, consumed) = outcome(&b.state, &lying);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
         assert_eq!(consumed, vec![true, true, true, false]);
-        assert!(b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())).is_none(), "a complete witness is never kept");
+        let saved = b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider()));
+        if service_hold {
+            let Some(Row::TirWitness(row)) = saved else { panic!("recovery retains the existing partial witness") };
+            assert_eq!(row.received, encoded[..split]);
+            row.check_structure_v1(claim_id, outsider()).unwrap();
+        } else {
+            assert!(saved.is_none(), "legacy consumes the witness as before");
+        }
     }
 
     /// **G14 R8: a fresh node restored from the pruning-point carriage continues the ORIGINAL frame identically** — not only an
@@ -2253,6 +2292,344 @@ mod conviction_e2e_tests {
         answered = control_step(frame, &answered, params, extras, offset, producer, acquisition, A::Acquisition(finish), 0, turn)
             .expect("Finish authenticates the committed leaf against the original step root");
         (answered, offset + 1)
+    }
+
+    #[test]
+    fn court_relay_presigned_custody_response_uses_literal_signer_not_carrier_inputs() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        use crate::palw_lifecycle_objects_v2::{PalwLifecycleTxPayloadV2, PALW_LIFECYCLE_TX_VERSION_V2,
+            palw_lifecycle_objects_from_accepted_txs_v2};
+        use crate::tx::{Transaction, TransactionInput, TransactionOutpoint};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = &fx.frame;
+        let (mut state, params, extras, target, offset) = demanded_world(&fx, frame, 0);
+        let plan = frame.plan_v1();
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let network = frame.original_v1().job.network_domain;
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x71; 32]);
+        // The original fixture is verified-half. Only these controls use the
+        // real registered key and real native signature verification.
+        state.bonds.get_mut(&producer).unwrap().pubkey = kp.verification_key.as_ref().to_vec();
+        let (demand_id, _, turn, _) = owner_pending(frame, &state, target);
+        let bytes = borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage: fx.execution.preimages[0].clone(),
+            opening: crate::palw_step_leg::step_opening_v1(&fx.execution.hashes, 0).unwrap(),
+        }).unwrap();
+        assert!(bytes.len() <= crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1);
+        let actions = [Owned::Begin { demand_id, answerer: producer, total_bytes: bytes.len() as u64,
+            body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&bytes) },
+            Owned::Part { demand_id, answerer: producer, offset: 0, bytes },
+            Owned::Finish { demand_id, answerer: producer }];
+        let controls: Vec<_> = actions.into_iter().map(|action| {
+            let mut c = Control { version: 1, claim: plan.original_claim, allocation_id: plan.allocation_id,
+                source_id: plan.source_id, target, expected_turn: turn, declared_rent_sompi: 0,
+                signer: producer, action: A::Acquisition(action), signature: vec![0; SIG] };
+            c.signature = libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key,
+                c.signing_message_v1(network).unwrap().as_byte_slice(),
+                crate::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1, [0; 32]).unwrap().as_ref().to_vec();
+            c
+        }).collect();
+        drop(kp); // No online signer is used for any later relay operation.
+        for (index, control) in controls.iter().enumerate() {
+            let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2,
+                object: PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control.clone()) } }).unwrap();
+            let carriers: Vec<_> = [0x81, 0x82].into_iter().map(|payer| Transaction::new(0,
+                vec![TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(payer), 0), vec![], 0, 0)],
+                vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE.clone(), 0, payload.clone())).collect();
+            // Codec/native relay check only: these illustrative carrier inputs
+            // are not funded or validated as UTXO transactions in this fixture.
+            assert_ne!(carriers[0].id(), carriers[1].id());
+            let mut roots = Vec::new();
+            let mut next = None;
+            for tx in carriers {
+                assert_ne!(tx.inputs[0].previous_outpoint, producer.0);
+                let extracted = palw_lifecycle_objects_from_accepted_txs_v2(&[tx]);
+                assert!(extracted.skipped.is_empty());
+                let PalwConsensusObjectV2::TirPublicControlV1 { control: carried } = &extracted.objects[0].object else { panic!("control") };
+                assert_eq!(carried.as_ref(), control);
+                let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+                let before = b.state.state_root();
+                assert!(apply_control_v1(&mut b, &at(frame, offset + index as u64), Hash64::default(), carried).is_err());
+                assert_eq!(b.state.state_root(), before, "wrong-domain relay cannot mutate state");
+                apply_control_v1(&mut b, &at(frame, offset + index as u64), network, carried).unwrap();
+                roots.push(b.state.state_root());
+                next = Some(b.state.clone());
+            }
+            assert_eq!(roots[0], roots[1], "carrier identity cannot change the signed court response");
+            state = next.unwrap();
+        }
+        assert!(owner_pending(frame, &state, target).3.is_some(), "relayed Finish authenticates the original body");
+    }
+
+    #[test]
+    fn rooted_service_guard_denies_default_and_native_undo_restores_legacy() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras, acquisition, _) = demanded_world(&fx, &frame, 0);
+        let (demand_id, until, turn, _) = owner_pending(&frame, &state, acquisition);
+        let base = frame.plan_v1().terms.accepted_daa;
+        let ctx = at(&frame, until - base);
+        let control = Control { version: 1, claim: frame.plan_v1().original_claim,
+            allocation_id: frame.plan_v1().allocation_id, source_id: frame.plan_v1().source_id,
+            target: acquisition, expected_turn: turn, declared_rent_sompi: 0, signer: outsider(),
+            action: A::Acquisition(Owned::Collect { demand_id }), signature: vec![5; SIG] };
+        // Test the verified half of the native control dispatcher. Fixture setup
+        // and carrier signatures here are synthetic, not node-ingress evidence.
+        let mut legacy = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        apply_verified_control_v1(&mut legacy, &ctx, &frame, &control).expect("legacy silence still defaults");
+        assert_ne!(legacy.state.state_root(), state.state_root());
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        for supplied in [false, true] {
+            let mut book = ServiceReservations::new(cost).unwrap();
+            book.reserve(&[ServicePacket { id: [1; 64], release_daa: base + 1, service_before: base + 2, cost }], base + 10_000).unwrap();
+            if supplied { book.observe_block(base + 1, [11; 64], Default::default()).unwrap(); }
+            book.observe_block(base + 2, [12; 64], Default::default()).unwrap();
+            let service = CourtServiceStateV2 { version: 2, source_profile_id: Hash64::from_u64_word(42), profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(42)), book,
+                claims: std::collections::BTreeMap::from([(control.claim, ServiceClaimBinding {
+                    claim: control.claim, allocation_id: control.allocation_id, source_id: control.source_id,
+                    original_accepted_daa: base, hard_deadline_daa: base + 10_000,
+                    packet_ids: std::collections::BTreeSet::from([[1; 64]]) })]) };
+            let row = Row::CourtService(Box::new(service).into());
+            row.check(&Key::CourtService).unwrap();
+            let encoded = borsh::to_vec(&row).unwrap();
+            let decoded: Row = borsh::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, row, "snapshot row preserves the entire book");
+            let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            b.write_staged_row_v1(Key::CourtService, Some(decoded)).unwrap();
+            let protected = b.state.clone();
+            let err = apply_verified_control_v1(&mut b, &ctx, &frame, &control).unwrap_err();
+            let message = format!("{err:?}");
+            assert!(message.contains(if supplied { "inclusion assumptions" } else { "supply is missing" }), "{message}");
+            assert_eq!(b.state, protected, "a denied default cannot debit, close, advance or replace a row");
+            // This is the real native StagedCourtSeed journal (delta tag 200),
+            // not a clone-only service-book rollback.
+            let mut undone = protected;
+            for entry in b.entries.iter().rev() { apply_delta_entry(&mut undone, entry, true).unwrap(); }
+            assert_eq!(undone.state_root(), state.state_root());
+            let mut replayed = undone;
+            for entry in &b.entries { apply_delta_entry(&mut replayed, entry, false).unwrap(); }
+            assert_eq!(replayed.state_root(), b.state.state_root());
+        }
+    }
+
+    #[test]
+    fn rooted_service_semantic_custody_guard_rejects_missing_short_and_substituted_contracts() {
+        use crate::palw_court_service_state_v2::require_tir_service_custody_window_v1 as check;
+        use crate::palw_staged_bundle_v1::{PalwStagedBundlePlanV1, PalwStagedFamilyV1, PalwStagedBundleContractV1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let (mut state, _, _, _, _) = demanded_world(&fx, &fx.frame, 0);
+        let terms = fx.frame.plan_v1().terms;
+        let semantic = PalwStagedBundlePlanV1::derive_v1(terms.accepted_daa,
+            vec![(PalwStagedFamilyV1::Constraint, terms.plan)], fx.rules.config).unwrap();
+        let resource = Hash64::from_u64_word(0x53e);
+        // Explicit guard-only synthetic injection, NOT native semantic admission.
+        let frame = fx.frame.clone().with_service_semantic_guard_fixture_v1(semantic.clone(), resource);
+        let claim = frame.plan_v1().original_claim;
+        let until = terms.accepted_daa + 10_000;
+        assert!(check(&state, &frame, until).unwrap_err().contains("missing"));
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let custody = crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1::new(
+            frame.original_v1().execution_root, crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1()),
+            Hash64::from_u64_word(1), &semantic.terms);
+        let pledge = crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1 {
+            version: 1, claim, producer, execution_root: frame.original_v1().execution_root,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1()),
+            cu_ruleset_id: Hash64::from_u64_word(1), resource_plan_id: resource, maximum_records: 1,
+            maximum_custodians: 4, accept_until_daa: terms.accepted_daa + 1, material_until_daa: until,
+            signature: vec![2; SIG],
+        };
+        let bundle = PalwStagedBundleContractV1 {
+            claim: crate::palw_staged_court_state_v1::PalwStagedClaimContractV1 {
+                terms: semantic.terms, producer, panel: Default::default(), prefix_custody: Some(custody.clone()) },
+            plan: semantic, config: fx.rules.config,
+            history_custody: crate::palw_history_custody_v1::PalwHistoryCustodyContractV1 {
+                pledge, producer, maximum_records: 1, maximum_custodians: 4, custody },
+            original_binding: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(frame.header_v1().clone()),
+            producer_custodian: None,
+        };
+        for delta in [-1_i64, 0, 1] {
+            let mut row = bundle.clone();
+            row.history_custody.pledge.material_until_daa = (until as i64 + delta) as u64;
+            state.staged_courts.insert(Key::Claim(claim), Row::ClaimBundle(Box::new(row).into()));
+            assert_eq!(check(&state, &frame, until).is_ok(), delta >= 0);
+        }
+        for field in 0..5 {
+            let mut row = bundle.clone();
+            let p = &mut row.history_custody.pledge;
+            match field {
+                0 => p.claim = Hash64::default(),
+                1 => p.resource_plan_id = Hash64::default(),
+                2 => p.execution_root = Hash64::default(),
+                3 => p.job_identity = Hash64::default(),
+                _ => p.producer = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::default(), 99)),
+            }
+            state.staged_courts.insert(Key::Claim(claim), Row::ClaimBundle(Box::new(row).into()));
+            assert!(check(&state, &frame, until).unwrap_err().contains("scope"));
+        }
+    }
+
+    #[test]
+    fn rooted_service_hold_retains_final_collateral_and_material_past_hard() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (demanded, params, extras, acquisition, offset) = demanded_world(&fx, &frame, 0);
+        let (state, _) = producer_answers(&fx, &frame, &demanded, &params, &extras, acquisition, 0, offset);
+        let plan = frame.plan_v1();
+        let claim = state.claim(&plan.original_claim).unwrap().clone();
+        // The candidate may retain state, but cannot manufacture a longer
+        // signed service promise. Boundary is on the actual accepted pledge.
+        let signed_until = frame.custody_v1().pledge_v1().material_until_daa;
+        for until in [signed_until - 1, signed_until] {
+            crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(&state, &frame, until).unwrap();
+        }
+        assert!(crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(
+            &state, &frame, signed_until.checked_add(1).unwrap()).unwrap_err().contains("signed TIR custody"));
+        let now = plan.terms.material_until_daa.max(plan.terms.bond_exit_after_daa).max(plan.terms.accepted_daa + 10_000) + 1;
+        let ctx = at(&frame, now - plan.terms.accepted_daa);
+        // The old path retains its finite TTL; no old signed deadline is rewritten.
+        let mut old = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        super::super::palw_staged_court_fold_v1::sweep(&mut old, &ctx).unwrap();
+        assert!(palw_tir_public_claim_v1(&old.state, plan.original_claim).is_none());
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id: [41; 64], release_daa: plan.terms.accepted_daa + 1,
+            service_before: plan.terms.accepted_daa + 2, cost }], plan.terms.accepted_daa + 10_000).unwrap();
+        book.observe_block(plan.terms.accepted_daa + 2, [42; 64], Default::default()).unwrap();
+        let service = CourtServiceStateV2 { version: 2, source_profile_id: Hash64::from_u64_word(43), profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(43)), book,
+            claims: std::collections::BTreeMap::from([(plan.original_claim, ServiceClaimBinding {
+                claim: plan.original_claim, allocation_id: plan.allocation_id, source_id: plan.source_id,
+                original_accepted_daa: plan.terms.accepted_daa, hard_deadline_daa: plan.terms.accepted_daa + 10_000,
+                packet_ids: std::collections::BTreeSet::from([[41; 64]]) })]) };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        // Advance the accepted point through the native journal shape, so the
+        // snapshot really loads AFTER hard/retention rather than querying a late
+        // clock against an earlier snapshot.
+        let old_point = b.state.last_point;
+        b.state.last_point = Some(ctx);
+        b.entries.push(PalwDeltaEntryV2::LastPoint { old: old_point, new: Some(ctx) });
+        let protected = b.state.clone();
+        assert!(palw_rcore_deadline_v1(&b.state, &params, &plan.original_claim, &claim, Some(now)).unwrap().is_none());
+        assert!(!b.state.deadlines.iter().any(|(_, id)| *id == plan.original_claim));
+        b.finalize_claim(plan.original_claim, &claim, now).unwrap();
+        b.retire_claim(plan.original_claim, &claim).unwrap();
+        super::super::palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
+        assert_eq!(b.state, protected, "hard/TTL passage cannot Final, pay, retire, refund or prune");
+        for liable in frame.custody_v1().liable_signers_v1() {
+            assert!(b.state.staged_bond_exit_held_v1(&liable, now));
+        }
+        assert!(!b.state.staged_bond_exit_held_v1(&honest_seat(), now), "a seat with no credited Valid is not liable");
+        assert!(!b.state.staged_bond_exit_held_v1(&outsider(), now), "the requesting owner is not a custodian");
+        assert!(owner_pending(&frame, &b.state, acquisition).3.is_some(), "authenticated response remains available");
+        assert!(b.write_staged_row_v1(frame.key_v1(), None).is_err(), "direct evidence erasure is refused too");
+        assert_eq!(b.state, protected);
+        // A stale derived deadline cannot bypass the hold; no replacement hard deadline is manufactured.
+        b.state.deadlines.insert((now - 1, plan.original_claim));
+        super::super::sweep_deadlines(&mut b, &ctx).unwrap();
+        assert_eq!(b.state, protected);
+        let mut restored = b.state.clone();
+        for entry in b.entries.iter().rev() { apply_delta_entry(&mut restored, entry, true).unwrap(); }
+        super::super::rebuild_deadline_index_v2(&mut restored, &params).unwrap();
+        assert_eq!(restored.state_root(), state.state_root());
+        assert!(!restored.court_service_holds_claim_v1(&plan.original_claim));
+        for entry in &b.entries { apply_delta_entry(&mut restored, entry, false).unwrap(); }
+        super::super::rebuild_deadline_index_v2(&mut restored, &params).unwrap();
+        assert_eq!(restored.state_root(), protected.state_root());
+        assert_eq!(restored.deadlines, protected.deadlines);
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&protected)).unwrap();
+        let fresh = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap()
+            .into_state(&params, Some(protected.state_root())).expect("fresh snapshot reconstructs unresolved service holds");
+        assert_eq!(fresh.state_root(), protected.state_root());
+        assert_eq!(fresh.deadlines, protected.deadlines);
+        assert!(fresh.staged_bond_exit_held_v1(&frame.custody_v1().pledge_v1().producer, now));
+        assert_eq!(palw_tir_public_claim_v1(&restored, plan.original_claim).unwrap().plan_v1().terms, plan.terms);
+    }
+
+    #[test]
+    fn rooted_service_repair_journals_without_releasing_holds() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras, _, owner_offset) = demanded_world(&fx, &frame, 0);
+        let plan = frame.plan_v1();
+        let hard = plan.terms.accepted_daa + 10_000;
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        // X3's de-stacked clock differs from the old main prototype: the
+        // fixture's owner interval fits the original hard bound. Exercise the
+        // rooted adapter there, without claiming calibrated service capacity.
+        let owner_start = plan.terms.accepted_daa + owner_offset + 1;
+        let mut geometry = ServiceReservations::new(cost).unwrap();
+        geometry.reserve(&[ServicePacket { id:[50;64], release_daa:owner_start,
+            service_before:owner_start+10, cost }],hard).unwrap();
+        assert!(owner_start + 10 <= hard);
+        eprintln!("X3 owner fixture geometry (not runtime/network measurement): accepted={}, preparation_until={}, owner_interval={}..{}, hard={}",
+            plan.terms.accepted_daa,plan.preparation_until_daa,owner_start,owner_start+10,hard);
+        let unchanged = geometry.clone();
+        assert_eq!(geometry.reserve(&[ServicePacket { id:[49;64], release_daa:hard,
+            service_before:hard+1, cost }],hard),
+            Err(crate::palw_court_service_v1::ServiceRefusal::InvalidInterval));
+        assert_eq!(geometry,unchanged,"a real out-of-bound interval still refuses atomically");
+        let start = owner_start;
+        let now = start + 1;
+        let first = ServicePacket { id: [51;64], release_daa:start, service_before:start+10, cost };
+        let other = ServicePacket { id: [52;64], release_daa:start+2, service_before:start+3, cost };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[first.clone(), other.clone()], plan.terms.accepted_daa+10_000).unwrap();
+        book.observe_block(now, [53;64], Default::default()).unwrap();
+        let service = CourtServiceStateV2 { version:2, source_profile_id: Hash64::from_u64_word(54), profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(54)), book,
+            claims: std::collections::BTreeMap::from([(plan.original_claim, ServiceClaimBinding {
+                claim:plan.original_claim, allocation_id:plan.allocation_id, source_id:plan.source_id,
+                original_accepted_daa:plan.terms.accepted_daa, hard_deadline_daa:plan.terms.accepted_daa+10_000,
+                packet_ids:std::collections::BTreeSet::from([first.id,other.id]) })]) };
+        let point = at(&frame, now-plan.terms.accepted_daa);
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        assert!(b.recover_court_service_supply_v1(&point).unwrap().is_empty());
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        let old_point = b.state.last_point;
+        b.state.last_point = Some(point);
+        b.entries.push(PalwDeltaEntryV2::LastPoint { old:old_point, new:Some(point) });
+        let before = b.state.clone();
+        let stale = at(&frame, now-plan.terms.accepted_daa+1);
+        assert!(b.recover_court_service_supply_v1(&stale).is_err());
+        assert_eq!(b.state,before,"a stale supply clock must not move reservations");
+        let journal_start = b.entries.len();
+        let report = b.recover_court_service_supply_v1(&point).unwrap();
+        assert_eq!(report.len(),1);
+        assert_eq!(report[0].claim,plan.original_claim);
+        assert_eq!(report[0].result,Ok(1));
+        let recovered = b.state.court_service_state_v1().unwrap();
+        assert_eq!(recovered.book.assigned_daa(&first.id),Some(start+3));
+        assert_eq!(recovered.book.assigned_daa(&other.id),Some(start+2));
+        assert_eq!(recovered.book.packet(&first.id),Some(&first));
+        assert_eq!(recovered.book.packet(&other.id),Some(&other));
+        assert_eq!(recovered.claims, before.court_service_state_v1().unwrap().claims);
+        assert!(b.state.court_service_holds_claim_v1(&plan.original_claim));
+        assert!(b.state.staged_bond_exit_held_v1(&frame.custody_v1().pledge_v1().producer,now));
+        assert!(recovered.default_hold(&frame).is_err(),"repair cannot authorize default");
+        assert_eq!(b.state.claim(&plan.original_claim), before.claim(&plan.original_claim));
+        assert_eq!(b.state.deadlines,before.deadlines);
+        let after = b.state.clone();
+        let entries = b.entries[journal_start..].to_vec();
+        assert_eq!(entries.len(),1,"one native delta-200 row commits the atomic repair");
+        assert!(b.recover_court_service_supply_v1(&point).unwrap().is_empty());
+        assert_eq!(b.entries.len(),journal_start+1,"repeat does not emit another write");
+        let mut reverted = after.clone();
+        for entry in entries.iter().rev() { apply_delta_entry(&mut reverted,entry,true).unwrap(); }
+        assert_eq!(reverted.state_root(),before.state_root());
+        for entry in &entries { apply_delta_entry(&mut reverted,entry,false).unwrap(); }
+        assert_eq!(reverted.state_root(),after.state_root());
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&after)).unwrap();
+        let fresh = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap()
+            .into_state(&params,Some(after.state_root())).unwrap();
+        assert_eq!(fresh.state_root(),after.state_root());
+        assert_eq!(fresh.court_service_state_v1(),after.court_service_state_v1());
+        assert!(fresh.court_service_holds_claim_v1(&plan.original_claim));
     }
 
     /// **G14 R5: an honest custodian that answers an outside owner's demand inside its clock is never defaulted or charged** —

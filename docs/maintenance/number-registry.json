@@ -1,21 +1,31 @@
 {
   "schema_version": 1,
-  "scope": "uploaded ZIP only; integration-branch reservations unverified; ADR-0193 reserved on RFC14 X3 worktree; 0189-0192 are separate-branch allocations, not imported (2026-10-20)",
+  "scope": "Isolated RFC14 G14 integration candidate, X3 0c3cb9f93 plus selected main 0f808b81d; ADR-0193 collision preserved by full path (2026-10-20).",
   "allocated_here": {
     "adr": [
       "0181",
       "0182",
       "0188",
-      "0193"
+      "0189",
+      "0190",
+      "0191",
+      "0192",
+      "0193",
+      "0194"
     ],
     "rfc": [
       "0021",
-      "0022"
+      "0022",
+      "0023",
+      "0024",
+      "0025",
+      "0026",
+      "0027"
     ]
   },
   "next_local": {
-    "adr": "0194",
-    "rfc": "0023"
+    "adr": "0195",
+    "rfc": "0028"
   },
   "legacy_duplicates": {
     "adr": {
@@ -26,6 +36,10 @@
       "0173": [
         "docs/adr/0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md",
         "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md"
+      ],
+      "0193": [
+        "docs/adr/0193-miner-account-bond-for-panel-incentives.md",
+        "docs/adr/0193-sequential-witness-filing-clock.md"
       ]
     },
     "rfc": {}

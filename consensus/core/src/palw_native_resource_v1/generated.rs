@@ -487,8 +487,8 @@ native_struct!(crate::palw_model_registry_v1::PalwSeatReadinessRowV1; proved_daa
 native_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; opened_daa, hard_deadline_daa, live, closed, dismissed_held, reacquiring, courts, court_reserve_used);
 native_struct!(crate::palw_class_semantics_v1::PalwClassSemanticsV1; version, class_id, artifact_root, bound_from_daa, model_profile_id, runtime_manifest_hash, runtime_class_id, tokenizer_id, cu_ruleset_id, token_table_root, rendering_rule, raw_tokenizer_bytes, tokenizer_key_events, prefix_state_relation);
 native_struct!(crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2; declaration, deadline_daa, parts);
-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0));
-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0));
+native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService);
+native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0));
 native_struct!(crate::palw_terminal_carriage_v1::PalwPendingTerminalV1; declaration, deadline_daa, parts);
 native_struct!(crate::palw_state_v2::PalwPanelDutyRowV1; seats, seat_exposure);
 native_struct!(crate::palw_execution_lane_v1::PalwExecFinalV1; domain, bond, operator_id, claim_id, execution_root, credit, accepted_blue_score);
@@ -848,6 +848,7 @@ native_struct!(crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1; acqu
 native_struct!(crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1; descriptor, allocation_id, preparation);
 native_struct!(crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessRowV1; claim, filer, allocation_id, total_bytes, digest, until_daa, received);
 native_struct!(crate::palw_tir_container_v1::PalwTirContainerRowV1; container_root, manifest_digest, weights_section, inner_leaf_count, bound_daa);
+native_struct!(crate::palw_court_service_state_v2::CourtServiceStateV2; version, profile_id, source_profile_id, book, claims);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetBondRowV1; window, open_claims, latest_release_daa, open_liability_sompi, open_final_weight, liability_hold_until);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetClaimRowV1; bond, model, accepted_daa, reuse_not_before, reserved, consumed, open, in_window, live, origin, liability_sompi);
 native_struct!(crate::palw_bond_budget_v1::PalwCapitalAssignmentRowV1; sequence, effective, pending, pending_since_epoch);
@@ -1057,6 +1058,8 @@ native_struct!(crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1;
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicChunkRecordV1; demand_id, answerer, previous, offset, bytes);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicAcceptedBodyRefV1; source_id, demand_id, turn, request, answerer, body_hash, total_bytes, chunk_head, opened_daa, respond_until_daa);
 native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1; version, source_id, original_claim, rules_id, resource_plan_id, allocation_id, semantic, semantic_resource_plan_id, maximum_semantic_history_records, acquisition, flat_trace, preparation_work, owner_work, preparation, executor, terminal, controls, control_footprint, owner_validation, preparation_until_daa, terms);
+native_struct!(crate::palw_court_service_v1::ServiceReservations; budget, remaining, assignments, packets, supply, last_observed_daa);
+native_struct!(crate::palw_court_service_state_v2::ServiceClaimBinding; claim, allocation_id, source_id, original_accepted_daa, hard_deadline_daa, packet_ids);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetVectorV1; claims, block_units, reward_sompi, final_weight, round_rights);
 native_enum!(crate::palw_bond_budget_v1::PalwBudgetOriginV1; Attempt, Rider, FreePrompt, Legacy, KernelRoute, RoundRights, MarketFee, RoundFee, SourceFee, NativeIncome, NativeIncomeQueued, NativeIncomePartial, DeferredReporterIncome, HoldDay, HoldBurst, HoldLiability);
 native_enum!(crate::palw_bond_budget_v1::PalwMaterialPaymentV1; Pending { income }, Queued { income, queue, queued_daa, paid_daa, release_daa }, Historical { until }, UnprovenPhysicalPayment { until });
@@ -1159,6 +1162,9 @@ native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicTerminalPlanV1
 native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicControlFootprintV1; maximum_frame_bytes, maximum_frame_writes, maximum_native_signature_checks, maximum_state_references, maximum_frame_validation_bytes);
 native_struct!(crate::palw_tir_public_custody_v1::PalwTirPublicOriginalPanelV1; anchor, bound_daa, seats);
 native_struct!(crate::palw_tir_public_custody_v1::PalwTirPublicOriginalCreditV1; receipt, ready);
+native_struct!(crate::palw_court_service_v1::ServiceCost; bytes, work, io, controls);
+native_struct!(crate::palw_court_service_v1::ServicePacket; id, release_daa, service_before, cost);
+native_struct!(crate::palw_court_service_v1::ServiceSupply; accepting_block, reserved);
 native_enum!(misaka_palw_tir::pipeline::TripRule; Fixed { n }, JobSteps, TokenCount, TextStream, Decode);
 native_struct!(misaka_palw_tir::pipeline::TokenRule; prefix, source, suffix, pad);
 native_enum!(misaka_palw_tir::pipeline::Binding; JobScalar { index }, JobTokens { rule }, StageRows { stage, drop, pad_to }, StageFinal { stage }, StageRowCount { stage, drop }, JobTokenCount { rule }, JobImage { index });

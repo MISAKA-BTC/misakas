@@ -440,7 +440,8 @@ impl Params {
     }
 
     /// **One gated fence's record gate**: `Ok` when the fence is not armed (`None`, `never()`), on an isolated G14 test genesis, or when
-    /// a pinned record authorizes exactly this network and height; otherwise the fence's own refusal.
+    /// a pinned record authorizes exactly this network and height AND the court policy is complete;
+    /// otherwise the fence's own refusal. A readiness digest cannot close RFC-0026 F02/F03.
     pub fn validate_palw_g14_fence_record_v1(&self, fence: PalwG14GatedFenceV1) -> Result<(), PalwModeV2Error> {
         self.validate_palw_g14_fence_record_in_v1(fence, PALW_G14_ARMING_RECORDS_V1)
     }
@@ -459,10 +460,33 @@ impl Params {
             return Ok(());
         }
         match palw_g14_arming_record_admits_v1(fence, self.genesis.hash, at.daa_score(), records) {
-            Ok(()) => Ok(()),
+            Ok(()) => self.validate_palw_court_policy_completeness_v1(fence),
             Err(PalwG14ArmingRefusalV1::NoRecord) => Err(PalwModeV2Error::Invalid(fence.no_record_refusal())),
             Err(other) => Err(PalwModeV2Error::Invalid(other.reason())),
         }
+    }
+
+    /// RFC-0026 §4–5: readiness digests cannot substitute for a defined service
+    /// opportunity or an outsider's access to localization. No production completion
+    /// record exists. The isolated test genesis may exercise unfinished routes.
+    pub fn validate_palw_court_policy_completeness_v1(&self, fence: PalwG14GatedFenceV1) -> Result<(), PalwModeV2Error> {
+        if fence.armed(self).is_none() || self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
+        if matches!(fence,
+            PalwG14GatedFenceV1::StagedPublicCourtV1
+            | PalwG14GatedFenceV1::StagedTirRouteV1
+            | PalwG14GatedFenceV1::StagedFloatConstraintV1
+            | PalwG14GatedFenceV1::TirPublicConvictionV1
+            | PalwG14GatedFenceV1::LegacyPublicFilerV1
+            | PalwG14GatedFenceV1::LegacyHeldDaV2
+        ) {
+            return Err(PalwModeV2Error::Invalid(
+                "OneOutsiderCapacityIncomplete: RFC-0026 F03 shared localization under colluding owner occupancy is incomplete; \
+                 ServiceOpportunityIncomplete: F02 deterministic service opportunities and inclusion assumptions are not adopted",
+            ));
+        }
+        Ok(())
     }
 
     /// **The cross-lane G14 gates' refusals**, asked by `validate_palw_v2`:

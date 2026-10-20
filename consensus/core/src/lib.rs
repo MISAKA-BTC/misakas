@@ -1092,3 +1092,13 @@ pub mod palw_kernel_material_replacement_v4;
 
 /// Dormant court payload transport accounting.
 pub mod palw_court_transport_v1;
+/// RFC-0026 checked clock derivation; not a live fold or wire format.
+pub mod palw_court_policy_v1;
+
+/// Unconnected RFC-0026 deterministic service reservation component.
+pub mod palw_court_service_v1;
+
+pub mod palw_court_service_state_v2;
+
+/// Proposed complete native TIR request set; not admission or activation.
+pub mod palw_court_tir_requests_v1;

@@ -188,4 +188,7 @@
 | ADR-0186 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md) | 原文と後続改定を参照 |
 | ADR-0187 | [native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md) | 原文と後続改定を参照 |
 | ADR-0188 | [D2・X3 の休眠 fence を G14 の arm-readiness record で閉じ、X3 の期限を窓の合成で定める](0188-d2-x3-arm-records-composition-and-pause-credit.md) | 原文と後続改定を参照 |
+| ADR-0192 | [court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md) | 原文と後続改定を参照 |
+| ADR-0193 | [Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md) | 原文と後続改定を参照 |
 | ADR-0193 | [sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md) | 原文と後続改定を参照 |
+| ADR-0194 | [休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md) | 原文と後続改定を参照 |

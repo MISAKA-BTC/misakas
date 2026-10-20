@@ -186,3 +186,7 @@
   - `rfc23s2_admission_context_recovers_the_exact_pav3_manifest_from_its_origin_header`: 1成功・0失敗。実 fold で作った birth frame にPAV3 origin headerを保持させて、signed manifestの出所を照合し、別block hashを持つ置換headerを拒否する。PAV2 frameではbindingを導かない条件も同じ回帰群で確認済み(5件成功・0失敗)。
   - 段階2は未完了。checkpointのfold-derived record / liability state builder、全native claimとそのnamespace付き依存閉包、実material archiveの収録・保持・pruning / IBD / restart / reorg転送、frontier・transaction settlement・native lifecycle接続、node受入drillは引き続き未実装または未実測である。§6の統合キャンペーン(同一候補artifactで複数node・複数claimの正常系と攻撃系を別シナリオとして実行)も未実施で、従来のunit・node fixture別々の合格記録をこの条件の代替にしない。
 - **namespace-aware checkpoint identities (2026-10-18):** checkpoint record key と入力 edge を raw `Hash64` から `ChainClaim` / `KernelClaim` / `ExecSession` / `ExecSlice` の `PalwClaimLocalWorkRefV1` に変更し、canonical codec と native preflight scanner もこの型を読むようにした。同じ raw bytes の chain claim と kernel claim は別 vertex になり、依存・有罪影響の探索で誤って alias しない。実行 root / reservation が同一なら、従来どおりその実際の共有 identity による依存は残る。`rfc23s2_` の core unit 群は43成功・0失敗(0.74秒、crate opt-level 0、`-j 3`)。namespace 衝突を直接検査する回帰を含む。これは checkpoint graph の型基盤であり、native record builder・material archive・runtime credit / frontier / settlement への接続や §6 の統合キャンペーンは未実装 / 未実測である。
+
+## 整合性修正 — 2026-10-19(RFC 全件整合性監査)
+
+- service 前提が崩れて default できず責任を保留した claim が、共有 frontier をどこまで止めるかを、終了理由ごとの効果表で明示する([RFC-0026](0026-court-policy-master-contract.md) §4.3、F08)。段階 2 が未有効なら、その独立進行を段階 1 の可用性の説明に借りない。service 障害中も `L_class` 以内という保証は要求しない(本書もネットワーク停止中の前進は保証しない)。期限だけで未解決 claim を Final にしない。

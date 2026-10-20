@@ -4045,7 +4045,7 @@ pub fn palw_rcore_deadline_v1(
     // **Lane LG14-A (RFC-0014 §7.3): a live dispute reservation holds every end of the claim** — no Final, no bind / receipt / redraw /
     // unavailable / replay timeout, and no retirement of a Final claim — until its lapse at the claim's own hard deadline or the claim's
     // outcome. The table is empty below `palw_legacy_public_filer_v1`, so every other row reads as it did.
-    if state.palw_legacy_dispute_holds_v1(claim_id) {
+    if state.palw_legacy_dispute_holds_v1(claim_id) || state.court_service_holds_claim_v1(claim_id) {
         return Ok(None);
     }
     // **Lane PL part C × G14 (SHARD)**: a lane-A claim whose next end past `palw_panel_unavailable_expiry` is uncharged owes no
@@ -17666,6 +17666,10 @@ fn sweep_panel_obligations(
     let mut pruned_liabilities: Vec<Hash64> = Vec::new();
     let mut pruned_locks: Vec<(PalwBondKeyV2, Hash64)> = Vec::new();
     for (claim_id, row) in &builder.state.panel_liabilities {
+        if builder.state.court_service_holds_claim_v1(claim_id) {
+            locks_by_claim.remove(claim_id);
+            continue;
+        }
         let locks = locks_by_claim.remove(claim_id).unwrap_or_default();
         if builder.state.staged_claim_contract_v1(claim_id).is_none_or(|c| now >= c.terms.material_until_daa)
             && prunable(row.expiry_daa, row.settled_at_final)
@@ -17676,6 +17680,7 @@ fn sweep_panel_obligations(
         }
     }
     for (claim_id, locks) in locks_by_claim {
+        if builder.state.court_service_holds_claim_v1(&claim_id) { continue; }
         let settled = builder.state.claims.get(&claim_id).is_none_or(|claim| claim.phase.is_terminal());
         if settled && builder.state.staged_claim_contract_v1(&claim_id).is_none_or(|c| now >= c.terms.material_until_daa) {
             pruned_locks.extend(locks.into_iter().filter(|(_, gone)| *gone).map(|(key, _)| key));

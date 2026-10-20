@@ -104,6 +104,7 @@
 - [ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md)
 - [ADR-0187 — native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md)
 - [ADR-0188 — D2・X3 の休眠 fence を G14 の arm-readiness record で閉じ、X3 の期限を窓の合成で定める](0188-d2-x3-arm-records-composition-and-pause-credit.md)
+- [ADR-0194 — 休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md)
 
 ## EVM / wallet
 
@@ -128,6 +129,7 @@
 - [ADR-0167 — The ×1000 capacity package: a fixed per-DAA PALW reward budget, riders, a lower-only breaker, and th](0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md)
 - [ADR-0176 — Bond bounds PALW claim capacity, blocks, rewards and Final weight](0176-bond-bounds-palw-production-rewards-and-final-weight.md)
 - [ADR-0178 — The fork choice heals a partition on bonded participation: one search over every tip, economic keys ](0178-fork-choice-heals-a-partition-on-bonded-participation.md)
+- [ADR-0193 — Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md)
 
 ## Governance / release scope
 
@@ -207,5 +209,6 @@
 - [ADR-0171 — Probabilistic constraint checks are the normal large-model verifier; the court resolves disputes exa](0171-probabilistic-constraint-checks-and-court-on-dispute.md)
 - [ADR-0183 — G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md)
 - [ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg](0184-native-liability-horizon-panel-record-and-single-certified-leg.md)
+- [ADR-0192 — court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md)
 - [ADR-0193 — sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md)
 

@@ -1459,10 +1459,34 @@
     },
     {
       "kind": "adr",
+      "number": "0192",
+      "path": "docs/adr/0192-court-service-opportunity-and-shared-pursuit.md",
+      "title": "ADR-0192 — court の正規処理機会と共有訴追経路",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0193",
+      "path": "docs/adr/0193-miner-account-bond-for-panel-incentives.md",
+      "title": "ADR-0193 — Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける",
+      "topic": "Economics / budgets",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
       "number": "0193",
       "path": "docs/adr/0193-sequential-witness-filing-clock.md",
       "title": "ADR-0193: sequential witness filing の versioned clock",
       "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0194",
+      "path": "docs/adr/0194-dormant-g14-integration-and-service-schema.md",
+      "title": "ADR-0194 — 休眠 G14 統合候補と service namespace",
+      "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
     },
     {
@@ -1647,6 +1671,38 @@
       "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
       "title": "RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める",
       "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0024",
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "title": "RFC-0024 — ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計(単一位置裁定・先読み開示・先行取得)",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0025",
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "title": "RFC-0025 — モデルが増え、不正に対する court が大量発生しても処理を継続できる客観的 court",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0026",
+      "path": "docs/rfc/0026-court-policy-master-contract.md",
+      "title": "RFC-0026 — court の主契約:時計・帰責・責任期間・置換関係の一本化",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0027",
+      "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "title": "RFC-0027 — Miner Account Bond と Panel 追及報酬: 10万の基礎担保、責任連動の追加拘束、REAL継続性",
+      "topic": "Economics / budgets",
       "status": "原文と後続改定を参照"
     }
   ]
