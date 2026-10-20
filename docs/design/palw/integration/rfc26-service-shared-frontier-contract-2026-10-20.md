@@ -75,3 +75,15 @@ native TIR fold では、pure default transition が返った後、row の書き
 この段階の対象は **default を実行しない検査と、その参照 state の永続化**。現在の owner demand と owner 非依存の義務 identity の導出、Final/担保/証拠/pruning の保留、残余容量内の再割当、hard 到達後の未解決・非 credit 状態、全 claim の admission、実ノードの restart/pruned IBD は未完了である。default 拒否だけで Final 保留や P0 完了まで実装したとは表示しない。原子的 admission と専用 fence/profile の採択前にこの schema を本番で生成・受理するルールへ接続しない。
 
 別 branch `codex/rfc14-x3-reorg-clock` / `4f41081ee` の transport 会計も未統合。そちらは bytes/work/memory、この予約部品は bytes/work/IO/control の独立次元である。memory を IO に読み替えず、両方の費用・保持 byte-DAA と物理容量を含む profile を導出する必要がある。
+
+## 9. 未解決 binding の保持候補
+
+`CourtServiceState` に binding がある claim は、この未採択候補では unresolved のままとする。quota 提供だけで解除する bool、時刻経過による解除、hard deadline を最大値へ書き換える処理はない。claim の自動終了 deadline を `None` とし、native Final/retirement の入口、期限 sweep、非 fraud の pending-accusation 判定を同じ rooted predicate で保持する。元の notice / hard / signed frame の期限値は動かさない。他 claim の deadline を書き直さない。
+
+元 frame の qualified custody signer は exit-held のままにし、関係しない owner / 未 credit の seat をその claim の責任者へ加えない。panel liability / Valid lock の時刻 pruning も unresolved binding を飛ばす。TIR frame、preparation、acquisition、raw chunk、accepted body、staged witness の TTL sweep と直接削除を保持する。期限切れの保持 row を sweep の 64 件枠より先に除き、別 claim の回収枠を保持 row だけで埋めない。これは state 内の証拠保持であり、署名済み horizon を超えて外部 provider に新しい配送義務を作る規則ではない。
+
+book の writer と state の整合性検査は、binding が元 frame と claim を失った場合、元の allocation/source/acceptance を替えた場合、unresolved のまま Final になっている場合を拒否する。snapshot からの復元時も同じ条件と derived deadline を再計算する。新規 field/tag や preset の変更は追加していない。
+
+これは保持を接続する実装候補で、正常終了時の解除や不足分の再割当を完成したものではない。解除の責任判定、正当な裁定ごとの解消、hard 後の明示的な復旧、actual original admission での契約 horizon 検査と profile/fence の固定、node の restart/pruned IBD、費用・保持上限の計測は残る。永久に止めることを G14 の達成へすり替えない。production writer は依然なく、旧 claim に新しい署名責任を後付けする入口は設けない。
+
+保持中の分割 witness も、全体を assemble/decode したら従来どおり deterministic fraud 裁定へ進む。保持を理由に裁定そのものを拒否しない。新 codec へ黙って読み替えず、V1 が禁止する completed witness row は生成しない。保持中の既存 partial prefix は残し、完成した evidence を裁定へ渡す。binding のない旧 claim では従来どおり row を消費する。裁定後の prefix の archive/解除は未採択の復旧・終了効果契約に残し、partial prefix が完成証拠全体の永続保存であるとは表示しない。

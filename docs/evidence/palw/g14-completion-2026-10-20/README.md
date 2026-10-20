@@ -47,3 +47,23 @@ All commands used the shared heavy build lock. An initial integration-test compi
 | [rooted-service-native-release.log](rooted-service-native-release.log) | `4fb7df751d829cd0611ed7cd295ff41a2861dcf3a67441b9e9787e5d0701425d` |
 | [rooted-service-regressions-release.log](rooted-service-regressions-release.log) | `62330a3f3d432c59ea2f84be811766ef366093b3112f41268895fc4d6f1c5b18` |
 | [rooted-service-consensus-check.log](rooted-service-consensus-check.log) | `3a6877fc7b0c7e74b74510fdbba941d9db30d0532ebb9468a3c7f74fee7ac73e` |
+
+## Unresolved service recovery holds
+
+Base `960729572`, dormant candidate on the same branch. No schema/preset/deadline-value change, no integration/arming/deployment. The binding remains unresolved until a reviewed terminal/recovery contract exists; this is not a complete recovery or capacity guarantee.
+
+- `cargo test --release -p kaspa-consensus-core --lib rooted_service_`: **3 passed**. Deny-only default guard, Final/retirement/material/exit holds past original hard/TTL, original term values preserved, native delta undo/replay, full `PalwStateCarriageV2` restore with an accepting point AFTER hard/TTL, and streamed fraud adjudication while service-held. Existing synthetic verified-half carriers are used; this is not real network ingress, live restart or pruned IBD.
+- `cargo test --release -p kaspa-consensus-core --test palw_court_service_state_v1 --test palw_court_service_v1 --test palw_court_policy_v1 --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only --test g14_close_gates`: **39 passed / 0 failed / 0 ignored**, including pinned t12 identity and unchanged release. These overlap the previous turn's regression targets.
+- The same release lib-test executable `target/release/deps/kaspa_consensus_core-cd85ed321316b157 g14_staged_witness_assembles_in_order_and_convicts_once`: **1 passed**, preserving the unbound legacy witness consumption behavior.
+- `cargo check --release -p kaspa-consensus`: **success** on the latest source; warnings remain.
+
+All used the shared heavy build lock. An intermediate two-test native run passed before late-point snapshot and staged-witness coverage were added; it is not substituted for the final three-test log below. Review found and fixed a hold/deletion interaction that would have prevented a streamed witness from reaching fraud adjudication. A service-held claim retains the existing incomplete prefix while assembled evidence is adjudicated; it does not create a completed V1 witness row. Prefix retention is not archival storage of the complete evidence. Clearing/rearchiving that prefix belongs to the still-open terminal/recovery contract.
+
+These checks do not prove expiry/pruning correctness across all terminal reasons or both monetary clocks, all resource bounds, ordinary/court saturation, complete supplied-duty eligibility, successful recovery/rescheduling, actual original admission, outsider access under collusion or node lifecycle closure. Those remain required. No expected identity or resource ceiling was repinned or raised.
+
+| Raw log | SHA-256 |
+| --- | --- |
+| [service-holds-native-release.log](service-holds-native-release.log) | `cf1dc5635e149b95770c1632a1ec15360d8530be09e7cd862a63f057aa974645` |
+| [service-holds-regressions-release.log](service-holds-regressions-release.log) | `1bd56ce29765736dcfaa54c3de51aa96a8ac6da827f009f82cfcfa04cb838aa1` |
+| [service-holds-legacy-witness-release.log](service-holds-legacy-witness-release.log) | `34a430772bd841b5895c5fe4ec248e0b4ca271982137fd1151367855643424ab` |
+| [service-holds-consensus-check.log](service-holds-consensus-check.log) | `3b921f7a57d99a455c20c0fa1bb35bcbf80c76d87794fd0fa6558f93da5597cb` |

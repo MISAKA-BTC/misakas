@@ -522,6 +522,7 @@ impl PalwChainStateV2 {
         Ok((page, None))
     }
     pub fn staged_bond_exit_held_v1(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
+        if self.court_service_holds_bond_v1(bond) { return true; }
         now.checked_add(1).is_some_and(|after| {
             self.staged_holds
                 .range((*bond, after, PalwStagedCourtKeyV1::Claim(ZERO_HASH64))..)
@@ -870,6 +871,12 @@ impl TransitionBuilder<'_> {
         }))))
     }
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
+            service.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
+        if new.is_none() && self.state.court_service_holds_material_v1(&key) {
+            return Err(PalwStateV2Error::CarriageInconsistent("unresolved court service retains original evidence".into()));
+        }
         self.reserve_map_row_v1(&key, &new, |s| &s.staged_courts, false, "native staged_courts writer")?;
         self.reserve_staged_indices_v1(&key, &new)?;
         let old = match &new {
@@ -877,6 +884,13 @@ impl TransitionBuilder<'_> {
             None => self.state.staged_courts.remove(&key),
         };
         update_indices(&mut self.state, key, old.as_ref(), new.as_ref());
+        if key == PalwStagedCourtKeyV1::CourtService {
+            if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
+                // Do not re-date unrelated claims midway through an accepting
+                // block. This candidate only installs/updates unresolved holds.
+                self.state.deadlines.retain(|(_, claim)| !service.claims.contains_key(claim));
+            }
+        }
         if old != new {
             self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old, new });
         }
@@ -3421,7 +3435,9 @@ pub(super) fn update_response_indices(
 }
 pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     // The due index gives rooted-clock ordering;64 row removals bound every accepted block.
-    let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score).take(64).map(|(_, key)| *key).collect();
+    let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score)
+        .filter(|(_, key)| !b.state.court_service_holds_material_v1(key))
+        .take(64).map(|(_, key)| *key).collect();
     for key in due {
         let Some(mut saved) = b.state.staged_courts.get(&key).cloned() else { continue };
         // Acquisition metadata and immutable public bytes have their own exact

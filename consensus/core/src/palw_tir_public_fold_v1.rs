@@ -1140,9 +1140,13 @@ fn apply_witness_part_v1(
     }
     let evidence =
         crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::decode_staged_v1(&row.received).map_err(refused)?;
-    if existing.is_some() {
+    if existing.is_some() && !b.state.court_service_holds_material_v1(&key) {
         b.write_staged_row_v1(key, None)?;
     }
+    // A recovery hold retains the existing partial row, without changing the
+    // V1 codec's ban on completed rows. It must not prevent the assembled,
+    // verified evidence from reaching adjudication. Terminal release/archive
+    // of that retained prefix still needs the adopted recovery contract.
     apply_conviction_v1(b, ctx, frame, filer, &evidence)
 }
 
@@ -1756,6 +1760,13 @@ mod conviction_e2e_tests {
     /// part is refused, and the completed witness convicts exactly as the same evidence filed directly (the row is consumed).
     #[test]
     fn g14_staged_witness_assembles_in_order_and_convicts_once() {
+        staged_witness_with_service_hold(false);
+    }
+    #[test]
+    fn rooted_service_hold_does_not_block_streamed_fraud_conviction() {
+        staged_witness_with_service_hold(true);
+    }
+    fn staged_witness_with_service_hold(service_hold: bool) {
         use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part, palw_tir_public_witness_digest_v1};
         let fx = palw_tir_public_frame_fixture_v1(None, 4);
         let ids = fx.execution.generated.clone();
@@ -1790,6 +1801,22 @@ mod conviction_e2e_tests {
         };
         let claim_id = lying.plan_v1().original_claim;
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        if service_hold {
+            use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+            use crate::palw_court_service_state_v1::{CourtServiceState, ServiceClaimBinding};
+            let plan = lying.plan_v1();
+            let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+            let mut book = ServiceReservations::new(cost).unwrap();
+            book.reserve(&[ServicePacket { id: [31; 64], release_daa: plan.terms.accepted_daa + 1,
+                service_before: plan.terms.accepted_daa + 2, cost }], plan.terms.accepted_daa + 10_000).unwrap();
+            book.observe_block(plan.terms.accepted_daa + 2, [32; 64], Default::default()).unwrap();
+            let service = CourtServiceState { version: 1, profile_id: h(33), book,
+                claims: std::collections::BTreeMap::from([(claim_id, ServiceClaimBinding { claim: claim_id,
+                    allocation_id: plan.allocation_id, source_id: plan.source_id, original_accepted_daa: plan.terms.accepted_daa,
+                    hard_deadline_daa: plan.terms.accepted_daa + 10_000,
+                    packet_ids: std::collections::BTreeSet::from([[31; 64]]) })]) };
+            b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        }
         assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(split, encoded.len())).is_err());
         let mut free = part(0, split);
         free.declared_rent_sompi = 0;
@@ -1801,7 +1828,14 @@ mod conviction_e2e_tests {
         let (phase, _, consumed) = outcome(&b.state, &lying);
         assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
         assert_eq!(consumed, vec![true, true, true, false]);
-        assert!(b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())).is_none(), "a complete witness is never kept");
+        let saved = b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider()));
+        if service_hold {
+            let Some(Row::TirWitness(row)) = saved else { panic!("recovery retains the existing partial witness") };
+            assert_eq!(row.received, encoded[..split]);
+            row.check_structure_v1(claim_id, outsider()).unwrap();
+        } else {
+            assert!(saved.is_none(), "legacy consumes the witness as before");
+        }
     }
 
     /// **G14 R8: a fresh node restored from the pruning-point carriage continues the ORIGINAL frame identically** — not only an
@@ -2131,6 +2165,77 @@ mod conviction_e2e_tests {
             for entry in &b.entries { apply_delta_entry(&mut replayed, entry, false).unwrap(); }
             assert_eq!(replayed.state_root(), b.state.state_root());
         }
+    }
+
+    #[test]
+    fn rooted_service_hold_retains_final_collateral_and_material_past_hard() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v1::{CourtServiceState, ServiceClaimBinding};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (demanded, params, extras, acquisition, offset) = demanded_world(&fx, &frame, 0);
+        let (state, _) = producer_answers(&fx, &frame, &demanded, &params, &extras, acquisition, 0, offset);
+        let plan = frame.plan_v1();
+        let claim = state.claim(&plan.original_claim).unwrap().clone();
+        let now = plan.terms.material_until_daa.max(plan.terms.bond_exit_after_daa).max(plan.terms.accepted_daa + 10_000) + 1;
+        let ctx = at(&frame, now - plan.terms.accepted_daa);
+        // The old path retains its finite TTL; no old signed deadline is rewritten.
+        let mut old = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        super::super::palw_staged_court_fold_v1::sweep(&mut old, &ctx).unwrap();
+        assert!(palw_tir_public_claim_v1(&old.state, plan.original_claim).is_none());
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id: [41; 64], release_daa: plan.terms.accepted_daa + 1,
+            service_before: plan.terms.accepted_daa + 2, cost }], plan.terms.accepted_daa + 10_000).unwrap();
+        book.observe_block(plan.terms.accepted_daa + 2, [42; 64], Default::default()).unwrap();
+        let service = CourtServiceState { version: 1, profile_id: Hash64::from_u64_word(43), book,
+            claims: std::collections::BTreeMap::from([(plan.original_claim, ServiceClaimBinding {
+                claim: plan.original_claim, allocation_id: plan.allocation_id, source_id: plan.source_id,
+                original_accepted_daa: plan.terms.accepted_daa, hard_deadline_daa: plan.terms.accepted_daa + 10_000,
+                packet_ids: std::collections::BTreeSet::from([[41; 64]]) })]) };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        // Advance the accepted point through the native journal shape, so the
+        // snapshot really loads AFTER hard/retention rather than querying a late
+        // clock against an earlier snapshot.
+        let old_point = b.state.last_point;
+        b.state.last_point = Some(ctx);
+        b.entries.push(PalwDeltaEntryV2::LastPoint { old: old_point, new: Some(ctx) });
+        let protected = b.state.clone();
+        assert!(palw_rcore_deadline_v1(&b.state, &params, &plan.original_claim, &claim, Some(now)).unwrap().is_none());
+        assert!(!b.state.deadlines.iter().any(|(_, id)| *id == plan.original_claim));
+        b.finalize_claim(plan.original_claim, &claim, now).unwrap();
+        b.retire_claim(plan.original_claim, &claim).unwrap();
+        super::super::palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
+        assert_eq!(b.state, protected, "hard/TTL passage cannot Final, pay, retire, refund or prune");
+        for liable in frame.custody_v1().liable_signers_v1() {
+            assert!(b.state.staged_bond_exit_held_v1(&liable, now));
+        }
+        assert!(!b.state.staged_bond_exit_held_v1(&honest_seat(), now), "a seat with no credited Valid is not liable");
+        assert!(!b.state.staged_bond_exit_held_v1(&outsider(), now), "the requesting owner is not a custodian");
+        assert!(owner_pending(&frame, &b.state, acquisition).3.is_some(), "authenticated response remains available");
+        assert!(b.write_staged_row_v1(frame.key_v1(), None).is_err(), "direct evidence erasure is refused too");
+        assert_eq!(b.state, protected);
+        // A stale derived deadline cannot bypass the hold; no replacement hard deadline is manufactured.
+        b.state.deadlines.insert((now - 1, plan.original_claim));
+        super::super::sweep_deadlines(&mut b, &ctx).unwrap();
+        assert_eq!(b.state, protected);
+        let mut restored = b.state.clone();
+        for entry in b.entries.iter().rev() { apply_delta_entry(&mut restored, entry, true).unwrap(); }
+        super::super::rebuild_deadline_index_v2(&mut restored, &params).unwrap();
+        assert_eq!(restored.state_root(), state.state_root());
+        assert!(!restored.court_service_holds_claim_v1(&plan.original_claim));
+        for entry in &b.entries { apply_delta_entry(&mut restored, entry, false).unwrap(); }
+        super::super::rebuild_deadline_index_v2(&mut restored, &params).unwrap();
+        assert_eq!(restored.state_root(), protected.state_root());
+        assert_eq!(restored.deadlines, protected.deadlines);
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&protected)).unwrap();
+        let fresh = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap()
+            .into_state(&params, Some(protected.state_root())).expect("fresh snapshot reconstructs unresolved service holds");
+        assert_eq!(fresh.state_root(), protected.state_root());
+        assert_eq!(fresh.deadlines, protected.deadlines);
+        assert!(fresh.staged_bond_exit_held_v1(&frame.custody_v1().pledge_v1().producer, now));
+        assert_eq!(palw_tir_public_claim_v1(&restored, plan.original_claim).unwrap().plan_v1().terms, plan.terms);
     }
 
     /// **G14 R5: an honest custodian that answers an outside owner's demand inside its clock is never defaulted or charged** —

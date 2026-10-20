@@ -79,3 +79,70 @@ impl CourtServiceState {
         Err("court service inclusion assumptions and duty eligibility are not adopted; no party default")
     }
 }
+
+impl CourtServiceState {
+    /// Contextual validation is separate from the standalone row codec check.
+    /// A recovery binding may not outlive or substitute its immutable frame.
+    pub fn check_context(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> Result<(), String> {
+        self.check()?;
+        for binding in self.claims.values() {
+            let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, binding.claim)
+                .ok_or("service recovery lost its original frame")?;
+            let plan = frame.plan_v1();
+            if (plan.allocation_id, plan.source_id, plan.terms.accepted_daa)
+                != (binding.allocation_id, binding.source_id, binding.original_accepted_daa)
+            {
+                return Err("service recovery substitutes original frame".into());
+            }
+            let claim = state.claim(&binding.claim).ok_or("service recovery lost its claim")?;
+            if matches!(claim.phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }) {
+                return Err("unresolved service claim cannot already be Final".into());
+            }
+        }
+        Ok(())
+    }
+}
+impl crate::palw_state_v2::PalwChainStateV2 {
+    pub fn court_service_state_v1(&self) -> Option<&CourtServiceState> {
+        match self.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService) {
+            Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(row)) => Some(row.as_ref()),
+            _ => None,
+        }
+    }
+    /// All bindings remain unresolved in this candidate. Quota alone cannot
+    /// discharge a duty, and no unadopted release flag or wall-clock expiry can.
+    pub fn court_service_holds_claim_v1(&self, claim: &Hash64) -> bool {
+        self.court_service_state_v1().is_some_and(|service| service.claims.contains_key(claim))
+    }
+    pub fn court_service_holds_bond_v1(&self, bond: &crate::palw_state_v2::PalwBondKeyV2) -> bool {
+        self.court_service_state_v1().is_some_and(|service| {
+            service.claims.keys().any(|claim| {
+                // Missing frames are invalid on write/load; fail closed if queried
+                // on a not-yet-validated candidate rather than releasing collateral.
+                crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)
+                    .is_none_or(|frame| frame.custody_v1().liable_signers_v1().contains(bond))
+            })
+        })
+    }
+    pub fn court_service_holds_material_v1(&self, key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1) -> bool {
+        use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+        let claim = match key {
+            Key::TirClaim(claim) | Key::TirAcquisition(claim, ..) | Key::TirPreparation(claim, ..) | Key::TirWitness(claim, ..) => {
+                Some(*claim)
+            }
+            Key::TirRawChunk(_) | Key::TirAcceptedBody(_) => {
+                let acquisition = match self.staged_court_row_v1(key) {
+                    Some(Row::TirRawChunk(row)) => Some(row.acquisition),
+                    Some(Row::TirAcceptedBody(row)) => Some(row.acquisition),
+                    _ => None,
+                };
+                match acquisition {
+                    Some(Key::TirAcquisition(claim, ..)) => Some(claim),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        claim.is_some_and(|claim| self.court_service_holds_claim_v1(&claim))
+    }
+}

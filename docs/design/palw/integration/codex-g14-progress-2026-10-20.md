@@ -91,3 +91,17 @@ release の `rooted_service_guard_denies_default_and_native_undo_restores_legacy
 原子的 original admission と実 accepting-block のコストからこの row を作成・更新する production writer は未実装。現在の owner demand と owner 非依存義務の対応、専用 fence/profile、Final/担保/証拠/pruning の保留・復旧、全 claim の容量保証、full snapshot / restart / pruned IBD は残る。default 拒否の試験を P0 完了へ読み替えない。別 branch `4f41081ee` の搬送会計も未統合で、その bytes/work/memory と service の bytes/work/IO/control は単純な読み替えができない。
 
 追加の release 回帰試験は **39 passed / 0 failed / 0 ignored**（候補 row の codec/native heap/wire preflight、binding/残余 quota の改変拒否 3 件、既存部品・G14 gates・t12/release 同一性 36 件）。上の native journal 試験 1 件と合わせて 40 件。`cargo check --release -p kaspa-consensus` も成功。生ログと SHA-256 は既存の [release 試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)に追加した。文書検査は imported assets の同じ欠落参照 5 件が残り、baseline を変更していない。
+
+## 未解決 service binding の Final・担保・証拠保持
+
+前項の default 拒否だけでは、別の expiry 経路から Final/retirement/証拠回収が進む余地があった。候補 binding のある claim に同じ rooted hold predicate を接続し、DL-1 と deadline 整合性検査、自動 sweep、native Final/retirement の入口、pending accusation、custodian の exit hold、panel liability/Valid lock の時刻 pruning、TIR 証拠 row の TTL と直接削除を保持した。元の 3,120 / 10,000、signed frame の期限、既存 wire/preset の値は変えず、最大 DAA を新 deadline に使わない。book を更新しても他 claim の deadline を書き換えない。
+
+book の writer と snapshot の整合性検査は、binding が元 frame/claim を失った場合や original scope を替えた場合、unresolved のまま Final になった場合を拒否する。保持 row は TTL sweep の 64 件枠を取る前に除外する。外部 provider の署名済み horizon を延長する規則ではなく、既に state にある証拠と未解決責任を保持する候補である。actual original admission の契約 horizon 検査はまだ必要。
+
+レビューで、直接削除の拒否が staged witness の完成時にも作用し、正当な fraud 裁定を止める点を発見して修正した。保持中は既存 partial prefix を残して assembled evidence を裁定へ渡す。V1 の completed witness row 禁止を変更しない。旧 claim では従来どおり witness を消費する。prefix の保持を完成 evidence 全体の archive として表示しない。
+
+最終版の release `--lib rooted_service_` は **3 passed / 0 failed / 0 ignored**。default 拒否、hard/TTL 後の Final/retirement/削除拒否、qualified custody signer だけの exit hold、元の期限値の保存、native journal undo/replay、hard 後の受理時点を含む full carriage の `into_state` 復元、保持中の streamed witness による CourtFraud を確認した。carrier/original は既存 fixture の verified-half で、ネットワーク署名検証や node の IBD ではない。
+
+正常応答・正当な裁定ごとの解除、残余容量内の再割当、hard 後の明示的 recovery、actual admission/block supply、全 owner 共謀下の共有経路、依存契約 horizon、物理容量と保持費用、node の restart/pruned IBD は依然として残る。binding が永久に unresolved で止まるだけの候補を G14 完成とはしない。武装・統合・配備なし。
+
+最終コードの回帰 39 件と同じ release binary の旧 witness 消費 1 件も成功し、今回の対象は native 3 + 回帰 39 + 旧 witness 1 = **43 passed / 0 failed / 0 ignored**。t12 identity / release pin を変更していない。最新ソースの `cargo check --release -p kaspa-consensus` 成功。生ログ・コマンド・SHA-256 を [release 試験記録](../../../evidence/palw/g14-completion-2026-10-20/README.md)へ追加。T01–T15 や G14 全体の完了数ではなく、保持候補の限定した回帰結果である。
