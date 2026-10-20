@@ -191,6 +191,7 @@
 - [adr/0186-hold-unresolved-liability-advance-independent-claims.md](../adr/0186-hold-unresolved-liability-advance-independent-claims.md)
 - [adr/0192-court-service-opportunity-and-shared-pursuit.md](../adr/0192-court-service-opportunity-and-shared-pursuit.md)
 - [adr/0193-miner-account-bond-for-panel-incentives.md](../adr/0193-miner-account-bond-for-panel-incentives.md)
+- [adr/0194-dormant-g14-integration-and-service-schema.md](../adr/0194-dormant-g14-integration-and-service-schema.md)
 - [adr/INDEX.md](../adr/INDEX.md)
 - [adr/README.md](../adr/README.md)
 - [adr/TOPICS.md](../adr/TOPICS.md)

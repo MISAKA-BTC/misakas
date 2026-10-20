@@ -185,3 +185,4 @@
 | ADR-0186 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md) | 原文と後続改定を参照 |
 | ADR-0192 | [court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md) | 原文と後続改定を参照 |
 | ADR-0193 | [Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md) | 原文と後続改定を参照 |
+| ADR-0194 | [休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md) | 原文と後続改定を参照 |

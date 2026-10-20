@@ -35,3 +35,7 @@ ADR-0192 は本 branch の Proposed。ADR-0193 (`docs/adr/0193-sequential-witnes
 ## Account Bond package addition (2026-10-20)
 
 [RFC-0027](../rfc/0027-miner-account-bond-and-panel-incentives.md) and [Account Bond ADR-0193](../adr/0193-miner-account-bond-for-panel-incentives.md) are imported as Proposed. Separate X3 branch also has a filing-clock ADR-0193 under a different filename; histories and paths are preserved and must be distinguished. Next local numbers: ADR-0194 / RFC-0028. Package shared indexes/registry were not blindly applied.
+
+## ADR-0194 reservation (2026-10-20)
+
+[ADR-0194](../adr/0194-dormant-g14-integration-and-service-schema.md) reserves the dormant integration/service namespace proposal. No integration is approved by this allocation. Next local ADR is 0195; RFC remains 0028.

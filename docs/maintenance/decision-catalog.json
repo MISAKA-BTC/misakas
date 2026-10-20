@@ -1434,6 +1434,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0194",
+      "path": "docs/adr/0194-dormant-g14-integration-and-service-schema.md",
+      "title": "ADR-0194 — 休眠 G14 統合候補と service namespace",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",

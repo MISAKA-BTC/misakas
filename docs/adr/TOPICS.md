@@ -101,6 +101,7 @@
 - [ADR-0173 — MISAKA's purpose: public-verifier dispute completeness](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)
 - [ADR-0180 — PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md)
 - [ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md)
+- [ADR-0194 — 休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md)
 
 ## EVM / wallet
 
