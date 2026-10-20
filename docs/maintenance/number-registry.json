@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
-  "scope": "uploaded ZIP only; integration-branch reservations unverified",
+  "scope": "uploaded ZIP only; integration-branch reservations unverified; ADR-0193 reserved on RFC14 X3 worktree; 0189-0192 are separate-branch allocations, not imported (2026-10-20)",
   "allocated_here": {
     "adr": [
       "0181",
       "0182",
-      "0188"
+      "0188",
+      "0193"
     ],
     "rfc": [
       "0021",
@@ -13,7 +14,7 @@
     ]
   },
   "next_local": {
-    "adr": "0189",
+    "adr": "0194",
     "rfc": "0023"
   },
   "legacy_duplicates": {

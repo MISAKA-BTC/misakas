@@ -207,4 +207,5 @@
 - [ADR-0171 — Probabilistic constraint checks are the normal large-model verifier; the court resolves disputes exa](0171-probabilistic-constraint-checks-and-court-on-dispute.md)
 - [ADR-0183 — G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md)
 - [ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg](0184-native-liability-horizon-panel-record-and-single-certified-leg.md)
+- [ADR-0193 — sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md)
 

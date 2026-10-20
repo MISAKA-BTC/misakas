@@ -1458,6 +1458,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0193",
+      "path": "docs/adr/0193-sequential-witness-filing-clock.md",
+      "title": "ADR-0193: sequential witness filing の versioned clock",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",

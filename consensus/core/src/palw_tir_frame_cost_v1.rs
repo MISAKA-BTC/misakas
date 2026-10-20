@@ -39,6 +39,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 /// The clock / cost-unit format's version.
 pub const PALW_TIR_FRAME_CLOCK_VERSION_V1: u16 = 1;
+/// Proposed opt-in clock for the node's accepted-offset witness pipeline.
+/// V1 keeps its exact old derivation; no preset or reviewed record selects V2.
+pub const PALW_TIR_FRAME_CLOCK_VERSION_V2: u16 = 2;
 
 /// WorkDebits on a preparer's serial path per pass: ONE debit carries the whole pass (the fold counts grants, not slices; the
 /// preparer's own lane bounds its cumulative work). Then its Ready.
@@ -90,12 +93,13 @@ impl PalwTirFrameClockV1 {
         Ok(sum(&[product(moves, self.control_bytes)?, body])?.div_ceil(self.parallel_bytes_per_daa))
     }
     pub fn check_v1(&self) -> Result<(), String> {
-        if self.version != PALW_TIR_FRAME_CLOCK_VERSION_V1
+        if !matches!(self.version, PALW_TIR_FRAME_CLOCK_VERSION_V1 | PALW_TIR_FRAME_CLOCK_VERSION_V2)
             || self.action_parser_steps == 0
             || self.frame_passes_per_check == 0
             || self.control_bytes == 0
             || self.maximum_door_daa == 0
-            || self.parallel_bytes_per_daa < self.control_bytes.saturating_add(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64)
+            || self.parallel_bytes_per_daa
+                < self.control_bytes.saturating_add(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64)
         {
             return Err("TIR frame clock needs its version and positive measured cost units and inclusion capacity".into());
         }
@@ -475,12 +479,98 @@ pub fn tir_public_filing_daa_v1(
 ) -> Result<u64, String> {
     clock.check_v1()?;
     let parts = product(witness_moves, crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64)?;
-    sum(&[product(2, config.prices.inclusion_margin_daa)?, clock.inclusion_daa_v1(witness_moves, parts)?])
+    // V1's fixed two margins must remain reproducible for signed old frames.
+    // The current node filer waits for the accepted offset before sending the
+    // next part. V2 therefore reserves a margin per possible carried move; the
+    // aggregate byte term cannot replace this serial dependency. maximum_moves
+    // is conservative (it also covers terminal controls/retries), never raised
+    // here. Original maximum_door still rejects a frame that no longer fits.
+    let serial = match clock.version {
+        PALW_TIR_FRAME_CLOCK_VERSION_V1 => 2,
+        PALW_TIR_FRAME_CLOCK_VERSION_V2 if witness_moves > 0 => witness_moves.max(2),
+        _ => return Err("sequential filing needs at least one carried move".into()),
+    };
+    sum(&[product(serial, config.prices.inclusion_margin_daa)?, clock.inclusion_daa_v1(witness_moves, parts)?])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequential_filing_v2_keeps_v1_bytes_and_cannot_erase_serial_wait() {
+        let cost = palw_tir_frame_test_only_cost_v1();
+        let bytes = borsh::to_vec(&cost).unwrap();
+        let moves = 100;
+        let body = moves * crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
+        let old = tir_public_filing_daa_v1(moves, &cost.config, &cost.clock).unwrap();
+        assert_eq!(old, 2 * cost.config.prices.inclusion_margin_daa + cost.clock.inclusion_daa_v1(moves, body).unwrap());
+        let mut v2 = cost;
+        v2.clock.version = PALW_TIR_FRAME_CLOCK_VERSION_V2;
+        v2.check_v1().unwrap();
+        assert_ne!(borsh::to_vec(&v2).unwrap(), bytes, "explicit version binds the changed rule");
+        assert!(tir_public_filing_daa_v1(moves, &v2.config, &v2.clock).unwrap() >= moves * v2.config.prices.inclusion_margin_daa);
+        // Synthetic stress capacity only: high throughput does not remove the
+        // actual filer's accepted-cursor dependency. No production value set.
+        v2.clock.parallel_bytes_per_daa = 64 << 20;
+        assert_eq!(tir_public_filing_daa_v1(moves, &v2.config, &v2.clock).unwrap(), 101);
+        assert!(tir_public_filing_daa_v1(0, &v2.config, &v2.clock).is_err());
+        assert_eq!(borsh::to_vec(&cost).unwrap(), bytes);
+        assert_eq!(tir_public_filing_daa_v1(moves, &cost.config, &cost.clock).unwrap(), old);
+        assert_eq!(
+            palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, Some(&v2), PALW_TIR_FRAME_COST_RECORDS_V1),
+            Err(PalwTirFrameCostRefusalV1::NoRecord)
+        );
+    }
+
+    #[test]
+    fn sequential_filing_v2_flows_through_real_plan_and_keeps_door_cap() {
+        use crate::palw_tir_public_allocation_v1::{
+            PalwTirPublicAllocationMissingV1, PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_v1,
+        };
+        let fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = &fx.frame;
+        let original = frame.original_v1();
+        let geometry = crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1 {
+            class_id: original.job.class_id,
+            producer: frame.custody_v1().pledge_v1().producer,
+            execution_root: original.execution_root,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original),
+            accepted_daa: frame.plan_v1().terms.accepted_daa,
+        };
+        let quote = |rules| {
+            derive_tir_public_allocation_v1(&geometry, original, frame.header_v1(), &fx.record, &fx.layout, None, None, rules).unwrap()
+        };
+        let PalwTirPublicAllocationQuoteV1::Complete(v1) = quote(fx.rules) else { panic!("V1 fixture plan") };
+        assert_eq!(borsh::to_vec(&v1).unwrap(), borsh::to_vec(frame.plan_v1()).unwrap(), "V1 plan rederives byte-for-byte");
+        // The original mixed fixture has a long network_v1 collection window;
+        // it can dominate both filing allowances. Verify that max explicitly.
+        let mut rules = fx.rules;
+        rules.clock.version = PALW_TIR_FRAME_CLOCK_VERSION_V2;
+        let PalwTirPublicAllocationQuoteV1::Complete(covered) = quote(rules) else { panic!("covered V2 plan") };
+        let filing = tir_public_filing_daa_v1(covered.terminal.envelope.maximum_moves, &rules.config, &rules.clock).unwrap();
+        assert_eq!(covered.terms.collect_until_daa, covered.terms.stream_until_daa + rules.config.collection_daa.max(filing));
+        assert!(covered.terms.collect_until_daa >= v1.terms.collect_until_daa);
+        // Same source/class, using the EXISTING synthetic small-window config
+        // for both versions; no production value or ceiling is changed.
+        rules = fx.rules;
+        rules.config = palw_tir_frame_test_only_cost_v1().config;
+        let PalwTirPublicAllocationQuoteV1::Complete(v1) = quote(rules) else { panic!("small-window V1 plan") };
+        rules.clock.version = PALW_TIR_FRAME_CLOCK_VERSION_V2;
+        let PalwTirPublicAllocationQuoteV1::Complete(v2) = quote(rules) else { panic!("small-window V2 plan") };
+        assert_eq!(v1.terms.stream_until_daa, v2.terms.stream_until_daa);
+        assert!(v2.terms.collect_until_daa > v1.terms.collect_until_daa);
+        assert_eq!(v2.terms.material_until_daa, v2.terms.collect_until_daa + rules.config.reorg_retention_daa);
+        assert_eq!(v2.terms.bond_exit_after_daa, v2.terms.material_until_daa);
+        assert_eq!(v1.source_id, v2.source_id);
+        assert_ne!(v1.resource_plan_id, v2.resource_plan_id);
+        rules.clock.maximum_door_daa = v1.terms.collect_until_daa - geometry.accepted_daa;
+        assert!(
+            matches!(quote(rules), PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. }
+            if missing.iter().any(|m| matches!(m, PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon { .. }))),
+            "the unchanged cap refuses a longer required door"
+        );
+    }
 
     #[test]
     fn the_cost_record_list_is_empty_and_refuses_every_network() {

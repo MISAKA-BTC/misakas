@@ -27,3 +27,7 @@ RFC-0010/0012のdormant implementationは主RFCではなくdesignへ移しまし
 - [18-inference-surface.md](../spec/palw/18-inference-surface.md)
 - [18-layer-sharded-panels.md](../spec/palw/18-layer-sharded-panels.md)
 - [18-verification-certificates.md](../spec/palw/18-verification-certificates.md)
+
+## 2026-10-20 X3 worktree の追加予約
+
+[ADR-0193](../adr/0193-sequential-witness-filing-clock.md) を Proposed として予約。ADR の次ローカル番号は 0194。0189–0192 は別 branch の割当で、この branch に主文書を捏造・複製しない。上の ZIP 時点の次番号は履歴であり、全 branch の未使用番号を保証しない。RFC の別 branch 予約も引き続き区別する。
