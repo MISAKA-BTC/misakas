@@ -53,7 +53,7 @@ impl VirtualStateProcessor {
                     daa_score: virtual_daa_score,
                     blue_score: 0,
                     subsidy: 0,
-                })
+                }).into_legacy_extras()
             })
         {
             return Some(refusal.to_string());
@@ -227,7 +227,7 @@ impl VirtualStateProcessor {
             ));
         }
         Some(kaspa_consensus_core::palw_state_v2::palw_v2_origin_rehearsal_v1(state, state_params, point, object, || {
-            self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object))
+            self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)).into_legacy_extras()
         }))
     }
 
@@ -1168,7 +1168,7 @@ impl VirtualStateProcessor {
         let extras = self.palw_transition_extras_for(point);
         let config = extras.staged_public_court.ok_or("preclaim quote has no native prospective config")?;
         let maximum_custodians =
-            state.staged_maximum_custodians_v1(original.job.class_id, point.daa_score, params, &extras).map_err(|e| e.to_string())?;
+            state.staged_maximum_custodians_v1(original.job.class_id, extras.point().daa_score, params, &extras).map_err(|e| e.to_string())?;
         let base_ladder =
             extras.held_context_ladder.or(extras.shard_court_ladder).ok_or("preclaim quote has no native held/shard leaf ladder")?;
         let maximum_leaves = state.class_step_ladder_v1(&original.job.class_id, base_ladder);
@@ -4604,7 +4604,7 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
     > {
         let (execution_key, job_anchor) = self.palw_attempt_keys_v1(Some(header), &envelope.attempt);
-        let mut extras = self.palw_transition_extras_for_objects(state, point, objects);
+        let mut extras = self.palw_transition_extras_for_objects(state, point, objects).into_legacy_extras();
         extras.own_job_anchor = job_anchor;
         if let Ok(bytes) = borsh::to_vec(header) {
             extras.exec_v2_origin_headers.insert(point.block, bytes);
@@ -4650,7 +4650,7 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
     > {
         let merged = [self.palw_merged_attempt_work_v1(blue, blue_header, envelope, subsidy, None, 0)];
-        let mut extras = self.palw_transition_extras_for(point);
+        let mut extras = self.palw_transition_extras_for(point).into_legacy_extras();
         if let Some(header) = blue_header
             && let Ok(bytes) = borsh::to_vec(header)
         {
@@ -4792,7 +4792,7 @@ impl VirtualStateProcessor {
         objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
         refunds: Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
     ) -> Result<kaspa_consensus_core::palw_state_v2::PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
-        let mut extras = self.palw_transition_extras_for(point);
+        let mut extras = self.palw_transition_extras_for(point).into_legacy_extras();
         extras.carrier_market_refunds = refunds;
         kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
             state,
@@ -10463,7 +10463,7 @@ impl VirtualStateProcessor {
                 self.palw_da_court_at(point.daa_score),
                 &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                     own_attempt_class,
-                    ..self.palw_transition_extras_for(&point)
+                    ..self.palw_transition_extras_for(&point).into_legacy_extras()
                 },
             );
             match applied {

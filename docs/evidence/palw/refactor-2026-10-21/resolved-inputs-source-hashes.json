@@ -1,0 +1,7 @@
+{
+  "consensus/core/src/palw_backend/operations.rs": "904090428863e82d90a06dad515eda8af7d6afd266349e19012e43006befa1e7",
+  "consensus/core/src/palw_state_v2/tests.rs": "9c0393e818291a3c8740b5301845356f092cdc8f514199fac3d23053a79f5e57",
+  "consensus/src/pipeline/virtual_processor/processor.rs": "dfa4abec3ef322eb33ba29f6cc4b10f7b2dbd37aec18f8bc805fa5ce412bb351",
+  "consensus/src/pipeline/virtual_processor/processor/palw.rs": "a973e2f4eaf66a32340182b5ce6120c942e16957cc0b8237ec298bb1023c3f12",
+  "consensus/src/pipeline/virtual_processor/processor/palw_accept.rs": "4ea09375c176e26d852081d5597b17e1743b3d584d1d08cf9b682f9c6b20eb64"
+}

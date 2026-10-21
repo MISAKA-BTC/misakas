@@ -2699,7 +2699,7 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
-                                        let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
+                                        let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
                                         extras.history_custody_pledges = history_custody_pledges;
                                         extras.tir_public_originals = tir_public_originals;
                                         extras.public_original_bindings = public_original_bindings;

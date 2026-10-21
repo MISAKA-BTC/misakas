@@ -669,4 +669,3 @@ impl<'a> PalwResourceOpsV1<'a> {
         self.backend.artifact_root_and_leaf_count()
     }
 }
-

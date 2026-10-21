@@ -2,6 +2,36 @@
 
 use super::*;
 
+/// Immutable output of the existing production resolver at one block. The legacy
+/// extras remain readable for the existing fold APIs, but cannot be mutated through
+/// this boundary. Accepted-fact assembly explicitly takes ownership of those extras.
+#[derive(Clone)]
+pub(super) struct PalwResolvedBlockInputsV1 {
+    point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    extras: kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+}
+impl PalwResolvedBlockInputsV1 {
+    fn at(point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+          extras: kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1) -> Self {
+        Self { point: *point, extras }
+    }
+    pub(super) fn point(&self) -> &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        &self.point
+    }
+    pub(super) fn into_legacy_extras(self) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+        self.extras
+    }
+}
+impl std::fmt::Debug for PalwResolvedBlockInputsV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.extras, f)
+    }
+}
+impl std::ops::Deref for PalwResolvedBlockInputsV1 {
+    type Target = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1;
+    fn deref(&self) -> &Self::Target { &self.extras }
+}
+
 impl VirtualStateProcessor {
     pub fn palw_producer_facts_v2_impl(
         &self,
@@ -630,7 +660,7 @@ impl VirtualStateProcessor {
         let audit_active = self.palw_audit_2026_09_11_at(point.daa_score);
         // The old path's synthetic chain point; unused past the fence.
         let mut rehearsal = *point;
-        let mut fee_extras = self.palw_transition_extras_for(point);
+        let mut fee_extras = self.palw_transition_extras_for(point).into_legacy_extras();
         fee_extras.round_fee_incomes = round_fee_incomes.to_vec();
         let mut folded = if audit_active {
             match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_retained_v1(
@@ -1552,7 +1582,7 @@ impl VirtualStateProcessor {
                             public_original_bindings: public_original_bindings.clone(),
                             producer_custody_delegations: producer_custody_delegations.clone(),
                             model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                            ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
+                            ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object)).into_legacy_extras()
                         },
                     ) {
                         Ok(next) => rehearsed_registration = Some(next),
@@ -1796,7 +1826,7 @@ impl VirtualStateProcessor {
                                 public_original_bindings: public_original_bindings.clone(),
                                 producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object)).into_legacy_extras()
                             },
                         )
                     } else {
@@ -1819,7 +1849,7 @@ impl VirtualStateProcessor {
                                 public_original_bindings: public_original_bindings.clone(),
                                 producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object)).into_legacy_extras()
                             },
                         )
                         .map(|(next, _)| next)
@@ -1963,7 +1993,7 @@ impl VirtualStateProcessor {
     pub(super) fn palw_transition_extras_for(
         &self,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
-    ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+    ) -> PalwResolvedBlockInputsV1 {
         let daa_score = point.daa_score;
         // SW-8's step 4c, read once: `(anchor_delay, reach)` where the block anchors a panel — and, past
         // lane F2's fence, the same reading's draw points (the header and mergeset are read once).
@@ -2233,7 +2263,7 @@ impl VirtualStateProcessor {
             extras.tir_public_allocation_rules_v1 = Some(rules);
             extras.tir_public_network_domain_v1 = Some(self.palw_network_domain_v2());
         }
-        extras
+        PalwResolvedBlockInputsV1::at(point, extras)
     }
 
     /// A class-independent native template, not a quote or an admission receipt. The claim
@@ -2293,7 +2323,7 @@ impl VirtualStateProcessor {
         }
         if let Some(envelope) = originals.values().next() {
             if originals.len() != 1 { return Err("one FP carrier cannot fund multiple original TIR allocations".into()); }
-            let mut extras = self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object));
+            let mut extras = self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)).into_legacy_extras();
             extras.tir_public_originals = originals.clone();
             // G14 R4: a frame with a semantic stage is quoted with its own TFP1-carried history pledge (the fold checks it the same way).
             if let Some(history) = &envelope.history_pledge {
@@ -2333,11 +2363,11 @@ impl VirtualStateProcessor {
         _state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
-    ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
-        let mut extras = self.palw_transition_extras_for(point);
+    ) -> PalwResolvedBlockInputsV1 {
+        let mut extras = self.palw_transition_extras_for(point).into_legacy_extras();
         extras.model_court_window_active = self.palw_model_court_window_active_at(point.daa_score);
         extras.class_court_windows = self.palw_class_court_windows_for_objects(objects, point.daa_score);
-        extras
+        PalwResolvedBlockInputsV1::at(point, extras)
     }
 
     pub(super) fn palw_v2_objects_of_block(

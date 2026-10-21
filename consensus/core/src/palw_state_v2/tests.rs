@@ -26436,7 +26436,7 @@ mod model_market_virtual {
         }
         // …and the chain walk folds a block's objects, its EVM actions and its refunds with them.
         for line in [
-            "let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);",
+            "let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();",
             "extras.evm_actions = staged.result.market_actions.clone();",
             "extras.carrier_market_refunds = carrier_refunds;",
         ] {
