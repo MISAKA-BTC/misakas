@@ -201,7 +201,18 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
     let sparse_material=ConstraintMaterialV1{eog:&eog,renderings:std::slice::from_ref(&renderings[selected_id as usize])};
     let mut sparse_intent=intent.clone();sparse_intent.material_id=sparse_material.identity(budget).unwrap();sign(&mut sparse_intent);
     let sparse_evidence=store.build_constraint_token_material_with_duty_v1(&b.state,&params,&rules,&sparse_intent,sparse_material,budget,&duty).unwrap();
-    assert_eq!(sparse_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    // The stream seed IS the signed intent message, which binds material_id, so a
+    // re-signed sparse intent has its own seed. Exact equality is against the old
+    // native builder over the SAME sparse intent/material; against the full intent
+    // the findings may differ only in that seed.
+    let sparse_old=store.build_constraint_terminal(&b.state,&params,&rules,&sparse_intent,sparse_material,budget).unwrap();
+    let sparse_found=sparse_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap();
+    assert_eq!(sparse_found,sparse_old.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    let full_found=evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap();
+    let mut reseeded=sparse_found.clone().expect("sparse selected material convicts");
+    assert_eq!(reseeded.seed_id,sparse_intent.signing_message(rules.network_domain).unwrap());
+    reseeded.seed_id=intent.signing_message(rules.network_domain).unwrap();
+    assert_eq!(Some(reseeded),full_found);
     assert!(sparse_material.renderings.len()<renderings.len(),"selected target does not require every potential rendering");
     let missing_material=ConstraintMaterialV1{eog:&eog,renderings:&[]};let mut missing_intent=intent.clone();missing_intent.material_id=missing_material.identity(budget).unwrap();sign(&mut missing_intent);
     assert!(store.build_constraint_token_material_with_duty_v1(&b.state,&params,&rules,&missing_intent,missing_material,budget,&duty).is_err());
@@ -452,10 +463,19 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     let eog_only=ConstraintMaterialV1{eog:&eog,renderings:&[]};
     let mut end_only=intent.clone();end_only.material_id=eog_only.identity(budget).unwrap();sign(&mut end_only);
     let projected_end=store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&duty).unwrap();
-    assert_eq!(projected_end.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
     assert!(store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&token_duty).is_err());
+    // Seed = signed intent message (binds material_id): exact equality is against
+    // the old native Stop builder over the SAME EOG-only intent/material; against
+    // the full-material intent only the seed may differ.
+    let end_seed=end_only.signing_message(rules.network_domain).unwrap();
     let end_only=store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&end_only,eog_only,budget).unwrap();
-    assert_eq!(end_only.recheck(&store,&b.state,&params,&rules,budget).unwrap().is_some(),fault);
+    let end_found=end_only.recheck(&store,&b.state,&params,&rules,budget).unwrap();
+    assert_eq!(projected_end.recheck(&store,&b.state,&params,&rules,budget).unwrap(),end_found);
+    assert_eq!(end_found.is_some(),fault);
+    let full_found=evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap();
+    assert_eq!(full_found.is_some(),fault);
+    let reseeded=end_found.map(|mut f|{assert_eq!(f.seed_id,end_seed);f.seed_id=intent.signing_message(rules.network_domain).unwrap();f});
+    assert_eq!(reseeded,full_found);
     // Negative-only altered native facts, never installed as a valid original.
     let mut changed=frame.original_v1().clone();changed.decode_tokens_executed-=1;
     assert!(matches!(direct(&changed,&ids),Err(e) if e.contains("native original claim/count/stop facts")));
