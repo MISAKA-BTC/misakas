@@ -14022,6 +14022,28 @@ mod fp_compute_pricing {
         PalwTransitionExtrasV1 { fp_derived_work_daa: Some(0), ..Default::default() }
     }
 
+    #[test]
+    fn borrowed_rule_views_keep_an_old_claims_unit_when_the_reading_block_crosses_the_fence() {
+        let (p, base, plain, _) = two_classes(&compute_era());
+        let prompt: Vec<u32> = (1..=6).collect();
+        let object = commit(plain, 0xB0, 1, &prompt, 4, honest_leaves(&derived_profile(), &prompt, 4));
+        let (state, _) = apply_derived(&base, &p, &ctx(4, 103, 4), &[object], &compute_era()).unwrap();
+        let mut claim = state.claim(&h64(0xB0)).unwrap().clone();
+        let extras = PalwTransitionExtrasV1 { canonical_work_daa: Some(100), ..Default::default() };
+        let before = state.state_root();
+        for (accepted, compute) in [(99, false), (100, true), (101, true)] {
+            claim.accepted_daa = accepted;
+            for (reading, active) in [(99, false), (100, true), (500, true)] {
+                let point = ctx(7, reading, 7);
+                assert_eq!(extras.rules_at(&point).canonical_work_active(), active);
+                assert_eq!(extras.rules_for_claim(&claim).prices_in_compute(&p), compute,
+                    "claim accepted at {accepted} must keep its unit when read at {reading}");
+            }
+        }
+        assert_eq!(state.state_root(), before, "the views cannot write chain state");
+        assert!(!PalwTransitionExtrasV1::default().rules_for_claim(&claim).prices_in_compute(&p));
+    }
+
     fn pricing() -> PalwFpPricingV1 {
         PalwFpPricingV1::of(&derived_work_chain().0, Some(0))
     }

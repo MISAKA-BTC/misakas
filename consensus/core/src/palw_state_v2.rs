@@ -13611,6 +13611,8 @@ mod native_mutation;
 mod native_writers;
 mod transition_builder;
 mod block_preparation;
+mod input_views;
+pub use input_views::{PalwBlockFactsV1, PalwRulesAtBlockV1, PalwRulesForClaimV1};
 
 // ---------------------------------------------------------------------------------------------
 // The transition
@@ -14100,7 +14102,7 @@ pub fn palw_v2_pre_object_base_retained_v1(
     let mut builder =
         TransitionBuilder::try_new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
 
-    block_preparation::prepare_block_objects_v1(&mut builder, parent, ctx, extras,
+    block_preparation::prepare_block_objects_v1(&mut builder, parent, ctx, extras.block_facts(), extras.rules_at(ctx),
         block_preparation::ArtifactMigrationOrderV1::BeforeClassRetarget)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
@@ -14593,7 +14595,7 @@ fn apply_palw_transition_v7_inner(
     //     market move is measured against it and refused by it, and past the 2026-09-23 audit fence
     //     so is every carrier refund (P-B1) — and market keys are minted in the top 1/256 of the key
     //     space, so this prefix still belongs to the claims it was sized for.
-    block_preparation::prepare_block_objects_v1(&mut builder, parent, ctx, extras,
+    block_preparation::prepare_block_objects_v1(&mut builder, parent, ctx, extras.block_facts(), extras.rules_at(ctx),
         block_preparation::ArtifactMigrationOrderV1::AfterMeshSweep)?;
 
     // 3. The block's accepted objects, in consensus acceptance order.
@@ -24940,6 +24942,7 @@ pub fn palw_state_v2_fold_source_v1() -> &'static str {
             include_str!("palw_state_v2/fold_read.rs"),
             include_str!("palw_state_v2/transition_builder.rs"),
             include_str!("palw_state_v2/block_preparation.rs"),
+            include_str!("palw_state_v2/input_views.rs"),
             include_str!("palw_state_v2/da_sessions.rs"),
             include_str!("palw_state_v2/deadlines.rs"),
             include_str!("palw_state_v2/objects.rs"),

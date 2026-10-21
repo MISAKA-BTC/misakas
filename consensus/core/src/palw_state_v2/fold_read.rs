@@ -318,7 +318,7 @@ impl PalwFoldReadV1<'_> {
     /// The work target's floor at this block (ADR-0132/0137) — the value the class target is read
     /// against — `None` where the work target is dormant. (The builder's `work_target_floor`.)
     pub(super) fn work_target_floor(&self, ctx: &PalwBlockContextV2) -> Option<u128> {
-        if !self.extras.work_target_active {
+        if !self.extras.rules_at(ctx).work_target_active() {
             return None;
         }
         let rate = self
@@ -330,7 +330,7 @@ impl PalwFoldReadV1<'_> {
         let floor = palw_work_floor_for_block_v1(self.params, ctx.subsidy, self.extras.escrow_carve, rate);
         // ADR-0132 S: with the network draw gone the stepped `W` is what holds the cadence, and it
         // is never below the block's `W₀`.
-        if self.extras.single_lottery_active {
+        if self.extras.rules_at(ctx).single_lottery_active() {
             return Some(floor.max(self.state.work_target.map(|target| target.work).unwrap_or(0)));
         }
         Some(floor)
@@ -355,7 +355,7 @@ impl PalwFoldReadV1<'_> {
         let target =
             crate::palw_admission_v2::palw_effective_class_target_v1(self.state, self.params, &class_id, self.work_target_floor(ctx))
                 .ok();
-        let past_the_unit = self.extras.canonical_work_daa.is_some_and(|height| ctx.daa_score >= height);
+        let past_the_unit = self.extras.rules_at(ctx).canonical_work_active();
         let pwu = if past_the_unit {
             let draw = self.state.palw_attempt_per_draw_v1(
                 &self.params.base_class_id,

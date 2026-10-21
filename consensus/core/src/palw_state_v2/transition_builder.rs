@@ -5942,7 +5942,7 @@ impl<'a> TransitionBuilder<'a> {
     /// failure `retire_claim`'s own comment calls "permanent, because the claim is gone and
     /// nothing later can reconcile it".
     pub(super) fn canonical_claim_weight(&self, claim: &PalwClaimStateV2) -> Option<u128> {
-        self.state.palw_claim_canonical_weight_v1(claim, self.extras.canonical_work_daa)
+        self.extras.rules_for_claim(claim).canonical_weight(&self.state)
     }
 
     /// ADR-0148: this fold's free-prompt pricing, from the ruleset and the unit's height.

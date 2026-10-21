@@ -10,7 +10,7 @@ Status: In progress. User changed the active task from G14 feature work to compl
 | 1 Court send state | One typed owner for pending/due/moved, preserving deadline order, duplicate suppression, submitted vs accepted and retry/recovery | Completed for shared node-local court send state: private pending/deadline/debounce owner; 55/55 source projections; 461 panel tests and three representative real-service cases pass. Actor capability narrowing continues under area 5 |
 | 2 Carrier and fee ownership | One build/submit/change-outpoint persistence/funding/inflight boundary; unchanged success/failure/restart behavior | Implemented: typed funding/count owner, prepared/submitted tokens and one change recorder at 16 old success sites. 463 panel tests, three representative actual-service cases, t12 identity 9 and activation 5 pass |
 | 3 Consensus preparation | Acceptance and full transition share pre-object work; historical ordering, roots, deltas and native resource errors preserved | Completed for the pre-object scope: 38 existing tests match before/after, 29 integration and 3 transformer-pin tests pass. Other refactoring areas remain separate obligations |
-| 4 Rules and views | Strengthen existing canonical rule resolver; separate block facts/current rules/claim acceptance rules, preserving accepted_daa semantics | Pending; no parallel resolver to be introduced |
+| 4 Rules and views | Strengthen existing canonical rule resolver; separate block facts/current rules/claim acceptance rules, preserving accepted_daa semantics | Initial borrowed views implemented and selected core tests pass. Canonical resolver and caller migration remain in progress; no parallel resolver |
 | 5 Runtime/validator/backend responsibilities | Central worker becomes orchestration; validation dispatch and capability interfaces depend on narrow inputs, ordered side effects retained | Pending |
 | 6 Compatibility paths | Classify normal/history/dormant/deferred/unused entrances; isolate misleading nonproduction sync APIs, retain necessary old wire and replay | Route matrix and standalone test-only isolation complete: consensus lib/tests check, three walker fixtures and no-caller/canonical-resolver guard pass. Preserve historical adapters while the remaining boundaries are narrowed |
 
@@ -76,3 +76,14 @@ All 461 previously passing non-service panel tests remain and pass; two new scen
 Full refactoring remains in progress: typed rule views, validator dispatch and narrower backend/runtime responsibilities are still required. No pre integration, arming or deployment was performed.
 
 Final carrier checks: representative actual-service cases 3/3; t12 identity 9/9; activation 5/5. [Validation and limits](../../../evidence/palw/refactor-2026-10-21/carrier-phase-validation.json). Source-only whitespace check is clean; raw logs and patch are retained verbatim, including their original whitespace.
+
+
+## Initial block/claim input views checkpoint
+
+The existing extras remain the legacy compatibility input and the processor's existing `palw_transition_extras_for(point)` remains the production resolver. New borrowed views neither resolve a fork nor read a current tip. `PalwBlockFactsV1` exposes accepted input facts; `PalwRulesAtBlockV1` evaluates the block-scoped rules; `PalwRulesForClaimV1` delegates pricing, independence and canonical weight to the existing claim-origin expressions. No serialized type, fence or default is changed.
+
+Shared pre-object preparation now receives facts and rules separately. Round fees are facts; the execution-lane configuration is a rule. Fold reads use the bound block view for fresh-attempt work rules, while the builder's canonical claim weight uses the claim view. The new boundary scenario checks claim origins immediately before, at and after a fence while the reading block moves across it. All 12 pricing tests and the same 38 preparation/history tests pass; all 29 selected integration tests also pass (including t12 identity 9 and activation 5).
+
+This is an initial caller migration, not completion of area 4. Raw extras still serve legacy and unconverted consumers. Validator family extraction has only been drafted outside the repository and is not implemented or tested in this checkpoint. Backend capability and worker responsibility work remain pending.
+
+Initial-view [validation and limits](../../../evidence/palw/refactor-2026-10-21/input-views-validation.json): the 11 original pricing tests still pass and one origin-boundary scenario is added. The unchanged 38 preparation/history tests and 29 integration tests pass, giving 79 unique selected after-tests. The preserved pricing baseline predates the preparation extraction; it is not labeled an adjacent-checkpoint binary.

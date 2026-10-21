@@ -8,7 +8,7 @@ pub(super) enum ArtifactMigrationOrderV1 { BeforeClassRetarget, AfterMeshSweep }
 
 pub(super) fn prepare_block_objects_v1(
     builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2,
-    ctx: &PalwBlockContextV2, extras: &PalwTransitionExtrasV1,
+    ctx: &PalwBlockContextV2, facts: PalwBlockFactsV1<'_>, rules: PalwRulesAtBlockV1<'_>,
     migration: ArtifactMigrationOrderV1,
 ) -> Result<(), PalwStateV2Error> {
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
@@ -28,12 +28,12 @@ pub(super) fn prepare_block_objects_v1(
     palw_bond_budget_fold_v1::tick_bond_budget_v1(builder, ctx)?;
     // RFC-0016 (dormant): the reissue snapshot at φ, the pending queue's TTL voids and dequeues, the heartbeat-dependent counter.
     palw_rfc0016_fold_v1::tick_rfc0016_v1(builder, ctx)?;
-    for income in &extras.round_fee_incomes {
+    for income in facts.round_fee_incomes() {
         builder.reserve_round_income_v1(ctx, *income)?;
     }
     // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
     //     by this block is a credit in THIS block's span, never in the one its finals just closed.
-    if let Some(lane) = extras.round_lane {
+    if let Some(lane) = rules.round_lane() {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa)?;
     }
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
