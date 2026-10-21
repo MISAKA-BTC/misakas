@@ -146,7 +146,7 @@ impl PalwPanelService {
                     if !capture_names_claim_v1(&payload.capture, d.execution_root, d.class_id) {
                         return None;
                     }
-                    let prompt = Self::fp_prompt_for_job(backend.as_ref(), &payload.material, form)?;
+                    let prompt = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), &payload.material, form)?;
                     Some((payload.capture, prompt))
                 }) else {
                     continue;

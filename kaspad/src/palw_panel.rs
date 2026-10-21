@@ -496,7 +496,7 @@ pub(crate) enum PalwMaterialArmV1 {
 pub(crate) fn palw_attempt_material_arm_v1(
     seat_r: bool,
     arm: PalwSeatArmV1,
-    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    backend: kaspa_consensus_core::palw_backend::PalwReplayOpsV1<'_>,
     bytes: &[u8],
     roots: PalwClaimRootsV1,
 ) -> PalwMaterialArmV1 {
@@ -2374,7 +2374,7 @@ pub(crate) fn palw_da_material_v1(
                 let material = match palw_fp_capture_decode_v1(&bytes, facts.form) {
                     Some(payload)
                         if fp_verify_capture_under_job_v1(
-                            backend,
+                            kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend),
                             &payload.material.job,
                             &payload.capture,
                             facts.roots_v1(Some(&payload.material.job)),
@@ -2406,7 +2406,7 @@ pub(crate) fn palw_da_material_v1(
             }
             let mut refused = String::new();
             for material in jobs {
-                let Some(ids) = PalwPanelService::fp_prompt_for_job(backend, &material, facts.form) else {
+                let Some(ids) = PalwPanelService::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), &material, facts.form) else {
                     refused = "the kept job's prompt is not the job's".to_string();
                     continue;
                 };
@@ -2435,7 +2435,7 @@ pub(crate) fn palw_da_material_v1(
                 };
                 // Verification must own the same authenticated job scope as execution: bare
                 // verification would compare a constrained/pipeline capture with default argmax.
-                if fp_verify_capture_under_job_v1(backend, &material.job, &capture, facts.roots_v1(Some(&material.job)))
+                if fp_verify_capture_under_job_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend), &material.job, &capture, facts.roots_v1(Some(&material.job)))
                     != PalwMaterialVerdictV1::Matches
                 {
                     refused = "the kept job's replay does not reproduce the claim's committed roots".to_string();
@@ -2497,7 +2497,7 @@ fn palw_fp_held_disclosure_v1(
         work_leaves,
         missing,
         form,
-        || PalwPanelService::served_binding_v1(backend, payload),
+        || PalwPanelService::served_binding_v1(kaspa_consensus_core::palw_backend::PalwMaterialOpsV1::new(backend), payload),
     )
 }
 
@@ -2878,7 +2878,7 @@ enum CloseFromServedV1 {
 /// the capture's committed answer for a V4 job. Bytes that are not an FP capture are verified as
 /// they are, exactly as before.
 fn fp_verify_material_v1(
-    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    backend: kaspa_consensus_core::palw_backend::PalwReplayOpsV1<'_>,
     bytes: &[u8],
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
@@ -2891,7 +2891,7 @@ fn fp_verify_material_v1(
 
 /// [`fp_verify_material_v1`] for a capture already decoded: `job` is the claim's.
 fn fp_verify_capture_under_job_v1(
-    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    backend: kaspa_consensus_core::palw_backend::PalwReplayOpsV1<'_>,
     job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
     capture: &[u8],
     roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
@@ -7597,7 +7597,7 @@ impl PalwPanelService {
     /// whose job hash is not the derived prompt's, or whose material carries any other prompt,
     /// is not the network's job, and no seat certifies it and no court is opened over it.
     fn fp_prompt_for_job(
-        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        backend: kaspa_consensus_core::palw_backend::PalwExecutionOpsV1<'_>,
         material: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1,
         prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Option<Vec<u32>> {
@@ -9426,7 +9426,7 @@ impl PalwPanelService {
                             continue;
                         };
                         let Some(prompt_ids) =
-                            Self::fp_prompt_for_job(backend.as_ref(), &job, self.class_prompt_ids_form(job.job.class_id))
+                            Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), &job, self.class_prompt_ids_form(job.job.class_id))
                         else {
                             continue;
                         };
@@ -9758,7 +9758,7 @@ impl PalwPanelService {
                         *court_stalls.entry("a free-prompt session whose job material this node has not heard").or_default() += 1;
                         continue;
                     };
-                    if Self::fp_prompt_for_job(backend.as_ref(), &job, self.class_prompt_ids_form(job.job.class_id)).is_none() {
+                    if Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), &job, self.class_prompt_ids_form(job.job.class_id)).is_none() {
                         *court_stalls.entry("a canonical claim whose material is not its own prompt").or_default() += 1;
                         continue;
                     }
@@ -9797,7 +9797,7 @@ impl PalwPanelService {
                     .get(&duty.claim_id)
                     .map(|pool| {
                         pool.iter().any(|b| {
-                            fp_verify_material_v1(backend.as_ref(), b, self.class_prompt_ids_form(duty.class_id), roots)
+                            fp_verify_material_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), b, self.class_prompt_ids_form(duty.class_id), roots)
                                 == PalwMaterialVerdictV1::Matches
                         })
                     })
@@ -9805,7 +9805,7 @@ impl PalwPanelService {
                 let mut accused_held = pool_has_it;
                 if !accused_held
                     && let Some(bytes) = self.retained_capture(&duty.claim_id)
-                    && fp_verify_material_v1(backend.as_ref(), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
+                    && fp_verify_material_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
                         == PalwMaterialVerdictV1::Matches
                 {
                     info!(
@@ -9852,7 +9852,7 @@ impl PalwPanelService {
                     };
                     match remade {
                         Some(bytes)
-                            if fp_verify_material_v1(backend.as_ref(), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
+                            if fp_verify_material_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
                                 == PalwMaterialVerdictV1::Matches =>
                         {
                             info!(
@@ -12012,7 +12012,7 @@ impl PalwPanelService {
                             let job = self.resolve_backend(&session, duty.class_id, duty.artifact_root).ok().and_then(|resolved| {
                                 let (material, ctx) = self.fp_seat_job_v1(resolved.as_ref(), duty, &held)?;
                                 let form = self.class_prompt_ids_form(material.job.class_id);
-                                let prompt = Self::fp_prompt_for_job(resolved.as_ref(), &material, form)?;
+                                let prompt = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(resolved.as_ref()), &material, form)?;
                                 Some((ctx, prompt.iter().map(|t| *t as usize).collect::<Vec<usize>>()))
                             });
                             // N-5 / P2-6: the step's word on service is noted as it is read
@@ -12171,7 +12171,7 @@ impl PalwPanelService {
                             self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
                             && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
                             && let Some(prompt_ids) = Self::fp_prompt_for_job(
-                                resolved.as_ref(),
+                                kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(resolved.as_ref()),
                                 &material,
                                 self.class_prompt_ids_form(material.job.class_id),
                             )
@@ -12358,7 +12358,7 @@ impl PalwPanelService {
                                 };
                                 // RFC-0001 §A: under the claim's decode rule (its job's, for a V4 claim).
                                 let fp_verdict =
-                                    fp_verify_capture_under_job_v1(backend.as_ref(), &payload.material.job, &payload.capture, roots);
+                                    fp_verify_capture_under_job_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), &payload.material.job, &payload.capture, roots);
                                 if fp_verdict != PalwMaterialVerdictV1::Matches {
                                     // P2-8, J1 auto: the claim's committed execution under another job?
                                     self.j1_auto_probe_v1(
@@ -12404,7 +12404,7 @@ impl PalwPanelService {
                                 // The prompt the samples are opened with: the user's, or the
                                 // network's own for a canonical claim (ADR-0074 Decision 1).
                                 let Some(prompt_ids) = Self::fp_prompt_for_job(
-                                    backend.as_ref(),
+                                    kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()),
                                     &payload.material,
                                     self.class_prompt_ids_form(payload.material.job.class_id),
                                 ) else {
@@ -12732,7 +12732,7 @@ impl PalwPanelService {
                                 break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                             };
                             let Some(prompt_ids) = Self::fp_prompt_for_job(
-                                backend.as_ref(),
+                                kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()),
                                 &material,
                                 self.class_prompt_ids_form(material.job.class_id),
                             ) else {
@@ -12837,7 +12837,7 @@ impl PalwPanelService {
                                 job_pin: duty.fp_job_pin_v1(),
                             };
                             let arm =
-                                palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, backend.as_ref(), bytes, roots);
+                                palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), bytes, roots);
                             if arm == PalwMaterialArmV1::Nothing {
                                 // P2-8, J1 auto: the claim's committed execution under another job?
                                 self.j1_auto_probe_v1(
@@ -12892,7 +12892,7 @@ impl PalwPanelService {
                             let arm = palw_attempt_material_arm_v1(
                                 seat_r,
                                 PalwSeatArmV1::RetainedMaterial,
-                                backend.as_ref(),
+                                kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()),
                                 &bytes,
                                 PalwClaimRootsV1 {
                                     execution_root: duty.execution_root,
@@ -13190,7 +13190,7 @@ impl PalwPanelService {
                         // The job's id IS the block's anchor: `job_for_anchor` names it so.
                         let anchor = ctx.job_id;
                         if let Some(output_ids) =
-                            self.attempt_committed_output_ids_v1(resolved.as_ref(), duty, &ctx, anchor, &prompt_ids, &held)
+                            self.attempt_committed_output_ids_v1(kaspa_consensus_core::palw_backend::PalwMaterialOpsV1::new(resolved.as_ref()), duty, &ctx, anchor, &prompt_ids, &held)
                             && let Some(verdict) = self
                                 .interval_seat_outcome_v1(
                                     &session,
@@ -16557,7 +16557,7 @@ impl PalwPanelService {
         use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
         use misaka_palw_base0::fp_interval::{Base0FpIntervalOpeningV4, base0_fp_interval_close_annex_any_v1};
         let Some(job) = fp_job else { return Err(CloseFromServedV1::NotThisLane) };
-        let Some(prompt_ids) = Self::fp_prompt_for_job(backend, job, self.class_prompt_ids_form(job.job.class_id)) else {
+        let Some(prompt_ids) = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), job, self.class_prompt_ids_form(job.job.class_id)) else {
             return Err(CloseFromServedV1::Refused("a canonical claim whose material is not its own prompt".to_string()));
         };
         // The answer's ids, off the same payloads the seat reads them from (ADR-0084 Decision 1).
@@ -16795,7 +16795,7 @@ impl PalwPanelService {
     /// retained under `foreign/` so this node can serve the next seat's pull.
     fn attempt_committed_output_ids_v1(
         &self,
-        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        backend: kaspa_consensus_core::palw_backend::PalwMaterialOpsV1<'_>,
         duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
         ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
         anchor: Hash64,
@@ -17638,7 +17638,7 @@ impl PalwPanelService {
     /// The binding a retained capture commits, read off its interval 0 — which every family serves
     /// and which carries it.
     fn served_binding_v1(
-        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        backend: kaspa_consensus_core::palw_backend::PalwMaterialOpsV1<'_>,
         payload: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1,
     ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, String> {
         let opened = backend.open_fp_interval(&payload.capture, 0, &payload.material.prompt_token_ids)?;
@@ -18726,7 +18726,7 @@ impl PalwPanelService {
                     let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
                         return (PalwSeatReplayStepV1::NoVerdict, None);
                     };
-                    let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), material, form) else { continue };
+                    let Some(prompt_ids) = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), material, form) else { continue };
                     let ctx = backend.fp_job_context_v1(&material.job);
                     // At the widest prefill run the ledger grants, on this duty's own instance (int-10.2 A2).
                     let backends = self.backends();
@@ -19902,7 +19902,7 @@ mod fp_job_v4_material_tests {
                 job_pin: None,
             };
             let bytes = palw_fp_capture_encode_v1(&job, &prompt, &run.outcome.material);
-            assert_eq!(fp_verify_material_v1(&backend, &bytes, PalwPromptIdsFormV1::Flat, roots), PalwMaterialVerdictV1::Matches);
+            assert_eq!(fp_verify_material_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &bytes, PalwPromptIdsFormV1::Flat, roots), PalwMaterialVerdictV1::Matches);
             let unscoped = backend.verify_material(&run.outcome.material, roots);
             if penalized {
                 assert_ne!(unscoped, PalwMaterialVerdictV1::Matches, "the argmax cannot vouch for a penalized answer");

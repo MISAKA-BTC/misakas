@@ -198,7 +198,7 @@ pub(crate) fn palw_held_responder_evidence_v1(
 /// divergent leaf of a held claim at a fused site and its accusation opens the held dissection, this
 /// is the challenger's side for that claim and leaf — the panel's held route calls it the same way.
 pub(crate) fn palw_held_challenger_evidence_v1(
-    backend: &dyn PalwExecutionBackendV1,
+    backend: kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1<'_>,
     filing: &PalwAttnHeldFilingV1,
     narrowed: u64,
     carried: Option<&[u32]>,
@@ -1953,7 +1953,7 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut 
             };
             let (_, filed) = filing.clone().expect("checked above");
             tokio::task::spawn_blocking(move || {
-                let built = palw_held_challenger_evidence_v1(backend.as_ref(), &filed, narrowed, carried.as_deref());
+                let built = palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(backend.as_ref()), &filed, narrowed, carried.as_deref());
                 drop(reserved);
                 palw_held_resident_v1(&ledger, built?, false, class_id, claim_id)
             })
@@ -2153,7 +2153,7 @@ impl PalwHeldHostV1 for PalwPanelHeldHostV1<'_> {
         let pooled = self.materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
         self.panel
             .fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)
-            .and_then(|job| PalwPanelService::fp_prompt_for_job(backend, &job, self.panel.class_prompt_ids_form(duty.class_id)))
+            .and_then(|job| PalwPanelService::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), &job, self.panel.class_prompt_ids_form(duty.class_id)))
             .map(Some)
             .ok_or_else(|| "no job material of the claim is held here".to_string())
     }

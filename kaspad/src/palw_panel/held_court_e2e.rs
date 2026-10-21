@@ -561,7 +561,7 @@ fn challenger_evidence(
     let duty = duty_of(s, SEAT, sid).expect("the seat's duty");
     let (_, filing) = palw_held_filing_of_duty_v1(std::slice::from_ref(filed), &duty, PALW_HELD_STEP_LADDER_V1)
         .expect("the filing stands for the claim at its leaf");
-    palw_held_challenger_evidence_v1(seat, &filing, duty.terminal_index.expect("the leaf"), None).expect("N2")
+    palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(seat), &filing, duty.terminal_index.expect("the leaf"), None).expect("N2")
 }
 
 /// The same real held filing and refused slice-root decoy as the held node tests, for the Consensus API history adapter tests.

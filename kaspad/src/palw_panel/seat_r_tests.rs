@@ -698,11 +698,11 @@ fn the_floors_material_is_kept_past_seat_r_and_its_replay_licenses() {
         job_pin: None,
     };
     for arm in [PalwSeatArmV1::AttemptMaterial, PalwSeatArmV1::RetainedMaterial] {
-        assert_eq!(palw_attempt_material_arm_v1(false, arm, &backend, &claim.material, roots), PalwMaterialArmV1::Licenses, "{arm:?}");
-        assert_eq!(palw_attempt_material_arm_v1(true, arm, &backend, &claim.material, roots), PalwMaterialArmV1::Evidence, "{arm:?}");
+        assert_eq!(palw_attempt_material_arm_v1(false, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, roots), PalwMaterialArmV1::Licenses, "{arm:?}");
+        assert_eq!(palw_attempt_material_arm_v1(true, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, roots), PalwMaterialArmV1::Evidence, "{arm:?}");
         let other = PalwClaimRootsV1 { execution_root: h(0xBAD), ..roots };
-        assert_eq!(palw_attempt_material_arm_v1(false, arm, &backend, &claim.material, other), PalwMaterialArmV1::Nothing);
-        assert_eq!(palw_attempt_material_arm_v1(true, arm, &backend, &claim.material, other), PalwMaterialArmV1::Nothing);
+        assert_eq!(palw_attempt_material_arm_v1(false, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, other), PalwMaterialArmV1::Nothing);
+        assert_eq!(palw_attempt_material_arm_v1(true, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, other), PalwMaterialArmV1::Nothing);
     }
     let replayed = backend.execute_for_verdict(&job, &prompt).expect("the seat's replay runs");
     assert!(replay_licenses_v1(&replayed, claim.execution_root, claim.trace_root, 0), "the replay licenses the floor");
@@ -752,7 +752,7 @@ fn a_bent_held_fold_attempt_is_kept_as_evidence_and_refuted_by_the_replay_past_s
         job_pin: None,
     };
     let arm = |seat_r: bool, bytes: &[u8], roots: PalwClaimRootsV1| {
-        palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, &backend, bytes, roots)
+        palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), bytes, roots)
     };
     assert_eq!(arm(true, &honest_bytes, honest_roots), PalwMaterialArmV1::Evidence, "the honest fold is kept, and signs nothing");
     let replayed = backend.execute_for_verdict(&job, &prompt);
