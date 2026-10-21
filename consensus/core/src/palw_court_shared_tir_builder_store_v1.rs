@@ -74,6 +74,38 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
         check_prompt_material(&source.header_v1().job_context,frame.plan_v1().owner_work.rules.prompt_form,prompt)?;
         Ok(Self {source,units,params,ids,prompt})
     }
+    /// Checks only the actual borrowed material for the derived coordinate
+    /// relation. The constructor already authenticates immutable prompt form,
+    /// parameter openings, source-bound complete IDs and complete step units.
+    /// No fallback, acquisition, paid supply or future retention is asserted.
+    pub(crate) fn check_root_input_cover_v1(&self,
+        cover:&crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1)->Result<(),String> {
+        use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1 as I;
+        if cover.parameters_v1().source_id!=self.source.source_id_v1() {
+            return Err("builder input cover from another original source".into());
+        }
+        for root in cover.roots_v1() {for input in &root.inputs {
+            match *input {
+                I::PromptPosition(pos)=>match self.prompt {
+                    PromptMaterialV1::Flat(ids) if ids.get(pos as usize).is_some()=>{},
+                    PromptMaterialV1::Merkle(tiles) if tiles.binary_search_by_key(
+                        &(pos/crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN),|p|p.tile_index).is_ok()=>{},
+                    _=>return Err("builder input cover lacks authenticated prompt coordinate".into()),
+                },
+                I::GeneratedId(index)=>{
+                    if self.ids.is_none_or(|ids|ids.ids_v1().get(index as usize).is_none()) {
+                        return Err("builder input cover lacks source-bound generated IDs".into());
+                    }
+                },
+                I::CarryStepLeaf(index)=>{
+                    if !matches!(self.unit(Q::StepLeaf{index}),Some(R::StepLeaf{..})) {
+                        return Err("builder input cover lacks authenticated carry unit".into());
+                    }
+                },
+            }
+        }}
+        Ok(())
+    }
     fn unit(&self,q:Q)->Option<&R> {
         self.units.iter().find(|u|u.request_v1()==q).map(|u|u.response_v1())
     }

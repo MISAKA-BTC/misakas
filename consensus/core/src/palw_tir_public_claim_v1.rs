@@ -452,6 +452,13 @@ pub(crate) fn palw_tir_public_frame_fixture_v1(forge: Option<(usize, usize)>, ma
 pub(crate) fn palw_tir_public_history_frame_fixture_v1() -> PalwTirPublicFrameFixtureV1 {
     tests::history_frame()
 }
+/// A distinct registered and honestly executed program: numerical Select condition
+/// reads actual Input(0), not a synthetic site or a mutated admitted plan.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_input_history_frame_fixture_v1(
+    form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)->PalwTirPublicFrameFixtureV1 {
+    tests::history_frame_form_v1(true,form)
+}
 
 /// Existing 4096-wide test execution reconstructed in its actual original job context.
 #[cfg(test)]
@@ -622,6 +629,17 @@ mod tests {
         semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
         inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
     )->super::PalwTirPublicFrameFixtureV1 {
+        frame_from_execution_with_material_form_v1(x,job,maximum_custodians,output_root,
+            semantics,inventory,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+    }
+    fn frame_from_execution_with_material_form_v1(
+        x:crate::palw_tir_court_v1::test_support::TinyExecution,
+        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        maximum_custodians:u64,output_root:Option<Hash64>,
+        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+        prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    )->super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_public_allocation_v1::*;
         let binding = x.binding.clone();
@@ -655,7 +673,7 @@ mod tests {
             maximum_custodians,
             court: crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 40, 45, 2).unwrap(),
             dissection: true,
-            prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            prompt_form,
             config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
             clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
         };
@@ -825,11 +843,40 @@ mod tests {
 
     /// Actual golden GQA execution with history reductions, re-committed under the public job context.
     pub(super) fn history_frame() -> super::PalwTirPublicFrameFixtureV1 {
+        history_frame_form_v1(false,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+    }
+    pub(super) fn history_frame_form_v1(direct_input:bool,prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)
+        ->super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_corpus_fixture_v1::{fixture_with, programs};
-        let (name, program, params, tokens) = programs().into_iter()
+        let (name, mut program, params, tokens) = programs().into_iter()
             .find(|(name, ..)| name == "dense-gqa-2layer").expect("golden GQA corpus");
+        if direct_input {
+            use misaka_palw_tir::{Ref,Prim};
+            use misaka_palw_tir::types::Dim;
+            let (bi,ni,input,out)=program.blocks.iter().enumerate().find_map(|(bi,b)| {
+                b.nodes.iter().enumerate().find_map(|(ni,n)| {
+                    if !matches!(n.prim,Prim::ReduceSum{..}|Prim::ReduceMax{..}) {return None;}
+                    let Ref::Node(input)=*n.inputs.first()? else {return None;};
+                    let out=b.nodes.get(usize::from(input))?.out.clone();
+                    out.shape.contains(&Dim::H).then_some((bi,ni,input,out))
+                })
+            }).expect("GQA actual history reduction");
+            let block=&mut program.blocks[bi];
+            for node in &mut block.nodes {for input in &mut node.inputs {
+                if let Ref::Node(index)=input {if usize::from(*index)>=ni {*index=index.checked_add(1).unwrap();}}
+            }}
+            for index in &mut block.carry_out {if usize::from(*index)>=ni {*index=index.checked_add(1).unwrap();}}
+            if bi==usize::from(program.schedule.post)&&usize::from(program.logits)>=ni {program.logits+=1;}
+            block.nodes.insert(ni,misaka_palw_tir::program::Node {
+                prim:Prim::Select,
+                inputs:vec![Ref::Input(0),Ref::Node(input),Ref::Node(input)],out,commit:false,
+            });
+            block.nodes[ni+1].inputs[0]=Ref::Node(ni.try_into().unwrap());
+            // The program is canonical-encoded, admitted, interpreted and all
+            // roots recomputed by fixture_with. No existing original is edited.
+        }
         let mut f = fixture_with(name, program, params, tokens, 16, 9);
         assert!(f.greedy, "the V3 job uses greedy decoding");
         let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
@@ -838,7 +885,7 @@ mod tests {
         job.tail = None;
         job.class_id = f.class_id;
         job.tokenizer_id = f.class.tokenizer_id;
-        job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&f.prompt);
+        job.prompt_token_ids_hash = crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(prompt_form,&f.prompt).unwrap();
         job.prompt_tokens = f.prompt.len() as u32;
         job.decode_token_limit = f.generated.len() as u32;
         job.max_context_tokens = 64;
@@ -857,7 +904,7 @@ mod tests {
             binding: x.binding, preimages: x.preimages, hashes: x.hashes, ops: f.ops,
             prompt: f.prompt, rows: x.rows, generated: x.generated,
         };
-        frame_from_execution(x, job, 1, None)
+        frame_from_execution_with_material_form_v1(x,job,1,None,None,None,prompt_form)
     }
 
     #[test]

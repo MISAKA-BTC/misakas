@@ -170,6 +170,19 @@ fn native_source_graph_output_v3(extent:SourceGraphExtentV3,queries:u64,roles:u6
     Ok(q.bytes_v1())
 }
 
+
+/// Origin classification is attached at the local limit check, never parsed from a string.
+#[derive(Debug)]
+pub(crate) enum SourceGraphDeriveErrorV3 { Semantic(String), Local(&'static str) }
+impl From<String> for SourceGraphDeriveErrorV3 {fn from(s:String)->Self {Self::Semantic(s)}}
+impl From<&str> for SourceGraphDeriveErrorV3 {fn from(s:&str)->Self {Self::Semantic(s.into())}}
+impl SourceGraphDeriveErrorV3 {
+    pub(crate) fn legacy(self)->String {match self {Self::Semantic(s)=>s,Self::Local(s)=>s.into()}}
+    pub(crate) fn native(self)->crate::palw_native_resource_v1::NativeDecodeErrorV1<String> {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeCoverageV1};
+        match self {Self::Semantic(s)=>E::Decode(s),Self::Local(s)=>E::Resource(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>("local source graph exploration",s))}
+    }
+}
 impl NativeSourceMaterialGraphV3 {
     /// Explicit allocation owner only. Retains construction/index scratch
     /// conservatively through graph lifetime; no paid/native profile or complete
@@ -189,19 +202,20 @@ impl NativeSourceMaterialGraphV3 {
         frame.check_structure_v1(&frame.key_v1()).map_err(E::Decode)?;
         let set=TirSharedRequestSetV1::new(frame,source,profile).map_err(E::Decode)?;
         let roles=frame.custody_v1().pledge_v1().maximum_custodians;
-        if set.len()>budget.max_queries || roles==0 || roles>budget.max_roles {
-            return Err(E::Decode("source graph query/role budget exhausted".into()));
+        if roles==0 {return Err(E::Decode("source graph query/role budget exhausted".into()));}
+        if set.len()>budget.max_queries || roles>budget.max_roles {
+            return Err(SourceGraphDeriveErrorV3::Local("source graph query/role budget exhausted").native());
         }
         let upper=set.signed_data_transport_upper().map_err(E::Decode)?;
         let extent=graph_extent_from_transport_v3(upper,set.has_full_ids_stream_v3()).map_err(E::Decode)?;
         if extent.vertices>budget.max_vertices || extent.edges>budget.max_edges {
-            return Err(E::Decode("source graph metadata vertex/edge budget exhausted before expansion".into()));
+            return Err(SourceGraphDeriveErrorV3::Local("source graph metadata vertex/edge budget exhausted before expansion").native());
         }
         let output=native_source_graph_output_v3(extent,set.len(),roles).map_err(E::Resource)?;
         if let Some(ticket)=lease.as_mut() {ticket.grow_memory_v1(output).map_err(E::Resource)?;}
         // All shape/query maps and predecessor/check indices are now covered.
         // Stream/control hashes use fixed request descriptors and streaming sink.
-        let graph=Self::derive_v3(frame,source,profile,budget).map_err(E::Decode)?;
+        let graph=Self::derive_typed_v3(frame,source,profile,budget).map_err(SourceGraphDeriveErrorV3::native)?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(graph,lease))
     }
 
@@ -215,11 +229,16 @@ impl NativeSourceMaterialGraphV3 {
         profile: Hash64,
         budget: SourceGraphBudgetV3,
     ) -> Result<Self, String> {
+        Self::derive_typed_v3(frame,source,profile,budget).map_err(SourceGraphDeriveErrorV3::legacy)
+    }
+    fn derive_typed_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64,budget:SourceGraphBudgetV3)
+        ->Result<Self,SourceGraphDeriveErrorV3> {
         frame.check_structure_v1(&frame.key_v1())?;
         let set = TirSharedRequestSetV1::new(frame, source, profile)?;
         let roles = frame.custody_v1().pledge_v1().maximum_custodians;
-        if set.len() > budget.max_queries || roles == 0 || roles > budget.max_roles {
-            return Err("source graph query/role budget exhausted".into());
+        if roles==0 {return Err("source graph query/role budget exhausted".into());}
+        if set.len() > budget.max_queries || roles > budget.max_roles {
+            return Err(SourceGraphDeriveErrorV3::Local("source graph query/role budget exhausted"));
         }
         // Independent native upper covers every distinct signed DATA control.
         // It cheaply rejects huge geometry before enumerating/allocating nodes.
@@ -228,7 +247,7 @@ impl NativeSourceMaterialGraphV3 {
         // Reject BEFORE allocating nodes/query maps/role predecessor Vecs.
         // Existing caller local budgets remain unchanged; not native RAM leases.
         if extent.vertices > budget.max_vertices || extent.edges > budget.max_edges {
-            return Err("source graph metadata vertex/edge budget exhausted before expansion".into());
+            return Err(SourceGraphDeriveErrorV3::Local("source graph metadata vertex/edge budget exhausted before expansion"));
         }
         let relative_scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
             b"misaka-palw/source-material-scope/v3",
@@ -302,17 +321,17 @@ impl NativeSourceMaterialGraphV3 {
         mut parents: Vec<Hash64>,
         guard: SourceRuntimeGuardV3,
         b: SourceGraphBudgetV3,
-    ) -> Result<Hash64, String> {
+    ) -> Result<Hash64, SourceGraphDeriveErrorV3> {
         if self.nodes.len() as u64 >= b.max_vertices {
-            return Err("source graph vertex budget exhausted".into());
+            return Err(SourceGraphDeriveErrorV3::Local("source graph vertex budget exhausted"));
         }
         parents.sort_unstable();
         if parents.windows(2).any(|w| w[0] == w[1]) {
             return Err("duplicate source allocation parent".into());
         }
-        let edges = self.edges.checked_add(parents.len() as u64).ok_or("source graph edge overflow")?;
+        let edges = self.edges.checked_add(parents.len() as u64).ok_or(SourceGraphDeriveErrorV3::Local("source graph edge overflow"))?;
         if edges > b.max_edges {
-            return Err("source graph edge budget exhausted".into());
+            return Err(SourceGraphDeriveErrorV3::Local("source graph edge budget exhausted"));
         }
         if parents.iter().any(|p| !self.nodes.contains_key(p)) {
             return Err("source graph missing allocation parent".into());
@@ -331,7 +350,7 @@ impl NativeSourceMaterialGraphV3 {
         query_id: Option<Hash64>,
         query: Option<u64>,
         b: SourceGraphBudgetV3,
-    ) -> Result<Vec<Hash64>, String> {
+    ) -> Result<Vec<Hash64>, SourceGraphDeriveErrorV3> {
         if body == 0 {
             return Err("source graph empty native stream".into());
         }
@@ -370,10 +389,10 @@ impl NativeSourceMaterialGraphV3 {
         target: SourceMaterialTargetV3,
         finishes: &[Hash64],
         b: SourceGraphBudgetV3,
-    ) -> Result<(), String> {
+    ) -> Result<(), SourceGraphDeriveErrorV3> {
         for role in 0..self.roles {
             if self.edges.checked_add(finishes.len() as u64).and_then(|n| n.checked_add(1)).is_none_or(|n| n > b.max_edges) {
-                return Err("source graph edge budget exhausted".into());
+                return Err(SourceGraphDeriveErrorV3::Local("source graph edge budget exhausted"));
             }
             let mut parents = finishes.to_vec();
             parents.push(query);
@@ -578,7 +597,12 @@ mod tests {
                 assert_eq!(checker.outstanding(),(0,0));
             }
             assert!(matches!(NativeSourceMaterialGraphV3::derive_native_v3(&f.frame,&source,profile,
-                SourceGraphBudgetV3 {max_edges:extent.edges-1,..B}),Err(E::Decode(_))));
+                SourceGraphBudgetV3 {max_edges:extent.edges-1,..B}),Err(E::Resource(_))));
+            for small in [SourceGraphBudgetV3{max_queries:0,..B},SourceGraphBudgetV3{max_roles:old.roles-1,..B},
+                SourceGraphBudgetV3{max_vertices:0,..B},SourceGraphBudgetV3{max_edges:0,..B}] {
+                assert!(NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,profile,small).is_err());
+                assert!(matches!(NativeSourceMaterialGraphV3::derive_native_v3(&f.frame,&source,profile,small),Err(E::Resource(_))));
+            }
         }
         assert!(native_source_graph_output_v3(SourceGraphExtentV3 {vertices:u64::MAX,edges:1},1,1).is_err());
         assert!(native_source_graph_output_v3(SourceGraphExtentV3 {vertices:1,edges:u64::MAX},1,1).is_err());

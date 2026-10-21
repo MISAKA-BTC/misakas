@@ -154,7 +154,16 @@ pub struct PalwTirJobShapeV1 {
     pub positions: u32,
 }
 
+/// Actual immutable job token coordinate, not supplied material or availability.
+#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
+pub enum PalwTirTokenSourceV1 { Prompt(u32), Generated(u32) }
 impl PalwTirJobShapeV1 {
+    /// Same absolute-position split used by the court's token source.
+    pub fn token_source_v1(&self,pos:u32)->PalwTirTokenSourceV1 {
+        if pos<self.prefill {PalwTirTokenSourceV1::Prompt(pos)}
+            else {PalwTirTokenSourceV1::Generated(pos-self.prefill)}
+    }
+
     /// The legacy coordinate `(call, position)` of absolute position `a`.
     pub fn call_position(&self, a: u32) -> (u32, u32) {
         if a < self.prefill { (0, a) } else { (a - self.prefill + 1, 0) }

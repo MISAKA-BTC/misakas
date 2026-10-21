@@ -78,8 +78,8 @@ pub struct NativeNumericalGeometryV3 {
     edges: u64,
     path_bytes: u64,
 }
-fn add(a: u64, b: u64) -> Result<u64, String> {
-    a.checked_add(b).ok_or("numerical geometry counter overflow".into())
+fn add(a: u64, b: u64) -> Result<u64, NumericalMaterializeErrorV3> {
+    a.checked_add(b).ok_or_else(||NumericalMaterializeErrorV3::local_v3("numerical geometry counter overflow"))
 }
 /// Private shared materializer classification. Old API preserves its exact
 /// legacy strings; native callers preserve local allocation refusal as Resource.
@@ -91,6 +91,9 @@ enum NumericalMaterializeErrorV3 {
 impl From<String> for NumericalMaterializeErrorV3 {fn from(s:String)->Self {Self::Semantic(s)}}
 impl From<&str> for NumericalMaterializeErrorV3 {fn from(s:&str)->Self {Self::Semantic(s.into())}}
 impl NumericalMaterializeErrorV3 {
+    fn local_v3(legacy:&'static str)->Self {Self::Resource {
+        coverage:crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<NativeNumericalGeometryV3>("local numerical exploration",legacy),legacy}}
+
     fn legacy_v3(self)->String { match self { Self::Semantic(s)=>s,Self::Resource{legacy,..}=>legacy.into() } }
     fn native_v3(self)->crate::palw_native_resource_v1::NativeDecodeErrorV1<String> {
         use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
@@ -117,10 +120,10 @@ struct NumericalNativeCountsV3 {
 }
 fn scan_native_counts_v3(source:&Source,registered:&PalwTirClassRecordV1,layout:&PalwTirLayoutV1,
     court:&PalwCourtParamsV2,demand:PalwTirDemandRulesV1,budget:NumericalGeometryBudgetV3)
-    ->Result<NumericalNativeCountsV3,String> {
+    ->Result<NumericalNativeCountsV3,NumericalMaterializeErrorV3> {
         let header = source.header_v1();
         if header.step_leaf_count > budget.max_original_leaves {
-            return Err("numerical original scan budget exhausted".into());
+            return Err(NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted"));
         }
         // Source is an opaque native object with a retained authenticated header;
         // resolve rechecks its original class/layout/job, once for this scan.
@@ -139,7 +142,7 @@ fn scan_native_counts_v3(source:&Source,registered:&PalwTirClassRecordV1,layout:
             let leaf = prepared.verified.space.leaf_at(&prepared.context, index).ok_or("numerical original leaf missing")?;
             let Some(site) = dissect::palw_tir_dissect_site_v1(&prepared.verified.space, &prepared.intervals, &leaf) else { continue };
             if out.roots >= budget.max_roots {
-                return Err("numerical root budget exhausted".into());
+                return Err(NumericalMaterializeErrorV3::local_v3("numerical root budget exhausted"));
             }
             let crate::palw_tir_step_v1::PalwTirLeafKindV1::Commit { block, node, .. } = leaf.kind else {
                 return Err("numerical site is not commit".into());
@@ -167,7 +170,7 @@ fn scan_native_counts_v3(source:&Source,registered:&PalwTirClassRecordV1,layout:
             let next_edges = add(out.edges, counts.child_claims)?;
             let next_bytes = add(out.path_bytes, bytes)?;
             if next_paths > budget.max_paths || next_edges > budget.max_edges || next_bytes > budget.max_path_bytes {
-                return Err("numerical path/edge/retained-path budget exhausted".into());
+                return Err(NumericalMaterializeErrorV3::local_v3("numerical path/edge/retained-path budget exhausted"));
             }
             out.roots = add(out.roots,1)?;
             out.paths = next_paths;
@@ -263,12 +266,12 @@ impl NativeNumericalGeometryV3 {
     )->Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
     where R:FnOnce(u64)->Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,crate::palw_native_resource_v1::NativeCoverageV1> {
         use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeRetainedV1};
-        if source.leaf_count_v1()>budget.max_original_leaves {return Err(E::Decode("numerical original scan budget exhausted".into()));}
+        if source.leaf_count_v1()>budget.max_original_leaves {return Err(NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted").native_v3());}
         let prelude=native_prelude_requests_v3(source,registered,layout,court)?;
         let mut lease=reserve(prelude).map_err(E::Resource)?;
         // This function returns ONLY counters. Its prepared binding/intervals
         // are dropped before the allocating second pass starts.
-        let c=scan_native_counts_v3(source,registered,layout,court,demand,budget).map_err(E::Decode)?;
+        let c=scan_native_counts_v3(source,registered,layout,court,demand,budget).map_err(NumericalMaterializeErrorV3::native_v3)?;
         let output=native_output_requests_v3(c,court.dissection_arity()).map_err(E::Resource)?;
         if let Some(ticket)=lease.as_mut() {ticket.grow_memory_v1(output).map_err(E::Resource)?;}
         let graph=Self::materialize_v3(source,registered,layout,court,demand,budget)
@@ -305,7 +308,7 @@ impl NativeNumericalGeometryV3 {
     ) -> Result<Self, NumericalMaterializeErrorV3> {
         let header = source.header_v1();
         if header.step_leaf_count > budget.max_original_leaves {
-            return Err("numerical original scan budget exhausted".into());
+            return Err(NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted"));
         }
         // Source is an opaque native object with a retained authenticated header;
         // resolve rechecks its original class/layout/job, once for this scan.
@@ -333,7 +336,7 @@ impl NativeNumericalGeometryV3 {
             let leaf = prepared.verified.space.leaf_at(&prepared.context, index).ok_or("numerical original leaf missing")?;
             let Some(site) = dissect::palw_tir_dissect_site_v1(&prepared.verified.space, &prepared.intervals, &leaf) else { continue };
             if out.roots.len() as u64 >= budget.max_roots {
-                return Err("numerical root budget exhausted".into());
+                return Err(NumericalMaterializeErrorV3::local_v3("numerical root budget exhausted"));
             }
             let crate::palw_tir_step_v1::PalwTirLeafKindV1::Commit { block, node, .. } = leaf.kind else {
                 return Err("numerical site is not commit".into());
@@ -361,7 +364,7 @@ impl NativeNumericalGeometryV3 {
             let next_edges = add(out.edges, counts.child_claims)?;
             let next_bytes = add(out.path_bytes, bytes)?;
             if next_paths > budget.max_paths || next_edges > budget.max_edges || next_bytes > budget.max_path_bytes {
-                return Err("numerical path/edge/retained-path budget exhausted".into());
+                return Err(NumericalMaterializeErrorV3::local_v3("numerical path/edge/retained-path budget exhausted"));
             }
             reserve_numerical_roots_v3(&mut out.roots,1)?;
             let mut root = NumericalRootV3 { leaf: index, paths: Vec::new() };
@@ -488,6 +491,10 @@ mod tests {
         assert_eq!(roots.legacy_v3(),"numerical root allocation failed");
         let paths=reserve_numerical_paths_v3(&mut Vec::new(),u64::MAX).unwrap_err();
         assert!(matches!(paths.native_v3(),crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_)));
+        let local=NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted");
+        assert_eq!(NumericalMaterializeErrorV3::local_v3("numerical original scan budget exhausted").legacy_v3(),"numerical original scan budget exhausted");
+        assert!(matches!(local.native_v3(),crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_)));
+        // Same spelling alone confers no classification: origin is mandatory.
         let semantic=NumericalMaterializeErrorV3::from("numerical original scan budget exhausted");
         assert!(matches!(semantic.native_v3(),crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_)));
     }
@@ -528,9 +535,15 @@ mod tests {
         }
         assert!(native_output_requests_v3(NumericalNativeCountsV3 {paths:u64::MAX,..Default::default()},2).is_err());
         assert!(native_output_requests_v3(NumericalNativeCountsV3 {path_bytes:u64::MAX,..Default::default()},2).is_err());
+        assert!(counts.roots>0 && counts.paths>0 && counts.edges>0 && counts.path_bytes>0);
+        for small in [NumericalGeometryBudgetV3{max_original_leaves:0,..B},NumericalGeometryBudgetV3{max_roots:0,..B},
+            NumericalGeometryBudgetV3{max_paths:0,..B},NumericalGeometryBudgetV3{max_edges:0,..B},NumericalGeometryBudgetV3{max_path_bytes:0,..B}] {
+            assert!(NativeNumericalGeometryV3::derive_v3(&source,&f.record,&f.layout,&court,PalwTirDemandRulesV1::H7,small).is_err());
+            assert!(matches!(NativeNumericalGeometryV3::derive_native_v3(&source,&f.record,&f.layout,&court,PalwTirDemandRulesV1::H7,small),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+        }
         assert!(matches!(NativeNumericalGeometryV3::derive_native_v3(&source,&f.record,&f.layout,&f.rules.court,
             PalwTirDemandRulesV1::H7,NumericalGeometryBudgetV3 {max_paths:0,..B}),
-            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))));
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
     }
     #[test]
     fn all_native_paths_match_independent_aggregated_topology_for_every_arity() {

@@ -889,14 +889,18 @@ impl DemandSource for TirSource<'_, '_> {
 
     fn token(&mut self, pos: u32) -> TirResult<u32> {
         self.source_read()?;
-        if pos < self.job.prefill {
-            let Some(id) = self.units.prompt_id(pos) else {
+        if let crate::palw_tir_step_v1::PalwTirTokenSourceV1::Prompt(prompt)=self.job.token_source_v1(pos) {
+            let Some(id) = self.units.prompt_id(prompt) else {
                 return tir_err(TirErrorKind::Missing, format!("the prompt id at {pos}"));
             };
             self.used.prompt.insert(pos);
             Ok(id)
         } else {
-            let Some(id) = self.units.generated_id(pos - self.job.prefill) else {
+            let generated=match self.job.token_source_v1(pos) {
+                crate::palw_tir_step_v1::PalwTirTokenSourceV1::Generated(index)=>index,
+                crate::palw_tir_step_v1::PalwTirTokenSourceV1::Prompt(_)=>unreachable!(),
+            };
+            let Some(id) = self.units.generated_id(generated) else {
                 return tir_err(TirErrorKind::Missing, format!("the generated id read at {pos}"));
             };
             self.used.decode = true;

@@ -52,6 +52,8 @@ Next primary integration work is the original coordinator: derive canonical comp
 
 ## Latest parallel checkpoint
 
+[Actual root input dependencies and local-budget origin](../../../evidence/palw/g14-completion-2026-10-22/root-input-and-budget.md): 63 unique selected successes, including actual Input0 GQA prompt/generated/carry derivation in both Flat/Merkle forms, authenticated Store positives/negatives, old TIR court12/parameter10, quota origin and t12 identity9. Other committed/state/semantic material closure, physical acquisition and paid/native financial admission remain incomplete.
+
 [Parameter-cover owner and Tokenizer data-path producer](../../../evidence/palw/g14-completion-2026-10-22/parameter-and-tokenizer-producer.md): 47 unique selected successes, including existing named/all-original parameter10, real native original/EOF Store replay, two-context data path identity, independent Book comparison, quota lifecycle, t12 identity9 and activation5. No prompt relation, public acquisition, CPU/fee profile or full funded acceptance is established. Raw/rendering remain separate input ownership scopes.
 
 [Native numerical and source-graph owners](../../../evidence/palw/g14-completion-2026-10-22/geometry-native-owners.md): 37 unique parent tests plus two isolated Source quota workers pass. Preparation/output/index scratch reservations now remain with the returned geometry; old path/graph identities and local limits remain. Parameter/prompt/semantic acquisition, complete duties/service/financial profiles, atomic escrow and full native campaign remain incomplete.

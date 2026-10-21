@@ -23,6 +23,19 @@ pub struct PotentialParameterCoverV1 {
     pub explored_coordinates: u64,
 }
 
+
+/// Origin classification is attached at the local limit check, never parsed from a string.
+#[derive(Debug)]
+pub(crate) enum CoverErrorV1 { Semantic(String), Local(&'static str) }
+impl From<String> for CoverErrorV1 {fn from(s:String)->Self {Self::Semantic(s)}}
+impl From<&str> for CoverErrorV1 {fn from(s:&str)->Self {Self::Semantic(s.into())}}
+impl CoverErrorV1 {
+    pub(crate) fn legacy(self)->String {match self {Self::Semantic(s)=>s,Self::Local(s)=>s.into()}}
+    pub(crate) fn native(self)->crate::palw_native_resource_v1::NativeDecodeErrorV1<String> {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeCoverageV1};
+        match self {Self::Semantic(s)=>E::Decode(s),Self::Local(s)=>E::Resource(NativeCoverageV1::unsupported::<PotentialParameterCoverV1>("local parameter exploration",s))}
+    }
+}
 /// Resolve the original binding and named leaf through the existing native
 /// verifier. This does not accept a caller-provided program, root claim, read set
 /// or unchecked scope as authority. Callers must first bind `binding` to their
@@ -38,6 +51,15 @@ pub fn derive_parameter_cover_v1(binding: &PalwTirStepBindingV1, leaf: u64,
     };
     let prepared=PreparedParameterCoverV1::new(verified,binding.job_context.clone())?;
     prepared.named(leaf,budget)?.ok_or("parameter cover needs a dissected commit leaf".into())
+}
+
+/// Exact external boundaries reached by the conservative named-root walk.
+/// Coordinates only: does not assert bytes are present, paid or retained.
+#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
+pub enum RootInputBoundaryV1 {
+    PromptPosition(u32),
+    GeneratedId(u32),
+    CarryStepLeaf(u64),
 }
 
 /// One original's immutable native analysis, shared by every named root. This
@@ -139,13 +161,26 @@ impl PreparedParameterCoverV1 {
     }
     pub(crate) fn named_with_leaf_limit(&self,index:u64,budget:ParameterCoverBudgetV1,max_leaves:u64)
         ->Result<Option<PotentialParameterCoverV1>,String> {
+        self.named_with_leaf_limit_typed(index,budget,max_leaves).map_err(CoverErrorV1::legacy)
+    }
+    pub(crate) fn named_with_leaf_limit_typed(&self,index:u64,budget:ParameterCoverBudgetV1,max_leaves:u64)
+        ->Result<Option<PotentialParameterCoverV1>,CoverErrorV1> {
+        self.named_tracked_v1(index,budget,max_leaves,None)
+    }
+    pub(crate) fn named_with_inputs_v1(&self,index:u64,budget:ParameterCoverBudgetV1,max_leaves:u64,
+        boundaries:&mut BTreeSet<RootInputBoundaryV1>)->Result<Option<PotentialParameterCoverV1>,CoverErrorV1> {
+        self.named_tracked_v1(index,budget,max_leaves,Some(boundaries))
+    }
+    fn named_tracked_v1(&self,index:u64,budget:ParameterCoverBudgetV1,max_leaves:u64,
+        boundaries:Option<&mut BTreeSet<RootInputBoundaryV1>>)->Result<Option<PotentialParameterCoverV1>,CoverErrorV1> {
         let leaf=self.verified.space.leaf_at(&self.context,index).ok_or("parameter cover original leaf missing")?;
         let Some(site)=palw_tir_dissect_site_v1(&self.verified.space,&self.intervals,&leaf) else {return Ok(None)};
     let block = occurrence_block(&self.verified.space, site.ctx.occurrence).ok_or("cover occurrence missing")?;
     let layer = self.verified.space.occurrences().get(usize::from(site.ctx.occurrence)).ok_or("cover occurrence missing")?.1;
     let h = usize::try_from(site.history_positions).map_err(|_| "cover H overflow")?;
     let mut walk = Walk { program: &self.verified.space.program, block: usize::from(block), layer, h,
-        space: &self.verified.space, pos: site.ctx.pos, occurrence: site.ctx.occurrence,
+        space: &self.verified.space, context:&self.context, original_leaf:index, boundaries,
+        pos: site.ctx.pos, occurrence: site.ctx.occurrence,
         inventory: &self.inventory, budget, leaf_limit:max_leaves,
         edges: 0, seen: BTreeSet::new(), pending: Vec::new(), leaves: BTreeSet::new() };
     if let PalwTirLeafKindV1::Commit {first_element,..}=leaf.kind {
@@ -167,47 +202,48 @@ impl PreparedParameterCoverV1 {
     }
 }
 
-struct Walk<'a> {
+struct Walk<'a,'sink> {
     program: &'a TirProgramV1, block: usize, layer: Option<u16>, h: usize,
-    space: &'a PalwTirStepSpaceV1, pos: u32, occurrence: u16,
+    space: &'a PalwTirStepSpaceV1, context:&'a PalwJobContextV2, original_leaf:u64,
+    boundaries:Option<&'sink mut BTreeSet<RootInputBoundaryV1>>,pos: u32, occurrence: u16,
     inventory: &'a PalwTirInventoryIndexV1, budget: ParameterCoverBudgetV1, leaf_limit:u64,
     edges: u64, seen: BTreeSet<(u32, u16, u16, usize)>, pending: Vec<(u32, u16, u16, usize)>, leaves: BTreeSet<u32>,
 }
-fn count(shape: &[usize]) -> Result<usize, String> {
+fn count(shape: &[usize]) -> Result<usize, CoverErrorV1> {
     shape.iter().try_fold(1usize, |a,b| a.checked_mul(*b).ok_or("cover shape overflow".into()))
 }
-fn coords(mut index: usize, shape: &[usize]) -> Result<Vec<usize>, String> {
+fn coords(mut index: usize, shape: &[usize]) -> Result<Vec<usize>, CoverErrorV1> {
     if index >= count(shape)? { return Err("cover index outside shape".into()); }
     let mut out = vec![0; shape.len()];
     for i in (0..shape.len()).rev() { out[i] = index % shape[i]; index /= shape[i]; }
     Ok(out)
 }
-fn index(c: &[usize], shape: &[usize]) -> Result<usize, String> {
+fn index(c: &[usize], shape: &[usize]) -> Result<usize, CoverErrorV1> {
     if c.len()!=shape.len() { return Err("cover coordinate rank".into()); }
     c.iter().zip(shape).try_fold(0usize, |a,(v,n)| {
         if v>=n { return Err("cover coordinate outside shape".into()); }
         a.checked_mul(*n).and_then(|x|x.checked_add(*v)).ok_or("cover coordinate overflow".into())
     })
 }
-fn broadcast(c: &[usize], shape: &[usize]) -> Result<usize,String> {
+fn broadcast(c: &[usize], shape: &[usize]) -> Result<usize,CoverErrorV1> {
     if shape.len()>c.len() { return Err("cover broadcast rank".into()); }
     let mapped:Vec<_>=c[c.len()-shape.len()..].iter().zip(shape).map(|(v,n)|if *n==1 {0}else{*v}).collect();
     index(&mapped,shape)
 }
-impl Walk<'_> {
-    fn edge(&mut self)->Result<(),String> { self.edges=self.edges.checked_add(1).ok_or("cover edge overflow")?;
-        if self.edges>self.budget.max_edges { return Err("parameter cover edge budget exhausted".into()); } Ok(()) }
-    fn node(&mut self,n:u16,i:usize)->Result<(),String> {
+impl Walk<'_, '_> {
+    fn edge(&mut self)->Result<(),CoverErrorV1> { self.edges=self.edges.checked_add(1).ok_or(CoverErrorV1::Local("cover edge overflow"))?;
+        if self.edges>self.budget.max_edges { return Err(CoverErrorV1::Local("parameter cover edge budget exhausted")); } Ok(()) }
+    fn node(&mut self,n:u16,i:usize)->Result<(),CoverErrorV1> {
         self.edge()?;
         let shape=self.program.blocks[self.block].nodes.get(n as usize).ok_or("cover node missing")?.out.resolve(self.h);
         if i>=count(&shape)? {return Err("cover node element outside shape".into());}
         let key=(self.pos,self.occurrence,n,i);
         if !self.seen.contains(&key) {
-            if self.seen.len() as u64>=self.budget.max_coordinates {return Err("parameter cover coordinate budget exhausted".into());}
+            if self.seen.len() as u64>=self.budget.max_coordinates {return Err(CoverErrorV1::Local("parameter cover coordinate budget exhausted"));}
             self.seen.insert(key); self.pending.push(key);
         } Ok(())
     }
-    fn shape(&self,r:Ref)->Result<Vec<usize>,String> {
+    fn shape(&self,r:Ref)->Result<Vec<usize>,CoverErrorV1> {
         let p=self.program; let b=&p.blocks[self.block];
         Ok(match r {
             Ref::Node(j)=>b.nodes.get(j as usize).ok_or("cover node missing")?.out.resolve(self.h),
@@ -218,7 +254,7 @@ impl Walk<'_> {
             Ref::Input(_)=>vec![],
         })
     }
-    fn bounds(&self,r:Ref,i:usize)->Result<Interval,String> {
+    fn bounds(&self,r:Ref,i:usize)->Result<Interval,CoverErrorV1> {
         Ok(match r {
             Ref::Node(j)=>Interval::of(self.program.blocks[self.block].nodes.get(j as usize).ok_or("cover node missing")?.out.dtype),
             Ref::Const(j)=>{let c=self.program.consts.get(j as usize).ok_or("cover const missing")?;
@@ -230,12 +266,12 @@ impl Walk<'_> {
             _=>Interval::new(i128::MIN,i128::MAX),
         })
     }
-    fn fetch(&mut self,r:Ref,i:usize)->Result<(),String> {
+    fn fetch(&mut self,r:Ref,i:usize)->Result<(),CoverErrorV1> {
         self.edge()?; if i>=count(&self.shape(r)?)? {return Err("cover operand index outside shape".into());}
         match r {
             Ref::Node(j)=>{if !self.program.blocks[self.block].nodes[j as usize].commit {self.node(j,i)?;}},
             Ref::Param(j)=>{let p=&self.program.params[j as usize]; let byte=(i as u64).checked_mul(p.dtype.width() as u64).ok_or("cover param byte overflow")?;
-                let leaf=self.inventory.leaf_of(j,if p.per_layer {self.layer}else{None},byte).ok_or("cover parameter coordinate missing")?; if !self.leaves.contains(&leaf) && self.leaves.len() as u64>=self.leaf_limit {return Err("parameter cover leaf budget exhausted".into());} self.leaves.insert(leaf);},
+                let leaf=self.inventory.leaf_of(j,if p.per_layer {self.layer}else{None},byte).ok_or("cover parameter coordinate missing")?; if !self.leaves.contains(&leaf) && self.leaves.len() as u64>=self.leaf_limit {return Err(CoverErrorV1::Local("parameter cover leaf budget exhausted"));} self.leaves.insert(leaf);},
             Ref::State(j)=>{
                 if self.pos>0 && !self.pos.is_multiple_of(self.space.layout.checkpoint_interval) {
                     let state=&self.program.states[j as usize];
@@ -249,18 +285,52 @@ impl Walk<'_> {
                     }
                 }
             },
-            // Carry and token sources are authenticated claim material. Fixed
-            // states are boundaries only at actual checkpoints, handled above.
-            Ref::CarryIn(_)|Ref::Const(_)|Ref::Input(_)=>{},
+            Ref::CarryIn(k)=>{
+                if self.boundaries.is_some() {
+                    // Existing verified TIR-14 requires every carry_out committed.
+                    // Reuse the exact demand mapping; refuse rather than invent
+                    // a StepLeaf if a future program violates that precondition.
+                    let ctx=misaka_palw_tir::demand::DemandContext{pos:self.pos,occurrence:self.occurrence};
+                    let (prev,node)=misaka_palw_tir::demand::carry_in_node_v1(self.program,ctx,k)
+                        .ok_or("cover carry-out missing")?;
+                    let block=occurrence_block(self.space,prev.occurrence).ok_or("cover carry occurrence missing")?;
+                    if !self.program.blocks[usize::from(block)].nodes[usize::from(node)].commit {
+                        return Err("cover carry-out is not committed".into());
+                    }
+                    let width=self.space.commit_tile_len(block,node).ok_or("cover carry tile absent")?;
+                    if width==0 {return Err("cover carry zero tile width".into());}
+                    let slot=self.space.node_slot(usize::from(prev.occurrence),node).ok_or("cover carry slot absent")?;
+                    let job=self.space.job_shape(self.context).map_err(|e|e.to_string())?;
+                    let (call_index,position)=job.call_position(prev.pos);
+                    let tile_index=u32::try_from((i as u64)/u64::from(width)).map_err(|_|"cover carry tile overflow")?;
+                    let coord=crate::palw_step::PalwStepCoordinateV1{call_index,node_slot:slot,position,tile_index};
+                    let leaf=self.space.leaf_index(self.context,&coord).ok_or("cover carry leaf absent")?;
+                    if leaf>=self.original_leaf {return Err("cover carry leaf does not precede original root".into());}
+                    self.boundaries.as_mut().unwrap().insert(RootInputBoundaryV1::CarryStepLeaf(leaf));
+                }
+            },
+            Ref::Input(0)=>{
+                if self.boundaries.is_some() {
+                    let job=self.space.job_shape(self.context).map_err(|e|e.to_string())?;
+                    if self.pos>=job.positions {return Err("cover token position outside original".into());}
+                    let input=match job.token_source_v1(self.pos) {
+                        crate::palw_tir_step_v1::PalwTirTokenSourceV1::Prompt(p)=>RootInputBoundaryV1::PromptPosition(p),
+                        crate::palw_tir_step_v1::PalwTirTokenSourceV1::Generated(p)=>RootInputBoundaryV1::GeneratedId(p),
+                    };
+                    self.boundaries.as_mut().unwrap().insert(input);
+                }
+            },
+            // Input(1) is the position scalar; constants need no supplied bytes.
+            Ref::Const(_)|Ref::Input(_)=>{},
         } Ok(())
     }
-    fn set_context(&mut self,pos:u32,occ:u16)->Result<(),String> {
+    fn set_context(&mut self,pos:u32,occ:u16)->Result<(),CoverErrorV1> {
         let (block,layer)=*self.space.occurrences().get(usize::from(occ)).ok_or("cover replay occurrence missing")?;
         self.block=usize::from(block); self.layer=layer; self.pos=pos; self.occurrence=occ;
         self.h=usize::try_from(history_length_v1(&self.space.info,block,pos).ok_or("cover replay H missing")?)
             .map_err(|_|"cover replay H overflow")?; Ok(())
     }
-    fn run(&mut self)->Result<(),String> {
+    fn run(&mut self)->Result<(),CoverErrorV1> {
         while let Some((pos,occ,n,i))=self.pending.pop() {
             self.set_context(pos,occ)?;
             let node=self.program.blocks[self.block].nodes[n as usize].clone(); let shape=node.out.resolve(self.h);

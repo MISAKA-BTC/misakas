@@ -1580,6 +1580,7 @@ mod tests {
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
 mod conviction_e2e_tests {
+    include!("palw_root_input_material_native_tests.rs");
     include!("palw_court_shared_constraint_native_tests.rs");
     include!("palw_court_shared_tokenizer_native_tests.rs");
     use super::*;
