@@ -31,6 +31,11 @@ pub(super) fn prepare_block_objects_v1(
     for income in facts.round_fee_incomes() {
         builder.reserve_round_income_v1(ctx, *income)?;
     }
+    // G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow outpoints UTXO acceptance spent under a qualified plan settle here,
+    // once, against the parent's rooted rows — journaled in this block's delta beside its UTXO diff. Empty below the fence.
+    for settlement in facts.funded_escrow_settlements() {
+        builder.settle_funded_escrow_v1(settlement)?;
+    }
     // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
     //     by this block is a credit in THIS block's span, never in the one its finals just closed.
     if let Some(lane) = rules.round_lane() {

@@ -2114,6 +2114,7 @@ impl VirtualStateProcessor {
             }),
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
+            funded_escrow_settlements: Vec::new(),
             // RFC-0008 v2: the slice carriers the covered set holds (empty until the closure carriage fills it).
             exec_v2_covered: Vec::new(),
             exec_v2_origin_headers: Default::default(),

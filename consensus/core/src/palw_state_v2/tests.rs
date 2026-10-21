@@ -17115,6 +17115,8 @@ fn every_delta_entry_kind_round_trips_through_borsh() {
                 // Lane LG14-A: its round trip is the dispute suite's.
                 PalwDeltaEntryV2::LegacyDispute { .. } => "legacy_dispute",
                 PalwDeltaEntryV2::TirDesignated { .. } => "tir_designated",
+                // G14 lane escrow-rfc08: its round trip is the funded-escrow suite's.
+                PalwDeltaEntryV2::FundedEscrow { .. } => "funded_escrow",
                 PalwDeltaEntryV2::PublicFpJob { .. } => "public_fp_job",
                 PalwDeltaEntryV2::ClassSemantics { .. } => "class_semantics",
                 PalwDeltaEntryV2::ClaimSemantics { .. } => "claim_semantics",
@@ -18235,6 +18237,8 @@ fn the_state_root_preimage_is_exactly_the_adr_0043_list() {
         // Lane LG14-A: one Some-only block, empty here.
         legacy_disputes: _,
         tir_designated: _,
+        // G14 lane escrow-rfc08: one Some-only block (`funded_escrow/v1`), empty here.
+        funded_escrows: _,
         fp_public_jobs: _,
         class_semantics: _,
         claim_semantics: _,
@@ -28471,6 +28475,7 @@ mod evm_market {
             round_lane: None,
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
+            funded_escrow_settlements: Vec::new(),
             exec_v2_covered: Vec::new(),
             exec_v2_origin_headers: BTreeMap::new(),
             #[cfg(test)]
@@ -28748,6 +28753,7 @@ mod evm_market {
             round_lane: None,
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
+            funded_escrow_settlements: Vec::new(),
             exec_v2_covered: Vec::new(),
             exec_v2_origin_headers: BTreeMap::new(),
             #[cfg(test)]

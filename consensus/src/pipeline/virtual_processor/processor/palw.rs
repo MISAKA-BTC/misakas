@@ -4383,6 +4383,20 @@ impl VirtualStateProcessor {
     ///
     /// Only bonds whose collateral is spendable appear: a locked one cannot be spent at all, so it
     /// owes nothing yet. Same parent state, same walk, same reason as the lock beside it.
+    /// **G14 lane escrow-rfc08 (RFC-0035 A): the selected parent's unsettled funded-escrow rows, by outpoint** — what the spend
+    /// filter locks (`PalwEscrowSpendLocksV1::rows`). Empty below `palw_tir_public_conviction_v1` (the fence that owns the public
+    /// original route a funded TFO1 carrier wraps), and empty wherever no row exists: every network today.
+    pub(in crate::pipeline::virtual_processor) fn palw_escrow_locked_rows_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        now_daa: u64,
+    ) -> std::collections::HashMap<TransactionOutpoint, kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1> {
+        if !self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(now_daa)) {
+            return Default::default();
+        }
+        kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_rows_by_outpoint_v1(state.funded_escrows_v1())
+    }
+
     pub(in crate::pipeline::virtual_processor) fn palw_v2_bond_burn_obligations(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,

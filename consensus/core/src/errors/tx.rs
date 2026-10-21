@@ -245,6 +245,13 @@ pub enum TxRuleError {
     #[error("a released bond's spend must burn {owed} sompi and leaves only {left}")]
     BondBurnNotPaid { owed: u64, left: u64 },
 
+    /// **G14 lane escrow-rfc08 (RFC-0035 A): a spend of a locked funded-escrow outpoint that is not qualified** — a rooted row's
+    /// outpoint spent outside `palw_escrow_qualified_spend_v1`, or a TFO1 carrier's own funding output spent later in the same
+    /// mergeset (`palw_tfo1_provisional_lock_v1`). Skipped like a bond spend; the carrying block stays valid. Inert below
+    /// `palw_tir_public_conviction_v1`.
+    #[error("transaction input spends a locked PALW funded-escrow outpoint without a qualified settlement (outpoint {0})")]
+    SpendsLockedPalwEscrow(TransactionOutpoint),
+
     /// **ADR-0119 Decision 6: a free-prompt commitment past the structural work-leaves cap, before
     /// the held regime.** Isolation admits up to the regime's `2^40` on a ruleset that declares the
     /// regime, because it holds no height; this is the height-indexed half, asked where the

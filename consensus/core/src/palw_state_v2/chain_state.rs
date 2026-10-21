@@ -139,6 +139,7 @@ impl PalwChainStateV2 {
             panel_v3: None,
             legacy_disputes: BTreeMap::new(),
             tir_designated: Default::default(),
+            funded_escrows: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
             class_semantics: BTreeMap::new(),
             claim_semantics: BTreeMap::new(),
@@ -661,6 +662,12 @@ impl PalwChainStateV2 {
         key: &crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1,
     ) -> Option<&crate::palw_tir_designated_answers_v1::PalwTirDesignatedRecordV1> {
         self.tir_designated.records.get(key)
+    }
+
+    /// **G14 lane escrow-rfc08 (RFC-0035 A): the rooted funded-escrow rows**, by contract id — what the UTXO spend filter locks
+    /// (the unsettled rows' outpoints, `crate::palw_funded_escrow_v1::palw_escrow_rows_by_outpoint_v1`). Empty on every network.
+    pub fn funded_escrows_v1(&self) -> &BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1> {
+        &self.funded_escrows
     }
 
     /// ADR-0191 step B: every designated-custodian record in the registry (empty below the fence).
@@ -2860,6 +2867,11 @@ impl PalwChainStateV2 {
         if !self.tir_designated.records.is_empty() {
             state.update(b"tir_designated/v1");
             state.update(collection_root(b"tir_designated", &self.tir_designated.records).as_byte_slice());
+        }
+        // **G14 lane escrow-rfc08 (RFC-0035 A).** Its own block: empty until a funded original installs a row, which nothing can yet.
+        if !self.funded_escrows.is_empty() {
+            state.update(b"funded_escrow/v1");
+            state.update(collection_root(b"funded_escrow", &self.funded_escrows).as_byte_slice());
         }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a

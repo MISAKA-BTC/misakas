@@ -2346,6 +2346,9 @@ impl VirtualStateProcessor {
                     // Audit C-08 part three: and what a released bond's spend must destroy.
                     ctx.palw_v2_bond_burns =
                         palw_state.as_ref().map(|s| self.palw_v2_bond_burn_obligations(s, pov_daa_score)).unwrap_or_default();
+                    // G14 lane escrow-rfc08 (RFC-0035 A): and which funded-escrow outpoints are locked, from the same parent state.
+                    ctx.palw_escrow_locks.rows =
+                        palw_state.as_ref().map(|s| self.palw_escrow_locked_rows_v1(s, pov_daa_score)).unwrap_or_default();
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts = palw_state
                         .as_ref()
@@ -2742,6 +2745,9 @@ impl VirtualStateProcessor {
                                             extras.round_permit_uses = verdicts.uses.clone();
                                         }
                                         extras.round_fee_incomes = ctx.palw_round_fee_incomes.clone();
+                                        // G14 lane escrow-rfc08: the qualified escrow spends UTXO acceptance admitted, settled by the fold
+                                        // in this block's rooted delta (committed with the UTXO diff in one WriteBatch).
+                                        extras.funded_escrow_settlements = ctx.palw_escrow_settlements.clone();
                                         // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
                                         // re-judged by the fold against its own running state) and the covered set itself.
                                         if let Some(resolved) = exec_resolved.as_ref() {
@@ -3608,6 +3614,11 @@ impl VirtualStateProcessor {
         ctx.palw_v2_bond_burns = virtual_palw_state
             .as_ref()
             .map(|(_, state)| self.palw_v2_bond_burn_obligations(state, virtual_daa_window.daa_score))
+            .unwrap_or_default();
+        // G14 lane escrow-rfc08: virtual locks the funded-escrow rows exactly as the chain walk does.
+        ctx.palw_escrow_locks.rows = virtual_palw_state
+            .as_ref()
+            .map(|(_, state)| self.palw_escrow_locked_rows_v1(state, virtual_daa_window.daa_score))
             .unwrap_or_default();
         // ADR-0125: virtual accepts exactly the round blocks the block built on it will accept.
         ctx.palw_round_verdicts = virtual_palw_state

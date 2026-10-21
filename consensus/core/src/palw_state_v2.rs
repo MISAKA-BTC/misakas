@@ -11039,6 +11039,12 @@ pub struct PalwChainStateV2 {
     /// once `palw_tir_designated_answers_v1` is in force. Empty on every shipped network; enters the root (`tir_designated/v1`) and
     /// the carriage (tail `0xE3`) only when non-empty, and its records are journaled as delta 215.
     tir_designated: crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1,
+    /// **G14 lane escrow-rfc08 (RFC-0035 A / ADR-0202): the rooted funded-escrow rows**, by contract id
+    /// ([`crate::palw_funded_escrow_v1`]). Written only by the funded-original installer and a qualified spend's settlement, each
+    /// journaled as delta 235 with `old`/`new`, so a revert restores the row — and with it the outpoint lock the spend filter reads.
+    /// Empty on every network (nothing installs a row yet); enters the root (`funded_escrow/v1`) and the carriage (tail `0xFB`) only
+    /// when non-empty.
+    funded_escrows: BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
     /// Accepted public FP commitment metadata, without prompt IDs or capture. Kept with the claim
     /// past the never-armed public-filer fence, rooted and carried through pruning snapshots.
     fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
@@ -12234,6 +12240,13 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_tir_designated_answers_v1::PalwTirDesignatedRecordV1>,
         new: Option<crate::palw_tir_designated_answers_v1::PalwTirDesignatedRecordV1>,
     } = 215,
+    /// **G14 lane escrow-rfc08 (delta number 235, declared explicitly): a funded-escrow row was installed or settled**
+    /// (`crate::palw_funded_escrow_v1::palw_escrow_row_transition_v1` admits exactly those two). Dormant: nothing writes it.
+    FundedEscrow {
+        key: Hash64,
+        old: Option<crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
+        new: Option<crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
+    } = 235,
     /// **Lane BUDGET (delta number 190, declared explicitly; 190–199 are the bond budget's): a row of the bond budget** was written,
     /// rewritten or dropped — `table` names the table ([`crate::palw_bond_budget_v1::PALW_BUDGET_TABLE_BONDS_V1`] …), the key and row
     /// ride as their Borsh bytes. One entry for every table. Dormant: `palw_bond_budget_v1` is armed on no network.
@@ -13629,6 +13642,8 @@ mod native_writers;
 mod transition_builder;
 mod block_preparation;
 mod input_views;
+// G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow rows' one writer.
+mod funded_escrow;
 pub use input_views::{PalwBlockFactsV1, PalwRulesAtBlockV1, PalwRulesForClaimV1};
 
 // ---------------------------------------------------------------------------------------------
@@ -20056,6 +20071,11 @@ pub struct PalwTransitionExtrasV1 {
     /// Actual UTXO-accepted Round fees, pre-reserved in the same native book
     /// before objects can consume the recipient's remaining R room.
     pub round_fee_incomes: Vec<crate::palw_bond_budget_v1::PalwRoundFeeIncomeV1>,
+    /// **G14 lane escrow-rfc08 (RFC-0035 A): the qualified funded-escrow spends this block's UTXO acceptance admitted**, in
+    /// acceptance order, each with the rooted row before and after. The fold settles each against its OWN parent row (a mismatch
+    /// refuses the block). Empty below `palw_tir_public_conviction_v1` and wherever no row exists — every network today — so
+    /// `Default` is byte-identical to the transition before the field existed.
+    pub funded_escrow_settlements: Vec<crate::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
     /// **RFC-0008 v2: the slice carriers the accepting block's covered set holds**, in the processor's canonical order (root, then
     /// index, then carrier). Each is re-judged by the fold against its own running state; empty unless
     /// `Params::palw_exec_payload_v2` is in force at the block, and then `Default` is byte-identical to the transition before the
@@ -22457,6 +22477,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::LegacyDispute { key, old, new } => swap_write!(state.legacy_disputes, key, old, new),
         PalwDeltaEntryV2::TirDesignated { key, old, new } => swap_write!(state.tir_designated.records, key, old, new),
+        PalwDeltaEntryV2::FundedEscrow { key, old, new } => swap_write!(state.funded_escrows, key, old, new),
         // RFC-0010: the permissionless Panel engine's keyed decomposition (see `palw_panel_v3_fold_v1`).
         PalwDeltaEntryV2::PanelV3Cursor { old, new } => palw_panel_v3_fold_v1::apply_cursor_entry_v1(state, old, new, revert)?,
         PalwDeltaEntryV2::PanelV3Claim { key, old, new } => palw_panel_v3_fold_v1::apply_claim_entry_v1(state, key, old, new, revert)?,
@@ -22913,6 +22934,8 @@ pub struct PalwStateCarriageV2 {
     pub legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
     /// ADR-0191 step B: the designated-custodian registry, in appended tail `0xE3`, present only when non-empty.
     pub tir_designated: crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1,
+    /// G14 lane escrow-rfc08: the rooted funded-escrow rows, in appended tail `0xFB`, present only when non-empty.
+    pub funded_escrows: BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
     /// Original accepted FP metadata, appended tail 0xF0; omitted when empty below the public-filer fence.
     pub fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
     /// Immutable signed registration semantics, optional tail 0xF7.
@@ -23670,6 +23693,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_tir_designated_answers_v1::PALW_CARRIAGE_TIR_DESIGNATED_TAIL_V1.serialize(writer)?;
             self.tir_designated.serialize(writer)?;
         }
+        if !self.funded_escrows.is_empty() {
+            crate::palw_funded_escrow_v1::PALW_CARRIAGE_FUNDED_ESCROW_TAIL_V1.serialize(writer)?;
+            self.funded_escrows.serialize(writer)?;
+        }
         if let Some(budget) = &self.bond_budget {
             crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1.serialize(writer)?;
             budget.serialize(writer)?;
@@ -23899,6 +23926,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_legacy_disputes = false;
         let mut tir_designated = crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1::default();
         let mut seen_tir_designated = false;
+        let mut funded_escrows: BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1> = BTreeMap::new();
+        let mut seen_funded_escrows = false;
         let mut bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1> = None;
         let mut seen_bond_budget = false;
         let mut exec_v2 = crate::palw_work_slice_v2::PalwExecV2StateV1::default();
@@ -24244,6 +24273,20 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                         ));
                     }
                 }
+                crate::palw_funded_escrow_v1::PALW_CARRIAGE_FUNDED_ESCROW_TAIL_V1 if !seen_funded_escrows => {
+                    seen_funded_escrows = true;
+                    funded_escrows = BTreeMap::deserialize_reader(reader)?;
+                    if funded_escrows.is_empty() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "an empty funded-escrow tail (written only when non-empty)",
+                        ));
+                    }
+                    // A row is carried only as the transitions admitted it: its own invariants hold, keyed by its contract.
+                    if funded_escrows.iter().any(|(key, row)| row.contract_id != *key || row.check_v1().is_err()) {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "a funded-escrow row violates its invariants"));
+                    }
+                }
                 crate::palw_tir_designated_answers_v1::PALW_CARRIAGE_TIR_DESIGNATED_TAIL_V1 if !seen_tir_designated => {
                     seen_tir_designated = true;
                     tir_designated = crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1::deserialize_reader(reader)?;
@@ -24403,6 +24446,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             kernel_route,
             legacy_disputes,
             tir_designated,
+            funded_escrows,
             fp_public_jobs,
             class_semantics,
             claim_semantics,
@@ -24554,6 +24598,7 @@ impl PalwStateCarriageV2 {
             }),
             legacy_disputes: state.legacy_disputes.clone(),
             tir_designated: state.tir_designated.clone(),
+            funded_escrows: state.funded_escrows.clone(),
             fp_public_jobs: state.fp_public_jobs.clone(),
             class_semantics: state.class_semantics.clone(),
             claim_semantics: state.claim_semantics.clone(),
@@ -24835,6 +24880,7 @@ impl PalwStateCarriageV2 {
             panel_v3: self.panel_v3,
             legacy_disputes: self.legacy_disputes,
             tir_designated: self.tir_designated,
+            funded_escrows: self.funded_escrows,
             fp_public_jobs: self.fp_public_jobs,
             class_semantics: self.class_semantics,
             claim_semantics: self.claim_semantics,
