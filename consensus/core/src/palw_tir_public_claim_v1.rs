@@ -459,6 +459,11 @@ pub(crate) fn palw_tir_public_input_history_frame_fixture_v1(
     form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)->PalwTirPublicFrameFixtureV1 {
     tests::history_frame_form_v1(true,form)
 }
+#[cfg(test)]
+pub(crate) fn palw_tir_public_fixed_history_frame_fixture_v1(
+    form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,committed_writer:bool)->PalwTirPublicFrameFixtureV1 {
+    tests::history_frame_condition_v1(tests::HistoryConditionV1::Fixed{committed_writer},form)
+}
 
 /// Existing 4096-wide test execution reconstructed in its actual original job context.
 #[cfg(test)]
@@ -845,14 +850,27 @@ mod tests {
     pub(super) fn history_frame() -> super::PalwTirPublicFrameFixtureV1 {
         history_frame_form_v1(false,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
     }
+    #[derive(Clone,Copy)]
+    pub(super) enum HistoryConditionV1 { None,Input,Fixed{committed_writer:bool} }
     pub(super) fn history_frame_form_v1(direct_input:bool,prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)
+        ->super::PalwTirPublicFrameFixtureV1 {
+        history_frame_condition_v1(if direct_input {HistoryConditionV1::Input}else{HistoryConditionV1::None},prompt_form)
+    }
+    pub(super) fn history_frame_condition_v1(condition:HistoryConditionV1,prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)
         ->super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_corpus_fixture_v1::{fixture_with, programs};
         let (name, mut program, params, tokens) = programs().into_iter()
             .find(|(name, ..)| name == "dense-gqa-2layer").expect("golden GQA corpus");
-        if direct_input {
+        let fixed=if let HistoryConditionV1::Fixed{committed_writer}=condition {
+            let state:u16=program.states.len().try_into().unwrap();
+            program.states.push(misaka_palw_tir::program::StateDecl{name:"boundary_scalar".into(),
+                kind:misaka_palw_tir::program::StateKind::Fixed{lo:0,hi:1},dtype:misaka_palw_tir::DType::I8,
+                shape:vec![],per_layer:true});
+            Some((state,committed_writer))
+        } else {None};
+        if !matches!(condition,HistoryConditionV1::None) {
             use misaka_palw_tir::{Ref,Prim};
             use misaka_palw_tir::types::Dim;
             let (bi,ni,input,out)=program.blocks.iter().enumerate().find_map(|(bi,b)| {
@@ -871,11 +889,36 @@ mod tests {
             if bi==usize::from(program.schedule.post)&&usize::from(program.logits)>=ni {program.logits+=1;}
             block.nodes.insert(ni,misaka_palw_tir::program::Node {
                 prim:Prim::Select,
-                inputs:vec![Ref::Input(0),Ref::Node(input),Ref::Node(input)],out,commit:false,
+                inputs:vec![fixed.map_or(Ref::Input(0),|(state,_)|Ref::State(state)),Ref::Node(input),Ref::Node(input)],out,commit:false,
             });
             block.nodes[ni+1].inputs[0]=Ref::Node(ni.try_into().unwrap());
             // The program is canonical-encoded, admitted, interpreted and all
             // roots recomputed by fixture_with. No existing original is edited.
+        }
+        if let Some((state,committed_writer))=fixed {
+            use misaka_palw_tir::{DType,Ref,Prim,TensorType};
+            use misaka_palw_tir::program::{ConstDecl,Node};
+            let zero=ConstDecl{dtype:DType::Idx,shape:vec![],data:vec![0;4]};
+            let z=if let Some(index)=program.consts.iter().position(|c|c==&zero) {index}
+                else {program.consts.push(zero);program.consts.len()-1};
+            // Each actual scheduled layer writes its own scalar instance from
+            // the actual committed carry vector. Rank-reducing gathers use a
+            // real Idx0 constant, then a clamp guarantees Fixed [0,1].
+            let layers:std::collections::BTreeSet<_>=program.schedule.layers.iter().copied().collect();
+            for bi in layers {
+                let block=&mut program.blocks[usize::from(bi)];
+                let carry=block.carry_in.first().expect("GQA carry").clone();
+                let mut input=Ref::CarryIn(0);
+                for dim in 0..carry.shape.len() {
+                    let out=TensorType{dtype:carry.dtype,shape:carry.shape[dim+1..].to_vec()};
+                    let node:u16=block.nodes.len().try_into().unwrap();
+                    block.nodes.push(Node{prim:Prim::Gather{axis:0,batch_dims:0},inputs:vec![input,Ref::Const(z.try_into().unwrap())],out,commit:false});
+                    input=Ref::Node(node);
+                }
+                let clamp:u16=block.nodes.len().try_into().unwrap();
+                block.nodes.push(Node{prim:Prim::Clamp{lo:0,hi:1},inputs:vec![input],out:TensorType::scalar(DType::I8),commit:false});
+                block.nodes.push(Node{prim:Prim::StateWrite{state},inputs:vec![Ref::Node(clamp)],out:TensorType::scalar(DType::I8),commit:committed_writer});
+            }
         }
         let mut f = fixture_with(name, program, params, tokens, 16, 9);
         assert!(f.greedy, "the V3 job uses greedy decoding");

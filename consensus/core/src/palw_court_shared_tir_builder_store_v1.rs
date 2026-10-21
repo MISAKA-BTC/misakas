@@ -19,9 +19,28 @@ use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 as PromptForm;
 pub(crate) struct SharedTirBuilderStoreV1<'a> {
     source: Source,
     units: &'a [Unit],
-    params: &'a [PalwArtifactOpeningV1],
+    params: ParameterMaterialV1<'a>,
     ids: Option<&'a Ids>,
     prompt: PromptMaterialV1<'a>,
+}
+/// A retained view borrows the actual decoded payload owners, never bare deep
+/// copies made from them. Borrowed compatibility inputs retain the old contract.
+#[derive(Clone,Copy)]
+enum ParameterMaterialV1<'a> {
+    Borrowed(&'a [PalwArtifactOpeningV1]),
+    Retained(&'a [crate::palw_native_resource_v1::NativeRetainedV1<PalwArtifactOpeningV1>]),
+}
+impl ParameterMaterialV1<'_> {
+    fn len(&self)->usize {match self {Self::Borrowed(v)=>v.len(),Self::Retained(v)=>v.len()}}
+    fn get(&self,i:usize)->&PalwArtifactOpeningV1 {match self {Self::Borrowed(v)=>&v[i],Self::Retained(v)=>&v[i]}}
+    fn find(&self,leaf:u32)->Option<&PalwArtifactOpeningV1> {
+        // No temporary Vec of references or opening clones.
+        let mut lo=0;let mut hi=self.len();
+        while lo<hi {let mid=lo+(hi-lo)/2;match self.get(mid).leaf_index.cmp(&leaf) {
+            std::cmp::Ordering::Less=>lo=mid+1,std::cmp::Ordering::Greater=>hi=mid,
+            std::cmp::Ordering::Equal=>return Some(self.get(mid)),
+        }} None
+    }
 }
 /// Borrowed input description, not an authentication or custody credential.
 #[derive(Clone,Copy)]
@@ -52,6 +71,17 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
     }
     pub(crate) fn new_with_prompt(state:&PalwChainStateV2,claim:Hash64,scope:Hash64,
         units:&'a [Unit],params:&'a [PalwArtifactOpeningV1],ids:Option<&'a Ids>,prompt:PromptMaterialV1<'a>)->Result<Self,String> {
+        Self::new_with_parameter_material(state,claim,scope,units,ParameterMaterialV1::Borrowed(params),ids,prompt)
+    }
+    /// Native parameter payload owners stay borrowed for this Store's lifetime.
+    /// Raw carrier bytes and outer owner-array construction need their own admission.
+    pub(crate) fn new_with_retained_parameters(state:&PalwChainStateV2,claim:Hash64,scope:Hash64,
+        units:&'a [Unit],params:&'a [crate::palw_native_resource_v1::NativeRetainedV1<PalwArtifactOpeningV1>],
+        ids:Option<&'a Ids>,prompt:PromptMaterialV1<'a>)->Result<Self,String> {
+        Self::new_with_parameter_material(state,claim,scope,units,ParameterMaterialV1::Retained(params),ids,prompt)
+    }
+    fn new_with_parameter_material(state:&PalwChainStateV2,claim:Hash64,scope:Hash64,
+        units:&'a [Unit],params:ParameterMaterialV1<'a>,ids:Option<&'a Ids>,prompt:PromptMaterialV1<'a>)->Result<Self,String> {
         let c=crate::palw_court_shared_tir_state_v1::context(state,claim)?;
         if scope!=c.scope_id || units.len() as u64>c.queries {return Err("builder material scope/cardinality".into());}
         let source=c.source(state)?;
@@ -61,11 +91,11 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
                 return Err("builder material wrong source or duplicate query".into());
             }
         }
-        if params.windows(2).any(|w|w[0].leaf_index>=w[1].leaf_index) {
+        if (1..params.len()).any(|i|params.get(i-1).leaf_index>=params.get(i).leaf_index) {
             return Err("builder parameters must be unique ascending coordinates".into());
         }
         c.with_parameter_verifier(state,scope,|v| {
-            for p in params {v.check(p).map_err(|e|e.to_string())?;} Ok(())
+            for i in 0..params.len() {v.check(params.get(i)).map_err(|e|e.to_string())?;} Ok(())
         })?;
         if ids.is_some_and(|i|i.source_id_v1()!=source.source_id_v1()) {
             return Err("builder IDs from another original source".into());
@@ -102,8 +132,31 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
                         return Err("builder input cover lacks authenticated carry unit".into());
                     }
                 },
+                I::CommittedStepLeaf(index)|I::FixedCheckpointStepLeaf(index)|I::HistoryStepLeaf(index)=>{
+                    if !matches!(self.unit(Q::StepLeaf{index}),Some(R::StepLeaf{..})) {
+                        return Err("builder input cover lacks authenticated step boundary unit".into());
+                    }
+                },
             }
         }}
+        Ok(())
+    }
+    /// Material sufficiency for ONE actual numerical root, not a union-based
+    /// availability assertion. The opaque cover is derived from the original.
+    fn check_root_parameters_v1(&self,
+        cover:&crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1,
+        leaf:u64)->Result<(),String> {
+        let parameters=cover.parameters_v1();
+        if parameters.source_id!=self.source.source_id_v1() {
+            return Err("builder parameter cover from another original source".into());
+        }
+        let index=parameters.roots.binary_search_by_key(&leaf,|r|r.leaf)
+            .map_err(|_|"builder parameter cover lacks requested numerical root")?;
+        for required in &parameters.roots[index].parameters {
+            if self.params.find(*required).is_none() {
+                return Err(format!("builder numerical root {leaf} lacks authenticated parameter leaf {required}"));
+            }
+        }
         Ok(())
     }
     fn unit(&self,q:Q)->Option<&R> {
@@ -129,7 +182,7 @@ impl PalwTirEvidenceStoreV1 for SharedTirBuilderStoreV1<'_> {
             self.source.header_v1().step_merkle_root,self.source.leaf_count_v1()).ok()
     }
     fn param_opening(&self,leaf:u32)->Option<PalwArtifactOpeningV1> {
-        self.params.binary_search_by_key(&leaf,|p|p.leaf_index).ok().map(|i|self.params[i].clone())
+        self.params.find(leaf).cloned()
     }
     fn prompt_token_ids(&self)->Option<Vec<u32>> {
         match self.prompt {PromptMaterialV1::Flat(ids)=>Some(ids.to_vec()),_=>None}
@@ -201,6 +254,27 @@ impl SharedTirBuilderStoreV1<'_> {
         limit:crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1)
         ->Result<(crate::palw_tir_court_v1::PalwTirConeRefutationV1,
             crate::palw_tir_court_v1::PalwTirBuilderMeterV1),String> {
+        self.build_terminal_inner(state,params,rules,intent,limit,None)
+    }
+    /// Checked material path: guard actual root requirements BEFORE finalization.
+    /// Cover and parameter payload tickets stay with caller; returned evidence
+    /// clones/multiproof/scratch still require independent native admission.
+    pub(crate) fn build_terminal_with_parameter_cover(&self,state:&PalwChainStateV2,
+        params:&crate::palw_state_v2::PalwStateParamsV2,
+        rules:&crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+        intent:&SignedSharedTerminalIntentV1,
+        limit:crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        cover:&crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1>)
+        ->Result<(crate::palw_tir_court_v1::PalwTirConeRefutationV1,crate::palw_tir_court_v1::PalwTirBuilderMeterV1),String> {
+        self.build_terminal_inner(state,params,rules,intent,limit,Some(cover))
+    }
+    fn build_terminal_inner(&self,state:&PalwChainStateV2,
+        params:&crate::palw_state_v2::PalwStateParamsV2,
+        rules:&crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+        intent:&SignedSharedTerminalIntentV1,
+        limit:crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        cover:Option<&crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1>)
+        ->Result<(crate::palw_tir_court_v1::PalwTirConeRefutationV1,crate::palw_tir_court_v1::PalwTirBuilderMeterV1),String> {
         use crate::palw_court_shared_tir_round_v1 as rounds;
         use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key,PalwStagedCourtRowV1 as Row};
         if intent.signature.len()!=crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
@@ -241,6 +315,7 @@ impl SharedTirBuilderStoreV1<'_> {
         let prompt_form=if rules.prompt_ids_merkle {PromptForm::MerkleV1}else{PromptForm::Flat};
         let native=crate::palw_tir_court_v1::PalwTirCourtRulesV1 {max_step_leaf_count:rules.step_ladder,prompt_form,
             limits:crate::palw_court_v2::palw_tir_court_limits_v1(&rules.court)};
+        if let Some(cover)=cover {self.check_root_parameters_v1(cover,intent.leaf)?;}
         let (mut bottom,meter)=crate::palw_tir_court_v1::build_tir_dissect_bottom_bounded_v1(
             &binding,&prepared.phase,self,&native,limit).map_err(|e|e.to_string())?;
         if bottom.output_opening.leaf_index!=intent.leaf

@@ -306,8 +306,8 @@ mod root_input_tests {
         let mut carry=0;let mut tokens=0;
         use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
         for root in &input.roots {for boundary in &root.inputs {match *boundary {
-            I::CarryStepLeaf(index)=>{
-                carry+=1;assert!(index<root.leaf);
+            I::CarryStepLeaf(index)|I::CommittedStepLeaf(index)|I::FixedCheckpointStepLeaf(index)|I::HistoryStepLeaf(index)=>{
+                if matches!(boundary,I::CarryStepLeaf(_)) {carry+=1;}assert!(index<root.leaf);
                 let query=super::super::PalwTirPublicRequestV1::StepLeaf{index};
                 let response=super::super::PalwTirPublicResponseV1::StepLeaf {
                     preimage:f.execution.step_leaf(index).unwrap(),opening:f.execution.step_opening(index).unwrap()};
@@ -366,5 +366,75 @@ mod root_input_tests {
         assert_eq!(job.token_source_v1(2),T::Prompt(2));
         assert_eq!(job.token_source_v1(3),T::Generated(0));
         assert_eq!(job.token_source_v1(5),T::Generated(2));
+    }
+}
+
+#[cfg(test)]
+mod step_material_dependency_tests {
+    use super::*;
+    #[test]
+    fn actual_numerical_roots_include_committed_and_history_step_boundaries() {
+        use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1 as I;
+        let f=crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+        let o=f.frame.original_v1();
+        let source=PalwTirPublicSourceV1::new_native_v1(&f.record,&f.layout,f.frame.header_v1(),o.execution_root,o.trace_root,f.rules.maximum_leaves).unwrap();
+        let budget=OriginalParameterCoverBudgetV1{max_original_leaves:1_000_000,max_total_edges:10_000_000,max_total_coordinates:1_000_000,max_root_memberships:1_000_000};
+        let cover=PalwTirPublicSourceV1::root_input_cover_native_v1(&source,&f.record,&f.layout,budget).unwrap();
+        assert_eq!(*cover.parameters_v1(),source.parameter_cover_v1(&f.record,&f.layout,budget).unwrap());
+        assert!(cover.roots_v1().iter().flat_map(|r|&r.inputs).any(|i|matches!(i,I::CommittedStepLeaf(_))));
+        assert!(cover.roots_v1().iter().flat_map(|r|&r.inputs).any(|i|matches!(i,I::HistoryStepLeaf(_))));
+    }
+}
+
+#[cfg(test)]
+mod fixed_root_material_tests {
+    use super::*;
+    #[test]
+    fn actual_fixed_state_numerical_roots_require_checkpoint_and_prior_writer_material() {
+        use crate::palw_tir_court_v1::{PalwTirEvidenceStoreV1,parameter_cover::RootInputBoundaryV1 as I};
+        use crate::palw_tir_step_v1::PalwTirLeafKindV1 as K;
+        use misaka_palw_tir::demand::{DemandContext,carry_in_node_v1,state_writer_v1};
+        for committed in [false,true] {
+            let f=crate::palw_tir_public_claim_v1::palw_tir_public_fixed_history_frame_fixture_v1(
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,committed);
+            let o=f.frame.original_v1();
+            let source=PalwTirPublicSourceV1::new_native_v1(&f.record,&f.layout,f.frame.header_v1(),o.execution_root,o.trace_root,f.rules.maximum_leaves).unwrap();
+            let budget=OriginalParameterCoverBudgetV1{max_original_leaves:1_000_000,max_total_edges:10_000_000,max_total_coordinates:1_000_000,max_root_memberships:1_000_000};
+            let old=source.parameter_cover_v1(&f.record,&f.layout,budget).unwrap();
+            let cover=PalwTirPublicSourceV1::root_input_cover_native_v1(&source,&f.record,&f.layout,budget).unwrap();
+            assert_eq!(cover.parameters_v1(),&old,"None legacy parameter walk retains its exact relation/counters");
+            let binding=&f.execution.binding;
+            let v=crate::palw_tir_step_v1::verify_tir_binding_v1(binding,1<<40).unwrap();
+            let state:u16=v.space.program.states.iter().position(|s|s.name=="boundary_scalar").unwrap().try_into().unwrap();
+            let(mut checkpoints,mut prior_writers)=(0,0);
+            for root in cover.roots_v1() {
+                let leaf=v.space.leaf_at(&binding.job_context,root.leaf).unwrap();
+                let K::Commit{occurrence,..}=leaf.kind else {continue};
+                let (_,layer)=v.space.occurrences()[usize::try_from(occurrence).unwrap()];
+                for dep in &root.inputs {
+                    let index=match *dep {I::FixedCheckpointStepLeaf(i)|I::CommittedStepLeaf(i)|I::CarryStepLeaf(i)=>i,_=>continue};
+                    let actual=v.space.leaf_at(&binding.job_context,index).unwrap();
+                    if matches!(dep,I::FixedCheckpointStepLeaf(_)) {
+                        if matches!(actual.kind,K::State{state:j,..} if j==state) {checkpoints+=1;}
+                    } else if leaf.position>0&&!leaf.position.is_multiple_of(f.layout.checkpoint_interval) {
+                        if let Some((writer_occ,writer_node))=state_writer_v1(&v.space.program,state,layer) {
+                            if committed {
+                                if matches!(actual.kind,K::Commit{occurrence:o,node:n,..} if o==u32::from(writer_occ)&&n==writer_node)
+                                    &&actual.position==leaf.position-1 {prior_writers+=1;}
+                            } else {
+                                let (prior,node)=carry_in_node_v1(&v.space.program,DemandContext{pos:leaf.position-1,occurrence:writer_occ},0).unwrap();
+                                if matches!(actual.kind,K::Commit{occurrence:o,node:n,..} if o==u32::from(prior.occurrence)&&n==node)
+                                    &&actual.position==prior.pos&&matches!(dep,I::CarryStepLeaf(_)) {prior_writers+=1;}
+                            }
+                        }
+                    }
+                    let q=super::super::PalwTirPublicRequestV1::StepLeaf{index};
+                    let r=super::super::PalwTirPublicResponseV1::StepLeaf{preimage:f.execution.step_leaf(index).unwrap(),opening:f.execution.step_opening(index).unwrap()};
+                    source.authenticate_v1(&q,&r,None).unwrap();
+                }
+            }
+            assert!(checkpoints>0,"actual numerical root must require new Fixed checkpoint body");
+            assert!(prior_writers>0,"actual noncheckpoint root must require its committed writer or replay carry body");
+        }
     }
 }

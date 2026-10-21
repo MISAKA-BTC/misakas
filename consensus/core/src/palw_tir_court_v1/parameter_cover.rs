@@ -60,6 +60,9 @@ pub enum RootInputBoundaryV1 {
     PromptPosition(u32),
     GeneratedId(u32),
     CarryStepLeaf(u64),
+    CommittedStepLeaf(u64),
+    FixedCheckpointStepLeaf(u64),
+    HistoryStepLeaf(u64),
 }
 
 /// One original's immutable native analysis, shared by every named root. This
@@ -269,11 +272,17 @@ impl Walk<'_, '_> {
     fn fetch(&mut self,r:Ref,i:usize)->Result<(),CoverErrorV1> {
         self.edge()?; if i>=count(&self.shape(r)?)? {return Err("cover operand index outside shape".into());}
         match r {
-            Ref::Node(j)=>{if !self.program.blocks[self.block].nodes[j as usize].commit {self.node(j,i)?;}},
+            Ref::Node(j)=>{
+                if !self.program.blocks[self.block].nodes[j as usize].commit {self.node(j,i)?;}
+                else if self.boundaries.is_some() {
+                    self.record_node(DemandContext{pos:self.pos,occurrence:self.occurrence},j,i,false)?;
+                }
+            },
             Ref::Param(j)=>{let p=&self.program.params[j as usize]; let byte=(i as u64).checked_mul(p.dtype.width() as u64).ok_or("cover param byte overflow")?;
                 let leaf=self.inventory.leaf_of(j,if p.per_layer {self.layer}else{None},byte).ok_or("cover parameter coordinate missing")?; if !self.leaves.contains(&leaf) && self.leaves.len() as u64>=self.leaf_limit {return Err(CoverErrorV1::Local("parameter cover leaf budget exhausted"));} self.leaves.insert(leaf);},
             Ref::State(j)=>{
-                if self.pos>0 && !self.pos.is_multiple_of(self.space.layout.checkpoint_interval) {
+                if self.boundaries.is_some() {self.record_fixed(j,i)?;}
+                else if self.pos>0 && !self.pos.is_multiple_of(self.space.layout.checkpoint_interval) {
                     let state=&self.program.states[j as usize];
                     let layer=if state.per_layer {self.layer}else{None};
                     if let Some((occ,writer))=state_writer_v1(self.program,j,layer) {
@@ -293,20 +302,7 @@ impl Walk<'_, '_> {
                     let ctx=misaka_palw_tir::demand::DemandContext{pos:self.pos,occurrence:self.occurrence};
                     let (prev,node)=misaka_palw_tir::demand::carry_in_node_v1(self.program,ctx,k)
                         .ok_or("cover carry-out missing")?;
-                    let block=occurrence_block(self.space,prev.occurrence).ok_or("cover carry occurrence missing")?;
-                    if !self.program.blocks[usize::from(block)].nodes[usize::from(node)].commit {
-                        return Err("cover carry-out is not committed".into());
-                    }
-                    let width=self.space.commit_tile_len(block,node).ok_or("cover carry tile absent")?;
-                    if width==0 {return Err("cover carry zero tile width".into());}
-                    let slot=self.space.node_slot(usize::from(prev.occurrence),node).ok_or("cover carry slot absent")?;
-                    let job=self.space.job_shape(self.context).map_err(|e|e.to_string())?;
-                    let (call_index,position)=job.call_position(prev.pos);
-                    let tile_index=u32::try_from((i as u64)/u64::from(width)).map_err(|_|"cover carry tile overflow")?;
-                    let coord=crate::palw_step::PalwStepCoordinateV1{call_index,node_slot:slot,position,tile_index};
-                    let leaf=self.space.leaf_index(self.context,&coord).ok_or("cover carry leaf absent")?;
-                    if leaf>=self.original_leaf {return Err("cover carry leaf does not precede original root".into());}
-                    self.boundaries.as_mut().unwrap().insert(RootInputBoundaryV1::CarryStepLeaf(leaf));
+                    self.record_node(prev,node,i,true)?;
                 }
             },
             Ref::Input(0)=>{
@@ -323,6 +319,76 @@ impl Walk<'_, '_> {
             // Input(1) is the position scalar; constants need no supplied bytes.
             Ref::Const(_)|Ref::Input(_)=>{},
         } Ok(())
+    }
+    fn record_coordinate(&mut self,coord:PalwStepCoordinateV1,kind:u8)->Result<(),CoverErrorV1> {
+        let leaf=self.space.leaf_index(self.context,&coord).ok_or("cover source coordinate has no original leaf")?;
+        if leaf>=self.original_leaf {return Err("cover source leaf does not precede original root".into());}
+        let item=match kind {
+            0=>RootInputBoundaryV1::CarryStepLeaf(leaf),
+            1=>RootInputBoundaryV1::CommittedStepLeaf(leaf),
+            2=>RootInputBoundaryV1::FixedCheckpointStepLeaf(leaf),
+            _=>RootInputBoundaryV1::HistoryStepLeaf(leaf),
+        };
+        self.boundaries.as_mut().ok_or("cover boundary sink missing")?.insert(item);
+        Ok(())
+    }
+    fn record_node(&mut self,ctx:DemandContext,node:u16,index:usize,carry:bool)->Result<(),CoverErrorV1> {
+        let block=occurrence_block(self.space,ctx.occurrence).ok_or("cover source occurrence missing")?;
+        if !self.program.blocks[usize::from(block)].nodes.get(usize::from(node)).ok_or("cover source node absent")?.commit {
+            return Err("cover source node is not committed".into());
+        }
+        let width=self.space.commit_tile_len(block,node).ok_or("cover source tile absent")?;
+        if width==0 {return Err("cover source zero tile width".into());}
+        let job=self.space.job_shape(self.context).map_err(|e|e.to_string())?;
+        let coord=source_geometry::commit(self.space,job,ctx,node,index as u64/u64::from(width)).map_err(|e|e.to_string())?;
+        self.record_coordinate(coord,if carry {0}else{1})
+    }
+    fn record_fixed(&mut self,state:u16,index:usize)->Result<(),CoverErrorV1> {
+        let decl=self.program.states.get(usize::from(state)).ok_or("cover source state absent")?;
+        if !matches!(decl.kind,misaka_palw_tir::program::StateKind::Fixed{..}) {
+            return Err("cover State ref is not Fixed".into());
+        }
+        let layer=if decl.per_layer {self.layer}else{None};
+        let job=self.space.job_shape(self.context).map_err(|e|e.to_string())?;
+        let supply=source_geometry::fixed(self.space,job,self.pos,state,layer,index).map_err(|e|e.to_string())?;
+        match supply {
+            source_geometry::SupplyGeometryV1::Zero=>Ok(()),
+            source_geometry::SupplyGeometryV1::Step{coord,..}=>self.record_coordinate(coord,2),
+            source_geometry::SupplyGeometryV1::Replay=>{
+                if let Some((occ,writer))=state_writer_v1(self.program,state,layer) {
+                    let old=(self.pos,self.occurrence);
+                    let prior=self.pos.checked_sub(1).ok_or("cover replay precedes zero")?;
+                    let block=occurrence_block(self.space,occ).ok_or("cover writer occurrence absent")?;
+                    if self.program.blocks[usize::from(block)].nodes[usize::from(writer)].commit {
+                        self.record_node(DemandContext{pos:prior,occurrence:occ},writer,index,false)
+                    } else {
+                        self.set_context(prior,occ)?;self.node(writer,index)?;
+                        self.set_context(old.0,old.1)
+                    }
+                } else {
+                    // No writer anywhere for this actual instance. Native demand
+                    // keeps walking back until its next source.state boundary;
+                    // derive exactly that boundary directly, not an assumed value.
+                    let at=self.pos-self.pos%self.space.layout.checkpoint_interval;
+                    match source_geometry::fixed(self.space,job,at,state,layer,index).map_err(|e|e.to_string())? {
+                        source_geometry::SupplyGeometryV1::Zero=>Ok(()),
+                        source_geometry::SupplyGeometryV1::Step{coord,..}=>self.record_coordinate(coord,2),
+                        _=>Err("cover unwritten state boundary unresolved".into()),
+                    }
+                }
+            },
+            _=>Err("cover Fixed source geometry".into()),
+        }
+    }
+    fn record_history(&mut self,state:u16,row_pos:u32,index:usize)->Result<(),CoverErrorV1> {
+        let decl=self.program.states.get(usize::from(state)).ok_or("cover history state absent")?;
+        let layer=if decl.per_layer {self.layer}else{None};
+        let job=self.space.job_shape(self.context).map_err(|e|e.to_string())?;
+        match source_geometry::history(self.space,job,self.pos,state,layer,row_pos,index).map_err(|e|e.to_string())? {
+            source_geometry::SupplyGeometryV1::Step{coord,..}=>self.record_coordinate(coord,3),
+            source_geometry::SupplyGeometryV1::Node{ctx,node,index}=>self.record_node(ctx,node,index,false),
+            _=>Err("cover history source geometry".into()),
+        }
     }
     fn set_context(&mut self,pos:u32,occ:u16)->Result<(),CoverErrorV1> {
         let (block,layer)=*self.space.occurrences().get(usize::from(occ)).ok_or("cover replay occurrence missing")?;
@@ -352,7 +418,13 @@ impl Walk<'_, '_> {
                     let(m,k,nn)=(x[xr-2],x[xr-1],y[yr-1]);for t in 0..k {self.fetch(inputs[0],xb*m*k+c[cr-2]*k+t)?;self.fetch(inputs[1],yb*k*nn+t*nn+c[cr-1])?;}},
                 Prim::ReduceSum{axis}|Prim::ReduceMax{axis}|Prim::TopK{axis,..}=>{let s=self.shape(inputs[0])?;for t in 0..s[axis as usize] {let mut q=c.clone();q[axis as usize]=t;self.fetch(inputs[0],index(&q,&s)?)?;}},
                 Prim::HistAppend{state}=>{let row=count(&self.program.states[state as usize].shape.iter().map(|d|*d as usize).collect::<Vec<_>>())?;
-                    if i/row+1==self.h {self.fetch(inputs[0],i%row)?;}},
+                    if i/row+1==self.h {self.fetch(inputs[0],i%row)?;}
+                    else if self.boundaries.is_some() {
+                        // Actual native Demand HistAppend selects this absolute row.
+                        let row_pos=(self.pos as usize).checked_add(1).and_then(|v|v.checked_sub(self.h))
+                            .and_then(|v|v.checked_add(i/row)).ok_or("cover history row position overflow")?;
+                        self.record_history(state,u32::try_from(row_pos).map_err(|_|"cover history row exceeds u32")?,i%row)?;
+                    }},
             }
         } Ok(())
     }

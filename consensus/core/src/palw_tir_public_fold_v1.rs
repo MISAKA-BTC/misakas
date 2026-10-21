@@ -2957,6 +2957,38 @@ mod conviction_e2e_tests {
 
         use crate::palw_court_shared_tir_round_v1 as rounds;
         use crate::palw_court_shared_tir_bottom_v1 as bottoms;
+        // Canonical potential requirements, derived before the path loop; not the
+        // oracle-observed one-execution read subset below. Fixture bytes are
+        // actual artifact openings decoded through retained native context.
+        let parameter_source=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(
+            &fx.record,&fx.layout,frame.header_v1(),frame.original_v1().execution_root,
+            frame.original_v1().trace_root,fx.rules.maximum_leaves).unwrap();
+        let parameter_cover=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::root_input_cover_native_v1(
+            &parameter_source,&fx.record,&fx.layout,
+            crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
+                max_original_leaves:1_000_000,max_total_edges:10_000_000,
+                max_total_coordinates:1_000_000,max_root_memberships:1_000_000}).unwrap();
+        let covered_root=parameter_cover.parameters_v1().roots.iter().find(|r|r.leaf==leaf).unwrap();
+        assert!(!covered_root.parameters.is_empty(),"actual root must require parameters");
+        let mut owner_requests=crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        owner_requests.vec_v1::<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_artifact::PalwArtifactOpeningV1>>(
+            covered_root.parameters.len() as u64).unwrap();
+        let _owner_array=crate::palw_native_resource_v1::reserve_native_requests_v1(owner_requests.bytes_v1()).unwrap();
+        let mut covered_parameters=Vec::new();
+        covered_parameters.try_reserve_exact(covered_root.parameters.len()).unwrap();
+        for required in &covered_root.parameters {
+            use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+            // Original fixture opening allocation is test provisioning; it is not
+            // a production acquisition/retention result. Serializer scratch is
+            // separately pre-reserved before building the carrier byte Vec.
+            let opening=fx.execution.param_opening(*required).unwrap();
+            let encoded=borsh::object_length(&opening).unwrap() as u64;
+            let raw_requests=encoded.max(1024).checked_mul(2).unwrap();
+            let _raw_owner=crate::palw_native_resource_v1::reserve_native_requests_v1(raw_requests).unwrap();
+            let wire=borsh::to_vec(&opening).unwrap();
+            let context=shared::context(&fresh,claim).unwrap();
+            covered_parameters.push(context.decode_parameter_opening(&fresh,context.scope_id,*required,&wire).unwrap());
+        }
         // Authenticated source material only; the builder view never sees fx.execution.
         let material_units: Vec<_> = (0..binding.step_leaf_count).map(|index| {
             use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
@@ -3035,6 +3067,22 @@ mod conviction_e2e_tests {
                             .checked_add(court.limits.max_terms).unwrap().checked_mul(8).unwrap().checked_add(65_536).unwrap()};
                     let before_intent=round_state.state_root();
                     let (built,meter)=store.build_terminal(&round_state,&params,&intent_rules,&intent,limit).unwrap();
+                    let covered_store=MaterialStore::new_with_retained_parameters(&round_state,claim,scope,
+                        &material_units,&covered_parameters,None,
+                        crate::palw_court_shared_tir_builder_store_v1::PromptMaterialV1::Missing).unwrap();
+                    let (covered,covered_meter)=covered_store.build_terminal_with_parameter_cover(
+                        &round_state,&params,&intent_rules,&intent,limit,&parameter_cover).unwrap();
+                    assert_eq!(borsh::to_vec(&covered).unwrap(),borsh::to_vec(&built).unwrap());
+                    assert_eq!(covered_meter,meter);
+                    let missing_store=MaterialStore::new_with_retained_parameters(&round_state,claim,scope,
+                        &material_units,&covered_parameters[1..],None,
+                        crate::palw_court_shared_tir_builder_store_v1::PromptMaterialV1::Missing).unwrap();
+                    // Correctly authenticated remaining inputs are not enough:
+                    // missing canonical requirement is caught before finalize.
+                    let refused=missing_store.build_terminal_with_parameter_cover(
+                        &round_state,&params,&intent_rules,&intent,limit,&parameter_cover).unwrap_err();
+                    assert!(refused.contains("lacks authenticated parameter leaf"),"{refused}");
+
                     let mut expected=replay.clone();
                     crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut expected.binding);
                     assert_eq!(borsh::to_vec(&built).unwrap(),borsh::to_vec(&expected).unwrap());

@@ -54,6 +54,7 @@
 //! implementation): see [`check_tir_cone_refutation_v1`].
 
 pub mod parameter_cover;
+mod source_geometry;
 
 use std::{
     cell::Cell,
@@ -779,15 +780,7 @@ impl TirSource<'_, '_> {
         if let Some(i) = self.leaf_cache.get(&(ctx, node, tile)) {
             return Ok(*i);
         }
-        let Some(block) = occurrence_block(self.space, ctx.occurrence) else {
-            return tir_err(TirErrorKind::Malformed, "no such occurrence");
-        };
-        let slot = self.space.node_slot(ctx.occurrence as usize, node);
-        let (Some(slot), Some(_)) = (slot, self.space.commit_tile_len(block, node)) else {
-            return tir_err(TirErrorKind::Malformed, format!("node {node} of block {block} is not a commit point"));
-        };
-        let (call_index, position) = self.job.call_position(ctx.pos);
-        let coord = PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: tile as u32 };
+        let coord=source_geometry::commit(self.space,self.job,ctx,node,tile)?;
         let Some(index) = self.space.leaf_index(self.ctx, &coord) else {
             return tir_err(TirErrorKind::Malformed, format!("{coord:?} is no leaf of this job"));
         };
@@ -796,8 +789,7 @@ impl TirSource<'_, '_> {
     }
 
     fn reserved_coord(&self, pos: u32, reserved: u32, tile: u64) -> PalwStepCoordinateV1 {
-        let (call_index, position) = self.job.call_position(pos);
-        PalwStepCoordinateV1 { call_index, node_slot: self.space.program_slots() + reserved, position, tile_index: tile as u32 }
+        source_geometry::reserved(self.space,self.job,pos,reserved,tile)
     }
 }
 
@@ -848,42 +840,20 @@ impl DemandSource for TirSource<'_, '_> {
 
     fn state(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> TirResult<StateSupply> {
         self.source_read()?;
-        if pos == 0 {
-            return Ok(StateSupply::Value(0));
+        match source_geometry::fixed(self.space,self.job,pos,state,layer,index)? {
+            source_geometry::SupplyGeometryV1::Zero=>Ok(StateSupply::Value(0)),
+            source_geometry::SupplyGeometryV1::Replay=>Ok(StateSupply::Replay),
+            source_geometry::SupplyGeometryV1::Step{coord,dtype,lane}=>self.step_lane(coord,dtype,lane).map(StateSupply::Value),
+            source_geometry::SupplyGeometryV1::Node{..}=>unreachable!(),
         }
-        if !pos.is_multiple_of(self.space.layout.checkpoint_interval) {
-            return Ok(StateSupply::Replay);
-        }
-        let Some(k) = self.space.fixed_instance_index(state, layer) else {
-            return tir_err(TirErrorKind::Malformed, format!("state {state} layer {layer:?} has no checkpoint"));
-        };
-        let inst = self.space.fixed_instances()[k];
-        let tile = index as u64 / inst.tile_lanes as u64;
-        let coord = self.reserved_coord(pos - 1, k as u32, tile);
-        self.step_lane(coord, inst.dtype, index % inst.tile_lanes as usize).map(StateSupply::Value)
     }
 
-    fn hist_row(&mut self, pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> TirResult<i128> {
+    fn hist_row(&mut self,pos:u32,state:u16,layer:Option<u16>,row_pos:u32,index:usize)->TirResult<i128> {
         self.source_read()?;
-        let h_tile = self.space.layout.h_tile;
-        let tile_start = row_pos - row_pos % h_tile;
-        let tile_end = tile_start + (h_tile - 1);
-        if tile_end < pos {
-            let Some(k) = self.space.hist_instance_index(state, layer) else {
-                return tir_err(TirErrorKind::Malformed, format!("history {state} layer {layer:?} has no tiles"));
-            };
-            let inst = self.space.hist_instances()[k];
-            let sub = index as u64 / inst.tile_lanes as u64;
-            let first_lane = sub * inst.tile_lanes as u64;
-            let row_lanes = (inst.elements - first_lane).min(inst.tile_lanes as u64);
-            let coord = self.reserved_coord(tile_end, (self.space.fixed_instances().len() + k) as u32, sub);
-            let lane_index = (row_pos - tile_start) as u64 * row_lanes + (index as u64 - first_lane);
-            self.step_lane(coord, inst.dtype, lane_index as usize)
-        } else {
-            let Some((ctx, node)) = hist_row_node_v1(&self.space.program, state, layer, row_pos) else {
-                return tir_err(TirErrorKind::Malformed, format!("history {state} layer {layer:?} appends nothing"));
-            };
-            self.node(ctx, node, index)
+        match source_geometry::history(self.space,self.job,pos,state,layer,row_pos,index)? {
+            source_geometry::SupplyGeometryV1::Step{coord,dtype,lane}=>self.step_lane(coord,dtype,lane),
+            source_geometry::SupplyGeometryV1::Node{ctx,node,index}=>self.node(ctx,node,index),
+            _=>unreachable!(),
         }
     }
 
