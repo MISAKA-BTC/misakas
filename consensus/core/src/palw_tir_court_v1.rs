@@ -3842,6 +3842,14 @@ pub(crate) mod test_support {
         select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
         vocab: usize,
     ) -> TinyExecution {
+        tiny_execution_selecting_in_vocab_with_tokenizer(ctx_of,forge,select,vocab,Hash64::from_bytes([3;64]))
+    }
+    /// Test-only real program/class whose tokenizer is bound to actual raw material.
+    pub(crate) fn tiny_execution_selecting_in_vocab_with_tokenizer(
+        ctx_of:impl FnOnce(&PalwTirClassV1,Hash64,&[u32])->PalwJobContextV2,
+        forge:Option<(usize,usize)>,select:&dyn Fn(u32,&[i32],&[u32])->u32,
+        vocab:usize,tokenizer_id:Hash64,
+    )->TinyExecution {
         let (program, params) = program_and_params_with_vocab(vocab);
         let bytes = program.encode();
         let class = PalwTirClassV1 {
@@ -3855,7 +3863,7 @@ pub(crate) mod test_support {
                 commit_tiles: vec![4, 4, 4096],
                 state_tiles: vec![4],
             },
-            tokenizer_id: Hash64::from_bytes([3; 64]),
+            tokenizer_id,
         };
         let ops = palw_tir_inventory_operands_v1(&program, &Src(&params)).expect("inventory");
         let artifact_root = artifact_root_v1(&ops.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).expect("root");

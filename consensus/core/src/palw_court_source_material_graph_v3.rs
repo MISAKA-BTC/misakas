@@ -19,6 +19,29 @@ pub struct SourceGraphBudgetV3 {
     pub max_vertices: u64,
     pub max_edges: u64,
 }
+/// Checked metadata bound for local graph expansion only. This is neither a
+/// native heap lease nor a cost/profile/admission capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SourceGraphExtentV3 { vertices: u64, edges: u64 }
+fn graph_extent_from_transport_v3(
+    t: crate::palw_court_tir_requests_v1::TirSharedDataTransportUpperV1,
+    full_ids: bool,
+) -> Result<SourceGraphExtentV3, String> {
+    let overflow = || "source graph metadata extent overflow".to_string();
+    let stream_controls = t.streams.checked_mul(2).and_then(|n| n.checked_add(t.parts)).ok_or_else(overflow)?;
+    let responses = t.queries.checked_mul(t.maximum_custodians).ok_or_else(overflow)?;
+    if t.fresh_responses != responses { return Err("source graph metadata response mismatch".into()); }
+    let vertices = t.queries.checked_add(responses).and_then(|n| n.checked_add(stream_controls)).ok_or_else(overflow)?;
+    if vertices != t.signed_controls { return Err("source graph metadata control mismatch".into()); }
+    // Every unit-stream Begin has its query parent. FullIds Begin has none.
+    // Each response depends on ALL R finishes and its own query, not just the
+    // response signer's Finish: the exact R-squared OR-frontier edge bound.
+    let no_query_begins = if full_ids { t.maximum_custodians } else { 0 };
+    let stream_edges = stream_controls.checked_sub(no_query_begins).ok_or_else(overflow)?;
+    let edges = responses.checked_mul(t.maximum_custodians.checked_add(1).ok_or_else(overflow)?)
+        .and_then(|n| n.checked_add(stream_edges)).ok_or_else(overflow)?;
+    Ok(SourceGraphExtentV3 { vertices, edges })
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceGraphCoverageV3 {
     SourceMaterialOnly,
@@ -106,8 +129,11 @@ impl NativeSourceMaterialGraphV3 {
         // Independent native upper covers every distinct signed DATA control.
         // It cheaply rejects huge geometry before enumerating/allocating nodes.
         let upper = set.signed_data_transport_upper()?;
-        if upper.signed_controls > budget.max_vertices {
-            return Err("source graph vertex budget exhausted".into());
+        let extent = graph_extent_from_transport_v3(upper, set.has_full_ids_stream_v3())?;
+        // Reject BEFORE allocating nodes/query maps/role predecessor Vecs.
+        // Existing caller local budgets remain unchanged; not native RAM leases.
+        if extent.vertices > budget.max_vertices || extent.edges > budget.max_edges {
+            return Err("source graph metadata vertex/edge budget exhausted before expansion".into());
         }
         let relative_scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
             b"misaka-palw/source-material-scope/v3",
@@ -168,6 +194,9 @@ impl NativeSourceMaterialGraphV3 {
         }
         if out.nodes.len() as u64 > upper.signed_controls {
             return Err("source graph exceeds native transport upper".into());
+        }
+        if out.nodes.len() as u64 > extent.vertices || out.edges > extent.edges {
+            return Err("source graph exceeded checked metadata extent".into());
         }
         out.check_v3()?;
         Ok(out)
@@ -423,6 +452,35 @@ mod tests {
     }
     fn graph(f: &crate::palw_tir_public_claim_v1::PalwTirPublicFrameFixtureV1) -> NativeSourceMaterialGraphV3 {
         NativeSourceMaterialGraphV3::derive_v3(&f.frame, &source(f), Hash64::from_u64_word(71), B).unwrap()
+    }
+    #[test]
+    fn grouped_graph_extent_rejects_local_budget_before_expansion() {
+        for f in [fixture(), crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1()] {
+            let source = source(&f);
+            let set = TirSharedRequestSetV1::new(&f.frame, &source, Hash64::from_u64_word(71)).unwrap();
+            let extent = graph_extent_from_transport_v3(set.signed_data_transport_upper().unwrap(),set.has_full_ids_stream_v3()).unwrap();
+            let exact_budget = SourceGraphBudgetV3 { max_vertices:extent.vertices,max_edges:extent.edges,..B };
+            let g = NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,Hash64::from_u64_word(71),exact_budget).unwrap();
+            assert!(g.nodes.len() as u64 <= extent.vertices && g.edges <= extent.edges);
+            assert!(extent.vertices > 0 && extent.edges > 0);
+            for small in [SourceGraphBudgetV3 {max_vertices:extent.vertices-1,..exact_budget},
+                          SourceGraphBudgetV3 {max_edges:extent.edges-1,..exact_budget}] {
+                let error=NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,Hash64::from_u64_word(71),small).unwrap_err();
+                assert_eq!(error,"source graph metadata vertex/edge budget exhausted before expansion");
+            }
+        }
+    }
+    #[test]
+    fn grouped_graph_extent_counts_all_role_or_edges_and_checks_overflow() {
+        use crate::palw_court_tir_requests_v1::TirSharedDataTransportUpperV1 as T;
+        // Arithmetic-only unit fixture, not an authenticated original/profile.
+        // Q=2, R=3, one shared FullIds stream per role: V=2+6+9.
+        let t=T {queries:2,maximum_custodians:3,streams:3,parts:3,fresh_responses:6,signed_controls:17,..Default::default()};
+        assert_eq!(graph_extent_from_transport_v3(t,true).unwrap(),SourceGraphExtentV3 {vertices:17,edges:30});
+        assert_eq!(graph_extent_from_transport_v3(t,false).unwrap().edges,33);
+        assert!(graph_extent_from_transport_v3(T {maximum_custodians:u64::MAX,..t},true).is_err());
+        assert!(graph_extent_from_transport_v3(T {streams:u64::MAX,..t},true).is_err());
+        assert!(graph_extent_from_transport_v3(T {fresh_responses:5,..t},true).is_err());
     }
     #[test]
     fn native_source_universe_and_all_role_streams_are_closed_without_owner_slots() {

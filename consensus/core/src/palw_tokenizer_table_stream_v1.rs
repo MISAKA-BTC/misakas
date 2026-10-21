@@ -367,6 +367,9 @@ impl PalwTokenizerTableStreamV1 {
     }
 }
 
+#[path = "palw_tokenizer_canonical_replay_v1.rs"]
+pub(crate) mod canonical_replay;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,6 +668,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn private_tokenizer_canonical_builder_consumes_real_ordered_proofs_and_authenticates_operands() {
+        use super::canonical_replay::{self as replay, Budget, Material, Refusal};
+        let budget=Budget {max_material_bytes:1<<25,max_proofs:1000,max_native_calls:100_000,max_packets:10_000};
+        let mut vocab=serde_json::Map::new();
+        vocab.insert("A".into(),serde_json::json!(0));
+        for id in 1..100u32 {vocab.insert(format!("B{}{:04}","a".repeat(1024),id),serde_json::json!(id));}
+        let raw=serde_json::to_vec(&serde_json::json!({"model":{"vocab":vocab,"merges":[]},"added_tokens":[]})).unwrap();
+        let base=replay_fixture(&raw,b"A");
+        let saved=borsh::to_vec(&base).unwrap();
+        let atoms=replay_atoms(&base,&raw,false).unwrap();
+        let proofs:Vec<_>=atoms.iter().flat_map(|p|p.proofs.clone()).collect();
+        assert!(proofs.len()>64 && raw.len()>65536);
+        let input=Material {raw:&raw,proofs:&proofs,rendering:Some(b"A")};
+        let got=replay::build(&base,input,budget).unwrap();
+        let direct=run_replay(&base,&atoms,b"A",false).unwrap();
+        assert_eq!(got.violation(),direct.0);
+        assert!(!got.violation());
+        assert_eq!(got.key_events(),direct.2);
+        assert_eq!(got.key_root(),direct.3.key_set_root());
+        assert!(got.work().packets>=2);
+        assert_eq!(got.work().proofs,proofs.len() as u64);
+        assert_eq!(borsh::to_vec(&base).unwrap(),saved);
+        let missing=Material {proofs:&proofs[..proofs.len()-1],..input};
+        assert!(matches!(replay::build(&base,missing,budget),Err(Refusal::NeedProof {..})));
+        let mut extra=proofs.clone();extra.push(proofs[0].clone());
+        assert!(matches!(replay::build(&base,Material {proofs:&extra,..input},budget),Err(Refusal::ExtraProof {..})));
+        let mut foreign=proofs.clone();foreign[0].namespace^=1;
+        assert!(matches!(replay::build(&base,Material {proofs:&foreign,..input},budget),Err(Refusal::Native(_))));
+        let mut badraw=raw.clone();let at=badraw.iter().position(|b|*b==b'A').unwrap();badraw[at]=b'X';
+        assert!(replay::build(&base,Material {raw:&badraw,..input},budget).is_err());
+        assert!(matches!(replay::build(&base,Material {raw:&raw[..raw.len()-1],..input},budget),Err(Refusal::OperandLength)));
+        assert!(matches!(replay::build(&base,Material {rendering:None,..input},budget),Err(Refusal::RenderingOperand)));
+        assert!(matches!(replay::build(&base,input,Budget {max_packets:got.work().packets-1,..budget}),Err(Refusal::Budget)));
+        assert_eq!(borsh::to_vec(&base).unwrap(),saved);
     }
 
 }

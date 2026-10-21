@@ -1581,6 +1581,7 @@ mod tests {
 #[cfg(test)]
 mod conviction_e2e_tests {
     include!("palw_court_shared_constraint_native_tests.rs");
+    include!("palw_court_shared_tokenizer_native_tests.rs");
     use super::*;
     use crate::palw_tir_public_carriage_v1::{
         PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T, PalwTirPublicControlV1 as Control,

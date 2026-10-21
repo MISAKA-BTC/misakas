@@ -254,6 +254,7 @@ impl<'a> TirSharedRequestSetV1<'a> {
         }
         Ok(result)
     }
+    pub(crate) fn has_full_ids_stream_v3(&self) -> bool { self.geometry.families[6] != 0 }
     pub fn len(&self) -> u64 { self.geometry.total }
     pub fn is_empty(&self) -> bool { self.len() == 0 }
     pub fn request_at(&self, ordinal: u64) -> Result<Request, String> {

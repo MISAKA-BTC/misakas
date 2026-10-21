@@ -1,0 +1,355 @@
+diff --git a/consensus/core/src/mldsa87_primitives.rs b/consensus/core/src/mldsa87_primitives.rs
+index 07c2d168b..8a387d8a1 100644
+--- a/consensus/core/src/mldsa87_primitives.rs
++++ b/consensus/core/src/mldsa87_primitives.rs
+@@ -6,7 +6,9 @@
+ //! the overlay, only on these four definitions, so they live here and the overlay re-exports them
+ //! under its old names. Every value is byte-identical to what it was: the lengths
+ //! are FIPS 204's, the script is ADR-0019 §8's, and the key id is the unkeyed BLAKE2b-512 of the
+-//! key — genesis premine outputs, bond payouts and registry ids all hash through them.
++//! key. This legacy key identity is distinct from the domain-separated native P2PKH
++//! address payload; derive the latter with `kaspa_hashes::blake2b_512_address_payload`
++//! when constructing a payer-address output. Do not substitute the key id for an address.
+ 
+ use crate::Hash64;
+ use crate::tx::{ScriptPublicKey, ScriptVec};
+@@ -65,7 +67,8 @@ pub fn p2pkh_mldsa87_payload(spk: &ScriptPublicKey) -> Option<Hash64> {
+ }
+ 
+ /// **A key's 64-byte id**: the unkeyed BLAKE2b-512 of the verification key. Unkeyed because the
+-/// input is a fixed-length key, not a multi-field structure.
++/// input is a fixed-length key, not a multi-field structure. This is NOT the native
++/// P2PKH address payload; that uses `kaspa_hashes::blake2b_512_address_payload`.
+ pub fn mldsa87_key_id(pubkey: &[u8]) -> Hash64 {
+     let mut out = [0u8; 64];
+     out.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(pubkey).finalize().as_bytes());
+diff --git a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+index 14586bfa1..b262655b4 100644
+--- a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
++++ b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+@@ -258,3 +258,6 @@ mod prompt_material_tests {
+ 
+ #[path = "palw_court_shared_constraint_builder_v1.rs"]
+ pub(crate) mod constraint_terminal;
++
++#[path = "palw_court_shared_tokenizer_builder_v1.rs"]
++pub(crate) mod tokenizer_terminal;
+diff --git a/consensus/core/src/palw_court_source_material_graph_v3.rs b/consensus/core/src/palw_court_source_material_graph_v3.rs
+index c95b9bd82..404d2c528 100644
+--- a/consensus/core/src/palw_court_source_material_graph_v3.rs
++++ b/consensus/core/src/palw_court_source_material_graph_v3.rs
+@@ -19,6 +19,29 @@ pub struct SourceGraphBudgetV3 {
+     pub max_vertices: u64,
+     pub max_edges: u64,
+ }
++/// Checked metadata bound for local graph expansion only. This is neither a
++/// native heap lease nor a cost/profile/admission capability.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++struct SourceGraphExtentV3 { vertices: u64, edges: u64 }
++fn graph_extent_from_transport_v3(
++    t: crate::palw_court_tir_requests_v1::TirSharedDataTransportUpperV1,
++    full_ids: bool,
++) -> Result<SourceGraphExtentV3, String> {
++    let overflow = || "source graph metadata extent overflow".to_string();
++    let stream_controls = t.streams.checked_mul(2).and_then(|n| n.checked_add(t.parts)).ok_or_else(overflow)?;
++    let responses = t.queries.checked_mul(t.maximum_custodians).ok_or_else(overflow)?;
++    if t.fresh_responses != responses { return Err("source graph metadata response mismatch".into()); }
++    let vertices = t.queries.checked_add(responses).and_then(|n| n.checked_add(stream_controls)).ok_or_else(overflow)?;
++    if vertices != t.signed_controls { return Err("source graph metadata control mismatch".into()); }
++    // Every unit-stream Begin has its query parent. FullIds Begin has none.
++    // Each response depends on ALL R finishes and its own query, not just the
++    // response signer's Finish: the exact R-squared OR-frontier edge bound.
++    let no_query_begins = if full_ids { t.maximum_custodians } else { 0 };
++    let stream_edges = stream_controls.checked_sub(no_query_begins).ok_or_else(overflow)?;
++    let edges = responses.checked_mul(t.maximum_custodians.checked_add(1).ok_or_else(overflow)?)
++        .and_then(|n| n.checked_add(stream_edges)).ok_or_else(overflow)?;
++    Ok(SourceGraphExtentV3 { vertices, edges })
++}
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum SourceGraphCoverageV3 {
+     SourceMaterialOnly,
+@@ -106,8 +129,11 @@ impl NativeSourceMaterialGraphV3 {
+         // Independent native upper covers every distinct signed DATA control.
+         // It cheaply rejects huge geometry before enumerating/allocating nodes.
+         let upper = set.signed_data_transport_upper()?;
+-        if upper.signed_controls > budget.max_vertices {
+-            return Err("source graph vertex budget exhausted".into());
++        let extent = graph_extent_from_transport_v3(upper, set.has_full_ids_stream_v3())?;
++        // Reject BEFORE allocating nodes/query maps/role predecessor Vecs.
++        // Existing caller local budgets remain unchanged; not native RAM leases.
++        if extent.vertices > budget.max_vertices || extent.edges > budget.max_edges {
++            return Err("source graph metadata vertex/edge budget exhausted before expansion".into());
+         }
+         let relative_scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
+             b"misaka-palw/source-material-scope/v3",
+@@ -169,6 +195,9 @@ impl NativeSourceMaterialGraphV3 {
+         if out.nodes.len() as u64 > upper.signed_controls {
+             return Err("source graph exceeds native transport upper".into());
+         }
++        if out.nodes.len() as u64 > extent.vertices || out.edges > extent.edges {
++            return Err("source graph exceeded checked metadata extent".into());
++        }
+         out.check_v3()?;
+         Ok(out)
+     }
+@@ -425,6 +454,35 @@ mod tests {
+         NativeSourceMaterialGraphV3::derive_v3(&f.frame, &source(f), Hash64::from_u64_word(71), B).unwrap()
+     }
+     #[test]
++    fn grouped_graph_extent_rejects_local_budget_before_expansion() {
++        for f in [fixture(), crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1()] {
++            let source = source(&f);
++            let set = TirSharedRequestSetV1::new(&f.frame, &source, Hash64::from_u64_word(71)).unwrap();
++            let extent = graph_extent_from_transport_v3(set.signed_data_transport_upper().unwrap(),set.has_full_ids_stream_v3()).unwrap();
++            let exact_budget = SourceGraphBudgetV3 { max_vertices:extent.vertices,max_edges:extent.edges,..B };
++            let g = NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,Hash64::from_u64_word(71),exact_budget).unwrap();
++            assert!(g.nodes.len() as u64 <= extent.vertices && g.edges <= extent.edges);
++            assert!(extent.vertices > 0 && extent.edges > 0);
++            for small in [SourceGraphBudgetV3 {max_vertices:extent.vertices-1,..exact_budget},
++                          SourceGraphBudgetV3 {max_edges:extent.edges-1,..exact_budget}] {
++                let error=NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,Hash64::from_u64_word(71),small).unwrap_err();
++                assert_eq!(error,"source graph metadata vertex/edge budget exhausted before expansion");
++            }
++        }
++    }
++    #[test]
++    fn grouped_graph_extent_counts_all_role_or_edges_and_checks_overflow() {
++        use crate::palw_court_tir_requests_v1::TirSharedDataTransportUpperV1 as T;
++        // Arithmetic-only unit fixture, not an authenticated original/profile.
++        // Q=2, R=3, one shared FullIds stream per role: V=2+6+9.
++        let t=T {queries:2,maximum_custodians:3,streams:3,parts:3,fresh_responses:6,signed_controls:17,..Default::default()};
++        assert_eq!(graph_extent_from_transport_v3(t,true).unwrap(),SourceGraphExtentV3 {vertices:17,edges:30});
++        assert_eq!(graph_extent_from_transport_v3(t,false).unwrap().edges,33);
++        assert!(graph_extent_from_transport_v3(T {maximum_custodians:u64::MAX,..t},true).is_err());
++        assert!(graph_extent_from_transport_v3(T {streams:u64::MAX,..t},true).is_err());
++        assert!(graph_extent_from_transport_v3(T {fresh_responses:5,..t},true).is_err());
++    }
++    #[test]
+     fn native_source_universe_and_all_role_streams_are_closed_without_owner_slots() {
+         let f = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1();
+         let source = source(&f);
+diff --git a/consensus/core/src/palw_court_tir_requests_v1.rs b/consensus/core/src/palw_court_tir_requests_v1.rs
+index 648ed19f6..72e45e6d4 100644
+--- a/consensus/core/src/palw_court_tir_requests_v1.rs
++++ b/consensus/core/src/palw_court_tir_requests_v1.rs
+@@ -254,6 +254,7 @@ impl<'a> TirSharedRequestSetV1<'a> {
+         }
+         Ok(result)
+     }
++    pub(crate) fn has_full_ids_stream_v3(&self) -> bool { self.geometry.families[6] != 0 }
+     pub fn len(&self) -> u64 { self.geometry.total }
+     pub fn is_empty(&self) -> bool { self.len() == 0 }
+     pub fn request_at(&self, ordinal: u64) -> Result<Request, String> {
+diff --git a/consensus/core/src/palw_funded_original_native_fixture_tests.rs b/consensus/core/src/palw_funded_original_native_fixture_tests.rs
+index aa2430433..9b4ce85af 100644
+--- a/consensus/core/src/palw_funded_original_native_fixture_tests.rs
++++ b/consensus/core/src/palw_funded_original_native_fixture_tests.rs
+@@ -77,4 +77,3 @@
+             std::fs::write(dir.join("PROVENANCE.txt"), "Generated by g14_native_funded_candidate_fixture_generator_v1 from existing tiny original fixture. Public test MLDSA seed: 0x6d repeated 32. Fresh unclaimed registered state; tiny execution regenerated through palw_tir_public_frame_fixture_ruled_v1 in the real key-bearing FP job context (key changes job_id); current producer key/operator/payout replaced; original FP and source pledge re-signed; exact production prepare_original_v1 succeeded; no funded escrow installed. Parent records exact source/bytes SHA256 externally.\n").unwrap();
+         }
+     }
+-
+diff --git a/consensus/core/src/palw_tir_court_v1.rs b/consensus/core/src/palw_tir_court_v1.rs
+index 3dc57d029..63e3e46dd 100644
+--- a/consensus/core/src/palw_tir_court_v1.rs
++++ b/consensus/core/src/palw_tir_court_v1.rs
+@@ -3842,6 +3842,14 @@ pub(crate) mod test_support {
+         select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
+         vocab: usize,
+     ) -> TinyExecution {
++        tiny_execution_selecting_in_vocab_with_tokenizer(ctx_of,forge,select,vocab,Hash64::from_bytes([3;64]))
++    }
++    /// Test-only real program/class whose tokenizer is bound to actual raw material.
++    pub(crate) fn tiny_execution_selecting_in_vocab_with_tokenizer(
++        ctx_of:impl FnOnce(&PalwTirClassV1,Hash64,&[u32])->PalwJobContextV2,
++        forge:Option<(usize,usize)>,select:&dyn Fn(u32,&[i32],&[u32])->u32,
++        vocab:usize,tokenizer_id:Hash64,
++    )->TinyExecution {
+         let (program, params) = program_and_params_with_vocab(vocab);
+         let bytes = program.encode();
+         let class = PalwTirClassV1 {
+@@ -3855,7 +3863,7 @@ pub(crate) mod test_support {
+                 commit_tiles: vec![4, 4, 4096],
+                 state_tiles: vec![4],
+             },
+-            tokenizer_id: Hash64::from_bytes([3; 64]),
++            tokenizer_id,
+         };
+         let ops = palw_tir_inventory_operands_v1(&program, &Src(&params)).expect("inventory");
+         let artifact_root = artifact_root_v1(&ops.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).expect("root");
+diff --git a/consensus/core/src/palw_tir_public_claim_v1.rs b/consensus/core/src/palw_tir_public_claim_v1.rs
+index c9162389f..fb52bba6e 100644
+--- a/consensus/core/src/palw_tir_public_claim_v1.rs
++++ b/consensus/core/src/palw_tir_public_claim_v1.rs
+@@ -473,6 +473,12 @@ pub(crate) fn palw_tir_public_constraint_frame_fixture_v1()->(PalwTirPublicFrame
+     tests::constraint_frame()
+ }
+ 
++#[cfg(test)]
++pub(crate) fn palw_tir_public_tokenizer_frame_fixture_v1()->(PalwTirPublicFrameFixtureV1,
++    crate::palw_class_semantics_v1::PalwClassSemanticsV1,
++    crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
++    Vec<u8>,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {tests::tokenizer_frame()}
++
+ /// **G14 G-T2 test support:** [`palw_tir_public_frame_fixture_v1`] over a job `edit_job` shapes (a seeded V3 job, a V4 job with
+ /// penalties or stop sequences, ...), whose execution decodes by THAT job's own selection rule — except at decode position
+ /// `wrong_at`, where it commits the best lane the rule does not choose (a selection violation over honest arithmetic).
+@@ -606,6 +612,15 @@ mod tests {
+         job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+         maximum_custodians:u64,output_root:Option<Hash64>,
+         semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
++    )->super::PalwTirPublicFrameFixtureV1 {
++        frame_from_execution_with_material(x,job,maximum_custodians,output_root,semantics,None)
++    }
++    fn frame_from_execution_with_material(
++        x:crate::palw_tir_court_v1::test_support::TinyExecution,
++        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        maximum_custodians:u64,output_root:Option<Hash64>,
++        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
++        inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+     )->super::PalwTirPublicFrameFixtureV1 {
+         use crate::palw_freeprompt_v3::*;
+         use crate::palw_tir_public_allocation_v1::*;
+@@ -645,7 +660,7 @@ mod tests {
+             clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
+         };
+         let PalwTirPublicAllocationQuoteV1::Complete(plan) =
+-            derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, semantics, None, rules).unwrap()
++            derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, semantics, inventory, rules).unwrap()
+         else {
+             panic!("fixture requires a real native generic arithmetic quote")
+         };
+@@ -707,7 +722,7 @@ mod tests {
+             &record,
+             &layout,
+             semantics,
+-            None,
++            inventory,
+             rules,
+             &BTreeSet::new(),
+             &object,
+@@ -760,6 +775,54 @@ mod tests {
+         (frame,semantics,table)
+     }
+ 
++    pub(super) fn tokenizer_frame()->(super::PalwTirPublicFrameFixtureV1,
++        crate::palw_class_semantics_v1::PalwClassSemanticsV1,
++        crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
++        Vec<u8>,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
++        use crate::palw_freeprompt_v3::*;
++        use crate::palw_tokenizer_artifact_inventory_v1::*;
++        let raw=br#"{"model":{"vocab":{"A":0,"B":1,"C":2,"D":3,"E":4,"F":5,"G":6,"H":7},"merges":[]},"added_tokens":[]}"#.to_vec();
++        let tokenizer=crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(&raw);
++        let table=crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
++            entries:(b'A'..=b'H').map(|b|Some(vec![b])).collect(),eog_token_ids:vec![7],tokenizer_id:tokenizer};
++        let (_,_,mut job,_)=crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false,false);
++        job.version=PALW_FP_V3_VERSION;job.tail=None;job.decode=None;job.tokenizer_id=tokenizer;
++        job.decode_token_limit=crate::palw_tir_court_v1::test_support::DECODE;job.max_context_tokens=64;
++        let rule=crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {sampling:job.sampling_v2()};
++        let select=|_:u32,row:&[i32],before:&[u32]|crate::palw_tir_court_v1::test_support::select_by_rule(&rule,row,before,false);
++        let x=crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in_vocab_with_tokenizer(
++            |class,id,prompt| {
++                job.class_id=id;job.tokenizer_id=class.tokenizer_id;job.prompt_tokens=prompt.len() as u32;
++                job.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(prompt);
++                let facts=crate::palw_fp_execution_v3::PalwFpClassFactsV3 {model_profile_id:Hash64::default(),
++                    runtime_manifest_hash:Hash64::default(),runtime_class_id:Hash64::default(),shape_profile_id:id,cu_ruleset_id:Hash64::default()};
++                crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job,&facts,
++                    &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job,job.decode_token_limit),b"testnet-12").unwrap()
++            },None,&select,8,tokenizer);
++        let opener=PalwBondKeyV2(job.executor_bond);
++        let key=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91;32]);
++        let mut offer=PalwTokenizerArtifactInventoryOfferV1 {version:1,artifact_hash:tokenizer,opener,
++            maximum_bytes:raw.len() as u64,accept_until_daa:10,signature:vec![]};
++        offer.signature=libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key,offer.id_v1().as_byte_slice(),
++            PALW_ARTIFACT_INVENTORY_CONTEXT_V1,[92;32]).unwrap().as_ref().to_vec();
++        offer.validate_signature_v1(key.verification_key.as_ref(),crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1).unwrap();
++        let mut inventory=PalwTokenizerArtifactInventoryV1::new_v1(offer,1,
++            crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()).unwrap();
++        inventory.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Part {offset:0,bytes:raw.clone()},2).unwrap();
++        let eof=inventory.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Finish,3).unwrap().unwrap();
++        let c=&x.binding.job_context;
++        let semantics=crate::palw_class_semantics_v1::PalwClassSemanticsV1 {version:1,class_id:job.class_id,
++            artifact_root:x.binding.artifact_root,bound_from_daa:0,model_profile_id:c.model_profile_id,
++            runtime_manifest_hash:c.runtime_manifest_hash,runtime_class_id:c.runtime_class_id,tokenizer_id:tokenizer,
++            cu_ruleset_id:c.cu_ruleset_id,token_table_root:Some(table.root()),
++            rendering_rule:Some(crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1),
++            raw_tokenizer_bytes:Some(eof.actual_bytes),tokenizer_key_events:Some(eof.key_event_upper_bound_v1()),prefix_state_relation:None};
++        let fx=frame_from_execution_with_material(x,job,1,None,Some(&semantics),Some(&eof));
++        assert!(fx.frame.plan_v1().semantic.as_ref().unwrap().stages.iter().any(|s|
++            s.family==crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer));
++        (fx,semantics,eof,raw,table)
++    }
++
+     /// Actual golden GQA execution with history reductions, re-committed under the public job context.
+     pub(super) fn history_frame() -> super::PalwTirPublicFrameFixtureV1 {
+         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index 3f66df848..67eb97946 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -1581,6 +1581,7 @@ mod tests {
+ #[cfg(test)]
+ mod conviction_e2e_tests {
+     include!("palw_court_shared_constraint_native_tests.rs");
++    include!("palw_court_shared_tokenizer_native_tests.rs");
+     use super::*;
+     use crate::palw_tir_public_carriage_v1::{
+         PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T, PalwTirPublicControlV1 as Control,
+diff --git a/consensus/core/src/palw_tokenizer_table_stream_v1.rs b/consensus/core/src/palw_tokenizer_table_stream_v1.rs
+index f3e9abaf9..ec1aae956 100644
+--- a/consensus/core/src/palw_tokenizer_table_stream_v1.rs
++++ b/consensus/core/src/palw_tokenizer_table_stream_v1.rs
+@@ -367,6 +367,9 @@ impl PalwTokenizerTableStreamV1 {
+     }
+ }
+ 
++#[path = "palw_tokenizer_canonical_replay_v1.rs"]
++pub(crate) mod canonical_replay;
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -667,6 +670,43 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn private_tokenizer_canonical_builder_consumes_real_ordered_proofs_and_authenticates_operands() {
++        use super::canonical_replay::{self as replay, Budget, Material, Refusal};
++        let budget=Budget {max_material_bytes:1<<25,max_proofs:1000,max_native_calls:100_000,max_packets:10_000};
++        let mut vocab=serde_json::Map::new();
++        vocab.insert("A".into(),serde_json::json!(0));
++        for id in 1..100u32 {vocab.insert(format!("B{}{:04}","a".repeat(1024),id),serde_json::json!(id));}
++        let raw=serde_json::to_vec(&serde_json::json!({"model":{"vocab":vocab,"merges":[]},"added_tokens":[]})).unwrap();
++        let base=replay_fixture(&raw,b"A");
++        let saved=borsh::to_vec(&base).unwrap();
++        let atoms=replay_atoms(&base,&raw,false).unwrap();
++        let proofs:Vec<_>=atoms.iter().flat_map(|p|p.proofs.clone()).collect();
++        assert!(proofs.len()>64 && raw.len()>65536);
++        let input=Material {raw:&raw,proofs:&proofs,rendering:Some(b"A")};
++        let got=replay::build(&base,input,budget).unwrap();
++        let direct=run_replay(&base,&atoms,b"A",false).unwrap();
++        assert_eq!(got.violation(),direct.0);
++        assert!(!got.violation());
++        assert_eq!(got.key_events(),direct.2);
++        assert_eq!(got.key_root(),direct.3.key_set_root());
++        assert!(got.work().packets>=2);
++        assert_eq!(got.work().proofs,proofs.len() as u64);
++        assert_eq!(borsh::to_vec(&base).unwrap(),saved);
++        let missing=Material {proofs:&proofs[..proofs.len()-1],..input};
++        assert!(matches!(replay::build(&base,missing,budget),Err(Refusal::NeedProof {..})));
++        let mut extra=proofs.clone();extra.push(proofs[0].clone());
++        assert!(matches!(replay::build(&base,Material {proofs:&extra,..input},budget),Err(Refusal::ExtraProof {..})));
++        let mut foreign=proofs.clone();foreign[0].namespace^=1;
++        assert!(matches!(replay::build(&base,Material {proofs:&foreign,..input},budget),Err(Refusal::Native(_))));
++        let mut badraw=raw.clone();let at=badraw.iter().position(|b|*b==b'A').unwrap();badraw[at]=b'X';
++        assert!(replay::build(&base,Material {raw:&badraw,..input},budget).is_err());
++        assert!(matches!(replay::build(&base,Material {raw:&raw[..raw.len()-1],..input},budget),Err(Refusal::OperandLength)));
++        assert!(matches!(replay::build(&base,Material {rendering:None,..input},budget),Err(Refusal::RenderingOperand)));
++        assert!(matches!(replay::build(&base,input,Budget {max_packets:got.work().packets-1,..budget}),Err(Refusal::Budget)));
++        assert_eq!(borsh::to_vec(&base).unwrap(),saved);
++    }
++
+ }
+ 
+ // Read-only native allocation inventory; no state/root/codec field is added.

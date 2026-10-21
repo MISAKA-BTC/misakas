@@ -258,3 +258,6 @@ mod prompt_material_tests {
 
 #[path = "palw_court_shared_constraint_builder_v1.rs"]
 pub(crate) mod constraint_terminal;
+
+#[path = "palw_court_shared_tokenizer_builder_v1.rs"]
+pub(crate) mod tokenizer_terminal;

@@ -473,6 +473,12 @@ pub(crate) fn palw_tir_public_constraint_frame_fixture_v1()->(PalwTirPublicFrame
     tests::constraint_frame()
 }
 
+#[cfg(test)]
+pub(crate) fn palw_tir_public_tokenizer_frame_fixture_v1()->(PalwTirPublicFrameFixtureV1,
+    crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+    Vec<u8>,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {tests::tokenizer_frame()}
+
 /// **G14 G-T2 test support:** [`palw_tir_public_frame_fixture_v1`] over a job `edit_job` shapes (a seeded V3 job, a V4 job with
 /// penalties or stop sequences, ...), whose execution decodes by THAT job's own selection rule — except at decode position
 /// `wrong_at`, where it commits the best lane the rule does not choose (a selection violation over honest arithmetic).
@@ -607,6 +613,15 @@ mod tests {
         maximum_custodians:u64,output_root:Option<Hash64>,
         semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     )->super::PalwTirPublicFrameFixtureV1 {
+        frame_from_execution_with_material(x,job,maximum_custodians,output_root,semantics,None)
+    }
+    fn frame_from_execution_with_material(
+        x:crate::palw_tir_court_v1::test_support::TinyExecution,
+        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        maximum_custodians:u64,output_root:Option<Hash64>,
+        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    )->super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_public_allocation_v1::*;
         let binding = x.binding.clone();
@@ -645,7 +660,7 @@ mod tests {
             clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
         };
         let PalwTirPublicAllocationQuoteV1::Complete(plan) =
-            derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, semantics, None, rules).unwrap()
+            derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, semantics, inventory, rules).unwrap()
         else {
             panic!("fixture requires a real native generic arithmetic quote")
         };
@@ -707,7 +722,7 @@ mod tests {
             &record,
             &layout,
             semantics,
-            None,
+            inventory,
             rules,
             &BTreeSet::new(),
             &object,
@@ -758,6 +773,54 @@ mod tests {
         let frame=frame_from_execution_with_semantics(x,job,1,None,Some(&semantics));
         assert!(frame.frame.plan_v1().semantic.is_some());
         (frame,semantics,table)
+    }
+
+    pub(super) fn tokenizer_frame()->(super::PalwTirPublicFrameFixtureV1,
+        crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+        crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+        Vec<u8>,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+        use crate::palw_freeprompt_v3::*;
+        use crate::palw_tokenizer_artifact_inventory_v1::*;
+        let raw=br#"{"model":{"vocab":{"A":0,"B":1,"C":2,"D":3,"E":4,"F":5,"G":6,"H":7},"merges":[]},"added_tokens":[]}"#.to_vec();
+        let tokenizer=crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(&raw);
+        let table=crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+            entries:(b'A'..=b'H').map(|b|Some(vec![b])).collect(),eog_token_ids:vec![7],tokenizer_id:tokenizer};
+        let (_,_,mut job,_)=crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false,false);
+        job.version=PALW_FP_V3_VERSION;job.tail=None;job.decode=None;job.tokenizer_id=tokenizer;
+        job.decode_token_limit=crate::palw_tir_court_v1::test_support::DECODE;job.max_context_tokens=64;
+        let rule=crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {sampling:job.sampling_v2()};
+        let select=|_:u32,row:&[i32],before:&[u32]|crate::palw_tir_court_v1::test_support::select_by_rule(&rule,row,before,false);
+        let x=crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in_vocab_with_tokenizer(
+            |class,id,prompt| {
+                job.class_id=id;job.tokenizer_id=class.tokenizer_id;job.prompt_tokens=prompt.len() as u32;
+                job.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(prompt);
+                let facts=crate::palw_fp_execution_v3::PalwFpClassFactsV3 {model_profile_id:Hash64::default(),
+                    runtime_manifest_hash:Hash64::default(),runtime_class_id:Hash64::default(),shape_profile_id:id,cu_ruleset_id:Hash64::default()};
+                crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job,&facts,
+                    &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job,job.decode_token_limit),b"testnet-12").unwrap()
+            },None,&select,8,tokenizer);
+        let opener=PalwBondKeyV2(job.executor_bond);
+        let key=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91;32]);
+        let mut offer=PalwTokenizerArtifactInventoryOfferV1 {version:1,artifact_hash:tokenizer,opener,
+            maximum_bytes:raw.len() as u64,accept_until_daa:10,signature:vec![]};
+        offer.signature=libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key,offer.id_v1().as_byte_slice(),
+            PALW_ARTIFACT_INVENTORY_CONTEXT_V1,[92;32]).unwrap().as_ref().to_vec();
+        offer.validate_signature_v1(key.verification_key.as_ref(),crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1).unwrap();
+        let mut inventory=PalwTokenizerArtifactInventoryV1::new_v1(offer,1,
+            crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()).unwrap();
+        inventory.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Part {offset:0,bytes:raw.clone()},2).unwrap();
+        let eof=inventory.apply_v1(&PalwTokenizerArtifactInventoryActionV1::Finish,3).unwrap().unwrap();
+        let c=&x.binding.job_context;
+        let semantics=crate::palw_class_semantics_v1::PalwClassSemanticsV1 {version:1,class_id:job.class_id,
+            artifact_root:x.binding.artifact_root,bound_from_daa:0,model_profile_id:c.model_profile_id,
+            runtime_manifest_hash:c.runtime_manifest_hash,runtime_class_id:c.runtime_class_id,tokenizer_id:tokenizer,
+            cu_ruleset_id:c.cu_ruleset_id,token_table_root:Some(table.root()),
+            rendering_rule:Some(crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1),
+            raw_tokenizer_bytes:Some(eof.actual_bytes),tokenizer_key_events:Some(eof.key_event_upper_bound_v1()),prefix_state_relation:None};
+        let fx=frame_from_execution_with_material(x,job,1,None,Some(&semantics),Some(&eof));
+        assert!(fx.frame.plan_v1().semantic.as_ref().unwrap().stages.iter().any(|s|
+            s.family==crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer));
+        (fx,semantics,eof,raw,table)
     }
 
     /// Actual golden GQA execution with history reductions, re-committed under the public job context.
