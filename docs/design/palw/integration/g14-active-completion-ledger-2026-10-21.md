@@ -52,6 +52,8 @@ Next primary integration work is the original coordinator: derive canonical comp
 
 ## Latest parallel checkpoint
 
+[Retained native Source constructor](../../../evidence/palw/g14-completion-2026-10-22/source-native-owner.md): 21 unique parent tests plus two isolated quota-worker invocations pass. The explicit constructor reserves conservative construction-peak typed requests before allocation and holds the ticket with Source; insufficient quota, holding/release and semantic-failure release are tested. Old call sites and activation are unchanged. Numerical/source-graph retained owners, complete canonical original and actual escrow remain incomplete.
+
 [Source StepSpace allocation inventory](../../../evidence/palw/g14-completion-2026-10-22/source-step-inventory.md): 19 unique selected successes (StepSpace2, retained TIR3, t12 identity9, activation5). Opaque actual program metadata now feeds checked typed Vec capacity bounds; complete Source ownership and admission are still separate.
 
 [Tokenizer reconstruction and pre-expansion graph bounds](../../../evidence/palw/g14-completion-2026-10-22/tokenizer-and-graph-preflight.md): 36 unique selected successes, including actual-original/EOF Tokenizer material reconstruction and fresh recheck, existing Constraint regression, graph/request checks, t12 identity9 and activation5. This adds no public raw/proof delivery, native heap lease, complete funded original or escrow settlement.

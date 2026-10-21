@@ -1,0 +1,118 @@
+--- a/consensus/core/src/palw_tir_public_source_v1.rs
++++ b/consensus/core/src/palw_tir_public_source_v1.rs
+@@ -1293,4 +1293,114 @@
+                 Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))));
+         }
+     }
+-}
++/private/tmp/g14-source-native-quota-tests.rs:
++
++/// Logical limits are global OnceLock settings. Run each case in a fresh
++/// process so neither quota nor outstanding leases escape into other tests.
++#[test]
++fn retained_native_source_refuses_before_construction_and_holds_owner_quota() {
++    let worker = format!(
++        "{}::native_source_quota_worker",
++        module_path!().split_once("::").unwrap().1
++    );
++    for case in ["short", "retained"] {
++        let status = std::process::Command::new(std::env::current_exe().unwrap())
++            .args([
++                "--exact",
++                &worker,
++                "--ignored",
++                "--nocapture",
++                "--test-threads=1",
++            ])
++            .env("MISAKA_SOURCE_NATIVE_QUOTA_CHILD", case)
++            .status()
++            .unwrap();
++        assert!(
++            status.success(),
++            "isolated Source quota {case} failed: {status}"
++        );
++    }
++}
++#[test]
++#[ignore = "isolated quota worker; invoke through parent test"]
++fn native_source_quota_worker() {
++    use crate::palw_native_resource_v1::{
++        arm_native_logical_limits_v1, reserve_native_requests_v1, NativeDecodeErrorV1,
++        NativeSnapshotResourceLimitsV1,
++    };
++    let case = std::env::var("MISAKA_SOURCE_NATIVE_QUOTA_CHILD")
++        .expect("invoke through isolated Source quota parent test");
++    // All fixture construction/quote work occurs before the global checker
++    // is armed. This tests the new constructor, not unrelated fixture costs.
++    let f = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 2);
++    let original = f.frame.original_v1();
++    let header = f.frame.header_v1();
++    let q = PalwTirPublicSourceV1::native_construction_requests_v1(&f.record, &f.layout, header)
++        .unwrap();
++    assert!(q > 0);
++    let wrong = Hash64::from_u64_word(0x534F55524345);
++    assert_ne!(wrong, original.execution_root);
++    let construct = |root| {
++        PalwTirPublicSourceV1::new_native_v1(
++            &f.record,
++            &f.layout,
++            header,
++            root,
++            original.trace_root,
++            f.rules.maximum_leaves,
++        )
++    };
++    let quota = match case.as_str() {
++        "short" => q.checked_sub(1).unwrap(),
++        "retained" => q,
++        _ => panic!("unknown Source quota case"),
++    };
++    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 {
++        memory_bytes: quota,
++        database_bytes: 0,
++    }));
++    if case == "short" {
++        assert!(matches!(
++            construct(original.execution_root),
++            Err(NativeDecodeErrorV1::Resource(_))
++        ));
++        // Quote inputs are valid. A wrong expected root would be semantic
++        // Decode if new_v1 ran: Resource proves reservation comes first.
++        assert!(matches!(
++            construct(wrong),
++            Err(NativeDecodeErrorV1::Resource(_))
++        ));
++        // A failed reservation must not debit any partial outstanding size.
++        let probe = reserve_native_requests_v1(quota)
++            .unwrap()
++            .expect("logical checker armed");
++        drop(probe);
++    } else {
++        let source = construct(original.execution_root).unwrap();
++        assert_eq!(source.source_id_v1(), f.frame.descriptor_v1().source_id);
++        assert!(
++            reserve_native_requests_v1(1).is_err(),
++            "returned owner must retain full construction ticket"
++        );
++        drop(source);
++        let probe = reserve_native_requests_v1(q)
++            .unwrap()
++            .expect("owner drop returned reservation");
++        assert!(reserve_native_requests_v1(1).is_err());
++        drop(probe);
++        // Reservation succeeds first, semantic constructor then refuses.
++        // Its RAII lease must also be returned when construction fails.
++        assert!(matches!(
++            construct(wrong),
++            Err(NativeDecodeErrorV1::Decode(_))
++        ));
++        let retry = reserve_native_requests_v1(q)
++            .unwrap()
++            .expect("semantic refusal returned reservation");
++        drop(retry);
++        let again = construct(original.execution_root).unwrap();
++        drop(again);
++    }
++}
++
++}

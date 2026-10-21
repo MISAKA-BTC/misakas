@@ -1,0 +1,225 @@
+diff --git a/consensus/core/src/palw_tir_public_source_v1.rs b/consensus/core/src/palw_tir_public_source_v1.rs
+index b72149a41..9331221e2 100644
+--- a/consensus/core/src/palw_tir_public_source_v1.rs
++++ b/consensus/core/src/palw_tir_public_source_v1.rs
+@@ -185,6 +185,81 @@ fn height(count: u64) -> u8 {
+     if count <= 1 { 0 } else { (64 - (count - 1).leading_zeros()) as u8 }
+ }
+ impl PalwTirPublicSourceV1 {
++    /// Explicit retained native constructor. Unchanged semantic constructor,
++    /// source ID and format bounds; no activation, fee or original admission.
++    /// The program codec/analysis and StepSpace quote is augmented with actual
++    /// input clones and hash writers BEFORE any Source constructor allocation.
++    /// Conservatively retains the whole construction peak (including temporary
++    /// verified space) for the returned Source lifetime; no measured RAM claim.
++    pub fn new_native_v1(
++        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
++        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
++        header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        original_execution_root: Hash64,
++        original_trace_root: Hash64,
++        maximum_leaves: u64,
++    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>,
++                crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
++        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1, reserve_native_requests_v1};
++        let requests = Self::native_construction_requests_v1(registered,layout,header)?;
++        let lease = reserve_native_requests_v1(requests).map_err(E::Resource)?;
++        let source = Self::new_v1(registered,layout,header,original_execution_root,original_trace_root,maximum_leaves)
++            .map_err(E::Decode)?;
++        Ok(NativeRetainedV1::from_owner_reserved_v1(source,lease))
++    }
++
++    /// Construction request quote only; not a lease or policy authentication.
++    pub(crate) fn native_construction_requests_v1(
++        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
++        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
++        header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++    ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
++        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeCoverageV1, NativeHeapV1,
++            TirNativeRequestsV1, standalone_tir_program_shape_v1};
++        // Check real byte/count identity before scanner, clone or class builder.
++        registered.check_program_v1().map_err(|e|E::Decode(e.into()))?;
++        if layout.commit_tiles.len() as u64 > u64::from(registered.program_bytes)
++            || layout.state_tiles.len() as u64 > u64::from(registered.program_bytes) {
++            return Err(E::Decode("source layout exceeds registered program geometry".into()));
++        }
++        let shape=standalone_tir_program_shape_v1(&registered.program).map_err(|e|E::Decode(e.to_string()))?;
++        let mut q=TirNativeRequestsV1::new();
++        q.add_v1(shape.program_requests_v1()).map_err(E::Resource)?;
++        q.add_v1(crate::palw_tir_step_v1::native_tir_step_space_additional_requests_v1(&shape).map_err(E::Resource)?)
++            .map_err(E::Resource)?;
++        // resolve_owned_class verifies once and drops its temporary StepSpace
++        // at the semicolon. Source then verifies again: two total passes, at
++        // most ONE live decoded program/analysis/StepSpace at a time. Its
++        // binding's raw program/layout remain live through the second pass.
++        q.exact_v1::<u8>(registered.program.len() as u64).map_err(E::Resource)?;
++        for _ in 0..2 { // class binding layout + verified-space layout
++            let bound=layout.native_heap_v1("native Source layout clone");
++            q.add_v1(bound.bytes().ok_or(E::Resource(bound))?).map_err(E::Resource)?;
++        }
++        for _ in 0..3 { // binding context + decode-view context + retained Source.header
++            // The full header overbounds the binding's job_context-only clone.
++            let bound=header.native_heap_v1("native Source header clone");
++            q.add_v1(bound.bytes().ok_or(E::Resource(bound))?).map_err(E::Resource)?;
++        }
++        // maximum_window_lanes (RUN calls) and cone_runs_bound only iterate the
++        // already retained StepSpace; scalar/iterator scratch is stack-only.
++        // The RUN-sized output Vec coexists with verified space and decode view.
++        q.vec_v1::<u64>(RUN as u64).map_err(E::Resource)?;
++        q.exact_v1::<crate::palw_native_resource_v1::NativeRetainedV1<Self>>(1).map_err(E::Resource)?;
++        // layout_digest/Borsh header hash and CanonicalWriter context_hash are
++        // sequential temporary writers. Pinned Borsh starts at1024; existing
++        // CanonicalWriter starts at512 and emits the SAME field widths/order
++        // as Borsh for this context. Reserve their maximum coexisting writer,
++        // including geometric growth, rather than only logical output bytes.
++        let encoded=borsh::object_length(layout).and_then(|a|borsh::object_length(header).map(|b|a.max(b)))
++            .and_then(|a|borsh::object_length(&header.job_context).map(|b|a.max(b)))
++            .map_err(|e|E::Decode(e.to_string()))? as u64;
++        let writer=encoded.max(1024).checked_mul(2).ok_or_else(||
++            E::Resource(NativeCoverageV1::overflow::<Self>("native Source hash writer capacity")))?;
++        q.exact_v1::<u8>(writer).map_err(E::Resource)?;
++        Ok(q.bytes_v1())
++    }
++
+     pub fn new_v1(
+         registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+         layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+@@ -1194,3 +1269,138 @@ mod tests {
+         assert!(source.authenticate_v1(&PalwTirPublicRequestV1::TraceTile { row: 0, tile: 255 }, &response, Some(&sealed)).is_err());
+     }
+ }
++
++#[cfg(test)]
++mod native_source_owner_tests_v1 {
++    use super::*;
++    #[test]
++    fn retained_native_source_preserves_real_source_identity_and_bounds() {
++        for f in [crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None,2),
++                  crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1()] {
++            let original=f.frame.original_v1();
++            let old=PalwTirPublicSourceV1::new_v1(&f.record,&f.layout,f.frame.header_v1(),
++                original.execution_root,original.trace_root,f.rules.maximum_leaves).unwrap();
++            let retained=PalwTirPublicSourceV1::new_native_v1(&f.record,&f.layout,f.frame.header_v1(),
++                original.execution_root,original.trace_root,f.rules.maximum_leaves).unwrap();
++            assert_eq!(retained.source_id_v1(),old.source_id_v1());
++            assert_eq!(retained.window_value_bytes,old.window_value_bytes);
++            assert_eq!(retained.maximum_leaf_bytes,old.maximum_leaf_bytes);
++            assert_eq!(retained.cone_runs,old.cone_runs);
++            assert!(PalwTirPublicSourceV1::native_construction_requests_v1(&f.record,&f.layout,f.frame.header_v1()).unwrap()>0);
++            let mut wrong=f.record.clone();wrong.program_bytes=wrong.program_bytes.checked_add(1).unwrap();
++            assert!(matches!(PalwTirPublicSourceV1::new_native_v1(&wrong,&f.layout,f.frame.header_v1(),
++                original.execution_root,original.trace_root,f.rules.maximum_leaves),
++                Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))));
++        }
++    }
++/private/tmp/g14-source-native-quota-tests.rs:
++
++/// Logical limits are global OnceLock settings. Run each case in a fresh
++/// process so neither quota nor outstanding leases escape into other tests.
++#[test]
++fn retained_native_source_refuses_before_construction_and_holds_owner_quota() {
++    let worker = format!(
++        "{}::native_source_quota_worker",
++        module_path!().split_once("::").unwrap().1
++    );
++    for case in ["short", "retained"] {
++        let status = std::process::Command::new(std::env::current_exe().unwrap())
++            .args([
++                "--exact",
++                &worker,
++                "--ignored",
++                "--nocapture",
++                "--test-threads=1",
++            ])
++            .env("MISAKA_SOURCE_NATIVE_QUOTA_CHILD", case)
++            .status()
++            .unwrap();
++        assert!(
++            status.success(),
++            "isolated Source quota {case} failed: {status}"
++        );
++    }
++}
++#[test]
++#[ignore = "isolated quota worker; invoke through parent test"]
++fn native_source_quota_worker() {
++    use crate::palw_native_resource_v1::{
++        arm_native_logical_limits_v1, reserve_native_requests_v1, NativeDecodeErrorV1,
++        NativeSnapshotResourceLimitsV1,
++    };
++    let case = std::env::var("MISAKA_SOURCE_NATIVE_QUOTA_CHILD")
++        .expect("invoke through isolated Source quota parent test");
++    // All fixture construction/quote work occurs before the global checker
++    // is armed. This tests the new constructor, not unrelated fixture costs.
++    let f = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 2);
++    let original = f.frame.original_v1();
++    let header = f.frame.header_v1();
++    let q = PalwTirPublicSourceV1::native_construction_requests_v1(&f.record, &f.layout, header)
++        .unwrap();
++    assert!(q > 0);
++    let wrong = Hash64::from_u64_word(0x534F55524345);
++    assert_ne!(wrong, original.execution_root);
++    let construct = |root| {
++        PalwTirPublicSourceV1::new_native_v1(
++            &f.record,
++            &f.layout,
++            header,
++            root,
++            original.trace_root,
++            f.rules.maximum_leaves,
++        )
++    };
++    let quota = match case.as_str() {
++        "short" => q.checked_sub(1).unwrap(),
++        "retained" => q,
++        _ => panic!("unknown Source quota case"),
++    };
++    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 {
++        memory_bytes: quota,
++        database_bytes: 0,
++    }));
++    if case == "short" {
++        assert!(matches!(
++            construct(original.execution_root),
++            Err(NativeDecodeErrorV1::Resource(_))
++        ));
++        // Quote inputs are valid. A wrong expected root would be semantic
++        // Decode if new_v1 ran: Resource proves reservation comes first.
++        assert!(matches!(
++            construct(wrong),
++            Err(NativeDecodeErrorV1::Resource(_))
++        ));
++        // A failed reservation must not debit any partial outstanding size.
++        let probe = reserve_native_requests_v1(quota)
++            .unwrap()
++            .expect("logical checker armed");
++        drop(probe);
++    } else {
++        let source = construct(original.execution_root).unwrap();
++        assert_eq!(source.source_id_v1(), f.frame.descriptor_v1().source_id);
++        assert!(
++            reserve_native_requests_v1(1).is_err(),
++            "returned owner must retain full construction ticket"
++        );
++        drop(source);
++        let probe = reserve_native_requests_v1(q)
++            .unwrap()
++            .expect("owner drop returned reservation");
++        assert!(reserve_native_requests_v1(1).is_err());
++        drop(probe);
++        // Reservation succeeds first, semantic constructor then refuses.
++        // Its RAII lease must also be returned when construction fails.
++        assert!(matches!(
++            construct(wrong),
++            Err(NativeDecodeErrorV1::Decode(_))
++        ));
++        let retry = reserve_native_requests_v1(q)
++            .unwrap()
++            .expect("semantic refusal returned reservation");
++        drop(retry);
++        let again = construct(original.execution_root).unwrap();
++        drop(again);
++    }
++}
++
++}
