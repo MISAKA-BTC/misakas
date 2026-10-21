@@ -384,6 +384,7 @@
 - [design/palw/integration/mainnet-spec-register-2026-10-12.md](../design/palw/integration/mainnet-spec-register-2026-10-12.md)
 - [design/palw/integration/model-onboarding-implementation-matrix.md](../design/palw/integration/model-onboarding-implementation-matrix.md)
 - [design/palw/integration/palw-class-activation-gate-status.md](../design/palw/integration/palw-class-activation-gate-status.md)
+- [design/palw/integration/palw-refactor-plan-2026-10-21.md](../design/palw/integration/palw-refactor-plan-2026-10-21.md)
 - [design/palw/integration/palw-road-to-mainnet-2026-08-21.md](../design/palw/integration/palw-road-to-mainnet-2026-08-21.md)
 - [design/palw/integration/remaining-rfc-integration-matrix.md](../design/palw/integration/remaining-rfc-integration-matrix.md)
 - [design/palw/integration/remaining-work-2026-10-16.md](../design/palw/integration/remaining-work-2026-10-16.md)
