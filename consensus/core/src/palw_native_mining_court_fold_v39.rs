@@ -681,4 +681,42 @@ mod tests {
         let big = NativeMiningAccusationWireV39 { kind: 0, body: vec![0; MINING_ACCUSATION_MAX_BYTES_V39], ..wire };
         assert!(NativeMiningAccusationWireV39::from_bytes(&borsh::to_vec(&big).unwrap()).is_err(), "bounded extent");
     }
+
+    /// An honest certified claim no one accuses keeps its certification, receipt, weight, producer collateral and attestor locks;
+    /// Gate C sees no pending accusation and no conviction.
+    #[test]
+    fn g14n2_an_unaccused_honest_claim_is_untouched() {
+        let (state, params, extras) = (state(), params(), extras());
+        let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let c = claim(4_000);
+        world(&mut tb, &c);
+        let hash = c.claim_hash();
+        assert!(!crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&tb.state, &hash));
+        assert!(!native_mining_convicted_v39(&tb.state, &hash));
+        assert!(crate::palw_security_certification_v1::palw_native_mining_security_certified_v39(&tb.state, &hash));
+        let r = tb.state.kernel_route.as_ref().unwrap();
+        assert!(r.aux.contains_key(&(MINING, mk(MINING_RECEIPT_KIND_V39, &native_mining_receipt_id_v39(c.id)))));
+        assert_eq!(tb.state.safe_weight, 1_000);
+        assert_eq!(tb.state.bonds[&bond(1)].collateral, 10_000);
+        assert_eq!(r.signer_locks_of_v1(&bond(3)), 600);
+        assert_eq!(super::super::super::palw_native_mining_fold_v39::claim(r, &c.id).unwrap().closed, Some((20, true)));
+    }
+
+    /// Below the owning39 mining fence (no `native_mining39` in the route extras) action 80 is refused and changes nothing.
+    #[test]
+    fn g14n2_below_the_mining_fence_action_80_is_refused_without_effect() {
+        let (state, params, extras) = (state(), params(), extras());
+        assert!(extras.kernel_route.as_ref().unwrap().native_mining39.is_none());
+        let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let c = claim(4_000);
+        world(&mut tb, &c);
+        let before = (tb.state.kernel_route.as_ref().unwrap().aux.clone(), tb.state.safe_weight, tb.state.bonds.clone());
+        let wire = NativeMiningAccusationWireV39 { version: 39, kind: 0, claim: c.id, stage: 0, body: vec![1] };
+        let body = borsh::to_vec(&wire).unwrap();
+        assert!(super::super::apply(&mut tb, &ctx(40), &bond(2), ACCUSE_MINING_ACTION_V39, &body).is_err());
+        assert!(super::super::super::palw_native_mining_fold_v39::policy(&tb, &ctx(40)).is_err());
+        let after = (tb.state.kernel_route.as_ref().unwrap().aux.clone(), tb.state.safe_weight, tb.state.bonds.clone());
+        assert!(before == after, "a refused accusation below the fence leaves the state byte-identical");
+        assert!(!native_mining_convicted_v39(&tb.state, &c.claim_hash()));
+    }
 }
