@@ -1131,7 +1131,7 @@ impl VirtualStateProcessor {
                 let owed = kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1();
                 if carrier_fee < owed {
                     info!(
-                        "Block {block}: an ObjectChunk opening group {group} was dropped, and the block stands: its carrier paid \
+                        "Block {block}: an ObjectChunk opening group {group} was dropped, and the block stands: its carrier has available after bond burn \
                          {carrier_fee} sompi and one of the {} pending-chunk slots rents for {owed} (ADR-0075 SA-1)",
                         kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_GROUPS
                     );
@@ -1182,7 +1182,7 @@ impl VirtualStateProcessor {
                 let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v1(&object);
                 if carrier_fee < owed {
                     info!(
-                        "Block {block}: a model-registry object was dropped, and the block stands: its carrier paid \
+                        "Block {block}: a model-registry object was dropped, and the block stands: its carrier has available after bond burn \
                          {carrier_fee} sompi and a row in a bounded registry table rents for {owed} (ADR-0088 Decision 11)"
                     );
                     continue;
@@ -1196,7 +1196,7 @@ impl VirtualStateProcessor {
                 if carrier_fee < owed {
                     info!(
                         "Block {block}: a CourtCloseDeclared for session {session_id} was dropped, and the block stands: its \
-                         carrier paid {carrier_fee} sompi and adjudicating a close of {count} chunks rents for {owed} \
+                         carrier has {carrier_fee} sompi available after bond burn and adjudicating a close of {count} chunks rents for {owed} \
                          (ADR-0080 design A)"
                     );
                     continue;
@@ -1359,7 +1359,7 @@ impl VirtualStateProcessor {
                     let owed = kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(vectors);
                     if carrier_fee < owed {
                         info!(
-                            "Block {block}: a FamilyCertified object was dropped ungraded, and the block stands: its carrier paid \
+                            "Block {block}: a FamilyCertified object was dropped ungraded, and the block stands: its carrier has available after bond burn \
                              {carrier_fee} sompi and grading {vectors} fault vectors rents for {owed} (ADR-0075 SA-2)"
                         );
                         continue;
@@ -1639,7 +1639,7 @@ impl VirtualStateProcessor {
                     );
                     if carrier_fee < owed {
                         info!(
-                            "Block {block}: a whole-prompt PromptNotAnchored was dropped, and the block stands: its carrier paid \
+                            "Block {block}: a whole-prompt PromptNotAnchored was dropped, and the block stands: its carrier has available after bond burn \
                              {carrier_fee} sompi and recomputing its prompt rents for {owed}"
                         );
                         continue;
@@ -1789,7 +1789,7 @@ impl VirtualStateProcessor {
             // original full plan or this owner's own acquisition/work contract.
             match self.palw_tir_public_minimum_rent_v1(&folded, state_params, point, &object, &tir_public_originals) {
                 Ok(Some(owed)) if carrier_fee == PALW_RENT_UNPRICED || carrier_fee < owed => {
-                    info!("Block {block}: a TIR public allocation was dropped: actual carrier rent {carrier_fee} is not a paid allocation of {owed}");
+                    info!("Block {block}: a TIR public allocation was dropped: carrier rent available after bond burn {carrier_fee} is not a paid allocation of {owed}");
                     continue;
                 }
                 Err(why) => {
@@ -2376,7 +2376,7 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         block: BlockHash,
         block_daa: u64,
-        carrier_fees: &std::collections::HashMap<TransactionId, u64>,
+        rent_available_fees: &std::collections::HashMap<TransactionId, u64>,
     ) -> Vec<PalwCarriedObjectV1> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Vec::new();
@@ -2686,14 +2686,12 @@ impl VirtualStateProcessor {
         // makes the whole rule read as absent rather than as "everyone underpaid".
         let priced = self.palw_certification_rent_at(block_daa);
         // G14 R2: past `palw_tir_public_conviction_v1` the TIR route's own carriers (a TFP1 original, a TIR control) read their
-        // actual fee whatever the certification-rent fence says; every OTHER carrier keeps exactly the reading it had (priced or
+        // actual fee remaining after bond burn whatever the certification-rent fence says; every OTHER carrier keeps exactly the reading it had (priced or
         // `PALW_RENT_UNPRICED`), so arming this route moves no other object's rent rule.
         let fee_of = |carrier: TransactionId, tir_route: bool| {
-            if priced || (tir_public_armed && tir_route) {
-                carrier_fees.get(&carrier).copied().unwrap_or(0)
-            } else {
-                PALW_RENT_UNPRICED
-            }
+            crate::pipeline::virtual_processor::utxo_validation::palw_carrier_rent_available_v1(
+                rent_available_fees, carrier, priced || (tir_public_armed && tir_route),
+            )
         };
         // **The 2026-09-23 Position route matrix, P-B1: a carrier-borne buy or seed names, here, who
         // it is paid back to if acceptance refuses it** — the one place the carrier transaction is

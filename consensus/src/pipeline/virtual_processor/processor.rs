@@ -1130,7 +1130,7 @@ pub struct VirtualStateProcessor {
 /// absent, never as "the carrier underpaid".
 pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
 
-/// One object a block's acceptance produced, with what its carrier paid (ADR-0075 SA-1/SA-2).
+/// One accepted object with its carrier fee available for rent after mandatory bond burn.
 ///
 /// The pairing exists because `AcceptanceData` cannot express it: it records a transaction id and
 /// an index and nothing about value, so before this the object walk had no way to read the fee
@@ -1138,6 +1138,7 @@ pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
 /// the map `calculate_utxo_state` filled, and spent in `palw_v2_accepted_objects`.
 pub(super) struct PalwCarriedObjectV1 {
     pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    /// Internal only: fee available for rent after mandatory bond burn, or the unpriced sentinel.
     pub(super) carrier_fee: u64,
     /// Original transaction-local companion, never borrowed from another carrier.
     pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
@@ -2477,7 +2478,7 @@ impl VirtualStateProcessor {
                                     header.daa_score,
                                     // ADR-0075 SA-1/SA-2: what each 0x4b carrier paid, collected
                                     // by the UTXO walk two frames up, where the fee is knowable.
-                                    &ctx.palw_v2_accepted_tx_fees,
+                                    &ctx.palw_v2_rent_available_fees,
                                 );
                                 let history_custody_pledges = objects
                                     .iter()

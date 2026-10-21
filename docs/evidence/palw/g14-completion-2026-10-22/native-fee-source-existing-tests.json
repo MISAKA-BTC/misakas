@@ -1,0 +1,29 @@
+{
+  "source_build": "native-fee-source-verification.json",
+  "executable": {
+    "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-native-fee-source-04kzlv6e/kaspa_consensus",
+    "sha256": "f70afd059f80cef92e56304338391a58defe39b0c4b45fdffa4c9a49134b9bc5"
+  },
+  "commands": [
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-native-fee-source-04kzlv6e/kaspa_consensus",
+        "palw_v2_a_funded_carrier_is_priced_by_the_fee_the_utxo_walk_read",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.079,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/native-fee-source-existing-funded-carrier.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-native-fee-source-04kzlv6e/kaspa_consensus",
+        "palw_v2_a_chunk_the_transition_refuses_spends_no_grading_slot",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.324,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/native-fee-source-existing-grading-slots.log"
+    }
+  ]
+}

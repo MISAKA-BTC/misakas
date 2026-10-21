@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'pipeline::virtual_processor::tests::carrier_bond_rent_conservation::palw_bond_burn_and_object_rent_cannot_spend_the_same_actual_fee' (4305787) panicked at consensus/src/pipeline/virtual_processor/tests/carrier_bond_rent_conservation.rs:65:9:
+assertion failed: value > fee && row.collateral > burn
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test pipeline::virtual_processor::tests::carrier_bond_rent_conservation::palw_bond_burn_and_object_rent_cannot_spend_the_same_actual_fee ... FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::carrier_bond_rent_conservation::palw_bond_burn_and_object_rent_cannot_spend_the_same_actual_fee
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1064 filtered out; finished in 0.03s
+

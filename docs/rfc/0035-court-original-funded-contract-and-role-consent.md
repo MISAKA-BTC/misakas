@@ -90,3 +90,13 @@ original carrier transactionの実入力から、元のbond/予約資本・既�
 同carrierのpopulated input/outputからchecked differenceを求め、一つのfee budget上でallocation identityの重複と合計超過を拒否する。これは実UTXO viewの供給と通常script検証、nativeでのallocation適格性、burn/collectibleの更新を代替しない。個別helperを呼び直して別budgetを作る経路で保存則を迂回させないことが、将来coordinatorの責務として残る。
 
 accepted transactionのobject extractionでは、既存history/TIR fenceとは独立してTFO1を拒否し、内包TFP1を旧originalとして受理しない。通常carrierのUTXO/feeは残り得るが、rooted escrow残高を作らない。新rooted row、同mergeset lock、停止Minerに依存しない適格支出、全分岐の原子的受付・精算は未接続である。第一段階の署名・codec・実出力検査を、Aの実escrow確保やG14完了とは扱わない。
+
+## 9. Native feeとsource graphの接続 — 2026-10-22
+
+既存carrierでも、実fee `F`に対するbond burn `B`とrent `R`を独立に`F>=B`・`F>=R`と判定すると、同じfeeを二重に充当できる。native accepted transactionのraw feeはそのまま保持し、同じ検証済みcarrierとburn obligationからrent利用可能額`F-B`を別に導出して価格検査へ渡す。finality分類も実collectibleの範囲内とし、burnされた額を別carrierの通常feeへ転嫁しない。既存の金額・価格・fence条件を変更するものではない。
+
+source資料のv3候補は全7query familyから導出するopaqueなSourceMaterialOnly graphである。相対logical IDと実受付allocationに束縛したpacket IDを分離し、source全packet集合・辺・元時計の内側の予約を検査する。短bodyの未使用tail、他signerが供給した認証済み資料を使う応答、FullIds共有を維持する。semantic・数値裁定・parameter・役割別同意・資本・実費まで閉じた全original graphではなく、旧v2のcodecやrooted schemaも変更しない。
+
+実escrow支出の次段階では、ordinary UTXO受付より前に、同じselected-chain state/accepting pointに束縛した決定論的なUTXO/金融state planを検査しなければならない。後段のPALW object dropへ会計を付加するだけでは、実支出とstate更新が分離する。認可結果は同じ実input entries・全transaction bytes・contract/pointへ束縛し、txidだけで署名検査を省略するcacheに流用しない。
+
+[実装範囲・検証記録・残りの接続](../evidence/palw/g14-completion-2026-10-22/native-fee-and-source-graph.md)を参照。これらを実escrowの確保、公開有料入口、G14全体の完了とは扱わない。

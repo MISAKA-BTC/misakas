@@ -181,7 +181,8 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// `AcceptanceData` records a transaction id and an index and nothing about value, and the
     /// object walk that grades a certification is a pure function of the transactions. The fee is
     /// known exactly HERE — `calculated_fee` is `in − out` over the composed view — so it is kept
-    /// here and read by `palw_v2_objects_of_block` two frames along.
+    /// here without changing its raw meaning. The parallel rent-available map deducts mandatory
+    /// bond burn before `palw_v2_objects_of_block` reads purchasing power.
     ///
     /// **Every accepted transaction, not a list of PALW bands.** The walk two frames along builds
     /// one list out of `palw_fp_objects_from_accepted_txs_v3` (0x4a) and
@@ -196,6 +197,9 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// Filled only while a V2 bundle is installed AND the rent fence is armed, so on every shipped
     /// preset it is empty and costs one `is_some_and`.
     pub palw_v2_accepted_tx_fees: std::collections::HashMap<TransactionId, u64>,
+    /// Actual accepted carrier fee remaining after mandatory released-bond burn.
+    /// The raw fee map above retains its existing meaning.
+    pub palw_v2_rent_available_fees: std::collections::HashMap<TransactionId, u64>,
     /// **ADR-0125: the merged round blocks and which of them hold their permit**, decided against
     /// the parent state before acceptance runs. `None` where the lane is not open at this block, so
     /// every shipped preset walks the mergeset exactly as before.
@@ -250,6 +254,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_receipt_v4_payouts: BlockHashMap::default(),
             palw_v2_bond_burns: Default::default(),
             palw_v2_accepted_tx_fees: Default::default(),
+            palw_v2_rent_available_fees: Default::default(),
             palw_round_verdicts: None,
             palw_round_fee_incomes: Vec::new(),
         }
@@ -586,9 +591,7 @@ impl VirtualStateProcessor {
             for (validated_tx, _) in validated_transactions.iter() {
                 ctx.mergeset_diff.add_transaction(validated_tx, pov_daa_score).unwrap();
                 ctx.accepted_tx_ids.push(validated_tx.id());
-                if collect_carrier_fees {
-                    ctx.palw_v2_accepted_tx_fees.insert(validated_tx.id(), validated_tx.calculated_fee);
-                }
+
                 // **Audit C-08 part three: the miner does not collect what the chain destroyed.**
                 //
                 // A released PALW bond's spend must leave `slashed` sompi unclaimed by any output,
@@ -597,6 +600,11 @@ impl VirtualStateProcessor {
                 // documentation ("enters circulation nowhere") would still be false. Burned by
                 // don't-mint, the mechanism the §F service share already uses.
                 let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0);
+                if collect_carrier_fees {
+                    palw_record_accepted_carrier_fees_v1(
+                        validated_tx, owed, &mut ctx.palw_v2_accepted_tx_fees, &mut ctx.palw_v2_rent_available_fees,
+                    );
+                }
                 // **ADR-0075 SA-1/SA-2: the RENT is burned, and only the carriage is the miner's.**
                 //
                 // Both prices are transaction fees, and a fee is paid to the coinbase of the block
@@ -619,15 +627,8 @@ impl VirtualStateProcessor {
                 let collectible =
                     self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
                 block_fee += collectible;
-                if finality_fee_active
-                    && validated_tx.tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some())
-                {
-                    // G14 R2: a TIR rent declaration is BURNED, never re-classified into the finality split (0 below
-                    // `palw_tir_public_conviction_v1`, so every shipped network classifies exactly as before).
-                    finality_fee += validated_tx
-                        .calculated_fee
-                        .saturating_sub(self.palw_tir_public_declared_rent_v1(validated_tx.tx, pov_daa_score));
-                }
+                // Finality classifies collectible fees, never destroyed bond/rent funds.
+                finality_fee += palw_finality_collectible_fee_v1(validated_tx.tx, collectible, finality_fee_active);
             }
 
             if let Some(income) = round_income {
@@ -3743,5 +3744,36 @@ mod tests {
             // Net committed set = a's reporter mint only.
             assert_eq!(multiset.finalize(), multiset_of(&[(mint_a, mint_a_entry)]).finalize());
         }
+    }
+}
+
+/// Record two views of the same natively validated carrier. Bond burn is senior to rent.
+pub(super) fn palw_record_accepted_carrier_fees_v1(
+    tx: &ValidatedTransaction<'_>,
+    bond_burn: u64,
+    raw: &mut std::collections::HashMap<TransactionId, u64>,
+    rent_available: &mut std::collections::HashMap<TransactionId, u64>,
+) {
+    let available = tx.calculated_fee.checked_sub(bond_burn)
+        .expect("native accepted bond spend paid its mandatory burn");
+    raw.insert(tx.id(), tx.calculated_fee);
+    rent_available.insert(tx.id(), available);
+}
+
+/// Internal fee view: the accepted native fee after mandatory bond burn, never raw F twice.
+pub(in crate::pipeline::virtual_processor) fn palw_carrier_rent_available_v1(
+    available: &std::collections::HashMap<TransactionId, u64>,
+    carrier: TransactionId,
+    priced: bool,
+) -> u64 {
+    if priced { available.get(&carrier).copied().unwrap_or(0) } else { super::processor::PALW_RENT_UNPRICED }
+}
+
+/// A bridge's finality share is a subset of the same collectible amount used for total fees.
+pub(super) fn palw_finality_collectible_fee_v1(tx: &Transaction, collectible: u64, active: bool) -> u64 {
+    if active && tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some()) {
+        collectible
+    } else {
+        0
     }
 }
