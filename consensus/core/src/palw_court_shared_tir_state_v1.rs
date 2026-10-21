@@ -124,20 +124,32 @@ impl SharedTirIdsV1 {
         source.validate_complete_ids_v1(self.rows_root,&self.ids)
     }
 }
+/// Step roots do not depend on decoded IDs. Trace roots still require a fresh
+/// original outer-root check, but an owned copy of the ID sequence is unneeded.
+fn rows_anchor_for_query(state:&PalwChainStateV2,c:&SharedTirContextV1,
+    source:&crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
+    query:crate::palw_tir_public_source_v1::PalwTirPublicRequestV1)
+    ->Result<Option<crate::palw_tir_public_source_v1::PalwTirPublicRowsAnchorV1>,String>{
+    use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1 as Q;
+    match query {
+        Q::StepNode {..}|Q::StepLeaf {..}|Q::StepRun {..}|Q::Ids {..}=>Ok(None),
+        Q::RowsNode {..}|Q::TileNode {..}|Q::TraceTile {..}=>match state.staged_court_row_v1(&Key::CourtSharedIds(c.claim)) {
+            Some(Row::CourtSharedIds(row))=>{
+                row.check(&Key::CourtSharedIds(c.claim))?;
+                if row.scope_id!=c.scope_id {return Err("shared body substitutes ID context".into());}
+                source.rows_anchor_from_complete_ids_v1(row.rows_root,&row.ids).map(Some)
+            },_=>Ok(None),
+        },
+    }
+}
 pub(crate) fn authenticate_body(state:&PalwChainStateV2,c:&SharedTirContextV1,
     source:&crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
     query:crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,bytes:&[u8])->Result<(),String> {
     let bound=source.unit_bound_v1(&query)?;
     let _scratch=crate::palw_native_resource_v1::reserve_native_requests_v1(bound.resident_ram_bytes).map_err(|e|e.to_string())?;
     let response=source.decode_response_v1(&query,bytes)?;
-    let ids=match state.staged_court_row_v1(&Key::CourtSharedIds(c.claim)) {
-        Some(Row::CourtSharedIds(row))=>{
-            row.check(&Key::CourtSharedIds(c.claim))?;
-            if row.scope_id!=c.scope_id {return Err("shared body substitutes ID context".into());}
-            Some(source.retain_complete_ids_v1(row.rows_root,&row.ids)?)
-        },_=>None,
-    };
-    source.authenticate_v1(&query,&response,ids.as_ref().map(|v|&**v))?;
+    let rows=rows_anchor_for_query(state,c,source,query)?;
+    source.authenticate_with_rows_v1(&query,&response,None,rows.as_ref())?;
     Ok(())
 }
 
@@ -167,9 +179,7 @@ pub fn read_shared_data_v1(state:&PalwChainStateV2,claim:Hash64,ordinal:u64)->Re
     let bound=source.unit_bound_v1(&query)?;
     let lease=crate::palw_native_resource_v1::reserve_native_requests_v1(bound.resident_ram_bytes).map_err(|e|e.to_string())?;
     let response=source.decode_response_v1(&query,&body.bytes)?;
-    let ids=match state.staged_court_row_v1(&Key::CourtSharedIds(claim)) {
-        Some(Row::CourtSharedIds(ids))=>Some(source.retain_complete_ids_v1(ids.rows_root,&ids.ids)?),_=>None,
-    };
-    let unit=source.authenticate_v1(&query,&response,ids.as_ref().map(|x|&**x))?;
+    let rows=rows_anchor_for_query(state,c,&source,query)?;
+    let unit=source.authenticate_with_rows_v1(&query,&response,None,rows.as_ref())?;
     Ok(Some(RootedSharedDataV1::Unit(crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(unit,lease))))
 }

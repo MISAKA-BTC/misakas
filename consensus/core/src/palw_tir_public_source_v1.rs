@@ -357,7 +357,15 @@ impl PalwTirPublicSourceV1 {
         }
         Ok(())
     }
-    /// The returned allocation ticket remains attached to the non-wire capability.
+    /// Recheck the borrowed sequence against the original outer root, but retain
+    /// only its rows identity. No ID Vec clone or serialized trust flag.
+    pub(crate) fn rows_anchor_from_complete_ids_v1(&self,rows_root:Hash64,ids:&[u32])
+        ->Result<PalwTirPublicRowsAnchorV1,String>{
+        self.validate_complete_ids_v1(rows_root,ids)?;
+        Ok(PalwTirPublicRowsAnchorV1 {source_id:self.source_id,trace_root:self.header.full_logits_trace_root,rows_root})
+    }
+
+    /// Owned output remains necessary at FullIds ingestion, not per-query reads.
     pub(crate) fn retain_complete_ids_v1(&self, rows_root: Hash64, ids: &[u32])
         -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, String> {
         self.validate_complete_ids_v1(rows_root,ids)?;
@@ -919,6 +927,12 @@ mod tests {
         assert!(source.authenticate_v1(&request, &response, None).is_err(), "wire material cannot mint a native rows anchor");
         let native = PalwTirPublicRowsAnchorV1::from_native_v1(&source, ids.rows_root_v1());
         assert_eq!(source.authenticate_with_rows_v1(&request, &response, None, Some(&native)).unwrap().response_v1(), &response);
+        let borrowed=source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(),ids.ids_v1()).unwrap();
+        assert_eq!(source.authenticate_with_rows_v1(&request,&response,None,Some(&borrowed)).unwrap().response_v1(),&response);
+        let mut altered=ids.ids_v1().to_vec();altered[0]^=1;
+        assert!(source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(),&altered).is_err());
+        assert!(source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(),&[]).is_err());
+        assert!(source.rows_anchor_from_complete_ids_v1(Hash64::from_u64_word(999),ids.ids_v1()).is_err());
         let wrong = PalwTirPublicRowsAnchorV1::from_native_v1(&source, Hash64::from_u64_word(999));
         assert!(source.authenticate_with_rows_v1(&request, &response, None, Some(&wrong)).is_err());
         let (foreign, _) = geometry(8, 1);

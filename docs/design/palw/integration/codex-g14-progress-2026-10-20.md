@@ -355,3 +355,14 @@ Non-test consensus release check exited0. The four changed runtime sources were 
 これは状態を進めるデータ操作の部分上限であり、外側transaction/UTXO/mass/fee、再送・coalesced・無効入力の予算、preparation/restart、semantic/court/archive、保持IO/byte-DAA、実CPU/物理容量は未完。署名数を実測CPUへ換算せず、未知項を0にせず、完全な有料profileとしてbookへ投入しない。[コマンド・source/実行file/log hashと範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/shared-transport-artifact.json)。G14全体・実door・T01–T15・武装/統合/配備の未完を維持する。
 最終選択は93件（native40＋共有関連18＋service/policy/G14gate/activation/t12同一性35）。新規component試験1件は18に含み、targeted18と過去134等を加算しない。小型oracleとcodecの導出検査であり、nodeの有料shared入口や実物理容量の合格ではない。source監査には、step系でも保存済みIDs全列を再認証・コピーする未計上の読出し経路を記録した。必要なtrace/IDsの認証とloaded integrityを維持しながら不要な再処理を除き、残費用を全profileへ含める必要がある。
 Non-test consensus release check exited0. The changed runtime source was reconstructed from the parent plus saved patch and matched SHA-256. Documentation remains FAIL/exit1 with the same five imported missing references and43 baseline-known occurrences; no new authored missing link or baseline update.
+## 共有queryのIDs再処理と所有copyの局所化
+
+親`52c20b99e`。[RFC-0029 §12](../../../rfc/0029-owner-independent-shared-tir-query-data.md#12-query-local-rows-identity-without-per-read-id-ownership)の候補では、step系は元step rootだけで認証し、無関係なIDs全列を参照・hash・copyしない。trace系は元outer rootに対して完全IDsを毎回再検査し、opaqueなrows identityだけを保持してID Vecの所有copyを作らない。native認証本体・完全IDs検査・loaded IDS context・FullIds EOFの所有出力は維持する。raw digest/serialized sealを認証器にせず、認証済みboolも新設しない。
+
+既存のnarrow/wide署名stream fixtureにtrace公開のIDs前拒否・EOF後成功、読出し・carriage・全undo/replayを追加する。直接改変した不正stateはnative受理済みとせず、stepの局所読出しが独立していてもtrace読出しと全体loadが拒否することを検査する。source試験では旧owned-ID方式とborrowed anchor方式の認証結果を比較する。[検証・source/実行file/log hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/borrowed-rows-artifact.json)。
+
+CPU/RSS削減の実測や全profile校正ではない。traceのouter hash・既存経路での再認証・EOF割当、全original有料graph、実費/IO/保持、実供給・公開ingress・金融解消・P2・T01–T15/実doorは未完で、G14全体・武装・統合・配備を完了へ変えない。
+最終選択は99件（native40＋共有関連18＋source認証6＋integration35）。既存3ケースを拡張し、targeted2と過去93等は加算しない。non-test consensus release checkはexit0。最初の型検査はFullIds EOFにも必要な所有ID helperの削除によるexit101で、修正前source/patch/logを保存した。helperは元の本体のまま復元し、最終release試験前に修正している。実行試験0の型検査失敗を、試験の失敗や成功へ数えない。
+三つの変更runtime sourceは親commit＋保存patchから再構成しSHA-256一致。文書検査は同じimport済み欠損5件とbaseline既知43件によりFAIL/exit1で、新規著者リンク欠損は0、baseline更新なし。
+
+次のP0は、データ共有だけで止まっているclaim共通frontierをsemantic/courtの義務・終端へ接続し、元originalの全合法分岐・全actor資本と実feeを原子的に導出/予約するcoordinatorを具体化すること。今回のcopy除去や署名envelope部分上限だけを完全profile/有料受付済みにしない。公開node入口・実供給/配送収録前提・T05/T01–T15と実doorの元条件は残す。

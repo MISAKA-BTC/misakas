@@ -65,3 +65,6 @@ Ready資格でactor集合を元契約に束縛しても、正直な署名者の�
 ## Signed data transport derivation
 
 [RFC-0029 section11](../rfc/0029-owner-independent-shared-tir-query-data.md#11-derived-signed-data-transport-components) derives the distinct data-control envelope extent from original custodian bounds, grouped source bounds, canonical fragments and actual Borsh codecs. It includes one FullIds stream per signer and per-query fresh responses. This closes a previously omitted byte/control component; it does not close CPU/IO/fees/retention, repeated ingress, preparation, semantic/court/archive or the full funded graph. No production parameter, signature obligation or public endpoint is adopted by this helper.
+## Borrowed rows identity for shared reads
+
+[RFC-0029 section12](../rfc/0029-owner-independent-shared-tir-query-data.md#12-query-local-rows-identity-without-per-read-id-ownership) removes unrelated IDs work from step-only reads and uses freshly authenticated borrowed IDs for trace rows identity. Whole-state loading and trace outer-root authentication remain required; no cached flag or current native-pointer shortcut grants that identity. FullIds ingestion still owns its decoded output. No measured saving, funded profile, public admission or production activation follows from this optimization.

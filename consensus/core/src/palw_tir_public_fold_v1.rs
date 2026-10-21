@@ -2619,6 +2619,15 @@ mod conviction_e2e_tests {
         assert!(!fold::share_body(&mut b,&ctx,claim,first,&body).unwrap());
         assert!(matches!(shared::read_shared_data_v1(&b.state,claim,first).unwrap(),Some(RootedSharedDataV1::Unit(unit))
             if unit.source_id_v1()==p.source_id && borsh::to_vec(unit.response_v1()).unwrap()==body));
+        let trace_ordinal=find(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::TraceTile {row:0,tile:0});
+        fold::request(&mut b,&ctx,claim,&make(trace_ordinal,outsider(),11)).unwrap();
+        let event=crate::palw_tir_court_v1::tir_logits_event_disclosure_v1(&fx.execution.binding,&fx.execution.rows,&fx.execution.generated,0,0).unwrap();
+        let crate::palw_tir_court_v1::PalwTirTraceEventDisclosureV1::Tiled {row_root,row_opening,tile_lanes,tile_opening,..}=event else {panic!("tiled fixture")};
+        let trace_body=borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::TraceTile {
+            row_root,row_opening,lanes:tile_lanes,opening:tile_opening}).unwrap();
+        let before=b.state.state_root();let journal=b.entries.len();
+        assert!(fold::share_body(&mut b,&ctx,claim,trace_ordinal,&trace_body).is_err(),"trace still needs authenticated IDs");
+        assert_eq!(b.state.state_root(),before);assert_eq!(b.entries.len(),journal);
         fold::request(&mut b,&ctx,claim,&make(ids_ordinal,outsider(),11)).unwrap();
         let rows=crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context,&fx.execution.rows).unwrap();
         let mut bad_ids=fx.execution.generated.clone();bad_ids[0]^=1;
@@ -2636,6 +2645,9 @@ mod conviction_e2e_tests {
         assert!(!fold::share_ids(&mut b,&ctx,claim,rows,&fx.execution.generated).unwrap());
         assert!(matches!(shared::read_shared_data_v1(&b.state,claim,ids_ordinal).unwrap(),Some(RootedSharedDataV1::Ids {rows_root,ids})
             if rows_root==rows && ids==fx.execution.generated.as_slice()));
+        assert!(fold::share_body(&mut b,&ctx,claim,trace_ordinal,&trace_body).unwrap());
+        assert!(matches!(shared::read_shared_data_v1(&b.state,claim,trace_ordinal).unwrap(),Some(RootedSharedDataV1::Unit(unit))
+            if borsh::to_vec(unit.response_v1()).unwrap()==trace_body));
         let data=response::shared_data_fingerprint_v1(&b.state,request_id).unwrap().unwrap();
         let signed_response=make_response(&b.state,producer,31,data);let reply_ctx=at(frame,offset+2);
         let before=b.state.state_root();let entries=b.entries.len();
@@ -2700,6 +2712,14 @@ mod conviction_e2e_tests {
         row.check(&query_key).unwrap();assert!(reload(&poisoned).is_err(),"matching stored digest cannot replace original-root authentication");
         let mut wrong_ids=fresh.clone();let Some(Row::CourtSharedIds(ids))=wrong_ids.staged_courts.get_mut(&Key::CourtSharedIds(claim)) else {panic!()};
         ids.ids[0]^=1;assert!(reload(&wrong_ids).is_err(),"raw persisted IDs are reauthenticated, not trusted as a sealed flag");
+        // Direct invalid-state counterexample, not an accepted native mutation.
+        // Step-root access is independent; trace access and whole-state loading
+        // must still reject the corrupt outer-root dependency.
+        assert!(shared::read_shared_data_v1(&wrong_ids,claim,first).unwrap().is_some());
+        assert!(shared::read_shared_data_v1(&wrong_ids,claim,trace_ordinal).is_err());
+        let mut missing_ids=fresh.clone();missing_ids.staged_courts.remove(&Key::CourtSharedIds(claim));
+        assert!(shared::read_shared_data_v1(&missing_ids,claim,first).unwrap().is_some());
+        assert!(shared::read_shared_data_v1(&missing_ids,claim,trace_ordinal).is_err());assert!(reload(&missing_ids).is_err());
         let mut no_requester=fresh.clone();no_requester.bonds.remove(&outsider());
         let Some(Row::CourtSharedQuery(q))=no_requester.staged_court_row_v1(&Key::CourtSharedQuery(set.request_id(next).unwrap())) else {panic!()};
         q.check_context(&no_requester).unwrap();
