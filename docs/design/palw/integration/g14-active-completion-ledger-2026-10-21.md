@@ -52,6 +52,8 @@ Next primary integration work is the original coordinator: derive canonical comp
 
 ## Latest parallel checkpoint
 
+[Parameter-cover owner and Tokenizer data-path producer](../../../evidence/palw/g14-completion-2026-10-22/parameter-and-tokenizer-producer.md): 47 unique selected successes, including existing named/all-original parameter10, real native original/EOF Store replay, two-context data path identity, independent Book comparison, quota lifecycle, t12 identity9 and activation5. No prompt relation, public acquisition, CPU/fee profile or full funded acceptance is established. Raw/rendering remain separate input ownership scopes.
+
 [Native numerical and source-graph owners](../../../evidence/palw/g14-completion-2026-10-22/geometry-native-owners.md): 37 unique parent tests plus two isolated Source quota workers pass. Preparation/output/index scratch reservations now remain with the returned geometry; old path/graph identities and local limits remain. Parameter/prompt/semantic acquisition, complete duties/service/financial profiles, atomic escrow and full native campaign remain incomplete.
 
 [Single decoded-original policy path](../../../evidence/palw/g14-completion-2026-10-22/fp-original-projection.md): core34 and actual-signature/native3 selected tests pass. Existing policy checks and object fields are reused through one crate-private helper; carrier decoding/routing remain separate. No policy, activation, funded-success capability or current-authority shortcut is introduced.

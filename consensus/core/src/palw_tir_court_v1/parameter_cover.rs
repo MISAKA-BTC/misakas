@@ -55,6 +55,83 @@ impl PreparedParameterCoverV1 {
         let intervals=analyze_ranges(&verified.space.program).map_err(|e|e.to_string())?;
         Ok(Self {verified,context,inventory,intervals})
     }
+    /// Conservative simultaneous allocation peak for the existing all-root
+    /// materializer. Counts are checked local limits, never adopted network caps.
+    pub(crate) fn native_all_roots_requests_v1(program:&TirProgramV1,
+        shape:&crate::palw_native_resource_v1::NativeTirProgramShapeV1,
+        original_leaves:u64,
+        budget:crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1)
+        ->Result<u64,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,TirNativeRequestsV1,
+            btree_node_envelope_bytes_v1,NativeCoverageV1};
+        use crate::palw_tir_public_source_v1::parameter_cover_v1::{NamedParameterCoverV1,OriginalParameterCoverV1};
+        let mut q=TirNativeRequestsV1::new();
+        let n=shape.structural_items_v1();
+        let overflow=||E::Resource(NativeCoverageV1::overflow::<OriginalParameterCoverV1>("original parameter native allocation"));
+        q.exact_v1::<PalwTirVerifiedBindingV1>(1).map_err(E::Resource)?;
+        q.add_v1(TirInventoryOpeningVerifierV1::index_requests(program).map_err(E::Resource)?).map_err(E::Resource)?;
+        // Retained range analysis beside the verified StepSpace. Each inner
+        // interval vector has its own minimum capacity even when node counts
+        // are spread among many blocks.
+        q.vec_v1::<Vec<Interval>>(n).map_err(E::Resource)?;
+        q.vec_v1::<Interval>(n).map_err(E::Resource)?;
+        let mut minimum=TirNativeRequestsV1::new(); minimum.vec_v1::<Interval>(1).map_err(E::Resource)?;
+        q.add_v1(n.checked_mul(minimum.bytes_v1()).ok_or_else(overflow)?).map_err(E::Resource)?;
+        // Site/cone live while Walk grows: reductions, folds, bounds, counts,
+        // cone computed/seen/derived and repeated-reference traversal stack.
+        q.vec_v1::<u16>(n).map_err(E::Resource)?;
+        q.vec_v1::<crate::palw_tir_dissect_v1::PalwTirFoldV1>(n).map_err(E::Resource)?;
+        q.vec_v1::<Interval>(n).map_err(E::Resource)?;
+        q.vec_v1::<u64>(n).map_err(E::Resource)?;
+        for _ in 0..3 {q.vec_v1::<bool>(n).map_err(E::Resource)?;}
+        q.vec_v1::<usize>(n.checked_add(1).ok_or_else(overflow)?).map_err(E::Resource)?;
+        // One cloned Node is bounded by the entire actual scanned program
+        // ownership. No peer-provided rank/count or sizeof(Node)-only estimate.
+        q.add_v1(shape.program_requests_v1()).map_err(E::Resource)?;
+        // Gather is the largest simultaneous rank workspace: run.shape/c,
+        // d/x/xi/q, plus fetch's temporary shape (seven rank Vecs). Other
+        // branches (including state replay node.shape) have no larger live set.
+        for _ in 0..7 {q.vec_v1::<usize>(misaka_palw_tir::types::MAX_RANK as u64).map_err(E::Resource)?;}
+        let coordinates=budget.max_total_coordinates.min(budget.max_total_edges);
+        // No allocating param_instances/index call is made before growth.
+        // Row pieces and actual scheduled parameter readers give the same
+        // inventory cardinality as the existing index, using borrowed scans.
+        let mut inventory=0u128;
+        for (j,param) in program.params.iter().enumerate() {
+            let tensor=param.shape.iter().try_fold(param.dtype.width() as u128,|a,d|a.checked_mul(u128::from(*d)))
+                .ok_or_else(overflow)?;
+            let row=if param.shape.len()>=2 {
+                param.shape[1..].iter().try_fold(param.dtype.width() as u128,|a,d|a.checked_mul(u128::from(*d)))
+                    .ok_or_else(overflow)?
+            } else {tensor};
+            let pieces=if row==0||tensor==0 {0} else {
+                (tensor/row).checked_mul(row.div_ceil(u128::from(PALW_TIR_ROW_PIECE_BYTES_V1))).ok_or_else(overflow)?
+            };
+            let instances=if param.per_layer {
+                program.schedule.layers.iter().filter(|block|program.blocks.get(usize::from(**block))
+                    .is_some_and(|b|b.nodes.iter().any(|n|n.inputs.iter().any(|r|matches!(r,Ref::Param(k) if usize::from(*k)==j)))))
+                    .count() as u128
+            } else {1};
+            inventory=inventory.checked_add(pieces.checked_mul(instances).ok_or_else(overflow)?).ok_or_else(overflow)?;
+        }
+        let memberships=u128::from(budget.max_root_memberships.min(budget.max_total_edges))
+            .min(inventory.checked_mul(u128::from(original_leaves)).ok_or_else(overflow)?) as u64;
+        let union_members=memberships.min(inventory.min(u128::from(u64::MAX)) as u64);
+        type Key=(u32,u16,u16,usize);
+        q.add_v1(coordinates.checked_mul(btree_node_envelope_bytes_v1::<Key,()>() as u64).ok_or_else(overflow)?).map_err(E::Resource)?;
+        q.vec_v1::<Key>(coordinates).map_err(E::Resource)?;
+        // Walk.leaves and global union coexist. Conversion to output Vecs
+        // occurs while the iterator still owns the remaining tree nodes.
+        q.add_v1(memberships.checked_add(union_members)
+            .and_then(|v|v.checked_mul(btree_node_envelope_bytes_v1::<u32,()>() as u64)).ok_or_else(overflow)?).map_err(E::Resource)?;
+        q.vec_v1::<NamedParameterCoverV1>(original_leaves).map_err(E::Resource)?;
+        q.vec_v1::<u32>(memberships).map_err(E::Resource)?; // all retained root parameters
+        q.vec_v1::<u32>(union_members).map_err(E::Resource)?; // final union
+        let mut minimum=TirNativeRequestsV1::new();minimum.vec_v1::<u32>(1).map_err(E::Resource)?;
+        q.add_v1(original_leaves.checked_mul(minimum.bytes_v1()).ok_or_else(overflow)?).map_err(E::Resource)?;
+        q.exact_v1::<OriginalParameterCoverV1>(1).map_err(E::Resource)?;
+        Ok(q.bytes_v1())
+    }
     /// None means an existing canonical leaf has no numerical dissection.
     /// A missing leaf, failed analysis or exhausted exploration is always Err.
     pub(crate) fn named(&self,index:u64,budget:ParameterCoverBudgetV1)->Result<Option<PotentialParameterCoverV1>,String> {
@@ -71,7 +148,11 @@ impl PreparedParameterCoverV1 {
         space: &self.verified.space, pos: site.ctx.pos, occurrence: site.ctx.occurrence,
         inventory: &self.inventory, budget, leaf_limit:max_leaves,
         edges: 0, seen: BTreeSet::new(), pending: Vec::new(), leaves: BTreeSet::new() };
-    for element in leaf_elements(&leaf) { walk.node(site.node, element)?; }
+    if let PalwTirLeafKindV1::Commit {first_element,..}=leaf.kind {
+        for element in first_element..first_element+u64::from(leaf.value_count) {
+            walk.node(site.node,element as usize)?;
+        }
+    }
     // Every legal root element/closure and every legal bottom range is covered.
     // This intentionally includes elements not reached by one particular root;
     // it is a finite coordinate envelope, not a canonical carriage for a move.

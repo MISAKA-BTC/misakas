@@ -60,6 +60,59 @@ impl PalwTirPublicSourceV1 {
         // Binding verification, inventory index and range analysis are shared
         // for all roots. Only the finite potential-coordinate walks repeat.
         let prepared=PreparedParameterCoverV1::new(Box::new(verified),binding.job_context)?;
+        self.parameter_cover_prepared_v1(prepared,budget)
+    }
+
+    /// Additional native allocation owner for the all-original parameter relation.
+    /// Source (and any numerical geometry) keep their own live reservations.
+    /// This authenticates original/program coordinates, not material availability,
+    /// prompt dependencies, native CPU, fees, custody or complete admission.
+    pub fn parameter_cover_native_v1(
+        source:&crate::palw_native_resource_v1::NativeRetainedV1<Self>,
+        registered:&crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout:&crate::palw_tir_class_v1::PalwTirLayoutV1,
+        budget:OriginalParameterCoverBudgetV1)
+        ->Result<crate::palw_native_resource_v1::NativeRetainedV1<OriginalParameterCoverV1>,
+            crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        Self::parameter_cover_native_reserved_v1(source,registered,layout,budget,
+            crate::palw_native_resource_v1::reserve_native_requests_v1)
+    }
+    fn parameter_cover_native_reserved_v1<R>(
+        source:&crate::palw_native_resource_v1::NativeRetainedV1<Self>,
+        registered:&crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout:&crate::palw_tir_class_v1::PalwTirLayoutV1,
+        budget:OriginalParameterCoverBudgetV1,reserve:R)
+        ->Result<crate::palw_native_resource_v1::NativeRetainedV1<OriginalParameterCoverV1>,
+            crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    where R:FnOnce(u64)->Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
+        crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeRetainedV1,
+            standalone_tir_program_shape_v1};
+        if source.header.step_leaf_count>budget.max_original_leaves {
+            return Err(E::Decode("original parameter cover leaf budget exhausted".into()));
+        }
+        // Reserve before resolving/decoding/verifying. This is an additional
+        // conservative construction peak, not a borrow of Source's ticket.
+        let requests=Self::native_construction_requests_v1(registered,layout,&source.header)?;
+        let mut lease=reserve(requests).map_err(E::Resource)?;
+        let binding=source.header.resolve_registered_layout_v1(registered,layout,
+            source.header.committed_execution_root,source.maximum_leaves).map_err(E::Decode)?;
+        let verified=crate::palw_tir_step_v1::verify_tir_binding_v1(&binding,source.maximum_leaves)
+            .map_err(|e|E::Decode(e.to_string()))?;
+        if verified.class_id!=source.class_id||verified.context_hash!=source.context_hash {
+            return Err(E::Decode("original parameter cover substitutes source geometry".into()));
+        }
+        let shape=standalone_tir_program_shape_v1(&registered.program).map_err(|e|E::Decode(e.to_string()))?;
+        let additional=PreparedParameterCoverV1::native_all_roots_requests_v1(
+            &verified.space.program,&shape,source.header.step_leaf_count,budget)?;
+        if let Some(ticket)=lease.as_mut() {ticket.grow_memory_v1(additional).map_err(E::Resource)?;}
+        let prepared=PreparedParameterCoverV1::new(Box::new(verified),binding.job_context).map_err(E::Decode)?;
+        let cover=source.parameter_cover_prepared_v1(prepared,budget).map_err(E::Decode)?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(cover,lease))
+    }
+
+    fn parameter_cover_prepared_v1(&self,prepared:PreparedParameterCoverV1,
+        budget:OriginalParameterCoverBudgetV1)->Result<OriginalParameterCoverV1,String> {
         let mut out=OriginalParameterCoverV1{source_id:self.source_id,original_leaves:self.header.step_leaf_count,
             roots:Vec::new(),union:Vec::new(),total_edges:0,total_coordinates:0,root_memberships:0};
         let mut union=BTreeSet::new();
@@ -80,5 +133,55 @@ impl PalwTirPublicSourceV1 {
         }
         out.union=union.into_iter().collect();
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod native_owner_tests {
+    use super::*;
+    const B:OriginalParameterCoverBudgetV1=OriginalParameterCoverBudgetV1 {
+        max_original_leaves:1_000_000,max_total_edges:10_000_000,
+        max_total_coordinates:1_000_000,max_root_memberships:1_000_000,
+    };
+    #[test]
+    fn native_original_parameter_cover_preserves_actual_all_root_relation() {
+        let f=crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+        let original=f.frame.original_v1();
+        let source=PalwTirPublicSourceV1::new_native_v1(&f.record,&f.layout,f.frame.header_v1(),
+            original.execution_root,original.trace_root,f.rules.maximum_leaves).unwrap();
+        let legacy=source.parameter_cover_v1(&f.record,&f.layout,B).unwrap();
+        let native=PalwTirPublicSourceV1::parameter_cover_native_v1(&source,&f.record,&f.layout,B).unwrap();
+        assert!(!legacy.roots.is_empty());
+        assert!(!legacy.union.is_empty());
+        assert_eq!(*native,legacy);
+        assert_eq!(native.root_memberships,native.roots.iter().map(|r|r.parameters.len() as u64).sum::<u64>());
+        let low=OriginalParameterCoverBudgetV1 {max_total_edges:0,..B};
+        assert!(PalwTirPublicSourceV1::parameter_cover_native_v1(&source,&f.record,&f.layout,low).is_err());
+        let binding=source.header.resolve_registered_layout_v1(&f.record,&f.layout,
+            source.header.committed_execution_root,source.maximum_leaves).unwrap();
+        let verified=crate::palw_tir_step_v1::verify_tir_binding_v1(&binding,source.maximum_leaves).unwrap();
+        let shape=crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&f.record.program).unwrap();
+        let prelude=PalwTirPublicSourceV1::native_construction_requests_v1(&f.record,&f.layout,&source.header).unwrap();
+        let additional=PreparedParameterCoverV1::native_all_roots_requests_v1(
+            &verified.space.program,&shape,source.header.step_leaf_count,B).unwrap();
+        let total=prelude.checked_add(additional).unwrap();
+        for quota in [prelude-1,total-1,total] {
+            let checker=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(
+                crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1 {memory_bytes:quota,database_bytes:0});
+            let result=PalwTirPublicSourceV1::parameter_cover_native_reserved_v1(&source,&f.record,&f.layout,B,
+                |bytes|checker.reserve_requests_v1(bytes,0).map(Some));
+            if quota==total {
+                let owned=result.unwrap();
+                assert_eq!(*owned,legacy);
+                assert_eq!(checker.outstanding(),(total,0));
+                drop(owned);
+            } else {assert!(matches!(result,Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));}
+            assert_eq!(checker.outstanding(),(0,0));
+        }
+        let unbounded=OriginalParameterCoverBudgetV1 {max_original_leaves:u64::MAX,
+            max_total_edges:u64::MAX,max_total_coordinates:u64::MAX,max_root_memberships:u64::MAX};
+        assert!(matches!(PreparedParameterCoverV1::native_all_roots_requests_v1(
+            &verified.space.program,&shape,source.header.step_leaf_count,unbounded),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
     }
 }

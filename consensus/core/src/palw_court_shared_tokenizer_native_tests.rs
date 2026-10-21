@@ -84,27 +84,18 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     b.write_staged_row_v1(Key::CourtSharedContext(claim), Some(Row::CourtSharedContext(Box::new(c)))).unwrap();
     let store = Store::new(&b.state, claim, scope, &[], &[], None).unwrap();
-    // Only cfg(test) constructs the actual ordered absence proofs. Production
-    // must verify supplied proofs; it never uses this sparse-tree book.
-    let context = h(961);
-    let mut parser =
-        crate::palw_tokenizer_json_stream_v1::PalwTokenizerJsonStreamV1::new(context, semantics.tokenizer_id, raw.len() as u64, 0);
-    let mut book = crate::palw_tokenizer_json_stream_v1::tests::Book::new();
-    let mut proofs = Vec::new();
-    while parser.offset() < raw.len() as u64 || parser.pending_key().is_some() {
-        if let Some((namespace, hash)) = parser.pending_key() {
-            let proof = book.proof(namespace, hash);
-            parser.prove_key(context, &proof).unwrap();
-            book.insert(namespace, hash);
-            proofs.push(crate::palw_json_key_set_v1::PalwJsonKeyCompactProofV1::compress(&proof).unwrap());
-        } else {
-            assert!(parser.push(context, parser.offset(), &raw[parser.offset() as usize..]).unwrap() > 0);
-        }
-    }
-    parser.seal().unwrap();
-    parser.finish().unwrap();
-    assert!(!proofs.is_empty());
+    // Production data paths generated under a local target context; the final signed
+    // material intent below uses a different context and rechecks the same paths.
     let rendering = table.opening_of(0).unwrap();
+    let view=crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(source.header_v1(),&fx.record,frame.descriptor_v1().maximum_leaves).unwrap();
+    let target=crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state,&claim).unwrap();
+    let base=crate::palw_tokenizer_table_stream_v1::PalwTokenizerTableStreamV1::new_with_operand_length_view_v1(
+        h(961),&target,&view,&frame.original_v1().job,0,rendering.rendering.is_some(),
+        rendering.rendering.as_ref().map_or(0,Vec::len) as u32,&rendering.opening,eof.actual_bytes).unwrap();
+    let produced=crate::palw_tokenizer_table_stream_v1::producer::generate(&base,&raw,
+        crate::palw_tokenizer_table_stream_v1::producer::Budget{max_proofs:1000,max_nodes:513000,max_requests:1<<30,max_hash_calls:1000000,max_hash_bytes:1<<30}).unwrap();
+    let proofs=produced.proofs().to_vec();
+    assert!(!proofs.is_empty());
     let material = Material { raw: &raw, proofs: &proofs, rendering: &rendering };
     let budget = Budget { max_material_bytes: 1 << 25, max_proofs: 1000, max_native_calls: 100_000, max_packets: 10_000 };
     let rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 {

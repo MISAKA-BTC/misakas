@@ -1,0 +1,22 @@
+# Original-wide parameter native allocation owner candidate (unbuilt)
+
+Repository untouched; only /tmp patch. Parent must review/build/test under lock.
+
+## Real connection
+NativeRetained<Source> is borrowed, real retained header resolves registered layout and verify_tir_binding verifies actual class/context. Native lease is acquired BEFORE that reconstruction; grown BEFORE actual inventory index, analyze_ranges, site/walk and all-root result allocation. Existing all-root algorithm is extracted into one private shared materializer. No second derivation pass/prepared clone. The only semantic-preserving local optimization replaces leaf_elements temporary Vec by same ordered range iteration.
+
+Actual original -> every eligible dissection site -> all legal root/reduction elements -> conservative Select/Gather and Fixed-state replay -> native inventory leaf coordinates. Output preserves per-root relation and parameter-free numerical roots. Existing inventory index_requests is reused rather than a duplicate count assertion.
+
+## Simultaneous ownership
+Source's reservation remains live (borrowed owner argument); NumericalGeometry ticket, if caller retains it, also remains independent. This new conservative peak includes its own verified program/StepSpace, boxed binding, original inventory/range/site/Walk and retained output; it is deliberately retained until result Drop, not physical retained RAM/RSS or CPU. Index quote counts both existing param-instance passes. One actual Node clone is overbounded by full actual canonical program expansion. Gather live rank Vec inventory: run shape+c; d+x+xi+q; fetch shape = seven. Parent should review rank scratch and legacy analyze/cone allocation inventory before merge.
+
+BTree seen <= min(total coordinate,total edge); pending same. Individual leafset and retained union <= min(total memberships,total edge). Two sets coexist. Root Vec <= actual original leaves. Parameter Vec total lengths <= memberships, plus each root's independent minimum capacity; final union Vec additional. BTree->Vec conversion retains remaining nodes, counted together. Checked size arithmetic returns Native Resource before large index/output allocation. Existing codec/verifier semantic Result<String> pathways are unchanged; no claim all decoder physical malloc failures now typed.
+
+## Scope explicitly incomplete
+No prompt relation is fabricated: existing Walk treats Ref::Input/CarryIn as authenticated boundaries and does not record prompt-position dependencies. Deriving prompt coordinates must reuse actual site/context and the retained prompt form in a separate relation extension, then existing Flat/Merkle verifier; cannot infer them from parameter union. No material bytes, delivery, custody, complete grammar, adopted profile, native CPU or actual fee allocation is authenticated by success. This does not connect production/native funded success.
+
+## Proposed checks (included, UNRUN)
+Filter: native_original_parameter_cover_preserves_actual_all_root_relation. Uses actual history/GQA frame fixture, requires nonempty roots+union, compares every output field against existing derivation, checks membership accounting, semantic edge exhaustion and typed checked Resource overflow from u64::MAX limits. Included independent local checker tests use the same production reserve/grow path with prelude−1, total−1 and total; resource refusals must leave zero outstanding, success retains total until Drop then zero. No process-global quota arming. Tests are unrun. No quota/price/cap change.
+
+## Revision after parent review
+Fixed Option<NativeDemandLease> grow with `if let Some(ticket)` as existing numerical owner. Private reserved entry exists solely to run the identical path against a real local NativeDemandChecker (production uses existing framework reserve). Requested capacities are conservative local exploration bounds, not authenticated policy. Membership storage is reduced by actual verified program row-piece inventory cardinality × actual original leaves; union bounded by actual inventory. This count-only loop allocates nothing before lease growth, scans actual scheduled readers, and is NOT a substitute for the existing index verifier. Coordinate bound remains min(edge, coordinate request): a tighter program/job-domain bound needs history/occurrence/shape cardinalities including Fixed-state replay; using program node count alone is unsound and was not added. Quote is intentionally allowed to conservatively refuse a requested large exploration envelope. All tests remain UNRUN.

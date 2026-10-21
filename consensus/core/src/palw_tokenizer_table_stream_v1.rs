@@ -370,6 +370,9 @@ impl PalwTokenizerTableStreamV1 {
 #[path = "palw_tokenizer_canonical_replay_v1.rs"]
 pub(crate) mod canonical_replay;
 
+#[path = "palw_tokenizer_key_producer_v1.rs"]
+pub(crate) mod producer;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,6 +708,94 @@ mod tests {
         assert!(matches!(replay::build(&base,Material {rendering:None,..input},budget),Err(Refusal::RenderingOperand)));
         assert!(matches!(replay::build(&base,input,Budget {max_packets:got.work().packets-1,..budget}),Err(Refusal::Budget)));
         assert_eq!(borsh::to_vec(&base).unwrap(),saved);
+    }
+
+    fn data_producer_budget() -> producer::Budget {
+        producer::Budget {max_proofs:1000,max_nodes:513000,max_requests:1<<30,max_hash_calls:1000000,max_hash_bytes:1<<30}
+    }
+    #[test]
+    fn production_key_material_is_data_identical_across_native_contexts_and_rechecks() {
+        let raw=br#"{"model":{"vocab":{"A":0,"B":1},"merges":[]},"added_tokens":[]}"#;
+        let a=replay_fixture(raw,b"A");
+        let mut b=replay_fixture(raw,b"A");
+        b.context=Hash64::from_u64_word(109);
+        b.parser=PalwTokenizerJsonStreamV1::new(b.context,crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw),raw.len() as u64,0);
+        b.table.context=b.context;
+        let first=producer::generate(&a,raw,data_producer_budget()).unwrap();
+        let second=producer::generate(&b,raw,data_producer_budget()).unwrap();
+        assert!(!first.proofs().is_empty());
+        assert_eq!(first.proofs(),second.proofs());
+        assert_eq!(first.root(),second.root());
+        // Independent preexisting test Book and actual parser grammar, not generator twice only.
+        let atoms=replay_atoms(&a,raw,true).unwrap();
+        let expected:Vec<_>=atoms.iter().flat_map(|p|p.proofs.clone()).collect();
+        assert_eq!(first.proofs(),expected);
+        let budget=canonical_replay::Budget{max_material_bytes:1<<20,max_proofs:1000,max_native_calls:10000,max_packets:10000};
+        for base in [&a,&b] {
+            let material=canonical_replay::Material{raw,proofs:first.proofs(),rendering:Some(b"A")};
+            let finding=canonical_replay::build(base,material,budget).unwrap();
+            assert!(!finding.violation());
+            assert_eq!(finding.key_root(),first.root());
+        }
+        // Counts only wrapped producer hash invocations, not verifier CPU/hash totals.
+        assert_eq!(first.hash_calls,first.native_proof_calls*514);
+        assert_eq!(first.hash_bytes,first.native_proof_calls*(72+64+512*130));
+    }
+    #[test]
+    fn production_key_material_obeys_actual_overrun_duplicate_and_eof_authentication() {
+        let raw=br#"{"model":{"vocab":{"A":0,"A":1},"merges":[]}}"#;
+        for bound in [0,1,512] {
+            let mut base=replay_fixture(raw,b"A");
+            base.signed_key_bound=bound;
+            let result=producer::generate(&base,raw,data_producer_budget()).unwrap();
+            assert!(result.proofs().len() as u64<=bound);
+            if bound==0 {assert!(result.proofs().is_empty());}
+            let budget=canonical_replay::Budget{max_material_bytes:1<<20,max_proofs:1000,max_native_calls:10000,max_packets:10000};
+            let finding=canonical_replay::build(&base,canonical_replay::Material{raw,proofs:result.proofs(),rendering:Some(b"A")},budget).unwrap();
+            assert!(finding.violation());
+            if bound==512 {
+                // Duplicate membership causes no new leaf/ancestor hashes.
+                assert!(result.hash_calls<result.native_proof_calls*514);
+            }
+        }
+        let base=replay_fixture(raw,b"A");
+        let mut bad=raw.to_vec();
+        *bad.last_mut().unwrap()=b' ';
+        assert!(matches!(producer::generate(&base,&bad,data_producer_budget()),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))));
+        let mut budget=data_producer_budget();budget.max_requests=0;
+        assert!(matches!(producer::generate(&base,raw,budget),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+        let good=producer::generate(&base,raw,data_producer_budget()).unwrap();
+        let mut budget=data_producer_budget();budget.max_hash_calls=good.hash_calls-1;
+        assert!(matches!(producer::generate(&base,raw,budget),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+    }
+    #[test]
+    fn production_key_material_owner_refuses_before_construction_holds_quota_and_releases() {
+        use crate::palw_native_resource_v1::{NativeDemandCheckerV1,NativeSnapshotResourceLimitsV1,NativeDecodeErrorV1};
+        let raw=br#"{"model":{"vocab":{"A":0,"B":1},"merges":[]}}"#;
+        let base=replay_fixture(raw,b"A");
+        let checker=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:u64::MAX,database_bytes:0});
+        let first=producer::generate_reserved(&base,raw,data_producer_budget(),|q|checker.reserve_requests_v1(q,0).map(Some)).unwrap();
+        let q=checker.outstanding().0;
+        assert!(q>0);
+        drop(first);
+        assert_eq!(checker.outstanding(),(0,0));
+        let mut wrong=raw.to_vec();*wrong.last_mut().unwrap()=b' ';
+        for bytes in [raw.as_slice(),wrong.as_slice()] {
+            let short=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:q-1,database_bytes:0});
+            assert!(matches!(producer::generate_reserved(&base,bytes,data_producer_budget(),|n|short.reserve_requests_v1(n,0).map(Some)),Err(NativeDecodeErrorV1::Resource(_))));
+            assert_eq!(short.outstanding(),(0,0));
+        }
+        let exact=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:q,database_bytes:0});
+        let owner=producer::generate_reserved(&base,raw,data_producer_budget(),|n|exact.reserve_requests_v1(n,0).map(Some)).unwrap();
+        assert_eq!(exact.outstanding(),(q,0));
+        assert!(exact.reserve_requests_v1(1,0).is_err());
+        drop(owner);
+        assert_eq!(exact.outstanding(),(0,0));
+        let ticket=exact.reserve_requests_v1(q,0).unwrap();drop(ticket);
+        assert!(matches!(producer::generate_reserved(&base,&wrong,data_producer_budget(),|n|exact.reserve_requests_v1(n,0).map(Some)),Err(NativeDecodeErrorV1::Decode(_))));
+        assert_eq!(exact.outstanding(),(0,0));
+        let ticket=exact.reserve_requests_v1(q,0).unwrap();drop(ticket);
+        assert_eq!(exact.outstanding(),(0,0));
     }
 
 }

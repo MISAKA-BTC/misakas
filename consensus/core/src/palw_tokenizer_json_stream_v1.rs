@@ -1338,3 +1338,16 @@ pub(crate) mod tests {
 // Read-only native allocation inventory; no state/root/codec field is added.
 #[path = "palw_native_resource_v1/private/palw_tokenizer_json_stream_v1.rs"]
 mod native_resource_inventory_v1;
+
+
+/// Owner-local parser growth bound, derived from the existing grammar, not a protocol cap.
+/// Includes one parser inline value, the bounded Frame stack, and both String Vecs.
+pub(crate) fn producer_parser_requests_v1() -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::TirNativeRequestsV1;
+    let mut q=TirNativeRequestsV1::new();
+    q.exact_v1::<PalwTokenizerJsonStreamV1>(1)?;
+    q.vec_v1::<Frame>(MAX_DEPTH as u64)?;
+    q.vec_v1::<u8>(16)?;
+    q.vec_v1::<u8>(4)?;
+    Ok(q.bytes_v1())
+}
