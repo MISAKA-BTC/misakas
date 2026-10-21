@@ -115,3 +115,12 @@ current book の assignment は再割当先を表す。変更前後は native jo
 [Native TIR 要求集合](rfc26-shared-tir-request-set-2026-10-20.md)を、実 source の全許可 query shape から導出する部品として追加した。全 interior level、全 leaf、全合法 run の start/count、row/tile/IDs を列挙可能な ordinal にし、claim/source/native rules/shared profile の identity に固定する。owner/relay/先着順は入力にしない。
 
 これは全応答義務・service packet・合法対話の全遷移 graph の完成ではない。元 source validator より狭い reachable set を採るなら、実 protocol から全敵対 choice を含めて導出する必要がある。重なる query の公開データ再利用を計上してよいが、変換・opening・署名・保持費用を省かない。実費用、応答者/turn/fragment、予約・ingress・期限/供給会計への接続と T05 は未完了であり、gate を解除しない。
+
+
+## 全枝 numerical tree の事前集計（隔離候補、未採択）
+
+`palw_tir_dissect_v1::tree_inventory_v1::numerical_tree_inventory_v1` は、root受領前に既存のceil-width分割に従う全枝を集計する。入力は、一つのeligible leafについて元jobから導出する履歴tile数、既存の合法arity、登録programから導出するreduction数と要求値数の上限。各深さで同じ大きさの区間をまとめ、全tileを列挙せずに、内部開示数・全終端数・child claim数・内部path長の総和・最大深さ・round本文量の上限を求める。完全k分木の近似や一本の最長経路で代用しない。既存arityとreduction/value capを変更せず、ゼロtileや範囲外を拒否する。
+
+本文量は既存 `PalwTirDissectRoundV1` の符号化だけである。child数をc、reduction数をr、要求値上限をvとすると、一開示は `6 + c * (4 + 4*r + 16*v)` bytes。端数区間では実際のchild数を使う。全枝に同じ要求値上限を適用した保守的な上限であり、実際の要求集合が小さければ等値とは限らない。これは実測CPUやnode負荷の値ではない。
+
+この関数はまだ元受付への接続ではない。入力を外部申告で信用せず、既存のprogram/demand規則から導出し、元claimの**全eligible leaf**を含めることが必要。既に保持したrootの一形状だけを予約して全分岐を確保したと扱わない。root/finalize・各terminal witness・新署名envelope/transport・source/semantic/court/archive・不正/重複ingress・CPU/IO・保持・料金を加え、実供給と依存horizonと資金を原子的に確保するまでは、完全な予約packet集合や受付能力にならない。既存schedulerへ単位費用で流し込まず、default/credit/財務効果を許可しない。

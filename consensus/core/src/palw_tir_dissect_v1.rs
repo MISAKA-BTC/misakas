@@ -43,6 +43,10 @@ pub const PALW_TIR_DISSECT_MAX_REDUCTIONS: usize = 16;
 /// The most demanded elements of all reductions together one claim may carry.
 pub const PALW_TIR_DISSECT_MAX_VALUES: usize = 4096;
 
+/// Pre-root numerical tree inventory; not a service reservation or admission.
+#[path = "palw_tir_dissect_inventory_v1.rs"]
+pub mod tree_inventory_v1;
+
 /// How a reduction's partials fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
