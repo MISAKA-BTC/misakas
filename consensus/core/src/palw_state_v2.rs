@@ -252,6 +252,8 @@ mod palw_security_certification_fold_v1;
 mod palw_claim_local_fold_v1;
 #[path = "palw_claim_local_rewards_v1.rs"]
 mod palw_claim_local_rewards_v1;
+// RFC-0023 stage 2: per-claim settlement read (dormant `palw_claim_local_settlement_v1`).
+pub use palw_claim_local_rewards_v1::{PalwClaimLocalSettlementV1, palw_claim_local_settlement_v1};
 // RFC-0008: the once-only settlement registry (dormant `palw_settlement_once_v1`; kernel route aux 140) — every settlement consumer
 // checks and writes its exact obligation's marker in the same transition before any value moves.
 #[path = "palw_settlement_once_fold_v1.rs"]

@@ -410,3 +410,54 @@ class Aggregation(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def recovery_row(states, reserve=500, block='ee' * 64, role='FRESH', source='node-rpc'):
+    return dict(source=source, role=role, value=dict(pointStates=states, reserveBalance=reserve, blockHash=block))
+
+
+LOCK, DEPOSIT, REFUND = 'aa' * 64 + ':0', 'bb' * 64 + ':1', 'cc' * 64 + ':0'
+REFUND_ENTRY = dict(amount=900, scriptPublicKey='0000' + '51', isCoinbase=False, blockDaaScore=7)
+
+
+class RecoveryOnce(unittest.TestCase):
+    def states(self, **override):
+        base = {LOCK: None, DEPOSIT: None, REFUND: dict(REFUND_ENTRY)}
+        base.update(override)
+        return base
+
+    def test_identical_rights_across_the_crash_are_observed(self):
+        pre, post = [recovery_row(self.states())], [recovery_row(self.states(), role='A')]
+        # A re-accepted refund may move its acceptance DAA; the right itself is unchanged.
+        post[0]['value']['pointStates'][REFUND]['blockDaaScore'] = 9
+        facts = J.refund_recovered_once(pre, post, [LOCK, DEPOSIT], [REFUND])
+        self.assertEqual(facts['reads'], 2)
+
+    def test_missed_refund_double_count_and_reopened_lock_are_violations(self):
+        pre = [recovery_row(self.states())]
+        for after in (self.states(**{REFUND: None}), self.states(**{LOCK: dict(REFUND_ENTRY)}),
+                      self.states(**{REFUND: dict(REFUND_ENTRY, amount=901)})):
+            self.assertEqual(verdict(J.refund_recovered_once, pre, [recovery_row(after)], [LOCK, DEPOSIT], [REFUND]), J.FAIL)
+
+    def test_missing_side_or_synthetic_rows_are_not_observed(self):
+        pre = [recovery_row(self.states())]
+        self.assertNotEqual(verdict(J.refund_recovered_once, pre, [], [LOCK], [REFUND]), J.OBSERVED)
+        self.assertNotEqual(verdict(J.refund_recovered_once, pre, [recovery_row(self.states(), source='fixture')],
+                                    [LOCK], [REFUND]), J.OBSERVED)
+        omitted = self.states()
+        del omitted[DEPOSIT]
+        self.assertNotEqual(verdict(J.refund_recovered_once, pre, [recovery_row(omitted)], [LOCK, DEPOSIT], [REFUND]),
+                            J.OBSERVED)
+
+
+class ReserveAcrossRecovery(unittest.TestCase):
+    def test_same_known_balance_at_the_anchor_is_observed(self):
+        facts = J.reserve_stable_across_recovery([recovery_row({}, 500)], [recovery_row({}, 500, role='A')])
+        self.assertEqual(facts['balanceSompi'], 500)
+
+    def test_changed_balance_is_a_violation_and_unknown_is_not_observed(self):
+        self.assertEqual(verdict(J.reserve_stable_across_recovery, [recovery_row({}, 500)], [recovery_row({}, 1000)]), J.FAIL)
+        self.assertNotEqual(verdict(J.reserve_stable_across_recovery, [recovery_row({}, 500)], [recovery_row({}, None)]),
+                            J.OBSERVED)
+        self.assertNotEqual(verdict(J.reserve_stable_across_recovery, [recovery_row({}, 500)],
+                                    [recovery_row({}, 500, block='ff' * 64)]), J.OBSERVED)

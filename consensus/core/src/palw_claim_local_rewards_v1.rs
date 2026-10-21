@@ -492,3 +492,51 @@ pub(super) fn reward_readiness_v1(
     }
     Ok(result)
 }
+
+/// RFC-0023 stage 2 (ADR-0186), the per-claim settlement read. Under the dormant
+/// `palw_claim_local_settlement_v1` fence, whether one claim's effects are settled
+/// is decided by that claim and its actual dependency closure (same non-zero
+/// execution root visible at its admission, its own Gate C certification, court
+/// / prosecution / native dependency windows) — never by an unrelated unresolved
+/// claim elsewhere in the shared DAG. Below the fence the answer is `Dormant` and
+/// callers keep the shared-frontier read (`palw_settlement_v1`) byte for byte.
+///
+/// `Denied` withholds credit only (void, conviction, lapse of a stage-1 bound, or
+/// of a dependency); it is never a fraud verdict and moves no collateral.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwClaimLocalSettlementV1 {
+    /// Stage 2 is not in force at `now`; use the shared-frontier settlement read.
+    Dormant,
+    /// The claim is Final, SecurityCertified, past its own liability windows, and
+    /// every source it actually depends on is in the same condition.
+    Settled,
+    /// Not yet settled; re-evaluate no earlier than this DAA (`u64::MAX`: until
+    /// missing provenance or certification appears — held, not refused).
+    Held { until_daa: u64 },
+    /// No credit for this claim's effects. Not a slash.
+    Denied,
+    /// The state retains no live claim with this id (retired or unknown): this
+    /// read has no answer; it never guesses one.
+    NotRetained,
+}
+
+/// The read itself. `now` is the DAA score the caller evaluates at (normally the
+/// sink's). Pure over `state`/`params`; no write, no fence bypass.
+pub fn palw_claim_local_settlement_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: Hash64,
+    now: u64,
+) -> Result<PalwClaimLocalSettlementV1, PalwStateV2Error> {
+    if !params.claim_local_settlement_active_at(now) {
+        return Ok(PalwClaimLocalSettlementV1::Dormant);
+    }
+    if !state.claims.contains_key(&claim_id) {
+        return Ok(PalwClaimLocalSettlementV1::NotRetained);
+    }
+    Ok(match reward_readiness_v1(state, params, now, claim_id, false)? {
+        RewardReadinessV1::Ready => PalwClaimLocalSettlementV1::Settled,
+        RewardReadinessV1::Hold(until_daa) => PalwClaimLocalSettlementV1::Held { until_daa },
+        RewardReadinessV1::Denied => PalwClaimLocalSettlementV1::Denied,
+    })
+}
