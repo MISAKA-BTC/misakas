@@ -1,0 +1,674 @@
+diff --git a/consensus/core/src/palw_constraint_stream_court_v1.rs b/consensus/core/src/palw_constraint_stream_court_v1.rs
+index dd59055c6..b92b3737a 100644
+--- a/consensus/core/src/palw_constraint_stream_court_v1.rs
++++ b/consensus/core/src/palw_constraint_stream_court_v1.rs
+@@ -184,6 +184,52 @@ impl PalwConstraintStreamCourtV1 {
+             signed_context,
+         )
+     }
++    /// Private TIR terminal predicate from actual source-authenticated FullIds.
++    /// No synthetic logits row or token-selection position is introduced.
++    /// Caller admits source/context/hash/clone/stream/replay scratch separately.
++    #[allow(clippy::too_many_arguments)]
++    pub(crate) fn new_from_tiled_ids_with_original_stop_context_v1(
++        claim_id:Hash64,owner:PalwBondKeyV2,reserved_daa:u64,
++        view:&crate::palw_decode_view_v1::PalwDecodeViewV1,view_identity:&[u8],
++        source:&crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
++        ids:&crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1,
++        original:&PalwFreePromptCommitmentV3,eog_count:u32,eog_opening:&PalwStepOpeningV1,
++        signed_context:Hash64,
++    )->Result<Self,String> {
++        let header=source.header_v1();
++        if !view.is_tiled_v1()||!source.supports_tiled_trace_v1()
++            ||view.lane!=crate::palw_step::PalwStepLaneV1::Int32
++            ||view.job_context!=header.job_context||view.class_id!=header.job_context.shape_profile_id
++            ||view.vocab_size!=source.vocab_v1()||view.full_logits_trace_root!=header.full_logits_trace_root
++            ||view.committed_execution_root!=header.committed_execution_root||view.step_leaf_count!=header.step_leaf_count
++            ||ids.source_id_v1()!=source.source_id_v1()||ids.ids_v1().len() as u64!=u64::from(source.decode_count_v1()) {
++            return Err("terminal TIR predicate changes actual source/view/FullIds".into());
++        }
++        let job=&original.job;
++        if fp_claim_id_v3(original)!=claim_id||!job.is_constraint()
++            ||original.execution_root!=view.committed_execution_root
++            ||original.trace_root!=view.full_logits_trace_root
++            ||original.decode_tokens_executed!=view.job_context.exact_decode_tokens
++            ||original.decode_tokens_executed==0||original.decode_tokens_executed>job.decode_token_limit
++            ||crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original)
++                !=crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&view.job_context)
++            ||match original.stop_reason {
++                PalwFpStopReasonV3::ExactBudgetReached=>original.decode_tokens_executed!=job.decode_token_limit,
++                PalwFpStopReasonV3::EndOfGeneration=>original.decode_tokens_executed>=job.decode_token_limit,
++            } {
++            return Err("terminal TIR predicate changes native original claim/count/stop facts".into());
++        }
++        if ids.ids_v1().iter().any(|id|*id>=view.vocab_size) {
++            // This separate objective fault already has the native Output door.
++            return Err("terminal TIR predicate delegates out-of-vocabulary IDs to native Output".into());
++        }
++        let position=u32::try_from(ids.ids_v1().len()).map_err(|_|"terminal TIR position overflow")?;
++        let canonical=borsh::to_vec(&(source.source_id_v1(),ids.rows_root_v1(),ids.ids_v1()))
++            .map_err(|e|e.to_string())?;
++        Self::from_authenticated_selection_view_v1(claim_id,owner,reserved_daa,original.execution_root,
++            view,view_identity,job,ids.ids_v1(),position,None,None,false,eog_count,eog_opening,
++            Some(signed_context),&canonical,Some(original.stop_reason))
++    }
+     /// The tiled seed over a decode view. The caller derives `view` natively (a verified legacy
+     /// binding, or a TIR claim's admitted header and registered record) and passes the exact
+     /// bytes that identified it at admission as `view_identity` (the legacy binding's borsh, or
+diff --git a/consensus/core/src/palw_court_shared_constraint_native_tests.rs b/consensus/core/src/palw_court_shared_constraint_native_tests.rs
+index 4ae6e44db..41bca97a1 100644
+--- a/consensus/core/src/palw_court_shared_constraint_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_constraint_native_tests.rs
+@@ -201,3 +201,213 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
+     assert!(evidence.recheck(&store, &stale, &params, &rules, budget).is_err());
+     assert_eq!(b.state.state_root(), before);
+ }
++
++#[test]
++fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_boundaries(){
++    use crate::palw_constraint_stream_court_v1::canonical_replay::WorkBudget;
++    use crate::palw_court_shared_tir_builder_store_v1::{
++        constraint_terminal::{
++            ConstraintMaterialV1, SignedConstraintTerminalIntentV1 as Intent,
++            CONSTRAINT_INTENT_SIGNATURE_CONTEXT_V1 as SIGNATURE_CONTEXT,
++        },
++        SharedTirBuilderStoreV1 as Store,
++    };
++    use crate::palw_court_shared_tir_state_v1 as shared;
++    use crate::palw_tir_court_v1::{tir_logits_event_disclosure_v1, PalwTirTraceEventDisclosureV1};
++    use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q, PalwTirPublicResponseV1 as R};
++    use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::{SignedConstraintStopIntentV1 as StopIntent,CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1 as STOP_CONTEXT};
++    use crate::palw_freeprompt_v3::PalwFpStopReasonV3 as Stop;
++    for stop in [Stop::ExactBudgetReached,Stop::EndOfGeneration] {for fault in [false,true] {
++    let (fx, semantics, table) = crate::palw_tir_public_claim_v1::palw_tir_public_constraint_stop_frame_fixture_v1(stop,fault);
++    fx.record.check_program_v1().unwrap();
++    assert!(fx.record.program.len() > 3);
++    let frame = &fx.frame;
++    let p = frame.plan_v1();
++    let claim = p.original_claim;
++    assert!(p
++        .semantic
++        .as_ref()
++        .unwrap()
++        .stages
++        .iter()
++        .any(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint));
++    let (mut state, params, mut extras) = world(&fx, frame);
++    state.claim_semantics.insert(claim, semantics.clone());
++    state.class_semantics.insert(semantics.class_id, semantics.clone());
++    let key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([79; 32]);
++    state.bonds.get_mut(&outsider()).unwrap().pubkey = key.verification_key.as_ref().to_vec();
++    assert!(
++        crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(&state, frame, p.terms.material_until_daa).is_err()
++    );
++    // Build the SAME signed semantic dependency as native original installation;
++    // a service binding must never bypass its real custody-window check.
++    let producer = frame.custody_v1().pledge_v1().producer;
++    let producer_key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([81; 32]);
++    state.bonds.get_mut(&producer).unwrap().pubkey = producer_key.verification_key.as_ref().to_vec();
++    let mut pledge = crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1 {
++        version: 1,
++        claim,
++        producer,
++        execution_root: frame.original_v1().execution_root,
++        job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1()),
++        cu_ruleset_id: semantics.cu_ruleset_id,
++        resource_plan_id: p.semantic_resource_plan_id.unwrap(),
++        maximum_records: p.maximum_semantic_history_records,
++        maximum_custodians: p.acquisition.maximum_custodians,
++        accept_until_daa: p.terms.accepted_daa + 1,
++        material_until_daa: p.terms.material_until_daa,
++        signature: vec![],
++    };
++    pledge.signature = libcrux_ml_dsa::ml_dsa_87::sign(
++        &producer_key.signing_key,
++        pledge.pledge_id_v1().as_byte_slice(),
++        crate::palw_history_custody_v1::PALW_HISTORY_PLEDGE_CONTEXT_V1,
++        [82; 32],
++    )
++    .unwrap()
++    .as_ref()
++    .to_vec();
++    extras.staged_public_court = Some(fx.rules.config);
++    extras.history_custody_pledges.insert(claim, pledge);
++    let mut dependency = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
++    let bundle = frame_semantic_bundle_v1(&dependency, frame, p.terms.accepted_daa).unwrap().unwrap();
++    dependency.write_staged_row_v1(Key::Claim(claim), Some(bundle)).unwrap();
++    let state = dependency.state.clone();
++    crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(&state, frame, p.terms.material_until_daa).unwrap();
++
++    let state = bind_clock_service(&state, frame, &params, &extras);
++    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
++    let profile = shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
++    let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
++    let scope = set.scope_id().unwrap();
++    let c = shared::SharedTirContextV1 {
++        version: 1,
++        claim,
++        allocation_id: p.allocation_id,
++        source_id: p.source_id,
++        rules_id: p.rules_id,
++        profile_id: profile,
++        scope_id: scope,
++        queries: set.len(),
++        original_accepted_daa: p.terms.accepted_daa,
++        hard_daa: p.terms.accepted_daa + 10_000,
++        material_until_daa: p.terms.material_until_daa,
++    };
++    let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
++    b.write_staged_row_v1(Key::CourtSharedContext(claim), Some(Row::CourtSharedContext(Box::new(c)))).unwrap();
++    let rows = crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
++    let ids = source.retain_complete_ids_v1(rows, &fx.execution.generated).unwrap();
++    let store = Store::new(&b.state, claim, scope, &[], &[], Some(&ids)).unwrap();
++    let rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 {
++        network_domain: extras.tir_public_network_domain_v1.unwrap(),
++        at: at(frame, 1),
++        court: fx.rules.court,
++        step_ladder: fx.rules.maximum_leaves,
++        prompt_ids_merkle: false,
++        held_regime: false,
++        decode_close_convicts_only: false,
++        fp_decode_from_daa: None,
++        cell_closure_from_daa: None,
++        memory_routing_from_daa: None,
++        tir_active: true,
++        gen_active: false,
++        task_heads_active: false,
++        improvement_active: false,
++        constraint_active: true,
++    };
++    let eog=table.eog_opening().unwrap();
++    let renderings=(0..table.vocab()).map(|id|table.opening_of(id).unwrap()).collect::<Vec<_>>();
++    let material=ConstraintMaterialV1{eog:&eog,renderings:&renderings};
++    let budget=WorkBudget{max_material_bytes:1<<25,max_calls:100_000};
++    let mut intent=StopIntent{version:1,claim,scope_id:scope,
++        policy_id:crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(&rules).unwrap(),
++        semantics_id:semantics.commitment(),material_id:material.identity(budget).unwrap(),position:source.decode_count_v1(),
++        stop_reason:stop,filer:outsider(),signature:vec![]};
++    let sign=|i:&mut StopIntent|{i.signature=libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key,
++        i.signing_message(rules.network_domain).unwrap().as_byte_slice(),STOP_CONTEXT,[97;32]).unwrap().as_ref().to_vec();};
++    sign(&mut intent);let before=b.state.state_root();
++    let evidence=store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&intent,material,budget).unwrap();
++    assert_eq!(evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap().is_some(),fault);
++    // Exact native end position; token position D-1 cannot become a stop root.
++    let mut wrong=intent.clone();wrong.position-=1;sign(&mut wrong);
++    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,material,budget).is_err());
++    let mut wrong=intent.clone();wrong.position+=1;sign(&mut wrong);
++    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,material,budget).is_err());
++    let mut wrong=intent.clone();wrong.stop_reason=if stop==Stop::ExactBudgetReached{Stop::EndOfGeneration}else{Stop::ExactBudgetReached};sign(&mut wrong);
++    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,material,budget).is_err());
++    let mut wrong=intent.clone();wrong.scope_id=h(979);sign(&mut wrong);
++    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,material,budget).is_err());
++    let missing=Store::new(&b.state,claim,scope,&[],&[],None).unwrap();
++    assert!(missing.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&intent,material,budget).is_err());
++    let mut eog_bad=eog.clone();eog_bad.ids[0]=(eog_bad.ids[0]+1)%table.vocab();
++    let bad=ConstraintMaterialV1{eog:&eog_bad,renderings:&renderings};
++    let mut wrong=intent.clone();wrong.material_id=bad.identity(budget).unwrap();sign(&mut wrong);
++    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,bad,budget).is_err());
++    let encoded=renderings.iter().map(|o|borsh::to_vec(o).unwrap()).collect::<Vec<_>>();
++    let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
++    let eog_wire=borsh::to_vec(&eog).unwrap();
++    let owner=store.retain_semantic_table_material_v1(&b.state,claim,&bodies,&eog_wire).unwrap();
++    let retained=store.build_constraint_stop_terminal_retained_v1(&b.state,&params,&rules,&intent,&owner,budget).unwrap();
++    assert_eq!(retained.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
++    let view=crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(source.header_v1(),&fx.record,fx.rules.maximum_leaves).unwrap();
++    let view_identity=borsh::to_vec(source.header_v1()).unwrap();
++    let direct=|candidate:&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,actual_ids:&crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1| {
++        crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1::new_from_tiled_ids_with_original_stop_context_v1(
++            crate::palw_freeprompt_v3::fp_claim_id_v3(candidate),outsider(),p.terms.accepted_daa,&view,&view_identity,&source,actual_ids,candidate,
++            eog.ids.len() as u32,&eog.opening,h(981))
++    };
++    // Prove that this route reaches the normative terminal-stop predicate,
++    // not the deliberately false rendering/grammar arm of this fixture.
++    let base=direct(frame.original_v1(),&ids).unwrap();
++    use crate::palw_constraint_stream_court_v1::{PalwConstraintStreamPhaseV1 as Phase,canonical_replay as stop_replay};
++    assert_eq!(base.phase(),Phase::Eog);assert!(base.rendering_cursor_v1().is_none());
++    assert_eq!(base.selection_for_tests_v1(),(source.decode_count_v1(),None,false));
++    struct EogOnly<'a>{ids:&'a [u32],rendering_calls:std::cell::Cell<u32>}
++    impl stop_replay::Material for EogOnly<'_>{
++        fn eog(&self)->Option<&[u32]>{Some(self.ids)}
++        fn rendering(&self,_:u32)->Option<stop_replay::RenderingMaterial<'_>>{
++            self.rendering_calls.set(self.rendering_calls.get()+1);None
++        }
++    }
++    let only=EogOnly{ids:&eog.ids,rendering_calls:std::cell::Cell::new(0)};
++    let terminal=stop_replay::build(&base,&only,budget).unwrap();
++    assert_eq!(only.rendering_calls.get(),0,"stop path must never enter grammar/rendering");
++    assert_eq!(terminal.work().material_bytes,eog.ids.len() as u64*4);
++    assert_eq!(terminal.work().calls,2,"one EOG part and finish only");
++    assert_eq!(terminal.finding().is_some(),fault);
++    if let Some(found)=terminal.finding(){
++        assert_eq!(found.position,if stop==Stop::ExactBudgetReached{0}else{source.decode_count_v1()-1});
++    }
++    let mut finished=base.clone();
++    finished.push_eog(finished.seed_id(),0,&eog.ids).unwrap();finished.finish_eog().unwrap();
++    assert_eq!(finished.phase(),Phase::Complete);assert!(finished.rendering_cursor_v1().is_none());
++    assert_eq!(finished.fault().unwrap().is_some(),fault);
++    // Signed private adapter also succeeds with ONLY authenticated EOG, so no
++    // unrelated invalid-rendering result can make the positive pass by accident.
++    let eog_only=ConstraintMaterialV1{eog:&eog,renderings:&[]};
++    let mut end_only=intent.clone();end_only.material_id=eog_only.identity(budget).unwrap();sign(&mut end_only);
++    let end_only=store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&end_only,eog_only,budget).unwrap();
++    assert_eq!(end_only.recheck(&store,&b.state,&params,&rules,budget).unwrap().is_some(),fault);
++    // Negative-only altered native facts, never installed as a valid original.
++    let mut changed=frame.original_v1().clone();changed.decode_tokens_executed-=1;
++    assert!(matches!(direct(&changed,&ids),Err(e) if e.contains("native original claim/count/stop facts")));
++    let mut changed=frame.original_v1().clone();changed.job.decode_token_limit=changed.decode_tokens_executed-1;
++    assert!(matches!(direct(&changed,&ids),Err(e) if e.contains("native original claim/count/stop facts")));
++    if stop==Stop::ExactBudgetReached {
++        let mut changed=frame.original_v1().clone();changed.job.decode_token_limit+=1;
++        assert!(matches!(direct(&changed,&ids),Err(e) if e.contains("native original claim/count/stop facts")));
++    }
++    let (other,_,_)=crate::palw_tir_public_claim_v1::palw_tir_public_constraint_stop_frame_fixture_v1(stop,!fault);
++    let other_source=other.frame.source_v1(&other.record,&other.layout,other.rules.maximum_leaves).unwrap();
++    let other_rows=crate::palw_step_refute::tiled_logits_rows_root_v1(&other.execution.binding.job_context,&other.execution.rows).unwrap();
++    let other_ids=other_source.retain_complete_ids_v1(other_rows,&other.execution.generated).unwrap();
++    assert!(matches!(direct(frame.original_v1(),&other_ids),Err(e) if e.contains("actual source/view/FullIds")));
++    assert_eq!(b.state.state_root(),before);
++    // Old token builder still requires an authenticated row and its own old
++    // intent/domain; this row-free Stop Store cannot satisfy token selection.
++    let old=Intent{version:1,claim,scope_id:scope,policy_id:intent.policy_id,semantics_id:intent.semantics_id,
++        material_id:intent.material_id,position:source.decode_count_v1()-1,beat_lane:0,witness:None,filer:outsider(),signature:vec![]};
++    let mut old=old;old.signature=libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key,old.signing_message(rules.network_domain).unwrap().as_byte_slice(),SIGNATURE_CONTEXT,[98;32]).unwrap().as_ref().to_vec();
++    assert!(store.build_constraint_terminal(&b.state,&params,&rules,&old,material,budget).is_err());
++    }}
++}
+diff --git a/consensus/core/src/palw_court_shared_semantic_material_v1.rs b/consensus/core/src/palw_court_shared_semantic_material_v1.rs
+index 90a2001ff..5d583f632 100644
+--- a/consensus/core/src/palw_court_shared_semantic_material_v1.rs
++++ b/consensus/core/src/palw_court_shared_semantic_material_v1.rs
+@@ -294,3 +294,17 @@ impl Store<'_> {
+             eog:&material.eog,renderings:&material.renderings},budget)
+     }
+ }
++
++impl Store<'_> {
++    pub(crate) fn build_constraint_stop_terminal_retained_v1<'a>(
++        &self,state:&PalwChainStateV2,params:&crate::palw_state_v2::PalwStateParamsV2,
++        rules:&crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
++        intent:&super::constraint_stop::SignedConstraintStopIntentV1,
++        material:&'a NativeRetainedV1<SemanticTableMaterialV1>,
++        budget:crate::palw_constraint_stream_court_v1::canonical_replay::WorkBudget,
++    )->Result<super::constraint_stop::ConstraintStopEvidenceV1<'a>,String> {
++        material.check_scope_v1(self.source.source_id_v1(),intent.claim,intent.scope_id,intent.semantics_id)?;
++        self.build_constraint_stop_terminal_v1(state,params,rules,intent,super::constraint_terminal::ConstraintMaterialV1{
++            eog:&material.eog,renderings:&material.renderings},budget)
++    }
++}
+diff --git a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+index 1851a71c1..f6f1e971c 100644
+--- a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
++++ b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+@@ -374,3 +374,6 @@ pub(crate) mod prefix_terminal;
+ 
+ #[path = "palw_court_shared_semantic_material_v1.rs"]
+ pub(crate) mod semantic_material;
++
++#[path = "palw_court_shared_constraint_stop_v1.rs"]
++pub(crate) mod constraint_stop;
+diff --git a/consensus/core/src/palw_tir_public_claim_v1.rs b/consensus/core/src/palw_tir_public_claim_v1.rs
+index f48c40146..197c7a5cc 100644
+--- a/consensus/core/src/palw_tir_public_claim_v1.rs
++++ b/consensus/core/src/palw_tir_public_claim_v1.rs
+@@ -470,6 +470,12 @@ pub(crate) fn palw_tir_public_fixed_history_frame_fixture_v1(
+     tests::history_frame_condition_v1(tests::HistoryConditionV1::Fixed{committed_writer},form)
+ }
+ 
++#[cfg(test)]
++pub(crate) fn palw_tir_public_constraint_stop_frame_fixture_v1(stop:crate::palw_freeprompt_v3::PalwFpStopReasonV3,fault:bool)
++    ->(PalwTirPublicFrameFixtureV1,crate::palw_class_semantics_v1::PalwClassSemanticsV1,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
++    tests::constraint_frame_stop_mode_v1(Some((stop,fault)))
++}
++
+ /// Existing 4096-wide test execution reconstructed in its actual original job context.
+ #[cfg(test)]
+ pub(crate) fn palw_tir_public_frame_fixture_wide_v1(forge:Option<(usize,usize)>,maximum_custodians:u64)->PalwTirPublicFrameFixtureV1 {
+@@ -649,6 +655,18 @@ mod tests {
+         semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+         inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+         prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
++    )->super::PalwTirPublicFrameFixtureV1 {
++        frame_from_execution_with_material_form_stop_v1(x,job,maximum_custodians,output_root,semantics,inventory,prompt_form,
++            crate::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached)
++    }
++    fn frame_from_execution_with_material_form_stop_v1(
++        x:crate::palw_tir_court_v1::test_support::TinyExecution,
++        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        maximum_custodians:u64,output_root:Option<Hash64>,
++        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
++        inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
++        prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
++        stop_reason:crate::palw_freeprompt_v3::PalwFpStopReasonV3,
+     )->super::PalwTirPublicFrameFixtureV1 {
+         use crate::palw_freeprompt_v3::*;
+         use crate::palw_tir_public_allocation_v1::*;
+@@ -662,7 +680,7 @@ mod tests {
+             schedule_root: Hash64::default(),
+             execution_root: binding.committed_execution_root,
+             decode_tokens_executed: x.generated.len() as u32,
+-            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
++            stop_reason,
+             work_leaves: binding.step_leaf_count,
+             trace_manifest_root: Hash64::default(),
+             trace_chunk_count: 1,
+@@ -760,6 +778,11 @@ mod tests {
+         super::PalwTirPublicFrameFixtureV1 { frame, record, layout, execution: x, rules, object }
+     }
+     pub(super) fn constraint_frame()->(super::PalwTirPublicFrameFixtureV1,
++        crate::palw_class_semantics_v1::PalwClassSemanticsV1,
++        crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
++        constraint_frame_stop_mode_v1(None)
++    }
++    pub(super) fn constraint_frame_stop_mode_v1(mode:Option<(crate::palw_freeprompt_v3::PalwFpStopReasonV3,bool)>)->(super::PalwTirPublicFrameFixtureV1,
+         crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+         crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+         use crate::palw_freeprompt_v3::*;
+@@ -771,25 +794,34 @@ mod tests {
+         job.class_id=class_id;job.tokenizer_id=honest.binding.class.tokenizer_id;
+         job.prompt_tokens=honest.prompt.len() as u32;
+         job.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(&honest.prompt);
+-        job.decode_token_limit=honest.generated.len() as u32;job.max_context_tokens=64;
++        job.decode_token_limit=honest.generated.len() as u32+u32::from(mode.is_some_and(|(s,_)|s==PalwFpStopReasonV3::EndOfGeneration));job.max_context_tokens=64;
++        let stop_reason=mode.map_or(PalwFpStopReasonV3::ExactBudgetReached,|(s,_)|s);
+         // All real eight-word registered lanes render an inadmissible first byte
+         // under the existing bracket/digit constraint. Arithmetic remains real;
+         // the semantic court must detect this deliberately bad selection.
+         let table=crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+             entries:vec![Some(b"x".to_vec());honest.rows[0].len()],
+-            eog_token_ids:vec![(honest.generated[0]+1) % honest.rows[0].len() as u32],tokenizer_id:job.tokenizer_id,
++            eog_token_ids:vec![mode.map_or((honest.generated[0]+1) % honest.rows[0].len() as u32,|(stop,fault)|match (stop,fault) {
++                (PalwFpStopReasonV3::ExactBudgetReached,true)=>0,
++                (PalwFpStopReasonV3::EndOfGeneration,false)=>honest.generated.len() as u32-1,
++                _=>honest.rows[0].len() as u32-1,
++            })],tokenizer_id:job.tokenizer_id,
+         };
+         let Some(PalwFpJobTailV1::Constraint(tail))=job.tail.as_mut() else {panic!("constraint job")};
+         tail.table_root=table.root();
+         let class=PalwFpClassFactsV3 {model_profile_id:Hash64::default(),runtime_manifest_hash:Hash64::default(),
+             runtime_class_id:Hash64::default(),shape_profile_id:class_id,cu_ruleset_id:Hash64::default()};
+-        let facts=PalwFpRunFactsV3 {decode_tokens_executed:job.decode_token_limit,
+-            stop_reason:PalwFpStopReasonV3::ExactBudgetReached,full_logits_trace_root:Hash64::default(),
++        let facts=PalwFpRunFactsV3 {decode_tokens_executed:honest.generated.len() as u32,
++            stop_reason,full_logits_trace_root:Hash64::default(),
+             activation_leg_root:Hash64::default(),checkpoint_leg_root:Hash64::default(),step_leg_root:Hash64::default(),
+             step_leaf_count:honest.hashes.len() as u64};
+         let context=crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job,&class,&facts,b"testnet-12").unwrap();
+         let rule=crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {sampling:job.sampling_v2()};
+-        let select=|_:u32,row:&[i32],before:&[u32]|crate::palw_tir_court_v1::test_support::select_by_rule(&rule,row,before,false);
++        // Stop-mode fixture still executes the actual registered arithmetic and
++        // commits its actual IDs; selection may be false under the grammar.
++        // Only the ORIGINAL stop predicate is the test's honest/fault label.
++        let select=|pos:u32,row:&[i32],before:&[u32]|if mode.is_some(){pos % row.len() as u32}
++            else{crate::palw_tir_court_v1::test_support::select_by_rule(&rule,row,before,false)};
+         let x=crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_,_,_|context.clone(),None,&select);
+         let semantics=crate::palw_class_semantics_v1::PalwClassSemanticsV1 {
+             version:1,class_id,artifact_root:x.binding.artifact_root,bound_from_daa:0,
+@@ -798,7 +830,9 @@ mod tests {
+             token_table_root:Some(table.root()),rendering_rule:None,raw_tokenizer_bytes:None,
+             tokenizer_key_events:None,prefix_state_relation:None,
+         };
+-        let frame=frame_from_execution_with_semantics(x,job,1,None,Some(&semantics));
++        if mode.is_some(){assert_eq!(x.generated,(0..honest.generated.len() as u32).collect::<Vec<_>>());}
++        let frame=frame_from_execution_with_material_form_stop_v1(x,job,1,None,Some(&semantics),None,
++            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,stop_reason);
+         assert!(frame.frame.plan_v1().semantic.is_some());
+         (frame,semantics,table)
+     }
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index 940b4258b..6f0cd5cd6 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -12,21 +12,29 @@ use crate::palw_tir_public_state_v1::{PalwTirPublicAcquisitionRowV1, PalwTirPubl
+ 
+ /// Diagnostics for a funded carrier on the native accepted UTXO path. There is
+ /// deliberately no Admitted/Complete variant and no state or spend capability.
+-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[derive(Clone, Debug, PartialEq, Eq)]
+ pub enum PalwFundedOriginalCandidateV1 {
+     Invalid(&'static str),
+     Missing(&'static str),
++    /// Local refusal/out-of-coverage is never an invalid claim or conviction.
++    Resource(crate::palw_native_resource_v1::NativeCoverageV1),
+ }
+ 
+ /// Read-only candidate inspection. `validated` alone does not attest provenance:
+ /// the consensus caller must obtain it from its composed-view UTXO validator.
+ /// No caller-provided profile, graph or consent hash becomes native policy.
+ /// Ordinary fallback outputs survive every result of this function.
++/// Native params/court/ladder must come from the consensus processor's current
++/// config resolvers; these references are NOT a caller-adoptable ingress DTO.
++/// Source construction reserves its native ticket. Remaining traversal work
++/// without calibrated coverage stays Missing; Resource never implies fraud.
+ pub fn palw_funded_original_candidate_v1(
+     state: &PalwChainStateV2,
+     network: Hash64,
+     daa: u64,
+     validated: &crate::tx::ValidatedTransaction<'_>,
++    native_params: Option<&PalwStateParamsV2>,
++    native_court: Option<(&crate::palw_mode_v2::PalwCourtParamsV2,u64)>,
+ ) -> PalwFundedOriginalCandidateV1 {
+     use PalwFundedOriginalCandidateV1::{Invalid, Missing};
+     use crate::palw_tir_funded_original_envelope_v1::{is_funded_original_carrier_v1, PalwTirFundedOriginalEnvelopeV1};
+@@ -88,15 +96,60 @@ pub fn palw_funded_original_candidate_v1(
+     let Some(record) = state.tir_class_v1(&fp.commitment.job.class_id) else {
+         return Invalid("registered original TIR class absent");
+     };
+-    if crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id).is_none() {
++    let Some(layout) = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id) else {
+         return Invalid("registered original TIR layout absent");
++    };
++    let Some(class) = state.class(&fp.commitment.job.class_id) else {
++        return Invalid("native registered class state absent");
++    };
++    if class.registered_daa > daa || class.artifact_root != original.header.artifact_root {
++        return Invalid("native registered class time or artifact");
++    }
++    // Producer consent has its own actual acceptance clock. This does not
++    // manufacture any future service/retention horizon or extend that clock.
++    if daa > original.pledge.accept_until_daa {
++        return Invalid("producer source pledge acceptance clock");
++    }
++    let Some(params) = native_params else {
++        return Missing("actual native state policy unavailable");
++    };
++    let demand = crate::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(params, class.registered_daa);
++    let Some((court, network_ladder)) = native_court else {
++        return Missing("actual current native court or ladder unavailable");
++    };
++    // Same native class uplift as original_plan_v1; no caller-declared class
++    // ladder or signed profile ID is accepted in place of the rooted record.
++    let maximum_leaves = state.class_step_ladder_v1(&fp.commitment.job.class_id, network_ladder);
++    if maximum_leaves == 0 || !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(court.dissection_arity()) {
++        return Missing("actual current native court geometry unsupported");
++    }
++    let source = match crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(
++        record, layout, &original.header, fp.commitment.execution_root, fp.commitment.trace_root, maximum_leaves,
++    ) {
++        Ok(source) => source,
++        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(coverage)) => {
++            return PalwFundedOriginalCandidateV1::Resource(coverage);
++        }
++        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_)) => {
++            return Invalid("native original source geometry or job roots");
++        }
++    };
++    if source.source_id_v1() != original.pledge.source_id {
++        return Invalid("producer pledge differs from actual native source");
++    }
++    // Source's exact old constructor has run with actual court/class ladder.
++    // The registration-time demand is resolved from actual native state policy,
++    // NOT the accepting DAA or a producer/profile declaration. Do not enumerate
++    // numerical/semantic paths under an uncalibrated traversal budget, or build
++    // an invented paid frame when measuredFrameCost is absent. These diagnostics
++    // intentionally retain Missing and grant no funded/Complete/state authority.
++    match demand {
++        crate::palw_tir_fence2_v1::PalwTirDemandRulesV1::Release2000 =>
++            Missing("native source checked; registered Release2000 demand; numerical/semantic grammar calibration, profiles and ordered coordinator missing"),
++        crate::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7 =>
++            Missing("native source checked; registered H7 demand; numerical/semantic grammar calibration, profiles and ordered coordinator missing"),
+     }
+-    // Do not enter prepare_original/source graph expansion without its complete
+-    // native allocation preflight. Fixed header bytes have been decoded/paired,
+-    // but registered source geometry, producer pledge native plan/horizon and
+-    // full branch grammar remain UNCHECKED, as do native profiles and ordered
+-    // accepted-prefix state. Pledge signature alone establishes none of those.
+-    Missing("native source construction meter, full grammar/profiles and ordered original coordinator")
++
+ }
+ 
+ fn refused(why: impl Into<String>) -> PalwStateV2Error {
+diff --git a/consensus/src/pipeline/virtual_processor/tests/funded_original_native_candidate.rs b/consensus/src/pipeline/virtual_processor/tests/funded_original_native_candidate.rs
+index 23084edde..df366ac2a 100644
+--- a/consensus/src/pipeline/virtual_processor/tests/funded_original_native_candidate.rs
++++ b/consensus/src/pipeline/virtual_processor/tests/funded_original_native_candidate.rs
+@@ -28,7 +28,15 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
+     let original = PalwTirPublicFpEnvelopeV1::decode_v1(&read("original.tfp1")).unwrap();
+     let fp = original.original_fp_v1().unwrap();
+     let now: u64 = std::str::from_utf8(&read("accepting-daa.txt")).unwrap().parse().unwrap();
+-    let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
++    // Existing native TEST bundle, not a new tariff/production preset. The
++    // standalone original state remains the core-generated preparation fixture.
++    let catalog=palw_v2_test_catalog();
++    let bundle=palw_v2_test_bundle_funded_for(&catalog,64);
++    let config=ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work()
++        .edit_consensus_params(move |p| {
++            p.palw_consensus_mode=kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle.clone());
++            *p=p.clone().with_palw_v2_cadence();
++        }).build();
+     let ctx = TestContext::new(TestConsensus::new(&config));
+     let vp = ctx.consensus.virtual_processor();
+     let seed = [0x73; 32]; // Public local fixture only.
+@@ -75,7 +83,7 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
+     let tx=make(envelope.encode_v1().unwrap());
+     let validated=vp.validate_transaction_in_utxo_context(&tx,&view,now,full,None).unwrap();
+     let diagnostic=vp.palw_funded_original_candidate_from_native_v1(&state,now,&validated);
+-    assert!(matches!(diagnostic,PalwFundedOriginalCandidateV1::Missing(_)),"{diagnostic:?}");
++    assert!(matches!(&diagnostic,PalwFundedOriginalCandidateV1::Missing(s) if s.starts_with("native source checked;")),"{diagnostic:?}");
+     assert_eq!(state.state_root(),root);
+     assert!(state.claim(&fp.claim_id()).is_none());
+     assert_eq!(validated.calculated_fee,value-envelope.funding.terms.funding_amount_sompi);
+@@ -130,6 +138,106 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
+     replaced_bond.operator_id = kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&key);
+     let replaced = replaced.into_state(&params,None).unwrap();
+     assert!(matches!(vp.palw_funded_original_candidate_from_native_v1(&replaced,now,&validated),PalwFundedOriginalCandidateV1::Invalid(_)));
++    // The original was generated and prepared with this public TEST producer
++    // key. Mutations below remain real MLDSA signed carrier transactions.
++    let producer_seed=[0x6D;32];
++    let producer_key=mldsa::generate_key_pair(producer_seed);
++    assert_eq!(producer_key.verification_key.as_ref(),fp.commitment.job.executor_pubkey.as_slice());
++    let mutate_pledge=|source:Option<kaspa_consensus_core::Hash64>,expiry:Option<u64>| {
++        let mut candidate=envelope.clone();
++        let mut original=candidate.original_v1().unwrap();
++        if let Some(source)=source {original.pledge.source_id=source;candidate.funding.terms.source_id=source;}
++        if let Some(expiry)=expiry {original.pledge.accept_until_daa=expiry;}
++        original.pledge.signature=mldsa::sign(&producer_key.signing_key,original.pledge.id_v1().as_byte_slice(),
++            kaspa_consensus_core::palw_tir_public_custody_v1::PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1,producer_seed).unwrap().as_ref().to_vec();
++        candidate.original_envelope=original.encode_v1().unwrap();
++        candidate.funding.signature=mldsa::sign(&kp.signing_key,candidate.funding.terms.id_v1().as_byte_slice(),
++            COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,seed).unwrap().as_ref().to_vec();
++        make(candidate.encode_v1().unwrap())
++    };
++    assert!(now>1,"fixture must span a real registration/acceptance boundary");
++    for (candidate,reason) in [
++        (mutate_pledge(Some(h(0xF136)),None),"producer pledge differs from actual native source"),
++        (mutate_pledge(None,Some(now-1)),"producer source pledge acceptance clock"),
++    ] {
++        let actual=vp.validate_transaction_in_utxo_context(&candidate,&view,now,full,None).unwrap();
++        assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&state,now,&actual),PalwFundedOriginalCandidateV1::Invalid(reason));
++        assert_eq!(candidate.outputs,tx.outputs);assert_eq!(actual.calculated_fee,validated.calculated_fee);
++        assert_eq!(state.state_root(),root);
++    }
++    // Real current state metadata is authoritative, not the signed profile IDs.
++    let mut future=PalwStateCarriageV2::from_state(&state);
++    future.classes.get_mut(&fp.commitment.job.class_id).unwrap().registered_daa=now+1;
++    let future=future.into_state(&params,None).unwrap();
++    assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&future,now,&validated),
++        PalwFundedOriginalCandidateV1::Invalid("native registered class time or artifact"));
++    let mut foreign=PalwStateCarriageV2::from_state(&state);
++    foreign.classes.get_mut(&fp.commitment.job.class_id).unwrap().artifact_root=h(0xF137);
++    let foreign=foreign.into_state(&params,None).unwrap();
++    assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&foreign,now,&validated),
++        PalwFundedOriginalCandidateV1::Invalid("native registered class time or artifact"));
++    let mut geometry=PalwStateCarriageV2::from_state(&state);
++    let layout_key=kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirLayout(fp.commitment.job.class_id);
++    if let kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirLayout(layout)=geometry.staged_courts.get_mut(&layout_key).unwrap() {
++        assert!(!layout.commit_tiles.is_empty());
++        layout.commit_tiles[0]=if layout.commit_tiles[0]==4 {8} else {4};
++    } else {panic!("actual registered layout fixture");}
++    let geometry=geometry.into_state(&params,None).unwrap();
++    assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&geometry,now,&validated),
++        PalwFundedOriginalCandidateV1::Invalid("native original source geometry or job roots"));
++    // Explicit local TEST configuration mutation only; no preset/fence is armed
++    // in production. Resolve demand at registered DAA, NOT accepting DAA.
++    // Reuse the existing runnable T12 launch rule chain (audit, k-ary,
++    // R-core+ and its complete prerequisites), never assemble a half-ruleset by
++    // switching on TIR over the deliberately minimal baseline TEST bundle.
++    let (known_valid,_,_,_)=super::t12_round_lane_e2e::t12_with_harness_cards();
++    let mut demand_config=known_valid.params.clone();
++    demand_config.palw_tir_v1=Some(kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1::testnet12_v1(
++        kaspa_consensus_core::config::params::ForkActivation::new(0)));
++    demand_config.sync_palw_tir_v1();
++    demand_config.palw_tir_fence2=Some(kaspa_consensus_core::config::params::ForkActivation::new(1));
++    demand_config.sync_palw_tir_fence2();
++    let demand_config=ConfigBuilder::new(demand_config).skip_proof_of_work().build();
++    let demand_ctx=TestContext::new(TestConsensus::new(&demand_config));
++    let demand_vp=demand_ctx.consensus.virtual_processor();
++    // Funding consent belongs to the ACTUAL T12 network, independently of the
++    // baseline MAINNET fixture. Re-sign rather than forge a matching domain.
++    assert_ne!(demand_vp.palw_network_domain_v2(),vp.palw_network_domain_v2());
++    assert_eq!(demand_config.params.storage_mass_parameter,config.params.storage_mass_parameter,
++        "reusing make/sign requires the same actual native storage mass parameter");
++    let mut demand_envelope=envelope.clone();
++    demand_envelope.funding.terms.network_domain=demand_vp.palw_network_domain_v2();
++    demand_envelope.funding.signature=mldsa::sign(&kp.signing_key,demand_envelope.funding.terms.id_v1().as_byte_slice(),
++        COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,seed).unwrap().as_ref().to_vec();
++    demand_envelope.funding.verify_signature_v1(&demand_envelope.payer_pubkey).unwrap();
++    let demand_tx=make(demand_envelope.encode_v1().unwrap());
++    let actual=demand_vp.validate_transaction_in_utxo_context(&demand_tx,&view,now,full,None).unwrap();
++    assert_eq!(actual.calculated_fee,validated.calculated_fee);
++    assert_eq!(demand_tx.outputs,tx.outputs);
++    let mut old=PalwStateCarriageV2::from_state(&state);
++    old.classes.get_mut(&fp.commitment.job.class_id).unwrap().registered_daa=0;
++    let old=old.into_state(&params,None).unwrap();
++    assert!(matches!(demand_vp.palw_funded_original_candidate_from_native_v1(&old,now,&actual),
++        PalwFundedOriginalCandidateV1::Missing(s) if s.contains("registered Release2000 demand")));
++    let mut newer=PalwStateCarriageV2::from_state(&state);
++    newer.classes.get_mut(&fp.commitment.job.class_id).unwrap().registered_daa=1;
++    let newer=newer.into_state(&params,None).unwrap();
++    assert!(matches!(demand_vp.palw_funded_original_candidate_from_native_v1(&newer,now,&actual),
++        PalwFundedOriginalCandidateV1::Missing(s) if s.contains("registered H7 demand")));
++    // The actual configured court/ladder is used by native source construction.
++    // A smaller TEST court cannot be replaced by a producer's signed hash.
++    assert_eq!(state.class_step_ladder_v1(&fp.commitment.job.class_id,2),2,"fixture has no held uplift");
++    let mut small_config=config.params.clone();
++    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)=&mut small_config.palw_consensus_mode {
++        bundle.court=kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(2,1,2).unwrap();
++    } else {panic!("native fixture consensus-v2 policy");}
++    let small_config=ConfigBuilder::new(small_config).skip_proof_of_work().build();
++    let small_ctx=TestContext::new(TestConsensus::new(&small_config));
++    let small_vp=small_ctx.consensus.virtual_processor();
++    let actual=small_vp.validate_transaction_in_utxo_context(&tx,&view,now,full,None).unwrap();
++    assert_eq!(small_vp.palw_funded_original_candidate_from_native_v1(&state,now,&actual),
++        PalwFundedOriginalCandidateV1::Invalid("native original source geometry or job roots"));
++    assert_eq!(tx.outputs.len(),1);assert_eq!(state.state_root(),root);assert!(state.claim(&fp.claim_id()).is_none());
+     for payload in [b"TFO1".to_vec(), {
+         let mut bad=envelope.clone();bad.funding.signature[0]^=1;bad.encode_v1().unwrap()
+     }] {
+diff --git a/consensus/src/pipeline/virtual_processor/utxo_validation.rs b/consensus/src/pipeline/virtual_processor/utxo_validation.rs
+index a698b84e7..b57c4a3a3 100644
+--- a/consensus/src/pipeline/virtual_processor/utxo_validation.rs
++++ b/consensus/src/pipeline/virtual_processor/utxo_validation.rs
+@@ -430,8 +430,13 @@ impl VirtualStateProcessor {
+         accepting_daa: u64,
+         validated: &ValidatedTransaction<'_>,
+     ) -> kaspa_consensus_core::palw_state_v2::PalwFundedOriginalCandidateV1 {
++        // Actual processor configuration only. Never derive a policy body from
++        // the carrier's signed profile IDs or a caller graph/count declaration.
++        let court = self.palw_court_params_at(accepting_daa).and_then(Result::ok);
++        let native = court.as_ref().map(|c|(c,self.palw_court_step_ladder_at(accepting_daa,c)));
+         kaspa_consensus_core::palw_state_v2::palw_funded_original_candidate_v1(
+             state, self.palw_network_domain_v2(), accepting_daa, validated,
++            self.palw_state_params_v2.as_ref(), native,
+         )
+     }
+ 

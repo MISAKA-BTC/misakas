@@ -430,8 +430,13 @@ impl VirtualStateProcessor {
         accepting_daa: u64,
         validated: &ValidatedTransaction<'_>,
     ) -> kaspa_consensus_core::palw_state_v2::PalwFundedOriginalCandidateV1 {
+        // Actual processor configuration only. Never derive a policy body from
+        // the carrier's signed profile IDs or a caller graph/count declaration.
+        let court = self.palw_court_params_at(accepting_daa).and_then(Result::ok);
+        let native = court.as_ref().map(|c|(c,self.palw_court_step_ladder_at(accepting_daa,c)));
         kaspa_consensus_core::palw_state_v2::palw_funded_original_candidate_v1(
             state, self.palw_network_domain_v2(), accepting_daa, validated,
+            self.palw_state_params_v2.as_ref(), native,
         )
     }
 

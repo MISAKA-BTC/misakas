@@ -374,3 +374,6 @@ pub(crate) mod prefix_terminal;
 
 #[path = "palw_court_shared_semantic_material_v1.rs"]
 pub(crate) mod semantic_material;
+
+#[path = "palw_court_shared_constraint_stop_v1.rs"]
+pub(crate) mod constraint_stop;

@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'pipeline::virtual_processor::tests::funded_original_native_candidate::palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_incomplete_admission' (4707232) panicked at consensus/core/src/config/mod.rs:346:13:
+network mainnet declares a PALW V2 mode that does not validate: invalid V2 bundle: the rung window the bundle commits to is not the one the sweep enforces. Refusing to start rather than run half a ruleset.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test pipeline::virtual_processor::tests::funded_original_native_candidate::palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_incomplete_admission ... FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::funded_original_native_candidate::palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_incomplete_admission
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1065 filtered out; finished in 0.06s
+

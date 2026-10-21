@@ -12,21 +12,29 @@ use crate::palw_tir_public_state_v1::{PalwTirPublicAcquisitionRowV1, PalwTirPubl
 
 /// Diagnostics for a funded carrier on the native accepted UTXO path. There is
 /// deliberately no Admitted/Complete variant and no state or spend capability.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwFundedOriginalCandidateV1 {
     Invalid(&'static str),
     Missing(&'static str),
+    /// Local refusal/out-of-coverage is never an invalid claim or conviction.
+    Resource(crate::palw_native_resource_v1::NativeCoverageV1),
 }
 
 /// Read-only candidate inspection. `validated` alone does not attest provenance:
 /// the consensus caller must obtain it from its composed-view UTXO validator.
 /// No caller-provided profile, graph or consent hash becomes native policy.
 /// Ordinary fallback outputs survive every result of this function.
+/// Native params/court/ladder must come from the consensus processor's current
+/// config resolvers; these references are NOT a caller-adoptable ingress DTO.
+/// Source construction reserves its native ticket. Remaining traversal work
+/// without calibrated coverage stays Missing; Resource never implies fraud.
 pub fn palw_funded_original_candidate_v1(
     state: &PalwChainStateV2,
     network: Hash64,
     daa: u64,
     validated: &crate::tx::ValidatedTransaction<'_>,
+    native_params: Option<&PalwStateParamsV2>,
+    native_court: Option<(&crate::palw_mode_v2::PalwCourtParamsV2,u64)>,
 ) -> PalwFundedOriginalCandidateV1 {
     use PalwFundedOriginalCandidateV1::{Invalid, Missing};
     use crate::palw_tir_funded_original_envelope_v1::{is_funded_original_carrier_v1, PalwTirFundedOriginalEnvelopeV1};
@@ -88,15 +96,60 @@ pub fn palw_funded_original_candidate_v1(
     let Some(record) = state.tir_class_v1(&fp.commitment.job.class_id) else {
         return Invalid("registered original TIR class absent");
     };
-    if crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id).is_none() {
+    let Some(layout) = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id) else {
         return Invalid("registered original TIR layout absent");
+    };
+    let Some(class) = state.class(&fp.commitment.job.class_id) else {
+        return Invalid("native registered class state absent");
+    };
+    if class.registered_daa > daa || class.artifact_root != original.header.artifact_root {
+        return Invalid("native registered class time or artifact");
     }
-    // Do not enter prepare_original/source graph expansion without its complete
-    // native allocation preflight. Fixed header bytes have been decoded/paired,
-    // but registered source geometry, producer pledge native plan/horizon and
-    // full branch grammar remain UNCHECKED, as do native profiles and ordered
-    // accepted-prefix state. Pledge signature alone establishes none of those.
-    Missing("native source construction meter, full grammar/profiles and ordered original coordinator")
+    // Producer consent has its own actual acceptance clock. This does not
+    // manufacture any future service/retention horizon or extend that clock.
+    if daa > original.pledge.accept_until_daa {
+        return Invalid("producer source pledge acceptance clock");
+    }
+    let Some(params) = native_params else {
+        return Missing("actual native state policy unavailable");
+    };
+    let demand = crate::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(params, class.registered_daa);
+    let Some((court, network_ladder)) = native_court else {
+        return Missing("actual current native court or ladder unavailable");
+    };
+    // Same native class uplift as original_plan_v1; no caller-declared class
+    // ladder or signed profile ID is accepted in place of the rooted record.
+    let maximum_leaves = state.class_step_ladder_v1(&fp.commitment.job.class_id, network_ladder);
+    if maximum_leaves == 0 || !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(court.dissection_arity()) {
+        return Missing("actual current native court geometry unsupported");
+    }
+    let source = match crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(
+        record, layout, &original.header, fp.commitment.execution_root, fp.commitment.trace_root, maximum_leaves,
+    ) {
+        Ok(source) => source,
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(coverage)) => {
+            return PalwFundedOriginalCandidateV1::Resource(coverage);
+        }
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_)) => {
+            return Invalid("native original source geometry or job roots");
+        }
+    };
+    if source.source_id_v1() != original.pledge.source_id {
+        return Invalid("producer pledge differs from actual native source");
+    }
+    // Source's exact old constructor has run with actual court/class ladder.
+    // The registration-time demand is resolved from actual native state policy,
+    // NOT the accepting DAA or a producer/profile declaration. Do not enumerate
+    // numerical/semantic paths under an uncalibrated traversal budget, or build
+    // an invented paid frame when measuredFrameCost is absent. These diagnostics
+    // intentionally retain Missing and grant no funded/Complete/state authority.
+    match demand {
+        crate::palw_tir_fence2_v1::PalwTirDemandRulesV1::Release2000 =>
+            Missing("native source checked; registered Release2000 demand; numerical/semantic grammar calibration, profiles and ordered coordinator missing"),
+        crate::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7 =>
+            Missing("native source checked; registered H7 demand; numerical/semantic grammar calibration, profiles and ordered coordinator missing"),
+    }
+
 }
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {

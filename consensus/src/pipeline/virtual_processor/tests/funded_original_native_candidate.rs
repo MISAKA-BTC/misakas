@@ -28,7 +28,15 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
     let original = PalwTirPublicFpEnvelopeV1::decode_v1(&read("original.tfp1")).unwrap();
     let fp = original.original_fp_v1().unwrap();
     let now: u64 = std::str::from_utf8(&read("accepting-daa.txt")).unwrap().parse().unwrap();
-    let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    // Existing native TEST bundle, not a new tariff/production preset. The
+    // standalone original state remains the core-generated preparation fixture.
+    let catalog=palw_v2_test_catalog();
+    let bundle=palw_v2_test_bundle_funded_for(&catalog,64);
+    let config=ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work()
+        .edit_consensus_params(move |p| {
+            p.palw_consensus_mode=kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p=p.clone().with_palw_v2_cadence();
+        }).build();
     let ctx = TestContext::new(TestConsensus::new(&config));
     let vp = ctx.consensus.virtual_processor();
     let seed = [0x73; 32]; // Public local fixture only.
@@ -75,7 +83,7 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
     let tx=make(envelope.encode_v1().unwrap());
     let validated=vp.validate_transaction_in_utxo_context(&tx,&view,now,full,None).unwrap();
     let diagnostic=vp.palw_funded_original_candidate_from_native_v1(&state,now,&validated);
-    assert!(matches!(diagnostic,PalwFundedOriginalCandidateV1::Missing(_)),"{diagnostic:?}");
+    assert!(matches!(&diagnostic,PalwFundedOriginalCandidateV1::Missing(s) if s.starts_with("native source checked;")),"{diagnostic:?}");
     assert_eq!(state.state_root(),root);
     assert!(state.claim(&fp.claim_id()).is_none());
     assert_eq!(validated.calculated_fee,value-envelope.funding.terms.funding_amount_sompi);
@@ -130,6 +138,121 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
     replaced_bond.operator_id = kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&key);
     let replaced = replaced.into_state(&params,None).unwrap();
     assert!(matches!(vp.palw_funded_original_candidate_from_native_v1(&replaced,now,&validated),PalwFundedOriginalCandidateV1::Invalid(_)));
+    // The original was generated and prepared with this public TEST producer
+    // key. Mutations below remain real MLDSA signed carrier transactions.
+    let producer_seed=[0x6D;32];
+    let producer_key=mldsa::generate_key_pair(producer_seed);
+    assert_eq!(producer_key.verification_key.as_ref(),fp.commitment.job.executor_pubkey.as_slice());
+    let mutate_pledge=|source:Option<kaspa_consensus_core::Hash64>,expiry:Option<u64>| {
+        let mut candidate=envelope.clone();
+        let mut original=candidate.original_v1().unwrap();
+        if let Some(source)=source {original.pledge.source_id=source;candidate.funding.terms.source_id=source;}
+        if let Some(expiry)=expiry {original.pledge.accept_until_daa=expiry;}
+        original.pledge.signature=mldsa::sign(&producer_key.signing_key,original.pledge.id_v1().as_byte_slice(),
+            kaspa_consensus_core::palw_tir_public_custody_v1::PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1,producer_seed).unwrap().as_ref().to_vec();
+        candidate.original_envelope=original.encode_v1().unwrap();
+        candidate.funding.signature=mldsa::sign(&kp.signing_key,candidate.funding.terms.id_v1().as_byte_slice(),
+            COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,seed).unwrap().as_ref().to_vec();
+        make(candidate.encode_v1().unwrap())
+    };
+    assert!(now>1,"fixture must span a real registration/acceptance boundary");
+    for (candidate,reason) in [
+        (mutate_pledge(Some(h(0xF136)),None),"producer pledge differs from actual native source"),
+        (mutate_pledge(None,Some(now-1)),"producer source pledge acceptance clock"),
+    ] {
+        let actual=vp.validate_transaction_in_utxo_context(&candidate,&view,now,full,None).unwrap();
+        assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&state,now,&actual),PalwFundedOriginalCandidateV1::Invalid(reason));
+        assert_eq!(candidate.outputs,tx.outputs);assert_eq!(actual.calculated_fee,validated.calculated_fee);
+        assert_eq!(state.state_root(),root);
+    }
+    // Real current state metadata is authoritative, not the signed profile IDs.
+    let mut future=PalwStateCarriageV2::from_state(&state);
+    future.classes.get_mut(&fp.commitment.job.class_id).unwrap().registered_daa=now+1;
+    let future=future.into_state(&params,None).unwrap();
+    assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&future,now,&validated),
+        PalwFundedOriginalCandidateV1::Invalid("native registered class time or artifact"));
+    let mut foreign=PalwStateCarriageV2::from_state(&state);
+    foreign.classes.get_mut(&fp.commitment.job.class_id).unwrap().artifact_root=h(0xF137);
+    let foreign=foreign.into_state(&params,None).unwrap();
+    assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&foreign,now,&validated),
+        PalwFundedOriginalCandidateV1::Invalid("native registered class time or artifact"));
+    let mut geometry=PalwStateCarriageV2::from_state(&state);
+    let layout_key=kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirLayout(fp.commitment.job.class_id);
+    if let kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirLayout(layout)=geometry.staged_courts.get_mut(&layout_key).unwrap() {
+        assert!(!layout.commit_tiles.is_empty());
+        layout.commit_tiles[0]=if layout.commit_tiles[0]==4 {8} else {4};
+    } else {panic!("actual registered layout fixture");}
+    let geometry=geometry.into_state(&params,None).unwrap();
+    assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&geometry,now,&validated),
+        PalwFundedOriginalCandidateV1::Invalid("native original source geometry or job roots"));
+    // Explicit local TEST configuration mutation only; no preset/fence is armed
+    // in production. Resolve demand at registered DAA, NOT accepting DAA.
+    // Reuse the existing runnable T12 launch rule chain (audit, k-ary,
+    // R-core+ and its complete prerequisites), never assemble a half-ruleset by
+    // switching on TIR over the deliberately minimal baseline TEST bundle.
+    let (known_valid,_,_,_)=super::t12_round_lane_e2e::t12_with_harness_cards();
+    let mut demand_config=known_valid.params.clone();
+    demand_config.palw_tir_v1=Some(kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1::testnet12_v1(
+        kaspa_consensus_core::config::params::ForkActivation::new(0)));
+    demand_config.sync_palw_tir_v1();
+    demand_config.palw_tir_fence2=Some(kaspa_consensus_core::config::params::ForkActivation::new(1));
+    demand_config.sync_palw_tir_fence2();
+    let demand_config=ConfigBuilder::new(demand_config).skip_proof_of_work().build();
+    let demand_ctx=TestContext::new(TestConsensus::new(&demand_config));
+    let demand_vp=demand_ctx.consensus.virtual_processor();
+    // Funding consent belongs to the ACTUAL T12 network, independently of the
+    // baseline MAINNET fixture. Re-sign rather than forge a matching domain.
+    assert_ne!(demand_vp.palw_network_domain_v2(),vp.palw_network_domain_v2());
+    assert_eq!(demand_config.params.storage_mass_parameter,config.params.storage_mass_parameter,
+        "reusing make/sign requires the same actual native storage mass parameter");
+    let mut demand_envelope=envelope.clone();
+    demand_envelope.funding.terms.network_domain=demand_vp.palw_network_domain_v2();
+    demand_envelope.funding.signature=mldsa::sign(&kp.signing_key,demand_envelope.funding.terms.id_v1().as_byte_slice(),
+        COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,seed).unwrap().as_ref().to_vec();
+    demand_envelope.funding.verify_signature_v1(&demand_envelope.payer_pubkey).unwrap();
+    let demand_tx=make(demand_envelope.encode_v1().unwrap());
+    let actual=demand_vp.validate_transaction_in_utxo_context(&demand_tx,&view,now,full,None).unwrap();
+    assert_eq!(actual.calculated_fee,validated.calculated_fee);
+    assert_eq!(demand_tx.outputs,tx.outputs);
+    let mut old=PalwStateCarriageV2::from_state(&state);
+    old.classes.get_mut(&fp.commitment.job.class_id).unwrap().registered_daa=0;
+    let old=old.into_state(&params,None).unwrap();
+    assert!(matches!(demand_vp.palw_funded_original_candidate_from_native_v1(&old,now,&actual),
+        PalwFundedOriginalCandidateV1::Missing(s) if s.contains("registered Release2000 demand")));
+    let mut newer=PalwStateCarriageV2::from_state(&state);
+    newer.classes.get_mut(&fp.commitment.job.class_id).unwrap().registered_daa=1;
+    let newer=newer.into_state(&params,None).unwrap();
+    assert!(matches!(demand_vp.palw_funded_original_candidate_from_native_v1(&newer,now,&actual),
+        PalwFundedOriginalCandidateV1::Missing(s) if s.contains("registered H7 demand")));
+    // The actual configured court/ladder is used by native source construction.
+    // A smaller TEST court cannot be replaced by a producer's signed hash.
+    assert_eq!(state.class_step_ladder_v1(&fp.commitment.job.class_id,2),2,"fixture has no held uplift");
+    let mut small_config=config.params.clone();
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)=&mut small_config.palw_consensus_mode {
+        // Change only the tested leaf ladder. Preserve the court's existing
+        // clock, terminal rounds and cost ceilings, including its state mirror.
+        let actual=bundle.court;
+        bundle.court=kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+            2,actual.turn_deadline_daa(),actual.terminal_rounds(),actual.max_close_bytes(),
+            actual.max_terminal_macs(),actual.max_operand_count()).unwrap();
+        assert_eq!(bundle.court.dissection_arity(),actual.dissection_arity());
+    } else {panic!("native fixture consensus-v2 policy");}
+    // A dormant ladder fence MUST retain the historical executor cap.
+    let dormant_config=ConfigBuilder::new(small_config.clone()).skip_proof_of_work().build();
+    let dormant_ctx=TestContext::new(TestConsensus::new(&dormant_config));
+    let dormant_vp=dormant_ctx.consensus.virtual_processor();
+    let actual=dormant_vp.validate_transaction_in_utxo_context(&tx,&view,now,full,None).unwrap();
+    assert!(matches!(dormant_vp.palw_funded_original_candidate_from_native_v1(&state,now,&actual),
+        PalwFundedOriginalCandidateV1::Missing(s) if s.starts_with("native source checked;")));
+    // Only the explicit TEST fence makes the configured two-leaf ladder apply.
+    small_config.palw_court_ladder=Some(kaspa_consensus_core::config::params::ForkActivation::always());
+    let small_config=ConfigBuilder::new(small_config).skip_proof_of_work().build();
+    let small_ctx=TestContext::new(TestConsensus::new(&small_config));
+    let small_vp=small_ctx.consensus.virtual_processor();
+    let actual=small_vp.validate_transaction_in_utxo_context(&tx,&view,now,full,None).unwrap();
+    assert_eq!(small_vp.palw_funded_original_candidate_from_native_v1(&state,now,&actual),
+        PalwFundedOriginalCandidateV1::Invalid("native original source geometry or job roots"));
+    assert_eq!(tx.outputs.len(),1);assert_eq!(state.state_root(),root);assert!(state.claim(&fp.claim_id()).is_none());
     for payload in [b"TFO1".to_vec(), {
         let mut bad=envelope.clone();bad.funding.signature[0]^=1;bad.encode_v1().unwrap()
     }] {

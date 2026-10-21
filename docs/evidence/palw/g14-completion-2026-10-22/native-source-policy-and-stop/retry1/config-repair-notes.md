@@ -1,0 +1,9 @@
+# Native-only test configuration prerequisite repair
+
+Initial runtime failed at demand_config startup because the minimal MAINNET test bundle did not declare TIR prerequisites: audit09_11, k-ary court and R-core+; R-core+ itself requires14 policies. Baseline actual-source checks before this alternate configuration had succeeded according to parent run. No production validation defect is inferred.
+
+Incremental `config-prerequisite-repair.patch` modifies ONLY the native test's alternate demand configuration and its corresponding transaction. It reuses existing runnable `t12_round_lane_e2e::t12_with_harness_cards()` launch profile, the same base used by existing t12_tir_da_step_gate tests. It then sets TIR at0 and fence2 at1, syncs the real state mirrors, and keeps both exact registration-time demand assertions. No prerequisite is bypassed or reimplemented piecemeal, no production params/validator/fence is changed.
+
+Actual network differs, so the payer funding consent's domain is updated to demand_vp's actual native network domain and correctly re-signed with the existing test payer key. Original source/FP/pledge bytes and outputs are preserved. The test explicitly asserts native storage_mass_parameter equals baseline before reusing make/sign, whose mass calculator captures baseline config. Full UTXO validation uses the actual demand processor and actual signed transaction; fee/output equality is asserted. Old and new registered states are passed to the same actual T12 processor at the same accepting DAA, retaining Release2000 versus H7 assertions.
+
+No repo edit/build/test executed. Apply-check passed. Other baseline Source/pledge/layout/current metadata assertions are unchanged. The later tiny-court mutation has not executed yet; any distinct startup invariant there must be reported honestly rather than bypassed. This repair does not imply the whole native test passes.

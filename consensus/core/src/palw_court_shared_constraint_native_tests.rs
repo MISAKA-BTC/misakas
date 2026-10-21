@@ -201,3 +201,213 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
     assert!(evidence.recheck(&store, &stale, &params, &rules, budget).is_err());
     assert_eq!(b.state.state_root(), before);
 }
+
+#[test]
+fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_boundaries(){
+    use crate::palw_constraint_stream_court_v1::canonical_replay::WorkBudget;
+    use crate::palw_court_shared_tir_builder_store_v1::{
+        constraint_terminal::{
+            ConstraintMaterialV1, SignedConstraintTerminalIntentV1 as Intent,
+            CONSTRAINT_INTENT_SIGNATURE_CONTEXT_V1 as SIGNATURE_CONTEXT,
+        },
+        SharedTirBuilderStoreV1 as Store,
+    };
+    use crate::palw_court_shared_tir_state_v1 as shared;
+    use crate::palw_tir_court_v1::{tir_logits_event_disclosure_v1, PalwTirTraceEventDisclosureV1};
+    use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q, PalwTirPublicResponseV1 as R};
+    use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::{SignedConstraintStopIntentV1 as StopIntent,CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1 as STOP_CONTEXT};
+    use crate::palw_freeprompt_v3::PalwFpStopReasonV3 as Stop;
+    for stop in [Stop::ExactBudgetReached,Stop::EndOfGeneration] {for fault in [false,true] {
+    let (fx, semantics, table) = crate::palw_tir_public_claim_v1::palw_tir_public_constraint_stop_frame_fixture_v1(stop,fault);
+    fx.record.check_program_v1().unwrap();
+    assert!(fx.record.program.len() > 3);
+    let frame = &fx.frame;
+    let p = frame.plan_v1();
+    let claim = p.original_claim;
+    assert!(p
+        .semantic
+        .as_ref()
+        .unwrap()
+        .stages
+        .iter()
+        .any(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint));
+    let (mut state, params, mut extras) = world(&fx, frame);
+    state.claim_semantics.insert(claim, semantics.clone());
+    state.class_semantics.insert(semantics.class_id, semantics.clone());
+    let key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([79; 32]);
+    state.bonds.get_mut(&outsider()).unwrap().pubkey = key.verification_key.as_ref().to_vec();
+    assert!(
+        crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(&state, frame, p.terms.material_until_daa).is_err()
+    );
+    // Build the SAME signed semantic dependency as native original installation;
+    // a service binding must never bypass its real custody-window check.
+    let producer = frame.custody_v1().pledge_v1().producer;
+    let producer_key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([81; 32]);
+    state.bonds.get_mut(&producer).unwrap().pubkey = producer_key.verification_key.as_ref().to_vec();
+    let mut pledge = crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1 {
+        version: 1,
+        claim,
+        producer,
+        execution_root: frame.original_v1().execution_root,
+        job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1()),
+        cu_ruleset_id: semantics.cu_ruleset_id,
+        resource_plan_id: p.semantic_resource_plan_id.unwrap(),
+        maximum_records: p.maximum_semantic_history_records,
+        maximum_custodians: p.acquisition.maximum_custodians,
+        accept_until_daa: p.terms.accepted_daa + 1,
+        material_until_daa: p.terms.material_until_daa,
+        signature: vec![],
+    };
+    pledge.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &producer_key.signing_key,
+        pledge.pledge_id_v1().as_byte_slice(),
+        crate::palw_history_custody_v1::PALW_HISTORY_PLEDGE_CONTEXT_V1,
+        [82; 32],
+    )
+    .unwrap()
+    .as_ref()
+    .to_vec();
+    extras.staged_public_court = Some(fx.rules.config);
+    extras.history_custody_pledges.insert(claim, pledge);
+    let mut dependency = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let bundle = frame_semantic_bundle_v1(&dependency, frame, p.terms.accepted_daa).unwrap().unwrap();
+    dependency.write_staged_row_v1(Key::Claim(claim), Some(bundle)).unwrap();
+    let state = dependency.state.clone();
+    crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(&state, frame, p.terms.material_until_daa).unwrap();
+
+    let state = bind_clock_service(&state, frame, &params, &extras);
+    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let profile = shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
+    let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
+    let scope = set.scope_id().unwrap();
+    let c = shared::SharedTirContextV1 {
+        version: 1,
+        claim,
+        allocation_id: p.allocation_id,
+        source_id: p.source_id,
+        rules_id: p.rules_id,
+        profile_id: profile,
+        scope_id: scope,
+        queries: set.len(),
+        original_accepted_daa: p.terms.accepted_daa,
+        hard_daa: p.terms.accepted_daa + 10_000,
+        material_until_daa: p.terms.material_until_daa,
+    };
+    let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    b.write_staged_row_v1(Key::CourtSharedContext(claim), Some(Row::CourtSharedContext(Box::new(c)))).unwrap();
+    let rows = crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+    let ids = source.retain_complete_ids_v1(rows, &fx.execution.generated).unwrap();
+    let store = Store::new(&b.state, claim, scope, &[], &[], Some(&ids)).unwrap();
+    let rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 {
+        network_domain: extras.tir_public_network_domain_v1.unwrap(),
+        at: at(frame, 1),
+        court: fx.rules.court,
+        step_ladder: fx.rules.maximum_leaves,
+        prompt_ids_merkle: false,
+        held_regime: false,
+        decode_close_convicts_only: false,
+        fp_decode_from_daa: None,
+        cell_closure_from_daa: None,
+        memory_routing_from_daa: None,
+        tir_active: true,
+        gen_active: false,
+        task_heads_active: false,
+        improvement_active: false,
+        constraint_active: true,
+    };
+    let eog=table.eog_opening().unwrap();
+    let renderings=(0..table.vocab()).map(|id|table.opening_of(id).unwrap()).collect::<Vec<_>>();
+    let material=ConstraintMaterialV1{eog:&eog,renderings:&renderings};
+    let budget=WorkBudget{max_material_bytes:1<<25,max_calls:100_000};
+    let mut intent=StopIntent{version:1,claim,scope_id:scope,
+        policy_id:crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(&rules).unwrap(),
+        semantics_id:semantics.commitment(),material_id:material.identity(budget).unwrap(),position:source.decode_count_v1(),
+        stop_reason:stop,filer:outsider(),signature:vec![]};
+    let sign=|i:&mut StopIntent|{i.signature=libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key,
+        i.signing_message(rules.network_domain).unwrap().as_byte_slice(),STOP_CONTEXT,[97;32]).unwrap().as_ref().to_vec();};
+    sign(&mut intent);let before=b.state.state_root();
+    let evidence=store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&intent,material,budget).unwrap();
+    assert_eq!(evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap().is_some(),fault);
+    // Exact native end position; token position D-1 cannot become a stop root.
+    let mut wrong=intent.clone();wrong.position-=1;sign(&mut wrong);
+    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,material,budget).is_err());
+    let mut wrong=intent.clone();wrong.position+=1;sign(&mut wrong);
+    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,material,budget).is_err());
+    let mut wrong=intent.clone();wrong.stop_reason=if stop==Stop::ExactBudgetReached{Stop::EndOfGeneration}else{Stop::ExactBudgetReached};sign(&mut wrong);
+    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,material,budget).is_err());
+    let mut wrong=intent.clone();wrong.scope_id=h(979);sign(&mut wrong);
+    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,material,budget).is_err());
+    let missing=Store::new(&b.state,claim,scope,&[],&[],None).unwrap();
+    assert!(missing.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&intent,material,budget).is_err());
+    let mut eog_bad=eog.clone();eog_bad.ids[0]=(eog_bad.ids[0]+1)%table.vocab();
+    let bad=ConstraintMaterialV1{eog:&eog_bad,renderings:&renderings};
+    let mut wrong=intent.clone();wrong.material_id=bad.identity(budget).unwrap();sign(&mut wrong);
+    assert!(store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&wrong,bad,budget).is_err());
+    let encoded=renderings.iter().map(|o|borsh::to_vec(o).unwrap()).collect::<Vec<_>>();
+    let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let eog_wire=borsh::to_vec(&eog).unwrap();
+    let owner=store.retain_semantic_table_material_v1(&b.state,claim,&bodies,&eog_wire).unwrap();
+    let retained=store.build_constraint_stop_terminal_retained_v1(&b.state,&params,&rules,&intent,&owner,budget).unwrap();
+    assert_eq!(retained.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    let view=crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(source.header_v1(),&fx.record,fx.rules.maximum_leaves).unwrap();
+    let view_identity=borsh::to_vec(source.header_v1()).unwrap();
+    let direct=|candidate:&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,actual_ids:&crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1| {
+        crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1::new_from_tiled_ids_with_original_stop_context_v1(
+            crate::palw_freeprompt_v3::fp_claim_id_v3(candidate),outsider(),p.terms.accepted_daa,&view,&view_identity,&source,actual_ids,candidate,
+            eog.ids.len() as u32,&eog.opening,h(981))
+    };
+    // Prove that this route reaches the normative terminal-stop predicate,
+    // not the deliberately false rendering/grammar arm of this fixture.
+    let base=direct(frame.original_v1(),&ids).unwrap();
+    use crate::palw_constraint_stream_court_v1::{PalwConstraintStreamPhaseV1 as Phase,canonical_replay as stop_replay};
+    assert_eq!(base.phase(),Phase::Eog);assert!(base.rendering_cursor_v1().is_none());
+    assert_eq!(base.selection_for_tests_v1(),(source.decode_count_v1(),None,false));
+    struct EogOnly<'a>{ids:&'a [u32],rendering_calls:std::cell::Cell<u32>}
+    impl stop_replay::Material for EogOnly<'_>{
+        fn eog(&self)->Option<&[u32]>{Some(self.ids)}
+        fn rendering(&self,_:u32)->Option<stop_replay::RenderingMaterial<'_>>{
+            self.rendering_calls.set(self.rendering_calls.get()+1);None
+        }
+    }
+    let only=EogOnly{ids:&eog.ids,rendering_calls:std::cell::Cell::new(0)};
+    let terminal=stop_replay::build(&base,&only,budget).unwrap();
+    assert_eq!(only.rendering_calls.get(),0,"stop path must never enter grammar/rendering");
+    assert_eq!(terminal.work().material_bytes,eog.ids.len() as u64*4);
+    assert_eq!(terminal.work().calls,2,"one EOG part and finish only");
+    assert_eq!(terminal.finding().is_some(),fault);
+    if let Some(found)=terminal.finding(){
+        assert_eq!(found.position,if stop==Stop::ExactBudgetReached{0}else{source.decode_count_v1()-1});
+    }
+    let mut finished=base.clone();
+    finished.push_eog(finished.seed_id(),0,&eog.ids).unwrap();finished.finish_eog().unwrap();
+    assert_eq!(finished.phase(),Phase::Complete);assert!(finished.rendering_cursor_v1().is_none());
+    assert_eq!(finished.fault().unwrap().is_some(),fault);
+    // Signed private adapter also succeeds with ONLY authenticated EOG, so no
+    // unrelated invalid-rendering result can make the positive pass by accident.
+    let eog_only=ConstraintMaterialV1{eog:&eog,renderings:&[]};
+    let mut end_only=intent.clone();end_only.material_id=eog_only.identity(budget).unwrap();sign(&mut end_only);
+    let end_only=store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&end_only,eog_only,budget).unwrap();
+    assert_eq!(end_only.recheck(&store,&b.state,&params,&rules,budget).unwrap().is_some(),fault);
+    // Negative-only altered native facts, never installed as a valid original.
+    let mut changed=frame.original_v1().clone();changed.decode_tokens_executed-=1;
+    assert!(matches!(direct(&changed,&ids),Err(e) if e.contains("native original claim/count/stop facts")));
+    let mut changed=frame.original_v1().clone();changed.job.decode_token_limit=changed.decode_tokens_executed-1;
+    assert!(matches!(direct(&changed,&ids),Err(e) if e.contains("native original claim/count/stop facts")));
+    if stop==Stop::ExactBudgetReached {
+        let mut changed=frame.original_v1().clone();changed.job.decode_token_limit+=1;
+        assert!(matches!(direct(&changed,&ids),Err(e) if e.contains("native original claim/count/stop facts")));
+    }
+    let (other,_,_)=crate::palw_tir_public_claim_v1::palw_tir_public_constraint_stop_frame_fixture_v1(stop,!fault);
+    let other_source=other.frame.source_v1(&other.record,&other.layout,other.rules.maximum_leaves).unwrap();
+    let other_rows=crate::palw_step_refute::tiled_logits_rows_root_v1(&other.execution.binding.job_context,&other.execution.rows).unwrap();
+    let other_ids=other_source.retain_complete_ids_v1(other_rows,&other.execution.generated).unwrap();
+    assert!(matches!(direct(frame.original_v1(),&other_ids),Err(e) if e.contains("actual source/view/FullIds")));
+    assert_eq!(b.state.state_root(),before);
+    // Old token builder still requires an authenticated row and its own old
+    // intent/domain; this row-free Stop Store cannot satisfy token selection.
+    let old=Intent{version:1,claim,scope_id:scope,policy_id:intent.policy_id,semantics_id:intent.semantics_id,
+        material_id:intent.material_id,position:source.decode_count_v1()-1,beat_lane:0,witness:None,filer:outsider(),signature:vec![]};
+    let mut old=old;old.signature=libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key,old.signing_message(rules.network_domain).unwrap().as_byte_slice(),SIGNATURE_CONTEXT,[98;32]).unwrap().as_ref().to_vec();
+    assert!(store.build_constraint_terminal(&b.state,&params,&rules,&old,material,budget).is_err());
+    }}
+}

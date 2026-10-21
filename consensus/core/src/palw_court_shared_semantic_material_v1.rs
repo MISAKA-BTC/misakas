@@ -294,3 +294,17 @@ impl Store<'_> {
             eog:&material.eog,renderings:&material.renderings},budget)
     }
 }
+
+impl Store<'_> {
+    pub(crate) fn build_constraint_stop_terminal_retained_v1<'a>(
+        &self,state:&PalwChainStateV2,params:&crate::palw_state_v2::PalwStateParamsV2,
+        rules:&crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+        intent:&super::constraint_stop::SignedConstraintStopIntentV1,
+        material:&'a NativeRetainedV1<SemanticTableMaterialV1>,
+        budget:crate::palw_constraint_stream_court_v1::canonical_replay::WorkBudget,
+    )->Result<super::constraint_stop::ConstraintStopEvidenceV1<'a>,String> {
+        material.check_scope_v1(self.source.source_id_v1(),intent.claim,intent.scope_id,intent.semantics_id)?;
+        self.build_constraint_stop_terminal_v1(state,params,rules,intent,super::constraint_terminal::ConstraintMaterialV1{
+            eog:&material.eog,renderings:&material.renderings},budget)
+    }
+}

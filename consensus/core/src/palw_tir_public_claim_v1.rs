@@ -470,6 +470,12 @@ pub(crate) fn palw_tir_public_fixed_history_frame_fixture_v1(
     tests::history_frame_condition_v1(tests::HistoryConditionV1::Fixed{committed_writer},form)
 }
 
+#[cfg(test)]
+pub(crate) fn palw_tir_public_constraint_stop_frame_fixture_v1(stop:crate::palw_freeprompt_v3::PalwFpStopReasonV3,fault:bool)
+    ->(PalwTirPublicFrameFixtureV1,crate::palw_class_semantics_v1::PalwClassSemanticsV1,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+    tests::constraint_frame_stop_mode_v1(Some((stop,fault)))
+}
+
 /// Existing 4096-wide test execution reconstructed in its actual original job context.
 #[cfg(test)]
 pub(crate) fn palw_tir_public_frame_fixture_wide_v1(forge:Option<(usize,usize)>,maximum_custodians:u64)->PalwTirPublicFrameFixtureV1 {
@@ -650,6 +656,18 @@ mod tests {
         inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
         prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     )->super::PalwTirPublicFrameFixtureV1 {
+        frame_from_execution_with_material_form_stop_v1(x,job,maximum_custodians,output_root,semantics,inventory,prompt_form,
+            crate::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached)
+    }
+    fn frame_from_execution_with_material_form_stop_v1(
+        x:crate::palw_tir_court_v1::test_support::TinyExecution,
+        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        maximum_custodians:u64,output_root:Option<Hash64>,
+        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        inventory:Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+        prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        stop_reason:crate::palw_freeprompt_v3::PalwFpStopReasonV3,
+    )->super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_public_allocation_v1::*;
         let binding = x.binding.clone();
@@ -662,7 +680,7 @@ mod tests {
             schedule_root: Hash64::default(),
             execution_root: binding.committed_execution_root,
             decode_tokens_executed: x.generated.len() as u32,
-            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+            stop_reason,
             work_leaves: binding.step_leaf_count,
             trace_manifest_root: Hash64::default(),
             trace_chunk_count: 1,
@@ -762,6 +780,11 @@ mod tests {
     pub(super) fn constraint_frame()->(super::PalwTirPublicFrameFixtureV1,
         crate::palw_class_semantics_v1::PalwClassSemanticsV1,
         crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+        constraint_frame_stop_mode_v1(None)
+    }
+    pub(super) fn constraint_frame_stop_mode_v1(mode:Option<(crate::palw_freeprompt_v3::PalwFpStopReasonV3,bool)>)->(super::PalwTirPublicFrameFixtureV1,
+        crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+        crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
         use crate::palw_freeprompt_v3::*;
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3,PalwFpRunFactsV3};
         let honest=crate::palw_tir_court_v1::test_support::tiny_execution(None);
@@ -771,25 +794,34 @@ mod tests {
         job.class_id=class_id;job.tokenizer_id=honest.binding.class.tokenizer_id;
         job.prompt_tokens=honest.prompt.len() as u32;
         job.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(&honest.prompt);
-        job.decode_token_limit=honest.generated.len() as u32;job.max_context_tokens=64;
+        job.decode_token_limit=honest.generated.len() as u32+u32::from(mode.is_some_and(|(s,_)|s==PalwFpStopReasonV3::EndOfGeneration));job.max_context_tokens=64;
+        let stop_reason=mode.map_or(PalwFpStopReasonV3::ExactBudgetReached,|(s,_)|s);
         // All real eight-word registered lanes render an inadmissible first byte
         // under the existing bracket/digit constraint. Arithmetic remains real;
         // the semantic court must detect this deliberately bad selection.
         let table=crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
             entries:vec![Some(b"x".to_vec());honest.rows[0].len()],
-            eog_token_ids:vec![(honest.generated[0]+1) % honest.rows[0].len() as u32],tokenizer_id:job.tokenizer_id,
+            eog_token_ids:vec![mode.map_or((honest.generated[0]+1) % honest.rows[0].len() as u32,|(stop,fault)|match (stop,fault) {
+                (PalwFpStopReasonV3::ExactBudgetReached,true)=>0,
+                (PalwFpStopReasonV3::EndOfGeneration,false)=>honest.generated.len() as u32-1,
+                _=>honest.rows[0].len() as u32-1,
+            })],tokenizer_id:job.tokenizer_id,
         };
         let Some(PalwFpJobTailV1::Constraint(tail))=job.tail.as_mut() else {panic!("constraint job")};
         tail.table_root=table.root();
         let class=PalwFpClassFactsV3 {model_profile_id:Hash64::default(),runtime_manifest_hash:Hash64::default(),
             runtime_class_id:Hash64::default(),shape_profile_id:class_id,cu_ruleset_id:Hash64::default()};
-        let facts=PalwFpRunFactsV3 {decode_tokens_executed:job.decode_token_limit,
-            stop_reason:PalwFpStopReasonV3::ExactBudgetReached,full_logits_trace_root:Hash64::default(),
+        let facts=PalwFpRunFactsV3 {decode_tokens_executed:honest.generated.len() as u32,
+            stop_reason,full_logits_trace_root:Hash64::default(),
             activation_leg_root:Hash64::default(),checkpoint_leg_root:Hash64::default(),step_leg_root:Hash64::default(),
             step_leaf_count:honest.hashes.len() as u64};
         let context=crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job,&class,&facts,b"testnet-12").unwrap();
         let rule=crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {sampling:job.sampling_v2()};
-        let select=|_:u32,row:&[i32],before:&[u32]|crate::palw_tir_court_v1::test_support::select_by_rule(&rule,row,before,false);
+        // Stop-mode fixture still executes the actual registered arithmetic and
+        // commits its actual IDs; selection may be false under the grammar.
+        // Only the ORIGINAL stop predicate is the test's honest/fault label.
+        let select=|pos:u32,row:&[i32],before:&[u32]|if mode.is_some(){pos % row.len() as u32}
+            else{crate::palw_tir_court_v1::test_support::select_by_rule(&rule,row,before,false)};
         let x=crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_,_,_|context.clone(),None,&select);
         let semantics=crate::palw_class_semantics_v1::PalwClassSemanticsV1 {
             version:1,class_id,artifact_root:x.binding.artifact_root,bound_from_daa:0,
@@ -798,7 +830,9 @@ mod tests {
             token_table_root:Some(table.root()),rendering_rule:None,raw_tokenizer_bytes:None,
             tokenizer_key_events:None,prefix_state_relation:None,
         };
-        let frame=frame_from_execution_with_semantics(x,job,1,None,Some(&semantics));
+        if mode.is_some(){assert_eq!(x.generated,(0..honest.generated.len() as u32).collect::<Vec<_>>());}
+        let frame=frame_from_execution_with_material_form_stop_v1(x,job,1,None,Some(&semantics),None,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,stop_reason);
         assert!(frame.frame.plan_v1().semantic.is_some());
         (frame,semantics,table)
     }
