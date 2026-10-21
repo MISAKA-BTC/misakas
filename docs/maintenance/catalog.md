@@ -936,11 +936,15 @@
 
 ## measurements
 
+- [measurements/2026-10-19-court-verify-cpu.md](../measurements/2026-10-19-court-verify-cpu.md)
 - [measurements/2026-10-19-devnet-payload-carrier-audit.md](../measurements/2026-10-19-devnet-payload-carrier-audit.md)
 - [measurements/2026-10-19-devnet-payload-carrier.md](../measurements/2026-10-19-devnet-payload-carrier.md)
+- [measurements/2026-10-19-rothschild-mldsa-payload.md](../measurements/2026-10-19-rothschild-mldsa-payload.md)
+- [measurements/2026-10-19-t12-passive-daa-blocks.md](../measurements/2026-10-19-t12-passive-daa-blocks.md)
 - [measurements/2026-10-22-devnet-payload-carrier/analysis/README.md](../measurements/2026-10-22-devnet-payload-carrier/analysis/README.md)
 - [measurements/2026-10-22-devnet-payload-carrier/runtime-python-source/README.md](../measurements/2026-10-22-devnet-payload-carrier/runtime-python-source/README.md)
 - [measurements/2026-10-22-devnet-payload-carrier.md](../measurements/2026-10-22-devnet-payload-carrier.md)
+- [measurements/README.md](../measurements/README.md)
 
 ## operations
 

@@ -2012,6 +2012,127 @@ fn closure_containment_on_fixture_classes() {
     }
 }
 
+/// **Partial-read adjudication on the fixture classes.** For every disputed step leaf (the containment test's seeds), the closure's
+/// exact parameter leaves are read from the container file alone ([`TirPartialReaderV1`]) and verified against the inventory root.
+/// Checked: every piece is byte-identical to the instance's bytes at the same range, and the bytes read equal the closure's derived
+/// leaf bytes both per trial (before dedup) and over the class run (after dedup: each leaf read once). NOT checked: step results of
+/// the evaluator on partial operands (no evaluator path takes them yet). Gather row bounds are not leaves and are not read here; their
+/// bytes are reported separately as unread.
+#[test]
+fn partial_read_on_fixture_classes() {
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1 as K;
+    use misaka_palw_tir_exec::node::partial::TirPartialReaderV1;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut trials, mut before_total, mut distinct_total, mut gather_bound_total) = (0u64, 0u64, 0u64, 0u64);
+    let (mut step_total, mut hist_total, mut token_total, mut auth_total) = (0u64, 0u64, 0u64, 0u64);
+    let mut classes = Vec::new();
+    for (name, program, params) in programs() {
+        if analyze_ranges(&program).is_err() || program.params.is_empty() {
+            continue;
+        }
+        let program = TirProgramV1::decode_canonical(&tiled(program).encode()).unwrap();
+        let lay = layout(&program, 5, 2, 2, 64);
+        let path = dir.path().join(format!("{}.palwtir", name.replace(' ', "-")));
+        let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
+            params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
+        };
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
+            .unwrap();
+        let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+        let (root, _) = artifact.inventory_root().unwrap();
+        let class = artifact.class().unwrap();
+        let canonical =
+            kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+        let backend = TirBackendV1::new(name.clone(), artifact.clone(), root, canonical, PalwPromptIdsFormV1::Flat, LADDER)
+            .unwrap()
+            .with_network_id_v1(NET);
+        let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+        let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
+        let job = fp_job(&backend, &prompt, 6);
+        let ids: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+        let run = backend.execute_free_prompt(&job, &ids).unwrap();
+        let material = run.outcome.material.clone();
+        let capture = backend.decode_capture(&material).unwrap();
+        let ctx = capture.binding.job_context.clone();
+        let n = capture.binding.step_leaf_count;
+        drop(capture);
+        let space = backend.space();
+        let inv = PalwTirInventoryIndexV1::new(&space.program).unwrap();
+        let reader = TirPartialReaderV1::new(&artifact).unwrap();
+        let piece_len = |leaf: u32| inv.piece_of(leaf).unwrap().3 as u64;
+        let mut full_cache: std::collections::BTreeMap<(u16, Option<u16>), Vec<u8>> = std::collections::BTreeMap::new();
+        let (mut class_trials, mut class_before, mut class_leaves) = (0u64, 0u64, BTreeSet::new());
+        for i in 0..n {
+            let l = space.leaf_at(&ctx, i).unwrap();
+            let seed = match l.kind {
+                K::Commit { occurrence, block, node, first_element, .. } => {
+                    let _ = block;
+                    Some((l.position, occurrence as u16, node, first_element))
+                }
+                K::State { state, layer, first_element, .. } => {
+                    state_writer_v1(&space.program, state, layer).map(|(occ, w)| (l.position, occ, w, first_element))
+                }
+                K::HistTile { .. } => None,
+            };
+            let Some((pos, occ, node, first)) = seed else { continue };
+            let elems: Vec<u64> = (first..first + l.value_count as u64).collect();
+            let mut c = Closure::new(&space.program, &space.info, space, &inv);
+            c.seed_node(pos, occ, node, elems);
+            c.run().unwrap_or_else(|e| panic!("{name}: leaf {i}: the closure refused: {e}"));
+            let param_leaves: Vec<u32> =
+                c.leaves.keys().filter_map(|k| if let CLeaf::Param { leaf } = k { Some(*leaf) } else { None }).collect();
+            let derived: u64 = param_leaves.iter().map(|x| piece_len(*x)).sum();
+            let got = reader.read_leaves(&param_leaves).unwrap();
+            assert_eq!(got.len(), param_leaves.len(), "{name}: a leaf came back missing");
+            for (leaf, piece) in &got {
+                let (j, layer, start, len) = inv.piece_of(*leaf).unwrap();
+                let whole = full_cache
+                    .entry((j, layer))
+                    .or_insert_with(|| artifact.container().read_tensor_bytes(j, layer).unwrap());
+                assert_eq!(piece.as_slice(), &whole[start as usize..(start + len) as usize], "{name}: leaf {leaf} differs from the file");
+            }
+            for (k, (bytes, _)) in &c.leaves {
+                match k {
+                    CLeaf::Param { .. } => {}
+                    CLeaf::Hist { .. } => hist_total += bytes,
+                    _ => step_total += bytes,
+                }
+            }
+            token_total += 4 * c.tokens.len() as u64;
+            gather_bound_total += c.summary().gather.values().map(|v| v.1).sum::<u64>();
+            class_before += derived;
+            class_leaves.extend(param_leaves.iter().copied());
+            class_trials += 1;
+            trials += 1;
+        }
+        let after: u64 = class_leaves.iter().map(|x| piece_len(*x)).sum();
+        let counts = reader.counts();
+        assert_eq!(counts.model_operand_bytes_before_dedup, class_before, "{name}: bytes requested != derived per-trial bytes");
+        assert_eq!(counts.model_operand_bytes_read, after, "{name}: bytes read != distinct derived leaf bytes");
+        assert_eq!(counts.leaves_read as usize, class_leaves.len());
+        before_total += class_before;
+        distinct_total += after;
+        auth_total += counts.auth_path_bytes_before_dedup;
+        classes.push(json!({ "class": name, "disputed_trials": class_trials, "model_operand_bytes_before_dedup": class_before,
+            "model_operand_bytes_read_after_dedup": after, "distinct_leaves": class_leaves.len(),
+            "auth_path_bytes_before_dedup": counts.auth_path_bytes_before_dedup, "file_reads": counts.file_reads }));
+    }
+    assert!(trials > 0, "no fixture class was checked");
+    println!(
+        "[partial-read] trials={trials} model_operand_bytes before_dedup={before_total} after_dedup={distinct_total} \
+         auth_path_bytes={auth_total} step_leaf_bytes={step_total} hist_tile_bytes={hist_total} token_bytes={token_total} \
+         gather_row_bound_bytes_unread={gather_bound_total}"
+    );
+    if let Ok(out) = std::env::var("MISAKA_PARTIAL_READ_OUT") {
+        let record = json!({ "record": "misaka-palw/tir-partial-read-fixture/v1", "trials": trials,
+            "bytes": { "model_operand_before_dedup": before_total, "model_operand_after_dedup": distinct_total,
+                "auth_path_before_dedup": auth_total, "step_leaves": step_total, "hist_tiles": hist_total, "tokens": token_total,
+                "gather_row_bounds_unread": gather_bound_total },
+            "not_established": ["evaluator step results on partial operands", "safe bound"], "classes": classes });
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+}
+
 /// **The closure of disputed steps at the 32K maximum, Huihui-Qwen3.5-2B class** (params-free: the class and its program only; no
 /// tensor is read). Seeds: every commit node of the top GDN layer, the top attention layer and `post`, at position `max_context−1`,
 /// for the first, middle and last tile of each node. Measurement of sampled seeds (see the record), not a maximum over all tiles.

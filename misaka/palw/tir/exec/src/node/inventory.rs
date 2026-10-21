@@ -94,6 +94,20 @@ impl TirInventoryTreeV1 {
         self.index.leaf_count()
     }
 
+    /// The number of sibling hashes in leaf `leaf`'s opening (what [`Self::open`] supplies; an odd last node
+    /// is promoted and contributes none).
+    pub fn path_len_v1(&self, leaf: u32) -> u32 {
+        let mut at = leaf as usize;
+        let mut n = 0;
+        for level in &self.levels[..self.levels.len() - 1] {
+            if !(at == level.len() - 1 && level.len() % 2 == 1) {
+                n += 1;
+            }
+            at /= 2;
+        }
+        n
+    }
+
     /// Every leaf hash, in inventory order.
     pub fn leaves(&self) -> &[Hash64] {
         &self.levels[0]
