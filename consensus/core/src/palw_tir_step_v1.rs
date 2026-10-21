@@ -213,6 +213,43 @@ pub(crate) fn floor_sum(n: u128, m: u128, a: u128, b: u128) -> u128 {
     }
 }
 
+/// Additional StepSpace vectors, derived from opaque actual wire metadata.
+/// Does NOT include Source input clones/hash writers, a lease or admission.
+/// Caller must separately retain the program codec/analysis quote and reserve
+/// all coexisting owners before calling an allocating constructor.
+pub(crate) fn native_tir_step_space_additional_requests_v1(
+    shape: &crate::palw_native_resource_v1::NativeTirProgramShapeV1,
+) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    step_space_requests_from_count_v1(shape.structural_items_v1())
+}
+fn step_space_requests_from_count_v1(items: u64) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1};
+    let overflow = || NativeCoverageV1::overflow::<PalwTirStepSpaceV1>("StepSpace structural cardinality");
+    let mut q = TirNativeRequestsV1::new();
+    // B blocks, N nodes, S states, L layer references are each bounded by the
+    // sum of actual parsed collection/byte elements (not canonical frame size).
+    let n = items;
+    let occurrences = n.checked_add(2).ok_or_else(overflow)?;
+    q.exact_v1::<BlockSpaceV1>(n)?; // Vec::with_capacity(blocks.len())
+    // Commit Vecs grow independently. Sum 2*max(nodes_in_block, minimum)
+    // <= 2*N + B*(2*minimum). Quote the ordinary one-Vec envelope for N,
+    // plus one one-item envelope per B; the helper supplies its pinned minimum.
+    q.vec_v1::<CommitNodeV1>(n)?;
+    let mut one = TirNativeRequestsV1::new();
+    one.vec_v1::<CommitNodeV1>(1)?;
+    q.add_v1(n.checked_mul(one.bytes_v1()).ok_or_else(overflow)?)?;
+    q.exact_v1::<(u8, Option<u16>)>(occurrences)?; // retained occurrences
+    q.exact_v1::<(u8, Option<u16>)>(occurrences)?; // occurrence_slot_bases temporary occurrences
+    q.vec_v1::<u32>(occurrences)?; // collect slot bases
+    // A global state has one instance; a per-layer state at most L. Count both
+    // output Vecs conservatively even though each state chooses only one kind.
+    let instances = n.checked_mul(occurrences).ok_or_else(overflow)?;
+    q.vec_v1::<PalwTirStateInstanceV1>(instances)?;
+    q.vec_v1::<PalwTirStateInstanceV1>(instances)?;
+    q.vec_v1::<Option<u16>>(occurrences)?; // one transient layers list
+    Ok(q.bytes_v1())
+}
+
 impl PalwTirStepSpaceV1 {
     /// Decode the class's program, validate it and check the layout against it.
     pub fn new(class: &PalwTirClassV1) -> Result<Self, PalwTirStepError> {
@@ -1073,4 +1110,37 @@ pub fn verify_tir_binding_v1(
         return Err(PalwTirStepError::Binding("the parts do not produce the committed execution root"));
     }
     Ok(PalwTirVerifiedBindingV1 { space, class_id, context_hash, job })
+}
+
+#[cfg(test)]
+mod native_step_space_inventory_tests_v1 {
+    use super::*;
+    #[test]
+    fn actual_scanned_nonempty_step_space_vectors_fit_additional_quote() {
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let class = &x.binding.class;
+        let shape = crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&class.program).unwrap();
+        assert!(shape.structural_items_v1() > 0 && shape.program_requests_v1() > 0);
+        let quote = native_tir_step_space_additional_requests_v1(&shape).unwrap();
+        let space = PalwTirStepSpaceV1::new(class).unwrap();
+        let mut actual = space.blocks.capacity() * std::mem::size_of::<BlockSpaceV1>();
+        actual += space.blocks.iter().map(|b| b.commits.capacity() * std::mem::size_of::<CommitNodeV1>()).sum::<usize>();
+        actual += space.occurrences.capacity() * std::mem::size_of::<(u8,Option<u16>)>();
+        actual += space.slot_bases.capacity() * std::mem::size_of::<u32>();
+        actual += (space.fixed.capacity()+space.hist.capacity()) * std::mem::size_of::<PalwTirStateInstanceV1>();
+        assert!(quote >= actual as u64);
+    }
+    #[test]
+    fn structural_overflow_and_hostile_canonical_shape_are_refused_before_space_construction() {
+        assert!(step_space_requests_from_count_v1(u64::MAX).is_err());
+        assert!(step_space_requests_from_count_v1(u64::MAX / 2).is_err());
+        assert!(crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&[]).is_err());
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let mut bytes = x.binding.class.program.clone();
+        bytes.push(0);
+        assert!(crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&bytes).is_err());
+        let mut bytes = vec![0u8;2+64+4+4];
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&bytes).is_err());
+    }
 }

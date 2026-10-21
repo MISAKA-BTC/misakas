@@ -52,6 +52,8 @@ Next primary integration work is the original coordinator: derive canonical comp
 
 ## Latest parallel checkpoint
 
+[Source StepSpace allocation inventory](../../../evidence/palw/g14-completion-2026-10-22/source-step-inventory.md): 19 unique selected successes (StepSpace2, retained TIR3, t12 identity9, activation5). Opaque actual program metadata now feeds checked typed Vec capacity bounds; complete Source ownership and admission are still separate.
+
 [Tokenizer reconstruction and pre-expansion graph bounds](../../../evidence/palw/g14-completion-2026-10-22/tokenizer-and-graph-preflight.md): 36 unique selected successes, including actual-original/EOF Tokenizer material reconstruction and fresh recheck, existing Constraint regression, graph/request checks, t12 identity9 and activation5. This adds no public raw/proof delivery, native heap lease, complete funded original or escrow settlement.
 
 [Material reconstruction and native input candidate, 2026-10-22](../../../evidence/palw/g14-completion-2026-10-22/material-and-native-candidate.md): 43 unique selected successes (core42 + native1), including t12 identity9 and activation5. A real native regression exposed and fixed unkeyed payer-ID/native-address conflation; ordinary fallback spend succeeds and an unkeyed trap is explicitly refused. The separate Constraint material builder reconstructs its native original context and rechecks evidence. Default production diagnostics remain disabled; complete source/semantic/financial admission, actual escrow locks and the public paid route remain absent.

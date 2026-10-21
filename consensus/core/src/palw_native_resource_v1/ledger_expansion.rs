@@ -443,11 +443,38 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
     Ok(shape)
 }
 
-/// Borrowed standalone adapter to the same audited program codec/analysis walk
-/// used by ledger restoration. The stack prefix supplies only Borsh framing;
-/// the actual program bytes are scanned directly without a concatenated Vec.
+/// Borrowed scanner output only. No public fields/constructor: a caller cannot
+/// substitute a budget or declared count for the actual canonical-byte scan.
+/// This quote owns no lease and certifies neither semantic validity nor Source.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NativeTirProgramShapeV1 {
+    program_requests: u64,
+    structural_items: u64,
+}
+impl NativeTirProgramShapeV1 {
+    pub(crate) fn program_requests_v1(&self) -> u64 { self.program_requests }
+    pub(crate) fn structural_items_v1(&self) -> u64 { self.structural_items }
+}
+/// Same audited program codec/analysis walk used by ledger restoration.
+/// The stack prefix supplies framing; actual bytes are scanned without a copy.
+pub(crate) fn standalone_tir_program_shape_v1(bytes: &[u8]) -> io::Result<NativeTirProgramShapeV1> {
+    let len = u32::try_from(bytes.len()).map_err(|_| wire::wire_bad("TIR program frame exceeds u32"))?;
+    let prefix = len.to_le_bytes();
+    let source = std::io::Cursor::new(prefix).chain(bytes);
+    let mut reader = NativeWireReaderV1::new(source, u64::from(len) + 4);
+    let shape = program_blob::<misaka_palw_tir::TirProgramV1, _>(
+        &mut reader, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)?;
+    if reader.remaining() != 0 { return Err(wire::wire_bad("standalone TIR program trailing bytes")); }
+    let program_requests = shape.heap.checked_add(size_of::<NativeRetainedV1<misaka_palw_tir::TirProgramV1>>() as u64)
+        .ok_or_else(|| wire::wire_bad("standalone TIR owner framing overflow"))?;
+    // Vec<u8> is tracked separately by the existing wire scanner. Include it:
+    // in particular schedule.layers is byte-valued and still bounds occurrences.
+    let structural_items = shape.collection_entries.checked_add(shape.byte_entries)
+        .ok_or_else(|| wire::wire_bad("TIR structural item count overflow"))?;
+    Ok(NativeTirProgramShapeV1 { program_requests, structural_items })
+}
 pub(crate) fn standalone_tir_program_requests_v1(bytes: &[u8]) -> io::Result<u64> {
-    standalone_program_requests_v1::<misaka_palw_tir::TirProgramV1>(bytes, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
+    Ok(standalone_tir_program_shape_v1(bytes)?.program_requests_v1())
 }
 pub(crate) fn standalone_program_requests_v1<T: NativeWireScanV1>(bytes: &[u8], cap: u64) -> io::Result<u64> {
     let len = u32::try_from(bytes.len()).map_err(|_| wire::wire_bad("TIR program frame exceeds u32"))?;

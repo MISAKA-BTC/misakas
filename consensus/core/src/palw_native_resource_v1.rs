@@ -38,6 +38,7 @@ mod kernel_ledger_mutation;
 pub use kernel_ledger_mutation::{PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1, PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1};
 mod tir;
 pub use demand::reserve_native_requests_v1;
+pub(crate) use ledger_expansion::{NativeTirProgramShapeV1, standalone_tir_program_shape_v1};
 pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1, preflight_kernel_served_row_v1};
 pub(crate) use ledger_expansion::{ledger_cache_clone_v1, reserve_ledger_expansion_v1};
 pub use tir::decode_native_tir_program_v1;
