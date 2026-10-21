@@ -2647,18 +2647,95 @@ mod conviction_e2e_tests {
         assert_eq!(fresh.court_sessions_len(), 0);
 
         use crate::palw_court_shared_tir_round_v1 as rounds;
+        use crate::palw_court_shared_tir_bottom_v1 as bottoms;
+        for false_partition in [false,true] {
         let mut round_state=fresh.clone();
+        let filer_keys=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([101;32]);
+        // Fixture identity setup, not a native registration/rotation or funding test.
+        round_state.bonds.get_mut(&outsider()).unwrap().pubkey=filer_keys.verification_key.as_ref().to_vec();
+        let (mut event_offset,mut local_faults)=(10,0);
+
         let mut paths=std::collections::VecDeque::from([Vec::<u8>::new()]);
         let (mut disclosures,mut terminals)=(0,0);
         let mut retained_controls=Vec::new();
         while let Some(path)=paths.pop_front(){
             let prepared=rounds::prepare_shared_tir_round_v1(&round_state,claim,leaf,&path).unwrap();
-            if prepared.phase.terminal_range().is_some(){terminals+=1;continue;}
+            if prepared.phase.terminal_range().is_some(){
+                let mut evidence=crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&fx.execution,&court).unwrap();
+                crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut evidence.binding);
+                let native_proof=crate::palw_court_v2::PalwCourtVerdictProofV2::TirDissection {bottom:Box::new(evidence.clone())};
+                let bytes=bottoms::shared_bottom_close_bytes_v1(&evidence).unwrap();
+                assert_eq!(bytes,borsh::to_vec(&native_proof).unwrap().len() as u64);
+                let small=crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(native.court.max_step_leaf_count(),native.court.turn_deadline_daa(),
+                    native.court.terminal_rounds(),bytes-1,native.court.max_terminal_macs(),native.court.max_operand_count()).unwrap();
+                assert!(bottoms::check_shared_bottom_cost_v1(&evidence,&small).is_err());
+                let mut c=bottoms::SignedSharedTirBottomV1 {version:1,claim,leaf,root_id:prepared.root_id,path:path.clone(),parent_id:prepared.parent_id,
+                    filer:outsider(),bottom:Box::new(evidence),signature:vec![]};
+                let sign_bottom=|c:&mut bottoms::SignedSharedTirBottomV1|{
+                    c.signature=libcrux_ml_dsa::ml_dsa_87::sign(&filer_keys.signing_key,
+                        c.signing_message(native.network_domain).unwrap().as_byte_slice(),bottoms::SHARED_TIR_BOTTOM_CONTEXT_V1,[102;32]).unwrap().as_ref().to_vec();
+                };
+                sign_bottom(&mut c);
+                let mut at_rules=native;at_rules.at=at(frame,event_offset);event_offset+=1;
+                let mut at_extras=root_extras.clone();at_extras.native_court_rules_v1=Some(at_rules);
+                let mut b=TransitionBuilder::new(&round_state,&params,false,false,false,false,&at_extras);
+                let before=b.state.state_root();
+                let original_claim=b.state.claim(&claim).unwrap().clone();
+                let original_producer=b.state.bond(&producer).unwrap().clone();let original_filer=b.state.bond(&outsider()).unwrap().clone();
+                for kind in 0..4 {
+                    let mut bad=c.clone();
+                    match kind {0=>bad.parent_id=h(0xBC01),1=>bad.bottom.output_opening.leaf_index=leaf+1,
+                        2=>bad.bottom.binding.committed_execution_root=h(0xBC02),3=>bad.bottom.output_opening.siblings.clear(),_=>unreachable!()}
+                    sign_bottom(&mut bad);
+                    assert!(fold::bottom(&mut b,&at_rules.at,&bad).is_err(),"bad bottom {kind}");
+                    assert_eq!(b.state.state_root(),before);assert!(b.entries.is_empty());
+                }
+                let (opened,outcome)=fold::bottom(&mut b,&at_rules.at,&c).unwrap();assert!(opened);
+                match &outcome {bottoms::SharedTirBottomOutcomeV1::NoMismatchFound=>{},bottoms::SharedTirBottomOutcomeV1::NativeFault(_)=>{assert!(false_partition);local_faults+=1;}}
+                assert_eq!(b.state.claim(&claim),Some(&original_claim));
+                assert_eq!(b.state.bond(&producer),Some(&original_producer));assert_eq!(b.state.bond(&outsider()),Some(&original_filer));
+                let key=Key::CourtSharedBottom(c.id().unwrap());let row=b.state.staged_court_row_v1(&key).unwrap().clone();
+                let wire=borsh::to_vec(&row).unwrap();assert_eq!(borsh::to_vec(&key).unwrap()[0],24);assert_eq!(wire[0],30);
+                let shape=preflight_native_value_v1::<Row>(wire.as_slice(),wire.len() as u64).unwrap();
+                assert!(shape.logical_requests_v1()>=row.native_heap_v1("bottom row").bytes().unwrap()+std::mem::size_of::<Row>() as u64);
+                assert_eq!(borsh::from_slice::<Row>(&wire).unwrap(),row);
+                let canonical=b.state.state_root();let n=b.entries.len();
+                let mut other=c.clone();other.filer=producer;
+                other.signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,other.signing_message(native.network_domain).unwrap().as_byte_slice(),
+                    bottoms::SHARED_TIR_BOTTOM_CONTEXT_V1,[103;32]).unwrap().as_ref().to_vec();
+                let (opened,again)=fold::bottom(&mut b,&at_rules.at,&other).unwrap();assert!(!opened);assert_eq!(again,outcome);
+                assert_eq!(b.state.state_root(),canonical);assert_eq!(b.entries.len(),n);
+                assert!(b.write_staged_row_v1(key,None).is_err());
+                if let Row::CourtSharedBottom(mut changed)=row.clone(){changed.outcome_digest=h(0xBC03);assert!(changed.check_context(&b.state).is_err());
+                    assert!(b.write_staged_row_v1(key,Some(Row::CourtSharedBottom(changed))).is_err());}
+                let mut undone=b.state.clone();for e in b.entries.iter().rev(){apply_delta_entry(&mut undone,e,true).unwrap();}
+                assert_eq!(undone.state_root(),round_state.state_root());for e in &b.entries{apply_delta_entry(&mut undone,e,false).unwrap();}
+                assert_eq!(undone.state_root(),canonical);
+                round_state=b.state.clone();round_state.set_last_point_for_tests(Some(at_rules.at));
+                terminals+=1;continue;
+            }
             let children=prepared.phase.child_ranges().len();
             let sum_index=checked.site().folds.iter().enumerate().find_map(|(i,f)|
                 (matches!(f,crate::palw_tir_dissect_v1::PalwTirFoldV1::Sum) && !control.root.elements[i].is_empty()).then_some(i))
                 .expect("the corpus has a nonempty sum reduction");
-            let msg=crate::palw_tir_court_v1::build_tir_dissect_round_v1(binding,&prepared.phase,fx.layout.h_tile,&fx.execution,&court).unwrap();
+            let mut msg=crate::palw_tir_court_v1::build_tir_dissect_round_v1(binding,&prepared.phase,fx.layout.h_tile,&fx.execution,&court).unwrap();
+            if false_partition {
+                let bounds=checked.site().bounds[sum_index];
+                let truth: i128=msg.children.iter().map(|c|c.partials[sum_index][0]).sum();
+                let delta=prepared.phase.claim().partials[sum_index][0]-truth;
+                if path.is_empty(){
+                    let delta=[1i128,-1].into_iter().find(|d|{
+                        let a=msg.children[0].partials[sum_index][0]+d;let b=msg.children[1].partials[sum_index][0]-d;
+                        a>=bounds.lo && a<=bounds.hi && b>=bounds.lo && b<=bounds.hi
+                    }).expect("the corpus has room for opposite signed partition errors");
+                    msg.children[0].partials[sum_index][0]+=delta;msg.children[1].partials[sum_index][0]-=delta;
+                }else if delta!=0 {
+                    let child=msg.children.iter_mut().find(|c|{
+                        let v=c.partials[sum_index][0]+delta;v>=bounds.lo && v<=bounds.hi
+                    }).expect("the same lie can be pushed into an allowed child");
+                    child.partials[sum_index][0]+=delta;
+                }
+            }
             let mut c=rounds::SignedSharedTirRoundV1 {version:1,claim,leaf,root_id:prepared.root_id,path:path.clone(),
                 parent_id:prepared.parent_id,signer:producer,round:Box::new(msg),signature:vec![]};
             let round_sign=|c:&mut rounds::SignedSharedTirRoundV1,nonce:u8|{
@@ -2667,7 +2744,7 @@ mod conviction_e2e_tests {
                     .unwrap().as_ref().to_vec();
             };
             round_sign(&mut c,95);
-            let mut at_rules=native;at_rules.at=at(frame,10+disclosures);
+            let mut at_rules=native;at_rules.at=at(frame,event_offset);event_offset+=1;
             let mut at_extras=root_extras.clone();at_extras.native_court_rules_v1=Some(at_rules);
             let mut b=TransitionBuilder::new(&round_state,&params,false,false,false,false,&at_extras);
             let unchanged=b.state.state_root();
@@ -2714,6 +2791,7 @@ mod conviction_e2e_tests {
             for child in (0..children).rev(){let mut next=path.clone();next.push(child as u8);paths.push_back(next);}
         }
         assert_eq!(disclosures,11);assert_eq!(terminals,12);
+        if false_partition {assert!(local_faults>0);} else {assert_eq!(local_faults,0);}
         let bytes=borsh::to_vec(&PalwStateCarriageV2::from_state(&round_state)).unwrap();
         preflight_native_carriage_v1(bytes.as_slice(),bytes.len() as u64).unwrap();
         let round_fresh=borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params,Some(round_state.state_root())).unwrap();
@@ -2734,6 +2812,10 @@ mod conviction_e2e_tests {
         super::super::palw_staged_court_fold_v1::sweep(&mut round_swept,&past).unwrap();
         assert!(round_swept.state.staged_court_row_v1(&Key::CourtSharedRound(child.id().unwrap())).is_some());
         assert_eq!(round_fresh.court_sessions_len(),0);
+        for (_,row) in &round_fresh.staged_courts {
+            if let Row::CourtSharedBottom(row)=row {row.check_loaded_context(&round_fresh).unwrap();}
+        }
+        }
     }
 
     #[test]

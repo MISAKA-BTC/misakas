@@ -75,6 +75,7 @@ pub enum PalwStagedCourtKeyV1 {
     /// Private canonical numerical root, appended key22.
     CourtSharedRoot(Hash64,u64),
     CourtSharedRound(Hash64),
+    CourtSharedBottom(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -121,6 +122,7 @@ pub enum PalwStagedCourtRowV1 {
     CourtCloseReceipt(PalwSharedCourtV1<crate::palw_court_close_receipt_v1::CourtCloseReceiptV1>),
     CourtSharedRoot(PalwSharedCourtV1<crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1>),
     CourtSharedRound(PalwSharedCourtV1<crate::palw_court_shared_tir_round_v1::SharedTirRoundRowV1>),
+    CourtSharedBottom(PalwSharedCourtV1<crate::palw_court_shared_tir_bottom_v1::SharedTirBottomRowV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -128,7 +130,7 @@ impl PalwStagedCourtRowV1 {
             Self::OwnerBundle(bundle) => bundle.active_v1(),
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) | Self::CourtSharedRound(_) => None,
+            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) | Self::CourtSharedRound(_) | Self::CourtSharedBottom(_) => None,
             _ => Some(self),
         }
     }
@@ -137,7 +139,7 @@ impl PalwStagedCourtRowV1 {
             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) | Self::CourtSharedRound(_) => None,
+            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) | Self::CourtSharedRound(_) | Self::CourtSharedBottom(_) => None,
             _ => Some(self),
         }
     }
@@ -265,6 +267,7 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::CourtCloseReceipt(..), Self::CourtCloseReceipt(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtSharedRoot(..), Self::CourtSharedRoot(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtSharedRound(..), Self::CourtSharedRound(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::CourtSharedBottom(..), Self::CourtSharedBottom(row)) => row.check(key),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

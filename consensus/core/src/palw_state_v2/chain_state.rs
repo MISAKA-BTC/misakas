@@ -3901,6 +3901,7 @@ impl PalwChainStateV2 {
                 R::CourtCloseReceipt(r)=>r.check_loaded_context(self),
                 R::CourtSharedRoot(r)=>r.check_loaded_context(self),
                 R::CourtSharedRound(r)=>r.check_loaded_context(self),
+                R::CourtSharedBottom(r)=>r.check_loaded_context(self),
                 R::CourtSharedStream(s)=>s.check_context(self),
                 R::CourtSharedChunk(c)=>c.check_context(self),_=>Ok(()),
             }.map_err(PalwStateV2Error::CarriageInconsistent)?;

@@ -303,3 +303,56 @@ pub(super) fn round(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
     })();
     if result.is_err(){b.restore(saved);}result
 }
+
+/// Preserve a local comparison, without applying any claim/court/money effect.
+pub(super) fn bottom(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
+    c:&crate::palw_court_shared_tir_bottom_v1::SignedSharedTirBottomV1)
+    ->Result<(bool,crate::palw_court_shared_tir_bottom_v1::SharedTirBottomOutcomeV1),PalwStateV2Error>{
+    use crate::palw_court_shared_tir_bottom_v1 as bottom;
+    use crate::palw_court_shared_tir_round_v1 as rounds;
+    use crate::palw_native_resource_v1::{NativeHeapV1,TirNativeRequestsV1};
+    let saved=b.try_checkpoint()?;
+    let result=(|| {
+        let rules=b.extras.native_court_rules_v1.ok_or_else(||refused("shared bottom native rules missing"))?;
+        if rules.at!=*ctx || b.extras.tir_public_network_domain_v1!=Some(rules.network_domain){return Err(refused("shared bottom native point/network mismatch"));}
+        bottom::check_shared_bottom_cost_v1(&c.bottom,&rules.court).map_err(refused)?;
+        let r=rounds::root(&b.state,c.claim,c.leaf).map_err(refused)?;
+        let bond=b.state.bond(&c.filer).ok_or_else(||refused("shared bottom filer missing"))?;
+        let record=b.state.tir_class_v1(&r.control.root.finalize.binding.job_context.shape_profile_id).ok_or_else(||refused("shared bottom program missing"))?;
+        let mut q=TirNativeRequestsV1::new();
+        let heap=|v:crate::palw_native_resource_v1::NativeCoverageV1|v.bytes().ok_or_else(||refused("shared bottom clone inventory missing"));
+        q.add_v1(heap(r.control.native_heap_v1("bottom root verifier"))?.checked_mul(2).ok_or_else(||refused("root copy overflow"))?).map_err(PalwStateV2Error::NativeResource)?;
+        q.add_v1(heap(r.control.root.finalize.binding.native_heap_v1("root binding"))?).map_err(PalwStateV2Error::NativeResource)?;
+        q.add_v1(heap(c.native_heap_v1("bottom verifier/retained copies"))?.checked_mul(2).ok_or_else(||refused("bottom copy overflow"))?).map_err(PalwStateV2Error::NativeResource)?;
+        q.add_v1(heap(c.bottom.binding.native_heap_v1("bottom binding"))?).map_err(PalwStateV2Error::NativeResource)?;
+        q.add_v1((record.program.len() as u64).checked_mul(2).ok_or_else(||refused("program copy overflow"))?).map_err(PalwStateV2Error::NativeResource)?;
+        q.exact_v1::<bottom::SharedTirBottomRowV1>(1).map_err(PalwStateV2Error::NativeResource)?;
+        q.exact_v1::<u8>(bond.pubkey.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+        for _ in 0..2 {
+            q.exact_v1::<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>(1).map_err(PalwStateV2Error::NativeResource)?;
+            q.add_v1(heap(r.control.root.elements.native_heap_v1("phase elements"))?).map_err(PalwStateV2Error::NativeResource)?;
+            for _ in 0..2{q.add_v1(heap(r.control.root.totals.native_heap_v1("phase root/claim"))?).map_err(PalwStateV2Error::NativeResource)?;}
+            let n=r.control.root.elements.len() as u64;
+            q.vec_v1::<u16>(n).map_err(PalwStateV2Error::NativeResource)?;
+            q.vec_v1::<crate::palw_tir_dissect_v1::PalwTirFoldV1>(n).map_err(PalwStateV2Error::NativeResource)?;
+            q.vec_v1::<(i128,i128)>(n).map_err(PalwStateV2Error::NativeResource)?;
+        }
+        q.vec_v1::<(u64,u64)>(u64::from(r.control.arity)).map_err(PalwStateV2Error::NativeResource)?;
+        let _lease=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+        let checked=bottom::check_shared_tir_bottom_v1(&b.state,b.params,&rules,c).map_err(refused)?;
+        let digest=checked.outcome_digest().map_err(refused)?;let outcome=checked.outcome().clone();
+        let key=Key::CourtSharedBottom(c.id().map_err(refused)?);
+        if let Some(old)=b.state.staged_court_row_v1(&key){
+            let Row::CourtSharedBottom(old)=old else{return Err(refused("shared bottom foreign slot"));};
+            if ctx.daa_score<old.rules.at.daa_score || old.control.parent_id!=c.parent_id || old.outcome_digest!=digest {
+                return Err(refused("shared bottom cannot replace local comparison"));
+            }
+            return Ok((false,outcome));
+        }
+        let row=bottom::SharedTirBottomRowV1 {version:1,control:c.clone(),rules,filer_pubkey:bond.pubkey.clone(),
+            material_until_daa:r.material_until_daa,outcome_digest:digest};
+        b.write_staged_row_v1(key,Some(Row::CourtSharedBottom(Box::new(row).into())))?;
+        Ok((true,outcome))
+    })();
+    if result.is_err(){b.restore(saved);}result
+}

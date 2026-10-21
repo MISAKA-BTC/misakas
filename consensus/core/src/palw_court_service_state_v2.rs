@@ -258,6 +258,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             Key::CourtSharedStream(_) | Key::CourtSharedChunk(..) => match self.staged_court_row_v1(key) {
                 Some(Row::CourtSharedStream(s))=>Some(s.claim),Some(Row::CourtSharedChunk(c))=>Some(c.claim),_=>None,
             },
+            Key::CourtSharedBottom(_) => match self.staged_court_row_v1(key) {
+                Some(Row::CourtSharedBottom(r))=>Some(r.control.claim),_=>None,
+            },
             Key::CourtSharedRound(_) => match self.staged_court_row_v1(key) {
                 Some(Row::CourtSharedRound(r))=>Some(r.control.claim),_=>None,
             },

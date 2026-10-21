@@ -973,6 +973,21 @@ impl TransitionBuilder<'_> {
     }
 
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        if matches!(key,PalwStagedCourtKeyV1::CourtSharedBottom(_)) || matches!(&new,Some(PalwStagedCourtRowV1::CourtSharedBottom(_))) {
+            let Some(PalwStagedCourtRowV1::CourtSharedBottom(r))=&new else {
+                return Err(PalwStateV2Error::CarriageInconsistent("shared bottom evidence cannot be removed or retyped".into()));
+            };
+            r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if let Some(old)=self.state.staged_court_row_v1(&key) {
+                if Some(old)!=new.as_ref(){return Err(PalwStateV2Error::CarriageInconsistent("shared bottom evidence is immutable".into()));}
+            } else {
+                if Some(r.rules)!=self.extras.native_court_rules_v1 || self.state.bond(&r.control.filer).is_none_or(|b|b.pubkey!=r.filer_pubkey) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared bottom does not capture native rules/key".into()));
+                }
+                crate::palw_court_shared_tir_bottom_v1::check_shared_tir_bottom_v1(&self.state,self.params,&r.rules,&r.control)
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
         if let PalwStagedCourtKeyV1::CourtSharedRound(..) = key {
             let Some(PalwStagedCourtRowV1::CourtSharedRound(r)) = &new else {
                 return Err(PalwStateV2Error::CarriageInconsistent("canonical shared round cannot be removed or retyped".into()));
@@ -3408,6 +3423,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtCloseReceipt(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedRoot(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedRound(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedBottom(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
@@ -3723,7 +3739,7 @@ pub(super) fn update_response_indices(
 pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     // The due index gives rooted-clock ordering;64 row removals bound every accepted block.
     let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score)
-        .filter(|(_, key)| !matches!(key,PalwStagedCourtKeyV1::CourtSharedRoot(..)|PalwStagedCourtKeyV1::CourtSharedRound(..))
+        .filter(|(_, key)| !matches!(key,PalwStagedCourtKeyV1::CourtSharedRoot(..)|PalwStagedCourtKeyV1::CourtSharedRound(..)|PalwStagedCourtKeyV1::CourtSharedBottom(..))
             && !b.state.court_service_holds_material_v1(key))
         .take(64).map(|(_, key)| *key).collect();
     for key in due {
@@ -3747,6 +3763,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtCloseReceipt(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedRoot(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedRound(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedBottom(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
             _ => None,
