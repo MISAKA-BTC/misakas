@@ -259,6 +259,56 @@ fn court_pools_v1(state: &PalwChainStateV2, ticket_window: u64) -> (PalwCourtPoo
     (reserve, spare)
 }
 
+/// **G14 F03 (lane g14p/court-owner): how many FOLLOW-ON sessions the unchanged network cap may hold** — a follow-on is a session on
+/// a claim that already has a running session. `⌊(cap − 1) / 2⌋`: at least `cap − ⌊(cap − 1) / 2⌋ ≥ 1` slots stay for first
+/// sessions (one per distinct claim), so stacking decoy dissections on one claim can never fill the cap. A pure function of the cap.
+pub fn palw_court_outsider_lane_followon_cap_v1(cap: u64) -> u64 {
+    cap.saturating_sub(1) / 2
+}
+
+/// **The legacy concurrency cap** (int-12, audit A M-1), and past `palw_court_outsider_lane_v1` its claim-diverse split (G14 F03).
+///
+/// Below the fence, byte for byte the old rule: `open >= cap` refuses with `CourtSessionsAtCapacity`. Past it the cap is the SAME
+/// number (total concurrency, hence the per-block slot's rung guarantee, is unchanged) but follow-on sessions — a second or later
+/// session on a claim that already has one running — may hold at most [`palw_court_outsider_lane_followon_cap_v1`] of it. So a
+/// coalition that stacks Sybil dissections on its own decoy claim (G-07 residual) leaves room for every other claim's first
+/// session: an outsider pursuing a different (lying) claim opens. The rule reads no owner, opener order or identity — only the set
+/// of claims with running sessions — so it is not a first-come exclusive occupancy (ADR-0199): every claim's first session competes
+/// for the first-session room on equal terms, and that room can be exhausted only by `≥ cap − F` DISTINCT claims under dispute,
+/// each a licensed claim whose decoy accusation costs its accuser the claim's reserve when it fails (residual, see the lane notes).
+pub(super) fn legacy_court_cap_admits_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: Hash64,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    let open_sessions = state.court_sessions.len() as u64;
+    let max_sessions = palw_max_concurrent_court_sessions_v1(params.turn_deadline_daa());
+    let at_capacity = || PalwStateV2Error::CourtSessionsAtCapacity {
+        open: open_sessions,
+        max: max_sessions,
+        turn_deadline_daa: params.turn_deadline_daa(),
+        per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+    };
+    if open_sessions >= max_sessions {
+        return Err(at_capacity());
+    }
+    if !params.court_outsider_lane_active_v1(now) {
+        return Ok(());
+    }
+    let mut claims = std::collections::BTreeSet::new();
+    let mut followons = 0u64;
+    for session in state.court_sessions.values() {
+        if !claims.insert(session.claim) {
+            followons += 1;
+        }
+    }
+    if claims.contains(&claim_id) && followons >= palw_court_outsider_lane_followon_cap_v1(max_sessions) {
+        return Err(at_capacity());
+    }
+    Ok(())
+}
+
 /// **Court admission** where a court session is about to open (`open_dissection_at_named_leaf_v1`, `CourtOpened`). Past the fence:
 /// the challenger's own live LG14-A reservation on the claim (its claim-fixed hard deadline, its Final hold), an Active bond at or
 /// above the floor, and the occupancy escrow (ρ × (ticket window + `session_window`) × weight × the claim's row count, round 2) on its

@@ -758,16 +758,7 @@ pub(super) fn open_dissection_at_named_leaf_v1(
         super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(None),
         super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open => {}
         super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {
-            let open_sessions = builder.state.court_sessions.len() as u64;
-            let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
-            if open_sessions >= max_sessions {
-                return Err(PalwStateV2Error::CourtSessionsAtCapacity {
-                    open: open_sessions,
-                    max: max_sessions,
-                    turn_deadline_daa: builder.params.turn_deadline_daa(),
-                    per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
-                });
-            }
+            super::palw_court_capacity_fold_v1::legacy_court_cap_admits_v1(&builder.state, builder.params, claim_id, ctx.daa_score)?;
         }
     }
     let challenger_collateral =

@@ -2001,6 +2001,10 @@ pub struct PalwStateParamsV2 {
     detection_policy_v1: Option<crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1>,
     #[borsh(skip)]
     reward_liability_horizon_from_daa: Option<u64>,
+    /// **G14 F03 (lane g14p/court-owner): `Params::palw_court_outsider_lane_v1`'s height**, mirrored by
+    /// `Params::sync_palw_g14_gates_v1`. `None` on every shipped preset.
+    #[borsh(skip)]
+    court_outsider_lane_from_daa: Option<u64>,
     /// **RFC-0006 R6-CELL round 4: `Params::palw_cell_coverage_closure_v1`'s height**, mirrored by
     /// `Params::sync_palw_cell_coverage_closure_v1` (`crate::palw_cell_coverage_closure_v1`: the registration refusal, the claim gate
     /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
@@ -12611,7 +12615,8 @@ pub fn palw_class_admits_claim_v1(
 /// the producer's pre-check beside [`palw_class_admits_claim_v1`], so a producer does not spend an inference on a skipped attempt.
 pub use palw_court_capacity_fold_v1::{
     PALW_COURT_REFUSAL_NO_RESERVATION_V1, PALW_COURT_REFUSAL_QUEUED_V1, PALW_COURT_REFUSAL_RUNNING_V1,
-    PALW_COURT_REFUSAL_TICKET_EXPIRED_V1, PalwCourtProsecutionStepV1, palw_court_prosecution_step_v1, palw_court_refusal_waits_v1,
+    PALW_COURT_REFUSAL_TICKET_EXPIRED_V1, PalwCourtProsecutionStepV1, palw_court_outsider_lane_followon_cap_v1,
+    palw_court_prosecution_step_v1, palw_court_refusal_waits_v1,
 };
 
 pub fn palw_court_claim_admission_v1(

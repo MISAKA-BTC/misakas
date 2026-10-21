@@ -548,6 +548,26 @@ impl Params {
         Ok(())
     }
 
+    /// **G14 F03 outsider court lane gate (DORMANT, lane g14p/court-owner).** `palw_court_outsider_lane_v1` needs
+    /// `palw_legacy_public_filer_v1` in force at or below it (the lane reads the LG14-A dispute record and its reservations, and that
+    /// fence carries the arming record), and the fold's mirror must agree (`sync_palw_g14_gates_v1`).
+    pub fn validate_palw_court_outsider_lane_in_v1(&self) -> Result<(), PalwModeV2Error> {
+        let Some(lane) = self.palw_court_outsider_lane_v1_fence() else { return Ok(()) };
+        if !self.palw_legacy_public_filer_v1.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= lane.daa_score()) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_court_outsider_lane_v1 needs palw_legacy_public_filer_v1 in force at or below it (G14 F03 outsider court lane)",
+            ));
+        }
+        if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
+            if bundle.state.court_outsider_lane_from_daa() != Some(lane.daa_score()) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_court_outsider_lane_v1 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// **The TIR frame cost gate** (audit §10): `Ok` when `palw_tir_public_conviction_v1` is not armed; otherwise the ruleset must
     /// carry a well-formed `palw_tir_frame_cost_v1` and — unless its genesis is an isolated G14 test genesis — a record in `records`
     /// must name this network, the fence's height and exactly that model.
@@ -643,9 +663,14 @@ impl Params {
     pub fn sync_palw_g14_gates_v1(&mut self) {
         let route = self.palw_g14_route_required_v1_mirror();
         let liability = PalwG14GatedFenceV1::RewardLiabilityHorizonV1.armed(self).map(|f| f.daa_score());
+        let outsider_lane = self.palw_court_outsider_lane_v1_fence().map(|f| f.daa_score());
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state =
-                bundle.state.clone().with_g14_route_required_v1(route).with_reward_liability_horizon_from_daa(liability);
+            bundle.state = bundle
+                .state
+                .clone()
+                .with_g14_route_required_v1(route)
+                .with_reward_liability_horizon_from_daa(liability)
+                .with_court_outsider_lane_from_daa(outsider_lane);
         }
     }
 }
