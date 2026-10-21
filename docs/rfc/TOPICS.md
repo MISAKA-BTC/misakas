@@ -10,6 +10,7 @@
 - [RFC-0013 — Reproducible layouts and resource-bounded model onboarding tools](0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md)
 - [RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0023-unresolved-claim-liability-and-independent-progress.md)
 - [RFC-0029 — owner-independent shared TIR query data](0029-owner-independent-shared-tir-query-data.md)
+- [RFC-0033 — D2 readiness rootのdigest opening取得](0033-d2-readiness-root-opening-availability.md)
 
 ## EVM / wallet
 

@@ -72,3 +72,22 @@ tag 230 の wire 形は設計判断のため実装しない。選択肢:
 - node-level の BLOCKED 1 件（R-D2-NODE：filer が D2 claim に KernelWitness を要求し、fold が claim-part 経路で裁定する変更が要る）。X3 の reorg 再生（pre-cutoff の reservation と session を使うシナリオは未作成）。
 - tag 230 の codec と A-2 kind-table 行（上の選択）。
 - X3 の Δ（5 項）と `c_retain` の測定・承認（未決のまま）。
+
+
+## R-D2-READY B案の隔離実装承認 — 2026-10-21
+
+利用者は本chatの選択回答で **B（Merkle rootと認証path）** を選択した。tag 230の小さいroot objectと、反証時のleaf index・認証pathについて詳細仕様化・隔離実装を進める。上のA/B未選択という記述は当時の履歴である。
+
+この選択はdraw上限の値、本番採択・新しいモデル審査・モデル係数の変更・武装・配備の承認ではない。未決のdraw上限を仮値や0で代用して受付成功にしない。既存wire/tag・t12同一性を保持し、codec、既存digest refutationとの接続、native/resource preflight、A-2とfence境界の扱いを別々に検証する。新codecの追加だけをR-D2/G14完成と報告しない。
+
+### Bのcodec詳細候補（2026-10-21、隔離・限定検証済み）
+
+`palw_court_model_scope_routes_v1::readiness_root`で、reserved tag230と固定fieldのroot/countを独立にencode/decodeする。これは既存の`PalwConsensusObjectV2`へ登録したkindではない。tag/fieldsの切断・末尾を拒否し、root objectに可変長配列を持たせない。seat認証署名・native recordを持たないDTOのdecodeを、ready認定・slash・モデル審査の権限へ変換しない。
+
+反証はinventory leaf index、既存keyed digest、bottom-up sibling列を持つ。drawの正規順序は昇順・重複なしとし、そのordinalに対するtree pathを検査する。leaf hashはbeacon/class/seat/span/index/digestを新しいデータ同一性domainへ束縛する。内部nodeは既存artifact treeの関数を使い、odd nodeは複製せずpromoteする。pathの正確な長さ・順序と全消費を検査する。u32 countから導ける構造上の最大深さ32を、可変長割当前に検査する。32はdraw数の採択値ではない。
+
+native authorityから得るexpected context/drawと、明示したnonzero draw上限が必要であり、未決上限はNoneとして拒否する。認証pathがrootへ届いた後にだけ、検証者自身の登録artifact openingを既存`palw_d2_readiness_refute_v1`へ渡す。openingの別座標・改変・登録root不一致はrefute成立にせず、正しいdigestは既存のDigestHolds、登録byteと異なる認証済みdigestだけはSeatRefutedを返す。結果はpure predicateであり金融効果を適用しない。
+
+全体の残件は、nativeのliteral seat authority/署名・drawの合意導出と上限の採択、実fee/資本とリソースpreflight、永続state/反証受付/qualified金融効果、A-2/dispatcher/fence境界への接続、実nodeでの敵対的検証である。既存のA-2 pinやt12同一性をこの部品に合わせてrepinしない。既存のモデル二階層を変更せず、model登録/昇格/利用資格への審査に転用しない。
+
+[限定検証の証拠と残件](../evidence/palw/g14-completion-2026-10-21/readiness-root.md)：D2選択8件、現ソースのt12同一性9件・有効化境界5件が成功。rootだけでは隠されたdigest/pathを復元できないため、供給経路を[RFC-0033](../rfc/0033-d2-readiness-root-opening-availability.md) / [ADR-0200](0200-d2-readiness-root-opening-availability.md)で別途具体化し、C1/C2の選択を確認中。nativeのready/金融効果は未実装のままである。

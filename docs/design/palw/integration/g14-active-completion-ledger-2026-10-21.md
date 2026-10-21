@@ -1,0 +1,51 @@
+# G14 active completion ledger — 2026-10-21
+
+Status: **incomplete; activation refused**. This ledger tracks the original handover and RFC-0026 contract after the completed refactor. It does not replace historical evidence or redefine completion around the available fixtures.
+
+The previous integration request is complete: `pre` was pushed at `537843abe`, preserving `7fe073ec2` and the exact tree of `c0137d340`. The later commits `2883727b6` (pruning harness) and `dfb380cae` (terminal intent) remain on `codex/g14-completion-after-refactor`; they were not part of that push.
+
+## Decisions carried forward
+
+ADR-0192 A/A: recorded real reserved supply under explicit delivery/inclusion premises; owner-independent claim-common frontier and advance reservation of every permitted branch. ADR-0194 A: isolate candidates, preserve X3 tags and separate service namespace. ADR-0197 A: separate correct adjudication from unresolved liability archive. ADR-0198 A: inclusive initial notice `a <= d <= a+3,120`, unchanged hard `a+10,000`. ADR-0199 A: authenticated primitive material including parameters/prompt and terminal intents, without exclusive unfinished body ownership. ADR-0188 B: root/count and digest authentication paths selected for isolated tag230 work; draw cap remains unadopted. None adopts production financial/network values or arms a fence.
+
+## Required implementation and evidence
+
+| Original work | Current authoritative implementation/evidence | Required remaining closure |
+| --- | --- | --- |
+| P0-1 / F02 canonical opportunity | `palw_court_service_v1`, rooted service v2, current-duty clocks; default guard remains denial-only | Derive all actual duties/packets from original; atomic paid admission; actual accepting-block supply; explicit delivery/inclusion premise; duty-based default and no-slash failure path; native adversarial campaign |
+| P0-2 / F03 outsider under all-owner collusion | Shared original-bound queries/streams; signed canonical numerical root and all-child round retention; authenticated material view; [terminal intent evidence](../../../evidence/palw/g14-completion-2026-10-21/terminal-intent.md) | Complete common semantic/court coordinator, all legal branches/actors/resources/capital/fees at original admission, public paid fair ingress and actual one-outsider node T05 with continuous colluding refill |
+| P1-1 / clocks | Checked original hard and inclusive notice predicate; X3 component and node evidence retained | Atomic original rule update across collect/disclosure/retention/Final/bond; whole native notice and adaptive request lifecycle, old/new claims and every boundary; final deadline feasibility from complete graph |
+| P1-2 / dependencies | Signed TIR and semantic custody minimum-horizon guards | Every provider/worker/kernel/parameter/prompt/material contract and all follow-up liabilities; same-bond aggregate capital; authenticated funding and retention through qualified resolution |
+| P1-3 / signer vs relay | Separate explicit signer data responses; legacy relay evidence | All adaptive semantic/court duties, current literal authority and funding, third-party relay while miner is offline; no old signature replay as a new response |
+| P1-4 / end effects | Rooted archive of groups/deposits/evidence/receipts; historical native-v5 recheck and append | Original-funded claims on every financial entrance, public late material intake and exact qualified settlement/release/pruning; nominal archive amounts are not prepaid escrow |
+| P1-5 / capacity | Native shape/resource checks and partial data/numerical transport upper bounds | Entire transaction/UTXO/fee/codec/signature/hash/heap/IO/retention/restart/refusal budget, all-original concurrency and physical/network calibration; no assumed zero cost or upper-limit increase |
+| P2 / localization and evidence | Named-root check, all-child numerical frontier, existing fold checks, edge range assembly and shared material builder | Full original dependency closure and legal families, lookahead/single-position integration, multiproof and actual whole-evidence comparison; real-model door <=3,120. SC64 remains unattained where actual signatures alone exceed it |
+| Recovery failure | [Pruning repair](../../../evidence/palw/g14-completion-2026-10-21/pruning.md): strict targeted1 and six-case actual service suite pass; no deadline/assertion weakening | Full shared-original restart/reorg/pruned IBD under funded service and all-family stress; these six legacy-service cases are not that campaign |
+| R-D2-NODE / READY / COVER | Claim-part replacement node component evidence exists; B root/path codec:8 selected passes, native ingress still absent; original exact digest refutation exists | Full family/daemon signoff; READY native literal-seat authorization, explicit draw cap, resource/fee/state/wire/fence integration; COVER exact finalize read-set admission without compelled producer model bytes |
+| RFC-0027 / ADR-0193 | Imported report and original assets distinguish old-log reaggregation, conditional capital simulation and assumed-price sensitivity | Document import is complete within its scope. New Account Bond code/adoption and actual operating node/profit/heartbeat measurements are absent; any G14 financing that relies on them must first supply that evidence. Neither minimum100,000 nor example12,000/claim proves viable operating capital |
+
+## RFC-0026 T01–T15 completion audit
+
+No entire T-item is declared achieved by component selections. Every complete item needs the original contract, public paid native path and its own exact scenario evidence.
+
+| Test | Evidence needed for completion; current missing scope |
+| --- | --- |
+| T01 | Honest miner and wrong challenger through complete shared-original duties and funded outcomes |
+| T02 | Permanent miner silence, actual supplied opportunity, valid duty authority and correct eligible default |
+| T03 | Forged signatures and fake Panel completion reports rejected before a culpability/monetary effect |
+| T04 | Separate normal-tx, paid-court and invalid-codec floods; bounded native intake and actual supply/calibrated costs |
+| T05 | Every owner occupied/refilled by colluders, exactly one external verifier finishes through fair paid public ingress |
+| T06 | Last inclusive notice and latest lawful response; every remaining legal branch fits original hard |
+| T07 | -1/equality/+1 at every connected native deadline and rule boundary; pure predicates are only partial evidence |
+| T08 | Miner PC offline, distinct court signer and third-party relay using actual current-duty authority |
+| T09 | Shortest signed dependency leases and multiple claims sharing one bond; aggregate reservation funded |
+| T10 | Internal numerical fold-only lie is rejected without dropping fold arithmetic; fixture coverage does not cover every paid original |
+| T11 | 1–10,000 concurrent pursuits, last stage alone false; full retained liabilities and capacity accounted |
+| T12 | Hard-boundary concentration at10,000 DAA with every accepted duty and exact outcome funded |
+| T13 | Oldest claim loses service, independent claim still progresses; unresolved evidence/bonds stay held without false slash |
+| T14 | Complete shared path across actual reorg/restart/pruning/pruned IBD; specific legacy pruning regression now passes |
+| T15 | Old/new fence boundaries, old claims retain old rules, shipping identity unchanged, activation refusal remains |
+
+The quiet-devnet seven-carrier record is not saturation or reserved-supply evidence. Toy GQA, exact-builder byte equality, synthetic caps and mathematical transport counts are not real-model latency, actual fees or profit. Existing raw logs and baseline reference defects remain preserved.
+
+Next primary integration work is the original coordinator: derive canonical complete duty/dependency/resource graphs, authenticate each actor's contract and current authority, atomically reserve actual money and physical service, and bind the shared numerical/semantic terminal to qualified effects. No caller-supplied “complete/paid” boolean or partial profile may install an admitted original. Unknown values/contracts cause explicit refusal while calibration and design choices are resolved.

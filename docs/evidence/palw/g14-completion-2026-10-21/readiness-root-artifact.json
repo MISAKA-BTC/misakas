@@ -1,0 +1,42 @@
+{
+  "base": "dfb380caee48a6c366e5e733908ce98a0a97ac09",
+  "binary": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-readiness-root-d_zk4x4n/core-tests",
+  "binary_sha256": "d68944e025f8aa7d4446ef76f0087a7530f56e9dfc9147bd0d8d3f4fa8d3f47d",
+  "source_sha256": {
+    "consensus/core/src/palw_court_model_scope_routes_v1.rs": "188d1c0085132e4f290fb1cc1d1da3585c7715d31ac1af6abe4fc89a74327066",
+    "consensus/core/src/palw_court_model_scope_routes_v1/readiness_root.rs": "0168ede8551d39189caac277d59f5f984fdbf4e4515a0a01478a6898bc9de0ff"
+  },
+  "tests": {
+    "passed": 8,
+    "failed": 0,
+    "ignored": 0,
+    "seconds": 0.17
+  },
+  "log": "readiness-root-tests.log",
+  "initial_compile": {
+    "exit_code": 101,
+    "tests_run": 0,
+    "reason": "Test fixture constructed a tuple instead of the PalwBondKeyV2 newtype",
+    "log": "readiness-root-first-compile.log"
+  },
+  "identities": {
+    "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only -- --test-threads=1",
+    "passed": 14,
+    "failed": 0,
+    "ignored": 0,
+    "log": "readiness-root-identities.log",
+    "includes_fresh_non_test_release_library_build": true
+  },
+  "unchanged_native_identity_sources": {
+    "consensus/core/src/palw_state_v2.rs": true,
+    "consensus/core/src/palw_lifecycle_objects_v2.rs": true,
+    "consensus/core/src/fork_id_v1.rs": true,
+    "consensus/core/src/config/params.rs": true
+  },
+  "log_sha256": {
+    "readiness-root-tests.log": "a93862b3460f2ba3b5e11c8d4ba94b833b328958e55560b9422dac27cbeb9f6b",
+    "readiness-root-identities.log": "92cca784ba8599bb97e442c08a0e7f9e0a40f1f21fb24f6a374dd79dbef491f9",
+    "readiness-root-first-compile.log": "57234a6647701744861003f811c1f5c99fa075053fcee0c296027e5f3c965240"
+  },
+  "reconstruction": "readiness-root-reconstruction.json"
+}

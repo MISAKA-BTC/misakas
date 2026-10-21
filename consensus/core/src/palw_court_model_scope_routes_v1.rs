@@ -38,6 +38,8 @@
 //! digest is a built predicate whose object tag 230 is reserved but not landed; until then a class registered past the fence takes
 //! no readiness proof and seats it by the possession floor's other conditions.
 
+pub mod readiness_root;
+
 use borsh::BorshSerialize;
 
 use crate::Hash64;

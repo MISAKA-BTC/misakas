@@ -197,3 +197,4 @@
 | ADR-0197 | [court終了効果と未解決責任の保存方式](0197-court-end-effects-and-pending-liability-archive.md) | 原文と後続改定を参照 |
 | ADR-0198 | [共有courtのinitial noticeの等号](0198-shared-court-initial-notice-boundary.md) | 原文と後続改定を参照 |
 | ADR-0199 | [共有court終端materialと非独占提出方式](0199-shared-court-terminal-material-and-nonblocking-ingress.md) | 原文と後続改定を参照 |
+| ADR-0200 | [D2 readiness rootの認証path供給](0200-d2-readiness-root-opening-availability.md) | 原文と後続改定を参照 |

@@ -1530,6 +1530,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0200",
+      "path": "docs/adr/0200-d2-readiness-root-opening-availability.md",
+      "title": "ADR-0200 — D2 readiness rootの認証path供給",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1783,6 +1791,14 @@
       "path": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
       "title": "RFC-0032 — 共有courtの終端materialと非独占提出",
       "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0033",
+      "path": "docs/rfc/0033-d2-readiness-root-opening-availability.md",
+      "title": "RFC-0033 — D2 readiness rootのdigest opening取得",
+      "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
     }
   ]
