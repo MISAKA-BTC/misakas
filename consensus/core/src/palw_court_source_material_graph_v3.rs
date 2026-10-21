@@ -109,6 +109,12 @@ pub struct NativeSourceMaterialGraphV3 {
 fn hash<T: BorshSerialize>(scope: Hash64, kind: &T) -> Result<Hash64, String> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/source-material-graph/v3", &(scope, kind))
 }
+fn source_graph_relative_scope_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64,queries:u64,roles:u64)->Result<Hash64,String>{
+    crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/source-material-scope/v3",&(
+        3u16,frame.plan_v1().original_claim,source.source_id_v1(),frame.plan_v1().resource_plan_id,
+        frame.plan_v1().rules_id,profile,queries,roles,PART))
+}
+
 /// Frame validation has its own temporary plan clone and Borsh/FP hash
 /// writers. No Source/StepSpace reconstruction is performed by this owner.
 fn native_source_graph_prelude_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64)
@@ -249,20 +255,7 @@ impl NativeSourceMaterialGraphV3 {
         if extent.vertices > budget.max_vertices || extent.edges > budget.max_edges {
             return Err(SourceGraphDeriveErrorV3::Local("source graph metadata vertex/edge budget exhausted before expansion"));
         }
-        let relative_scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
-            b"misaka-palw/source-material-scope/v3",
-            &(
-                3u16,
-                frame.plan_v1().original_claim,
-                source.source_id_v1(),
-                frame.plan_v1().resource_plan_id,
-                frame.plan_v1().rules_id,
-                profile,
-                set.len(),
-                roles,
-                PART,
-            ),
-        )?;
+        let relative_scope = source_graph_relative_scope_v3(frame,source,profile,set.len(),roles)?;
         let accepted_daa = frame.plan_v1().terms.accepted_daa;
         let hard_daa =
             accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA).ok_or("source graph original hard overflow")?;
@@ -404,6 +397,19 @@ impl NativeSourceMaterialGraphV3 {
             )?;
         }
         Ok(())
+    }
+    /// Rebind an immutable native-derived graph to the exact original frame and
+    /// source without treating its namespace as an adopted service policy body.
+    /// Caller admits frame identity hashing scratch separately.
+    pub(crate) fn check_frame_binding_v3(&self,frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64)->Result<(),String>{
+        let set=TirSharedRequestSetV1::new(frame,source,profile)?;
+        let p=frame.plan_v1();let roles=frame.custody_v1().pledge_v1().maximum_custodians;
+        let scope=source_graph_relative_scope_v3(frame,source,profile,set.len(),roles)?;
+        let hard=p.terms.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA).ok_or("source graph original hard overflow")?;
+        if (self.scope,self.absolute_scope,self.source,self.claim,self.accepted_daa,self.hard_daa,self.queries,self.roles)
+            !=(scope,set.scope_id()?,source.source_id_v1(),p.original_claim,p.terms.accepted_daa,hard,set.len(),roles){
+            return Err("source graph belongs to another frame/source/profile/allocation".into());
+        }Ok(())
     }
     pub fn coverage_v3(&self) -> SourceGraphCoverageV3 {
         SourceGraphCoverageV3::SourceMaterialOnly

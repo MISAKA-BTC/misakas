@@ -1,0 +1,14 @@
+{
+  "added-source/consensus/core/src/palw_court_shared_output_native_tests.rs": "11f15757df7685ef72a29e6d095b03d4fdcbfe7dc5ea79b70d0835b6e44e0963",
+  "added-source/consensus/core/src/palw_court_shared_output_terminal_v1.rs": "3c7b3a59b209a4b4d0f5b72232eb2ea6d355ab3e6cfd93a751fe0815022d4625",
+  "added-source/consensus/core/src/palw_court_shared_selection_native_tests.rs": "0c97fbf000ad9df57152a4e9756b12c75e376e4c49d97e2af99a1ad2fb489f33",
+  "added-source/consensus/core/src/palw_court_shared_selection_terminal_v1.rs": "0cddd1b61c238e079559c4338f1ed587592cbe2f1ea3a4f88cfe7a4dc4719cab",
+  "core-build.log": "3480d64819cda69369d66f674440de227fca0873cec15dc6aa7920d01311077d",
+  "output-stop-notes.md": "7f13c6225a3d15194d63a6fd14bdff3f3280d0bafd069545078326fad6434a8a",
+  "output-stop-review.md": "f72c11502df0d9392949189b5c7ac5201886cc121bb156e72f54a1e6432f7db4",
+  "selection-notes.md": "0be20813a25c89f71a792a28c88d538ebbf4036d4b992c4ef0fd32ef836623ba",
+  "selection-review.md": "071df87e5a0a783c2f4b2f61190b3841bb90ec60dbba9d422aa6997766b85f65",
+  "source.patch": "7da4c1086def826a59023aa48cbd2fdb5a2daf69bd969a87c7ed741f42a890de",
+  "verification.json": "88d3a11eca0279121e586ee3650a52ae4b4f9c40baa0e8d157b5f27c638c0e67",
+  "verify.py": "fb79556fda8b1c2195e356b7758b79d91b3c7b71351c313066c012df664c590c"
+}

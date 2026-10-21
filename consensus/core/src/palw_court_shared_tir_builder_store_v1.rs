@@ -377,3 +377,9 @@ pub(crate) mod semantic_material;
 
 #[path = "palw_court_shared_constraint_stop_v1.rs"]
 pub(crate) mod constraint_stop;
+
+#[path = "palw_court_shared_output_terminal_v1.rs"]
+pub(crate) mod output_terminal;
+
+#[path = "palw_court_shared_selection_terminal_v1.rs"]
+pub(crate) mod selection_terminal;

@@ -1,6 +1,6 @@
 # ADR-0202 — shared court originalの実原資と役割別同意
 
-Status: **Proposed / Review Required** (2026-10-21)。[RFC-0035](../rfc/0035-court-original-funded-contract-and-role-consent.md)に具体化。選択待ち。
+Status: **Proposed / Review Required** (2026-10-21)。[RFC-0035](../rfc/0035-court-original-funded-contract-and-role-consent.md)に具体化。ユーザーはA（実UTXOで裏付けた独立escrow）の詳細仕様化・隔離実装を承認済み。金額・新料金・本番採択・pre統合・武装・配備の承認は含まない。
 
 ## 問題
 

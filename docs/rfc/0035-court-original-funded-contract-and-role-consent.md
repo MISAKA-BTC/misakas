@@ -1,6 +1,6 @@
 # RFC-0035 — shared court originalの実原資と役割別同意
 
-Status: **Proposed / Review Required** (2026-10-21)。[ADR-0202](../adr/0202-court-original-funded-contract-and-role-consent.md)の選択待ち。RFC-0026の原子的受付を実装するための未確定な金融・署名契約を具体化する。実装済み・採択済み・有効化済みとは扱わない。
+Status: **Proposed / Review Required** (2026-10-21)。[ADR-0202](../adr/0202-court-original-funded-contract-and-role-consent.md)ではA（実UTXOで裏付けた独立escrow）の詳細仕様化・隔離実装がユーザー承認済み。金額・新料金・本番採択・pre統合・武装・配備は未承認。RFC-0026の原子的受付を実装するための未確定な金融・署名契約を具体化する。実装済み・採択済み・有効化済みとは扱わない。
 
 ## 1. 問題と既存経路
 
