@@ -1522,6 +1522,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0199",
+      "path": "docs/adr/0199-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "title": "ADR-0199 — 共有court終端materialと非独占提出方式",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1766,6 +1774,14 @@
       "number": "0031",
       "path": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
       "title": "RFC-0031 — 共有courtのinitial notice境界",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0032",
+      "path": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "title": "RFC-0032 — 共有courtの終端materialと非独占提出",
       "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     }

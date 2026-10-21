@@ -53,4 +53,5 @@
 - [RFC-0028 — rooted court response eligibility history](0028-rooted-court-response-eligibility-history.md)
 - [RFC-0030 — court終了効果と未解決責任の保存](0030-court-end-effects-and-pending-liability-archive.md)
 - [RFC-0031 — 共有courtのinitial notice境界](0031-shared-court-initial-notice-boundary.md)
+- [RFC-0032 — 共有courtの終端materialと非独占提出](0032-shared-court-terminal-material-and-nonblocking-ingress.md)
 

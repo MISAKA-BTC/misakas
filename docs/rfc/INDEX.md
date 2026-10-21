@@ -37,3 +37,4 @@
 | RFC-0029 | [owner-independent shared TIR query data](0029-owner-independent-shared-tir-query-data.md) | 原文と後続改定を参照 |
 | RFC-0030 | [court終了効果と未解決責任の保存](0030-court-end-effects-and-pending-liability-archive.md) | 原文と後続改定を参照 |
 | RFC-0031 | [共有courtのinitial notice境界](0031-shared-court-initial-notice-boundary.md) | 原文と後続改定を参照 |
+| RFC-0032 | [共有courtの終端materialと非独占提出](0032-shared-court-terminal-material-and-nonblocking-ingress.md) | 原文と後続改定を参照 |
