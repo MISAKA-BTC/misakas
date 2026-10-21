@@ -255,3 +255,51 @@ pub(super) fn root(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2,
     if result.is_err() { b.restore(saved); }
     result
 }
+
+/// Private data disclosure only, never an accepted choice or duty completion.
+pub(super) fn round(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
+    c:&crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1)->Result<bool,PalwStateV2Error>{
+    use crate::palw_court_shared_tir_round_v1 as rounds;
+    use crate::palw_native_resource_v1::{NativeHeapV1,TirNativeRequestsV1};
+    let saved=b.try_checkpoint()?;
+    let result=(|| {
+        let rules=b.extras.native_court_rules_v1.ok_or_else(||refused("shared round native rules missing"))?;
+        if rules.at!=*ctx || b.extras.tir_public_network_domain_v1!=Some(rules.network_domain) {return Err(refused("shared round native point/network mismatch"));}
+        let r=rounds::root(&b.state,c.claim,c.leaf).map_err(refused)?;
+        let bond=b.state.bond(&c.signer).ok_or_else(||refused("shared round producer missing"))?;
+        let record=b.state.tir_class_v1(&r.control.root.finalize.binding.job_context.shape_profile_id)
+            .ok_or_else(||refused("shared round registered program missing"))?;
+        let mut q=TirNativeRequestsV1::new();
+        let heap=|x:crate::palw_native_resource_v1::NativeCoverageV1|x.bytes().ok_or_else(||refused("shared round typed clone inventory missing"));
+        q.add_v1(heap(r.control.native_heap_v1("round root verifier"))?.checked_mul(2).ok_or_else(||refused("round root clone overflow"))?).map_err(PalwStateV2Error::NativeResource)?;
+        q.add_v1(heap(r.control.root.finalize.binding.native_heap_v1("round temporary binding"))?).map_err(PalwStateV2Error::NativeResource)?;
+        q.add_v1(record.program.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+        q.add_v1(heap(c.native_heap_v1("retained round control"))?).map_err(PalwStateV2Error::NativeResource)?;
+        q.exact_v1::<rounds::SharedTirRoundRowV1>(1).map_err(PalwStateV2Error::NativeResource)?;
+        q.exact_v1::<u8>(bond.pubkey.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+        // Two coexisting arithmetic phase views: no whole-tree frontier/map
+        // clone. Shape terms come from this actual immutable root's vectors.
+        for _ in 0..2 {
+            q.exact_v1::<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>(1).map_err(PalwStateV2Error::NativeResource)?;
+            q.add_v1(heap(r.control.root.elements.native_heap_v1("phase elements"))?).map_err(PalwStateV2Error::NativeResource)?;
+            for _ in 0..2 {q.add_v1(heap(r.control.root.totals.native_heap_v1("phase root/claim"))?).map_err(PalwStateV2Error::NativeResource)?;}
+            let n=r.control.root.elements.len() as u64;
+            q.vec_v1::<u16>(n).map_err(PalwStateV2Error::NativeResource)?;
+            q.vec_v1::<crate::palw_tir_dissect_v1::PalwTirFoldV1>(n).map_err(PalwStateV2Error::NativeResource)?;
+            q.vec_v1::<(i128,i128)>(n).map_err(PalwStateV2Error::NativeResource)?;
+        }
+        q.vec_v1::<(u64,u64)>(u64::from(r.control.arity)).map_err(PalwStateV2Error::NativeResource)?;
+        let _lease=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+        rounds::check_shared_tir_round_v1(&b.state,b.params,&rules,c).map_err(refused)?;
+        let key=Key::CourtSharedRound(c.id().map_err(refused)?);
+        if let Some(old)=b.state.staged_court_row_v1(&key){
+            let Row::CourtSharedRound(old)=old else{return Err(refused("shared round foreign slot"));};
+            if ctx.daa_score<old.rules.at.daa_score || !old.same_statement(c){return Err(refused("shared round cannot replace canonical disclosure"));}
+            return Ok(false);
+        }
+        let row=rounds::SharedTirRoundRowV1 {version:1,control:c.clone(),rules,signer_pubkey:bond.pubkey.clone(),material_until_daa:r.material_until_daa};
+        b.write_staged_row_v1(key,Some(Row::CourtSharedRound(Box::new(row).into())))?;
+        Ok(true)
+    })();
+    if result.is_err(){b.restore(saved);}result
+}

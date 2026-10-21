@@ -2645,6 +2645,95 @@ mod conviction_e2e_tests {
         assert!(swept.state.staged_court_row_v1(&key).is_some());
         assert!(swept.write_staged_row_v1(key, None).is_err());
         assert_eq!(fresh.court_sessions_len(), 0);
+
+        use crate::palw_court_shared_tir_round_v1 as rounds;
+        let mut round_state=fresh.clone();
+        let mut paths=std::collections::VecDeque::from([Vec::<u8>::new()]);
+        let (mut disclosures,mut terminals)=(0,0);
+        let mut retained_controls=Vec::new();
+        while let Some(path)=paths.pop_front(){
+            let prepared=rounds::prepare_shared_tir_round_v1(&round_state,claim,leaf,&path).unwrap();
+            if prepared.phase.terminal_range().is_some(){terminals+=1;continue;}
+            let children=prepared.phase.child_ranges().len();
+            let sum_index=checked.site().folds.iter().enumerate().find_map(|(i,f)|
+                (matches!(f,crate::palw_tir_dissect_v1::PalwTirFoldV1::Sum) && !control.root.elements[i].is_empty()).then_some(i))
+                .expect("the corpus has a nonempty sum reduction");
+            let msg=crate::palw_tir_court_v1::build_tir_dissect_round_v1(binding,&prepared.phase,fx.layout.h_tile,&fx.execution,&court).unwrap();
+            let mut c=rounds::SignedSharedTirRoundV1 {version:1,claim,leaf,root_id:prepared.root_id,path:path.clone(),
+                parent_id:prepared.parent_id,signer:producer,round:Box::new(msg),signature:vec![]};
+            let round_sign=|c:&mut rounds::SignedSharedTirRoundV1,nonce:u8|{
+                c.signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,
+                    c.signing_message(native.network_domain).unwrap().as_byte_slice(),rounds::SHARED_TIR_ROUND_CONTEXT_V1,[nonce;32])
+                    .unwrap().as_ref().to_vec();
+            };
+            round_sign(&mut c,95);
+            let mut at_rules=native;at_rules.at=at(frame,10+disclosures);
+            let mut at_extras=root_extras.clone();at_extras.native_court_rules_v1=Some(at_rules);
+            let mut b=TransitionBuilder::new(&round_state,&params,false,false,false,false,&at_extras);
+            let unchanged=b.state.state_root();
+            for kind in 0..4 {
+                let mut bad=c.clone();
+                match kind {0=>bad.parent_id=h(0xBAD1),1=>bad.root_id=h(0xBAD2),2=>bad.signer=outsider(),
+                    3=>bad.round.children[0].partials[sum_index][0]+=1,_=>unreachable!()}
+                round_sign(&mut bad,96);
+                assert!(fold::round(&mut b,&at_rules.at,&bad).is_err());
+                assert_eq!(b.state.state_root(),unchanged);assert!(b.entries.is_empty());
+            }
+            let mut legacy=c.clone();
+            legacy.signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,
+                &crate::palw_tir_dissect_v1::palw_tir_round_message_v1(&h(0x515),prepared.phase.round(),&c.round),
+                crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,[97;32]).unwrap().as_ref().to_vec();
+            assert!(fold::round(&mut b,&at_rules.at,&legacy).is_err());
+            assert!(fold::round(&mut b,&at_rules.at,&c).unwrap());
+            let row_key=Key::CourtSharedRound(c.id().unwrap());
+            assert_eq!(borsh::to_vec(&row_key).unwrap()[0],23);
+            let row=b.state.staged_court_row_v1(&row_key).unwrap().clone();let row_wire=borsh::to_vec(&row).unwrap();
+            assert_eq!(row_wire[0],29);
+            let shape=preflight_native_value_v1::<Row>(row_wire.as_slice(),row_wire.len() as u64).unwrap();
+            assert!(shape.logical_requests_v1()>=row.native_heap_v1("round").bytes().unwrap()+std::mem::size_of::<Row>() as u64);
+            assert_eq!(borsh::from_slice::<Row>(&row_wire).unwrap(),row);
+            assert!(preflight_native_value_v1::<Row>(&row_wire[..row_wire.len()-1],row_wire.len() as u64-1).is_err());
+            if path.is_empty(){
+                let path_at=1+2+2+64+8+64;
+                let mut bad=row_wire[..path_at].to_vec();bad.extend_from_slice(&u32::MAX.to_le_bytes());
+                assert!(borsh::from_slice::<Row>(&bad).is_err());
+            }
+            let canonical=b.state.state_root();let n=b.entries.len();
+            let mut retry=c.clone();round_sign(&mut retry,98);
+            assert!(!fold::round(&mut b,&at_rules.at,&retry).unwrap());
+            assert_eq!(b.state.state_root(),canonical);assert_eq!(b.entries.len(),n);
+            assert!(b.write_staged_row_v1(row_key,None).is_err());
+            let mut undone=b.state.clone();
+            for e in b.entries.iter().rev(){apply_delta_entry(&mut undone,e,true).unwrap();}
+            assert_eq!(undone.state_root(),round_state.state_root());
+            for e in &b.entries{apply_delta_entry(&mut undone,e,false).unwrap();}
+            assert_eq!(undone.state_root(),canonical);
+            round_state=b.state.clone();round_state.set_last_point_for_tests(Some(at_rules.at));
+            retained_controls.push(c);disclosures+=1;
+            // Visit the other sibling first; first arrival never closes a path.
+            for child in (0..children).rev(){let mut next=path.clone();next.push(child as u8);paths.push_back(next);}
+        }
+        assert_eq!(disclosures,11);assert_eq!(terminals,12);
+        let bytes=borsh::to_vec(&PalwStateCarriageV2::from_state(&round_state)).unwrap();
+        preflight_native_carriage_v1(bytes.as_slice(),bytes.len() as u64).unwrap();
+        let round_fresh=borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params,Some(round_state.state_root())).unwrap();
+        assert_eq!(round_fresh.state_root(),round_state.state_root());
+        for c in &retained_controls {
+            let key=Key::CourtSharedRound(c.id().unwrap());
+            let Some(Row::CourtSharedRound(row))=round_fresh.staged_court_row_v1(&key) else{panic!()};
+            row.check_loaded_context(&round_fresh).unwrap();
+            assert!(rounds::prepare_shared_tir_round_v1(&round_fresh,claim,leaf,&c.path).is_ok());
+        }
+        let child=retained_controls.iter().find(|c|!c.path.is_empty()).unwrap();
+        let mut orphan=round_fresh.clone();orphan.staged_courts.remove(&Key::CourtSharedRound(retained_controls[0].id().unwrap()));
+        let Some(Row::CourtSharedRound(row))=round_fresh.staged_court_row_v1(&Key::CourtSharedRound(child.id().unwrap())) else{panic!()};
+        assert!(row.check_loaded_context(&orphan).is_err());
+        let mut too_long=child.clone();too_long.path=vec![0;rounds::SHARED_TIR_MAX_PATH_V1+1];
+        assert!(too_long.signing_message(native.network_domain).is_err());
+        let mut round_swept=TransitionBuilder::new(&round_fresh,&params,false,false,false,false,&root_extras);
+        super::super::palw_staged_court_fold_v1::sweep(&mut round_swept,&past).unwrap();
+        assert!(round_swept.state.staged_court_row_v1(&Key::CourtSharedRound(child.id().unwrap())).is_some());
+        assert_eq!(round_fresh.court_sessions_len(),0);
     }
 
     #[test]

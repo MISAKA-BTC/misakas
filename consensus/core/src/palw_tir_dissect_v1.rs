@@ -779,6 +779,23 @@ impl PalwTirDissectPhaseV1 {
         Ok(())
     }
 
+    /// Read-only arithmetic descent. No accepted choice, signature, timestamp or
+    /// deadline update; never install the returned phase or use it for default.
+    pub fn project_unrooted_child_v1(&self, msg: &PalwTirDissectRoundV1, child: u8) -> Result<Self, String> {
+        self.check_round_header(msg).and_then(|()| self.check_round_values(msg)).map_err(|e| e.to_string())?;
+        if self.round.checked_add(1).is_none_or(|n| n > self.round_budget()) { return Err("numerical path exceeds round budget".into()); }
+        let ranges = self.child_ranges();
+        let &(first,count) = ranges.get(usize::from(child)).ok_or("numerical child outside pinned cut")?;
+        let mut phase = self.clone();
+        phase.claim = msg.children[usize::from(child)].clone(); phase.tile_first = first; phase.tile_count = count; phase.round += 1;
+        phase.pending.clear();
+        phase.turn = if count <= 1 { PalwBisectTurnV1::Terminal } else { PalwBisectTurnV1::AwaitDisclosure };
+        Ok(phase)
+    }
+    pub fn check_unrooted_round_v1(&self, msg: &PalwTirDissectRoundV1) -> Result<(), String> {
+        self.check_round_header(msg).and_then(|()| self.check_round_values(msg)).map_err(|e| e.to_string())
+    }
+
     /// **The responder's round**: the children's claims, fold-checked and bound-checked before the
     /// challenger moves.
     pub fn apply_round(&mut self, msg: &PalwTirDissectRoundV1, accepted_daa: u64, w_round: u64) -> Result<(), PalwTirDissectError> {
