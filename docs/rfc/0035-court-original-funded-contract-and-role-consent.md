@@ -93,10 +93,41 @@ accepted transactionのobject extractionでは、既存history/TIR fenceとは�
 
 ## 9. Native feeとsource graphの接続 — 2026-10-22
 
-既存carrierでも、実fee `F`に対するbond burn `B`とrent `R`を独立に`F>=B`・`F>=R`と判定すると、同じfeeを二重に充当できる。native accepted transactionのraw feeはそのまま保持し、同じ検証済みcarrierとburn obligationからrent利用可能額`F-B`を別に導出して価格検査へ渡す。finality分類も実collectibleの範囲内とし、burnされた額を別carrierの通常feeへ転嫁しない。既存の金額・価格・fence条件を変更するものではない。
+既存carrierでも、実fee `F`に対するbond burn `B`とrent `R`を独立に`F>=B`・`F>=R`と判定すると、同じfeeを二重に充当できる。native accepted transactionのraw feeはそのまま保持し、同じ検証済みcarrierとburn obligationからrent利用可能額`F-B`を別に導出して価格検査へ渡す。finality分類も実collectibleの範囲内とし、burnされた額をcollectibleとして分類せず、他carrierの通常feeも誤ってfinality枠へ分類しない。既存の金額・価格・fence条件を変更するものではない。
 
 source資料のv3候補は全7query familyから導出するopaqueなSourceMaterialOnly graphである。相対logical IDと実受付allocationに束縛したpacket IDを分離し、source全packet集合・辺・元時計の内側の予約を検査する。短bodyの未使用tail、他signerが供給した認証済み資料を使う応答、FullIds共有を維持する。semantic・数値裁定・parameter・役割別同意・資本・実費まで閉じた全original graphではなく、旧v2のcodecやrooted schemaも変更しない。
 
 実escrow支出の次段階では、ordinary UTXO受付より前に、同じselected-chain state/accepting pointに束縛した決定論的なUTXO/金融state planを検査しなければならない。後段のPALW object dropへ会計を付加するだけでは、実支出とstate更新が分離する。認可結果は同じ実input entries・全transaction bytes・contract/pointへ束縛し、txidだけで署名検査を省略するcacheに流用しない。
 
 [実装範囲・検証記録・残りの接続](../evidence/palw/g14-completion-2026-10-22/native-fee-and-source-graph.md)を参照。これらを実escrowの確保、公開有料入口、G14全体の完了とは扱わない。
+
+
+### 9.1 同branchの事前plan・commit・復旧の接続条件
+
+実装調査では `consensus/src/pipeline/virtual_processor/processor.rs` の既存 `PalwUtxoCommitV2` / `commit_utxo_state` が、rooted PALW delta/rootとblockのUTXO diff・multiset・AcceptanceData・statusを同じWriteBatchで保存する。独立したfunded storeへ残高だけを先書きせず、将来のescrow rowも同じrooted deltaのold/newへ含める。virtual tipのcacheを先に書いて原資を認証したことにしない。
+
+以下の事前認可表は実escrow inputを消費する経路を対象とする。新規funding carrierの通常受付との区別は後述する。
+
+| 段階 | 必要な拘束 | 不一致時 |
+| --- | --- | --- |
+| branch準備 | retained PALW stateとcomposed selected-parent UTXO viewを同じbranchから解決。root・parent block・実accepting pointをplanへ拘束 | 別tip/cacheの認可を流用せず拒否 |
+| UTXO受付前 | 実accepted順で、全transaction bytes・実input entries・出力・fee・契約・一回限りの適格履行を検査。成功候補だけをtransaction-local scratch planへ置く | txのUTXO diffへ加える前に拒否 |
+| UTXO検証 | 唯一の該当escrow inputだけに限定した認可と通常inputの既存検査を両立。selected-parent script省略経路も金融条件を省略しない | payload上の成功やobjectの後段dropで代替しない |
+| PALW final fold | 事前planの全消費と最終rooted old/new、実outpoint変更の完全一致を確認 | 未消費plan・別tx再利用・異なる金融deltaを拒否 |
+| block commit | 同じWriteBatchへPALW delta/rootとUTXO結果を保存 | 片側のみの成功を公開しない |
+| undo/replay | retained PALW deltaのreverse/forward検査が成功してから対応するUTXO diffを進める。残高・current outpoint・once状態・署名scopeを両方向で復元 | 古い状態や破損deltaに対して進行しない |
+
+`calculate_utxo_state_relatively` の既存復旧はretained branchから再導出する。tip cacheの更新とflat virtual UTXOの更新はblock journalの原子的保存とは別段階なので、再起動時もblock単位の同一deltaを基準とする。template・mempool・mergeset・selected-parent shortcut・IBDも同じ支出契約へ接続する必要がある。
+
+これは実装接続の条件であり、現時点で支出認可・rooted escrow・原子的original受付が稼働した記録ではない。private preflightがexact transactionを束縛しても、caller提供のscope/profileをnative全graph由来の認可へ昇格させない。将来のqualified authorizationは専用inputに限定し、通常の署名cacheへ認可成功を格納しない。
+
+
+新規funding originalと実escrow支出を区別する。新規funding carrierの通常署名・UTXO/fee検証を先に通し、その後のpaired FP checkpoint内で重い全graph検査を行うことは可能である。不成立ならFP/予約/frame/funding rowをまとめて戻すが、通常carrierとpayer fallback outputは残せる。同mergesetの暫定lockは、そのraw carrier自身が作る実outputだけに限定する。他人の既存outpointを占有しない。これを実escrow支出へ広げてはならず、後者にはUTXO diffへ追加する前の適格認可が必要である。
+
+既存の書込前seamは`apply_object_with_pair_v1`のpaired checkpoint内、`prepare_paired_original_v1`の後・最初の`reserve_for_claim`の前である。新coordinatorは既存private `prepare_original_v1`のframe/source導出を共有し、`original_plan_v1`と実native extrasのrules/court/demand、同時点のbuilder stateの現在署名権限を使う。parent snapshotだけで同block内の先行object更新を無視しない。全検査後、`install_original_v1`と同checkpointでfundingを更新する。これらの接続は現時点では未実装である。
+
+### 9.2 数値geometryと実native policyの照合
+
+source identityはheaderの同一性を示すが、court/demandの採択を示さない。全branch coordinatorでは、実native params・受付点・stateからallocation rulesを解決し、`check_tir_public_allocation_native_v1`のexpected/carried完全一致検査を通した同じcourtを数値geometryへ渡す。frameのrules IDだけから別のcaller courtを正当化しない。demandも元の登録DAAとnative fence履歴から解決し、class recordやsource digestに保持されていない規則をあるものと扱わない。
+
+geometryの全path列挙とsource graphの組合せは、同じsourceへの拘束を強める隔離部品である。署名済みroot値・役割別の提出/開示/応答・parameter/prompt取得・終了効果・実費/原資の全閉包を含まない。RFC-0030 §3の終了理由と完成不整合を費用と効果へ接続する必要があり、既存archive試験の件数を合法終了grammarの数に読み替えない。

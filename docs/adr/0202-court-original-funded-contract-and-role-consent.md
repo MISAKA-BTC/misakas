@@ -28,3 +28,8 @@ Aで詳細仕様化・隔離実装を進めることを推奨する。どちら�
 ## 隔離実装の第一段階
 
 [RFC-0035 §8](../rfc/0035-court-original-funded-contract-and-role-consent.md#8-aの隔離実装の第一段階)に別TFO1 transport、新payer署名、厳密な実出力/返還鍵照合、同carrierのchecked fee budgetを記録した。[検証記録と残りの接続](../evidence/palw/g14-completion-2026-10-21/funded-original-stage1.md)は、準備検査と実UTXO lock/支払/原子的original受付を区別する。新入口は旧形式へ降格せず拒否する。rooted資金・同mergeset拘束・第三者の適格支出と全分岐受付は未完成であり、本番採択・有効化保留を維持する。
+
+
+## 2026-10-22 接続条件と隔離部品
+
+[RFC-0035 §9](../rfc/0035-court-original-funded-contract-and-role-consent.md#9-native-feeとsource-graphの接続--2026-10-22)は既存feeのburn/rent二重充当を修正し、UTXO受付前の同branch planと同一WriteBatchでのrooted delta/UTXO保存・undo/replayの接続条件を記録する。[数値geometryとtransaction-bound preflight](../evidence/palw/g14-completion-2026-10-22/numerical-geometry-and-funding-preflight.md)は全pathの導出と実transaction/entry/scope拘束を進める部品で、native支出認可・実escrow lock・完全original受付・金銭精算を成立させるものではない。Aの承認範囲と有効化保留を維持する。

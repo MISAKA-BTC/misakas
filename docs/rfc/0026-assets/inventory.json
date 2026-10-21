@@ -1,0 +1,4782 @@
+[
+  {
+    "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+    "lines": 431,
+    "bytes": 49564,
+    "sha256": "cf5d0a773fa10221d09ec0e4f5f28cbede209fdfda1c97e4e993ed4bfa941486",
+    "headings": [
+      [
+        1,
+        "# RFC-0001: PALW 推論サーフェスの欠落機能 — 決定論的な生成制御・サービング・入力拡張の設計"
+      ],
+      [
+        24,
+        "## 将来profileの検証境界（2026-10-06）"
+      ],
+      [
+        35,
+        "## §A. リリース「FP Job V4 — Deterministic Decode Pipeline」(Implementation Frozen)"
+      ],
+      [
+        39,
+        "### A.1 範囲"
+      ],
+      [
+        44,
+        "### A.2 `DecodeConfigV4`(規範)"
+      ],
+      [
+        62,
+        "### A.3 processor の定義(規範)"
+      ],
+      [
+        94,
+        "### A.4 Job V4(wire)"
+      ],
+      [
+        100,
+        "### A.5 consensus vectors(仕様の実行可能版)"
+      ],
+      [
+        111,
+        "### A.6 関門(gate)と commit 計画"
+      ],
+      [
+        129,
+        "### A.7 公開と有効化は分ける"
+      ],
+      [
+        135,
+        "### A.8 rollback"
+      ],
+      [
+        140,
+        "### A.9 公開物(実装作業に含める)"
+      ],
+      [
+        146,
+        "## 0. 要約"
+      ],
+      [
+        158,
+        "## 1. 前提 — PALW が守る 3 つの不変条件"
+      ],
+      [
+        168,
+        "### 1.1 分類表"
+      ],
+      [
+        187,
+        "## 2. 項目別の設計"
+      ],
+      [
+        191,
+        "### 2.0 MINING レーンと Chat パスの線引き(2026-09-27 ユーザー確認)"
+      ],
+      [
+        206,
+        "### 2.1 決定論的 repeat_penalty(新規実装・P0)"
+      ],
+      [
+        235,
+        "### 2.2 stop(停止条件・P0)"
+      ],
+      [
+        246,
+        "### 2.3 logit_bias(P0)"
+      ],
+      [
+        253,
+        "### 2.4 n > 1(P1 → P2)"
+      ],
+      [
+        260,
+        "### 2.5 JSON Schema の拡張(P2)"
+      ],
+      [
+        270,
+        "### 2.6 会話をまたぐ KV キャッシュの再利用(P1・最優先)"
+      ],
+      [
+        286,
+        "### 2.7 並行処理(P1)"
+      ],
+      [
+        295,
+        "### 2.8 /v1/embeddings(P1、claim 化は P3)"
+      ],
+      [
+        301,
+        "### 2.9 artifact の自己完結化(P1)"
+      ],
+      [
+        312,
+        "### 2.10 LoRA / adapter(P3、新 class)"
+      ],
+      [
+        319,
+        "### 2.11 マルチモーダル(P3、新 class)"
+      ],
+      [
+        328,
+        "## 3. 優先順位とフェーズ"
+      ],
+      [
+        341,
+        "## 4. consensus・identity への影響"
+      ],
+      [
+        359,
+        "## 5. リスクと緩和"
+      ],
+      [
+        372,
+        "## 6. テスト・ドリル計画"
+      ],
+      [
+        383,
+        "## 7. 未決事項(判断が必要)"
+      ],
+      [
+        392,
+        "### 7.1 採択記録(2026-10-03、lane U / `rfc1/serve`)"
+      ],
+      [
+        404,
+        "### 7.2 追記(2026-10-03、lane U 第 2 弾)"
+      ],
+      [
+        410,
+        "### 7.3 追記(2026-10-03 夜、lane U 第 3 弾)— 段階 2b と運用"
+      ],
+      [
+        418,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        424,
+        "## 改定 — 2026-10-12（W1・W2・X4・N4：提案）"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0002-palw-tensor-ir.md",
+    "lines": 4748,
+    "bytes": 383102,
+    "sha256": "146a6db24530aa8a5440e9b6904a3f3bf7f643fe21c4d63325be6c7eb6d78d87",
+    "headings": [
+      [
+        1,
+        "# RFC-0002: PALW Canonical Tensor IR v1 (PALW-TIR) — a bounded, deterministic integer tensor program as the consensus meaning of a class, with a reference evaluator and optional fused kernels"
+      ],
+      [
+        29,
+        "## Current requirements and historical records — 2026-10-10"
+      ],
+      [
+        46,
+        "## Current design boundary — 2026-10-06"
+      ],
+      [
+        67,
+        "## 概要(日本語)"
+      ],
+      [
+        106,
+        "## Summary"
+      ],
+      [
+        122,
+        "## Motivation"
+      ],
+      [
+        124,
+        "### 1. Where the boundary is today"
+      ],
+      [
+        151,
+        "### 2. What a new architecture costs today"
+      ],
+      [
+        165,
+        "### 3. Why this is tractable here and would not be elsewhere"
+      ],
+      [
+        178,
+        "## Goals and non-goals"
+      ],
+      [
+        199,
+        "## 1. The conformance corpus and the v1 freeze criterion"
+      ],
+      [
+        203,
+        "### 1.1 The corpus"
+      ],
+      [
+        220,
+        "### 1.2 The freeze criterion"
+      ],
+      [
+        254,
+        "## 2. Architecture"
+      ],
+      [
+        285,
+        "## 3. The primitive set (starting hypothesis)"
+      ],
+      [
+        295,
+        "### 3.1 Types and shapes"
+      ],
+      [
+        311,
+        "### 3.2 The order-free region"
+      ],
+      [
+        323,
+        "### 3.3 Primitives"
+      ],
+      [
+        356,
+        "## 4. The program, `TirProgramV1`"
+      ],
+      [
+        358,
+        "### 4.1 Structure"
+      ],
+      [
+        391,
+        "### 4.2 Time: the bounded scan over positions"
+      ],
+      [
+        414,
+        "## 5. Static verification (admission)"
+      ],
+      [
+        419,
+        "### 5.1 Types and shapes"
+      ],
+      [
+        424,
+        "### 5.2 Ranges"
+      ],
+      [
+        443,
+        "### 5.3 Costs"
+      ],
+      [
+        456,
+        "### 5.4 Court feasibility and size caps"
+      ],
+      [
+        482,
+        "## 6. Commitment and the court"
+      ],
+      [
+        505,
+        "## 7. Fused kernels (built last)"
+      ],
+      [
+        539,
+        "## 8. The tool: `palw-class check-architecture`"
+      ],
+      [
+        562,
+        "## 9. Proposed Spec text (new chapter `spec/palw/04b-tensor-ir.md`)"
+      ],
+      [
+        600,
+        "## Activation plan"
+      ],
+      [
+        623,
+        "## Implementation status"
+      ],
+      [
+        643,
+        "## Alternatives"
+      ],
+      [
+        664,
+        "## Security and economic analysis"
+      ],
+      [
+        695,
+        "## Compatibility and migration"
+      ],
+      [
+        705,
+        "## Open questions"
+      ],
+      [
+        726,
+        "## Decision"
+      ],
+      [
+        732,
+        "# Part II — Model onboarding: a standard path from a Hugging Face directory to a registered, reproducible and honestly staged class"
+      ],
+      [
+        739,
+        "## Part II in one page"
+      ],
+      [
+        778,
+        "## 概要(Part II、日本語)"
+      ],
+      [
+        800,
+        "## II.0 Requirements, acceptance and the three examples"
+      ],
+      [
+        802,
+        "### II.0.1 The requirements"
+      ],
+      [
+        834,
+        "### II.0.2 Acceptance"
+      ],
+      [
+        851,
+        "### II.0.3 The three examples"
+      ],
+      [
+        859,
+        "### II.0.4 Where each requirement lives"
+      ],
+      [
+        876,
+        "## II.1 Principles"
+      ],
+      [
+        920,
+        "## II.2 The header-only preflight (R1)"
+      ],
+      [
+        925,
+        "### II.2.1 Inputs, and what is read"
+      ],
+      [
+        940,
+        "### II.2.2 Depths and the first line"
+      ],
+      [
+        960,
+        "### II.2.3 What the shape depth computes"
+      ],
+      [
+        1005,
+        "### II.2.4 Verdicts, stages and codes"
+      ],
+      [
+        1029,
+        "### II.2.5 Safe paths"
+      ],
+      [
+        1037,
+        "### II.2.6 Plug points"
+      ],
+      [
+        1048,
+        "### II.2.7 The JSON form"
+      ],
+      [
+        1057,
+        "### II.2.8 What a preflight does not claim"
+      ],
+      [
+        1063,
+        "### II.2.9 As built (2026-10-01), and what this slice leaves out"
+      ],
+      [
+        1106,
+        "## II.3 The streaming loader and the converter (R2)"
+      ],
+      [
+        1111,
+        "### II.3.1 `TensorSource`"
+      ],
+      [
+        1125,
+        "### II.3.2 Streaming materialisation and the converter"
+      ],
+      [
+        1143,
+        "### II.3.3 Reproducibility"
+      ],
+      [
+        1168,
+        "## II.4 Runtime packs (R2)"
+      ],
+      [
+        1174,
+        "### II.4.1 Identity and form"
+      ],
+      [
+        1185,
+        "### II.4.2 The sections"
+      ],
+      [
+        1207,
+        "### II.4.3 The commands"
+      ],
+      [
+        1224,
+        "### II.4.4 Independent conformance"
+      ],
+      [
+        1238,
+        "### II.4.5 What a pack is not"
+      ],
+      [
+        1245,
+        "## II.5 Quantisation as data (R3)"
+      ],
+      [
+        1253,
+        "### II.5.1 The descriptor"
+      ],
+      [
+        1281,
+        "### II.5.2 The three layouts"
+      ],
+      [
+        1294,
+        "### II.5.3 Virtual tensors"
+      ],
+      [
+        1309,
+        "### II.5.4 The expression language"
+      ],
+      [
+        1334,
+        "### II.5.5 Reading `quantization_config`"
+      ],
+      [
+        1345,
+        "### II.5.6 Refusals, and what is known and not yet described"
+      ],
+      [
+        1358,
+        "### II.5.7 The descriptors this build carries, and their evidence"
+      ],
+      [
+        1379,
+        "### II.5.8 What is exact, and what the formats cost"
+      ],
+      [
+        1406,
+        "### II.5.9 Adding a format"
+      ],
+      [
+        1418,
+        "## II.6 Feature scope (R4)"
+      ],
+      [
+        1444,
+        "## II.7 Staged enablement: convert, register, mine (R5)"
+      ],
+      [
+        1451,
+        "### II.7.1 The lifecycle today"
+      ],
+      [
+        1472,
+        "### II.7.2 What it already guarantees"
+      ],
+      [
+        1483,
+        "### II.7.3 Where it falls short of R5"
+      ],
+      [
+        1522,
+        "### II.7.4 The node-only change: a structured `blocking` in the registry"
+      ],
+      [
+        1571,
+        "### II.7.5 The consensus rules — historical decision and implementation status at 2026-10-01"
+      ],
+      [
+        1590,
+        "#### Proposal A — one seating rule for every class kind (approved)"
+      ],
+      [
+        1699,
+        "##### Scenarios the drills must include"
+      ],
+      [
+        1723,
+        "#### Proposal B — executor conformance by the seat (go)"
+      ],
+      [
+        1730,
+        "#### Proposal C — what probation pays (C1 decided)"
+      ],
+      [
+        1739,
+        "#### The registration policy of the CLI (decided)"
+      ],
+      [
+        1746,
+        "#### Open items"
+      ],
+      [
+        1753,
+        "## II.8 Acceptance criteria and corpus completion"
+      ],
+      [
+        1755,
+        "### II.8.1 The acceptance criteria as checks"
+      ],
+      [
+        1768,
+        "### II.8.2 Corpus completion"
+      ],
+      [
+        1786,
+        "## II.9 Known limits and open questions"
+      ],
+      [
+        1820,
+        "## II.10 Hugging Face majority: from a lowerable architecture to a class that can reach `Final`"
+      ],
+      [
+        1827,
+        "### II.10.1 The gap and the unit of measurement"
+      ],
+      [
+        1858,
+        "### II.10.2 A repeatable Hub census and real-checkpoint cohort"
+      ],
+      [
+        1884,
+        "### II.10.3 The gates whose failures must be counted"
+      ],
+      [
+        1904,
+        "### II.10.4 Close the largest measured blockers without weakening verification"
+      ],
+      [
+        1934,
+        "### II.10.5 Exit criteria and the permitted coverage claim"
+      ],
+      [
+        1958,
+        "## II.11 Future families without a `main` release (R7/A7)"
+      ],
+      [
+        1965,
+        "### II.11.1 Decide by the missing semantic, not by the model's name"
+      ],
+      [
+        1983,
+        "### II.11.2 An open, content-addressed frontend-pack interface"
+      ],
+      [
+        2035,
+        "### II.11.3 Direct-TIR escape hatch and exact boundary of permissionlessness"
+      ],
+      [
+        2052,
+        "### II.11.4 Acceptance before calling this permissionless"
+      ],
+      [
+        2079,
+        "## II.12 Local-LLM coverage: active kernels and an explicit extension queue (R8/A8)"
+      ],
+      [
+        2085,
+        "### II.12.1 Define “90 % of local LLMs” before counting"
+      ],
+      [
+        2105,
+        "### II.12.2 Actual kernel routes and counted gaps"
+      ],
+      [
+        2123,
+        "### II.12.3 Engineering order and the upgrade rule"
+      ],
+      [
+        2138,
+        "## II.13 Immutable challenge-policy binding and later conformance evidence (2026-10-08)"
+      ],
+      [
+        2162,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        2168,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        2177,
+        "## II.14 Completion contract — 2026-10-10"
+      ],
+      [
+        2183,
+        "### II.14.1 Scoped support and the public extension interface"
+      ],
+      [
+        2198,
+        "### II.14.2 Bounded dimensions, sparse computation and state"
+      ],
+      [
+        2213,
+        "### II.14.3 Storage, arithmetic and fidelity"
+      ],
+      [
+        2222,
+        "### II.14.4 One derived resource contract"
+      ],
+      [
+        2248,
+        "### II.14.5 Work and economic conservation"
+      ],
+      [
+        2258,
+        "### II.14.6 Whole-statement public verification and completion evidence"
+      ],
+      [
+        2296,
+        "#### 14.7 Bounded flat Gather courts and a real-program static regression"
+      ],
+      [
+        2315,
+        "#### 14.8 Generic bounded preparation of real parameter commitments"
+      ],
+      [
+        2335,
+        "### 14.9 Exact context and actual-weight node execution evidence"
+      ],
+      [
+        2358,
+        "### 14.10 Native segmented roots and real delivery-court evidence"
+      ],
+      [
+        2384,
+        "### 14.11 Requested-claim identity and actual-weight node delivery path"
+      ],
+      [
+        2421,
+        "### 14.12 Conformance-only class preparation"
+      ],
+      [
+        2457,
+        "### 14.13 Bounded v3 artifact-identity refutation"
+      ],
+      [
+        2501,
+        "### 14.14 Descriptor-scoped model inventory and job-input roles"
+      ],
+      [
+        2536,
+        "### 14.15 Signed model artifact statements in the node consumer"
+      ],
+      [
+        2581,
+        "### 14.16 Descriptor-scoped finite-domain conformance reference"
+      ],
+      [
+        2614,
+        "### 14.17 Authenticated finite-domain conformance and direct execution registration"
+      ],
+      [
+        2646,
+        "### 14.18 Public trace courts for unregistered scoped candidates"
+      ],
+      [
+        2692,
+        "### 14.19 Candidate trace unit availability and verifier-owned whole-value courts"
+      ],
+      [
+        2760,
+        "### 14.20 Candidate Gather dependency courts without a full weight opening"
+      ],
+      [
+        2803,
+        "### 14.21 Staged flat-v4 commitment material for large withheld values"
+      ],
+      [
+        2855,
+        "### 14.22 Staged flat-profile dependency-leaf terminal court"
+      ],
+      [
+        2929,
+        "### 14.23 Staged all-dtype internal flat-v5 material and fault kinds"
+      ],
+      [
+        2981,
+        "### 14.24 Staged flat-v5 all-position terminal-court resource admission"
+      ],
+      [
+        3046,
+        "### 14.25 Dormant actual-node flat-v5 candidate statements and courts"
+      ],
+      [
+        3098,
+        "### 14.26 Dormant flat-v5 public hash-unit demand, service and default"
+      ],
+      [
+        3153,
+        "### §14.27 — Generic streamed flat-v5 detection (dormant component, 2026-10-11)"
+      ],
+      [
+        3204,
+        "### §14.28 — Versioned local replay budgets over the frozen flat scope (2026-10-11)"
+      ],
+      [
+        3255,
+        "### §14.29 — Actor-bound sealed evidence and equivalent-carrier counterexamples (2026-10-11)"
+      ],
+      [
+        3298,
+        "### §14.30 — Protected native flat candidate statements and evidence seals v6 (2026-10-11)"
+      ],
+      [
+        3341,
+        "### §14.31 — Protected candidate SDK and offline CLI (2026-10-11)"
+      ],
+      [
+        3374,
+        "### §14.32 — Mature actor-owned protected proof chunks (2026-10-11)"
+      ],
+      [
+        3410,
+        "### §14.33 — Protected candidate reads from one anchored public snapshot (2026-10-11)"
+      ],
+      [
+        3453,
+        "### §14.34 — Bounded TopK point counterexamples and native-storage selection (2026-10-11)"
+      ],
+      [
+        3516,
+        "### §14.35 — Explicit mixed-court graph scope and prepaid independent replay (2026-10-11)"
+      ],
+      [
+        3587,
+        "### §14.36 — Explicit v7 native candidate registration (2026-10-11)"
+      ],
+      [
+        3642,
+        "### §14.37 — Frozen bounded job lengths and history-selection component (2026-10-11)"
+      ],
+      [
+        3688,
+        "### §14.38 — Independent actual-checkpoint source diagnostic (2026-10-11)"
+      ],
+      [
+        3725,
+        "### §14.39 — Prepaid exact scheduled-metadata admission (2026-10-11)"
+      ],
+      [
+        3759,
+        "### §14.40 — Native protected mixed-graph prosecution, v7 (2026-10-11)"
+      ],
+      [
+        3805,
+        "### §14.41 — Independent free-running task diagnostic failure (2026-10-11)"
+      ],
+      [
+        3834,
+        "### §14.42 — Complete ordinary point graph and resource components, v9/v10"
+      ],
+      [
+        3877,
+        "### §14.43 — Actual checkpoint point court and parameter continuity, v9"
+      ],
+      [
+        3906,
+        "### §14.44 — Bounded authenticated external stage inputs, component v12"
+      ],
+      [
+        3943,
+        "### §14.45 — Generic public checkpoint localization and fresh context128"
+      ],
+      [
+        3981,
+        "### §14.46 — Funded execution and persisted quota components, v11"
+      ],
+      [
+        4033,
+        "### §14.47 — Predeclared complete free-running task diagnostic, context128"
+      ],
+      [
+        4060,
+        "### §14.48 — Native mixed-court conformance and bounded candidate restoration, v9"
+      ],
+      [
+        4093,
+        "### §14.49 — Rooted native execution headers and staged request funding, v11"
+      ],
+      [
+        4136,
+        "### §14.50 — Public-snapshot streaming outsider consumer, v9"
+      ],
+      [
+        4169,
+        "### §14.51 — Protected quota rows and bounded execution11 carriers"
+      ],
+      [
+        4198,
+        "## 改定 — 2026-10-12（seatingとモデル保有、単一seat scope：提案）"
+      ],
+      [
+        4204,
+        "### §14.52 — Paid pre-proof discovery and one-slot proof conversion, v13 (2026-10-13)"
+      ],
+      [
+        4257,
+        "### 14.53 Prospective native funded and typed-stage namespaces"
+      ],
+      [
+        4282,
+        "### 14.54 Original producer consent and additional source obligations"
+      ],
+      [
+        4331,
+        "### 14.55 Original physical leases and native carrier selection"
+      ],
+      [
+        4368,
+        "### 14.56 Original burst residency and the new full-court contracts"
+      ],
+      [
+        4421,
+        "### II.14.57 Independent original credit delivery — audit32/redemption33"
+      ],
+      [
+        4443,
+        "### II.14.58 Text29 native lane, accepted-spend redemption and the A6/A8 receipt rule (2026-10-15)"
+      ],
+      [
+        4490,
+        "### II.14.59 Versioned length fields and lead defaults (2026-10-15)"
+      ],
+      [
+        4544,
+        "### II.14.60 Typed window graph v37 and the window class (2026-10-15)"
+      ],
+      [
+        4575,
+        "#### II.14.60a Window-class job path (2026-10-15, unverified source checkpoint)"
+      ],
+      [
+        4603,
+        "### II.14.61 Genesis model set: eight text-generation models in one `.palwart` format (user decisions, 2026-10-15)"
+      ],
+      [
+        4662,
+        "#### History: the initial seven-model activation target (user decision, 2026-10-15; superseded the same day)"
+      ],
+      [
+        4713,
+        "### II.14.62 Verification assumptions (user decision, 2026-10-15)"
+      ],
+      [
+        4731,
+        "### II.14.63 Unsupported models and consensus upgrades (user decision, 2026-10-15)"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0003-palw-generative-model-classes.md",
+    "lines": 2621,
+    "bytes": 210123,
+    "sha256": "2e6c459f7c1f2aceb4233f4c9b71364486d78f625e948aacf6e4c4fa1fe951b5",
+    "headings": [
+      [
+        1,
+        "# RFC-0003: PALW Generative Model Classes — one job, determinism and output layer, and the class profiles on top of it"
+      ],
+      [
+        26,
+        "## Current extension and verification boundary — 2026-10-06"
+      ],
+      [
+        46,
+        "## 概要(日本語)"
+      ],
+      [
+        109,
+        "## Summary"
+      ],
+      [
+        135,
+        "## Motivation"
+      ],
+      [
+        153,
+        "## Goals and non-goals"
+      ],
+      [
+        179,
+        "# Part I — The common layer"
+      ],
+      [
+        181,
+        "## I.0 One job shape"
+      ],
+      [
+        215,
+        "## I.1 Deterministic randomness"
+      ],
+      [
+        217,
+        "### I.1.1 Where R lives — decision: (a), the job layer"
+      ],
+      [
+        259,
+        "### I.1.2 The function"
+      ],
+      [
+        276,
+        "### I.1.3 The canonical encoding of every input"
+      ],
+      [
+        312,
+        "### I.1.4 Domains"
+      ],
+      [
+        339,
+        "### I.1.5 From bits to values"
+      ],
+      [
+        390,
+        "### I.1.6 RFC-0001's sampler is domain 0, unchanged"
+      ],
+      [
+        437,
+        "### I.1.7 Derived inputs: how a program receives R and how the court recomputes it"
+      ],
+      [
+        453,
+        "### I.1.8 Properties"
+      ],
+      [
+        468,
+        "## I.2 Canonical tensors and the execution profile"
+      ],
+      [
+        470,
+        "### I.2.1 One meaning, so no profile"
+      ],
+      [
+        489,
+        "### I.2.2 What remains of the concern"
+      ],
+      [
+        501,
+        "### I.2.3 Canonical tensors at every boundary: the program surface every profile shares"
+      ],
+      [
+        608,
+        "## I.3 Canonical outputs"
+      ],
+      [
+        610,
+        "### I.3.1 The rule"
+      ],
+      [
+        620,
+        "### I.3.2 The digest"
+      ],
+      [
+        669,
+        "### I.3.3 Per output kind"
+      ],
+      [
+        685,
+        "### I.3.4 Why raw tensors, not a canonical PNG, WAV or MP4"
+      ],
+      [
+        698,
+        "### I.3.5 The logits unit of a text class"
+      ],
+      [
+        726,
+        "## I.4 The generative claim: a tensor job on the free-prompt lane"
+      ],
+      [
+        738,
+        "### I.4.1 The job version and the wire"
+      ],
+      [
+        777,
+        "### I.4.2 What a commitment carries"
+      ],
+      [
+        794,
+        "### I.4.3 The payload and the material"
+      ],
+      [
+        812,
+        "### I.4.4 The doors"
+      ],
+      [
+        834,
+        "### I.4.5 What the chain derives and refuses at acceptance (the fold)"
+      ],
+      [
+        883,
+        "### I.4.6 Pricing: leaves are the work"
+      ],
+      [
+        907,
+        "### I.4.7 The court"
+      ],
+      [
+        1003,
+        "### I.4.8 Capacity and denial of service"
+      ],
+      [
+        1016,
+        "### I.4.9 Which fence opens it"
+      ],
+      [
+        1039,
+        "### I.4.10 What is not here"
+      ],
+      [
+        1048,
+        "### I.4.11 Allocations"
+      ],
+      [
+        1065,
+        "# Part II — Class profiles"
+      ],
+      [
+        1071,
+        "## II.1 Image generation"
+      ],
+      [
+        1073,
+        "### 1. ImageJob"
+      ],
+      [
+        1112,
+        "### 2. Deterministic noise"
+      ],
+      [
+        1136,
+        "### 3. The denoise scan"
+      ],
+      [
+        1138,
+        "#### 3.1 The loop and its mapping"
+      ],
+      [
+        1156,
+        "#### 3.2 Scheduler and timestep coefficients are pinned integer tables"
+      ],
+      [
+        1171,
+        "#### 3.3 CFG uses a batch axis"
+      ],
+      [
+        1184,
+        "#### 3.4 Text conditioning: a separate encoder program (a stage), not a pre-scan block"
+      ],
+      [
+        1215,
+        "#### 3.5 VAE decode as the final program(s)"
+      ],
+      [
+        1233,
+        "#### 3.6 Attention over image tokens is inside one step"
+      ],
+      [
+        1245,
+        "#### 3.7 What `TirProgramV1` lacks — exactly"
+      ],
+      [
+        1278,
+        "### 4. ImageOutput"
+      ],
+      [
+        1299,
+        "### 5. Verification and court"
+      ],
+      [
+        1301,
+        "#### 5.1 Commit points"
+      ],
+      [
+        1318,
+        "#### 5.2 The step space"
+      ],
+      [
+        1325,
+        "#### 5.3 Bisection over steps × tiles"
+      ],
+      [
+        1339,
+        "#### 5.4 Tile cones against the court ceilings"
+      ],
+      [
+        1363,
+        "#### 5.4a Which demand model prices an image cone, and what a close carries (FR-22, resolved 2026-10-01)"
+      ],
+      [
+        1445,
+        "#### 5.5 What does not fit, and the fix that needs no protocol change: committed partial reductions"
+      ],
+      [
+        1468,
+        "#### 5.6 Proposed: dissection over a declared reduction axis (PALW-TIR-32′)"
+      ],
+      [
+        1499,
+        "#### 5.7 Replaying the latent from checkpoints"
+      ],
+      [
+        1506,
+        "#### 5.8 Who loses on malformed commitments — PALW-TIR-33 carries over"
+      ],
+      [
+        1528,
+        "### Fidelity — usefulness, never validity"
+      ],
+      [
+        1548,
+        "### Compute — a parameterised estimate"
+      ],
+      [
+        1606,
+        "### Verification checklist before the profile is frozen"
+      ],
+      [
+        1625,
+        "### 6. The first image profile (activation step 6): design"
+      ],
+      [
+        1706,
+        "### 6.1 As built — the first image profile, recorded 2026-10-01 (lane D)"
+      ],
+      [
+        1794,
+        "## II.2 Text generation"
+      ],
+      [
+        1819,
+        "### II.2.1 Text pipelines and the vision-language job (the VLM path)"
+      ],
+      [
+        2006,
+        "### II.2.2 Encoder–decoder text classes: the source input and the forced prefix"
+      ],
+      [
+        2078,
+        "### II.2.3 Evaluation pipelines: the `Decode` stage and finalized outputs (RFC-0004 §7.2)"
+      ],
+      [
+        2127,
+        "## II.3 Embedding / encoder"
+      ],
+      [
+        2167,
+        "## II.4 Multimodal input (vision canonicalisation)"
+      ],
+      [
+        2218,
+        "## II.5 Audio — generation and understanding"
+      ],
+      [
+        2253,
+        "## II.6 Video generation"
+      ],
+      [
+        2290,
+        "# Rules, alternatives, security and activation"
+      ],
+      [
+        2292,
+        "## Proposed Spec text (sketch)"
+      ],
+      [
+        2386,
+        "## Alternatives"
+      ],
+      [
+        2407,
+        "## Security and economic analysis"
+      ],
+      [
+        2442,
+        "## Compatibility and migration"
+      ],
+      [
+        2457,
+        "## Open questions"
+      ],
+      [
+        2501,
+        "## Activation plan and order of implementation"
+      ],
+      [
+        2563,
+        "## Decision"
+      ],
+      [
+        2599,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        2605,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        2614,
+        "## 改定 — 2026-10-12（challenge windowの再付与禁止、公開検証不能な経路の報酬除外：提案）"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0004-palw-model-improvement.md",
+    "lines": 1155,
+    "bytes": 95917,
+    "sha256": "6abaa2eba4f2ef5aa97774b93154858365f116370cec0b7a64465240252deb42",
+    "headings": [
+      [
+        1,
+        "# RFC-0004: PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR"
+      ],
+      [
+        14,
+        "## 2026-10-09 改定 — 改善結果は独立モデルとして登録する"
+      ],
+      [
+        18,
+        "### 実装状態と残作業"
+      ],
+      [
+        43,
+        "## 概要(日本語)"
+      ],
+      [
+        101,
+        "## Summary"
+      ],
+      [
+        133,
+        "## 0. Kernel-only registration and probabilistic evaluation (2026-10-06)"
+      ],
+      [
+        177,
+        "## Motivation"
+      ],
+      [
+        196,
+        "## Goals and non-goals"
+      ],
+      [
+        219,
+        "## 1. Layers and phases"
+      ],
+      [
+        236,
+        "## 2. The division of work"
+      ],
+      [
+        248,
+        "### 2.1 The four things the protocol verifies"
+      ],
+      [
+        257,
+        "### 2.2 Trust labels"
+      ],
+      [
+        280,
+        "## 3. Lines, heads and the improvement policy"
+      ],
+      [
+        324,
+        "## 4. The epoch state machine"
+      ],
+      [
+        354,
+        "### 4.1 Objects"
+      ],
+      [
+        374,
+        "### 4.2 Optional contracts"
+      ],
+      [
+        380,
+        "## 5. Hard cases, datasets and teaching artifacts"
+      ],
+      [
+        382,
+        "### 5.1 Hard cases"
+      ],
+      [
+        403,
+        "### 5.2 Verification types in Phase A"
+      ],
+      [
+        417,
+        "### 5.3 Teaching artifacts and registered datasets"
+      ],
+      [
+        460,
+        "## 6. Candidates and their artifacts"
+      ],
+      [
+        462,
+        "### 6.1 What a candidate is"
+      ],
+      [
+        477,
+        "### 6.2 The adapter in the IR graph"
+      ],
+      [
+        508,
+        "### 6.3 Composite artifacts and the class id"
+      ],
+      [
+        543,
+        "### 6.4 The calibration rule"
+      ],
+      [
+        559,
+        "### 6.5 The node budget, and what an adapter may target"
+      ],
+      [
+        570,
+        "### 6.6 Adapter forms out of v1"
+      ],
+      [
+        587,
+        "### 6.7 Prefetch and work"
+      ],
+      [
+        596,
+        "## 7. Evaluation"
+      ],
+      [
+        598,
+        "### 7.1 Items: hidden, and in the future"
+      ],
+      [
+        611,
+        "### 7.2 The evaluation job"
+      ],
+      [
+        646,
+        "### 7.3 Scoring stages"
+      ],
+      [
+        662,
+        "### 7.4 Code in Phase A"
+      ],
+      [
+        673,
+        "### 7.5 Promotion: a paired rule in integers"
+      ],
+      [
+        694,
+        "### 7.6 Rollback"
+      ],
+      [
+        705,
+        "## 8. Rewards, staged"
+      ],
+      [
+        710,
+        "### 8.1 S1 — bounties, only for EXACT-verifiable tasks"
+      ],
+      [
+        719,
+        "### 8.2 S2 — the gain share, through declared, registered datasets"
+      ],
+      [
+        731,
+        "### 8.3 S3 — marginal attribution (\"Proof of Useful Data\"), as research"
+      ],
+      [
+        745,
+        "### 8.4 Vesting and forfeit"
+      ],
+      [
+        751,
+        "### 8.5 The pool"
+      ],
+      [
+        765,
+        "## 9. Licence and legal"
+      ],
+      [
+        787,
+        "## 10. Privacy"
+      ],
+      [
+        798,
+        "## 11. Reinforcement learning"
+      ],
+      [
+        807,
+        "## 12. Training as IR: possible, and not in v1"
+      ],
+      [
+        822,
+        "## 13. Capacity and cost"
+      ],
+      [
+        845,
+        "## 14. Kernel extensions and off-chain automation"
+      ],
+      [
+        857,
+        "## 15. Threats"
+      ],
+      [
+        876,
+        "## 16. How this differs from nearby designs"
+      ],
+      [
+        887,
+        "## 17. Implementation plan and effort"
+      ],
+      [
+        923,
+        "## Proposed Spec text (new chapter `spec/palw/17-model-improvement.md`)"
+      ],
+      [
+        982,
+        "## Activation plan"
+      ],
+      [
+        1006,
+        "## Alternatives"
+      ],
+      [
+        1020,
+        "## Security, principles and compatibility"
+      ],
+      [
+        1033,
+        "## Open questions"
+      ],
+      [
+        1063,
+        "## Decision"
+      ],
+      [
+        1073,
+        "## Part II — Verifiable computation beyond fixed weight files (2026-10-08)"
+      ],
+      [
+        1081,
+        "### II.1 Why"
+      ],
+      [
+        1093,
+        "### II.2 The computation specification"
+      ],
+      [
+        1112,
+        "### II.3 Relation to the improvement protocol"
+      ],
+      [
+        1118,
+        "### II.4 Required evidence (part of \"every RFC implemented\")"
+      ],
+      [
+        1132,
+        "## Shared verification-challenge boundary — 2026-10-08"
+      ],
+      [
+        1145,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        1151,
+        "## 改定 — 2026-10-12（公開検証不能な経路の報酬除外：提案）"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0005-palw-ml-vm.md",
+    "lines": 15,
+    "bytes": 2996,
+    "sha256": "cc096f4afa7bc81205e50f8123553a81d1b4ece4ed7ea6084cf6118aaa41676f",
+    "headings": [
+      [
+        1,
+        "# RFC-0005: PALW VM（不採用）"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+    "lines": 1328,
+    "bytes": 96980,
+    "sha256": "06ae27140abd9812a80678750240b9e84785ecbd3871fc48fd64483af029f50c",
+    "headings": [
+      [
+        1,
+        "# RFC-0006: PALW layer-sharded panels — bounded cell verification from authenticated boundaries, with independent public-verifier localization and exact court on dispute"
+      ],
+      [
+        34,
+        "## Current verification boundary — 2026-10-06"
+      ],
+      [
+        51,
+        "## 概要(日本語)"
+      ],
+      [
+        95,
+        "## Summary"
+      ],
+      [
+        116,
+        "## Motivation"
+      ],
+      [
+        118,
+        "### 1. Verification supply is the binding limit of claim throughput"
+      ],
+      [
+        155,
+        "### 2. What already exists"
+      ],
+      [
+        193,
+        "## Goals and non-goals"
+      ],
+      [
+        218,
+        "## 1. Cells"
+      ],
+      [
+        220,
+        "### 1.1 The layer plan (derived, as ADR-0099 Decision 2)"
+      ],
+      [
+        237,
+        "### 1.2 Position segments"
+      ],
+      [
+        255,
+        "### 1.3 What a cell reads, and what it checks"
+      ],
+      [
+        280,
+        "### 1.4 Two ways to check a cell, one receipt"
+      ],
+      [
+        297,
+        "## 2. Why a cell's check is enough"
+      ],
+      [
+        299,
+        "### 2.1 The detection lemma"
+      ],
+      [
+        349,
+        "### 2.2 What a cell check does not see"
+      ],
+      [
+        355,
+        "## 3. Availability of boundary rows"
+      ],
+      [
+        386,
+        "### 3.1 Off-chain model supply, identity and claim-specific evidence — 2026-10-10後続改定"
+      ],
+      [
+        407,
+        "## 4. The panel"
+      ],
+      [
+        409,
+        "### 4.1 The stratified draw, per shard (ADR-0100 Decision 4)"
+      ],
+      [
+        428,
+        "### 4.2 An outsider per shard (ADR-0147, generalised)"
+      ],
+      [
+        455,
+        "### 4.3 Receipts with cell masks"
+      ],
+      [
+        466,
+        "### 4.4 The recount over cells (Q-3, generalised)"
+      ],
+      [
+        488,
+        "### 4.5 Licence by parts, and Final"
+      ],
+      [
+        506,
+        "## 5. Coverage and collusion"
+      ],
+      [
+        551,
+        "## 6. Economics"
+      ],
+      [
+        553,
+        "### 6.1 Seat duty and locks, per cell"
+      ],
+      [
+        578,
+        "### 6.2 The claim's liability and the class room"
+      ],
+      [
+        599,
+        "### 6.3 Seat pay"
+      ],
+      [
+        605,
+        "## 7. Held context (ADR-0103) and position segments"
+      ],
+      [
+        630,
+        "## 8. Cost model and what it buys"
+      ],
+      [
+        687,
+        "## 9. The prototype (D4)"
+      ],
+      [
+        714,
+        "### 9.1 Results (2026-10-01)"
+      ],
+      [
+        742,
+        "## 10. Activation"
+      ],
+      [
+        795,
+        "## Proposed Spec text (sketch)"
+      ],
+      [
+        823,
+        "## Alternatives"
+      ],
+      [
+        836,
+        "## Security and economic analysis"
+      ],
+      [
+        854,
+        "## Compatibility and migration"
+      ],
+      [
+        867,
+        "## Historical open questions — initial baseline"
+      ],
+      [
+        915,
+        "## Decision"
+      ],
+      [
+        932,
+        "## V3 shard assignment: retained derivation and restore contract — 2026-10-11"
+      ],
+      [
+        967,
+        "## Shared verification-challenge boundary — 2026-10-08"
+      ],
+      [
+        978,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        984,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        993,
+        "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+      ],
+      [
+        999,
+        "## 改定 — 2026-10-12（shardとPanel=1：提案）"
+      ],
+      [
+        1007,
+        "## Spec closures — 2026-10-15"
+      ],
+      [
+        1019,
+        "### R6-CELL — coverage of new cell profiles"
+      ],
+      [
+        1040,
+        "#### R6-CELL round 3 — claim-wide boundary, routing and memory coverage (2026-10-15)"
+      ],
+      [
+        1156,
+        "#### R6-CELL round 4 — the coverage closure fence (2026-10-15)"
+      ],
+      [
+        1245,
+        "### R6-DRAW — the V3 per-shard draw"
+      ],
+      [
+        1268,
+        "### R6-OUTSIDE — non-seat verification and pre-emption"
+      ],
+      [
+        1284,
+        "### R6-PRICE — cell work, residency and capacity"
+      ],
+      [
+        1297,
+        "### R6-MIGRATION — live v1, history and new profiles"
+      ],
+      [
+        1309,
+        "### ALL-MODEL — shared rules for RFC6/7/8/12"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+    "lines": 1497,
+    "bytes": 143742,
+    "sha256": "eadad4e17cc30e8acf0b0f882d664fa1bedb871af9e6e63fb7bd1c00d924c07b",
+    "headings": [
+      [
+        1,
+        "# RFC-0007: PALW probabilistic detection — direct checks, authenticated receipts, and deterministic court"
+      ],
+      [
+        38,
+        "## 概要(日本語)"
+      ],
+      [
+        49,
+        "### 旧草案の概要（2026-10-01の設計・計測記録）"
+      ],
+      [
+        103,
+        "## Summary"
+      ],
+      [
+        109,
+        "## Motivation"
+      ],
+      [
+        111,
+        "### 1. Verification supply binds"
+      ],
+      [
+        124,
+        "### 2. Splitting is not saving"
+      ],
+      [
+        134,
+        "### 3. Two levers"
+      ],
+      [
+        145,
+        "## Goals and non-goals"
+      ],
+      [
+        161,
+        "## Part I — Batched verification certificates"
+      ],
+      [
+        163,
+        "### I.1 What a seat signs today, and what it costs"
+      ],
+      [
+        182,
+        "### I.2 The vertex"
+      ],
+      [
+        208,
+        "### I.3 Leaves"
+      ],
+      [
+        226,
+        "### I.4 Signing"
+      ],
+      [
+        239,
+        "### I.5 Carriage and the tally (licence by reference)"
+      ],
+      [
+        264,
+        "### I.6 Equivocation"
+      ],
+      [
+        278,
+        "### I.7 DA certificates"
+      ],
+      [
+        296,
+        "### I.8 The pool and the assembler"
+      ],
+      [
+        309,
+        "### I.9 Capacity"
+      ],
+      [
+        335,
+        "## Part II — Algebraic verification (seat-local)"
+      ],
+      [
+        344,
+        "### II.1 What the trace commits, and what a seat lacks"
+      ],
+      [
+        357,
+        "### II.2 The witness"
+      ],
+      [
+        371,
+        "### II.3 The check, and why it is sound"
+      ],
+      [
+        434,
+        "### II.4 The seat secret, the sketches and their refresh"
+      ],
+      [
+        462,
+        "### II.5 Moduli from the range proofs"
+      ],
+      [
+        481,
+        "### II.6 Policies: what is served"
+      ],
+      [
+        494,
+        "### II.7 The trace-serving obligation and its DA"
+      ],
+      [
+        508,
+        "### II.8 Failure, escalation, and the exact court"
+      ],
+      [
+        533,
+        "### II.9 Where it pays (measured)"
+      ],
+      [
+        569,
+        "### II.10 Bandwidth pricing"
+      ],
+      [
+        582,
+        "## Part III — Security parameters and escalation"
+      ],
+      [
+        584,
+        "### III.1 The model"
+      ],
+      [
+        592,
+        "### III.2 `m` per interval"
+      ],
+      [
+        610,
+        "### III.3 Audits and challenges"
+      ],
+      [
+        617,
+        "### III.4 Bond economics"
+      ],
+      [
+        628,
+        "## Part IV — The global audit mesh and staged onboarding"
+      ],
+      [
+        630,
+        "### IV.1 Global random leaf audits — a sensor, not the security floor"
+      ],
+      [
+        714,
+        "### IV.2 Staged onboarding (capped mode)"
+      ],
+      [
+        778,
+        "## Part V — Constraint verification is the normal Panel path (2026-10-06)"
+      ],
+      [
+        780,
+        "### V.1 Scope and the existing implementation boundary"
+      ],
+      [
+        796,
+        "### V.2 Profile, statement and constraint coverage"
+      ],
+      [
+        810,
+        "### V.3 Batch repeated work, not semantic context"
+      ],
+      [
+        827,
+        "### V.4 Direct checking and explicit limits"
+      ],
+      [
+        833,
+        "### V.5 Commitments and challenge ordering"
+      ],
+      [
+        841,
+        "### V.6 Typed receipts and a coverage-aware tally"
+      ],
+      [
+        865,
+        "### V.7 Error accounting, licence, Final and dispute"
+      ],
+      [
+        887,
+        "### V.8 Delivery plan and acceptance measurements"
+      ],
+      [
+        899,
+        "### V.9 Activation and required spec changes"
+      ],
+      [
+        918,
+        "## Part VI — Post-commit challenge protocol: the single source of truth (2026-10-08)"
+      ],
+      [
+        920,
+        "### VI.1 Authority, scope and security boundary"
+      ],
+      [
+        942,
+        "### VI.2 Immutable policy and committed subject"
+      ],
+      [
+        975,
+        "### VI.3 PALW Work Beacon source eligibility and non-circularity"
+      ],
+      [
+        1011,
+        "### VI.4 Canonical collection, accumulator and lock"
+      ],
+      [
+        1044,
+        "### VI.5 One seed derivation and domain-separated sampling"
+      ],
+      [
+        1078,
+        "### VI.6 Direct probabilistic checks and repeated audit rounds"
+      ],
+      [
+        1086,
+        "### VI.7 Reorg, abort, scarcity and deterministic recovery"
+      ],
+      [
+        1107,
+        "### VI.8 Activation and evidence gates"
+      ],
+      [
+        1124,
+        "## Relations"
+      ],
+      [
+        1143,
+        "## Proposed Spec text (new chapter `spec/palw/18-verification-certificates.md`)"
+      ],
+      [
+        1175,
+        "## Activation plan"
+      ],
+      [
+        1197,
+        "## Alternatives"
+      ],
+      [
+        1212,
+        "## Security and economic analysis (summary)"
+      ],
+      [
+        1234,
+        "## Historical open questions (Parts I–IV)"
+      ],
+      [
+        1254,
+        "## Decision"
+      ],
+      [
+        1260,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        1266,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        1275,
+        "## 改定 — 2026-10-12（Work Beaconの独立bootstrap：提案）"
+      ],
+      [
+        1284,
+        "## Spec closures — 2026-10-15"
+      ],
+      [
+        1302,
+        "### R7-SUBJECT — immutable subject binding"
+      ],
+      [
+        1334,
+        "### R7-SOURCE — eligibility, order, distinct work and payment"
+      ],
+      [
+        1394,
+        "### R7-RANDOM — collection, composition and grinding"
+      ],
+      [
+        1426,
+        "### R7-RELATION — relation coverage per target"
+      ],
+      [
+        1445,
+        "### R7-ECON — costs, collection and lazy verification"
+      ],
+      [
+        1494,
+        "### ALL-MODEL"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+    "lines": 356,
+    "bytes": 51395,
+    "sha256": "5e6df30068ead9de1eb85c4d3bb14d10f4df49314a105f443c4d68f188591b31",
+    "headings": [
+      [
+        1,
+        "# RFC-0008: PALW EXEC lane — claim-backed work slices and transaction execution"
+      ],
+      [
+        20,
+        "## 0. 要旨と旧提案の置換"
+      ],
+      [
+        28,
+        "## 1. mainを基準とする4役"
+      ],
+      [
+        43,
+        "## 2. 同じEXEC class、独立した2つのpayload"
+      ],
+      [
+        67,
+        "### 2.1 EXEC_TX: 過去のFinal creditによる高速取引"
+      ],
+      [
+        76,
+        "### 2.2 EXEC_SLICE: 現在のclaimに属する新しいwork"
+      ],
+      [
+        100,
+        "## 3. REAL rootと長い推論"
+      ],
+      [
+        118,
+        "## 4. Accounting: permitとworkを分離する"
+      ],
+      [
+        142,
+        "## 5. Anchor、reorg、livenessの分離"
+      ],
+      [
+        154,
+        "## 6. 公開検証・裁定・証拠保持"
+      ],
+      [
+        168,
+        "### 6.1 モデル入手への不介入・bond配分と規則E — 2026-10-10後続改定"
+      ],
+      [
+        193,
+        "## 7. 実装境界とactivation gates"
+      ],
+      [
+        217,
+        "## 8. 観測と段階導入"
+      ],
+      [
+        225,
+        "## 9. 関連設計との優先関係"
+      ],
+      [
+        235,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        244,
+        "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+      ],
+      [
+        250,
+        "## 改定 — 2026-10-12（モデル配分とブロック生成機会の接続：提案）"
+      ],
+      [
+        258,
+        "## 仕様閉鎖 — 2026-10-15（設計監査の要件索引 R8-* に対する規範文）"
+      ],
+      [
+        264,
+        "### R8-LANE — 排他envelope、carrier、header carriage"
+      ],
+      [
+        275,
+        "### R8-WORK — 同単位のwork、prefix/suffix scope"
+      ],
+      [
+        286,
+        "### R8-IDENTITY — useful workの一回利用"
+      ],
+      [
+        294,
+        "### R8-BUDGET — 予約、Final前無支払、実debit"
+      ],
+      [
+        305,
+        "### R8-WINDOW — 依存claimの責任・material・post-Final"
+      ],
+      [
+        318,
+        "### R8-SLICE — 重複・再利用・一精算"
+      ],
+      [
+        325,
+        "### R8-NEUTRAL — 順序・分割の不変性"
+      ],
+      [
+        333,
+        "### R8-RECOVERY — 世代一致、restart/reorg/pruning"
+      ],
+      [
+        341,
+        "### R8-ECON — 収支基準"
+      ],
+      [
+        350,
+        "### ALL-MODEL"
+      ],
+      [
+        354,
+        "### 本文との関係"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0009-palw-remote-miner.md",
+    "lines": 326,
+    "bytes": 45686,
+    "sha256": "6e7e1d57b99d00df635a86c475c6d917714d18640ab3bc885e9efa421810d2ff",
+    "headings": [
+      [
+        1,
+        "# RFC-0009: PALW Remote Client — node を持たないモデル登録・claim・非保管型の報酬回収"
+      ],
+      [
+        22,
+        "## 0. 結論"
+      ],
+      [
+        43,
+        "## 1. 現行実装と解くべき結合"
+      ],
+      [
+        58,
+        "## 2. 目標と非目標"
+      ],
+      [
+        67,
+        "## 3. 署名済み claim と permissionless relay"
+      ],
+      [
+        69,
+        "### 3.1 free-prompt carrier"
+      ],
+      [
+        75,
+        "### 3.2 ordinary attempt block"
+      ],
+      [
+        81,
+        "### 3.3 node-less モデル登録: prepare → sign → relay → verify"
+      ],
+      [
+        95,
+        "### 3.4 GAS は登録者が用意する: 固定登録費・carrier fee・担保を区別"
+      ],
+      [
+        112,
+        "### 3.5 Artifact配布の任意運用とmodel-bond配分 — 2026-10-10後続改定"
+      ],
+      [
+        137,
+        "### 3.6 状態追跡・再送・登録と readiness の分離"
+      ],
+      [
+        145,
+        "## 4. miner から独立した evidence 配信"
+      ],
+      [
+        147,
+        "### 4.1 manifest と取得"
+      ],
+      [
+        160,
+        "### 4.2 可用性と責任"
+      ],
+      [
+        170,
+        "## 5. executor と receipt block builder の分離"
+      ],
+      [
+        172,
+        "### 5.1 公開 redemption authorization"
+      ],
+      [
+        178,
+        "### 5.2 報酬と誘因"
+      ],
+      [
+        184,
+        "## 6. miner client の chain 検証"
+      ],
+      [
+        190,
+        "## 7. 導入順と受け入れ条件"
+      ],
+      [
+        202,
+        "## 8. 未決事項"
+      ],
+      [
+        211,
+        "## 運用モードと安全分類 — 2026-10-08"
+      ],
+      [
+        301,
+        "## 共通post-commit challengeとremote status — 2026-10-08"
+      ],
+      [
+        307,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        313,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        322,
+        "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+    "lines": 246,
+    "bytes": 40975,
+    "sha256": "de4435a333e023fe870f0e5dd218a9a7e53e2488e1662436f7a0ba15c1364004",
+    "headings": [
+      [
+        1,
+        "# RFC-0010: Permissionless PALW Panel binding and claim completion"
+      ],
+      [
+        21,
+        "## 0. Decision proposed"
+      ],
+      [
+        33,
+        "### 0.1 New verification profiles — 2026-10-06"
+      ],
+      [
+        49,
+        "### 0.2 Model acquisition outside consensus — 2026-10-10後続改定"
+      ],
+      [
+        70,
+        "## 1. Current rule and trust boundary"
+      ],
+      [
+        78,
+        "## 2. Required properties and attack model"
+      ],
+      [
+        90,
+        "## 3. Proposed state machine"
+      ],
+      [
+        92,
+        "### 3.1 Seal a claim before its Panel entropy is known"
+      ],
+      [
+        100,
+        "### 3.2 Freeze the eligible population and draw policy"
+      ],
+      [
+        108,
+        "### 3.3 Supply entropy that the binder cannot choose"
+      ],
+      [
+        128,
+        "### 3.4 Bind on an ordinary chain transition"
+      ],
+      [
+        134,
+        "### 3.4a Verification challenges are a separate contract (2026-10-08)"
+      ],
+      [
+        144,
+        "### 3.5 Unavailability and a finite fallback"
+      ],
+      [
+        150,
+        "## 4. Bond weight and canonical tickets"
+      ],
+      [
+        158,
+        "## 5. Completing a claim without the existing fleet"
+      ],
+      [
+        173,
+        "## 6. Concrete implementation changes"
+      ],
+      [
+        187,
+        "## 7. Migration and compatibility"
+      ],
+      [
+        193,
+        "## 8. Failure cases the design must settle"
+      ],
+      [
+        205,
+        "## 9. Activation gates"
+      ],
+      [
+        213,
+        "## 10. Decision boundary"
+      ],
+      [
+        217,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        223,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        232,
+        "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+      ],
+      [
+        238,
+        "## 改定 — 2026-10-12（Panel=1暫定mode・有界の交代・正の証拠を必須にしたFinal：提案）"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+    "lines": 746,
+    "bytes": 124418,
+    "sha256": "7b90b55124990629f5b00ab4b14ac189edb3bb2a22416ee493bf7ca6e229b083",
+    "headings": [
+      [
+        1,
+        "# RFC-0011: Permissionless model onboarding with probabilistic constraint verification and court on dispute"
+      ],
+      [
+        14,
+        "## 2026-10-09 改定 — 登録IDとモデル内容の永久不変binding"
+      ],
+      [
+        28,
+        "## 0. Decision requested"
+      ],
+      [
+        42,
+        "## 1. Evidence: why the Huihui Qwen3.5-9B registration stopped"
+      ],
+      [
+        58,
+        "## 2. Why 2M is more than a CPU problem"
+      ],
+      [
+        67,
+        "## 3. Proposed interface and trust separation"
+      ],
+      [
+        98,
+        "## 4. Admission and long-context changes"
+      ],
+      [
+        100,
+        "### A. Make today's 9B failure explainable and fixable without raising limits"
+      ],
+      [
+        104,
+        "### B. Open a safe path above 32,783 positions"
+      ],
+      [
+        110,
+        "### C. Keep execution exact; make normal verification probabilistic"
+      ],
+      [
+        118,
+        "### D. Resource envelopes, not fixed fleet tiers or architecture names"
+      ],
+      [
+        124,
+        "## 5. Implementation order and release gates"
+      ],
+      [
+        137,
+        "## 6. Explicit non-goals and unresolved questions"
+      ],
+      [
+        141,
+        "## 7. The 90% claim: denominator, numerator, and feasibility ceiling"
+      ],
+      [
+        155,
+        "## 8. Current evidence, and how much remains unproven"
+      ],
+      [
+        163,
+        "### 8.1 Recount of the checked-in evidence, not a projected success rate"
+      ],
+      [
+        189,
+        "## 9. Required coverage work, selected by measured lost repositories"
+      ],
+      [
+        205,
+        "## 10. Reproducible census, experiment, and release decision"
+      ],
+      [
+        216,
+        "## 11. No hidden registration blocker: exhaustive gate-closure contract"
+      ],
+      [
+        220,
+        "### 11.1 Inventory every gate, not only the first refusal"
+      ],
+      [
+        237,
+        "### 11.2 Exact duplicates must be idempotent, without inventing a new mandatory registry"
+      ],
+      [
+        245,
+        "### 11.3 A proof obligation for “more hardware solves it”"
+      ],
+      [
+        249,
+        "### 11.4 Zero-surprise acceptance test and permitted language"
+      ],
+      [
+        257,
+        "## 12. Concrete remaining limits: replace aggregate cliffs, retain bounded verification"
+      ],
+      [
+        275,
+        "## 13. Implementable route to removing the cliffs"
+      ],
+      [
+        277,
+        "### 13.1 Verification-plan admission; probabilistic execution acceptance"
+      ],
+      [
+        289,
+        "### 13.2 Segments preserve the model; they do not shorten its context"
+      ],
+      [
+        295,
+        "### 13.3 Cheap registration is not cheap correctness certification"
+      ],
+      [
+        301,
+        "### 13.4 Deterministic eligibility, not a promise of immediate inclusion"
+      ],
+      [
+        307,
+        "## 14. Required evidence bundle and completion checklist"
+      ],
+      [
+        332,
+        "## 15. Sampling-first / court-on-dispute (2026-10-06 decision)"
+      ],
+      [
+        334,
+        "### 15.1 What is accepted probabilistically"
+      ],
+      [
+        342,
+        "### 15.2 Constraint map and checker choices"
+      ],
+      [
+        361,
+        "### 15.3 Bind first, challenge later, preserve replay determinism"
+      ],
+      [
+        373,
+        "### 15.4 Whole-claim error budget and adversary"
+      ],
+      [
+        383,
+        "### 15.5 Final and exact dispute handling"
+      ],
+      [
+        399,
+        "### 15.6 Kimi K3 and large-model feasibility gate"
+      ],
+      [
+        407,
+        "### 15.7 Activation tests and implementation boundaries"
+      ],
+      [
+        415,
+        "### 15.8 Primary sources and what they establish"
+      ],
+      [
+        424,
+        "### 15.9 Selected research basis: economic challenge, MatMul-first checks and bounded disputes"
+      ],
+      [
+        446,
+        "#### Implementation sequence and the measurement that decides it"
+      ],
+      [
+        468,
+        "#### Economic deterrence is not the cryptographic error bound"
+      ],
+      [
+        486,
+        "## 16. Model extensibility without a VM (2026-10-06 revision)"
+      ],
+      [
+        488,
+        "### 16.1 Fixed policy, changed extension mechanism"
+      ],
+      [
+        506,
+        "### 16.2 Registration outcomes, independently of hardware"
+      ],
+      [
+        521,
+        "### 16.3 Extension contract"
+      ],
+      [
+        541,
+        "### 16.4 Recalculate coverage without fictional VM successes"
+      ],
+      [
+        566,
+        "### 16.5 Additional completion tests"
+      ],
+      [
+        576,
+        "## 17. Three-stage model onboarding with post-commit conformance (2026-10-08)"
+      ],
+      [
+        610,
+        "### 17.1 Stage A — Static Admission"
+      ],
+      [
+        623,
+        "### 17.2 Stage B — Beacon Conformance"
+      ],
+      [
+        649,
+        "### 17.3 Stage C — Active Eligibility"
+      ],
+      [
+        674,
+        "### 17.4 Kernel extension and release evidence"
+      ],
+      [
+        688,
+        "## 18. Coverage target restated — 2026-10-08 (user decision)"
+      ],
+      [
+        721,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        727,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        736,
+        "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+      ],
+      [
+        742,
+        "## 改定 — 2026-10-12（BeaconConformanceとbootstrap exact sourceの型分離：提案）"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+    "lines": 607,
+    "bytes": 57041,
+    "sha256": "95a70735174361d070ca69e17f44907f70bb8ee30f25a9ea77e8c7e5c728b9f9",
+    "headings": [
+      [
+        1,
+        "# RFC-0012 — PALW-only consensus and native EVM settlement: retire DNS validators and their reorg veto"
+      ],
+      [
+        40,
+        "## 0. Decision"
+      ],
+      [
+        62,
+        "## 1. What must actually change in today's code"
+      ],
+      [
+        88,
+        "## 2. One authority, without an unadvertised replacement committee"
+      ],
+      [
+        115,
+        "### 2.1 Model acquisition non-interference, allocation and Rule E — 2026-10-10後続改定"
+      ],
+      [
+        140,
+        "## 3. What “settled” means after DNS-final is gone"
+      ],
+      [
+        187,
+        "### 3.1 Publication history is separate from the current certificate"
+      ],
+      [
+        210,
+        "## 4. Native EVM bridge: one ledger transition, no validator approval"
+      ],
+      [
+        212,
+        "### 4.1 Deposit / withdrawal invariants"
+      ],
+      [
+        239,
+        "### 4.2 Progress and reader-visible heads"
+      ],
+      [
+        263,
+        "### 4.3 Pruning import authority and repeatable recovery"
+      ],
+      [
+        301,
+        "## 5. Retire the overlay without erasing history or locking users' bonds"
+      ],
+      [
+        327,
+        "## 6. Monetary policy: no DNS reward, no extra issuance"
+      ],
+      [
+        356,
+        "## 7. RPC, tooling and operator migration"
+      ],
+      [
+        373,
+        "## 8. Implementation sequence and release gates"
+      ],
+      [
+        407,
+        "## 9. Completion and non-claims"
+      ],
+      [
+        418,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        424,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        433,
+        "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+      ],
+      [
+        439,
+        "## 改定 — 2026-10-12（モデル配分とブロック生成機会の接続：提案）"
+      ],
+      [
+        449,
+        "## Spec closures — 2026-10-15"
+      ],
+      [
+        461,
+        "### R12-AUTHORITY — every selection entry point, ordering and assumptions"
+      ],
+      [
+        488,
+        "### R12-SETTLE — `PalwSettlementPolicyV1` parameters and invariants"
+      ],
+      [
+        526,
+        "### R12-BRIDGE — native accounting"
+      ],
+      [
+        534,
+        "### R12-HEADS — durability and reader coherence"
+      ],
+      [
+        548,
+        "### R12-MONEY — split, fees and retained liabilities"
+      ],
+      [
+        566,
+        "### R12-OPS — capabilities, retired kinds, release procedure"
+      ],
+      [
+        590,
+        "### ALL-MODEL"
+      ],
+      [
+        596,
+        "## ユーザー方針 2026-10-15 による改定"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+    "lines": 394,
+    "bytes": 36800,
+    "sha256": "8c9c2a6e3b5cb2b1c95d62da8a60670d826b5ecd27e56c661819a171102c2df0",
+    "headings": [
+      [
+        1,
+        "# RFC-0013: Reproducible layouts and resource-bounded model onboarding tools"
+      ],
+      [
+        22,
+        "## 0. 日本語での結論と範囲"
+      ],
+      [
+        37,
+        "## 1. Evidence and its limits"
+      ],
+      [
+        39,
+        "### 1.1 Pinned inputs"
+      ],
+      [
+        53,
+        "### 1.2 Attempt-by-attempt diagnosis"
+      ],
+      [
+        74,
+        "### 1.3 The offline sizing result is not one unit over"
+      ],
+      [
+        91,
+        "### 1.4 What the old pack could not reproduce"
+      ],
+      [
+        107,
+        "## 2. Coverage by existing RFCs — no duplicate protocol redesign"
+      ],
+      [
+        124,
+        "## 3. Exact layout is data, not a search result to guess later"
+      ],
+      [
+        148,
+        "## 4. Target-ruleset admission and useful diagnostics"
+      ],
+      [
+        168,
+        "## 5. Large-artifact independent conformance"
+      ],
+      [
+        194,
+        "## 6. Exact calibration interchange and resumable stages"
+      ],
+      [
+        218,
+        "## 7. Release tests and observable completion"
+      ],
+      [
+        242,
+        "## 8. Implementation boundary of the accompanying patch"
+      ],
+      [
+        263,
+        "## 9. Beacon-aware packs and asynchronous conformance evidence (2026-10-08)"
+      ],
+      [
+        310,
+        "### 9.1 Resume, retries and changed inputs"
+      ],
+      [
+        335,
+        "### 9.2 Independent bounded checks and release cases"
+      ],
+      [
+        350,
+        "## 10. Immutable identity and model-bond allocation evidence — 2026-10-10後続改定"
+      ],
+      [
+        375,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        381,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        390,
+        "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+    "lines": 1027,
+    "bytes": 86867,
+    "sha256": "458d6b61eeaaedf943508a960215a02e10127e41f4efefd03b2026c877dd21f9",
+    "headings": [
+      [
+        1,
+        "# RFC-0014 — Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ"
+      ],
+      [
+        12,
+        "## 2026-10-09 登録不変性との整合"
+      ],
+      [
+        34,
+        "## 0. 採用する設計"
+      ],
+      [
+        72,
+        "## 1. 現行コードの到達点"
+      ],
+      [
+        93,
+        "## 2. 安全性の定義と仮定"
+      ],
+      [
+        95,
+        "### 2.1 検出後の条件付き不変条件"
+      ],
+      [
+        127,
+        "### 2.2 確率的検査の残余リスク"
+      ],
+      [
+        143,
+        "### 2.3 公開性と検出責任"
+      ],
+      [
+        154,
+        "## 3. Dispute Completenessをclass admissionへ追加する"
+      ],
+      [
+        156,
+        "### 3.1 提案するimmutable descriptor"
+      ],
+      [
+        184,
+        "### 3.2 admissionで必須とする五つの性質"
+      ],
+      [
+        201,
+        "### 3.3 class lifecycle"
+      ],
+      [
+        222,
+        "### 3.4 G14に含めるpost-commit challenge再現性（2026-10-08）"
+      ],
+      [
+        253,
+        "## 4. 階層commitmentと独立した局所化"
+      ],
+      [
+        255,
+        "### 4.1 認証するtree"
+      ],
+      [
+        266,
+        "### 4.2 比較と降下"
+      ],
+      [
+        280,
+        "### 4.3 保持するmaterial"
+      ],
+      [
+        290,
+        "## 5. held/fusedのDA gapを閉じる"
+      ],
+      [
+        292,
+        "### 5.1 retrievalとadjudicationを分離する"
+      ],
+      [
+        316,
+        "### 5.2 回答の処理"
+      ],
+      [
+        328,
+        "### 5.3 exact semantics"
+      ],
+      [
+        335,
+        "## 6. seat/non-seat共通のfraud filer"
+      ],
+      [
+        337,
+        "### 6.1 仮称 palw_fraud_filer"
+      ],
+      [
+        358,
+        "### 6.2 現行moduleからの接続"
+      ],
+      [
+        373,
+        "### 6.3 node/RPCと再起動"
+      ],
+      [
+        384,
+        "## 7. non-seatの追及予約とFinal"
+      ],
+      [
+        386,
+        "### 7.1 現行との差分"
+      ],
+      [
+        393,
+        "### 7.2 仮称 PalwDisputeReservationV1"
+      ],
+      [
+        421,
+        "### 7.3 Final条件"
+      ],
+      [
+        449,
+        "### 7.4 sessionの先取りで正直なverifierを排除しない"
+      ],
+      [
+        473,
+        "## 8. challengerの経済条件と処罰"
+      ],
+      [
+        492,
+        "## 9. Valid receiptの検証範囲"
+      ],
+      [
+        519,
+        "## 10. ADR0171との接続"
+      ],
+      [
+        545,
+        "## 11. wire・合意移行"
+      ],
+      [
+        572,
+        "## 12. 実装対象と段階ごとの出口条件"
+      ],
+      [
+        593,
+        "## 13. 必須の敵対的試験とrelease gate"
+      ],
+      [
+        595,
+        "### 13.1 一人のfresh outsider"
+      ],
+      [
+        620,
+        "### 13.2 検証レベル"
+      ],
+      [
+        631,
+        "### 13.3 activationを拒否する条件"
+      ],
+      [
+        645,
+        "## 14. baseline確認記録と未決パラメータ"
+      ],
+      [
+        652,
+        "# 3 + 21 passed"
+      ],
+      [
+        657,
+        "# 11 + 1 + 9 passed"
+      ],
+      [
+        679,
+        "## 15. Pinned source references"
+      ],
+      [
+        741,
+        "## 16. モデル入手への不介入と拘束bond連動coinbase配分（2026-10-10後続改定）"
+      ],
+      [
+        743,
+        "### 16.1 採択方針と旧方針の撤回"
+      ],
+      [
+        753,
+        "### 16.2 配布と合意の境界"
+      ],
+      [
+        761,
+        "### 16.3 固定モデルとの同一性"
+      ],
+      [
+        770,
+        "### 16.4 モデル資格とclaim証拠のscope"
+      ],
+      [
+        806,
+        "### 16.5 重複しないモデル別miner元本"
+      ],
+      [
+        819,
+        "### 16.6 モデル別coinbase allocation"
+      ],
+      [
+        834,
+        "### 16.7 個別bond予算との同時制約"
+      ],
+      [
+        841,
+        "### 16.8 独立受入matrix"
+      ],
+      [
+        848,
+        "### 16.9 資料と記録の位置づけ"
+      ],
+      [
+        854,
+        "### 16.10 規則Eとfork-choiceへの接続"
+      ],
+      [
+        861,
+        "### 16.11 ECON・MEAS: 公開参加の経済優位"
+      ],
+      [
+        875,
+        "### 16.12 未決パラメータとactivation"
+      ],
+      [
+        883,
+        "### 16.13 Forced Public Retrievalの撤回と検証保証の変更"
+      ],
+      [
+        893,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        899,
+        "## Bond予算・総影響保存の改定 — 2026-10-10"
+      ],
+      [
+        908,
+        "## 改定 — 2026-10-12（固定期限と有限終了、共通経済会計：提案）"
+      ],
+      [
+        925,
+        "## 改定 — 2026-10-19(異議があった claim だけ延長する期限、応答義務に基づく勝敗、court 提出経路の liveness と DDoS 対策:採用方針)"
+      ],
+      [
+        929,
+        "### A. 対話の回数(16 分岐・1 tile 16 位置の場合)"
+      ],
+      [
+        940,
+        "### B. 通常の期限と、係争の最終期限を分ける"
+      ],
+      [
+        956,
+        "### C. 「証明できなければ slash」を分ける"
+      ],
+      [
+        969,
+        "### D. 延長の濫用を防ぐ条件"
+      ],
+      [
+        976,
+        "### E. court 提出経路の liveness と DDoS 対策"
+      ],
+      [
+        1015,
+        "### F. 追加する合意仕様(Court Submission Liveness & Anti-DDoS)"
+      ],
+      [
+        1025,
+        "### G. 受入条件"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+    "lines": 966,
+    "bytes": 81639,
+    "sha256": "ed63475109cd6edd721ea85ac96dcd9687d9108ea9253b8dc2201941ed1a1112",
+    "headings": [
+      [
+        1,
+        "# RFC-0015 — Panel=0: 固定Panelからpermissionless verifierとobjective fraud proofへ移行する"
+      ],
+      [
+        26,
+        "## 0. 日本語での決定と有効化禁止条件"
+      ],
+      [
+        49,
+        "## 1. 必須のactivation gate: Public Fraud Prosecution Complete"
+      ],
+      [
+        51,
+        "### 1.1 G14の内容"
+      ],
+      [
+        94,
+        "### 1.2 gate未達の取り扱い"
+      ],
+      [
+        107,
+        "## 2. 検証する役割と安全性の前提"
+      ],
+      [
+        130,
+        "## 3. なぜ現行のseats/quorumを0にするだけでは成立しないか"
+      ],
+      [
+        150,
+        "## 4. 選択する新modeとclaim lifecycle"
+      ],
+      [
+        152,
+        "### 4.1 OptimisticPublicVerification"
+      ],
+      [
+        177,
+        "### 4.2 Challengeableのadmission"
+      ],
+      [
+        194,
+        "### 4.3 正の検査receiptの位置づけ"
+      ],
+      [
+        209,
+        "## 5. public materialと後から参加するverifier"
+      ],
+      [
+        242,
+        "## 6. challenge window、Final、censorshipとspam"
+      ],
+      [
+        244,
+        "### 6.1 時計"
+      ],
+      [
+        263,
+        "### 6.2 Final predicate"
+      ],
+      [
+        282,
+        "### 6.3 inclusion仮定と資源独占"
+      ],
+      [
+        295,
+        "## 7. 通常時の検査、soundnessと監視市場"
+      ],
+      [
+        297,
+        "### 7.1 実際に監視する主体"
+      ],
+      [
+        312,
+        "### 7.2 確率的checker"
+      ],
+      [
+        327,
+        "### 7.3 検査サービスの報酬"
+      ],
+      [
+        337,
+        "## 8. Panel担保を外した後の経済設計"
+      ],
+      [
+        339,
+        "### 8.1 新しいproducer reservation"
+      ],
+      [
+        359,
+        "### 8.2 convictionとbounty"
+      ],
+      [
+        380,
+        "### 8.3 Class-Independent Bond Production, Reward and Final Weight Caps — 2026-10-10追加決定"
+      ],
+      [
+        382,
+        "#### 8.3.1 目的・claim容量・三つの総量上限"
+      ],
+      [
+        419,
+        "#### 8.3.2 全報酬・確定weight経路の予約と清算"
+      ],
+      [
+        444,
+        "#### 8.3.3 共通DAA拘束と責任担保の分離"
+      ],
+      [
+        468,
+        "#### 8.3.4 同額資本の分割・再登録・別経路による迂回禁止"
+      ],
+      [
+        484,
+        "#### 8.3.5 現行issuance slotsとの関係"
+      ],
+      [
+        500,
+        "#### 8.3.6 経済安全性の判定と未確定値"
+      ],
+      [
+        525,
+        "#### 8.3.7 予約額引下げと公開検証・責任担保・共通DAA拘束の一体設計"
+      ],
+      [
+        544,
+        "### 8.4 Claim容量の倍率とbond当たり総影響の保存"
+      ],
+      [
+        568,
+        "### 8.5 モデル別bond連動coinbase allocationと入手への不介入"
+      ],
+      [
+        574,
+        "#### 8.5.1 集計と配分"
+      ],
+      [
+        596,
+        "#### 8.5.2 個別bond capとの同時制約"
+      ],
+      [
+        606,
+        "#### 8.5.3 公開対閉鎖の経済評価"
+      ],
+      [
+        621,
+        "#### 8.5.4 completion / activation"
+      ],
+      [
+        629,
+        "#### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）"
+      ],
+      [
+        678,
+        "## 9. work weight、PALW blockとsettlement"
+      ],
+      [
+        702,
+        "## 10. 将来のnode-verifiable compact proofとの関係"
+      ],
+      [
+        721,
+        "## 11. 移行・wire互換・公開表示"
+      ],
+      [
+        723,
+        "### 11.1 段階"
+      ],
+      [
+        738,
+        "### 11.2 互換性"
+      ],
+      [
+        753,
+        "### 11.3 利用者に示す情報"
+      ],
+      [
+        762,
+        "## 12. 実装変更の対応表"
+      ],
+      [
+        780,
+        "## 13. 必須試験とactivation checklist"
+      ],
+      [
+        782,
+        "### 13.1 前提gateの否定試験"
+      ],
+      [
+        795,
+        "### 13.2 Panel=0 node E2E"
+      ],
+      [
+        826,
+        "### 13.3 全て満たすまで有効化しない"
+      ],
+      [
+        852,
+        "## 14. 本RFCで決めない値と現状"
+      ],
+      [
+        875,
+        "## 15. 参照"
+      ],
+      [
+        922,
+        "## Mission alignment amendment — 2026-10-07"
+      ],
+      [
+        928,
+        "## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定"
+      ],
+      [
+        934,
+        "## 改定 — 2026-10-12（Panel=0は当面有効化しない：提案）"
+      ],
+      [
+        940,
+        "## 実装状況 — 2026-10-15（implemented, dormant, unverified）"
+      ],
+      [
+        952,
+        "## ユーザー方針 2026-10-15 第4回 — §8.5.5 の配分式に階層係数"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+    "lines": 672,
+    "bytes": 60599,
+    "sha256": "22623ac1bd4581c372daf78d13755c8b1305f69233edc0ceff50306c180201d0",
+    "headings": [
+      [
+        1,
+        "# RFC-0016 — bond加重のブロック生成機会と弾力的Final容量: 物理ブロック機会をbondへ接続する"
+      ],
+      [
+        38,
+        "## ユーザー判断 2026-10-15（第1回: review、拘束）"
+      ],
+      [
+        49,
+        "## ユーザー判断 2026-10-15（第2回: 設計決定、本番値・有効化の承認ではない）"
+      ],
+      [
+        60,
+        "## ユーザー判断 2026-10-15（第3回: 設計採用、本番値・有効化の承認ではない）"
+      ],
+      [
+        68,
+        "## 0. 要約"
+      ],
+      [
+        87,
+        "## 1. レビュー主張の検証"
+      ],
+      [
+        112,
+        "## 2. Panel=0の前提（決定済み）"
+      ],
+      [
+        114,
+        "### 2.1 Kernel claimとそれを運ぶblock（事実）"
+      ],
+      [
+        123,
+        "### 2.2 B/R/Fの予約（D-P1/P2で決定）"
+      ],
+      [
+        133,
+        "### 2.3 資金の区別（D-P3で決定）"
+      ],
+      [
+        139,
+        "### 2.4 clipの禁止（D-P4で決定、code `eee1710ce`、休眠・未build）"
+      ],
+      [
+        151,
+        "### 2.5 coinbase採掘経路とPanel（D-P5で決定）"
+      ],
+      [
+        157,
+        "## 3. 拘束期間・発行能力の調整とmode切替（D-H、ADR-0176と整合）"
+      ],
+      [
+        161,
+        "### 3.1 調整の対象"
+      ],
+      [
+        178,
+        "### 3.2 Panel=0とPanel=1の比較"
+      ],
+      [
+        186,
+        "### 3.3 能力の回復と担保の解放は別"
+      ],
+      [
+        193,
+        "### 3.4 短期のburst上限"
+      ],
+      [
+        198,
+        "### 3.5 mode切替"
+      ],
+      [
+        205,
+        "### 3.6 値の決め方（3段階）"
+      ],
+      [
+        221,
+        "## 4. 用語と記号"
+      ],
+      [
+        233,
+        "## 5. 目標と保持する制約"
+      ],
+      [
+        252,
+        "## 6. 物理ブロックと報酬権利の分析（背景）"
+      ],
+      [
+        254,
+        "### 6.1 経済的誘導による収束の条件（物理層を変えない場合）"
+      ],
+      [
+        266,
+        "### 6.2 反例"
+      ],
+      [
+        279,
+        "## 7. 物理層の設計空間（D-Q1）— V+以外は検討した代替案（D-V1）"
+      ],
+      [
+        281,
+        "### 7.1 手段"
+      ],
+      [
+        291,
+        "### 7.2 保持する制約に対する評価"
+      ],
+      [
+        301,
+        "### 7.3 反例に対する評価"
+      ],
+      [
+        314,
+        "## 8. 採用設計 V+: 事前発行権 ＋ σ上限付きの途中再発行 ＋ 抽選前のquote（D-V1で採用、値は測定待ち）"
+      ],
+      [
+        316,
+        "### 8.1 規則案"
+      ],
+      [
+        338,
+        "### 8.2 G1pの達成範囲"
+      ],
+      [
+        343,
+        "### 8.3 主なリスク"
+      ],
+      [
+        350,
+        "### 8.4 時計とheartbeatの保護（K4）"
+      ],
+      [
+        363,
+        "### 8.5 その他の手段の位置付け（検討した代替案）"
+      ],
+      [
+        373,
+        "### 8.6 `σ`と`k`の導出（D-σk）"
+      ],
+      [
+        420,
+        "## 9. B+（報酬権利だけ）— 検討した代替案（D-V1）"
+      ],
+      [
+        429,
+        "## 10. 弾力的Final容量（Panel経路）"
+      ],
+      [
+        439,
+        "## 11. 計測と報告"
+      ],
+      [
+        455,
+        "## 12. 受入試験"
+      ],
+      [
+        459,
+        "### 12.1 ユーザー指定"
+      ],
+      [
+        471,
+        "### 12.2 R5の追加試験"
+      ],
+      [
+        483,
+        "### 12.3 第2回の決定に対応する試験"
+      ],
+      [
+        498,
+        "### 12.4 時計・heartbeat（V+）"
+      ],
+      [
+        507,
+        "### 12.5 敵対的試験"
+      ],
+      [
+        512,
+        "## 13. codeは決定に従う（選択肢ではない）"
+      ],
+      [
+        522,
+        "## 14. 有効化gate"
+      ],
+      [
+        535,
+        "### 14.1 本RFCで決めない値と判断"
+      ],
+      [
+        554,
+        "### 14.2 ユーザー判断 2026-10-15（V2〜V11）の実装状況"
+      ],
+      [
+        572,
+        "## 16. 実装（休眠、未有効化、未build）"
+      ],
+      [
+        577,
+        "### 16.1 lead decision（2026-10-15、ユーザーreview待ち）"
+      ],
+      [
+        585,
+        "### 16.2 実装の範囲"
+      ],
+      [
+        631,
+        "## 15. 参照"
+      ],
+      [
+        648,
+        "## ユーザー方針 2026-10-15 による改定"
+      ],
+      [
+        661,
+        "## ユーザー方針 2026-10-15 第4回 — `P_m` は階層係数 `c_m` を含み、一度だけ適用する"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+    "lines": 45,
+    "bytes": 5080,
+    "sha256": "9928a16fd00c9de212cc78a9b85b4d0f82933d32c8cd89cf74149da8e264fda8",
+    "headings": [
+      [
+        1,
+        "# RFC-0017 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3(モデル単位の審査は廃止)"
+      ],
+      [
+        9,
+        "## 現行仕様 — ユーザー判断 2026-10-15 第 4 回・第 5 回"
+      ],
+      [
+        43,
+        "## 廃止した審査の履歴"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+    "lines": 429,
+    "bytes": 56280,
+    "sha256": "3672c8774d690749527351c5276e622f19a623798a16e29386c2265392b28390",
+    "headings": [
+      [
+        1,
+        "# RFC-0018 — DAGを最大限に活用する設計変更: 多モデル並行生成、特権なきPanel anchor、SecurityCertified(Gate C)とDNS廃止後の収束"
+      ],
+      [
+        23,
+        "## ユーザー方針 2026-10-15(本RFCを拘束する)"
+      ],
+      [
+        29,
+        "## 0. 要約と目標状態"
+      ],
+      [
+        42,
+        "## 1. レビュー主張の検証(STEP 1)"
+      ],
+      [
+        58,
+        "### 1.1 レビューが扱っていなかった点"
+      ],
+      [
+        71,
+        "## 2. 主要な所見"
+      ],
+      [
+        83,
+        "## 3. liveと休眠の対応"
+      ],
+      [
+        98,
+        "## 4. 設計変更1: 多モデル同時生成とRED取り込み(`palw_dag_sibling_attribution_v1`)"
+      ],
+      [
+        100,
+        "### 4.1 不変条件"
+      ],
+      [
+        109,
+        "### 4.2 規則(fence以後、accepting blockのDAAで判定)"
+      ],
+      [
+        113,
+        "### 4.3 mergeset上限とREDの期限"
+      ],
+      [
+        119,
+        "### 4.4 計測と受入試験"
+      ],
+      [
+        129,
+        "## 5. 設計変更2: Panel anchorの特権除去(`palw_panel_anchor_permissionless_v1`)"
+      ],
+      [
+        131,
+        "### 5.1 候補の評価"
+      ],
+      [
+        141,
+        "### 5.2 規則(fence以後、anchor blockのDAAで判定。lane Aより優先)"
+      ],
+      [
+        149,
+        "### 5.3 grinding上界"
+      ],
+      [
+        153,
+        "### 5.4 未解決"
+      ],
+      [
+        157,
+        "## 6. 設計変更3: DNS廃止後の収束 — rule E v2(`palw_rule_e_participation_v2`)"
+      ],
+      [
+        159,
+        "### 6.1 規則(fence以後、現職のDAAで判定。rule E v1を同じ高さ以下で要する)"
+      ],
+      [
+        167,
+        "### 6.2 性質"
+      ],
+      [
+        174,
+        "### 6.3 Gate Cとの組"
+      ],
+      [
+        178,
+        "### 6.4 creditなし区間の扱い"
+      ],
+      [
+        182,
+        "### 6.5 受入試験"
+      ],
+      [
+        191,
+        "## 7. Gate C — `SecurityCertified`(`palw_independently_work_certified_v1`、ユーザー方針により採用)"
+      ],
+      [
+        193,
+        "### 7.1 二つの状態"
+      ],
+      [
+        208,
+        "### 7.2 認証述語(前提に基づく認証)"
+      ],
+      [
+        220,
+        "### 7.3 前提が崩れた場合の影響(報告値、設計の変更条件ではない)"
+      ],
+      [
+        236,
+        "### 7.4 合意creditの加算点(一箇所)"
+      ],
+      [
+        240,
+        "### 7.5 frontierとsettlementの単一規則"
+      ],
+      [
+        244,
+        "### 7.5a frontierの巻き戻し(conviction後の再計算)"
+      ],
+      [
+        252,
+        "### 7.6 寿命"
+      ],
+      [
+        256,
+        "### 7.7 pruning progress"
+      ],
+      [
+        260,
+        "### 7.8 settlementの意味とRPC"
+      ],
+      [
+        268,
+        "### 7.9 ADR-0177の変更(明示)"
+      ],
+      [
+        272,
+        "### 7.10 genesisモデルと70B"
+      ],
+      [
+        276,
+        "### 7.11 受入試験 — 必須の最上位試験「300M閉鎖モデル/自前Panel攻撃」(T-0)"
+      ],
+      [
+        292,
+        "## 8. DAG幅(`palw_dag_width_schedule_v1`、仕様とstub)"
+      ],
+      [
+        294,
+        "### 8.1 現状"
+      ],
+      [
+        298,
+        "### 8.2 RED率の推定(Poisson、λ = 2·d/T、`palw_dag_width_red_permille_v1`)"
+      ],
+      [
+        310,
+        "### 8.3 分析"
+      ],
+      [
+        317,
+        "### 8.4 stubの理由"
+      ],
+      [
+        321,
+        "## 9. 他RFC・ADRとの関係"
+      ],
+      [
+        330,
+        "## 10. 受入試験の一覧"
+      ],
+      [
+        334,
+        "## 11. 本RFCで決めない値"
+      ],
+      [
+        350,
+        "## 12. ユーザー判断が必要な事項"
+      ],
+      [
+        361,
+        "## 13. 実装(休眠、未build、未試験)"
+      ],
+      [
+        363,
+        "### 13.1 fenceと割り当て"
+      ],
+      [
+        373,
+        "### 13.2 module"
+      ],
+      [
+        379,
+        "### 13.3 Gate Cの読み取り箇所(全て、fence未満は従来どおり)"
+      ],
+      [
+        394,
+        "### 13.4 driver"
+      ],
+      [
+        398,
+        "### 13.5 compile上のリスク(未build)"
+      ],
+      [
+        406,
+        "## 14. 有効化gate"
+      ],
+      [
+        420,
+        "## 15. 参照"
+      ],
+      [
+        427,
+        "## 改訂(2026-10-17)— 共有 frontier と独立な進行"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0019-annual-model-upgrade.md",
+    "lines": 446,
+    "bytes": 60831,
+    "sha256": "ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e",
+    "headings": [
+      [
+        1,
+        "# RFC-0019 — 年次モデル追加フォーク: 段階的ソフトウェア展開・年次モデルカタログ・合意は不変"
+      ],
+      [
+        25,
+        "## ユーザー方針 2026-10-15(本RFCを拘束する)"
+      ],
+      [
+        35,
+        "## 0. 要約"
+      ],
+      [
+        45,
+        "## 1. 用語"
+      ],
+      [
+        56,
+        "## 2. Solana(Agave)からの参照 — 採ったパターンと採らなかったもの"
+      ],
+      [
+        71,
+        "## 3. 合意に入るもの・入らないもの"
+      ],
+      [
+        83,
+        "## 4. 運用 lifecycle"
+      ],
+      [
+        85,
+        "### 4.1 状態"
+      ],
+      [
+        100,
+        "### 4.2 中止(ABORTED)は別の展開である"
+      ],
+      [
+        104,
+        "## 5. カタログの型と規則"
+      ],
+      [
+        106,
+        "### 5.1 型(`consensus/core/src/palw_annual_catalog_v1.rs`)"
+      ],
+      [
+        117,
+        "### 5.2 正規の符号化と root"
+      ],
+      [
+        127,
+        "### 5.3 連鎖の規則(MUST、`PalwAnnualCatalogChainV1::validate`、`:195`)"
+      ],
+      [
+        135,
+        "### 5.4 追加のみ(ADR-0175)"
+      ],
+      [
+        142,
+        "### 5.5 genesis = edition 0"
+      ],
+      [
+        147,
+        "## 6. 階層規則"
+      ],
+      [
+        149,
+        "### 6.1 `model_tier_permille`"
+      ],
+      [
+        159,
+        "### 6.2 registry の `Active` は 1.0 ではない"
+      ],
+      [
+        163,
+        "### 6.3 一度だけ、`A_m` に"
+      ],
+      [
+        170,
+        "### 6.4 受理 DAA と境界の規則(権利を二重に発行しない)"
+      ],
+      [
+        179,
+        "### 6.5 階層は経済だけ — Gate C は全 edition に"
+      ],
+      [
+        183,
+        "### 6.6 掲載は取得可能性ではない"
+      ],
+      [
+        187,
+        "## 7. 既存基盤への対応"
+      ],
+      [
+        189,
+        "### 7.1 `ForkActivation` と `Params`"
+      ],
+      [
+        195,
+        "### 7.2 identity(`config/params/identity.rs`)— 切替まで旧新は同じ identity"
+      ],
+      [
+        203,
+        "### 7.3 fork id(`fork_id_v1.rs`)— 切替前は警告、切替後は拒否"
+      ],
+      [
+        211,
+        "### 7.4 `palw_model_registry_v1`"
+      ],
+      [
+        215,
+        "### 7.5 ADR-0175・ADR-0179 との統合"
+      ],
+      [
+        220,
+        "### 7.6 P2P handshake — 新しい field を割り当てない"
+      ],
+      [
+        225,
+        "### 7.7 RPC / CLI"
+      ],
+      [
+        233,
+        "## 8. リリース手順"
+      ],
+      [
+        235,
+        "### 8.1 署名済みリリース manifest(`misaka/release-manifest/v1`)"
+      ],
+      [
+        239,
+        "### 8.2 検証(`verify`、運用者が install の前に実行)"
+      ],
+      [
+        253,
+        "### 8.3 自動実行しない"
+      ],
+      [
+        257,
+        "### 8.4 署名の運び方"
+      ],
+      [
+        261,
+        "### 8.5 時期案(提案であり検証済みの値ではない)"
+      ],
+      [
+        274,
+        "## 9. readiness の測定 — 投票しない"
+      ],
+      [
+        289,
+        "## 10. 互換性 — hard fork と soft fork"
+      ],
+      [
+        296,
+        "## 11. 受入試験"
+      ],
+      [
+        331,
+        "## 12. 最初の開発段階 — 同じカタログでの rolling upgrade(testnet-12 DAA 14,000)"
+      ],
+      [
+        346,
+        "### 12.1 次の段階 — ローカル LLM のモデル ID を**追加のみ**で有効化する年次 edition drill(2026-10-16 追加)"
+      ],
+      [
+        359,
+        "## 13. 本RFCで決めない値"
+      ],
+      [
+        375,
+        "## 14. ユーザー判断が必要な事項"
+      ],
+      [
+        384,
+        "## 15. 実装(休眠、未build、未試験)"
+      ],
+      [
+        386,
+        "### 15.1 fence と割り当て"
+      ],
+      [
+        396,
+        "### 15.2 module とファイル"
+      ],
+      [
+        404,
+        "### 15.3 driver"
+      ],
+      [
+        410,
+        "### 15.4 本 lane が実行したもの"
+      ],
+      [
+        416,
+        "### 15.5 compile 上のリスク(未build)"
+      ],
+      [
+        426,
+        "## 16. 有効化 gate"
+      ],
+      [
+        441,
+        "## 17. 参照"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0020-long-context-calibration-memory.md",
+    "lines": 187,
+    "bytes": 22702,
+    "sha256": "9ea21859e194f85dedd83868df1c397b982df9f65f30e34de281fa2a355f6fce",
+    "headings": [
+      [
+        1,
+        "# RFC-0020 — 長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない"
+      ],
+      [
+        19,
+        "## ユーザー方針 2026-10-16(本RFCを拘束する)"
+      ],
+      [
+        30,
+        "## 0. 要約"
+      ],
+      [
+        42,
+        "## 1. 範囲"
+      ],
+      [
+        55,
+        "## 2. 計測を先にする — RAM 計上モード(実装済み・未検証)"
+      ],
+      [
+        64,
+        "## 3. carry の二重保持を除く(実装済み・未検証)"
+      ],
+      [
+        74,
+        "## 4. lazy 重み(既存機能の既定値と案内)"
+      ],
+      [
+        85,
+        "## 5. attention のメモリ"
+      ],
+      [
+        87,
+        "### 5.1 監査: 全系列のスコア行列はどこにあるか(実施済み)"
+      ],
+      [
+        101,
+        "### 5.2 タイル化した厳密 attention(仕様、未実装)"
+      ],
+      [
+        119,
+        "### 5.3 統計との互換"
+      ],
+      [
+        126,
+        "### 5.4 chunk を意識した observer(仕様、未実装)"
+      ],
+      [
+        130,
+        "### 5.5 位置の run 評価(実装済み・未検証)は chunk attention ではない"
+      ],
+      [
+        134,
+        "## 6. 32K を超える文脈(64K / 128K)"
+      ],
+      [
+        136,
+        "### 6.1 線形に増えるもの"
+      ],
+      [
+        145,
+        "### 6.2 carry のディスク退避(実装済み・未検証、opt-in)"
+      ],
+      [
+        149,
+        "### 6.3 KV 履歴の退避(仕様、未実装)"
+      ],
+      [
+        155,
+        "## 7. 検証"
+      ],
+      [
+        161,
+        "## 8. 実装順と状態"
+      ],
+      [
+        170,
+        "## 9. 32K の見積り(未計測)"
+      ],
+      [
+        182,
+        "## 10. 本RFCで決めないこと"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+    "lines": 23,
+    "bytes": 1628,
+    "sha256": "1d780be260b557208bf4bdf3310e09bb3b1b7f463d1dbc13cfe6a0f81b68183a",
+    "headings": [
+      [
+        1,
+        "# RFC-0021 — 設計凍結・例外変更手続きと文書の役割分離"
+      ],
+      [
+        10,
+        "## 方針"
+      ],
+      [
+        15,
+        "## 文書の役割"
+      ],
+      [
+        19,
+        "## 移行・検査"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+    "lines": 28,
+    "bytes": 2195,
+    "sha256": "753f83e076fc1228ddf8b29ae0520c9a61457ff66842da20d3fd31e773df4717",
+    "headings": [
+      [
+        1,
+        "# RFC-0022 — 初期 mainnet から画像・動画・モデル改善を外す適用範囲"
+      ],
+      [
+        10,
+        "## 1. 要求"
+      ],
+      [
+        14,
+        "## 2. 共通経路との分離"
+      ],
+      [
+        18,
+        "## 3. 検査"
+      ],
+      [
+        22,
+        "## 4. 再開"
+      ],
+      [
+        26,
+        "## 5. 非変更事項"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+    "lines": 65,
+    "bytes": 8202,
+    "sha256": "b7733389cb0462db4d3ce99def2c95d819c78178d61be0d3daaf6daf02449ab3",
+    "headings": [
+      [
+        1,
+        "# RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める"
+      ],
+      [
+        9,
+        "## 1. 設計目標"
+      ],
+      [
+        15,
+        "## 2. 現行規則(変更前の記録)"
+      ],
+      [
+        25,
+        "## 3. 段階 1 — 現行 frontier を保ち、足止め時間に上限を置く(次回 fence)"
+      ],
+      [
+        35,
+        "## 4. 段階 2 — 未解決 claim を局所管理する(別の休眠 fence)"
+      ],
+      [
+        51,
+        "## 5. 採らない案"
+      ],
+      [
+        60,
+        "## 6. 受入条件"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+    "lines": 593,
+    "bytes": 50698,
+    "sha256": "6f59e3c4e2c44b7ad3613d6326e5c0cae80764a6708a957dd9765d95bafe9a30",
+    "headings": [
+      [
+        1,
+        "# RFC-0024 — ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計(単一位置裁定・先読み開示・先行取得)"
+      ],
+      [
+        15,
+        "## 最新 branch との照合(2026-10-19 時点、g14/door-design)"
+      ],
+      [
+        39,
+        "## 0. 根拠・対象版・未確認事項"
+      ],
+      [
+        41,
+        "### 0.1 添付資料の位置づけ"
+      ],
+      [
+        53,
+        "### 0.2 既存実装から確認できること"
+      ],
+      [
+        65,
+        "### 0.3 本書で証明したとはしない事項"
+      ],
+      [
+        71,
+        "## 1. 問題と設計目標"
+      ],
+      [
+        84,
+        "## 2. 脅威モデルと保証の正確な範囲"
+      ],
+      [
+        86,
+        "### 2.1 維持する保証"
+      ],
+      [
+        95,
+        "### 2.2 明示する前提"
+      ],
+      [
+        102,
+        "### 2.3 最適化で削らないもの"
+      ],
+      [
+        106,
+        "## 3. 提案する全体経路"
+      ],
+      [
+        129,
+        "## 4. A — 最後の裁定を 1 位置に絞る"
+      ],
+      [
+        131,
+        "### 4.1 対象"
+      ],
+      [
+        137,
+        "### 4.2 局所化単位"
+      ],
+      [
+        143,
+        "### 4.3 算術"
+      ],
+      [
+        151,
+        "### 4.4 行レベル認証 — 本変更の重要な条件"
+      ],
+      [
+        167,
+        "### 4.5 Witness の構造とサイズ"
+      ],
+      [
+        189,
+        "## 5. B — 最大 2 段の先読み開示で適応的な往復を減らす"
+      ],
+      [
+        191,
+        "### 5.1 方針"
+      ],
+      [
+        197,
+        "### 5.2 2 種類の frontier を混同しない"
+      ],
+      [
+        204,
+        "### 5.3 検証規則"
+      ],
+      [
+        214,
+        "### 5.4 得られる論理段数"
+      ],
+      [
+        225,
+        "### 5.5 bytes 増大への制約"
+      ],
+      [
+        242,
+        "### 5.6 先読みと paid permit"
+      ],
+      [
+        248,
+        "## 6. C — 原本の先行取得と、非協力時の強制開示"
+      ],
+      [
+        250,
+        "### 6.1 manifest と index"
+      ],
+      [
+        270,
+        "### 6.2 2 経路"
+      ],
+      [
+        278,
+        "### 6.3 起点をずらして時間を隠さない"
+      ],
+      [
+        290,
+        "### 6.4 timeout と責任"
+      ],
+      [
+        301,
+        "### 6.5 保持・共用・費用"
+      ],
+      [
+        307,
+        "## 7. 合意状態と codec の契約"
+      ],
+      [
+        321,
+        "## 8. door の算出契約"
+      ],
+      [
+        323,
+        "### 8.1 時間と費用を別にする"
+      ],
+      [
+        339,
+        "### 8.2 各段の上限"
+      ],
+      [
+        356,
+        "### 8.3 3,200 の達成に必要な削減量"
+      ],
+      [
+        380,
+        "### 8.4 絶対期限と最終段の予約"
+      ],
+      [
+        390,
+        "## 9. 記録と arming gate"
+      ],
+      [
+        412,
+        "## 10. 安全性・完結性のレビュー義務"
+      ],
+      [
+        431,
+        "## 11. 必須試験"
+      ],
+      [
+        433,
+        "### 11.1 単体・性質試験"
+      ],
+      [
+        452,
+        "### 11.2 実ノード E2E"
+      ],
+      [
+        462,
+        "## 12. 実装手順と変更箇所"
+      ],
+      [
+        476,
+        "## 13. 移行・有効化・失敗時対応"
+      ],
+      [
+        486,
+        "## 14. 受入チェックリスト"
+      ],
+      [
+        506,
+        "## 15. 不採用・本 RFC に含めない案"
+      ],
+      [
+        520,
+        "## 付録 A. 外部参考の位置づけ"
+      ],
+      [
+        524,
+        "## 付録 B. 同梱の計算補助"
+      ],
+      [
+        528,
+        "## 付録 C. 逐次 step block 搬送の削減を優先する(2026-10-19 追記、ユーザー指示)"
+      ],
+      [
+        532,
+        "### C.1 現在の値(2M、12,500 B/DAA、式による derived_upper。実測ではない)"
+      ],
+      [
+        556,
+        "### C.2 設計案(組み合わせ)"
+      ],
+      [
+        571,
+        "### C.3 同時発生と証拠サイズ"
+      ],
+      [
+        576,
+        "### C.4 進める順番"
+      ],
+      [
+        583,
+        "### C.5 目標案"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+    "lines": 698,
+    "bytes": 56510,
+    "sha256": "df986f6fc4fc70781f9fb71149a0ec638511d8f1d8682b5db3c2d59a716b99ad",
+    "headings": [
+      [
+        1,
+        "# RFC-0025 — モデルが増え、不正に対する court が大量発生しても処理を継続できる客観的 court"
+      ],
+      [
+        16,
+        "## 0. 前版との関係・根拠"
+      ],
+      [
+        39,
+        "## 1. 保証と非保証"
+      ],
+      [
+        41,
+        "### 1.1 維持する安全性"
+      ],
+      [
+        51,
+        "### 1.2 条件付きの生存性"
+      ],
+      [
+        62,
+        "### 1.3 モデル数と負荷の区別"
+      ],
+      [
+        68,
+        "## 2. 固定上限の証拠と局所演算"
+      ],
+      [
+        70,
+        "### 2.1 3種類のサイズを区別する"
+      ],
+      [
+        86,
+        "### 2.2 固定上限が成立する範囲"
+      ],
+      [
+        104,
+        "### 2.3 Aの一般化: 1位置でも大きければさらに分割する"
+      ],
+      [
+        114,
+        "### 2.4 全fault routeの被覆"
+      ],
+      [
+        120,
+        "## 3. A・B・Cを統合した経路"
+      ],
+      [
+        150,
+        "## 4. 時間の定義: 通常3,200、混雑時は予約に応じて延長"
+      ],
+      [
+        152,
+        "### 4.1 変数"
+      ],
+      [
+        174,
+        "### 4.2 受付窓とterminal余裕"
+      ],
+      [
+        182,
+        "### 4.3 通常・混雑・過負荷"
+      ],
+      [
+        191,
+        "### 4.4 1 originalに複数courtがある場合"
+      ],
+      [
+        201,
+        "## 5. モデル横断の容量予約とスケジューリング"
+      ],
+      [
+        203,
+        "### 5.1 service profileと資源ベクトル"
+      ],
+      [
+        226,
+        "### 5.2 original claim受付で責任容量も確保する"
+      ],
+      [
+        236,
+        "### 5.3 予約カレンダー"
+      ],
+      [
+        254,
+        "### 5.4 controlと証拠本体を分離する"
+      ],
+      [
+        262,
+        "### 5.5 容量枠と実際の収録保証は異なる"
+      ],
+      [
+        272,
+        "## 6. 混雑時の延長・bond・経済的Final"
+      ],
+      [
+        274,
+        "### 6.1 有界なextension contract"
+      ],
+      [
+        294,
+        "### 6.2 必ず同時更新するもの"
+      ],
+      [
+        313,
+        "### 6.3 後続攻撃による無期限延長を防ぐ"
+      ],
+      [
+        321,
+        "### 6.4 延長費用と資本拘束"
+      ],
+      [
+        333,
+        "## 7. 外部1人の訴追権と大量濫用"
+      ],
+      [
+        335,
+        "### 7.1 owner枠占有を安全性の穴にしない"
+      ],
+      [
+        343,
+        "### 7.2 boundedな対話とdedup"
+      ],
+      [
+        351,
+        "### 7.3 停止すべき入口"
+      ],
+      [
+        357,
+        "### 7.4 持続負荷の限界"
+      ],
+      [
+        363,
+        "## 8. 容量試算と3,200 DAAの達成判定"
+      ],
+      [
+        365,
+        "### 8.1 総量から得られる必要条件"
+      ],
+      [
+        378,
+        "### 8.2 20%配分の感度分析"
+      ],
+      [
+        392,
+        "### 8.3 1万件を3,200に入れる帯域の最低条件"
+      ],
+      [
+        404,
+        "### 8.4 正式な判定"
+      ],
+      [
+        412,
+        "## 9. ブロック容量拡張の検討"
+      ],
+      [
+        414,
+        "### 9.1 同じブロックサイズでもできる改善"
+      ],
+      [
+        420,
+        "### 9.2 上限を増やす場合"
+      ],
+      [
+        428,
+        "### 9.3 採用条件"
+      ],
+      [
+        439,
+        "### 9.4 動的増大は初期v2に入れない"
+      ],
+      [
+        445,
+        "## 10. 10,000 DAA checkpointと安全なpruning"
+      ],
+      [
+        447,
+        "### 10.1 4つの時計を分ける"
+      ],
+      [
+        458,
+        "### 10.2 削除可能性の条件"
+      ],
+      [
+        476,
+        "### 10.3 データ階層"
+      ],
+      [
+        486,
+        "### 10.4 保存量の上限"
+      ],
+      [
+        492,
+        "## 11. 検証可能なcheckpointとpruned IBD"
+      ],
+      [
+        494,
+        "### 11.1 checkpointに必要な状態"
+      ],
+      [
+        512,
+        "### 11.2 rootの一致だけでは状態遷移の正しさの証明にならない"
+      ],
+      [
+        520,
+        "### 11.3 測定項目"
+      ],
+      [
+        528,
+        "## 12. ノード実装のスケーリング条件"
+      ],
+      [
+        532,
+        "### 12.1 必須の実装制約"
+      ],
+      [
+        541,
+        "### 12.2 state commitmentの効率化"
+      ],
+      [
+        547,
+        "## 13. 状態・codec・再生の契約"
+      ],
+      [
+        573,
+        "## 14. 受入条件と試験計画"
+      ],
+      [
+        575,
+        "### 14.1 規範的な受入条件"
+      ],
+      [
+        590,
+        "### 14.2 負荷matrix"
+      ],
+      [
+        606,
+        "### 14.3 個別の攻撃・境界試験"
+      ],
+      [
+        627,
+        "### 14.4 合格の報告形式"
+      ],
+      [
+        633,
+        "## 15. 実装順序と統合箇所"
+      ],
+      [
+        649,
+        "## 16. 移行と互換性"
+      ],
+      [
+        659,
+        "## 17. arming recordと未確定事項"
+      ],
+      [
+        661,
+        "### 17.1 pinする証跡"
+      ],
+      [
+        678,
+        "### 17.2 採択前に確定すること"
+      ],
+      [
+        684,
+        "## 18. このRFCが達成したと主張しないこと"
+      ],
+      [
+        692,
+        "## 19. 参考一次資料"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/INDEX.md",
+    "lines": 31,
+    "bytes": 4801,
+    "sha256": "1600c188a758bdff2cc3b00605f297aae2378aa491446131bd6f066513644b6a",
+    "headings": [
+      [
+        1,
+        "# RFC 番号順索引"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/README.md",
+    "lines": 28,
+    "bytes": 3074,
+    "sha256": "db6e7e0d584be9404bffd1ab5e85ce7f1f027ee022165f8bb097292ecc7fd9a6",
+    "headings": [
+      [
+        1,
+        "# RFC — 提案・技術設計・未決事項"
+      ],
+      [
+        9,
+        "## まず読む文書"
+      ]
+    ]
+  },
+  {
+    "path": "docs/rfc/TOPICS.md",
+    "lines": 48,
+    "bytes": 3951,
+    "sha256": "cfdf9f29926552b966c10f01c3fbf9b6d05118fd54636e954c8f344c114e8016",
+    "headings": [
+      [
+        1,
+        "# RFC トピック別索引"
+      ],
+      [
+        5,
+        "## Consensus / architecture"
+      ],
+      [
+        13,
+        "## EVM / wallet"
+      ],
+      [
+        17,
+        "## Economics / budgets"
+      ],
+      [
+        21,
+        "## Governance / release scope"
+      ],
+      [
+        26,
+        "## Models / execution / onboarding"
+      ],
+      [
+        37,
+        "## Operations / interfaces / recovery"
+      ],
+      [
+        41,
+        "## Verification / court"
+      ]
+    ]
+  }
+]

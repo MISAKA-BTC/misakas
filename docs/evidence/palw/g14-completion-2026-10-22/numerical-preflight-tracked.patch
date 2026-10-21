@@ -1,0 +1,12 @@
+diff --git a/consensus/core/src/lib.rs b/consensus/core/src/lib.rs
+index 456c737d9..28dfbf8c0 100644
+--- a/consensus/core/src/lib.rs
++++ b/consensus/core/src/lib.rs
+@@ -1126,3 +1126,7 @@ pub mod palw_court_shared_tir_stream_state_v1;
+ pub mod palw_court_shared_tir_response_v1;
+ pub mod palw_court_shared_tir_state_v1;
+ pub(crate) mod palw_court_shared_tir_builder_store_v1;
++
++pub mod palw_court_funding_preflight_v1;
++
++pub mod palw_court_numerical_geometry_v3;

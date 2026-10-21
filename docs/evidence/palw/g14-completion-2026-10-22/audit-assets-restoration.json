@@ -1,0 +1,27 @@
+{
+  "source_zip": "/Users/wata/Downloads/rfc-consistency-audit-20261019.zip",
+  "source_zip_sha256": "730ef7f0146ae953aa3671be87cb80ba5872ef100b5330335fbdfd004fd93822",
+  "verification": "Exact original MANIFEST size and SHA-256; no regeneration or baseline changes",
+  "restored": [
+    {
+      "path": "docs/rfc/0026-assets/inventory.json",
+      "bytes": 105253,
+      "sha256": "fe69cfa3fab0c460d38732003939aa11a131425d636e4357b2c9613ec04296b0"
+    },
+    {
+      "path": "docs/rfc/0026-assets/cross-rfc-normative-scan.json",
+      "bytes": 273944,
+      "sha256": "81aa3090881a954bff29b05e1cb3b74d8321e209b033184894c78149248f84fa"
+    }
+  ],
+  "existing_hashes_unchanged": {
+    "source-evidence.md": "7105e278f2f33ae842ee5e7dc6221e7b85056fcc267c00287b78319ba14c02e1",
+    "checks.json": "910b1e624b9c58ea775b4ac21944cf375ecf4cc212682929efeb787fcfbb1606",
+    "README.md": "fc4b62e3d028829b4bd4cc4537ce7313e6fec405e0b99642e2cef654715c6079",
+    "audit-report.md": "38feee5b24cf01bf6f1ed43fb1fc0351d452c00ea2488334c2f02a99b98b8101",
+    "findings.json": "9b53fc77459191833452b843b4b6653a75a6062795795a8799e8bc547270bf8e",
+    "MANIFEST.json": "a6958a6ecc60dc1fa519758d9034003a0e431cab2592a4dfcc0d2a933516bf21",
+    "coverage.md": "7329875a106a69c24a6e705f9d96da6a601e6552dc440557b17e5c34a974b116",
+    "reproduce_checks.py": "9aa51ad0a74dccf2953310d82d2f1eb59f75623e19f286998b82b655cdf2c881"
+  }
+}
