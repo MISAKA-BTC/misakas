@@ -1,0 +1,1 @@
+{"argv": ["cargo", "test", "--release", "-p", "rothschild", "--bin", "rothschild"], "exit": 101, "elapsed_seconds": 152.76721906661987}

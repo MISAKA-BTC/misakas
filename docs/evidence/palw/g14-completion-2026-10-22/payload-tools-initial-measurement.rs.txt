@@ -1,0 +1,762 @@
+//! Local-devnet measurement mode. RPC admission is never chain confirmation.
+//! Borsh byte counts describe signed Transaction DTOs, not P2P framing.
+use super::*;
+use kaspa_mining::MAXIMUM_STANDARD_TRANSACTION_MASS;
+use serde_json::{Value, json};
+use std::{
+    collections::HashSet,
+    fs::{File, OpenOptions},
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
+};
+const FANOUT: usize = 32;
+// Operational funding reserve, not a consensus dust threshold or fee change.
+// Each final independent UTXO starts with >=1 MSK; insufficiency refuses.
+const RESERVE: u64 = SOMPI_PER_KASPA;
+type Coin = (TransactionOutpoint, UtxoEntry);
+struct Trace {
+    file: File,
+    start: Instant,
+    sequence: u64,
+}
+impl Trace {
+    fn event(&mut self, mut v: Value) -> Result<(), String> {
+        v["t_unix_ms"] = json!(unix_now());
+        v["elapsed_ms"] = json!(self.start.elapsed().as_millis());
+        serde_json::to_writer(&mut self.file, &v).map_err(|e| e.to_string())?;
+        self.file
+            .write_all(b"\n")
+            .and_then(|_| self.file.flush())
+            .and_then(|_| self.file.sync_data())
+            .map_err(|e| e.to_string())
+    }
+}
+fn partition(total: u64, fee: u64, goals: &[usize], minimum: u64) -> Result<Vec<u64>, String> {
+    let count = goals
+        .iter()
+        .try_fold(0u64, |n, g| n.checked_add(*g as u64).filter(|_| *g > 0))
+        .ok_or("invalid fanout goals")?;
+    let available = total
+        .checked_sub(fee)
+        .ok_or("funding cannot cover native relay fee")?;
+    if goals.is_empty()
+        || available
+            < minimum
+                .checked_mul(count)
+                .ok_or("funding reserve overflow")?
+    {
+        return Err("funding insufficient for independent UTXO reserves plus fees".into());
+    }
+    let mut remaining = available;
+    let mut values = Vec::with_capacity(goals.len());
+    for (i, g) in goals.iter().enumerate() {
+        let value = if i + 1 == goals.len() {
+            remaining
+        } else {
+            u64::try_from(u128::from(available) * (*g as u128) / u128::from(count))
+                .map_err(|_| "fanout amount overflow")?
+        };
+        remaining = remaining
+            .checked_sub(value)
+            .ok_or("fanout conservation underflow")?;
+        values.push(value);
+    }
+    if remaining != 0 {
+        return Err("fanout conservation mismatch".into());
+    }
+    Ok(values)
+}
+fn goals(n: usize) -> Vec<usize> {
+    let outputs = n.min(FANOUT);
+    (0..outputs)
+        .map(|i| n / outputs + usize::from(i < n % outputs))
+        .collect()
+}
+struct Metrics {
+    compute: u64,
+    storage: u64,
+    transient: u64,
+    fee: u64,
+    bytes: u64,
+}
+fn build(
+    key: &ValidatorKey,
+    params: &Params,
+    coin: &Coin,
+    spk: &ScriptPublicKey,
+    goals: &[usize],
+    payload: usize,
+    priority: u64,
+) -> Result<(Transaction, Metrics), String> {
+    // Mirror the existing MLDSA P2PKH dust calculation at the native production
+    // relay fee. Derive redeeming script length from actual key/signature grammar;
+    // a custom node with stricter policy can still refuse and is logged as such.
+    let script = ScriptBuilder::new()
+        .add_data(&vec![0; MLDSA87_SIG_LEN + 1])
+        .map_err(|e| e.to_string())?
+        .add_data(key.public_key())
+        .map_err(|e| e.to_string())?
+        .drain();
+    let redeeming_input = 68u64 + 8 + script.len() as u64 + 8;
+    let sample = TransactionOutput::new(0, spk.clone());
+    let dust_size =
+        kaspa_consensus_core::mass::transaction_output_estimated_serialized_size(&sample)
+            .checked_add(redeeming_input)
+            .ok_or("dust size overflow")?;
+    let rate = kaspa_mining::mempool::config::PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE;
+    let dust = u64::try_from((u128::from(dust_size) * 3 * u128::from(rate)).div_ceil(1000))
+        .map_err(|_| "dust amount overflow")?;
+    let minimum = if goals.len() > 1 {
+        RESERVE.max(dust)
+    } else {
+        dust
+    };
+    let mut fee = 0;
+    for _ in 0..16 {
+        let values = partition(coin.1.amount, fee, goals, minimum)?;
+        let outputs = values
+            .into_iter()
+            .map(|v| TransactionOutput::new(v, spk.clone()))
+            .collect();
+        let mut data = vec![0; payload];
+        rand::thread_rng().fill_bytes(&mut data);
+        let mut tx = build_signed_tx(
+            key,
+            std::slice::from_ref(coin),
+            outputs,
+            data,
+            params.storage_mass_parameter,
+        )?;
+        tx.finalize();
+        let mc = mass_calc(params);
+        let nc = mc.calc_non_contextual_masses(&tx);
+        let storage = mc
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![coin.1.clone()]))
+            .ok_or("actual contextual mass unavailable")?
+            .storage_mass;
+        if nc.compute_mass > MAXIMUM_STANDARD_TRANSACTION_MASS
+            || nc.transient_mass > MAXIMUM_STANDARD_TRANSACTION_MASS
+            || storage > MAXIMUM_STANDARD_TRANSACTION_MASS
+        {
+            return Err(
+                "fanout/load actual mass exceeds existing standard transaction limit".into(),
+            );
+        }
+        let required =
+            relay_fee_for_compute_mass(nc.compute_mass.max(storage).max(nc.transient_mass))
+                .checked_add(priority)
+                .ok_or("relay/priority fee overflow")?;
+        if fee >= required {
+            let sum = tx
+                .outputs
+                .iter()
+                .try_fold(0u64, |n, o| n.checked_add(o.value))
+                .ok_or("output total overflow")?;
+            if coin.1.amount.checked_sub(sum) != Some(fee) {
+                return Err("signed transaction fee conservation mismatch".into());
+            }
+            let bytes = borsh::object_length(&tx).map_err(|e| e.to_string())? as u64;
+            return Ok((
+                tx,
+                Metrics {
+                    compute: nc.compute_mass,
+                    storage,
+                    transient: nc.transient_mass,
+                    fee,
+                    bytes,
+                },
+            ));
+        }
+        fee = required;
+    }
+    Err("actual fee/mass quote did not converge within bounded construction".into())
+}
+async fn snapshot(
+    rpc: &GrpcClient,
+    address: &Address,
+    maturity: u64,
+) -> Result<(u64, Vec<Coin>), String> {
+    let dag = tokio::time::timeout(Duration::from_secs(10), rpc.get_block_dag_info())
+        .await
+        .map_err(|_| "DAG RPC timeout")?
+        .map_err(|e| e.to_string())?;
+    if dag.network != NetworkId::new(NetworkType::Devnet) {
+        return Err("measurement RPC stopped reporting devnet".into());
+    }
+    let rows = tokio::time::timeout(
+        Duration::from_secs(10),
+        rpc.get_utxos_by_addresses(vec![address.clone()]),
+    )
+    .await
+    .map_err(|_| "UTXO RPC timeout")?
+    .map_err(|e| e.to_string())?;
+    let mut coins = Vec::new();
+    for row in rows {
+        // Confirmed noncoinbase outputs have no extra native maturity. Coinbase
+        // uses Params::coinbase_spend_maturity(), including the long DNS fallback;
+        // DNS acceleration is deliberately not inferred from an RPC-submit result.
+        let depth = if row.utxo_entry.is_coinbase {
+            maturity
+        } else {
+            0
+        };
+        if row
+            .utxo_entry
+            .block_daa_score
+            .checked_add(depth)
+            .is_some_and(|a| a <= dag.virtual_daa_score)
+        {
+            coins.push((row.outpoint.into(), row.utxo_entry.into()));
+        }
+    }
+    Ok((dag.virtual_daa_score, coins))
+}
+/// Only a matching successful response establishes RPC acceptance. The generic
+/// RpcError path can hide transport failure after server acceptance; absent a
+/// stable typed server-rejection certificate it is conservatively UNKNOWN.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RpcOutcome {
+    Accepted,
+    Unknown,
+}
+impl RpcOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+fn classify_submission(
+    local: kaspa_consensus_core::tx::TransactionId,
+    response: &Result<kaspa_consensus_core::tx::TransactionId, String>,
+) -> RpcOutcome {
+    match response {
+        Ok(returned) if *returned == local => RpcOutcome::Accepted,
+        _ => RpcOutcome::Unknown,
+    }
+}
+async fn submit(
+    rpc: &GrpcClient,
+    trace: &mut Trace,
+    phase: &str,
+    tx: &Transaction,
+    m: &Metrics,
+) -> Result<(), String> {
+    trace.sequence = trace
+        .sequence
+        .checked_add(1)
+        .ok_or("attempt sequence overflow")?;
+    let seq = trace.sequence;
+    // The attempt is durable before the RPC; process termination leaves an
+    // explicit unmatched attempt instead of silently omitting an in-flight send.
+    trace.event(json!({"ev":"submit_attempt","phase":phase,"sequence":seq,"txid":tx.id().to_string(),"payload_bytes":tx.payload.len()}))?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        rpc.submit_transaction(tx.into(), false),
+    )
+    .await;
+    let response = match result {
+        Ok(Ok(id)) => Ok(id),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("submit RPC timeout; admission outcome unknown, run stopped".into()),
+    };
+    let outcome = classify_submission(tx.id(), &response);
+    let success = outcome == RpcOutcome::Accepted;
+    let returned = response.as_ref().ok().map(ToString::to_string);
+    let error = match &response {
+        Ok(id) if *id != tx.id() => {
+            Some("RPC transaction id mismatch; local admission unknown".to_string())
+        }
+        Err(e) => Some(e.clone()),
+        _ => None,
+    };
+    trace.event(json!({"ev":"submit","phase":phase,"sequence":seq,"txid":tx.id().to_string(),"rpc_txid":returned,
+  "success":success,"rpc_outcome":outcome.as_str(),"payload_bytes":tx.payload.len(),"serialized_bytes":m.bytes,"serialization":"borsh_transaction_v1",
+  "mass":m.compute.max(m.storage).max(m.transient),"compute_mass":m.compute,"storage_mass":m.storage,"transient_mass":m.transient,"fee_sompi":m.fee,"error":error}))?;
+    if success {
+        Ok(())
+    } else {
+        Err(error.unwrap_or("RPC admission outcome unknown".into()))
+    }
+}
+async fn wait_batch(
+    rpc: &GrpcClient,
+    address: &Address,
+    maturity: u64,
+    txs: &[Transaction],
+    deadline: Instant,
+    trace: &mut Trace,
+) -> Result<Vec<Vec<Coin>>, String> {
+    let expected = txs
+        .iter()
+        .try_fold(0usize, |n, tx| n.checked_add(tx.outputs.len()))
+        .ok_or("batch output count overflow")?;
+    if expected > 10_000 {
+        return Err("fanout batch exceeds bounded final target".into());
+    }
+    loop {
+        if Instant::now() >= deadline {
+            return Err(
+                "funding timeout before entire independent split batch was observed".into(),
+            );
+        }
+        let (daa, coins) = snapshot(rpc, address, maturity).await?;
+        let mut out = Vec::new();
+        let mut found = 0usize;
+        for tx in txs {
+            let mut row = Vec::new();
+            for (i, o) in tx.outputs.iter().enumerate() {
+                let op = TransactionOutpoint::new(
+                    tx.id(),
+                    u32::try_from(i).map_err(|_| "output index overflow")?,
+                );
+                if let Some(c) = coins.iter().find(|(p, e)| {
+                    *p == op && e.amount == o.value && e.script_public_key == o.script_public_key
+                }) {
+                    row.push(c.clone());
+                }
+            }
+            found = found
+                .checked_add(row.len())
+                .ok_or("batch observation count overflow")?;
+            out.push(row);
+        }
+        trace.event(json!({"ev":"funding_observation","txids":txs.iter().map(|tx|tx.id().to_string()).collect::<Vec<_>>(),
+            "daa":daa,"confirmed_outputs":found,"expected_outputs":expected}))?;
+        if found == expected {
+            return Ok(out);
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn inner(
+    args: &Args,
+    key: &ValidatorKey,
+    params: &Params,
+    rpc: &GrpcClient,
+    address: &Address,
+    maturity: u64,
+    trace: &mut Trace,
+) -> Result<(), String> {
+    let target = args
+        .initial_utxos
+        .ok_or("measurement mode needs --initial-utxos")?;
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(args.measurement_funding_timeout_secs))
+        .ok_or("funding deadline overflow")?;
+    let spk = pay_to_address_script(address);
+    let (_, mut coins) = snapshot(rpc, address, maturity).await?;
+    coins.retain(|(_, e)| e.script_public_key == spk && e.amount >= RESERVE);
+    coins.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
+    let mut pool = if coins.len() >= target {
+        coins.into_iter().take(target).collect::<Vec<_>>()
+    } else {
+        let seed = coins
+            .into_iter()
+            .next()
+            .ok_or("no mature funded measurement UTXO")?;
+        // A single funded root avoids uncontrolled cross-wallet aggregation. Each
+        // split assigns value in proportion to its final descendant count.
+        let mut pending = vec![(seed, target)];
+        let mut final_coins = Vec::new();
+        let mut funding_spent = HashSet::new();
+        while !pending.is_empty() {
+            if Instant::now() >= deadline {
+                return Err("funding timeout before independent pool completed".into());
+            }
+            let mut txs = Vec::new();
+            let mut allocations = Vec::new();
+            // Submit ALL independently confirmed parents at this depth before
+            // waiting. No output from this batch is spent until the next full
+            // batch observation succeeds; never chain unconfirmed inputs.
+            for (coin, n) in pending {
+                if n == 1 {
+                    final_coins.push(coin);
+                    continue;
+                }
+                if !funding_spent.insert(coin.0) {
+                    return Err("fanout attempted a repeated parent input".into());
+                }
+                if Instant::now() >= deadline {
+                    return Err("funding timeout during split batch submission".into());
+                }
+                let gs = goals(n);
+                let (tx, m) = build(key, params, &coin, &spk, &gs, 0, args.priority_fee)?;
+                submit(rpc, trace, "split", &tx, &m).await?;
+                txs.push(tx);
+                allocations.push(gs);
+            }
+            pending = Vec::new();
+            if txs.is_empty() {
+                break;
+            }
+            let batches = wait_batch(rpc, address, maturity, &txs, deadline, trace).await?;
+            for (out, gs) in batches.into_iter().zip(allocations) {
+                if out.len() != gs.len() {
+                    return Err("fanout batch allocation/observation mismatch".into());
+                }
+                pending.extend(out.into_iter().zip(gs));
+            }
+        }
+        final_coins
+    };
+    // Re-observe the WHOLE final pool in one UTXO RPC response, with a separate
+    // DAG-score read (not an atomic DAG/UTXO snapshot or persistence proof).
+    // A reorg after observation can still cause native submit refusal; stop and
+    // retain that outcome rather than claiming successful chain inclusion.
+    let observed = snapshot(rpc, address, maturity).await?;
+    let daa = observed.0;
+    if pool.len() != target || pool.iter().any(|c| !observed.1.iter().any(|v| v == c)) {
+        return Err("final independent pool absent from the same observed UTXO response".into());
+    }
+    let mut tracked = pool.iter().map(|c| c.0).collect::<HashSet<_>>();
+    let mut spent = HashSet::new();
+    trace.event(json!({"ev":"measurement_started","confirmed_utxos":pool.len(),"target_count":target,"daa":daa,
+  "duration_secs":args.measurement_duration_secs,"target_tps":args.tps,"payload_bytes":args.payload_size}))?;
+    let stop = Instant::now()
+        .checked_add(Duration::from_secs(args.measurement_duration_secs))
+        .ok_or("measurement deadline overflow")?;
+    let mut ticker = interval(Duration::from_secs_f64(1.0 / args.tps as f64));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut success = 0u64;
+    loop {
+        ticker.tick().await;
+        if Instant::now() >= stop {
+            break;
+        }
+        if pool.is_empty() {
+            let (d, observed) = snapshot(rpc, address, maturity).await?;
+            pool = observed
+                .into_iter()
+                .filter(|(op, _)| tracked.contains(op) && !spent.contains(op))
+                .collect();
+            if pool.is_empty() {
+                trace.event(
+                    json!({"ev":"load_wait","reason":"no_confirmed_independent_utxo","daa":d}),
+                )?;
+                continue;
+            }
+        }
+        let coin = pool.pop().ok_or("measurement pool underflow")?;
+        if !spent.insert(coin.0) {
+            return Err("attempted to reuse a spent measurement input".into());
+        }
+        let (tx, m) = build(
+            key,
+            params,
+            &coin,
+            &spk,
+            &[1],
+            args.payload_size,
+            args.priority_fee,
+        )?;
+        submit(rpc, trace, "load", &tx, &m).await?;
+        success = success.checked_add(1).ok_or("submit counter overflow")?;
+        tracked.insert(TransactionOutpoint::new(tx.id(), 0));
+    }
+    trace.event(json!({"ev":"load_completed","successful_rpc_submits":success}))?;
+    Ok(())
+}
+fn loopback_endpoint(server: &str) -> bool {
+    if let Ok(address) = server.parse::<std::net::SocketAddr>() {
+        return address.ip().is_loopback();
+    }
+    server.strip_prefix("localhost:").is_some_and(|port| {
+        !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok()
+    })
+}
+pub(super) fn validate_args(args: &Args) -> Result<(), String> {
+    if args.network != NetworkId::new(NetworkType::Devnet) || !loopback_endpoint(&args.rpc_server) {
+        return Err(
+            "measurement fanout requires explicitly selected devnet and loopback RPC".into(),
+        );
+    }
+    if args.addr.is_some()
+        || args.randomize_fee
+        || args.unleashed
+        || args.tps == 0
+        || args.tps > 100
+    {
+        return Err(
+            "measurement needs own-address, fixed fee and 1..=100 TPS without unleashed".into(),
+        );
+    }
+    if !args
+        .initial_utxos
+        .is_some_and(|n| (1..=10_000).contains(&n))
+    {
+        return Err("measurement initial UTXOs must be in 1..=10000".into());
+    }
+    if !(1..=3600).contains(&args.measurement_duration_secs)
+        || !(1..=3600).contains(&args.measurement_funding_timeout_secs)
+    {
+        return Err("measurement duration and funding timeout must be in 1..=3600 seconds".into());
+    }
+    if args.measurement_log.as_ref().is_none_or(|s| s.is_empty()) {
+        return Err("measurement requires fresh log path".into());
+    }
+    Ok(())
+}
+pub(super) async fn run(
+    args: &Args,
+    key: &ValidatorKey,
+    params: &Params,
+    rpc: &GrpcClient,
+    address: &Address,
+    maturity: u64,
+) -> Result<(), String> {
+    validate_args(args)?;
+    let path = args
+        .measurement_log
+        .as_ref()
+        .ok_or("measurement requires a fresh --measurement-log path")?;
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    let mut trace = Trace {
+        file,
+        start: Instant::now(),
+        sequence: 0,
+    };
+    trace.event(json!({"ev":"measurement_setup","trace_version":1,"network":"devnet","target_count":args.initial_utxos,
+  "key_scheme":"MLDSA87","funding_timeout_secs":args.measurement_funding_timeout_secs}))?;
+    let result = inner(args, key, params, rpc, address, maturity, &mut trace).await;
+    trace.event(
+        json!({"ev":"measurement_ended","success":result.is_ok(),"reason":result.as_ref().err()}),
+    )?;
+    result
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn target_partition_is_exact_and_bounded() {
+        for n in 2..=10_000 {
+            let g = goals(n);
+            assert!(g.len() <= FANOUT);
+            assert!(g.iter().all(|n| *n > 0));
+            assert_eq!(g.iter().sum::<usize>(), n);
+        }
+    }
+    #[test]
+    fn funded_partition_preserves_fee_and_descendant_reserves() {
+        for n in [2, 31, 32, 33, 600, 10_000] {
+            let gs = goals(n);
+            let total = RESERVE * (n as u64) * 2 + 12345;
+            let fee = 1234;
+            let v = partition(total, fee, &gs, RESERVE).unwrap();
+            assert_eq!(v.iter().sum::<u64>() + fee, total);
+            for (a, g) in v.iter().zip(gs) {
+                assert!(*a >= RESERVE * g as u64);
+            }
+        }
+        assert!(partition(10, 11, &[1], RESERVE).is_err());
+        assert!(partition(RESERVE, 1, &[1], RESERVE).is_err());
+        assert!(partition(u64::MAX, 0, &[usize::MAX, 1], RESERVE).is_err());
+    }
+    #[test]
+    fn depth_batches_have_distinct_independent_parents_and_exact_terminal_count() {
+        for target in [1, 2, 32, 33, 600, 10_000] {
+            let mut pending = vec![(Vec::<u8>::new(), target)];
+            let mut seen = HashSet::new();
+            let mut terminal = 0usize;
+            let mut batches = Vec::new();
+            while !pending.is_empty() {
+                let mut next = Vec::new();
+                let mut split_count = 0;
+                for (path, n) in pending {
+                    assert!(
+                        seen.insert(path.clone()),
+                        "a parent is never submitted twice"
+                    );
+                    if n == 1 {
+                        terminal += 1;
+                        continue;
+                    }
+                    split_count += 1;
+                    for (i, g) in goals(n).into_iter().enumerate() {
+                        let mut child = path.clone();
+                        child.push(i as u8);
+                        next.push((child, g));
+                    }
+                }
+                let ids = next.iter().map(|(p, _)| p.clone()).collect::<HashSet<_>>();
+                assert_eq!(ids.len(), next.len());
+                if split_count > 0 {
+                    batches.push(split_count);
+                }
+                pending = next;
+            }
+            assert_eq!(terminal, target);
+            if target == 600 {
+                assert_eq!(
+                    batches,
+                    vec![1, 32],
+                    "33 split txs require two dependent observation batches"
+                );
+            }
+        }
+    }
+    #[test]
+    fn loopback_parser_rejects_userinfo_and_malformed_ports() {
+        for server in [
+            "127.0.0.1:16210",
+            "127.2.3.4:80",
+            "[::1]:80",
+            "localhost:16210",
+        ] {
+            assert!(loopback_endpoint(server), "{server}");
+        }
+        for server in [
+            "localhost:80@evil",
+            "127.0.0.1:80@evil",
+            "localhost:80/evil",
+            "localhost:+80",
+            "localhost:",
+            "localhost:65536",
+            "localhost.evil:80",
+            "192.0.2.1:80",
+            "[::1]:80@evil",
+        ] {
+            assert!(!loopback_endpoint(server), "{server}");
+        }
+    }
+    fn args() -> Args {
+        Args {
+            measurement_capabilities: false,
+            initial_utxos: Some(600),
+            measurement_duration_secs: 600,
+            measurement_funding_timeout_secs: 600,
+            measurement_log: Some("unused-test-trace".into()),
+            private_key_file: None,
+            private_key_stdin: false,
+            tps: 1,
+            rpc_server: "127.0.0.1:16210".into(),
+            threads: 1,
+            unleashed: false,
+            addr: None,
+            priority_fee: 0,
+            randomize_fee: false,
+            payload_size: 17408,
+            network: NetworkId::new(NetworkType::Devnet),
+        }
+    }
+    #[test]
+    fn measurement_bounds_are_rechecked_before_any_network_or_key_use() {
+        assert!(validate_args(&args()).is_ok());
+        let mut invalid = Vec::new();
+        for n in [None, Some(0), Some(10001)] {
+            let mut a = args();
+            a.initial_utxos = n;
+            invalid.push(a);
+        }
+        let mut a = args();
+        a.measurement_duration_secs = 0;
+        invalid.push(a);
+        let mut a = args();
+        a.measurement_funding_timeout_secs = 0;
+        invalid.push(a);
+        let mut a = args();
+        a.measurement_log = None;
+        invalid.push(a);
+        let mut a = args();
+        a.network = NetworkId::new(NetworkType::Mainnet);
+        invalid.push(a);
+        let mut a = args();
+        a.rpc_server = "example.org:16210".into();
+        invalid.push(a);
+        let mut a = args();
+        a.tps = 0;
+        invalid.push(a);
+        for a in invalid {
+            assert!(validate_args(&a).is_err());
+        }
+    }
+    #[test]
+    fn transport_errors_and_mismatched_ids_are_unknown_not_rejected() {
+        use kaspa_consensus_core::Hash64;
+        let local = Hash64::from_u64_word(1);
+        assert_eq!(classify_submission(local, &Ok(local)), RpcOutcome::Accepted);
+        assert_eq!(
+            classify_submission(local, &Ok(Hash64::from_u64_word(2))),
+            RpcOutcome::Unknown
+        );
+        for e in [
+            "timeout",
+            "connection reset after write",
+            "server rejected (untyped transport string)",
+        ] {
+            assert_eq!(
+                classify_submission(local, &Err(e.into())),
+                RpcOutcome::Unknown
+            );
+        }
+    }
+    #[test]
+    fn actual_signed_fanout_and_payload_preserve_amount_mass_and_signature_scope() {
+        let key = ValidatorKey::from_seed([37; VALIDATOR_SEED_LEN]);
+        let params = Params::from(NetworkId::new(NetworkType::Devnet));
+        let spk = pay_to_address_script(&key.funding_address(Prefix::Devnet));
+        let coin = (
+            TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_u64_word(3), 0),
+            UtxoEntry::new(RESERVE * 64, spk.clone(), 0, false),
+        );
+        for (gs, payload) in [(goals(33), 0), (vec![1], 17408)] {
+            let (tx, m) = build(&key, &params, &coin, &spk, &gs, payload, 123).unwrap();
+            assert!(tx.id_is_current());
+            assert_eq!(tx.payload.len(), payload);
+            assert_eq!(tx.outputs.len(), gs.len());
+            assert!(tx.outputs.iter().all(|o| o.script_public_key == spk));
+            assert_eq!(
+                tx.outputs.iter().map(|o| o.value).sum::<u64>() + m.fee,
+                coin.1.amount
+            );
+            let nc = mass_calc(&params).calc_non_contextual_masses(&tx);
+            let storage = mass_calc(&params)
+                .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![coin.1.clone()]))
+                .unwrap()
+                .storage_mass;
+            assert_eq!(
+                (m.compute, m.transient, m.storage),
+                (nc.compute_mass, nc.transient_mass, storage)
+            );
+            assert_eq!(tx.mass(), storage);
+            assert_eq!(m.bytes, borsh::to_vec(&tx).unwrap().len() as u64);
+            assert!(
+                m.fee
+                    >= relay_fee_for_compute_mass(m.compute.max(m.storage).max(m.transient)) + 123
+            );
+            let script = &tx.inputs[0].signature_script;
+            assert_eq!(script[0], 0x4d); // actual MLDSA signature PUSHDATA2
+            let signature = &script[3..3 + MLDSA87_SIG_LEN];
+            let populated = MutableTransaction::with_entries(tx.clone(), vec![coin.1.clone()]);
+            let reused = Mldsa87SigHashReusedValuesUnsync::new();
+            let sighash =
+                calc_mldsa87_signature_hash(&populated.as_verifiable(), 0, SIG_HASH_ALL, &reused);
+            assert!(key.verify_with_context(
+                sighash.as_byte_slice(),
+                signature,
+                MLDSA87_TX_CONTEXT
+            ));
+            let mut tampered = tx.clone();
+            tampered.outputs[0].value -= 1;
+            tampered.finalize();
+            let populated = MutableTransaction::with_entries(tampered, vec![coin.1.clone()]);
+            let reused = Mldsa87SigHashReusedValuesUnsync::new();
+            let sighash =
+                calc_mldsa87_signature_hash(&populated.as_verifiable(), 0, SIG_HASH_ALL, &reused);
+            assert!(!key.verify_with_context(
+                sighash.as_byte_slice(),
+                signature,
+                MLDSA87_TX_CONTEXT
+            ));
+        }
+        let poor = (coin.0, UtxoEntry::new(1, spk.clone(), 0, false));
+        assert!(build(&key, &params, &poor, &spk, &[1], 17408, 0).is_err());
+    }
+}

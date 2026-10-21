@@ -52,6 +52,8 @@ Next primary integration work is the original coordinator: derive canonical comp
 
 ## Latest parallel checkpoint
 
+[Payload load tooling, 2026-10-22](../../../evidence/palw/g14-completion-2026-10-22/payload-load-tooling.md): adaptive ML-DSA sender nine selected tests and observer/audit eighteen synthetic tests pass. The initial native mass refusal is preserved. These are tooling checks; release build/run status and actual measurements are recorded separately. No achieved offered load, saturation, reserved supply or real-model door follows from them.
+
 [Numerical geometry and transaction-bound funding preflight, 2026-10-22](../../../evidence/palw/g14-completion-2026-10-22/numerical-geometry-and-funding-preflight.md) enumerates native numerical paths and binds full transaction/entries/parent/point/scope and a single fee budget. Verification status is recorded in the linked evidence. Caller-selected court/demand are not authenticated native policy; populated entries are not UTXO admission; the private preflight grants no script bypass. Same-branch pre-UTXO planning, all-duty closure, actual locks and matched rooted monetary settlement remain required.
 
 

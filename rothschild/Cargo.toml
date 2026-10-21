@@ -11,25 +11,25 @@ repository.workspace = true
 
 [dependencies]
 kaspa-addresses.workspace = true
-# kaspa-pq PQ-only: rothschild uses the legacy secp256k1 `sign` helper, gated
-# behind `legacy-secp256k1` in kaspa-consensus-core (ADR-0019 §14).
-kaspa-consensus-core = { workspace = true, features = ["legacy-secp256k1"] }
+kaspa-consensus-core.workspace = true
 kaspa-core.workspace = true
 kaspa-grpc-client.workspace = true
 kaspa-notify.workspace = true
+kaspa-mining.workspace = true
+kaspa-pq-validator-core.workspace = true
 kaspa-rpc-core.workspace = true
 kaspa-txscript.workspace = true
 kaspa-utils.workspace = true
 
 async-channel.workspace = true
+borsh.workspace = true
+serde_json.workspace = true
 clap.workspace = true
 faster-hex.workspace = true
-itertools.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 rand.workspace = true
 rayon.workspace = true
-secp256k1 = { workspace = true, features = ["global-context", "rand-std"] }
 tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
 
 [dev-dependencies]
