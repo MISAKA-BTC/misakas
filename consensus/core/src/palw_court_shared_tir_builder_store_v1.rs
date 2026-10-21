@@ -368,3 +368,6 @@ pub(crate) mod constraint_terminal;
 
 #[path = "palw_court_shared_tokenizer_builder_v1.rs"]
 pub(crate) mod tokenizer_terminal;
+
+#[path = "palw_court_shared_prefix_builder_v1.rs"]
+pub(crate) mod prefix_terminal;

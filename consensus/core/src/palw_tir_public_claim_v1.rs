@@ -460,6 +460,11 @@ pub(crate) fn palw_tir_public_input_history_frame_fixture_v1(
     tests::history_frame_form_v1(true,form)
 }
 #[cfg(test)]
+pub(crate) fn palw_tir_public_prefix_history_frame_fixture_v1(fault:bool)->PalwTirPublicFrameFixtureV1 {
+    tests::history_frame_condition_v1(tests::HistoryConditionV1::Prefix{fault},
+        crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+}
+#[cfg(test)]
 pub(crate) fn palw_tir_public_fixed_history_frame_fixture_v1(
     form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,committed_writer:bool)->PalwTirPublicFrameFixtureV1 {
     tests::history_frame_condition_v1(tests::HistoryConditionV1::Fixed{committed_writer},form)
@@ -851,7 +856,7 @@ mod tests {
         history_frame_form_v1(false,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
     }
     #[derive(Clone,Copy)]
-    pub(super) enum HistoryConditionV1 { None,Input,Fixed{committed_writer:bool} }
+    pub(super) enum HistoryConditionV1 { None,Input,Fixed{committed_writer:bool},Prefix{fault:bool} }
     pub(super) fn history_frame_form_v1(direct_input:bool,prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)
         ->super::PalwTirPublicFrameFixtureV1 {
         history_frame_condition_v1(if direct_input {HistoryConditionV1::Input}else{HistoryConditionV1::None},prompt_form)
@@ -870,7 +875,7 @@ mod tests {
                 shape:vec![],per_layer:true});
             Some((state,committed_writer))
         } else {None};
-        if !matches!(condition,HistoryConditionV1::None) {
+        if matches!(condition,HistoryConditionV1::Input|HistoryConditionV1::Fixed{..}) {
             use misaka_palw_tir::{Ref,Prim};
             use misaka_palw_tir::types::Dim;
             let (bi,ni,input,out)=program.blocks.iter().enumerate().find_map(|(bi,b)| {
@@ -923,6 +928,7 @@ mod tests {
         let mut f = fixture_with(name, program, params, tokens, 16, 9);
         assert!(f.greedy, "the V3 job uses greedy decoding");
         let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
+        let prefix_decode=job.decode.clone();
         job.version = PALW_FP_V3_VERSION;
         job.decode = None;
         job.tail = None;
@@ -932,6 +938,17 @@ mod tests {
         job.prompt_tokens = f.prompt.len() as u32;
         job.decode_token_limit = f.generated.len() as u32;
         job.max_context_tokens = 64;
+        if let HistoryConditionV1::Prefix{fault}=condition {
+            let k=4;
+            let before=f.honest();
+            let digest=crate::palw_tir_prefix_state_v1::palw_tir_prefix_kv_digest_v1(&f.space,&f.ctx,k,
+                |leaf|Ok(before.preimages[leaf.index as usize].values_le.clone())).unwrap();
+            let mut root=crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&f.class_id,k,&digest);
+            if fault {let mut bytes=*root.as_byte_slice();bytes[0]^=1;root=Hash64::from_bytes(bytes);}
+            job.version=crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
+            job.decode=prefix_decode;
+            job.tail=Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1{class_id:f.class_id,prefix_tokens:k,state_root:root}));
+        }
         let class = PalwFpClassFactsV3 {
             model_profile_id: Hash64::default(), runtime_manifest_hash: Hash64::default(),
             runtime_class_id: Hash64::default(), shape_profile_id: f.class_id, cu_ruleset_id: Hash64::default(),
@@ -947,7 +964,15 @@ mod tests {
             binding: x.binding, preimages: x.preimages, hashes: x.hashes, ops: f.ops,
             prompt: f.prompt, rows: x.rows, generated: x.generated,
         };
-        frame_from_execution_with_material_form_v1(x,job,1,None,None,None,prompt_form)
+        if matches!(condition,HistoryConditionV1::Prefix{..}) {
+            let c=&x.binding.job_context;
+            let semantics=crate::palw_class_semantics_v1::PalwClassSemanticsV1{version:1,class_id:f.class_id,
+                artifact_root:x.binding.artifact_root,bound_from_daa:0,model_profile_id:c.model_profile_id,
+                runtime_manifest_hash:c.runtime_manifest_hash,runtime_class_id:c.runtime_class_id,tokenizer_id:c.tokenizer_id,
+                cu_ruleset_id:c.cu_ruleset_id,token_table_root:None,rendering_rule:None,raw_tokenizer_bytes:None,
+                tokenizer_key_events:None,prefix_state_relation:None};
+            frame_from_execution_with_material_form_v1(x,job,1,None,Some(&semantics),None,prompt_form)
+        } else {frame_from_execution_with_material_form_v1(x,job,1,None,None,None,prompt_form)}
     }
 
     #[test]

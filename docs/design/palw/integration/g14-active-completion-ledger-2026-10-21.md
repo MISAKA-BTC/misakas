@@ -52,6 +52,8 @@ Next primary integration work is the original coordinator: derive canonical comp
 
 ## Latest parallel checkpoint
 
+[Actual Prefix material replay](../../../evidence/palw/g14-completion-2026-10-22/prefix-material.md): 69 unique selected passes, including actual Prefix honest/mismatch and data/ownership refusals, signed terminal foreign-cover refusal, old TIR court12/parameter10, t12 identity9 and activation5. Initial local-budget failure is preserved. The actual conservative request quote is about26.9GB for this fixture; it is not measured RAM or proven practical capacity. Complete semantic supply, funded original/escrow and all service/monetary profile bodies remain incomplete.
+
 [Actual state/history boundaries and retained parameter material](../../../evidence/palw/g14-completion-2026-10-22/step-and-parameter-material.md): 67 unique selected passes, including actual checkpoint/history/Fixed writer material, real signed terminal parameter sufficiency/refusal, old TIR court12/parameter10, t12 identity9 and activation5. Initial test compile failure is preserved. Complete semantic acquisition, actual funded original/escrow, paid service and full T01–T15 remain incomplete.
 
 [Actual root input dependencies and local-budget origin](../../../evidence/palw/g14-completion-2026-10-22/root-input-and-budget.md): 63 unique selected successes, including actual Input0 GQA prompt/generated/carry derivation in both Flat/Merkle forms, authenticated Store positives/negatives, old TIR court12/parameter10, quota origin and t12 identity9. Other committed/state/semantic material closure, physical acquisition and paid/native financial admission remain incomplete.

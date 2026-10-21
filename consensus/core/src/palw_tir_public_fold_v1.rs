@@ -1580,6 +1580,7 @@ mod tests {
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
 mod conviction_e2e_tests {
+    include!("palw_prefix_material_native_tests.rs");
     include!("palw_root_input_material_native_tests.rs");
     include!("palw_court_shared_constraint_native_tests.rs");
     include!("palw_court_shared_tokenizer_native_tests.rs");
@@ -2968,6 +2969,20 @@ mod conviction_e2e_tests {
             crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
                 max_original_leaves:1_000_000,max_total_edges:10_000_000,
                 max_total_coordinates:1_000_000,max_root_memberships:1_000_000}).unwrap();
+        // A genuine different original's opaque cover; no cover DTO/roots are
+        // forged or edited. Even an empty numerical set cannot be substituted.
+        let foreign_parameter_fixture=crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1();
+        let foreign_parameter_original=foreign_parameter_fixture.frame.original_v1();
+        let foreign_parameter_source=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(
+            &foreign_parameter_fixture.record,&foreign_parameter_fixture.layout,foreign_parameter_fixture.frame.header_v1(),
+            foreign_parameter_original.execution_root,foreign_parameter_original.trace_root,
+            foreign_parameter_fixture.rules.maximum_leaves).unwrap();
+        let foreign_parameter_cover=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::root_input_cover_native_v1(
+            &foreign_parameter_source,&foreign_parameter_fixture.record,&foreign_parameter_fixture.layout,
+            crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
+                max_original_leaves:1_000_000,max_total_edges:10_000_000,
+                max_total_coordinates:1_000_000,max_root_memberships:1_000_000}).unwrap();
+        assert_ne!(foreign_parameter_cover.parameters_v1().source_id,parameter_cover.parameters_v1().source_id);
         let covered_root=parameter_cover.parameters_v1().roots.iter().find(|r|r.leaf==leaf).unwrap();
         assert!(!covered_root.parameters.is_empty(),"actual root must require parameters");
         let mut owner_requests=crate::palw_native_resource_v1::TirNativeRequestsV1::new();
@@ -3074,6 +3089,15 @@ mod conviction_e2e_tests {
                         &round_state,&params,&intent_rules,&intent,limit,&parameter_cover).unwrap();
                     assert_eq!(borsh::to_vec(&covered).unwrap(),borsh::to_vec(&built).unwrap());
                     assert_eq!(covered_meter,meter);
+                    // Same valid signed intent and retained terminal phase as
+                    // positive path: rejection must occur at source affinity,
+                    // not an invalid signature/root/phase shortcut.
+                    if terminals==0 {
+                        let foreign=covered_store.build_terminal_with_parameter_cover(
+                            &round_state,&params,&intent_rules,&intent,limit,&foreign_parameter_cover).unwrap_err();
+                        assert_eq!(foreign,"builder parameter cover from another original source");
+                    }
+
                     let missing_store=MaterialStore::new_with_retained_parameters(&round_state,claim,scope,
                         &material_units,&covered_parameters[1..],None,
                         crate::palw_court_shared_tir_builder_store_v1::PromptMaterialV1::Missing).unwrap();
