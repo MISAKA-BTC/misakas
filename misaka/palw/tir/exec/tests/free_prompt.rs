@@ -411,3 +411,50 @@ fn tir_free_prompt_contexts_carry_the_registered_semantics_the_node_sets() {
     off.cu_ruleset_id = Hash64::from_u64_word(0x3D05);
     assert!(!off.matches_context(&header));
 }
+
+/// **Lane rfc02-09: the builder door the node's IR-only duty paths use** (`TirBackendV1::with_fp_class_facts_v1`, called by
+/// `PalwPanelService::resolve_tir_registered_v1` through `palw_tir_with_registered_facts_v1`). A class registered with non-default
+/// semantics executes under the REGISTERED statement — not the backend defaults — and the builder and the trait setter agree
+/// byte for byte on the context they build.
+#[test]
+fn tir_free_prompt_builder_executes_a_non_default_class_under_its_registered_semantics() {
+    use kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1;
+    use kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3;
+    let mut pair = backends("semantics-builder").into_iter();
+    let (name, default_backend) = pair.next().unwrap();
+    let (_, mut set_backend) = backends("semantics-builder").into_iter().next().unwrap();
+    let mut semantics =
+        PalwClassSemanticsV1::of_registration(default_backend.class_id(), default_backend.artifact_root(), default_backend.canonical(), 0);
+    semantics.model_profile_id = Hash64::from_u64_word(0x4E01);
+    semantics.runtime_manifest_hash = Hash64::from_u64_word(0x4E02);
+    semantics.runtime_class_id = Hash64::from_u64_word(0x4E03);
+    semantics.cu_ruleset_id = Hash64::from_u64_word(0x4E04);
+    semantics.tokenizer_id = default_backend.class().tokenizer_id;
+    let facts = PalwFpClassFactsV3 {
+        model_profile_id: semantics.model_profile_id,
+        runtime_manifest_hash: semantics.runtime_manifest_hash,
+        runtime_class_id: semantics.runtime_class_id,
+        shape_profile_id: Hash64::from_u64_word(0xBAD),
+        cu_ruleset_id: semantics.cu_ruleset_id,
+    };
+    let prompt = prompt_of(&default_backend, 0);
+    let job = fp_job(&default_backend, &prompt, 2);
+    let context_of = |b: &TirBackendV1| {
+        let run = b.execute_free_prompt(&job, &usize_ids(&prompt)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let shape = b.capture_shape(&run.outcome.material).expect("an IR capture has a shape");
+        let PalwPublicExecutionBindingHeaderV1::Tir(header) = b.public_execution_binding_header_v1(&run.outcome.material).unwrap() else {
+            panic!("{name}: an IR capture exports a TIR header");
+        };
+        (shape.job_context, header.job_context)
+    };
+    let (default_shape, _) = context_of(&default_backend);
+    assert!(!semantics.matches_context(&default_shape), "the defaults are not the registered statement");
+    let class_id = default_backend.class_id();
+    let built = default_backend.with_fp_class_facts_v1(facts.clone());
+    let (shape, header) = context_of(&built);
+    assert!(semantics.matches_context(&shape), "{name}: the run executes under the registered semantics");
+    assert!(semantics.matches_context(&header), "{name}: and its public header carries them");
+    assert_eq!(shape.shape_profile_id, class_id, "the class id is never the caller's");
+    set_backend.set_registered_class_facts_v1(facts);
+    assert_eq!(context_of(&set_backend), (shape, header), "the builder and the node's setter build one context");
+}

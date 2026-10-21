@@ -20,9 +20,12 @@
 //! * **Membership is economic only** (PRINCIPLES §9): a listed class gets the 1.0 tier; every claim still needs its own Gate C
 //!   (`SecurityCertified`) and court. #10 is listed as the user chose but is not end-to-end adjudicable, so its claims cannot be
 //!   certified until it is: listing it grants nothing a claim has not earned.
-//! * **Open integration requirement** (recorded, not implemented here): registration on the next network must bind the `PALWART3`
-//!   root as the class's artifact root (today a TIR class binds its inventory root directly), with the court opening the inner
-//!   inventory leaves under the inner root the container root commits.
+//! * **Container root → inventory root → registration → court** (RFC-0002 02-A + lane rfc02-09): a TIR class registers its
+//!   inventory root; its registrant binds the `PALWART3` container (tag 175, `palw_tir_container_v1`, past
+//!   `palw_tir_container_identity_v1`), whose opening is recomputed and whose one weight section's inner root must equal the
+//!   registered inventory root; courts open operands under that inventory root. The catalog lists the container root (typed
+//!   [`crate::palw_artifact_identity_v1::PalwContainerRootV1`]) and the tier read reaches the class through the recorded binding
+//!   only (`palw_model_tier_at_v1` → `palw_catalog_container_root_of_class_v1`).
 
 use crate::Hash64;
 use crate::palw_annual_catalog_v1::{AnnualModelCatalogV1, ApprovedModelV1, PALW_ANNUAL_CATALOG_KERNEL_VERSION_MAX_V1};
@@ -233,8 +236,10 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
 pub struct PalwGenesisRootsV1 {
     /// The registered class id.
     pub class_id: Hash64,
-    /// The `PALWART3` root of the model's artifact.
-    pub artifact_root: Hash64,
+    /// The `PALWART3` root of the model's artifact — typed (lane rfc02-09), so an inventory root or an A16 digest cannot be
+    /// listed in its place. A TIR class reaches the 1.0 tier through it only once its registrant has bound this container
+    /// (`palw_artifact_identity_v1::palw_catalog_container_root_of_class_v1`).
+    pub container_root: crate::palw_artifact_identity_v1::PalwContainerRootV1,
     /// The verification plan the entry names (`0^64`: the class's own registered plan).
     pub verification_plan_id: Hash64,
 }
@@ -294,7 +299,7 @@ pub fn palw_genesis8_edition0_v1(
     let mut models = Vec::with_capacity(listed.len());
     for m in &listed {
         let (_, r) = roots.iter().find(|(id, _)| *id == m.genesis_id).ok_or(E::Missing { genesis_id: m.genesis_id })?;
-        if r.class_id == Hash64::default() || r.artifact_root == Hash64::default() {
+        if r.class_id == Hash64::default() || r.container_root.hash() == Hash64::default() {
             return Err(E::Zero { genesis_id: m.genesis_id });
         }
         if m.kernel_version > PALW_ANNUAL_CATALOG_KERNEL_VERSION_MAX_V1 {
@@ -305,7 +310,7 @@ pub fn palw_genesis8_edition0_v1(
         }
         models.push(ApprovedModelV1 {
             class_id: r.class_id,
-            artifact_root: r.artifact_root,
+            artifact_root: r.container_root.hash(),
             kernel_version: m.kernel_version,
             verification_plan_id: r.verification_plan_id,
         });
@@ -326,7 +331,10 @@ mod tests {
                     *id,
                     PalwGenesisRootsV1 {
                         class_id: Hash64::from_u64_word(1000 + *id as u64),
-                        artifact_root: Hash64::from_u64_word(2000 + *id as u64),
+                        container_root: crate::palw_artifact_identity_v1::PalwContainerRootV1::named(Hash64::from_u64_word(
+                            2000 + *id as u64,
+                        ))
+                        .unwrap(),
                         verification_plan_id: Hash64::default(),
                     },
                 )
@@ -384,7 +392,9 @@ mod tests {
             Err(PalwGenesisCatalogErrorV1::Missing { genesis_id: 3 })
         );
         let mut zero = roots_for(&all);
-        zero[0].1.artifact_root = Hash64::default();
+        zero[0].1.class_id = Hash64::default();
+        // A zero container root cannot even be named (lane rfc02-09: the type refuses it).
+        assert!(crate::palw_artifact_identity_v1::PalwContainerRootV1::named(Hash64::default()).is_none());
         assert_eq!(palw_genesis8_edition0_v1(&zero, true), Err(PalwGenesisCatalogErrorV1::Zero { genesis_id: 1 }));
         assert_eq!(
             palw_genesis8_edition0_v1(&roots_for(&[1, 2, 3, 4, 5, 6, 7, 8, 10]), true),
@@ -399,7 +409,7 @@ mod tests {
         assert_eq!(palw_genesis8_edition0_v1(&roots_for(&all), false), Err(PalwGenesisCatalogErrorV1::Unknown { genesis_id: 3 }));
         // The roots differ with the content: a different artifact root is a different catalog.
         let mut other = roots_for(&all);
-        other[1].1.artifact_root = Hash64::from_u64_word(99);
+        other[1].1.container_root = crate::palw_artifact_identity_v1::PalwContainerRootV1::named(Hash64::from_u64_word(99)).unwrap();
         assert_ne!(palw_genesis8_edition0_v1(&other, true).unwrap().root(), c.root());
     }
 }

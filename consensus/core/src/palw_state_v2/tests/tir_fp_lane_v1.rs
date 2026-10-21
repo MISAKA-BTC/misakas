@@ -886,3 +886,53 @@ fn t_n1_a_forged_ir_fp_claim_is_convicted_by_one_outside_owner_and_never_paid() 
     assert!(tn1_spend(&l, &later, terms.material_until_daa + 2).is_err(), "its receipt never spends: no reward, no weight");
     assert_eq!(later.safe_weight(), 0, "no consensus weight from the forged claim");
 }
+
+/// **Lane rfc02-09 (RFC-0002 Tensor IR identity): a catalog that names a TIR model by its `PALWART3` container root reaches the
+/// class only through the chain's recorded binding.** The class registers its inventory root; edition 0 lists the container root
+/// (as `palw_genesis8_edition0_v1` does). Unbound — or asked at a DAA before the binding — the class is `Registered` (the inventory
+/// root is not the catalog's key and is never guessed into it); once its registrant's binding folds (past
+/// `palw_tir_container_identity_v1`) it is `Approved` from the bound DAA on. A catalog listing the INVENTORY root still matches
+/// exactly as before (byte-identical for every class that never binds).
+#[test]
+fn tir_catalog_tier_reaches_a_class_through_its_bound_container_root_only() {
+    use crate::palw_annual_catalog_v1::{ApprovedModelV1, PalwAnnualCatalogChainV1};
+    use crate::palw_artifact_identity_v1::{palw_catalog_container_root_of_class_v1, palw_registered_inventory_root_v1};
+    use crate::palw_model_tier_v1::{PalwModelTierMirrorV1, palw_model_tier_at_v1};
+    use crate::palw_tir_container_v1::test_binding_v1;
+    let mut l = lane(false);
+    let mut class = l.state.class(&l.class_id).unwrap().clone();
+    class.registrant_bond = Some(bond_key(PRODUCER));
+    l.state.set_class_for_tests(l.class_id, class);
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let inventory = palw_registered_inventory_root_v1(&l.state, &l.class_id).expect("a TIR class's root is an inventory root");
+    let binding = test_binding_v1(&record, inventory.hash(), b"{\"model\":\"tiny\"}");
+    let container = binding.container_root;
+    assert_ne!(container, inventory.hash(), "the container root and the inventory root are different objects");
+    let mirror_of = |root: Hash64| PalwModelTierMirrorV1 {
+        from_daa: 0,
+        catalogs: PalwAnnualCatalogChainV1::genesis_only(vec![ApprovedModelV1::of(l.class_id, root)]),
+        registered_permille: 300,
+        registered_cap_permille: 1000,
+    };
+    let mut p = l.p.clone();
+    p.model_tier_v1 = Some(mirror_of(container));
+    // Unbound: the catalog's container root does not reach the class.
+    assert!(palw_catalog_container_root_of_class_v1(&l.state, &l.class_id, AT_DAA).is_none());
+    assert!(!palw_model_tier_at_v1(&l.state, &p, &l.class_id, AT_DAA).is_approved(), "unbound: registered");
+    // The registrant binds (past the fence).
+    let mut past = l.extras.clone();
+    past.tir_container_identity_active = true;
+    let bound = PalwConsensusObjectV2::TirClassContainerBoundV1 { binding: Box::new(binding.clone()), signature: Vec::new() };
+    let (bound_state, _) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).expect("the binding folds");
+    assert_eq!(palw_catalog_container_root_of_class_v1(&bound_state, &l.class_id, AT_DAA).map(|c| c.hash()), Some(container));
+    assert!(palw_model_tier_at_v1(&bound_state, &p, &l.class_id, AT_DAA).is_approved(), "bound: approved through the container");
+    assert!(
+        !palw_model_tier_at_v1(&bound_state, &p, &l.class_id, AT_DAA - 1).is_approved(),
+        "a DAA before the binding does not read it"
+    );
+    // A catalog naming the inventory root matches as it always did; one naming another root matches nothing.
+    p.model_tier_v1 = Some(mirror_of(inventory.hash()));
+    assert!(palw_model_tier_at_v1(&l.state, &p, &l.class_id, AT_DAA).is_approved());
+    p.model_tier_v1 = Some(mirror_of(Hash64::from_u64_word(0xC0FFEE)));
+    assert!(!palw_model_tier_at_v1(&bound_state, &p, &l.class_id, AT_DAA).is_approved());
+}

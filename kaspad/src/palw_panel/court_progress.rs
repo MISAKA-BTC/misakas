@@ -455,7 +455,7 @@ impl PalwPanelService {
             // responder's is the claim's; a challenger's its own execution) and, for the bottom, the
             // ACCUSED capture; signed here, and queued as every court move is.
             if let Some(mv) = tir_dissect::palw_tir_dissect_move_of_duty_v1(duty)
-                && let Some(tir) = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root)
+                && let Some(tir) = self.resolve_tir_registered_v1(session, duty.class_id, duty.artifact_root)
             {
                 let tir = match tir {
                     Ok(tir) => tir,
@@ -986,7 +986,7 @@ impl PalwPanelService {
                     // IR backend from the ACCUSED capture — `TirCone` for either party, and at a
                     // logits tile the challenger's `TirLogits` and decode-token doors
                     // (`palw_panel::tir_court`). A party files only the close that wins its side.
-                    if let Some(tir) = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) {
+                    if let Some(tir) = self.resolve_tir_registered_v1(session, duty.class_id, duty.artifact_root) {
                         let tir = match tir {
                             Ok(tir) => tir,
                             Err(why) => {
