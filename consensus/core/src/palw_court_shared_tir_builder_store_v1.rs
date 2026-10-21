@@ -405,3 +405,6 @@ pub(crate) mod numerical_material_join;
 
 #[path = "palw_court_shared_tokenizer_family_v1.rs"]
 pub(crate) mod tokenizer_family;
+
+#[path = "palw_court_shared_original_aggregate_v1.rs"]
+pub(crate) mod original_aggregate;

@@ -10,6 +10,8 @@ use crate::palw_tir_public_owned_v1::{
 };
 use crate::palw_tir_public_state_v1::{PalwTirPublicAcquisitionRowV1, PalwTirPublicPreparationRowV1};
 
+include!("palw_tir_prepared_original_geometry_v1.rs");
+
 /// Diagnostics for a funded carrier on the native accepted UTXO path. There is
 /// deliberately no Admitted/Complete variant and no state or spend capability.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -270,7 +272,7 @@ pub(super) fn prepare_paired_original_v1(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
     public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
-) -> Result<Option<Frame>, PalwStateV2Error> {
+) -> Result<Option<PreparedOriginalFrameV1>, PalwStateV2Error> {
     let PalwConsensusObjectV2::FreePromptCommitted { claim, .. } = object else { return Ok(None) };
     let Some(envelope) = b.extras.tir_public_originals.get(claim) else { return Ok(None) };
     check_paired_original_v1(b, object)?;
@@ -282,7 +284,12 @@ pub(super) fn prepare_paired_original_v1(
     if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi {
         return Err(refused("TFP1 declared burn differs from the exact original native full-SUM rent"));
     }
-    Ok(Some(frame))
+    // Capture native facts without new Source reconstruction/resource scope.
+    // The ordinary old preparation and price/quote paths remain unchanged.
+    let mut native=rules(b)?;
+    native.maximum_leaves=b.state.class_step_ladder_v1(&original.job.class_id,native.maximum_leaves);
+    let registered=b.state.class(&original.job.class_id).map(|c|(c.registered_daa,crate::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(b.params,c.registered_daa)));
+    Ok(Some(PreparedOriginalFrameV1{frame,at:*ctx,native,registered,network:b.extras.tir_public_network_domain_v1,semantic_snapshot:b.state.class_semantics_v1(&original.job.class_id).cloned()}))
 }
 
 /// Native price derivation on the actual pre-object state. The object must be
@@ -1646,6 +1653,7 @@ mod conviction_e2e_tests {
     include!("palw_court_shared_numerical_material_native_tests.rs");
     include!("palw_prefix_material_native_tests.rs");
     include!("palw_court_shared_prefix_family_native_tests.rs");
+    include!("palw_court_original_aggregate_native_tests.rs");
     include!("palw_root_input_material_native_tests.rs");
     include!("palw_court_shared_constraint_native_tests.rs");
     include!("palw_court_shared_tokenizer_native_tests.rs");

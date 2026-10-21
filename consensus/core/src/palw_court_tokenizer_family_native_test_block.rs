@@ -3,6 +3,7 @@
     let source_owner=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(&fx.record,&fx.layout,frame.header_v1(),frame.original_v1().execution_root,frame.original_v1().trace_root,fx.rules.maximum_leaves).unwrap();
     let required=std::cell::Cell::new(0);
     let family=Family::derive_reserved_v1(&b.state,frame,&source_owner,&retained,&produced,|q|{required.set(q);Ok(None)}).unwrap();
+    include!("palw_court_original_aggregate_tokenizer_block.rs");
     assert_eq!(produced.artifact_binding_v1(),(semantics.tokenizer_id,raw.len() as u64));
     assert_eq!(produced.key_work_bound_v1(),semantics.tokenizer_key_events.unwrap());
     // A true native Court under a different qualified statement can seal the

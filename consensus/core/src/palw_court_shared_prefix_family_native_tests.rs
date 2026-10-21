@@ -19,8 +19,18 @@ fn prefix_family_actual_canonical_boundaries_all_suppliers_and_replay(){
         assert!(matches!(Family::derive_native_v1(&state,frame,&source,&graph,profile,total,lookup_work-1),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
         assert_eq!(family.total_v1(),total);assert_eq!(family.dependencies_v1().len() as u64,total*graph.role_slots_v3());
         let named=crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&frame.original_v1().job).unwrap();
-        for d in family.dependencies_v1(){let leaf=prefix.space.prefix_state_leaf_v1(&prefix.job_context,named.prefix_tokens,d.ordinal).unwrap();assert_eq!(d.index,leaf.index);
-            assert!(graph.nodes_v3().any(|n|n.id_v3()==d.logical&&graph.absolute_packet_id_v3(n.id_v3())==d.absolute));}
+        // Independent one-pass test index over actual graph Finish nodes.
+        // No production canonical lookup helper is used to validate its output.
+        let mut finish_index=std::collections::BTreeMap::new();
+        for node in graph.nodes_v3(){if matches!(node.kind_v3(),crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{..}){
+            assert!(finish_index.insert(node.id_v3(),node).is_none(),"unique actual Finish identity");
+        }}
+        for d in family.dependencies_v1(){
+            let leaf=prefix.space.prefix_state_leaf_v1(&prefix.job_context,named.prefix_tokens,d.ordinal).unwrap();assert_eq!(d.index,leaf.index);
+            let actual=finish_index.get(&d.logical).expect("actual Prefix supplier Finish");assert_eq!(graph.absolute_packet_id_v3(actual.id_v3()),d.absolute);
+            let crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::Unit(ordinal),role}=actual.kind_v3() else{panic!("Prefix needs actual StepLeaf Finish")};
+            assert_eq!(*role,d.role);assert_eq!(set.request_at(*ordinal).unwrap(),Q::StepLeaf{index:d.index});
+        }
         let mut extra=crate::palw_native_resource_v1::TirNativeRequestsV1::new();extra.exact_v1::<crate::palw_court_shared_tir_builder_store_v1::prefix_family::NativePrefixFamilyV1<'_>>(1).unwrap();
         extra.exact_v1::<crate::palw_court_shared_tir_builder_store_v1::prefix_family::PrefixBoundaryDependencyV1>(total*graph.role_slots_v3()).unwrap();let required=first.get().checked_add(extra.bytes_v1()).unwrap();
         for limit in [first.get()-1,required-1,required]{let checker=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:limit,database_bytes:0});

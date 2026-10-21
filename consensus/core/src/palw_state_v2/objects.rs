@@ -3728,7 +3728,7 @@ fn apply_object_inner(
             let staged_contract = if let Some(frame) = &tir_original {
                 // This is an ORIGINAL prospective allocation, not a repricing
                 // of an old claim or a second old required-family bundle.
-                claim.trace_retention_daa = claim.trace_retention_daa.max(frame.plan_v1().terms.material_until_daa);
+                claim.trace_retention_daa = claim.trace_retention_daa.max(frame.frame_v1().plan_v1().terms.material_until_daa);
                 None
             } else {
                 builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?
@@ -3809,7 +3809,7 @@ fn apply_object_inner(
             }
             if let Some(frame) = tir_original {
                 // G14 G-T3: the frame keeps the claim's public prompt ids to its material horizon (derived work or not).
-                palw_tir_public_fold_v1::install_original_v1(builder, ctx, frame, &prompt_row)?;
+                palw_tir_public_fold_v1::install_prepared_original_v1(builder, ctx, frame, &prompt_row)?;
             }
         }
     }

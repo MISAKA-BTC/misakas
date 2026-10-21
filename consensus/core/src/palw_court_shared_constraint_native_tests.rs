@@ -173,6 +173,7 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
     let graph_edges=upper.fresh_responses.checked_mul(upper.maximum_custodians+1).unwrap().checked_add(upper.streams.checked_mul(2).unwrap()).unwrap().checked_add(upper.parts).unwrap();
     let family_graph=FamilyGraph::derive_native_v3(frame,&source,profile,SourceGraphBudgetV3{max_queries:set.len(),max_roles:upper.maximum_custodians,max_vertices:upper.signed_controls,max_edges:graph_edges}).unwrap();
     let family=Universe::derive_native_v1(&b.state,frame,&source,&family_graph,profile).unwrap();
+    include!("palw_court_original_aggregate_constraint_block.rs");
     assert_eq!(family.semantic_supply_v1(),ConstraintSemanticSupplyV1::UnresolvedTableSupply{table:semantics.token_table_root.unwrap(),vocabulary:source.vocab_v1()});
     let mut rank=0;
     for position in 0..source.decode_count_v1(){for beat in 0..source.vocab_v1(){for w in 0..=source.vocab_v1(){

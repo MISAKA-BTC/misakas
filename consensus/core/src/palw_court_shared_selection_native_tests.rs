@@ -51,13 +51,21 @@ fn shared_selection_family_actual_rules_and_runtime_tiles_recheck(){
         let duty=universe.project_native_v1(Target{position:pos,beat},visits).unwrap();
         let tiles=u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
         assert_eq!(duty.dependencies_v1().len() as u64,(tiles+1)*roles);
+        // Independent one-pass test index over actual graph Finish nodes.
+        // No production canonical lookup helper is used to validate its output.
+        let mut finish_index=std::collections::BTreeMap::new();
+        for node in graph.nodes_v3(){if matches!(node.kind_v3(),crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{..}){
+            assert!(finish_index.insert(node.id_v3(),node).is_none(),"unique actual Finish identity");
+        }}
         for dep in duty.dependencies_v1(){
-            let expected=graph.nodes_v3().find(|n|match n.kind_v3(){
-                crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::FullIds,role}=>dep.tile.is_none()&&*role==dep.role,
-                crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::Unit(n),role}=>
-                    *role==dep.role&&dep.tile.is_some_and(|t|set.request_at(*n).unwrap()==(Q::TraceTile{row:pos,tile:t as u32})),_=>false,
-            }).unwrap();
-            assert_eq!(dep.logical,expected.id_v3());assert_eq!(dep.absolute,graph.absolute_packet_id_v3(expected.id_v3()));
+            let expected=finish_index.get(&dep.logical).expect("actual Selection supplier Finish");
+            match expected.kind_v3(){
+                crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::FullIds,role}=>{assert!(dep.tile.is_none());assert_eq!(*role,dep.role);},
+                crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::Unit(ordinal),role}=>{
+                    let tile=dep.tile.expect("selected row needs TraceTile, not FullIds");assert_eq!(*role,dep.role);assert_eq!(set.request_at(*ordinal).unwrap(),Q::TraceTile{row:pos,tile:u32::try_from(tile).unwrap()});
+                },_=>panic!("selection needs actual Finish node"),
+            }
+            assert_eq!(dep.absolute,graph.absolute_packet_id_v3(expected.id_v3()));
         }
         // Exact local projection owner accounting only. Universe/Source/graph
         // and builder scratch have independent tickets and are not this quota.

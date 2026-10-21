@@ -30,9 +30,25 @@ fn numerical_material_join_actual_all_root_readset_and_supplier_finishes(){
         let lookup_work=joined.dependencies_v1().len() as u64;
         let exact_join=Join::derive_native_v1(frame,&source,&graph,&numerical,&cover,profile,&fx.rules.court,demand,lookup_work).unwrap();assert_eq!(exact_join.dependencies_v1(),joined.dependencies_v1());
         assert!(matches!(Join::derive_native_v1(frame,&source,&graph,&numerical,&cover,profile,&fx.rules.court,demand,lookup_work-1),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
-        for d in joined.dependencies_v1(){assert!(cover.roots_v1().iter().any(|r|r.leaf==d.root));
-            assert!(graph.nodes_v3().any(|n|n.id_v3()==d.logical&&graph.absolute_packet_id_v3(n.id_v3())==d.absolute));
-            if let M::StepLeaf(index)=d.material {assert!(index<source.leaf_count_v1());}}
+        // Independent one-pass test index over actual graph Finish nodes.
+        // No production canonical lookup helper is used to validate its output.
+        // binary_search below requires the opaque cover's strict ascending leaf order.
+        assert!(cover.roots_v1().windows(2).all(|w|w[0].leaf<w[1].leaf),"cover roots strictly ascending by leaf");
+        let mut finish_index=std::collections::BTreeMap::new();
+        for node in graph.nodes_v3(){if matches!(node.kind_v3(),crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{..}){
+            assert!(finish_index.insert(node.id_v3(),node).is_none(),"unique actual Finish identity");
+        }}
+        for d in joined.dependencies_v1(){
+            assert!(cover.roots_v1().binary_search_by_key(&d.root,|r|r.leaf).is_ok());
+            let actual=finish_index.get(&d.logical).expect("dependency belongs to actual opaque graph");
+            assert_eq!(graph.absolute_packet_id_v3(actual.id_v3()),d.absolute);
+            match (d.material,actual.kind_v3()){
+                (M::FullIds,crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::FullIds,role})=>assert_eq!(*role,d.role),
+                (M::StepLeaf(index),crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::Unit(ordinal),role})=>{
+                    assert_eq!(*role,d.role);assert_eq!(set.request_at(*ordinal).unwrap(),Q::StepLeaf{index});assert!(index<source.leaf_count_v1());
+                },_=>panic!("dependency actual Finish kind/target mismatch"),
+            }
+        }
         for limit in [required.get()-1,required.get()]{let checker=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:limit,database_bytes:0});
             let got=Join::derive_reserved_v1(frame,&source,&graph,&numerical,&cover,profile,&fx.rules.court,demand,visits,|q|checker.reserve_requests_v1(q,0).map(Some));
             if limit==required.get(){let held=got.unwrap();assert_eq!(checker.outstanding(),(required.get(),0));drop(held);}else{assert!(matches!(got,Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));}assert_eq!(checker.outstanding(),(0,0));}
