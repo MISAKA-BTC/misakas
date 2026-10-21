@@ -1,0 +1,123 @@
+{
+  "unique_selected": 37,
+  "runs": [
+    {
+      "folder": "fp-original-projection",
+      "log": "core-selection-0.log",
+      "tests": [
+        "palw_fp_objects_v3::tests::every_skip_reason_is_named",
+        "palw_fp_objects_v3::tests::an_accepted_commitment_becomes_one_object_carrying_its_leaves",
+        "palw_fp_objects_v3::tests::the_commitment_signature_is_checked_over_the_claim_id_in_its_own_context",
+        "palw_fp_objects_v3::tests::a_commitment_whose_signature_does_not_verify_creates_no_claim",
+        "palw_fp_objects_v3::tests::a_leaf_count_above_the_cap_never_becomes_an_object",
+        "palw_fp_objects_v3::tests::only_this_subnetwork_is_read_and_order_is_preserved",
+        "palw_fp_objects_v3::tests::a_held_class_commitment_is_bounded_by_its_own_ladder_and_every_other_by_the_networks",
+        "palw_fp_objects_v3::tests::admission_never_refuses_what_the_walk_would_credit",
+        "palw_fp_objects_v3::tests::the_isolation_door_admits_the_regimes_ladder_only_where_the_regime_is_declared",
+        "palw_fp_objects_v3::tests::a_class_that_does_not_commit_q24_logits_is_offered_only_the_unit_free_controls",
+        "palw_fp_objects_v3::tests::the_walk_carries_the_prompt_length_and_the_prompt_itself",
+        "palw_fp_objects_v3::tests::the_walk_bounds_a_commitment_at_the_rulesets_ladder_and_the_door_never_narrower",
+        "palw_fp_objects_v3::tests::ten_times_the_work_leaves_rides_below_the_fence_and_the_walk_refuses_it_past_it",
+        "palw_fp_objects_v3::tests::the_walk_admits_one_job_version_per_side_of_the_decode_rules_fence",
+        "palw_fp_objects_v3::tests::trace_manifest_root_is_retained_as_metadata_without_changing_carrier_bytes",
+        "palw_fp_objects_v3::tests::under_the_held_regime_public_ids_past_one_transaction_are_skipped_by_name"
+      ],
+      "summaries": [
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 4732 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "folder": "fp-original-projection",
+      "log": "core-selection-1.log",
+      "tests": [
+        "palw_fp_prefix_v1::tests::the_walk_carries_the_state_past_the_fence_and_skips_the_claim_below_it"
+      ],
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4747 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "folder": "fp-original-projection",
+      "log": "core-selection-2.log",
+      "tests": [
+        "palw_fp_constraint_job_v1::tests::the_walk_carries_a_constrained_claim_on_its_stand_in_and_skips_it_by_name_otherwise"
+      ],
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4747 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "folder": "fp-original-projection",
+      "log": "core-selection-3.log",
+      "tests": [
+        "palw_derived_v1::tests::golden_vector_ids_are_frozen",
+        "palw_freeprompt_v3::tests::golden_vector_ids_are_frozen"
+      ],
+      "summaries": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 4746 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "folder": "fp-original-projection",
+      "log": "palw_activation_pool_is_t12_only.log",
+      "tests": [
+        "the_pool_carries_its_fork_id_name",
+        "the_pool_is_genesis_only_and_needs_the_registry_the_jury_and_the_audit",
+        "the_pool_and_its_terms_move_testnet12s_fingerprint",
+        "testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_pool",
+        "the_activation_pool_is_armed_on_testnet12_only"
+      ],
+      "summaries": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      ]
+    },
+    {
+      "folder": "fp-original-projection",
+      "log": "palw_the_release_did_not_move.log",
+      "tests": [
+        "p4_does_not_forbid_the_bundle_and_the_release_still_does_not_arm_it",
+        "the_verification_s3_and_s2_fences_are_past_s1_and_the_lock_ledger",
+        "every_fence_the_reward_work_added_is_dormant_everywhere",
+        "the_execution_quanta_fence_is_past_the_clock",
+        "the_daa_clock_fence_is_past_the_stalled_tip",
+        "the_objective_offence_fence_is_past_the_clock",
+        "the_shipped_release_fingerprint_did_not_move",
+        "arming_one_fence_of_the_bundle_on_the_release_is_refused",
+        "the_work_price_denominator_cannot_reach_the_payer_past_the_bundle"
+      ],
+      "summaries": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "folder": "fp-original-projection-native",
+      "log": "native-selection-0.log",
+      "tests": [
+        "pipeline::virtual_processor::tests::a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_quantum"
+      ],
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1065 filtered out; finished in 0.07s"
+      ]
+    },
+    {
+      "folder": "fp-original-projection-native",
+      "log": "native-selection-1.log",
+      "tests": [
+        "pipeline::virtual_processor::tests::palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped_otherwise"
+      ],
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1065 filtered out; finished in 0.08s"
+      ]
+    },
+    {
+      "folder": "fp-original-projection-native",
+      "log": "native-selection-2.log",
+      "tests": [
+        "pipeline::virtual_processor::tests::funded_original_native_candidate::palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_incomplete_admission"
+      ],
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1065 filtered out; finished in 0.01s"
+      ]
+    }
+  ]
+}

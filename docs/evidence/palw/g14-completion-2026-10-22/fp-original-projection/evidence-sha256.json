@@ -1,0 +1,16 @@
+{
+  "native-verification-runner.py": "5b5f0b8150e7379345266706d74127939b5089c101dbc56cc9c874b24a5cec2d",
+  "independent-review.md": "6d980b5cb17848e3031a6154026d3e21185700d369b891d1fa3a0e75040d0974",
+  "core-verification-runner.py": "aef64b9a7b5d8976da3e1dc000c49cbc3d0f853a796b054cbd4f35258e05573f",
+  "source.patch": "786e4f3583912acaddefe31cfcd2d2d5bd186ac9a611a0f4261db6e0e857e423",
+  "palw_activation_pool_is_t12_only.log": "284b3259e18d27c95dcb9966aaf8945a46ba456c07da55e93a49dc2641818618",
+  "core-selection-0.log": "f9a3ae7e6750548a1b4f3f400fdb1166738cf2096c60e73bd1e15abeac92c75f",
+  "core-selection-1.log": "dd88f2593bd36674cb77924c2a6fc4b579629ebcfcbf31557304bb6606af9e03",
+  "core-build.log": "61223e76aa75d96a8c83d6333388d229f4fee0f5fc0d2dec89814e97d008b2db",
+  "core-selection-3.log": "33cfe2e0a298dc1e0ae9d4538766be7fd624916246d1915c79652f9b7db59c23",
+  "core-selection-2.log": "3f202b4c41a93cb44d7cd6162388c822e8687ed09898babf028002d20d01cbe8",
+  "verification.json": "c903ccf0dcb088d72cd6180e0ea1837394e1f81a8a6427eb9faf3168c72f7053",
+  "candidate-mechanical-audit.json": "330c1ce61bab73c27c1373ad08e7badf6922ce92ba0819ae98e9fc7466c7af18",
+  "applied-mapping-audit.json": "db8fc29d904ef9e933949713845d4c6aec92873a99c6af810059d351a9ca0233",
+  "palw_the_release_did_not_move.log": "01543cc55880d29382d4da08103fe575318ec91936f65f37694851165a6f3c77"
+}

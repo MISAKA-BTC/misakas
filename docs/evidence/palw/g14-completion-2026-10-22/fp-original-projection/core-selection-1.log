@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_fp_prefix_v1::tests::the_walk_carries_the_state_past_the_fence_and_skips_the_claim_below_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4747 filtered out; finished in 0.00s
+

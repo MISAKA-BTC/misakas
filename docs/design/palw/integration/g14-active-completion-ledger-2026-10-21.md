@@ -52,6 +52,8 @@ Next primary integration work is the original coordinator: derive canonical comp
 
 ## Latest parallel checkpoint
 
+[Single decoded-original policy path](../../../evidence/palw/g14-completion-2026-10-22/fp-original-projection.md): core34 and actual-signature/native3 selected tests pass. Existing policy checks and object fields are reused through one crate-private helper; carrier decoding/routing remain separate. No policy, activation, funded-success capability or current-authority shortcut is introduced.
+
 [Retained native Source constructor](../../../evidence/palw/g14-completion-2026-10-22/source-native-owner.md): 21 unique parent tests plus two isolated quota-worker invocations pass. The explicit constructor reserves conservative construction-peak typed requests before allocation and holds the ticket with Source; insufficient quota, holding/release and semantic-failure release are tested. Old call sites and activation are unchanged. Numerical/source-graph retained owners, complete canonical original and actual escrow remain incomplete.
 
 [Source StepSpace allocation inventory](../../../evidence/palw/g14-completion-2026-10-22/source-step-inventory.md): 19 unique selected successes (StepSpace2, retained TIR3, t12 identity9, activation5). Opaque actual program metadata now feeds checked typed Vec capacity bounds; complete Source ownership and admission are still separate.
