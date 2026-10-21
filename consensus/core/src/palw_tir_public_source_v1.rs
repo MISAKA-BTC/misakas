@@ -215,16 +215,16 @@ impl PalwTirPublicSourceV1 {
         header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
         use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeCoverageV1, NativeHeapV1,
-            TirNativeRequestsV1, standalone_tir_program_shape_v1};
+            TirNativeRequestsV1, source_tir_program_shape_v1};
         // Check real byte/count identity before scanner, clone or class builder.
         registered.check_program_v1().map_err(|e|E::Decode(e.into()))?;
         if layout.commit_tiles.len() as u64 > u64::from(registered.program_bytes)
             || layout.state_tiles.len() as u64 > u64::from(registered.program_bytes) {
             return Err(E::Decode("source layout exceeds registered program geometry".into()));
         }
-        let shape=standalone_tir_program_shape_v1(&registered.program).map_err(|e|E::Decode(e.to_string()))?;
+        let (shape,source_program_requests)=source_tir_program_shape_v1(&registered.program)?;
         let mut q=TirNativeRequestsV1::new();
-        q.add_v1(shape.program_requests_v1()).map_err(E::Resource)?;
+        q.add_v1(source_program_requests).map_err(E::Resource)?;
         q.add_v1(crate::palw_tir_step_v1::native_tir_step_space_additional_requests_v1(&shape).map_err(E::Resource)?)
             .map_err(E::Resource)?;
         // resolve_owned_class verifies once and drops its temporary StepSpace

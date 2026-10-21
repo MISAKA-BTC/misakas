@@ -1,0 +1,40 @@
+# Source-specific program decode/normal-form phase audit
+
+Read-only investigation, no quote reduction applied. Parent's actual Prefix accounting log: initial 26,887,161,444; replay 1,176; Source 26,887,127,540; old StepSpace additional 132,798,240. StepSpace is ~0.5%, not the dominant cause. These are typed logical allocation requests, not measured allocated/RSS bytes.
+
+## Why the generic 26GB charge is not specific to this call path
+
+`palw_native_resource_v1/ledger_expansion.rs::program_blob<T>` is a generic audited ledger/kernel gate expansion profile. After the actual nested wire shape it adds canonical reencoding, per-node validator/plan/state-boundary/interval/cost/cone structures, `2*n*n` cone closure/tree leaves, `2*n*(MAX_LAYERS+2)` occurrence/gate-mask/prepared-wiring/memoization structures, decoded i128 constants, then multiplies the entire sum by four for v2 lifting/gate derivation/coexisting analysis. This remains required by its existing general contract until every generic caller is audited; do NOT globally replace those terms with Source-specific smaller costs.
+
+The actual native Source constructor path is narrower:
+
+1. `PalwTirPublicSourceV1::new_v1` → header.resolve_registered_layout_v1 → resolve_owned_class_v1 builds a binding with authenticated class bytes/layout/context.
+2. resolve_owned_class invokes verify_tir_binding_v1 and discards its returned verified binding/StepSpace at the statement boundary before returning the original binding.
+3. Source separately invokes verify_tir_binding_v1 again. At most one temporary decoded Program/StepSpace verification lives at a time, while the binding's raw program/layout persist. Existing Source owner quote already separately accounts those input/layout/context copies.
+4. Each verify_tir_binding calls StepSpace::new → class.decode_program → TirProgramV1::decode_canonical. Canonical decode owns the parsed Program, temporarily reencodes it, then calls `validate` and drops that returned ProgramInfo at the decode statement boundary.
+5. StepSpace::new calls `validate(&program)` a second time and retains its ProgramInfo via `from_program`, then materializes only StepSpace geometry. Decode's validation and this second validation are sequential. Neither calls `tir_admit`, gate derivation, range analysis, cone closure construction, or node/occurrence price memoization.
+
+Therefore a NEW Source-specific codec+normal-form profile is justified in principle, while keeping the old Byte/Program owner and generic ledger program_blob profile unchanged. This is not authority to remove the broad quote from general program consumers or numerical/parameter analyses that really do analyze cones/ranges.
+
+## Normal-form validator coexisting allocations to preserve
+
+`misaka/palw/tir/core/src/validate.rs::validate`:
+
+- Persistent across most phases: parameter names BTreeSet<&str>; `seen_consts` BTreeSet<(DType,Vec<u32>,Vec<u8>)> containing actual cloned constant shapes/data; state names BTreeSet<&str>; later block ProgramInfo Vec and carry TensorType Vec with owned nested shapes. Lexical Rust drop keeps these owners live until function exit, so summing phases must not assume early loop-scope reclamation for the three declaration trees.
+- Carry construction precedes per-node `check_tensor_type`. Its shapes may be malformed and far larger than MAX_RANK: the source node output shape has not yet passed that check. Per-block actual carry_count is checked <=MAX_CARRY before cloning. Any Source quote must use actual scanned rank/shape cardinality or a conservative raw-shape-derived bound here, not MAX_RANK alone. One retained carry list plus one temporary layer block carry-out list can coexist. Duplicate carry_out indices can clone the same node shape up to MAX_CARRY times; summing each declared shape once is insufficient.
+- Per-node processing has written/appended state-ID BTreeSets. It allocates an operand TensorType Vec and clones nested shapes for each actual input (arity and MAX_NODE_INPUTS checked first). Earlier Node operands have passed type checks; Param/Const/State shapes were checked in declaration pass; CarryIn raw shapes are equal to actual carry but should still be bounded by scanned shape metadata unless every prior guard is proved. Shape inference has temporary shape/broadcast Vecs. Gather can form a result rank up to the sum of operand ranks BEFORE checking equality; Select can transiently hold an intermediate and final broadcast vector. HistAppend can have row/temporary fixed-shape and growing H+shape vectors simultaneously.
+- Liveness: live Vec<bool> and DFS Vec<usize>. Each node is expanded only on its first pop (`replace(live[i],true)` precedes traversal); duplicate stack entries are not expanded again. Thus total stack pushes <= initial roots (<=nodes + carry_out + one logits) + actual Ref::Node input edges. A checked linear bound on actual scanned node/input counts suffices; no closure n² is required for this validator's liveness traversal.
+- Final used map: at most the fixed three string keys and inner BTreeSets of actual parameter/constant/state references. The loop `.cloned()` used-set can coexist with the entire map. This peak must include the extra cloned set, not only its final cardinality.
+- Error formatting also allocates; malformed transpose `perm` is formatted before its length matches rank, and rank mismatch formats actual shapes. A constant MAX_RANK error-writer assumption is unsound. A candidate should either account conservative actual serialized field-size-derived diagnostic writer space, or use bounded static errors only in a new private adapter without changing public error strings. Do not silently drop failure-path allocations.
+
+The actual typed program itself and Borsh decoder nested Vec/String allocations precede all validation and must remain leased. Canonical reencoding capacity is separately 2*max(actual canonical bytes,1024) per pinned Borsh writer.
+
+## Safe next candidate shape (not yet implemented)
+
+- Keep `standalone_tir_program_shape_v1` and `.program_requests_v1()` broad semantics for existing consumers. Add a private Source-only scanner/profile that retains the unexpanded actual wire heap, actual B/N/input/counts, and scanned shape cardinalities. It may share the allocation-free StepSpace metadata walk, but MUST NOT repurpose the broad program owner field.
+- Quote the parsed program + canonical encoding + above validator trees/operand/carry/inference/liveness/used peaks. Use actual count × pinned type/min/grow/BTree envelopes; for malformed pre-validation carry rank use actual max shape rank (or linear structural-elements bound), not an assumed already-valid rank. Every multiplication/aggregate must be checked and return typed Resource in the Source native API; unknown codec/version remains Decode/unsupported grammar, not a fabricated count.
+- Retain the maximum of sequential decode/validation/StepSpace phases only after explicitly identifying every still-live owner; conservative summation is acceptable initially and much tighter than adding gate/cone/unrolled work that does not execute. Avoid passing a caller-selected quote or profile ID as authority.
+- Existing broad program shape scanner currently maps io errors to Decode at Source entry; new owner-local allocation/overflow origin must preserve Resource directly, without string matching. Do not claim all old scanner classifications fixed by a new profile.
+- Add actual source success/identity equality vs old constructor, q-1/held/drop/wrongroot typed refusal, actual fixed/history and Prefix constructors. Report separately actual Vec capacities, quote counters, and process RSS; none alone establishes every physical peak. Unknown/truncated/huge cardinality codec tests must run before allocating constructors.
+
+No code reduction patch is supplied yet: the malformed carry/shape/error-diagnostic cases above need a fully specified conservative profile, not an unreviewed reduction of the global 4-pass multiplier. Whole G14 allbranch admission/pricing/door feasibility remains separate.

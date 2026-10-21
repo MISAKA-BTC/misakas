@@ -131,6 +131,15 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
     let eog = table.eog_opening().unwrap();
     let renderings: Vec<_> = (0..table.vocab()).map(|i| table.opening_of(i).unwrap()).collect();
     let material = ConstraintMaterialV1 { eog: &eog, renderings: &renderings };
+    assert!(semantics.raw_tokenizer_bytes.is_none());
+    assert!(b.state.staged_tokenizer_inventory_v1(semantics.tokenizer_id).is_none());
+    let encoded=renderings.iter().map(|x|borsh::to_vec(x).unwrap()).collect::<Vec<_>>();
+    let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let eog_encoded=borsh::to_vec(&eog).unwrap();
+    let retained=store.retain_semantic_table_material_v1(&b.state,claim,&bodies,&eog_encoded).unwrap();
+    assert_eq!(retained.counts_v1().vocabulary,table.vocab());
+    assert_eq!(retained.counts_v1().raw_bytes,0); // no raw body in this owner
+    assert!(store.retain_semantic_table_material_v1(&b.state,claim,&bodies[..bodies.len()-1],&eog_encoded).is_err());
     let budget = WorkBudget { max_material_bytes: 1 << 25, max_calls: 100_000 };
     let mut intent = Intent {
         version: 1,
@@ -159,6 +168,11 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
     sign(&mut intent);
     let before = b.state.state_root();
     let evidence = store.build_constraint_terminal(&b.state, &params, &rules, &intent, material, budget).unwrap();
+    let retained_evidence=store.build_constraint_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,budget).unwrap();
+    assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),
+        evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    let mut wrong=intent.clone();wrong.scope_id=h(971);sign(&mut wrong);
+    assert!(store.build_constraint_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,budget).is_err());
     let finding = evidence.recheck(&store, &b.state, &params, &rules, budget).unwrap().expect("invalid selected rendering convicted");
     assert_eq!(finding.claim_id, claim);
     assert_eq!(finding.execution_root, frame.header_v1().committed_execution_root);

@@ -158,6 +158,22 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     sign(&mut intent);
     let before = b.state.state_root();
     let evidence = store.build_tokenizer_terminal(&b.state, &params, &rules, &intent, material, budget).unwrap();
+    // Borrow the exact retained decoded payload owners: no raw/rendering clone
+    // between native material owner and the real existing terminal primitive.
+    let all_encoded=(0..table.vocab()).map(|id|borsh::to_vec(&table.opening_of(id).unwrap()).unwrap()).collect::<Vec<_>>();
+    let all_bodies=all_encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let eog_encoded=borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
+    let retained=store.retain_semantic_material_v1(&b.state,claim,&all_bodies,&eog_encoded,&raw).unwrap();
+    let retained_evidence=store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,proofs,budget).unwrap();
+    assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),
+        evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    let mut wrong=intent.clone();wrong.inventory_id=h(966);sign(&mut wrong);
+    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,proofs,budget).is_err());
+    let mut wrong=intent.clone();wrong.scope_id=h(967);sign(&mut wrong);
+    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,proofs,budget).is_err());
+    let mut wrong=intent.clone();wrong.token_id=table.vocab();sign(&mut wrong);
+    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,proofs,budget).is_err());
+    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,&proofs[..proofs.len()-1],budget).is_err());
     assert!(!evidence.recheck(&store, &b.state, &params, &rules, budget).unwrap());
     let mut changed = intent.clone();
     changed.scope_id = h(962);
