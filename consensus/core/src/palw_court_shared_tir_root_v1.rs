@@ -39,6 +39,34 @@ pub struct SignedSharedTirRootV1 {
     pub root: Box<PalwTirRootClaimV1>,
     pub signature: Vec<u8>,
 }
+/// Existing legacy root carrier overhead, counted from its actual field
+/// grammar (one-byte lifecycle tag, session, root body, arity, signature).
+/// The extra signer reference is the existing admission allowance. This is a
+/// width exemplar only, never a lifecycle message or signature assertion.
+fn legacy_root_overhead_v1() -> Result<u64, String> {
+    let fields = (0u8, Hash64::default(), (), 0u8, Vec::<u8>::new());
+    (borsh::object_length(&fields).map_err(|e| e.to_string())? as u64)
+        .checked_add(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64)
+        .and_then(|n| n.checked_add(crate::palw_tir_close_size_v1::MOVE_CARRIER_EXTRA_BYTES))
+        .ok_or_else(|| "shared root carrier count overflow".into())
+}
+/// Existing root payload allowance; new shared header/transport is additional.
+pub fn shared_root_body_ceiling_v1() -> Result<u64, String> {
+    crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1
+        .checked_sub(legacy_root_overhead_v1()?).ok_or_else(|| "shared root carrier allowance underflow".into())
+}
+pub fn shared_root_carried_bytes_v1(root: &PalwTirRootClaimV1) -> Result<u64, String> {
+    (borsh::object_length(root).map_err(|e| e.to_string())? as u64)
+        .checked_add(legacy_root_overhead_v1()?).ok_or_else(|| "shared root carrier count overflow".into())
+}
+/// Same old payload/carrier allowance, no buffer/clone, cap increase, or claim
+/// that the larger new shared envelope fits that single carrier.
+pub fn check_shared_root_cost_v1(root: &PalwTirRootClaimV1) -> Result<(), String> {
+    if shared_root_carried_bytes_v1(root)? > crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1 {
+        return Err("shared root exceeds existing root carrier allowance".into());
+    }
+    Ok(())
+}
 impl SignedSharedTirRootV1 {
     pub fn signing_message(&self, network: Hash64) -> Result<Hash64, String> {
         if self.version != 1 { return Err("shared TIR root version".into()); }
@@ -79,6 +107,7 @@ fn check_shared_tir_root_statement_v1<'a>(state: &PalwChainStateV2, rules: &Nati
     if control.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
         return Err("shared TIR root signature shape".into());
     }
+    check_shared_root_cost_v1(&control.root)?;
     let policy = shared_tir_root_policy_id_v1(rules)?;
     let c = crate::palw_court_shared_tir_state_v1::context(state, control.claim)?;
     let source = c.source(state)?;

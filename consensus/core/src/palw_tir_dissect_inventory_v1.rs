@@ -14,6 +14,8 @@ pub struct NumericalTreeInventoryV1 {
     pub child_claims: u64,
     /// Sum of path lengths over internal nodes, excluding Vec prefixes.
     pub disclosure_path_bytes: u64,
+    /// Sum of path lengths over all terminal evidence slots.
+    pub terminal_path_bytes: u64,
     pub max_depth: u32,
     /// Only PalwTirDissectRoundV1 bodies, with demand at the supplied bound.
     pub round_body_bytes_upper: u64,
@@ -43,6 +45,7 @@ pub fn numerical_tree_inventory_v1(
             out.max_depth = depth;
             if count == 1 {
                 out.terminals = out.terminals.checked_add(multiplicity)?;
+                out.terminal_path_bytes = out.terminal_path_bytes.checked_add(multiplicity.checked_mul(u64::from(depth))?)?;
                 continue;
             }
             // Same partition as palw_attn_child_ranges_v1: full ceil-width
@@ -86,7 +89,11 @@ mod tests {
                 while let Some((first, count, depth)) = todo.pop() {
                     expected.max_depth = expected.max_depth.max(depth);
                     let ranges = palw_attn_child_ranges_v1(first, count, arity).unwrap();
-                    if ranges.is_empty() { expected.terminals += 1; continue; }
+                    if ranges.is_empty() {
+                        expected.terminals += 1;
+                        expected.terminal_path_bytes += u64::from(depth);
+                        continue;
+                    }
                     expected.disclosures += 1;
                     expected.child_claims += ranges.len() as u64;
                     expected.disclosure_path_bytes += u64::from(depth);

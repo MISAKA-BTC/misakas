@@ -26,6 +26,7 @@ fn accumulate(total: &mut NumericalTreeInventoryV1, one: NumericalTreeInventoryV
     total.terminals = add(total.terminals, mul(one.terminals, count)?)?;
     total.child_claims = add(total.child_claims, mul(one.child_claims, count)?)?;
     total.disclosure_path_bytes = add(total.disclosure_path_bytes, mul(one.disclosure_path_bytes, count)?)?;
+    total.terminal_path_bytes = add(total.terminal_path_bytes, mul(one.terminal_path_bytes, count)?)?;
     total.round_body_bytes_upper = add(total.round_body_bytes_upper, mul(one.round_body_bytes_upper, count)?)?;
     total.max_depth = total.max_depth.max(one.max_depth);
     total.max_round_body_bytes_upper = total.max_round_body_bytes_upper.max(one.max_round_body_bytes_upper);

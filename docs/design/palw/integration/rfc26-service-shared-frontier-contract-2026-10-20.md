@@ -135,3 +135,14 @@ current book の assignment は再割当先を表す。変更前後は native jo
 `TirSharedRequestSetV1::numerical_disclosure_transport_upper` は、同じsource universeにscopeを結び付け、新しい `SignedSharedTirRoundV1` の実Borsh構造と既存ML-DSA署名長から全内部開示のenvelope上限を導出する。空body/path/signatureを持つ未送信の幅計数用exemplarを使い、本文を引いた固定header量、全内部path長、実署名長を加える。ハッシュ・署名を偽造した受付データを作る処理ではない。最大bodyと最大pathが同じnodeにない場合もあるため、一件の最大値は保守的な上限。旧round本文が収まることから新envelopeが収まるとは推論しない。
 
 ここで数えるのは各canonical root/pathの異なる数値開示である。root/finalizeと全終端witnessの実形状・新carrier/transaction wrapper・mass・実測CPU/IO・重複/不正ingress・semantic/court/archive・保存期間と料金は未導出。再構成・program解析・履歴group反復自体もnative admissionへ接続する前に資源検査が必要。元受付への原子的予約・実供給・配送収録・責任解消・資金確保を実装したものではなく、F02/F03、T05、G14の完了や武装を許可しない。
+
+
+## root・終端witnessの既存ceilingに基づく上限（隔離候補、未採択）
+
+旧class sizerの `root_claim_bytes` を共有frontierの全rootへそのまま乗算しない。旧sizerは最初の位置でwhole closeを使い、rootを数える分岐は位置1以後である。共有のnamed root predicateは履歴1 tileのrootも扱うため、旧側のゼロ値や別の提出機会を借りて費用ゼロとはできない。
+
+private shared rootのcost predicateへ、旧 `CourtTirRootClaimed` と同じcarrier allowanceを明示する。既存の1-byte variant、session、arity、signature Vec prefixとML-DSA長、既存signer参照分をBorsh field grammarで数え、元の `PALW_TIR_DISSECT_CARRIER_BYTES_V1` から差し引いたroot本文ceilingを用いる。実rootもbufferやcloneなしに数え、上限超過を署名・source解析の前に拒否する。これは旧carrierで提出できた本文の上限をprivate候補へ適用するもので、既存tag・codec・本番規則・capの引き上げではない。cost predicateが通ることはrootの正当性を意味せず、その後に元claim・program・署名・finalize等を従来どおり検査する。
+
+`numerical_evidence_transport_upper` は、元claimから導出した各canonical root、全内部round、全終端witnessを各slotにつき1件数える。root本文には上記ceiling、終端本文には既にprivate bottom checkerが強制する `max_close_bytes - 1` を用い、新しい各DTOのheader・署名・全終端path長を加える（旧proof variantの1 byteは新bottom bodyに含まれない）。終端path総量は全枝から正確に集計する。root/終端の本文量をclass別にtightに推定したものではなく、許容ceilingを使う保守的なbytes上限である。実際の必要資本の下限や実測CPU・採算へ読み替えない。
+
+特に、新しいroot headerを加えた最大control上限は旧single-carrier上限より大きい。本文が旧carrier allowance以内であることから新control全体の収録可能性を保証しない。既存cap内の分割transport、transaction wrapper/mass、署名/再構成/拒否/重複ingressの処理費用、source・semantic・court・archive、保持・fee・依存期限・実供給・資金確保・原子的受付は残る。過大な仮値を実測値として置いたり、この上限が入らないことを理由にモデルを除外したり、capを引き上げて通過させない。F02/F03/T05/G14の完了・本番採択・武装を許可しない。

@@ -2498,7 +2498,11 @@ mod conviction_e2e_tests {
                 while let Some((first, n, depth)) = todo.pop() {
                     reference.max_depth = reference.max_depth.max(depth);
                     let children = crate::palw_attn_dissect::palw_attn_child_ranges_v1(first, n, arity).unwrap();
-                    if children.is_empty() { reference.terminals += 1; continue; }
+                    if children.is_empty() {
+                        reference.terminals += 1;
+                        reference.terminal_path_bytes += u64::from(depth);
+                        continue;
+                    }
                     reference.disclosures += 1;
                     reference.child_claims += children.len() as u64;
                     reference.disclosure_path_bytes += u64::from(depth);
@@ -2523,7 +2527,11 @@ mod conviction_e2e_tests {
             }
             let court = fx.rules.court.with_dissection_arity(arity).unwrap();
             for demand in [Demand::Release2000, Demand::H7] {
-                let transport = set.numerical_disclosure_transport_upper(&fx.record, &fx.layout, &court, demand).unwrap();
+                let evidence = set.numerical_evidence_transport_upper(&fx.record, &fx.layout, &court, demand).unwrap();
+                assert_eq!(evidence.signed_bytes_upper, evidence.roots_signed_bytes_upper
+                    + evidence.bottoms_signed_bytes_upper + evidence.disclosures.signed_bytes_upper);
+                assert_eq!(evidence.signed_controls, sites.len() as u64 + reference.disclosures + reference.terminals);
+                let transport = evidence.disclosures;
                 assert_eq!(transport.scope_id, set.scope_id().unwrap());
                 if demand == Demand::H7 {
                     assert_eq!(transport.signed_bytes_upper, signed_reference);
@@ -2539,6 +2547,7 @@ mod conviction_e2e_tests {
                 assert_eq!(actual.trees.terminals, reference.terminals);
                 assert_eq!(actual.trees.child_claims, reference.child_claims);
                 assert_eq!(actual.trees.disclosure_path_bytes, reference.disclosure_path_bytes);
+                assert_eq!(actual.trees.terminal_path_bytes, reference.terminal_path_bytes);
                 assert_eq!(actual.trees.max_depth, reference.max_depth);
                 assert_eq!(actual.trees.child_claims + actual.eligible_roots,
                     actual.trees.disclosures + actual.trees.terminals);
@@ -2609,6 +2618,28 @@ mod conviction_e2e_tests {
                 .unwrap().as_ref().to_vec();
         };
         sign(&mut control);
+        let legacy = crate::palw_state_v2::PalwConsensusObjectV2::CourtTirRootClaimed {
+            session_id:claim, root:control.root.clone(), arity:control.arity, signature:control.signature.clone()};
+        assert_eq!(shared_root_carried_bytes_v1(&control.root).unwrap(), borsh::to_vec(&legacy).unwrap().len() as u64
+            + crate::palw_tir_close_size_v1::MOVE_CARRIER_EXTRA_BYTES);
+        let transport = set.numerical_evidence_transport_upper(&fx.record, &fx.layout, &rules.court,
+            crate::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7).unwrap();
+        let root_fixed = borsh::to_vec(&control).unwrap().len() as u64 - borsh::object_length(control.root.as_ref()).unwrap() as u64;
+        assert_eq!(transport.maximum_root_signed_bytes_upper, shared_root_body_ceiling_v1().unwrap() + root_fixed);
+        assert!(transport.maximum_root_signed_bytes_upper > crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1,
+            "new framing cannot inherit a single-carrier guarantee from the old payload ceiling");
+        assert!(borsh::to_vec(&control).unwrap().len() as u64 <= transport.maximum_root_signed_bytes_upper);
+        // Isolate the byte predicate only: padding here is not a valid root
+        // or a new network-ID allowance and is never signed or ingested.
+        let mut boundary = control.root.as_ref().clone();
+        let remaining = shared_root_body_ceiling_v1().unwrap() as usize - borsh::object_length(&boundary).unwrap();
+        let old = boundary.finalize.binding.job_context.network_id.len();
+        boundary.finalize.binding.job_context.network_id.resize(old + remaining, 0);
+        check_shared_root_cost_v1(&boundary).unwrap();
+        boundary.finalize.binding.job_context.network_id.push(0);
+        assert!(check_shared_root_cost_v1(&boundary).is_err());
+        let mut oversized = control.clone(); oversized.root = Box::new(boundary);
+        assert!(check_shared_tir_root_v1(&state, &params, &rules, &oversized).err().unwrap().contains("root carrier allowance"));
         let before = state.state_root();
         assert_eq!(state.court_sessions_len(), 0);
         let checked = check_shared_tir_root_v1(&state, &params, &rules, &control).unwrap();
@@ -2667,6 +2698,8 @@ mod conviction_e2e_tests {
         let mut native = rules; native.at = at(frame, 5);
         let mut root_extras = extras.clone(); root_extras.native_court_rules_v1 = Some(native);
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &root_extras);
+        assert!(fold::root(&mut b, &native.at, &oversized).is_err());
+        assert_eq!(b.state.state_root(), before); assert!(b.entries.is_empty());
         assert!(fold::root(&mut b, &native.at, &control).unwrap());
         let key = Key::CourtSharedRoot(claim, leaf);
         let Some(Row::CourtSharedRoot(retained)) = b.state.staged_court_row_v1(&key).cloned() else { panic!() };
@@ -2767,6 +2800,12 @@ mod conviction_e2e_tests {
                         c.signing_message(native.network_domain).unwrap().as_byte_slice(),bottoms::SHARED_TIR_BOTTOM_CONTEXT_V1,[102;32]).unwrap().as_ref().to_vec();
                 };
                 sign_bottom(&mut c);
+                let body = borsh::object_length(c.bottom.as_ref()).unwrap() as u64;
+                let actual_overhead = borsh::to_vec(&c).unwrap().len() as u64 - body - path.len() as u64;
+                let predicted_one = transport.maximum_bottom_signed_bytes_upper
+                    - u64::from(transport.disclosures.numerical.trees.max_depth);
+                assert_eq!(predicted_one, native.court.max_close_bytes() - 1 + actual_overhead);
+                assert!(borsh::to_vec(&c).unwrap().len() as u64 <= transport.maximum_bottom_signed_bytes_upper);
                 let mut at_rules=native;at_rules.at=at(frame,event_offset);event_offset+=1;
                 let mut at_extras=root_extras.clone();at_extras.native_court_rules_v1=Some(at_rules);
                 let mut b=TransitionBuilder::new(&round_state,&params,false,false,false,false,&at_extras);

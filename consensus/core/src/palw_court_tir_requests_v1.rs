@@ -137,6 +137,37 @@ impl<'a> TirSharedRequestSetV1<'a> {
         Ok(TirSharedNumericalTransportUpperV1 {scope_id:self.scope_id()?, numerical,
             signed_bytes_upper, maximum_signed_bytes_upper})
     }
+    /// Canonical numerical evidence slots under existing enforced payload
+    /// ceilings, not a class-specific tight estimate or carrier admission.
+    /// No source/semantic/archive/repeated-ingress/CPU/IO/retention/fee costs.
+    pub fn numerical_evidence_transport_upper(&self,
+        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        court: &crate::palw_mode_v2::PalwCourtParamsV2,
+        demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
+    ) -> Result<TirSharedNumericalEvidenceUpperV1, String> {
+        let disclosures = self.numerical_disclosure_transport_upper(registered, layout, court, demand)?;
+        let n = &disclosures.numerical;
+        // Exactly the new root/bottom DTO field grammar with a zero-width
+        // payload hole and empty signature. Unsent serialization shapes only.
+        let root_fixed = signed_wire_length(&(1u16, self.claim, self.scope_id()?, self.source_id(),
+            0u64, n.arity, self.producer, (), Vec::<u8>::new()))?;
+        let bottom_fixed = signed_wire_length(&(1u16, self.claim, 0u64, self.source_id(), Vec::<u8>::new(),
+            self.source_id(), self.producer, (), Vec::<u8>::new()))?;
+        let root_one = add(crate::palw_court_shared_tir_root_v1::shared_root_body_ceiling_v1()?, root_fixed)?;
+        // Existing native proof enum has a one-byte TirDissection tag. The
+        // shared control carries its body directly, without that old tag.
+        let bottom_body = court.max_close_bytes().checked_sub(1).ok_or("native bottom ceiling lacks proof tag")?;
+        let bottom_one = add(bottom_body, bottom_fixed)?;
+        let roots_signed_bytes_upper = mul(n.eligible_roots, root_one)?;
+        let bottoms_signed_bytes_upper = add(mul(n.trees.terminals, bottom_one)?, n.trees.terminal_path_bytes)?;
+        let maximum_root_signed_bytes_upper = if n.eligible_roots == 0 {0} else {root_one};
+        let maximum_bottom_signed_bytes_upper = if n.trees.terminals == 0 {0} else {add(bottom_one, u64::from(n.trees.max_depth))?};
+        let signed_controls = add(add(n.eligible_roots, n.trees.disclosures)?, n.trees.terminals)?;
+        let signed_bytes_upper = add(add(roots_signed_bytes_upper, disclosures.signed_bytes_upper)?, bottoms_signed_bytes_upper)?;
+        Ok(TirSharedNumericalEvidenceUpperV1 {disclosures, roots_signed_bytes_upper, bottoms_signed_bytes_upper,
+            maximum_root_signed_bytes_upper, maximum_bottom_signed_bytes_upper, signed_controls, signed_bytes_upper})
+    }
     /// A conservative SUM for every legal source query, without enumerating the
     /// O(N*256 + rows*tiles) universe. This is source data/parser/hash/RAM only,
     /// NOT a full service graph, signature/IO/fee or physical capacity bound.
@@ -253,6 +284,19 @@ pub struct TirSharedNumericalTransportUpperV1 {
     pub numerical:crate::palw_tir_public_source_v1::numerical_inventory_v1::TirPublicNumericalInventoryV1,
     pub signed_bytes_upper:u64,
     pub maximum_signed_bytes_upper:u64,
+}
+/// Canonical roots/all disclosures/all terminal evidence, each once. Native
+/// payload ceilings are conservative upper bounds, not expected usage or a
+/// minimal capital requirement. Fragmentation/transaction/mass remain unclosed.
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub struct TirSharedNumericalEvidenceUpperV1 {
+    pub disclosures:TirSharedNumericalTransportUpperV1,
+    pub roots_signed_bytes_upper:u64,
+    pub bottoms_signed_bytes_upper:u64,
+    pub maximum_root_signed_bytes_upper:u64,
+    pub maximum_bottom_signed_bytes_upper:u64,
+    pub signed_controls:u64,
+    pub signed_bytes_upper:u64,
 }
 /// Derived envelope/control components for one original's distinct DATA states.
 /// No transaction wrapper, payment, admission, duty or complete-cost capability.
