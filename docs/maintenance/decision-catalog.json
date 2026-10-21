@@ -1459,6 +1459,30 @@
     },
     {
       "kind": "adr",
+      "number": "0189",
+      "path": "docs/adr/0189-tir-court-read-set-door-options.md",
+      "title": "ADR-0189 — TIR court read set and the conviction door: options (Proposed)",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0190",
+      "path": "docs/adr/0190-tir-door-sparse-fetch-designated-answers-tenure-split.md",
+      "title": "ADR-0190 — TIR conviction door: sparse fetch, designated answers, tenure split (Proposed)",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0191",
+      "path": "docs/adr/0191-tir-dispute-local-decomposition-long-context.md",
+      "title": "ADR-0191 — TIR court: dispute-local decomposition for long-context claims (Proposed)",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
       "number": "0192",
       "path": "docs/adr/0192-court-service-opportunity-and-shared-pursuit.md",
       "title": "ADR-0192 — court の正規処理機会と共有訴追経路",

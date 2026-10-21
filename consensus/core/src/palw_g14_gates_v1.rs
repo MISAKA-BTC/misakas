@@ -36,6 +36,10 @@ use crate::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PalwFpJobTailV1, PalwF
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 use crate::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwStateParamsV2};
 
+/// ADR-0190: the gather / model-parameter operand bound of the bounded-round door is derived. `false` until the closure-bound lane lands; 
+/// while `false` the bounded door cannot be armed on any network.
+pub const PALW_TIR_BOUNDED_DOOR_GATHER_BOUND_DERIVED_V1: bool = false;
+
 // =================================================================================================================================
 // 1. The arm-readiness records (G-10, N4, option (b), the liability horizon)
 // =================================================================================================================================
@@ -532,9 +536,45 @@ impl Params {
         Ok(())
     }
 
+    /// **ADR-0191 step B gate (DORMANT).** `palw_tir_designated_answers_v1` needs the TIR public conviction fence, because its rules
+    /// only answer a conviction path. It needs no record: nothing consumes it on any shipped preset.
+    pub fn validate_palw_tir_designated_answers_in_v1(&self) -> Result<(), PalwModeV2Error> {
+        if self.palw_tir_designated_answers_v1_fence().is_none() {
+            return Ok(());
+        }
+        if self.palw_tir_public_conviction_v1_fence().is_none() {
+            return Err(PalwModeV2Error::Invalid("palw_tir_designated_answers_v1 needs palw_tir_public_conviction_v1"));
+        }
+        Ok(())
+    }
+
     /// **The TIR frame cost gate** (audit §10): `Ok` when `palw_tir_public_conviction_v1` is not armed; otherwise the ruleset must
     /// carry a well-formed `palw_tir_frame_cost_v1` and — unless its genesis is an isolated G14 test genesis — a record in `records`
     /// must name this network, the fence's height and exactly that model.
+    /// **ADR-0190 bounded-round door gate (DORMANT).** `Ok` when `palw_tir_bounded_door_v1` is not armed. Arming needs the frame cost
+    /// model, the TIR public conviction fence, a pinned record (unless isolated genesis), and the gather/param operand bound, which is
+    /// not derived yet ([`PALW_TIR_BOUNDED_DOOR_GATHER_BOUND_DERIVED_V1`] is `false`), so arming is refused everywhere.
+    pub fn validate_palw_tir_bounded_door_in_v1(
+        &self,
+        records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
+    ) -> Result<(), PalwModeV2Error> {
+        let Some(at) = self.palw_tir_bounded_door_v1_fence() else { return Ok(()) };
+        if !PALW_TIR_BOUNDED_DOOR_GATHER_BOUND_DERIVED_V1 {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_tir_bounded_door_v1 cannot be armed: the gather / model-parameter operand bound (ADR-0190) is not derived",
+            ));
+        }
+        if self.palw_tir_frame_cost_v1.is_none() || self.palw_tir_public_conviction_v1_fence().is_none() {
+            return Err(PalwModeV2Error::Invalid("palw_tir_bounded_door_v1 needs palw_tir_frame_cost_v1 and palw_tir_public_conviction_v1"));
+        }
+        if self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
+        let cost = self.palw_tir_frame_cost_v1.as_ref().expect("checked above");
+        crate::palw_tir_frame_cost_v1::palw_tir_frame_cost_record_admits_v1(self.genesis.hash, at.daa_score(), Some(cost), records)
+            .map_err(|_| PalwModeV2Error::Invalid("palw_tir_bounded_door_v1 has no pinned frame cost record for this network and height"))
+    }
+
     pub fn validate_palw_tir_frame_cost_in_v1(
         &self,
         records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],

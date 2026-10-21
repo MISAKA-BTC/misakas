@@ -104,6 +104,7 @@
 - [ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md)
 - [ADR-0187 — native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md)
 - [ADR-0188 — D2・X3 の休眠 fence を G14 の arm-readiness record で閉じ、X3 の期限を窓の合成で定める](0188-d2-x3-arm-records-composition-and-pause-credit.md)
+- [ADR-0190 — TIR conviction door: sparse fetch, designated answers, tenure split (Proposed)](0190-tir-door-sparse-fetch-designated-answers-tenure-split.md)
 - [ADR-0194 — 休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md)
 - [ADR-0196 — owner 非依存の TIR 要求と認証済み公開データ](0196-owner-independent-shared-tir-query-data.md)
 - [ADR-0200 — D2 readiness rootの認証path供給](0200-d2-readiness-root-opening-availability.md)
@@ -177,6 +178,7 @@
 - [ADR-0175 — 新規モデル登録は自由、登録モデルは永久不変](0175-registered-models-are-permanently-immutable.md)
 - [ADR-0177 — Model-bond coinbase allocation without model-availability consensus](0177-model-bond-allocation-without-availability-consensus.md)
 - [ADR-0179 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3](0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
+- [ADR-0191 — TIR court: dispute-local decomposition for long-context claims (Proposed)](0191-tir-dispute-local-decomposition-long-context.md)
 
 ## Operations / interfaces / recovery
 
@@ -212,6 +214,7 @@
 - [ADR-0171 — Probabilistic constraint checks are the normal large-model verifier; the court resolves disputes exa](0171-probabilistic-constraint-checks-and-court-on-dispute.md)
 - [ADR-0183 — G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md)
 - [ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg](0184-native-liability-horizon-panel-record-and-single-certified-leg.md)
+- [ADR-0189 — TIR court read set and the conviction door: options (Proposed)](0189-tir-court-read-set-door-options.md)
 - [ADR-0192 — court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md)
 - [ADR-0193 — sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md)
 - [ADR-0195 — native court 応答の前提受理時刻を保持する](0195-rooted-court-response-eligibility-history.md)

@@ -795,6 +795,29 @@ mod tests {
         test_support::{TinyExecution, tiny_execution},
     };
 
+    /// ADR-0190 bounded-round path (DORMANT): refuses an unbounded gather term; otherwise two cone rounds whatever the run count, the
+    /// round-1 body carrying the cone runs and the gather bytes, and the restart replaying both rounds.
+    #[test]
+    fn the_bounded_localization_path_refuses_an_unbounded_gather_and_prices_two_rounds() {
+        use crate::palw_tir_frame_cost_v1 as fc;
+        let x = tiny_execution(None);
+        let src = source(&x);
+        let cost = fc::palw_tir_frame_test_only_cost_v1();
+        assert!(fc::tir_public_localization_path_bounded_v1(&src, 6, &cost.config, &cost.clock, None).is_err(), "gather unbounded: refused");
+        let base = fc::tir_public_localization_path_bounded_v1(&src, 6, &cost.config, &cost.clock, Some(0)).unwrap();
+        let with_gather = fc::tir_public_localization_path_bounded_v1(&src, 6, &cost.config, &cost.clock, Some(1_000)).unwrap();
+        assert_eq!(base.cone_runs, src.cone_runs_v1(), "the cone is the source's own run count");
+        assert_eq!(with_gather.round1_body - base.round1_body, 1_000, "the gather bytes are carried by round 1");
+        assert!(with_gather.daa >= base.daa);
+        let tiled = u64::from(src.supports_tiled_trace_v1() && src.decode_count_v1() > 0);
+        let restarts = cost.config.prices.reorg_replay_moves;
+        assert_eq!(
+            base.turns,
+            tiled + src.step_descent_units_v1() + 1 + fc::PALW_TIR_BOUNDED_CONE_ROUNDS_V1 + 1 + restarts * fc::PALW_TIR_BOUNDED_CONE_ROUNDS_V1,
+            "two cone rounds, not one per run"
+        );
+    }
+
     fn source(x: &TinyExecution) -> PalwTirPublicSourceV1 {
         let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
         PalwTirPublicSourceV1::new_v1(

@@ -1,0 +1,11 @@
+{
+  "record": "misaka-palw/read-set-1018/v1",
+  "status": "partial",
+  "class": "Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW (PALWART3, 32K)",
+  "host": "Apple M1 Max 10c 32GiB",
+  "measured_decode2": { "step_leaves": 114664, "kinds_measured": 11, "trials": 44, "source": "raw/read-set-prefill4-decode2-1018.json" },
+  "observed_max_decode2": { "runs_256": 8, "leaves": 97, "value_bytes": 24832, "whole_run_bytes": 524288, "wire_bytes": 1169221 },
+  "door_options_decode2": "raw/read-set-door-options-d2-1018.json",
+  "not_measured": ["State and HistTile kinds (checkpoint 164, h_tile 32; need position >= 33 / >= 164)", "structural analyser", "dedup/signature/retention accounting", "non-cone door terms per option", "32K maximum profile", "real-model CPU time"],
+  "observed_is_not_bound": true
+}

@@ -25,6 +25,8 @@ mod native_liability_hold_v1;
 mod paid_consumer_retention_v1;
 // RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
 mod tir_fp_lane_v1;
+// ADR-0191 step B: the designated-answer registry as a state field (tag 245, dormant behind its fence).
+mod tir_designated_registry_v1;
 // RFC-0016 V8 (audit 2026-10-17, 16-A): capacity attestations through the fold and the attested capacity read.
 mod rfc0016_capacity_attestation_v1;
 use super::*;
@@ -17112,6 +17114,7 @@ fn every_delta_entry_kind_round_trips_through_borsh() {
                 PalwDeltaEntryV2::KernelRouteHeader { .. } => "kernel_route_header",
                 // Lane LG14-A: its round trip is the dispute suite's.
                 PalwDeltaEntryV2::LegacyDispute { .. } => "legacy_dispute",
+                PalwDeltaEntryV2::TirDesignated { .. } => "tir_designated",
                 PalwDeltaEntryV2::PublicFpJob { .. } => "public_fp_job",
                 PalwDeltaEntryV2::ClassSemantics { .. } => "class_semantics",
                 PalwDeltaEntryV2::ClaimSemantics { .. } => "claim_semantics",
@@ -17554,6 +17557,15 @@ fn delta_entry_discriminants_are_the_ones_on_disk() {
         (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
         // Lane LG14-A (200–204), declared explicitly.
         (200, PalwDeltaEntryV2::LegacyDispute { key, old: None, new: None }),
+        // ADR-0191 step B (215), declared explicitly.
+        (
+            215,
+            PalwDeltaEntryV2::TirDesignated {
+                key: crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1 { claim: [0; 32], root: [0; 32], coordinates: 0 },
+                old: None,
+                new: None,
+            },
+        ),
         (201, PalwDeltaEntryV2::PublicFpJob { key, old: None, new: None }),
         (
             202,
@@ -18222,6 +18234,7 @@ fn the_state_root_preimage_is_exactly_the_adr_0043_list() {
         kernel_route: _,
         // Lane LG14-A: one Some-only block, empty here.
         legacy_disputes: _,
+        tir_designated: _,
         fp_public_jobs: _,
         class_semantics: _,
         claim_semantics: _,
@@ -28393,6 +28406,7 @@ mod evm_market {
             tir_public_originals: Default::default(),
             tir_public_conviction_active: false,
             tir_container_identity_active: false,
+            tir_designated_answers_active: false,
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,
@@ -28671,6 +28685,7 @@ mod evm_market {
             tir_public_originals: Default::default(),
             tir_public_conviction_active: false,
             tir_container_identity_active: false,
+            tir_designated_answers_active: false,
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,

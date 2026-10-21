@@ -471,6 +471,148 @@ pub fn tir_public_owner_queue_wait_v1(
     product(sum(&[ahead, 1])?.div_ceil(k), tenure)
 }
 
+/// **Serial cone rounds of the bounded-round localisation (ADR-0190 step 1, DORMANT).** The disputed step's derived operand closure
+/// is fetched in ONE batched request (round 1), and the value-dependent follow-ups in ONE request (round 2): the serial cone rounds
+/// are this constant whatever the run count; bytes per round are carried by parts.
+pub const PALW_TIR_BOUNDED_CONE_ROUNDS_V1: u64 = 2;
+
+/// The bounded-round localisation path's breakdown ([`tir_public_localization_path_bounded_v1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirBoundedPathV1 {
+    pub turns: u64,
+    pub daa: u64,
+    pub cone_runs: u64,
+    pub round1_body: u64,
+    pub round2_body: u64,
+    pub round1_daa: u64,
+    pub round2_daa: u64,
+    pub output_check_daa: u64,
+    pub restart_daa: u64,
+    pub gather_bytes: u64,
+}
+
+/// **The bounded-round localisation path (ADR-0190; DORMANT: no preset selects it; the legacy path is untouched).**
+///
+/// Each term is priced from its own request span (no widest-turn reuse, ADR-0190 step 4):
+/// * IDs and the step-tree descent to the first differing leaf, as the legacy path (bounded by tree height, not by runs);
+/// * the faulty leaf (one turn);
+/// * round 1: ONE batched request carrying the whole cone (`cone_runs × run body`) plus the gather / model-parameter operand bytes;
+/// * round 2: ONE request carrying the leaf and the value-dependent trace path (rows descent, tile descent, every tile of one row);
+/// * the output / stop-rule check: its own request, one trace tile;
+/// * `reorg_replay_moves` restarts, each replaying the two cone rounds (2 turns per restart), at their own spans.
+///
+/// `uncovered_gather_bytes` is the gather / model-parameter operand bound, which the structural analyser does not yet derive. `None`
+/// refuses the frame: the term is never assumed to be 0.
+pub fn tir_public_localization_path_bounded_v1(
+    source: &PalwTirPublicSourceV1,
+    maximum_custodians: u64,
+    config: &PalwStagedPublicCourtConfigV1,
+    clock: &PalwTirFrameClockV1,
+    uncovered_gather_bytes: Option<u64>,
+) -> Result<PalwTirBoundedPathV1, String> {
+    use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1 as R;
+    let gather = uncovered_gather_bytes.ok_or(
+        "TIR bounded door: gather / model-parameter operand bytes are not bounded (ADR-0190 term); the frame is refused, not priced at 0",
+    )?;
+    let slots = maximum_custodians.checked_add(1).ok_or("TIR frame slots overflow")?;
+    let body = |request: R| -> Result<u64, String> { Ok(crate::palw_tir_public_owned_v1::request_body_bound_v1(source, request)?.0) };
+    let span = |bytes: u64| tir_public_turn_span_v1(bytes, slots, config, clock);
+    let level = |count: u64| height(count).min(u64::from(crate::palw_tir_court_v1::PALW_TIR_STEP_NODE_DEPTH_V1)) as u8;
+    let n = source.leaf_count_v1();
+    let d = u64::from(source.decode_count_v1());
+    let tiled = source.supports_tiled_trace_v1() && d > 0;
+    let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+    let run = u32::try_from(n.clamp(1, u64::from(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)))
+        .map_err(|_| "TIR run overflow")?;
+    let leaf_body = body(R::StepLeaf { index: 0 })?;
+    let tile_body = body(R::TraceTile { row: 0, tile: 0 })?;
+    let run_body = if run > 1 { body(R::StepRun { first: 0, count: run })? } else { leaf_body };
+    let cone_runs = source.cone_runs_v1();
+
+    let ids_daa = if tiled { span(body(R::Ids { offset: 0 })?)? } else { 0 };
+    let node_body = if n > 1 { body(R::StepNode { level: level(n), index: 0 })? } else { leaf_body };
+    let descent_turns = source.step_descent_units_v1();
+    let descent_daa = product(descent_turns, span(node_body)?)?;
+    let leaf_daa = span(leaf_body)?;
+
+    let round1_body = sum(&[product(cone_runs, run_body)?, gather])?;
+    let round1_daa = span(round1_body)?;
+    let trace_body = if tiled {
+        let rows_node = if d > 1 { body(R::RowsNode { level: level(d), index: 0 })? } else { tile_body };
+        let tile_node = if tiles > 1 { body(R::TileNode { row: 0, level: level(tiles), index: 0 })? } else { tile_body };
+        sum(&[product(descent(d), rows_node)?, product(descent(tiles), tile_node)?, product(tiles, tile_body)?])?
+    } else {
+        0
+    };
+    let round2_body = sum(&[leaf_body, trace_body])?;
+    let round2_daa = span(round2_body)?;
+    let output_check_daa = span(tile_body)?;
+
+    let restarts = config.prices.reorg_replay_moves;
+    let restart_daa = product(restarts, sum(&[round1_daa, round2_daa])?)?;
+    let restart_turns = product(restarts, PALW_TIR_BOUNDED_CONE_ROUNDS_V1)?;
+    let turns = sum(&[u64::from(tiled), descent_turns, 1, PALW_TIR_BOUNDED_CONE_ROUNDS_V1, 1, restart_turns])?;
+    let daa = sum(&[ids_daa, descent_daa, leaf_daa, round1_daa, round2_daa, output_check_daa, restart_daa])?;
+    Ok(PalwTirBoundedPathV1 {
+        turns,
+        daa,
+        cone_runs,
+        round1_body,
+        round2_body,
+        round1_daa,
+        round2_daa,
+        output_check_daa,
+        restart_daa,
+        gather_bytes: gather,
+    })
+}
+
+/// **ADR-0191 dispute door (DORMANT, derivation).** Every term is declared: the span fit `span(B) = 44 + ceil(B / 920)` (from ADR-0190's
+/// two measured one-round points), one bisection round of 46 DAA, the preparation (16) and the output check (53) of ADR-0191.
+pub const PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1: u64 = 44;
+pub const PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1: u64 = 920;
+pub const PALW_TIR_DISPUTE_ROUND_DAA_V1: u64 = 46;
+pub const PALW_TIR_DISPUTE_PREP_DAA_V1: u64 = 16;
+pub const PALW_TIR_DISPUTE_OUTPUT_DAA_V1: u64 = 53;
+/// The bisection arity of every level (ADR-0191 (1)).
+pub const PALW_TIR_DISPUTE_ARITY_V1: u64 = 16;
+
+/// The dispute door for one adjudication shape, with `levels` extra bisection levels below the shape's own rounds.
+///
+/// * `rounds`: the dependent rounds before the adjudication (positions, attention tiles, step ops, vocabulary tiles);
+/// * `reduction_blocks`: the byte sizes of the divisible operand blocks (attention tile, GDN state block, matmul block); each one
+///   shrinks by `PALW_TIR_DISPUTE_ARITY_V1` per extra level, rounded up;
+/// * `floor_bytes`: the indivisible part (one leaf and one logits tile), which no level shrinks;
+/// * `contenders`: owners per claim (`K_owner`), each of whose queued adjudication waits one budget;
+/// * the door is `prep + (rounds + levels)·round + output + (K + 1)·span(B)`: own adjudication, restart, and the `(K − 1)` queued budgets.
+///
+/// Returns `None` on overflow. The adjudication itself is still a deterministic recomputation of the block from authenticated
+/// operands; this function only prices it.
+pub fn palw_tir_dispute_door_fit_v1(rounds: u64, levels: u32, reduction_blocks: &[u64], floor_bytes: u64, contenders: u64) -> Option<u64> {
+    let mut block = floor_bytes;
+    let divisor = PALW_TIR_DISPUTE_ARITY_V1.checked_pow(levels)?;
+    for bytes in reduction_blocks {
+        block = block.checked_add(bytes.div_ceil(divisor))?;
+    }
+    let span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1.checked_add(block.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1))?;
+    let rounds = rounds.checked_add(u64::from(levels))?.checked_mul(PALW_TIR_DISPUTE_ROUND_DAA_V1)?;
+    let fixed = PALW_TIR_DISPUTE_PREP_DAA_V1.checked_add(PALW_TIR_DISPUTE_OUTPUT_DAA_V1)?;
+    let carriers = contenders.checked_add(1)?.checked_mul(span)?;
+    fixed.checked_add(rounds)?.checked_add(carriers)
+}
+
+/// The extra levels in `0..=max_levels` that minimise the door, with the door (ties take the fewer levels).
+pub fn palw_tir_dispute_door_minimum_v1(rounds: u64, reduction_blocks: &[u64], floor_bytes: u64, contenders: u64, max_levels: u32) -> Option<(u32, u64)> {
+    let mut best: Option<(u32, u64)> = None;
+    for levels in 0..=max_levels {
+        let door = palw_tir_dispute_door_fit_v1(rounds, levels, reduction_blocks, floor_bytes, contenders)?;
+        if best.is_none_or(|(_, d)| door < d) {
+            best = Some((levels, door));
+        }
+    }
+    best
+}
+
 /// **The filing allowance** after the stream door: the filer's witness parts (in order) and its conviction, at the measured capacity.
 pub fn tir_public_filing_daa_v1(
     witness_moves: u64,
@@ -624,6 +766,124 @@ mod tests {
         // 257 custodians add only their inclusion at the parallel capacity, not 257 serial chains.
         assert_eq!(wide, 2 + 6 + (258 * 8 * (4 * 8_192 + 700u64)).div_ceil(64 << 10));
         assert!(wide < 258 * 4 * 8, "not end to end");
+    }
+
+    #[test]
+    fn the_dispute_door_is_within_3120_at_32k_and_2m_at_the_minimising_level() {
+        // ADR-0191: attention tile 65,536 B, GDN state block 65,536 B, matmul block 131,072 B; one leaf + one logits tile (16,384 B) floor.
+        let blocks = [65_536u64, 65_536, 131_072];
+        let floor = 16_384u64;
+        // The declared fit reproduces the ADR's values.
+        assert_eq!(palw_tir_dispute_door_fit_v1(12, 0, &blocks, floor, 8), Some(3_744), "32K, no extra level: over 3,120");
+        assert_eq!(palw_tir_dispute_door_fit_v1(16, 0, &blocks, floor, 8), Some(3_928), "2M, no extra level: over 3,120");
+        // The minimising extra level is the same at both sizes (two levels: block 17,408 B).
+        assert_eq!(palw_tir_dispute_door_minimum_v1(12, &blocks, floor, 8, 7), Some((2, 1_280)), "32K minimum");
+        assert_eq!(palw_tir_dispute_door_minimum_v1(16, &blocks, floor, 8, 7), Some((2, 1_464)), "2M minimum");
+        assert!(palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap() <= 3_120, "2M fits 3,120 at the minimum");
+        // Fewer owners is NOT the fix (ADR-0191 decision): K = 8 is kept above.
+        assert!(palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap() > palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 4).unwrap());
+        // The floor is never shrunk: more levels stop helping once only the floor remains.
+        let at7 = palw_tir_dispute_door_fit_v1(16, 7, &blocks, floor, 8).unwrap();
+        let at2 = palw_tir_dispute_door_fit_v1(16, 2, &blocks, floor, 8).unwrap();
+        assert!(at7 > at2, "extra levels past the minimum only add rounds");
+    }
+
+    /// **derived_upper (formula, not measured).** The bounded TIR public door for the Huihui-Qwen3.5-2B 32K class and its 2M
+    /// extension under ADR-0191: b = 16 bisection, M = 1 admission, L = 2 extra levels (17,408 B step block), history-tile
+    /// bisection (2,048 tiles = 3 rounds at 32K, 65,536 tiles = 4 rounds at 2M), and the terminal history read of ~135.6 KB.
+    /// Only the existing formula functions and constants are used; nothing is measured and no rule or constant is changed.
+    /// Prints every term. Asserts only arithmetic identities, never that the door is at or below 3,120.
+    #[test]
+    fn bounded_door_derived_upper_32k_and_2m_prints_every_term() {
+        use crate::palw_tir_history_bisection_v1::palw_tir_history_rounds_v1;
+        let ceil_log16 = |n: u64| -> u64 {
+            let (mut rounds, mut reach) = (0u64, 1u64);
+            while reach < n {
+                reach = reach.saturating_mul(16);
+                rounds += 1;
+            }
+            rounds
+        };
+        let k = PALW_TIR_FRAME_CONCURRENT_OWNERS_V1;
+        let levels = 2u32;
+        // Step reduction blocks (attention tile, GDN state block, matmul block) and the indivisible floor (one leaf + one logits tile).
+        let blocks = [65_536u64, 65_536, 131_072];
+        let floor = 16_384u64;
+        // Non-cone carry-over terms of the shipped door that the dispute door does not replace (door-breakdown-1018): IDs 106,
+        // filing allowance 82, open window 5. The shipped trace tiles (4,209), output (2,346), reorg (2,346) and the owner queue
+        // (1,536) are replaced by the dispute formula's own terms, so they are not added here.
+        let carry_over = [("IDs / leaf (door-breakdown-1018)", 106u64), ("filing allowance (door-breakdown-1018)", 82), ("open window", 5)];
+        let carry_sum: u64 = carry_over.iter().map(|(_, v)| v).sum();
+        // Terminal history read (given: ~135.6 KB; not recomputed here). Own adjudication plus one restart.
+        let terminal_bytes = 135_600u64;
+        // Position terminal (one more round, then one position): given ~12 KB, not derived from the shape.
+        const POSITION_TERMINAL_BYTES_GIVEN: u64 = 12_000;
+        let vocab_tiles = 248_320u64.div_ceil(4_096);
+        let r_op = ceil_log16(1_024);
+        let r_tile = ceil_log16(vocab_tiles);
+        let cases = [("32K", 32_768u64, 2_048u64), ("2M", 2_097_152u64, 131_072u64)];
+        for (label, positions, tiles) in cases {
+            let r_pos = ceil_log16(positions);
+            let r_hist = u64::from(palw_tir_history_rounds_v1(tiles));
+            assert_eq!(r_hist, ceil_log16(tiles), "history rounds are ceil(log16 tiles)");
+            let rounds = r_pos + r_hist + r_op + r_tile;
+            println!("[{label}] derived_upper (formula, not measured)");
+            println!("[{label}] positions {positions}, history tiles {tiles}, vocab tiles {vocab_tiles}, K_owner {k}, M 1, b 16");
+            println!("[{label}] rounds: R_pos {r_pos} + R_hist {r_hist} + R_op {r_op} + R_tile {r_tile} = {rounds}");
+            // The scale 1 is the stated 125,000 B/DAA sensitivity; the scale 10 is 1/10 of it (bytes multiplied by 10).
+            for scale in [1u64, 10] {
+                let blocks_s = blocks.map(|b| b * scale);
+                let floor_s = floor * scale;
+                let terminal_s = terminal_bytes * scale;
+                let adj_block = floor_s + blocks_s.iter().map(|b| b.div_ceil(16u64.pow(levels))).sum::<u64>();
+                let span_adj = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + adj_block.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
+                let terminal_span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + terminal_s.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
+                let core = palw_tir_dispute_door_fit_v1(rounds, levels, &blocks_s, floor_s, k).expect("the door fits in u64");
+                // Identity: prep + (R + L)·46 + output + (K + 1)·span(B_adj).
+                assert_eq!(
+                    core,
+                    PALW_TIR_DISPUTE_PREP_DAA_V1
+                        + (rounds + u64::from(levels)) * PALW_TIR_DISPUTE_ROUND_DAA_V1
+                        + PALW_TIR_DISPUTE_OUTPUT_DAA_V1
+                        + (k + 1) * span_adj,
+                    "core door identity"
+                );
+                let door_a = core + carry_sum;
+                let terminal_extra = 2 * terminal_span;
+                let door_b = door_a + terminal_extra;
+                let tag = if scale == 1 { "125,000 B/DAA (sensitivity)" } else { "12,500 B/DAA (1/10 sensitivity)" };
+                println!("[{label}] --- {tag}, bytes scaled x{scale} ---");
+                println!("[{label}]   step block B_adj = {adj_block} B (floor {floor_s} + blocks {blocks_s:?} / 16^{levels} rounded up)");
+                println!("[{label}]   span(B_adj) = 44 + ceil(B/920) = {span_adj}");
+                println!("[{label}]   prep = {PALW_TIR_DISPUTE_PREP_DAA_V1}");
+                println!("[{label}]   bisection = (R + L) x 46 = {} x 46 = {}", rounds + u64::from(levels), (rounds + u64::from(levels)) * PALW_TIR_DISPUTE_ROUND_DAA_V1);
+                println!("[{label}]   output check = {PALW_TIR_DISPUTE_OUTPUT_DAA_V1}");
+                println!("[{label}]   admission queue + own + restart = (K + 1) x span(B_adj) = {} x {span_adj} = {}", k + 1, (k + 1) * span_adj);
+                println!("[{label}]   core door (existing fn palw_tir_dispute_door_fit_v1) = {core}");
+                for (name, v) in carry_over {
+                    println!("[{label}]   carry-over {name} = {v}");
+                }
+                println!("[{label}]   door_A (no terminal) = {door_a}");
+                println!("[{label}]   terminal history span(B={terminal_s}) = 44 + ceil(B/920) = {terminal_span}; own + restart = {terminal_extra}");
+                println!("[{label}]   door_B (with terminal) = {door_b}");
+                println!("[{label}]   replaced, not added: shipped trace 4,209, output 2,346, reorg 2,346, owner queue 1,536");
+                // **Position terminal row (DORMANT, derived_upper).** The history bisection localises one tile, then ONE more
+                // b = 16 round over its 16 slot partials localises one position; the terminal recomputes that position from
+                // its query row, K row and V row. The round adds one to R; the terminal is ~12 KB (given, not derived).
+                let position_rounds = rounds + 1;
+                let core_p = palw_tir_dispute_door_fit_v1(position_rounds, levels, &blocks_s, floor_s, k).expect("the door fits in u64");
+                assert_eq!(core_p, core + PALW_TIR_DISPUTE_ROUND_DAA_V1, "one extra round adds exactly one round of DAA");
+                let door_a_p = core_p + carry_sum;
+                let position_span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1 + (POSITION_TERMINAL_BYTES_GIVEN * scale).div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1);
+                let door_b_p = door_a_p + 2 * position_span;
+                println!("[{label}] --- position terminal, {tag} ---");
+                println!("[{label}]   rounds = {position_rounds} (R + 1: one position round over 16 slots)");
+                println!("[{label}]   core door (rounds + 1) = {core_p}");
+                println!("[{label}]   door_A_position (no terminal) = {door_a_p}");
+                println!("[{label}]   position terminal span({} B) = 44 + ceil(B/920) = {position_span}; own + restart = {}", POSITION_TERMINAL_BYTES_GIVEN * scale, 2 * position_span);
+                println!("[{label}]   door_B_position (with position terminal) = {door_b_p}");
+            }
+        }
     }
 
     #[test]

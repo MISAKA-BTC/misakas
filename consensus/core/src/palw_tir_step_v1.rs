@@ -471,6 +471,11 @@ impl PalwTirStepSpaceV1 {
         self.hist.iter().fold(0u64, |acc, s| acc.saturating_add(s.tiles()))
     }
 
+    /// Measurement accessor (no rule): the history-tile leaves one completed tile holds, over every history instance.
+    pub fn hist_leaves_per_tile_v1(&self) -> u64 {
+        self.hist_leaves_per_tile()
+    }
+
     /// The leaves of absolute position `a`.
     pub fn leaves_at_position(&self, job: &PalwTirJobShapeV1, a: u32) -> u64 {
         let post_occ = self.occurrences.len() - 1;

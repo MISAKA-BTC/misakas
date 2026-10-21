@@ -48,6 +48,10 @@ use kaspa_consensus_core::palw_lifecycle_objects_v2::{
     palw_int12_kind_refused_past_fence_v1, palw_lifecycle_kind_owner_v1, palw_lifecycle_object_may_ride_v2,
 };
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
+use kaspa_consensus_core::palw_tir_designated_answers_v1::{
+    PalwTirDesignatedEventV1, PalwTirDesignatedOutcomeV1, PalwTirDesignatedRequestV1, PalwTirRequestKeyV1,
+    palw_tir_designated_outcome_v1,
+};
 use kaspa_consensus_core::palw_state_v2::{
     PalwBondKeyV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, palw_object_chunk_group_id_v1,
 };
@@ -111,6 +115,22 @@ fn arm_the_release(params: &mut Params) {
 /// **Every owning fence at `at`** — the lifecycle kinds', the header forms' and the kernel-route inner kinds' — through exhaustive
 /// matches over their `ALL` lists, so a fence a lane adds does not compile here until this harness arms it. The documented
 /// validation bypass: `validate_palw_v2` refuses each of them at every real height.
+/// G14 original paid TIR conviction (tags 170-171) at `at`: the conviction fence, and the staged TIR route, the staged court, R-core+
+/// and the aggregate liability each armed at or below `at` (the objective-offence ledger through [`arm_objective_offence_at_or_below`]).
+fn arm_tir_public_conviction_at_or_below(params: &mut Params, at: ForkActivation) {
+    params.palw_tir_public_conviction_v1 = Some(at);
+    for field in [&mut params.palw_staged_tir_route_v1, &mut params.palw_staged_public_court_v1, &mut params.palw_rcore_plus] {
+        if field.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score()) {
+            *field = Some(at);
+        }
+    }
+    arm_objective_offence_at_or_below(params, at);
+    if params.palw_capacity_aggregate_liability.as_ref().is_none_or(|l| l.activation.daa_score() > at.daa_score()) {
+        params.palw_capacity_aggregate_liability =
+            Some(kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at));
+    }
+}
+
 /// The objective-offence ledger and its attribution (ADR-0144 §9) at `at` unless the ruleset already arms them at or below it.
 fn arm_objective_offence_at_or_below(params: &mut Params, at: ForkActivation) {
     let never = ForkActivation::never();
@@ -238,21 +258,10 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             // G14 original paid TIR conviction (tags 170-171): in force where the staged TIR route, the staged court, the
             // objective-offence ledger, R-core+ and the aggregate liability all are, each armed at or below `at` here.
-            PalwLifecycleKindFenceV1::TirPublicConvictionV1 => {
-                params.palw_tir_public_conviction_v1 = Some(at);
-                for field in [&mut params.palw_staged_tir_route_v1, &mut params.palw_staged_public_court_v1, &mut params.palw_rcore_plus] {
-                    if field.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score()) {
-                        *field = Some(at);
-                    }
-                }
-                arm_objective_offence_at_or_below(params, at);
-                if params.palw_capacity_aggregate_liability.as_ref().is_none_or(|l| l.activation.daa_score() > at.daa_score()) {
-                    params.palw_capacity_aggregate_liability =
-                        Some(kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at));
-                }
-            }
+            PalwLifecycleKindFenceV1::TirPublicConvictionV1 => arm_tir_public_conviction_at_or_below(params, at),
             // RFC-0002 02-A (tag 175): the TIR container binding, in force where the TIR lane is (`palw_tir_v1` is armed above).
             PalwLifecycleKindFenceV1::TirContainerIdentityV1 => params.palw_tir_container_identity_v1 = Some(at),
+            PalwLifecycleKindFenceV1::TirDesignatedAnswersV1 => params.palw_tir_designated_answers_v1 = Some(at),
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {
@@ -1447,4 +1456,106 @@ async fn t12_a2u_adr0175_past_its_fence_a_definition_update_is_refused_and_its_b
     kaspa_core::log::try_init_logger("warn");
     assert_eq!(adr0175_versions_after_publishing(false).await, 2, "the live build's rule: the version is applied");
     assert_eq!(adr0175_versions_after_publishing(true).await, 1, "past palw_model_immutable_v1: refused, not applied");
+}
+
+/// ADR-0191 step B (tag 245): a designated-custodian request opened on `claim`/`root`, with two designated custodians and a one-DAA
+/// window each. The custodian identities are opaque to the fold (it checks only membership of the answerer), so fixed 32-byte ids
+/// stand in for them; the key is the real claim's id and the chain's sink hash.
+fn designated_request(claim: Hash64, root: Hash64, opened_daa: u64) -> PalwTirDesignatedRequestV1 {
+    let (mut claim_digest, mut root_digest) = ([0u8; 32], [0u8; 32]);
+    claim_digest.copy_from_slice(&claim.as_bytes()[..32]);
+    root_digest.copy_from_slice(&root.as_bytes()[..32]);
+    PalwTirDesignatedRequestV1 {
+        key: PalwTirRequestKeyV1 { claim: claim_digest, root: root_digest, coordinates: 7 },
+        designated: vec![[0xC1; 32], [0xC2; 32]],
+        obligation_daa: 1_000,
+        opened_daa,
+    }
+}
+
+/// **The tag-245 fold in a real block** (ADR-0191 step B). Armed at DAA 0 in a params copy (the conviction fence it needs armed with
+/// it), a block carrying the opening of a designated request, then a block carrying its answer by the first designated custodian,
+/// are both accepted; the tip's registry reads `Answered` for the request.
+#[tokio::test]
+async fn t12_a2u_tir_designated_event_folds_in_a_real_block_past_its_fence() {
+    kaspa_core::log::try_init_logger("warn");
+    let (mut config, _, premine, floats) = t12_with_harness_cards();
+    arm_tir_public_conviction_at_or_below(&mut config.params, ForkActivation::new(0));
+    config.params.palw_tir_designated_answers_v1 = Some(ForkActivation::new(0));
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!("testnet-12 is V2") };
+    let bundle = bundle.clone();
+    let mut a = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let ttpb = config.params.target_time_per_block();
+    while a.daa_of(a.sink()) < 2 {
+        a.heartbeat(ttpb, Vec::new()).await;
+    }
+    let (_, claim_id) = a.attempt(0, ttpb, Vec::new(), &|_| true).await;
+    let mut wallet = Wallet { coins: floats.clone() };
+
+    let request = designated_request(claim_id, a.sink(), 1);
+    let key = request.key;
+    let opened = Obj::TirDesignatedEventV1 { event: PalwTirDesignatedEventV1::Open(request.clone()) };
+    carry(&mut a, &mut wallet, &config, &[("a designated request opened (tag 245)".into(), payload_of(&opened))]).await;
+    let (_, state) = a.tip_state();
+    assert_eq!(state.tir_designated_record(&key).map(|r| &r.request), Some(&request), "the opening is folded into the registry");
+
+    let answered_by = request.designated[0];
+    let body = [0xB7; 32];
+    let answer_daa = a.daa_of(a.sink());
+    let answer = Obj::TirDesignatedEventV1 {
+        event: PalwTirDesignatedEventV1::Answer { key, custodian: answered_by, body, at_daa: answer_daa },
+    };
+    carry(&mut a, &mut wallet, &config, &[("the first designated custodian answers (tag 245)".into(), payload_of(&answer))]).await;
+
+    let (_, state) = a.tip_state();
+    let record = state.tir_designated_record(&key).expect("the request is in the registry at the tip");
+    let tip_daa = a.daa_of(a.sink());
+    assert_eq!(
+        palw_tir_designated_outcome_v1(record, tip_daa).expect("the outcome is defined"),
+        PalwTirDesignatedOutcomeV1::Answered { by: answered_by, body },
+        "the tip's registry reads Answered for the event"
+    );
+    eprintln!("[a2u tir-designated] request opened at DAA 1, answered at DAA {answer_daa}; the tip (DAA {tip_daa}) reads Answered");
+}
+
+/// **Dormant (fence None, the t12 params)**: the same tag-245 carriers are valid, carried and skipped exactly as before the fold
+/// existed (A-2): the blocks stand, and the registry stays empty.
+#[tokio::test]
+async fn t12_a2u_tir_designated_event_below_its_fence_is_skipped_and_writes_nothing() {
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats) = config_with(Ruleset::Launch, None);
+    assert!(config.params.palw_tir_designated_answers_v1_fence().is_none(), "the t12 params arm no designated-answer fence");
+    let mut a = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let ttpb = config.params.target_time_per_block();
+    while a.daa_of(a.sink()) < 2 {
+        a.heartbeat(ttpb, Vec::new()).await;
+    }
+    let (_, claim_id) = a.attempt(0, ttpb, Vec::new(), &|_| true).await;
+    let mut wallet = Wallet { coins: floats.clone() };
+
+    let request = designated_request(claim_id, a.sink(), 1);
+    let key = request.key;
+    let opened = Obj::TirDesignatedEventV1 { event: PalwTirDesignatedEventV1::Open(request.clone()) };
+    let answer = Obj::TirDesignatedEventV1 {
+        event: PalwTirDesignatedEventV1::Answer {
+            key,
+            custodian: request.designated[0],
+            body: [0xB7; 32],
+            at_daa: a.daa_of(a.sink()),
+        },
+    };
+    let blocks = carry(
+        &mut a,
+        &mut wallet,
+        &config,
+        &[
+            ("a designated request opened (tag 245), dormant".into(), payload_of(&opened)),
+            ("a designated answer (tag 245), dormant".into(), payload_of(&answer)),
+        ],
+    )
+    .await;
+    assert!(blocks >= 1, "the dormant carriers were carried in blocks that stand");
+    let (_, state) = a.tip_state();
+    assert!(state.tir_designated_records().is_empty(), "below the fence the registry is never written");
+    assert!(state.tir_designated_record(&key).is_none(), "and the request is not in it");
 }

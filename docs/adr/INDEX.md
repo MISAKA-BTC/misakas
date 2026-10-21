@@ -188,6 +188,9 @@
 | ADR-0186 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md) | 原文と後続改定を参照 |
 | ADR-0187 | [native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md) | 原文と後続改定を参照 |
 | ADR-0188 | [D2・X3 の休眠 fence を G14 の arm-readiness record で閉じ、X3 の期限を窓の合成で定める](0188-d2-x3-arm-records-composition-and-pause-credit.md) | 原文と後続改定を参照 |
+| ADR-0189 | [TIR court read set and the conviction door: options (Proposed)](0189-tir-court-read-set-door-options.md) | 原文と後続改定を参照 |
+| ADR-0190 | [TIR conviction door: sparse fetch, designated answers, tenure split (Proposed)](0190-tir-door-sparse-fetch-designated-answers-tenure-split.md) | 原文と後続改定を参照 |
+| ADR-0191 | [TIR court: dispute-local decomposition for long-context claims (Proposed)](0191-tir-dispute-local-decomposition-long-context.md) | 原文と後続改定を参照 |
 | ADR-0192 | [court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md) | 原文と後続改定を参照 |
 | ADR-0193 | [Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md) | 原文と後続改定を参照 |
 | ADR-0193 | [sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md) | 原文と後続改定を参照 |

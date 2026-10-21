@@ -1,0 +1,124 @@
+{
+  "record": "misaka-palw/g14-detection-measurements/v1",
+  "status": "PARTIAL. Only the full re-execution time of one short job and the class geometry are measured; K is derived (pure arithmetic, not a measurement). Coverage under load, opening bytes per interval, interval check time, verdicts and collected collateral are UNMEASURED. palw_detection_policy_v1 stays refused (validate_palw_detection_policy_v1 refuses every armed fence).",
+  "source_sha": "17cbdee9ee59ee860bb5270226766402a0709be9 (+ the frame_measure real-class probe, committed next)",
+  "build": "release (lto=thin, overflow-checks), CARGO_INCREMENTAL=0, -j 6, rustc 1.93.0",
+  "hardware": "Apple M1 Max, 10 cores, 32 GiB",
+  "model_class": {
+    "name": "Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW",
+    "context": 32768,
+    "class_id": "672e93aa71e08b457deb2f2c3d312ce62c87c232ca452494c12d8d1b2436904ec1523099c09dbca8bbda61b8edb1979eab60de2778f673fe7d23861659ada63c",
+    "note": "the class id is the one palw-class declare-layout derives on this source; the genesis catalog has no Huihui roots yet"
+  },
+  "user_decided": {
+    "epsilon": "1/100",
+    "d_min_abs": 1,
+    "d_min_ppm": 100000,
+    "q_100_not_production": true
+  },
+  "measured": {
+    "full_reexecution_short_job": {
+      "prompt_len": 4,
+      "decode_len": 2,
+      "ns": 2910302625,
+      "capture_bytes": 35810835,
+      "step_leaves": 114664,
+      "trials": 1,
+      "concurrency": "sequential",
+      "raw": "raw/tir-frame-measure-huihui2b.log"
+    }
+  },
+  "derived_K_at_q_100_percent": {
+    "derivation": "K = min K with C(N-D,K)/C(N,K) <= 1/100, D = D_min(N) = min(N, max(1, ceil(N*0.1))); exact rationals; README example N=1000 -> K=43 reproduced. Same definition as palw_detection_k_min_v1 (which never returns below the exact minimum).",
+    "table": [
+      {
+        "N": 1,
+        "D_min": 1,
+        "K_q100": 1,
+        "detect_one_interval_fraud": "1/1"
+      },
+      {
+        "N": 2,
+        "D_min": 1,
+        "K_q100": 2,
+        "detect_one_interval_fraud": "2/2"
+      },
+      {
+        "N": 5,
+        "D_min": 1,
+        "K_q100": 5,
+        "detect_one_interval_fraud": "5/5"
+      },
+      {
+        "N": 10,
+        "D_min": 1,
+        "K_q100": 10,
+        "detect_one_interval_fraud": "10/10"
+      },
+      {
+        "N": 20,
+        "D_min": 2,
+        "K_q100": 18,
+        "detect_one_interval_fraud": "18/20"
+      },
+      {
+        "N": 50,
+        "D_min": 5,
+        "K_q100": 29,
+        "detect_one_interval_fraud": "29/50"
+      },
+      {
+        "N": 100,
+        "D_min": 10,
+        "K_q100": 36,
+        "detect_one_interval_fraud": "36/100"
+      },
+      {
+        "N": 200,
+        "D_min": 20,
+        "K_q100": 40,
+        "detect_one_interval_fraud": "40/200"
+      },
+      {
+        "N": 500,
+        "D_min": 50,
+        "K_q100": 42,
+        "detect_one_interval_fraud": "42/500"
+      },
+      {
+        "N": 1000,
+        "D_min": 100,
+        "K_q100": 43,
+        "detect_one_interval_fraud": "43/1000"
+      },
+      {
+        "N": 2000,
+        "D_min": 200,
+        "K_q100": 44,
+        "detect_one_interval_fraud": "44/2000"
+      },
+      {
+        "N": 5000,
+        "D_min": 500,
+        "K_q100": 44,
+        "detect_one_interval_fraud": "44/5000"
+      },
+      {
+        "N": 10000,
+        "D_min": 1000,
+        "K_q100": 44,
+        "detect_one_interval_fraud": "44/10000"
+      }
+    ],
+    "note": "q < 0.99 cannot reach 99% total detection whatever K; q is unmeasured, so no production K is derived."
+  },
+  "unmeasured": {
+    "N_per_profile": "the class's N rule (DecodeCalls/HeldPositions/PricedLeaves and its parameter) is not chosen for Huihui; N cannot be measured before the rule exists",
+    "opening_bytes_per_interval": "the public TIR frame for this class is Incomplete (NativeWitnessCeiling 2,382,851 > 2,250,000), so no public opening is quoted",
+    "interval_check_time": "needs the interval runner on the chosen N rule; not run",
+    "full_reexecution_at_32K": "only a 4+2 token job was timed; a long-context job was not run",
+    "coverage_q_under_load": "needs a loaded devnet with armed detection; arming is refused by validation and must not be removed",
+    "verdicts_and_collected_collateral": "same: no armed devnet, so no slash/settlement to reconcile"
+  },
+  "observed_max_vs_bound_vs_margin": "observed: one sample only (no max claim); design bound: none; adopted margin: none"
+}

@@ -89,6 +89,7 @@ impl VirtualStateProcessor {
                 | Obj::HeldLeafChallengeDeclared { .. }
                 | Obj::GdnStepAccusedV2 { .. }
                 | Obj::MemoryRoutingV2 { .. }
+                | Obj::TirDesignatedEventV1 { .. }
                 | Obj::ShardCourtAccused { .. }
                 | Obj::CheckpointAccused { .. }
                 | Obj::DefaultAccusedTirStep { .. }

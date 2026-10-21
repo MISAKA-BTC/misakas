@@ -2197,6 +2197,9 @@ impl VirtualStateProcessor {
             } else {
                 None
             },
+            // ADR-0191 step B: the designated-custodian registry's mirror of `palw_tir_designated_answers_v1`. Written explicitly
+            // so an unwritten default cannot leave a tag-245 event unfolded on a network that has armed it.
+            tir_designated_answers_active: self.palw_tir_designated_answers_v1_at(daa_score),
             // ADR-0100 Decision 4: one shard's seats and quorum ride to the fold when per-shard
             // licensing is armed — the panel parameters the draw and the acceptance layer use.
             shard_licensing: if self.palw_shard_licensing_at(daa_score) {

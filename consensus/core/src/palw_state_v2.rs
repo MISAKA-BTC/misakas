@@ -7546,6 +7546,11 @@ pub enum PalwConsensusObjectV2 {
     MemoryRoutingV2 {
         object: Box<crate::palw_memory_routing_v2::PalwMemoryRoutingObjectV2>,
     } = 244,
+    /// ADR-0191 step B: a designated-custodian event (`crate::palw_tir_designated_answers_v1`). Tag 245. Dormant behind
+    /// `palw_tir_designated_answers_v1`: below it the live build's undecodable payload (A-2); the fold writes nothing below it.
+    TirDesignatedEventV1 {
+        event: crate::palw_tir_designated_answers_v1::PalwTirDesignatedEventV1,
+    } = 245,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -11030,6 +11035,10 @@ pub struct PalwChainStateV2 {
     /// block (`legacy_disputes/v1`), carriage tail `0xE2`, delta 200 — all only when non-empty, which nothing below
     /// `palw_legacy_public_filer_v1` (armed on no network) can make it.
     legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
+    /// **ADR-0191 step B: the designated-custodian registry** (`crate::palw_tir_designated_answers_v1`), written only by tag 245
+    /// once `palw_tir_designated_answers_v1` is in force. Empty on every shipped network; enters the root (`tir_designated/v1`) and
+    /// the carriage (tail `0xE3`) only when non-empty, and its records are journaled as delta 215.
+    tir_designated: crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1,
     /// Accepted public FP commitment metadata, without prompt IDs or capture. Kept with the claim
     /// past the never-armed public-filer fence, rooted and carried through pruning snapshots.
     fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
@@ -12218,6 +12227,13 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
         new: Option<crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
     } = 200,
+    /// **ADR-0191 step B (delta number 215, declared explicitly): a designated-custodian record was written or dropped** by the one
+    /// writer of the registry. Dormant: no stored delta carries it below `palw_tir_designated_answers_v1`.
+    TirDesignated {
+        key: crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1,
+        old: Option<crate::palw_tir_designated_answers_v1::PalwTirDesignatedRecordV1>,
+        new: Option<crate::palw_tir_designated_answers_v1::PalwTirDesignatedRecordV1>,
+    } = 215,
     /// **Lane BUDGET (delta number 190, declared explicitly; 190–199 are the bond budget's): a row of the bond budget** was written,
     /// rewritten or dropped — `table` names the table ([`crate::palw_bond_budget_v1::PALW_BUDGET_TABLE_BONDS_V1`] …), the key and row
     /// ride as their Borsh bytes. One entry for every table. Dormant: `palw_bond_budget_v1` is armed on no network.
@@ -18859,6 +18875,8 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::MonetaryMaterialV1) => builder.params.monetary_material_at_v1(ctx.daa_score).is_some(),
         K::Fence(F::MaterialReleaseRecoveryV2) => builder.params.material_release_recovery_at_v2(ctx.daa_score).is_some(),
         K::Fence(F::MemoryRoutingCourtV2) => builder.extras.memory_routing_court.is_some(),
+        // ADR-0191 step B: the extras flag (the fence's mirror at this block) decides whether a tag-245 chunk is in force.
+        K::Fence(F::TirDesignatedAnswersV1) => builder.extras.tir_designated_answers_active,
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
         K::Fence(F::TirPublicConvictionV1) => {
@@ -20104,6 +20122,9 @@ pub struct PalwTransitionExtrasV1 {
     /// `palw_tir_container_identity_v1` at this block (RFC-0002 02-A): a TIR class's `PALWART3` container binding folds, and a
     /// TIR original of an unbound class is refused. False below it (every shipped preset).
     pub tir_container_identity_active: bool,
+    /// `palw_tir_designated_answers_v1` at this block (ADR-0191 step B): a tag-245 event folds into the designated registry.
+    /// `false` by `Default` and below the fence (every shipped preset). The processor sets it from `palw_tir_designated_answers_v1`.
+    pub tir_designated_answers_active: bool,
     /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
     /// admitted with the rooted f32 row court. False below it: refused.
     pub staged_float_constraint_active: bool,
@@ -22435,6 +22456,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
         }
         PalwDeltaEntryV2::LegacyDispute { key, old, new } => swap_write!(state.legacy_disputes, key, old, new),
+        PalwDeltaEntryV2::TirDesignated { key, old, new } => swap_write!(state.tir_designated.records, key, old, new),
         // RFC-0010: the permissionless Panel engine's keyed decomposition (see `palw_panel_v3_fold_v1`).
         PalwDeltaEntryV2::PanelV3Cursor { old, new } => palw_panel_v3_fold_v1::apply_cursor_entry_v1(state, old, new, revert)?,
         PalwDeltaEntryV2::PanelV3Claim { key, old, new } => palw_panel_v3_fold_v1::apply_claim_entry_v1(state, key, old, new, revert)?,
@@ -22889,6 +22911,8 @@ pub struct PalwStateCarriageV2 {
     pub kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
     /// Lane LG14-A: the legacy route's dispute records, in appended tail `0xE2`, present only when non-empty.
     pub legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
+    /// ADR-0191 step B: the designated-custodian registry, in appended tail `0xE3`, present only when non-empty.
+    pub tir_designated: crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1,
     /// Original accepted FP metadata, appended tail 0xF0; omitted when empty below the public-filer fence.
     pub fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
     /// Immutable signed registration semantics, optional tail 0xF7.
@@ -23642,6 +23666,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_legacy_public_filer_v1::PALW_CARRIAGE_LEGACY_DISPUTES_TAIL_V1.serialize(writer)?;
             self.legacy_disputes.serialize(writer)?;
         }
+        if !self.tir_designated.records.is_empty() {
+            crate::palw_tir_designated_answers_v1::PALW_CARRIAGE_TIR_DESIGNATED_TAIL_V1.serialize(writer)?;
+            self.tir_designated.serialize(writer)?;
+        }
         if let Some(budget) = &self.bond_budget {
             crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1.serialize(writer)?;
             budget.serialize(writer)?;
@@ -23869,6 +23897,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut claim_semantics = BTreeMap::new();
         let mut seen_class_semantics = false;
         let mut seen_legacy_disputes = false;
+        let mut tir_designated = crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1::default();
+        let mut seen_tir_designated = false;
         let mut bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1> = None;
         let mut seen_bond_budget = false;
         let mut exec_v2 = crate::palw_work_slice_v2::PalwExecV2StateV1::default();
@@ -24214,6 +24244,16 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                         ));
                     }
                 }
+                crate::palw_tir_designated_answers_v1::PALW_CARRIAGE_TIR_DESIGNATED_TAIL_V1 if !seen_tir_designated => {
+                    seen_tir_designated = true;
+                    tir_designated = crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1::deserialize_reader(reader)?;
+                    if tir_designated.records.is_empty() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "an empty designated-answer tail (written only when non-empty)",
+                        ));
+                    }
+                }
                 crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1 if !seen_bond_budget => {
                     seen_bond_budget = true;
                     bond_budget = Some(crate::palw_bond_budget_v1::PalwBondBudgetStateV1::deserialize_reader(reader)?);
@@ -24362,6 +24402,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             panel_v3,
             kernel_route,
             legacy_disputes,
+            tir_designated,
             fp_public_jobs,
             class_semantics,
             claim_semantics,
@@ -24512,6 +24553,7 @@ impl PalwStateCarriageV2 {
                 }
             }),
             legacy_disputes: state.legacy_disputes.clone(),
+            tir_designated: state.tir_designated.clone(),
             fp_public_jobs: state.fp_public_jobs.clone(),
             class_semantics: state.class_semantics.clone(),
             claim_semantics: state.claim_semantics.clone(),
@@ -24792,6 +24834,7 @@ impl PalwStateCarriageV2 {
             seat_root_readiness: self.seat_root_readiness,
             panel_v3: self.panel_v3,
             legacy_disputes: self.legacy_disputes,
+            tir_designated: self.tir_designated,
             fp_public_jobs: self.fp_public_jobs,
             class_semantics: self.class_semantics,
             claim_semantics: self.claim_semantics,

@@ -549,6 +549,7 @@ pub struct VirtualStateProcessor {
     pub(super) palw_tir_container_identity_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The TIR frame's measured cost model (G14 audit §10); `None` on every shipped preset, so the frame route resolves no rules.
     pub(super) palw_tir_frame_cost_v1: Option<kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
+    pub(super) palw_tir_bounded_door_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_staged_float_constraint_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -734,6 +735,8 @@ pub struct VirtualStateProcessor {
     /// must get the same answer for the same block.
     pub(super) palw_shard_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_memory_routing_court_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0191 step B: `palw_tir_designated_answers_v1`'s mirror (None on every shipped network).
+    pub(super) palw_tir_designated_answers_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_shard_licensing` (ADR-0100 Decision 4). Resolved in ONE place,
     /// [`Self::palw_shard_licensing_at`]; the panel draw, its validation and the fold's extras all
     /// read it through that, so a node cannot bind what its fold refuses.
@@ -1409,6 +1412,7 @@ impl VirtualStateProcessor {
             palw_tir_public_conviction_v1: params.palw_tir_public_conviction_v1_fence(),
             palw_tir_container_identity_v1: params.palw_tir_container_identity_v1_fence(),
             palw_tir_frame_cost_v1: params.palw_tir_frame_cost_v1,
+            palw_tir_bounded_door_v1: params.palw_tir_bounded_door_v1_fence(),
             palw_staged_float_constraint_v1: params.palw_staged_float_constraint_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
@@ -1470,6 +1474,7 @@ impl VirtualStateProcessor {
             palw_da_court: params.palw_da_court,
             palw_shard_court: params.palw_shard_court_fence(),
             palw_memory_routing_court_v2: params.palw_memory_routing_court_v2_fence(),
+            palw_tir_designated_answers_v1: params.palw_tir_designated_answers_v1_fence(),
             palw_shard_licensing: params.palw_shard_licensing_fence(),
             palw_token_lift: params.palw_token_lift_fence(),
             palw_kimi_k3: params.palw_kimi_k3_fence(),
@@ -7281,6 +7286,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
         O::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
         O::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
+        O::TirDesignatedEventV1 { .. } => "TirDesignatedEventV1",
         O::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
         O::BondShardsDeclared { .. } => "BondShardsDeclared",
         O::ShardReceiptLicensed { .. } => "ShardReceiptLicensed",
