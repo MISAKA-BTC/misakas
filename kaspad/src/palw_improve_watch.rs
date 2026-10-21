@@ -550,7 +550,7 @@ mod tests {
         let read = &improve[at..at + 1600];
         assert!(read.contains("c.palw_improvement_open_epochs_v1()") && read.contains("c.palw_improvement_eval_views_v1()"));
         assert!(read.contains("st.watch.tick(&chain, &node, current_daa)"));
-        assert!(include_str!("palw_panel.rs").contains("self.improve_tick_v1(&mut improve, current_daa).await"));
+        assert!(crate::palw_panel::source_support::former_parent_production_source_v1().contains("self.improve_tick_v1(&mut improve, current_daa).await"));
         let _ = PalwTirArtifactRefV1::Single { root: h(0) };
         assert!(palw_improve_held_classes_v1(&[]).is_empty(), "a node with no IR artifact holds no class");
         // Testnet-12 arms the improvement fence with the int-11 flag day (H, DAA 5,300); mainnet keeps it dormant.

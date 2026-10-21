@@ -9271,7 +9271,7 @@ pub(super) mod tests {
     /// **The tick wires the filer behind no flag, after lane B, with the seat's replay room** (a source pin).
     #[test]
     fn the_tick_wires_the_filer_behind_no_flag() {
-        let panel = include_str!("palw_panel.rs");
+        let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
         let tick = panel.find("self.fraud_filer_tick_v1(").expect("the tick calls the filer");
         let operator = panel.find("self.operator_da_tick_v1(").expect("lane B");
         assert!(tick > operator, "after lane B");

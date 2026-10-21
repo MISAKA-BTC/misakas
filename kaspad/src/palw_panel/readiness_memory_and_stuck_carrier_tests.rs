@@ -6,8 +6,9 @@ use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_readiness_escalation_v1::PALW_READINESS_ESCALATION_LANDING_DAA_V1;
 
 /// Match code shapes across rustfmt line wrapping while returning original source offsets.
-pub(super) trait CodeNeedleV1 {
+pub(crate) trait CodeNeedleV1 {
     fn find_code(&self, needle: &str) -> Option<usize>;
+    fn rfind_code(&self, needle: &str) -> Option<usize>;
     fn contains_code(&self, needle: &str) -> bool {
         self.find_code(needle).is_some()
     }
@@ -41,6 +42,18 @@ impl CodeNeedleV1 for str {
     fn find_code(&self, needle: &str) -> Option<usize> {
         code_span_v1(self, needle).map(|span| span.start)
     }
+    fn rfind_code(&self, needle: &str) -> Option<usize> {
+        let mut rest = self;
+        let mut offset = 0;
+        let mut last = None;
+        while let Some(span) = code_span_v1(rest, needle) {
+            if span.is_empty() { break; }
+            last = Some(offset + span.start);
+            offset += span.end;
+            rest = &rest[span.end..];
+        }
+        last
+    }
     fn count_code(&self, needle: &str) -> usize {
         let mut rest = self;
         let mut count = 0;
@@ -56,8 +69,7 @@ impl CodeNeedleV1 for str {
 }
 
 fn production() -> &'static str {
-    let whole = include_str!("../palw_panel.rs");
-    &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the test module")]
+    crate::palw_panel::source_support::former_parent_production_source_v1()
 }
 
 /// The drill's A16 geometry, derived in-tree — the seat's own prover path runs on it.
@@ -165,24 +177,25 @@ fn the_8k_proof_is_built_streamed_beside_a_replay_on_a_three_and_a_half_gib_seat
 /// figure without another class's holding (`palw_backends`).
 #[test]
 fn the_readiness_duty_asks_capacity_and_takes_its_bytes_from_the_proof_lane() {
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let source = production();
-    let duties = &source[source.find("    fn readiness_duties(").expect("readiness_duties")..];
+    let duties = &source[source.find_code("    fn readiness_duties(").expect("readiness_duties")..];
     let duties = &duties[..duties.find("\n    }\n").expect("its end")];
-    assert!(duties.contains("self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root)))"));
-    assert!(!duties.contains("replay_memory_budget_v1("), "the moment's gate starved the drill's proofs");
-    let reserve = duties.find("self.reserve_readiness_proof_v1(class.class_id, span_now, streamed_need)").expect("the proof lane");
-    let streamed = duties.find("backend.artifact_readiness_material_streamed_v1(").expect("the streamed walk");
-    let vector = duties.find("backend.artifact_readiness_material(&draw)").expect("the vector, for a family that cannot stream");
+    assert!(duties.contains_code("self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root)))"));
+    assert!(!duties.contains_code("replay_memory_budget_v1("), "the moment's gate starved the drill's proofs");
+    let reserve = duties.find_code("self.reserve_readiness_proof_v1(class.class_id, span_now, streamed_need)").expect("the proof lane");
+    let streamed = duties.find_code("backend.artifact_readiness_material_streamed_v1(").expect("the streamed walk");
+    let vector = duties.find_code("backend.artifact_readiness_material(&draw)").expect("the vector, for a family that cannot stream");
     assert!(reserve < streamed && streamed < vector, "reserve, stream, and only then the vector");
-    assert!(duties.contains("palw_readiness_proof_materialized_need_v1(leaf_count)"), "the vector is priced before it is built");
+    assert!(duties.contains_code("palw_readiness_proof_materialized_need_v1(leaf_count)"), "the vector is priced before it is built");
     // The status says what the seat does.
-    let status = &source[source.find("    fn publish_local_panel_status(").expect("the status")..];
+    let status = &source[source.find_code("    fn publish_local_panel_status(").expect("the status")..];
     let status = &status[..status.find("\n    }\n").expect("its end")];
-    assert!(status.contains("self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root)))"));
+    assert!(status.contains_code("self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root)))"));
     // The seat's REPLAY still asks the moment, and still reserves when it starts.
-    assert!(source.contains("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))"));
+    assert!(source.contains_code("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))"));
     let backends = include_str!("../palw_backends.rs");
-    assert!(backends.contains("fn serves_without_a_holding_v1("), "the derived floor is priced without a holding");
+    assert!(backends.contains_code("fn serves_without_a_holding_v1("), "the derived floor is priced without a holding");
     // A vector build is priced at four vectors' worth of hashes plus the streamed figure.
     assert_eq!(
         palw_readiness_proof_materialized_need_v1(649_480),
@@ -290,6 +303,7 @@ fn a_carrier_stuck_in_our_own_mempool_yields_to_the_proof_within_the_escalation_
 /// for a carrier that moves no money; and a replaced tip writes the chain back.
 #[test]
 fn the_tick_replaces_our_own_late_carrier_with_the_proof() {
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let source = production();
     let tick =
         &source[source.find_code("let mut held = carrier_chain.inflight() >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
@@ -308,7 +322,7 @@ fn the_tick_replaces_our_own_late_carrier_with_the_proof() {
         "measured, then the escalated site, then the Own site"
     );
     assert!(tick.contains_code("slots.rewind_v1(carrier_chain.inflight());"), "a failed replacement is not the lane of record");
-    let tail = &tick[tick.find_code("last_lane = slots.finish(carrier_chain.inflight());").expect("the tail")..];
+    let tail = &tick[tick.find_code("(*last_lane) = slots.finish(carrier_chain.inflight());").expect("the tail")..];
     assert!(
         tail.contains_code("if !held {\n                    carrier_chain.set_funding(funding);"),
         "a replaced tip writes the chain back"
@@ -402,6 +416,7 @@ fn a_proof_replaces_only_a_lane_carrier_and_pays_above_it() {
 /// `ObjectiveOffence`, a proof of our own) yields late, as before.
 #[test]
 fn a_court_move_is_replaced_only_once_its_lane_re_plans_it() {
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     use kaspa_consensus_core::{palw_attn_court_v1, palw_bisect, palw_offence_v1};
     let session_id = Hash64::from_u64_word(7);
     let bond = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(1), 0));
@@ -474,7 +489,7 @@ fn a_court_move_is_replaced_only_once_its_lane_re_plans_it() {
     // Every court move and every data-availability answer is named (the answers carry a whole
     // step binding, so the list is read rather than built).
     let source = production();
-    let keeps = &source[source.find("pub(crate) fn palw_carrier_keeps_its_turn_v1(").expect("the rule")..];
+    let keeps = &source[source.find_code("pub(crate) fn palw_carrier_keeps_its_turn_v1(").expect("the rule")..];
     let keeps = &keeps[..keeps.find("\n}\n").expect("its end")];
     for variant in [
         "CourtClosed",
@@ -493,16 +508,16 @@ fn a_court_move_is_replaced_only_once_its_lane_re_plans_it() {
         assert!(keeps.contains(&format!("PalwConsensusObjectV2::{variant} {{ .. }}")), "{variant} keeps its turn");
     }
     // And the replacement asks it before it builds anything.
-    let replace = &source[source.find("    async fn replace_late_carrier_v1(").expect("the replacement fn")..];
+    let replace = &source[source.find_code("    async fn replace_late_carrier_v1(").expect("the replacement fn")..];
     let replace = &replace[..replace.find("\n    }\n").expect("its end")];
-    let asked = replace.find("palw_carrier_keeps_its_turn_v1(&late.tx, unconfirmed_daa)").expect("asked");
-    assert!(asked < replace.find("self.build_lifecycle_tx_priced_v1(").expect("the build"), "before the build");
+    let asked = replace.find_code("palw_carrier_keeps_its_turn_v1(&late.tx, unconfirmed_daa)").expect("asked");
+    assert!(asked < replace.find_code("self.build_lifecycle_tx_priced_v1(").expect("the build"), "before the build");
     // The stuck opening asks it too, before it arms the opening or hands out the input.
-    let open = &source[source.find("    async fn open_stuck_carrier_v1(").expect("the opening fn")..];
+    let open = &source[source.find_code("    async fn open_stuck_carrier_v1(").expect("the opening fn")..];
     let open = &open[..open.find("\n    }\n").expect("its end")];
-    let asked = open.find("palw_carrier_keeps_its_turn_v1(&late.tx, unconfirmed_daa)").expect("asked by the opening");
-    assert!(asked < open.find("session.get_virtual_utxo_entry(input)?").expect("the input"), "before the input");
-    assert!(asked < open.find("*self.carrier_replacement.lock().unwrap() =").expect("the arming"), "before it arms");
+    let asked = open.find_code("palw_carrier_keeps_its_turn_v1(&late.tx, unconfirmed_daa)").expect("asked by the opening");
+    assert!(asked < open.find_code("session.get_virtual_utxo_entry(input)?").expect("the input"), "before the input");
+    assert!(asked < open.find_code("*self.carrier_replacement.lock().unwrap() =").expect("the arming"), "before it arms");
     // A move that keeps its turn declines the escalated site's replacement — and the escalated proof
     // it declined still rides the readiness lane (V07, rcore/n1-carrier), which the escalated site
     // offers only when nothing is being replaced: the declined arm offers it the removed duty
@@ -516,9 +531,9 @@ fn a_court_move_is_replaced_only_once_its_lane_re_plans_it() {
     let site = &site[..site
         .find_code("} else if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, carrier_chain.inflight())")
         .expect("the next arm")];
-    let declined = &site[site.find("} else {").expect("the declined arm")..];
+    let declined = &site[site.find_code("} else {").expect("the declined arm")..];
     assert!(
-        declined.contains("!self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;"),
+        declined.contains_code("!self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;"),
         "a declined escalated replacement offers the lane: {declined}"
     );
 }
@@ -682,6 +697,7 @@ fn a_proof_the_main_slot_cannot_take_rides_the_readiness_lane() {
 /// its change is never remembered as the main chain's.
 #[test]
 fn the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof() {
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let source = production();
     let body = |signature: &str| -> &'static str {
         let start = source.find(signature).unwrap_or_else(|| panic!("{signature}"));
@@ -709,16 +725,15 @@ fn the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof() 
     let declined = &tick[replace_escalated..main_escalated];
     let declined = &declined[declined.find_code("} else {").expect("the declined arm")..];
     let lane_declined = declined
-            .find_code("readiness_waiting =\n                            !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;")
+            .find_code("(*readiness_waiting) =\n                            !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;")
             .expect("the declined replacement offers the removed duty to the lane");
     assert!(declined[..lane_declined].contains_code("slots.rewind_v1(carrier_chain.inflight());"), "after the site is rewound");
     assert!(
-        declined[..lane_declined].chars().filter(|c| !c.is_whitespace()).collect::<String>().contains(
-            "funding.iter().chain(carrier_chain.funding().iter()).chain(receipt_lanes.values().filter_map(|l|l.funding.as_ref())).map(|(outpoint,_)|*outpoint).collect();"
+        declined[..lane_declined].chars().filter(|c| !c.is_whitespace()).collect::<String>().contains_code("funding.iter().chain(carrier_chain.funding().iter()).chain(receipt_lanes.values().filter_map(|l|l.funding.as_ref())).map(|(outpoint,_)|*outpoint).collect();"
         ),
         "the lane's funding excludes both main and receipt-lane chains"
     );
-    assert!(!declined.contains_code("readiness_waiting = true;"), "the proof waits only when the lane refuses it too");
+    assert!(!declined.contains_code("(*readiness_waiting) = true;"), "the proof waits only when the lane refuses it too");
     let lane_own = tick
         .find_code("&& self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await")
         .expect("the Own site's lane");
@@ -744,6 +759,7 @@ fn the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof() 
 /// with the tick — a tick that sent nothing leaves the slot held.
 #[test]
 fn the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door() {
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let source = production();
     let body = |signature: &str| -> &'static str {
         let start = source.find(signature).unwrap_or_else(|| panic!("{signature}"));
@@ -765,8 +781,8 @@ fn the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door() {
     ] {
         assert!(opened.contains(line), "the opening: {line}");
     }
-    assert!(tick[..escalated].trim_end().ends_with("!stuck_opened\n                        &&"), "the escalated site defers to it");
-    let tail_at = tick.find_code("last_lane = slots.finish(carrier_chain.inflight());").expect("the tail");
+    assert!(tick[..escalated].chars().filter(|c| !c.is_whitespace()).collect::<String>().ends_with("!stuck_opened&&"), "the escalated site defers to it");
+    let tail_at = tick.find_code("(*last_lane) = slots.finish(carrier_chain.inflight());").expect("the tail");
     let (sites, tail) = tick.split_at(tail_at);
     assert_eq!(
         sites.count_code("self.submit_prepared_carrier_v1(&session, prepared_carrier)"),

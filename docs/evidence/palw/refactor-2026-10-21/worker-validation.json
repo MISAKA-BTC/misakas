@@ -1,0 +1,97 @@
+{
+  "status": "Implementation and selected regression complete; known pre-existing recovery failure retained. Documentation check is recorded separately.",
+  "branch": "codex/palw-behavior-preserving-refactor",
+  "goal_base": "292a6d7db",
+  "worker_adjacent_base": "fd3c74aef",
+  "source_pins": "worker-fifth-build-source-hashes.json",
+  "all_80_pinned_source_files_match": true,
+  "source_checks": {
+    "moved_body_and_pool_checks": 12,
+    "stage_audit": "worker-stage-audit.json",
+    "complete_worker_assembly": "worker-orchestration-audit.json",
+    "source_files_reconstructed_byte_exact": 33,
+    "patch_reconstruction": "worker-fifth-patch-reconstruction.json"
+  },
+  "tests": {
+    "final_node_panel": {
+      "passed": 464,
+      "failed": 0,
+      "log": "worker-panel-tests-final.log",
+      "binary": "worker-final-panel-binary.json",
+      "comparison": "worker-panel-comparison.json"
+    },
+    "nonpanel_palw": {
+      "passed": 266,
+      "failed": 0,
+      "log": "worker-nonpanel-tests-final.log",
+      "production_binary": "worker-service-node-binary.json",
+      "subsequent_change": "Only a pure reporter source-guard string changed after this executable, outside the nonpanel filter; production prefixes unchanged."
+    },
+    "actual_core_unit_selection": {
+      "passed": 55,
+      "failed": 0,
+      "log": "final-core-selected-tests.log",
+      "metadata": "final-core-selected-tests.json",
+      "comparison": "final-core-test-comparison.json"
+    },
+    "core_integration": {
+      "passed": 29,
+      "failed": 0,
+      "log": "final-integration-tests.log",
+      "covers": [
+        "carrier refunds",
+        "deadline re-date",
+        "burn/cap acceptance and fold",
+        "t12 identity (9)",
+        "activation (5)"
+      ]
+    },
+    "transformer_identity": {
+      "passed": 3,
+      "failed": 0,
+      "log": "final-transformer-pin-tests.log"
+    },
+    "actual_node_services": {
+      "before_passed": 5,
+      "before_failed": 1,
+      "after_passed": 5,
+      "after_failed": 1,
+      "comparison": "worker-service-comparison.json",
+      "log": "worker-after-service-recovery.log",
+      "production_source_pins": "worker-fourth-build-source-hashes.json",
+      "subsequent_change": "The fifth build changes only the reporter cfg(test) source guard. No production change follows the service-tested executable."
+    }
+  },
+  "checks": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus -p kaspad --lib --tests",
+      "exit_code": 0,
+      "log": "final-type-check.log",
+      "note": "Final test-only reporter string is subsequently compiled by the successful actual fifth node test build."
+    }
+  ],
+  "intermediate_results": {
+    "initial_panel": "424 pass / 40 source-guard failures, preserved in worker-panel-tests-first.log.",
+    "second_panel_build": "Canceled with SIGINT (exit130) while guard edits were consolidated; no runtime result counted.",
+    "third_panel": "455 pass / nine source-guard failures.",
+    "fourth_panel": "463 pass / one pure source-guard failure.",
+    "last_pure_guard_support": "Native exact-function harness passes 1 before the final full crate run; not added to unique test totals.",
+    "initial_core_test_launch": "Copied executable lacked executable mode; no test started. Corrected with copy2. See final-core-selected-initial-launch.json."
+  },
+  "known_limits": [
+    "The existing pruned-input-lane recovery test fails before and after at the requirement that the real worker judge all three roots Honest. It is not fixed or represented as a pass.",
+    "Selected tests and source projections are not exhaustive execution equivalence or a whole-workspace test run. No throughput, profitability or capacity measurement is inferred.",
+    "Legacy v2-v6 adapters and compound/configuration/drill backend edges retain their classified compatibility role.",
+    "No wire/ID/derive-source/independent-reference, monetary rule, cap, deadline or activation change; no pre integration, arming or deployment."
+  ],
+  "documentation": {
+    "command": "python3 docs/maintenance/check_docs.py",
+    "exit_code": 1,
+    "log": "worker-docs-check.log",
+    "checker_new_issue_occurrences": 5,
+    "baseline_known_occurrences": 43,
+    "total_missing_references": 48,
+    "new_authored_issues_relative_to_prior_checkpoint": 0,
+    "comparison": "Exact same five imported issues as resolved-inputs-docs-check.log; no baseline file changes."
+  }
+}

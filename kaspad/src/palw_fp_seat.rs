@@ -1224,7 +1224,7 @@ mod tests {
     #[test]
     fn nothing_in_this_module_logs_a_prompt() {
         let seat = include_str!("palw_fp_seat.rs");
-        let panel = include_str!("palw_panel.rs");
+        let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
         let bodies =
             [("palw_fp_seat.rs", seat.split("fn nothing_in_this_module_logs_a_prompt").next().unwrap()), ("palw_panel.rs", panel)];
         for (file, body) in bodies {

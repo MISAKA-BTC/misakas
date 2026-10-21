@@ -925,7 +925,7 @@ fn t_a10_every_node_registry_answers_held_dissections_through_one_constructor() 
         let at = source.find(head).unwrap_or_else(|| panic!("{head}"));
         &source[at..at + source[at..].find("\n    }\n").expect("its end")]
     };
-    for (name, source) in [("producer", include_str!("../palw_producer.rs")), ("panel", include_str!("../palw_panel.rs"))] {
+    for (name, source) in [("producer", include_str!("../palw_producer.rs")), ("panel", crate::palw_panel::source_support::former_parent_production_source_v1())] {
         let backends = body(source, "    fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {");
         assert!(backends.contains("crate::palw_backends::PalwBackendRegistry::for_node_v1("), "{name}: the one node constructor");
         assert!(!backends.contains("PalwBackendRegistry::new"), "{name}: never a registry built without the node's rules");
@@ -2276,6 +2276,7 @@ async fn step6_a_non_seat_challengers_demand_holds_final_off_until_the_late_disc
 /// deadline alone dated the pursuit at `bound + 540`; it is now due at `bound + 61`.
 #[test]
 fn the_seats_court_filings_are_dated_in_the_priority_lane() {
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     use super::{PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1, palw_seat_claim_earliest_final_v1, palw_seat_court_filing_due_v1};
     let margin = PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1;
     assert_eq!(palw_seat_court_filing_due_v1(1_000, None, 900), 1_000 - margin, "the duty's deadline, where no Final is read");
@@ -2302,29 +2303,29 @@ fn the_seats_court_filings_are_dated_in_the_priority_lane() {
     assert_eq!(due, earliest - margin, "the 8k row: due {due}, a margin before the earliest Final {earliest}");
     assert!(due < receipt_deadline - margin, "earlier than the duty's deadline alone dated it");
 
-    let source = include_str!("../palw_panel.rs");
+    let source = crate::palw_panel::source_support::former_parent_production_source_v1();
     let before = |push: &str| {
         let at = source.find(push).unwrap_or_else(|| panic!("{push}"));
         &source[at.saturating_sub(700)..at]
     };
     let named = before("court_outbox.push_pending((key, 0, false, object));");
     assert!(
-        named.contains("palw_seat_claim_earliest_final_v1(")
-            && named.contains("palw_seat_court_filing_due_v1(deadline, earliest_final,"),
+        named.contains_code("palw_seat_claim_earliest_final_v1(")
+            && named.contains_code("palw_seat_court_filing_due_v1(deadline, earliest_final,"),
         "the named leaf's pursuit is dated before the earliest Final"
     );
     // The one-move accusation is queued by the capture arm's filer (P2-8, int-3); the panel dates it
     // now, right after, and reads the filer's own dates after the filer's pass.
-    let at = source.find("let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));").expect("the court key");
+    let at = source.find_code("let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));").expect("the court key");
     let after = &source[at..];
-    let after = &after[..after.find("break 'verdict None;").expect("this capture arm ends")];
+    let after = &after[..after.find_code("break 'verdict None;").expect("this capture arm ends")];
     assert!(
-        after.contains("self.capture_arm_files_v1(") && after.contains("court_outbox.date_if_absent(key, current_daa);"),
+        after.contains_code("self.capture_arm_files_v1(") && after.contains_code("court_outbox.date_if_absent(key, current_daa);"),
         "the one-move accusation is due now"
     );
-    let tick = source.find("self.reporter_filer_tick_v1(&session, &mut reporter_filer,").expect("the filer's pass");
+    let tick = source.find_code("self.reporter_filer_tick_v1(&session, &mut reporter_filer,").expect("the filer's pass");
     assert!(
-        source[tick..(tick + 400).min(source.len())].contains("court_outbox.extend_due(reporter_filer.queued_dues_v1());"),
+        source[tick..(tick + 400).min(source.len())].contains_code("court_outbox.extend_due(reporter_filer.queued_dues_v1());"),
         "the filer's items carry the filer's dates"
     );
 }

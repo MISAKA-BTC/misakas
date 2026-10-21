@@ -1438,8 +1438,8 @@ mod tests {
     /// lane is queued or logged by the carrier lane itself (the filer's objects are the filer's).
     #[test]
     fn the_panel_notes_proofs_and_runs_the_step_where_it_should() {
-        let whole = include_str!("palw_panel.rs");
-        let source = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the test module")];
+        let whole = crate::palw_panel::source_support::former_parent_production_source_v1();
+        let source = whole;
         let fault = source.find("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {").expect("the arm");
         let recorded = fault + source[fault..].find("self.note_seat_fault_v1(duty.claim_id, leaf, 1);").expect("recorded");
         let noted = fault + source[fault..].find("false_valid.note_step_refutation_v1(").expect("noted");

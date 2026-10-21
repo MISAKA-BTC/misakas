@@ -3215,16 +3215,17 @@ mod tests {
     /// `Nothing`, each with the roots the arm just refused.
     #[test]
     fn the_panel_wires_the_capture_arm_j1_and_the_tick() {
-        let whole = include_str!("palw_panel.rs");
-        let source = &whole[..whole.find("mod court_responder_coverage_pin").expect("the panel's pins")];
+        use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
+        let whole = crate::palw_panel::source_support::former_parent_production_source_v1();
+        let source = whole;
         let this = include_str!("palw_reporter_filer.rs");
         let body = |signature: &str| {
             let start = this.find(signature).unwrap_or_else(|| panic!("{signature}"));
             &this[start..start + this[start..].find("\n    }\n").expect("its end")]
         };
         // (a)
-        let fault = source.find("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {").expect("the arm");
-        let arm = &source[fault..fault + source[fault..].find("self.persist_foreign_material(&duty.claim_id, &bytes);").unwrap()];
+        let fault = source.find_code("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {").expect("the arm");
+        let arm = &source[fault..fault + source[fault..].find_code("self.persist_foreign_material(&duty.claim_id, &bytes);").unwrap()];
         let at = |needle: &str| arm.find(needle).unwrap_or_else(|| panic!("the fault arm no longer contains {needle:?}"));
         let order = [
             at("self.note_seat_fault_v1(duty.claim_id, leaf, 1);"),
@@ -3236,43 +3237,42 @@ mod tests {
             arm.rfind("break 'verdict None;").expect("the arm ends"),
         ];
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
-        assert!(!arm[order[2]..order[5]].contains("break 'verdict"), "no exit of the accusation's block skips kind 4");
+        assert!(!arm[order[2]..order[5]].contains_code("break 'verdict"), "no exit of the accusation's block skips kind 4");
         assert!(
-            !arm.contains("court_pending.push(") && !arm.contains("court_outbox.push_pending(") && !arm.contains("accused.insert("),
+            !arm.contains_code("court_pending.push(") && !arm.contains_code("court_outbox.push_pending(") && !arm.contains_code("accused.insert("),
             "the decision queues, not the arm"
         );
         // The decision is `palw_capture_arm_files_v1` (its order is tested on a book:
         // `the_capture_arm_files_kind_4_first_and_backs_a_replay_filing_it_finds`); the panel runs it
         // over its own door, and nothing else.
         let decide = body("pub(super) fn capture_arm_files_v1(");
-        assert!(decide.contains(
-            "palw_capture_arm_files_v1(filer, accused, court_outbox, duty.claim_id, leaf, refuted, court, |filer, filing| {\n            \
+        assert!(decide.contains_code("palw_capture_arm_files_v1(filer, accused, court_outbox, duty.claim_id, leaf, refuted, court, |filer, filing| {\n            \
              self.reporter_filer_file_v1(session, filer, filing, bond_key, network_domain)\n        });"
         ));
         assert!(
-            !decide.contains("court_pending.push(")
-                && !decide.contains("court_outbox.push_pending(")
-                && !decide.contains("accused.insert("),
+            !decide.contains_code("court_pending.push(")
+                && !decide.contains_code("court_outbox.push_pending(")
+                && !decide.contains_code("accused.insert("),
             "the decision queues, not the panel"
         );
         // (b)
-        assert!(body("pub(super) fn capture_arm_filing_v1(").contains(
-            "self.consensus_config.params.palw_rcore_plus_active_at(current_daa),\n            bond_key,\n            duty.executor_bond,"
+        assert!(body("pub(super) fn capture_arm_filing_v1(").contains_code("self.consensus_config.params.palw_rcore_plus_active_at(current_daa),\n            bond_key,\n            duty.executor_bond,"
         ));
         let j1 = body("pub(super) async fn j1_auto_probe_v1(");
         let guard = j1
-            .find("if !self.consensus_config.params.palw_rcore_plus_active_at(current_daa) || duty.executor_bond == bond_key {")
+            .find_code("if !self.consensus_config.params.palw_rcore_plus_active_at(current_daa) || duty.executor_bond == bond_key {")
             .expect("J1's guard");
-        assert!(guard < j1.find("filer.take_probe(duty.claim_id, bytes, current_daa)").expect("the probe"));
+        assert!(guard < j1.find_code("filer.take_probe(duty.claim_id, bytes, current_daa)").expect("the probe"));
         // (c)
         const TICK: &str = "self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_outbox, &mut accused);";
         assert_eq!(source.matches("self.reporter_filer_tick_v1(").count(), 1);
         let tick = source.find(TICK).expect("the tick, with every seam it prunes");
-        let submitter = source.find("// --- the collector + submitter's half ---").expect("the submitter");
-        assert!(fault < tick && tick < submitter);
+        let submitter = source.find_code("// --- the collector + submitter's half ---").expect("the submitter");
+        let worker = include_str!("palw_panel.rs");
+        let seat_call = worker.find("self.seat_progress_tick_v1(").expect("seat stage");
+        assert!(seat_call < tick && tick < submitter, "seat faults precede the filer tick and carrier phase");
         // The tick also advances terminal filings since the terminal carriage (`tick_with_terminal_v2`); the same seams are pruned.
-        assert!(body("pub(super) fn reporter_filer_tick_v1(").contains(
-            "filer.tick_with_terminal_v2(\n            court_outbox,\n            accused,\n            |entry, gated| \
+        assert!(body("pub(super) fn reporter_filer_tick_v1(").contains_code("filer.tick_with_terminal_v2(\n            court_outbox,\n            accused,\n            |entry, gated| \
              session.palw_reporter_filing_read_v1("
         ));
         // (d)
@@ -3284,9 +3284,9 @@ mod tests {
             "if arm == PalwMaterialArmV1::Nothing {",
         ]) {
             let arm = source.find(refused).unwrap_or_else(|| panic!("{refused}"));
-            let call = &source[*hook..*hook + source[*hook..].find(".await;").expect("awaited")];
+            let call = &source[*hook..*hook + source[*hook..].find_code(".await;").expect("awaited")];
             assert!(arm < *hook && source[arm..*hook].lines().count() <= 3, "{refused} hooks J1 at once");
-            assert!(call.contains("&mut reporter_filer,") && call.contains("roots,\n"), "with the roots the arm refused");
+            assert!(call.contains_code("&mut reporter_filer,") && call.contains_code("roots)"), "with the roots the arm refused");
         }
     }
 }

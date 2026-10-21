@@ -1762,7 +1762,7 @@ mod tests {
     /// params name, hands it the seat slots' room, and no CLI option reaches it.
     #[test]
     fn the_tick_wires_the_lane_before_the_carriers_and_behind_no_flag() {
-        let panel = include_str!("palw_panel.rs");
+        let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
         let tick = panel.find("self.operator_da_tick_v1(").expect("the tick calls the lane");
         let reporter = panel.find("// --- P2-8: the reporter's commit–reveal filer").expect("the reporter filer");
         let carriers = panel.find("// --- the collector + submitter's half ---").expect("the carriers");

@@ -471,36 +471,40 @@ fn an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block() {
 /// not keep it signs no `Valid`.
 #[test]
 fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
-    let whole = include_str!("../palw_panel.rs");
-    let source = &whole[..whole.find("mod p2_7_disclosure_policy").expect("this module is in this file")];
-    let read = source.find("let disclosure = session.palw_disclosure_duties_v1(vec![bond_key]);").expect("the duty read");
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
+    let source = crate::palw_panel::source_support::former_parent_production_source_v1();
+    let court = include_str!("court_progress.rs");
+    let worker = include_str!("../palw_panel.rs");
+    let read = court.find_code("let disclosure = session.palw_disclosure_duties_v1(vec![bond_key]);").expect("the duty read");
     let pinned =
-        read + source[read..].find("self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());").expect("pinned");
+        read + court[read..].find_code("self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());").expect("pinned");
     let built = pinned
-        + source[pinned..]
-            .find("self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await")
+        + court[pinned..]
+            .find_code("self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await")
             .expect("each claim's answers built");
-    let queued = built + source[built..].find("court_outbox.push_pending((key.0, key.1, key.2, object));").expect("and queued");
-    let seats = source.find("let duties = session.palw_seat_duties_v2(vec![bond_key]);").expect("the seat's duties");
-    assert!(read < pinned && pinned < built && built < queued && queued < seats, "read, pin, build, queue — before the seats");
-    let fp = &source[source.find("    async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
+    let queued = built + court[built..].find_code("court_outbox.push_pending((key.0, key.1, key.2, object));").expect("and queued");
+    let seats = worker.find_code("let duties = session.palw_seat_duties_v2(vec![bond_key]);").expect("the seat's duties");
+    assert!(read < pinned && pinned < built && built < queued, "read, pin, build, queue");
+    let court_call = worker.find("self.court_progress_tick_v1(").expect("court stage");
+    assert!(court_call < seats, "court/DA progression precedes the seat duty read");
+    let fp = &source[source.find_code("    async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
     let fp = &fp[..fp.find("\n    }\n").expect("its end")];
     assert!(
-            fp.contains("PalwSeatReplayStepV1::Licensed,\n                            Some(palw_fp_material_encode_v1(&material.job, &material.prompt_token_ids)),"),
+            fp.contains_code("PalwSeatReplayStepV1::Licensed,\n                            Some(palw_fp_material_encode_v1(&material.job, &material.prompt_token_ids)),)"),
             "a licence keeps the job it licensed"
         );
-    assert!(!fp.contains("payloads.first()"), "never the first-arrived spelling");
-    let licensed = &source[source.find("(PalwSeatReplayStepV1::Licensed, bytes) => {").expect("the licence arm")..];
-    let valid = licensed.find("break 'verdict Some(PalwReceiptVerdictV2::Valid);").expect("its Valid");
+    assert!(!fp.contains_code("payloads.first()"), "never the first-arrived spelling");
+    let licensed = &source[source.find_code("(PalwSeatReplayStepV1::Licensed, bytes) => {").expect("the licence arm")..];
+    let valid = licensed.find_code("break 'verdict Some(PalwReceiptVerdictV2::Valid);").expect("its Valid");
     let abstain = licensed
-            .find("if !self.licensed_job_kept_v1(&duty.claim_id, bytes, current_daa) {\n                                        break 'verdict None;")
+            .find_code("if !self.licensed_job_kept_v1(&duty.claim_id, bytes, current_daa) {\n                                        break 'verdict None;")
             .expect("the kept-or-abstain gate");
     assert!(abstain < valid, "past the fence nothing is signed that this seat cannot answer for");
-    let gate = &source[source.find("    fn licensed_job_kept_v1(").expect("the gate")..];
+    let gate = &source[source.find_code("    fn licensed_job_kept_v1(").expect("the gate")..];
     let gate = &gate[..gate.find("\n    }\n").expect("its end")];
     assert!(
-        gate.contains("bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes))")
-            && gate.contains("if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {"),
+        gate.contains_code("bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes))")
+            && gate.contains_code("if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {"),
         "the job is kept, or past the fence the licence is not signed"
     );
 }

@@ -37,8 +37,6 @@
 
 use super::*;
 use crate::palw_panel::court_outbox::CourtOutboxV1;
-#[cfg(test)]
-use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1;
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -1360,7 +1358,8 @@ mod tests {
     /// the fence (the tick) or the claim's own predicate (the seat), none changing a line below it.
     #[test]
     fn the_panel_loop_hooks_the_improvement_loop_in_its_four_places() {
-        let panel = include_str!("../palw_panel.rs");
+        use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
+        let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
         assert!(panel.contains_code("self.improve_tick_v1(&mut improve, current_daa).await"));
         let one_move = panel.find_code("self.tir_one_move_pass_v1(").expect("the IR one-move pass");
         let court = panel
@@ -1370,7 +1369,7 @@ mod tests {
         assert!(
             court
                 < panel[one_move..]
-                    .find_code("// --- the court's half: answer the disputes this bond is a party to ---")
+                    .find_code("self.court_progress_tick_v1(")
                     .expect("the court's half")
                     + one_move,
             "and before the court's half answers its duties"

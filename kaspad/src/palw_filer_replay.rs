@@ -2629,7 +2629,7 @@ mod tests {
     /// and reserved inside its blocking task.
     #[test]
     fn the_tick_runs_the_filer_before_the_carriers_and_the_start_looks_before_it_derives() {
-        let panel = include_str!("palw_panel.rs");
+        let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
         let accusations = panel.find("// --- P2-6: this seat's accusations of withholding ---").expect("P2-6's step");
         let tick = panel.find(".replay_filer_tick_v1(").expect("the filer's call");
         let carriers = panel.find("// --- the collector + submitter's half ---").expect("the carriers");

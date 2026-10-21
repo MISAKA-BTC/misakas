@@ -9,8 +9,6 @@
 //! book that files each claim once, the fee funder's age and B-3 rules, and the lane order — and
 //! the tick's wiring, pinned where it runs.
 use super::*;
-#[cfg(test)]
-use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1;
 use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as C;
 use kaspa_consensus_core::palw_state_v2::{PalwDaAdmissionV1, PalwStateV2Error};
 
@@ -19,8 +17,7 @@ fn claim(n: u64) -> Hash64 {
 }
 
 fn the_source() -> &'static str {
-    let whole = include_str!("../palw_panel.rs");
-    &whole[..whole.find("mod p2_6_da_accusation_policy").expect("this module is in this file")]
+    crate::palw_panel::source_support::former_parent_production_source_v1()
 }
 
 /// The body of `fn name` in the production source.
@@ -186,35 +183,39 @@ fn the_accusation_queue_key_is_the_claim_on_the_accusing_side() {
 /// saying the filing is Phase 2's.
 #[test]
 fn the_tick_accuses_after_the_unavailable_and_before_the_carriers() {
-    let source = the_source();
-    let receipt = source
-        .find("self.flow_context.broadcast_palw_seat_receipt(bytes).await;\n                }\n                if valid {")
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
+    let source = include_str!("../palw_panel.rs");
+    let seat = include_str!("seat_progress.rs");
+    let retirement = include_str!("retirement.rs");
+    let receipt = seat
+        .find_code("self.flow_context.broadcast_palw_seat_receipt(bytes).await;\n                }\n                if valid {")
         .expect("the receipt");
-    let noted = source.find("accusations.want(duty.claim_id, by);").expect("the Unavailable notes the claim");
-    let step = source.find("// --- P2-6: this seat's accusations of withholding ---").expect("the accusation step");
+    let noted = seat.find_code("accusations.want(duty.claim_id, by);").expect("the Unavailable notes the claim");
+    let step = source.find_code("// --- P2-6: this seat's accusations of withholding ---").expect("the accusation step");
     let asked = step
         + source[step..]
-            .find("let Some(check) = session.palw_da_accusation_check_v1(claim, bond_key) else")
+            .find_code("let Some(check) = session.palw_da_accusation_check_v1(claim, bond_key) else")
             .expect("asked of the chain");
     let rechecked = step
         + source[step..]
-            .find("court_outbox.retain_pending(|(claim, round, responder, object)| {")
+            .find_code("court_outbox.retain_pending(|(claim, round, responder, object)| {")
             .expect("the queued ones asked again");
-    let built = step + source[step..].find("palw_da_rcore_v1::palw_da_accusation_object_v1(").expect("the ONE builder");
-    let queued = built + source[built..].find("let key = palw_da_accusation_queue_key_v1(claim);").expect("keyed");
-    let carriers = source.find("// --- the collector + submitter's half ---").expect("the carriers");
-    assert!(receipt < noted && noted < step, "noted once the receipt is out, before the step");
+    let built = step + source[step..].find_code("palw_da_rcore_v1::palw_da_accusation_object_v1(").expect("the ONE builder");
+    let queued = built + source[built..].find_code("let key = palw_da_accusation_queue_key_v1(claim);").expect("keyed");
+    let carriers = source.find_code("// --- the collector + submitter's half ---").expect("the carriers");
+    assert!(receipt < noted, "noted once the receipt is out");
+    let seat_call = source.find("self.seat_progress_tick_v1(").expect("seat stage");
+    assert!(seat_call < step, "the seat stage precedes accusation progression");
     assert!(step < rechecked && rechecked < asked && asked < built && built < queued && queued < carriers);
     let pruned = queued
         + source[queued..]
-            .find(
-                "court_outbox.retain_submitted(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));",
+            .find_code("court_outbox.retain_submitted(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));",
             )
             .expect("the debounce leaves with the book entry");
     assert!(pruned < carriers);
-    let licence = source.find("if palw_seat_unserved_licence_v1(phase) {").expect("the licence seam");
-    assert!(source[licence..].contains("accusations.want(claim, current_daa.saturating_add(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1));"));
-    assert!(!source.contains("the DefaultAccused filing that answers it is Phase 2's"), "the seam files now");
+    let licence = retirement.find_code("if palw_seat_unserved_licence_v1(phase) {").expect("the licence seam");
+    assert!(retirement[licence..].contains_code("accusations.want(claim, current_daa.saturating_add(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1));"));
+    assert!(!source.contains_code("the DefaultAccused filing that answers it is Phase 2's"), "the seam files now");
 }
 
 /// **The fee funder takes a coinbase output the mempool takes, and nothing B-3 holds** (T52's
@@ -283,6 +284,7 @@ fn outpoint(n: u64) -> TransactionOutpoint {
 /// carrier's relay fee, so a chain at or above it never fails a carrier for want of funds.
 #[test]
 fn f13_a_drained_residue_is_left_for_a_mature_coinbase() {
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let maturity = kaspa_consensus_core::config::params::palw_t12_shipped_params().coinbase_spend_maturity();
     let floor = palw_fee_funding_floor_v1();
     assert_eq!(floor, 12_000_000, "2 × the relay fee of a 480,000-mass carrier: 0.12 MSK");
@@ -456,20 +458,21 @@ fn a_panel_tick_is_recorded_with_its_slowest_phase_on_every_way_out_of_the_itera
 /// site asks the in-flight cap by itself any more, so none can skip the scheduler.
 #[test]
 fn the_tick_runs_every_carrier_site_through_the_one_scheduler_in_tick_order() {
-    let source = the_source();
-    let submitter = &source[source.find_code("// --- the collector + submitter's half ---").expect("the submitter")..];
-    let submitter = &submitter[..submitter.find_code("// Forget what the chain has moved past").expect("its end")];
-    let built = submitter.find_code("let mut slots = PalwCarrierSlotsV1::new(last_lane);").expect("one scheduler");
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
+    let source = include_str!("collector.rs");
+    let submitter = &source[source.find_code("pub(super) async fn collector_tick_v1(").expect("the submitter")..];
+
+    let built = submitter.find_code("let mut slots = PalwCarrierSlotsV1::new(*last_lane);").expect("one scheduler");
     let sites = &submitter[built..];
     let mut at = 0;
     for site in PalwCarrierSiteV1::TICK_ORDER {
         let mark = format!("slots.at(PalwCarrierSiteV1::{site:?}, carrier_chain.inflight());");
         let found = sites.find_code(&mark).unwrap_or_else(|| panic!("{mark}"));
         assert!(found >= at, "{site:?} in TICK_ORDER");
-        assert_eq!(sites.matches(&mark).count(), 1, "{site:?} marked once");
+        assert_eq!(sites.count_code(&mark), 1, "{site:?} marked once");
         at = found;
     }
-    let gate = |site: &str| sites.matches(&format!("slots.offers(PalwCarrierSiteV1::{site}, carrier_chain.inflight())")).count();
+    let gate = |site: &str| sites.count_code(&format!("slots.offers(PalwCarrierSiteV1::{site}, carrier_chain.inflight())"));
     assert_eq!(gate("ReadinessEscalated"), 1, "M1: the one escalated possession proof, ahead of the court queue");
     assert_eq!(gate("PriorityFirst"), 1);
     assert_eq!(
@@ -513,7 +516,7 @@ fn the_tick_runs_every_carrier_site_through_the_one_scheduler_in_tick_order() {
     ] {
         assert!(!sites.contains(own_gate), "no site asks the cap by itself: {own_gate}");
     }
-    assert!(sites.contains_code("last_lane = slots.finish(carrier_chain.inflight());"));
+    assert!(sites.contains_code("(*last_lane) = slots.finish(carrier_chain.inflight());"));
     assert!(!submitter.contains_code("std::mem::take(&mut court_pending)"), "the court queue is the priority lane's alone");
 }
 
@@ -577,33 +580,33 @@ fn a_seat_served_after_its_first_tick_accuses_nobody_when_the_licence_lands() {
 /// `ended`; and no site writes the old map.
 #[test]
 fn the_tick_records_service_where_it_sees_it() {
+    use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
     let source = the_source();
     let worker = body_of(source, "    pub async fn worker(");
-    assert!(!worker.contains("unserved.entry(") && !worker.contains("unserved.remove("), "the first-absence map is gone");
-    let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
-    let block = &block[..block.find("let Some(verdict) = verdict else { continue };").unwrap()];
-    let pre = source.find("if seat_r && duty.free_prompt && service.is_unserved(&duty.claim_id) {").expect("the pre-check");
-    let budget = source.find("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("deferral");
-    let verdict = source.find("let verdict = 'verdict: {").unwrap();
+    assert!(!worker.contains_code("unserved.entry(") && !worker.contains_code("unserved.remove("), "the first-absence map is gone");
+    let block = &source[source.find_code("let verdict = 'verdict: {").unwrap()..];
+    let block = &block[..block.find_code("let Some(verdict) = verdict else { continue };").unwrap()];
+    let pre = source.find_code("if seat_r && duty.free_prompt && service.is_unserved(&duty.claim_id) {").expect("the pre-check");
+    let budget = source.find_code("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("deferral");
+    let verdict = source.find_code("let verdict = 'verdict: {").unwrap();
     assert!(pre < budget && budget < verdict, "asked before a replay deferred for memory skips the verdict");
-    assert!(source[pre..budget].contains(".fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)"));
+    assert!(source[pre..budget].contains_code(".fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)"));
     assert_eq!(block.matches("match service.resumed(duty.claim_id, current_daa, holds_job, step) {").count(), 1, "the FP resume");
     assert_eq!(block.matches("if palw_seat_replay_served_v1(&pass.0) {").count(), 1, "the FP replay");
-    let fault = block.find("if self.seat_found_fault_v1(&duty.claim_id) {").unwrap();
-    assert!(block[fault..fault + 300].contains("service.note_served(duty.claim_id);"), "a fault found");
+    let fault = block.find_code("if self.seat_found_fault_v1(&duty.claim_id) {").unwrap();
+    assert!(block[fault..fault + 300].contains_code("service.note_served(duty.claim_id);"), "a fault found");
     let attempt =
-        block.find("if seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {\n                                //").expect("C7");
-    let route = attempt + block[attempt..].find(".seat_s4_resume_v1(").unwrap();
-    assert!(block[attempt..route].contains("service.note_served(duty.claim_id);"), "the attempt lane's job is the anchor's");
+        block.find_code("if seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {\n                                //").expect("C7");
+    let route = attempt + block[attempt..].find_code(".seat_s4_resume_v1(").unwrap();
+    assert!(block[attempt..route].contains_code("service.note_served(duty.claim_id);"), "the attempt lane's job is the anchor's");
     assert_eq!(
         block.matches("service.note_unserved(duty.claim_id, current_daa)").count(),
         3,
         "the tensor claim's pass (RFC-0003), the FP replay, the tail"
     );
-    let valid = source.find("if valid {\n                    service.note_served(duty.claim_id);").expect("a Valid");
-    let hook = source.find(
-        "if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })\n                    && service.is_unserved(&duty.claim_id)",
+    let valid = source.find_code("if valid {\n                    service.note_served(duty.claim_id);").expect("a Valid");
+    let hook = source.find_code("if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })\n                    && service.is_unserved(&duty.claim_id)",
     );
     assert!(hook.is_some_and(|hook| valid < hook), "an Unavailable accuses only an unserved claim");
-    assert!(source.contains("let ended = service.ended(|claim| duty_claims.contains(claim));"), "the seam");
+    assert!(source.contains_code("let ended = service.ended(|claim| duty_claims.contains(claim));"), "the seam");
 }
