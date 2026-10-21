@@ -1,0 +1,126 @@
+{
+  "checks": [
+    {
+      "path": "consensus/core/src/tx.rs",
+      "expected_sha256": "e0b6330060616fa2b06960fe52dd0cd3f3b226262a83997c3434c4751a42ad1b",
+      "actual_sha256": "e0b6330060616fa2b06960fe52dd0cd3f3b226262a83997c3434c4751a42ad1b"
+    },
+    {
+      "path": "consensus/core/src/tx/script_public_key.rs",
+      "expected_sha256": "40c232195b69c90a8307aa9778dfaed31140fabe9ccae0df97994a0393431cde",
+      "actual_sha256": "40c232195b69c90a8307aa9778dfaed31140fabe9ccae0df97994a0393431cde"
+    },
+    {
+      "path": "consensus/core/src/hashing/tx.rs",
+      "expected_sha256": "6556f3db35e27a717eed5ccb4af80f0a1d2b6bf688f06c431f7ed507bcadc67b",
+      "actual_sha256": "6556f3db35e27a717eed5ccb4af80f0a1d2b6bf688f06c431f7ed507bcadc67b"
+    },
+    {
+      "path": "consensus/core/src/hashing/mod.rs",
+      "expected_sha256": "ab60aeee85d4219dd1d6a157ae93eb5e328fa44dc79310cbab742020d20e9cea",
+      "actual_sha256": "ab60aeee85d4219dd1d6a157ae93eb5e328fa44dc79310cbab742020d20e9cea"
+    },
+    {
+      "path": "consensus/core/src/mass/mod.rs",
+      "expected_sha256": "e935613bca0e62ae81d322470daf608c23beb0980ba92baf7bf9c6d0ccda8cff",
+      "actual_sha256": "e935613bca0e62ae81d322470daf608c23beb0980ba92baf7bf9c6d0ccda8cff"
+    },
+    {
+      "path": "consensus/core/src/constants.rs",
+      "expected_sha256": "76916710e1d3e5b1b71e5eaa3e21ad92bc5ef1a595ed3a188c938d8ea22ad737",
+      "actual_sha256": "76916710e1d3e5b1b71e5eaa3e21ad92bc5ef1a595ed3a188c938d8ea22ad737"
+    },
+    {
+      "path": "consensus/core/src/config/params.rs",
+      "expected_sha256": "48a6f814e18c4db71bd8ebcdf6bee28b04a012b4f8c7ac2d6e34657c3d1880f2",
+      "actual_sha256": "48a6f814e18c4db71bd8ebcdf6bee28b04a012b4f8c7ac2d6e34657c3d1880f2"
+    },
+    {
+      "path": "crypto/hashes/src/hashers.rs",
+      "expected_sha256": "63bce4e6c6019d97c457ecd7af2ea585f691c9a9016038b30c54065a4bd8e25a",
+      "actual_sha256": "63bce4e6c6019d97c457ecd7af2ea585f691c9a9016038b30c54065a4bd8e25a"
+    },
+    {
+      "path": "crypto/hashes/src/lib.rs",
+      "expected_sha256": "eff8755a58c341c93368969b4a459453ea74da96ce312bc7b3e3dcb092223fd5",
+      "actual_sha256": "eff8755a58c341c93368969b4a459453ea74da96ce312bc7b3e3dcb092223fd5"
+    },
+    {
+      "path": "rothschild/src/main.rs",
+      "expected_sha256": "b38a6d698163ddb77f9726a551cfd72de33905f18fe443c75f7cfb1dbac9559d",
+      "actual_sha256": "b38a6d698163ddb77f9726a551cfd72de33905f18fe443c75f7cfb1dbac9559d"
+    },
+    {
+      "path": "rothschild/src/measurement.rs",
+      "expected_sha256": "8e4138c6f275a38031664fb42dbc96cd3a34125fed8e49738b058a6ecf2622cd",
+      "actual_sha256": "8e4138c6f275a38031664fb42dbc96cd3a34125fed8e49738b058a6ecf2622cd"
+    },
+    {
+      "path": "runtime-python-source/audit.py",
+      "expected_sha256": "08eb14c3b0bd3ca97101127d3002945f9ba7c1dd5568beef1b11d8bb422c3381",
+      "actual_sha256": "08eb14c3b0bd3ca97101127d3002945f9ba7c1dd5568beef1b11d8bb422c3381"
+    },
+    {
+      "path": "runtime-python-source/driver.py",
+      "expected_sha256": "e5bf96a5802151e3339b77d77597820380e0e956a99a926b3915150164258587",
+      "actual_sha256": "e5bf96a5802151e3339b77d77597820380e0e956a99a926b3915150164258587"
+    },
+    {
+      "path": "runtime-python-source/launch.py",
+      "expected_sha256": "5ec63e85402bf71b9309807a77e0d6b4eabea2dbb7e316dff24ad1baacf40913",
+      "actual_sha256": "5ec63e85402bf71b9309807a77e0d6b4eabea2dbb7e316dff24ad1baacf40913"
+    },
+    {
+      "path": "runtime-python-source/native_peers.py",
+      "expected_sha256": "6e4da12b977a00f78e9312d1345cba28f094df07ab6ba6e6548b96182c099340",
+      "actual_sha256": "6e4da12b977a00f78e9312d1345cba28f094df07ab6ba6e6548b96182c099340"
+    },
+    {
+      "path": "runtime-python-source/observe.py",
+      "expected_sha256": "40dc57dd10509ec5f02adef094f8d03d8d342befb29d4a6a849b600d6c291949",
+      "actual_sha256": "40dc57dd10509ec5f02adef094f8d03d8d342befb29d4a6a849b600d6c291949"
+    },
+    {
+      "path": "runtime-python-source/owned_process.py",
+      "expected_sha256": "46ba2ebd69044b4bb66cfdfaac37c113759aa738372d507c524732869b6725ff",
+      "actual_sha256": "46ba2ebd69044b4bb66cfdfaac37c113759aa738372d507c524732869b6725ff"
+    },
+    {
+      "path": "runtime-python-source/test_audit.py",
+      "expected_sha256": "c26f85349236963a98cd92fbf20dbb1ea360c8f858f15af061bf529ebead7933",
+      "actual_sha256": "c26f85349236963a98cd92fbf20dbb1ea360c8f858f15af061bf529ebead7933"
+    },
+    {
+      "path": "runtime-python-source/test_driver.py",
+      "expected_sha256": "0f132e357542e39f3dff27f1e40cbc738265d21bba9a7173d7d2b96ae4f8c1df",
+      "actual_sha256": "0f132e357542e39f3dff27f1e40cbc738265d21bba9a7173d7d2b96ae4f8c1df"
+    },
+    {
+      "path": "runtime-python-source/test_launch.py",
+      "expected_sha256": "948e6bc7899062d6b1e14f10c650b52ca5bd89bbdf4d17e9c6d09c470b438b3e",
+      "actual_sha256": "948e6bc7899062d6b1e14f10c650b52ca5bd89bbdf4d17e9c6d09c470b438b3e"
+    },
+    {
+      "path": "runtime-python-source/test_native_peers.py",
+      "expected_sha256": "1e2d02dc4d5188b1b0d62daacae520ae61668cc7145db2a3c43ce4d2b76e14d2",
+      "actual_sha256": "1e2d02dc4d5188b1b0d62daacae520ae61668cc7145db2a3c43ce4d2b76e14d2"
+    },
+    {
+      "path": "runtime-python-source/test_owned_process.py",
+      "expected_sha256": "9169ae1f70c30e58cadf6bdaecf144d75d3f04e59f211e922812c7d6e7ab1f3c",
+      "actual_sha256": "9169ae1f70c30e58cadf6bdaecf144d75d3f04e59f211e922812c7d6e7ab1f3c"
+    },
+    {
+      "path": "runtime-python-source/test_trace_io.py",
+      "expected_sha256": "ddebae61e55bbc3322056c4675e9fecc59391be405dff9850b17bcff2c76dd19",
+      "actual_sha256": "ddebae61e55bbc3322056c4675e9fecc59391be405dff9850b17bcff2c76dd19"
+    },
+    {
+      "path": "runtime-python-source/trace_io.py",
+      "expected_sha256": "f25d2b1566cbafe3fc2bbd5ae1ff1a711c34f9f8252fd4e7e36f0047d48d4928",
+      "actual_sha256": "f25d2b1566cbafe3fc2bbd5ae1ff1a711c34f9f8252fd4e7e36f0047d48d4928"
+    }
+  ],
+  "all_match": true,
+  "note": "Native formula source matches unchanged files at pinned base plus source patch; exact runtime Python snapshots match launch manifest. New unrelated Rust work after experiment is not the measured executable."
+}

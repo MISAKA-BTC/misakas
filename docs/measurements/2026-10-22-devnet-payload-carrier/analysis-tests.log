@@ -1,0 +1,13 @@
+test_arithmetic_storage_branch_and_checked_overflow (test_recalc.Recalc) ... ok
+test_conflicting_duplicate_trace_metrics_are_not_skipped (test_recalc.Recalc) ... ok
+test_exact_borsh_length_is_distinct_from_native_mass_estimated_size (test_recalc.Recalc) ... ok
+test_fee_or_mass_disagreement_is_not_silently_a_match (test_recalc.Recalc) ... ok
+test_inflight_attempt_remains_unknown_with_or_without_observed_body (test_recalc.Recalc) ... ok
+test_missing_body_input_and_same_id_different_signed_body_are_unknown (test_recalc.Recalc) ... ok
+test_plain_gzip_xz_are_lossless_iterable_representations (test_recalc.Recalc) ... ok
+test_positive_verbose_compute_is_checked_and_zero_or_none_is_unavailable (test_recalc.Recalc) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.004s
+
+OK
