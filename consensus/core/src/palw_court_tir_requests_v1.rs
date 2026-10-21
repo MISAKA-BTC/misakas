@@ -97,6 +97,46 @@ impl<'a> TirSharedRequestSetV1<'a> {
     }
     pub fn source_id(&self) -> Hash64 { self.source.source_id_v1() }
     pub fn decode_count(&self) -> u32 { self.source.decode_count_v1() }
+    /// Original-wide numerical topology beside the complete source universe.
+    /// Native court/demand rules must be supplied by the authenticated caller;
+    /// this does not price terminal witnesses or create service packets.
+    pub fn numerical_tree_upper(&self,
+        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        court: &crate::palw_mode_v2::PalwCourtParamsV2,
+        demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
+    ) -> Result<crate::palw_tir_public_source_v1::numerical_inventory_v1::TirPublicNumericalInventoryV1, String> {
+        self.source.numerical_tree_upper_v1(registered, layout, court, demand)
+    }
+    /// All distinct producer-signed numerical disclosures, including actual new
+    /// DTO framing and every path byte. Roots and terminal witnesses remain
+    /// separate unfinished costs. This creates no packet or funded admission.
+    pub fn numerical_disclosure_transport_upper(&self,
+        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        court: &crate::palw_mode_v2::PalwCourtParamsV2,
+        demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
+    ) -> Result<TirSharedNumericalTransportUpperV1, String> {
+        let numerical = self.numerical_tree_upper(registered, layout, court, demand)?;
+        let empty = crate::palw_tir_dissect_v1::PalwTirDissectRoundV1 {version:1, children:Vec::new()};
+        let empty_body = borsh::object_length(&empty).map_err(|e|e.to_string())? as u64;
+        // Unsent fixed-width serialization exemplar, never an admitted control
+        // or asserted signature/hash. No signature/body buffer is allocated.
+        let exemplar = crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1 {
+            version:1, claim:self.claim, leaf:0, root_id:self.source_id(), path:Vec::new(),
+            parent_id:self.source_id(), signer:self.producer, round:Box::new(empty), signature:Vec::new()};
+        let overhead = signed_wire_length(&exemplar)?.checked_sub(empty_body)
+            .ok_or("numerical disclosure framing underflow")?;
+        let tree = &numerical.trees;
+        let signed_bytes_upper = add(add(tree.round_body_bytes_upper,
+            mul(tree.disclosures, overhead)?)?, tree.disclosure_path_bytes)?;
+        let maximum_signed_bytes_upper = if tree.disclosures == 0 { 0 } else {
+            add(add(tree.max_round_body_bytes_upper, overhead)?,
+                u64::from(tree.max_depth.checked_sub(1).ok_or("numerical disclosure depth")?))?
+        };
+        Ok(TirSharedNumericalTransportUpperV1 {scope_id:self.scope_id()?, numerical,
+            signed_bytes_upper, maximum_signed_bytes_upper})
+    }
     /// A conservative SUM for every legal source query, without enumerating the
     /// O(N*256 + rows*tiles) universe. This is source data/parser/hash/RAM only,
     /// NOT a full service graph, signature/IO/fee or physical capacity bound.
@@ -204,6 +244,15 @@ impl<'a> TirSharedRequestSetV1<'a> {
 fn signed_wire_length<T:borsh::BorshSerialize>(shape:&T)->Result<u64,String>{
     add(borsh::object_length(shape).map_err(|e|e.to_string())? as u64,
         crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64)
+}
+/// Numerical disclosure transport only. No root/terminal/transaction wrapper,
+/// mass, execution/retention work, fee, reservation or admission capability.
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub struct TirSharedNumericalTransportUpperV1 {
+    pub scope_id:Hash64,
+    pub numerical:crate::palw_tir_public_source_v1::numerical_inventory_v1::TirPublicNumericalInventoryV1,
+    pub signed_bytes_upper:u64,
+    pub maximum_signed_bytes_upper:u64,
 }
 /// Derived envelope/control components for one original's distinct DATA states.
 /// No transaction wrapper, payment, admission, duty or complete-cost capability.

@@ -2466,6 +2466,97 @@ mod conviction_e2e_tests {
     }
 
     #[test]
+    fn original_wide_numerical_inventory_covers_every_native_eligible_leaf() {
+        use crate::palw_tir_dissect_v1 as d;
+        use crate::palw_tir_fence2_v1::PalwTirDemandRulesV1 as Demand;
+        let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+        let source = fx.frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+        let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(&fx.frame, &source, h(251)).unwrap();
+        let binding = &fx.execution.binding;
+        let space = crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&binding.class).unwrap();
+        let intervals = misaka_palw_tir::interval::analyze_ranges(&space.program).unwrap();
+        // Independent reference: every actual leaf at its original coordinate,
+        // then every actual native child range, with no grouped occurrence or
+        // history arithmetic from the implementation under test.
+        let sites: Vec<_> = (0..binding.step_leaf_count).filter_map(|i| {
+            let leaf = space.leaf_at(&binding.job_context, i).unwrap();
+            d::palw_tir_dissect_site_v1(&space, &intervals, &leaf).map(|s| (leaf, s))
+        }).collect();
+        assert!(!sites.is_empty());
+        assert!(sites.iter().map(|(l, _)| l.position).collect::<std::collections::BTreeSet<_>>().len() > 1);
+        let mut counts = Vec::new();
+        for arity in [2, 4, 8, 16, 32, 64] {
+            let mut reference = d::tree_inventory_v1::NumericalTreeInventoryV1::default();
+            let mut signed_reference = 0u64;
+            let mut maximum_signed_reference = 0u64;
+            for (leaf, site) in &sites {
+                let tiles = u64::from(site.history_positions.div_ceil(site.tile_positions));
+                let crate::palw_tir_step_v1::PalwTirLeafKindV1::Commit {block, node, ..} = leaf.kind else {panic!("site")};
+                let values = d::palw_tir_dissect_value_bound_v2(&space.program, &space.program.blocks[block as usize], node,
+                    space.commit_tile_len(block, node).unwrap(), Demand::H7) as usize;
+                let mut todo = vec![(0, tiles, 0u32)];
+                while let Some((first, n, depth)) = todo.pop() {
+                    reference.max_depth = reference.max_depth.max(depth);
+                    let children = crate::palw_attn_dissect::palw_attn_child_ranges_v1(first, n, arity).unwrap();
+                    if children.is_empty() { reference.terminals += 1; continue; }
+                    reference.disclosures += 1;
+                    reference.child_claims += children.len() as u64;
+                    reference.disclosure_path_bytes += u64::from(depth);
+                    // Unsent width exemplars: actual DTO serialization with
+                    // native count bounds, not purported valid math/signatures.
+                    let row = crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1 {
+                        version:1, claim:fx.frame.plan_v1().original_claim, leaf:leaf.index,
+                        root_id:source.source_id_v1(), path:vec![0; depth as usize], parent_id:source.source_id_v1(),
+                        signer:fx.frame.custody_v1().pledge_v1().producer,
+                        round:Box::new(d::PalwTirDissectRoundV1 {version:1, children:children.iter().map(|_| {
+                            let mut partials = vec![Vec::new(); site.reductions.len()];
+                            partials[0] = vec![0; values];
+                            d::PalwTirRangeClaimV1 {partials}
+                        }).collect()}),
+                        signature:vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+                    };
+                    let bytes = borsh::to_vec(&row).unwrap().len() as u64;
+                    signed_reference += bytes;
+                    maximum_signed_reference = maximum_signed_reference.max(bytes);
+                    todo.extend(children.into_iter().map(|(f, c)| (f, c, depth + 1)));
+                }
+            }
+            let court = fx.rules.court.with_dissection_arity(arity).unwrap();
+            for demand in [Demand::Release2000, Demand::H7] {
+                let transport = set.numerical_disclosure_transport_upper(&fx.record, &fx.layout, &court, demand).unwrap();
+                assert_eq!(transport.scope_id, set.scope_id().unwrap());
+                if demand == Demand::H7 {
+                    assert_eq!(transport.signed_bytes_upper, signed_reference);
+                    assert!(transport.maximum_signed_bytes_upper >= maximum_signed_reference);
+                }
+                let actual = transport.numerical;
+                assert_eq!(actual.source_id, source.source_id_v1());
+                assert_eq!(actual.original_leaves, binding.step_leaf_count);
+                assert_eq!(actual.eligible_roots, sites.len() as u64);
+                assert_eq!(actual.arity, arity);
+                assert_eq!(actual.demand, demand);
+                assert_eq!(actual.trees.disclosures, reference.disclosures);
+                assert_eq!(actual.trees.terminals, reference.terminals);
+                assert_eq!(actual.trees.child_claims, reference.child_claims);
+                assert_eq!(actual.trees.disclosure_path_bytes, reference.disclosure_path_bytes);
+                assert_eq!(actual.trees.max_depth, reference.max_depth);
+                assert_eq!(actual.trees.child_claims + actual.eligible_roots,
+                    actual.trees.disclosures + actual.trees.terminals);
+                assert!(actual.trees.round_body_bytes_upper > 0);
+            }
+            counts.push((arity, reference.disclosures, reference.terminals));
+        }
+        eprintln!("original numerical inventory: original_leaves={} eligible_roots={} arity_disclosures_terminals={counts:?}",
+            binding.step_leaf_count, sites.len());
+        let mut wrong_layout = fx.layout.clone();
+        wrong_layout.h_tile *= 2;
+        assert!(set.numerical_tree_upper(&fx.record, &wrong_layout, &fx.rules.court, Demand::H7).is_err());
+        let mut wrong_record = fx.record.clone();
+        wrong_record.program = std::sync::Arc::new(vec![]);
+        assert!(set.numerical_tree_upper(&wrong_record, &fx.layout, &fx.rules.court, Demand::H7).is_err());
+    }
+
+    #[test]
     fn shared_history_root_binds_public_original_policy_and_literal_producer_signature() {
         use crate::palw_court_shared_tir_root_v1::*;
         use crate::palw_court_shared_tir_state_v1 as shared;

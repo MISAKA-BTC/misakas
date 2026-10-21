@@ -124,3 +124,14 @@ current book の assignment は再割当先を表す。変更前後は native jo
 本文量は既存 `PalwTirDissectRoundV1` の符号化だけである。child数をc、reduction数をr、要求値上限をvとすると、一開示は `6 + c * (4 + 4*r + 16*v)` bytes。端数区間では実際のchild数を使う。全枝に同じ要求値上限を適用した保守的な上限であり、実際の要求集合が小さければ等値とは限らない。これは実測CPUやnode負荷の値ではない。
 
 この関数はまだ元受付への接続ではない。入力を外部申告で信用せず、既存のprogram/demand規則から導出し、元claimの**全eligible leaf**を含めることが必要。既に保持したrootの一形状だけを予約して全分岐を確保したと扱わない。root/finalize・各terminal witness・新署名envelope/transport・source/semantic/court/archive・不正/重複ingress・CPU/IO・保持・料金を加え、実供給と依存horizonと資金を原子的に確保するまでは、完全な予約packet集合や受付能力にならない。既存schedulerへ単位費用で流し込まず、default/credit/財務効果を許可しない。
+
+
+## 元claim全体からの numerical inventory 導出（隔離候補、未採択）
+
+`PalwTirPublicSourceV1::numerical_tree_upper_v1` は、保持済みのrootやownerの選択に依存せず、literal original header・認証済み登録program・digest一致layoutを再検査して全対象を導出する。全実行occurrenceの全commitを調べ、H上のreductionを持つconeでは既存O-1〜O-3を検査する。同一blockのlayer occurrenceを多重度として数え、postはprefill末尾以後の実行位置だけを数える。履歴windowの飽和はまとめるが、飽和前の異なる履歴を省かない。出力の端数tileも含め、各位置・各対象nodeの出力tile数と全枝inventoryを乗算・合算する。全leafを一件ずつ確保する方式ではない。reduction数や要求値数をwire申告から受け取らない。
+
+既存のbox-demand規則とcourt arityは、呼出側が実際のnative policyから解決して渡す。結果にはそのdemandとarityを記録するが、policyの認証・採択を代替しない。違う時期の規則を黙って使ったり、複数規則の最大値を新しい受付基準として採択しない。値数上限は既存の登録programに対する `palw_tir_dissect_value_bound_v2`、各targetの既存commit tile長から求める。最後の短い出力tileにも全tileの値数上限を適用するため、本文量は保守的な上限である。算術overflowや既存cap外は、保証が導出できない結果として拒否し、capを引き上げない。
+
+`TirSharedRequestSetV1::numerical_disclosure_transport_upper` は、同じsource universeにscopeを結び付け、新しい `SignedSharedTirRoundV1` の実Borsh構造と既存ML-DSA署名長から全内部開示のenvelope上限を導出する。空body/path/signatureを持つ未送信の幅計数用exemplarを使い、本文を引いた固定header量、全内部path長、実署名長を加える。ハッシュ・署名を偽造した受付データを作る処理ではない。最大bodyと最大pathが同じnodeにない場合もあるため、一件の最大値は保守的な上限。旧round本文が収まることから新envelopeが収まるとは推論しない。
+
+ここで数えるのは各canonical root/pathの異なる数値開示である。root/finalizeと全終端witnessの実形状・新carrier/transaction wrapper・mass・実測CPU/IO・重複/不正ingress・semantic/court/archive・保存期間と料金は未導出。再構成・program解析・履歴group反復自体もnative admissionへ接続する前に資源検査が必要。元受付への原子的予約・実供給・配送収録・責任解消・資金確保を実装したものではなく、F02/F03、T05、G14の完了や武装を許可しない。

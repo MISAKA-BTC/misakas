@@ -1,0 +1,20 @@
+{
+  "parent": "14aaf669df36a5817891158e2e90b53b7f4feeb2",
+  "tracked_changes_additions_only": true,
+  "runtime_patch_reconstruction": "PASS: fresh resolved temporary cwd, all four source files byte-identical",
+  "source_sha256": {
+    "consensus/core/src/palw_court_tir_requests_v1.rs": "a9fb408598c780dce62edecc6b10d98125ca16afd2b0c90e2c491bf9c8c43fe1",
+    "consensus/core/src/palw_tir_public_source_v1.rs": "bc621054b2344908211b391f0e19b43cdbf855e15b4a5fb3b6f8fc65973cd3fa",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "21c5ad38148d2aead6d87fa0dcb68d7aef351eb9c0d78fde184523d8bc23ba1d",
+    "consensus/core/src/palw_tir_public_numerical_inventory_v1.rs": "43eda21d4eec963a2a17305d1887257925ae90d9ace386cafe8854fffc107a62"
+  },
+  "unchanged_native_schema_and_state_files": [
+    "consensus/core/src/palw_staged_court_state_v1.rs",
+    "consensus/core/src/palw_staged_court_fold_v1.rs",
+    "consensus/core/src/palw_native_resource_v1/generated.rs",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs",
+    "consensus/core/src/palw_court_shared_tir_root_v1.rs",
+    "consensus/core/src/palw_court_shared_tir_round_v1.rs",
+    "consensus/core/src/palw_court_shared_tir_bottom_v1.rs"
+  ]
+}
