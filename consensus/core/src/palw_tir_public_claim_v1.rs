@@ -446,6 +446,13 @@ pub(crate) fn palw_tir_public_frame_fixture_v1(forge: Option<(usize, usize)>, ma
     tests::fixture_in(forge, maximum_custodians)
 }
 
+/// Golden history-bearing corpus in its actual original FP context; verified-half
+/// original signature/payment assumptions are identical to the other fixtures.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_history_frame_fixture_v1() -> PalwTirPublicFrameFixtureV1 {
+    tests::history_frame()
+}
+
 /// Existing 4096-wide test execution reconstructed in its actual original job context.
 #[cfg(test)]
 pub(crate) fn palw_tir_public_frame_fixture_wide_v1(forge:Option<(usize,usize)>,maximum_custodians:u64)->PalwTirPublicFrameFixtureV1 {

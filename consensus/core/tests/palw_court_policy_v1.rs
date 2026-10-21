@@ -61,3 +61,23 @@ fn readiness_record_cannot_bypass_unfinished_outsider_path() {
         assert!(format!("{error:?}").contains("ServiceOpportunityIncomplete"));
     }
 }
+
+#[test]
+fn shared_initial_notice_includes_original_terminal_daa_without_hard_overflow() {
+    for a in [0, 100, u64::MAX - DISPUTE_WINDOW_DAA] {
+        if let Some(before) = a.checked_sub(1) {
+            assert_eq!(shared_initial_notice_daa_in_window_v1(a, before), Ok(false));
+        }
+        for offset in [0, NOTICE_WINDOW_DAA - 1, NOTICE_WINDOW_DAA] {
+            assert_eq!(shared_initial_notice_daa_in_window_v1(a, a + offset), Ok(true));
+        }
+        for offset in [NOTICE_WINDOW_DAA + 1, DISPUTE_WINDOW_DAA] {
+            assert_eq!(shared_initial_notice_daa_in_window_v1(a, a + offset), Ok(false));
+        }
+    }
+    for a in [u64::MAX - DISPUTE_WINDOW_DAA + 1, u64::MAX - NOTICE_WINDOW_DAA, u64::MAX] {
+        assert_eq!(shared_initial_notice_daa_in_window_v1(a, a), Err(CourtPolicyError::Overflow));
+    }
+    // A late retry is still measured from the original, never from that retry.
+    assert_eq!(shared_initial_notice_daa_in_window_v1(100, 3_221), Ok(false));
+}

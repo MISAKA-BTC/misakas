@@ -1,7 +1,8 @@
 //! RFC-0026 §2–3: checked derivation from ORIGINAL accepting-chain DAA.
 //! No wire/state format, fence, preset or existing claim is changed here.
 //! Fold integration requires a separately versioned, reviewed ruleset. In
-//! particular, this helper does not choose notice equality or turn durations.
+//! particular, legacy clocks/turn durations are unchanged. The separate shared
+//! initial-notice DAA predicate follows the privately approved ADR-0198 A.
 
 pub const NOTICE_WINDOW_DAA: u64 = 3_120;
 pub const DISPUTE_WINDOW_DAA: u64 = 10_000;
@@ -50,4 +51,17 @@ impl CourtClockBounds {
             bond_exit_after: material_until.max(dependency_until).max(other_bond_liability),
         })
     }
+}
+
+/// ADR-0198 A: clock condition ONLY for a new shared initial notice. The native
+/// coordinator must separately authenticate the actual original accepting point,
+/// same-DAA causal ordering, signature, funds and all-branch reservation. This
+/// does not create a notice, reset an original, extend hard or authorize default.
+/// Both original boundaries must be representable; no saturating fallback.
+pub fn shared_initial_notice_daa_in_window_v1(original_acceptance: u64, notice_daa: u64)
+    -> Result<bool, CourtPolicyError>
+{
+    let end = original_acceptance.checked_add(NOTICE_WINDOW_DAA).ok_or(CourtPolicyError::Overflow)?;
+    original_acceptance.checked_add(DISPUTE_WINDOW_DAA).ok_or(CourtPolicyError::Overflow)?;
+    Ok(original_acceptance <= notice_daa && notice_daa <= end)
 }

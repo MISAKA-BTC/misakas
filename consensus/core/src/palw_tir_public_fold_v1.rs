@@ -2466,6 +2466,113 @@ mod conviction_e2e_tests {
     }
 
     #[test]
+    fn shared_history_root_binds_public_original_policy_and_literal_producer_signature() {
+        use crate::palw_court_shared_tir_root_v1::*;
+        use crate::palw_court_shared_tir_state_v1 as shared;
+        use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
+        use crate::palw_tir_court_v1::{PalwTirCourtRulesV1, build_tir_root_claim_v1};
+        let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+        let frame = &fx.frame;
+        let claim = frame.plan_v1().original_claim;
+        let (mut state, params, extras) = world(&fx, frame);
+        let params = params.with_tir_from_daa(Some(0));
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+        // Existing original/registration/payment are verified-half fixtures.
+        // Key replacement is fixture setup, never a native rotation transaction.
+        state.bonds.get_mut(&producer).unwrap().pubkey = keys.verification_key.as_ref().to_vec();
+        state = bind_clock_service(&state, frame, &params, &extras);
+        let profile = shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
+        let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+        let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
+        let p = frame.plan_v1();
+        let c = shared::SharedTirContextV1 { version: 1, claim, allocation_id: p.allocation_id,
+            source_id: p.source_id, rules_id: p.rules_id, profile_id: profile, scope_id: set.scope_id().unwrap(), queries: set.len(),
+            original_accepted_daa: p.terms.accepted_daa, hard_daa: p.terms.accepted_daa + 10_000,
+            material_until_daa: p.terms.material_until_daa };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_staged_row_v1(Key::CourtSharedContext(claim), Some(Row::CourtSharedContext(Box::new(c)))).unwrap();
+        let state = b.state.clone();
+        let rules = NativeCourtRulesV1 { network_domain: extras.tir_public_network_domain_v1.unwrap(), at: at(frame, 1),
+            court: fx.rules.court, step_ladder: fx.rules.maximum_leaves, prompt_ids_merkle: false,
+            held_regime: false, decode_close_convicts_only: false, fp_decode_from_daa: None,
+            cell_closure_from_daa: None, memory_routing_from_daa: None, tir_active: true, gen_active: false,
+            task_heads_active: false, improvement_active: false, constraint_active: false };
+        let binding = &fx.execution.binding;
+        let space = crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&binding.class).unwrap();
+        let intervals = misaka_palw_tir::interval::analyze_ranges(&space.program).unwrap();
+        let (leaf, _) = (0..binding.step_leaf_count).filter_map(|i| {
+            let l = space.leaf_at(&binding.job_context, i).unwrap();
+            crate::palw_tir_dissect_v1::palw_tir_dissect_site_v1(&space, &intervals, &l).map(|site| (i, site))
+        }).max_by_key(|(i, site)| (site.history_positions, site.reductions.len(), std::cmp::Reverse(*i))).unwrap();
+        let court = PalwTirCourtRulesV1 { max_step_leaf_count: rules.step_ladder, prompt_form: fx.rules.prompt_form,
+            limits: crate::palw_court_v2::palw_tir_court_limits_v1(&rules.court) };
+        let mut root = build_tir_root_claim_v1(binding, leaf, &fx.execution, &court).unwrap();
+        crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut root.finalize.binding);
+        let mut control = SignedSharedTirRootV1 { version: 1, claim, scope_id: set.scope_id().unwrap(),
+            policy_id: shared_tir_root_policy_id_v1(&rules).unwrap(), leaf, arity: rules.court.dissection_arity(),
+            signer: producer, root: Box::new(root), signature: vec![] };
+        let sign = |c: &mut SignedSharedTirRootV1| {
+            c.signature = libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,
+                c.signing_message(rules.network_domain).unwrap().as_byte_slice(), SHARED_TIR_ROOT_CONTEXT_V1, [92; 32])
+                .unwrap().as_ref().to_vec();
+        };
+        sign(&mut control);
+        let before = state.state_root();
+        assert_eq!(state.court_sessions_len(), 0);
+        let checked = check_shared_tir_root_v1(&state, &params, &rules, &control).unwrap();
+        assert_eq!(checked.site().history_positions, 24);
+        assert_eq!(checked.control(), &control);
+        // Relays/requesters contribute nothing to the identity. Rechecking by a
+        // second caller does not allocate a session or choose a numerical child.
+        check_shared_tir_root_v1(&state, &params, &rules, &control).unwrap();
+        let mut later = rules; later.at = at(frame, 2);
+        assert_eq!(shared_tir_root_policy_id_v1(&later).unwrap(), control.policy_id);
+        check_shared_tir_root_v1(&state, &params, &later, &control).unwrap();
+        for mutate in 0..11 {
+            let mut bad = control.clone();
+            match mutate {
+                0 => bad.claim = h(0xFA01), 1 => bad.scope_id = h(0xFA02), 2 => bad.policy_id = h(0xFA03),
+                3 => bad.leaf = binding.step_leaf_count, 4 => bad.arity = 3, 5 => bad.signer = outsider(),
+                6 => bad.root.finalize.binding.committed_execution_root = h(0xFA04),
+                7 => bad.root.elements.clear(), 8 => bad.root.finalize.binding.class.program = binding.class.program.clone(),
+                9 => bad.version = 2, 10 => bad.signature[0] ^= 1, _ => unreachable!(),
+            }
+            // Re-sign semantic/source substitutions, so refusal is not merely
+            // an old signature failing to match the edited body.
+            if mutate < 9 { sign(&mut bad); }
+            assert!(check_shared_tir_root_v1(&state, &params, &rules, &bad).is_err(), "mutation {mutate}");
+        }
+        let mut old = control.clone();
+        old.signature = libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,
+            &crate::palw_tir_dissect_v1::palw_tir_root_claim_message_v1(&h(0x515), &old.root),
+            crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT, [93;32]).unwrap().as_ref().to_vec();
+        assert!(check_shared_tir_root_v1(&state, &params, &rules, &old).is_err());
+        let mut other_network = rules; other_network.network_domain = h(0xFA05);
+        let mut wrong_network = control.clone();
+        wrong_network.policy_id = shared_tir_root_policy_id_v1(&other_network).unwrap();
+        assert!(check_shared_tir_root_v1(&state, &params, &other_network, &wrong_network).is_err());
+        let mut other_rules = rules; other_rules.held_regime = !rules.held_regime;
+        assert!(check_shared_tir_root_v1(&state, &params, &other_rules, &control).is_err());
+        let mut hard = rules; hard.at = at(frame, 10_000);
+        assert!(check_shared_tir_root_v1(&state, &params, &hard, &control).is_err());
+        let mut missing = state.clone(); missing.staged_courts.remove(&frame.key_v1());
+        assert!(check_shared_tir_root_v1(&missing, &params, &rules, &control).is_err(), "no native-claim fallback");
+        let mut missing = state.clone(); missing.staged_courts.remove(&Key::CourtSharedContext(claim));
+        assert!(check_shared_tir_root_v1(&missing, &params, &rules, &control).is_err());
+        let mut substituted = state.clone();
+        let Some(Row::CourtSharedContext(row)) = substituted.staged_courts.get_mut(&Key::CourtSharedContext(claim)) else { unreachable!() };
+        row.profile_id = h(0xFA06);
+        assert!(check_shared_tir_root_v1(&substituted, &params, &rules, &control).is_err());
+        let mut inactive = rules; inactive.tir_active = false;
+        assert!(check_shared_tir_root_v1(&state, &params, &inactive, &control).is_err());
+        let mut exited = state.clone(); exited.bonds.get_mut(&producer).unwrap().collateral = 0;
+        assert!(check_shared_tir_root_v1(&exited, &params, &rules, &control).is_err());
+        assert_eq!(state.state_root(), before);
+        assert_eq!(state.court_sessions_len(), 0);
+    }
+
+    #[test]
     fn rooted_shared_query_and_signed_streams_work_with_all_native_owner_slots_occupied_and_reload() {
         exercise_rooted_shared_streams(palw_tir_public_frame_fixture_v1(Some((7,1)),4),7,false);
     }

@@ -1,16 +1,16 @@
 # RFC-0031 — 共有courtのinitial notice境界
 
-Status: **Draft / Review Required** (2026-10-21)。正本は[RFC-0026 §2.2](0026-court-policy-master-contract.md#22-境界表f09値は未決形式だけ固定)と[ADR-0192](../adr/0192-court-service-opportunity-and-shared-pursuit.md)。判断は[ADR-0198](../adr/0198-shared-court-initial-notice-boundary.md)。旧claim・t12・既存tag/clockを変更せず、本番採択・有効化は含まない。
+Status: **Draft / Review Required** (2026-10-21)。利用者はA（終端DAAを含む）の詳細仕様化・隔離実装を承認済み。正本は[RFC-0026 §2.2](0026-court-policy-master-contract.md#22-境界表f09値は未決形式だけ固定)と[ADR-0192](../adr/0192-court-service-opportunity-and-shared-pursuit.md)。判断は[ADR-0198](../adr/0198-shared-court-initial-notice-boundary.md)。旧claim・t12・既存tag/clockを変更せず、本番採択・有効化は含まない。
 
-## 1. 固定値と未決の一点
+## 1. 固定値と隔離実装の選択
 
 `a`はoriginalの実accepting-chain DAA。通常申立ての終端値は`a + 3,120`、hardは`a + 10,000`で固定する。両方をchecked arithmeticで求め、overflowは受付拒否とし、飽和値や別の起点に置換しない。
 
-未決なのはinitial noticeが終端DAAと等しい場合の受理である。RFC-0026は等号を未決としており、既存`collect_until`の排他的境界や旧courtのinclusiveな期限をそのまま流用する根拠にはしない。
+initial noticeが終端DAAと等しい場合は、Aの `a <= d <= a + 3,120` を詳細仕様化・隔離実装に使用する。RFC-0026は等号を未決としており、既存`collect_until`の排他的境界や旧courtのinclusiveな期限をそのまま流用する根拠にはしない。
 
 | 候補 | initial noticeのDAA区間 | 最後のnotice DAA |
 | --- | --- | --- |
-| A（詳細仕様化の推奨） | `a <= d <= a + 3,120` | `a + 3,120` |
+| A（詳細仕様化・隔離実装を承認済み） | `a <= d <= a + 3,120` | `a + 3,120` |
 | B | `a <= d < a + 3,120` | `a + 3,119` |
 
 Aは「3,120まで」という終端を含める明示方式である。3,200へ変更する案やhardを後ろへ動かす案ではない。Bは新profileの全受付窓をhalf-openで表しやすいが、Aより最後のnotice DAAが一つ早い。どちらも実供給・適格性・全残作業の予約を別途要求する。
@@ -36,6 +36,12 @@ claim共通noticeの重複統合、後続actorの資格と費用、signer義務�
 
 ## 4. 次の実装・検証
 
-選んだ候補でpredicateと境界試験を作る。最短/最大u64、overflow、同一DAA別block、originalより前のnotice、重複notice、後続要求の起点差替え、reorgでのnotice消失/復元を対象にする。最遅notice後の全作業がhard内に収まることは別の全graph検査で示す。deadlineの等号から供給やdefault許可を作らない。
+Aのpredicateと境界試験を作る。最短/最大u64、overflow、同一DAA別block、originalより前のnotice、重複notice、後続要求の起点差替え、reorgでのnotice消失/復元を対象にする。最遅notice後の全作業がhard内に収まることは別の全graph検査で示す。deadlineの等号から供給やdefault許可を作らない。
 
 本書は性能測定、数値fee、turn duration、配送遅延、公開wireの選択を行わない。F02/F03、全original有料受付、T01–T15と実doorの完了前は武装を拒否する。
+
+## 5. 隔離predicateの範囲
+
+`shared_initial_notice_daa_in_window_v1(a, d)` はAのDAA条件をchecked arithmeticで検査する。notice終端だけが表現可能でもhardがoverflowする場合は拒否する。既存`CourtClockBounds::derive`、旧court、共有dataのhard排他的検査は変更しない。
+
+このpure predicateは実originalの存在・同一DAA内の因果順・署名・資金・予約を認証せず、notice行も作らない。重複統合、後続要求、reorgによるnoticeの消失/復元の検証は、native notice coordinatorとともに残る。DAA境界試験だけをこれらの合格に数えない。
