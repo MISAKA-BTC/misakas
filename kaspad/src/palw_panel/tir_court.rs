@@ -25,6 +25,7 @@
 //! ([`palw_tir_one_move_accusation_to_file_v1`]), signed over its session id
 //! (`PalwPanelService::tir_one_move_pass_v1`).
 
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 use std::collections::{HashMap, HashSet};
 
 use kaspa_consensus_core::Hash64;
@@ -1145,8 +1146,7 @@ pub(super) struct PalwTirOneMoveBooksV1<'a> {
     pub challenged: &'a mut HashSet<Hash64>,
     /// Claims this node has accused in one move (or found no accusation for): filed once.
     pub accused: &'a mut HashSet<Hash64>,
-    pub court_pending: &'a mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-    pub court_due: &'a mut HashMap<(Hash64, u32, bool), u64>,
+    pub court_outbox: &'a mut CourtOutboxV1,
     /// Option B: the claims pursued through served annexes (their capture is not held).
     pub pursuits: &'a mut HashMap<Hash64, PalwTirAnnexPursuitV1>,
     /// The interval lane's served payloads, where the annexes asked for arrive.
@@ -1406,15 +1406,15 @@ impl super::PalwPanelService {
             warn!("[{PALW_PANEL}] IR claim {}: the accusation cannot ride a carrier ({why}); recorded, not filed", target.claim_id);
             return;
         }
-        if books.court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
+        if books.court_outbox.pending().iter().any(|(sid, _, _, _)| *sid == session_id) {
             return;
         }
         info!(
             "[{PALW_PANEL}] IR claim {}: filing its one-move accusation ({label} close; first divergent leaf {leaf:?}, token row {row:?})",
             target.claim_id
         );
-        books.court_due.insert((session_id, 0, false), due);
-        books.court_pending.push((session_id, 0, false, object));
+        books.court_outbox.set_due((session_id, 0, false), due);
+        books.court_outbox.push_pending((session_id, 0, false, object));
     }
 
     /// **Option C: one tick of a pursuit whose executor served no annex** (RFC-0002 evidence transport
@@ -1649,13 +1649,13 @@ impl super::PalwPanelService {
     ) -> PalwTirDemandFiledV1 {
         use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
         use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
-        if books.court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
+        if books.court_outbox.pending().iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
             return PalwTirDemandFiledV1::Wait("queued already".into());
         }
         match session.palw_object_rehearsal_v1(object) {
             Some(PalwObjectRehearsalV1::Accepted) => {
-                books.court_due.insert(key, due);
-                books.court_pending.push((key.0, key.1, key.2, object.clone()));
+                books.court_outbox.set_due(key, due);
+                books.court_outbox.push_pending((key.0, key.1, key.2, object.clone()));
                 PalwTirDemandFiledV1::Filed
             }
             Some(PalwObjectRehearsalV1::Refused(PalwStateV2Error::DaSessionAlreadyOpen { .. })) => {

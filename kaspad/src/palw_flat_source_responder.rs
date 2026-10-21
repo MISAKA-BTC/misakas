@@ -1,5 +1,6 @@
 //! Literal paid Flat-source duties. Readers survive polls; only native cursors acknowledge bytes.
 use super::*;
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::{
     palw_backend::PalwFlatPublicSourceReaderV1,
     palw_constraint_stream_carriage_v1::{
@@ -27,9 +28,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         slot: super::PalwAnswerSlotV1<'_>,
         book: &mut FlatSourceBookV1,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         if self.consensus_config.params.palw_staged_public_court_v1.is_none() {
             return Ok(());
@@ -57,7 +56,7 @@ impl PalwPanelService {
             }
         }
         // Refresh pending packets directly, independently of the paginated discovery cursor.
-        pending.retain(|(_, round, responder, object)| {
+        court_outbox.retain_pending(|(_, round, responder, object)| {
             if (*round, *responder) != (lane_round, true) {
                 return true;
             }
@@ -123,11 +122,13 @@ impl PalwPanelService {
                     return Ok(());
                 }
                 let key = (id, lane_round, true);
-                if pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (lane_round, true)).count() >= 64 {
+                if court_outbox.pending().iter().filter(|(_, round, responder, _)| (*round, *responder) == (lane_round, true)).count()
+                    >= 64
+                {
                     return Ok(());
                 }
-                if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
-                    || moved.get(&key).is_some_and(|at| progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
+                    || court_outbox.submitted_at(&key).is_some_and(|at| progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                 {
                     return Ok(());
                 }
@@ -205,15 +206,20 @@ impl PalwPanelService {
                     .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
                     .ok_or("Flat custodian signing key unavailable")?;
                 movement.check()?;
-                pending.push((key.0, key.1, key.2, PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }));
-                due.insert(key, deadline.saturating_sub(1));
-                moved.insert(key, clock);
+                court_outbox.push_pending((
+                    key.0,
+                    key.1,
+                    key.2,
+                    PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+                ));
+                court_outbox.set_due(key, deadline.saturating_sub(1));
+                court_outbox.mark_submitted(key, clock);
                 Ok::<(), String>(())
             }
             .await;
             if let Err(why) = result {
                 if let Some((key, clock)) = attempt {
-                    moved.insert(key, clock);
+                    court_outbox.mark_submitted(key, clock);
                 }
                 // A refused read/guard never manufactures a source response or a conviction.
                 debug!("[{PALW_PANEL}] claim {claim}: original Flat response remains pending: {why}");

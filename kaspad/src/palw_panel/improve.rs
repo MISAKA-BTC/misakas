@@ -36,6 +36,7 @@
 //! **Dormant**: nothing here runs below the fence.
 
 use super::*;
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -1112,8 +1113,7 @@ impl PalwPanelService {
         st: &mut PalwImproveLoopV1,
         bond_key: PalwBondKeyV2,
         current_daa: u64,
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) {
         if st.court_ready.is_empty() {
             return;
@@ -1178,7 +1178,7 @@ impl PalwPanelService {
                 continue;
             }
             st.court_done.insert(claim);
-            if court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
+            if court_outbox.pending().iter().any(|(sid, _, _, _)| *sid == session_id) {
                 continue;
             }
             info!(
@@ -1187,8 +1187,8 @@ impl PalwPanelService {
                 filing.leaf,
                 if filing.opens_dissection { ", a dissected leaf: the chain opens a dissection there" } else { "" }
             );
-            court_due.insert((session_id, 0, false), current_daa);
-            court_pending.push((session_id, 0, false, object));
+            court_outbox.set_due((session_id, 0, false), current_daa);
+            court_outbox.push_pending((session_id, 0, false, object));
             Self::improve_set_filing_v1(
                 st,
                 claim,
@@ -1374,7 +1374,7 @@ mod tests {
         assert!(panel.contains("self.improve_tick_v1(&mut improve, current_daa).await"));
         let one_move = panel.find("self.tir_one_move_pass_v1(").expect("the IR one-move pass");
         let court = panel
-            .find("self.improve_court_pass_v1(&mut improve, bond_key, current_daa, &mut court_pending, &mut court_due)")
+            .find("self.improve_court_pass_v1(&mut improve, bond_key, current_daa, &mut court_outbox)")
             .expect("the evaluation court's pass");
         assert!(one_move < court, "the evaluation accusations are queued after the IR pass, on the same court path");
         assert!(

@@ -1225,6 +1225,24 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
     let source = &whole[..whole.find(MARKER).expect("the pin module is in this file")];
     let block = verdict_block(source);
 
+    // The explicit collusion drill predates this refactor and deliberately signs without replay.
+    // Attribute that branch separately, while keeping every ordinary exit under the existing pin.
+    assert!(source.contains("let colluding = self.config.drill_collude_with.contains(&duty.executor_bond);"));
+    let drill = block.find("if colluding {").expect("the explicit drill branch");
+    let after_drill = drill + block[drill..].find("// **Class capability").expect("the ordinary path resumes");
+    let drill_body = &block[drill..after_drill];
+    assert_eq!(drill_body.matches("break 'verdict Some(PalwReceiptVerdictV2::Valid);").count(), 1);
+    for gate in [
+        "seat_r_duty.role == PalwSeatRRoleV1::PartialResumes",
+        "licensed_by_verified_resume = true;",
+        "licensed_by_replay = true;",
+        ".mask_of(duty.seat_index as u16)",
+    ] {
+        assert!(drill_body.contains(gate), "the drill remains attributed to its explicit role: {gate}");
+    }
+    let ordinary = format!("{}{}", &block[..drill], &block[after_drill..]);
+    let block = ordinary.as_str();
+
     // Every exit, in a spelling this pin reads.
     const VALID: &str = "break 'verdict Some(PalwReceiptVerdictV2::Valid);";
     const ANY: &str = "break 'verdict Some(verdict);";

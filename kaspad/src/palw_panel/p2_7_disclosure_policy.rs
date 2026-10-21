@@ -480,7 +480,7 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
         + source[pinned..]
             .find("self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await")
             .expect("each claim's answers built");
-    let queued = built + source[built..].find("court_pending.push((key.0, key.1, key.2, object));").expect("and queued");
+    let queued = built + source[built..].find("court_outbox.push_pending((key.0, key.1, key.2, object));").expect("and queued");
     let seats = source.find("let duties = session.palw_seat_duties_v2(vec![bond_key]);").expect("the seat's duties");
     assert!(read < pinned && pinned < built && built < queued && queued < seats, "read, pin, build, queue — before the seats");
     let fp = &source[source.find("    async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];

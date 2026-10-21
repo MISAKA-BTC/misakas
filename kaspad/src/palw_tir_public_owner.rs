@@ -39,6 +39,7 @@
 //! **Not covered:** a class with no kept prompt ids is not replayed (the frame keeps them since G-T3); a trace-only disagreement
 //! with equal IDs and equal steps is logged.
 #![allow(dead_code)] // the panel loop calls the tick; the finding rule is consensus-core's (tested there).
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
 use super::tir_public_filer::palw_tir_public_arithmetic_evidence_v1;
@@ -88,11 +89,7 @@ fn owner_cone_run_request_v1(leaf_count: u64, missing: u64) -> Result<PalwTirPub
     let run = u64::from(PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1);
     let first = (missing / run) * run;
     let count = (leaf_count - first).min(run) as u32;
-    Ok(if count == 1 {
-        PalwTirPublicRequestV1::StepLeaf { index: first }
-    } else {
-        PalwTirPublicRequestV1::StepRun { first, count }
-    })
+    Ok(if count == 1 { PalwTirPublicRequestV1::StepLeaf { index: first } } else { PalwTirPublicRequestV1::StepRun { first, count } })
 }
 
 /// What the independent replay disagrees with.
@@ -116,7 +113,8 @@ pub(crate) fn owner_suspicion_v1(
     vocab: u32,
     replay: &kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceInfoV1,
 ) -> Option<SuspicionV1> {
-    let steps = replay.header.step_merkle_root != committed.step_merkle_root || replay.header.step_leaf_count != committed.step_leaf_count;
+    let steps =
+        replay.header.step_merkle_root != committed.step_merkle_root || replay.header.step_leaf_count != committed.step_leaf_count;
     if steps || replay.header.full_logits_trace_root != committed.full_logits_trace_root {
         return Some(SuspicionV1::Selection);
     }
@@ -378,14 +376,12 @@ impl PalwPanelService {
         network_domain: Hash64,
         filer: &mut PalwTirPublicFilerBookV1,
         book: &mut PalwTirPublicOwnerBookV1,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) {
         let ours = |round: u32, responder: bool| !responder && round == PALW_TIR_PUBLIC_OWNER_ROUND_V1;
         if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_none() {
             book.cases.clear();
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return;
         }
         let form = self.config.prompt_ids_form;
@@ -425,15 +421,15 @@ impl PalwPanelService {
                     }
                     // Lane g14-court-capacity-r2: past `palw_court_capacity_v1` an Open is never refused for the K_owner cap (it
                     // waits in the owner queue), so a free slot is not a precondition.
-                    let slot_open =
-                        owner_slot_open_v1(fair_start, state.staged_tir_owner_slot_open_v1(&claim, now.saturating_add(1)));
+                    let slot_open = owner_slot_open_v1(fair_start, state.staged_tir_owner_slot_open_v1(&claim, now.saturating_add(1)));
                     if !owner_may_pursue_v1(&view, plan.preparation_until_daa, &signer, now, slot_open, owns_here) {
                         continue;
                     }
                     let original = frame.original_v1();
                     // A canonical job's prompt is derived from the job itself at replay (`job_for_anchor`); a user prompt is the
                     // frame's kept public input (G-T3).
-                    let canonical = original.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL;
+                    let canonical =
+                        original.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL;
                     let prompt = match state.fp_claim_prompt_ids_v1(&original.job.class_id, &view.producer, &claim) {
                         Some(prompt) => prompt,
                         None if canonical => Vec::new(),
@@ -750,7 +746,7 @@ impl PalwPanelService {
             Ok(true) => {}
             Ok(false) => {
                 book.cases.clear();
-                pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+                court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
                 return;
             }
             Err(why) => {
@@ -758,7 +754,7 @@ impl PalwPanelService {
                 return;
             }
         }
-        pending.retain(|(claim, round, responder, _)| !ours(*round, *responder) || book.cases.contains_key(claim));
+        court_outbox.retain_pending(|(claim, round, responder, _)| !ours(*round, *responder) || book.cases.contains_key(claim));
         for step in steps {
             let result: Result<(), String> = async {
                 match step {
@@ -839,8 +835,8 @@ impl PalwPanelService {
                         let queue = (claim, PALW_TIR_PUBLIC_OWNER_ROUND_V1, false);
                         let digest = control.signing_message_v1(network_domain)?;
                         let last = book.cases.get(&claim).and_then(|case| case.last_move);
-                        if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || owner_retry_waits_v1(last, digest, moved.get(&queue).copied(), now)
+                        if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
+                            || owner_retry_waits_v1(last, digest, court_outbox.submitted_at(&queue).copied(), now)
                         {
                             return Ok(());
                         }
@@ -857,9 +853,9 @@ impl PalwPanelService {
                         if let Some(case) = book.cases.get_mut(&claim) {
                             case.last_move = Some(digest);
                         }
-                        pending.push((queue.0, queue.1, queue.2, PalwConsensusObjectV2::TirPublicControlV1 { control }));
-                        due.insert(queue, due_daa);
-                        moved.insert(queue, now);
+                        court_outbox.push_pending((queue.0, queue.1, queue.2, PalwConsensusObjectV2::TirPublicControlV1 { control }));
+                        court_outbox.set_due(queue, due_daa);
+                        court_outbox.mark_submitted(queue, now);
                     }
                     OwnerStepV1::Cone { claim, source, registered, layout, leaf, maximum_leaves } => {
                         let Some(case) = book.cases.get(&claim) else { return Ok(()) };
@@ -925,15 +921,16 @@ mod tests {
     fn cone_acquisition_backtracking_stays_within_full_run_turn_and_leaf_budgets() {
         assert!(owner_cone_run_request_v1(0, 0).is_err());
         assert!(owner_cone_run_request_v1(130, 130).is_err());
-        assert_eq!(owner_cone_run_request_v1(130, 129).unwrap(),
-            PalwTirPublicRequestV1::StepRun { first: 0, count: 130 });
+        assert_eq!(owner_cone_run_request_v1(130, 129).unwrap(), PalwTirPublicRequestV1::StepRun { first: 0, count: 130 });
         for n in [1u64, 130, 256, 257, 1_031] {
             let mut covered = BTreeSet::new();
             let mut turns = 0u64;
             let mut charged = 0u64;
             // Discover later dependencies first, then backtrack across boundaries.
             for missing in (0..n).rev() {
-                if covered.contains(&missing) { continue }
+                if covered.contains(&missing) {
+                    continue;
+                }
                 let (first, count) = match owner_cone_run_request_v1(n, missing).unwrap() {
                     PalwTirPublicRequestV1::StepLeaf { index } => (index, 1u64),
                     PalwTirPublicRequestV1::StepRun { first, count } => (first, u64::from(count)),

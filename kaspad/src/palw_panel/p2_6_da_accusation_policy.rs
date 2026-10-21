@@ -194,8 +194,10 @@ fn the_tick_accuses_after_the_unavailable_and_before_the_carriers() {
         + source[step..]
             .find("let Some(check) = session.palw_da_accusation_check_v1(claim, bond_key) else")
             .expect("asked of the chain");
-    let rechecked =
-        step + source[step..].find("court_pending.retain(|(claim, round, responder, object)| {").expect("the queued ones asked again");
+    let rechecked = step
+        + source[step..]
+            .find("court_outbox.retain_pending(|(claim, round, responder, object)| {")
+            .expect("the queued ones asked again");
     let built = step + source[step..].find("palw_da_rcore_v1::palw_da_accusation_object_v1(").expect("the ONE builder");
     let queued = built + source[built..].find("let key = palw_da_accusation_queue_key_v1(claim);").expect("keyed");
     let carriers = source.find("// --- the collector + submitter's half ---").expect("the carriers");
@@ -203,7 +205,9 @@ fn the_tick_accuses_after_the_unavailable_and_before_the_carriers() {
     assert!(step < rechecked && rechecked < asked && asked < built && built < queued && queued < carriers);
     let pruned = queued
         + source[queued..]
-            .find("court_moved.retain(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));")
+            .find(
+                "court_outbox.retain_submitted(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));",
+            )
             .expect("the debounce leaves with the book entry");
     assert!(pruned < carriers);
     let licence = source.find("if palw_seat_unserved_licence_v1(phase) {").expect("the licence seam");

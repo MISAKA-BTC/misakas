@@ -6,13 +6,13 @@ Status: In progress. User changed the active task from G14 feature work to compl
 
 | Area | Required result | Current evidence/status |
 | --- | --- | --- |
-| 0 Baseline | Map canonical, historical, dormant and deferred paths; record starting test results and identity inputs | Started: three targeted preparation/fence baseline tests and executable hash saved. Full route matrix pending |
-| 1 Court send state | One typed owner for pending/due/moved, preserving deadline order, duplicate suppression, submitted vs accepted and retry/recovery | Pending; current worker and child pass inputs inventoried |
+| 0 Baseline | Map canonical, historical, dormant and deferred paths; record starting test results and identity inputs | Canonical/history/dormant/deferred route matrix recorded below; preserved core/node executable hashes and before/after checks retained. Remaining rule/profile coverage follows each later extraction |
+| 1 Court send state | One typed owner for pending/due/moved, preserving deadline order, duplicate suppression, submitted vs accepted and retry/recovery | Completed for shared node-local court send state: private pending/deadline/debounce owner; 55/55 source projections; 461 panel tests and three representative real-service cases pass. Actor capability narrowing continues under area 5 |
 | 2 Carrier and fee ownership | One build/submit/change-outpoint persistence/funding/inflight boundary; unchanged success/failure/restart behavior | Pending |
-| 3 Consensus preparation | Acceptance and full transition share pre-object work; historical ordering, roots, deltas and native resource errors preserved | Shared helper extracted; 38 existing tests match before/after, 29 integration and 3 transformer-pin tests pass. Full phase/remaining structural work is not inferred complete |
+| 3 Consensus preparation | Acceptance and full transition share pre-object work; historical ordering, roots, deltas and native resource errors preserved | Completed for the pre-object scope: 38 existing tests match before/after, 29 integration and 3 transformer-pin tests pass. Other refactoring areas remain separate obligations |
 | 4 Rules and views | Strengthen existing canonical rule resolver; separate block facts/current rules/claim acceptance rules, preserving accepted_daa semantics | Pending; no parallel resolver to be introduced |
 | 5 Runtime/validator/backend responsibilities | Central worker becomes orchestration; validation dispatch and capability interfaces depend on narrow inputs, ordered side effects retained | Pending |
-| 6 Compatibility paths | Classify normal/history/dormant/deferred/unused entrances; isolate misleading nonproduction sync APIs, retain necessary old wire and replay | Pending |
+| 6 Compatibility paths | Classify normal/history/dormant/deferred/unused entrances; isolate misleading nonproduction sync APIs, retain necessary old wire and replay | Route matrix and standalone test-only isolation complete: consensus lib/tests check, three walker fixtures and no-caller/canonical-resolver guard pass. Preserve historical adapters while the remaining boundaries are narrowed |
 
 Completion requires all areas, not just the first extraction or shorter files. Verify acceptance/refusal/exclusion, bytes/IDs/state roots/deltas, collateral/reservation/release/slash/reward/weight, activation boundaries, claim-time rules, restart/reorg/pruning and submit/retry behavior at each changed boundary. Preserve independent reference implementations and journal/atomicity. Build/test commands use the existing heavy lock. No production arming, pre merge/push, deployment, new bond/reward/fee/deadline/cap or activation change is authorized by this structural task.
 
@@ -33,3 +33,35 @@ Evidence: [baseline and preparation sequence audit](../../../evidence/palw/refac
 The unchanged pre-refactor executable was preserved with its recorded SHA-256. Migration/model-line, reward-sweep, claim pre-object judgment and retained/legacy canonical-byte tests pass under both binaries with the same 38 unique test names/results. Fresh integration tests cover carrier refunds (5), deadline re-date (8), burn/cap acceptance vs fold (2), t12 identity (9) and activation (5). Transformer pin tests pass 3. Total current selected passes: 70; repeated pre-object/baseline subsets are not added to that total. These are scoped existing assertions, not a claim to compare every possible state/root/delta.
 
 Remaining work is still the full court/fee ownership, rule/view and validator/runtime/backend boundary, compatibility-route classification and complete regression/recovery matrix. No endpoint or frozen semantic rule has been removed or normalized.
+
+## Route classification from the current checkout
+
+This is a source inventory, not an activation or deployment decision. Inspect the preset's fence schedule at the target block; a route's existence does not enable it on any network.
+
+| Classification | Entrance and owner | Rule/time contract and preservation requirement |
+| --- | --- | --- |
+| Canonical admission/rehearsal | `processor/palw_accept.rs`, `processor/palw_validate.rs`, pre-object retained base | The existing `palw_transition_extras_for(point)` resolver and object-specific overlay select block rules. Native resource refusals remain distinct from invalid objects. Admission does not install the full transition |
+| Canonical live and IBD fold | `processor/palw.rs` full/retained v7 wrappers | Uses the same resolver; attaches accepted carrier/refund/EVM and mergeset facts at the existing call sites. Keep journal, delta and material-retirement order |
+| Canonical reorg | `consensus/src/processes/palw_state_walk.rs` and processor/store integration | Revert/apply stored deltas in the existing chain order. Do not regenerate historical changes from today's rules |
+| Canonical pruning import | Processor pruning-point carriage loading and checked witness/root import | Imports the checked carriage for its pruning point; the unused standalone walker is not the import engine |
+| Historical compatibility | Core v2–v6 entry wrappers, old object codec/tag variants and retained-state adapters | Keep their explicit defaults and old bytes. They converge on the shared engine but are not permission to fold current blocks with default extras |
+| Dormant test/exploration walker | `consensus/src/processes/palw_state_v2_sync.rs` | Whole-workspace Rust search finds no construction or step-type use outside that module; other matches are module declarations, comments and an existing no-caller source guard. It deliberately lacks current extras. Now compiled only under `cfg(test)`; its no-caller guard also pins that boundary. Its three existing transactional/restart/reorg fixtures pass; do not connect it to production |
+| Canonical node court attempts | `PalwPanelService::worker`, reporter/replay/fraud/held books, public-response actors, priority lane | One local pending/deadline/debounce owner is being installed. Native accepted views remain authoritative. Preserve eager queue-attempt stamps where the old code used them, submission stamps, refusal retry and recovery |
+| Deferred | RFC-0003 image/video and RFC-0004 improvement paths | The post-mainnet deferral remains; shared interfaces and registry cleanup cannot turn these on |
+| Identity-sensitive | `misaka/palw/derive/src`, transformer pin, independent reference implementation | No move, content change, wire ordinal or identity-input change in this task |
+
+The block/claim distinction remains mandatory: `canonical_work_daa` and other claim-origin fences stay as heights where consumers compare the claim's `accepted_daa`. This inventory does not replace them with a current-block boolean. Existing model coefficients, deadlines, collateral, reservations and payouts are unchanged.
+
+## Carrier boundary findings for the next extraction
+
+The main fee chain and the tick's spendable funding are distinct: a held tick deliberately has no spendable funding, but must not erase its persistent tip. Existing readiness/receipt lanes also have their own funding/inflight state and scan throttle. A shared owner must retain that distinction, the current replacement path's in-flight count, and each lane's recovery reads.
+
+Submission and bookkeeping have an order contract. The old sites clone the selected change output before submission, then perform site-specific success logs/flags, persist the next outpoint, replace funding and increment inflight. A common submission result can carry the change to the original bookkeeping point; moving persistence ahead of those site-specific effects would be a separate change. A persistence write error currently warns and continues, so this structural task must not silently introduce a new durability/refusal rule. Builder and mempool refusal paths likewise retain their existing retry/drop decisions. This extraction remains pending.
+
+## Court ownership and dormant-walker checkpoint
+
+The typed court owner preserves old stable EDF, session-round order, duplicate handling, due-date insertion vs tightening, queue-attempt/submission stamps and the unsent/due cleanup. Native accepted state and filer recovery remain the authority; a local stamp never settles a claim. The raw-parts adapter exists only under `cfg(test)` to retain independent pre-refactor fixture assertions.
+
+Before: 455 panel tests pass and four existing source guards fail. After: all 461 tests in that same non-service scope pass, including two new ownership/retry scenarios. No previously passing test disappears or regresses. Four old guards were updated for an already-existing capture-arm branch, receipt-lane funding exclusion/site and explicit collusion drill; this changes no protocol upper bound or ordinary licence rule. Three representative real-service cases match before/after; the attempted whole-panel baseline was interrupted and is not called a full pass. Walker tests pass 3, its source guard 1, t12 identity 9 and activation 5.
+
+The 55 outbox-facing production function bodies match the reviewed mechanical projection. A patch reconstructs all 36 changed source files byte for byte from `1b83142a2`. See [the court checkpoint validation](../../../evidence/palw/refactor-2026-10-21/court-phase-validation.json) and [test comparison](../../../evidence/palw/refactor-2026-10-21/court-test-comparison.json). Full refactoring is still in progress: carrier ownership, typed rules/views, validator dispatch and backend capabilities remain.

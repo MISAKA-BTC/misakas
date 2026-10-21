@@ -35,6 +35,7 @@
 //! no shipped preset arms either and validation refuses both); everywhere else it is a clean no-op. It treats a Panel-licensed and an
 //! OptimisticPublicVerification claim alike (`Challengeable` is open; an OPV claim has no seat to leave it to). Claims this bond produced are skipped (a producer does not prosecute itself).
 use super::*;
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::palw_kernel_route_v1::{
     PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1, PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1, palw_kernel_bond_id_v1,
     palw_kernel_chunk_message_v1, palw_kernel_route_message_v1,
@@ -200,12 +201,10 @@ impl PalwPanelService {
         current_daa: u64,
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
-        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) {
         // What the priority lane carried of this verifier's items: said and forgotten (it keeps its own spacing, never the debounce).
-        court_moved.retain(|(claim, round, responder), at| {
+        court_outbox.retain_submitted(|(claim, round, responder), at| {
             if *round != PALW_KERNEL_VERIFIER_ROUND_V1 || *responder {
                 return true;
             }
@@ -223,7 +222,7 @@ impl PalwPanelService {
         if !(armed && self.config.fee_outpoint.is_some() && !self.config.kernel_models.is_empty()) {
             if book.last_daa.is_some() {
                 book.clear();
-                court_pending.retain(|(_, round, responder, _)| *round != PALW_KERNEL_VERIFIER_ROUND_V1 || *responder);
+                court_outbox.retain_pending(|(_, round, responder, _)| *round != PALW_KERNEL_VERIFIER_ROUND_V1 || *responder);
             }
             return;
         }
@@ -283,16 +282,14 @@ impl PalwPanelService {
                 let row = &ledger.claims[id];
                 (Hash64::from_bytes(row.class_binding_id), row.committed_daa)
             },
-            |class| {
-                match kaspa_consensus_core::palw_detection_policy_v1::palw_detection_regime_v1(
-                    params.palw_detection_policy_v1.as_ref(),
-                    class,
-                    0,
-                    next,
-                ) {
-                    kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionRegimeV1::Policy(p) => Some(p.resources.claims_in_flight),
-                    _ => None,
-                }
+            |class| match kaspa_consensus_core::palw_detection_policy_v1::palw_detection_regime_v1(
+                params.palw_detection_policy_v1.as_ref(),
+                class,
+                0,
+                next,
+            ) {
+                kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionRegimeV1::Policy(p) => Some(p.resources.claims_in_flight),
+                _ => None,
             },
             |class, id| {
                 self.config.telemetry.detection_loss_once(
@@ -383,15 +380,15 @@ impl PalwPanelService {
                     continue;
                 };
                 let key = palw_kernel_object_key_v1(&object);
-                let queued = court_pending.iter().any(|(_, round, _, o)| *round == PALW_KERNEL_SEAT_ROUND_V1 && *o == object);
+                let queued = court_outbox.pending().iter().any(|(_, round, _, o)| *round == PALW_KERNEL_SEAT_ROUND_V1 && *o == object);
                 if queued || in_pool.contains(&key) {
                     continue;
                 }
                 let session_key = Hash64::from_bytes(*claim);
                 info!("[{PALW_PANEL}] claim {session_key}: this interim seat queues its passing receipt (kernel route, G14-K)");
                 let deadline = route.assignment_of(claim).map_or(current_daa, |a| a.deadline_daa);
-                court_due.insert((session_key, PALW_KERNEL_SEAT_ROUND_V1, false), deadline);
-                court_pending.push((session_key, PALW_KERNEL_SEAT_ROUND_V1, false, object));
+                court_outbox.set_due((session_key, PALW_KERNEL_SEAT_ROUND_V1, false), deadline);
+                court_outbox.push_pending((session_key, PALW_KERNEL_SEAT_ROUND_V1, false, object));
             }
         }
         let salt = misaka_palw_kernel::hash::id(b"misaka-palw/kaspad/kernel-verifier/salt/v1", &me);
@@ -465,7 +462,8 @@ impl PalwPanelService {
                 let key = palw_kernel_object_key_v1(&object);
                 let recently =
                     book.queued.get(&key).is_some_and(|at| current_daa < at.saturating_add(PALW_KERNEL_VERIFIER_RESEND_DAA_V1));
-                let queued = court_pending.iter().any(|(_, round, _, o)| *round == PALW_KERNEL_VERIFIER_ROUND_V1 && *o == object);
+                let queued =
+                    court_outbox.pending().iter().any(|(_, round, _, o)| *round == PALW_KERNEL_VERIFIER_ROUND_V1 && *o == object);
                 if recently || queued || in_pool.contains(&key) {
                     continue;
                 }
@@ -476,11 +474,11 @@ impl PalwPanelService {
                 );
                 // Dated by the step's own deadline (the planner's `by_daa`: before Final where the claim can still reach it, else
                 // its liability horizon), so the court lane's EDF carries the pursuit closest to its horizon first.
-                court_due.insert(
+                court_outbox.set_due(
                     (session_key, PALW_KERNEL_VERIFIER_ROUND_V1, false),
                     palw_kernel_step_due_v1(&step).unwrap_or(current_daa),
                 );
-                court_pending.push((session_key, PALW_KERNEL_VERIFIER_ROUND_V1, false, object));
+                court_outbox.push_pending((session_key, PALW_KERNEL_VERIFIER_ROUND_V1, false, object));
                 book.queued.insert(key, current_daa);
             }
         }

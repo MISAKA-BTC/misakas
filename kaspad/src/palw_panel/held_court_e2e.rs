@@ -2307,7 +2307,7 @@ fn the_seats_court_filings_are_dated_in_the_priority_lane() {
         let at = source.find(push).unwrap_or_else(|| panic!("{push}"));
         &source[at.saturating_sub(700)..at]
     };
-    let named = before("court_pending.push((key, 0, false, object));");
+    let named = before("court_outbox.push_pending((key, 0, false, object));");
     assert!(
         named.contains("palw_seat_claim_earliest_final_v1(")
             && named.contains("palw_seat_court_filing_due_v1(deadline, earliest_final,"),
@@ -2316,14 +2316,15 @@ fn the_seats_court_filings_are_dated_in_the_priority_lane() {
     // The one-move accusation is queued by the capture arm's filer (P2-8, int-3); the panel dates it
     // now, right after, and reads the filer's own dates after the filer's pass.
     let at = source.find("let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));").expect("the court key");
-    let after = &source[at..(at + 2_000).min(source.len())];
+    let after = &source[at..];
+    let after = &after[..after.find("break 'verdict None;").expect("this capture arm ends")];
     assert!(
-        after.contains("self.capture_arm_files_v1(") && after.contains("court_due.entry(key).or_insert(current_daa);"),
+        after.contains("self.capture_arm_files_v1(") && after.contains("court_outbox.date_if_absent(key, current_daa);"),
         "the one-move accusation is due now"
     );
     let tick = source.find("self.reporter_filer_tick_v1(&session, &mut reporter_filer,").expect("the filer's pass");
     assert!(
-        source[tick..(tick + 400).min(source.len())].contains("court_due.extend(reporter_filer.queued_dues_v1());"),
+        source[tick..(tick + 400).min(source.len())].contains("court_outbox.extend_due(reporter_filer.queued_dues_v1());"),
         "the filer's items carry the filer's dates"
     );
 }
@@ -2530,11 +2531,17 @@ async fn a_pooled_demand_is_not_resent_after_a_restart_and_a_failing_build_backs
 // ---- RFC-0006 06-A: the held-GDN filer against the real fold ------------------------------------------------------------------
 
 /// The fold with the memory/routing court's runtime mirror (tag 244) on, as `palw_memory_routing_court_v2` arms it.
-fn gdn_step(parent: &PalwChainStateV2, daa: u64, objects: &[PalwConsensusObjectV2], att: Option<&PalwAttemptEnvelopeV2>) -> Result<PalwChainStateV2, PalwStateV2Error> {
+fn gdn_step(
+    parent: &PalwChainStateV2,
+    daa: u64,
+    objects: &[PalwConsensusObjectV2],
+    att: Option<&PalwAttemptEnvelopeV2>,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
     let p = params().with_memory_routing_court_from_daa(Some(0));
     let c = PalwBlockContextV2 { block: Hash64::from_u64_word(0x6D_0000 + daa), daa_score: daa, blue_score: daa, subsidy: 10_000 };
     let mut extras = launch();
-    extras.memory_routing_court = Some(kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2 { ladder: 1 << 26, max_close_bytes: 64 << 20 });
+    extras.memory_routing_court =
+        Some(kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2 { ladder: 1 << 26, max_close_bytes: 64 << 20 });
     let (child, delta) = apply_palw_transition_v2_with_extras(parent, &p, &c, objects, att, false, false, false, true, &extras)?;
     child.assert_internal_consistency(&p).expect("internal consistency");
     assert_eq!(apply_delta_v2(parent, &delta, &p).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
@@ -2640,7 +2647,10 @@ impl crate::palw_gdn_held_filer::PalwGdnHeldHostV1 for GdnNode<'_> {
     fn accusable_claims(&self) -> Vec<crate::palw_gdn_held_filer::PalwGdnHeldClaimV1> {
         vec![self.claim.clone()]
     }
-    fn material(&self, _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1) -> Result<misaka_palw_base0::gdn_evidence_v2::Base0GdnOwnedMaterialV2, String> {
+    fn material(
+        &self,
+        _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1,
+    ) -> Result<misaka_palw_base0::gdn_evidence_v2::Base0GdnOwnedMaterialV2, String> {
         Ok(self.w.forged.clone())
     }
     fn kernels(
@@ -2655,9 +2665,13 @@ impl crate::palw_gdn_held_filer::PalwGdnHeldHostV1 for GdnNode<'_> {
     fn openings(
         &self,
         _: &crate::palw_gdn_held_filer::PalwGdnHeldClaimV1,
-    ) -> Result<(Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1), String> {
-        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&self.w.openings, self.w.inventory_root)
-            .map_err(|e| format!("{e:?}"))?;
+    ) -> Result<
+        (Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1),
+        String,
+    > {
+        let oracle =
+            kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&self.w.openings, self.w.inventory_root)
+                .map_err(|e| format!("{e:?}"))?;
         Ok((self.w.openings.clone(), oracle))
     }
     fn disclose_window_daa(&self) -> u64 {

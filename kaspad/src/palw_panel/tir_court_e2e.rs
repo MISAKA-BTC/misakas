@@ -2009,7 +2009,7 @@ fn a_withheld_pursuit_demands_on_chain_only_past_the_fence_and_within_its_sessio
         assert!(demand.contains(reached), "the demand tick reaches {reached}");
     }
     let file = &court_src[court_src.find("    pub(super) fn file_tir_demand_v1(").expect("the filer")..];
-    assert!(file.find("session.palw_object_rehearsal_v1(object)").unwrap() < file.find("books.court_pending.push(").unwrap());
+    assert!(file.find("session.palw_object_rehearsal_v1(object)").unwrap() < file.find("books.court_outbox.push_pending(").unwrap());
     let panel = include_str!("../palw_panel.rs");
     let rcore = &panel[panel.find("    async fn rcore_da_answers_v1(").expect("the answers")..];
     assert!(rcore.contains("units.iter().any(|unit| unit.is_tir_fence2_v1())") && rcore.contains("tir.as_ref(),"));

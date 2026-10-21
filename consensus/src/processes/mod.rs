@@ -5,6 +5,9 @@ pub mod difficulty;
 // executor seam. Re-exports the executor only under the `evm` feature.
 pub mod evm;
 pub mod ghostdag;
+// Historical standalone walker: it lacks the processor's complete extras.
+// Keep its transactional/reorg fixtures available without a production entrance.
+#[cfg(test)]
 pub mod palw_state_v2_sync;
 pub mod palw_state_walk;
 pub mod parents_builder;

@@ -601,7 +601,12 @@ impl Queue {
         run: Option<(Hash64, PalwReplayRunV1)>,
     ) -> usize {
         let duties = palw_court_duties_v2(state, &[bond_key(SEAT)]);
-        let _ = filer.observe_held_v1(&duties, &bond_key(SEAT), daa, &mut self.pending);
+        let _ = crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut self.pending,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            |outbox| filer.observe_held_v1(&duties, &bond_key(SEAT), daa, outbox),
+        );
         for duty in notes {
             let _ = filer.note_v1(duty, PalwReplayMismatchSiteV1::Replay, daa, &bond_key(SEAT), &nodoor());
         }
@@ -611,7 +616,12 @@ impl Queue {
             let _ = filer.on_run_v1(claim, run, daa, &bond_key(SEAT));
         }
         let host = FilerHost { state: state.clone(), daa };
-        palw_held_dissections_step_v1(&host, filer, daa, bond_key(SEAT), &mut self.pending, &mut self.due, &self.moved)
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut self.pending,
+            &mut self.due,
+            &mut (&self.moved).clone(),
+            |outbox| palw_held_dissections_step_v1(&host, filer, daa, bond_key(SEAT), outbox),
+        )
     }
 
     /// A tick with no trigger and no run returning.
@@ -1193,7 +1203,16 @@ async fn t54g_missing_material_falls_back_to_the_step_leaf_demand_never_both() {
     let binding = (**binding).clone();
     assert_eq!(queue.held_step(&mut filer, &licence(&s102, claim), 104), 0, "never both: no opening beside the demand");
     assert!(queue.pending.is_empty());
-    assert_eq!(filer.demands_due_v1(104, &queue.pending, &queue.moved), vec![(claim, f.d.leaf)], "the demand is P2-8d's to ask");
+    assert_eq!(
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut (&queue.pending).to_vec(),
+            &mut std::collections::HashMap::new(),
+            &mut (&queue.moved).clone(),
+            |outbox| filer.demands_due_v1(104, outbox)
+        ),
+        vec![(claim, f.d.leaf)],
+        "the demand is P2-8d's to ask"
+    );
     let refused = kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_accusation_object_v1(
         &h64(999),
         claim,
@@ -1491,7 +1510,16 @@ async fn t54g_an_opening_the_folds_verdict_refuses_is_not_missing_material() {
     let queue = Queue::default();
     filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     assert!(filer.settled_v1(&claim) && filer.case(&claim).is_none(), "settled, not a demand");
-    assert!(queue.pending.is_empty() && filer.demands_due_v1(104, &queue.pending, &queue.moved).is_empty());
+    assert!(
+        queue.pending.is_empty()
+            && crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+                &mut (&queue.pending).to_vec(),
+                &mut std::collections::HashMap::new(),
+                &mut (&queue.moved).clone(),
+                |outbox| filer.demands_due_v1(104, outbox)
+            )
+            .is_empty()
+    );
 }
 
 /// **The review's LOW: the opening P2-8e builds meets the acceptance layer's gates, on testnet-12's

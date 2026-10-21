@@ -30,6 +30,7 @@
 //! demands from the prepared capture (the Begin/Part/Finish responder), measured completion within the fixed preparation clock at
 //! the largest profile, sweeping orphan `prepared-*` directories the journal never recorded, and re-sealing a corrupted capture.
 #![allow(dead_code)] // the panel loop calls the tick; the journal helpers are exercised by the tests below.
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
 use super::tir_acquisition_driver::{
@@ -385,16 +386,14 @@ impl PalwPanelService {
         network_domain: Hash64,
         own_receipts: &HashMap<Hash64, (PalwSeatReceiptV2, u64)>,
         book: &mut PalwTirPublicCustodianBookV1,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         let ours = |round: u32, responder: bool| {
             responder && (round == PALW_TIR_PUBLIC_DEBIT_ROUND_V1 || round == PALW_TIR_PUBLIC_READY_ROUND_V1)
         };
         if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_none() {
             book.cases.clear();
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return Ok(());
         }
         // ---- ONE accepted read: discover duties, confirm accepted debits, prepare the next exact debits. ----
@@ -546,10 +545,15 @@ impl PalwPanelService {
                     )
                     .and_then(|budget| {
                         // The pass must at least fund its first slice (else the plan cannot carry this class: never debit).
-                        let first = preparation_slice_work_v1(&quote).and_then(|w| PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1.checked_add_v1(w))?;
+                        let first =
+                            preparation_slice_work_v1(&quote).and_then(|w| PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1.checked_add_v1(w))?;
                         let mut first_slice = first;
                         first_slice.attempts = budget.attempts;
-                        if budget.covers_v1(&first_slice) { Ok(budget) } else { Err("the pass budget does not fund its first slice".into()) }
+                        if budget.covers_v1(&first_slice) {
+                            Ok(budget)
+                        } else {
+                            Err("the pass budget does not fund its first slice".into())
+                        }
                     }) {
                         Ok(work) => work,
                         Err(why) => {
@@ -599,11 +603,11 @@ impl PalwPanelService {
         };
         if !armed {
             book.cases.clear();
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return Ok(());
         }
         // A queued item of a frame this node no longer prepares (Ready accepted, duty ended) is stale.
-        pending.retain(|(claim, round, responder, _)| {
+        court_outbox.retain_pending(|(claim, round, responder, _)| {
             !ours(*round, *responder) || book.cases.keys().any(|(c, _)| c == claim) || book.sealed.keys().any(|(c, _)| c == claim)
         });
 
@@ -665,8 +669,8 @@ impl PalwPanelService {
                     }
                     StepV1::Debit { key, action, original_accepted_daa, source_id, due: due_daa } => {
                         let queue = (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true);
-                        if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                        if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
+                            || court_outbox.submitted_at(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                         {
                             return Ok(());
                         }
@@ -683,13 +687,13 @@ impl PalwPanelService {
                             signature: Vec::new(),
                         };
                         let object = signed_control_v1(self, network_domain, control)?;
-                        pending.push((queue.0, queue.1, queue.2, object));
-                        due.insert(queue, due_daa);
-                        moved.insert(queue, now);
+                        court_outbox.push_pending((queue.0, queue.1, queue.2, object));
+                        court_outbox.set_due(queue, due_daa);
+                        court_outbox.mark_submitted(queue, now);
                     }
                     StepV1::Run { key, snapshot } => {
                         // The debit is accepted: its queued carrier (if still queued) is spent.
-                        pending.retain(|(a, b, c, _)| (*a, *b, *c) != (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true));
+                        court_outbox.retain_pending(|(a, b, c, _)| (*a, *b, *c) != (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true));
                         let arming = book.cases.get(&key).is_some_and(|case| case.ledger.is_none() && case.permit.is_some());
                         if arming {
                             // G14 R8: write-ahead physical charge of the PASS (one accepted debit), against the lane's finite recovery
@@ -762,8 +766,8 @@ impl PalwPanelService {
                     }
                     StepV1::Ready { key, snapshot, view, descriptor } => {
                         let queue = (key.0, PALW_TIR_PUBLIC_READY_ROUND_V1, true);
-                        if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                        if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
+                            || court_outbox.submitted_at(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                         {
                             return Ok(());
                         }
@@ -803,9 +807,9 @@ impl PalwPanelService {
                                 )?
                             }
                         };
-                        pending.push((queue.0, queue.1, queue.2, object));
-                        due.insert(queue, deadline);
-                        moved.insert(queue, now);
+                        court_outbox.push_pending((queue.0, queue.1, queue.2, object));
+                        court_outbox.set_due(queue, deadline);
+                        court_outbox.mark_submitted(queue, now);
                     }
                 }
                 Ok(())
@@ -1037,14 +1041,12 @@ impl PalwPanelService {
         signer: PalwBondKeyV2,
         network_domain: Hash64,
         book: &mut PalwTirPublicCustodianBookV1,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         let ours = |round: u32, responder: bool| responder && round == PALW_TIR_PUBLIC_RESPOND_ROUND_V1;
         if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_none() {
             book.responses_clear_v1();
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return Ok(());
         }
         let mut steps: Vec<ResponseStepV1> = Vec::new();
@@ -1166,10 +1168,10 @@ impl PalwPanelService {
         };
         if !armed {
             book.responses_clear_v1();
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return Ok(());
         }
-        pending.retain(|(demand, round, responder, _)| !ours(*round, *responder) || book.responses.contains_key(demand));
+        court_outbox.retain_pending(|(demand, round, responder, _)| !ours(*round, *responder) || book.responses.contains_key(demand));
         for step in steps {
             let result: Result<(), String> = async {
                 match step {
@@ -1219,8 +1221,9 @@ impl PalwPanelService {
                         let ordinal = response_move_ordinal_v1(&action);
                         // G-T5: a next move goes at once (its predecessor was accepted); only a re-send waits the replan span.
                         let resend = case.last_move == Some(ordinal);
-                        if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || (resend && moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA)))
+                        if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
+                            || (resend
+                                && court_outbox.submitted_at(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA)))
                         {
                             return Ok(());
                         }
@@ -1238,9 +1241,9 @@ impl PalwPanelService {
                         };
                         let object = signed_control_v1(self, network_domain, control)?;
                         let respond_until_daa = case.respond_until_daa;
-                        pending.push((queue.0, queue.1, queue.2, object));
-                        due.insert(queue, respond_until_daa.saturating_sub(1));
-                        moved.insert(queue, now);
+                        court_outbox.push_pending((queue.0, queue.1, queue.2, object));
+                        court_outbox.set_due(queue, respond_until_daa.saturating_sub(1));
+                        court_outbox.mark_submitted(queue, now);
                         if let Some(case) = book.responses.get_mut(&demand) {
                             case.last_move = Some(ordinal);
                         }
@@ -1373,7 +1376,11 @@ mod tests {
             sequence,
             phase,
             cursor_id: Hash64::from_u64_word(100 + sequence),
-            work: kaspa_consensus_core::palw_backend::PalwTirPublicCaptureWorkV1 { io_bytes: io, hash_bytes: io, ..Default::default() },
+            work: kaspa_consensus_core::palw_backend::PalwTirPublicCaptureWorkV1 {
+                io_bytes: io,
+                hash_bytes: io,
+                ..Default::default()
+            },
             resident_ram_bytes: 0,
         }
     }
@@ -1454,8 +1461,7 @@ mod tests {
             loop {
                 steps += 1;
                 assert!(steps < 1_000, "the pass ends");
-                let w: Option<&mut (dyn PalwTirPublicPreparedWriterV1 + 'static)> =
-                    if writer_open { Some(&mut writer) } else { None };
+                let w: Option<&mut (dyn PalwTirPublicPreparedWriterV1 + 'static)> = if writer_open { Some(&mut writer) } else { None };
                 let r: Option<&mut (dyn PalwTirPublicCaptureReaderV1 + 'static)> = Some(&mut reader);
                 match run_pass_slices_v1(
                     &mut warm,

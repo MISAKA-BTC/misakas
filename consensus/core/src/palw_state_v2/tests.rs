@@ -26388,6 +26388,12 @@ mod model_market_virtual {
             offenders.join("\n  ")
         );
 
+        let modules = std::fs::read_to_string(root.join("consensus/src/processes/mod.rs")).expect("process module inventory");
+        assert!(
+            modules.contains("#[cfg(test)]\npub mod palw_state_v2_sync;"),
+            "the incomplete historical walker must remain unavailable to production callers"
+        );
+
         // The other half: the extras every production fold takes are written field by field from
         // the block's own DAA, never left to a default.
         let processor = crate::palw_source_guard_v1::palw_processor_source_v1().to_string(); // the processor and its split files (2026-10-13)

@@ -2435,7 +2435,7 @@ mod tests {
         let moves = production
             .find("held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy)")
             .expect("the moves");
-        let dated = production[moves..].find("court_due.insert(queued.key, queued.due);").expect("each with its due date") + moves;
+        let dated = production[moves..].find("court_outbox.set_due(queued.key, queued.due);").expect("each with its due date") + moves;
         let started =
             production.find("held_court::palw_held_start_builds_v1(&held_host, &mut held_court, current_daa);").expect("builds");
         assert!(begin < route && route < pushed && pushed < dense_resolve && dense_resolve < dense, "routed before the dense builder");
@@ -2446,10 +2446,13 @@ mod tests {
         assert!(production.contains("PalwAttnHeldFilingV1::from_object_v1(object)"), "the sub-roots read off the object");
         let carry = &production[production.find("    async fn carry_priority_v1(").expect("the priority lane")..];
         let carry = &carry[..carry.find("\n    }\n").expect("its end")];
-        let sorted = carry.find("palw_court_queue_edf_v1(court_pending, court_due);").expect("EDF");
+        assert!(carry.contains("for (session_id, round, mine_is_responder, object) in court_outbox.take_priority()"));
+        let owner = include_str!("court_outbox.rs");
+        let take = &owner[owner.find("fn take_priority(").expect("typed priority operation")..];
+        let take = &take[..take.find("\n    }").expect("its end")];
         assert!(
-            sorted
-                < carry.find("for (session_id, round, mine_is_responder, object) in std::mem::take(court_pending)").expect("the loop")
+            take.find("palw_court_queue_edf_v1(&mut self.pending, &self.due);").expect("EDF")
+                < take.find("std::mem::take(&mut self.pending)").expect("only then drain")
         );
 
         let module = include_str!("held_court.rs");

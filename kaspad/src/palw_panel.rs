@@ -71,6 +71,9 @@ mod palw_service_public_e2e;
 #[path = "palw_service_violations_e2e.rs"]
 mod palw_service_violations_e2e;
 
+pub(crate) mod court_outbox;
+use court_outbox::CourtOutboxV1;
+
 #[path = "palw_carrier_fees.rs"]
 pub(crate) mod palw_carrier_fees;
 
@@ -96,12 +99,12 @@ mod artifact_inventory;
 mod flat_source_responder;
 #[path = "palw_float_source_responder.rs"]
 mod float_source_responder;
-#[path = "palw_tir_prefix_responder.rs"]
-mod tir_prefix_responder;
 /// Paid public history recovery: the literal custodians' answers (producer and granted Valid
 /// seats) and the outside owner's native Demand/Collect when every peer and archive lacks a link.
 #[path = "palw_history_recovery_actor.rs"]
 mod history_recovery_actor;
+#[path = "palw_tir_prefix_responder.rs"]
+mod tir_prefix_responder;
 
 /// Which literal answer slot one public-source responder pass serves: this seat's own bond, or
 /// an external producer's slot this node accepted as custodian (signed with this node's key,
@@ -248,7 +251,12 @@ mod improve;
 /// RFC-0002 Phase F (F6, node half): an IR class's court close.
 mod tir_court;
 // RFC-0006: layer-sharded panels, the node's half.
+/// RFC-0018 (iv): the single in-flight carrier's wait across many classes.
+#[cfg(test)]
+mod carrier_wait_many_classes;
 mod da_answer_chunks;
+/// RFC-0006 06-A: the held-GDN filer on the service tick.
+mod gdn_filer_tick;
 /// RFC-0003 (carriage node half): a tensor claim's seat replay and its one-move court.
 mod gen_court;
 /// RFC-0003 decision 22: the held leaf challenge filed from a node — a close past one carrier, declared and delivered in chunks.
@@ -263,11 +271,6 @@ mod tir_dissect;
 mod tir_shard;
 #[cfg(test)]
 mod tir_shard_e2e;
-/// RFC-0006 06-A: the held-GDN filer on the service tick.
-mod gdn_filer_tick;
-/// RFC-0018 (iv): the single in-flight carrier's wait across many classes.
-#[cfg(test)]
-mod carrier_wait_many_classes;
 
 /// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
 /// phase differs from the one `seen` last recorded, in the operator's stage names. A claim seen for
@@ -6990,20 +6993,18 @@ impl PalwPanelService {
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         current_daa: u64,
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
         funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
         inflight: &mut usize,
-        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
         challenged: &mut HashSet<Hash64>,
     ) {
         // The court's moves first: a rung has a deadline and a receipt quorum does not — and among
         // them the one due first (EDF; the licences' turn and the one-in-flight rule are the tick's
         // slots', untouched).
-        palw_court_queue_edf_v1(court_pending, court_due);
+
         let mut failed_minimum: Option<u64> = None;
         let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
-        for (session_id, round, mine_is_responder, object) in std::mem::take(court_pending) {
+        for (session_id, round, mine_is_responder, object) in court_outbox.take_priority() {
             let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
             // A failed full scan also excludes a higher minimum in this pass. Do not scan the
             // same unavailable heavy budget for every queued proof; cheap moves may still use
@@ -7062,7 +7063,7 @@ impl PalwPanelService {
                                 },
                             ));
                             *inflight += 1;
-                            court_moved.insert((session_id, round, mine_is_responder), current_daa);
+                            court_outbox.mark_submitted((session_id, round, mine_is_responder), current_daa);
                             if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
                                 challenged.insert(*claim);
                             }
@@ -7076,8 +7077,7 @@ impl PalwPanelService {
                 Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}"),
             }
         }
-        *court_pending = unsent;
-        court_due.retain(|key, _| court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key));
+        court_outbox.finish_flush(unsent);
         // **ADR-0125 §7.3: a permit signed twice, filed.** The relay queues each pair once;
         // the evidence proves itself, so any funded panel may carry it. Behind the court's
         // moves (they have deadlines) and in the priority lane; one carrier a tick at most,
@@ -8016,14 +8016,18 @@ impl PalwPanelService {
             kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, retention)
                 .map_err(|e| format!("the run does not assemble into a commitment: {e}"))?;
         if let Some(position) = drill_selection {
-            warn!("[{PALW_PANEL}] PALW DRILL (D-06): this canonical claim commits a token at decode position {position} its job's rule does not select");
+            warn!(
+                "[{PALW_PANEL}] PALW DRILL (D-06): this canonical claim commits a token at decode position {position} its job's rule does not select"
+            );
         }
         // G14 audit G-17 (skip-all-compute): the commitment names an execution root no computation reproduces.
         if self.config.drill_fp_fault == Some(PalwDrillFpFaultV1::SkipAll) {
             commitment.execution_root = Hash64::from_u64_word(PALW_DRILL_SKIP_ALL_EXECUTION_ROOT_WORD_V1);
-            warn!("[{PALW_PANEL}] PALW DRILL (G-17 skip-all): this canonical claim commits an execution root no computation reproduces");
+            warn!(
+                "[{PALW_PANEL}] PALW DRILL (G-17 skip-all): this canonical claim commits an execution root no computation reproduces"
+            );
         }
-                // G14 drill D-07: the commitment names an output root its own committed trace's ids do not reproduce.
+        // G14 drill D-07: the commitment names an output root its own committed trace's ids do not reproduce.
         if tir_drill == Some(PalwDrillTirFrameFaultV1::Output) {
             commitment.output_root = Hash64::from_u64_word(0xD07D_07D0_7D07_D07D);
             warn!("[{PALW_PANEL}] PALW DRILL (D-07): this canonical claim commits a substituted output root");
@@ -8592,9 +8596,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         custodian: PalwBondKeyV2,
         book: &mut PalwDelegatedSlotsV1,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) {
         match session.palw_staged_custody_delegations_to_v1(custodian, book.after) {
             Ok((page, next)) => {
@@ -8620,27 +8622,27 @@ impl PalwPanelService {
         for (producer, claims) in &slots {
             let slot = PalwAnswerSlotV1::delegated(*producer, claims);
             let cursor = book.prefix.entry(*producer).or_default();
-            if let Err(why) = self.public_prefix_answer_tick_v1(session, slot, cursor, pending, due, moved).await {
+            if let Err(why) = self.public_prefix_answer_tick_v1(session, slot, cursor, court_outbox).await {
                 debug!("[{PALW_PANEL}] delegated prefix response for {producer:?} remains pending: {why}");
             }
             let cursor = book.selected.entry(*producer).or_default();
-            if let Err(why) = self.public_selected_answer_tick_v1(session, slot, cursor, pending, due, moved).await {
+            if let Err(why) = self.public_selected_answer_tick_v1(session, slot, cursor, court_outbox).await {
                 debug!("[{PALW_PANEL}] delegated selected response for {producer:?} remains pending: {why}");
             }
             let flat = book.flat.entry(*producer).or_default();
-            if let Err(why) = self.public_flat_answer_tick_v1(session, slot, flat, pending, due, moved).await {
+            if let Err(why) = self.public_flat_answer_tick_v1(session, slot, flat, court_outbox).await {
                 debug!("[{PALW_PANEL}] delegated Flat response for {producer:?} remains pending: {why}");
             }
             let float = book.float.entry(*producer).or_default();
-            if let Err(why) = self.public_float_answer_tick_v1(session, slot, float, pending, due, moved).await {
+            if let Err(why) = self.public_float_answer_tick_v1(session, slot, float, court_outbox).await {
                 debug!("[{PALW_PANEL}] delegated Float32 response for {producer:?} remains pending: {why}");
             }
             let tir_prefix = book.tir_prefix.entry(*producer).or_default();
-            if let Err(why) = self.public_tir_prefix_answer_tick_v1(session, slot, tir_prefix, pending, due, moved).await {
+            if let Err(why) = self.public_tir_prefix_answer_tick_v1(session, slot, tir_prefix, court_outbox).await {
                 debug!("[{PALW_PANEL}] delegated TIR prefix response for {producer:?} remains pending: {why}");
             }
             let history = book.history.entry(*producer).or_default();
-            if let Err(why) = self.history_recovery_answer_tick_v1(session, slot, history, pending, due, moved).await {
+            if let Err(why) = self.history_recovery_answer_tick_v1(session, slot, history, court_outbox).await {
                 debug!("[{PALW_PANEL}] delegated history response for {producer:?} remains pending: {why}");
             }
         }
@@ -8921,7 +8923,7 @@ impl PalwPanelService {
         // The DAA at send instead: skip while the send is plausibly still in flight, then let the
         // CHAIN decide by re-planning. A duty only survives re-planning if chain state still says
         // that move is due, so a landed move disappears on its own when the round advances.
-        let mut court_moved: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
+        let mut court_outbox = CourtOutboxV1::default();
         // ADR-0152 IMPL-16 (P2-7): the claims whose R-core `Flat` answer this node sent, and when —
         // one `Flat` answers every in-run event unit, so while it is plausibly in flight no other
         // in-run unit of the claim is answered again (the fold would refuse it as answered).
@@ -8932,7 +8934,7 @@ impl PalwPanelService {
         // and `mem::take`n by the submitter, which dropped every one of them whenever the fee UTXO
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
-        let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+
         let mut public_prefix_response_cursor = None;
         let mut public_selected_response_cursor = None;
         let mut public_flat_response_book = flat_source_responder::FlatSourceBookV1::default();
@@ -8950,7 +8952,7 @@ impl PalwPanelService {
         // by (`palw_court_queue_edf_v1`). Each queue site states its item's; an item without one is
         // carried after every dated item, by age. The reporter filer's items are dated by the filer
         // (`queued_dues_v1`, read after each of its passes).
-        let mut court_due: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
+
         // RFC-0003 decision 22: the held leaf challenges this node is carrying — each a close past one carrier,
         // declared (queued above) and delivered in chunks once its group stands (`held_chunks`).
         let mut held_chunks: Vec<held_chunks::PalwHeldChunksV1> = Vec::new();
@@ -9550,10 +9552,10 @@ impl PalwPanelService {
                     let session_id =
                         court_session_id_v2(&target.claim_id, &target.trace_root, &target.executor_bond, &bond_key, space, space_size);
                     let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_COURT_V2_MLDSA87_OPEN_CONTEXT) else { continue };
-                    if court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
+                    if court_outbox.pending().iter().any(|(sid, _, _, _)| *sid == session_id) {
                         continue;
                     }
-                    court_pending.push((
+                    court_outbox.push_pending((
                         session_id,
                         0,
                         false,
@@ -9600,8 +9602,7 @@ impl PalwPanelService {
                     tir_court::PalwTirOneMoveBooksV1 {
                         challenged: &mut challenged,
                         accused: &mut accused,
-                        court_pending: &mut court_pending,
-                        court_due: &mut court_due,
+                        court_outbox: &mut court_outbox,
                         pursuits: &mut tir_annex_pursuits,
                         openings: &interval_openings,
                     },
@@ -9618,8 +9619,7 @@ impl PalwPanelService {
                     &mut tir_court::PalwTirOneMoveBooksV1 {
                         challenged: &mut challenged,
                         accused: &mut accused,
-                        court_pending: &mut court_pending,
-                        court_due: &mut court_due,
+                        court_outbox: &mut court_outbox,
                         pursuits: &mut tir_annex_pursuits,
                         openings: &interval_openings,
                     },
@@ -9644,8 +9644,7 @@ impl PalwPanelService {
                     gen_court::PalwGenOneMoveBooksV1 {
                         challenged: &mut challenged,
                         accused: &mut accused,
-                        court_pending: &mut court_pending,
-                        court_due: &mut court_due,
+                        court_outbox: &mut court_outbox,
                         held_chunks: &mut held_chunks,
                     },
                 )
@@ -9655,21 +9654,13 @@ impl PalwPanelService {
             // the passes that file their declarations (the generative pass above; an IR pass hands its close to the
             // same module).
             if !held_chunks.is_empty() {
-                self.held_chunks_tick_v1(
-                    &session,
-                    bond_key,
-                    current_daa,
-                    &mut held_chunks,
-                    &mut court_pending,
-                    &mut court_due,
-                    &court_moved,
-                );
+                self.held_chunks_tick_v1(&session, bond_key, current_daa, &mut held_chunks, &mut court_outbox);
             }
             // **RFC-0004 (A10): the evaluation court's pass.** An evaluation claim a challenger's audit disputed was
             // built its accusation off the improvement loop; it is signed and queued here, on the court's own carrier
             // path, as the IR one-move accusation it is (`TirShardCourtAccused`, tag 62). Nothing is ready on any node
             // that is no challenger, and nothing at all below `palw_improvement_v1`.
-            self.improve_court_pass_v1(&mut improve, bond_key, current_daa, &mut court_pending, &mut court_due);
+            self.improve_court_pass_v1(&mut improve, bond_key, current_daa, &mut court_outbox);
 
             tick_guard.phase("challenger");
             // --- the court's half: answer the disputes this bond is a party to ---
@@ -9705,7 +9696,7 @@ impl PalwPanelService {
             let mut held_duties: Vec<kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2> = Vec::new();
             for duty in &court_duties {
                 let move_round = court_move_round_v1(duty);
-                if let Some(sent_daa) = court_moved.get(&(duty.session_id, move_round, duty.i_am_responder))
+                if let Some(sent_daa) = court_outbox.submitted_at(&(duty.session_id, move_round, duty.i_am_responder))
                     && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
                 {
                     continue;
@@ -9717,7 +9708,7 @@ impl PalwPanelService {
                 // and later sessions' moves were dropped unsent. A rung is clocked, so the moves
                 // crowded out are exactly the ones whose lapse convicts the responder. The
                 // opening-court branch has always had this guard; the responder branch did not.
-                if court_pending.iter().any(|(sid, round, responder, _)| {
+                if court_outbox.pending().iter().any(|(sid, round, responder, _)| {
                     *sid == duty.session_id && *round == move_round && *responder == duty.i_am_responder
                 }) {
                     continue;
@@ -9763,8 +9754,8 @@ impl PalwPanelService {
                         .await
                     {
                         Ok(Some(object)) => {
-                            court_due.insert((duty.session_id, move_round, false), palw_court_move_due_v1(duty));
-                            court_pending.push((duty.session_id, move_round, false, object));
+                            court_outbox.set_due((duty.session_id, move_round, false), palw_court_move_due_v1(duty));
+                            court_outbox.push_pending((duty.session_id, move_round, false, object));
                         }
                         Ok(None) => {
                             *court_stalls.entry("the partial public bottom does not win").or_default() += 1;
@@ -10165,8 +10156,8 @@ impl PalwPanelService {
                         }
                     };
                     info!("[{PALW_PANEL}] session {}: filing the IR dissection's {name} (round {})", duty.session_id, duty.round);
-                    court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
-                    court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
+                    court_outbox.set_due((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
+                    court_outbox.push_pending((duty.session_id, move_round, duty.i_am_responder, object));
                     continue;
                 }
                 // ---- ADR-0093 as built: the fused site's dissection -------------------------------
@@ -10205,8 +10196,8 @@ impl PalwPanelService {
                             continue;
                         }
                     };
-                    let memory_route = self.consensus_config.params.palw_memory_routing_court_v2_fence()
-                        .is_some_and(|f| f.is_active(current_daa));
+                    let memory_route =
+                        self.consensus_config.params.palw_memory_routing_court_v2_fence().is_some_and(|f| f.is_active(current_daa));
                     if !backend.supports_dissection_with_memory_routing_v2(memory_route) {
                         *court_stalls
                             .entry("this class's family cannot take a dissection's turn in this build — the clock will decide")
@@ -10511,8 +10502,8 @@ impl PalwPanelService {
                             PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof }
                         }
                     };
-                    court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
-                    court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
+                    court_outbox.set_due((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
+                    court_outbox.push_pending((duty.session_id, move_round, duty.i_am_responder, object));
                     continue;
                 }
                 let object = match (duty.turn, duty.i_am_responder) {
@@ -10648,8 +10639,8 @@ impl PalwPanelService {
                                 *court_stalls.entry("no IR close wins this party's side").or_default() += 1;
                                 continue;
                             };
-                            court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
-                            court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
+                            court_outbox.set_due((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
+                            court_outbox.push_pending((duty.session_id, move_round, duty.i_am_responder, object));
                             continue;
                         }
                         // The rungs speak from each party's OWN execution — that is what makes a
@@ -10875,8 +10866,8 @@ impl PalwPanelService {
                     }
                 };
                 let Some(object) = object else { continue };
-                court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
-                court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
+                court_outbox.set_due((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
+                court_outbox.push_pending((duty.session_id, move_round, duty.i_am_responder, object));
             }
             // ADR-0152 §4-ter N3: the held route — the chain reads it asks for, its moves (each with the
             // DAA its session says it is due by), and the builds the ledger admits, off the tick.
@@ -10952,11 +10943,11 @@ impl PalwPanelService {
                         Ok(true) => {}
                         Ok(false) => {
                             held_court.invalidate_history_v1(sid, claim);
-                            court_pending.retain(|(queued, _, responder, _)| *queued != sid || *responder);
+                            court_outbox.retain_pending(|(queued, _, responder, _)| *queued != sid || *responder);
                         }
                         Err(why) => {
                             history_unavailable.insert(sid);
-                            court_pending.retain(|(queued, _, responder, _)| *queued != sid || *responder);
+                            court_outbox.retain_pending(|(queued, _, responder, _)| *queued != sid || *responder);
                             warn!("[{PALW_PANEL}] session {sid}: held history branch unavailable: {why}; challenger moves wait");
                         }
                     }
@@ -10985,16 +10976,16 @@ impl PalwPanelService {
                 }
                 let busy = |key: &(Hash64, u32, bool)| {
                     history_unavailable.contains(&key.0)
-                        || court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key)
-                        || court_moved.get(key).is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                        || court_outbox.pending().iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key)
+                        || court_outbox.submitted_at(key).is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                 };
                 let tick = held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy);
                 for why in tick.stalls {
                     *court_stalls.entry(why).or_default() += 1;
                 }
                 for queued in tick.queued {
-                    court_due.insert(queued.key, queued.due);
-                    court_pending.push((queued.key.0, queued.key.1, queued.key.2, queued.object));
+                    court_outbox.set_due(queued.key, queued.due);
+                    court_outbox.push_pending((queued.key.0, queued.key.1, queued.key.2, queued.object));
                 }
                 held_court::palw_held_start_builds_v1(&held_host, &mut held_court, current_daa);
             }
@@ -11019,7 +11010,7 @@ impl PalwPanelService {
                 info!(
                     "[{PALW_PANEL}] court: {} sessions ({responder_of} as responder), {} pending; not moved: {}",
                     court_duties.len(),
-                    court_pending.len(),
+                    court_outbox.pending().len(),
                     court_stalls.iter().map(|(why, n)| format!("{n}× {why}")).collect::<Vec<_>>().join(", ")
                 );
             }
@@ -11049,12 +11040,16 @@ impl PalwPanelService {
                     continue;
                 }
                 let key = (duty.claim_id, duty.missing_event_index, true);
-                if let Some(sent_daa) = court_moved.get(&key)
+                if let Some(sent_daa) = court_outbox.submitted_at(&key)
                     && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
                 {
                     continue;
                 }
-                if court_pending.iter().any(|(sid, round, responder, _)| *sid == key.0 && *round == key.1 && *responder == key.2) {
+                if court_outbox
+                    .pending()
+                    .iter()
+                    .any(|(sid, round, responder, _)| *sid == key.0 && *round == key.1 && *responder == key.2)
+                {
                     continue;
                 }
                 let held = self.retained_capture(&duty.claim_id).or_else(|| {
@@ -11111,8 +11106,8 @@ impl PalwPanelService {
                                  deadline DAA {}",
                                 duty.claim_id, duty.disclose_deadline_daa
                             );
-                            court_due.insert(key, duty.disclose_deadline_daa);
-                            court_pending.push((key.0, key.1, key.2, object));
+                            court_outbox.set_due(key, duty.disclose_deadline_daa);
+                            court_outbox.push_pending((key.0, key.1, key.2, object));
                         }
                         Err(why) => {
                             warn!("[{PALW_PANEL}] claim {}: cannot answer the held accusation of {missing:?}: {why}", duty.claim_id);
@@ -11152,8 +11147,8 @@ impl PalwPanelService {
                      retained capture — deadline DAA {}",
                     duty.claim_id, duty.disclose_deadline_daa
                 );
-                court_due.insert(key, duty.disclose_deadline_daa);
-                court_pending.push((
+                court_outbox.set_due(key, duty.disclose_deadline_daa);
+                court_outbox.push_pending((
                     key.0,
                     key.1,
                     key.2,
@@ -11198,7 +11193,7 @@ impl PalwPanelService {
             // rather than paying a carrier the mempool then refuses.
             let owed: std::collections::BTreeSet<(Hash64, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1)> =
                 disclosure.duties.iter().map(|duty| (duty.claim_id, duty.unit)).collect();
-            court_pending.retain(|(_, _, _, object)| match object {
+            court_outbox.retain_pending(|(_, _, _, object)| match object {
                 PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, .. } => owed.contains(&(*claim, *unit)),
                 PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } => {
                     owed.contains(&(answer.claim, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(answer.unit)))
@@ -11221,7 +11216,8 @@ impl PalwPanelService {
             if da_armed && !disclosure.duties.is_empty() {
                 let mut disclosure_keys = BTreeMap::new();
                 // A `Flat` queued (possibly waiting for the fee UTXO) or just sent answers the claim's run.
-                let mut flat_queued: HashSet<Hash64> = court_pending
+                let mut flat_queued: HashSet<Hash64> = court_outbox
+                    .pending()
                     .iter()
                     .filter_map(|(_, _, _, object)| match object {
                         PalwConsensusObjectV2::MaterialDisclosedV2 {
@@ -11280,12 +11276,12 @@ impl PalwPanelService {
                         palw_disclosure_queue_key_v1(duty)
                     };
                     disclosure_keys.insert((duty.claim_id, duty.unit), key);
-                    if let Some(sent_daa) = court_moved.get(&key)
+                    if let Some(sent_daa) = court_outbox.submitted_at(&key)
                         && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
                     {
                         continue;
                     }
-                    if court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
+                    if court_outbox.pending().iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
                         continue;
                     }
                     match by_claim.iter_mut().find(|(claim, _)| *claim == duty.claim_id) {
@@ -11322,8 +11318,8 @@ impl PalwPanelService {
                                             flat_queued.insert(claim);
                                             da_flat_sent.insert(claim, current_daa);
                                         }
-                                        court_due.insert(key, palw_disclosure_answer_due_v1(duty));
-                                        court_pending.push((key.0, key.1, key.2, object));
+                                        court_outbox.set_due(key, palw_disclosure_answer_due_v1(duty));
+                                        court_outbox.push_pending((key.0, key.1, key.2, object));
                                     }
                                     Err(why) => {
                                         warn!(
@@ -11331,7 +11327,7 @@ impl PalwPanelService {
                                              {role:?}: {why}",
                                             duty.unit
                                         );
-                                        court_moved.insert(key, current_daa);
+                                        court_outbox.mark_submitted(key, current_daa);
                                         *court_stalls
                                             .entry("a data-availability unit cannot be answered from what this node holds")
                                             .or_default() += 1;
@@ -11356,7 +11352,7 @@ impl PalwPanelService {
                                 duties.len()
                             );
                             for duty in &duties {
-                                court_moved.insert(disclosure_keys[&(duty.claim_id, duty.unit)], current_daa);
+                                court_outbox.mark_submitted(disclosure_keys[&(duty.claim_id, duty.unit)], current_daa);
                             }
                             *court_stalls
                                 .entry("a data-availability unit cannot be answered from what this node holds")
@@ -11371,9 +11367,7 @@ impl PalwPanelService {
                     &session,
                     PalwAnswerSlotV1::own(bond_key),
                     &mut public_prefix_response_cursor,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
+                    &mut court_outbox,
                 )
                 .await
             {
@@ -11391,9 +11385,7 @@ impl PalwPanelService {
                         class_id,
                         facts.artifact_root,
                         &mut artifact_inventory_book,
-                        &mut court_pending,
-                        &mut court_due,
-                        &mut court_moved,
+                        &mut court_outbox,
                     )
                     .await
             {
@@ -11404,9 +11396,7 @@ impl PalwPanelService {
                     &session,
                     PalwAnswerSlotV1::own(bond_key),
                     &mut public_selected_response_cursor,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
+                    &mut court_outbox,
                 )
                 .await
             {
@@ -11417,9 +11407,7 @@ impl PalwPanelService {
                     &session,
                     PalwAnswerSlotV1::own(bond_key),
                     &mut public_flat_response_book,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
+                    &mut court_outbox,
                 )
                 .await
             {
@@ -11430,9 +11418,7 @@ impl PalwPanelService {
                     &session,
                     PalwAnswerSlotV1::own(bond_key),
                     &mut public_float_response_book,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
+                    &mut court_outbox,
                 )
                 .await
             {
@@ -11443,9 +11429,7 @@ impl PalwPanelService {
                     &session,
                     PalwAnswerSlotV1::own(bond_key),
                     &mut public_tir_prefix_response_book,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
+                    &mut court_outbox,
                 )
                 .await
             {
@@ -11456,25 +11440,13 @@ impl PalwPanelService {
                     &session,
                     PalwAnswerSlotV1::own(bond_key),
                     &mut public_history_response_book,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
+                    &mut court_outbox,
                 )
                 .await
             {
                 debug!("[{PALW_PANEL}] public history custody response remains pending: {why}");
             }
-            if let Err(why) = self
-                .history_custody_grant_tick_v1(
-                    &session,
-                    bond_key,
-                    &own_receipts,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
-                )
-                .await
-            {
+            if let Err(why) = self.history_custody_grant_tick_v1(&session, bond_key, &own_receipts, &mut court_outbox).await {
                 debug!("[{PALW_PANEL}] public history custody grant remains pending: {why}");
             }
             // G14 R3: an ORIGINAL TIR frame's preparation — paid slices, the prepared capture, then the producer's Ready or a
@@ -11486,9 +11458,7 @@ impl PalwPanelService {
                     network_domain,
                     &own_receipts,
                     &mut tir_public_custodian,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
+                    &mut court_outbox,
                 )
                 .await
             {
@@ -11497,22 +11467,13 @@ impl PalwPanelService {
             // G14 R5: the same custodians answer outside owners' demands from their sealed prepared capture, inside each demand's
             // own response clock. A clean no-op below `palw_tir_public_conviction_v1`.
             if let Err(why) = self
-                .tir_public_responder_tick_v1(
-                    &session,
-                    bond_key,
-                    network_domain,
-                    &mut tir_public_custodian,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
-                )
+                .tir_public_responder_tick_v1(&session, bond_key, network_domain, &mut tir_public_custodian, &mut court_outbox)
                 .await
             {
                 debug!("[{PALW_PANEL}] TIR frame demand answer remains pending: {why}");
             }
             if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
-                self.delegated_slots_tick_v1(&session, bond_key, &mut delegated_slots, &mut court_pending, &mut court_due, &mut court_moved)
-                    .await;
+                self.delegated_slots_tick_v1(&session, bond_key, &mut delegated_slots, &mut court_outbox).await;
             }
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
@@ -11986,15 +11947,17 @@ impl PalwPanelService {
                                 if accusation {
                                     accused.insert(duty.claim_id);
                                 }
-                                if !court_pending.iter().any(|(sid, _, _, _)| *sid == key) {
+                                if !court_outbox.pending().iter().any(|(sid, _, _, _)| *sid == key) {
                                     // Dated (the second review's MEDIUM): an undated item waits behind
                                     // every dated one, and a lie it would have convicted reaches `Final`.
                                     // Before the claim's earliest `Final` too (the fourth review's MEDIUM).
                                     let earliest_final =
                                         palw_seat_claim_earliest_final_v1(&self.consensus_config.params, duty.bound_daa);
-                                    court_due
-                                        .insert((key, 0, false), palw_seat_court_filing_due_v1(deadline, earliest_final, current_daa));
-                                    court_pending.push((key, 0, false, object));
+                                    court_outbox.set_due(
+                                        (key, 0, false),
+                                        palw_seat_court_filing_due_v1(deadline, earliest_final, current_daa),
+                                    );
+                                    court_outbox.push_pending((key, 0, false, object));
                                 }
                             }
                             break 'verdict None;
@@ -12761,7 +12724,7 @@ impl PalwPanelService {
                                             &session,
                                             &mut reporter_filer,
                                             &mut accused,
-                                            &mut court_pending,
+                                            &mut court_outbox,
                                             duty,
                                             leaf,
                                             bond_key,
@@ -12777,9 +12740,12 @@ impl PalwPanelService {
                                         // items (a kind 4 filed first) carry the filer's dates, read
                                         // after its pass.
                                         if let Some(key) = court_key
-                                            && court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key)
+                                            && court_outbox
+                                                .pending()
+                                                .iter()
+                                                .any(|(sid, round, responder, _)| (*sid, *round, *responder) == key)
                                         {
-                                            court_due.entry(key).or_insert(current_daa);
+                                            court_outbox.date_if_absent(key, current_daa);
                                         }
                                         break 'verdict None;
                                     }
@@ -13763,13 +13729,13 @@ impl PalwPanelService {
                 let due = accusations.due(
                     current_daa,
                     |claim| {
-                        court_pending.iter().any(|(sid, round, responder, object)| {
+                        court_outbox.pending().iter().any(|(sid, round, responder, object)| {
                             *sid == *claim && palw_da_accusation_queued_v1(*round, *responder, object)
                         })
                     },
-                    |claim| court_moved.get(&palw_da_accusation_queue_key_v1(*claim)).copied(),
+                    |claim| court_outbox.submitted_at(&palw_da_accusation_queue_key_v1(*claim)).copied(),
                 );
-                court_pending.retain(|(claim, round, responder, object)| {
+                court_outbox.retain_pending(|(claim, round, responder, object)| {
                     if !palw_da_accusation_queued_v1(*round, *responder, object) {
                         return true;
                     }
@@ -13808,9 +13774,9 @@ impl PalwPanelService {
                                     );
                                     let key = palw_da_accusation_queue_key_v1(claim);
                                     if let Some(by) = accusations.by(&claim) {
-                                        court_due.insert(key, by);
+                                        court_outbox.set_due(key, by);
                                     }
-                                    court_pending.push((key.0, key.1, key.2, object));
+                                    court_outbox.push_pending((key.0, key.1, key.2, object));
                                 }
                                 Err(why) => {
                                     warn!("[{PALW_PANEL}] claim {claim}: cannot build the accusation: {why}");
@@ -13836,7 +13802,7 @@ impl PalwPanelService {
                 // An accusation's debounce (`court_moved` under its queue key) leaves with its book
                 // entry: nothing else prunes `court_moved`, and every accusation added one (the P2-6
                 // review's note).
-                court_moved.retain(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));
+                court_outbox.retain_submitted(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));
             }
 
             tick_guard.phase("accusations");
@@ -13860,23 +13826,12 @@ impl PalwPanelService {
                     &materials,
                     &accused,
                     &court_duties,
-                    &mut court_pending,
-                    &mut court_due,
-                    &mut court_moved,
+                    &mut court_outbox,
                 )
                 .await;
             // RFC-0006 06-A: the held-GDN filer — a forged recurrence checkpoint of a held hybrid claim this bond may dispute.
-            self.gdn_held_filer_tick_v1(
-                &session,
-                &mut gdn_book,
-                &materials,
-                current_daa,
-                network_domain,
-                bond_key,
-                &mut court_pending,
-                &mut court_due,
-            )
-            .await;
+            self.gdn_held_filer_tick_v1(&session, &mut gdn_book, &materials, current_daa, network_domain, bond_key, &mut court_outbox)
+                .await;
             // P2-8c (N10): the replay's contradiction proves the claim's liable `Valid` signers false too.
             if let Some((refuted, bound_daa)) = &replay_made {
                 false_valid.note_executor_refuted_v1(
@@ -13916,9 +13871,9 @@ impl PalwPanelService {
             }
 
             // --- P2-8: the reporter's commit–reveal filer (ADR-0152 R-3; `reporter_filer`) ---
-            self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_pending, &mut court_moved, &mut accused);
+            self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_outbox, &mut accused);
             // The filer's queued items, dated by the filer, in the priority lane's order.
-            court_due.extend(reporter_filer.queued_dues_v1());
+            court_outbox.extend_due(reporter_filer.queued_dues_v1());
 
             // --- lane B: the operator's non-seat accusations (`palw_operator_da`) ---
             //
@@ -13936,9 +13891,7 @@ impl PalwPanelService {
                 network_domain,
                 bond_key,
                 seat_replays.has_room(false),
-                &mut court_pending,
-                &mut court_due,
-                &mut court_moved,
+                &mut court_outbox,
             )
             .await;
 
@@ -13957,9 +13910,7 @@ impl PalwPanelService {
                 bond_key,
                 seat_replays.has_room(false),
                 &materials,
-                &mut court_pending,
-                &mut court_due,
-                &mut court_moved,
+                &mut court_outbox,
             )
             .await;
             // --- G14 R4: the outside owner (`tir_public_owner`): replay, acquire, localize, and feed findings to the filer ---
@@ -13969,26 +13920,15 @@ impl PalwPanelService {
                 network_domain,
                 &mut tir_public_filer,
                 &mut tir_public_owner,
-                &mut court_pending,
-                &mut court_due,
-                &mut court_moved,
+                &mut court_outbox,
             )
             .await;
             // --- G14 R4: public convictions against ORIGINAL TIR frames (`tir_public_filer_scheduler`) ---
             //
             // Files each pending finding at once inside the frame's fixed d0 door, after the fold's own dry run accepts it; one per
             // claim on its own lane, persisted across restarts. A clean no-op below `palw_tir_public_conviction_v1`.
-            self.tir_public_filer_tick_v1(
-                &session,
-                bond_key,
-                network_domain,
-                current_daa,
-                &mut tir_public_filer,
-                &mut court_pending,
-                &mut court_due,
-                &mut court_moved,
-            )
-            .await;
+            self.tir_public_filer_tick_v1(&session, bond_key, network_domain, current_daa, &mut tir_public_filer, &mut court_outbox)
+                .await;
 
             // --- lane G14-K: the kernel route's public verifier (`palw_kernel_verifier`; G14) ---
             //
@@ -13996,17 +13936,8 @@ impl PalwPanelService {
             // of a class its model opens to, and pursues a refuted one through `misaka_palw_remote::pursuit` (seal, file, demand), each
             // object dry-run against the rebuilt ledger before it is queued on the court lane. Identity and a model arm it; a clean no-op
             // below the fence.
-            self.kernel_verifier_tick_v1(
-                &session,
-                &mut kernel_verifier,
-                current_daa,
-                network_domain,
-                bond_key,
-                &mut court_pending,
-                &mut court_due,
-                &mut court_moved,
-            )
-            .await;
+            self.kernel_verifier_tick_v1(&session, &mut kernel_verifier, current_daa, network_domain, bond_key, &mut court_outbox)
+                .await;
 
             // --- ADR-0160 F-Q (stage 2): the operator's audit duty (`palw_audit_duty`) ---
             //
@@ -14020,16 +13951,15 @@ impl PalwPanelService {
                 network_domain,
                 bond_key,
                 seat_replays.has_room(false),
-                &mut court_pending,
-                &mut court_due,
+                &mut court_outbox,
             )
             .await;
 
             // --- ADR-0164 F-M1: the riders this node's producer built, onto the carrier queue (`palw_rider_outbox`) ---
             for (lead, object) in crate::palw_rider_outbox::palw_rider_outbox_drain_v1() {
                 let key = (lead, crate::palw_rider_outbox::PALW_RIDER_QUEUE_ROUND_V1, false);
-                court_due.insert(key, current_daa);
-                court_pending.push((key.0, key.1, key.2, object));
+                court_outbox.set_due(key, current_daa);
+                court_outbox.push_pending((key.0, key.1, key.2, object));
             }
 
             // --- the collector + submitter's half ---
@@ -14277,8 +14207,7 @@ impl PalwPanelService {
                         // duty left the tick's list above and the Own site never sees it: without this the
                         // ordinary proofs rode the lane while the one about to lapse waited (the int-4
                         // audit of 2026-09-26, the n1 x n2 composition).
-                        let main: Vec<TransactionOutpoint> =
-                            funding
+                        let main: Vec<TransactionOutpoint> = funding
                             .iter()
                             .chain(chained_funding.iter())
                             .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
@@ -14301,13 +14230,12 @@ impl PalwPanelService {
                     && let Some(at) = crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)
                 {
                     // V07: the main slot cannot take the escalated proof this tick — the lane can.
-                    let main: Vec<TransactionOutpoint> =
-                        funding
-                            .iter()
-                            .chain(chained_funding.iter())
-                            .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
-                            .map(|(outpoint, _)| *outpoint)
-                            .collect();
+                    let main: Vec<TransactionOutpoint> = funding
+                        .iter()
+                        .chain(chained_funding.iter())
+                        .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
+                        .map(|(outpoint, _)| *outpoint)
+                        .collect();
                     if self.carry_on_readiness_lane_v1(&session, &duties[at], current_daa, &mut readiness_lane, &main).await {
                         duties.remove(at);
                         readiness_waiting = false;
@@ -14318,17 +14246,8 @@ impl PalwPanelService {
                 }
                 slots.at(PalwCarrierSiteV1::PriorityFirst, inflight);
                 if slots.offers(PalwCarrierSiteV1::PriorityFirst, inflight) {
-                    self.carry_priority_v1(
-                        &session,
-                        current_daa,
-                        &mut court_pending,
-                        &mut court_due,
-                        &mut funding,
-                        &mut inflight,
-                        &mut court_moved,
-                        &mut challenged,
-                    )
-                    .await;
+                    self.carry_priority_v1(&session, current_daa, &mut court_outbox, &mut funding, &mut inflight, &mut challenged)
+                        .await;
                 }
                 slots.at(PalwCarrierSiteV1::Own, inflight);
                 // **The class registration, ahead of every other ordinary carrier and only once.**
@@ -14531,8 +14450,7 @@ impl PalwPanelService {
                     }
                     if funding.is_none() || !slots.offers(PalwCarrierSiteV1::Own, inflight) {
                         // V07: the main slot cannot take it this tick — the readiness lane can, past R-core+.
-                        let main: Vec<TransactionOutpoint> =
-                            funding
+                        let main: Vec<TransactionOutpoint> = funding
                             .iter()
                             .chain(chained_funding.iter())
                             .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
@@ -14843,17 +14761,8 @@ impl PalwPanelService {
                 tick_guard.phase("supplementary");
                 slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);
                 if slots.offers(PalwCarrierSiteV1::PriorityAfterLicences, inflight) {
-                    self.carry_priority_v1(
-                        &session,
-                        current_daa,
-                        &mut court_pending,
-                        &mut court_due,
-                        &mut funding,
-                        &mut inflight,
-                        &mut court_moved,
-                        &mut challenged,
-                    )
-                    .await;
+                    self.carry_priority_v1(&session, current_daa, &mut court_outbox, &mut funding, &mut inflight, &mut challenged)
+                        .await;
                 }
                 slots.at(PalwCarrierSiteV1::OwnReceipts, inflight);
                 // **ADR-0124 Decision 2: a seat carries its own receipt after the licence.** For
@@ -15138,7 +15047,7 @@ impl PalwPanelService {
             // its claim is unresolved, and `mark_own_material` feeds that back to itself.
             let mut live: HashSet<Hash64> = duties.iter().map(|d| d.claim_id).collect();
             live.extend(court_duties.iter().map(|d| d.claim_id));
-            live.extend(court_pending.iter().filter_map(|(_, _, _, o)| match o {
+            live.extend(court_outbox.pending().iter().filter_map(|(_, _, _, o)| match o {
                 PalwConsensusObjectV2::CourtOpened { claim, .. } => Some(*claim),
                 _ => None,
             }));
@@ -15666,7 +15575,8 @@ fn palw_drill_collusion_allows_v1(tx: &Transaction) -> Result<(), &'static str> 
         "VerificationVertexV1",
         "AttemptRidersV1",
     ];
-    let extracted = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx));
+    let extracted =
+        kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx));
     for carried in &extracted.objects {
         let kind = object_name(&carried.object);
         if !ALLOWED.contains(&kind) {
@@ -17195,13 +17105,21 @@ impl PalwPanelService {
             PalwDetectionLossV1, PalwDetectionRefusalV1, PalwDetectionRegimeV1, PalwDetectionStageV1, palw_detection_regime_v1,
         };
         let telemetry = self.config.telemetry.clone();
-        let regime =
-            palw_detection_regime_v1(self.consensus_config.params.palw_detection_policy_v1.as_ref(), &duty.class_id, 0, duty.bound_daa);
+        let regime = palw_detection_regime_v1(
+            self.consensus_config.params.palw_detection_policy_v1.as_ref(),
+            &duty.class_id,
+            0,
+            duty.bound_daa,
+        );
         let draw = match regime {
             PalwDetectionRegimeV1::LegacyV1 => {
-                let Some(draw) =
-                    crate::palw_fp_seat::palw_fp_seat_draw_at_the_claims_price_v1(backend.as_ref(), network_domain, duty, counts, priced)
-                else {
+                let Some(draw) = crate::palw_fp_seat::palw_fp_seat_draw_at_the_claims_price_v1(
+                    backend.as_ref(),
+                    network_domain,
+                    duty,
+                    counts,
+                    priced,
+                ) else {
                     if kaspa_consensus_core::palw_backend::palw_claim_prices_work_v1(duty.work_leaves)
                         && priced.is_some_and(|leaves| leaves != duty.work_leaves)
                     {
@@ -17224,7 +17142,14 @@ impl PalwPanelService {
                 return None;
             }
             PalwDetectionRegimeV1::Policy(policy) => {
-                match crate::palw_fp_seat::palw_fp_seat_draw_under_policy_v2(backend.as_ref(), network_domain, duty, counts, priced, policy) {
+                match crate::palw_fp_seat::palw_fp_seat_draw_under_policy_v2(
+                    backend.as_ref(),
+                    network_domain,
+                    duty,
+                    counts,
+                    priced,
+                    policy,
+                ) {
                     Ok((draw, plan))
                         if !telemetry.detection_take_duty_v1(
                             duty.class_id,

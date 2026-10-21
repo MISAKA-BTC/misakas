@@ -651,8 +651,10 @@ fn the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof() 
             .expect("the declined replacement offers the removed duty to the lane");
     assert!(declined[..lane_declined].contains("slots.rewind_v1(inflight);"), "after the site is rewound");
     assert!(
-        declined[..lane_declined].contains("funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();"),
-        "the lane's funding excludes the main chain's, as at the other sites"
+        declined[..lane_declined].chars().filter(|c| !c.is_whitespace()).collect::<String>().contains(
+            "funding.iter().chain(chained_funding.iter()).chain(receipt_lanes.values().filter_map(|l|l.funding.as_ref())).map(|(outpoint,_)|*outpoint).collect();"
+        ),
+        "the lane's funding excludes both main and receipt-lane chains"
     );
     assert!(!declined.contains("readiness_waiting = true;"), "the proof waits only when the lane refuses it too");
     let lane_own = tick
@@ -703,8 +705,8 @@ fn the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door() {
     let (sites, tail) = tick.split_at(tail_at);
     assert_eq!(
         sites.matches("self.submit_carrier_v1(&session, tx)").count(),
-        6,
-        "class registration, licences, sets, receipts, and (RFC-0007) the seat's vertex and its trap object"
+        7,
+        "the existing main sites and RFC-0018 receipt-lane site all use the shared submission door"
     );
     assert_eq!(sites.matches("self.flow_context.submit_rpc_transaction(").count(), 1, "the canonical claim alone");
     let canonical = sites.find("self.flow_context.submit_rpc_transaction(").unwrap();

@@ -4,6 +4,7 @@
 //! capture through the backend's `disclose_tir_step_leaf_v1` (RFC-0002's TIR executor). Only the
 //! accepted slot cursor acknowledges a leaf.
 use super::*;
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::{
     palw_constraint_stream_carriage_v1::{
         PALW_CONSTRAINT_STREAM_CONTEXT_V1, PALW_PREFIX_BATCH_CARRIER_BYTES_V1, PalwConstraintStreamActionV1,
@@ -148,9 +149,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         slot: super::PalwAnswerSlotV1<'_>,
         book: &mut TirPrefixBookV1,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         if self.consensus_config.params.palw_staged_public_court_v1.is_none()
             || self.consensus_config.params.palw_staged_tir_route_v1_fence().is_none()
@@ -175,7 +174,7 @@ impl PalwPanelService {
         }
         book.after = next;
         // A queued leaf whose slot cursor moved on (or whose court closed) is stale.
-        pending.retain(|(_, round, responder, object)| {
+        court_outbox.retain_pending(|(_, round, responder, object)| {
             if (*round, *responder) != (lane_round, true) {
                 return true;
             }
@@ -207,12 +206,14 @@ impl PalwPanelService {
                 }
             }
         });
-        book.held.retain(|(seed, round), _| pending.iter().any(|(s, r, responder, _)| (s, r, *responder) == (seed, round, true)));
+        book.held.retain(|(seed, round), _| {
+            court_outbox.pending().iter().any(|(s, r, responder, _)| (s, r, *responder) == (seed, round, true))
+        });
         for (claim, owner) in keys {
             if slot.only.is_some_and(|only| !only.contains(&claim)) {
                 continue;
             }
-            if pending.iter().filter(|(_, r, b, _)| (*r, *b) == (lane_round, true)).count() >= 64 {
+            if court_outbox.pending().iter().filter(|(_, r, b, _)| (*r, *b) == (lane_round, true)).count() >= 64 {
                 break;
             }
             let mut attempt = None;
@@ -237,8 +238,8 @@ impl PalwPanelService {
                 }
                 let ordinal = row.slot_ordinal_v1(&signer).ok_or("TIR prefix signer has no literal slot")?;
                 let key = (row.seed_id(), lane_round, true);
-                if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
-                    || moved.get(&key).is_some_and(|at| progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
+                    || court_outbox.submitted_at(&key).is_some_and(|at| progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                 {
                     return Ok(());
                 }
@@ -320,15 +321,20 @@ impl PalwPanelService {
                 movement.check()?;
                 book.held.insert((key.0, key.1), packet_memory);
                 let deadline = row.respond_until_daa;
-                pending.push((key.0, key.1, key.2, PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }));
-                due.insert(key, deadline.saturating_sub(1));
-                moved.insert(key, progress.now_daa);
+                court_outbox.push_pending((
+                    key.0,
+                    key.1,
+                    key.2,
+                    PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+                ));
+                court_outbox.set_due(key, deadline.saturating_sub(1));
+                court_outbox.mark_submitted(key, progress.now_daa);
                 Ok::<(), String>(())
             }
             .await;
             if let Err(why) = result {
                 if let Some((key, clock)) = attempt {
-                    moved.insert(key, clock);
+                    court_outbox.mark_submitted(key, clock);
                 }
                 debug!("[{PALW_PANEL}] claim {claim}: TIR prefix-state response remains pending: {why}");
             }

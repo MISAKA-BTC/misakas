@@ -5,6 +5,7 @@
 //! that does not challenge.
 use super::*;
 use crate::palw_gdn_held_filer::{PalwGdnHeldBookV1, PalwGdnHeldClaimV1, PalwGdnHeldHostV1, palw_gdn_held_filer_tick_v1};
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 use misaka_palw_base0::qwen36_backend::Qwen36Backend;
 
 /// The queue round of a GDN filer object, below the dissection's rounds and beside step 6's.
@@ -110,8 +111,7 @@ impl PalwPanelService {
         current_daa: u64,
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) {
         use kaspa_consensus_core::config::params::ForkActivation;
         let armed = self
@@ -228,8 +228,8 @@ impl PalwPanelService {
         for (i, (claim, object)) in palw_gdn_held_filer_tick_v1(&host, book, current_daa).into_iter().enumerate() {
             let round = PALW_GDN_FILER_ROUND_V1 + i as u32;
             info!("[{PALW_PANEL}] claim {claim}: the held-GDN filer queues {} (RFC-0006 06-A)", object_name(&object));
-            court_pending.push((claim, round, false, object));
-            court_due.insert((claim, round, false), current_daa);
+            court_outbox.push_pending((claim, round, false, object));
+            court_outbox.set_due((claim, round, false), current_daa);
         }
     }
 }
