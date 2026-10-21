@@ -1518,6 +1518,24 @@ mod conviction_e2e_tests {
     fn h(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)
     }
+    fn numerical_parts(control:crate::palw_court_numerical_transport_v1::NumericalControlRefV1<'_>,scope:Hash64,
+        rules:&crate::palw_court_close_receipt_v1::NativeCourtRulesV1)
+        ->(crate::palw_court_numerical_transport_v1::NumericalManifestV1,Vec<crate::palw_court_numerical_transport_v1::NumericalPartV1>) {
+        use crate::palw_court_numerical_transport_v1::*;
+        let m=describe_numerical_v1(&control,scope,rules).unwrap();
+        assert_eq!(borsh::from_slice::<NumericalManifestV1>(&borsh::to_vec(&m).unwrap()).unwrap(),m);
+        let mut parts=Vec::new();
+        write_numerical_parts_v1(&control,&m,rules,|part|{
+            let bytes=borsh::to_vec(&part)?;
+            assert!(bytes.len()<=crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1 as usize);
+            parts.push(borsh::from_slice::<NumericalPartV1>(&bytes)?);Ok(())
+        }).unwrap();
+        // Joined bytes exist only in this independent codec oracle, never in
+        // the sender/receiver implementation or the native fold adapter.
+        let joined:Vec<_>=parts.iter().flat_map(|p|p.bytes.iter().copied()).collect();
+        assert_eq!(joined,borsh::to_vec(&control).unwrap());
+        (m,parts)
+    }
     fn bond(n: u64) -> PalwBondKeyV2 {
         PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(n), 0))
     }
@@ -2700,7 +2718,24 @@ mod conviction_e2e_tests {
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &root_extras);
         assert!(fold::root(&mut b, &native.at, &oversized).is_err());
         assert_eq!(b.state.state_root(), before); assert!(b.entries.is_empty());
-        assert!(fold::root(&mut b, &native.at, &control).unwrap());
+        use crate::palw_court_numerical_transport_v1::NumericalControlRefV1 as N;
+        let (manifest,parts)=numerical_parts(N::Root(&control),set.scope_id().unwrap(),&native);
+        for kind in 0..9 {
+            let mut m=manifest.clone();let mut p=parts.clone();
+            match kind {0=>m.network=h(0xCF01),1=>m.scope=h(0xCF02),2=>m.leaf+=1,3=>m.total_bytes+=1,
+                4=>p[0].bytes[0]^=1,5=>p[0].offset+=1,6=>p[0].stream_id=h(0xCF03),7=>{p.pop();},_=>m.body_hash=h(0xCF04)}
+            assert!(fold::numerical_transport(&mut b,&native.at,&m,&p).is_err(),"transport mutation {kind}");
+            assert_eq!(b.state.state_root(),before);assert!(b.entries.is_empty());
+        }
+        let mut bad_signature=control.clone();bad_signature.signature[0]^=1;
+        let (m,p)=numerical_parts(N::Root(&bad_signature),set.scope_id().unwrap(),&native);
+        assert!(fold::numerical_transport(&mut b,&native.at,&m,&p).is_err());
+        assert_eq!(b.state.state_root(),before);assert!(b.entries.is_empty());
+        let mut direct=TransitionBuilder::new(&state,&params,false,false,false,false,&root_extras);
+        assert!(fold::root(&mut direct,&native.at,&control).unwrap());
+        assert_eq!(fold::numerical_transport(&mut b,&native.at,&manifest,&parts).unwrap(),fold::NumericalTransportEffectV1::Root(true));
+        assert_eq!(b.state.state_root(),direct.state.state_root());assert_eq!(b.entries.len(),direct.entries.len());
+        eprintln!("numerical root transport: bytes={} parts={}",manifest.total_bytes,parts.len());
         let key = Key::CourtSharedRoot(claim, leaf);
         let Some(Row::CourtSharedRoot(retained)) = b.state.staged_court_row_v1(&key).cloned() else { panic!() };
         assert_eq!(retained.rules, native);
@@ -2820,7 +2855,10 @@ mod conviction_e2e_tests {
                     assert!(fold::bottom(&mut b,&at_rules.at,&bad).is_err(),"bad bottom {kind}");
                     assert_eq!(b.state.state_root(),before);assert!(b.entries.is_empty());
                 }
-                let (opened,outcome)=fold::bottom(&mut b,&at_rules.at,&c).unwrap();assert!(opened);
+                let (m,p)=numerical_parts(N::Bottom(&c),set.scope_id().unwrap(),&at_rules);
+                let fold::NumericalTransportEffectV1::Bottom(opened,outcome)=fold::numerical_transport(&mut b,&at_rules.at,&m,&p).unwrap()
+                    else {panic!("bottom transport kind")};assert!(opened);
+                eprintln!("numerical bottom transport: bytes={} parts={}",m.total_bytes,p.len());
                 match &outcome {bottoms::SharedTirBottomOutcomeV1::NoMismatchFound=>{},bottoms::SharedTirBottomOutcomeV1::NativeFault(_)=>{assert!(false_partition);local_faults+=1;}}
                 assert_eq!(b.state.claim(&claim),Some(&original_claim));
                 assert_eq!(b.state.bond(&producer),Some(&original_producer));assert_eq!(b.state.bond(&outsider()),Some(&original_filer));
@@ -2891,7 +2929,8 @@ mod conviction_e2e_tests {
                 &crate::palw_tir_dissect_v1::palw_tir_round_message_v1(&h(0x515),prepared.phase.round(),&c.round),
                 crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,[97;32]).unwrap().as_ref().to_vec();
             assert!(fold::round(&mut b,&at_rules.at,&legacy).is_err());
-            assert!(fold::round(&mut b,&at_rules.at,&c).unwrap());
+            let (m,p)=numerical_parts(N::Round(&c),set.scope_id().unwrap(),&at_rules);
+            assert_eq!(fold::numerical_transport(&mut b,&at_rules.at,&m,&p).unwrap(),fold::NumericalTransportEffectV1::Round(true));
             let row_key=Key::CourtSharedRound(c.id().unwrap());
             assert_eq!(borsh::to_vec(&row_key).unwrap()[0],23);
             let row=b.state.staged_court_row_v1(&row_key).unwrap().clone();let row_wire=borsh::to_vec(&row).unwrap();

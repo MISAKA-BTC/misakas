@@ -146,3 +146,14 @@ private shared rootのcost predicateへ、旧 `CourtTirRootClaimed` と同じcar
 `numerical_evidence_transport_upper` は、元claimから導出した各canonical root、全内部round、全終端witnessを各slotにつき1件数える。root本文には上記ceiling、終端本文には既にprivate bottom checkerが強制する `max_close_bytes - 1` を用い、新しい各DTOのheader・署名・全終端path長を加える（旧proof variantの1 byteは新bottom bodyに含まれない）。終端path総量は全枝から正確に集計する。root/終端の本文量をclass別にtightに推定したものではなく、許容ceilingを使う保守的なbytes上限である。実際の必要資本の下限や実測CPU・採算へ読み替えない。
 
 特に、新しいroot headerを加えた最大control上限は旧single-carrier上限より大きい。本文が旧carrier allowance以内であることから新control全体の収録可能性を保証しない。既存cap内の分割transport、transaction wrapper/mass、署名/再構成/拒否/重複ingressの処理費用、source・semantic・court・archive、保持・fee・依存期限・実供給・資金確保・原子的受付は残る。過大な仮値を実測値として置いたり、この上限が入らないことを理由にモデルを除外したり、capを引き上げて通過させない。F02/F03/T05/G14の完了・本番採択・武装を許可しない。
+
+
+## 数値証拠の完成bundle fragment codec（隔離候補、未採択）
+
+数値root/round/bottomの署名済みBorsh本文を、既存16,384-byte part上限内へ分割する別namespaceのcodecを追加する。旧DATA streamのtargetや既存lifecycle/tag230の意味は変更しない。manifestはnetwork・元scope/claim/leaf・kind・総量・本文hashに結び付き、partはmanifest IDと連続offsetを持つ。外側partのhashは同一性だけであり、元controlのproducer/filer署名を代替しない。
+
+送信は本文hashの計算と分割出力をstreamして、本文全体の中間Vecを作らない。受信は**完成した全partがあるbundleのみ**を扱い、実native policyのceiling、part数・長さ・順序・hashを検査後、借用readerで既存native shape preflightを行う。nested allocation前に実形状のメモリを予約し、ticket付きtyped ownerでdecodeする。受信でも全本文の連結コピーを作らない。scopeとaccepting pointを実stateから検査するinternal fold adapterが、従来のroot/round/bottom foldへ渡し、署名・actor・元claim・root/ancestor・局所数値裁定を改めて検査する。checked flagを受け取らず、codecが通っただけでは証拠を受理しない。
+
+未完成prefixを合意stateへ書く方式ではない。先着した不正Beginが他filerを塞ぐ規則は導入しない一方、multi-block保持・有料public ingress・全owner共謀下での予約済み完了経路・restart等は未接続である。受信partsや送信callback側の保持、hash/preflight/decode/署名/再構成の全作業、transaction/mass、保持・料金・資金・実供給を別途計上する。既存型のsnapshotだけでnative multi-block搬送を達成したと扱わず、G14/T05やdefault/金融効果を許可しない。
+
+メモリ予約は既存native resource設定に従い、このcodecでは有効化や予算値の設定を行わない。試験の成功を全RSS・CPU・有料受付profileの成立へ読み替えない。

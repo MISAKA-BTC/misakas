@@ -5,6 +5,32 @@ use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key,PalwStagedCo
 use crate::palw_court_shared_tir_state_v1 as shared;
 use crate::palw_court_shared_tir_frontier_v1::{SignedSharedRequestV1,SharedRequestEffectV1};
 fn refused(s:impl Into<String>)->PalwStateV2Error {PalwStateV2Error::CarriageInconsistent(s.into())}
+#[derive(Debug,PartialEq,Eq)]
+pub(super) enum NumericalTransportEffectV1 {
+    Root(bool), Round(bool), Bottom(bool,crate::palw_court_shared_tir_bottom_v1::SharedTirBottomOutcomeV1),
+}
+/// Complete bundle adapter only. Incomplete prefix storage, block ingress and
+/// paid reservation remain separate; no wire checked flag bypasses typed folds.
+pub(super) fn numerical_transport(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
+    manifest:&crate::palw_court_numerical_transport_v1::NumericalManifestV1,
+    parts:&[crate::palw_court_numerical_transport_v1::NumericalPartV1])->Result<NumericalTransportEffectV1,PalwStateV2Error> {
+    use crate::palw_court_numerical_transport_v1::{decode_numerical_v1,DecodedNumericalV1 as D,TransportErrorV1 as E};
+    let rules=b.extras.native_court_rules_v1.ok_or_else(||refused("numerical transport native rules missing"))?;
+    if rules.at!=*ctx || b.extras.tir_public_network_domain_v1!=Some(rules.network_domain) {
+        return Err(refused("numerical transport native point/network mismatch"));
+    }
+    let c=shared::context(&b.state,manifest.claim).map_err(refused)?;clock(c,ctx)?;
+    let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state,manifest.claim)
+        .ok_or_else(||refused("numerical transport original missing"))?;
+    if manifest.leaf>=frame.header_v1().step_leaf_count {return Err(refused("numerical transport leaf outside original"));}
+    let control=decode_numerical_v1(manifest,parts,c.scope_id,&rules).map_err(|e|match e {
+        E::Resource(e)=>PalwStateV2Error::NativeResource(e),E::Invalid(e)=>refused(e)})?;
+    match control {
+        D::Root(c)=>root(b,ctx,&c).map(NumericalTransportEffectV1::Root),
+        D::Round(c)=>round(b,ctx,&c).map(NumericalTransportEffectV1::Round),
+        D::Bottom(c)=>bottom(b,ctx,&c).map(|(opened,outcome)|NumericalTransportEffectV1::Bottom(opened,outcome)),
+    }
+}
 fn clock(c:&shared::SharedTirContextV1,ctx:&PalwBlockContextV2)->Result<(),PalwStateV2Error> {
     if ctx.daa_score<c.original_accepted_daa || ctx.daa_score>=c.hard_daa {
         return Err(refused("shared data operation outside original hard interval"));
