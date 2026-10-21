@@ -275,6 +275,7 @@ mod carrier_wait_many_classes;
 mod da_answer_chunks;
 /// RFC-0006 06-A: the held-GDN filer on the service tick.
 mod gdn_filer_tick;
+mod gdn_step_filer_tick;
 /// RFC-0003 (carriage node half): a tensor claim's seat replay and its one-move court.
 mod gen_court;
 /// RFC-0003 decision 22: the held leaf challenge filed from a node — a close past one carrier, declared and delivered in chunks.
@@ -4186,6 +4187,10 @@ pub struct PalwPanelConfig {
     /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, `tir_shard::watch`): verify the shards this bond does
     /// not seat from public material, accuse as a non-seat bond, demand runs on chain. Never a receipt.
     pub tir_shard_watch: bool,
+    /// **G14 ③ / ⑦: the GDN step filer** (`--palw-gdn-step-filer`, `crate::palw_gdn_step_filer`): re-execute the served recurrence
+    /// steps of disputable Qwen3.6 hybrid claims and file `GdnStepAccusedV2` on a mismatch the court's own verdict convicts. Off by
+    /// default; dormant below `palw_memory_routing_court_v2` either way.
+    pub gdn_step_filer: bool,
     /// **RFC-0006: where an outsider fetches a class it does not hold** (`--palw-tir-shard-mirror=<class container path>`): loaded
     /// on the first sharded duty of a class this node holds no artifact of, and used only if it derives exactly the class and the
     /// inventory root the chain registered.
@@ -8909,6 +8914,8 @@ impl PalwPanelService {
         let mut own_receipt_class: HashMap<Hash64, Hash64> = HashMap::new();
         // RFC-0006 06-A: the held-GDN filer's cases (dormant below `palw_memory_routing_court_v2`).
         let mut gdn_book = crate::palw_gdn_held_filer::PalwGdnHeldBookV1::default();
+        // G14 ③ / ⑦: the GDN step filer's cases (off by default; dormant below `palw_memory_routing_court_v2`).
+        let mut gdn_step_book = crate::palw_gdn_step_filer::PalwGdnStepBookV1::default();
         // ADR-0135: a possession proof that found no carrier slot waits for the next one, and the
         // receipts yield until it lands — a seat whose proofs starve behind its own receipt traffic
         // counts as no seat at all (measured on the devnet: receipts filled the eight-carrier chain
@@ -9928,6 +9935,19 @@ impl PalwPanelService {
             // RFC-0006 06-A: the held-GDN filer — a forged recurrence checkpoint of a held hybrid claim this bond may dispute.
             self.gdn_held_filer_tick_v1(&session, &mut gdn_book, pool_books.material.map(), current_daa, network_domain, bond_key, &mut court_outbox)
                 .await;
+            // G14 ③ / ⑦: the GDN step filer — a forged recurrence step on an honest checkpoint (tag 243), filed, tracked to its verdict,
+            // re-submitted after a reorg, and its conviction handed to the false-Valid filer below.
+            self.gdn_step_filer_tick_v1(
+                &session,
+                &mut gdn_step_book,
+                &mut false_valid,
+                pool_books.material.map(),
+                current_daa,
+                network_domain,
+                bond_key,
+                &mut court_outbox,
+            )
+            .await;
             // P2-8c (N10): the replay's contradiction proves the claim's liable `Valid` signers false too.
             if let Some((refuted, bound_daa)) = &replay_made {
                 false_valid.note_executor_refuted_v1(
