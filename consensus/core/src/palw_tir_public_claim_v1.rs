@@ -459,6 +459,12 @@ pub(crate) fn palw_tir_public_frame_fixture_wide_v1(forge:Option<(usize,usize)>,
     tests::fixture_with_vocab(forge,maximum_custodians,|_|{},None,None,true)
 }
 
+/// Additional two-tile fixture; existing tiny/GQA/4096-wide fixtures are unchanged.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_frame_fixture_two_tile_v1() -> PalwTirPublicFrameFixtureV1 {
+    tests::two_tile_frame()
+}
+
 /// **G14 G-T2 test support:** [`palw_tir_public_frame_fixture_v1`] over a job `edit_job` shapes (a seeded V3 job, a V4 job with
 /// penalties or stop sequences, ...), whose execution decodes by THAT job's own selection rule — except at decode position
 /// `wrong_at`, where it commits the best lane the rule does not choose (a selection violation over honest arithmetic).
@@ -550,6 +556,31 @@ mod tests {
         let x = if wide {crate::palw_tir_court_v1::test_support::tiny_execution_selecting_wide_in(|_,_,_|context.clone(),forge,&select)}
             else {crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), forge, &select)};
         frame_from_execution(x, job, maximum_custodians, output_root)
+    }
+
+    pub(super) fn two_tile_frame() -> super::PalwTirPublicFrameFixtureV1 {
+        use crate::palw_tir_court_v1::test_support::{tiny_execution,tiny_execution_selecting_in_vocab,select_by_rule};
+        use crate::palw_freeprompt_v3::*;
+        use crate::palw_fp_execution_v3::{PalwFpClassFactsV3,PalwFpRunFactsV3};
+        // A new synthetic program, not a change to the fixed existing fixtures or native caps.
+        let honest=tiny_execution_selecting_in_vocab(|class,id,prompt| {
+            let mut c=tiny_execution(None).binding.job_context;c.shape_profile_id=id;c.tokenizer_id=class.tokenizer_id;
+            c.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(prompt);c
+        },None,&|_,row,_|crate::palw_step_refute::base0_decode_token_select_v1(row) as u32,4097);
+        let (_,_,mut job,_)=crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false,false);
+        job.version=PALW_FP_V3_VERSION;job.decode=None;job.tail=None;
+        job.class_id=honest.binding.class.class_id(&honest.binding.artifact_root);
+        job.tokenizer_id=honest.binding.class.tokenizer_id;job.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(&honest.prompt);
+        job.prompt_tokens=honest.prompt.len() as u32;job.decode_token_limit=honest.generated.len() as u32;job.max_context_tokens=64;
+        let class=PalwFpClassFactsV3 {model_profile_id:Hash64::default(),runtime_manifest_hash:Hash64::default(),
+            runtime_class_id:Hash64::default(),shape_profile_id:job.class_id,cu_ruleset_id:Hash64::default()};
+        let facts=PalwFpRunFactsV3 {decode_tokens_executed:job.decode_token_limit,stop_reason:PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root:Hash64::default(),activation_leg_root:Hash64::default(),checkpoint_leg_root:Hash64::default(),
+            step_leg_root:Hash64::default(),step_leaf_count:honest.hashes.len() as u64};
+        let ctx=crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job,&class,&facts,b"testnet-12").unwrap();
+        let rule=crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&job).unwrap();
+        let x=tiny_execution_selecting_in_vocab(|_,_,_|ctx,None,&|_,row,before|select_by_rule(&rule,row,before,false),4097);
+        frame_from_execution(x,job,1,None)
     }
 
     // Shared geometry construction: every tree is committed in this job's actual FP context.

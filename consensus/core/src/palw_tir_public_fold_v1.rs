@@ -2584,6 +2584,46 @@ mod conviction_e2e_tests {
     }
 
     #[test]
+    fn shared_material_two_tile_row_pins_match_native_without_full_rows() {
+        use crate::palw_tir_court_v1::{PalwTirEvidenceStoreV1,PalwTirTraceEventDisclosureV1,tir_logits_event_disclosure_v1};
+        use crate::palw_court_shared_tir_builder_store_v1::SharedTirBuilderStoreV1 as MaterialStore;
+        use crate::palw_court_shared_tir_state_v1 as shared;
+        use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q,PalwTirPublicResponseV1 as R};
+        let fx=crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1();
+        let frame=&fx.frame;let claim=frame.plan_v1().original_claim;let p=frame.plan_v1();
+        let (state,params,extras)=world(&fx,frame);let state=bind_clock_service(&state,frame,&params,&extras);
+        let source=frame.source_v1(&fx.record,&fx.layout,fx.rules.maximum_leaves).unwrap();
+        assert!(source.vocab_v1()>4096,"additional 4097-word fixture exercises two different tiles");
+        let profile=shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
+        let set=crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame,&source,profile).unwrap();let scope=set.scope_id().unwrap();
+        let c=shared::SharedTirContextV1 {version:1,claim,allocation_id:p.allocation_id,source_id:p.source_id,rules_id:p.rules_id,
+            profile_id:profile,scope_id:scope,queries:set.len(),original_accepted_daa:p.terms.accepted_daa,
+            hard_daa:p.terms.accepted_daa+10_000,material_until_daa:p.terms.material_until_daa};
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        b.write_staged_row_v1(Key::CourtSharedContext(claim),Some(Row::CourtSharedContext(Box::new(c)))).unwrap();
+        let rows=crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context,&fx.execution.rows).unwrap();
+        let ids=source.retain_complete_ids_v1(rows,&fx.execution.generated).unwrap();
+        let mut units=Vec::new();
+        for row in 0..source.decode_count_v1() {for tile in 0..source.vocab_v1().div_ceil(4096) {
+            let PalwTirTraceEventDisclosureV1::Tiled {row_root,row_opening,tile_lanes,tile_opening,..}=
+                tir_logits_event_disclosure_v1(&fx.execution.binding,&fx.execution.rows,&fx.execution.generated,row,u8::try_from(tile).unwrap()).unwrap() else {panic!("tiled fixture")};
+            units.push(source.authenticate_v1(&Q::TraceTile {row,tile},&R::TraceTile {row_root,row_opening,lanes:tile_lanes,opening:tile_opening},Some(&ids)).unwrap());
+        }}
+        let store=MaterialStore::new(&b.state,claim,scope,&units,&[],Some(&ids)).unwrap();
+        for row in 0..source.decode_count_v1() {for lane in [0,4095,4096] {
+            let expected=fx.execution.row_pin(row,lane).unwrap();let actual=store.row_pin(row,lane).unwrap();
+            assert_eq!(borsh::to_vec(&actual).unwrap(),borsh::to_vec(&expected).unwrap());
+        }}
+        assert_eq!(store.decode_pin(),fx.execution.decode_pin());
+        assert!(store.row_pin(source.decode_count_v1(),0).is_none());assert!(store.row_pin(0,source.vocab_v1()).is_none());
+        let no_ids=MaterialStore::new(&b.state,claim,scope,&units,&[],None).unwrap();assert!(no_ids.row_pin(0,0).is_none());
+        let other_tile=if fx.execution.generated[0]/4096==0 {1}else{0};
+        let partial:Vec<_>=units.iter().filter(|u|u.request_v1()!=Q::TraceTile {row:0,tile:other_tile}).cloned().collect();
+        let missing=MaterialStore::new(&b.state,claim,scope,&partial,&[],Some(&ids)).unwrap();
+        assert!(missing.row_pin(0,other_tile*4096).is_none());
+    }
+
+    #[test]
     fn shared_history_root_binds_public_original_policy_and_literal_producer_signature() {
         use crate::palw_court_shared_tir_root_v1::*;
         use crate::palw_court_shared_tir_state_v1 as shared;
@@ -2840,6 +2880,25 @@ mod conviction_e2e_tests {
             };
             source.authenticate_v1(&q,&r,None).unwrap()
         }).collect();
+        {
+            use crate::palw_tir_court_v1::{PalwTirEvidenceStoreV1,build_tir_cone_refutation_v1};
+            use crate::palw_court_shared_tir_builder_store_v1::{SharedTirBuilderStoreV1 as MaterialStore,PromptMaterialV1};
+            let (early_leaf,early)=(0..binding.step_leaf_count).find_map(|i|
+                build_tir_cone_refutation_v1(binding,i,&fx.execution,&court).ok()
+                    .filter(|p|!p.prompt_token_ids.is_empty()).map(|p|(i,p))).expect("fixture has a prompt-reading cone");
+            let params:Vec<_>=early.params.single().map(|p|p.opened.as_slice()).unwrap_or(&[]).iter()
+                .map(|(i,_)|fx.execution.param_opening(*i).unwrap()).collect();
+            let scope=set.scope_id().unwrap();
+            let store=MaterialStore::new_with_prompt(&fresh,claim,scope,&material_units,&params,None,
+                PromptMaterialV1::Flat(&fx.execution.prompt)).unwrap();
+            let replay=build_tir_cone_refutation_v1(binding,early_leaf,&store,&court).unwrap();
+            assert_eq!(borsh::to_vec(&replay).unwrap(),borsh::to_vec(&early).unwrap());
+            let missing=MaterialStore::new(&fresh,claim,scope,&material_units,&params,None).unwrap();
+            assert!(build_tir_cone_refutation_v1(binding,early_leaf,&missing,&court).is_err());
+            let mut bad=fx.execution.prompt.clone();bad[0]^=1;
+            assert!(MaterialStore::new_with_prompt(&fresh,claim,scope,&material_units,&params,None,PromptMaterialV1::Flat(&bad)).is_err());
+            assert!(MaterialStore::new_with_prompt(&fresh,claim,scope,&material_units,&params,None,PromptMaterialV1::Merkle(&[])).is_err());
+        }
         for false_partition in [false,true] {
         let mut round_state=fresh.clone();
         let filer_keys=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([101;32]);

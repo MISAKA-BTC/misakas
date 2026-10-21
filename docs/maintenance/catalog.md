@@ -608,6 +608,7 @@
 - [evidence/palw/g14-integration-candidate-2026-10-20/inventory-material-verifier.md](../evidence/palw/g14-integration-candidate-2026-10-20/inventory-material-verifier.md)
 - [evidence/palw/g14-integration-candidate-2026-10-20/material-builder.md](../evidence/palw/g14-integration-candidate-2026-10-20/material-builder.md)
 - [evidence/palw/g14-integration-candidate-2026-10-20/parameter-decode.md](../evidence/palw/g14-integration-candidate-2026-10-20/parameter-decode.md)
+- [evidence/palw/g14-integration-candidate-2026-10-20/prompt-row-material.md](../evidence/palw/g14-integration-candidate-2026-10-20/prompt-row-material.md)
 - [evidence/palw/g14-integration-candidate-2026-10-20/rooted-parameter-verifier.md](../evidence/palw/g14-integration-candidate-2026-10-20/rooted-parameter-verifier.md)
 - [evidence/palw/g14-integration-candidate-2026-10-20/terminal-dependencies.md](../evidence/palw/g14-integration-candidate-2026-10-20/terminal-dependencies.md)
 - [evidence/palw/g14-measure-2026-10-18/README.md](../evidence/palw/g14-measure-2026-10-18/README.md)

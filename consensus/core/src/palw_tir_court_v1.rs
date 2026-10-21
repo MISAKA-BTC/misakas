@@ -3834,7 +3834,7 @@ pub(crate) mod test_support {
         (x, wide)
     }
 
-    fn tiny_execution_selecting_in_vocab(
+    pub(crate) fn tiny_execution_selecting_in_vocab(
         ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
         forge: Option<(usize, usize)>,
         select: &dyn Fn(u32, &[i32], &[u32]) -> u32,

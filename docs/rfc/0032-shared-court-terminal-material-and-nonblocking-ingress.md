@@ -49,4 +49,12 @@ Aの原始materialも、最初の不完全な送信が唯一slotを占有する�
 
 [実装・検証記録](../evidence/palw/g14-integration-candidate-2026-10-20/material-builder.md)では既存GQA fixtureの正直/偽数値履歴・24終端で従来builderとのbyte一致と欠落拒否を検査する。parameter集合の試験供給には直接builderのread-setを用いるため、全originalの先読み・依存閉包を実装済みとはしない。
 
-現在はborrowed read-only viewであり、prompt・row-pin、永続化・再起動、materialの供給/保持/原資・全分岐予約、実際の処理機会と公平なmulti-block提出は未完。clone・multiproof/range組立・builder outputを含む完全な資源/費用profileも別途必要である。本節はAの限定的な隔離実装記録であり、F03/T05や本番規則の採択・有効化を示さない。
+このcheckpoint（7de51563d）ではborrowed read-only viewであり、prompt・row-pin、永続化・再起動、materialの供給/保持/原資・全分岐予約、実際の処理機会と公平なmulti-block提出は未完。clone・multiproof/range組立・builder outputを含む完全な資源/費用profileも別途必要である。本節はAの限定的な隔離実装記録であり、F03/T05や本番規則の採択・有効化を示さない。
+
+## 7. Promptとrow-pinの隔離projection
+
+保持済みoriginalのwork rulesからprompt形式を解決し、Flatの全listまたはMerkleの供給済みtileを既存commitmentへ認証する。形式の差替え、改変、個数違い、重複/逆順tileは拒否する。未供給tileを取得済みにはしない。
+
+row-pinは認証済み全IDと、committed token/要求laneの二つのTraceTileから既存native形式へ構成する。whole rowsやlocal cacheへfallbackしない。これらはidentityを保持するデータ変換であり、裁定結果・計算credit・供給証明ではない。
+
+[検証範囲と限界](../evidence/palw/g14-integration-candidate-2026-10-20/prompt-row-material.md)。永続化、promptのbounded wire入口、全originalの依存閉包・供給/保持/原資・予約、完全な費用profile、F02/F03と実node T05は引き続き未完である。
