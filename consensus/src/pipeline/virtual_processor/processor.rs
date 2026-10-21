@@ -2349,6 +2349,11 @@ impl VirtualStateProcessor {
                     if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                         self.palw_record_round_verdicts(verdicts);
                     }
+                    // Funded-original candidate inspection remains disabled here:
+                    // no native shared-service/profile activation contract exists.
+                    // Native integration tests exercise its synchronous entry with
+                    // real validated inputs; ordinary production processing adds
+                    // no unfunded decode/signature/graph work.
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The

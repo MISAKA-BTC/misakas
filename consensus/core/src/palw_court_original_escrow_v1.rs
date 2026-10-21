@@ -53,7 +53,9 @@ pub struct FundingTermsV1 {
     pub material_until_daa: u64,
     pub funding_output_index: u32,
     pub funding_amount_sompi: u64,
+    /// Unkeyed identity of the signing key; never a P2PKH address payload.
     pub payer_key_id: Hash64,
+    /// Native keyed MLDSA87 address of that same payer, checked with its key.
     pub refund_payload: Hash64,
     pub nonce: Hash64,
 }
@@ -65,7 +67,6 @@ impl FundingTermsV1 {
             || self.funding_amount_sompi == 0
             || self.accept_from_daa >= self.accept_until_daa
             || self.material_until_daa <= self.accept_until_daa
-            || self.payer_key_id != self.refund_payload
             || [
                 self.network_domain,
                 self.claim,
@@ -138,6 +139,7 @@ impl FundingConsentV1 {
         self.check_v1()?;
         if payer_pubkey.len() != crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN
             || crate::mldsa87_primitives::mldsa87_key_id(payer_pubkey) != self.terms.payer_key_id
+            || kaspa_hashes::blake2b_512_address_payload(payer_pubkey) != self.terms.refund_payload
             || !crate::palw_attempt_material_v3::verify_ready_signature_v3(
                 payer_pubkey,
                 self.terms.id_v1().as_byte_slice(),
@@ -151,11 +153,14 @@ impl FundingConsentV1 {
     }
     /// Own-output facts only. A normal payer P2PKH fallback protects an
     /// unsuccessful candidate's coins; it is not by itself an escrow lock.
-    pub fn check_actual_output_v1(&self, actual: &ActualCarrierFundingV1<'_>) -> Result<(), FundingRefusalV1> {
+    pub fn check_actual_output_v1(&self, actual: &ActualCarrierFundingV1<'_>, payer_pubkey: &[u8]) -> Result<(), FundingRefusalV1> {
         self.check_v1()?;
-        if actual.output_index() != self.terms.funding_output_index
+        if payer_pubkey.len() != crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN
+            || crate::mldsa87_primitives::mldsa87_key_id(payer_pubkey) != self.terms.payer_key_id
+            || kaspa_hashes::blake2b_512_address_payload(payer_pubkey) != self.terms.refund_payload
+            || actual.output_index() != self.terms.funding_output_index
             || actual.output().value != self.terms.funding_amount_sompi
-            || crate::mldsa87_primitives::p2pkh_mldsa87_payload(&actual.output().script_public_key) != Some(self.terms.payer_key_id)
+            || crate::mldsa87_primitives::p2pkh_mldsa87_payload(&actual.output().script_public_key) != Some(self.terms.refund_payload)
         {
             return Err(FundingRefusalV1::OutputMismatch);
         }
@@ -281,7 +286,7 @@ pub fn prepare_funding_v1<'a>(
     {
         return Err(FundingRefusalV1::Coverage);
     }
-    consent.check_actual_output_v1(&actual)?;
+    consent.check_actual_output_v1(&actual, payer_pubkey)?;
     consent.verify_signature_v1(payer_pubkey)?;
     Ok(PreparedEscrowFundingV1 { actual, consent, payer_pubkey, accepted_daa })
 }
@@ -317,7 +322,7 @@ mod tests {
             funding_output_index: 0,
             funding_amount_sompi: 150,
             payer_key_id: payer,
-            refund_payload: payer,
+            refund_payload: kaspa_hashes::blake2b_512_address_payload(&public),
             nonce: h(11),
         };
         let signature = libcrux_ml_dsa::ml_dsa_87::sign(
@@ -333,7 +338,7 @@ mod tests {
         let tx = Transaction::new(
             0,
             vec![crate::tx::TransactionInput::new(TransactionOutpoint::new(h(77), 0), Vec::new(), 0, 0)],
-            vec![TransactionOutput::new(150, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&payer.as_bytes()))],
+            vec![TransactionOutput::new(150, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&public).as_bytes()))],
             0,
             crate::subnets::SUBNETWORK_ID_NATIVE,
             0,
@@ -382,7 +387,7 @@ mod tests {
 
     #[test]
     fn actual_amount_index_unknown_version_free_script_and_stale_txid_are_refused() {
-        let (_, consent, tx, _) = fixture();
+        let (public, consent, tx, _) = fixture();
         assert_eq!(inspect_transaction_v1(&tx, 1).unwrap_err(), FundingRefusalV1::OutputMissing);
         for mode in 0..4 {
             let mut bad = tx.clone();
@@ -398,13 +403,13 @@ mod tests {
             assert_eq!(inspect_transaction_v1(&bad, 0).unwrap_err(), FundingRefusalV1::CarrierIdentity);
             bad.finalize();
             assert_eq!(
-                consent.check_actual_output_v1(&inspect_transaction_v1(&bad, 0).unwrap()),
+                consent.check_actual_output_v1(&inspect_transaction_v1(&bad, 0).unwrap(), &public),
                 Err(FundingRefusalV1::OutputMismatch)
             );
         }
         let mut changed = consent.clone();
         changed.terms.funding_output_index = 1;
-        assert_eq!(changed.check_actual_output_v1(&inspect_transaction_v1(&tx, 0).unwrap()), Err(FundingRefusalV1::OutputMismatch));
+        assert_eq!(changed.check_actual_output_v1(&inspect_transaction_v1(&tx, 0).unwrap(), &public), Err(FundingRefusalV1::OutputMismatch));
     }
 
     #[test]
@@ -449,6 +454,35 @@ mod tests {
         let mut altered = consent.clone();
         altered.signature[0] ^= 1;
         assert_eq!(altered.verify_signature_v1(&public), Err(FundingRefusalV1::Signature));
+    }
+
+    #[test]
+    fn payer_identity_is_not_the_native_address_and_unspendable_refunds_are_refused() {
+        let (public, consent, tx, _) = fixture();
+        let address = kaspa_hashes::blake2b_512_address_payload(&public);
+        assert_ne!(address, consent.terms.payer_key_id);
+        assert_eq!(consent.terms.refund_payload, address);
+        consent.verify_signature_v1(&public).unwrap();
+        consent.check_actual_output_v1(&inspect_transaction_v1(&tx,0).unwrap(), &public).unwrap();
+        let wrong = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([93;32]);
+        assert_eq!(consent.check_actual_output_v1(&inspect_transaction_v1(&tx,0).unwrap(),wrong.verification_key.as_ref()),
+            Err(FundingRefusalV1::OutputMismatch));
+        let mut trap = tx.clone();
+        trap.outputs[0].script_public_key = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&consent.terms.payer_key_id.as_bytes());
+        trap.finalize();
+        assert_eq!(consent.check_actual_output_v1(&inspect_transaction_v1(&trap,0).unwrap(),&public),Err(FundingRefusalV1::OutputMismatch));
+        let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91;32]);
+        for refund in [consent.terms.payer_key_id, kaspa_hashes::blake2b_512_address_payload(wrong.verification_key.as_ref())] {
+            let mut changed = consent.clone();
+            changed.terms.refund_payload = refund;
+            // Structure has no public key; it cannot derive the native address.
+            changed.check_v1().unwrap();
+            changed.signature = libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key, changed.terms.id_v1().as_byte_slice(),
+                COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,[92;32]).unwrap().as_ref().to_vec();
+            // Even a real payer signature cannot assign another/refund trap key.
+            assert_eq!(changed.verify_signature_v1(&public),Err(FundingRefusalV1::Signature));
+            assert_eq!(changed.check_actual_output_v1(&inspect_transaction_v1(&tx,0).unwrap(),&public),Err(FundingRefusalV1::OutputMismatch));
+        }
     }
 
     #[test]

@@ -883,6 +883,9 @@ impl PalwConstraintStreamCourtV1 {
         }))
     }
 }
+#[path = "palw_constraint_canonical_replay_v1.rs"]
+pub(crate) mod canonical_replay;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,6 +991,146 @@ mod tests {
             .is_err()
         );
     }
+    // Only deterministic primitive adjudication/material authentication is
+    // compared; old move accounting, signatures, retention and DAA are excluded.
+    fn replay_partition(
+        row: &mut PalwConstraintStreamCourtV1,
+        a: &crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1,
+        small: bool,
+        corrupt: bool,
+    ) -> Result<usize, String> {
+        let context = row.seed_id();
+        let mut parts = 0;
+        let limit = if small {
+            1
+        } else {
+            crate::palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1
+        };
+        for ids in a.eog.ids.chunks(limit) {
+            row.push_eog(
+                context,
+                row.eog_offset_v1().ok_or("EOG cursor absent")?,
+                ids,
+            )?;
+            parts += 1;
+        }
+        row.finish_eog()?;
+        let mut corrupted = false;
+        while row.phase() != PalwConstraintStreamPhaseV1::Complete {
+            let id = row.next_rendering_id()?;
+            if row.is_eog(id) {
+                row.finish_eog_token(context)?;
+                continue;
+            }
+            let o = a
+                .renderings
+                .iter()
+                .find(|o| o.id == id)
+                .ok_or("fixture rendering absent")?;
+            row.begin_rendering(
+                context,
+                id,
+                o.rendering.is_some(),
+                o.rendering.as_ref().map_or(0, |b| b.len()) as u32,
+                &o.opening,
+            )?;
+            if let Some(bytes) = &o.rendering {
+                let mut material = bytes.clone();
+                if corrupt && !corrupted && !material.is_empty() {
+                    material[0] ^= 1;
+                    corrupted = true;
+                }
+                let chunk = if small {
+                    1
+                } else {
+                    crate::palw_rendering_stream_v1::PALW_RENDERING_STREAM_PART_BYTES_V1
+                };
+                let mut offset = 0;
+                for part in material.chunks(chunk) {
+                    row.push_rendering(context, offset, part)?;
+                    offset += part.len() as u32;
+                    parts += 1;
+                }
+            }
+            row.finish_rendering()?;
+        }
+        if corrupt && !corrupted {
+            return Err("nonempty corrupt fixture material was not exercised".into());
+        }
+        Ok(parts)
+    }
+    #[test]
+    fn canonical_constraint_material_replay_matches_distinct_legal_partitions() {
+        for fault in [false, true] {
+            let (base, a) = court(fault);
+            assert!(
+                a.eog.ids.len() > 1,
+                "the fixture must exercise different EOG packet counts"
+            );
+            assert!(
+                a.renderings
+                    .iter()
+                    .any(|o| o.rendering.as_ref().is_some_and(|b| !b.is_empty()))
+            );
+            let identity = (
+                base.seed_id(),
+                base.execution_root_v1(),
+                base.table_root,
+                base.job_id,
+            );
+            let mut canonical = base.clone();
+            let mut alternative = base.clone();
+            let ca = replay_partition(&mut canonical, &a, false, false).unwrap();
+            let cb = replay_partition(&mut alternative, &a, true, false).unwrap();
+            assert!(cb > ca);
+            assert_eq!(canonical.fault().unwrap(), alternative.fault().unwrap());
+            assert_eq!(canonical.fault().unwrap().is_some(), fault);
+            assert_eq!(
+                identity,
+                (
+                    canonical.seed_id(),
+                    canonical.execution_root_v1(),
+                    canonical.table_root,
+                    canonical.job_id
+                )
+            );
+            assert_eq!(
+                identity,
+                (
+                    alternative.seed_id(),
+                    alternative.execution_root_v1(),
+                    alternative.table_root,
+                    alternative.job_id
+                )
+            );
+            for small in [false, true] {
+                let mut bad = base.clone();
+                assert!(replay_partition(&mut bad, &a, small, true).is_err());
+                assert!(bad.fault().is_err());
+                let mut altered = a.clone();
+                altered.eog.opening.leaf_index += 1;
+                // An altered opening cannot instantiate the original primitive.
+                let (binding, _) = public_constrained_case_for_tests_v1(fault);
+                assert!(
+                    PalwConstraintStreamCourtV1::new(
+                        Hash64::from_u64_word(1),
+                        owner(),
+                        100,
+                        binding.committed_execution_root,
+                        &binding,
+                        &altered.job,
+                        &altered.pin,
+                        altered.witness,
+                        altered.eog.ids.len() as u32,
+                        &altered.eog.opening,
+                        1 << 25
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+
 }
 
 // Read-only native allocation inventory; no state/root/codec field is added.

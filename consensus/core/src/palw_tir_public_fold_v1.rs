@@ -10,6 +10,87 @@ use crate::palw_tir_public_owned_v1::{
 };
 use crate::palw_tir_public_state_v1::{PalwTirPublicAcquisitionRowV1, PalwTirPublicPreparationRowV1};
 
+/// Diagnostics for a funded carrier on the native accepted UTXO path. There is
+/// deliberately no Admitted/Complete variant and no state or spend capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwFundedOriginalCandidateV1 {
+    Invalid(&'static str),
+    Missing(&'static str),
+}
+
+/// Read-only candidate inspection. `validated` alone does not attest provenance:
+/// the consensus caller must obtain it from its composed-view UTXO validator.
+/// No caller-provided profile, graph or consent hash becomes native policy.
+/// Ordinary fallback outputs survive every result of this function.
+pub fn palw_funded_original_candidate_v1(
+    state: &PalwChainStateV2,
+    network: Hash64,
+    daa: u64,
+    validated: &crate::tx::ValidatedTransaction<'_>,
+) -> PalwFundedOriginalCandidateV1 {
+    use PalwFundedOriginalCandidateV1::{Invalid, Missing};
+    use crate::palw_tir_funded_original_envelope_v1::{is_funded_original_carrier_v1, PalwTirFundedOriginalEnvelopeV1};
+    let tx = validated.tx;
+    if !is_funded_original_carrier_v1(tx) || !tx.id_is_current() {
+        return Invalid("carrier framing or stale actual transaction id");
+    }
+    if tx.inputs.len() != validated.entries.len() {
+        return Invalid("actual input entry count");
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut input = 0u64;
+    for (i, e) in tx.inputs.iter().zip(&validated.entries) {
+        if !seen.insert(i.previous_outpoint) { return Invalid("duplicate actual input"); }
+        let Some(next) = input.checked_add(e.amount) else { return Invalid("actual input amount overflow"); };
+        input = next;
+    }
+    let Some(output) = tx.outputs.iter().try_fold(0u64, |n,o| n.checked_add(o.value)) else {
+        return Invalid("actual output amount overflow");
+    };
+    if input.checked_sub(output) != Some(validated.calculated_fee) {
+        return Invalid("actual input/output fee differs from native validation");
+    }
+    let Ok(envelope) = PalwTirFundedOriginalEnvelopeV1::decode_v1(&tx.payload) else {
+        return Invalid("funded original bounded codec");
+    };
+    let terms = &envelope.funding.terms;
+    if terms.network_domain != network || daa < terms.accept_from_daa || daa > terms.accept_until_daa {
+        return Invalid("funding network or actual acceptance interval");
+    }
+    let Ok(actual) = crate::palw_court_original_escrow_v1::inspect_transaction_v1(tx, terms.funding_output_index) else {
+        return Invalid("actual funding output");
+    };
+    if envelope.funding.check_actual_output_v1(&actual, &envelope.payer_pubkey).is_err()
+        || envelope.funding.verify_signature_v1(&envelope.payer_pubkey).is_err() {
+        return Invalid("actual funding output or payer consent signature");
+    }
+    let Ok(original) = envelope.original_v1() else { return Invalid("literal original envelope"); };
+    let Ok(fp) = original.original_fp_v1() else { return Invalid("literal original commitment"); };
+    if fp.validate_signature_v3(crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1).is_err() {
+        return Invalid("original commitment signature");
+    }
+    let Some(producer) = state.bond(&PalwBondKeyV2(fp.commitment.job.executor_bond)) else {
+        return Invalid("current producer absent");
+    };
+    if producer.pubkey != fp.commitment.job.executor_pubkey || !matches!(producer.status, PalwBondStatusV2::Active) {
+        return Invalid("current producer authority or status");
+    }
+    if state.claim(&fp.claim_id()).is_some() {
+        return Invalid("original claim already exists");
+    }
+    let Some(record) = state.tir_class_v1(&fp.commitment.job.class_id) else {
+        return Invalid("registered original TIR class absent");
+    };
+    if crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id).is_none() {
+        return Invalid("registered original TIR layout absent");
+    }
+    // Do not enter prepare_original/source graph expansion without its complete
+    // native allocation preflight. Fixed header bytes have been decoded/paired,
+    // but registered source geometry, producer pledge and full branch grammar
+    // remain UNCHECKED, as do native profiles and ordered accepted-prefix state.
+    Missing("native source construction meter, full grammar/profiles and ordered original coordinator")
+}
+
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(why.into())
 }
@@ -1499,6 +1580,7 @@ mod tests {
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
 mod conviction_e2e_tests {
+    include!("palw_court_shared_constraint_native_tests.rs");
     use super::*;
     use crate::palw_tir_public_carriage_v1::{
         PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T, PalwTirPublicControlV1 as Control,
@@ -1735,6 +1817,8 @@ mod conviction_e2e_tests {
         };
         (state, params, extras)
     }
+
+    include!("palw_funded_original_native_fixture_tests.rs");
 
     fn cone(fx: &PalwTirPublicFrameFixtureV1) -> Evidence {
         let rules = crate::palw_tir_court_v1::PalwTirCourtRulesV1 {

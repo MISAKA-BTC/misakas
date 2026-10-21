@@ -17710,3 +17710,5 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
 mod rfc12_native_capacity_selection;
 
 mod carrier_bond_rent_conservation;
+
+mod funded_original_native_candidate;

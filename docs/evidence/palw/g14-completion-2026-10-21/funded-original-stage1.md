@@ -34,3 +34,7 @@ These components return local preparation facts only. Native expected scope is a
 ## Remaining closure
 
 Actual selected-chain UTXO validation, native escrow locks including same-block/mergeset protection, qualified third-party settlement without a future payer signature, once-only rooted accounting, actual payee/refund/burn/change outputs, and atomic original admission remain unimplemented. Complete canonical duty/role/dependency/resource/capital/fee graphs and physical profiles are still required before opening the new path. This stage does not complete any whole RFC-0026 T01–T15 scenario or establish model door, throughput, Panel profitability or heartbeat measurements.
+
+## Later native address correction — 2026-10-22
+
+A real native input-validator regression found that the initial candidate conflated the unkeyed payer identity with the domain-separated native P2PKH address. Its helper successes therefore did not establish actual fallback spendability. The [preserved failure and corrective verification](../g14-completion-2026-10-22/material-and-native-candidate.md) separate those identities and check the actual public-key-derived output/refund address. Earlier source snapshots, executables, command outputs and measurement values remain unchanged; this note does not upgrade their scope.

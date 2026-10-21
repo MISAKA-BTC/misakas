@@ -5940,7 +5940,7 @@ impl VirtualStateProcessor {
     /// takes — one place, so two call sites cannot disagree about what an error means.
     /// ADR-0088: the network domain every registry message is signed under — the same one a class
     /// registration is signed under.
-    pub(super) fn palw_network_domain_v2(&self) -> kaspa_hashes::Hash64 {
+    pub(in crate::pipeline::virtual_processor) fn palw_network_domain_v2(&self) -> kaspa_hashes::Hash64 {
         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash))
     }
 

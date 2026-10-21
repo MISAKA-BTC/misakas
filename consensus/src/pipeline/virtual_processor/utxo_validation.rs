@@ -424,12 +424,39 @@ impl VirtualStateProcessor {
     /// so the side-effect is byte-identical across construction and validation.
     /// Gated on `dns_activation_daa_score` (= 0 on every current network), so it
     /// runs from genesis today. (The gate is retained for any net that sets it > 0.)
+    pub(super) fn palw_funded_original_candidate_from_native_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        accepting_daa: u64,
+        validated: &ValidatedTransaction<'_>,
+    ) -> kaspa_consensus_core::palw_state_v2::PalwFundedOriginalCandidateV1 {
+        kaspa_consensus_core::palw_state_v2::palw_funded_original_candidate_v1(
+            state, self.palw_network_domain_v2(), accepting_daa, validated,
+        )
+    }
+
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
         &self,
         ctx: &mut UtxoProcessingContext,
         selected_parent_utxo_view: &V,
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
+    ) {
+        self.calculate_utxo_state_with_funded_candidates_v1(
+            ctx, selected_parent_utxo_view, selected_parent_bond_view, pov_daa_score, None,
+        );
+    }
+
+    /// Borrow branch PALW state only while actual native validated inputs live.
+    /// The snapshot is not an ordered accepted-prefix original coordinator;
+    /// diagnostics never create a funded row or alter ordinary UTXO acceptance.
+    pub(super) fn calculate_utxo_state_with_funded_candidates_v1<V: UtxoView + Sync>(
+        &self,
+        ctx: &mut UtxoProcessingContext,
+        selected_parent_utxo_view: &V,
+        selected_parent_bond_view: &ActiveBondView,
+        pov_daa_score: u64,
+        candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
     ) {
         let selected_parent_transactions = self.block_transactions_store.get(ctx.selected_parent()).unwrap();
         let validated_coinbase = ValidatedTransaction::new_coinbase(&selected_parent_transactions[0]);
@@ -589,6 +616,15 @@ impl VirtualStateProcessor {
             let mut block_fee = 0u64;
             let mut finality_fee = 0u64;
             for (validated_tx, _) in validated_transactions.iter() {
+                if let Some((state, accepting_daa)) = candidate_state {
+                    if kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(validated_tx.tx) {
+                        let diagnostic = self.palw_funded_original_candidate_from_native_v1(state, accepting_daa, validated_tx);
+                        // Full / selected-parent cached checks are not relabelled
+                        // as each other. Both leave the funded installer CLOSED.
+                        info!("PALW TFO1 ordinary carrier {}: funded candidate {:?}; selected-parent cached script checks {}",
+                            validated_tx.id(), diagnostic, is_selected_parent);
+                    }
+                }
                 ctx.mergeset_diff.add_transaction(validated_tx, pov_daa_score).unwrap();
                 ctx.accepted_tx_ids.push(validated_tx.id());
 

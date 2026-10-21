@@ -465,6 +465,14 @@ pub(crate) fn palw_tir_public_frame_fixture_two_tile_v1() -> PalwTirPublicFrameF
     tests::two_tile_frame()
 }
 
+/// Native-derived constrained frame over the real tiny registered program.
+/// Signature/payment setup remains the same explicit verified-half fixture.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_constraint_frame_fixture_v1()->(PalwTirPublicFrameFixtureV1,
+    crate::palw_class_semantics_v1::PalwClassSemanticsV1,crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+    tests::constraint_frame()
+}
+
 /// **G14 G-T2 test support:** [`palw_tir_public_frame_fixture_v1`] over a job `edit_job` shapes (a seeded V3 job, a V4 job with
 /// penalties or stop sequences, ...), whose execution decodes by THAT job's own selection rule — except at decode position
 /// `wrong_at`, where it commits the best lane the rule does not choose (a selection violation over honest arithmetic).
@@ -591,6 +599,14 @@ mod tests {
         maximum_custodians: u64,
         output_root: Option<Hash64>,
     ) -> super::PalwTirPublicFrameFixtureV1 {
+        frame_from_execution_with_semantics(x,job,maximum_custodians,output_root,None)
+    }
+    fn frame_from_execution_with_semantics(
+        x:crate::palw_tir_court_v1::test_support::TinyExecution,
+        job:crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        maximum_custodians:u64,output_root:Option<Hash64>,
+        semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    )->super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_public_allocation_v1::*;
         let binding = x.binding.clone();
@@ -629,7 +645,7 @@ mod tests {
             clock: crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock,
         };
         let PalwTirPublicAllocationQuoteV1::Complete(plan) =
-            derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, None, None, rules).unwrap()
+            derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, semantics, None, rules).unwrap()
         else {
             panic!("fixture requires a real native generic arithmetic quote")
         };
@@ -690,7 +706,7 @@ mod tests {
             &geometry,
             &record,
             &layout,
-            None,
+            semantics,
             None,
             rules,
             &BTreeSet::new(),
@@ -700,6 +716,50 @@ mod tests {
         .unwrap();
         super::PalwTirPublicFrameFixtureV1 { frame, record, layout, execution: x, rules, object }
     }
+    pub(super) fn constraint_frame()->(super::PalwTirPublicFrameFixtureV1,
+        crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+        crate::palw_fp_constraint_job_v1::PalwTokenTableV1) {
+        use crate::palw_freeprompt_v3::*;
+        use crate::palw_fp_execution_v3::{PalwFpClassFactsV3,PalwFpRunFactsV3};
+        let honest=crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let class_id=honest.binding.class.class_id(&honest.binding.artifact_root);
+        let (_,accusation)=crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
+        let mut job=accusation.job;
+        job.class_id=class_id;job.tokenizer_id=honest.binding.class.tokenizer_id;
+        job.prompt_tokens=honest.prompt.len() as u32;
+        job.prompt_token_ids_hash=crate::palw_v2::prompt_token_ids_hash_v2(&honest.prompt);
+        job.decode_token_limit=honest.generated.len() as u32;job.max_context_tokens=64;
+        // All real eight-word registered lanes render an inadmissible first byte
+        // under the existing bracket/digit constraint. Arithmetic remains real;
+        // the semantic court must detect this deliberately bad selection.
+        let table=crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+            entries:vec![Some(b"x".to_vec());honest.rows[0].len()],
+            eog_token_ids:vec![(honest.generated[0]+1) % honest.rows[0].len() as u32],tokenizer_id:job.tokenizer_id,
+        };
+        let Some(PalwFpJobTailV1::Constraint(tail))=job.tail.as_mut() else {panic!("constraint job")};
+        tail.table_root=table.root();
+        let class=PalwFpClassFactsV3 {model_profile_id:Hash64::default(),runtime_manifest_hash:Hash64::default(),
+            runtime_class_id:Hash64::default(),shape_profile_id:class_id,cu_ruleset_id:Hash64::default()};
+        let facts=PalwFpRunFactsV3 {decode_tokens_executed:job.decode_token_limit,
+            stop_reason:PalwFpStopReasonV3::ExactBudgetReached,full_logits_trace_root:Hash64::default(),
+            activation_leg_root:Hash64::default(),checkpoint_leg_root:Hash64::default(),step_leg_root:Hash64::default(),
+            step_leaf_count:honest.hashes.len() as u64};
+        let context=crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job,&class,&facts,b"testnet-12").unwrap();
+        let rule=crate::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {sampling:job.sampling_v2()};
+        let select=|_:u32,row:&[i32],before:&[u32]|crate::palw_tir_court_v1::test_support::select_by_rule(&rule,row,before,false);
+        let x=crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_,_,_|context.clone(),None,&select);
+        let semantics=crate::palw_class_semantics_v1::PalwClassSemanticsV1 {
+            version:1,class_id,artifact_root:x.binding.artifact_root,bound_from_daa:0,
+            model_profile_id:context.model_profile_id,runtime_manifest_hash:context.runtime_manifest_hash,
+            runtime_class_id:context.runtime_class_id,tokenizer_id:context.tokenizer_id,cu_ruleset_id:context.cu_ruleset_id,
+            token_table_root:Some(table.root()),rendering_rule:None,raw_tokenizer_bytes:None,
+            tokenizer_key_events:None,prefix_state_relation:None,
+        };
+        let frame=frame_from_execution_with_semantics(x,job,1,None,Some(&semantics));
+        assert!(frame.frame.plan_v1().semantic.is_some());
+        (frame,semantics,table)
+    }
+
     /// Actual golden GQA execution with history reductions, re-committed under the public job context.
     pub(super) fn history_frame() -> super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};

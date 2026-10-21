@@ -201,7 +201,7 @@ mod tests {
             funding_output_index: 0,
             funding_amount_sompi: 150,
             payer_key_id: payer,
-            refund_payload: payer,
+            refund_payload: kaspa_hashes::blake2b_512_address_payload(&public),
             nonce: h(11),
         };
         let signature = libcrux_ml_dsa::ml_dsa_87::sign(
@@ -217,7 +217,7 @@ mod tests {
         let tx = crate::tx::Transaction::new(
             0,
             vec![crate::tx::TransactionInput::new(crate::tx::TransactionOutpoint::new(h(77), 0), Vec::new(), 0, 0)],
-            vec![crate::tx::TransactionOutput::new(150, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&payer.as_bytes()))],
+            vec![crate::tx::TransactionOutput::new(150, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&public).as_bytes()))],
             0,
             crate::subnets::SUBNETWORK_ID_NATIVE,
             0,

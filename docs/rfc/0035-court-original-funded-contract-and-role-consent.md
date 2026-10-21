@@ -87,6 +87,8 @@ original carrier transactionの実入力から、元のbond/予約資本・既�
 
 実出力との照合は既存version0の厳密なpayer P2PKH-MLDSA87 fallbackだけを認める。未知script version、OP_TRUE、別出力、異なる額/返還鍵を準備成功としない。payer署名とnative expected scopeを検査したopaque preparationも、UTXO検証済み・lock済み・全graph導出済み・actor同意済み・funded original受付済みではない。expected scopeのDTOをpeer入力から作るだけではnative導出にならない。
 
+**2026-10-22 native回帰での実装修正:** `payer_key_id`（既存unkeyed `mldsa87_key_id`）とnative P2PKH address payload（domain付き `blake2b_512_address_payload`）は異なる。前者を出力先と同一視すると、同じpayer鍵でもfallbackを支出できない。鍵ID・wire field・署名domainは変更せず、実payer公開鍵から鍵IDとnative addressを別々に導出し、署名済み`refund_payload`と実funding outputを後者へ一致させる。他者の返還先、旧unkeyed payloadの出力はpayer自身が署名しても認めない。これは上記payer回収可能性を満たすbugfixであり、別返還先や新金融方式の採択ではない。過去のhelper成功だけでは実script支出を検査できていなかった。失敗と修正の検証状況は[保存記録](../evidence/palw/g14-completion-2026-10-22/material-and-native-candidate.md)を参照する。
+
 同carrierのpopulated input/outputからchecked differenceを求め、一つのfee budget上でallocation identityの重複と合計超過を拒否する。これは実UTXO viewの供給と通常script検証、nativeでのallocation適格性、burn/collectibleの更新を代替しない。個別helperを呼び直して別budgetを作る経路で保存則を迂回させないことが、将来coordinatorの責務として残る。
 
 accepted transactionのobject extractionでは、既存history/TIR fenceとは独立してTFO1を拒否し、内包TFP1を旧originalとして受理しない。通常carrierのUTXO/feeは残り得るが、rooted escrow残高を作らない。新rooted row、同mergeset lock、停止Minerに依存しない適格支出、全分岐の原子的受付・精算は未接続である。第一段階の署名・codec・実出力検査を、Aの実escrow確保やG14完了とは扱わない。

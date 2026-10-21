@@ -1,0 +1,8 @@
+
+running 3 tests
+test palw_constraint_stream_court_v1::tests::ordered_public_stream_matches_direct_court_fault_and_honest_refusal ... ok
+test palw_constraint_stream_court_v1::tests::wrong_seed_root_skip_corrupt_prefix_and_incomplete_leaf_never_convict ... ok
+test palw_constraint_stream_court_v1::tests::canonical_constraint_material_replay_matches_distinct_legal_partitions ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4735 filtered out; finished in 0.22s
+

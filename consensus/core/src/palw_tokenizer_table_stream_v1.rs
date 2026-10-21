@@ -501,6 +501,172 @@ mod tests {
         changed.length = 2;
         assert!(changed.finish().is_err());
     }
+    // Primitive-only replay invariance, NOT equality of old signed moves,
+    // prices, retention, clocks, custody duties or complete-original admission.
+    fn replay_fixture(raw: &[u8], table_bytes: &[u8]) -> PalwTokenizerTableStreamV1 {
+        let context = Hash64::from_u64_word(18);
+        PalwTokenizerTableStreamV1 {
+            context,
+            signed_key_bound: 512,
+            signed_raw_length: raw.len() as u64,
+            operand_raw_length: raw.len() as u64,
+            parser: PalwTokenizerJsonStreamV1::new(
+                context,
+                crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw),
+                raw.len() as u64,
+                0,
+            ),
+            table: digest_stream(Some(table_bytes)),
+        }
+    }
+    fn replay_atoms(
+        base: &PalwTokenizerTableStreamV1,
+        raw: &[u8],
+        bytewise: bool,
+    ) -> Result<Vec<PalwTokenizerStreamPacketV1>, String> {
+        use crate::palw_tokenizer_json_stream_v1::tests::Book;
+        let mut book = Book::new();
+        let mut probe = base.clone();
+        let mut out = Vec::new();
+        while probe.tokenizer_offset() < raw.len() as u64 || probe.pending_key().is_some() {
+            let offset = probe.tokenizer_offset();
+            let packet = if let Some((namespace, key)) = probe.pending_key() {
+                let compact = PalwJsonKeyCompactProofV1::compress(&book.proof(namespace, key))
+                    .map_err(|e| format!("plan compact proof: {e}"))?;
+                let packet = PalwTokenizerStreamPacketV1 {
+                    offset,
+                    bytes: vec![],
+                    proofs: vec![compact],
+                };
+                probe
+                    .packet(base.context, &packet)
+                    .map_err(|e| format!("plan native packet: {e}"))?;
+                book.insert(namespace, key);
+                out.push(packet);
+                continue;
+            } else {
+                let mut parser = probe.parser.clone();
+                let maximum = if bytewise { 1 } else { 65536 };
+                let end = (offset as usize + maximum).min(raw.len());
+                let consumed = parser
+                    .push(base.context, offset, &raw[offset as usize..end])
+                    .map_err(|e| format!("plan native parser: {e}"))?;
+                if consumed == 0 {
+                    return Err("plan native parser made no progress".into());
+                }
+                PalwTokenizerStreamPacketV1 {
+                    offset,
+                    bytes: raw[offset as usize..offset as usize + consumed].to_vec(),
+                    proofs: vec![],
+                }
+            };
+            probe
+                .packet(base.context, &packet)
+                .map_err(|e| format!("plan native packet: {e}"))?;
+            out.push(packet);
+        }
+        Ok(out)
+    }
+    fn fixture_maximal_packet(
+        atoms: &[PalwTokenizerStreamPacketV1],
+    ) -> Vec<PalwTokenizerStreamPacketV1> {
+        // This nonempty fixture's ENTIRE authenticated file and every necessary
+        // proof fit one legal carrier. Thus this is maximal for these materials,
+        // not an asserted general-purpose packet planner or upper-bound closure.
+        let mut packet = PalwTokenizerStreamPacketV1 {
+            offset: 0,
+            bytes: vec![],
+            proofs: vec![],
+        };
+        for p in atoms {
+            packet.bytes.extend_from_slice(&p.bytes);
+            packet.proofs.extend(p.proofs.clone());
+        }
+        assert!(!packet.bytes.is_empty() && !packet.proofs.is_empty());
+        assert!(packet.bytes.len() <= 65536 && packet.proofs.len() <= 64);
+        assert!(borsh::to_vec(&packet).unwrap().len() <= 90000);
+        vec![packet]
+    }
+    fn run_replay(
+        base: &PalwTokenizerTableStreamV1,
+        packets: &[PalwTokenizerStreamPacketV1],
+        rendering: &[u8],
+        small: bool,
+    ) -> Result<
+        (
+            bool,
+            Option<PalwTokenizerRenderingDigestV1>,
+            u64,
+            PalwTokenizerTableStreamV1,
+        ),
+        String,
+    > {
+        let mut c = base.clone();
+        for p in packets {
+            c.packet(base.context, p)?;
+        }
+        c.seal_tokenizer(base.context)?;
+        let chunk = if small { 1 } else { 65536 };
+        for part in rendering.chunks(chunk) {
+            c.rendering_part(base.context, c.rendering_offset(), part)?;
+        }
+        Ok((c.finish()?, c.table.finish()?, c.key_events(), c))
+    }
+    #[test]
+    fn canonical_material_replay_matches_distinct_legal_packetizations() {
+        let raw = br#"{"model":{"vocab":{"A":0,"B":1},"merges":[]},"added_tokens":[]}"#;
+        for table_bytes in [b"A".as_slice(), b"X".as_slice()] {
+            let base = replay_fixture(raw, table_bytes);
+            let atoms = replay_atoms(&base, raw, false).unwrap();
+            let canonical = fixture_maximal_packet(&atoms);
+            let alternative = replay_atoms(&base, raw, true).unwrap();
+            assert!(
+                alternative
+                    .iter()
+                    .any(|p| p.bytes.is_empty() && !p.proofs.is_empty())
+            );
+            assert!(alternative.len() > canonical.len());
+            let a = run_replay(&base, &canonical, table_bytes, false).unwrap();
+            let b = run_replay(&base, &alternative, table_bytes, true).unwrap();
+            assert_eq!(a.0, b.0);
+            assert_eq!(a.1, b.1);
+            assert_eq!(a.2, b.2);
+            assert!(a.2 > 0);
+            assert_eq!(a.0, table_bytes != b"A");
+            assert!(a.3.same_contract_v1(&b.3) && a.3.same_contract_v1(&base));
+            for mut packets in [canonical.clone(), alternative.clone()] {
+                let p = packets.iter_mut().find(|p| !p.proofs.is_empty()).unwrap();
+                p.proofs[0].siblings.push(Hash64::default());
+                assert!(run_replay(&base, &packets, table_bytes, false).is_err());
+            }
+            assert!(run_replay(&base, &canonical, b"Q", false).is_err());
+            assert!(run_replay(&base, &alternative, b"Q", true).is_err());
+        }
+        let base = replay_fixture(raw, b"A");
+        let mut unauthenticated = raw.to_vec();
+        let i = unauthenticated.iter().position(|b| *b == b'B').unwrap();
+        unauthenticated[i] = b'C';
+        for small in [false, true] {
+            match replay_atoms(&base, &unauthenticated, small) {
+                Err(stage) => assert!(
+                    stage.starts_with("plan "),
+                    "native planning refusal must be explicit: {stage}"
+                ),
+                Ok(atoms) => {
+                    let packets = if small {
+                        atoms
+                    } else {
+                        fixture_maximal_packet(&atoms)
+                    };
+                    assert!(
+                        run_replay(&base, &packets, b"A", small).is_err(),
+                        "unauthenticated raw must never expose a semantic result"
+                    );
+                }
+            }
+        }
+    }
+
 }
 
 // Read-only native allocation inventory; no state/root/codec field is added.

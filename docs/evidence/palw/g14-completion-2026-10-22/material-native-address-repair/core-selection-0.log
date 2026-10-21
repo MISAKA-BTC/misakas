@@ -1,0 +1,10 @@
+
+running 5 tests
+test palw_court_original_escrow_v1::tests::actual_amount_index_unknown_version_free_script_and_stale_txid_are_refused ... ok
+test palw_court_original_escrow_v1::tests::signature_length_is_rejected_before_reading_any_signature_allocation_body ... ok
+test palw_court_original_escrow_v1::tests::cross_network_profile_graph_scope_key_and_underfunding_are_refused ... ok
+test palw_court_original_escrow_v1::tests::real_signature_actual_own_output_and_native_scope_prepare_without_funding_state ... ok
+test palw_court_original_escrow_v1::tests::payer_identity_is_not_the_native_address_and_unspendable_refunds_are_refused ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 4734 filtered out; finished in 0.00s
+

@@ -255,3 +255,6 @@ mod prompt_material_tests {
         assert!(check_prompt_material(&ctx,PromptForm::MerkleV1,PromptMaterialV1::Merkle(&tiles)).is_err());
     }
 }
+
+#[path = "palw_court_shared_constraint_builder_v1.rs"]
+pub(crate) mod constraint_terminal;

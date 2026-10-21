@@ -126,7 +126,7 @@ impl PalwTirFundedOriginalEnvelopeV1 {
         }
         let t = &self.funding.terms;
         let facts = inspect_transaction_v1(tx, t.funding_output_index).map_err(|e| format!("{e:?}"))?;
-        self.funding.check_actual_output_v1(&facts).map_err(|e| format!("{e:?}"))?;
+        self.funding.check_actual_output_v1(&facts, &self.payer_pubkey).map_err(|e| format!("{e:?}"))?;
         Ok(facts)
     }
 }
@@ -180,7 +180,7 @@ mod tests {
                 funding_output_index: 1,
                 funding_amount_sompi: 1000,
                 payer_key_id: payer,
-                refund_payload: payer,
+                refund_payload: kaspa_hashes::blake2b_512_address_payload(&key),
                 nonce: h(7),
             },
             signature: vec![8; MLDSA87_SIGNATURE_LEN],
@@ -193,7 +193,7 @@ mod tests {
             vec![TransactionInput::new(TransactionOutpoint::new(h(99), 0), vec![], 0, 0)],
             vec![
                 TransactionOutput::new(1, ScriptPublicKey::default()),
-                TransactionOutput::new(1000, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&e.funding.terms.payer_key_id.as_bytes())),
+                TransactionOutput::new(1000, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&e.payer_pubkey).as_bytes())),
             ],
             0,
             crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
