@@ -33,6 +33,32 @@ fn same_contract(a:&PalwCourtCloseGroupV2,b:&PalwCourtCloseGroupV2)->bool {
         && a.assembly_deadline_daa==b.assembly_deadline_daa && a.deposit_outpoint==b.deposit_outpoint && a.deposit==b.deposit
 }
 fn refusal(message:impl Into<String>)->PalwStateV2Error {PalwStateV2Error::CarriageInconsistent(message.into())}
+
+/// Inspection of the current native chunk event, not a peer-supplied point or
+/// a financial capability. The native dispatcher has not yet installed public
+/// archive intake. Completion, v5 adjudication and funded qualification remain
+/// separate requirements. No serialization/Clone/from-bool construction path.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(super) struct InspectedArchivedNativeChunkV1 {
+    state_root:Hash64,
+    session_id:Hash64,
+    side:PalwCourtSideV1,
+    index:u8,
+    chunk_digest:Hash64,
+    point:PalwBlockContextV2,
+    assembly_deadline_daa:u64,
+}
+#[allow(dead_code)]
+impl InspectedArchivedNativeChunkV1 {
+    pub(super) fn matches_state(&self,state:&PalwChainStateV2)->bool{self.state_root==state.state_root()}
+    pub(super) fn point(&self)->PalwBlockContextV2{self.point}
+    pub(super) fn assembly_deadline_daa(&self)->u64{self.assembly_deadline_daa}
+    pub(super) fn matches_chunk(&self,id:Hash64,side:PalwCourtSideV1,index:u8,bytes:&[u8])->bool{
+        self.session_id==id && self.side==side && self.index==index
+            && self.chunk_digest==palw_court_close_chunk_digest_v1(bytes)
+    }
+}
 /// Local construction limits must never turn a valid proof into misconduct.
 /// Syntax/truncation remains a semantic refusal; budget/OOM is retryable local
 /// NativeResource, including the wire reader's actual CPU/arithmetic limits.
@@ -42,6 +68,55 @@ pub(super) fn inspection_io_error(stage:&str,error:std::io::Error)->PalwStateV2E
     }else{refusal(format!("{stage}: {error}"))}
 }
 impl TransitionBuilder<'_> {
+    /// Inspect the point/object pair captured by the actual native wrapper.
+    /// Never infer an accepting point from last_point (still the parent while
+    /// a block is being built), a supplied timestamp or an old material append.
+    /// This neither appends bytes nor marks an obligation fulfilled.
+    #[allow(dead_code)]
+    pub(super) fn inspect_archived_native_chunk_v1(&mut self)->Result<InspectedArchivedNativeChunkV1,PalwStateV2Error>{
+        use crate::palw_court_end_archive_v1::CourtEndEvidenceV1;
+        let Some(CourtEndEvidenceV1::Native {point,object})=self.court_end_evidence.as_deref()
+            else{return Err(refusal("archived chunk lacks the current native event"));};
+        let PalwConsensusObjectV2::CourtCloseChunk {session_id,side,index,bytes}=object.as_ref()
+            else{return Err(refusal("current native event is not an archived close chunk"));};
+        let archive=self.state.court_end_archive_v1(*session_id).ok_or_else(||refusal("court archive missing"))?;
+        archive.check_context(&self.state).map_err(refusal)?;
+        let group=archive.groups.get(side).ok_or_else(||refusal("archived declaration missing"))?;
+        if archive.fulfilled_groups.contains(side) || archive.applied_deposit_debits.contains_key(side)
+            || *index>=group.count || group.has(*index) || bytes.is_empty() || bytes.len()>PALW_COURT_CLOSE_CHUNK_MAX_BYTES
+            || palw_court_close_chunk_digest_v1(bytes)!=group.chunk_digests[usize::from(*index)]
+        {return Err(refusal("native archived chunk is not missing declared material"));}
+        let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(*session_id,*side)) {
+            Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>return Err(refusal("original signed close receipt missing")),
+        };
+        let deadline=receipt.point.daa_score.checked_add(palw_close_assembly_daa_v1(group.count))
+            .ok_or_else(||refusal("original signed assembly deadline overflow"))?;
+        let binding=self.state.court_service_state_v1().and_then(|s|s.claims.get(&archive.session.claim))
+            .ok_or_else(||refusal("archive original binding missing"))?;
+        let ended_at=match archive.evidence.as_ref(){
+            CourtEndEvidenceV1::Native {point,..}|CourtEndEvidenceV1::TirConviction {point,..}=>Some(point.daa_score),
+            CourtEndEvidenceV1::Uncaptured=>None,
+        };
+        if deadline!=group.assembly_deadline_daa || point.daa_score<receipt.point.daa_score
+            || point.daa_score>deadline || point.daa_score>receipt.session.deadline_daa
+            || point.daa_score>binding.hard_deadline_daa
+            || ended_at.is_some_and(|ended|point.daa_score<ended)
+            || self.state.last_point().is_some_and(|parent|point.daa_score<parent.daa_score)
+        {return Err(refusal("native archived chunk is outside its original signed window"));}
+        let inspected=InspectedArchivedNativeChunkV1 {state_root:self.state.state_root(),session_id:*session_id,
+            side:*side,index:*index,chunk_digest:group.chunk_digests[usize::from(*index)],point:*point,assembly_deadline_daa:deadline};
+        if self.native_writers_tracking_v1(){
+            let mut q=native_writers::NativeWriteQuoteV1::new("archived native chunk original signature before buffers");
+            q.exact::<Hash64>(2*u64::from(group.count))?.exact::<u8>(256)?;
+            self.admit_native_write_v1(q)?;
+        }
+        let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(inspected.session_id,inspected.side)) {
+            Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>unreachable!(),
+        };
+        receipt.check_context(&self.state).map_err(refusal)?;
+        Ok(inspected)
+    }
+
     /// Retain only a missing precommitted chunk after active court termination.
     /// This private material path admits no new declaration, clock, fulfilment,
     /// penalty or financial release. A completed malformed object is evidence to

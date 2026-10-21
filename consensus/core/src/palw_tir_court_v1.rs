@@ -53,6 +53,8 @@
 //! **The check order is normative** (the verdict and its evidence id must be the same on every
 //! implementation): see [`check_tir_cone_refutation_v1`].
 
+pub mod parameter_cover;
+
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},

@@ -107,6 +107,7 @@
 - [ADR-0194 — 休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md)
 - [ADR-0196 — owner 非依存の TIR 要求と認証済み公開データ](0196-owner-independent-shared-tir-query-data.md)
 - [ADR-0200 — D2 readiness rootの認証path供給](0200-d2-readiness-root-opening-availability.md)
+- [ADR-0201 — archived closeの期限内実受付と責任解消](0201-archived-close-qualified-financial-discharge.md)
 
 ## EVM / wallet
 

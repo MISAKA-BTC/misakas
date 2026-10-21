@@ -25,3 +25,8 @@ Bのrootとleaf数だけから、外部検証者はseatがcommitしたdigestと�
 偽digest rootだけを公開してopeningを拒むseat、全外部枠の共謀/再充填、外部一人の要求、誤path/別draw/別署名、サービス未供給時のno-slash、restart/reorg/pruned IBD、全資本/保持、最遅受付・全deadline境界を実native/nodeで確認する。C2なら全materialの欠落・部分公開・資金不足の拒否と再取得を含む。いずれもpure codec試験だけでは完了しない。
 
 未決のdraw上限・応答期間・料金・保持義務を仮値で埋めない。本番採択・pre統合・武装・配備は別の承認を要する。
+
+
+## C1の詳細仕様化・隔離実装承認 — 2026-10-21
+
+利用者はC1（F02のdigest/path開示court）を選択した。上の未選択記述は当時の履歴である。literal signer・実供給とno-slash経路・全draw分岐の原資/予約へ接続する。draw上限・本番料金・保持義務の採択、pre統合・武装・配備、モデル審査の導入は含まない。

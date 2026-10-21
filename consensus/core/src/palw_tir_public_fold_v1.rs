@@ -4190,6 +4190,35 @@ mod conviction_e2e_tests {
             super::super::objects::apply_object(&mut b,&at(&frame,6),&PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:0,bytes:raw[..split].to_vec()}).unwrap();
             super::super::objects::apply_object(&mut b,&at(&frame,7),&correct).unwrap();
             assert!(b.state.court_session(&id).is_none());
+            // Inspect an internal native event pair, without opening public
+            // archive ingress or declaring this material fulfilled. The actual
+            // chunk dispatcher still refuses a terminated active session.
+            {
+                let root=b.state.state_root();let entries=b.entries.len();
+                assert!(b.inspect_archived_native_chunk_v1().is_err(),"no current native event");
+                let group=&b.state.court_end_archive_v1(id).unwrap().groups[&side];
+                let deadline=group.assembly_deadline_daa;
+                let chunk=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:raw[split..].to_vec()};
+                for (daa,expected) in [(deadline-1,true),(deadline,true),(deadline+1,false)] {
+                    let point=at(&frame,daa-frame.plan_v1().terms.accepted_daa);
+                    assert!(super::super::objects::apply_object(&mut b,&point,&chunk).is_err(),"public archive intake stays closed");
+                    b.prepare_native_court_end_cause_v1(&point,&chunk).unwrap();
+                    let result=b.inspect_archived_native_chunk_v1();
+                    assert_eq!(result.is_ok(),expected);
+                    if let Ok(token)=result {
+                        assert_eq!(token.point(),point);assert_eq!(token.assembly_deadline_daa(),deadline);
+                        assert!(token.matches_state(&b.state));assert!(token.matches_chunk(id,side,1,&raw[split..]));
+                        assert!(!token.matches_chunk(id,side,0,&raw[split..]));
+                        let mut changed=b.state.clone();changed.last_point=Some(point);assert!(!token.matches_state(&changed));
+                    }
+                    b.court_end_evidence=None;
+                    assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),entries);
+                }
+                b.prepare_native_court_end_cause_v1(&at(&frame,7),&correct).unwrap();
+                assert!(b.inspect_archived_native_chunk_v1().is_err(),"another native object is no chunk receipt");
+                b.court_end_evidence=None;
+                assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),entries);
+            }
             let mut candidate=b.state.court_end_archive_v1(id).unwrap().groups[&side].clone();
             candidate.chunks.insert(1,raw[split..].to_vec());candidate.present=PalwCourtCloseGroupV2::full_mask(2);
             let root=b.state.state_root();let journal=b.entries.len();

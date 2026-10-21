@@ -1538,6 +1538,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0201",
+      "path": "docs/adr/0201-archived-close-qualified-financial-discharge.md",
+      "title": "ADR-0201 — archived closeの期限内実受付と責任解消",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1798,6 +1806,14 @@
       "number": "0033",
       "path": "docs/rfc/0033-d2-readiness-root-opening-availability.md",
       "title": "RFC-0033 — D2 readiness rootのdigest opening取得",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0034",
+      "path": "docs/rfc/0034-archived-close-qualified-financial-discharge.md",
+      "title": "RFC-0034 — archived closeの実受付と金融責任の適格解消",
       "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
     }

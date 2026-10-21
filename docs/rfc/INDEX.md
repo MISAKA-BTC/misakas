@@ -39,3 +39,4 @@
 | RFC-0031 | [共有courtのinitial notice境界](0031-shared-court-initial-notice-boundary.md) | 原文と後続改定を参照 |
 | RFC-0032 | [共有courtの終端materialと非独占提出](0032-shared-court-terminal-material-and-nonblocking-ingress.md) | 原文と後続改定を参照 |
 | RFC-0033 | [D2 readiness rootのdigest opening取得](0033-d2-readiness-root-opening-availability.md) | 原文と後続改定を参照 |
+| RFC-0034 | [archived closeの実受付と金融責任の適格解消](0034-archived-close-qualified-financial-discharge.md) | 原文と後続改定を参照 |

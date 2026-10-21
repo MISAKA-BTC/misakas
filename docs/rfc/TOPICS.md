@@ -11,6 +11,7 @@
 - [RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0023-unresolved-claim-liability-and-independent-progress.md)
 - [RFC-0029 — owner-independent shared TIR query data](0029-owner-independent-shared-tir-query-data.md)
 - [RFC-0033 — D2 readiness rootのdigest opening取得](0033-d2-readiness-root-opening-availability.md)
+- [RFC-0034 — archived closeの実受付と金融責任の適格解消](0034-archived-close-qualified-financial-discharge.md)
 
 ## EVM / wallet
 

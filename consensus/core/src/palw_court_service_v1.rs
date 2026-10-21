@@ -4,6 +4,8 @@
 //! packet set from an adopted profile, including every allowed hostile branch.
 //! A successful reservation does not establish network/inclusion assumptions.
 
+pub mod causal;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
 
