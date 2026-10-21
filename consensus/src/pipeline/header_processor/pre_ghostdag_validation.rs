@@ -8,7 +8,6 @@ use kaspa_consensus_core::BlockLevel;
 use kaspa_consensus_core::blockhash::BlockHashExtensions;
 use kaspa_consensus_core::blockstatus::BlockStatus::StatusInvalid;
 use kaspa_consensus_core::header::Header;
-use kaspa_core::time::unix_now;
 use kaspa_database::prelude::StoreResultExt;
 
 impl HeaderProcessor {
@@ -39,6 +38,13 @@ impl HeaderProcessor {
 
     pub(super) fn validate_parent_relations(&self, header: &Header) -> BlockProcessResult<()> {
         self.check_parents_exist(header)?;
+        if self.max_block_parents.activation() != kaspa_consensus_core::config::params::ForkActivation::never() {
+            let parent = self.ghostdag_manager.find_selected_parent(header.direct_parents().iter().copied());
+            let limit = self.max_block_parents.get(self.headers_store.get_daa_score(parent).unwrap()) as usize;
+            if header.direct_parents().len() > limit {
+                return Err(RuleError::TooManyParents(header.direct_parents().len(), limit));
+            }
+        }
         self.check_parents_incest(header)?;
         self.check_round_lane_parents(header)?;
         Ok(())
@@ -587,7 +593,7 @@ pub(crate) fn palw_carriage_stateless_v1(
 impl HeaderProcessor {
     fn check_block_timestamp_in_isolation(&self, header: &Header) -> BlockProcessResult<()> {
         // Timestamp deviation tolerance is in seconds so we multiply by 1000 to get milliseconds (without BPS dependency)
-        let max_block_time = unix_now() + self.timestamp_deviation_tolerance * 1000;
+        let max_block_time = self.validation_now() + self.timestamp_deviation_tolerance * 1000;
         if header.timestamp > max_block_time {
             return Err(RuleError::TimeTooFarIntoTheFuture(header.timestamp, max_block_time));
         }
@@ -599,7 +605,7 @@ impl HeaderProcessor {
             return Err(RuleError::NoParents);
         }
 
-        let max_block_parents = self.max_block_parents as usize;
+        let max_block_parents = self.max_block_parents.upper_bound() as usize;
         if header.direct_parents().len() > max_block_parents {
             return Err(RuleError::TooManyParents(header.direct_parents().len(), max_block_parents));
         }

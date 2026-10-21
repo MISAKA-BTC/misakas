@@ -1141,7 +1141,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
         // We use +1 because low_hash is also returned
         // max_blocks MUST be >= mergeset_size_limit + 1
-        let max_blocks = self.config.mergeset_size_limit() as usize + 1;
+        let max_blocks = self.config.mergeset_size_limit_history().upper_bound() as usize + 1;
         let (block_hashes, high_hash) = session.async_get_hashes_between(low_hash, sink_hash, max_blocks).await?;
 
         // If the high hash is equal to sink it means get_hashes_between didn't skip any hashes, and
@@ -3361,55 +3361,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwForkChoiceOpeningRequest,
     ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
-        use kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1;
-        // Parsed before a byte of chain state is read: a malformed hash, or too many, is an error.
-        if request.block_hashes.len() > PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1 {
-            return Err(RpcError::General(format!(
-                "at most {PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1} block hashes per request (got {})",
-                request.block_hashes.len()
-            )));
-        }
-        let blocks =
-            request.block_hashes.iter().map(|text| parse_hash64(text.trim(), "blockHashes")).collect::<RpcResult<Vec<_>>>()?;
-        let unavailable = |reason: String| GetPalwForkChoiceOpeningResponse { available: false, reason, ..Default::default() };
+        use kaspa_rpc_core::convert::palw_fork_choice::{parse_request, response};
+        let (blocks, extras) = parse_request(&request)?;
         if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(unavailable("this network has no PALW V2 state".to_string()));
+            return Ok(response(Err("this network has no PALW V2 state".into())));
         }
         let session = self.consensus_manager.consensus().unguarded_session();
-        match session.spawn_blocking(move |c| c.palw_fork_choice_openings_v1(&blocks)).await {
-            Err(reason) => Ok(unavailable(reason)),
-            Ok(served) => Ok(GetPalwForkChoiceOpeningResponse {
-                available: true,
-                reason: String::new(),
-                sink: served.sink.to_string(),
-                tips: served.tips.iter().map(|t| t.to_string()).collect(),
-                entries: served
-                    .entries
-                    .into_iter()
-                    .map(|(block, entry)| match entry {
-                        Ok(e) => RpcPalwForkChoiceEntry {
-                            block_hash: block.to_string(),
-                            available: true,
-                            reason: String::new(),
-                            header: Some(RpcHeader::from(&e.header)),
-                            leaf: e.opening.leaf.encode(),
-                            inner_root: e.opening.inner_root.to_string(),
-                            committed_root: e.committed_root.to_string(),
-                            committed_form: e.committed_form,
-                        },
-                        Err(reason) => RpcPalwForkChoiceEntry { block_hash: block.to_string(), reason, ..Default::default() },
-                    })
-                    .collect(),
-                dns_overlay: served.dns_gate.is_some(),
-                dns_stage_active: served.dns_gate.is_some_and(|d| d.stage_active),
-                dns_confirmed_anchor: served
-                    .dns_gate
-                    .and_then(|d| d.confirmed_anchor)
-                    .map(|(anchor, _)| anchor.to_string())
-                    .unwrap_or_default(),
-                dns_confirmed_anchor_daa: served.dns_gate.and_then(|d| d.confirmed_anchor).map(|(_, daa)| daa).unwrap_or(0),
-            }),
-        }
+        Ok(response(session.spawn_blocking(move |c| c.palw_fork_choice_openings_v2(&blocks, &extras)).await))
     }
 
     // ------------------------------------------------------------------------------------------
@@ -3801,6 +3759,70 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             },
             Ok(None) => GetPalwRouterBindingV2Response::default(),
             Err(refusal) => return Err(RpcError::General(refusal)),
+        })
+    }
+
+    async fn get_palw_acceptance_reads_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwAcceptanceReadsRequest,
+    ) -> RpcResult<GetPalwAcceptanceReadsResponse> {
+        // Bounded and parsed before any read: at most 64 of each, 128-hex block hashes and `txid:index` outpoints.
+        if request.reserve_blocks.len() > 64 || request.outpoints.len() > 64 {
+            return Err(RpcError::General("at most 64 reserve blocks and 64 outpoints per request".into()));
+        }
+        let blocks = request.reserve_blocks.iter().map(|t| parse_hash64(t.trim(), "reserveBlocks")).collect::<RpcResult<Vec<_>>>()?;
+        let outpoints = request
+            .outpoints
+            .iter()
+            .map(|text| {
+                let (txid, index) =
+                    text.trim().rsplit_once(':').ok_or_else(|| RpcError::General(format!("outpoint {text}: not txid:index")))?;
+                let txid = <kaspa_consensus_core::tx::TransactionId as std::str::FromStr>::from_str(txid)
+                    .map_err(|e| RpcError::General(format!("outpoint {text}: {e}")))?;
+                let index = index.parse::<u32>().map_err(|e| RpcError::General(format!("outpoint {text}: {e}")))?;
+                Ok(kaspa_consensus_core::tx::TransactionOutpoint::new(txid, index))
+            })
+            .collect::<RpcResult<Vec<_>>>()?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        // The consensus method owns pruning protection and one virtual read
+        // lock; do not compose individually stamped convenience readers here.
+        let answer = session
+            .spawn_blocking(move |c| c.get_palw_acceptance_reads_v1(blocks, outpoints))
+            .await
+            .map_err(|e| RpcError::General(format!("PALW acceptance reads: {e}")))?;
+        Ok(GetPalwAcceptanceReadsResponse {
+            available: true,
+            sink: answer.sink.to_string(),
+            virtual_daa: answer.virtual_daa,
+            reserve_balances: answer
+                .reserve_balances
+                .into_iter()
+                .map(|(b, balance)| RpcPalwReserveBalance {
+                    block_hash: b.to_string(),
+                    known: balance.is_some(),
+                    balance_sompi: balance.unwrap_or(0),
+                })
+                .collect(),
+            outpoints: answer
+                .outpoints
+                .into_iter()
+                .map(|(outpoint, entry)| match entry {
+                    Some(e) => RpcPalwOutpointEntry {
+                        outpoint: format!("{}:{}", outpoint.transaction_id, outpoint.index),
+                        present: true,
+                        amount: e.amount,
+                        script_version: e.script_public_key.version(),
+                        script_hex: faster_hex::hex_string(e.script_public_key.script()),
+                        block_daa_score: e.block_daa_score,
+                        is_coinbase: e.is_coinbase,
+                    },
+                    None => RpcPalwOutpointEntry {
+                        outpoint: format!("{}:{}", outpoint.transaction_id, outpoint.index),
+                        ..Default::default()
+                    },
+                })
+                .collect(),
         })
     }
 
@@ -4729,7 +4751,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // this bounds by number of merged blocks, if include_accepted_transactions = true
         // else it returns the batch_size amount on pure chain blocks.
         // Note: batch_size does not bound removed chain blocks, only added chain blocks.
-        let batch_size = (self.config.mergeset_size_limit() * 10) as usize;
+        let batch_size = (self.config.mergeset_size_limit_history().upper_bound() * 10) as usize;
         let mut virtual_chain_batch = session.async_get_virtual_chain_from_block(request.start_hash, Some(batch_size)).await?;
 
         if let Some(min_confirmation_count) = request.min_confirmation_count
@@ -5459,7 +5481,7 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
         // sets to full by default
         let data_verbosity_level = request.data_verbosity_level.or(Some(RpcDataVerbosityLevel::Full));
         let verbosity: RpcAcceptanceDataVerbosity = data_verbosity_level.map(RpcAcceptanceDataVerbosity::from).unwrap_or_default();
-        let batch_size = (self.config.mergeset_size_limit() * 10) as usize;
+        let batch_size = (self.config.mergeset_size_limit_history().upper_bound() * 10) as usize;
 
         let mut chain_path = session.async_get_virtual_chain_from_block(request.start_hash, Some(batch_size)).await?;
 

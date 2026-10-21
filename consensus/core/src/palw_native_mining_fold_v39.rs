@@ -73,7 +73,7 @@ impl NativeModelTierSourceV39 for ModelTierV1SourceV39 {
     }
 }
 
-fn model(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeMiningModelRecordV39, PalwStateV2Error> {
+pub(super) fn model(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeMiningModelRecordV39, PalwStateV2Error> {
     let (root, m): (Digest, NativeMiningModelRecordV39) =
         read(r, MINING_MODEL_KIND_V39, id, 16384).ok_or_else(|| bad("mining39 original model absent"))?;
     if root != m.root() || m.version != 39 || m.model != *id {
@@ -81,19 +81,19 @@ fn model(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeMiningModelRec
     }
     Ok(m)
 }
-fn write_model(builder: &mut TransitionBuilder<'_>, m: &NativeMiningModelRecordV39) -> Result<(), PalwStateV2Error> {
+pub(super) fn write_model(builder: &mut TransitionBuilder<'_>, m: &NativeMiningModelRecordV39) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(TABLE, k(MINING_MODEL_KIND_V39, &m.model), Some(b(&(m.root(), m))))?;
     Ok(())
 }
-fn seat(r: &PalwKernelRouteStateV1, model: &Digest, bond: &PalwBondKeyV2) -> Option<NativeMiningSeatRecordV39> {
+pub(super) fn seat(r: &PalwKernelRouteStateV1, model: &Digest, bond: &PalwBondKeyV2) -> Option<NativeMiningSeatRecordV39> {
     let (root, s): (Digest, NativeMiningSeatRecordV39) = read(r, MINING_SEAT_KIND_V39, &(model, bond), 2048)?;
     (root == s.root() && s.version == 39 && s.model == *model && s.bond == *bond).then_some(s)
 }
-fn write_seat(builder: &mut TransitionBuilder<'_>, s: &NativeMiningSeatRecordV39) -> Result<(), PalwStateV2Error> {
+pub(super) fn write_seat(builder: &mut TransitionBuilder<'_>, s: &NativeMiningSeatRecordV39) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(TABLE, k(MINING_SEAT_KIND_V39, &(s.model, s.bond)), Some(b(&(s.root(), s))))?;
     Ok(())
 }
-fn claim(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeMiningClaimRecordV39, PalwStateV2Error> {
+pub(super) fn claim(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeMiningClaimRecordV39, PalwStateV2Error> {
     let (root, c): (Digest, NativeMiningClaimRecordV39) =
         read(r, MINING_CLAIM_KIND_V39, id, 16384).ok_or_else(|| bad("mining39 original claim absent"))?;
     if root != c.root() || c.version != 39 || c.id != *id {
@@ -101,7 +101,7 @@ fn claim(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeMiningClaimRec
     }
     Ok(c)
 }
-fn write_claim(builder: &mut TransitionBuilder<'_>, c: &NativeMiningClaimRecordV39) -> Result<(), PalwStateV2Error> {
+pub(super) fn write_claim(builder: &mut TransitionBuilder<'_>, c: &NativeMiningClaimRecordV39) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(TABLE, k(MINING_CLAIM_KIND_V39, &c.id), Some(b(&(c.root(), c))))?;
     Ok(())
 }
@@ -109,7 +109,7 @@ fn write_receipt(builder: &mut TransitionBuilder<'_>, r: &NativeMiningReceiptRec
     builder.write_kernel_row(TABLE, k(MINING_RECEIPT_KIND_V39, &r.id), Some(b(&(r.root(), r))))?;
     Ok(())
 }
-fn master_final(r: &PalwKernelRouteStateV1, master: &Digest) -> Option<NativeMasterFinalRecordV39> {
+pub(super) fn master_final(r: &PalwKernelRouteStateV1, master: &Digest) -> Option<NativeMasterFinalRecordV39> {
     let raw = r.aux.get(&(TABLE, borsh::to_vec(&(39u8, 83u8, master)).ok()?)).filter(|raw| raw.len() <= 64 << 10)?;
     let (root, f): (Digest, NativeMasterFinalRecordV39) = borsh::from_slice(raw).ok()?;
     (root == f.root() && f.version == 39 && f.master == *master).then_some(f)
@@ -117,7 +117,7 @@ fn master_final(r: &PalwKernelRouteStateV1, master: &Digest) -> Option<NativeMas
 
 /// The mining policy in force at `ctx`, with every prerequisite lane: native39 (the caller's `p`), Final27, the ADR-0176 budget,
 /// and RFC-0018 Gate C under the certification threshold the policy states its premise against.
-fn policy(builder: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<NativeMiningPolicyV39, PalwStateV2Error> {
+pub(super) fn policy(builder: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<NativeMiningPolicyV39, PalwStateV2Error> {
     let e = builder.extras.kernel_route.as_ref().ok_or_else(|| bad("mining39 route extras absent"))?;
     let f = e
         .native_mining39
@@ -228,7 +228,7 @@ fn register(
     {
         return Err(bad("mining39 registration sequence/share/policy/duplicate line/model capacity differs"));
     }
-    if !prepay(builder, ctx, signer, p, 65536, body.len())? {
+    if !prepay(builder, ctx, signer, p, 0, body.len())? {
         return Ok(());
     }
     let record = NativeMiningModelRecordV39 {
@@ -409,7 +409,7 @@ fn commit(
     }
     // The stages this producer actually produced, each credited at most once ever.
     let mut stages = Vec::new();
-    let mut restore = 65536u64;
+    let mut restore = 0u64;
     for c in &fin.components {
         let h = super::palw_native_job_fold_v39::header(r, c.original.job)?;
         if h.original.producer != *signer {
@@ -417,6 +417,10 @@ fn commit(
         }
         if r.aux.contains_key(&(TABLE, k(MINING_MASTER_USED_KIND_V39, &(w.master, c.original.stage)))) {
             return Err(bad("mining39 a Master stage is credited at most once"));
+        }
+        // G-N2: the component's material must still be retained (its collection 53 not yet run) for a post-Final accusation.
+        if super::palw_native_job_fold_v39::native_job_collected_v39(r, c.original.job)? {
+            return Err(bad("mining39 a credited component's material is already collected"));
         }
         restore = restore.saturating_add(h.source_bytes as u64);
         stages.push((c.original.stage, h.original.class, c.original.job));
@@ -484,6 +488,12 @@ fn commit(
     )?;
     for (stage, _, _) in &stages {
         builder.write_kernel_row(TABLE, k(MINING_MASTER_USED_KIND_V39, &(w.master, *stage)), Some(b(&id)))?;
+    }
+    // G-N2: hold every credited component's material through the claim's liability (collection 53 refused meanwhile).
+    let certification = builder.params.rfc0018_v1().map(|m| m.certification).ok_or_else(|| bad("mining39 requires RFC-0018"))?;
+    let until = palw_native_mining_liability_until_v39(ctx.daa_score, policy, &certification);
+    for (_, _, job) in &stages {
+        builder.write_kernel_row(TABLE, k(MINING_JOB_HOLD_KIND_V39, job), Some(b(&(id, until))))?;
     }
     m.live_claims += 1;
     s.live_claims += 1;
@@ -586,6 +596,12 @@ fn collect(
             if ctx.daa_score <= rc.expires && rc.spent_quanta < rc.price.quanta {
                 return Err(bad("mining39 receipt still live"));
             }
+            // G-N2: a rewarded claim stays accusable (and its material held) through its liability horizon.
+            let policy = policy(builder, ctx)?;
+            let certification = builder.params.rfc0018_v1().map(|m| m.certification).ok_or_else(|| bad("mining39 requires RFC-0018"))?;
+            if ctx.daa_score <= palw_native_mining_liability_until_v39(c.admitted_daa, &policy, &certification) {
+                return Err(bad("mining39 receipt's claim is still within its liability horizon"));
+            }
             (c.id, Some(rc))
         }
     };
@@ -599,6 +615,12 @@ fn collect(
         m.live_receipts = m.live_receipts.saturating_sub(1);
         builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score)?;
         builder.write_kernel_row(TABLE, k(MINING_RECEIPT_KIND_V39, &rc.id), None)?;
+    }
+    // G-N2: the claim leaves its liability: its material holds and its attestors' locks are released uncharged.
+    super::palw_native_job_fold_v39::release_mining_holds_v39(builder, &c)?;
+    super::palw_security_certification_fold_v1::release_native_attestor_locks_v39(builder, &c.claim_hash())?;
+    if let Some(rc) = &receipt {
+        builder.write_kernel_row(TABLE, k(MINING_RECEIPT_GRANTED_KIND_V39, &rc.id), None)?;
     }
     // A permanent tombstone keeps the claim id (and its used Master stages) from ever being re-credited.
     builder.write_kernel_row(TABLE, k(MINING_COLLECTED_KIND_V39, &c.id), Some(b(&(c.root(), c.closed, ctx.daa_score))))?;
@@ -628,6 +650,9 @@ pub(super) fn apply_native_receipt_block_v39(
     }
     if !crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39(builder.params, &builder.state, &c.claim_hash(), c.admitted_daa) {
         return Err(bad("mining39 receipt block's mining claim is not SecurityCertified (Gate C)"));
+    }
+    if crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&builder.state, &c.claim_hash()) {
+        return Err(bad("mining39 receipt block's mining claim has an open post-Final accusation (G-N2)"));
     }
     // RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`): the quantum's worker share settles once across
     // every consumer, whatever the receipt's own bitmap says — checked and written before the budget draw; a repeat is refused.
@@ -668,6 +693,9 @@ pub(super) fn apply_native_receipt_block_v39(
     let granted =
         builder.bond_budget_native_receipt_spend_v39(ctx, &native_mining_budget_id_v39(&c.id), rc.producer, policy.weight_per_quantum, last)?;
     builder.state.safe_weight = builder.state.safe_weight.checked_add(granted).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
+    // G-N2: what this receipt granted, so a conviction takes all of it back.
+    let total: u128 = read::<u128>(route(builder)?, MINING_RECEIPT_GRANTED_KIND_V39, &rc.id, 32).unwrap_or(0);
+    builder.write_kernel_row(TABLE, k(MINING_RECEIPT_GRANTED_KIND_V39, &rc.id), Some(b(&total.saturating_add(granted))))?;
     rc.spent[spend.quantum_index as usize / 8] |= 1 << (spend.quantum_index % 8);
     rc.spent_quanta += 1;
     write_receipt(builder, &rc)?;

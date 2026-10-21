@@ -193,8 +193,13 @@ RSS with an mmapped checkpoint (mapped pages count). Measure with `--ram-account
 * **The fit of #5, #6 and #10** is not measured on this host (§4.1); measure it on a host with the source on disk and RAM for the
   integer program before the index is relied on.
 * **#1 at 32K**: the A16 route has no long-context check (qwen25-convert's FAITHFUL report covers its 57-token prompt).
-* **Registration binds the PALWART3 root**: today a TIR class binds its inventory root; the next network's registration must bind the
-  container root and the court must open the inner inventory leaves under the inner root it commits. Consensus work, not started.
+* **Registration binds the PALWART3 root** — implemented, dormant (2026-10-18, `integ/g14-tir-pricing-r2` `87af99d36`): the
+  registrant binds a registered TIR class to its container (tag 175 `TirClassContainerBoundV1`, fence
+  `palw_tir_container_identity_v1`, None on every preset); the chain recomputes the container root from its opening and accepts it
+  only if the one weight section's inner root is the class's inventory root and the program record is the class's program and
+  tokenizer; past the fence an unbound class's TIR original is refused. Tests: `palw_tir_container_v1::tests`,
+  `tir_fp_lane_past_the_container_fence_…`, `misaka-palw-sdk tests/tir_container_binding` (a real packed container). Not done: the
+  restart/IBD/reorg restore of the row, and IR attempt-lane claims are not gated by it.
 * **K2-TIR activation**: the kernels are implemented, not active; arming them is a fenced decision outside this lane.
 * **#3** awaits the user's decision; **#6**'s calibration tokenizer is the Qwen3.8 tokenizer from
   `huihui-ai/Huihui-Qwen3.8-27B-abliterated@739e3c5b`, checked id by id against the GGUF's own vocabulary before use.

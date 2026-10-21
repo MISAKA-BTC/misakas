@@ -409,6 +409,12 @@ start + B_cold_fetch + B_check + B_localize + B_disclose
     <= dispute_hard_deadline
 ~~~
 
+**2026-10-18 ユーザー決定（窓の合成）:** `dispute_hard_deadline` の項は次で定める。`T_prepare = window_bind + window_receipt`、
+`T_observe = window_challenge_at(activation)`、`T_resolve = B_disclose + B_court + Δ`、`Δ = B_cold_fetch + B_check + B_localize + B_carrier + B_reorg_slack`、
+`hard = accepted_daa + T_prepare + T_observe + T_resolve`。窓は activation で `Params` から読み直し、食い違えば refuse する（`palw_x3_composition_refusal_v1`）。
+Δ の各項と `c_retain` は policy の名前付き入力で、0 は未測定として拒否する。既定値として 0 を入れた実 preset は作らない。
+新 claim には DA pause の返還による期限延長を与えない（`palw_x3_pause_credit_v1`）。この決定の arm は `PALW_G14_ARMING_RECORDS_V1`（空）の record で行う（ADR-0188）。
+
 最悪round数・返答時間と最小carrier処理能力からclass/plan別のDAA envelopeを導く。
 秒のbenchmarkをDAAへ変換する際は、実際のnetwork clock/inclusion仮定を明記する。
 「1人がwindow最終瞬間に見つけても必ず間に合う」とはしない。

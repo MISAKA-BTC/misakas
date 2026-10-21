@@ -1,0 +1,15 @@
+{
+  "base": "292a6d7db",
+  "method": "comment/whitespace-normalized exact statement comparison after explicit historical-order projection; runtime regression still required",
+  "sequences": {
+    "BeforeClassRetarget": {
+      "normalized_statement_sha256": "d4cf0e9142482c790739aec53536b78a620e41384a77e822bfee6aeb43d6873e",
+      "unchanged": true
+    },
+    "AfterMeshSweep": {
+      "normalized_statement_sha256": "3edcf0d59df0a99bd6ed2edde1b9afa0690b5da8d78bae25736be934a4f934fc",
+      "unchanged": true
+    }
+  },
+  "rearm": "pre-object rearm remains immediately after helper; full fold rearm remains at its original later position"
+}

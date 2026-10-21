@@ -29,7 +29,7 @@ ROLE_NAMES = {key: name for name, key in ROLE_KEYS.items()}
 PLACEHOLDER_ROLES = {'producer': 'PRODUCER', 'provider': 'PROVIDER', 'checker': 'CHECKER', 'fresh': 'FRESH',
                      'crashJoin': 'CRASHJOIN'}
 ENDPOINT_FIELDS = ('APPDIR', 'WRPC', 'GRPC', 'BORSH', 'ETH', 'P2P')
-GLOBAL_PLACEHOLDERS = ('ROOT', 'SALT', 'FIXTURE', 'CLI', 'OLD_BLOCK', 'WORK_DIR')
+GLOBAL_PLACEHOLDERS = ('ROOT', 'SALT', 'FIXTURE', 'CLI', 'OLD_BLOCK', 'WORK_DIR', 'REQUEST_BLOCK')
 
 # The kernel paid-work producer (--private-probe-kernel-paid-work) exists only on paid-v4.
 ACCEPTANCE_PROFILES = ('paid-v4',)
@@ -54,7 +54,12 @@ CONSUMER_CHECKPOINTS = ('usefulWork', 'bridge', 'market', 'fork', 'partition', '
                         'freshJoin', 'coldReopen', 'generationMismatch')
 # Phases during which a crash point may be armed, and the trigger kinds each role can carry.
 CRASH_PHASES = ('usefulWork', 'fork', 'partition', 'freshJoin', 'coldReopen')
+IMPORT_WAL_STAGES = (
+    'utxo-before-clear', 'utxo-after-clear', 'utxo-before-virtual-copy', 'utxo-after-virtual-clear',
+    'utxo-mid-virtual-copy', 'utxo-after-virtual-copy', 'import-before-complete', 'import-after-complete',
+)
 TRIGGERS = {
+    'import-wal': (('crashJoin',), ('freshJoin',)),
     'import-phase': (('crashJoin',), ('freshJoin',)),
     'kernel-outbox': (('producer',), ('usefulWork',)),
     'checker-outbox': (('producer', 'provider', 'checker'), ('usefulWork',)),
@@ -335,6 +340,9 @@ def _trigger(value, name, role, phase):
     roles, phases = TRIGGERS[kind]
     if role not in roles or phase not in phases:
         raise PlanError('%s %s cannot be armed for role %s in phase %s' % (name, kind, role, phase))
+    if kind == 'import-wal':
+        _keys(value, ('kind', 'stage'), name)
+        return dict(kind=kind, stage=_enum(value['stage'], name + '.stage', IMPORT_WAL_STAGES))
     if kind == 'import-phase':
         _keys(value, ('kind', 'phases'), name)
         chosen = value['phases']
@@ -373,6 +381,11 @@ def _crash(value, allowed):
         phase = _enum(point['phase'], name + '.phase', CRASH_PHASES)
         parsed.append(dict(name=label, role=role, phase=phase, trigger=_trigger(point['trigger'], name + '.trigger', role, phase),
                            maximumWaitSeconds=_int(point['maximumWaitSeconds'], name + '.maximumWaitSeconds', 1)))
+    if sum(p['trigger']['kind'] == 'import-wal' for p in parsed) > 1:
+        raise PlanError('one exact WAL rendezvous per owned crash-join launch; use a separate bounded plan for each stage')
+    if any(p['trigger']['kind'] == 'import-wal' for p in parsed) and any(
+            p['trigger']['kind'] == 'import-phase' for p in parsed):
+        raise PlanError('an exact WAL run cannot also kill its crash-join process at a coarse import phase')
     mismatch = _keys(value['generationMismatch'], ('role', 'wrongProfile', 'exitWithinSeconds'), 'crash.generationMismatch')
     return dict(points=parsed,
                 generationMismatch=dict(
@@ -656,6 +669,8 @@ def parse_plan(raw):
     if fence >= 2:
         check_legacy_window(fence, out['dnsHistory']['legacySettlementWindowDaa'], out['dnsHistory']['observeAfterFenceDaa'],
                             out['dnsHistory']['dnsCadence'], 'dnsHistory')
+    if out['capacity']['mode'] == 'import' and any(p['trigger']['kind'] == 'import-wal' for p in out['crash']['points']):
+        raise PlanError('exact WAL runs need running-node capacity mode; constrained import must be a separate run')
     for point in out['crash']['points']:
         if point['trigger']['kind'] == 'checker-outbox' and point['role'] not in out['usefulWork']['checker']['hosts']:
             raise PlanError('crash point %s watches a checker outbox on a role that hosts no checker' % point['name'])

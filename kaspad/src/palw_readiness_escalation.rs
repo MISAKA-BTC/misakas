@@ -228,7 +228,7 @@ mod tests {
     /// `ReadinessEscalated` site takes `palw_escalated_readiness_pick_v1`'s proof.
     #[test]
     fn the_panel_reads_the_duty_rules_from_here() {
-        let source = include_str!("palw_panel.rs");
+        let source = crate::palw_panel::source_support::former_parent_production_source_v1();
         let duties = &source[source.find("    fn readiness_duties(").expect("readiness_duties")..];
         let duties = &duties[..duties.find("\n    }\n").expect("its end")];
         let due = duties.find("palw_readiness_duty_due_v2(").expect("the duty");

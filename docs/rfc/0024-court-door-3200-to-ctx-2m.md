@@ -8,7 +8,7 @@
 - **非変更:** モデルの算術、検出 policy、正しい署名・root の検証、計算不正と DA/default の区別、担保・責任保持、Gate C、客観的 exact court。ZK・SNARK/STARK・zkVM・PCS によるモデル計算の validity proof は導入しない([PRINCIPLES](../PRINCIPLES.md) §8)。
 - **上限値:** 従来の `maximum_door_daa = 3,120` から 3,200 への変更は**明示的な承認対象**であり、本 RFC の登録だけでは gate を変えない。
 - **有効化:** 新経路は休眠。wire tag、fingerprint、DAA 16,000、稼働 t12 の設定は本書で割り当て・変更しない。
-- **Related:** ADR-0189(door 候補)、ADR-0190(bounded rounds)、ADR-0191(dispute-local decomposition)、[g14 実測 evidence](../evidence/palw/g14-measure-2026-10-18/)。
+- **Related:** ADR-0189(door 候補)、ADR-0190(bounded rounds)、ADR-0191(dispute-local decomposition)、`docs/evidence/palw/g14-measure-2026-10-18/`（別 branch の evidence。この snapshot には未同梱。以下の commit/path を参照）。
 
 > **提案する決定:** court の判定をノード上に残したまま、裁定に必要な原本の範囲を小さくし、適応的な要求を前もって網羅し、待機の依存を減らす。3,200 を満たしたことにするために既存タイマーを切り詰めたり、オフチェーンの好条件を最悪時の保証に読み替えたりしない。
 

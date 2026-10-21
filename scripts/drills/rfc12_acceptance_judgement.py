@@ -418,6 +418,11 @@ def crash_point(point, record):
             raise NotObservable('the kill was not observed inside a requested import phase')
         if not import_is_stable(after):
             raise Violation('the crashed import did not complete or roll back to a stable state')
+    elif kind == 'import-wal':
+        if record['trigger'].get('stage') != point['trigger']['stage'] or before.get('walStage') != point['trigger']['stage']:
+            raise Violation('the SIGKILL was not at the exact requested WAL rendezvous')
+        if not import_is_stable(after):
+            raise Violation('the WAL-crashed import did not recover to a stable state')
     elif kind in ('kernel-outbox', 'checker-outbox'):
         for name, digest in before['outbox'].items():
             if after.get('outbox', {}).get(name) != digest:
@@ -636,7 +641,8 @@ def effects_stable(snapshots):
     first = None
     for row in snapshots:
         value = row['value']
-        key = (tuple(sorted(value['withdrawalOutpoints'])), tuple(sorted(value['refundOutpoints'])))
+        key = (tuple(sorted(value['withdrawalOutpoints'])), tuple(sorted(value['refundOutpoints'])),
+               stable_point_states(value.get('pointStates', {})))
         if first is None:
             first = key
         elif key != first:
@@ -847,3 +853,60 @@ def retirement_reconciliation(pre, post, retirement_daa):
 def dns_reward_stop(post):
     raise NotObservable('no node read exposes the per-coinbase DNS validator share; the reward stop is only covered '
                         'by in-process tests (RFC-0012 x12), not by this real-process run')
+
+
+def point_consumed(rows, point):
+    require_real(rows)
+    for row in rows:
+        states = row['value'].get('pointStates', {})
+        if point not in states:
+            raise NotObservable('the consumed outpoint was not read')
+        if states[point] is not None:
+            raise Pending('the lock outpoint is still unspent')
+    return dict(outpoint=point, unspent=False)
+
+
+def point_present(rows, point, low, high):
+    require_real(rows)
+    for row in rows:
+        states = row['value'].get('pointStates', {})
+        if point not in states:
+            raise NotObservable('the materialized outpoint was not read')
+        entry = states[point]
+        if entry is None:
+            raise Pending('the outpoint is not materialized yet')
+        if entry.get('isCoinbase') or not low <= exact_int(entry['amount'], 'outpoint amount') <= high:
+            raise Violation('the materialized outpoint value/type differs from the expected transition')
+    return dict(outpoint=point, low=low, high=high)
+
+
+def stable_point_states(states):
+    """Ignore acceptance DAA (which may move on a reorg); preserve actual rights."""
+    return tuple(sorted((point, None if entry is None else
+                         (exact_int(entry['amount'], 'point amount'), json.dumps(entry['scriptPublicKey'], sort_keys=True),
+                          entry['isCoinbase'])) for point, entry in states.items()))
+
+
+def refund_link(row, lock_point, refund_point, original_amount, maximum_fee):
+    require_real([row])
+    txid, index = refund_point.rsplit(':', 1)
+    found = row['value'].get(norm(txid))
+    if not found:
+        raise Pending('the refund transaction body is not on the observed accepted chain yet')
+    tx = found['transaction']
+    inputs = tx.get('inputs') or []
+    if len(inputs) != 1:
+        raise NotObservable('refund conservation needs the complete one-input first-party refund path')
+    if outpoint_key({'outpoint': inputs[0]['previousOutpoint']}) != lock_point:
+        raise Violation('the refund output transaction did not spend the original deposit outpoint')
+    outputs = tx.get('outputs') or []
+    index = int(index)
+    if index >= len(outputs):
+        raise Violation('the observed refund outpoint is absent from its transaction')
+    total = sum(exact_int(output['value'], 'refund output value') for output in outputs)
+    fee = original_amount - total
+    if not 0 <= fee <= maximum_fee:
+        raise Violation('the signed refund does not conserve the deposit within its fee cap')
+    if not original_amount - maximum_fee <= outputs[index]['value'] <= original_amount:
+        raise Violation('the returned deposit amount differs from the declared refund')
+    return dict(inputOutpoint=lock_point, refundOutpoint=refund_point, feeSompi=fee, outputTotalSompi=total)

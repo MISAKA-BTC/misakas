@@ -354,8 +354,8 @@ pub struct VirtualStateProcessor {
 
     // Config
     pub(super) genesis: GenesisBlock,
-    pub(super) max_block_parents: u8,
-    pub(super) mergeset_size_limit: u64,
+    pub(super) max_block_parents: kaspa_consensus_core::config::params::ForkedParam<u16>,
+    pub(super) mergeset_size_limit: kaspa_consensus_core::config::params::ForkedParam<u64>,
     /// ADR-0068 Phase 1 (F3a): the heartbeat width bound's fence (same activation as the lane —
     /// `Params::palw_heartbeat_width_fence`). `Some` = templates keep their mergesets within
     /// `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeat members, chunking sibling floods exactly as
@@ -545,6 +545,10 @@ pub struct VirtualStateProcessor {
     pub(super) palw_staged_public_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_staged_tir_route_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_tir_public_conviction_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// RFC-0002 02-A: the TIR container identity's effective fence; `None` on every shipped preset.
+    pub(super) palw_tir_container_identity_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The TIR frame's measured cost model (G14 audit §10); `None` on every shipped preset, so the frame route resolves no rules.
+    pub(super) palw_tir_frame_cost_v1: Option<kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
     pub(super) palw_staged_float_constraint_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1194,6 +1198,11 @@ mod palw_validate;
 mod template;
 
 impl VirtualStateProcessor {
+    #[cfg(test)]
+    pub(crate) fn set_template_time_for_test(&self, now: u64) {
+        self.template_clock.fetch_max(now, std::sync::atomic::Ordering::Relaxed);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -1281,8 +1290,8 @@ impl VirtualStateProcessor {
             palw_maturity_warn_last_band: std::sync::atomic::AtomicU64::new(0),
             palw_beacon_fold: params.palw_beacon_fold,
             palw_chunk_cap_charge: params.palw_chunk_cap_charge,
-            max_block_parents: params.max_block_parents(),
-            mergeset_size_limit: params.mergeset_size_limit(),
+            max_block_parents: params.max_block_parents_history(),
+            mergeset_size_limit: params.mergeset_size_limit_history(),
             palw_heartbeat_width_fence: params.palw_heartbeat_width_fence(),
 
             db,
@@ -1397,6 +1406,8 @@ impl VirtualStateProcessor {
             palw_staged_public_court_v1: params.palw_staged_public_court_v1_fence(),
             palw_staged_tir_route_v1: params.palw_staged_tir_route_v1_fence(),
             palw_tir_public_conviction_v1: params.palw_tir_public_conviction_v1_fence(),
+            palw_tir_container_identity_v1: params.palw_tir_container_identity_v1_fence(),
+            palw_tir_frame_cost_v1: params.palw_tir_frame_cost_v1,
             palw_staged_float_constraint_v1: params.palw_staged_float_constraint_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
@@ -2688,7 +2699,7 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
-                                        let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
+                                        let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
                                         extras.history_custody_pledges = history_custody_pledges;
                                         extras.tir_public_originals = tir_public_originals;
                                         extras.public_original_bindings = public_original_bindings;
@@ -3885,8 +3896,9 @@ impl VirtualStateProcessor {
                     let (pair, counts) = self.palw_rule_e_pair_v1(&mut states, refused, sink)?;
                     // RFC-0018 §6: the v2 order past its fence at the sink's DAA (the v1 order exactly below it).
                     let capital_v2 = self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.palw_rule_e_participation_v2_at(daa));
-                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v2(&pair.a, &pair.b, counts, capital_v2)
-                        != std::cmp::Ordering::Greater)
+                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v2(
+                        &pair.a, &pair.b, counts, capital_v2,
+                    ) != std::cmp::Ordering::Greater)
                         .then_some(refused);
                 }
                 let (incumbent, challenger) = (self.palw_candidate_order_v2(sink)?, self.palw_candidate_order_v2(refused)?);
@@ -5199,8 +5211,9 @@ impl VirtualStateProcessor {
         // we might touch such data prior to validating the bounded merge rule. All in all, this function is short
         // enough so we avoid making further optimizations
         let _prune_guard = self.pruning_lock.blocking_read();
-        let max_block_parents = self.max_block_parents as usize;
-        let mergeset_size_limit = self.mergeset_size_limit;
+        let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
+        let max_block_parents = self.max_block_parents.get(parent_daa) as usize;
+        let mergeset_size_limit = self.mergeset_size_limit.get(parent_daa);
         let max_candidates = self.max_virtual_parent_candidates(max_block_parents);
 
         // Prioritize half the blocks with highest blue work and pick the rest randomly to ensure diversity between nodes
@@ -5868,9 +5881,10 @@ impl VirtualStateProcessor {
         self.db.write_opt(batch, &options).expect("persisting a pruning import recovery barrier cannot fail");
     }
 
-    /// Test-only OS-kill rendezvous. Production builds contain no environment
-    /// switch or pause path. The exact child process owns the rendezvous directory.
-    #[cfg(test)]
+    /// Test-only OS-kill rendezvous — and (RFC-0012 acceptance, checkbox 3) in the unpublished private-integration build the drill
+    /// runs (`private-integration-config`): exact crash points between the pruning import's WAL barriers. Production builds contain
+    /// no environment switch or pause path. The exact child process owns the rendezvous directory.
+    #[cfg(any(test, feature = "private-integration-config"))]
     fn pruning_import_crash_checkpoint(&self, label: &str) {
         if std::env::var("MISAKA_RFC12_IMPORT_CRASH_STAGE").ok().as_deref() != Some(label) {
             return;
@@ -6046,10 +6060,10 @@ impl VirtualStateProcessor {
         }
         meta.set_pruning_utxoset_stable_flag(&mut batch, false).expect("staging an incomplete UTXO import cannot fail");
         self.write_pruning_import_barrier(batch);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "private-integration-config"))]
         self.pruning_import_crash_checkpoint("utxo-before-clear");
         meta.utxo_set.clear().expect("clearing an authorized UTXO import cannot fail");
-        #[cfg(test)]
+        #[cfg(any(test, feature = "private-integration-config"))]
         self.pruning_import_crash_checkpoint("utxo-after-clear");
         Ok(())
     }
@@ -6133,19 +6147,19 @@ impl VirtualStateProcessor {
         }
         {
             // Copy the pruning-point UTXO set into virtual's UTXO set.
-            #[cfg(test)]
+            #[cfg(any(test, feature = "private-integration-config"))]
             self.pruning_import_crash_checkpoint("utxo-before-virtual-copy");
             virtual_write.utxo_set.clear().unwrap();
-            #[cfg(test)]
+            #[cfg(any(test, feature = "private-integration-config"))]
             self.pruning_import_crash_checkpoint("utxo-after-virtual-clear");
             for chunk in &pruning_meta_read.utxo_set.iterator().map(|iter_result| iter_result.unwrap()).chunks(1000) {
                 virtual_write.utxo_set.write_from_iterator_without_cache(chunk).unwrap();
-                #[cfg(test)]
+                #[cfg(any(test, feature = "private-integration-config"))]
                 self.pruning_import_crash_checkpoint("utxo-mid-virtual-copy");
             }
             // ADR-0109 Decision 1: the set was replaced wholesale; the index follows it wholesale.
             self.rebuild_evm_deposit_lock_index(&virtual_write.utxo_set);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "private-integration-config"))]
             self.pruning_import_crash_checkpoint("utxo-after-virtual-copy");
         }
 
@@ -6271,10 +6285,10 @@ impl VirtualStateProcessor {
         // Store writers update caches as they stage the batch. A failed durable
         // commit is fatal, like the other consensus writes; returning would expose
         // the cached true marker without its durable completion.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "private-integration-config"))]
         self.pruning_import_crash_checkpoint("import-before-complete");
         self.write_pruning_import_barrier(batch);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "private-integration-config"))]
         self.pruning_import_crash_checkpoint("import-after-complete");
         Ok(())
     }
@@ -7215,6 +7229,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
         O::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
         O::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
+        O::TirClassContainerBoundV1 { .. } => "TirClassContainerBoundV1",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::MonetaryMaterialEnrolledV1 { .. } => "MonetaryMaterialEnrolledV1",

@@ -195,6 +195,9 @@ impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
         ))
     }
 
+    fn opt_in_seal_reveal_v6(&self) -> bool {
+        self.state.kernel_route.as_ref().is_some_and(|route| route.opt_in_seal_reveal_v6())
+    }
     fn paid_material(&self, context: &Digest) -> Result<crate::palw_beacon_source_fee_v1::PaidBeaconMaterialV5, String> {
         let route = self.state.kernel_route.as_ref().ok_or("Panel paid sources have no rooted kernel route")?;
         if route.beacon_source_target_v4(context)?.context.subject_kind != misaka_palw_challenge::SubjectKindV1::PanelAssignment {
@@ -447,7 +450,10 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
     fn available_collateral(&self, bond: &BondIdV1) -> u128 {
         let key = panel_bond_key_v1(*bond);
         let state = &self.builder.state;
-        let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.builder.params.min_collateral_sompi());
+        let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+            self.builder.params.min_collateral_sompi(),
+            self.builder.params.legacy_public_filer_active_at(self.ctx.daa_score),
+        );
         let may_work = state.bonds.get(&key).is_some_and(|record| palw_bond_may_take_work_v2(record, floor))
             && !crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, &key);
         if !may_work {

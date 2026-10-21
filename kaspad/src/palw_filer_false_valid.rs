@@ -293,6 +293,19 @@ impl PalwFalseValidFilerV1 {
         self.cases.contains_key(claim)
     }
 
+    /// A caller has read this claim's CourtFraud verdict from the accepted chain.
+    /// Revisit its receipts now even if the first (pre-licence) scan found none.
+    /// Keep the original proof and all in-flight/settled accounting; every filing
+    /// still passes the ordinary receipt admission, adjudicator, gate and fold.
+    pub(crate) fn wake_after_court_fraud_v1(&mut self, claim: &Hash64, current_daa: u64) -> bool {
+        let Some(case) = self.cases.get_mut(claim) else { return false };
+        case.next_daa = case.next_daa.min(current_daa);
+        case.expires_daa = case.expires_daa.max(current_daa.saturating_add(self.ttl_daa));
+        case.walked_daa = None;
+        case.walk = None;
+        true
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.cases.is_empty()
     }
@@ -512,6 +525,12 @@ impl PalwFalseValidFilerV1 {
         let (mut filed, mut waiting) = (false, false);
         for filing in &outcome.filings {
             let seat = filing.accused;
+            if !filing.files() && !filing.declined() {
+                info!(
+                    "[{PALW_PANEL}] claim {}: false-Valid scan for {seat:?} produced no filing: {:?} (P2-8c)",
+                    filing.claim_id, filing.check
+                );
+            }
             for id in &filing.not_liable {
                 if case.not_liable.insert(*id) {
                     info!(
@@ -841,6 +860,32 @@ mod tests {
     }
 
     #[test]
+    fn court_fraud_wakes_a_prelicence_empty_scan_without_replacing_its_proof() {
+        let mut filer = filer_with_proof(100);
+        let mut door = door();
+        let original = filer.cases[&claim()].proof.clone();
+        let empty = PalwFalseValidScanOutcomeV1 {
+            claim_id: claim(),
+            receipts: vec![],
+            filings: vec![],
+            walked: true,
+            walk: Some(PalwFalseValidWalkV1 { anchor: Hash64::from_u64_word(100), anchor_daa: 100, floor: 40, next: None }),
+        };
+        assert!(filer.apply_v1(empty, 100, &mut door).is_empty());
+        assert!(filer.due_v1(101, |_| false).is_empty(), "an empty scan normally waits 100 DAA");
+        filer.cases.get_mut(&claim()).unwrap().sent.insert(bond(1), (100, 1));
+        assert!(!filer.wake_after_court_fraud_v1(&Hash64::from_u64_word(0xBAD), 110));
+        assert!(filer.wake_after_court_fraud_v1(&claim(), 110));
+        let scans = filer.due_v1(110, |_| true);
+        assert_eq!(scans.len(), 1, "the verdict triggers an immediate rescan");
+        assert_eq!(scans[0].proof.as_ref(), original.as_ref());
+        assert_eq!(scans[0].walk_from_daa, 40, "reread from the claim's original receipt floor");
+        assert!(scans[0].walk.is_none());
+        assert!(scans[0].skip.contains(&bond(1)), "an in-flight filing is still held");
+        assert_eq!(filer.cases[&claim()].sent[&bond(1)], (100, 1), "no retry count is reset");
+    }
+
+    #[test]
     fn incomplete_receipt_history_retains_findings_without_advancing_the_interval() {
         let mut filer = filer_with_proof(100);
         let mut door = door();
@@ -930,7 +975,12 @@ mod tests {
         // The filer's tick: the commitment goes first, under the offence key; the evidence waits.
         let mut queue = Vec::new();
         let read = door.read.clone();
-        door.book.tick(&mut queue, &mut HashMap::new(), &mut std::collections::HashSet::new(), |_, _| Some(read.clone()));
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut queue,
+            &mut std::collections::HashMap::new(),
+            &mut HashMap::new(),
+            |outbox| door.book.tick(outbox, &mut std::collections::HashSet::new(), |_, _| Some(read.clone())),
+        );
         assert_eq!(queue.len(), 1);
         let (id, round, responder, object) = &queue[0];
         assert_eq!((*id, *round, *responder), (key, PALW_FILER_ROUND_COMMIT_V1, false));
@@ -1388,8 +1438,8 @@ mod tests {
     /// lane is queued or logged by the carrier lane itself (the filer's objects are the filer's).
     #[test]
     fn the_panel_notes_proofs_and_runs_the_step_where_it_should() {
-        let whole = include_str!("palw_panel.rs");
-        let source = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the test module")];
+        let whole = crate::palw_panel::source_support::former_parent_production_source_v1();
+        let source = whole;
         let fault = source.find("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {").expect("the arm");
         let recorded = fault + source[fault..].find("self.note_seat_fault_v1(duty.claim_id, leaf, 1);").expect("recorded");
         let noted = fault + source[fault..].find("false_valid.note_step_refutation_v1(").expect("noted");
@@ -1424,7 +1474,11 @@ mod tests {
         let this = include_str!("palw_filer_false_valid.rs");
         let body = &this[..this.find("#[cfg(test)]\nmod tests").expect("the tests")];
         assert!(
-            !body.contains("court_pending:") && !body.contains("court_pending.") && !body.contains("court_moved:"),
+            !body.contains("court_pending:")
+                && !body.contains("court_pending.")
+                && !body.contains("court_moved:")
+                && !body.contains("court_outbox:")
+                && !body.contains("court_outbox."),
             "the lane never touches the court queue"
         );
     }

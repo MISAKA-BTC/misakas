@@ -46,6 +46,9 @@ impl<'a> TransitionBuilder<'a> {
             native_reservation,
             params,
             monetary_native_ready: BTreeMap::new(),
+            court_end_evidence: None,
+            court_settled_deposit: None,
+            court_fulfilled_group: None,
             state,
             entries: Vec::new(),
             registration_index: None,
@@ -69,6 +72,8 @@ impl<'a> TransitionBuilder<'a> {
             heavy_prompt_claims: BTreeSet::new(),
             panel_v3_beacons: Vec::new(),
             paid_lifetime_admission_v1: None,
+            court_cost_spent: Default::default(),
+            court_one_move_spent: Default::default(),
         })
     }
 
@@ -3014,6 +3019,15 @@ impl<'a> TransitionBuilder<'a> {
                 "retained source default changes producer, independent winner or literal signer roles".into(),
             ));
         }
+        // Absence is not an objective fraud finding. Every semantic/history
+        // collector uses this common economic leg; quota, expired clocks and a
+        // literal unpaid set do not supply the missing service/inclusion policy.
+        // Refuse before both producer and signer-only branches mutate anything.
+        if self.state.court_service_holds_claim_v1(&claim_id) {
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "unresolved court service has no adopted semantic default permission".into(),
+            ));
+        }
         let covering: std::collections::BTreeSet<PalwBondKeyV2> = unpaid.iter().copied().filter(|bond| *bond != producer).collect();
         if !unpaid.contains(&producer) {
             // The producer answered to EOF: no void, no producer record, no session release.
@@ -4291,7 +4305,10 @@ impl<'a> TransitionBuilder<'a> {
         if self.params.rcore_plus_active_at(now_daa) {
             let distinct: BTreeSet<PalwBondKeyV2> = seats.iter().map(|seat| seat.bond).collect();
             let prices = self.read().rcore_bind_prices(&claim_id, claim, distinct.len(), now_daa);
-            let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi());
+            let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+                self.params.min_collateral_sompi(),
+                self.params.legacy_public_filer_active_at(now_daa),
+            );
             for seat in &distinct {
                 // ADR-0160 lane liab (AG-3): a frozen bond is not a seat (the draw never seats one; the
                 // map is empty below the fence).
@@ -5925,7 +5942,7 @@ impl<'a> TransitionBuilder<'a> {
     /// failure `retire_claim`'s own comment calls "permanent, because the claim is gone and
     /// nothing later can reconcile it".
     pub(super) fn canonical_claim_weight(&self, claim: &PalwClaimStateV2) -> Option<u128> {
-        self.state.palw_claim_canonical_weight_v1(claim, self.extras.canonical_work_daa)
+        self.extras.rules_for_claim(claim).canonical_weight(&self.state)
     }
 
     /// ADR-0148: this fold's free-prompt pricing, from the ruleset and the unit's height.
@@ -6705,7 +6722,10 @@ impl<'a> TransitionBuilder<'a> {
         if a == 0 {
             return Ok(());
         }
-        let panel_floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi());
+        let panel_floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+            self.params.min_collateral_sompi(),
+            self.params.legacy_public_filer_active_at(ctx.daa_score),
+        );
         let slots = (terms.prep_payee_cap as usize).saturating_sub(pool.prep_paid.len()).min((pool.prep_sompi / a) as usize);
         let mut payees: Vec<(Hash64, Hash64)> = Vec::new();
         for (operator, bonds) in &jury.drawn {
@@ -8645,6 +8665,21 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_court(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) -> Result<(), PalwStateV2Error> {
+        if new.is_some() && self.state.court_end_archive_v1(key).is_some() { return Err(PalwStateV2Error::DuplicateSession(key)); }
+        let archive = new.is_none() && self.state.court_sessions.get(&key).is_some_and(|s|
+            self.state.claims.contains_key(&s.claim) && self.state.court_service_holds_claim_v1(&s.claim));
+        if !archive { return self.write_court_inner_v1(key,new,false); }
+        let saved = self.try_checkpoint()?;
+        let result = (|| {
+            let pending = self.build_pending_court_archive_v1(key)?;
+            self.write_court_inner_v1(key,new,true)?;
+            self.write_staged_row_v1(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtEndArchive(key),
+                Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtEndArchive(Box::new(pending).into())))
+        })();
+        if result.is_err() {self.restore(saved);}
+        result
+    }
+    fn write_court_inner_v1(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>, archived: bool) -> Result<(), PalwStateV2Error> {
         if let Some(record) = &new {
             self.state.require_paid_consumer_backstop_v1(&record.claim, record.deadline_daa)?;
             if !self.state.court_sessions.contains_key(&key) {
@@ -8742,7 +8777,7 @@ impl<'a> TransitionBuilder<'a> {
         if removed {
             for side in [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor] {
                 if self.state.court_close_groups.contains_key(&(key, side)) {
-                    forfeit_close_deposit_v1(self, key, side)?;
+                    if !archived {forfeit_close_deposit_v1(self, key, side)?;}
                     self.write_court_close_group((key, side), None)?;
                 }
             }
@@ -8838,7 +8873,18 @@ impl<'a> TransitionBuilder<'a> {
     // ---- deadline index (never in the delta: rebuilt facts, not primary data) ----
 
     pub(super) fn arm_deadline(&mut self, deadline: u64, claim: Hash64) -> Result<(), PalwStateV2Error> {
-        let deadline = self.state.staged_retirement_floor_v1(&claim, deadline);
+        // The staged material horizon floors a terminal claim's RETIREMENT, never its operational release (the abandon hold or the
+        // obligation release: a collateral clock) — exactly `terminal_deadline_with_material_v1`, the form DL-1 rebuilds. Flooring
+        // the release here armed a free-prompt `BindTimeout` of a TIR-framed claim at its frame's material horizon while DL-1
+        // rebuilt it at `voided + fp_abandon_hold` (the DL-1 drift the node T-N1 harness hit, 2026-10-17).
+        let operational = self
+            .state
+            .claims
+            .get(&claim)
+            .map(|c| super::terminal_operational_release_at_v1(c, self.params, None))
+            .transpose()?
+            .flatten();
+        let deadline = if operational == Some(deadline) { deadline } else { self.state.staged_retirement_floor_v1(&claim, deadline) };
         // **ADR-0152 DL-1's DA rows (M3), at the one primitive every arm site calls**: a live claim a
         // seat session pauses owes no deadline, a terminal claim with a session open owes none (its
         // retirement waits), and a retirement arms no earlier than one DAA after the last close —
@@ -8847,7 +8893,7 @@ impl<'a> TransitionBuilder<'a> {
         // `palw_rcore_plus`, where this is the plain insert it always was.
         let mut deadline = deadline;
         // Lane LG14-A: DL-1's dispute-reservation row, at the same primitive — a claim a live reservation holds owes none.
-        if self.state.palw_legacy_dispute_holds_v1(&claim) {
+        if self.state.palw_legacy_dispute_holds_v1(&claim) || self.state.court_service_holds_claim_v1(&claim) {
             return Ok(());
         }
         // **RFC-0008 v2: a licensed claim whose work session is not ready owes no `Final` deadline** — the same pause a DA session
@@ -9561,6 +9607,7 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
+        if self.state.court_service_holds_claim_v1(&id) { return Ok(()); }
         if self.state.staged_claim_contract_v1(&id).and_then(|c| c.prefix_custody.as_ref()).is_some_and(|c| !c.qualified()) {
             // Refusal to opt into prospective custody buys no Final/activation credit and
             // creates no retroactive DA guilt. Pending accusations keep their existing route.
@@ -10078,6 +10125,9 @@ impl<'a> TransitionBuilder<'a> {
             terminal_daa.checked_add(self.params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?;
         let at = palw_exec_v2_rewards_v1::retirement(&self.state, self.params, &id, Some(ordinary), claim)?
             .expect("retirement is configured");
+        let at = if self.params.claim_local_settlement_active_at(claim.accepted_daa) {
+            crate::palw_rfc0018_v1::palw_gate_c_retirement_floor_v1(self.params, claim, at)
+        } else { at };
         self.arm_deadline(at, id)?;
         Ok(())
     }
@@ -10087,6 +10137,9 @@ impl<'a> TransitionBuilder<'a> {
     /// The panel goes with it: `write_panel` had no `None` caller anywhere, so a bound claim's
     /// panel outlived the claim by exactly forever and grew at the same one-per-block rate.
     pub(super) fn retire_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+        if self.state.court_service_holds_claim_v1(&id) { return Ok(()); }
+        let now = self.state.last_point.map_or(0, |p| p.daa_score);
+        super::palw_claim_local_rewards_v1::clear_hold_v1(self, now, id)?;
         self.forget_paid_consumer_v1(id)?;
         // A `Final` attempt claim folded its `pwu` into `safe_weight` when it finalized. The
         // running total does not move here — the claim's contribution is simply carried by a

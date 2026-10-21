@@ -318,7 +318,7 @@ impl PalwFoldReadV1<'_> {
     /// The work target's floor at this block (ADR-0132/0137) — the value the class target is read
     /// against — `None` where the work target is dormant. (The builder's `work_target_floor`.)
     pub(super) fn work_target_floor(&self, ctx: &PalwBlockContextV2) -> Option<u128> {
-        if !self.extras.work_target_active {
+        if !self.extras.rules_at(ctx).work_target_active() {
             return None;
         }
         let rate = self
@@ -330,7 +330,7 @@ impl PalwFoldReadV1<'_> {
         let floor = palw_work_floor_for_block_v1(self.params, ctx.subsidy, self.extras.escrow_carve, rate);
         // ADR-0132 S: with the network draw gone the stepped `W` is what holds the cadence, and it
         // is never below the block's `W₀`.
-        if self.extras.single_lottery_active {
+        if self.extras.rules_at(ctx).single_lottery_active() {
             return Some(floor.max(self.state.work_target.map(|target| target.work).unwrap_or(0)));
         }
         Some(floor)
@@ -355,7 +355,7 @@ impl PalwFoldReadV1<'_> {
         let target =
             crate::palw_admission_v2::palw_effective_class_target_v1(self.state, self.params, &class_id, self.work_target_floor(ctx))
                 .ok();
-        let past_the_unit = self.extras.canonical_work_daa.is_some_and(|height| ctx.daa_score >= height);
+        let past_the_unit = self.extras.rules_at(ctx).canonical_work_active();
         let pwu = if past_the_unit {
             let draw = self.state.palw_attempt_per_draw_v1(
                 &self.params.base_class_id,
@@ -944,8 +944,14 @@ impl PalwFoldReadV1<'_> {
         // producer's pre-check answers this before an inference). Read from the fence state: the route's arming restores the reward.
         // `None` below the fence (every shipped network). The free-prompt lane asks its own question with the job in hand
         // (`palw_g14_route_fp_refusal_v1`, the commitment arm).
+        // Lane g14-court-capacity (user direction 2026-10-16): a class with fused-attention leaves also needs the court-capacity
+        // guarantee (`palw_court_capacity_v1`) before its fused-leaf route counts.
         if incoming == PalwGatedClaimV1::Attempt
-            && let Some(why) = crate::palw_g14_gates_v1::palw_g14_route_attempt_refusal_v1(self.params, now_daa)
+            && let Some(why) = crate::palw_g14_gates_v1::palw_g14_route_attempt_refusal_for_class_v1(
+                self.params,
+                now_daa,
+                self.state.classes.get(class_id).is_some_and(|class| class.fused_attention),
+            )
         {
             return Err(PalwStateV2Error::ClassNotRewardable {
                 class: *class_id,
@@ -1652,7 +1658,10 @@ impl PalwFoldReadV1<'_> {
             .unwrap_or(u128::MAX)
             .saturating_mul(crate::palw_verify_capacity_v1::PALW_FLOOR_ROOM_ANCHOR_RESERVE_V1 as u128);
         let floor = if self.extras.panel_economy_active {
-            crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi)
+            crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+                self.params.min_collateral_sompi,
+                self.params.legacy_public_filer_active_at(now_daa),
+            )
         } else {
             self.params.min_collateral_sompi
         };

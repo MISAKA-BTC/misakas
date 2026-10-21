@@ -1,0 +1,23 @@
+{
+  "parent": "fa1104eed",
+  "source": "consensus/core/src/palw_staged_court_state_v1.rs",
+  "source_sha256": "352b3f5d089615787acf891b50c393ba6fa32d6f0567b2b9d8ab7d80e8343d8d",
+  "enums": {
+    "PalwStagedCourtKeyV1": {
+      "old_count": 19,
+      "new_count": 20,
+      "old_variant_declarations_unchanged": true,
+      "appended": [
+        "CourtSharedResponse(Hash64,PalwBondKeyV2),"
+      ]
+    },
+    "PalwStagedCourtRowV1": {
+      "old_count": 25,
+      "new_count": 26,
+      "old_variant_declarations_unchanged": true,
+      "appended": [
+        "CourtSharedResponse(Box<crate::palw_court_shared_tir_response_v1::SharedDataResponseV1>),"
+      ]
+    }
+  }
+}

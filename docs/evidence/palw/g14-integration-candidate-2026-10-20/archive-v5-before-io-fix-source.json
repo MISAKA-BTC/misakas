@@ -1,0 +1,21 @@
+{
+  "source_sha256": {
+    "consensus/core/src/palw_court_close_receipt_v1.rs": "125fd6b87114939ecd7c331317d3bd5c4a49fcf45f05c190db483957539add9a",
+    "consensus/core/src/palw_state_v2.rs": "f17413cc70a91bc81d948fe3db36a7c0ef7452b43676112efcde736bfee4938b",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "f0de7e4145a21616172d1fc3df782f383e729e2706b16c7f74547e83fbd8362a",
+    "consensus/core/src/palw_court_archive_verify_v1.rs": "d48ae16f66bb69af7a7b69c388da8eb7b0b23d5db221eec97650e9cc26660d01"
+  },
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "kaspa-consensus-core",
+    "--lib",
+    "rooted_archive_v5"
+  ],
+  "reason": "Deliberate own-build interruption to preserve local wire CPU/OOM refusal as NativeResource instead of evidence invalidity, before final testing. Terminal status/log verified separately; no test successes claimed here.",
+  "observed_exit_code": 130,
+  "executed_tests": 0,
+  "type_check_exit_code": 0
+}

@@ -304,6 +304,25 @@ fn set(p: &mut Params, fence: PalwG14GatedFenceV1, at: Option<ForkActivation>) {
             p.sync_palw_legacy_public_filer_v1();
             p.palw_legacy_held_da_v2 = at;
         }
+        // Lane g14-court-capacity: the court-capacity fence (with LG14-A at or below it; the placeholder policy, which a real network
+        // is refused even with a record).
+        PalwG14GatedFenceV1::CourtCapacityV1 => {
+            p.palw_legacy_public_filer_v1 = at;
+            p.sync_palw_legacy_public_filer_v1();
+            p.palw_court_capacity_v1 = at.map(kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCapacityFenceV1::placeholder_at);
+            p.sync_palw_court_capacity_v1();
+        }
+        // The ruling fences D2 and X3 (lane d2-x3-finish, 2026-10-18): record-gated like the others. D2 needs LG14-B at or below it.
+        PalwG14GatedFenceV1::CourtModelScopeV1 => {
+            p.palw_legacy_held_da_v2 = at;
+            p.palw_court_model_scope_v1 = at;
+            p.sync_palw_2026_10_12_ruling_fences_v1();
+        }
+        PalwG14GatedFenceV1::ClaimHardDeadlineV1 => {
+            p.palw_claim_hard_deadline_v1 =
+                at.map(kaspa_consensus_core::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at);
+            p.sync_palw_2026_10_12_ruling_fences_v1();
+        }
     }
     p.sync_palw_g14_gates_v1();
 }
@@ -328,6 +347,11 @@ fn armable_g14_fences_refuse_without_a_measured_record() {
         set(&mut never, fence, Some(ForkActivation::never()));
         never.validate_palw_g14_fence_record_v1(fence).expect("never() is dormant");
         // The four G-10 fences need V1–V7; option (b), N4 and the liability horizon only remove or delay reward.
+        // X3 (lane d2-x3-finish, 2026-10-18) is the one ruling fence whose policy terms are measurements; D2 needs tests and drills only.
+        if fence == PalwG14GatedFenceV1::ClaimHardDeadlineV1 {
+            assert!(fence.needs_measured_value(), "X3's policy terms are measurements");
+            continue;
+        }
         assert_eq!(fence.needs_measured_value(), fence.requirements().len() == PALW_G14_VALIDATION_STEPS_V1.len(), "{fence:?}");
     }
     assert!(!PalwG14GatedFenceV1::G14RouteRequiredV1.needs_measured_value());
@@ -511,8 +535,13 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
     // Only LG14-A armed: still no complete route.
     let half = route_sp(&p, FENCE, PalwG14RouteMirrorV1 { legacy_filer_from: Some(0), ..none });
     assert!(attempt_at(&half, FENCE).is_err(), "LG14-A without LG14-B is not the legacy route's G14 path");
-    // LG14-A + LG14-B armed: the family regains reward with no other change.
-    let routed = route_sp(&p, FENCE, PalwG14RouteMirrorV1 { legacy_filer_from: Some(0), legacy_held_da_from: Some(FENCE), ..none });
+    // LG14-A + LG14-B armed (and, for a class with fused-attention leaves, the court-capacity fence — lane g14-court-capacity): the
+    // family regains reward with no other change.
+    let routed = route_sp(
+        &p,
+        FENCE,
+        PalwG14RouteMirrorV1 { legacy_filer_from: Some(0), legacy_held_da_from: Some(FENCE), court_capacity_from: Some(FENCE), ..none },
+    );
     let s2 = attempt_at(&routed, FENCE).expect("the armed route restores admission");
     assert!(s2.claim(&id).is_some());
     palw_class_admits_claim_v1(&s, &routed, &extras(&p, FENCE), &floor, FENCE).expect("and the pre-check");
@@ -791,8 +820,8 @@ fn g14_genesis_ruleset_validates_and_its_exception_reaches_no_shipped_preset() {
     let mut forged = g.clone();
     forged.genesis.nonce ^= 1;
     assert!(!forged.has_isolated_g14_genesis_v1(), "the header must hash to the genesis");
-    // Every G14 fence the ruleset carries is at block 0, and the mirrors agree.
-    for fence in PalwG14GatedFenceV1::ALL {
+    // Every G14 fence the ruleset carries is at block 0, and the mirrors agree. The two ruling fences (D2, X3) are not part of G14-from-genesis.
+    for fence in PalwG14GatedFenceV1::ALL.into_iter().filter(|f| !matches!(f, PalwG14GatedFenceV1::CourtModelScopeV1 | PalwG14GatedFenceV1::ClaimHardDeadlineV1)) {
         assert_eq!(fence.armed(&g), Some(ForkActivation::new(0)), "{fence:?}");
     }
     assert_eq!(g.palw_legacy_public_filer_v1, Some(ForkActivation::new(0)));

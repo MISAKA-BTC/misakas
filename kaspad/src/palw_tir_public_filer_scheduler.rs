@@ -24,19 +24,16 @@
 //! findings — an outside owner's acquisition driving (Open → Demand → Collect) and the arithmetic scheduler's localization to a
 //! Ready primitive (`palw_tir_arithmetic_scheduler`) are not yet called from the panel loop.
 #![allow(dead_code)] // `queue_finding_v1` is the hook the finding producers call once they are wired; the tick runs every panel tick.
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
 use super::tir_public_filer::{
     palw_tir_public_conviction_object_v1, palw_tir_public_may_file_v1, palw_tir_public_witness_part_object_v1,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
-use kaspa_consensus_core::{
-    Hash64,
-    palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2},
-    palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
-};
+use kaspa_consensus_core::{Hash64, palw_state_v2::PalwBondKeyV2, palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1};
 use kaspa_core::{debug, info, warn};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const PALW_PANEL: &str = "palw-panel";
@@ -178,9 +175,7 @@ impl PalwPanelService {
         network_domain: Hash64,
         current_daa: u64,
         book: &mut PalwTirPublicFilerBookV1,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) {
         let ours = |round: u32, responder: bool| round == PALW_TIR_PUBLIC_CONVICTION_ROUND_V1 && !responder;
         if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_none() {
@@ -189,16 +184,16 @@ impl PalwPanelService {
                 book.dirty = true;
                 book.persist();
             }
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return;
         }
         // A queued filing whose finding left the book is stale.
-        pending.retain(|(claim, round, responder, _)| !ours(*round, *responder) || book.filings.contains_key(claim));
+        court_outbox.retain_pending(|(claim, round, responder, _)| !ours(*round, *responder) || book.filings.contains_key(claim));
         let claims: Vec<Hash64> = book.filings.keys().copied().collect();
         for claim in claims {
             let key = (claim, PALW_TIR_PUBLIC_CONVICTION_ROUND_V1, false);
-            if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
-                || moved.get(&key).is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+            if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
+                || court_outbox.submitted_at(&key).is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
             {
                 continue;
             }
@@ -312,9 +307,9 @@ impl PalwPanelService {
                 book.drop_v1(&claim, "sent its bounded number of times");
                 continue;
             }
-            pending.push((key.0, key.1, key.2, object));
-            due.insert(key, view.collect_until_daa.saturating_sub(1));
-            moved.insert(key, current_daa);
+            court_outbox.push_pending((key.0, key.1, key.2, object));
+            court_outbox.set_due(key, view.collect_until_daa.saturating_sub(1));
+            court_outbox.mark_submitted(key, current_daa);
             if let Some(entry) = book.filings.get_mut(&claim) {
                 entry.sends = entry.sends.saturating_add(1);
                 book.dirty = true;

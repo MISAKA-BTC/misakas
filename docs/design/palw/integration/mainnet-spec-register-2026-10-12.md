@@ -109,6 +109,24 @@
 - **N4**: 生成tensor claim（tag 87）は現状weightlessなので対象外。将来weightを与えるfenceは同じ述語を使う必要がある。
 - R-core+未満のADR-0062経路（`resume_claim_after_da_session_v2`）のpause返却にはX3のguardを入れていない（t12はR-core+をgenesisで武装）。
 
+#### 3.1.2 2026-10-18（d2-x3-finish）— 休眠 fence の arm 形と X3 の窓の合成（ADR-0188）
+
+- **arm の形:** D2（`palw_court_model_scope_v1`）と X3（`palw_claim_hard_deadline_v1`）の無条件 refusal を、G14 の arm-readiness record（`PalwG14GatedFenceV1::{CourtModelScopeV1, ClaimHardDeadlineV1}`）に置き換えた。`PALW_G14_ARMING_RECORDS_V1` は**空のまま**で、どの real network でも両 fence は refuse される。
+- **X3 の期限:** `T_prepare = window_bind + window_receipt`、`T_observe = window_challenge_at(activation)`、`T_resolve = B_disclose + B_court + Δ`（Δ = 5 つの `B_*`）。`hard = accepted + prepare + observe + resolve`。`palw_x3_composed_policy_v1` で作り、`palw_x3_composition_refusal_v1` で activation の窓と照合する。未測定（0）の `B_*` と `c_retain` は refuse する。**値は未承認・未測定。**
+- **X3 の pause:** 新 claim の DA pause 返還（`resume_claim_after_da_session_v2` の呼び出し 2 箇所）は 0。旧 claim は不変。
+- **econ:** `palw_minimum_price_c_upper_x3_v1` と `PalwBeaconSourceCostBoundsV1::minimum_gross_fee_x3` が retention の価格を入れる。`c_retain = 0` で拡張が正なら UNKNOWN。
+- **R-D2-READY:** tag 230 を確定（`PALW_A2_TAG_ALLOCATIONS_V1` の既存行）。kind の codec と A-2 kind-table 行は未着手。
+- **R-D2-COVER:** 2026-10-18 に導出して記録（ADR-0188「R-D2-COVER」）。finalize の読み取り集合は評価の実行後にしか決まらない（添字が step のデータに依存）。opening は空・部分の carriage を受理し、厳密な関門は root claim の finalize（Step 8）。露出は 1 件の finalize が読む相異なる leaf に有界。試験 `r_d2_cover_…` で固定。
+- **node-level 試験（2026-10-19、ADR-0188「node-level 試験」）:** `lg14a_legacy_filer_e2e` で 29 PASS / 3 ignored。PASS: REQ-X3-1・2・3（期限固定・min・不変）、REQ-X3-4（許容 start は cutoff まで）、X3 の再起動と fresh replay、D2 の reorg。BLOCKED（ignore 記録）: R-D2-NODE（新 claim の held 告発が mempool で拒否、replacement route が node admission に未配線）、R-X3-HOLD は試験の前提の誤りとして解消（2026-10-19、X3 では開いている DA session だけが Final を止める。REQ-X3-5 と REQ-X3-2 の node 試験が通過、lg14a 31 passed / 2 ignored）。発見: probe の resolve は composition より短く pursuit が 0 件になる。
+- **tag 230 の codec:** 未実装。wire 形の案 A/B と A-2 への影響は ADR-0188「R-D2-READY」（Proposed、ユーザー判断待ち）。
+
+- **検証の現況（2026-10-18、同節の追記）:**
+- **変更**: D2（`palw_court_model_scope_v1`）と X3（`palw_claim_hard_deadline_v1`）の無条件 refusal を record gate に置換（`PALW_G14_ARMING_RECORDS_V1` は**空のまま**）。X3 の期限は窓の合成（`palw_x3_composed_policy_v1`）、X3 claim は DA pause を返さない（`palw_x3_pause_credit_v1`）。tag 230 は R-D2-READY として確定（codec と A-2 行の landed は未着手）。
+- **検証済み**: `palw_ruling_fences_v1` 16、econ の X3 gross floor / C_upper 4（commit 4cc05d5ec）。`--lib` の 8 件の FAIL は base 17cbdee9e でも同一（既存の失敗、本変更の原因ではない）。
+- **未検証・未実施**: node-level（virtual processor の block flow）の REQ-X3-1〜5、restart/reorg 再生の同一性、node-level の D2 full-collusion 試験、R-D2-COVER の finalize 読み取り集合の導出、tag 230 の codec と A-2 行。
+- **未測定（0 のまま拒否）**: X3 の Δ（`B_cold_fetch`・`B_check`・`B_localize`・`B_carrier`・`B_reorg_slack`）と `c_retain`。値は承認と測定まで入れない。
+- **activation**: なし。全 network で refuse。
+
 #### 3.1.1 2026-10-15（round 3）— D2代替経路・N4のtag 87・X3のretention延長（未検証のソース）
 
 上の未解決4項目のうち3つに休眠のソースを追加した。**ビルド・テストは未実行**で、PASSを主張しない。新しいobject種別・fence・tag・state tableは追加していない（既存3 fenceの裏側。fence未満・`None` presetではどのhookも読まれず、A-2の表とharnessは変更不要）。

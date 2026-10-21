@@ -1,0 +1,135 @@
+{
+  "date": "2026-10-21",
+  "candidate_parent": "8902e738cd24a0e2b38fd5ff3271f432564713b5",
+  "selected_unique_passes": 67,
+  "selected_failed": 0,
+  "selected_ignored": 0,
+  "selection": "Native32 (includes targeted first1) + service codec6 + policy3 + G14 gates12 + activation5 + release identity9 = 67. Do not add targeted1, historical31/62/89 or any earlier checkpoint.",
+  "scope": "Minimum accepted-frame material/native hard+reorg horizon checked at existing service-context validation, used by native row write and carriage consistency. No complete original compiler/fees/reservation or semantic termination graph, public lifecycle or default authority.",
+  "fixture_limits": "New boundary assertions use existing guard-only synthetic semantic rows with original/frame fields, dummy history signatures and synthetic service packet costs. They compare the old hard-only helper with contextual validation, not actual signed semantic admission. Other native fixtures retain verified-half original/Ready/payment assumptions. Not full node T05/T08, pruned IBD, actual capacity or measured door.",
+  "required_horizon": "max(original frame material_until, original hard + accepted descriptor native reorg_retention), checked arithmetic; hard must equal original acceptance+10,000. Additional follow-up duties remain unclosed, not assumed zero.",
+  "production_effect": "No wire/schema/preset/clock/signed-contract values changed. Service-absent legacy paths unchanged; existing unadopted service snapshots with too-short signed dependencies now refuse contextual validation. F02/F03 default/arming denials remain.",
+  "heavy_lock": "/Users/wata/.cache/misaka-heavy-lock.sh",
+  "commands": [
+    {
+      "command": "cargo test --release -p kaspa-consensus-core --lib rooted_service_semantic_custody_guard_rejects_missing_short_and_substituted_contracts -- --nocapture",
+      "log": "service-material-floor-first.log",
+      "exit_code": 0,
+      "selected": false
+    },
+    {
+      "command": "cargo test --release -p kaspa-consensus-core --lib palw_tir_public_fold_v1",
+      "log": "service-material-floor-native-release.log",
+      "exit_code": 0,
+      "selected": true
+    },
+    {
+      "command": "cargo test --release -p kaspa-consensus-core --test palw_court_service_state_v2 --test palw_court_policy_v1 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move",
+      "log": "service-material-floor-regressions.log",
+      "exit_code": 0,
+      "selected": true
+    },
+    {
+      "command": "cargo check --release -p kaspa-consensus",
+      "log": "service-material-floor-consensus-check.log",
+      "exit_code": 0,
+      "selected": false
+    }
+  ],
+  "source_sha256": {
+    "consensus/core/src/palw_court_service_state_v2.rs": "c892f39951b697a6d53f712c52484f095c8922f11f419dce4da7a53326595362",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "19980ea55ccef0de0202b135ff196fb7911ccb9d01c4d0d0c7a5e7dbd868edea",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "74b70b159cab69de90e5b298ccde0084f95fb56d3d20eb508376293d7bf30010",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "f64465d35b9213cb9ec98e210197f0afb3348d59369aacfcde060d9d969e39d7",
+    "consensus/core/src/palw_court_policy_v1.rs": "e3a3debe367823276538fdbdc688f71f952cd312043646d2bf9c3f0980775706"
+  },
+  "patch": {
+    "path": "service-material-floor-runtime.patch",
+    "sha256": "282b796a8b6161485eaf417f3709828446abbb25bd2b8e37e7a3bd0438642061"
+  },
+  "core_unit_executable_sha256": "9cc3bf04fece85c761d38731e3077d18dfc184facdd3563666f45fba1631ddec",
+  "integration_executable_sha256": {
+    "target/release/deps/g14_close_gates-07a58aeba402f266": "9076b8afccf91db3da2d28bad9c5e26ee516a999defabcd71d7dab32ce83f588",
+    "target/release/deps/palw_activation_pool_is_t12_only-19bd1d2a52f9c5c6": "58bd7e2df9705f4111c61f2665863f60416b7ad42c0c268a5480e98b14fc47f8",
+    "target/release/deps/palw_court_policy_v1-411f3ee2af7ee8dc": "862b31beb63ffdec9c7de529c20681dfbfde6e9dffbb87db58c11b805ff34ecc",
+    "target/release/deps/palw_court_service_state_v2-84a662caba178f3c": "de5171b456e39004b0438e8b3d487a8f88cd6761e93a5f98317af8f7ff1d27bc",
+    "target/release/deps/palw_the_release_did_not_move-c8b47338cdf2801d": "7808441c2b57a201fbc6b598f849cc19d2ef811729277adce774d7959f8d6f45"
+  },
+  "logs": [
+    {
+      "path": "service-material-floor-consensus-check.log",
+      "sha256": "447d69f585eba2e513521e9430712fdd7fd6cd40cbff6ed89c7dbb6335be666b",
+      "test_results": []
+    },
+    {
+      "path": "service-material-floor-first.log",
+      "sha256": "20d73d10e21ea7a4437d9cb19bbbe2aed1df34d6285f4222149a1a881ac4178b",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "path": "service-material-floor-native-release.log",
+      "sha256": "93fd47c3e9fe5fc94f47229d2ad05ea8279516d04cdb172e7d941c89a9d7f16c",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 32,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "path": "service-material-floor-regressions.log",
+      "sha256": "b9da889662f3760fe62f1594782846c315de01d35f8c99751b9dc6a979db80cf",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    }
+  ],
+  "documentation_check": {
+    "command": "python3 docs/maintenance/check_docs.py",
+    "exit_code": 1,
+    "log": "service-material-floor-docs-check.log",
+    "sha256": "3d05eeede7cde1b6b70f7c2d66c03fa08c6e9893ca71e7a5a947ff7547635e39",
+    "inherited_imported_issues": 5,
+    "baseline_known_occurrences": 43,
+    "new_authored_issues": 0
+  },
+  "raw_evidence_note": "Raw logs and git-generated patch are retained verbatim; whitespace checks apply to implementation and Markdown, not raw patch context/log endings."
+}

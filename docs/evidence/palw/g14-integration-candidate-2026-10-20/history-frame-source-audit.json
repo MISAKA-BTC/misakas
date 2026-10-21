@@ -1,0 +1,10 @@
+{
+  "parent": "3bc8f1ff462b53f3747fddaee06478c71ec98c0f",
+  "scope": "test-only public original history frame; no production semantics",
+  "original_frame_construction_body_byte_identical": true,
+  "shared_body_sha256": "e3e87c3b441044a37db70ae6c0cc4a6cb8f2e1089b5fde10c82af7092ddcfa1d",
+  "changed_sources_sha256": {
+    "consensus/core/src/lib.rs": "030f3e9b6e7a92ea80c7b0038e8af472388015ad5251985148c65c439af5e77c",
+    "consensus/core/src/palw_tir_public_claim_v1.rs": "56aa87f67d90a57ac6bee7f0cdb4b8a6f8ad4d1ed55a7c536afa0805ff2157c7"
+  }
+}

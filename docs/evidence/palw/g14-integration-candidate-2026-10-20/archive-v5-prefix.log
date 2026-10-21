@@ -1,0 +1,22 @@
+
+running 17 tests
+test palw_state_v2::tests::public_prefix_fold_v1::prospective_public_job_retention_precedes_the_legacy_fence_and_survives_native_reload ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::named_prefix_job_keeps_its_immutable_registered_tokenizer_statement ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::expired_public_collection_preserves_pending_material_but_never_revives_collection ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflow_before_writes ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_collection_can_finish_after_stream_horizon_but_not_at_collection_expiry ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::already_charged_public_claim_keeps_paid_material_without_a_second_collection ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_history_is_literal_success_only_rooted_and_reversible ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound_once ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::producer_only_history_default_does_not_discharge_other_paid_prefix_valid_signers ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::shared_owned_rows_preserve_every_old_box_encoding_and_copy_only_the_written_owner ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::staged_source_default_charges_the_producer_only_when_it_is_itself_in_the_unpaid_set ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::every_paid_family_continues_and_convicts_after_actual_sibling_da_default ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::flat_response_index_pages_literal_phase_deadlines_and_roundtrips_seed_journals ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 4665 filtered out; finished in 5.72s
+

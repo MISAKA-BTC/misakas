@@ -1,5 +1,6 @@
 //! Accepted-cursor public prefix acquisition. No producer capture enters the requester's
 //! view: only authenticated binding/job, immutable semantics and rooted court progress do.
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::{
     Hash64,
     palw_constraint_stream_carriage_v1::{
@@ -450,9 +451,7 @@ impl super::PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         slot: super::PalwAnswerSlotV1<'_>,
         cursor: &mut Option<(u64, Hash64, PalwBondKeyV2)>,
-        court_pending: &mut Vec<(Hash64, u32, bool, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2)>,
-        court_due: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
-        court_moved: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         use super::*;
         // Distinct from the replay filer's demand round (`u32::MAX - 6`), which retains by round.
@@ -462,7 +461,7 @@ impl super::PalwPanelService {
         let page = session.palw_prefix_response_duties_v1(signer, *cursor)?;
         *cursor = page.next;
         // Remove a stale branch/fulfilled source before spending another fee input.
-        court_pending.retain(|(_, round, responder, object)| {
+        court_outbox.retain_pending(|(_, round, responder, object)| {
             if (*round, *responder) != (lane_round, true) {
                 return true;
             }
@@ -517,13 +516,15 @@ impl super::PalwPanelService {
             if slot.only.is_some_and(|only| !only.contains(&duty.material.claim_id)) {
                 continue;
             }
-            if court_pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (lane_round, true)).count() >= 64 {
+            if court_outbox.pending().iter().filter(|(_, round, responder, _)| (*round, *responder) == (lane_round, true)).count()
+                >= 64
+            {
                 break;
             }
             let Some(seed_id) = duty.progress.seed_id else { continue };
             let key = (seed_id, lane_round, true);
-            if court_pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
-                || court_moved.get(&key).is_some_and(|at| duty.progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+            if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
+                || court_outbox.submitted_at(&key).is_some_and(|at| duty.progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
             {
                 continue;
             }
@@ -642,11 +643,11 @@ impl super::PalwPanelService {
             .await;
             match result {
                 Ok(object) => {
-                    court_due.insert(key, deadline.saturating_sub(1));
-                    court_pending.push((key.0, key.1, key.2, object));
+                    court_outbox.set_due(key, deadline.saturating_sub(1));
+                    court_outbox.push_pending((key.0, key.1, key.2, object));
                 }
                 Err(why) => {
-                    court_moved.insert(key, now);
+                    court_outbox.mark_submitted(key, now);
                     debug!("[{PALW_PANEL}] claim {claim}: public prefix source remains unavailable: {why}");
                 }
             }

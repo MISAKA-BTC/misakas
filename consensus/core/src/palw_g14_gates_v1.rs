@@ -54,7 +54,34 @@ pub enum PalwG14GatedFenceV1 {
     LegacyPublicFilerV1,
     /// LG14-B `palw_legacy_held_da_v2` (lane g14-close-legacy, 2026-10-16): likewise, and it needs LG14-A at or below it.
     LegacyHeldDaV2,
+    /// `palw_court_capacity_v1` (lane g14-court-capacity, audit G-07): the court budget, time price and deadline-aware queue.
+    CourtCapacityV1,
+    /// `palw_court_model_scope_v1` (register D2, ruling 2026-10-12; lane d2-x3-finish, 2026-10-18): its unconditional refusal is replaced by
+    /// this gate. Its requirements are tests and drills (no economic value is measured).
+    CourtModelScopeV1,
+    /// `palw_claim_hard_deadline_v1` (register X3, ruling 2026-10-12; lane d2-x3-finish, 2026-10-18): its unconditional refusal is replaced
+    /// by this gate, and its policy terms are measurements ([`Self::needs_measured_value`]).
+    ClaimHardDeadlineV1,
 }
+
+/// **D2's arm-readiness requirements** (register §3.1.1, ADR-0177 D2): the replacement routes' own tests, the node-level full-collusion
+/// conviction past the fence, and the fence-crossing drill. No economic value is measured.
+pub const PALW_D2_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "T-D2 fold: palw_court_model_scope_routes_v1 suite; a D2 claim's restricted units refused, the replacement routes admitted, old claims unaffected",
+    "node E2E: past the fence a new claim's full collusion (producer and every seat, outside bond) is convicted by the replacement route; the block stands",
+    "drill: the shipped binary crosses the fence; the four model-byte routes are closed for new claims only and every older claim settles",
+];
+
+/// **X3's arm-readiness requirements** (register §3.1, REQ-X3-1..6): the fold tests, the MEASURED policy terms (every `B_*` term with no
+/// existing source and `c_retain`; 0 is refused), the node-level flow, and the fence-crossing drill.
+pub const PALW_X3_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "V1 build, regressions and boundary decode (palw_ruling_fences_v1 X3 suite, REQ-X3-1..6)",
+    "measured: B_cold_fetch, B_check, B_localize, B_carrier, B_reorg_slack and c_retain on the slowest supported node and the real retention \
+     price, as the approved policy (none of them 0)",
+    "node E2E: acceptance fixes the deadline, effective = min(proposed, hard), no extension or regrant for a new claim, a pursuit starts only \
+     inside its budget, and reaching the deadline alone never Finals an unresolved claim",
+    "drill: the shipped binary crosses the fence; restart and reorg replay identical across it; claims accepted before it keep the old rules",
+];
 
 /// The G14 validation steps V1–V7 (`g14-objective-conviction-remaining-2026-10-15.md` §5), one evidence digest each.
 pub const PALW_G14_VALIDATION_STEPS_V1: &[&str] = &[
@@ -122,8 +149,24 @@ pub const PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1: &[&str] = &[
     "drill D-02 / D-11: the shipped binary crosses the fence; a withheld unit defaults on the real network",
 ];
 
+/// **The court-capacity fence's arm-readiness requirements** (audit G-07; user direction 2026-10-16 §1, §3). Every value of its
+/// policy is a measurement: the per-operation work units and the block budget on the slowest supported node, ρ_court, and the drills
+/// that show an honest prosecution reaches a verdict under a saturating and a continuously refilling coalition.
+pub const PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "V1 build, regressions and boundary decode (g14_court_capacity fold suite; the dispute record's appended court rows)",
+    "measured: each court operation class's verification time, evidence bytes and working set on the slowest supported node \
+     (palw_court_op_timing_harness and the node E2E's [court-op timing]), with the block allotments, as a PalwCourtMeasurementV1 \
+     whose digest is THIS evidence entry and from which the armed policy derives exactly (validated)",
+    "measured: rho_court (sompi per occupied DAA per weight unit) and the session weight, with the occupancy economics reported",
+    "V3 drill: a coalition holds every court slot; a further honest independent verifier reaches its verdict inside its claim's \
+     hard deadline",
+    "V3 drill: a coalition refills every slot as it frees; the queued honest prosecution is granted first and convicts in time",
+    "V5 drill: maximum load — every block's court operations at the budget; node verification time and memory under the bound",
+    "V7 restart / IBD / pruned / reorg mid-queue: identical reservations, deadlines, fees and releases",
+];
+
 impl PalwG14GatedFenceV1 {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 12] = [
         Self::StagedPublicCourtV1,
         Self::StagedTirRouteV1,
         Self::StagedFloatConstraintV1,
@@ -133,6 +176,9 @@ impl PalwG14GatedFenceV1 {
         Self::RewardLiabilityHorizonV1,
         Self::LegacyPublicFilerV1,
         Self::LegacyHeldDaV2,
+        Self::CourtCapacityV1,
+        Self::CourtModelScopeV1,
+        Self::ClaimHardDeadlineV1,
     ];
 
     /// The `Params` field's name.
@@ -147,6 +193,9 @@ impl PalwG14GatedFenceV1 {
             Self::RewardLiabilityHorizonV1 => "palw_reward_liability_horizon_v1",
             Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
             Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
+            Self::CourtCapacityV1 => "palw_court_capacity_v1",
+            Self::CourtModelScopeV1 => "palw_court_model_scope_v1",
+            Self::ClaimHardDeadlineV1 => "palw_claim_hard_deadline_v1",
         }
     }
 
@@ -161,6 +210,9 @@ impl PalwG14GatedFenceV1 {
             Self::RewardLiabilityHorizonV1 => PALW_REWARD_LIABILITY_ARMING_REQUIREMENTS_V1,
             Self::LegacyPublicFilerV1 => PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1,
             Self::LegacyHeldDaV2 => PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1,
+            Self::CourtCapacityV1 => PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1,
+            Self::CourtModelScopeV1 => PALW_D2_ARMING_REQUIREMENTS_V1,
+            Self::ClaimHardDeadlineV1 => PALW_X3_ARMING_REQUIREMENTS_V1,
         }
     }
 
@@ -176,6 +228,8 @@ impl PalwG14GatedFenceV1 {
                 | Self::TirPublicConvictionV1
                 | Self::LegacyPublicFilerV1
                 | Self::LegacyHeldDaV2
+                | Self::CourtCapacityV1
+                | Self::ClaimHardDeadlineV1
         )
     }
 
@@ -191,6 +245,9 @@ impl PalwG14GatedFenceV1 {
             Self::RewardLiabilityHorizonV1 => p.palw_reward_liability_horizon_v1,
             Self::LegacyPublicFilerV1 => p.palw_legacy_public_filer_v1,
             Self::LegacyHeldDaV2 => p.palw_legacy_held_da_v2,
+            Self::CourtCapacityV1 => p.palw_court_capacity_v1.map(|f| f.activation),
+            Self::CourtModelScopeV1 => p.palw_court_model_scope_v1,
+            Self::ClaimHardDeadlineV1 => p.palw_claim_hard_deadline_v1.map(|f| f.activation),
         };
         raw.filter(|f| *f != ForkActivation::never())
     }
@@ -234,6 +291,19 @@ impl PalwG14GatedFenceV1 {
             Self::LegacyHeldDaV2 => {
                 "palw_legacy_held_da_v2 cannot be armed: no arm-readiness record (LG14-B: held-DA node E2E, measured descent budget, \
                  fence-crossing drill) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 is empty; audit G-01 option (a))"
+            }
+            Self::CourtCapacityV1 => {
+                "palw_court_capacity_v1 cannot be armed: no arm-readiness record (measured court operation costs and block budget, \
+                 rho_court, saturation / refill / maximum-load drills) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 \
+                 is empty; audit G-07)"
+            }
+            Self::CourtModelScopeV1 => {
+                "palw_court_model_scope_v1 cannot be armed: no arm-readiness record (D2 replacement-route suite, node full-collusion E2E, \
+                 fence-crossing drill) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 is empty; register D2)"
+            }
+            Self::ClaimHardDeadlineV1 => {
+                "palw_claim_hard_deadline_v1 cannot be armed: no arm-readiness record (X3 fold suite, measured B_* terms and c_retain, node \
+                 E2E, fence-crossing drill) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 is empty; register X3)"
             }
         }
     }
@@ -370,7 +440,8 @@ impl Params {
     }
 
     /// **One gated fence's record gate**: `Ok` when the fence is not armed (`None`, `never()`), on an isolated G14 test genesis, or when
-    /// a pinned record authorizes exactly this network and height; otherwise the fence's own refusal.
+    /// a pinned record authorizes exactly this network and height AND the court policy is complete;
+    /// otherwise the fence's own refusal. A readiness digest cannot close RFC-0026 F02/F03.
     pub fn validate_palw_g14_fence_record_v1(&self, fence: PalwG14GatedFenceV1) -> Result<(), PalwModeV2Error> {
         self.validate_palw_g14_fence_record_in_v1(fence, PALW_G14_ARMING_RECORDS_V1)
     }
@@ -389,10 +460,33 @@ impl Params {
             return Ok(());
         }
         match palw_g14_arming_record_admits_v1(fence, self.genesis.hash, at.daa_score(), records) {
-            Ok(()) => Ok(()),
+            Ok(()) => self.validate_palw_court_policy_completeness_v1(fence),
             Err(PalwG14ArmingRefusalV1::NoRecord) => Err(PalwModeV2Error::Invalid(fence.no_record_refusal())),
             Err(other) => Err(PalwModeV2Error::Invalid(other.reason())),
         }
+    }
+
+    /// RFC-0026 §4–5: readiness digests cannot substitute for a defined service
+    /// opportunity or an outsider's access to localization. No production completion
+    /// record exists. The isolated test genesis may exercise unfinished routes.
+    pub fn validate_palw_court_policy_completeness_v1(&self, fence: PalwG14GatedFenceV1) -> Result<(), PalwModeV2Error> {
+        if fence.armed(self).is_none() || self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
+        if matches!(fence,
+            PalwG14GatedFenceV1::StagedPublicCourtV1
+            | PalwG14GatedFenceV1::StagedTirRouteV1
+            | PalwG14GatedFenceV1::StagedFloatConstraintV1
+            | PalwG14GatedFenceV1::TirPublicConvictionV1
+            | PalwG14GatedFenceV1::LegacyPublicFilerV1
+            | PalwG14GatedFenceV1::LegacyHeldDaV2
+        ) {
+            return Err(PalwModeV2Error::Invalid(
+                "OneOutsiderCapacityIncomplete: RFC-0026 F03 shared localization under colluding owner occupancy is incomplete; \
+                 ServiceOpportunityIncomplete: F02 deterministic service opportunities and inclusion assumptions are not adopted",
+            ));
+        }
+        Ok(())
     }
 
     /// **The cross-lane G14 gates' refusals**, asked by `validate_palw_v2`:
@@ -438,6 +532,41 @@ impl Params {
         Ok(())
     }
 
+    /// **The TIR frame cost gate** (audit §10): `Ok` when `palw_tir_public_conviction_v1` is not armed; otherwise the ruleset must
+    /// carry a well-formed `palw_tir_frame_cost_v1` and — unless its genesis is an isolated G14 test genesis — a record in `records`
+    /// must name this network, the fence's height and exactly that model.
+    pub fn validate_palw_tir_frame_cost_in_v1(
+        &self,
+        records: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1],
+    ) -> Result<(), PalwModeV2Error> {
+        let Some(at) = PalwG14GatedFenceV1::TirPublicConvictionV1.armed(self) else { return Ok(()) };
+        let Some(cost) = self.palw_tir_frame_cost_v1.as_ref() else {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_tir_public_conviction_v1 cannot be armed without a measured TIR frame cost model (palw_tir_frame_cost_v1; audit §10)",
+            ));
+        };
+        if cost.check_v1().is_err() {
+            return Err(PalwModeV2Error::Invalid("palw_tir_frame_cost_v1 is malformed (zero window, price, unit or capacity)"));
+        }
+        // External audit 10-17 §7 P0(3): the longest accepted pursuit ends inside the liability horizon Final and payment are held
+        // to (`window_challenge_at(fence) + window_court`), on every network including an isolated test genesis.
+        if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
+            let horizon =
+                bundle.state.window_challenge_at(at.daa_score()).saturating_add(bundle.state.window_court());
+            if cost.clock.maximum_door_daa > horizon {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_tir_frame_cost_v1's longest accepted pursuit (maximum_door_daa) exceeds the network's liability horizon \
+                     window_challenge + window_court",
+                ));
+            }
+        }
+        if self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
+        crate::palw_tir_frame_cost_v1::palw_tir_frame_cost_record_admits_v1(self.genesis.hash, at.daa_score(), Some(cost), records)
+            .map_err(|why| PalwModeV2Error::Invalid(why.reason()))
+    }
+
     /// `palw_g14_route_required_v1` in force at `daa_score`.
     pub fn palw_g14_route_required_v1_active_at(&self, daa_score: u64) -> bool {
         PalwG14GatedFenceV1::G14RouteRequiredV1.armed(self).is_some_and(|f| f.is_active(daa_score))
@@ -458,6 +587,7 @@ impl Params {
             legacy_held_da_from: height(self.palw_legacy_held_da_v2),
             staged_court_from: height(self.palw_staged_public_court_v1_fence()),
             tir_conviction_from: height(self.palw_tir_public_conviction_v1_fence()),
+            court_capacity_from: self.palw_court_capacity_v1_fence().map(|f| f.activation.daa_score()),
         })
     }
 
@@ -512,6 +642,8 @@ pub struct PalwG14RouteMirrorV1 {
     pub staged_court_from: Option<u64>,
     /// `palw_tir_public_conviction_v1`, resolved (the later of its prerequisites).
     pub tir_conviction_from: Option<u64>,
+    /// `palw_court_capacity_v1` (audit G-07): the court-capacity guarantee the fused-leaf adjudication route depends on.
+    pub court_capacity_from: Option<u64>,
 }
 
 fn in_force(height: Option<u64>, daa: u64) -> bool {
@@ -530,6 +662,11 @@ impl PalwG14RouteMirrorV1 {
         let d = accepted_daa;
         match family {
             PalwG14RouteFamilyV1::LegacyPanelAttempt => in_force(self.legacy_filer_from, d) && in_force(self.legacy_held_da_from, d),
+            // User direction 2026-10-16 (§1): the fused-leaf route (KernelWitness → ShardCourtAccused → held dissection) needs a court
+            // slot, so it is not a G14 route until the court-capacity guarantee is armed as well.
+            PalwG14RouteFamilyV1::LegacyFusedLeaf => {
+                self.route_armed(PalwG14RouteFamilyV1::LegacyPanelAttempt, d, framed) && in_force(self.court_capacity_from, d)
+            }
             PalwG14RouteFamilyV1::FpSelection => framed && in_force(self.tir_conviction_from, d),
             PalwG14RouteFamilyV1::FpConstraint | PalwG14RouteFamilyV1::FpPrefix | PalwG14RouteFamilyV1::FpTokenizer => {
                 in_force(self.staged_court_from, d) && in_force(self.legacy_filer_from, d)
@@ -544,6 +681,7 @@ impl PalwG14RouteMirrorV1 {
 /// | family | claims | G14 public-conviction route (every fence in force at the claim's acceptance) |
 /// |---|---|---|
 /// | `LegacyPanelAttempt` | every V2 Attempt (floor, model, TIR v1, gen v1, shard classes) | LG14-A `palw_legacy_public_filer_v1` + LG14-B `palw_legacy_held_da_v2` |
+/// | `LegacyFusedLeaf` | a V2 Attempt whose class has fused-attention leaves (their lies are adjudicated only through a court session) | `LegacyPanelAttempt`'s + `palw_court_capacity_v1` (user direction 2026-10-16) |
 /// | `FpSelection` | every FP job decoded under a selection rule (V3, V4, constraint, prefix) | the TIR public frame: `palw_tir_public_conviction_v1` AND the commitment carries its TFP1 frame |
 /// | `FpConstraint` | FP Job V6 (constraint) | the staged Constraint family: `palw_staged_public_court_v1` + LG14-A |
 /// | `FpPrefix` | prefix state / inherit (11 / 12) | the staged PublicPrefix family: `palw_staged_public_court_v1` + LG14-A |
@@ -555,6 +693,7 @@ impl PalwG14RouteMirrorV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PalwG14RouteFamilyV1 {
     LegacyPanelAttempt,
+    LegacyFusedLeaf,
     FpSelection,
     FpConstraint,
     FpPrefix,
@@ -584,8 +723,30 @@ pub fn palw_g14_fp_route_families_v1(job: &PalwFreePromptJobV3) -> Vec<PalwG14Ro
     families
 }
 
-/// **Option (b) on a V2 Attempt accepted at `accepted_daa`**: `None` below the fence (or where no network arms it), or when the legacy
-/// Panel route's G14 route is armed; else `Some(why)`, refused at the claim gate with [`PALW_G14_ROUTE_ABSENT_CODE_V1`].
+/// **Option (b) on a V2 Attempt of a class WITH fused-attention leaves** (lane g14-court-capacity, user direction 2026-10-16 §1):
+/// [`palw_g14_route_attempt_refusal_v1`] and, past it, the fused-leaf route — whose adjudication needs a court session — counts only
+/// once `palw_court_capacity_v1` is in force at the claim's acceptance. `fused` is `PalwClassStateV2::fused_attention`. This is the
+/// one the class gate asks; below option (b)'s fence `None`, byte for byte.
+pub fn palw_g14_route_attempt_refusal_for_class_v1(params: &PalwStateParamsV2, accepted_daa: u64, fused: bool) -> Option<String> {
+    if let Some(why) = palw_g14_route_attempt_refusal_v1(params, accepted_daa) {
+        return Some(why);
+    }
+    let mirror = params.g14_route_required_v1()?;
+    if !fused || !mirror.governs(accepted_daa) || mirror.route_armed(PalwG14RouteFamilyV1::LegacyFusedLeaf, accepted_daa, false) {
+        return None;
+    }
+    Some(
+        "palw_g14_route_required_v1: this V2 Attempt's class has fused-attention leaves, whose lies are adjudicated only through a \
+         court session (KernelWitness, ShardCourtAccused, held dissection); that route counts as a G14 route only once \
+         palw_court_capacity_v1 guarantees an honest prosecution court capacity before its deadline: no reward, weight or consensus \
+         credit"
+            .to_string(),
+    )
+}
+
+/// **Option (b) on a V2 Attempt accepted at `accepted_daa`** (the class-agnostic half: a class with no fused-attention leaf): `None`
+/// below the fence (or where no network arms it), or when the legacy Panel route's G14 route is armed; else `Some(why)`, refused at
+/// the claim gate with [`PALW_G14_ROUTE_ABSENT_CODE_V1`].
 pub fn palw_g14_route_attempt_refusal_v1(params: &PalwStateParamsV2, accepted_daa: u64) -> Option<String> {
     let mirror = params.g14_route_required_v1()?;
     if !mirror.governs(accepted_daa) || mirror.route_armed(PalwG14RouteFamilyV1::LegacyPanelAttempt, accepted_daa, false) {
@@ -694,10 +855,20 @@ pub fn palw_g14_genesis_test_params_v1() -> Params {
     p.palw_legacy_public_filer_v1 = at;
     p.sync_palw_legacy_public_filer_v1();
     p.palw_legacy_held_da_v2 = at;
+    // Lane g14-court-capacity: the court-capacity guarantee at 0 too (its placeholder policy is admissible only on an isolated genesis).
+    p.palw_court_capacity_v1 = Some(crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1::placeholder_at(ForkActivation::new(0)));
+    p.sync_palw_court_capacity_v1();
     p.palw_staged_public_court_v1 = at;
     p.palw_staged_tir_route_v1 = at;
     p.palw_staged_float_constraint_v1 = at;
     p.palw_tir_public_conviction_v1 = at;
+    // The frame's cost model: the TEST-ONLY config (an isolated genesis skips the record pin, never the model itself).
+    // Its longest accepted pursuit is this genesis's own liability horizon at the fence (validation refuses a longer one).
+    let mut cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    if let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode {
+        cost.clock.maximum_door_daa = bundle.state.window_challenge_at(0).saturating_add(bundle.state.window_court());
+    }
+    p.palw_tir_frame_cost_v1 = Some(cost);
     p.palw_public_evidence_reward_v1 = at;
     p.sync_palw_2026_10_12_ruling_fences_v1();
     p.palw_g14_route_required_v1 = at;

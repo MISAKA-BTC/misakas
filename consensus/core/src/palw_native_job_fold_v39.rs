@@ -3,10 +3,15 @@
 use super::*;
 use crate::{
     palw_flat_execution_capacity_v22::*,
+    palw_native_mining_v39::ACCUSE_MINING_ACTION_V39,
     palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1},
     palw_native_execution_v39::*,
     palw_native_job_v39::*,
     palw_native_queue_v30::*,
+};
+use crate::palw_native_liability_hold_v1::{
+    PALW_NATIVE_FAMILY_JOB_V39, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1, PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+    PalwNativeHeldFeeRowV1, palw_native_held_fee_key_v1,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::{
@@ -351,7 +356,13 @@ pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128
         .iter()
         .filter_map(|id| header(r, *id).ok())
         .filter(|h| {
-            h.original.producer == *bond && matches!(h.terminal, NativeJobTerminalV39::Funded | NativeJobTerminalV39::Challengeable)
+            h.original.producer == *bond
+                && (matches!(h.terminal, NativeJobTerminalV39::Funded | NativeJobTerminalV39::Challengeable)
+                    || (h.terminal == NativeJobTerminalV39::Final
+                        && r.aux_row::<PalwNativeHeldFeeRowV1>(
+                            PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+                            &palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_JOB_V39, &h.id),
+                        ).is_some_and(|row| row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1 && row.family == PALW_NATIVE_FAMILY_JOB_V39 && row.job == h.id && row.producer == *bond)))
         })
         .fold(0u128, |n, h| n.saturating_add(h.original.reserve as u128))
         .saturating_add(public::reserved(r, bond))
@@ -728,6 +739,15 @@ fn commit_after_paid(
     // is dropped successfully, so a nested decoder cannot roll back the tariff.
     let Ok(w) = NativeCommitWireV39::from_bytes(body, h.original.maximum_positions) else { return Ok(()) };
     let (mut book, _, class, max, quota, _) = restore_job(builder, p, &h)?;
+    // The original producer source guarantee is reserved in one quota interval.
+    // A new liable claim must fit its whole signed H in that SAME interval;
+    // accepting it first and dropping answers at the old deadline is unsound.
+    if super::palw_native_liability_hold_fold_v1::native_hold_applies_v1(builder.params, ctx.daa_score) {
+        let horizon = super::palw_native_liability_hold_fold_v1::native_horizon_v1(builder.params, h.original.deadline);
+        if horizon >= epoch(p, ctx)?.interval_end(&p.execution.quota).map_err(bad)? {
+            return Err(bad("native39 full liability service exceeds its originally reserved quota interval"));
+        }
+    }
     let r = builder.state.kernel_route.as_ref().unwrap();
     let reader = NativeMaterialReader { route: r };
     let inputs = match ActualInputResolverV39::derive(class.source(), &max, &w.generated, &reader) {
@@ -771,11 +791,28 @@ pub(super) fn apply(
         65..=70 => super::palw_native_master_fold_v39::apply(builder, ctx, signer, action, body),
         61..=64 => material::apply(builder, ctx, signer, &p, action, body),
         73..=79 => super::palw_native_mining_fold_v39::apply(builder, ctx, signer, &p, action, body),
+        ACCUSE_MINING_ACTION_V39 => {
+            super::palw_native_mining_fold_v39::policy(builder, ctx)?;
+            mining_court::apply(builder, ctx, signer, &p, body)
+        }
         _ => Err(bad("native39 action has no implemented current native transition")),
     }
 }
 #[path = "palw_native_collect_fold_v39.rs"]
 pub(super) mod collect;
+/// G14 lane closure G-N2: the post-Final accusation of a mining claim (stage action 80).
+#[path = "palw_native_mining_court_fold_v39.rs"]
+mod mining_court;
+/// Has the job's collection (53) run (its material detached)?
+pub(super) fn native_job_collected_v39(r: &PalwKernelRouteStateV1, job: Digest) -> Result<bool, PalwStateV2Error> {
+    Ok(collect::collected(r, job)?.is_some())
+}
+pub(super) fn release_mining_holds_v39(
+    builder: &mut TransitionBuilder<'_>,
+    c: &crate::palw_native_mining_v39::NativeMiningClaimRecordV39,
+) -> Result<(), PalwStateV2Error> {
+    mining_court::release_holds(builder, c)
+}
 #[path = "palw_native_job_audit_fold_v39.rs"]
 mod audit;
 pub(super) use audit::audit_policies_v39;
@@ -833,12 +870,48 @@ fn credit(
     if s.actual_slash != 0 && builder.slash_bond(h.original.producer, s.actual_slash as u128)? != s.actual_slash {
         return Err(bad("native39 original actual collected producer reserve changed"));
     }
-    if s.producer_credit != 0 {
-        builder.pay_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11, ctx.daa_score, amount, queue, true)?;
+    // RFC08 08-B (ADR-0184 §1, dormant `palw_native_liability_horizon_v1`): a Final of a claim committed past the fence does not
+    // queue the producer's fee — it is held to the claim's liability horizon (signed deadline + window_court), accusable through
+    // it, and released by the closing tick or refunded to the requester on a post-Final conviction.
+    let held = s.producer_credit != 0
+        && s.terminal == NativeJobTerminalV39::Final
+        && book.claim().is_some_and(|c| {
+            super::palw_native_liability_hold_fold_v1::native_fee_needs_hold_v1(
+                builder.params,
+                c.committed,
+                ctx.daa_score,
+                h.original.deadline,
+            )
+        });
+    if held {
+        let horizon = super::palw_native_liability_hold_fold_v1::native_horizon_v1(builder.params, h.original.deadline);
+        super::palw_native_liability_hold_fold_v1::hold_native_fee_v1(
+            builder,
+            &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1 {
+                version: crate::palw_native_liability_hold_v1::PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1,
+                family: crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39,
+                job: h.id,
+                claim: s.claim.unwrap_or([0; 64]),
+                producer: h.original.producer,
+                queue: queue.as_bytes(),
+                payload: payout.as_bytes(),
+                amount,
+                income_root: h.id,
+                income_kind: 11,
+                budget: super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id).as_bytes(),
+                refund_payload: h.requester_payout.as_bytes(),
+                final_daa: ctx.daa_score,
+                horizon_daa: horizon,
+            },
+        )?;
     } else {
-        builder.cancel_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11)?;
+        if s.producer_credit != 0 {
+            builder.pay_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11, ctx.daa_score, amount, queue, true)?;
+        } else {
+            builder.cancel_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11)?;
+        }
+        builder.write_payout(queue, Some(PalwPayoutV2 { payload: payout, amount }))?;
     }
-    builder.write_payout(queue, Some(PalwPayoutV2 { payload: payout, amount }))?;
     if let Some((f, payout)) = finder_payout {
         if builder.params.reporter_income_active_at(ctx.daa_score) {
             let award = Hash64::from_bytes(object_id(
@@ -884,7 +957,11 @@ fn credit(
     )
     .map_err(bad)?;
     public::cancel_remaining(builder, h)?;
-    subject.closed = true;
+    // A held Final still admits independently paid accusations. Closing the
+    // subject here would make protected::owner reject every new owner despite
+    // accusable_v39 accepting the same claim. Keep its prepaid capacity intact
+    // until the held fee actually leaves; never return consumed allowance.
+    subject.closed = !held;
     builder.write_kernel_row(QUOTA, b(&(2u8, h.id)), Some(b(&(subject.row_root(), subject))))?;
     write_book(builder, h, book)?;
     let c = NativeSingleCreditV39 {
@@ -901,17 +978,173 @@ fn credit(
         established: s.established,
     };
     builder.write_kernel_row(TABLE, k(23, &h.id), Some(b(&(c.root(), &c))))?;
-    builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id), ctx.daa_score)?;
+    // A held fee keeps the producer's reservation open to the horizon (the release or the refund closes it).
+    if !held {
+        builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id), ctx.daa_score)?;
+    }
     // Keep the original books/posts/credit for Master and independent audit,
-    // but a terminal job no longer occupies an active actor job slot. This
-    // does not return any resource or monetary-window allowance.
+    // A held Final retains the producer slot as its collateral index; other
+    // terminal slots can leave without returning any prepaid allowance.
     for (kind, who) in [(21, h.original.requester), (22, h.original.producer)] {
+        // The producer catalogue is also the bounded collateral-reservation index.
+        // Keep this slot while the Final fee is held, including an awaited verdict.
+        if held && kind == 22 {
+            continue;
+        }
         let mut ids = list(builder.state.kernel_route.as_ref().unwrap(), kind, &who)?;
         ids.retain(|id| *id != h.id);
         builder.write_kernel_row(TABLE, k(kind, &who), Some(b(&ids)))?;
     }
     Ok(())
 }
+/// Release the bounded producer reservation slot only when its held fee has been
+/// paid or refunded. The original job/book/credit remain available for audit.
+pub(super) fn clear_held_producer_slot_v39(
+    builder: &mut TransitionBuilder<'_>,
+    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
+) -> Result<(), PalwStateV2Error> {
+    if row.family != crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39 {
+        return Ok(());
+    }
+    let route = builder.state.kernel_route.as_ref().ok_or_else(|| bad("native39 held producer catalogue absent"))?;
+    let mut ids = list(route, 22, &row.producer)?;
+    // The native release guard authenticates the original subject. Close its
+    // retained capacity with the actual fee transition, preserving all debits.
+    // Authenticate any present row before changing it or the producer index.
+    let subject_key = b(&(2u8, row.job));
+    let subject = route.aux.get(&(QUOTA, subject_key.clone())).map(|raw| {
+        if raw.len() >= 8192 {
+            return Err(bad("native39 held subject extent"));
+        }
+        let (root, mut subject): (Digest, QuotaSubjectSummaryV11) =
+            borsh::from_slice(raw).map_err(|_| bad("native39 held subject grammar"))?;
+        if root != subject.row_root() || subject.binding.job_id != row.job {
+            return Err(bad("native39 held subject root/job differs"));
+        }
+        subject.closed = true;
+        Ok(subject)
+    }).transpose()?;
+    if let Some(subject) = subject {
+        builder.write_kernel_row(QUOTA, subject_key, Some(b(&(subject.row_root(), subject))))?;
+    }
+    if ids.contains(&row.job) {
+        ids.retain(|id| *id != row.job);
+        builder.write_kernel_row(TABLE, k(22, &row.producer), Some(b(&ids)))?;
+    }
+    Ok(())
+}
+
+/// **RFC08 08-B (ADR-0184 §1): the credit of a conviction of a Final claim before its liability horizon.** The Final's fee was
+/// held (aux 144), never queued: it is refunded to the requester whole, the producer's reserve is collected as a pre-Final
+/// conviction collects it (`s.actual_slash`), the finder is paid as [`credit`] pays it, and the job's single-credit record is
+/// replaced by the conviction's. Refused without a held fee inside its horizon.
+pub(super) fn credit_after_final_conviction(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    h: &mut JobHeader,
+    book: &NativeJobBookV39,
+    s: &NativeSettlementV39,
+    finder: PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39;
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    if !r.aux.contains_key(&(TABLE, k(23, &h.id)))
+        || book.settlement() != Some(s)
+        || s.terminal != NativeJobTerminalV39::Convicted
+        || s.job != h.id
+        || s.producer_credit != 0
+        || s.requester_credit != h.original.reward
+    {
+        return Err(bad("native39 post-Final conviction settlement differs"));
+    }
+    let row =
+        super::palw_native_liability_hold_fold_v1::refund_native_fee_v1(builder, PALW_NATIVE_FAMILY_JOB_V39, &h.id, ctx.daa_score)?;
+    if row.amount != h.original.reward {
+        return Err(bad("native39 held fee differs from the original escrow"));
+    }
+    if s.actual_slash != 0 && builder.slash_bond(h.original.producer, s.actual_slash as u128)? != s.actual_slash {
+        return Err(bad("native39 post-Final collected producer reserve changed"));
+    }
+    if s.finder_credit != 0 {
+        let bond = builder.state.bonds.get(&finder).ok_or_else(|| bad("native39 post-Final finder absent"))?;
+        if bond.operator_id.as_bytes() == h.original.producer_operator {
+            return Err(bad("native39 post-Final finder is not independent"));
+        }
+        let payout = bond.payout_payload;
+        if builder.params.reporter_income_active_at(ctx.daa_score) {
+            let award = Hash64::from_bytes(object_id(
+                b"misaka-palw/native/post-final-collected-finder/v39",
+                &(h.id, h.original.root(), s.proof, finder),
+            ));
+            builder.stage_reporter_recipient_v1(award, finder, ctx.daa_score, s.finder_credit, Hash64::from_bytes(h.id))?;
+        } else {
+            builder.add_kernel_payout(payout, s.finder_credit)?;
+        }
+    }
+    write_book(builder, h, book)?;
+    let c = NativeSingleCreditV39 {
+        version: 39,
+        job: h.id,
+        funding: book.funding(),
+        terminal: book.root(),
+        settlement: s.root(),
+        claim: s.claim,
+        recipient: h.original.requester,
+        payout: h.requester_payout,
+        queue: super::palw_native_liability_hold_fold_v1::native_refund_queue_v1(&row),
+        amount: row.amount,
+        established: s.established,
+    };
+    builder.write_kernel_row(TABLE, k(23, &h.id), Some(b(&(c.root(), &c))))?;
+    Ok(())
+}
+
+/// **Does a held fee's job still have an open dispute?** (the release waits for its verdict): a native39 job's pending demands or
+/// live proof owners. Unknown families or unavailable job/status rows cannot authorize a payment.
+pub(super) fn native_dispute_open_v39(
+    builder: &TransitionBuilder<'_>,
+    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
+) -> bool {
+    if row.family != crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39 {
+        return true;
+    }
+    let Some(r) = builder.state.kernel_route.as_ref() else { return true };
+    let Ok(h) = header(r, row.job) else { return true };
+    let Some(raw) = r.aux.get(&(QUOTA, b(&(2u8, row.job)))).filter(|raw| raw.len() < 8192) else { return true };
+    let Ok((root, subject)) = borsh::from_slice::<(Digest, QuotaSubjectSummaryV11)>(raw) else { return true };
+    if root != subject.row_root() || subject.binding.job_id != row.job {
+        return true;
+    }
+    protected::status(r, &h).map_or(true, |st| !st.pending.is_empty() || st.owners.iter().any(|id| *id != [0; 64]))
+}
+
+/// **Is the job still accusable at `now`?** Challengeable, or (RFC08 08-B) Final with its fee held inside the liability horizon.
+pub(super) fn accusable_v39(builder: &TransitionBuilder<'_>, h: &JobHeader, now: u64) -> bool {
+    h.terminal == NativeJobTerminalV39::Challengeable
+        || (h.terminal == NativeJobTerminalV39::Final
+            && super::palw_native_liability_hold_fold_v1::native_accusable_after_final_v1(
+                &builder.state,
+                crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39,
+                &h.id,
+                now,
+            )
+            .is_some())
+}
+
+/// The last DAA an accusation's window may reach: the signed deadline, or past a held Final its liability horizon.
+pub(super) fn accusation_horizon_v39(builder: &TransitionBuilder<'_>, h: &JobHeader) -> u64 {
+    if h.terminal == NativeJobTerminalV39::Final
+        && let Some(row) = super::palw_native_liability_hold_fold_v1::held_native_fee_v1(
+            &builder.state,
+            crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39,
+            &h.id,
+        )
+    {
+        return row.horizon_daa;
+    }
+    h.original.deadline
+}
+
 fn restore_job_for_terminal(
     builder: &TransitionBuilder<'_>,
     p: &NativeExecutionPoliciesV39,
@@ -1181,3 +1414,7 @@ pub(super) fn accepted_consent_wire(r: &PalwKernelRouteStateV1, producer: &PalwB
         })
     })
 }
+
+#[cfg(test)]
+#[path = "palw_native_job_fold_v39_liability_tests.rs"]
+mod liability_tests;

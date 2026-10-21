@@ -29,6 +29,7 @@ pub struct SyncManager<
     Y: StatusesStoreReader,
 > {
     mergeset_size_limit: u64,
+    mergeset_capacity: Option<Arc<dyn Fn(BlockHash) -> u64 + Send + Sync>>,
     reachability_service: MTReachabilityService<T>,
     traversal_manager: DagTraversalManager<U, T, S>,
     ghostdag_store: Arc<U>,
@@ -70,6 +71,7 @@ impl<
     ) -> Self {
         Self {
             mergeset_size_limit,
+            mergeset_capacity: None,
             reachability_service,
             traversal_manager,
             ghostdag_store,
@@ -80,6 +82,17 @@ impl<
             exec_members: None,
             exec_children: None,
         }
+    }
+
+    /// A capacity lookup for the queried branch. Before activation it must remain the old
+    /// scalar, so a valid pre-fence request is not rejected merely for declaring a future step.
+    pub fn with_mergeset_capacity(mut self, capacity: Arc<dyn Fn(BlockHash) -> u64 + Send + Sync>) -> Self {
+        self.mergeset_capacity = Some(capacity);
+        self
+    }
+
+    pub(crate) fn mergeset_capacity_for(&self, high: BlockHash) -> u64 {
+        self.mergeset_capacity.as_ref().map_or(self.mergeset_size_limit, |read| read(high))
     }
 
     /// Install RFC-0008 v2's two hooks (only on a network that armed the EXEC payload).
@@ -94,7 +107,7 @@ impl<
     /// because it returns blocks with MergeSet granularity, so if MergeSet > max_blocks, the function will return nothing which is undesired behavior.
     pub fn antipast_hashes_between(&self, low: BlockHash, high: BlockHash, max_blocks: Option<usize>) -> (Vec<BlockHash>, BlockHash) {
         let max_blocks = max_blocks.unwrap_or(usize::MAX);
-        assert!(max_blocks >= self.mergeset_size_limit as usize);
+        assert!(max_blocks >= self.mergeset_capacity_for(high) as usize);
 
         // If low is not in the chain of high - forward_chain_iterator will fail.
         // Therefore, we traverse down low's chain until we reach a block that is in

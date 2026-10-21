@@ -80,6 +80,24 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
         assert!(store.load_tip(&fresh.bundle.state).unwrap().is_none());
         assert_eq!(store.iter_delta_blocks().count(), 0);
     }
+    // Every IBD caller establishes the sidecar import target through its pruning history first (761dcb1f3: a valid historic root
+    // is not permission to replace the live PALW tip). Without this, both imports below were refused for the target alone
+    // (`ImportedPalwPruningPointMismatch(point, genesis)`), so the forged-claim refusal proved nothing.
+    // The history is the one this node derived itself while validating the prefix: `point`'s pruning samples back to genesis.
+    let genesis = fresh.config.params.genesis.hash;
+    let mut history = vec![point];
+    while let Some(sample) = fresh.tc.pruning_sample_from_pov_for_tests(*history.last().unwrap()) {
+        if sample == genesis {
+            break;
+        }
+        history.push(sample);
+    }
+    history.push(genesis);
+    history.reverse();
+    fresh
+        .tc
+        .import_pruning_points(history.iter().map(|hash| fresh.tc.get_header(*hash).unwrap()).collect())
+        .expect("the verified local headers establish the sidecar import target");
     let mut forged = carriage.clone();
     forged.claims.get_mut(&claim).unwrap().execution_root = Hash64::from_bytes([0xED; 64]);
     assert!(
@@ -88,6 +106,12 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
     );
     assert!(fresh.tc.palw_state_v2_store.read().load_tip(&fresh.bundle.state).unwrap().is_none());
     fresh.tc.import_pruning_point_palw_state(point, carriage).expect("the normal carriage installs against the committed root");
+    assert!(fresh.tc.is_consensus_in_transitional_ibd_state(), "the sidecar install leaves the durable incomplete-import marker");
+    // This node validated the whole prefix, so its UTXO set is already the canonical one: there is no UTXO step to run. Without
+    // completing, the node stays in the transitional IBD state and the verifier's loop idles (validation 2026-10-17: no session in
+    // 1,600 DAA after the install).
+    fresh.tc.mark_pruning_utxoset_stable_for_tests();
+    assert!(!fresh.tc.is_consensus_in_transitional_ibd_state());
     let (installed_at, installed) = fresh.tc.palw_state_v2_store.read().load_tip(&fresh.bundle.state).unwrap().unwrap();
     assert_eq!(installed_at, point);
     assert_eq!(installed.state_root(), expected);

@@ -28,7 +28,13 @@
 | RFC-0020 | [長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない](0020-long-context-calibration-memory.md) | Draft / 部分実装 |
 | RFC-0021 | [設計凍結・例外変更手続きと文書の役割分離](0021-design-freeze-and-documentation-governance.md) | Accepted / 文書管理 |
 | RFC-0022 | [初期 mainnet から画像・動画・モデル改善を外す適用範囲](0022-post-mainnet-media-and-model-improvement-scope.md) | Accepted / 延期・無効化方針 |
-| RFC-0023 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0023-unresolved-claim-liability-and-independent-progress.md) | 方向 Accepted / 段階 1 休眠実装中 |
-| RFC-0024 | [ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計](0024-court-door-3200-to-ctx-2m.md) | Draft / 性能目標(RFC-0026 参照) |
-| RFC-0025 | [モデルが増え court が大量発生しても処理を継続できる客観的 court](0025-scalable-objective-court-many-models-mass-disputes.md) | Draft / 未実装(RFC-0026 参照) |
-| RFC-0026 | [court の主契約:時計・帰責・責任期間・置換関係の一本化](0026-court-policy-master-contract.md) | Draft / current court policy |
+| RFC-0023 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0023-unresolved-claim-liability-and-independent-progress.md) | 原文と後続改定を参照 |
+| RFC-0024 | [ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計(単一位置裁定・先読み開示・先行取得)](0024-court-door-3200-to-ctx-2m.md) | 原文と後続改定を参照 |
+| RFC-0025 | [モデルが増え、不正に対する court が大量発生しても処理を継続できる客観的 court](0025-scalable-objective-court-many-models-mass-disputes.md) | 原文と後続改定を参照 |
+| RFC-0026 | [court の主契約:時計・帰責・責任期間・置換関係の一本化](0026-court-policy-master-contract.md) | 原文と後続改定を参照 |
+| RFC-0027 | [Miner Account Bond と Panel 追及報酬: 10万の基礎担保、責任連動の追加拘束、REAL継続性](0027-miner-account-bond-and-panel-incentives.md) | 原文と後続改定を参照 |
+| RFC-0028 | [rooted court response eligibility history](0028-rooted-court-response-eligibility-history.md) | 原文と後続改定を参照 |
+| RFC-0029 | [owner-independent shared TIR query data](0029-owner-independent-shared-tir-query-data.md) | 原文と後続改定を参照 |
+| RFC-0030 | [court終了効果と未解決責任の保存](0030-court-end-effects-and-pending-liability-archive.md) | 原文と後続改定を参照 |
+| RFC-0031 | [共有courtのinitial notice境界](0031-shared-court-initial-notice-boundary.md) | 原文と後続改定を参照 |
+| RFC-0032 | [共有courtの終端materialと非独占提出](0032-shared-court-terminal-material-and-nonblocking-ingress.md) | 原文と後続改定を参照 |

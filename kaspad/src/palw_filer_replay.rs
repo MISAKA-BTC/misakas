@@ -90,6 +90,7 @@
 //! book.
 
 use super::*;
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::palw_offence_attribution_v1::{PalwClaimSourceKindV1, PalwOffenceTargetV1};
 use kaspa_consensus_core::palw_producer_v2::{PalwDaStepLeafDemandCheckV1, PalwSeatDutyV2};
 use kaspa_consensus_core::palw_replay_refute_v1::{
@@ -196,8 +197,8 @@ pub(super) fn palw_replay_demand_queue_key_v1(claim: Hash64) -> (Hash64, u32, bo
 }
 
 /// Whether the court queue holds `key`.
-fn queued_v1(court_pending: &[(Hash64, u32, bool, PalwConsensusObjectV2)], key: (Hash64, u32, bool)) -> bool {
-    court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key)
+fn queued_v1(court_outbox: &CourtOutboxV1, key: (Hash64, u32, bool)) -> bool {
+    court_outbox.pending().iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key)
 }
 
 /// **The DAA this seat's P2-8d `StepLeaf` demand on a claim is due by** (the P2-8e review, MED-2 and
@@ -231,8 +232,8 @@ pub(super) fn palw_replay_filer_opening_due_v1(current_daa: u64) -> u64 {
 /// **Date a queued court filing** — `due`, or the date it already has when that is earlier (the
 /// capture arm may have queued the same object under the same key; a claim licensed since brings its
 /// `Final` forward, never back).
-fn date_v1(court_due: &mut HashMap<(Hash64, u32, bool), u64>, key: (Hash64, u32, bool), due: u64) {
-    court_due.entry(key).and_modify(|at| *at = (*at).min(due)).or_insert(due);
+fn date_v1(court_outbox: &mut CourtOutboxV1, key: (Hash64, u32, bool), due: u64) {
+    court_outbox.tighten_due(key, due);
 }
 
 /// **A divergent fused-attention leaf no held opening was built for** (§3.9, DA-3:
@@ -739,7 +740,7 @@ impl PalwReplayFilerV1 {
         court_duties: &[kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2],
         bond: &PalwBondKeyV2,
         current_daa: u64,
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Vec<(Hash64, u64, Hash64, u64)> {
         let fresh = self.held.observe_v1(court_duties, bond, current_daa);
         let running = self.running.as_ref().map(|(claim, _)| *claim);
@@ -754,7 +755,7 @@ impl PalwReplayFilerV1 {
         for claim in ended {
             let Some(case) = self.cases.get(&claim) else { continue };
             let keys = Self::keys_of(&claim, case);
-            court_pending.retain(|(a, b, c, _)| !keys.contains(&(*a, *b, *c)));
+            court_outbox.retain_pending(|(a, b, c, _)| !keys.contains(&(*a, *b, *c)));
             info!(
                 "[{PALW_PANEL}] claim {claim}: this bond holds (or held) a held dissection on it — the held route's; the replay \
                  filer's case ends before anything more is paid for (P2-8e)"
@@ -1104,12 +1105,7 @@ impl PalwReplayFilerV1 {
 
     /// The P2-8d demands the chain is asked about now, with their leaves: not queued, not sent or
     /// asked to wait less than a re-plan ago, a send left.
-    pub(super) fn demands_due_v1(
-        &self,
-        current_daa: u64,
-        court_pending: &[(Hash64, u32, bool, PalwConsensusObjectV2)],
-        court_moved: &HashMap<(Hash64, u32, bool), u64>,
-    ) -> Vec<(Hash64, u64)> {
+    pub(super) fn demands_due_v1(&self, current_daa: u64, court_outbox: &CourtOutboxV1) -> Vec<(Hash64, u64)> {
         let fresh = |at: Option<u64>| at.is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA));
         self.cases
             .iter()
@@ -1117,8 +1113,8 @@ impl PalwReplayFilerV1 {
                 let PalwReplayCaseStepV1::Demand { leaf, sends, refused_at, .. } = &case.step else { return None };
                 let key = palw_replay_demand_queue_key_v1(*claim);
                 (*sends < PALW_REPLAY_FILER_SENDS_V1
-                    && !queued_v1(court_pending, key)
-                    && !fresh(court_moved.get(&key).copied())
+                    && !queued_v1(court_outbox, key)
+                    && !fresh(court_outbox.submitted_at(&key).copied())
                     && !fresh(*refused_at))
                 .then_some((*claim, *leaf))
             })
@@ -1133,11 +1129,11 @@ impl PalwReplayFilerV1 {
     pub(super) fn recheck_queued_demands_v1(
         &mut self,
         current_daa: u64,
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_outbox: &mut CourtOutboxV1,
         mut ask: impl FnMut(Hash64, u64) -> Option<PalwSeatAccuseStepV1>,
     ) {
         let mut settle = Vec::new();
-        court_pending.retain(|(claim, round, responder, _)| {
+        court_outbox.retain_pending(|(claim, round, responder, _)| {
             if (*claim, *round, *responder) != palw_replay_demand_queue_key_v1(*claim) {
                 return true;
             }
@@ -1199,15 +1195,14 @@ impl PalwReplayFilerV1 {
     pub(super) fn date_queued_demands_v1(
         &self,
         current_daa: u64,
-        court_pending: &[(Hash64, u32, bool, PalwConsensusObjectV2)],
-        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
         deadlines: &HashMap<Hash64, Option<u64>>,
         earliest_final: impl Fn(u64) -> Option<u64>,
     ) {
         for (claim, case) in &self.cases {
             let key = palw_replay_demand_queue_key_v1(*claim);
-            if matches!(case.step, PalwReplayCaseStepV1::Demand { .. }) && queued_v1(court_pending, key) {
-                date_v1(court_due, key, self.court_due_of_v1(claim, deadlines, &earliest_final, current_daa));
+            if matches!(case.step, PalwReplayCaseStepV1::Demand { .. }) && queued_v1(court_outbox, key) {
+                date_v1(court_outbox, key, self.court_due_of_v1(claim, deadlines, &earliest_final, current_daa));
             }
         }
     }
@@ -1256,9 +1251,7 @@ impl PalwPanelService {
         materials: &HashMap<Hash64, Vec<Vec<u8>>>,
         accused: &HashSet<Hash64>,
         court_duties: &[kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2],
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
-        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Option<(PalwConvictionFilingV1, u64)> {
         if !palw_replay_filer_armed_v1(
             self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
@@ -1286,7 +1279,7 @@ impl PalwPanelService {
             let forfeits = seeds.pursuits.iter().map(|seed| (seed.duty.claim_id, seed.record.narrowed_leaf));
             filer.seed_held_v1(forfeits.chain(pooled), current_daa);
         }
-        for (claim, leaf, session_id, rung) in filer.observe_held_v1(court_duties, &bond_key, current_daa, court_pending) {
+        for (claim, leaf, session_id, rung) in filer.observe_held_v1(court_duties, &bond_key, current_daa, court_outbox) {
             info!(
                 "[{PALW_PANEL}] claim {claim}: this bond's held dissection at fused leaf {leaf} is open (session {session_id}); the \
                  producer's held root claim is due by DAA {rung}, the rung the chain stamped — the held route plays it from here \
@@ -1340,16 +1333,16 @@ impl PalwPanelService {
         let earliest_final = |bound_daa: u64| palw_seat_claim_earliest_final_v1(&self.consensus_config.params, bound_daa);
         // P2-8d's demands: the queued ones asked again (and dated again — a licence brings `Final`
         // forward), then the due ones.
-        filer.recheck_queued_demands_v1(current_daa, court_pending, |claim, leaf| {
+        filer.recheck_queued_demands_v1(current_daa, court_outbox, |claim, leaf| {
             session.palw_da_step_leaf_demand_check_v1(claim, bond_key, leaf).map(|check| palw_replay_demand_step_v1(&check))
         });
-        filer.date_queued_demands_v1(current_daa, court_pending, court_due, &deadlines, earliest_final);
-        for (claim, leaf) in filer.demands_due_v1(current_daa, court_pending, court_moved) {
+        filer.date_queued_demands_v1(current_daa, court_outbox, &deadlines, earliest_final);
+        for (claim, leaf) in filer.demands_due_v1(current_daa, court_outbox) {
             let due = filer.court_due_of_v1(&claim, &deadlines, earliest_final, current_daa);
-            self.replay_demand_v1(session, filer, claim, leaf, current_daa, network_domain, bond_key, court_pending, court_due, due);
+            self.replay_demand_v1(session, filer, claim, leaf, current_daa, network_domain, bond_key, court_outbox, due);
         }
         // 3b. P2-8e's held openings, due now.
-        self.held_dissections_tick_v1(session, filer, current_daa, network_domain, bond_key, court_pending, court_due, court_moved);
+        self.held_dissections_tick_v1(session, filer, current_daa, network_domain, bond_key, court_outbox);
         // 4. The next run: none on an offence already filed or a claim already accused; then at most
         // one start, over at most a few tries, so a case that waits (no served capture yet, the
         // claim's block not held) never holds the ones behind it.
@@ -1382,7 +1375,7 @@ impl PalwPanelService {
         }
         // 5. The debounce leaves with the case: nothing else prunes `court_moved`.
         for key in filer.take_released_v1() {
-            court_moved.remove(&key);
+            court_outbox.forget_submitted(&key);
         }
         made
     }
@@ -1402,8 +1395,7 @@ impl PalwPanelService {
         current_daa: u64,
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
         due: u64,
     ) {
         let Some(check) = session.palw_da_step_leaf_demand_check_v1(claim, bond_key, leaf) else { return };
@@ -1443,8 +1435,8 @@ impl PalwPanelService {
                 );
                 let key = palw_replay_demand_queue_key_v1(claim);
                 // Dated (the P2-8e review, MED-3): an undated demand waited behind every dated item.
-                date_v1(court_due, key, due);
-                court_pending.push((key.0, key.1, key.2, object));
+                date_v1(court_outbox, key, due);
+                court_outbox.push_pending((key.0, key.1, key.2, object));
                 *sends += 1;
             }
             Err(why) => {
@@ -2057,13 +2049,23 @@ mod tests {
         // The book's ticks: one commitment, then — rooted two DAA deep — one evidence, the capture arm's.
         let mut queue = Vec::new();
         let mut read = door.read.clone();
-        door.book.tick(&mut queue, &mut HashMap::new(), &mut HashSet::new(), |_, _| Some(read.clone()));
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut queue,
+            &mut std::collections::HashMap::new(),
+            &mut HashMap::new(),
+            |outbox| door.book.tick(outbox, &mut HashSet::new(), |_, _| Some(read.clone())),
+        );
         assert!(
             matches!(queue.as_slice(), [(key, _, false, PalwConsensusObjectV2::ReporterCommitted { .. })] if *key == capture_arm.offence_key)
         );
         queue.clear();
         (read.now_daa, read.committed_daa) = (103, Some(101));
-        door.book.tick(&mut queue, &mut HashMap::new(), &mut HashSet::new(), |_, _| Some(read.clone()));
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut queue,
+            &mut std::collections::HashMap::new(),
+            &mut HashMap::new(),
+            |outbox| door.book.tick(outbox, &mut HashSet::new(), |_, _| Some(read.clone())),
+        );
         let evidence: Vec<&PalwConsensusObjectV2> =
             queue.iter().filter(|(_, _, _, o)| matches!(o, PalwConsensusObjectV2::ObjectiveOffence { .. })).map(|(.., o)| o).collect();
         assert_eq!(evidence, vec![&capture_arm.object], "one evidence, filed once");
@@ -2469,7 +2471,15 @@ mod tests {
         let demand = PalwReplayFindingV1::DemandLeaf { leaf: 3, binding: binding.clone(), why: "test".into(), rungs: 5 };
         filer.on_run_v1(h(4), PalwReplayRunV1::Found(demand), 20, &own);
         let moved = HashMap::new();
-        assert_eq!(filer.demands_due_v1(30, &[], &moved), vec![(h(4), 3)]);
+        assert_eq!(
+            crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+                &mut (&[]).to_vec(),
+                &mut std::collections::HashMap::new(),
+                &mut (&moved).clone(),
+                |outbox| filer.demands_due_v1(30, outbox)
+            ),
+            vec![(h(4), 3)]
+        );
         let key = palw_replay_demand_queue_key_v1(h(4));
         let object = PalwConsensusObjectV2::DefaultAccusedHeld {
             accusation: Box::new(kaspa_consensus_core::palw_held_da_v1::PalwHeldAccusationV1 {
@@ -2482,40 +2492,94 @@ mod tests {
             }),
         };
         let mut queued = vec![(key.0, key.1, key.2, object)];
-        assert!(filer.demands_due_v1(30, &queued, &moved).is_empty(), "not while queued");
+        assert!(
+            crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+                &mut (&queued).to_vec(),
+                &mut std::collections::HashMap::new(),
+                &mut (&moved).clone(),
+                |outbox| filer.demands_due_v1(30, outbox)
+            )
+            .is_empty(),
+            "not while queued"
+        );
         // Dated (the P2-8e review, MED-3) by the A-held node's one rule over the earliest `Final` this
         // seat knows, again every tick: the duty's receipt deadline (700) while nothing earlier is read,
         // the bundle's earliest `Final` of the bind, the fold's `Final` once it is read.
         assert_eq!(filer.dated_claims_v1(), vec![h(4)]);
         let mut due = HashMap::new();
-        filer.date_queued_demands_v1(30, &queued, &mut due, &HashMap::new(), |_| None);
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut (&queued).to_vec(),
+            &mut due,
+            &mut std::collections::HashMap::new(),
+            |outbox| filer.date_queued_demands_v1(30, outbox, &HashMap::new(), |_| None),
+        );
         assert_eq!(due.get(&key), Some(&(700 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)));
-        filer.date_queued_demands_v1(30, &queued, &mut due, &HashMap::new(), |_| Some(400));
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut (&queued).to_vec(),
+            &mut due,
+            &mut std::collections::HashMap::new(),
+            |outbox| filer.date_queued_demands_v1(30, outbox, &HashMap::new(), |_| Some(400)),
+        );
         assert_eq!(due.get(&key), Some(&(400 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)), "the bundle's earliest Final, earlier");
-        filer.date_queued_demands_v1(31, &queued, &mut due, &HashMap::from([(h(4), Some(223))]), |_| Some(400));
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut (&queued).to_vec(),
+            &mut due,
+            &mut std::collections::HashMap::new(),
+            |outbox| filer.date_queued_demands_v1(31, outbox, &HashMap::from([(h(4), Some(223))]), |_| Some(400)),
+        );
         assert_eq!(due.get(&key), Some(&(223 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)), "licensed since: its Final, earlier");
         assert_eq!(due[&key], palw_seat_court_filing_due_v1(700, Some(223), 31), "the A-held node's helper, called, never restated");
-        filer.date_queued_demands_v1(32, &queued, &mut due, &HashMap::new(), |_| None);
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut (&queued).to_vec(),
+            &mut due,
+            &mut std::collections::HashMap::new(),
+            |outbox| filer.date_queued_demands_v1(32, outbox, &HashMap::new(), |_| None),
+        );
         assert_eq!(due.get(&key), Some(&(223 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)), "never later again");
         let mut sent = HashMap::new();
         sent.insert(key, 30);
-        assert!(filer.demands_due_v1(35, &[], &sent).is_empty(), "not a re-plan after its send");
+        assert!(
+            crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+                &mut (&[]).to_vec(),
+                &mut std::collections::HashMap::new(),
+                &mut (&sent).clone(),
+                |outbox| filer.demands_due_v1(35, outbox)
+            )
+            .is_empty(),
+            "not a re-plan after its send"
+        );
         // A queued demand the chain now asks to wait leaves the queue unsent, its send given back.
         if let PalwReplayCaseStepV1::Demand { sends, .. } = &mut filer.cases.get_mut(&h(4)).unwrap().step {
             *sends = 1;
         }
         let mut asked = Vec::new();
-        filer.recheck_queued_demands_v1(40, &mut queued, |claim, leaf| {
-            asked.push((claim, leaf));
-            Some(PalwSeatAccuseStepV1::Retry)
-        });
+        crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+            &mut queued,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            |outbox| {
+                filer.recheck_queued_demands_v1(40, outbox, |claim, leaf| {
+                    asked.push((claim, leaf));
+                    Some(PalwSeatAccuseStepV1::Retry)
+                })
+            },
+        );
         assert!(queued.is_empty() && asked == vec![(h(4), 3)]);
         let PalwReplayCaseStepV1::Demand { sends, refused_at, .. } = &filer.case(&h(4)).unwrap().step else { panic!() };
         assert_eq!((*sends, *refused_at), (0, Some(40)));
         if let PalwReplayCaseStepV1::Demand { sends, .. } = &mut filer.cases.get_mut(&h(4)).unwrap().step {
             *sends = PALW_REPLAY_FILER_SENDS_V1;
         }
-        assert!(filer.demands_due_v1(100, &[], &sent).is_empty(), "two sends at most");
+        assert!(
+            crate::palw_panel::court_outbox::CourtOutboxV1::with_fixture_parts(
+                &mut (&[]).to_vec(),
+                &mut std::collections::HashMap::new(),
+                &mut (&sent).clone(),
+                |outbox| filer.demands_due_v1(100, outbox)
+            )
+            .is_empty(),
+            "two sends at most"
+        );
         // P2-8e's hook settles a fused leaf; nothing is queued.
         filer.note_v1(&duty(5, 7), PalwReplayMismatchSiteV1::Replay, 20, &own, &nodoor());
         let dissection = PalwReplayFindingV1::NeedsDissection { leaf: 9, binding: Box::new(floor_binding), rungs: 4 };
@@ -2565,7 +2629,7 @@ mod tests {
     /// and reserved inside its blocking task.
     #[test]
     fn the_tick_runs_the_filer_before_the_carriers_and_the_start_looks_before_it_derives() {
-        let panel = include_str!("palw_panel.rs");
+        let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
         let accusations = panel.find("// --- P2-6: this seat's accusations of withholding ---").expect("P2-6's step");
         let tick = panel.find(".replay_filer_tick_v1(").expect("the filer's call");
         let carriers = panel.find("// --- the collector + submitter's half ---").expect("the carriers");
@@ -2594,8 +2658,8 @@ mod tests {
         assert!(accused_first < tick_body.find("filer.note_v1(duty, site, current_daa, &bond_key, &door)").unwrap());
         let settled = tick_body.find("filer.settle_pursued_v1(current_daa, &door, accused);").expect("F5's settle");
         assert!(settled < tick_body.find("filer.due_v1(current_daa)").expect("the start"), "settled before any start");
-        assert_eq!(source.matches("court_pending.push(").count(), 1, "the demand's, and nothing else");
-        assert!(demand.contains("court_pending.push((key.0, key.1, key.2, object));"));
+        assert_eq!(source.matches("court_outbox.push_pending(").count(), 1, "the demand's, and nothing else");
+        assert!(demand.contains("court_outbox.push_pending((key.0, key.1, key.2, object));"));
         let start = &source[source.find("fn replay_filer_start_v1(").expect("the start")..];
         let start = &start[..start.find("\n    }\n").expect("its body")];
         let looked = start.find("palw_replay_served_held_v1(").expect("looks first");
@@ -2624,8 +2688,8 @@ mod tests {
             tick_body.contains("palw_seat_claim_earliest_final_v1(&self.consensus_config.params, bound_daa)"),
             "and the bundle's earliest Final, as the A-held node reads it"
         );
-        let dated = demand.find("date_v1(court_due, key, due);").expect("the demand is dated");
-        assert!(dated < demand.find("court_pending.push(").expect("queued"), "dated as it is queued");
+        let dated = demand.find("date_v1(court_outbox, key, due);").expect("the demand is dated");
+        assert!(dated < demand.find("court_outbox.push_pending(").expect("queued"), "dated as it is queued");
         // The one rule is called, never restated.
         let rule = &source[source.find("pub(super) fn palw_replay_filer_court_due_v1(").expect("the rule")..];
         let rule = &rule[..rule.find("\n}\n").expect("its body")];

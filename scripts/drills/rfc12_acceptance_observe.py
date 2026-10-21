@@ -26,6 +26,7 @@ CHECKER_OUTBOX = 'kernel-paid-checker-v4'
 PROVIDER_STORE_DIR = 'palw-native-provider-v3'
 # Read-only op 247 (rpc/service get_palw_paid_claim_call, consensus/core palw_paid_claim_read_v1): see paid_claim_read_spec().
 PAID_CLAIM_METHOD = 'getPalwPaidClaim'
+ACCEPTANCE_READS_METHOD = 'getPalwAcceptanceReads'
 LOG_PATTERNS = (
     ('enrollment-accepted', re.compile(r'private kernel paid enrollment accepted: ([0-9a-f]{128})')),
     ('receipt-accepted', re.compile(r'private selected checker receipt accepted: ([0-9a-f]{128}) round (\d+)')),
@@ -180,6 +181,28 @@ def paid_claim_value(rpc, base_claim, round_number):
     if not isinstance(answer, dict):
         raise NotObservable('the paid-claim read returned no object')
     return answer
+
+
+def acceptance_reads(rpc, reserve_blocks=(), outpoints=()):
+    """Op 246: the DNS security reserve balance per block and the virtual UTXO point read by outpoint (`txid:index`). A node built
+    before it makes the dependent predicates BLOCKED, never inferred."""
+    reserve_blocks, outpoints = list(reserve_blocks), list(outpoints)
+    if len(reserve_blocks) > 64 or len(outpoints) > 64:
+        raise NotObservable('op 246 reads at most 64 blocks and 64 outpoints a call')
+    try:
+        answer = rpc.call(ACCEPTANCE_READS_METHOD, {'reserveBlocks': reserve_blocks, 'outpoints': outpoints})
+    except RuntimeError as error:
+        text = str(error).lower()
+        if 'unknown' in text or 'not found' in text or 'method' in text or 'unsupported' in text:
+            raise NotObservable('the node serves no acceptance reads (%s); it predates read-only op 246' % ACCEPTANCE_READS_METHOD)
+        raise
+    if not isinstance(answer, dict) or not answer.get('available'):
+        raise NotObservable('the acceptance reads are not available on this node')
+    return dict(sink=norm(answer['sink']), virtualDaa=answer['virtualDaa'],
+                reserve={norm(r['blockHash']): (r['balanceSompi'] if r['known'] else None) for r in answer['reserveBalances']},
+                outpoints={o['outpoint']: (dict(amount=o['amount'], blockDaaScore=o['blockDaaScore'], isCoinbase=o['isCoinbase'],
+                                                scriptPublicKey='%04x' % o['scriptVersion'] + norm(o['scriptHex']))
+                                           if o['present'] else None) for o in answer['outpoints']})
 
 
 def utxo_entries(rpc, addresses, maximum):
@@ -363,3 +386,79 @@ def log_lines(paths, maximum_bytes=64 << 20):
                     rows.append(dict(source='owned-file', kind=kind, file=str(path), line=line.strip()[:1000],
                                      lineNumber=number, groups=list(match.groups()), authoritative=False))
     return rows
+
+
+def rfc12_state_value(rpc, outpoints=(), block_hash=''):
+    """Exact point/reserve read; a failed read is never an absent/spent UTXO."""
+    if len(outpoints) > 64 or len(set(outpoints)) != len(outpoints):
+        raise NotObservable('RFC12 point read needs at most 64 distinct outpoints')
+    for point in outpoints:
+        if not isinstance(point, str) or not re.fullmatch(r'[0-9a-f]{128}:[0-9]+', point) \
+                or int(point.rsplit(':', 1)[1]) > 2**32 - 1:
+            raise NotObservable('RFC12 point read contains a malformed outpoint')
+    try:
+        # Validation's op246 is canonical. Preserve its known/present distinction
+        # while checking the raw lists before dictionaries could hide omissions.
+        requested_blocks = [block_hash] if block_hash else []
+        response = rpc.call(ACCEPTANCE_READS_METHOD, dict(reserveBlocks=requested_blocks, outpoints=list(outpoints)))
+        if not isinstance(response, dict) or response.get('available') is not True:
+            raise ValueError('op246 state read is unavailable')
+        balances = response['reserveBalances']
+        if not isinstance(balances, list) or len(balances) != len(requested_blocks):
+            raise ValueError('missing or unsolicited reserve response')
+        reserve = None
+        for row in balances:
+            if norm(row['blockHash']) != block_hash or type(row['known']) is not bool:
+                raise ValueError('reserve response names another block or has no known flag')
+            reserve = row['balanceSompi'] if row['known'] else None
+        utxos = []
+        for row in response['outpoints']:
+            if type(row.get('present')) is not bool:
+                raise ValueError('outpoint response has no exact presence flag')
+            txid, index = row['outpoint'].rsplit(':', 1)
+            if not index.isascii() or not index.isdecimal() or str(int(index)) != index:
+                raise ValueError('outpoint response index is not canonical')
+            entry = None
+            if row['present']:
+                version, script = row['scriptVersion'], row['scriptHex']
+                if type(version) is not int or not 0 <= version <= 65535 or not isinstance(script, str) \
+                        or len(script) % 2 or not re.fullmatch(r'[0-9a-fA-F]*', script):
+                    raise ValueError('outpoint script is malformed')
+                entry = dict(amount=row['amount'], scriptPublicKey='%04x' % version + script.lower(),
+                             isCoinbase=row['isCoinbase'], blockDaaScore=row['blockDaaScore'])
+            utxos.append(dict(outpoint=dict(transactionId=norm(txid), index=int(index)), utxoEntry=entry))
+        value = dict(version=1, blockHash=block_hash or norm(response['sink']), reserveBalance=reserve,
+                     virtualSelectedParent=norm(response['sink']), virtualDaaScore=response['virtualDaa'], utxos=utxos)
+    except (OSError, RuntimeError, KeyError, TypeError, ValueError) as error:
+        raise NotObservable('RFC12 reserve/outpoint read unavailable: %s' % error) from error
+    if type(value.get('version')) is not int or value['version'] != 1 or not isinstance(value.get('utxos'), list):
+        raise NotObservable('unsupported RFC12 state snapshot')
+    if type(value.get('virtualDaaScore')) is not int or not 0 <= value['virtualDaaScore'] < 2**64:
+        raise NotObservable('RFC12 snapshot virtual DAA is not an exact u64')
+    if any(not isinstance(value.get(k), str) or not re.fullmatch(r'[0-9a-f]{128}', value[k])
+           for k in ('blockHash', 'virtualSelectedParent')):
+        raise NotObservable('RFC12 snapshot omits its exact block/virtual generation')
+    reserve = value.get('reserveBalance')
+    if reserve is not None and (type(reserve) is not int or not 0 <= reserve < 2**64):
+        raise NotObservable('reserve balance is not an exact u64')
+    if block_hash and norm(value.get('blockHash')) != norm(block_hash):
+        raise NotObservable('reserve snapshot names another block')
+    found = {}
+    for row in value['utxos']:
+        point = row.get('outpoint') or {}
+        index = point.get('index')
+        if type(index) is not int or not 0 <= index < 2**32:
+            raise NotObservable('outpoint response index is not u32')
+        key = '%s:%d' % (norm(point.get('transactionId')), index)
+        if key not in outpoints or key in found or 'utxoEntry' not in row:
+            raise NotObservable('missing, duplicate or unsolicited outpoint response')
+        entry = row['utxoEntry']
+        if entry is not None and (not isinstance(entry, dict) or type(entry.get('amount')) is not int
+                                  or not 0 < entry['amount'] < 2**64 or type(entry.get('isCoinbase')) is not bool
+                                  or 'scriptPublicKey' not in entry):
+            raise NotObservable('outpoint response omits the exact UTXO value/script')
+        found[key] = entry
+    if set(found) != set(outpoints):
+        raise NotObservable('outpoint response omits a requested point')
+    value['pointStates'] = found
+    return value

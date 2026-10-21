@@ -23,7 +23,10 @@ fn beacon_fact_of(cw: &Cw, claim: &Digest) -> Option<(&'static str, misaka_palw_
 #[tokio::test]
 async fn x8_g14_opv_settlement_never_substitutes_for_selected_exec_approval() {
     let mut cw = active_world().await;
-    let mut s = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 300).await;
+    // Past the paid path every session claim is a paid claim; slice 0's is locked but never receipted, so its OPV lifecycle runs to
+    // Final while its paid authority stays unapproved. The root's signed lifetime outlasts that Final.
+    cw.unapproved = vec![1];
+    let mut s = opened(&mut cw, false, |_| false, |_, _, _| Vec::new()).await;
     for index in 0..3 {
         s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &s.slices[index].claim).await);
     }
@@ -38,11 +41,35 @@ async fn x8_g14_opv_settlement_never_substitutes_for_selected_exec_approval() {
         .slices
         .iter()
         .chain(std::iter::once(&s.prefix))
-        .map(|k| api.claim_read_v1(&k.claim.id).unwrap().unwrap().opv.expect("an OPV claim").final_floor_daa)
+        .map(|k| kernel_final_due(&api, &k.claim.id))
         .max()
         .unwrap();
     cw.net.beat_to(floor + 1).await;
+    // A paid claim's Final lands at the close of its signed windows: beat to it.
+    let ttpb = cw.net.ttpb();
+    for _ in 0..2_000 {
+        if matches!(cw.net.claim_state(&k0), ClaimStateV1::Final { .. }) {
+            break;
+        }
+        cw.net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
     let (label, from) = settlement_of(&cw, &k0);
+    // Past the paid path an unapproved paid claim reaches no Final at all: its locked round without receipts defaults (the stronger
+    // property — no lifecycle settlement exists to substitute for the selected approval).
+    if label == "defaulted" {
+        assert!(beacon_fact_of(&cw, &k0).is_none(), "a defaulted unapproved claim exports no beacon fact");
+        assert!(
+            !matches!(
+                cw.net.chain.tip_state().1.exec_v2_slice_v1(&root_claim, 0).unwrap().stage,
+                PalwWorkSliceStageV2::Verified { .. }
+            ),
+            "an unapproved dependency never verifies its slice"
+        );
+        assert!(cw.net.chain.tip_state().1.exec_v2_holds_final_v1(&root_claim), "unapproved work cannot release root Final");
+        let z = replay_with_lane(&cw.net, &s.lane).await;
+        cw.net.assert_same(&z, "replay");
+        return;
+    }
     assert_eq!(label, "final-revocable", "Final within liability is revocable, never safe");
     let liability = cw.net.ledger().claims[&k0].liability_until.expect("a Final claim's horizon");
     assert_eq!(from, Some(liability + 1));

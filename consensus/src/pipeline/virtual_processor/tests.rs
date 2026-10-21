@@ -22,6 +22,7 @@ use std::{collections::VecDeque, thread::JoinHandle};
 mod palw_mergeset_view;
 // RFC-0018 §10 T-1/T-2: three models × three miners from the same parents; arrival-order independence (unbuilt source).
 mod rfc0018_dag_siblings;
+mod rfc18_dag_width;
 
 struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
@@ -6581,6 +6582,11 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     let reserve_accrued = ctx.consensus.virtual_processor().reserve_balance_store.get(reserve_settle.header.hash).unwrap_or(0);
     assert_eq!(reserve_accrued, dist.security_reserve_sompi, "A's slash accrues its reserve share to the pool");
     assert!(reserve_accrued > 0, "the reserve must be non-zero to drip");
+    assert_eq!(
+        ctx.consensus.get_dns_reserve_balance(reserve_settle.header.hash),
+        Some(dist.security_reserve_sompi),
+        "RFC12 reads the actual positive balance, independently checked against the slashed principal's split"
+    );
 
     // ── Mine until epoch E's DAA-finalization; the drip pays B in that block's coinbase ─────────
     let target_final_daa =
@@ -6603,6 +6609,16 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     let drip_out = drip_block.transactions[0].outputs.iter().find(|o| o.script_public_key == spk_b).expect("drip pays B");
     // The sole included validator B receives the WHOLE reserve (cap is u64::MAX): accrued-in == dripped-out.
     assert_eq!(drip_out.value, reserve_accrued, "the entire accrued reserve drips to the lone included validator B");
+    assert_eq!(
+        ctx.consensus.get_dns_reserve_balance(drip_block.header.hash),
+        Some(0),
+        "RFC12 reports known zero after the independently observed coinbase drip exhausts the reserve"
+    );
+    assert_eq!(
+        ctx.consensus.get_dns_reserve_balance(reserve_settle.header.hash),
+        Some(reserve_accrued),
+        "a later drip does not change the historical block's reserve balance"
+    );
 }
 
 /// kaspa-pq ADR-0016 §D.2 — the bond-UTXO spend-gate races the slashing side-effect (audit M-01). A
@@ -15184,7 +15200,7 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
     let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
     let end = at + source[at..].find("\n                Obj::").expect("the next arm");
     let arm = &source[at..end];
-    let refusal = arm.find("state_params.held_class_is_unanswerable_v1(&claim.class_id)").expect("the mirror is read");
+    let refusal = arm.find("state.held_claim_is_unanswerable_v2(state_params, claim)").expect("the mirror is read");
     let guard = &arm[refusal.saturating_sub(160)..refusal];
     assert!(
         guard.contains("if self.palw_offence_attribution_at(point.daa_score)") && guard.contains("NeedsDissection)"),
@@ -15197,7 +15213,7 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
         &fold[fold_at..fold_at + fold[fold_at..].find("PalwConsensusObjectV2::CheckpointAccused { accusation } => {").unwrap()];
     assert!(
         fold_arm
-            .contains("builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id)"),
+            .contains("builder.extras.offence_attribution_active && builder.state.held_claim_is_unanswerable_v2(builder.params, &claim)"),
         "the fold refuses under the same fence and mirror"
     );
 }
@@ -15223,8 +15239,9 @@ fn the_acceptance_layer_takes_the_held_root_claim_past_the_fence_and_refuses_an_
     }
     let registration = source.find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(").expect("the gate");
     let after = &source[registration..registration + 6_000];
-    let c5 = after.find("palw_held_class_is_attributable_v1(").expect("C5 beside the gate");
+    let c5 = after.find("palw_held_class_is_attributable_v2(").expect("C5 beside the gate");
     assert!(after[c5..c5 + 200].contains("self.palw_offence_attribution_at(point.daa_score)"), "at the block's fence");
+    assert!(after[c5..c5 + 300].contains("self.palw_memory_routing_court_v2_at(point.daa_score)"), "the versioned route uses the same block height");
     assert!(source.contains("O::CourtAttnRootClaimedHeld { .. } => \"CourtAttnRootClaimedHeld\","), "and it has a name");
 }
 
@@ -17037,6 +17054,7 @@ mod rfc12_c_items;
 // RFC-0012 R12-AUTHORITY item 4 (port of codex/rfc12-remove-dns-bft, 2026-10-15): every DNS authority read in the consensus crate is
 // inventoried and asks the retirement — a source scan, no feature needed.
 mod rfc12_dns_reader_inventory;
+mod rfc12_acceptance_reads;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`

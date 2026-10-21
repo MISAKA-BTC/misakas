@@ -1,4 +1,5 @@
 use super::*;
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::{
     palw_constraint_stream_carriage_v1::{
         PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
@@ -14,9 +15,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         slot: super::PalwAnswerSlotV1<'_>,
         after: &mut Option<(u64, Hash64, PalwBondKeyV2)>,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         if self.consensus_config.params.palw_staged_public_court_v1.is_none() {
             return Ok(());
@@ -40,7 +39,7 @@ impl PalwPanelService {
         *after = next;
         // Direct accepted reads keep another page's pending source alive while refusing
         // stale fork identities and already fulfilled duties before spending another fee.
-        pending.retain(|(_, round, responder, object)| {
+        court_outbox.retain_pending(|(_, round, responder, object)| {
             if (*round, *responder) != (lane_round, true) {
                 return true;
             }
@@ -90,7 +89,7 @@ impl PalwPanelService {
             if slot.only.is_some_and(|only| !only.contains(&claim)) {
                 continue;
             }
-            if pending.iter().filter(|(_, r, b, _)| (*r, *b) == (lane_round, true)).count() >= 64 {
+            if court_outbox.pending().iter().filter(|(_, r, b, _)| (*r, *b) == (lane_round, true)).count() >= 64 {
                 break;
             }
             let mut attempt = None;
@@ -116,8 +115,8 @@ impl PalwPanelService {
                     return Ok(());
                 }
                 let key = (request.demand_id, lane_round, true);
-                if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
-                    || moved.get(&key).is_some_and(|at| progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
+                    || court_outbox.submitted_at(&key).is_some_and(|at| progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                 {
                     return Ok(());
                 }
@@ -135,7 +134,9 @@ impl PalwPanelService {
                         session.palw_producer_facts_v2(class, None).ok_or("TIR selected response has no registered artifact")?;
                     let need = self
                         .backends()
-                        .role_memory_need_or_chain_v1(class, facts.artifact_root, FULL_SEAT_V1, |id| self.chain_carriage_v1(session, id))
+                        .role_memory_need_or_chain_v1(class, facts.artifact_root, FULL_SEAT_V1, |id| {
+                            self.chain_carriage_v1(session, id)
+                        })
                         .ok_or("TIR selected responder resource profile unavailable")?;
                     let execution = self.reserve_replay_v1("public-tir-selected-answer", &need, class, claim)?;
                     let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
@@ -158,7 +159,8 @@ impl PalwPanelService {
                         let mut found = None;
                         for path in paths {
                             let Ok(material) = std::fs::read(&path) else { continue };
-                            if let Ok(event) = backend.disclose_tir_selected_event_v1(&material, &header, coordinate.row, coordinate.tile, maximum)
+                            if let Ok(event) =
+                                backend.disclose_tir_selected_event_v1(&material, &header, coordinate.row, coordinate.tile, maximum)
                             {
                                 found = Some(event);
                                 break;
@@ -202,9 +204,9 @@ impl PalwPanelService {
                     })
                     .await
                     .map_err(|e| format!("TIR selected response worker failed: {e}"))??;
-                    pending.push((key.0, key.1, key.2, object));
-                    due.insert(key, deadline.saturating_sub(1));
-                    moved.insert(key, clock);
+                    court_outbox.push_pending((key.0, key.1, key.2, object));
+                    court_outbox.set_due(key, deadline.saturating_sub(1));
+                    court_outbox.mark_submitted(key, clock);
                     return Ok(());
                 }
                 let context = progress.context.as_ref().ok_or("selected duty lacks accepted original binding/job")?;
@@ -301,15 +303,15 @@ impl PalwPanelService {
                 })
                 .await
                 .map_err(|e| format!("selected response worker failed: {e}"))??;
-                pending.push((key.0, key.1, key.2, object));
-                due.insert(key, deadline.saturating_sub(1));
-                moved.insert(key, clock);
+                court_outbox.push_pending((key.0, key.1, key.2, object));
+                court_outbox.set_due(key, deadline.saturating_sub(1));
+                court_outbox.mark_submitted(key, clock);
                 Ok::<(), String>(())
             }
             .await;
             if let Err(why) = result {
                 if let Some((key, clock)) = attempt {
-                    moved.insert(key, clock);
+                    court_outbox.mark_submitted(key, clock);
                 }
                 debug!("[{PALW_PANEL}] claim {claim}: original selected response remains pending: {why}")
             }

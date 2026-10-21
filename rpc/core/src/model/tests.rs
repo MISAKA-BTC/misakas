@@ -2681,7 +2681,11 @@ mod mockery {
     // RFC-0009 L2: op 203 and its parts round-trip.
     impl Mock for GetPalwForkChoiceOpeningRequest {
         fn mock() -> Self {
-            GetPalwForkChoiceOpeningRequest { block_hashes: vec![mock_hex(), mock_hex()] }
+            GetPalwForkChoiceOpeningRequest {
+                block_hashes: vec![mock_hex(), mock_hex()],
+                rule_e_window_above_blue: Some(77),
+                registry_bonds: vec!["ab".repeat(68)],
+            }
         }
     }
     test!(GetPalwForkChoiceOpeningRequest);
@@ -2697,6 +2701,9 @@ mod mockery {
                 inner_root: mock_hex(),
                 committed_root: mock_hex(),
                 committed_form: mock(),
+                committed_leaf: vec![3; 300],
+                rule_e_window: vec![4; 20],
+                registry_openings: vec![vec![5; 9], vec![6; 2]],
             }
         }
     }
@@ -2718,6 +2725,35 @@ mod mockery {
         }
     }
     test!(GetPalwForkChoiceOpeningResponse);
+
+    // RFC-0012 acceptance: op 246 round-trips.
+    impl Mock for GetPalwAcceptanceReadsRequest {
+        fn mock() -> Self {
+            GetPalwAcceptanceReadsRequest { reserve_blocks: vec![mock_hex()], outpoints: vec!["ab:1".to_string()] }
+        }
+    }
+    test!(GetPalwAcceptanceReadsRequest);
+
+    impl Mock for GetPalwAcceptanceReadsResponse {
+        fn mock() -> Self {
+            GetPalwAcceptanceReadsResponse {
+                available: true,
+                sink: mock_hex(),
+                virtual_daa: 9,
+                reserve_balances: vec![RpcPalwReserveBalance { block_hash: mock_hex(), known: true, balance_sompi: 7 }],
+                outpoints: vec![RpcPalwOutpointEntry {
+                    outpoint: "ab:1".into(),
+                    present: true,
+                    amount: 5,
+                    script_version: 0,
+                    script_hex: "ab".into(),
+                    block_daa_score: 3,
+                    is_coinbase: false,
+                }],
+            }
+        }
+    }
+    test!(GetPalwAcceptanceReadsResponse);
 
     // RFC-0010 (lane C2): op 220 round-trips.
     // RFC-0008 v2 (lane X8R): op 240 round-trips.

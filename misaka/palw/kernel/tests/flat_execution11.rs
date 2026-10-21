@@ -1105,3 +1105,59 @@ fn source16_public_expired_collection_charges_only_current_caller_and_never_revi
     assert!(retire_expired_source_v16(&mut caller,&quota,&next,&plan,&retired,&retired.root(),&terminal).is_err());
     assert_eq!(caller.global_row(),after);
 }
+
+#[test]
+fn held_final_adjudication_refunds_once_and_never_overdraws_actual_slash() {
+    let (class,quota,_,_,_)=fixture();
+    for kind in [NativeAdjudicationKindV11::ComputationFault, NativeAdjudicationKindV11::SourceMismatch, NativeAdjudicationKindV11::DataUnavailable] {
+        for collected in [0,40,130] {
+            let mut state=committed(&class,&quota);
+            state.finalize(class.record(),&ready(&state)).unwrap();
+            let horizon=state.job().deadline_daa+500;
+            let mut proof=judgment(&class,&state,kind);
+            proof.established_daa=horizon;proof.current_daa=horizon;
+            let settlement=state.adjudicate_held_final(class.record(),&proof,collected,horizon).unwrap();
+            assert_eq!(settlement.requester_refund,100);
+            assert_eq!(settlement.producer_credit,0);
+            assert_eq!(settlement.escrow_debit,100);
+            assert_eq!(settlement.collected_original_slash,collected);
+            assert_eq!(settlement.finder_credit+settlement.burned,collected);
+            assert_eq!(state.escrow_remaining(),0);
+            assert!(!state.claim().unwrap().credit_paid);
+            let bytes=borsh::to_vec(&state).unwrap();
+            ExecutionJobStateV11::from_bytes(&bytes,&class,state.job().root(),state.root()).unwrap();
+            assert!(state.adjudicate_held_final(class.record(),&proof,collected,horizon).is_err());
+            assert_eq!(borsh::to_vec(&state).unwrap(),bytes);
+        }
+    }
+}
+
+#[test]
+fn held_final_adjudication_refuses_late_or_substituted_judgments_without_mutation() {
+    let (class,quota,_,_,_)=fixture();
+    for case in 0..15 {
+        let mut state=committed(&class,&quota);
+        state.finalize(class.record(),&ready(&state)).unwrap();
+        let before=borsh::to_vec(&state).unwrap();
+        let mut horizon=state.job().deadline_daa+500;
+        let mut proof=judgment(&class,&state,NativeAdjudicationKindV11::DataUnavailable);
+        proof.current_daa=horizon;proof.established_daa=horizon;
+        let mut collected=40;
+        match case {
+            0=>proof.job_id=[99;64],1=>proof.claim_id=[99;64],2=>proof.vector=[99;64],
+            3=>proof.class_id=[99;64],4=>proof.inventory_root=[99;64],5=>proof.parameter_root=[99;64],
+            6=>proof.current_daa=horizon+1,7=>{proof.established_daa=horizon+1;proof.current_daa=horizon+1;},
+            8=>proof.finder=state.job().producer,9=>proof.proof_id=[0;64],10=>collected=131,
+            11=>horizon=state.job().deadline_daa-1,
+            12=>proof.established_daa=state.claim().unwrap().committed_daa-1,
+            13=>proof.current_daa=proof.established_daa-1,
+            _=>proof.finder=[0;64],
+        }
+        assert!(state.adjudicate_held_final(class.record(),&proof,collected,horizon).is_err(),"case {case}");
+        assert_eq!(borsh::to_vec(&state).unwrap(),before,"case {case}");
+    }
+    let mut live=committed(&class,&quota);
+    let proof=judgment(&class,&live,NativeAdjudicationKindV11::ComputationFault);
+    let horizon=live.job().deadline_daa+500;
+    assert!(live.adjudicate_held_final(class.record(),&proof,40,horizon).is_err());
+}

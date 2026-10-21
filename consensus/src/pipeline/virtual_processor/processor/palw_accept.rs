@@ -2,6 +2,36 @@
 
 use super::*;
 
+/// Immutable output of the existing production resolver at one block. The legacy
+/// extras remain readable for the existing fold APIs, but cannot be mutated through
+/// this boundary. Accepted-fact assembly explicitly takes ownership of those extras.
+#[derive(Clone)]
+pub(super) struct PalwResolvedBlockInputsV1 {
+    point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    extras: kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+}
+impl PalwResolvedBlockInputsV1 {
+    fn at(point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+          extras: kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1) -> Self {
+        Self { point: *point, extras }
+    }
+    pub(super) fn point(&self) -> &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        &self.point
+    }
+    pub(super) fn into_legacy_extras(self) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+        self.extras
+    }
+}
+impl std::fmt::Debug for PalwResolvedBlockInputsV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.extras, f)
+    }
+}
+impl std::ops::Deref for PalwResolvedBlockInputsV1 {
+    type Target = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1;
+    fn deref(&self) -> &Self::Target { &self.extras }
+}
+
 impl VirtualStateProcessor {
     pub fn palw_producer_facts_v2_impl(
         &self,
@@ -92,6 +122,21 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()
                 .map(|refusal| refusal.to_string());
+        // **Lane g14-court-capacity-r2: and the bounded court admission** (`palw_court_capacity_v1`, dormant): a fused-attention attempt
+        // whose hard-deadline bucket is full would be SKIPPED (no claim, no reward), so the producer holds instead of spending an
+        // inference. The retention is the one the attempt will carry (`candidate + min_trace_retention_daa`). `Ok` below the fence.
+        if facts.class_admission_refusal.is_none() {
+            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_court_claim_admission_v1(
+                &state,
+                state_params,
+                &class_id,
+                candidate_daa,
+                candidate_daa.saturating_add(facts.min_trace_retention_daa),
+                extras.model_registry.as_ref().map_or(0, |fold| fold.span_daa),
+            )
+            .err()
+            .map(|refusal| refusal.to_string());
+        }
         // **Lane PA, C-F2: what each rider of this lead is demanded** — at the rider's share of the lead's subsidy, as the fold admits it.
         // Past the canonical-work height and where riders are armed only; otherwise the producer keeps the lead's pwu as before.
         if state_params.capacity_riders_active_at(candidate_daa)
@@ -615,7 +660,7 @@ impl VirtualStateProcessor {
         let audit_active = self.palw_audit_2026_09_11_at(point.daa_score);
         // The old path's synthetic chain point; unused past the fence.
         let mut rehearsal = *point;
-        let mut fee_extras = self.palw_transition_extras_for(point);
+        let mut fee_extras = self.palw_transition_extras_for(point).into_legacy_extras();
         fee_extras.round_fee_incomes = round_fee_incomes.to_vec();
         let mut folded = if audit_active {
             match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_retained_v1(
@@ -685,6 +730,11 @@ impl VirtualStateProcessor {
         let mut exec_origin_budget = kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginBudgetV1::default();
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
         let mut court_closes_completed = 0usize;
+        // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` the block's court operations are bounded by the policy's
+        // deterministic cost-unit budget instead of the one-slot rule (the fold charges the same units as its second lock).
+        let mut court_cost_spent = kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1::default();
+        // Lane g14-court-capacity-r2: the one-move accusations spend their own budget (the fold's second lock likewise).
+        let mut court_one_move_spent = kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1::default();
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
         // RFC-0002 Phase F: whether this block has handed an IR class registration to the gate
@@ -1532,7 +1582,7 @@ impl VirtualStateProcessor {
                             public_original_bindings: public_original_bindings.clone(),
                             producer_custody_delegations: producer_custody_delegations.clone(),
                             model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                            ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
+                            ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object)).into_legacy_extras()
                         },
                     ) {
                         Ok(next) => rehearsed_registration = Some(next),
@@ -1621,7 +1671,36 @@ impl VirtualStateProcessor {
             }
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
                 || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
-            if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
+            let court_policy = state_params.court_capacity_at_v1(point.daa_score);
+            let accounted = match kaspa_consensus_core::palw_court_transport_v1::palw_court_accounted_op_v1(
+                &folded, state_params, point.daa_score, &object,
+            ) {
+                Ok(accounted) => accounted,
+                Err(why) => {
+                    info!("Block {block}: court cost refused: {why}; the object is dropped and the block stands");
+                    continue;
+                }
+            };
+            let court_cost = accounted.map(|(cost, _)| cost);
+            let court_one_move = accounted.is_some_and(|(_, one_move)| one_move);
+            if let (Some(policy), Some(cost)) = (court_policy.as_ref(), court_cost) {
+                let (spent, budget) = if court_one_move {
+                    (court_one_move_spent, policy.one_move_budget)
+                } else {
+                    (court_cost_spent, policy.block_budget)
+                };
+                if spent.checked_add(cost).is_none_or(|total| !total.fits_within(&budget)) {
+                    info!(
+                        "Block {block}: a court operation was dropped, and the block stands: the block's court budget {budget:?} is \
+                         spent ({spent:?} of it; palw_court_capacity_v1)"
+                    );
+                    continue;
+                }
+            }
+            if court_policy.is_none()
+                && spends_the_court_slot
+                && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
+            {
                 info!(
                     "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
                      stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
@@ -1747,7 +1826,7 @@ impl VirtualStateProcessor {
                                 public_original_bindings: public_original_bindings.clone(),
                                 producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object)).into_legacy_extras()
                             },
                         )
                     } else {
@@ -1770,13 +1849,20 @@ impl VirtualStateProcessor {
                                 public_original_bindings: public_original_bindings.clone(),
                                 producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object)).into_legacy_extras()
                             },
                         )
                         .map(|(next, _)| next)
                     };
                     match applied {
                         Ok(next) => {
+                            if let Some(cost) = court_cost {
+                                if court_one_move {
+                                    court_one_move_spent = court_one_move_spent.checked_add(cost).expect("court cost prechecked");
+                                } else {
+                                    court_cost_spent = court_cost_spent.checked_add(cost).expect("court cost prechecked");
+                                }
+                            }
                             // **AC-SLOT past the fence: the slot is spent only by a move that
                             // ACTUALLY APPLIES.** A move the fold refuses is dropped below and
                             // leaves the slot for the next.
@@ -1907,7 +1993,7 @@ impl VirtualStateProcessor {
     pub(super) fn palw_transition_extras_for(
         &self,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
-    ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+    ) -> PalwResolvedBlockInputsV1 {
         let daa_score = point.daa_score;
         // SW-8's step 4c, read once: `(anchor_delay, reach)` where the block anchors a panel — and, past
         // lane F2's fence, the same reading's draw points (the header and mergeset are read once).
@@ -1920,6 +2006,26 @@ impl VirtualStateProcessor {
             _ => None,
         };
         let mut extras = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+            native_court_rules_v1: self.palw_court_params_v2.map(|court| kaspa_consensus_core::palw_court_close_receipt_v1::NativeCourtRulesV1 {
+                network_domain:self.palw_network_domain_v2(),at:*point,court,
+                step_ladder:self.palw_court_step_ladder_at(daa_score,&court),
+                prompt_ids_merkle:match self.palw_prompt_ids_form_at(daa_score) {
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat=>false,
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1=>true,
+                },held_regime:self.palw_held_context_at(daa_score),
+                decode_close_convicts_only:self.palw_offence_attribution_at(daa_score),
+                fp_decode_from_daa:self.palw_fp_decode_rules.filter(|f|*f!=kaspa_consensus_core::config::params::ForkActivation::never()).map(|f|f.daa_score()),
+                cell_closure_from_daa:self.palw_state_params_v2.as_ref().and_then(|p|p.cell_coverage_closure_from_daa()),
+                memory_routing_from_daa:self.palw_state_params_v2.as_ref().and_then(|p|p.memory_routing_court_from_daa()),
+                tir_active:self.palw_tir_at(daa_score),gen_active:self.palw_gen_at(daa_score),
+                task_heads_active:self.palw_task_heads_at(daa_score),improvement_active:self.palw_improvement_at(daa_score),
+                constraint_active:self.palw_fp_decode_constraint_at(daa_score),
+            }),
+            claim_local_rule_context_v1: self.palw_state_params_v2.as_ref()
+                .filter(|params| params.claim_local_settlement_active_at(daa_score))
+                .map(|_| (self.palw_kernel_route_ruleset_id.as_bytes(),
+                    kaspa_consensus_core::palw_onboarding_v1::palw_envelope_fork_digest_v1(
+                        self.genesis.hash, &self.palw_fence_schedule, daa_score).as_bytes())),
             // ADR-0165: the reds of the accepting block's mergeset belong to the chain walk's own fold (a block's GHOSTDAG
             // data, set where it is folded — `extras.merged_reds`); every other reading of the fences (a rehearsal, the
             // pre-object base) merges no work, so nothing in it is red.
@@ -1940,6 +2046,8 @@ impl VirtualStateProcessor {
             tir_public_originals: Default::default(),
             // G14 G-03: the route's own fence (not whether its rules resolved), so a frameless TIR original is refused past it.
             tir_public_conviction_active: self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa_score)),
+            // RFC-0002 02-A: the TIR container identity's own fence.
+            tir_container_identity_active: self.palw_tir_container_identity_v1.is_some_and(|f| f.is_active(daa_score)),
             staged_float_constraint_active: self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(daa_score)),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
@@ -2155,7 +2263,7 @@ impl VirtualStateProcessor {
             extras.tir_public_allocation_rules_v1 = Some(rules);
             extras.tir_public_network_domain_v1 = Some(self.palw_network_domain_v2());
         }
-        extras
+        PalwResolvedBlockInputsV1::at(point, extras)
     }
 
     /// A class-independent native template, not a quote or an admission receipt. The claim
@@ -2171,7 +2279,11 @@ impl VirtualStateProcessor {
         {
             return None;
         }
-        let config = extras.staged_public_court?;
+        // The staged court must be in force; the frame is priced and clocked by its own MEASURED cost model (audit §10), never
+        // by the staged routes' `network_v1` template. No model (every shipped preset): no rules, the route stays closed.
+        extras.staged_public_court?;
+        let cost = self.palw_tir_frame_cost_v1?;
+        cost.check_v1().ok()?;
         let params = self.palw_state_params_v2.as_ref()?;
         let court = self.palw_court_params_at(daa_score)?.ok()?;
         // The legacy helper has a conservative u16::MAX fallback for callers without registry
@@ -2179,10 +2291,9 @@ impl VirtualStateProcessor {
         if !params.panel_v3_rule_at(daa_score) && extras.model_registry.is_none() {
             return None;
         }
-        let maximum_custodians = kaspa_consensus_core::palw_state_v2::PalwChainStateV2::staged_registered_tir_maximum_custodians_v1(
-            daa_score, params, extras,
-        )
-        .ok()?;
+        // G14 audit §11 (d): the frame's own upper (the flat Panel's credited seats and the producer), not the typed routes' 257.
+        let maximum_custodians =
+            kaspa_consensus_core::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(daa_score, params, extras).ok()?;
         let maximum_leaves = self.palw_court_step_ladder_at(daa_score, &court);
         if maximum_custodians == 0 || maximum_leaves == 0 {
             return None;
@@ -2193,7 +2304,8 @@ impl VirtualStateProcessor {
             court,
             dissection: self.palw_fused_dissectable_at(daa_score),
             prompt_form: self.palw_prompt_ids_form_at(daa_score),
-            config,
+            config: cost.config,
+            clock: cost.clock,
         })
     }
 
@@ -2211,7 +2323,7 @@ impl VirtualStateProcessor {
         }
         if let Some(envelope) = originals.values().next() {
             if originals.len() != 1 { return Err("one FP carrier cannot fund multiple original TIR allocations".into()); }
-            let mut extras = self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object));
+            let mut extras = self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)).into_legacy_extras();
             extras.tir_public_originals = originals.clone();
             // G14 R4: a frame with a semantic stage is quoted with its own TFP1-carried history pledge (the fold checks it the same way).
             if let Some(history) = &envelope.history_pledge {
@@ -2251,11 +2363,11 @@ impl VirtualStateProcessor {
         _state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
-    ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
-        let mut extras = self.palw_transition_extras_for(point);
+    ) -> PalwResolvedBlockInputsV1 {
+        let mut extras = self.palw_transition_extras_for(point).into_legacy_extras();
         extras.model_court_window_active = self.palw_model_court_window_active_at(point.daa_score);
         extras.class_court_windows = self.palw_class_court_windows_for_objects(objects, point.daa_score);
-        extras
+        PalwResolvedBlockInputsV1::at(point, extras)
     }
 
     pub(super) fn palw_v2_objects_of_block(

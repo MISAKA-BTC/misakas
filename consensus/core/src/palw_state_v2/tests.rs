@@ -4,6 +4,8 @@
 
 mod kernel_route_locator_v1;
 mod public_filer_targeting_v1;
+mod claim_local_v1;
+mod claim_local_rewards_v1;
 // RFC-0017: model eligibility through the actual fold (claim gate, commit-then-draw, fee, promotion, lapse, renewal).
 mod model_eligibility_fold_v1;
 mod public_prefix_fold_v1;
@@ -18,8 +20,13 @@ mod settlement_once_v1;
 mod settlement_liability_v1;
 // RFC-0007 §4.1 T6: paid-claim traps, the receipt signers' liability and held check fees (dormant; kernel route aux 142).
 mod paid_claim_trap_v1;
+// RFC08 08-B: native claim fees held from Final to the liability horizon (dormant; kernel route aux 144).
+mod native_liability_hold_v1;
+mod paid_consumer_retention_v1;
 // RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
 mod tir_fp_lane_v1;
+// RFC-0016 V8 (audit 2026-10-17, 16-A): capacity attestations through the fold and the attested capacity read.
+mod rfc0016_capacity_attestation_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;
@@ -14015,6 +14022,28 @@ mod fp_compute_pricing {
         PalwTransitionExtrasV1 { fp_derived_work_daa: Some(0), ..Default::default() }
     }
 
+    #[test]
+    fn borrowed_rule_views_keep_an_old_claims_unit_when_the_reading_block_crosses_the_fence() {
+        let (p, base, plain, _) = two_classes(&compute_era());
+        let prompt: Vec<u32> = (1..=6).collect();
+        let object = commit(plain, 0xB0, 1, &prompt, 4, honest_leaves(&derived_profile(), &prompt, 4));
+        let (state, _) = apply_derived(&base, &p, &ctx(4, 103, 4), &[object], &compute_era()).unwrap();
+        let mut claim = state.claim(&h64(0xB0)).unwrap().clone();
+        let extras = PalwTransitionExtrasV1 { canonical_work_daa: Some(100), ..Default::default() };
+        let before = state.state_root();
+        for (accepted, compute) in [(99, false), (100, true), (101, true)] {
+            claim.accepted_daa = accepted;
+            for (reading, active) in [(99, false), (100, true), (500, true)] {
+                let point = ctx(7, reading, 7);
+                assert_eq!(extras.rules_at(&point).canonical_work_active(), active);
+                assert_eq!(extras.rules_for_claim(&claim).prices_in_compute(&p), compute,
+                    "claim accepted at {accepted} must keep its unit when read at {reading}");
+            }
+        }
+        assert_eq!(state.state_root(), before, "the views cannot write chain state");
+        assert!(!PalwTransitionExtrasV1::default().rules_for_claim(&claim).prices_in_compute(&p));
+    }
+
     fn pricing() -> PalwFpPricingV1 {
         PalwFpPricingV1::of(&derived_work_chain().0, Some(0))
     }
@@ -26381,6 +26410,12 @@ mod model_market_virtual {
             offenders.join("\n  ")
         );
 
+        let modules = std::fs::read_to_string(root.join("consensus/src/processes/mod.rs")).expect("process module inventory");
+        assert!(
+            modules.contains("#[cfg(test)]\npub mod palw_state_v2_sync;"),
+            "the incomplete historical walker must remain unavailable to production callers"
+        );
+
         // The other half: the extras every production fold takes are written field by field from
         // the block's own DAA, never left to a default.
         let processor = crate::palw_source_guard_v1::palw_processor_source_v1().to_string(); // the processor and its split files (2026-10-13)
@@ -26401,7 +26436,7 @@ mod model_market_virtual {
         }
         // …and the chain walk folds a block's objects, its EVM actions and its refunds with them.
         for line in [
-            "let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);",
+            "let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();",
             "extras.evm_actions = staged.result.market_actions.clone();",
             "extras.carrier_market_refunds = carrier_refunds;",
         ] {
@@ -28344,6 +28379,8 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
+            native_court_rules_v1: None,
+            claim_local_rule_context_v1: None,
             merged_reds: Default::default(),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
@@ -28355,6 +28392,7 @@ mod evm_market {
             tir_public_network_domain_v1: None,
             tir_public_originals: Default::default(),
             tir_public_conviction_active: false,
+            tir_container_identity_active: false,
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,
@@ -28619,6 +28657,8 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
+            native_court_rules_v1: None,
+            claim_local_rule_context_v1: None,
             merged_reds: Default::default(),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
@@ -28630,6 +28670,7 @@ mod evm_market {
             tir_public_network_domain_v1: None,
             tir_public_originals: Default::default(),
             tir_public_conviction_active: false,
+            tir_container_identity_active: false,
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,
@@ -30639,6 +30680,8 @@ mod anchor_window_v1;
 // Lane BUDGET (ADR-0176 / ADR-0177): the bond budget through the fold — the unarmed fold byte for byte, the engine's creation,
 // its deltas and carriage, the capital assignment, and (milestone 3) every reward path's reservation and consumption.
 mod bond_budget_fold_v1;
+// RFC-0023 stage 1: the unresolved bound through the fold's floor rows.
+mod unresolved_bound_v1;
 
 /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
 /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's
@@ -34259,4 +34302,34 @@ fn native_claim_cascade_refusal_keeps_dependent_rows_and_journal_unchanged() {
     assert!(builder.entries.is_empty());
     assert!(matches!(builder.reserve_mutation_sequence_v1(0, usize::MAX), Err(PalwStateV2Error::NativeResource(_))));
     assert_eq!(checker.outstanding(), (0, 0));
+}
+
+/// The route is selected by the claim's acceptance cohort, including after tip advancement.
+#[test]
+fn memory_routing_held_claim_mercy_preserves_acceptance_cohort_and_fails_closed() {
+    use crate::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v8};
+    let (_, params, mut state, claim_id, _) = held_fused_claim(1, 12);
+    let mut claim = state.claim(&claim_id).unwrap().clone();
+    let mut geometry = QWEN36_35B_A3B;
+    geometry.n_ctx = 32;
+    geometry.tile_len = geometry.attn_head_dim;
+    let profile = qwen36_profile_v8(geometry).unwrap();
+    let class_id = profile.shape_profile_id();
+    let ladder = *state.class_step_ladders.get(&claim.class_id).unwrap();
+    state.class_step_ladders.insert(class_id, ladder);
+    state.fp_work_profiles.insert(class_id, Box::new(profile.clone()));
+    claim.class_id = class_id;
+    let params = params.with_held_unanswerable_classes(vec![class_id]).with_memory_routing_court_from_daa(Some(100));
+    claim.accepted_daa = 99;
+    assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
+    claim.accepted_daa = 100;
+    assert!(!state.held_claim_is_unanswerable_v2(&params, &claim));
+    let dormant = params.clone().with_memory_routing_court_from_daa(None);
+    assert!(state.held_claim_is_unanswerable_v2(&dormant, &claim));
+    state.fp_work_profiles.remove(&class_id);
+    assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
+    let mut foreign = profile;
+    foreign.n_ctx += 1;
+    state.fp_work_profiles.insert(class_id, Box::new(foreign));
+    assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
 }

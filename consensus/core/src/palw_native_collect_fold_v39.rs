@@ -314,6 +314,13 @@ pub(super) fn collect(
     if r.aux.contains_key(&(TABLE, k(COLLECTED, &id))) {
         return Err(bad("native39 original job already collected"));
     }
+    if super::palw_native_liability_hold_fold_v1::held_native_fee_v1(
+        &builder.state,
+        crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39,
+        &id,
+    ).is_some() {
+        return Err(bad("native39 collection cannot erase a job with an unpaid held fee"));
+    }
     let h = header(r, id)?;
     let terminal_book = book(r, &h)?;
     let (croot, credit): (Digest, NativeSingleCreditV39) = read(r, 23, &id, 1024)?;
@@ -332,6 +339,10 @@ pub(super) fn collect(
         || ctx.daa_score <= horizon
     {
         return Err(bad("native39 collection requires a genuine settled single credit past the complete original retention"));
+    }
+    // G14 lane closure G-N2: a component a live mining claim credits keeps its material through that claim's liability.
+    if super::mining_court::job_held(r, &id, ctx.daa_score) {
+        return Err(bad("native39 collection: a mining claim crediting this job is still accusable (material held)"));
     }
     let st = protected::status(r, &h)?;
     if !st.pending.is_empty() || st.owners.iter().any(|o| *o != [0; 64]) {

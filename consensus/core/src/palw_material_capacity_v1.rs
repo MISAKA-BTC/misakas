@@ -1002,6 +1002,7 @@ mod native_resource_inventory_v1;
 #[path = "palw_material_capacity_owner_v1.rs"]
 mod material_capacity_owner_v1;
 
+pub use material_capacity_owner_v1::PalwLiabilityMaterialArchiveV1;
 pub use material_capacity_owner_v1::prospective_kernel_bundle_auth_requests_v4;
 pub use material_capacity_owner_v1::prospective_kernel_bundle_requests_v4;
 

@@ -282,6 +282,7 @@ impl RemoteNode for WrpcNode<'_> {
             .runtime
             .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
                 block_hashes: blocks.iter().map(|b| b.to_string()).collect(),
+                ..Default::default()
             }))
             .map_err(|e| format!("getPalwForkChoiceOpening: {e}"))?;
         if !served.available {
@@ -292,6 +293,44 @@ impl RemoteNode for WrpcNode<'_> {
             .iter()
             .filter(|e| e.available)
             .filter_map(|e| misaka_palw_remote::l2::opening_from_wire_v1(&e.leaf, &e.inner_root))
+            .collect())
+    }
+
+    /// RFC09: op 203 v2's committed leaves (untrusted; `misaka_palw_remote::l2_rule_e` verifies each with the full node's readers).
+    fn fork_choice_committed_v2(
+        &self,
+        blocks: &[Hash64],
+        window_above_blue: Option<u64>,
+        bonds: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> Result<Vec<misaka_palw_remote::l2_rule_e::CommittedServedV2>, String> {
+        let registry_bonds: Vec<String> =
+            bonds.iter().map(|b| faster_hex::hex_string(&borsh::to_vec(b).expect("a bond key serializes"))).collect();
+        let served = self
+            .runtime
+            .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
+                block_hashes: blocks.iter().map(|b| b.to_string()).collect(),
+                rule_e_window_above_blue: window_above_blue,
+                registry_bonds,
+            }))
+            .map_err(|e| format!("getPalwForkChoiceOpening: {e}"))?;
+        if !served.available {
+            return Err(format!("{} serves no fork-choice opening: {}", self.endpoint, served.reason));
+        }
+        Ok(served
+            .entries
+            .iter()
+            .filter(|e| e.available)
+            .filter_map(|e| {
+                misaka_palw_remote::l2_rule_e::committed_entry_from_wire_v2(
+                    &e.block_hash,
+                    &e.committed_leaf,
+                    &e.inner_root,
+                    window_above_blue,
+                    &e.rule_e_window,
+                    &e.registry_openings,
+                    bonds,
+                )
+            })
             .collect())
     }
 
@@ -743,6 +782,7 @@ fn main() {
                         Ok(found)
                     }),
                     verify_signature: misaka_palw_remote::l2::verify_attestation_mldsa87_v1,
+                    params: Some(std::sync::Arc::new(params.clone())),
                 }),
             }),
             accept_unverified: args.accept_unverified,

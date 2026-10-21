@@ -1,0 +1,170 @@
+{
+  "date": "2026-10-21",
+  "candidate_parent": "705b27616",
+  "selected_unique_passes": 67,
+  "selected_failed": 0,
+  "selected_ignored": 0,
+  "arithmetic": "11 query/frontier + 26 fresh identity/gate/activation/release + 30 native replay = 67; no intermediate passes or historical overlapping checkpoints added",
+  "commands": [
+    "cargo test --release -p kaspa-consensus-core --lib court_tir_ (initial compile, intermediate 9 passed / 2 failed, final 11 passed)",
+    "cargo test --release -p kaspa-consensus-core --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move && cargo check --release -p kaspa-consensus && target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1",
+    "python3 scripts/drills/check_rfc06_native_wire_idempotent.py"
+  ],
+  "cargo_and_release_lock": "/Users/wata/.cache/misaka-heavy-lock.sh",
+  "non_test_consensus_check_exit": 0,
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "6b0c8a3815cc0b252601979702844ca0b92c9d7e6af66ed0e56eb8f839e1f43a",
+    "consensus/core/src/palw_court_shared_tir_frontier_v1.rs": "3789ae9fa4259bbded7e626cee7cf39e9883de3f0943e618a3bb374520902f65",
+    "consensus/core/src/palw_court_tir_requests_v1.rs": "6ed2ed63bb64e63951b5629aae1dab5d7b249abd30ab12d4ecaf0431d748930a"
+  },
+  "core_unit_executable_sha256": "bb60206d3238e5382e62b1568b023553e49c2b250dfd1ed9040ef3759fa8e4d2",
+  "source_patch": {
+    "path": "shared-frontier-runtime.patch",
+    "sha256": "2cb994715644ed384021e94547aab2d7f129ea4afd780d289771e45ec20f47f1"
+  },
+  "intermediate_patch": {
+    "path": "shared-frontier-pre-signature-fix.patch",
+    "sha256": "72140be642d366cbe9f46afc2c7eb5c3d9b78850a1be619ee2e30bfe390db368",
+    "scope": "after test private-field API correction, before verifier argument correction"
+  },
+  "legacy_audit": {
+    "path": "shared-frontier-legacy-audit.json",
+    "sha256": "7eb3350741248847088974b0dd59b0900b83c501a989889c386c22637a42dfa6"
+  },
+  "generator_check": {
+    "path": "shared-frontier-wire-idempotent.log",
+    "sha256": "f37ab49c54bf5b109caa581b2e6b1535ca0dc30de9442d0b7df178ef441dfb02",
+    "scope": "Existing rooted scanner outputs unchanged. The unassigned intent is not linked into native lifecycle wire coverage."
+  },
+  "logs": [
+    {
+      "path": "shared-frontier-first-release.log",
+      "scope": "initial compile error: private test fields",
+      "passed_groups": [],
+      "sha256": "78da3ae0bfe375991f2d1d2045db2064c0e88a860adb2ad8e6770c10eff78674",
+      "exit_code": 101,
+      "test_results": []
+    },
+    {
+      "path": "shared-frontier-release.log",
+      "scope": "intermediate: signature verifier arguments reversed",
+      "passed_groups": [],
+      "sha256": "95e81ca40e84f515cb733557a7ce9b2db85d26a19ba5bb8467b8508cdabbd0df",
+      "exit_code": 101,
+      "test_results": [
+        {
+          "status": "FAILED",
+          "passed": 9,
+          "failed": 2,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "path": "shared-frontier-identities-native-check.log",
+      "scope": "intermediate regression build, before signature fix",
+      "passed_groups": [
+        12,
+        5,
+        9,
+        30
+      ],
+      "sha256": "553bcb092df9a3bcbca91acc98e06460538ae9b9e20ac0de50d28dd98216de45",
+      "exit_code": 0,
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 30,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "path": "shared-frontier-corrected-release.log",
+      "scope": "final source query/frontier cases",
+      "passed_groups": [
+        11
+      ],
+      "sha256": "f9f9c85802fcaf619ec89af1ad87b463d0953bee0c07b4e5f056e29b4d530e30",
+      "exit_code": 0,
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "path": "shared-frontier-final-regressions-check.log",
+      "scope": "final fresh identities, non-test check, native replay",
+      "passed_groups": [
+        12,
+        5,
+        9,
+        30
+      ],
+      "sha256": "a5c4c9abd1d9221cf7124d078f1b64c6228697b641302776306ff0e43732c2b4",
+      "exit_code": 0,
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 30,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    }
+  ],
+  "actual_mldsa_request_signatures": true,
+  "bond_registration": "injected identity-only fixture, no native registration/funding",
+  "frontier": "in-memory, not rooted/serializable/consensus ingress",
+  "data_authentication": "original Merkle/source identity only, not model computation certification or signer duty completion",
+  "production_admission_or_supply_added": false,
+  "numeric_profile_or_activation_adopted": false,
+  "node_T05_complete": false,
+  "full_g14_complete": false,
+  "docs_check": {
+    "status": "FAIL: same five imported missing references, 43 baseline-known occurrences",
+    "path": "shared-frontier-docs-check.log",
+    "sha256": "dc98b94f22491be74fb48d93c4005ac83685d276538fcf1ccb9ad3c05bd56295"
+  }
+}

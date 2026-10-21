@@ -1,0 +1,12 @@
+{
+  "parent": "4dff68eab",
+  "sha256": {
+    "consensus/core/src/lib.rs": "af4e99de661f7a92c48cea6e0982e3d150fe9fd2c4fd14afb907176e34230263",
+    "consensus/core/src/palw_court_shared_tir_state_v1.rs": "5d10120081909b7266a299ef4b99f3cf98a8cbc8266666a85c064c57f15dd0af",
+    "consensus/core/src/palw_step_leg.rs": "ec44aab21c30e3012f201a87c45fd901c23b4020933eb7620e0344f9425130d4",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "b144e4513d0af999f5b1c2ed1d25d29accd78575eb7fae26be51b3ca03e97155",
+    "consensus/core/src/palw_court_shared_tir_builder_store_v1.rs": "f8e8dcfc86d65676a007eb023b5aa30fd08c208d514a02e1d354c5722016cc5f"
+  },
+  "exact_patch_reconstruction": true,
+  "scope": "borrowed read-only material view and native boundary-opening range transform; no persistence or complete paid admission"
+}

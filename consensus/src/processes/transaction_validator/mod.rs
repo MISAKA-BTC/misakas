@@ -31,6 +31,7 @@ pub struct TransactionValidator {
     /// reds but this, and the isolation guard was sized as though the reds shared one aggregate
     /// output — the shape they had before ADR-0058 paid each of them its own.
     mergeset_size_limit: u64,
+    mergeset_size_history: Option<kaspa_consensus_core::config::params::ForkedParam<u64>>,
     sig_cache: Cache<SigCacheKey, bool>,
     pub(crate) mass_calculator: MassCalculator,
     /// kaspa-pq PQ-only enforcement mode for this network (ADR-0019).
@@ -209,6 +210,7 @@ impl TransactionValidator {
             coinbase_payload_script_public_key_max_len,
             coinbase_maturity,
             mergeset_size_limit,
+            mergeset_size_history: None,
             sig_cache: Cache::with_counters(10_000, counters),
             mass_calculator,
             pq_enforcement,
@@ -374,6 +376,17 @@ impl TransactionValidator {
         self
     }
 
+    pub fn dag_width_declared(&self) -> bool {
+        self.mergeset_size_history.is_some()
+    }
+
+    pub fn with_mergeset_size_history(mut self, history: kaspa_consensus_core::config::params::ForkedParam<u64>) -> Self {
+        if history.activation() != kaspa_consensus_core::config::params::ForkActivation::never() {
+            self.mergeset_size_history = Some(history);
+        }
+        self
+    }
+
     pub fn new_for_tests(
         max_tx_inputs: usize,
         max_tx_outputs: usize,
@@ -394,6 +407,7 @@ impl TransactionValidator {
             coinbase_payload_script_public_key_max_len,
             coinbase_maturity,
             mergeset_size_limit,
+            mergeset_size_history: None,
             sig_cache: Cache::with_counters(10_000, counters),
             mass_calculator: MassCalculator::new(0, 0, 0, 0),
             // Tests run upstream-compatible (no PQ restriction) unless a test

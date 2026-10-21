@@ -182,4 +182,18 @@
 | ADR-0180 | [PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md) | Accepted / BFT不使用の設計 |
 | ADR-0181 | [採用済み設計を原則凍結し、重大問題時のみ新規 RFC・ADR で変更する](0181-design-freeze-and-controlled-change.md) | Accepted / 原則凍結 |
 | ADR-0182 | [画像・動画経路とモデル改善を mainnet 後へ延期し、当面無効にする](0182-defer-media-and-model-improvement-until-post-mainnet.md) | Accepted / 延期・無効化方針 |
+| ADR-0183 | [G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md) | 原文と後続改定を参照 |
+| ADR-0184 | [native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg](0184-native-liability-horizon-panel-record-and-single-certified-leg.md) | 原文と後続改定を参照 |
+| ADR-0185 | [paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon sour…](0185-paid-lock-randomness-bootstrap-and-paid-sources.md) | 原文と後続改定を参照 |
 | ADR-0186 | [未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md) | 原文と後続改定を参照 |
+| ADR-0187 | [native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md) | 原文と後続改定を参照 |
+| ADR-0188 | [D2・X3 の休眠 fence を G14 の arm-readiness record で閉じ、X3 の期限を窓の合成で定める](0188-d2-x3-arm-records-composition-and-pause-credit.md) | 原文と後続改定を参照 |
+| ADR-0192 | [court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md) | 原文と後続改定を参照 |
+| ADR-0193 | [Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md) | 原文と後続改定を参照 |
+| ADR-0193 | [sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md) | 原文と後続改定を参照 |
+| ADR-0194 | [休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md) | 原文と後続改定を参照 |
+| ADR-0195 | [native court 応答の前提受理時刻を保持する](0195-rooted-court-response-eligibility-history.md) | 原文と後続改定を参照 |
+| ADR-0196 | [owner 非依存の TIR 要求と認証済み公開データ](0196-owner-independent-shared-tir-query-data.md) | 原文と後続改定を参照 |
+| ADR-0197 | [court終了効果と未解決責任の保存方式](0197-court-end-effects-and-pending-liability-archive.md) | 原文と後続改定を参照 |
+| ADR-0198 | [共有courtのinitial noticeの等号](0198-shared-court-initial-notice-boundary.md) | 原文と後続改定を参照 |
+| ADR-0199 | [共有court終端materialと非独占提出方式](0199-shared-court-terminal-material-and-nonblocking-ingress.md) | 原文と後続改定を参照 |

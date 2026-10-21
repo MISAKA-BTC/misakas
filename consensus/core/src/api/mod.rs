@@ -41,6 +41,16 @@ use crate::BlockHash;
 
 pub use self::stats::{BlockCount, ConsensusStats};
 
+/// Bounded RFC12 observations from one locked virtual state. Missing historical
+/// balances and spent/unknown outpoints are explicit; storage failures are errors.
+#[derive(Clone, Debug)]
+pub struct PalwAcceptanceReadsV1 {
+    pub sink: BlockHash,
+    pub virtual_daa: u64,
+    pub reserve_balances: Vec<(BlockHash, Option<u64>)>,
+    pub outpoints: Vec<(TransactionOutpoint, Option<UtxoEntry>)>,
+}
+
 /// **LIVE-R1 N2: the consensus half of the partition watchdog.** This node's recent resolves settled on
 /// `sink` after refusing the heavier `refused` on the PALW deep-reorg rule — a candidate it had
 /// UTXO-validated and weighed, and that did not strictly out-weigh its sink on `(safe frontier, safe
@@ -982,6 +992,23 @@ pub trait ConsensusApi: Send + Sync {
     /// the outpoint is unspent-absent (never existed or already spent).
     fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
         unimplemented!()
+    }
+
+    /// **RFC-0012 acceptance (op 246)**: the DNS security reserve balance `block`'s post-state holds (`reserve_balance_store`);
+    /// `None` where this node holds no reserve row for the block. Read-only.
+    fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
+        let _ = block;
+        None
+    }
+
+    /// At most 64 blocks and 64 outpoints, with one virtual state/UTXO lock and
+    /// pruning protection. Implementations must not assemble separate snapshots.
+    fn get_palw_acceptance_reads_v1(
+        &self,
+        _blocks: Vec<BlockHash>,
+        _outpoints: Vec<TransactionOutpoint>,
+    ) -> ConsensusResult<PalwAcceptanceReadsV1> {
+        Err(ConsensusError::General("atomic PALW acceptance reads are unsupported"))
     }
 
     fn get_tips(&self) -> Vec<BlockHash> {
@@ -2375,6 +2402,18 @@ pub trait ConsensusApi: Send + Sync {
         blocks: &[BlockHash],
     ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
         let _ = blocks;
+        Err("this consensus serves no fork-choice opening".to_string())
+    }
+
+    /// **RFC09: op 203 v2** — [`Self::palw_fork_choice_openings_v1`] with each entry's committed leaf in its own form, and (as asked)
+    /// its v3 rule-E window above a blue score and its v3 registry openings of some bonds: the inputs the full node's rule-E comparator
+    /// reads, for a remote client to evaluate with the node's own functions. Untrusted as served.
+    fn palw_fork_choice_openings_v2(
+        &self,
+        blocks: &[BlockHash],
+        extras: &crate::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2,
+    ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let _ = (blocks, extras);
         Err("this consensus serves no fork-choice opening".to_string())
     }
 

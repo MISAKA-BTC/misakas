@@ -43,6 +43,10 @@ pub const PALW_TIR_DISSECT_MAX_REDUCTIONS: usize = 16;
 /// The most demanded elements of all reductions together one claim may carry.
 pub const PALW_TIR_DISSECT_MAX_VALUES: usize = 4096;
 
+/// Pre-root numerical tree inventory; not a service reservation or admission.
+#[path = "palw_tir_dissect_inventory_v1.rs"]
+pub mod tree_inventory_v1;
+
 /// How a reduction's partials fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
@@ -444,6 +448,82 @@ pub struct PalwTirDissectPhaseV1 {
     pending: Vec<PalwTirRangeClaimV1>,
 }
 
+/// Numerical material only: not a rooted shared court, an authenticated original
+/// or any timing/funding/default capability. One fixed root, immutable disclosures
+/// keyed by child path, and all sibling choices coexist. No wire decoder.
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub struct PalwTirNumericalFrontierV1 {
+    root:PalwTirDissectPhaseV1,
+    disclosures:std::collections::BTreeMap<Vec<u8>,PalwTirDissectRoundV1>,
+}
+impl PalwTirNumericalFrontierV1 {
+    /// Caller must separately authenticate the root's source/finalize/signer.
+    /// These checks admit only internally consistent initial numerical state.
+    pub fn new(root:PalwTirDissectPhaseV1)->Result<Self,String>{
+        let n=root.reductions.len();
+        if !palw_attn_arity_is_legal_v1(root.arity) || root.history_positions==0 || root.tile_positions==0
+            || root.round!=0 || root.tile_first!=0 || root.tile_count!=root.tile_count_at_open()
+            || !root.pending.is_empty() || root.claim!=root.root
+            || root.turn!=if root.tile_count<=1 {PalwBisectTurnV1::Terminal}else{PalwBisectTurnV1::AwaitDisclosure}
+            || n==0 || n>PALW_TIR_DISSECT_MAX_REDUCTIONS || root.folds.len()!=n || root.bounds.len()!=n
+            || root.elements.len()!=n || root.root.partials.len()!=n
+            || root.reductions.windows(2).any(|p|p[0]>=p[1])
+            || root.bounds.iter().any(|(lo,hi)|lo>hi)
+        {return Err("shared numerical root is not an initial consistent phase".into());}
+        let mut values=0usize;
+        for (elements,partial) in root.elements.iter().zip(&root.root.partials) {
+            values=values.checked_add(elements.len()).ok_or("shared numerical shape overflow")?;
+            if elements.len()!=partial.len() || elements.windows(2).any(|p|p[0]>=p[1])
+                || values>PALW_TIR_DISSECT_MAX_VALUES {
+                return Err("shared numerical root shape is inconsistent".into());
+            }
+        }
+        check_bounds(&root.bounds,&root.root).map_err(|e|e.to_string())?;
+        Ok(Self {root,disclosures:std::collections::BTreeMap::new()})
+    }
+    /// Geometry upper only, per fixed root. Not total bytes/work, a funded
+    /// reservation, or a bound on multiple roots/sessions/claims.
+    pub fn maximum_disclosures(&self)->u64 {self.root.tile_count_at_open()-1}
+    pub fn terminal_tiles(&self)->u64 {self.root.tile_count_at_open()}
+    pub fn disclosed_count(&self)->usize {self.disclosures.len()}
+
+    /// An UNROOTED arithmetic projection for the existing builders/checker.
+    /// Its inherited historic deadline is not an accepted child-choice clock.
+    /// Never insert this view as a session/phase or use it to attribute absence.
+    pub fn project_unrooted_phase(&self,path:&[u8])->Result<PalwTirDissectPhaseV1,String>{
+        if path.len()>self.root.round_budget() as usize {return Err("shared numerical path exceeds root geometry".into());}
+        let mut phase=self.root.clone();
+        for depth in 0..path.len() {
+            let msg=self.disclosures.get(&path[..depth]).ok_or("shared numerical ancestor disclosure is missing")?;
+            phase.check_round_header(msg).and_then(|()|phase.check_round_values(msg)).map_err(|e|e.to_string())?;
+            if phase.round.checked_add(1).is_none_or(|n|n>phase.round_budget()) {
+                return Err("shared numerical path exceeds native round budget".into());
+            }
+            let index=usize::from(path[depth]);let ranges=phase.child_ranges();
+            let &(first,count)=ranges.get(index).ok_or("shared numerical child is outside pinned cut")?;
+            phase.claim=msg.children[index].clone();phase.tile_first=first;phase.tile_count=count;phase.round+=1;
+            phase.pending.clear();
+            phase.turn=if count<=1 {PalwBisectTurnV1::Terminal}else{PalwBisectTurnV1::AwaitDisclosure};
+            // No fabricated move, signature, accepting timestamp or clock update.
+        }
+        Ok(phase)
+    }
+    /// True only for new material. Equivalent disclosure coalesces; a changed
+    /// answer at the same path cannot erase or replace any alternative branch.
+    /// Capacity/accounting for copies/map/journal must precede any native use.
+    pub fn disclose(&mut self,path:&[u8],msg:&PalwTirDissectRoundV1)->Result<bool,String>{
+        if let Some(old)=self.disclosures.get(path) {
+            return if old==msg {Ok(false)}else{Err("shared numerical disclosure is immutable".into())};
+        }
+        let phase=self.project_unrooted_phase(path)?;
+        phase.check_round_header(msg).and_then(|()|phase.check_round_values(msg)).map_err(|e|e.to_string())?;
+        if self.disclosures.len() as u64>=self.maximum_disclosures() {
+            return Err("shared numerical disclosures exceed complete tree geometry".into());
+        }
+        self.disclosures.insert(path.to_vec(),msg.clone());Ok(true)
+    }
+}
+
 /// **A root claim's shape and values against its site**: one ascending, distinct element list inside
 /// each reduction and one value per element, within the carriage cap; every value in its
 /// reduction's proven interval.
@@ -654,9 +734,8 @@ impl PalwTirDissectPhaseV1 {
         self.last_deadline_daa
     }
 
-    /// **The responder's round**: the children's claims, fold-checked and bound-checked before the
-    /// challenger moves.
-    pub fn apply_round(&mut self, msg: &PalwTirDissectRoundV1, accepted_daa: u64, w_round: u64) -> Result<(), PalwTirDissectError> {
+    // One numerical validator for legacy timed moves and shared inspection.
+    fn check_round_header(&self,msg:&PalwTirDissectRoundV1)->Result<(),PalwTirDissectError>{
         if msg.version != PALW_TIR_DISSECT_OBJECT_VERSION_V1 {
             return Err(PalwTirDissectError::UnsupportedVersion { got: msg.version });
         }
@@ -665,9 +744,9 @@ impl PalwTirDissectPhaseV1 {
             PalwBisectTurnV1::AwaitVerdict => return Err(PalwTirDissectError::Turn("the challenger names a child")),
             PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => return Err(PalwTirDissectError::AlreadyTerminal),
         }
-        if w_round == 0 {
-            return Err(PalwTirDissectError::ZeroWindow);
-        }
+        Ok(())
+    }
+    fn check_round_values(&self,msg:&PalwTirDissectRoundV1)->Result<(),PalwTirDissectError>{
         let expected = self.child_ranges();
         if msg.children.len() != expected.len() {
             return Err(PalwTirDissectError::ChildCount { got: msg.children.len(), expected: expected.len() });
@@ -701,6 +780,34 @@ impl PalwTirDissectPhaseV1 {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Read-only arithmetic descent. No accepted choice, signature, timestamp or
+    /// deadline update; never install the returned phase or use it for default.
+    pub fn project_unrooted_child_v1(&self, msg: &PalwTirDissectRoundV1, child: u8) -> Result<Self, String> {
+        self.check_round_header(msg).and_then(|()| self.check_round_values(msg)).map_err(|e| e.to_string())?;
+        if self.round.checked_add(1).is_none_or(|n| n > self.round_budget()) { return Err("numerical path exceeds round budget".into()); }
+        let ranges = self.child_ranges();
+        let &(first,count) = ranges.get(usize::from(child)).ok_or("numerical child outside pinned cut")?;
+        let mut phase = self.clone();
+        phase.claim = msg.children[usize::from(child)].clone(); phase.tile_first = first; phase.tile_count = count; phase.round += 1;
+        phase.pending.clear();
+        phase.turn = if count <= 1 { PalwBisectTurnV1::Terminal } else { PalwBisectTurnV1::AwaitDisclosure };
+        Ok(phase)
+    }
+    pub fn check_unrooted_round_v1(&self, msg: &PalwTirDissectRoundV1) -> Result<(), String> {
+        self.check_round_header(msg).and_then(|()| self.check_round_values(msg)).map_err(|e| e.to_string())
+    }
+
+    /// **The responder's round**: the children's claims, fold-checked and bound-checked before the
+    /// challenger moves.
+    pub fn apply_round(&mut self, msg: &PalwTirDissectRoundV1, accepted_daa: u64, w_round: u64) -> Result<(), PalwTirDissectError> {
+        self.check_round_header(msg)?;
+        if w_round == 0 {
+            return Err(PalwTirDissectError::ZeroWindow);
+        }
+        self.check_round_values(msg)?;
         self.pending = msg.children.clone();
         self.last_deadline_daa = accepted_daa.saturating_add(w_round);
         self.turn = PalwBisectTurnV1::AwaitVerdict;

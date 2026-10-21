@@ -182,6 +182,42 @@ impl PalwClaimHardDeadlineFenceV1 {
     }
 }
 
+/// **The X3 policy composed from the network's windows** (user decision 2026-10-18): `T_prepare = window_bind + window_receipt`,
+/// `T_observe = window_challenge_at(activation)`, `T_resolve = B_disclose + B_court + Δ` with
+/// `Δ = B_cold_fetch + B_check + B_localize + B_carrier + B_reorg_slack`. `base` supplies the five `B_*` terms and `c_retain`; its three
+/// spans are overwritten by the composition (a caller can never choose them apart from the windows).
+pub fn palw_x3_composed_policy_v1(
+    params: &PalwStateParamsV2,
+    activation: ForkActivation,
+    base: PalwClaimHardDeadlinePolicyV1,
+) -> PalwClaimHardDeadlinePolicyV1 {
+    let delta = [base.cold_fetch_daa, base.check_daa, base.localize_daa, base.carrier_daa, base.reorg_slack_daa]
+        .into_iter()
+        .fold(0u64, u64::saturating_add);
+    PalwClaimHardDeadlinePolicyV1 {
+        prepare_daa: params.window_bind().saturating_add(params.window_receipt()),
+        observe_daa: params.window_challenge_at(activation.daa_score()),
+        resolve_daa: palw_da_disclose_window_daa_v1(params).saturating_add(params.window_court()).saturating_add(delta),
+        ..base
+    }
+}
+
+/// **Refuses an X3 policy whose spans are not the composition of the windows read from `params` at `activation`** (asked by
+/// validation, so a mismatch between the policy and the network's windows is refused rather than silently used). `None` when they agree.
+pub fn palw_x3_composition_refusal_v1(
+    params: &PalwStateParamsV2,
+    activation: ForkActivation,
+    policy: &PalwClaimHardDeadlinePolicyV1,
+) -> Option<&'static str> {
+    let composed = palw_x3_composed_policy_v1(params, activation, *policy);
+    if (policy.prepare_daa, policy.observe_daa, policy.resolve_daa) != (composed.prepare_daa, composed.observe_daa, composed.resolve_daa) {
+        return Some(
+            "palw_claim_hard_deadline_v1: T_prepare, T_observe and T_resolve must be the composition of the windows read at activation (REQ-X3-1)",
+        );
+    }
+    None
+}
+
 /// **The X3 terms a policy leaves UNMEASURED** (0 is UNKNOWN, never free): the five `B_*` terms with no existing source and `c_retain`.
 /// The candidate ([`PalwClaimHardDeadlineFenceV1::candidate_from_horizons_v1`]) leaves all six; a policy the user approves names none.
 pub fn palw_x3_unmeasured_terms_v1(policy: &PalwClaimHardDeadlinePolicyV1) -> Vec<&'static str> {
@@ -296,6 +332,13 @@ pub fn palw_claim_deadlines_v1(params: &PalwStateParamsV2, claim: &PalwClaimStat
 /// any later rule) bounds itself by.
 pub fn palw_claim_hard_deadline_of_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> Option<u64> {
     palw_claim_deadlines_v1(params, claim).map(|d| d.hard_deadline_daa)
+}
+
+/// **REQ-X3-3: the DA pause an X3 claim gives back.** The ADR-0062 pause return (`resume_claim_after_da_session_v2`) and the V6 verify
+/// credit move a claim's own anchors forward by the session's length; for an X3 claim that is a deadline extension, so the credit is
+/// ZERO. Under the old ruleset the pause passes through unchanged (every shipped ruleset, so the identity).
+pub fn palw_x3_pause_credit_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, paused_daa: u64) -> u64 {
+    if palw_claim_x3_governs_v1(params, claim) { 0 } else { paused_daa }
 }
 
 /// **Does X3 govern this claim?** (Accepted at/after the fence.) Every REQ-X3-3 guard asks this one question.

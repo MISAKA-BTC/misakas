@@ -600,7 +600,8 @@ impl PruningProofManager {
             self.palw_heartbeat_transparent,
             // ADR-0125: and the round lane's rule.
             self.palw_round_lane,
-        );
+        )
+        .with_dag_width(self.dag_width);
 
         // No need to initialize origin since we have a single root
         ghostdag_store.insert(root, Arc::new(ghostdag_manager.genesis_ghostdag_data())).unwrap();

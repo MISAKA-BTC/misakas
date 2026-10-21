@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_tir_public_source_v1::numerical_inventory_v1::tests::history_groups_match_each_original_position_including_saturation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4688 filtered out; finished in 0.00s
+

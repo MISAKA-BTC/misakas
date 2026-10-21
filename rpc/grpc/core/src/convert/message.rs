@@ -1873,7 +1873,11 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, protowire::GetPalwForkChoiceOpeningRequestMessage, {
-    Self { block_hashes: item.block_hashes.clone() }
+    Self {
+        block_hashes: item.block_hashes.clone(),
+        rule_e_window_above_blue: item.rule_e_window_above_blue,
+        registry_bonds: item.registry_bonds.clone(),
+    }
 });
 from!(item: &kaspa_rpc_core::RpcPalwForkChoiceEntry, protowire::RpcPalwForkChoiceEntry, {
     Self {
@@ -1885,6 +1889,9 @@ from!(item: &kaspa_rpc_core::RpcPalwForkChoiceEntry, protowire::RpcPalwForkChoic
         inner_root: item.inner_root.clone(),
         committed_root: item.committed_root.clone(),
         committed_form: item.committed_form,
+        committed_leaf: item.committed_leaf.clone(),
+        rule_e_window: item.rule_e_window.clone(),
+        registry_openings: item.registry_openings.clone(),
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, protowire::GetPalwForkChoiceOpeningResponseMessage, {
@@ -4394,7 +4401,11 @@ try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kasp
     }
 });
 try_from!(item: &protowire::GetPalwForkChoiceOpeningRequestMessage, kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, {
-    Self { block_hashes: item.block_hashes.clone() }
+    Self {
+        block_hashes: item.block_hashes.clone(),
+        rule_e_window_above_blue: item.rule_e_window_above_blue,
+        registry_bonds: item.registry_bonds.clone(),
+    }
 });
 try_from!(item: &protowire::RpcPalwForkChoiceEntry, kaspa_rpc_core::RpcPalwForkChoiceEntry, {
     Self {
@@ -4406,6 +4417,9 @@ try_from!(item: &protowire::RpcPalwForkChoiceEntry, kaspa_rpc_core::RpcPalwForkC
         inner_root: item.inner_root.clone(),
         committed_root: item.committed_root.clone(),
         committed_form: item.committed_form,
+        committed_leaf: item.committed_leaf.clone(),
+        rule_e_window: item.rule_e_window.clone(),
+        registry_openings: item.registry_openings.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwForkChoiceOpeningResponseMessage, RpcResult<kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, {
@@ -6427,3 +6441,65 @@ mod monetary_material_grpc_tests {
         assert_eq!((back.available, back.total_bytes, back.offset, back.bytes), (true, 9000, 4096, vec![5; 7]));
     }
 }
+
+// RFC-0012 acceptance (op 246).
+from!(item: &kaspa_rpc_core::GetPalwAcceptanceReadsRequest, protowire::GetPalwAcceptanceReadsRequestMessage, {
+    Self { reserve_blocks: item.reserve_blocks.clone(), outpoints: item.outpoints.clone() }
+});
+try_from!(item: &protowire::GetPalwAcceptanceReadsRequestMessage, kaspa_rpc_core::GetPalwAcceptanceReadsRequest, {
+    Self { reserve_blocks: item.reserve_blocks.clone(), outpoints: item.outpoints.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwAcceptanceReadsResponse>, protowire::GetPalwAcceptanceReadsResponseMessage, {
+    Self {
+        available: item.available,
+        sink: item.sink.clone(),
+        virtual_daa: item.virtual_daa,
+        reserve_balances: item
+            .reserve_balances
+            .iter()
+            .map(|r| protowire::RpcPalwReserveBalance { block_hash: r.block_hash.clone(), known: r.known, balance_sompi: r.balance_sompi })
+            .collect(),
+        outpoints: item
+            .outpoints
+            .iter()
+            .map(|o| protowire::RpcPalwOutpointEntry {
+                outpoint: o.outpoint.clone(),
+                present: o.present,
+                amount: o.amount,
+                script_version: o.script_version as u32,
+                script_hex: o.script_hex.clone(),
+                block_daa_score: o.block_daa_score,
+                is_coinbase: o.is_coinbase,
+            })
+            .collect(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwAcceptanceReadsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwAcceptanceReadsResponse>, {
+    Self {
+        available: item.available,
+        sink: item.sink.clone(),
+        virtual_daa: item.virtual_daa,
+        reserve_balances: item
+            .reserve_balances
+            .iter()
+            .map(|r| kaspa_rpc_core::RpcPalwReserveBalance { block_hash: r.block_hash.clone(), known: r.known, balance_sompi: r.balance_sompi })
+            .collect(),
+        outpoints: item
+            .outpoints
+            .iter()
+            .map(|o| {
+                Ok(kaspa_rpc_core::RpcPalwOutpointEntry {
+                    outpoint: o.outpoint.clone(),
+                    present: o.present,
+                    amount: o.amount,
+                    script_version: u16::try_from(o.script_version)
+                        .map_err(|_| kaspa_rpc_core::RpcError::General("script version out of range".into()))?,
+                    script_hex: o.script_hex.clone(),
+                    block_daa_score: o.block_daa_score,
+                    is_coinbase: o.is_coinbase,
+                })
+            })
+            .collect::<RpcResult<Vec<_>>>()?,
+    }
+});

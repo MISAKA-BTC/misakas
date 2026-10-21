@@ -137,7 +137,7 @@ fn registration_extent(r: &PalwKernelRouteStateV1, raw: &[u8]) -> Result<u64, Pa
     if n == 0 || n > 64 || raw.len() < 22 + n * 64 {
         return Err(bad("Master39 original class count"));
     }
-    let mut extent = raw.len() as u64 + 65536;
+    let mut extent = raw.len() as u64;
     let mut source_bytes = 0u64;
     for c in raw[22..22 + n * 64].chunks_exact(64) {
         let ch = super::palw_native_source_fold_v39::class_header(r, c.try_into().unwrap())?;
@@ -362,7 +362,7 @@ fn register(
     // Final books and the exact accepted generated ids, never from this DTO.
     let finalized_extent = s.request.finalized.iter().try_fold(0u64, |sum, f| {
         let h = super::palw_native_job_fold_v39::header(r, f.job)?;
-        sum.checked_add(h.post_bytes as u64 + h.book_bytes as u64 + 32768)
+        sum.checked_add(h.post_bytes as u64 + h.book_bytes as u64)
             .ok_or_else(|| bad("Master39 original finalized metadata extent overflow"))
     })?;
     if finalized_extent > 0 && !prepay(builder, ctx, signer, p, finalized_extent, 0)? {
@@ -518,9 +518,9 @@ pub(super) fn authenticate_invocation(
     {
         return Err(bad("Master39 original next component/source/operator horizon differs"));
     }
-    let extra = pr.components[..stage].iter().flatten().try_fold(65536u64, |n, c| {
+    let extra = pr.components[..stage].iter().flatten().try_fold(0u64, |n, c| {
         let h = super::palw_native_job_fold_v39::header(r, c.job)?;
-        n.checked_add(h.book_bytes as u64 + 16384).ok_or_else(|| bad("Master39 original prior header extent overflow"))
+        n.checked_add(h.book_bytes as u64).ok_or_else(|| bad("Master39 original prior header extent overflow"))
     })?;
     if !prepay(
         builder,
@@ -691,9 +691,9 @@ fn close(
     let r = builder.state.kernel_route.as_ref().unwrap();
     let m = record(r, id)?;
     let progress = progress(r, &m)?;
-    let extent = progress.components.iter().flatten().try_fold(131072u64, |n, c| {
+    let extent = progress.components.iter().flatten().try_fold(0u64, |n, c| {
         let h = super::palw_native_job_fold_v39::header(r, c.job)?;
-        n.checked_add(h.book_bytes as u64 + 32768).ok_or_else(|| bad("Master39 original close extent"))
+        n.checked_add(h.book_bytes as u64).ok_or_else(|| bad("Master39 original close extent"))
     })?;
     if r.aux.contains_key(&(TABLE, k(83, &id))) || r.aux.contains_key(&(TABLE, k(87, &id))) {
         return Err(bad("Master39 terminal already recorded"));
@@ -711,6 +711,17 @@ fn close(
                 return Err(bad("Master39 cannot collect live original child obligations"));
             }
             if h.terminal == NativeJobTerminalV39::Final {
+                // RFC08 08-B (ADR-0184 §1): a component whose fee is still held is still accusable — the Master (and every
+                // mining claim over it) waits for its liability horizon.
+                if super::palw_native_liability_hold_fold_v1::held_native_fee_v1(
+                    &builder.state,
+                    crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39,
+                    &c.job,
+                )
+                .is_some()
+                {
+                    return Err(bad("Master39 component's liability horizon is still open"));
+                }
                 let (book, credit) = original_final(r, c)?;
                 components.push(NativeMasterComponentFinalV39 {
                     original: c.clone(),
@@ -890,7 +901,7 @@ fn start_upload(
         .ok_or_else(|| bad("metadata39 original complete retained extent overflow"))?;
     // The whole declared retained image is charged BEFORE the first page copy.
     // This pre-Fund ordinary upload is never a paid challenge service grant.
-    if !prepay(builder, ctx, signer, p, start.bytes as u64 + 65536, held)? {
+    if !prepay(builder, ctx, signer, p, start.bytes as u64, held)? {
         return Ok(());
     }
     let id = start.id(*signer);
@@ -938,7 +949,7 @@ fn upload_action(
         if ctx.daa_score <= h.start.deadline {
             return Err(bad("metadata39 original retained upload has not expired"));
         }
-        if !prepay(builder, ctx, signer, p, 65536, 0)? {
+        if !prepay(builder, ctx, signer, p, 0, 0)? {
             return Ok(());
         }
         return erase_upload(builder, &h);
@@ -960,7 +971,7 @@ fn upload_action(
         if part.bytes.len() != expected {
             return Err(bad("metadata39 original page exact extent"));
         }
-        if !prepay(builder, ctx, signer, p, raw.len() as u64 + 65536, 0)? {
+        if !prepay(builder, ctx, signer, p, raw.len() as u64, 0)? {
             return Ok(());
         }
         h.attempts[i] += 1;
@@ -973,7 +984,7 @@ fn upload_action(
     if h.assembly >= 2 || (0..h.start.count as usize).any(|i| !h.has(i)) {
         return Err(bad("metadata39 original complete coverage or assembly attempt absent"));
     }
-    if !prepay(builder, ctx, signer, p, h.start.bytes as u64 + 65536, 0)? {
+    if !prepay(builder, ctx, signer, p, h.start.bytes as u64, 0)? {
         return Ok(());
     }
     h.assembly += 1;
@@ -1137,7 +1148,7 @@ impl PalwChainStateV2 {
         }
         let s = restore_with_classes(wire, classes).map_err(|e| e.to_string())?;
         check_restored(&m, &s).map_err(|e| e.to_string())?;
-        let expected_extent = s.wire.classes.iter().zip(&s.classes).try_fold(m.registration_bytes as u64 + 65536, |n, (_, c)| {
+        let expected_extent = s.wire.classes.iter().zip(&s.classes).try_fold(m.registration_bytes as u64, |n, (_, c)| {
             n.checked_add(c.source().wire().to_bytes().len() as u64 + 4096).ok_or("Master audit39 original extent overflow")
         })?;
         if m.restore_bytes != expected_extent {

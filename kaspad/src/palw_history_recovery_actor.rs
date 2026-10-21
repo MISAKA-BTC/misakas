@@ -1,5 +1,6 @@
 //! Ordinary paid history recovery. Native accepted state owns all clocks and turns;
 //! peer nonresponse merely schedules a demand and never proves a semantic fault.
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 use kaspa_consensus_core::{
     Hash64,
     palw_constraint_stream_carriage_v1::{PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1},
@@ -204,9 +205,7 @@ impl super::PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         slot: super::PalwAnswerSlotV1<'_>,
         book: &mut HistoryResponderBookV1,
-        pending: &mut Vec<(Hash64, u32, bool, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2)>,
-        due: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
         let now = session.palw_v2_daa_score().ok_or("history responder has no native DAA")?;
@@ -227,7 +226,7 @@ impl super::PalwPanelService {
         let lane_round = HISTORY_ROUND_V1 - slot.round_offset;
         let page = session.palw_history_response_duties_v1(signer, book.cursor)?;
         book.cursor = page.next;
-        pending.retain(|(_, round, responder, object)| {
+        court_outbox.retain_pending(|(_, round, responder, object)| {
             if (*round, *responder) != (lane_round, true) {
                 return true;
             }
@@ -242,7 +241,7 @@ impl super::PalwPanelService {
                 Ok(Some(progress)) => queued_response_current_v1(&progress, signer, movement),
             }
         });
-        book.held.retain(|scope, _| pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == (*scope, lane_round, true)));
+        book.held.retain(|scope, _| court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == (*scope, lane_round, true)));
         for (claim, owner, stage) in page.keys {
             if slot.only.is_some_and(|only| !only.contains(&claim)) {
                 continue;
@@ -257,8 +256,10 @@ impl super::PalwPanelService {
                 }
                 let scope = queue_scope_v1(&progress, signer);
                 let key = (scope, lane_round, true);
-                if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
-                    || moved.get(&key).is_some_and(|at| progress.now_daa >= *at && progress.now_daa < at.saturating_add(3))
+                if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
+                    || court_outbox
+                        .submitted_at(&key)
+                        .is_some_and(|at| progress.now_daa >= *at && progress.now_daa < at.saturating_add(3))
                 {
                     return Ok(None);
                 }
@@ -313,8 +314,8 @@ impl super::PalwPanelService {
             })();
             match result {
                 Ok(Some((key, object, until, guard))) => {
-                    due.insert(key, until.saturating_sub(1));
-                    pending.push((key.0, key.1, key.2, object));
+                    court_outbox.set_due(key, until.saturating_sub(1));
+                    court_outbox.push_pending((key.0, key.1, key.2, object));
                     book.held.insert(key.0, guard);
                 }
                 Ok(None) => {}
@@ -378,9 +379,7 @@ impl super::PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         signer: PalwBondKeyV2,
         own_receipts: &std::collections::HashMap<Hash64, (kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2, u64)>,
-        pending: &mut Vec<(Hash64, u32, bool, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2)>,
-        due: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
         let Some(now) = session.palw_v2_daa_score() else { return Ok(()) };
@@ -388,7 +387,7 @@ impl super::PalwPanelService {
             return Ok(());
         }
         // A queued grant whose duty is gone (credited, expired or another branch) is dropped.
-        pending.retain(|(claim, round, responder, object)| {
+        court_outbox.retain_pending(|(claim, round, responder, object)| {
             if (*round, *responder) != (HISTORY_GRANT_ROUND_V1, true) {
                 return true;
             }
@@ -399,7 +398,11 @@ impl super::PalwPanelService {
                 Ok(duty) => duty.is_some(),
             }
         });
-        let mut queued = pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (HISTORY_GRANT_ROUND_V1, true)).count();
+        let mut queued = court_outbox
+            .pending()
+            .iter()
+            .filter(|(_, round, responder, _)| (*round, *responder) == (HISTORY_GRANT_ROUND_V1, true))
+            .count();
         for (claim, (receipt, _)) in own_receipts {
             if queued >= HISTORY_GRANTS_QUEUED_V1 {
                 break;
@@ -408,8 +411,8 @@ impl super::PalwPanelService {
                 continue;
             }
             let key = (*claim, HISTORY_GRANT_ROUND_V1, true);
-            if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
-                || moved.get(&key).is_some_and(|at| now < at.saturating_add(super::COURT_MOVE_REPLAN_DAA))
+            if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
+                || court_outbox.submitted_at(&key).is_some_and(|at| now < at.saturating_add(super::COURT_MOVE_REPLAN_DAA))
             {
                 continue;
             }
@@ -430,12 +433,20 @@ impl super::PalwPanelService {
                 .ok_or("history grant signing key unavailable")?;
             movement.action = PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt: receipt.clone() };
             movement.signature = self
-                .sign(&movement.signing_message(), kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1)
+                .sign(
+                    &movement.signing_message(),
+                    kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1,
+                )
                 .ok_or("history grant carrier signing key unavailable")?;
             movement.check()?;
-            pending.push((key.0, key.1, key.2, PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }));
-            due.insert(key, duty.material_until_daa.saturating_sub(1));
-            moved.insert(key, now);
+            court_outbox.push_pending((
+                key.0,
+                key.1,
+                key.2,
+                PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+            ));
+            court_outbox.set_due(key, duty.material_until_daa.saturating_sub(1));
+            court_outbox.mark_submitted(key, now);
             queued += 1;
         }
         Ok(())

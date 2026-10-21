@@ -1,0 +1,6 @@
+{
+  "exit_code": 1,
+  "tests_started": false,
+  "error": "PermissionError EACCES on copied executable: shutil.copyfile omitted its executable mode. Build succeeded; no unit-test failure is inferred.",
+  "corrected": "Use shutil.copy2 to preserve executable mode and rerun under the heavy lock."
+}

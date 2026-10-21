@@ -607,7 +607,10 @@ pub fn evidence_diff_v1(a: &BeaconConformanceEvidenceV1, b: &BeaconConformanceEv
 /// The policy's numbers: `k` works, the anchor delay, the collection window, the settlement depth `D`, the repetitions, the bits.
 pub const PALW_ONBOARDING_POLICY_K_V1: u32 = 2;
 pub const PALW_ONBOARDING_POLICY_DELAY_DAA_V1: u64 = 2;
-pub const PALW_ONBOARDING_POLICY_WINDOW_DAA_V1: u64 = 120;
+/// User decision 2026-10-17 (ADR-0185): at least a paid source claim's signed lifetime including its source window — the beacon's
+/// sources are approved paid claims, whose Final lands after their checking, challenge and dispute windows (≈ 444 DAA after commit
+/// under the unapproved probe policies). Was 120, inside which no paid source could be Final. INTERIM.
+pub const PALW_ONBOARDING_POLICY_WINDOW_DAA_V1: u64 = 1_024;
 pub const PALW_ONBOARDING_POLICY_DEPTH_DAA_V1: u64 = 2;
 pub const PALW_ONBOARDING_POLICY_REPETITIONS_V1: u32 = 1;
 pub const PALW_ONBOARDING_POLICY_SECURITY_BITS_V1: u16 = 2;
@@ -995,8 +998,23 @@ pub fn fresh_verify_v4(
     contract: &misaka_palw_challenge::OptInContractV4,
     sources: &[misaka_palw_challenge::OptInSourceV4],
 ) -> FreshVerdictV1 {
+    fresh_verify_v4_with(input, contract, sources, false)
+}
+
+/// [`fresh_verify_v4`] with the route's seal-reveal rule (`PalwKernelRouteStateV1::opt_in_seal_reveal_v6`).
+pub fn fresh_verify_v4_with(
+    input: &FreshInputV1<'_>,
+    contract: &misaka_palw_challenge::OptInContractV4,
+    sources: &[misaka_palw_challenge::OptInSourceV4],
+    seal_reveal: bool,
+) -> FreshVerdictV1 {
     use misaka_palw_challenge::SealedBeaconStateV3 as S;
-    let derived = match misaka_palw_challenge::collect_opt_in_work_beacon_v4(input.ctx, contract, sources, input.tip_daa) {
+    let collected = if seal_reveal {
+        misaka_palw_challenge::collect_opt_in_seal_reveal_beacon_v6(input.ctx, contract, sources, None, input.tip_daa)
+    } else {
+        misaka_palw_challenge::collect_opt_in_work_beacon_v4(input.ctx, contract, sources, input.tip_daa)
+    };
+    let derived = match collected {
         Ok(S::Locked(b)) => Ok(b),
         Ok(state) => Err(format!("{state:?}")),
         Err(e) => Err(format!("POLICY_INVALID {e}")),
@@ -1010,9 +1028,31 @@ pub fn fresh_verify_v5(
     sources: &[misaka_palw_challenge::OptInSourceV4],
     promises: &[misaka_palw_challenge::PaidSourcePromiseV5],
 ) -> FreshVerdictV1 {
+    fresh_verify_v5_with(input, contract, sources, promises, false)
+}
+
+/// [`fresh_verify_v5`] with the route's seal-reveal rule (`PalwKernelRouteStateV1::opt_in_seal_reveal_v6`).
+pub fn fresh_verify_v5_with(
+    input: &FreshInputV1<'_>,
+    contract: &misaka_palw_challenge::PaidOptInContractV5,
+    sources: &[misaka_palw_challenge::OptInSourceV4],
+    promises: &[misaka_palw_challenge::PaidSourcePromiseV5],
+    seal_reveal: bool,
+) -> FreshVerdictV1 {
     use misaka_palw_challenge::SealedBeaconStateV3 as S;
+    let collected = if seal_reveal {
+        misaka_palw_challenge::collect_opt_in_seal_reveal_beacon_v6(
+            input.ctx,
+            &contract.source,
+            sources,
+            Some((contract, promises)),
+            input.tip_daa,
+        )
+    } else {
+        misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(input.ctx, contract, sources, promises, input.tip_daa)
+    };
     let derived =
-        match misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(input.ctx, contract, sources, promises, input.tip_daa) {
+        match collected {
             Ok(S::Locked(b)) => Ok(b),
             Ok(state) => Err(format!("{state:?}")),
             Err(e) => Err(format!("POLICY_INVALID {e}")),
@@ -1120,7 +1160,7 @@ mod tests {
         p.validate().expect("structurally valid");
         assert_eq!(
             (p.work_count_k, p.anchor_delay_slots, p.beacon_window_slots, p.settlement_depth_d, p.repetition_count, p.security_bits),
-            (2, 2, 120, 2, 1, 2)
+            (2, 2, 1_024, 2, 1, 2), // the window: user decision 2026-10-17 (ADR-0185 §4)
         );
         assert_eq!(p.retry_limit, 2, "three counted attempts");
         assert!(approved_fault_model_v1(&p).is_some(), "the unreviewed test soundness id has its fault model");

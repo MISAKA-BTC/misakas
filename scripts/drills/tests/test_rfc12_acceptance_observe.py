@@ -109,6 +109,35 @@ class PaidClaimRead(unittest.TestCase):
         self.assertEqual((spec['op'], spec['protoFields'], spec['readOnly']), (247, [1312, 1313], True))
 
 
+class AcceptanceReads(unittest.TestCase):
+    """Op 246: the reserve balance per block and the outpoint point read; a node without it is BLOCKED, never inferred."""
+
+    def test_served_balances_and_outpoints_are_decoded_and_absent_ones_are_none(self):
+        class Rpc:
+            def call(self, method, params=None):
+                assert method == O.ACCEPTANCE_READS_METHOD
+                return dict(available=True, sink='AA' * 64, virtualDaa=9,
+                            reserveBalances=[dict(blockHash='BB' * 64, known=True, balanceSompi=7),
+                                             dict(blockHash='CC' * 64, known=False, balanceSompi=0)],
+                            outpoints=[dict(outpoint='dd:0', present=True, amount=5, scriptVersion=0, scriptHex='AB',
+                                            blockDaaScore=3, isCoinbase=False),
+                                       dict(outpoint='ee:1', present=False, amount=0, scriptVersion=0, scriptHex='',
+                                            blockDaaScore=0, isCoinbase=False)])
+        got = O.acceptance_reads(Rpc(), ['bb' * 64, 'cc' * 64], ['dd:0', 'ee:1'])
+        self.assertEqual(got['reserve'], {'bb' * 64: 7, 'cc' * 64: None})
+        self.assertEqual(got['outpoints']['dd:0'], dict(amount=5, blockDaaScore=3, isCoinbase=False, scriptPublicKey='0000ab'))
+        self.assertIsNone(got['outpoints']['ee:1'])
+
+    def test_a_node_without_op_246_is_blocked(self):
+        class Rpc:
+            def call(self, method, params=None):
+                raise RuntimeError('unknown method')
+        with self.assertRaises(J.NotObservable):
+            O.acceptance_reads(Rpc(), ['bb' * 64])
+        with self.assertRaises(J.NotObservable):
+            O.acceptance_reads(Rpc(), ['bb' * 64] * 65)
+
+
 class OwnedFiles(unittest.TestCase):
     def test_outbox_store_coverage_and_log_reads(self):
         with tempfile.TemporaryDirectory() as directory:

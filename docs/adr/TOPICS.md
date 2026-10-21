@@ -100,7 +100,12 @@
 - [ADR-0170 — The seed anchor is a window, not a span: a merged attempt anchors, the anchor survives span boundari](0170-the-seed-anchor-is-a-window-not-a-span.md)
 - [ADR-0173 — MISAKA's purpose: public-verifier dispute completeness](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)
 - [ADR-0180 — PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md)
+- [ADR-0185 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に](0185-paid-lock-randomness-bootstrap-and-paid-sources.md)
 - [ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める](0186-hold-unresolved-liability-advance-independent-claims.md)
+- [ADR-0187 — native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及](0187-g14-native-public-filing-and-post-final-mining-accusation.md)
+- [ADR-0188 — D2・X3 の休眠 fence を G14 の arm-readiness record で閉じ、X3 の期限を窓の合成で定める](0188-d2-x3-arm-records-composition-and-pause-credit.md)
+- [ADR-0194 — 休眠 G14 統合候補と service namespace](0194-dormant-g14-integration-and-service-schema.md)
+- [ADR-0196 — owner 非依存の TIR 要求と認証済み公開データ](0196-owner-independent-shared-tir-query-data.md)
 
 ## EVM / wallet
 
@@ -125,6 +130,7 @@
 - [ADR-0167 — The ×1000 capacity package: a fixed per-DAA PALW reward budget, riders, a lower-only breaker, and th](0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md)
 - [ADR-0176 — Bond bounds PALW claim capacity, blocks, rewards and Final weight](0176-bond-bounds-palw-production-rewards-and-final-weight.md)
 - [ADR-0178 — The fork choice heals a partition on bonded participation: one search over every tip, economic keys ](0178-fork-choice-heals-a-partition-on-bonded-participation.md)
+- [ADR-0193 — Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md)
 
 ## Governance / release scope
 
@@ -202,4 +208,12 @@
 - [ADR-0153 — (draft) — 2M verification by shards: the implementation plan](0153-2m-verification-sharding-plan.md)
 - [ADR-0166 — Verifier unavailability is not producer fraud](0166-verifier-unavailability-is-not-producer-fraud.md)
 - [ADR-0171 — Probabilistic constraint checks are the normal large-model verifier; the court resolves disputes exa](0171-probabilistic-constraint-checks-and-court-on-dispute.md)
+- [ADR-0183 — G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md)
+- [ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg](0184-native-liability-horizon-panel-record-and-single-certified-leg.md)
+- [ADR-0192 — court の正規処理機会と共有訴追経路](0192-court-service-opportunity-and-shared-pursuit.md)
+- [ADR-0193 — sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md)
+- [ADR-0195 — native court 応答の前提受理時刻を保持する](0195-rooted-court-response-eligibility-history.md)
+- [ADR-0197 — court終了効果と未解決責任の保存方式](0197-court-end-effects-and-pending-liability-archive.md)
+- [ADR-0198 — 共有courtのinitial noticeの等号](0198-shared-court-initial-notice-boundary.md)
+- [ADR-0199 — 共有court終端materialと非独占提出方式](0199-shared-court-terminal-material-and-nonblocking-ingress.md)
 

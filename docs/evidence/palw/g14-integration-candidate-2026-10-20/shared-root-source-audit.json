@@ -1,0 +1,16 @@
+{
+  "parent": "f1bfc41ba8e21d989a461e03852609d45660b737",
+  "public_fold_only_new_cfg_test_case": true,
+  "old_clock_constants_error_bounds_and_derive_body_unchanged": true,
+  "root_dto_has_no_wire_deserializer_or_lifecycle_tag": true,
+  "patch_reconstructs_all_six_sources_byte_for_byte": true,
+  "sources_sha256": {
+    "consensus/core/src/lib.rs": "c4fa1450c62671b7e9338e801d90438cfa1e9b51f6c7fbd74f697c6da574aa7b",
+    "consensus/core/src/palw_court_policy_v1.rs": "cbf7a6dd478b27ba9e63e9f12b77beef59322474fa33fe64a72932a5d55cfeb8",
+    "consensus/core/src/palw_tir_public_claim_v1.rs": "52c2493bd768d40f4fdac4e1a7a079934512c3ef380d895dfe6d6380c3e13ae0",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "b11626ad7e94647eaca582340d728d78a36c81206f1967ff0eb3c5d08ce2dd05",
+    "consensus/core/tests/palw_court_policy_v1.rs": "aae5f61c28b5bcd519664c67a0d3e8c1ac18622ce0757ce87df51bd74645b30b",
+    "consensus/core/src/palw_court_shared_tir_root_v1.rs": "5f11dd9856953a8f1d542d39f38014990ff6978d24a34d2f2d47e84ed311d3ee"
+  },
+  "scope": "read-only producer-signed numerical predicate plus private ADR0198A DAA condition; not public/native funded acceptance"
+}

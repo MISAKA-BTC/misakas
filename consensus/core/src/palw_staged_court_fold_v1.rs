@@ -256,6 +256,88 @@ impl PalwChainStateV2 {
     pub fn staged_tir_owner_count_v1(&self, claim: &Hash64) -> u64 {
         self.staged_tir_owner_rows_v1(claim).into_iter().filter(|(_, row)| row.owned.holds_owner_slot_v1()).count() as u64
     }
+    /// **Lane g14-court-capacity-r2 (past `palw_court_capacity_v1`): the owner queue of `claim`** — every row that still wants a slot
+    /// (`holds_owner_slot_v1`), in arrival order `(reserved_daa, key)` (one claim: one door, so arrival order is deadline order). The
+    /// first K_owner of it are ADMITTED (they may demand); the rest WAIT, imposing no custodian load, and are admitted in this order
+    /// as the rows ahead release their slots — so an Open filed later never starts before an Open filed earlier. Each entry carries the
+    /// DAA from which it holds its slot (`admitted_since`): its Open, or the latest release (`last_progress_daa` of a row ahead that
+    /// stopped wanting — its last move, or its reclamation) that let it in.
+    pub fn staged_tir_owner_queue_v1(&self, claim: &Hash64) -> Vec<(PalwStagedCourtKeyV1, PalwBondKeyV2, bool, u64)> {
+        let rows = self.staged_tir_owner_rows_v1(claim);
+        let mut wanting: Vec<(u64, PalwStagedCourtKeyV1, PalwBondKeyV2)> = rows
+            .iter()
+            .filter(|(_, row)| row.owned.holds_owner_slot_v1())
+            .map(|(key, row)| (row.owned.contract_v1().reserved_daa, *key, row.owned.contract_v1().owner))
+            .collect();
+        wanting.sort();
+        let mut released: Vec<u64> = rows
+            .iter()
+            .filter(|(_, row)| !row.owned.holds_owner_slot_v1())
+            .map(|(_, row)| row.owned.spent_v1().last_progress_daa)
+            .collect();
+        released.sort_unstable();
+        let cap = crate::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1 as usize;
+        wanting
+            .into_iter()
+            .enumerate()
+            .map(|(position, (reserved, key, owner))| {
+                // The j-th admitted row beyond the first K_owner needed the j-th release (in time) to get in.
+                let since = if position < cap {
+                    reserved
+                } else {
+                    released.get(position - cap).copied().unwrap_or(reserved).max(reserved)
+                };
+                (key, owner, position < cap, since)
+            })
+            .collect()
+    }
+    /// **Lane g14-court-capacity-r2: is the owner row `key` of `claim` admitted** (among the first K_owner of the owner queue)?
+    pub fn staged_tir_owner_admitted_v1(&self, claim: &Hash64, key: &PalwStagedCourtKeyV1) -> bool {
+        self.staged_tir_owner_queue_v1(claim).iter().any(|(k, _, admitted, _)| k == key && *admitted)
+    }
+    /// **Lane g14-court-capacity-r2: the admitted rows of `claim` idle at `now`**, idleness counted from the later of the row's own
+    /// last progress and the DAA it was admitted (a row that waited is never idle for the time it waited).
+    pub fn staged_tir_idle_admitted_owners_v1(&self, claim: &Hash64, now: u64) -> Vec<(PalwStagedCourtKeyV1, PalwBondKeyV2)> {
+        let queue = self.staged_tir_owner_queue_v1(claim);
+        self.staged_tir_owner_rows_v1(claim)
+            .into_iter()
+            .filter_map(|(key, row)| {
+                let (_, owner, admitted, since) = *queue.iter().find(|(k, ..)| *k == key)?;
+                let idle_since = row.owned.idle_since_v1().max(since);
+                (admitted && now >= idle_since.saturating_add(row.owned.owner_idle_grace_daa_v1())).then_some((key, owner))
+            })
+            .collect()
+    }
+    /// **Lane g14-court-capacity-r2: the admitted rows of `claim` past their tenure at `now`** — only while some row WAITS: an admitted
+    /// row holds its slot at most `tenure` DAA from its admission while another verifier waits, then yields it (retired in place,
+    /// its deposit NOT forfeited — it was active; its accepted answers stay rooted, and a conviction needs no slot).
+    pub fn staged_tir_overstayed_owners_v1(&self, claim: &Hash64, now: u64, tenure: u64) -> Vec<(PalwStagedCourtKeyV1, PalwBondKeyV2)> {
+        let queue = self.staged_tir_owner_queue_v1(claim);
+        if queue.iter().all(|(_, _, admitted, _)| *admitted) {
+            return Vec::new();
+        }
+        queue
+            .into_iter()
+            .filter(|(_, _, admitted, since)| *admitted && now >= since.saturating_add(tenure))
+            .map(|(key, owner, ..)| (key, owner))
+            .collect()
+    }
+    /// **Lane g14-court-capacity-r2: would a Demand of the owner row `key` at `now` be admitted** — it is admitted already, or the
+    /// rotation that Demand triggers (overstayed rows past `tenure` yield, idle admitted rows are reclaimed) frees enough slots for
+    /// every waiting row ahead of it and itself. What a node's owner worker asks before it signs a Demand (a refused Demand is a
+    /// wasted carrier); the fold decides.
+    pub fn staged_tir_owner_demand_admits_v1(&self, claim: &Hash64, key: &PalwStagedCourtKeyV1, now: u64, tenure: u64) -> bool {
+        let queue = self.staged_tir_owner_queue_v1(claim);
+        let Some(position) = queue.iter().position(|(k, ..)| k == key) else { return false };
+        if queue[position].2 {
+            return true;
+        }
+        let mut freed: std::collections::BTreeSet<PalwStagedCourtKeyV1> =
+            self.staged_tir_idle_admitted_owners_v1(claim, now).into_iter().map(|(k, _)| k).collect();
+        freed.extend(self.staged_tir_overstayed_owners_v1(claim, now, tenure).into_iter().map(|(k, _)| k));
+        let cap = crate::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1 as usize;
+        position < cap + freed.len()
+    }
     /// **G14 R1 / G-T1: the slot an Open at DAA `now` reclaims when the frame is at K_owner** — the slot holder that has been idle
     /// longest ([`crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1::owner_idle_at_v1`]; ties by key), or `None` when every
     /// holder is still making progress.
@@ -522,6 +604,7 @@ impl PalwChainStateV2 {
         Ok((page, None))
     }
     pub fn staged_bond_exit_held_v1(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
+        if self.court_service_holds_bond_v1(bond) || self.court_archive_holds_bond_v1(bond) { return true; }
         now.checked_add(1).is_some_and(|after| {
             self.staged_holds
                 .range((*bond, after, PalwStagedCourtKeyV1::Claim(ZERO_HASH64))..)
@@ -869,7 +952,220 @@ impl TransitionBuilder<'_> {
             },
         }))))
     }
+    /// Proposed native journal adapter. Production block/admission callers are
+    /// still absent. Recovery cannot clear a binding, move a duty deadline,
+    /// release collateral, or turn quota into default permission.
+    pub(super) fn recover_court_service_supply_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+    ) -> Result<Vec<crate::palw_court_service_state_v2::ClaimServiceRecovery>, PalwStateV2Error> {
+        let Some(old) = self.state.court_service_state_v1() else { return Ok(Vec::new()) };
+        if old.book.last_observed_daa != Some(ctx.daa_score) {
+            return Err(PalwStateV2Error::CarriageInconsistent("court service recovery needs the current accepting-block supply clock".into()));
+        }
+        let mut next = old.clone();
+        let report = next.repair_missing_supply().map_err(PalwStateV2Error::CarriageInconsistent)?;
+        if &next != old {
+            self.write_staged_row_v1(PalwStagedCourtKeyV1::CourtService,
+                Some(PalwStagedCourtRowV1::CourtService(Box::new(next).into())))?;
+        }
+        Ok(report)
+    }
+
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        if matches!(key,PalwStagedCourtKeyV1::CourtSharedBottom(_)) || matches!(&new,Some(PalwStagedCourtRowV1::CourtSharedBottom(_))) {
+            let Some(PalwStagedCourtRowV1::CourtSharedBottom(r))=&new else {
+                return Err(PalwStateV2Error::CarriageInconsistent("shared bottom evidence cannot be removed or retyped".into()));
+            };
+            r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if let Some(old)=self.state.staged_court_row_v1(&key) {
+                if Some(old)!=new.as_ref(){return Err(PalwStateV2Error::CarriageInconsistent("shared bottom evidence is immutable".into()));}
+            } else {
+                if Some(r.rules)!=self.extras.native_court_rules_v1 || self.state.bond(&r.control.filer).is_none_or(|b|b.pubkey!=r.filer_pubkey) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared bottom does not capture native rules/key".into()));
+                }
+                crate::palw_court_shared_tir_bottom_v1::check_shared_tir_bottom_v1(&self.state,self.params,&r.rules,&r.control)
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+        if let PalwStagedCourtKeyV1::CourtSharedRound(..) = key {
+            let Some(PalwStagedCourtRowV1::CourtSharedRound(r)) = &new else {
+                return Err(PalwStateV2Error::CarriageInconsistent("canonical shared round cannot be removed or retyped".into()));
+            };
+            r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if let Some(old)=self.state.staged_court_row_v1(&key) {
+                if Some(old)!=new.as_ref(){return Err(PalwStateV2Error::CarriageInconsistent("canonical shared round is immutable".into()));}
+            } else {
+                if Some(r.rules)!=self.extras.native_court_rules_v1
+                    || self.state.bond(&r.control.signer).is_none_or(|b|b.pubkey!=r.signer_pubkey) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared round does not capture native rules/key".into()));
+                }
+                crate::palw_court_shared_tir_round_v1::check_shared_tir_round_v1(&self.state,self.params,&r.rules,&r.control)
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+        if let PalwStagedCourtKeyV1::CourtSharedRoot(..) = key {
+            let Some(PalwStagedCourtRowV1::CourtSharedRoot(r)) = &new else {
+                return Err(PalwStateV2Error::CarriageInconsistent("canonical shared root cannot be removed or retyped".into()));
+            };
+            r.check(&key).and_then(|()| r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if let Some(old) = self.state.staged_court_row_v1(&key) {
+                if Some(old) != new.as_ref() { return Err(PalwStateV2Error::CarriageInconsistent("canonical shared root is immutable".into())); }
+            } else {
+                if self.state.bond(&r.control.signer).is_none_or(|bond| bond.pubkey != r.signer_pubkey) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared root does not capture native producer key".into()));
+                }
+                if Some(r.rules) != self.extras.native_court_rules_v1 {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared root rules are not native accepting rules".into()));
+                }
+                crate::palw_court_shared_tir_root_v1::check_shared_tir_root_v1(&self.state,self.params,&r.rules,&r.control)
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+        if let PalwStagedCourtKeyV1::CourtCloseReceipt(..) = key {
+            if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
+                return Err(PalwStateV2Error::CarriageInconsistent("signed close receipt is immutable".into()));
+            }
+            let Some(PalwStagedCourtRowV1::CourtCloseReceipt(r))=&new else {
+                return Err(PalwStateV2Error::CarriageInconsistent("signed close receipt cannot be removed or retyped".into()));
+            };
+            if self.state.staged_court_row_v1(&key).is_none() {
+                if r.rules!=self.extras.native_court_rules_v1 {
+                    return Err(PalwStateV2Error::CarriageInconsistent("receipt rules are not the accepting native context".into()));
+                }
+                if !matches!(self.court_end_evidence.as_deref(),Some(crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native {point,object})
+                    if *point==r.point && object.as_ref()==r.declaration.as_ref()) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("close receipt is not this native declaration event".into()));
+                }
+            }
+            r.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
+        if let PalwStagedCourtKeyV1::CourtEndArchive(_) = key {
+            let Some(PalwStagedCourtRowV1::CourtEndArchive(a)) = &new else {
+                return Err(PalwStateV2Error::CarriageInconsistent("court archive cannot be removed or retyped".into()));
+            };
+            if let Some(old) = self.state.staged_court_row_v1(&key) {
+                let PalwStagedCourtRowV1::CourtEndArchive(old)=old else {
+                    return Err(PalwStateV2Error::CarriageInconsistent("court archive foreign row".into()));
+                };
+                a.check_material_extension(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+            a.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
+        match &new {
+            Some(PalwStagedCourtRowV1::CourtSharedResponse(r)) => {
+                r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared data response is immutable".into()));
+                }
+            },
+            Some(PalwStagedCourtRowV1::CourtSharedStream(s)) => {
+                s.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                let old=match self.state.staged_court_row_v1(&key) {
+                    Some(PalwStagedCourtRowV1::CourtSharedStream(old))=>Some(old.as_ref()),None=>None,
+                    _=>return Err(PalwStateV2Error::CarriageInconsistent("shared stream foreign key".into())),
+                };
+                s.check_advance(&self.state,old).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            },
+            Some(PalwStagedCourtRowV1::CourtSharedChunk(c)) => {
+                c.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                let s=crate::palw_court_shared_tir_stream_state_v1::stream(&self.state,c.slot_id).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                c.check_binding(s).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                if let Some(old)=self.state.staged_court_row_v1(&key) {
+                    if Some(old)!=new.as_ref() {return Err(PalwStateV2Error::CarriageInconsistent("shared chunk immutable".into()));}
+                } else if s.finished.is_some() || c.offset!=s.accepted_bytes || c.previous!=s.head || c.daa<s.last_daa {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared chunk does not advance current prefix".into()));
+                }
+            },
+            Some(PalwStagedCourtRowV1::CourtSharedContext(c)) => {
+                c.check(&key).and_then(|()| c.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared context is immutable".into()));
+                }
+            },
+            Some(PalwStagedCourtRowV1::CourtSharedQuery(q)) => {
+                q.check(&key).and_then(|()|q.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                match self.state.staged_court_row_v1(&key) {
+                    Some(PalwStagedCourtRowV1::CourtSharedQuery(old)) => {
+                        if !q.same_opening(old) || old.body.is_some() && old.body!=q.body {
+                            return Err(PalwStateV2Error::CarriageInconsistent("shared opening/data cannot be replaced".into()));
+                        }
+                    },
+                    Some(_)=>return Err(PalwStateV2Error::CarriageInconsistent("shared query key contains foreign row".into())),
+                    None=>{},
+                }
+            },
+            Some(PalwStagedCourtRowV1::CourtSharedIds(ids)) => {
+                ids.check(&key).and_then(|()|ids.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("sealed shared IDs are immutable".into()));
+                }
+            },_=>{},
+        }
+        if let Some(PalwStagedCourtRowV1::CourtDutyClock(clock)) = &new {
+            clock.check(&key).and_then(|()| clock.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if self.state.staged_court_row_v1(&key).is_some_and(|old| Some(old) != new.as_ref()) {
+                return Err(PalwStateV2Error::CarriageInconsistent("native duty clock is immutable".into()));
+            }
+        }
+        if key == PalwStagedCourtKeyV1::CourtService {
+            if let Some(old) = self.state.court_service_state_v1() {
+                match &new {
+                    Some(PalwStagedCourtRowV1::CourtService(service)) => {
+                        service.check_retains_unresolved(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                    }
+                    _ if !old.claims.is_empty() => {
+                        return Err(PalwStateV2Error::CarriageInconsistent("unresolved service book cannot be removed or retyped".into()));
+                    }
+                    _ => {}
+                }
+            }
+            for row in self.state.staged_courts.values() {
+                if let PalwStagedCourtRowV1::CourtSharedContext(c)=row {
+                    let Some(PalwStagedCourtRowV1::CourtService(service))=&new else {
+                        return Err(PalwStateV2Error::CarriageInconsistent("shared data retains service binding".into()));
+                    };
+                    c.check_binding(service).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                }
+                if let PalwStagedCourtRowV1::CourtDutyClock(clock) = row {
+                    let Some(PalwStagedCourtRowV1::CourtService(service)) = &new else {
+                        return Err(PalwStateV2Error::CarriageInconsistent("unresolved duty history retains service binding".into()));
+                    };
+                    clock.check_service_binding(service).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                }
+            }
+        }
+        if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
+            service.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
+        if let PalwStagedCourtKeyV1::Claim(claim) = key
+            && let Some(binding) = self.state.court_service_state_v1().and_then(|s| s.claims.get(&claim))
+        {
+            let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, claim)
+                .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service semantic update lost original frame".into()))?;
+            if frame.plan_v1().semantic.is_some()
+                && let Some(row) = new.as_ref()
+            {
+                let PalwStagedCourtRowV1::ClaimBundle(bundle) = row else {
+                    return Err(PalwStateV2Error::CarriageInconsistent("service semantic dependency cannot change row type".into()));
+                };
+                row.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                let old = self.state.staged_bundle_contract_v1(claim)
+                    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service semantic update lost signed dependency".into()))?;
+                if old.history_custody.pledge != bundle.history_custody.pledge
+                    || old.original_binding != bundle.original_binding
+                {
+                    return Err(PalwStateV2Error::CarriageInconsistent("service semantic original pledge/binding is immutable".into()));
+                }
+                let until = crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame, binding.hard_deadline_daa)
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                crate::palw_court_service_state_v2::require_tir_service_semantic_custody_v1(frame, bundle, until)
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+        if new.is_none() && self.state.court_service_holds_material_v1(&key) {
+            return Err(PalwStateV2Error::CarriageInconsistent("unresolved court service retains original evidence".into()));
+        }
         self.reserve_map_row_v1(&key, &new, |s| &s.staged_courts, false, "native staged_courts writer")?;
         self.reserve_staged_indices_v1(&key, &new)?;
         let old = match &new {
@@ -877,6 +1173,13 @@ impl TransitionBuilder<'_> {
             None => self.state.staged_courts.remove(&key),
         };
         update_indices(&mut self.state, key, old.as_ref(), new.as_ref());
+        if key == PalwStagedCourtKeyV1::CourtService {
+            if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
+                // Do not re-date unrelated claims midway through an accepting
+                // block. This candidate only installs/updates unresolved holds.
+                self.state.deadlines.retain(|(_, claim)| !service.claims.contains_key(claim));
+            }
+        }
         if old != new {
             self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old, new });
         }
@@ -3108,7 +3411,21 @@ pub(super) fn index_rows(
             (due, vec![(c.owner, c.plan.terms.material_until_daa, key)])
         }
         PalwStagedCourtRowV1::ArtifactInventoryOpen(c) => (c.until_daa, vec![(c.offer.opener, c.until_daa, key)]),
-        PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) => (u64::MAX, Vec::new()),
+        PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) | PalwStagedCourtRowV1::TirContainer(_) | PalwStagedCourtRowV1::CourtService(_) => {
+            (u64::MAX, Vec::new())
+        }
+        PalwStagedCourtRowV1::CourtDutyClock(c) => (c.material_until_daa, Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedContext(c) => (c.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedQuery(q) => (q.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedIds(ids) => (ids.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedResponse(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtEndArchive(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtCloseReceipt(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedRoot(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedRound(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedBottom(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::TirAcquisition(row) => {
             let c = row.owned.contract_v1();
@@ -3421,7 +3738,10 @@ pub(super) fn update_response_indices(
 }
 pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     // The due index gives rooted-clock ordering;64 row removals bound every accepted block.
-    let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score).take(64).map(|(_, key)| *key).collect();
+    let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score)
+        .filter(|(_, key)| !matches!(key,PalwStagedCourtKeyV1::CourtSharedRoot(..)|PalwStagedCourtKeyV1::CourtSharedRound(..)|PalwStagedCourtKeyV1::CourtSharedBottom(..))
+            && !b.state.court_service_holds_material_v1(key))
+        .take(64).map(|(_, key)| *key).collect();
     for key in due {
         let Some(mut saved) = b.state.staged_courts.get(&key).cloned() else { continue };
         // Acquisition metadata and immutable public bytes have their own exact
@@ -3434,6 +3754,18 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::TirPreparation(row) => Some(row.preparation.contract_v1().material_until_daa),
             PalwStagedCourtRowV1::TirClaim(frame) => Some(frame.plan_v1().terms.material_until_daa),
             PalwStagedCourtRowV1::TirWitness(row) => Some(row.until_daa),
+            PalwStagedCourtRowV1::CourtDutyClock(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedContext(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedQuery(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedIds(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedResponse(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtEndArchive(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtCloseReceipt(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedRoot(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedRound(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedBottom(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
             _ => None,
         };
         if let Some(until) = tir_until {

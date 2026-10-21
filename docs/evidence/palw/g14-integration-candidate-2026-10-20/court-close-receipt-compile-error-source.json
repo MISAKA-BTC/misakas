@@ -1,0 +1,27 @@
+{
+  "parent": "e2e367e984e3bfecc776a14668abc6d47e9f9cb7",
+  "command": [
+    "cargo",
+    "check",
+    "--release",
+    "-p",
+    "kaspa-consensus-core",
+    "--tests"
+  ],
+  "exit_code": 101,
+  "result": "Compile errors, no executed tests. Initial exact-count usize/u64 mismatch, non-Borsh prompt form, two full Extras test literals missing new optional input.",
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "f7ffb4ca352e4d72ced344b5e38a20a660b71a2c5a04adc0f28bf26340f4e515",
+    "consensus/core/src/palw_court_end_archive_fold_v1.rs": "a733efc2aea2543661411ba1d20fddfb77e4c75a914809891596cd0404f20404",
+    "consensus/core/src/palw_court_service_state_v2.rs": "5f654b58ddac6bb4add8318ee9ed2f35f00f30402ed932d8e7778fd90b23ea45",
+    "consensus/core/src/palw_native_resource_v1/generated.rs": "2fcce77f6f411ed0a3d591cd1eb27dd91035308ce258feff9419a1895967cd68",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "6f0d30c934f9d442cd772b1ca9abe48733fe7572e8ac07b391db17d564dd71c4",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "2a29a68e53cdfd3804b526f071b8f20a289eb46f4f3f8891cfb6840a6cfab847",
+    "consensus/core/src/palw_staged_court_state_v1.rs": "a151f2006e52f7ff5d3ac325f79dd9b67fc0428f18f667a21e416a178bf37406",
+    "consensus/core/src/palw_state_v2.rs": "184398dc0ac39d5501869b8a88fcd059aa1ccf48f7bc3d1bf67f64372ffbd2a0",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "b0568d227b961cefe0b69f8eb16f41350a6719998d134a042a557be03de417d9",
+    "consensus/core/src/palw_state_v2/objects.rs": "302d3a04b3c3af9a1237ee436896ed0bc0fa224425f404b1e5953a33f0a0fc89",
+    "consensus/src/pipeline/virtual_processor/processor/palw_accept.rs": "c131fd1d15decb0dc516ba8ccfd419348d09b6e46dded864fadf7b03c700e799",
+    "consensus/core/src/palw_court_close_receipt_v1.rs": "1fb81fe7eff3c5be2fcd33f9d91e3eace3c9cd5d76216f7d2fdbbe5dda177e17"
+  }
+}

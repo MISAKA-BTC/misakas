@@ -1,6 +1,6 @@
 # 文書番号の台帳
 
-既存主文書は再採番していません。このセットの次番号は **ADR-0183 / RFC-0023**。新規0181/0021は設計凍結、0182/0022は画像・動画・改善の延期です。他ブランチの予約は未確認です。[機械可読版](number-registry.json)。
+既存主文書は再採番していません。このセットの次番号は **ADR-0185 / RFC-0023**。新規0181/0021は設計凍結、0182/0022は画像・動画・改善の延期です。他ブランチの予約は未確認です。[機械可読版](number-registry.json)。
 
 ## 既存の衝突
 
@@ -27,3 +27,12 @@ RFC-0010/0012のdormant implementationは主RFCではなくdesignへ移しまし
 - [18-inference-surface.md](../spec/palw/18-inference-surface.md)
 - [18-layer-sharded-panels.md](../spec/palw/18-layer-sharded-panels.md)
 - [18-verification-certificates.md](../spec/palw/18-verification-certificates.md)
+
+## 2026-10-20 X3 worktree の追加予約
+
+[ADR-0193](../adr/0193-sequential-witness-filing-clock.md) を Proposed として予約。ADR の次ローカル番号は 0194。0189–0192 は別 branch の割当で、この branch に主文書を捏造・複製しない。上の ZIP 時点の次番号は履歴であり、全 branch の未使用番号を保証しない。RFC の別 branch 予約も引き続き区別する。
+
+
+## 2026-10-21 終了効果候補の追加予約
+
+[ADR-0197](../adr/0197-court-end-effects-and-pending-liability-archive.md) / [RFC-0030](../rfc/0030-court-end-effects-and-pending-liability-archive.md)をProposed/Draftとして予約した。利用者はAの詳細仕様化・隔離実装を指示し、本番採択・有効化とは区別する。ローカルの822 unique ref headとactive worktreeを調査し、同番号の別文書は見つからなかった。[調査範囲](../evidence/palw/g14-integration-candidate-2026-10-20/court-end-effects-number-audit.json)。未fetchのremoteや将来branchの未使用保証ではない。次のローカル番号はADR-0198 / RFC-0031。上の過去時点の次番号は履歴である。

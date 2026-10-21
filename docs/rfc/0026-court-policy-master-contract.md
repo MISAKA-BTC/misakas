@@ -141,10 +141,19 @@ RFC-0024 本文(B)の各 round の数値 fold 検査を、現行の規範とし�
 |---|---|
 | `palw_court_capacity_v1`(court 専用 block 予算・予約枠・期限順の割当・新規 claim 受付制限) | **別 branch の実装**(`release/t12-16000` に存在。`pre` には未統合)。休眠、値は仮。新しい提出保証が実装で閉じたとは言えない |
 | 履歴 tile 二分探索・1 位置化・tag 245 登録簿 | 別 branch(`g14/door-design`)、休眠、単体試験のみ |
-| X3 の固定期限・open session による Final 保留 | 別 branch(`codex-free/d2-x3`)、node 試験あり。reorg の node 試験(`x3_req_5c`)は未完 |
-| 本書 §2〜§7 の規範 | 設計だけ |
+| X3 の固定期限・open session による Final 保留 | 別 branch `e27771b96`（起点 `05fcf7b5c`）。合法な浅い reorg の予約/session rollback と復元を release node 試験で確認。関連 suite 33 passed / R-D2-NODE 2 ignored、t12 同一性 26 passed。未統合・有効化なし。詳細は [記録](../evidence/palw/g14-completion-2026-10-20/README.md) |
+| F02/F03 未完による武装拒否 | 別 branch の実装 `62ac3c55f`。readiness record による迂回を拒否。release 部品・回帰試験 29 件通過、実経路・敵対的統合試験は未完、有効化なし |
+| §2/§3.3 の時計・依存 horizon 導出部品 | 別 branch の実装 `62ac3c55f`。state/fold 未接続。原子的期限更新・T06/T09 完了を意味しない |
+| F02/F03 予約 scheduler 部品 | 別 branch `0336b6cea`、release 部品・回帰 32 件通過。全分岐の導出、供給会計、block admission、T04/T05 は未接続・未検証。有効化なし |
+| F02 供給会計部品 | 別 branch `0ea164766`、release 部品・回帰 36 件通過。同一 DAA/skip/予約 quota を検査。state/fold/codec/snapshot、期限補正と Final hold は未接続。有効化なし |
+| ADR-0194 A の隔離統合候補 | `codex/rfc14-g14-integration-candidate` の `b9c6d0656` で main/X3 の選択部分を統合。選択 joint release 93件。pre未統合・公開採択なし・有効化なし。[範囲と後続記録](../evidence/palw/g14-integration-candidate-2026-10-20/README.md) |
+| rooted service v2 / native duty clock | 隔離候補 `705b27616` までで key/row 12/18・13/19、native duty/prerequisite clock、journal/保持・default拒否を接続。選択64件。実供給・原子的な全分岐受付・帰責の完成ではない |
+| owner非依存の rooted query/data | 隔離候補 `b980f5788`、候補key/row 14/20〜16/22。build済み、選択69件の限定敵対的fixture検証済み（全8owner占有、原データ改変拒否、undo/reload等）。有料lifecycle/Ready応答/全分岐予約/T05は未完、有効化なし。[Draft RFC-0029](0029-owner-independent-shared-tir-query-data.md) |
+| Ready照合・永続signed stream/EOF | 隔離候補 `33738ea26` 後、候補key/row17/23・18/24。build・限定敵対的fixture検証86件、non-test check成功。[source hash・生ログ・範囲](../evidence/palw/g14-integration-candidate-2026-10-20/README.md#rooted-signed-shared-stream-native-adapter)。共有chunkのcheckpoint再コピーとArc preflight会計不一致を修正。公開lifecycle・完全予約/fee・fresh duty・実供給・T05/G14は未完、有効化なし |
+| 共有データとliteral signerの明示的応答の分離 | 隔離候補 `fa1104eed` 後、候補key/row19/25。署名を受理済みquery block/DAAと認証済みデータへ束縛し、実データ前提のresource起点とreceiptを分離。選択89件・non-test check・生成物一致成功。[範囲とhash](../evidence/palw/g14-integration-candidate-2026-10-20/README.md#explicit-fresh-data-response-native-candidate)。data replyのみで、全semantic duty/default・完全予約/fee・実供給・node T05は未完、有効化なし |
+| 本書 §2〜§7 の残りの規範 | 設計だけ。F02/F03 の選択肢は [ADR-0192](../adr/0192-court-service-opportunity-and-shared-pursuit.md)（Proposed） |
 
-「設計だけ / 別 branch 実装 / 統合済み / build 済み / 敵対的試験済み / 有効化済み」を別々に記し、設計メモ・別 branch のコード・toy test を混ぜて「完了」と表示しない。
+上表の旧 branch の件数は各checkpointの履歴であり、隔離候補の件数に加算しない。「設計だけ / 別 branch 実装 / 統合済み / build 済み / 敵対的試験済み / 有効化済み」を別々に記し、設計メモ・別 branch のコード・toy test を混ぜて「完了」と表示しない。
 
 ### 8.2 置換表
 

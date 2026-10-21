@@ -561,11 +561,12 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
             cx.pass("admission.gate");
             // **The two checks the processor asks beside the gate** (ADR-0152 §4-ter C5 and addendum §4-bis.8), through the one function every
             // pre-check shares — the SDK's preflight and the node's ask the same: a class the processor would drop is refused here by name.
-            if let Err(e) = kaspa_consensus_core::palw_attempt_rules_v1::palw_registration_attribution_v1(
+            if let Err(e) = kaspa_consensus_core::palw_attempt_rules_v1::palw_registration_attribution_v2(
                 &class.profile,
                 &canonical,
                 shape.offence_attribution,
                 shape.prompt_ids_form,
+                shape.memory_routing_court,
             ) {
                 return Ok(KindOutcomeV1::at(
                     cx.refuse(class.profile_field, format!("the registration would be dropped by the processor: {} ({e})", e.code())),

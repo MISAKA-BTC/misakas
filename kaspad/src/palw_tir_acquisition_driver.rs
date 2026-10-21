@@ -112,6 +112,11 @@ pub(super) struct OperationalLedgerV1 {
     maximum: OperationalWorkV1,
     spent: OperationalWorkV1,
     permit: Option<PalwTirPublicWorkPermitV1>,
+    /// **A whole-pass preparation permit** (audit §10, `palw_tir_frame_cost_v1::tir_public_pass_budget_v1`): ONE accepted debit
+    /// funds every slice of a preparation pass, so the permit binds the pass's FIRST slice and each later slice must follow it on
+    /// the same source / claim / actor / receipt; the slice count is not a resource (attempts unbounded locally), the work
+    /// quantities are.
+    pass: bool,
 }
 
 impl OperationalLedgerV1 {
@@ -141,8 +146,8 @@ impl OperationalLedgerV1 {
             || s.turn != 0
             || s.source_id != c.source_id
             || s.input_head != c.source_id
-            || s.cursor_id != quote.cursor_id
-            || s.slice != quote.sequence
+            || (!self.pass && (s.cursor_id != quote.cursor_id || s.slice != quote.sequence))
+            || (self.pass && quote.sequence < s.slice)
             || quote.source_id != c.source_id
             || receipt.hash_v1()? != permit.receipt_id_v1()
             || n.now_daa < c.original_accepted_daa
@@ -156,7 +161,21 @@ impl OperationalLedgerV1 {
     }
     #[cfg(test)]
     fn new_v1(source_id: Hash64, maximum: OperationalWorkV1) -> Self {
-        Self { source_id, maximum, spent: OperationalWorkV1::default(), permit: None }
+        Self { source_id, maximum, spent: OperationalWorkV1::default(), permit: None, pass: false }
+    }
+
+    /// **The ledger of a whole-pass preparation permit** (audit §10): every slice of the pass is charged against the permit's work
+    /// quantities; the per-slice attempt count is not bounded within the pass (the chain counted ONE grant).
+    pub(super) fn from_native_pass_permit_v1(
+        permit: PalwTirPublicWorkPermitV1,
+        expected: PalwTirPublicWorkScopeV1,
+    ) -> Result<Self, String> {
+        if *permit.scope_v1() != expected || !permit.is_preparation_v1() {
+            return Err("TIR pass permit changes exact accepted preparation scope".into());
+        }
+        let mut maximum = permit.work_v1();
+        maximum.attempts = u64::MAX;
+        Ok(Self { source_id: expected.source_id, maximum, spent: Default::default(), permit: Some(permit), pass: true })
     }
 
     pub(super) fn from_native_permit_v1(
@@ -166,7 +185,7 @@ impl OperationalLedgerV1 {
         if *permit.scope_v1() != expected {
             return Err("TIR work permit changes exact accepted execution scope".into());
         }
-        Ok(Self { source_id: expected.source_id, maximum: permit.work_v1(), spent: Default::default(), permit: Some(permit) })
+        Ok(Self { source_id: expected.source_id, maximum: permit.work_v1(), spent: Default::default(), permit: Some(permit), pass: false })
     }
 
     pub(super) fn require_current_v1(
@@ -242,24 +261,11 @@ impl OperationalLedgerV1 {
 }
 
 /// The quoted slice's work as the native debit counts it (G14 R3: the custodian worker debits exactly this plus the fixed
-/// per-slice overhead `require_preparation_v1` charges first).
+/// per-slice overhead `require_preparation_v1` charges first) — consensus-core's one definition, shared with the measurement.
 pub(super) fn preparation_slice_work_v1(
     q: &kaspa_consensus_core::palw_backend::PalwTirPublicCaptureSliceV1,
 ) -> Result<OperationalWorkV1, String> {
-    Ok(OperationalWorkV1 {
-        attempts: 1,
-        io_bytes: q.work.io_bytes,
-        hash_bytes: q.work.hash_bytes,
-        parser_steps: q.work.io_bytes.checked_mul(16).ok_or("TIR preparation slice parser work overflow")?,
-        tree_hashes: q.work.tree_hashes,
-        replay_leaves: q.work.replay_leaves,
-        replay_positions: q.work.replay_positions,
-        replay_id_words: q.work.replay_id_words,
-        id_copy_words: q.work.replay_id_words,
-        arithmetic_work: q.work.arithmetic_work,
-        traffic_bytes: q.work.traffic_bytes,
-        ..Default::default()
-    })
+    kaspa_consensus_core::palw_tir_frame_cost_v1::tir_public_slice_work_v1(q)
 }
 /// Bounded cold preparation only; a returned source response is discarded, not
 /// a DA acknowledgement or a computational-correctness credential.

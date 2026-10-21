@@ -410,7 +410,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             | PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. }
             | PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. }
             | PalwConsensusObjectV2::TirPublicControlV1 { .. }
-            | PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. } => Ok(()),
+            | PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. }
+            | PalwConsensusObjectV2::TirClassContainerBoundV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1198,11 +1199,14 @@ pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_memory_routing_court_v2` — RFC-0006's anchored GDN step court (tag 243) and router binding/routed accusations.
     /// Local activation-table slot (not wire): G14's public conviction took 15 first on integ.
     MemoryRoutingCourtV2 = 16,
+    /// `Params::palw_tir_container_identity_v1` — RFC-0002 / genesis 8 audit 02-A: a TIR class's `PALWART3` container binding
+    /// (tag 175). Local activation-table slot (not wire).
+    TirContainerIdentityV1 = 17,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1220,6 +1224,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::MaterialReleaseRecoveryV2,
         Self::TirPublicConvictionV1,
         Self::MemoryRoutingCourtV2,
+        Self::TirContainerIdentityV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1242,6 +1247,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
             Self::TirPublicConvictionV1 => "palw_tir_public_conviction_v1",
+            Self::TirContainerIdentityV1 => "palw_tir_container_identity_v1",
         }
     }
 }
@@ -1465,6 +1471,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::TirPublicControlV1 { .. } | O::TirPublicGrantReadyV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::TirPublicConvictionV1)
         }
+        O::TirClassContainerBoundV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirContainerIdentityV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
@@ -1622,6 +1629,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (170, "TirPublicControlV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
     (171, "TirPublicGrantReadyV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
+    (175, "TirClassContainerBoundV1", PalwLifecycleKindFenceV1::TirContainerIdentityV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
@@ -1720,6 +1728,7 @@ impl crate::config::params::Params {
                         Self::palw_later_of_v1(self.palw_staged_float_constraint_v1_fence(), self.palw_staged_public_court_v1)
                     }
                     PalwLifecycleKindFenceV1::TirPublicConvictionV1 => self.palw_tir_public_conviction_v1_fence(),
+                    PalwLifecycleKindFenceV1::TirContainerIdentityV1 => self.palw_tir_container_identity_v1_fence(),
                 },
             )
         })
@@ -1838,11 +1847,13 @@ pub enum PalwKernelInnerFenceV1 {
     BeaconBootstrapV1,
     /// `Params::palw_model_eligibility_v1` (RFC-0017): an eligibility exam commit (inner 74) or a drawn verifier's attestation (inner 75).
     ModelEligibilityV1,
+    /// `Params::palw_elastic_final_capacity_v1` (RFC-0016 V8): a verifier's capacity attestation (inner 76).
+    ElasticCapacityV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
@@ -1859,6 +1870,7 @@ impl PalwKernelInnerFenceV1 {
         Self::MinimumPriceV1,
         Self::BeaconBootstrapV1,
         Self::ModelEligibilityV1,
+        Self::ElasticCapacityV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1879,6 +1891,7 @@ impl PalwKernelInnerFenceV1 {
             Self::MinimumPriceV1 => "palw_minimum_price_v1",
             Self::BeaconBootstrapV1 => "palw_beacon_bootstrap_v1",
             Self::ModelEligibilityV1 => "palw_model_eligibility_v1",
+            Self::ElasticCapacityV1 => "palw_elastic_final_capacity_v1",
         }
     }
 }
@@ -1963,6 +1976,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::SignMinimumPriceContractV1 { .. } => Some(PalwKernelInnerFenceV1::MinimumPriceV1),
         K::BootstrapExactV1 { .. } => Some(PalwKernelInnerFenceV1::BeaconBootstrapV1),
         K::CommitEligibilityExamV1 { .. } | K::AttestEligibilityExamV1 { .. } => Some(PalwKernelInnerFenceV1::ModelEligibilityV1),
+        K::AttestCapacityV1 { .. } => Some(PalwKernelInnerFenceV1::ElasticCapacityV1),
         K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
             Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
         }
@@ -2046,6 +2060,8 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     // RFC-0017 (2026-10-15): the model eligibility exam commit and drawn-verifier attestation.
     (74, "CommitEligibilityExamV1", Some(PalwKernelInnerFenceV1::ModelEligibilityV1)),
     (75, "AttestEligibilityExamV1", Some(PalwKernelInnerFenceV1::ModelEligibilityV1)),
+    // RFC-0016 V8 (2026-10-17, audit 16-A): a verifier's capacity attestation.
+    (76, "AttestCapacityV1", Some(PalwKernelInnerFenceV1::ElasticCapacityV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2482,6 +2498,22 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-0017 model eligibility exam commit (74) and drawn-verifier attestation (75)",
         true,
     ),
+    // RFC-0016 V8 (2026-10-17, audit 16-A): a verifier's capacity attestation and its row (aux135 0x05).
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 76, hi: 76 },
+        "palw_elastic_final_capacity_v1",
+        "RFC-0016 V8 verifier capacity attestation (76)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux135 0x05 capacity attestations: (verifier bond, compute/memory/DA/court, window and expiry, \
+                   evidence root) per (class, verifier)",
+        },
+        "palw_elastic_final_capacity_v1",
+        "RFC-0016 V8 capacity attestation state",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::StateEncoding {
             what: "kernel route aux131 model eligibility rows: 0x4D model stage, 0x4C lineage counters, 0x50 principal counters, \
@@ -2851,6 +2883,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "LG14 terminal objective evidence",
         true,
     ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "claim-local original liability frames (kernel aux144 F + accepting block)" },
+        "palw_claim_local_settlement_v1",
+        "RFC-0023 stage 2 historical context",
+        true,
+    ),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {
@@ -2973,8 +3011,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // 168–169: the G14 TIR staged route (native seed opening, TIR class layout publication), merged 2026-10-15.
     (168, 169, "G14 TIR staged route", &["palw_staged_tir_route_v1"]),
     (170, 171, "G14 original paid TIR conviction", &["palw_tir_public_conviction_v1"]),
-    // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Checked free on this branch, the
-    // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
+    // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Confirmed 2026-10-18 (lane
+    // d2-x3-finish) as THE tag for that kind: no other allocation row uses 230, and the kind is dormant behind `palw_court_model_scope_v1`.
+    // Its codec and its A-2 kind-table row are not landed yet (the remaining step of R-D2-READY; register §3.1.1).
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
     (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),

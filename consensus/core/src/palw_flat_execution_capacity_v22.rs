@@ -132,6 +132,17 @@ impl NativePhysicalSlotsV22 {
         self.kinds[i] = kind;
         Ok(())
     }
+    /// **G14 lane closure G-N1:** a lapsed owner that compelled nothing (both of its streams never carried a unit) gives its
+    /// physical owner place back before its horizon; the streams' cooldowns are kept.
+    pub fn release_lapsed_owner_v41(&mut self, owner: Digest) -> Result<(), String> {
+        let i = self.owners.iter().position(|v| *v == owner).ok_or("native physical lapsed owner absent")?;
+        if self.units[3 + i * 2..5 + i * 2].iter().any(|u| *u != [0; 64]) {
+            return Err("native physical owner that carried a unit keeps its place".into());
+        }
+        self.owners[i] = [0; 64];
+        self.owner_horizons[i] = 0;
+        Ok(())
+    }
     pub fn retire_owner(&mut self, owner: Digest, now: u64) -> Result<(), String> {
         let i = self.owners.iter().position(|v| *v == owner).ok_or("native physical owner absent/already retired")?;
         if now <= self.owner_horizons[i] || self.not_before[3 + i * 2..5 + i * 2].iter().any(|d| now < *d) {
@@ -178,6 +189,10 @@ impl NativeCarriageServiceV22 {
         queue.check(queue.network_domain)?;
         let mut service = Self::probe(mass);
         service.implemented = true;
+        // User decision 2026-10-18 (ADR-0187): the reserved Final27 scheduler serves one slot every DAA (was 2), doubling the
+        // physical service; seal_ttl, deadlines and liability are unchanged. Only reached where Final27 is in force (dormant on
+        // every preset); the probe service below it keeps period 2.
+        service.period_daa = 1;
         service.check(mass)?;
         Ok(service)
     }

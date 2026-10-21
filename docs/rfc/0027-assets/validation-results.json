@@ -1,0 +1,24 @@
+{
+  "scope": "documentation_and_synthetic_arithmetic_only",
+  "date": "2026-10-20",
+  "arithmetic_tests": {
+    "tests_run": 16,
+    "passed": true
+  },
+  "repository_doc_check": {
+    "before_passed": false,
+    "after_passed": false,
+    "before_missing_doc_targets": 49,
+    "after_missing_doc_targets": 49,
+    "baseline_known_occurrences": 43,
+    "preexisting_unbaselined_link_issues": 6,
+    "introduced_link_regressions": 0,
+    "stale_primary_index_resolved": true,
+    "baseline_file_modified": false
+  },
+  "node_tests": "NOT_RUN",
+  "real_cost_measurements": "NOT_RUN",
+  "heartbeat_measurements": "NOT_RUN",
+  "protocol_activation": "NONE",
+  "remote_branch_verification": "NOT_RUN"
+}

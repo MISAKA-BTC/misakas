@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-21",
+  "candidate_parent": "e82921ee1",
+  "selected_unique_passes": 64,
+  "selected_failed": 0,
+  "selected_ignored": 0,
+  "overlap": "Final targeted native 2 are contained in final native replay 30. Fresh integrations 34. Do not add previous 64,54,58,57,93 or intermediate passes.",
+  "scope": "Verified-half native fixtures with synthetic signatures, codec/heap/scan, native journal undo/replay and full in-memory carriage reload. Not actual node ingress/restart/pruned-IBD, physical capacity, economics or full G14.",
+  "hard_service_boundary": "first_eligible_daa <= unit < min(response_deadline_daa, original_hard_daa); native acceptance unchanged",
+  "commands": [
+    "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib native_duty_clock",
+    "/Users/wata/.cache/misaka-heavy-lock.sh /bin/bash -c: cargo test --release -p kaspa-consensus-core --test palw_court_duty_clock_v1 --test palw_court_service_state_v2 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move && cargo check --release -p kaspa-consensus && target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1",
+    "python3 scripts/drills/check_rfc06_native_wire_idempotent.py (no compile, staged output comparison)"
+  ],
+  "non_test_consensus_check_exit": 0,
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "8a86614c9649804cf4fd8dd5fdb6d74bb396d3861eabcc1844ee5bb04ac44b0a",
+    "consensus/core/src/palw_court_duty_clock_v1.rs": "5c8d85d8316eeecd94158ce3056377775bfa19f7bba3cd6c52160035c9228135",
+    "consensus/core/src/palw_court_service_state_v2.rs": "5cdf3e5be7da7ba09ef7d59c84d2efc54139c9e94a96678c87e52a1efa1ff9ed",
+    "consensus/core/src/palw_native_resource_v1/generated.rs": "cd40614ead411a03857ecf39db3b29d9b2543bb29319db5fb1ba3bcfe740c49d",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "0974f0ce5c91d11897f71eedc107f12d8486f8c085df725e5f957eeb57522171",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "d3cb2ee3aa3c608a1617b798aec791244612e5337b2e97e9e7596b39ced12526",
+    "consensus/core/src/palw_staged_court_state_v1.rs": "efc6f95ccde68b433a38fc17caf4fb8238e2dcafc55c3c704d1a7374233ca474",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "fe3b0676abeb9e84f6f2003f22a970c5d961cb364daa22af48e57ece135d0023",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "dba30be478d3e5cc8c47e4b9beff8a3f106318221a375b66402b4029b18b8552",
+    "consensus/core/tests/palw_court_duty_clock_v1.rs": "bec8b07a2df9b39c696e6f0d28811dc6fcfde26b95b7898386a6c4da769fa9c9"
+  },
+  "core_unit_executable_sha256": "a734b20a2411e52de7be9fbe014fbf1e0fb812b22a12d702f1666f96251ddfb3",
+  "source_patch": {
+    "path": "duty-clock-runtime.patch",
+    "sha256": "be24bdcfd1ea0eb3c40fe93b2130c245226a1470e5951f52eaf74fd5780301ad"
+  },
+  "generator_check": {
+    "path": "duty-clock-hard-bound-wire-idempotent.log",
+    "sha256": "f37ab49c54bf5b109caa581b2e6b1535ca0dc30de9442d0b7df178ef441dfb02"
+  },
+  "logs": [
+    {
+      "path": "duty-clock-hard-bound-native-release.log",
+      "passed_groups": [
+        2
+      ],
+      "sha256": "d16f6b5fe993ab74d73ba20f8d3592b1839633d8118378857eaeae5c12ad2c58"
+    },
+    {
+      "path": "duty-clock-hard-bound-components-replay.log",
+      "passed_groups": [
+        12,
+        5,
+        2,
+        6,
+        9,
+        30
+      ],
+      "sha256": "9b00dee4efb1eaa09fd6ddb0db460e45f1240c2eef7e899afa759e9f3ce3b6a3"
+    }
+  ],
+  "prior_checkpoint_artifact": "duty-clock-artifact.json",
+  "default_permission": false,
+  "new_production_admission_or_supply_hook": false,
+  "public_schema_or_numeric_adoption": false,
+  "full_g14_complete": false,
+  "docs_check": {
+    "path": "duty-clock-docs-check.log",
+    "status": "FAIL: same 5 imported missing references, 43 baseline-known occurrences",
+    "sha256": "7e8c9e4bf9dc06525f86741151ac5dd45a86447578c9ba07dc56e6c7517ad9b5"
+  },
+  "wire_generation": {
+    "path": "duty-clock-wire-generation.log",
+    "sha256": "d9be6bc86a36cd16b2d634badb863feaf85127024c15672fe8fa07cf3d3aa54f"
+  }
+}

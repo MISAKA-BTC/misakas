@@ -7,6 +7,9 @@ use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::{self, Read};
 
+#[path = "palw_tir_public_numerical_inventory_v1.rs"]
+pub mod numerical_inventory_v1;
+
 pub const PALW_TIR_PUBLIC_FRONTIER_HASHES_V1: usize = 1024;
 pub const PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1: u32 = 1024;
 pub const PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1: u32 = crate::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1;
@@ -165,6 +168,13 @@ pub struct PalwTirPublicSourceV1 {
     maximum_leaf_bytes: u64,
     maximum_leaves: u64,
     source_id: Hash64,
+    /// **G14 audit §11 (a): the most bytes of leaf values `c` consecutive leaves of THIS job hold, for `c = 1 ..= RUN`** — from the
+    /// class's step space (`maximum_window_lanes_v1`: the job's actual widest leaf, and the positions a window can touch), not the
+    /// layout's widest tile × 4. Index `c − 1`. Only response BOUNDS read it (prices, clocks, the accepted body ceiling); decoding
+    /// stays at `maximum_leaf_bytes`.
+    window_value_bytes: Vec<u64>,
+    /// G14 audit §11 (b): the most full step-leaf runs the cone of any leaf of this job needs (`cone_runs_bound_v1`).
+    cone_runs: u64,
 }
 fn hash(domain: &[u8], bytes: &[u8]) -> Hash64 {
     Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(domain).hash(bytes).as_bytes().try_into().expect("64"))
@@ -208,6 +218,15 @@ impl PalwTirPublicSourceV1 {
             .filter(|n| *n <= LEAF_BYTES as u64)
             .ok_or("TIR native leaf geometry exceeds original format")?;
         let source_id = hash(b"misaka-palw/tir-public-source/v1", &borsh::to_vec(header).map_err(|e| e.to_string())?);
+        let job = verified.space.job_shape(&header.job_context).map_err(|e| e.to_string())?;
+        let window_value_bytes = (1..=RUN as u64)
+            .map(|count| {
+                let lanes = verified.space.maximum_window_lanes_v1(&job, count);
+                // Never above the format's own per-leaf ceiling (the decode bound).
+                u64::try_from(lanes.saturating_mul(4)).unwrap_or(u64::MAX).min(count.saturating_mul(maximum_leaf_bytes))
+            })
+            .collect();
+        let cone_runs = verified.space.cone_runs_bound_v1(&job, header.step_leaf_count, RUN as u64);
         Ok(Self {
             header: header.clone(),
             class_id: verified.class_id,
@@ -217,6 +236,8 @@ impl PalwTirPublicSourceV1 {
             maximum_leaf_bytes,
             maximum_leaves,
             source_id,
+            window_value_bytes,
+            cone_runs,
         })
     }
     pub fn source_id_v1(&self) -> Hash64 {
@@ -224,6 +245,18 @@ impl PalwTirPublicSourceV1 {
     }
     pub fn header_v1(&self) -> &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1 {
         &self.header
+    }
+    /// The largest leaf preimage this source decodes (`4 ×` the class layout's widest committed tile; every leaf is refused past it).
+    pub fn maximum_leaf_bytes_v1(&self) -> u64 {
+        self.maximum_leaf_bytes
+    }
+    /// The most full step-leaf runs the cone of any leaf of this job needs (G14 audit §11 (b)); at most `⌈leaves / run⌉`.
+    pub fn cone_runs_v1(&self) -> u64 {
+        self.cone_runs
+    }
+    /// The job's actual widest leaf, in value bytes (G14 audit §11 (a); at most [`Self::maximum_leaf_bytes_v1`]).
+    pub fn widest_leaf_value_bytes_v1(&self) -> u64 {
+        self.window_value_bytes[0]
     }
     pub fn leaf_count_v1(&self) -> u64 {
         self.header.step_leaf_count
@@ -311,6 +344,39 @@ impl PalwTirPublicSourceV1 {
         }
         self.check_response_bound_v1(request, &response)?;
         Ok(response)
+    }
+    /// Rooted shared-data reload: original identity only, never model validity.
+    /// Reserve the concrete temporary ID-byte writer before hashing.
+    pub(crate) fn validate_complete_ids_v1(&self, rows_root: Hash64, ids: &[u32]) -> Result<(), String> {
+        self.trace()?;
+        if ids.len() != self.decode_count_v1() as usize { return Err("shared IDs have no exact original EOF".into()); }
+        let mut q=crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        q.exact_v1::<u8>((ids.len() as u64).checked_mul(4).ok_or("shared ID byte count overflow")?)
+            .map_err(|e|e.to_string())?;
+        let _scratch=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e|e.to_string())?;
+        if crate::palw_step_refute::tiled_logits_outer_root_v1(&self.header.job_context,
+            u64::from(self.decode_count_v1()),&rows_root,ids) != self.header.full_logits_trace_root {
+            return Err("shared complete IDs do not reach original outer trace root".into());
+        }
+        Ok(())
+    }
+    /// Recheck the borrowed sequence against the original outer root, but retain
+    /// only its rows identity. No ID Vec clone or serialized trust flag.
+    pub(crate) fn rows_anchor_from_complete_ids_v1(&self,rows_root:Hash64,ids:&[u32])
+        ->Result<PalwTirPublicRowsAnchorV1,String>{
+        self.validate_complete_ids_v1(rows_root,ids)?;
+        Ok(PalwTirPublicRowsAnchorV1 {source_id:self.source_id,trace_root:self.header.full_logits_trace_root,rows_root})
+    }
+
+    /// Owned output remains necessary at FullIds ingestion, not per-query reads.
+    pub(crate) fn retain_complete_ids_v1(&self, rows_root: Hash64, ids: &[u32])
+        -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, String> {
+        self.validate_complete_ids_v1(rows_root,ids)?;
+        let mut q=crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        q.exact_v1::<u32>(ids.len() as u64).map_err(|e|e.to_string())?;
+        let lease=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e|e.to_string())?;
+        Ok(crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(
+            PalwTirPublicAuthenticatedIdsV1 {source_id:self.source_id,rows_root,ids:ids.to_vec()},lease))
     }
     fn ids<'a>(&self, ids: Option<&'a PalwTirPublicAuthenticatedIdsV1>) -> Result<&'a PalwTirPublicAuthenticatedIdsV1, String> {
         self.trace()?;
@@ -495,8 +561,11 @@ impl PalwTirPublicSourceV1 {
         };
         let bytes = match *request {
             StepNode { level, index } => node(self.leaf_count_v1(), level, index)?,
-            StepLeaf { .. } => 1 + self.maximum_leaf_bytes + 26 + 76 + h * 64,
-            StepRun { count, .. } => 1 + 4 + u64::from(count) * (self.maximum_leaf_bytes + 26 + 64) + 16 + h * 128,
+            // G14 audit §11 (a): leaf values at the job's actual widest leaf / window (`window_value_bytes`), framing as before.
+            StepLeaf { .. } => 1 + self.window_value_bytes[0] + 26 + 76 + h * 64,
+            StepRun { count, .. } => {
+                1 + 4 + self.window_value_bytes[count as usize - 1] + u64::from(count) * (26 + 64) + 16 + h * 128
+            }
             RowsNode { level, index } => node(u64::from(self.decode_count_v1()), level, index)?,
             TileNode { level, index, .. } => 64 + 76 + rows_h * 64 + node(tiles, level, index)?,
             TraceTile { tile, .. } => {
@@ -861,6 +930,12 @@ mod tests {
         assert!(source.authenticate_v1(&request, &response, None).is_err(), "wire material cannot mint a native rows anchor");
         let native = PalwTirPublicRowsAnchorV1::from_native_v1(&source, ids.rows_root_v1());
         assert_eq!(source.authenticate_with_rows_v1(&request, &response, None, Some(&native)).unwrap().response_v1(), &response);
+        let borrowed=source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(),ids.ids_v1()).unwrap();
+        assert_eq!(source.authenticate_with_rows_v1(&request,&response,None,Some(&borrowed)).unwrap().response_v1(),&response);
+        let mut altered=ids.ids_v1().to_vec();altered[0]^=1;
+        assert!(source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(),&altered).is_err());
+        assert!(source.rows_anchor_from_complete_ids_v1(ids.rows_root_v1(),&[]).is_err());
+        assert!(source.rows_anchor_from_complete_ids_v1(Hash64::from_u64_word(999),ids.ids_v1()).is_err());
         let wrong = PalwTirPublicRowsAnchorV1::from_native_v1(&source, Hash64::from_u64_word(999));
         assert!(source.authenticate_with_rows_v1(&request, &response, None, Some(&wrong)).is_err());
         let (foreign, _) = geometry(8, 1);

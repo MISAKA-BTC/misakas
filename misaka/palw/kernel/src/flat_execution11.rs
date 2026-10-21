@@ -1429,6 +1429,66 @@ impl ExecutionJobStateV11 {
             release_producer_reserve: c.reserved_original,
         })
     }
+    /// Reallocate an unpaid Final's original fee after a genuine court/default.
+    /// Native must first authenticate the held fee and derive `horizon` from the
+    /// producer-signed job under its accepted ruleset. This book moves no coins:
+    /// the native journal refunds the held fee and collects exactly the slash.
+    /// Both judgment clocks remain bounded by H; an earlier filing does not
+    /// authorize an arbitrarily late post-Final verdict.
+    pub fn adjudicate_held_final(
+        &mut self,
+        class: &ExecutionClassRecordV11,
+        result: &NativeExecutionJudgmentV11,
+        collected_original_slash: u64,
+        horizon: u64,
+    ) -> Result<ExecutionSettlementV11, String> {
+        self.class(class)?;
+        let c = self.claim.as_ref().ok_or("held Final has no execution claim")?;
+        let original_final = self.settlement.as_ref().is_some_and(|s| {
+            s.terminal == ExecutionTerminalV11::Final
+                && s.job_id == self.job.id() && s.claim_id == Some(c.id())
+                && s.escrow_debit == self.job.escrow_original_debit
+                && s.producer_credit == self.job.reward && s.requester_refund == 0
+                && s.collected_original_slash == 0 && s.finder.is_none()
+                && s.finder_credit == 0 && s.burned == 0 && s.proof_id.is_none()
+                && s.release_producer_reserve == c.reserved_original
+        });
+        if self.terminal != ExecutionTerminalV11::Final || c.terminal != self.terminal
+            || !c.credit_paid || !original_final || self.escrow_remaining != 0
+            || horizon < self.job.deadline_daa
+            || result.job_id != self.job.id() || result.claim_id != c.id()
+            || result.vector != c.vector || result.class_id != class.id()
+            || result.inventory_root != class.inventory_root || result.parameter_root != class.parameter_root
+            || result.established_daa < c.committed_daa || result.established_daa > horizon
+            || result.current_daa < result.established_daa || result.current_daa > horizon
+            || result.proof_id == [0;64] || result.finder == [0;64] || result.finder == self.job.producer
+            || collected_original_slash > c.reserved_original
+        {
+            return Err("held Final judgment lacks original unpaid fee, exact subject, bounded clocks or collectible reserve".into());
+        }
+        let terminal = match result.kind {
+            NativeAdjudicationKindV11::ComputationFault => ExecutionTerminalV11::ComputationFault,
+            NativeAdjudicationKindV11::SourceMismatch => ExecutionTerminalV11::SourceMismatch,
+            NativeAdjudicationKindV11::DataUnavailable => ExecutionTerminalV11::DataUnavailable,
+        };
+        let finder_credit = u64::try_from((collected_original_slash as u128 * class.finder_permille as u128)/1000)
+            .map_err(|_| "held Final finder amount overflow")?;
+        let settlement = ExecutionSettlementV11 {
+            job_id: self.job.id(), claim_id: Some(c.id()), terminal, proof_id: Some(result.proof_id),
+            escrow_debit: self.job.escrow_original_debit, requester_refund: self.job.reward, producer_credit: 0,
+            collected_original_slash, finder: Some(result.finder), finder_credit,
+            burned: collected_original_slash.checked_sub(finder_credit).ok_or("held Final finder exceeds collected slash")?,
+            release_producer_reserve: c.reserved_original,
+        };
+        settlement.check()?;
+        let c = self.claim.as_mut().expect("checked claim");
+        c.terminal = terminal;
+        c.credit_paid = false;
+        self.terminal = terminal;
+        self.settlement = Some(settlement.clone());
+        Ok(settlement)
+    }
+
     pub fn cancel_unclaimed(&mut self, class: &ExecutionClassRecordV11, current_daa: u64) -> Result<ExecutionSettlementV11, String> {
         self.class(class)?;
         if self.terminal != ExecutionTerminalV11::Funded || self.claim.is_some() || current_daa <= self.job.commit_deadline {

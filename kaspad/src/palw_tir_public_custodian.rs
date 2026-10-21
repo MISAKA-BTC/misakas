@@ -30,6 +30,7 @@
 //! demands from the prepared capture (the Begin/Part/Finish responder), measured completion within the fixed preparation clock at
 //! the largest profile, sweeping orphan `prepared-*` directories the journal never recorded, and re-sealing a corrupted capture.
 #![allow(dead_code)] // the panel loop calls the tick; the journal helpers are exercised by the tests below.
+use crate::palw_panel::court_outbox::CourtOutboxV1;
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
 use super::tir_acquisition_driver::{
@@ -50,7 +51,7 @@ use kaspa_consensus_core::{
         PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1, PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicControlV1,
     },
     palw_tir_public_claim_v1::{PalwTirPublicFrameViewV1, palw_tir_public_claim_v1},
-    palw_tir_public_owned_v1::{PalwTirPublicOwnedActionV1, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1, PalwTirPublicWorkV1},
+    palw_tir_public_owned_v1::{PalwTirPublicOwnedActionV1, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1},
     palw_tir_public_source_v1::PalwTirPublicRequestV1,
     palw_tir_public_state_v1::{
         PalwTirPublicPreparationSnapshotV1, PalwTirPublicWorkBookV1, PalwTirPublicWorkPermitV1,
@@ -73,26 +74,11 @@ const PALW_TIR_PUBLIC_CASES_V1: usize = 4;
 /// The journal's bound; a sealed entry leaves only once its files are retired past the IRREVERSIBLE material horizon.
 const PALW_TIR_PUBLIC_SEALED_MAX_V1: usize = 4096;
 const PALW_TIR_PUBLIC_JOURNAL_MAGIC_V2: &[u8] = b"misaka-node/tir-public-custodian/v2\n";
-/// The fixed per-slice overhead `OperationalLedgerV1::require_preparation_v1` debits before the slice's own quoted work, so
-/// the debit the chain accepts covers both (it never under-buys and then refuses its own slice).
-const PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1: PalwTirPublicWorkV1 = PalwTirPublicWorkV1 {
-    attempts: 1,
-    io_bytes: 0,
-    hash_bytes: 8192,
-    copy_bytes: 0,
-    parser_steps: 1024,
-    id_copy_words: 0,
-    tree_hashes: 0,
-    replay_leaves: 0,
-    replay_positions: 0,
-    replay_id_words: 0,
-    arithmetic_work: 0,
-    traffic_bytes: 0,
-    eval_elements: 0,
-    eval_terms: 0,
-    source_reads: 0,
-    target_requests: 0,
-};
+/// The fixed per-slice overhead `OperationalLedgerV1::require_preparation_v1` debits before the slice's own quoted work
+/// (consensus-core's one definition, shared with the measurement harness).
+use kaspa_consensus_core::palw_tir_frame_cost_v1::PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1;
+/// Slices one Run step executes under an accepted pass permit before yielding to the next tick (no chain wait between them).
+const PALW_TIR_PUBLIC_SLICES_PER_STEP_V1: usize = 64;
 
 /// One sealed prepared capture: what a restart needs to re-file Ready and to reopen the capture for answers.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -132,6 +118,9 @@ struct CaseV1 {
     /// The quote whose debit is queued or in flight, and the permit once that debit is accepted.
     quote: Option<PalwTirPublicCaptureSliceV1>,
     permit: Option<PalwTirPublicWorkPermitV1>,
+    /// **The accepted whole-pass permit's ledger** (audit §10): ONE debit per pass funds every slice of it (capture, then
+    /// publication); `None` until the pass's debit is accepted.
+    ledger: Option<OperationalLedgerV1>,
     failed: bool,
     _capture: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
     _publish: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
@@ -293,6 +282,44 @@ enum StepV1 {
 
 /// The literal preparation duty `signer` has on `(claim, allocation)` at the accepted snapshot: `Some(is_producer)` while it is
 /// pending (the producer as a d0 custodian; a drawn seat that signed Valid and holds no grant yet), `None` otherwise.
+/// **One Run step of an accepted preparation pass** (audit §10/§11: ONE debit per pass): up to `limit` slices, no chain wait between
+/// them — the cold capture's `StepLeaf { index: 0 }` slices until the reader warms (then the step ends: the writer begins on the next
+/// tick, still under the same permit), then the prepared generation's publication slices until it seals. `capture` / `publish` run
+/// one quoted slice under the pass's ledger (production: `prepare_claim_capture_slice_v1` / `prepare_claim_publication_slice_v1`,
+/// which charge the slice's quoted work and overhead against the permit). `Some(descriptor)` once sealed; an error fails the case.
+pub(super) fn run_pass_slices_v1<L>(
+    warm: &mut bool,
+    mut reader: Option<&mut (dyn PalwTirPublicCaptureReaderV1 + 'static)>,
+    mut writer: Option<&mut (dyn PalwTirPublicPreparedWriterV1 + 'static)>,
+    limit: usize,
+    ledger: &mut L,
+    capture: impl Fn(&mut L, &mut dyn PalwTirPublicCaptureReaderV1, &PalwTirPublicCaptureSliceV1) -> Result<bool, String>,
+    publish: impl Fn(
+        &mut L,
+        &mut dyn PalwTirPublicPreparedWriterV1,
+        &PalwTirPublicCaptureSliceV1,
+    ) -> Result<Option<PalwTirPublicPreparedDescriptorV1>, String>,
+) -> Result<Option<PalwTirPublicPreparedDescriptorV1>, String> {
+    for _ in 0..limit {
+        if *warm {
+            // The reader warmed: the writer begins on the next tick (no new debit).
+            let Some(writer) = writer.as_deref_mut() else { return Ok(None) };
+            let quote = writer.slice_quote_v1()?;
+            if let Some(descriptor) = publish(ledger, writer, &quote)? {
+                return Ok(Some(descriptor));
+            }
+        } else {
+            let reader = reader.as_deref_mut().ok_or("TIR custodian lost its capture reader")?;
+            let quote = reader.slice_quote_v1(&PalwTirPublicRequestV1::StepLeaf { index: 0 })?;
+            if capture(ledger, reader, &quote)? {
+                *warm = true;
+                return Ok(None);
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn preparation_duty_v1(
     state: &PalwChainStateV2,
     now: u64,
@@ -359,16 +386,14 @@ impl PalwPanelService {
         network_domain: Hash64,
         own_receipts: &HashMap<Hash64, (PalwSeatReceiptV2, u64)>,
         book: &mut PalwTirPublicCustodianBookV1,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         let ours = |round: u32, responder: bool| {
             responder && (round == PALW_TIR_PUBLIC_DEBIT_ROUND_V1 || round == PALW_TIR_PUBLIC_READY_ROUND_V1)
         };
         if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_none() {
             book.cases.clear();
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return Ok(());
         }
         // ---- ONE accepted read: discover duties, confirm accepted debits, prepare the next exact debits. ----
@@ -415,6 +440,7 @@ impl PalwPanelService {
                                     warm: false,
                                     quote: None,
                                     permit: None,
+                                    ledger: None,
                                     failed: false,
                                     _capture: None,
                                     _publish: None,
@@ -479,6 +505,15 @@ impl PalwPanelService {
                         }
                         continue;
                     }
+                    // An accepted pass permit: run the pass's next slices (and begin the writer once warm) with no new debit.
+                    if case.permit.is_some() || case.ledger.is_some() {
+                        if case.warm && case.writer.is_none() {
+                            steps.push(StepV1::Begin { key: *key, material_until_daa: c.material_until_daa, now });
+                        } else {
+                            steps.push(StepV1::Run { key: *key, snapshot: Box::new(snapshot) });
+                        }
+                        continue;
+                    }
                     if case.reader.is_none() {
                         steps.push(StepV1::Open {
                             key: *key,
@@ -492,7 +527,8 @@ impl PalwPanelService {
                         steps.push(StepV1::Begin { key: *key, material_until_daa: c.material_until_daa, now });
                         continue;
                     }
-                    // The next slice's quote, then its exact debit.
+                    // **Audit §10: ONE debit per pass.** The pass's first slice's quote binds the permit's scope; the debit buys the
+                    // pass's share of this preparer's lane (`tir_public_pass_budget_v1`), and every slice of the pass runs under it.
                     let quote = if case.warm {
                         case.writer.as_ref().map(|writer| writer.slice_quote_v1())
                     } else {
@@ -502,15 +538,30 @@ impl PalwPanelService {
                         case.failed = true;
                         continue;
                     };
-                    let work =
-                        match preparation_slice_work_v1(&quote).and_then(|w| PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1.checked_add_v1(w)) {
-                            Ok(work) => work,
-                            Err(why) => {
-                                debug!("[{PALW_PANEL}] TIR frame {}: slice work does not price: {why}", key.0);
-                                case.failed = true;
-                                continue;
-                            }
-                        };
+                    let lane = &snapshot.row.preparation.work_v1().allocation;
+                    let work = match kaspa_consensus_core::palw_tir_frame_cost_v1::tir_public_pass_budget_v1(
+                        lane.per_actor,
+                        lane.maximum_restarts.saturating_add(1),
+                    )
+                    .and_then(|budget| {
+                        // The pass must at least fund its first slice (else the plan cannot carry this class: never debit).
+                        let first =
+                            preparation_slice_work_v1(&quote).and_then(|w| PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1.checked_add_v1(w))?;
+                        let mut first_slice = first;
+                        first_slice.attempts = budget.attempts;
+                        if budget.covers_v1(&first_slice) {
+                            Ok(budget)
+                        } else {
+                            Err("the pass budget does not fund its first slice".into())
+                        }
+                    }) {
+                        Ok(work) => work,
+                        Err(why) => {
+                            debug!("[{PALW_PANEL}] TIR frame {}: pass work does not price: {why}", key.0);
+                            case.failed = true;
+                            continue;
+                        }
+                    };
                     let scope = PalwTirPublicWorkScopeV1 {
                         claim: c.claim,
                         owner: c.producer,
@@ -552,11 +603,11 @@ impl PalwPanelService {
         };
         if !armed {
             book.cases.clear();
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return Ok(());
         }
         // A queued item of a frame this node no longer prepares (Ready accepted, duty ended) is stale.
-        pending.retain(|(claim, round, responder, _)| {
+        court_outbox.retain_pending(|(claim, round, responder, _)| {
             !ours(*round, *responder) || book.cases.keys().any(|(c, _)| c == claim) || book.sealed.keys().any(|(c, _)| c == claim)
         });
 
@@ -618,8 +669,8 @@ impl PalwPanelService {
                     }
                     StepV1::Debit { key, action, original_accepted_daa, source_id, due: due_daa } => {
                         let queue = (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true);
-                        if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                        if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
+                            || court_outbox.submitted_at(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                         {
                             return Ok(());
                         }
@@ -636,60 +687,61 @@ impl PalwPanelService {
                             signature: Vec::new(),
                         };
                         let object = signed_control_v1(self, network_domain, control)?;
-                        pending.push((queue.0, queue.1, queue.2, object));
-                        due.insert(queue, due_daa);
-                        moved.insert(queue, now);
+                        court_outbox.push_pending((queue.0, queue.1, queue.2, object));
+                        court_outbox.set_due(queue, due_daa);
+                        court_outbox.mark_submitted(queue, now);
                     }
                     StepV1::Run { key, snapshot } => {
                         // The debit is accepted: its queued carrier (if still queued) is spent.
-                        pending.retain(|(a, b, c, _)| (*a, *b, *c) != (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true));
-                        // G14 R8: write-ahead physical charge, against the lane's finite recovery allowance — BEFORE the slice runs,
-                        // so a crash mid-slice still counts it and a reorg that rolls the canonical counter back refills nothing.
-                        let lane = snapshot.row.preparation.contract_v1();
-                        let cap = lane.plan.maximum_slices_per_actor.saturating_mul(lane.plan.maximum_restarts.saturating_add(1));
-                        let until = lane.preparation_until_daa;
-                        if let Err(why) = book.charge_physical_slice_v1(key, cap, until) {
-                            if let Some(case) = book.cases.get_mut(&key) {
-                                case.failed = true;
+                        court_outbox.retain_pending(|(a, b, c, _)| (*a, *b, *c) != (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true));
+                        let arming = book.cases.get(&key).is_some_and(|case| case.ledger.is_none() && case.permit.is_some());
+                        if arming {
+                            // G14 R8: write-ahead physical charge of the PASS (one accepted debit), against the lane's finite recovery
+                            // allowance — BEFORE any of its slices runs, so a crash mid-pass still counts it and a reorg that rolls the
+                            // canonical counter back refills nothing.
+                            let lane = snapshot.row.preparation.contract_v1();
+                            let cap = lane.plan.maximum_slices_per_actor.saturating_mul(lane.plan.maximum_restarts.saturating_add(1));
+                            let until = lane.preparation_until_daa;
+                            if let Err(why) = book.charge_physical_slice_v1(key, cap, until) {
+                                if let Some(case) = book.cases.get_mut(&key) {
+                                    case.failed = true;
+                                }
+                                return Err(why);
                             }
-                            return Err(why);
                         }
                         let Some(case) = book.cases.get_mut(&key) else { return Ok(()) };
-                        let (Some(quote), Some(permit)) = (case.quote.take(), case.permit.take()) else {
-                            return Err("TIR custodian has no accepted permit for its quoted slice".into());
-                        };
-                        let expected = *permit.scope_v1();
-                        let mut ledger = OperationalLedgerV1::from_native_permit_v1(permit, expected)?;
-                        let warm = case.warm;
+                        if case.ledger.is_none() {
+                            let permit = case.permit.take().ok_or("TIR custodian has no accepted pass permit")?;
+                            let expected = *permit.scope_v1();
+                            case.ledger = Some(OperationalLedgerV1::from_native_pass_permit_v1(permit, expected)?);
+                            case.quote = None;
+                        }
+                        let mut ledger = case.ledger.take().ok_or("TIR custodian lost its pass ledger")?;
+                        let mut warm = case.warm;
                         let mut reader = case.reader.take();
                         let mut writer = case.writer.take();
                         let outcome = tokio::task::spawn_blocking(move || {
                             let borrowed = BorrowedPreparationSnapshotV1::from_native_v1(&snapshot);
-                            let result = if warm {
-                                match writer.as_mut() {
-                                    Some(writer) => {
-                                        prepare_claim_publication_slice_v1(&borrowed, writer.as_mut(), &quote, &mut ledger)
-                                            .map(|sealed| (true, sealed))
-                                    }
-                                    None => Err("TIR custodian lost its prepared writer".into()),
-                                }
-                            } else {
-                                match reader.as_mut() {
-                                    Some(reader) => prepare_claim_capture_slice_v1(&borrowed, reader.as_mut(), &quote, &mut ledger)
-                                        .map(|warmed| (warmed, None)),
-                                    None => Err("TIR custodian lost its capture reader".into()),
-                                }
-                            };
-                            (reader, writer, result)
+                            let result = run_pass_slices_v1(
+                                &mut warm,
+                                reader.as_deref_mut(),
+                                writer.as_deref_mut(),
+                                PALW_TIR_PUBLIC_SLICES_PER_STEP_V1,
+                                &mut ledger,
+                                |ledger, reader, quote| prepare_claim_capture_slice_v1(&borrowed, reader, quote, ledger),
+                                |ledger, writer, quote| prepare_claim_publication_slice_v1(&borrowed, writer, quote, ledger),
+                            );
+                            (reader, writer, ledger, warm, result)
                         })
                         .await
                         .map_err(|e| format!("TIR custodian slice worker failed: {e}"))?;
-                        let (reader, writer, result) = outcome;
+                        let (reader, writer, ledger, warmed, result) = outcome;
                         case.reader = reader;
                         case.writer = writer;
+                        case.ledger = Some(ledger);
+                        case.warm |= warmed;
                         match result {
-                            Ok((warmed, sealed)) => {
-                                case.warm |= warmed;
+                            Ok(sealed) => {
                                 if let Some(descriptor) = sealed {
                                     let entry = PalwTirPublicSealedV1 {
                                         claim: key.0,
@@ -714,8 +766,8 @@ impl PalwPanelService {
                     }
                     StepV1::Ready { key, snapshot, view, descriptor } => {
                         let queue = (key.0, PALW_TIR_PUBLIC_READY_ROUND_V1, true);
-                        if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                        if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
+                            || court_outbox.submitted_at(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                         {
                             return Ok(());
                         }
@@ -755,9 +807,9 @@ impl PalwPanelService {
                                 )?
                             }
                         };
-                        pending.push((queue.0, queue.1, queue.2, object));
-                        due.insert(queue, deadline);
-                        moved.insert(queue, now);
+                        court_outbox.push_pending((queue.0, queue.1, queue.2, object));
+                        court_outbox.set_due(queue, deadline);
+                        court_outbox.mark_submitted(queue, now);
                     }
                 }
                 Ok(())
@@ -989,14 +1041,12 @@ impl PalwPanelService {
         signer: PalwBondKeyV2,
         network_domain: Hash64,
         book: &mut PalwTirPublicCustodianBookV1,
-        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        due: &mut HashMap<(Hash64, u32, bool), u64>,
-        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        court_outbox: &mut CourtOutboxV1,
     ) -> Result<(), String> {
         let ours = |round: u32, responder: bool| responder && round == PALW_TIR_PUBLIC_RESPOND_ROUND_V1;
         if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_none() {
             book.responses_clear_v1();
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return Ok(());
         }
         let mut steps: Vec<ResponseStepV1> = Vec::new();
@@ -1118,10 +1168,10 @@ impl PalwPanelService {
         };
         if !armed {
             book.responses_clear_v1();
-            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            court_outbox.retain_pending(|(_, round, responder, _)| !ours(*round, *responder));
             return Ok(());
         }
-        pending.retain(|(demand, round, responder, _)| !ours(*round, *responder) || book.responses.contains_key(demand));
+        court_outbox.retain_pending(|(demand, round, responder, _)| !ours(*round, *responder) || book.responses.contains_key(demand));
         for step in steps {
             let result: Result<(), String> = async {
                 match step {
@@ -1171,8 +1221,9 @@ impl PalwPanelService {
                         let ordinal = response_move_ordinal_v1(&action);
                         // G-T5: a next move goes at once (its predecessor was accepted); only a re-send waits the replan span.
                         let resend = case.last_move == Some(ordinal);
-                        if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || (resend && moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA)))
+                        if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
+                            || (resend
+                                && court_outbox.submitted_at(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA)))
                         {
                             return Ok(());
                         }
@@ -1190,9 +1241,9 @@ impl PalwPanelService {
                         };
                         let object = signed_control_v1(self, network_domain, control)?;
                         let respond_until_daa = case.respond_until_daa;
-                        pending.push((queue.0, queue.1, queue.2, object));
-                        due.insert(queue, respond_until_daa.saturating_sub(1));
-                        moved.insert(queue, now);
+                        court_outbox.push_pending((queue.0, queue.1, queue.2, object));
+                        court_outbox.set_due(queue, respond_until_daa.saturating_sub(1));
+                        court_outbox.mark_submitted(queue, now);
                         if let Some(case) = book.responses.get_mut(&demand) {
                             case.last_move = Some(ordinal);
                         }
@@ -1212,6 +1263,7 @@ impl PalwPanelService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicWorkV1;
 
     fn descriptor(n: u64) -> PalwTirPublicPreparedDescriptorV1 {
         PalwTirPublicPreparedDescriptorV1 {
@@ -1304,5 +1356,160 @@ mod tests {
         assert!(third.physical.contains_key(&key), "the door at 700 is not irreversibly past at 700");
         third.retired_v1((Hash64::from_u64_word(9), Hash64::from_u64_word(9)), 701);
         assert!(!third.physical.contains_key(&key));
+    }
+
+    /// A cold reader that warms after `slices` quoted slices, and a writer that seals after `slices`; each slice quotes `io` bytes.
+    struct FakeReader {
+        slices: u64,
+        polled: u64,
+        io: u64,
+    }
+    struct FakeWriter {
+        slices: u64,
+        polled: u64,
+        io: u64,
+    }
+    fn quote(sequence: u64, io: u64, phase: u8) -> PalwTirPublicCaptureSliceV1 {
+        PalwTirPublicCaptureSliceV1 {
+            source_id: Hash64::from_u64_word(1),
+            request_id: Hash64::default(),
+            sequence,
+            phase,
+            cursor_id: Hash64::from_u64_word(100 + sequence),
+            work: kaspa_consensus_core::palw_backend::PalwTirPublicCaptureWorkV1 {
+                io_bytes: io,
+                hash_bytes: io,
+                ..Default::default()
+            },
+            resident_ram_bytes: 0,
+        }
+    }
+    impl PalwTirPublicCaptureReaderV1 for FakeReader {
+        fn prepared_descriptor_v1(&self) -> Option<&PalwTirPublicPreparedDescriptorV1> {
+            None
+        }
+        fn prepared_need_v1(&self) -> Result<kaspa_consensus_core::palw_backend::PalwTirPublicPreparedNeedV1, String> {
+            Err("unused".into())
+        }
+        fn begin_prepared_v1(&self, _: &Path, _: u64, _: u64) -> Result<Box<dyn PalwTirPublicPreparedWriterV1>, String> {
+            Err("unused".into())
+        }
+        fn slice_quote_v1(&self, _: &PalwTirPublicRequestV1) -> Result<PalwTirPublicCaptureSliceV1, String> {
+            Ok(quote(self.polled, self.io, 1))
+        }
+        fn progress_v1(&self) -> kaspa_consensus_core::palw_backend::PalwTirPublicCaptureProgressV1 {
+            Default::default()
+        }
+        fn poll_quoted_v1(
+            &mut self,
+            _: &PalwTirPublicRequestV1,
+            q: &PalwTirPublicCaptureSliceV1,
+        ) -> Result<Option<kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicResponseV1>, String> {
+            assert_eq!(q.sequence, self.polled, "slices run in order");
+            self.polled += 1;
+            Ok((self.polled == self.slices).then(|| kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicResponseV1::Ids {
+                rows_root: Hash64::default(),
+                ids: vec![],
+            }))
+        }
+        fn poll_v1(
+            &mut self,
+            _: &PalwTirPublicRequestV1,
+        ) -> Result<Option<kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicResponseV1>, String> {
+            Err("unused".into())
+        }
+    }
+    impl PalwTirPublicPreparedWriterV1 for FakeWriter {
+        fn slice_quote_v1(&self) -> Result<PalwTirPublicCaptureSliceV1, String> {
+            Ok(quote(self.polled, self.io, 12))
+        }
+        fn progress_v1(&self) -> kaspa_consensus_core::palw_backend::PalwTirPublicCaptureProgressV1 {
+            Default::default()
+        }
+        fn poll_quoted_v1(&mut self, q: &PalwTirPublicCaptureSliceV1) -> Result<Option<PalwTirPublicPreparedDescriptorV1>, String> {
+            assert_eq!(q.sequence, self.polled);
+            self.polled += 1;
+            Ok((self.polled == self.slices).then(|| descriptor(1)))
+        }
+    }
+
+    /// **The custodian's pass loop runs a whole preparation pass under ONE accepted permit** (audit §10/§11): the cold capture's
+    /// slices until the reader warms (the step then yields, the writer begins next tick with no new debit), then the publication's
+    /// slices until it seals — `PALW_TIR_PUBLIC_SLICES_PER_STEP_V1` slices a step, every slice charged (quoted work + the fixed
+    /// overhead) to the pass's one budget, and a budget the pass outruns fails closed (no slice runs uncharged).
+    #[test]
+    fn one_permit_funds_a_whole_preparation_pass_across_run_steps_and_fails_closed_past_its_budget() {
+        use kaspa_consensus_core::palw_tir_frame_cost_v1::{tir_public_pass_budget_v1, tir_public_slice_work_v1};
+        let charge = |ledger: &mut (PalwTirPublicWorkV1, PalwTirPublicWorkV1, u64), q: &PalwTirPublicCaptureSliceV1| {
+            let next = ledger.1.checked_add_v1(PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1)?.checked_add_v1(tir_public_slice_work_v1(q)?)?;
+            let mut fit = next;
+            fit.attempts = ledger.0.attempts;
+            if !ledger.0.covers_v1(&fit) {
+                return Err("TIR cumulative local operational work is exhausted".to_string());
+            }
+            ledger.1 = next;
+            ledger.2 += 1;
+            Ok(())
+        };
+        let run = |budget: PalwTirPublicWorkV1, capture: u64, publication: u64| {
+            let mut reader = FakeReader { slices: capture, polled: 0, io: 4_096 };
+            let mut writer = FakeWriter { slices: publication, polled: 0, io: 16_384 };
+            let mut ledger = (budget, PalwTirPublicWorkV1::default(), 0u64);
+            let mut warm = false;
+            let mut steps = 0u64;
+            let mut writer_open = false;
+            loop {
+                steps += 1;
+                assert!(steps < 1_000, "the pass ends");
+                let w: Option<&mut (dyn PalwTirPublicPreparedWriterV1 + 'static)> = if writer_open { Some(&mut writer) } else { None };
+                let r: Option<&mut (dyn PalwTirPublicCaptureReaderV1 + 'static)> = Some(&mut reader);
+                match run_pass_slices_v1(
+                    &mut warm,
+                    r,
+                    w,
+                    PALW_TIR_PUBLIC_SLICES_PER_STEP_V1,
+                    &mut ledger,
+                    |l, reader, q| {
+                        charge(l, q)?;
+                        Ok(reader.poll_quoted_v1(&PalwTirPublicRequestV1::StepLeaf { index: 0 }, q)?.is_some())
+                    },
+                    |l, writer, q| {
+                        charge(l, q)?;
+                        writer.poll_quoted_v1(q)
+                    },
+                ) {
+                    Ok(Some(descriptor)) => return Ok((descriptor, ledger.2, steps)),
+                    Ok(None) => {
+                        // The tick's Begin step: once warm, the writer opens (no debit).
+                        if warm {
+                            writer_open = true;
+                        }
+                    }
+                    Err(why) => return Err((why, ledger.2)),
+                }
+            }
+        };
+        // A lane bought for two passes; the pass's ONE debit is half of it.
+        let lane = PalwTirPublicWorkV1 {
+            attempts: 4,
+            io_bytes: 2 * (300 * 4_096 + 20 * 16_384),
+            hash_bytes: 2 * (300 * (4_096 + 8_192) + 20 * (16_384 + 8_192)),
+            parser_steps: 2 * (300 * (16 * 4_096 + 1_024) + 20 * (16 * 16_384 + 1_024)),
+            ..Default::default()
+        };
+        let budget = tir_public_pass_budget_v1(lane, 2).unwrap();
+        assert_eq!(budget.attempts, 1, "one grant");
+        // 300 capture slices + 20 publication slices: five Run steps of the capture (the last ends at the warm), one of the publication.
+        let (descriptor, slices, steps) = run(budget, 300, 20).expect("the pass seals under its one permit");
+        assert_eq!(descriptor, descriptor_v1_seal());
+        assert_eq!(slices, 320, "every slice charged once");
+        assert_eq!(steps, 300u64.div_ceil(PALW_TIR_PUBLIC_SLICES_PER_STEP_V1 as u64) + 1, "steps of at most the per-step slices");
+        // A pass that outruns its debit fails closed at the first uncovered slice — it never runs uncharged.
+        let (why, slices): (String, u64) = run(budget, 301, 20).expect_err("past the budget");
+        assert!(why.contains("exhausted"), "{why}");
+        assert_eq!(slices, 301 + 19, "the slices before the uncovered one ran, charged; the uncovered one never ran");
+    }
+    fn descriptor_v1_seal() -> PalwTirPublicPreparedDescriptorV1 {
+        descriptor(1)
     }
 }

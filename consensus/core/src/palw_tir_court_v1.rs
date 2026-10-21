@@ -309,6 +309,78 @@ pub trait PalwTirEvidenceStoreV1 {
     }
 }
 
+
+/// Test-only observation of unchanged builder store calls; never a custody certificate.
+#[cfg(test)]
+pub(crate) struct ObservedEvidenceStoreV1<'a> {
+    pub inner: &'a dyn PalwTirEvidenceStoreV1,
+    pub calls: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    pub deny: Option<&'static str>,
+}
+#[cfg(test)]
+impl PalwTirEvidenceStoreV1 for ObservedEvidenceStoreV1<'_> {
+    fn begin_builder_move_v1(&self) { self.inner.begin_builder_move_v1(); }
+    fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
+        self.calls.borrow_mut().insert(format!("step_leaf({:?})" ,index));
+        if self.deny == Some("step_leaf") { return None; }
+        self.inner.step_leaf(index)
+    }
+    fn step_opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
+        self.calls.borrow_mut().insert(format!("step_opening({:?})" ,index));
+        if self.deny == Some("step_opening") { return None; }
+        self.inner.step_opening(index)
+    }
+    fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>> {
+        self.calls.borrow_mut().insert(format!("step_range_siblings({:?},{:?})" ,first,count));
+        if self.deny == Some("step_range_siblings") { return None; }
+        self.inner.step_range_siblings(first,count)
+    }
+    fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
+        self.calls.borrow_mut().insert(format!("param_opening({:?})" ,leaf));
+        if self.deny == Some("param_opening") { return None; }
+        self.inner.param_opening(leaf)
+    }
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1>  {
+        self.calls.borrow_mut().insert(format!("param_multiproof({:?})" ,leaves));
+        if self.deny == Some("param_multiproof") { return None; }
+        self.inner.param_multiproof(leaves)
+    }
+    fn param_carriage(&self, leaves: &[u32]) -> Option<PalwTirParamOpeningV1>  {
+        self.calls.borrow_mut().insert(format!("param_carriage({:?})" ,leaves));
+        if self.deny == Some("param_carriage") { return None; }
+        self.inner.param_carriage(leaves)
+    }
+    fn prompt_token_ids(&self) -> Option<Vec<u32>> {
+        self.calls.borrow_mut().insert(format!("prompt_token_ids()"));
+        if self.deny == Some("prompt_token_ids") { return None; }
+        self.inner.prompt_token_ids()
+    }
+    fn prompt_ids_opening(&self, tile: u32) -> Option<PalwPromptIdsOpeningV1> {
+        self.calls.borrow_mut().insert(format!("prompt_ids_opening({:?})" ,tile));
+        if self.deny == Some("prompt_ids_opening") { return None; }
+        self.inner.prompt_ids_opening(tile)
+    }
+    fn decode_pin(&self) -> Option<PalwDecodeTokenPinV1> {
+        self.calls.borrow_mut().insert(format!("decode_pin()"));
+        if self.deny == Some("decode_pin") { return None; }
+        self.inner.decode_pin()
+    }
+    fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1>  {
+        self.calls.borrow_mut().insert(format!("row_pin({:?},{:?})" ,row,lane));
+        if self.deny == Some("row_pin") { return None; }
+        self.inner.row_pin(row,lane)
+    }
+    fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)>  {
+        self.calls.borrow_mut().insert(format!("step_node({:?},{:?})" ,level,index));
+        if self.deny == Some("step_node") { return None; }
+        self.inner.step_node(level,index)
+    }
+    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)>  {
+        self.calls.borrow_mut().insert(format!("row_node({:?},{:?})" ,level,index));
+        if self.deny == Some("row_node") { return None; }
+        self.inner.row_node(level,index)
+    }
+}
 /// Why a builder could not build a refutation.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwTirEvidenceErrorV1 {
@@ -1021,14 +1093,95 @@ fn check_opened_leaves(
         if *index >= count {
             return Err(bad("the artifact multiproof names no leaf"));
         }
-        let (param, layer, start, len) = inventory.piece_of(base + *index).ok_or(bad("the artifact multiproof names no leaf"))?;
-        let d = v.space.program.params.get(param as usize).ok_or(bad("the artifact multiproof names no leaf"))?;
-        if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize
-        {
-            return Err(bad("an opened operand is not its leaf's canonical piece"));
-        }
+        check_inventory_operand_v1(&v.space.program, inventory, base + *index, operand)?;
     }
     Ok(())
+}
+
+/// One canonical piece predicate shared by legacy multiproofs and prospective material input.
+fn check_inventory_operand_v1(
+    program: &TirProgramV1,
+    inventory: &PalwTirInventoryIndexV1,
+    leaf: u32,
+    operand: &crate::palw_artifact::PalwArtifactOperandV1,
+) -> Result<(), PalwStepRefuteError> {
+    let (param, layer, start, len) = inventory.piece_of(leaf).ok_or(bad("the artifact multiproof names no leaf"))?;
+    let d = program.params.get(param as usize).ok_or(bad("the artifact multiproof names no leaf"))?;
+    if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize {
+        return Err(bad("an opened operand is not its leaf's canonical piece"));
+    }
+    Ok(())
+}
+
+/// Read-only single-root inventory verifier, not an admission or custody capability.
+/// The caller must resolve the validated registered program/root from the actual original.
+/// Construction allocates the existing inventory index; its native resource admission is separate.
+/// No peer decoder, state writer, fallback store, new composite/media path or credit is introduced.
+/// Successful checks authenticate data identity and canonical geometry only, never computation.
+pub(crate) struct TirInventoryOpeningVerifierV1<'a> {
+    program: &'a TirProgramV1,
+    inventory: PalwTirInventoryIndexV1,
+    root: Hash64,
+}
+impl<'a> TirInventoryOpeningVerifierV1<'a> {
+    /// Concrete allocation envelope for both existing param-instance analysis passes
+    /// and the retained index. Derived from actual program readers/layers, not codec size.
+    pub(crate) fn index_requests(program: &TirProgramV1) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, btree_node_envelope_bytes_v1};
+        let mut q = TirNativeRequestsV1::new();
+        let count = program.params.len() as u64;
+        q.exact_v1::<ParamIndexV1>(count)?;
+        // leaf_count_prefix and index construction each call param_instances.
+        for _ in 0..2 {
+            q.exact_v1::<BTreeSet<u8>>(count)?;
+            q.vec_v1::<Vec<Option<u16>>>(count)?;
+            for (j, param) in program.params.iter().enumerate() {
+                let reads = |block: usize| program.blocks[block].nodes.iter().any(|n|
+                    n.inputs.iter().any(|r| matches!(r, misaka_palw_tir::Ref::Param(k) if usize::from(*k) == j)));
+                let readers = (0..program.blocks.len()).filter(|b| reads(*b)).count() as u64;
+                q.add_v1(TirNativeRequestsV1::product_v1(readers, btree_node_envelope_bytes_v1::<u8, ()>() as u64)?)?;
+                if param.per_layer {
+                    let layers = program.schedule.layers.iter().filter(|k| program.blocks.get(usize::from(**k)).is_some() && reads(usize::from(**k))).count();
+                    q.vec_v1::<Option<u16>>(layers as u64)?;
+                } else { q.exact_v1::<Option<u16>>(1)?; }
+            }
+        }
+        Ok(q.bytes_v1())
+    }
+    pub(crate) fn new(program: &'a TirProgramV1, root: Hash64) -> Option<Self> {
+        Some(Self { program, inventory: PalwTirInventoryIndexV1::new(program)?, root })
+    }
+    /// Exact existing Borsh width for one requested native inventory coordinate.
+    fn opening_bytes(&self, leaf: u32) -> Result<u64, String> {
+        let (param, layer, _, len) = self.inventory.piece_of(leaf).ok_or("parameter coordinate outside inventory")?;
+        let name = &self.program.params.get(usize::from(param)).ok_or("parameter declaration absent")?.name;
+        let path = palw_artifact_opening_path_len_v1(self.inventory.leaf_count(), leaf).ok_or("parameter path not derivable")?;
+        palw_artifact_operand_borsh_len_v1(name.len(), layer.is_some(), len as usize)
+            .checked_add(12).and_then(|n| path.checked_mul(64).and_then(|p| n.checked_add(p)))
+            .ok_or_else(|| "parameter opening byte count overflow".into())
+    }
+    /// Native bounded read: always preflight and reserve nested ownership before Borsh allocation.
+    /// The returned owner is authenticated data only, not a paid/custody/availability certificate.
+    pub(crate) fn decode(&self, leaf: u32, bytes: &[u8])
+        -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwArtifactOpeningV1>, String> {
+        use crate::palw_native_resource_v1::{preflight_native_value_v1, reserve_native_requests_v1, NativeRetainedV1};
+        if bytes.len() as u64 != self.opening_bytes(leaf)? { return Err("parameter opening exceeds exact coordinate width".into()); }
+        let shape = preflight_native_value_v1::<PalwArtifactOpeningV1>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+        let lease = reserve_native_requests_v1(shape.logical_requests_v1()).map_err(|e| e.to_string())?;
+        let opening: PalwArtifactOpeningV1 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
+        if opening.leaf_index != leaf { return Err("parameter opening substitutes requested coordinate".into()); }
+        self.check(&opening).map_err(|e| e.to_string())?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(opening, lease))
+    }
+    /// Checks borrowed material without cloning its payload, paths or program.
+    pub(crate) fn check(&self, opening: &PalwArtifactOpeningV1) -> Result<(), PalwStepRefuteError> {
+        if opening.leaf_count != self.inventory.leaf_count() {
+            return Err(bad("the artifact opening is of another inventory"));
+        }
+        check_inventory_operand_v1(self.program, &self.inventory, opening.leaf_index, &opening.operand)?;
+        crate::palw_artifact::verify_artifact_opening_v1(opening, self.root)
+            .map_err(|_| bad("the artifact opening does not reach the class's root"))
+    }
 }
 
 /// **How an IR close carries its parameter openings** — the parameter of
@@ -3539,10 +3692,15 @@ pub(crate) mod test_support {
     }
 
     fn program_and_params() -> (TirProgramV1, MapParams) {
-        let mut pb = ProgramBuilder::new(8, HISTORY_BOUND_V1_SMALL);
-        let embed = pb.param("embed", DType::I8, &[8, 4], false);
+        program_and_params_with_vocab(8)
+    }
+
+    /// [`program_and_params`] over a `vocab`-word vocabulary (the logits node's leaf holds `min(vocab, 4096)` lanes).
+    fn program_and_params_with_vocab(vocab: usize) -> (TirProgramV1, MapParams) {
+        let mut pb = ProgramBuilder::new(vocab as u32, HISTORY_BOUND_V1_SMALL);
+        let embed = pb.param("embed", DType::I8, &[vocab as u32, 4], false);
         let w = pb.param("w", DType::I8, &[4, 4], true);
-        let head = pb.param("head", DType::I8, &[8, 4], false);
+        let head = pb.param("head", DType::I8, &[vocab as u32, 4], false);
         let sum = pb.fixed_state("sum", DType::I32, &[4], -1000, 1000, true);
         let carry = vec![TensorType::fixed(DType::I32, &[4])];
         let pre = {
@@ -3565,7 +3723,7 @@ pub(crate) mod test_support {
             let x = b.reshape_fixed(Ref::CarryIn(0), &[4, 1]);
             let l = b.matmul(head, x, DType::I64);
             let l = b.clamp(l, i32::MIN as i64, i32::MAX as i64, DType::I32);
-            let l = b.reshape_fixed(l, &[8]);
+            let l = b.reshape_fixed(l, &[vocab as u32]);
             let l = b.commit(l);
             let Ref::Node(i) = l else { unreachable!() };
             (b.finish(&[]), i)
@@ -3574,9 +3732,9 @@ pub(crate) mod test_support {
         program.logits_scheme_id.copy_from_slice(crate::palw_step_refute::tiled_logits_scheme_id_v1().as_byte_slice());
         let mut params = MapParams::default();
         let fill = |n: usize, k: i128| (0..n as i128).map(|i| ((i * 37 + k) % 255) - 127).collect::<Vec<_>>();
-        params.tensors.insert((0, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 5)).unwrap());
+        params.tensors.insert((0, None), Tensor::new(DType::I8, vec![vocab, 4], fill(vocab * 4, 5)).unwrap());
         params.tensors.insert((1, Some(0)), Tensor::new(DType::I8, vec![4, 4], fill(16, 11)).unwrap());
-        params.tensors.insert((2, None), Tensor::new(DType::I8, vec![8, 4], fill(32, 17)).unwrap());
+        params.tensors.insert((2, None), Tensor::new(DType::I8, vec![vocab, 4], fill(vocab * 4, 17)).unwrap());
         (program, params)
     }
 
@@ -3647,7 +3805,42 @@ pub(crate) mod test_support {
         forge: Option<(usize, usize)>,
         select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
     ) -> TinyExecution {
-        let (program, params) = program_and_params();
+        tiny_execution_selecting_in_vocab(ctx_of, forge, select, 8)
+    }
+
+    /// **The tiny class over a 4,096-word vocabulary** — the same program, its logits leaf a full 4,096-lane (16 KiB) tile: a
+    /// genuinely computed wide leaf for the acquisition's multi-part fixtures (G14 audit §11 (a) bounds every answer by the
+    /// job's ACTUAL leaves, so a part-spanning leaf has to be a real one). Returns the execution and that leaf's index.
+    /// Test-only wider class through the same execution/commitment builder.
+    pub(crate) fn tiny_execution_selecting_wide_in(
+        ctx_of: impl FnOnce(&PalwTirClassV1,Hash64,&[u32])->PalwJobContextV2,
+        forge:Option<(usize,usize)>,select:&dyn Fn(u32,&[i32],&[u32])->u32,
+    )->TinyExecution {tiny_execution_selecting_in_vocab(ctx_of,forge,select,4096)}
+    pub(crate) fn tiny_execution_wide() -> (TinyExecution, u64) {
+        let x = tiny_execution_selecting_in_vocab(
+            |class, class_id, prompt| {
+                let mut ctx = tiny_execution(None).binding.job_context;
+                ctx.shape_profile_id = class_id;
+                ctx.tokenizer_id = class.tokenizer_id;
+                ctx.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(prompt);
+                ctx
+            },
+            None,
+            &|_, row, _| base0_decode_token_select_v1(row) as u32,
+            4096,
+        );
+        let wide = (0..x.preimages.len()).max_by_key(|i| (x.preimages[*i].values_le.len(), usize::MAX - *i)).unwrap() as u64;
+        assert_eq!(x.preimages[wide as usize].values_le.len(), 4 * 4096, "the logits leaf is a full tile");
+        (x, wide)
+    }
+
+    pub(crate) fn tiny_execution_selecting_in_vocab(
+        ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
+        forge: Option<(usize, usize)>,
+        select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
+        vocab: usize,
+    ) -> TinyExecution {
+        let (program, params) = program_and_params_with_vocab(vocab);
         let bytes = program.encode();
         let class = PalwTirClassV1 {
             version: PALW_TIR_CLASS_VERSION_V1,
@@ -4295,5 +4488,83 @@ mod da_tests {
             &narrow.step_merkle_root,
         );
         assert_eq!(fault(&narrow, &target_of(&narrow, anchor)), Err(PalwOffenceVerifyError::IdentityNotDerivable));
+    }
+}
+
+#[cfg(test)]
+mod inventory_material_tests {
+    use super::*;
+    use crate::palw_artifact::{artifact_leaf_v1, artifact_root_v1, open_artifact_leaf_v1, verify_artifact_opening_v1};
+
+    #[test]
+    fn single_openings_match_existing_native_multiproof_canonical_checks() {
+        let x = test_support::tiny_execution(None);
+        let program = x.binding.class.decode_program().unwrap();
+        let verifier = TirInventoryOpeningVerifierV1::new(&program, x.binding.artifact_root).unwrap();
+        let BindingOutcome::Verified(v) = check_binding(&x.binding).unwrap() else { panic!("honest fixture") };
+        let inventory = PalwTirInventoryIndexV1::new(&program).unwrap();
+        let retained_index_bytes = inventory.params.capacity() * std::mem::size_of::<ParamIndexV1>()
+            + inventory.params.iter().map(|p| p.layers.capacity() * std::mem::size_of::<Option<u16>>()).sum::<usize>();
+        assert!(TirInventoryOpeningVerifierV1::index_requests(&program).unwrap() >= retained_index_bytes as u64);
+        for leaf in 0..inventory.leaf_count() {
+            let opening = x.param_opening(leaf).unwrap();
+            verifier.check(&opening).unwrap();
+            let wire = borsh::to_vec(&opening).unwrap();
+            assert_eq!(verifier.opening_bytes(leaf).unwrap(), wire.len() as u64);
+            assert_eq!(*verifier.decode(leaf, &wire).unwrap(), opening);
+            for cut in [0, wire.len()/2, wire.len()-1] { assert!(verifier.decode(leaf, &wire[..cut]).is_err()); }
+            let mut extra = wire.clone(); extra.push(0); assert!(verifier.decode(leaf, &extra).is_err());
+            let mut huge_name = wire.clone(); huge_name[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(verifier.decode(leaf, &huge_name).is_err());
+            let body_prefix = 4 + opening.operand.tensor_name.len() + if opening.operand.layer.is_some() { 3 } else { 1 } + 4;
+            let mut huge_body = wire.clone(); huge_body[body_prefix..body_prefix+4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(verifier.decode(leaf, &huge_body).is_err());
+            let path_prefix = wire.len() - 64 * opening.path.len() - 4;
+            let mut huge_path = wire.clone(); huge_path[path_prefix..path_prefix+4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(verifier.decode(leaf, &huge_path).is_err());
+            assert!(verifier.decode(inventory.leaf_count(), &wire).is_err());
+            let next = (leaf + 1) % inventory.leaf_count();
+            assert!(verifier.decode(next, &wire).is_err());
+            let proof = palw_artifact_multiproof_from_openings_v1(&[opening.clone()]).unwrap();
+            let native = authenticate_params(&x.binding, &v, &inventory, &PalwTirParamOpeningV1::Single(proof)).unwrap();
+            assert_eq!(native.get(&leaf), Some(&(opening.operand.row_start, opening.operand.bytes.clone())));
+            let mut bad_path = opening.clone(); bad_path.path.push(Hash64::from_bytes([0; 64]));
+            assert!(verifier.check(&bad_path).is_err());
+            let mut bad_index = opening; bad_index.leaf_index = inventory.leaf_count();
+            assert!(verifier.check(&bad_index).is_err());
+        }
+        assert!(inventory.leaf_count() > 1);
+        let mut other_root = [0u8; 64];
+        other_root.copy_from_slice(x.binding.artifact_root.as_byte_slice()); other_root[0] ^= 1;
+        let other_root = Hash64::from_bytes(other_root);
+        let other = TirInventoryOpeningVerifierV1::new(&program, other_root).unwrap();
+        assert!(other.check(&x.param_opening(0).unwrap()).is_err());
+    }
+
+    #[test]
+    fn root_membership_cannot_replace_registered_inventory_geometry() {
+        let x = test_support::tiny_execution(None);
+        let program = x.binding.class.decode_program().unwrap();
+        for mutation in 0..5 {
+            let mut ops = x.ops.clone();
+            match mutation {
+                0 => ops[0].tensor_name.push('!'),
+                1 => ops[0].layer = Some(u16::MAX),
+                2 => ops[0].row_start += 1,
+                3 => { ops[0].bytes.pop().unwrap(); },
+                4 => ops.push(ops[0].clone()),
+                _ => unreachable!(),
+            }
+            let root = artifact_root_v1(&ops.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).unwrap();
+            let opening = open_artifact_leaf_v1(&ops, 0).unwrap();
+            // The hostile inventory really authenticates to its supplied root.
+            verify_artifact_opening_v1(&opening, root).unwrap();
+            let verifier = TirInventoryOpeningVerifierV1::new(&program, root).unwrap();
+            assert!(verifier.check(&opening).is_err(), "geometry mutation {mutation}");
+        }
+        let opening = x.param_opening(0).unwrap();
+        let mut other_program = program.clone(); other_program.params[0].name.push('!');
+        let other = TirInventoryOpeningVerifierV1::new(&other_program, x.binding.artifact_root).unwrap();
+        assert!(other.check(&opening).is_err());
     }
 }

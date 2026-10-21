@@ -887,6 +887,10 @@ mod tests {
                 params.palw_paid_claim_trap_v1 = Some(at);
                 params.sync_palw_paid_claim_trap_v1();
             }
+            "palw_native_liability_horizon_v1" => {
+                params.palw_native_liability_horizon_v1 = Some(at);
+                params.sync_palw_native_liability_horizon_v1();
+            }
             "palw_paid_consumer_lifecycle_v1" => {
                 params.palw_paid_consumer_lifecycle_v1 = Some(crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1 {
                     activation: at,
@@ -976,7 +980,16 @@ mod tests {
             // The cross-lane G14 gates: bare heights, refused when armed by `validate_palw_v2` (no pinned record); the probe does not validate.
             "palw_g14_route_required_v1" => params.palw_g14_route_required_v1 = Some(at),
             "palw_reward_liability_horizon_v1" => params.palw_reward_liability_horizon_v1 = Some(at),
+            // The court-capacity fence: a height with the placeholder policy, refused when armed by `validate_palw_v2`.
+            "palw_court_capacity_v1" => {
+                params.palw_court_capacity_v1 = Some(crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1::placeholder_at(at))
+            }
+            "palw_court_transport_v1" => {
+                params.palw_court_transport_v1 = Some(crate::palw_court_transport_v1::PalwCourtTransportFenceV1::unapproved_probe_at(at))
+            }
             // RFC-0016's two dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_unresolved_bound_v1" => params.palw_unresolved_bound_v1 = Some(at),
+            "palw_claim_local_settlement_v1" => params.palw_claim_local_settlement_v1 = Some(at),
             "palw_model_block_rights_v1" => params.palw_model_block_rights_v1 = Some(at),
             "palw_elastic_final_capacity_v1" => params.palw_elastic_final_capacity_v1 = Some(at),
             // RFC-0017's model eligibility: a bare height, refused when armed by `validate_palw_v2`.
@@ -984,6 +997,10 @@ mod tests {
             // ADR-0179's model tiers: the design values and empty lists, refused when armed by `validate_palw_v2`.
             "palw_model_tier_v1" => {
                 params.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(at));
+            }
+            // G14's per-class detection policy: the height with no policy, refused when armed by `validate_palw_v2`.
+            "palw_detection_policy_v1" => {
+                params.palw_detection_policy_v1 = Some(crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1::at(at));
             }
             // RFC-0018's five dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_dag_sibling_attribution_v1" => params.palw_dag_sibling_attribution_v1 = Some(at),

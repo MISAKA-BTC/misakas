@@ -252,12 +252,28 @@ impl PalwChainStateV2 {
     /// bundle lists as unanswerable (the 2M row) keeps the mercy, and below the fence this is v1.
     pub(crate) fn court_root_evidence_is_buildable_v2(
         &self,
-        class_id: &Hash64,
+        claim: &PalwClaimStateV2,
         offence_attribution_active: bool,
         params: &PalwStateParamsV2,
     ) -> bool {
-        self.court_root_evidence_is_buildable_v1(class_id)
-            || (offence_attribution_active && !params.held_class_is_unanswerable_v1(class_id))
+        self.court_root_evidence_is_buildable_v1(&claim.class_id)
+            || (offence_attribution_active && !self.held_claim_is_unanswerable_v2(params, claim))
+    }
+
+    /// Keep pre-fence claims on their original mercy reading. Only a claim
+    /// accepted under the memory/routing court reads the new held route from its
+    /// immutable registered profile. Missing held profile data fails closed.
+    pub fn held_claim_is_unanswerable_v2(&self, params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
+        if !params.memory_routing_court_from_daa().is_some_and(|at| claim.accepted_daa >= at) {
+            return params.held_class_is_unanswerable_v1(&claim.class_id);
+        }
+        match self.fp_work_profile_of(&claim.class_id) {
+            Some(profile) if profile.shape_profile_id() == claim.class_id => {
+                crate::palw_class_admission_v2::palw_held_class_unanswerable_v2(profile, true).is_some()
+            }
+            Some(_) => true,
+            None => params.held_class_is_unanswerable_v1(&claim.class_id) || self.class_is_held_v1(&claim.class_id),
+        }
     }
 
     /// ADR-0071 SA-3: the production fact recorded under `key`, if the chain holds one.
@@ -1459,6 +1475,7 @@ impl PalwChainStateV2 {
     pub fn palw_accusation_pending_v1(&self, claim_id: &Hash64) -> bool {
         // Lane LG14-A: a live dispute reservation is a pending accusation (empty below `palw_legacy_public_filer_v1`).
         self.palw_legacy_dispute_holds_v1(claim_id)
+            || self.court_service_holds_claim_v1(claim_id)
             || self.da_claims.get(claim_id).is_some_and(|record| record.open_sessions() > 0)
             || self.open_courts_by_claim.get(claim_id).is_some_and(|open| *open > 0)
             || matches!(self.claims.get(claim_id).map(|claim| &claim.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
@@ -1868,6 +1885,15 @@ impl PalwChainStateV2 {
         self.model_lifecycles.insert(class_id, row);
     }
 
+    /// RFC-0023 tests: put a claim into / take it out of the unresolved index (the fold keeps it in lockstep with every claim write).
+    #[cfg(test)]
+    pub(crate) fn set_unresolved_for_tests(&mut self, blue_score: u64, claim_id: Hash64, open: bool) {
+        if open {
+            self.unresolved.insert((blue_score, claim_id));
+        } else {
+            self.unresolved.remove(&(blue_score, claim_id));
+        }
+    }
     /// Tests only: the rows ADR-0152 v2's adjudicator resolves a false-Valid target from — a
     /// claim, its bound panel, its liability row — and the session indices that make it wait, for
     /// `palw_offence_attribution_v1`'s tests, which judge evidence against state without folding a
@@ -2612,6 +2638,10 @@ impl PalwChainStateV2 {
 
     /// **RFC-0018 §7.7**: the accepted blue score of the oldest unresolved claim (`None`: nothing unresolved) — the pruning-progress
     /// rule's first bound.
+    /// The open claims in acceptance order (`(accepted blue score, claim)`), for RFC-0023 stage 1's resolved prefix.
+    pub fn unresolved_iter(&self) -> impl Iterator<Item = (u64, &Hash64)> + '_ {
+        self.unresolved.iter().map(|(blue_score, id)| (*blue_score, id))
+    }
     pub fn unresolved_first_blue_score_v1(&self) -> Option<u64> {
         self.unresolved.iter().next().map(|(blue_score, _)| *blue_score)
     }
@@ -3240,6 +3270,7 @@ impl PalwChainStateV2 {
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;
+        self.assert_claim_local_context_v1(params)?;
         self.assert_material_release_recovery_consistency_v2(params)?;
         self.assert_mesh_consistency_v1()?;
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.
@@ -3853,6 +3884,28 @@ impl PalwChainStateV2 {
             return Err(PalwStateV2Error::CarriageInconsistent("artifact inventory owner index differs from paid attempts".into()));
         }
         self.assert_tir_acquisition_indices_v1()?;
+        if let Some(service) = self.court_service_state_v1() {
+            service.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
+        for row in self.staged_courts.values() {
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtDutyClock(clock) = row {
+                clock.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+            use crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 as R;
+            match row {
+                R::CourtSharedContext(c)=>c.check_context(self),
+                R::CourtSharedQuery(q)=>q.check_context(self),
+                R::CourtSharedIds(ids)=>ids.check_context(self),
+                R::CourtSharedResponse(r)=>r.check_context(self),
+                R::CourtEndArchive(r)=>r.check_loaded_context(self),
+                R::CourtCloseReceipt(r)=>r.check_loaded_context(self),
+                R::CourtSharedRoot(r)=>r.check_loaded_context(self),
+                R::CourtSharedRound(r)=>r.check_loaded_context(self),
+                R::CourtSharedBottom(r)=>r.check_loaded_context(self),
+                R::CourtSharedStream(s)=>s.check_context(self),
+                R::CourtSharedChunk(c)=>c.check_context(self),_=>Ok(()),
+            }.map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;
@@ -3872,7 +3925,7 @@ impl PalwChainStateV2 {
                 continue;
             }
             // Lane LG14-A: a claim a live dispute reservation holds owes none (DL-1's reservation row; empty below the fence).
-            if self.palw_legacy_dispute_holds_v1(id) {
+            if self.palw_legacy_dispute_holds_v1(id) || self.court_service_holds_claim_v1(id) {
                 continue;
             }
             // RFC-0010: the engine clocks a claim it tracks until the claim is licensed (it owes no V2 deadline).
@@ -4341,6 +4394,7 @@ impl PalwChainStateV2 {
         }
         let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
+            if self.court_service_holds_claim_v1(id) { continue; }
             let open_courts = self.open_courts_by_claim.get(id).copied().unwrap_or(0);
             match claim.phase {
                 PalwClaimPhaseV2::Provisional => {

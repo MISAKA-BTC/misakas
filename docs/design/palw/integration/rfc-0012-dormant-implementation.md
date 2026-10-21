@@ -260,3 +260,47 @@ fence); the legacy `safe` arm of `update_evm_canonical_heads` (below the fence o
 (pre-fence entitlements, settled once); `dns_params`/`dns_bft_gate` in `Params` and their fingerprint bytes (identity of the
 live presets); the validator workers and `misaka validator *` (t12 runs DNS-BFT until the fence); DNS seeders and peer
 discovery (unrelated to the finality overlay).
+
+## RFC12 observation tools — 2026-10-18 implementation in progress
+
+Validation merge 8478ec5dc supplies `getPalwAcceptanceReads` (wRPC op 246
+and gRPC), with `reserveBlocks` and `outpoints` arrays bounded to 64 entries
+each. It reports `known` reserve balances, point presence and the served sink
+and DAA. The Codex branch-only op214 was superseded at the merge. Error versus
+absence handling, known-zero history and atomic generation reads still need
+reconciliation with the stronger pre-merge controls; no merged-tip runtime
+acceptance is claimed here.
+
+The private paid-v4 node can create an exporter request from a live pinned
+header with these tooling-only flags (plus the usual private profile, salt,
+and optional retirement DAA):
+
+```text
+--private-probe-request-rpc=ws://127.0.0.1:PORT
+--private-probe-request-block=PINNED_HEADER_HASH
+--private-probe-request-spec=SPEC_JSON
+--private-probe-request-inputs=PRODUCER_INPUTS_BORSH
+--private-probe-generate-paid-request=NEW_REQUEST_BORSH
+```
+
+The JSON spec supplies `baseJob`, `paidClass`, `paidJob`, `materialConsent`,
+`notBeforeDaa`, `salt`, and `producerCard`. Producer inputs use
+`NativePaidProducerInputsV3`; their allocation preflight is shared with the
+existing V4 exporter. The generator checks the node's genesis and parameter
+identity, downloads bounded carriage pages, verifies their canonical state
+against the caller-pinned header under its own exact private ruleset, and
+creates a new mode-0600 V4 request. It does not create missing jobs, approvals,
+receipts, or Panel membership. The driver pins `{REQUEST_BLOCK}` from a generation-bracketed live read before
+invoking the request command, and gives each paid-work cycle its own `{WORK_DIR}`.
+
+The canonical validation CLI is `misaka evm refund --outpoint=TXID:INDEX
+--key-file=KEY [--fee=SOMPI] [--yes]`. First-party acceptance wiring requires the plan destination to match that
+original owner; script-engine controls are being verified after the merge. Normal admission
+resolves a raced spend or claim.
+
+The validation private-integration build contains eight literal import crash
+rendezvous. The operator must arm an owned directory after genesis, wait for
+the exact marker, SIGKILL the owned child, clear arming, then reopen. The
+acceptance driver arms those exact markers in an owned import process.
+Pre-merge sixteen-stage controls do not describe this merged node. Full
+acceptance and independent reserve accrual/drip reconciliation remain open.

@@ -1,0 +1,334 @@
+diff --git a/consensus/core/src/palw_court_tir_requests_v1.rs b/consensus/core/src/palw_court_tir_requests_v1.rs
+index e84f69e3d..4cd7b13cf 100644
+--- a/consensus/core/src/palw_court_tir_requests_v1.rs
++++ b/consensus/core/src/palw_court_tir_requests_v1.rs
+@@ -97,6 +97,46 @@ impl<'a> TirSharedRequestSetV1<'a> {
+     }
+     pub fn source_id(&self) -> Hash64 { self.source.source_id_v1() }
+     pub fn decode_count(&self) -> u32 { self.source.decode_count_v1() }
++    /// Original-wide numerical topology beside the complete source universe.
++    /// Native court/demand rules must be supplied by the authenticated caller;
++    /// this does not price terminal witnesses or create service packets.
++    pub fn numerical_tree_upper(&self,
++        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
++        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
++        court: &crate::palw_mode_v2::PalwCourtParamsV2,
++        demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
++    ) -> Result<crate::palw_tir_public_source_v1::numerical_inventory_v1::TirPublicNumericalInventoryV1, String> {
++        self.source.numerical_tree_upper_v1(registered, layout, court, demand)
++    }
++    /// All distinct producer-signed numerical disclosures, including actual new
++    /// DTO framing and every path byte. Roots and terminal witnesses remain
++    /// separate unfinished costs. This creates no packet or funded admission.
++    pub fn numerical_disclosure_transport_upper(&self,
++        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
++        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
++        court: &crate::palw_mode_v2::PalwCourtParamsV2,
++        demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
++    ) -> Result<TirSharedNumericalTransportUpperV1, String> {
++        let numerical = self.numerical_tree_upper(registered, layout, court, demand)?;
++        let empty = crate::palw_tir_dissect_v1::PalwTirDissectRoundV1 {version:1, children:Vec::new()};
++        let empty_body = borsh::object_length(&empty).map_err(|e|e.to_string())? as u64;
++        // Unsent fixed-width serialization exemplar, never an admitted control
++        // or asserted signature/hash. No signature/body buffer is allocated.
++        let exemplar = crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1 {
++            version:1, claim:self.claim, leaf:0, root_id:self.source_id(), path:Vec::new(),
++            parent_id:self.source_id(), signer:self.producer, round:Box::new(empty), signature:Vec::new()};
++        let overhead = signed_wire_length(&exemplar)?.checked_sub(empty_body)
++            .ok_or("numerical disclosure framing underflow")?;
++        let tree = &numerical.trees;
++        let signed_bytes_upper = add(add(tree.round_body_bytes_upper,
++            mul(tree.disclosures, overhead)?)?, tree.disclosure_path_bytes)?;
++        let maximum_signed_bytes_upper = if tree.disclosures == 0 { 0 } else {
++            add(add(tree.max_round_body_bytes_upper, overhead)?,
++                u64::from(tree.max_depth.checked_sub(1).ok_or("numerical disclosure depth")?))?
++        };
++        Ok(TirSharedNumericalTransportUpperV1 {scope_id:self.scope_id()?, numerical,
++            signed_bytes_upper, maximum_signed_bytes_upper})
++    }
+     /// A conservative SUM for every legal source query, without enumerating the
+     /// O(N*256 + rows*tiles) universe. This is source data/parser/hash/RAM only,
+     /// NOT a full service graph, signature/IO/fee or physical capacity bound.
+@@ -205,6 +245,15 @@ fn signed_wire_length<T:borsh::BorshSerialize>(shape:&T)->Result<u64,String>{
+     add(borsh::object_length(shape).map_err(|e|e.to_string())? as u64,
+         crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64)
+ }
++/// Numerical disclosure transport only. No root/terminal/transaction wrapper,
++/// mass, execution/retention work, fee, reservation or admission capability.
++#[derive(Clone,Debug,PartialEq,Eq)]
++pub struct TirSharedNumericalTransportUpperV1 {
++    pub scope_id:Hash64,
++    pub numerical:crate::palw_tir_public_source_v1::numerical_inventory_v1::TirPublicNumericalInventoryV1,
++    pub signed_bytes_upper:u64,
++    pub maximum_signed_bytes_upper:u64,
++}
+ /// Derived envelope/control components for one original's distinct DATA states.
+ /// No transaction wrapper, payment, admission, duty or complete-cost capability.
+ #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index 864a27b0e..cd82600f2 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -2465,6 +2465,97 @@ mod conviction_e2e_tests {
+         assert!(owner_pending(frame, &state, target).3.is_some(), "relayed Finish authenticates the original body");
+     }
+ 
++    #[test]
++    fn original_wide_numerical_inventory_covers_every_native_eligible_leaf() {
++        use crate::palw_tir_dissect_v1 as d;
++        use crate::palw_tir_fence2_v1::PalwTirDemandRulesV1 as Demand;
++        let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
++        let source = fx.frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
++        let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(&fx.frame, &source, h(251)).unwrap();
++        let binding = &fx.execution.binding;
++        let space = crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&binding.class).unwrap();
++        let intervals = misaka_palw_tir::interval::analyze_ranges(&space.program).unwrap();
++        // Independent reference: every actual leaf at its original coordinate,
++        // then every actual native child range, with no grouped occurrence or
++        // history arithmetic from the implementation under test.
++        let sites: Vec<_> = (0..binding.step_leaf_count).filter_map(|i| {
++            let leaf = space.leaf_at(&binding.job_context, i).unwrap();
++            d::palw_tir_dissect_site_v1(&space, &intervals, &leaf).map(|s| (leaf, s))
++        }).collect();
++        assert!(!sites.is_empty());
++        assert!(sites.iter().map(|(l, _)| l.position).collect::<std::collections::BTreeSet<_>>().len() > 1);
++        let mut counts = Vec::new();
++        for arity in [2, 4, 8, 16, 32, 64] {
++            let mut reference = d::tree_inventory_v1::NumericalTreeInventoryV1::default();
++            let mut signed_reference = 0u64;
++            let mut maximum_signed_reference = 0u64;
++            for (leaf, site) in &sites {
++                let tiles = u64::from(site.history_positions.div_ceil(site.tile_positions));
++                let crate::palw_tir_step_v1::PalwTirLeafKindV1::Commit {block, node, ..} = leaf.kind else {panic!("site")};
++                let values = d::palw_tir_dissect_value_bound_v2(&space.program, &space.program.blocks[block as usize], node,
++                    space.commit_tile_len(block, node).unwrap(), Demand::H7) as usize;
++                let mut todo = vec![(0, tiles, 0u32)];
++                while let Some((first, n, depth)) = todo.pop() {
++                    reference.max_depth = reference.max_depth.max(depth);
++                    let children = crate::palw_attn_dissect::palw_attn_child_ranges_v1(first, n, arity).unwrap();
++                    if children.is_empty() { reference.terminals += 1; continue; }
++                    reference.disclosures += 1;
++                    reference.child_claims += children.len() as u64;
++                    reference.disclosure_path_bytes += u64::from(depth);
++                    // Unsent width exemplars: actual DTO serialization with
++                    // native count bounds, not purported valid math/signatures.
++                    let row = crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1 {
++                        version:1, claim:fx.frame.plan_v1().original_claim, leaf:leaf.index,
++                        root_id:source.source_id_v1(), path:vec![0; depth as usize], parent_id:source.source_id_v1(),
++                        signer:fx.frame.custody_v1().pledge_v1().producer,
++                        round:Box::new(d::PalwTirDissectRoundV1 {version:1, children:children.iter().map(|_| {
++                            let mut partials = vec![Vec::new(); site.reductions.len()];
++                            partials[0] = vec![0; values];
++                            d::PalwTirRangeClaimV1 {partials}
++                        }).collect()}),
++                        signature:vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
++                    };
++                    let bytes = borsh::to_vec(&row).unwrap().len() as u64;
++                    signed_reference += bytes;
++                    maximum_signed_reference = maximum_signed_reference.max(bytes);
++                    todo.extend(children.into_iter().map(|(f, c)| (f, c, depth + 1)));
++                }
++            }
++            let court = fx.rules.court.with_dissection_arity(arity).unwrap();
++            for demand in [Demand::Release2000, Demand::H7] {
++                let transport = set.numerical_disclosure_transport_upper(&fx.record, &fx.layout, &court, demand).unwrap();
++                assert_eq!(transport.scope_id, set.scope_id().unwrap());
++                if demand == Demand::H7 {
++                    assert_eq!(transport.signed_bytes_upper, signed_reference);
++                    assert!(transport.maximum_signed_bytes_upper >= maximum_signed_reference);
++                }
++                let actual = transport.numerical;
++                assert_eq!(actual.source_id, source.source_id_v1());
++                assert_eq!(actual.original_leaves, binding.step_leaf_count);
++                assert_eq!(actual.eligible_roots, sites.len() as u64);
++                assert_eq!(actual.arity, arity);
++                assert_eq!(actual.demand, demand);
++                assert_eq!(actual.trees.disclosures, reference.disclosures);
++                assert_eq!(actual.trees.terminals, reference.terminals);
++                assert_eq!(actual.trees.child_claims, reference.child_claims);
++                assert_eq!(actual.trees.disclosure_path_bytes, reference.disclosure_path_bytes);
++                assert_eq!(actual.trees.max_depth, reference.max_depth);
++                assert_eq!(actual.trees.child_claims + actual.eligible_roots,
++                    actual.trees.disclosures + actual.trees.terminals);
++                assert!(actual.trees.round_body_bytes_upper > 0);
++            }
++            counts.push((arity, reference.disclosures, reference.terminals));
++        }
++        eprintln!("original numerical inventory: original_leaves={} eligible_roots={} arity_disclosures_terminals={counts:?}",
++            binding.step_leaf_count, sites.len());
++        let mut wrong_layout = fx.layout.clone();
++        wrong_layout.h_tile *= 2;
++        assert!(set.numerical_tree_upper(&fx.record, &wrong_layout, &fx.rules.court, Demand::H7).is_err());
++        let mut wrong_record = fx.record.clone();
++        wrong_record.program = std::sync::Arc::new(vec![]);
++        assert!(set.numerical_tree_upper(&wrong_record, &fx.layout, &fx.rules.court, Demand::H7).is_err());
++    }
++
+     #[test]
+     fn shared_history_root_binds_public_original_policy_and_literal_producer_signature() {
+         use crate::palw_court_shared_tir_root_v1::*;
+diff --git a/consensus/core/src/palw_tir_public_source_v1.rs b/consensus/core/src/palw_tir_public_source_v1.rs
+index d005585a7..c9e1d13d5 100644
+--- a/consensus/core/src/palw_tir_public_source_v1.rs
++++ b/consensus/core/src/palw_tir_public_source_v1.rs
+@@ -7,6 +7,9 @@ use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
+ use borsh::{BorshDeserialize, BorshSerialize};
+ use std::io::{self, Read};
+ 
++#[path = "palw_tir_public_numerical_inventory_v1.rs"]
++pub mod numerical_inventory_v1;
++
+ pub const PALW_TIR_PUBLIC_FRONTIER_HASHES_V1: usize = 1024;
+ pub const PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1: u32 = 1024;
+ pub const PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1: u32 = crate::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1;
+diff --git a/consensus/core/src/palw_tir_public_numerical_inventory_v1.rs b/consensus/core/src/palw_tir_public_numerical_inventory_v1.rs
+new file mode 100644
+index 000000000..4d55bd24d
+--- /dev/null
++++ b/consensus/core/src/palw_tir_public_numerical_inventory_v1.rs
+@@ -0,0 +1,145 @@
++//! Original-wide numerical topology, not a complete service/funding profile.
++//! Reconstructs authenticated native geometry; no retained root or owner input.
++use super::PalwTirPublicSourceV1;
++use crate::{Hash64, palw_tir_dissect_v1 as d};
++use d::tree_inventory_v1::{NumericalTreeInventoryV1, numerical_tree_inventory_v1};
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct TirPublicNumericalInventoryV1 {
++    pub source_id: Hash64,
++    pub original_leaves: u64,
++    pub eligible_roots: u64,
++    pub arity: u8,
++    pub demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
++    pub trees: NumericalTreeInventoryV1,
++}
++
++fn add(a: u64, b: u64) -> Result<u64, String> {
++    a.checked_add(b).ok_or_else(|| "original numerical inventory overflow".into())
++}
++fn mul(a: u64, b: u64) -> Result<u64, String> {
++    a.checked_mul(b).ok_or_else(|| "original numerical inventory overflow".into())
++}
++fn accumulate(total: &mut NumericalTreeInventoryV1, one: NumericalTreeInventoryV1, count: u64) -> Result<(), String> {
++    if count == 0 { return Ok(()); }
++    total.disclosures = add(total.disclosures, mul(one.disclosures, count)?)?;
++    total.terminals = add(total.terminals, mul(one.terminals, count)?)?;
++    total.child_claims = add(total.child_claims, mul(one.child_claims, count)?)?;
++    total.disclosure_path_bytes = add(total.disclosure_path_bytes, mul(one.disclosure_path_bytes, count)?)?;
++    total.round_body_bytes_upper = add(total.round_body_bytes_upper, mul(one.round_body_bytes_upper, count)?)?;
++    total.max_depth = total.max_depth.max(one.max_depth);
++    total.max_round_body_bytes_upper = total.max_round_body_bytes_upper.max(one.max_round_body_bytes_upper);
++    Ok(())
++}
++
++/// Histories over the half-open original position range. Window saturation and
++/// H-free blocks collapse to one group; unsaturated histories remain distinct.
++/// No group is a selected path or an assumed participant response.
++fn histories(first: u32, end: u32, window: Option<u32>, mut visit: impl FnMut(u32, u64) -> Result<(), String>) -> Result<(), String> {
++    if first >= end { return Ok(()); }
++    match window {
++        None => visit(1, u64::from(end - first)),
++        Some(0) => Err("original numerical history window is zero".into()),
++        Some(w) => {
++            for h in (first + 1).min(w)..=end.min(w) {
++                let count = if h == w { u64::from(end - first.max(w - 1)) } else { 1 };
++                visit(h, count)?;
++            }
++            Ok(())
++        }
++    }
++}
++
++impl PalwTirPublicSourceV1 {
++    /// Covers every dissected commit tile of every executed occurrence and
++    /// position, including ragged output tiles and post's prefill boundary.
++    /// Registry/layout and literal source header are revalidated. Caller must
++    /// resolve the native box-demand rules, as existing class admission does;
++    /// the returned inventory records that choice, never authenticates it.
++    ///
++    /// Caller supplies the actual native court parameters. This analytical
++    /// function does not admit its own reconstruction/iteration work: a funded
++    /// ingress must bound that work too. No root/finalize/terminal-witness body,
++    /// signature/envelope, semantic work, IO, retention or fee is priced here.
++    pub fn numerical_tree_upper_v1(
++        &self,
++        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
++        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
++        court: &crate::palw_mode_v2::PalwCourtParamsV2,
++        demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
++    ) -> Result<TirPublicNumericalInventoryV1, String> {
++        let arity = court.dissection_arity();
++        if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) {
++            return Err("original numerical inventory arity".into());
++        }
++        let binding = self.header.resolve_registered_layout_v1(registered, layout,
++            self.header.committed_execution_root, self.maximum_leaves)?;
++        let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, self.maximum_leaves)
++            .map_err(|e| e.to_string())?;
++        if verified.class_id != self.class_id || verified.context_hash != self.context_hash {
++            return Err("original numerical inventory substitutes source geometry".into());
++        }
++        let space = &verified.space;
++        let job = space.job_shape(&self.header.job_context).map_err(|e| e.to_string())?;
++        let occurrences = space.occurrences();
++        let last = occurrences.len().checked_sub(1).ok_or("original has no occurrences")?;
++        let mut out = TirPublicNumericalInventoryV1 { source_id: self.source_id,
++            original_leaves: self.header.step_leaf_count, eligible_roots: 0, arity, demand,
++            trees: NumericalTreeInventoryV1::default() };
++        for (bi, block) in space.program.blocks.iter().enumerate() {
++            let block_id = u8::try_from(bi).map_err(|_| "original block index overflow")?;
++            let non_post = occurrences.iter().take(last).filter(|(b, _)| *b == block_id).count() as u64;
++            let post = u64::from(occurrences[last].0 == block_id);
++            if non_post == 0 && post == 0 { continue; }
++            for (ni, node) in block.nodes.iter().enumerate() {
++                if !node.commit { continue; }
++                let node_id = u16::try_from(ni).map_err(|_| "original node index overflow")?;
++                let reductions = d::palw_tir_cone_reductions_v1(block, node_id).len();
++                if reductions == 0 { continue; }
++                d::palw_tir_dissect_obligations_v1(block, node_id).map_err(|e| e.to_string())?;
++                let tile = space.commit_tile_len(block_id, node_id).ok_or("original commit tile missing")?;
++                let values = d::palw_tir_dissect_value_bound_v2(&space.program, block, node_id, tile, demand);
++                let mut charge = |h: u32, positions: u64, copies: u64| -> Result<(), String> {
++                    let output_tiles = node.out.elements_at(u64::from(h)).div_ceil(u64::from(tile));
++                    let roots = mul(output_tiles, mul(positions, copies)?)?;
++                    if roots == 0 { return Ok(()); }
++                    let tree = numerical_tree_inventory_v1(h.div_ceil(layout.h_tile), arity, reductions, values)
++                        .ok_or("original numerical tree exceeds existing native bounds")?;
++                    out.eligible_roots = add(out.eligible_roots, roots)?;
++                    accumulate(&mut out.trees, tree, roots)
++                };
++                let window = space.info.blocks.get(bi).ok_or("original block info missing")?.window;
++                if non_post != 0 {
++                    histories(0, job.positions, window, |h, n| charge(h, n, non_post))?;
++                }
++                if post != 0 {
++                    histories(job.prefill - 1, job.positions, window, |h, n| charge(h, n, post))?;
++                }
++            }
++        }
++        if out.eligible_roots > out.original_leaves {
++            return Err("original numerical inventory exceeds original leaf universe".into());
++        }
++        Ok(out)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn history_groups_match_each_original_position_including_saturation() {
++        for end in 1..=31 {
++            for first in 0..=end {
++                for window in [None, Some(1), Some(2), Some(7), Some(32)] {
++                    let mut actual = std::collections::BTreeMap::new();
++                    histories(first, end, window, |h, n| { *actual.entry(h).or_insert(0) += n; Ok(()) }).unwrap();
++                    let mut expected = std::collections::BTreeMap::new();
++                    for p in first..end { *expected.entry(window.map(|w| (p + 1).min(w)).unwrap_or(1)).or_insert(0) += 1; }
++                    assert_eq!(actual, expected);
++                }
++            }
++        }
++        assert!(histories(0, 1, Some(0), |_, _| Ok(())).is_err());
++    }
++}

@@ -29,8 +29,12 @@ use std::{
 };
 
 mod bootstrap;
+/// The G14 collusion drill's private rulesets (`g14-v1`).
+pub mod g14_drill_factory;
 pub use bootstrap::export_private_complete_bootstrap_v1;
 mod claim_paid_bootstrap;
+mod paid_request;
+pub use paid_request::generate_private_paid_request_v4;
 pub use claim_paid_bootstrap::{PrivatePaidNativeRequestV4, PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
 mod paid_claim_factory;
 pub use paid_claim_factory::private_paid_claim_params_v3;
@@ -242,6 +246,36 @@ fn validate_private_complete_relations(params: &kaspa_consensus_core::config::pa
     validate_private_native_relations(params)
 }
 
+/// **The G14 collusion drill's ruleset** (`g14-v1`; `scripts/drills/g14_collusion_drill.py`): the salted testnet-12 drill with the
+/// G14 set armed at `at_daa` (0: genesis mode) through drill arming records and a `seats`-seat Panel
+/// ([`kaspa_consensus_core::config::private_g14_drill`]). Reachable only from the feature-gated private entry point.
+pub fn private_g14_drill_params_v1(
+    salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1,
+    at_daa: u64,
+    set: self::g14_drill_factory::PrivateG14DrillSetV1,
+    seats: u16,
+) -> Result<kaspa_consensus_core::config::params::Params, String> {
+    use self::g14_drill_factory::{PrivateG14DrillModeV1, private_g14_drill_v1};
+    Ok(private_g14_drill_v1(salt, PrivateG14DrillModeV1::from_daa(at_daa), set, seats)?.params)
+}
+
+/// The G14 drill a running Config claims to be (option (b) armed is the drill's mark: no other private profile arms it), rebuilt from
+/// its salt, height, set and Panel so its records and ruleset id can be checked; `None` for every other profile.
+fn private_g14_drill_of_config_v1(
+    config: &Config,
+) -> Result<Option<self::g14_drill_factory::PrivateG14DrillV1>, String> {
+    use self::g14_drill_factory::{PrivateG14DrillModeV1, PrivateG14DrillSetV1, private_g14_drill_v1};
+    use kaspa_consensus_core::config::params::ForkActivation;
+    let Some(at) = config.params.palw_g14_route_required_v1.filter(|f| *f != ForkActivation::never()) else { return Ok(None) };
+    let salt = config.palw_drill_genesis_salt.as_ref().ok_or("the G14 drill needs its salted genesis")?;
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
+        return Err("the G14 drill needs its ConsensusV2 bundle".into());
+    };
+    let set =
+        if config.params.palw_legacy_public_filer_v1.is_some() { PrivateG14DrillSetV1::Full } else { PrivateG14DrillSetV1::RouteRequiredOnly };
+    private_g14_drill_v1(salt, PrivateG14DrillModeV1::from_daa(at.daa_score()), set, bundle.panel.seat_count()).map(Some)
+}
+
 /// Test-policy identity, not a release result or economic/security approval.
 pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
     let genesis_money = config.palw_drill_genesis_salt.as_ref().map(|salt| {
@@ -279,6 +313,11 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
     let mut manifest = serde_json::json!({
         "version": 1,
         "kind": "rfc12-private-integration-probe",
+        "paidRequestGenerator": true,
+        "importCrashFailpoints": {
+            "available": cfg!(feature = "private-integration-config"),
+            "rendezvousVersion": 1,
+        },
         "network": config.params.net.to_string(),
         "genesis": config.params.genesis.hash.to_string(),
         "consensusParamsId": config.params.consensus_params_id().to_string(),
@@ -315,6 +354,37 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
                 "approved": false,
             });
         }
+    }
+    // The G14 collusion drill (`g14-v1`): what is armed where, through which records. Only this profile carries the field.
+    if let Ok(Some(drill)) = private_g14_drill_of_config_v1(config) {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
+            unreachable!("the drill validated its ConsensusV2 bundle")
+        };
+        let mode = match drill.mode {
+            self::g14_drill_factory::PrivateG14DrillModeV1::Genesis => "genesis",
+            self::g14_drill_factory::PrivateG14DrillModeV1::Cross { .. } => "cross",
+        };
+        let records: Vec<serde_json::Value> = drill
+            .records
+            .iter()
+            .map(|r| serde_json::json!({"fence": r.fence.name(), "activationDaa": r.activation_daa}))
+            .collect();
+        let flag_days = self::g14_drill_factory::PRIVATE_G14_DRILL_FLAG_DAYS_V1.to_vec();
+        manifest["g14Drill"] = serde_json::json!({
+            "version": 1,
+            "mode": mode,
+            "atDaa": drill.mode.at_daa(),
+            "compressedT12FlagDays": flag_days,
+            "set": format!("{:?}", drill.set),
+            "panelSeats": bundle.panel.seat_count(),
+            "panelQuorum": bundle.panel.quorum(),
+            "anchorDelayDaa": bundle.panel.anchor_delay(),
+            "drillRecords": records,
+            "recordsPinnedInBinary": false,
+            "shippedValidationRefuses": config.params.validate_palw_v2().is_err(),
+            "tirPublicConvictionResolvesAt": config.params.palw_tir_public_conviction_v1_fence().map(|f| f.daa_score()),
+            "routeMirror": config.params.palw_g14_route_required_v1_mirror().map(|m| format!("{m:?}")),
+        });
     }
     if config.params.palw_material_release_recovery_v2.is_some() {
         // Paid-v4 private profile: PAV3 + material release recovery V2. Compact V4 is retired (PRINCIPLES §8).
@@ -383,7 +453,18 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
     let private_complete = config.params.palw_probabilistic_constraints_v1.is_some()
         || config.params.palw_signed_registration_v1.is_some()
         || config.params.palw_panel_free_v1.is_some();
-    if config.params.palw_claim_compact_v4.is_some() || config.params.palw_material_release_recovery_v2.is_some() {
+    if let Some(drill) = private_g14_drill_of_config_v1(config)? {
+        // The G14 collusion drill (`g14-v1`): the exact salted factory ruleset, validated through the test arming-record path with
+        // its own drill records. The shipped validation still refuses it (`private_g14_drill_v1` asserts that).
+        if config.private_population.is_some() {
+            return Err("the G14 drill profile has no population override".into());
+        }
+        if config.params.consensus_params_id() != drill.params.consensus_params_id() {
+            return Err("private G14 drill Config differs from its exact salted factory policy".into());
+        }
+        config.params.validate_palw_v1().map_err(|error| error.to_string())?;
+        config.params.validate_palw_v2_with_arming_records_v1(&drill.records).map_err(|error| format!("{error:?}"))?;
+    } else if config.params.palw_claim_compact_v4.is_some() || config.params.palw_material_release_recovery_v2.is_some() {
         if config.private_population.is_some() {
             return Err("the paid-v4 private probe has no population override".into());
         }

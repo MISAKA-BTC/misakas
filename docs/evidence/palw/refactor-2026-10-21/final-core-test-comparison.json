@@ -1,0 +1,15 @@
+{
+  "scope": "Final actual core unit selection vs previously preserved preparation/history and original pricing results. These baseline logs are earlier checkpoints, not the adjacent fd3c74aef unit executable.",
+  "baseline_unique_passes": 49,
+  "after_unique_passes": 55,
+  "old_passes_missing_or_regressed": [],
+  "additional_selected_passes": [
+    "palw_attempt_rules_v1::tests::t12_030_the_attribution_gate_is_the_processors_two_calls",
+    "palw_attempt_rules_v1::tests::t12_030_the_processors_attribution_calls_are_the_shared_gates",
+    "palw_backend::operation_view_tests::operation_views_keep_the_configured_instance_and_its_inherited_replay",
+    "palw_backend::operation_view_tests::unsupported_operations_stay_refusals_or_absent_in_every_view",
+    "palw_state_v2::tests::fp_compute_pricing::borrowed_rule_views_keep_an_old_claims_unit_when_the_reading_block_crosses_the_fence",
+    "palw_state_v2::tests::model_market_virtual::the_sync_walk_that_folds_with_default_model_extras_has_no_caller_and_the_chain_walk_resolves_every_model_fence"
+  ],
+  "all_80_pinned_source_files_unchanged_since_third_build_queued": true
+}

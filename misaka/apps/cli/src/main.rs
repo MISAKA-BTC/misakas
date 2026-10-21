@@ -2768,6 +2768,21 @@ enum EvmCmd {
         #[arg(long)]
         outpoint: String,
     },
+    /// Refund an unclaimed deposit lock to this key once its refund timeout has passed (dry-run unless --yes). The lock entry is
+    /// read by outpoint (`getPalwAcceptanceReads`, op 246); the spend is signed by this key's ML-DSA-87 funding key.
+    Refund {
+        /// The lock outpoint `deposit-lock` printed, `txid_hex:index`.
+        #[arg(long)]
+        outpoint: String,
+        /// Fee in sompi.
+        #[arg(long, default_value_t = 100_000)]
+        fee: u64,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
     /// EVM transaction lifecycle (`misaka_getEvmTxStatus`).
     /// A read-only eth_call at latest (ADR-0089's doors answer any caller): --to <addr> --data <hex>.
     View {
@@ -2932,10 +2947,21 @@ enum EvmTxCmd {
     },
 }
 
+fn main() -> std::process::ExitCode {
+    // Even boxed command futures have construction/poll temporaries in debug builds.
+    // Run the dispatcher on a bounded stack of its own so normal CLI invocations do
+    // not depend on an operator changing the process stack limit (including --help).
+    match std::thread::Builder::new().name("misaka-cli".into()).stack_size(64 * 1024 * 1024).spawn(cli_main) {
+        Ok(worker) => worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        Err(error) => {
+            eprintln!("error: cannot start CLI dispatcher: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> std::process::ExitCode {
-    // The command dispatcher contains large branch futures. Keep it on the heap so its
-    // storage is not duplicated on the process stack by the runtime's main wrapper.
+async fn cli_main() -> std::process::ExitCode {
     Box::pin(run_cli()).await
 }
 
@@ -3422,6 +3448,9 @@ async fn run_cli() -> std::process::ExitCode {
             })
         }
         Command::Evm(EvmCmd::Claim { outpoint }) => Box::pin(async move { evm_deposit::claim(ctx, &outpoint).await }),
+        Command::Evm(EvmCmd::Refund { outpoint, fee, yes, key }) => {
+            Box::pin(async move { evm_deposit::refund(ctx, &key.source(), &outpoint, fee, yes).await })
+        }
         Command::Evm(EvmCmd::Balance { address }) => Box::pin(async move { eth::balance(ctx, &address) }),
         Command::Evm(EvmCmd::Nonce { address }) => Box::pin(async move { eth::nonce(ctx, &address) }),
         Command::Evm(EvmCmd::EstimateGas { from, to, value, data }) => {

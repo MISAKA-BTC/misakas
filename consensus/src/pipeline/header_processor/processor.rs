@@ -94,6 +94,9 @@ impl HeaderProcessingContext {
 }
 
 pub struct HeaderProcessor {
+    /// Instance-local test wall clock; absent from production builds.
+    #[cfg(test)]
+    pub(crate) validation_clock: std::sync::atomic::AtomicU64,
     // Channels
     receiver: Receiver<BlockProcessingMessage>,
     body_sender: Sender<BlockProcessingMessage>,
@@ -104,8 +107,8 @@ pub struct HeaderProcessor {
     // Config
     pub(super) genesis: GenesisBlock,
     pub(super) timestamp_deviation_tolerance: u64,
-    pub(super) max_block_parents: u8,
-    pub(super) mergeset_size_limit: u64,
+    pub(super) max_block_parents: kaspa_consensus_core::config::params::ForkedParam<u16>,
+    pub(super) mergeset_size_limit: kaspa_consensus_core::config::params::ForkedParam<u64>,
     pub(super) skip_proof_of_work: bool,
     pub(super) max_block_level: BlockLevel,
     /// PR-8.6: per-network domain-separation tag (`NetworkId::to_string`
@@ -219,6 +222,17 @@ pub struct HeaderProcessor {
 }
 
 impl HeaderProcessor {
+    pub(super) fn validation_now(&self) -> u64 {
+        #[cfg(test)]
+        {
+            let now = self.validation_clock.load(Ordering::Relaxed);
+            if now != 0 {
+                return now;
+            }
+        }
+        kaspa_core::time::unix_now()
+    }
+
     pub fn new(
         receiver: Receiver<BlockProcessingMessage>,
         body_sender: Sender<BlockProcessingMessage>,
@@ -231,6 +245,8 @@ impl HeaderProcessor {
         counters: Arc<ProcessingCounters>,
     ) -> Self {
         Self {
+            #[cfg(test)]
+            validation_clock: Default::default(),
             receiver,
             body_sender,
             thread_pool,
@@ -263,8 +279,8 @@ impl HeaderProcessor {
             counters,
 
             timestamp_deviation_tolerance: params.timestamp_deviation_tolerance,
-            max_block_parents: params.max_block_parents(),
-            mergeset_size_limit: params.mergeset_size_limit(),
+            max_block_parents: params.max_block_parents_history(),
+            mergeset_size_limit: params.mergeset_size_limit_history(),
             skip_proof_of_work: params.skip_proof_of_work,
             max_block_level: params.max_block_level,
             // PR-8.6: Layer 0 PoW per-network domain separation tag.

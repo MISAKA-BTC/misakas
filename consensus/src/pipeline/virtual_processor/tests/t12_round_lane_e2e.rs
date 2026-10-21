@@ -80,6 +80,10 @@ use std::sync::Arc;
 
 const T12_GENESIS_CARDS: usize = 8;
 
+#[path = "t12_real_attempt.rs"]
+mod real_attempt;
+pub(super) use real_attempt::RealAttemptV1;
+
 /// Card `i`'s harness key — row `i` of the registry fixture (row 0 is the harness identity).
 fn card_key(i: usize) -> &'static MLDSA87KeyPair {
     TestConsensus::palw_v2_registry_keypair(i as u64)
@@ -295,11 +299,22 @@ impl T12Chain {
     /// removed by the caller remain a private fixture, not a P2P pruning proof.
     pub(super) fn establish_pruning_import_target(&self, point: BlockHash) {
         let consensus = &self.ctx.consensus;
+        // The history is the one this node derived itself while validating the prefix: `point`'s pruning samples back to genesis
+        // (a two-entry [genesis, point] list mismatches once `point` has intermediate pruning samples).
+        let genesis = self.config.params.genesis.hash;
+        let mut history = vec![point];
+        while let Some(sample) = consensus.pruning_sample_from_pov_for_tests(*history.last().unwrap()) {
+            if sample == genesis || history.contains(&sample) {
+                break;
+            }
+            history.push(sample);
+        }
+        if *history.last().unwrap() != genesis {
+            history.push(genesis);
+        }
+        history.reverse();
         consensus
-            .import_pruning_points(vec![
-                consensus.get_header(self.config.params.genesis.hash).unwrap(),
-                consensus.get_header(point).unwrap(),
-            ])
+            .import_pruning_points(history.iter().map(|hash| consensus.get_header(*hash).unwrap()).collect())
             .expect("the verified local headers establish the sidecar import target");
     }
 
@@ -332,6 +347,9 @@ impl T12Chain {
     /// An ordinary inert lane still re-stamps after the build. The builder takes
     /// `max(past median + 1, clock)` as its stamp and the lane executes against it.
     fn arm_clock(&self) {
+        if self.ctx.consensus.has_validation_time_for_test() {
+            self.ctx.consensus.set_validation_time_for_test(self.ctx.simulated_time);
+        }
         if self.config.params.is_evm_active(self.sink_daa())
             || self.vp().template_clock.load(std::sync::atomic::Ordering::Relaxed) != 0
         {

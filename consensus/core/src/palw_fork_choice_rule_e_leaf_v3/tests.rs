@@ -6,9 +6,7 @@ use super::*;
 use crate::config::params::palw_t12_shipped_params;
 use crate::palw_fork_choice_commitment_v1::{palw_committed_state_root_v1, palw_fork_choice_envelope_root_v1};
 use crate::palw_fork_choice_rule_e_v1::PalwRuleECertificationV1;
-use crate::palw_state_v2::{
-    PalwBlockContextV2, PalwBondStateV2, PalwBondStatusV2, PalwClaimPhaseV2, palw_claim_template_v1,
-};
+use crate::palw_state_v2::{PalwBlockContextV2, PalwBondStateV2, PalwBondStatusV2, PalwClaimPhaseV2, palw_claim_template_v1};
 use crate::tx::TransactionOutpoint;
 
 const POINT_DAA: u64 = 5_000;
@@ -130,8 +128,8 @@ fn rfc18_r4_an_anchor_verifies_with_the_v3_leaf() {
     let records = verify_window_suffix_v3(&decoded, POINT_BLUE - 10, &window).expect("the window verifies");
     assert_eq!(records.len(), 3);
     // The client's pair is the node's accumulator with capital (Gate C not in force here: NotGoverned).
-    let pair = palw_rule_e_pair_from_openings_v3(&records, &[], |k| entries.iter().find(|(b, _)| b == k).map(|(_, c)| *c), &decoded)
-        .unwrap();
+    let pair =
+        palw_rule_e_pair_from_openings_v3(&records, &[], |k| entries.iter().find(|(b, _)| b == k).map(|(_, c)| *c), &decoded).unwrap();
     assert_eq!(pair.a.participation_capital_v2, 13_000 + 26_000 + 1_000_000);
     assert_eq!(pair.even_split_min_capital_v2, (13_000u128 + 26_000 + 1_000_000).div_ceil(3));
 }
@@ -172,4 +170,67 @@ fn rfc18_r4_a_tampered_capital_or_certification_state_is_rejected() {
         palw_verify_committed_leaf_v2(&p, &committed, &other, &leaf, &s.state_root()),
         Err(PalwCommittedLeafErrorV2::PointMismatch)
     );
+}
+
+#[test]
+fn rfc09_served_opening_uses_the_committed_grammar_and_rejects_tampering() {
+    let state = state();
+    let point = point(&state);
+    let mut v1 = palw_t12_shipped_params();
+    v1.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(0));
+    let mut gate_c = params(false);
+    gate_c.palw_independently_work_certified_v1 = Some(ForkActivation::new(0));
+    for p in [palw_t12_shipped_params(), v1, params(false), params(true), gate_c] {
+        let opening = PalwCommittedOpeningV2::of(&state, &p).unwrap();
+        let root = palw_committed_state_root_v2(&state, &p);
+        assert_eq!(opening.committed_root(), root);
+        let view = opening.verify(&p, &root, &point).unwrap();
+        assert_eq!(view.form, palw_rule_e_commit_form_v1(&p, point.daa_score));
+        if !opening.leaf.is_empty() {
+            let mut bad = opening.clone();
+            *bad.leaf.last_mut().unwrap() ^= 1;
+            assert!(bad.verify(&p, &root, &point).is_err());
+            let mut wrong_point = point;
+            wrong_point.block = Hash64::from_u64_word(12345);
+            assert!(opening.verify(&p, &root, &wrong_point).is_err());
+        }
+        let mut bad = opening;
+        bad.inner_root = Hash64::from_u64_word(67890);
+        assert!(bad.verify(&p, &root, &point).is_err());
+    }
+}
+
+#[test]
+fn rfc09_rule_e_sub_openings_authenticate_windows_membership_capital_and_absence() {
+    let state = state();
+    let query = PalwForkChoiceProofQueryV2 { from_blue_score: Some(POINT_BLUE - 10), bonds: vec![bond_key(1), bond_key(99)] };
+    for p in [params(false), params(true)] {
+        let opening = PalwCommittedOpeningV2::of(&state, &p).unwrap();
+        opening.verify(&p, &palw_committed_state_root_v2(&state, &p), &point(&state)).unwrap();
+        let proof = PalwForkChoiceProofV2::of(&state, &p, &query).unwrap().unwrap();
+        let proof: PalwForkChoiceProofV2 = borsh::from_slice(&borsh::to_vec(&proof).unwrap()).unwrap();
+        let view = proof.verify(&opening.leaf, &query).unwrap();
+        assert_eq!(view.records.len(), 3);
+        assert_eq!(view.capital[&bond_key(99)], None);
+        assert_eq!(view.capital[&bond_key(1)], Some(if p.palw_rule_e_participation_v2.is_some() { 13_000 } else { 0 }));
+        let mut missing = proof.clone();
+        match &mut missing {
+            PalwForkChoiceProofV2::RuleEV2 { registry, .. } => {
+                registry.pop();
+            }
+            PalwForkChoiceProofV2::RuleEV3 { registry, .. } => {
+                registry.pop();
+            }
+        }
+        assert!(missing.verify(&opening.leaf, &query).is_err());
+        let mut bad = proof.clone();
+        let window = match &mut bad {
+            PalwForkChoiceProofV2::RuleEV2 { window, .. } | PalwForkChoiceProofV2::RuleEV3 { window, .. } => window.as_mut().unwrap(),
+        };
+        window.records[0].safe_weight += 1;
+        assert!(bad.verify(&opening.leaf, &query).is_err());
+        let mut bad_query = query.clone();
+        bad_query.bonds.push(bond_key(1));
+        assert!(proof.verify(&opening.leaf, &bad_query).is_err());
+    }
 }

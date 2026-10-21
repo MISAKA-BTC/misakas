@@ -1,0 +1,23 @@
+
+running 18 tests
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_geometry_retains_existing_part_ceiling ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_slot_does_not_multiply_with_declarations ... ok
+test palw_court_shared_tir_response_v1::tests::court_tir_shared_data_response_codec_bounds_signature_before_allocation ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_codec_rejects_lengths_before_reading_allocated_payload ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_node_first_frontier_dominates_ragged_last_nodes ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_requests_check_large_geometry_and_run_family_boundaries ... ok
+test palw_court_tir_requests_v1::tests::court_tir_response_graph_preserves_every_canonical_fragment_and_predecessor ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_source_cost_overflow_is_atomic ... ok
+test palw_court_shared_tir_response_v1::tests::court_tir_shared_data_response_real_signatures_bind_query_block_and_data ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_real_signature_binds_every_control_field ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_source_data_upper_covers_every_native_unit ... ok
+test palw_court_tir_requests_v1::tests::court_tir_response_graph_actions_match_native_body_hash_and_chunk_bytes ... ok
+test palw_court_shared_tir_frontier_v1::tests::court_tir_shared_frontier_signed_intent_decoder_bounds_signature_before_allocation ... ok
+test palw_court_tir_requests_v1::tests::court_tir_native_demands_match_owned_validator_and_native_body_bounds ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_transport_counts_actual_signed_codecs_and_all_source_choices ... ok
+test palw_court_shared_tir_frontier_v1::tests::court_tir_shared_frontier_never_promotes_provisional_ids_to_public_data ... ok
+test palw_court_shared_tir_frontier_v1::tests::court_tir_shared_frontier_real_signatures_coalesce_without_exclusive_choices ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_requests_match_native_validator_and_bind_scope ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 4665 filtered out; finished in 0.09s
+

@@ -1,0 +1,41 @@
+{
+  "base": "7b59c3489",
+  "status": "Initial operation-view and consumer migration implemented; full node runtime regression deferred to the combined worker/rules checkpoint.",
+  "source_inventory": "backend-ops-inventory.json",
+  "source_audit": "backend-ops-source-audit.json",
+  "source_pins": "backend-ops-source-hashes.json",
+  "checks": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "exit_code": 0,
+      "log": "backend-ops-core-tests-check.log"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspad --lib --tests",
+      "exit_code": 0,
+      "log": "backend-ops-panel-check.log"
+    }
+  ],
+  "native_test_support": {
+    "passed": 2,
+    "failed": 0,
+    "log": "backend-ops-harness.log",
+    "source": "backend-ops-harness.rs",
+    "library_metadata": "backend-ops-harness-library.json",
+    "scope": "The actual new operations.rs and the resident new core test module are compiled and executed against a preserved pre-operation core library whose compatibility trait is byte-unchanged. This is a native source harness, not a full cargo/core-crate test run."
+  },
+  "not_used_as_validation": "The first generator invocation stopped before writing source because it did not trim multiline parameters. The shell then ran a check with uncertain source timing; its initial-check log is not used. Explicit subsequent API, final core/tests and node/tests checks above succeeded.",
+  "limits": [
+    "No fresh complete Panel or actual-service runtime suite is claimed for this checkpoint. The preceding validator checkpoint has its own 463/3/14 results, which are not relabeled as operation-view results.",
+    "The registry remains the one backend factory. Configuration/downcast/drill hooks and compound unmigrated consumers retain the compatibility trait. No new model support/approval or activation decision is made by a view.",
+    "The projection and native harness do not establish exhaustive execution equivalence.",
+    "Remaining worker orchestration and canonical rule/view migration are unfinished.",
+    "No wire, monetary, deadline, cap, activation or derive-source change; no pre merge/push, arming or deployment."
+  ],
+  "documentation": {
+    "command": "python3 docs/maintenance/check_docs.py",
+    "exit_code": 1,
+    "log": "backend-ops-docs-check.log",
+    "result": "Five existing imported missing references plus 43 baseline-known; new authored missing links 0. Baseline unchanged."
+  }
+}

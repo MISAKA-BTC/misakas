@@ -1411,10 +1411,122 @@
     },
     {
       "kind": "adr",
+      "number": "0183",
+      "path": "docs/adr/0183-g14-court-capacity-panel-floor-retention-detection.md",
+      "title": "ADR-0183 — G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0184",
+      "path": "docs/adr/0184-native-liability-horizon-panel-record-and-single-certified-leg.md",
+      "title": "ADR-0184 — native claim の責任期間、Panel-licensed Final の記録専用 event、認証報酬の単一 leg",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0185",
+      "path": "docs/adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md",
+      "title": "ADR-0185 — paid claim の lock 乱数:後続 seal の commitment、最初の lock のみ固定 seed、承認済み paid claim を beacon source に",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
       "number": "0186",
       "path": "docs/adr/0186-hold-unresolved-liability-advance-independent-claims.md",
       "title": "ADR-0186 — 未解決 claim の責任を保持し、それに依存しない claim を進める",
       "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0187",
+      "path": "docs/adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md",
+      "title": "ADR-0187 — native 経路の G14:枠なしの公開告発、期限切れ seal の解放、mining claim の Final 後の追及",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0188",
+      "path": "docs/adr/0188-d2-x3-arm-records-composition-and-pause-credit.md",
+      "title": "ADR-0188 — D2・X3 の休眠 fence を G14 の arm-readiness record で閉じ、X3 の期限を窓の合成で定める",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0192",
+      "path": "docs/adr/0192-court-service-opportunity-and-shared-pursuit.md",
+      "title": "ADR-0192 — court の正規処理機会と共有訴追経路",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0193",
+      "path": "docs/adr/0193-miner-account-bond-for-panel-incentives.md",
+      "title": "ADR-0193 — Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける",
+      "topic": "Economics / budgets",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0193",
+      "path": "docs/adr/0193-sequential-witness-filing-clock.md",
+      "title": "ADR-0193: sequential witness filing の versioned clock",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0194",
+      "path": "docs/adr/0194-dormant-g14-integration-and-service-schema.md",
+      "title": "ADR-0194 — 休眠 G14 統合候補と service namespace",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0195",
+      "path": "docs/adr/0195-rooted-court-response-eligibility-history.md",
+      "title": "ADR-0195 — native court 応答の前提受理時刻を保持する",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0196",
+      "path": "docs/adr/0196-owner-independent-shared-tir-query-data.md",
+      "title": "ADR-0196 — owner 非依存の TIR 要求と認証済み公開データ",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0197",
+      "path": "docs/adr/0197-court-end-effects-and-pending-liability-archive.md",
+      "title": "ADR-0197 — court終了効果と未解決責任の保存方式",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0198",
+      "path": "docs/adr/0198-shared-court-initial-notice-boundary.md",
+      "title": "ADR-0198 — 共有courtのinitial noticeの等号",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0199",
+      "path": "docs/adr/0199-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "title": "ADR-0199 — 共有court終端materialと非独占提出方式",
+      "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     },
     {
@@ -1599,6 +1711,78 @@
       "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
       "title": "RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める",
       "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0024",
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "title": "RFC-0024 — ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計(単一位置裁定・先読み開示・先行取得)",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0025",
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "title": "RFC-0025 — モデルが増え、不正に対する court が大量発生しても処理を継続できる客観的 court",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0026",
+      "path": "docs/rfc/0026-court-policy-master-contract.md",
+      "title": "RFC-0026 — court の主契約:時計・帰責・責任期間・置換関係の一本化",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0027",
+      "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "title": "RFC-0027 — Miner Account Bond と Panel 追及報酬: 10万の基礎担保、責任連動の追加拘束、REAL継続性",
+      "topic": "Economics / budgets",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0028",
+      "path": "docs/rfc/0028-rooted-court-response-eligibility-history.md",
+      "title": "RFC-0028 — rooted court response eligibility history",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0029",
+      "path": "docs/rfc/0029-owner-independent-shared-tir-query-data.md",
+      "title": "RFC-0029 — owner-independent shared TIR query data",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0030",
+      "path": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+      "title": "RFC-0030 — court終了効果と未解決責任の保存",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0031",
+      "path": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
+      "title": "RFC-0031 — 共有courtのinitial notice境界",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0032",
+      "path": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "title": "RFC-0032 — 共有courtの終端materialと非独占提出",
+      "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     }
   ]

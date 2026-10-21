@@ -1,0 +1,50 @@
+[
+  {
+    "file": "archive-claim-summary.json",
+    "byte_equal": true
+  },
+  {
+    "file": "archive-panel-samples.json",
+    "byte_equal": false
+  },
+  {
+    "file": "archive-panel-summary.json",
+    "byte_equal": true
+  },
+  {
+    "file": "capital-envelope.csv",
+    "byte_equal": true
+  },
+  {
+    "file": "environment.json",
+    "byte_equal": false
+  },
+  {
+    "file": "panel-cost-sensitivity.csv",
+    "byte_equal": true
+  },
+  {
+    "file": "reaggregation-checks.json",
+    "byte_equal": true
+  },
+  {
+    "file": "source-manifest.json",
+    "byte_equal": false
+  },
+  {
+    "file": "summary.json",
+    "byte_equal": false
+  },
+  {
+    "file": "synthetic-admission.csv",
+    "byte_equal": true
+  },
+  {
+    "file": "synthetic-special-cases.json",
+    "byte_equal": true
+  },
+  {
+    "file": "trace-shadow.csv",
+    "byte_equal": true
+  }
+]

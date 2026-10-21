@@ -3,11 +3,28 @@
 use super::*;
 
 pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    while let Some(&(deadline, session_id)) = builder.state.court_deadlines.iter().next() {
+    // A held first entry must not starve unrelated expired sessions. Keep the
+    // persisted clocks intact; this cursor is only for this sweep invocation.
+    let mut after_held = None;
+    loop {
+        let next = match after_held {
+            None => builder.state.court_deadlines.iter().next(),
+            Some(cursor) => builder.state.court_deadlines.range((std::ops::Bound::Excluded(cursor), std::ops::Bound::Unbounded)).next(),
+        }.copied();
+        let Some((deadline, session_id)) = next else { break };
+
         if deadline >= ctx.daa_score {
             break;
         }
-        let mut session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+        let record = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?;
+        // Quota and elapsed time do not establish a delivered opportunity. No
+        // semantic rung, phase, assembly or backstop default is authorized yet.
+        // Missing claims still take the defensive cleanup path below.
+        if builder.state.claims.contains_key(&record.claim) && builder.state.court_service_holds_claim_v1(&record.claim) {
+            after_held = Some((deadline, session_id));
+            continue;
+        }
+        let mut session = record.clone();
         // **A missing claim drops the session; it does not fail the block.** `retire_claim` closes
         // a claim's sessions with it, so this should be unreachable — and it is written to be
         // survivable anyway, because the alternative failure mode is a chain that stops forever on
@@ -172,7 +189,7 @@ pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &P
                     // that cannot make it does not underwrite — `supports_dissection` is held-aware).
                     crate::palw_bisect::PalwBisectPartyV1::Responder
                         if !(owes_the_dissection_opening
-                            && palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id))
+                            && palw_held_claim_is_answerable_v2(&builder.state, builder.params, builder.extras, &claim))
                             && ((no_phase && session.ladder.round() == 0 && !class_holds_weight)
                                 || (builder.extras.court_responder_coverage_active
                                     && owes_the_dissection_opening
@@ -183,7 +200,7 @@ pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &P
                                     // class can (C1, `court_root_evidence_is_buildable_v2`).
                                     && !(builder.extras.audit_2026_09_11_deep_active
                                         && builder.state.court_root_evidence_is_buildable_v2(
-                                            &claim.class_id,
+                                            &claim,
                                             builder.extras.offence_attribution_active,
                                             builder.params,
                                         )))) =>
@@ -291,6 +308,7 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
         if !claim.phase.is_terminal() && builder.state.palw_v2_expiry_held_v1(builder.params, &claim_id, &claim) {
             continue;
         }
+        if builder.state.court_service_holds_claim_v1(&claim_id) { continue; }
         match claim.phase {
             PalwClaimPhaseV2::Provisional => {
                 let reason = builder.bind_timeout_reason(&claim, ctx);
@@ -495,7 +513,29 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     terminal_deadline_at_v1(&claim, builder.params, Some(ctx.daa_score))?,
                     &claim,
                 )?;
+                // G-15: an unpaid Final is not retired (`palw_unpaid_reward_retirement_floor_v1`, the same floor DL-1 derives).
+                let effective = super::palw_unpaid_reward_retirement_floor_v1(
+                    &builder.state,
+                    builder.params,
+                    &claim_id,
+                    &claim,
+                    Some(ctx.daa_score),
+                    effective,
+                    true,
+                );
                 if let Some(at) = effective.filter(|at| *at >= ctx.daa_score) {
+                    builder.arm_deadline(at, claim_id)?;
+                    continue;
+                }
+                // RFC23: retirement must not discard a certified consumer's
+                // held amount while another actual liability is still open.
+                if let Some(at) = super::palw_security_certification_fold_v1::try_release_claim_local_reward_v1(
+                    builder,
+                    ctx.daa_score,
+                    &claim_id,
+                    &claim,
+                    true,
+                )? {
                     builder.arm_deadline(at, claim_id)?;
                     continue;
                 }

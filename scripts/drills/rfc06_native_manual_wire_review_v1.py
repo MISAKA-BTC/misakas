@@ -5,6 +5,8 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# Same field order as derived serialize; only bytes Vec decode is narrowed to existing PART.
+'crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1': ('reviewed-field-layout','5252de7400c7c9e3ed9a231f3286f9429dea9d1f652e24aebff67a5026fd1dd8'),
 'crate::palw_bond_budget_v1::PalwBondBudgetStateV1': ('adapter','163e6501bd1b84fdf6f3ac7eff4cf62cee3495a3658c9047bcba633ac5d86abf'),
 'crate::palw_flat_constraint_stream_v1::PalwFlatConstraintActionV1': ('reviewed-field-layout','82eac4b65c1f7faae83e691c850e3e3cc5529e4c331f88bbc4d17797f3b89a33'),
 'crate::palw_float_constraint_source_v1::PalwFloatSourceActionV1': ('reviewed-field-layout','ef5bac2471e454620a0b6b70050b62ccfe2dbcca9139824197d04892588459af'),

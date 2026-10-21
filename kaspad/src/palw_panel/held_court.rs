@@ -198,7 +198,7 @@ pub(crate) fn palw_held_responder_evidence_v1(
 /// divergent leaf of a held claim at a fused site and its accusation opens the held dissection, this
 /// is the challenger's side for that claim and leaf — the panel's held route calls it the same way.
 pub(crate) fn palw_held_challenger_evidence_v1(
-    backend: &dyn PalwExecutionBackendV1,
+    backend: kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1<'_>,
     filing: &PalwAttnHeldFilingV1,
     narrowed: u64,
     carried: Option<&[u32]>,
@@ -1953,7 +1953,7 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut 
             };
             let (_, filed) = filing.clone().expect("checked above");
             tokio::task::spawn_blocking(move || {
-                let built = palw_held_challenger_evidence_v1(backend.as_ref(), &filed, narrowed, carried.as_deref());
+                let built = palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(backend.as_ref()), &filed, narrowed, carried.as_deref());
                 drop(reserved);
                 palw_held_resident_v1(&ledger, built?, false, class_id, claim_id)
             })
@@ -2153,7 +2153,7 @@ impl PalwHeldHostV1 for PalwPanelHeldHostV1<'_> {
         let pooled = self.materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
         self.panel
             .fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)
-            .and_then(|job| PalwPanelService::fp_prompt_for_job(backend, &job, self.panel.class_prompt_ids_form(duty.class_id)))
+            .and_then(|job| PalwPanelService::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), &job, self.panel.class_prompt_ids_form(duty.class_id)))
             .map(Some)
             .ok_or_else(|| "no job material of the claim is held here".to_string())
     }
@@ -2296,6 +2296,7 @@ mod tests {
     /// `consensus/core/tests/review_heldnode_arity.rs` pins the numbers on every preset).
     #[test]
     fn the_held_and_dense_routes_declare_the_arity_the_acceptance_layer_derives() {
+        use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
         let t12 = palw_t12_shipped_params();
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else {
             panic!("testnet-12 is a V2 network")
@@ -2307,16 +2308,15 @@ mod tests {
         let held = "palw_court_params_held_at_v2(\n            self.bundle()?,\n            params.palw_kary_court_active_at(daa),\n            params.palw_held_context_active_at(daa),";
         let source = include_str!("held_court.rs");
         assert!(
-            source[source.find("    fn arity(&self, daa: u64) -> Option<u8> {\n        let params").expect("the host's arity")..]
+            source[source.find_code("    fn arity(&self, daa: u64) -> Option<u8> {\n        let params").expect("the host's arity")..]
                 .contains(held)
         );
-        let panel = include_str!("../palw_panel.rs");
-        let production = &panel[..panel.find("#[cfg(test)]\nmod tests").expect("the unit tests follow the code")];
-        let root = &production[production.find("AttnMove::Root => {").expect("the dense root arm")..];
-        let root = &root[..root.find("AttnMove::Round => {").expect("its end")];
-        assert!(!root.contains("palw_court_params_at_v2("), "never the plain derivation");
-        assert!(root.contains(
-            "palw_court_params_held_at_v2(\n                                bundle,\n                                params.palw_kary_court_active_at(current_daa),\n                                params.palw_held_context_active_at(current_daa),"
+        let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
+        let production = panel;
+        let root = &production[production.find_code("AttnMove::Root => {").expect("the dense root arm")..];
+        let root = &root[..root.find_code("AttnMove::Round => {").expect("its end")];
+        assert!(!root.contains_code("palw_court_params_at_v2("), "never the plain derivation");
+        assert!(root.contains_code("palw_court_params_held_at_v2(\n                                bundle,\n                                params.palw_kary_court_active_at(current_daa),\n                                params.palw_held_context_active_at(current_daa),)"
         ));
         let _ = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
     }
@@ -2415,78 +2415,82 @@ mod tests {
     /// `carry_priority_v1`. Red if any of it is re-spelled around.
     #[test]
     fn t_a10_the_panel_routes_a_held_dissection_to_the_windowed_builders_and_files_c2() {
-        let panel = include_str!("../palw_panel.rs");
-        let production = &panel[..panel.find("#[cfg(test)]\nmod tests").expect("the unit tests follow the code")];
+        use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
+        let panel = crate::palw_panel::source_support::former_parent_production_source_v1();
+        let production = panel;
         let begin =
-            production.find("held_court.begin_tick_v1(&court_duties, current_daa).await;").expect("the tick collects held builds");
-        let route = production.find("held_court.routes_v1(&held_host, duty, current_daa) {").expect("the held route");
+            production.find_code("held_court.begin_tick_v1(&court_duties, current_daa).await;").expect("the tick collects held builds");
+        let route = production.find_code("held_court.routes_v1(&held_host, duty, current_daa) {").expect("the held route");
         // RFC-0002 F7: an IR class's dissection is never this route's (its own, `tir_dissect`).
         assert!(
             production[..route].ends_with("if session.palw_tir_class_record_v1(duty.class_id).is_none() && "),
             "an IR class is kept off the held route"
         );
-        let pushed = production[route..].find("held_duties.push(duty.clone());").expect("routed") + route;
+        let pushed = production[route..].find_code("held_duties.push(duty.clone());").expect("routed") + route;
         let dense_resolve = production[route..]
-            .find("let mut backend = match self.resolve_backend(&session, duty.class_id, duty.artifact_root)")
+            .find_code("let mut backend = match self.resolve_backend(&session, duty.class_id, duty.artifact_root)")
             .expect("the dense route's backend")
             + route;
-        let dense = production.find("b.attn_site_evidence(").expect("the dense builder");
-        let reads = production.find("held_court.chain_reads_v1(&held_host, &held_duties, current_daa)").expect("the chain reads");
+        let dense = production.find_code("b.attn_site_evidence(").expect("the dense builder");
+        let reads = production.find_code("held_court.chain_reads_v1(&held_host, &held_duties, current_daa)").expect("the chain reads");
         let moves = production
-            .find("held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy)")
+            .find_code("held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy)")
             .expect("the moves");
-        let dated = production[moves..].find("court_due.insert(queued.key, queued.due);").expect("each with its due date") + moves;
+        let dated = production[moves..].find_code("court_outbox.set_due(queued.key, queued.due);").expect("each with its due date") + moves;
         let started =
-            production.find("held_court::palw_held_start_builds_v1(&held_host, &mut held_court, current_daa);").expect("builds");
+            production.find_code("held_court::palw_held_start_builds_v1(&held_host, &mut held_court, current_daa);").expect("builds");
         assert!(begin < route && route < pushed && pushed < dense_resolve && dense_resolve < dense, "routed before the dense builder");
-        assert!(production[pushed..pushed + 120].contains("continue;"), "the held route ends the duty's iteration");
+        assert!(production[pushed..pushed + 120].contains_code("continue;"), "the held route ends the duty's iteration");
         assert!(dense < reads && reads < moves && moves < dated && dated < started, "read, move, date, build — after the loop");
-        let reader = production.find("fn attn_held_objects_page_from_chain_v1(").expect("the held paged reader");
-        assert!(reader > production.find("fn attn_root_filings_from_chain_v1(").expect("the anchored reader"), "beside it");
-        assert!(production.contains("PalwAttnHeldFilingV1::from_object_v1(object)"), "the sub-roots read off the object");
-        let carry = &production[production.find("    async fn carry_priority_v1(").expect("the priority lane")..];
+        let reader = production.find_code("fn attn_held_objects_page_from_chain_v1(").expect("the held paged reader");
+        assert!(reader > production.find_code("fn attn_root_filings_from_chain_v1(").expect("the anchored reader"), "beside it");
+        assert!(production.contains_code("PalwAttnHeldFilingV1::from_object_v1(object)"), "the sub-roots read off the object");
+        let carry = &production[production.find_code("    async fn carry_priority_v1(").expect("the priority lane")..];
         let carry = &carry[..carry.find("\n    }\n").expect("its end")];
-        let sorted = carry.find("palw_court_queue_edf_v1(court_pending, court_due);").expect("EDF");
+        assert!(carry.contains_code("for (session_id, round, mine_is_responder, object) in court_outbox.take_priority()"));
+        let owner = include_str!("court_outbox.rs");
+        let take = &owner[owner.find_code("fn take_priority(").expect("typed priority operation")..];
+        let take = &take[..take.find("\n    }").expect("its end")];
         assert!(
-            sorted
-                < carry.find("for (session_id, round, mine_is_responder, object) in std::mem::take(court_pending)").expect("the loop")
+            take.find_code("palw_court_queue_edf_v1(&mut self.pending, &self.due);").expect("EDF")
+                < take.find_code("std::mem::take(&mut self.pending)").expect("only then drain")
         );
 
         let module = include_str!("held_court.rs");
-        let module = &module[..module.find("#[cfg(test)]\nmod tests").expect("this module")];
-        assert!(module.contains("offence_attribution_active && class_is_held && duty.fused_class && duty.terminal_index.is_some()"));
+        let module = &module[..module.find_code("#[cfg(test)]\nmod tests").expect("this module")];
+        assert!(module.contains_code("offence_attribution_active && class_is_held && duty.fused_class && duty.terminal_index.is_some()"));
         assert!(
-            module.contains("self.panel.consensus_config.params.palw_offence_attribution_active_at(daa)"),
+            module.contains_code("self.panel.consensus_config.params.palw_offence_attribution_active_at(daa)"),
             "fenced at the tick's DAA"
         );
-        assert!(!module.contains(".attn_site_evidence(") && !module.contains(".attn_site_evidence_from_filing("), "no dense builder");
-        assert!(module.contains(".attn_site_evidence_held_v1(capture, narrowed, carried, None)"), "N1: the responder, no filing");
+        assert!(!module.contains_code(".attn_site_evidence(") && !module.contains_code(".attn_site_evidence_from_filing("), "no dense builder");
+        assert!(module.contains_code(".attn_site_evidence_held_v1(capture, narrowed, carried, None)"), "N1: the responder, no filing");
         assert!(
-            module.contains(".attn_site_evidence_held_v1(&[], narrowed, carried, Some(filing))"),
+            module.contains_code(".attn_site_evidence_held_v1(&[], narrowed, carried, Some(filing))"),
             "N2: the challenger, the filing"
         );
-        assert!(module.contains("PalwAttnHeldFilingV1::from_object_checked_v1("), "a filing stands the fold's own checks");
-        let root = &module[module.find("PalwHeldMoveV1::Root => {").expect("the root arm")..];
-        let root = &root[..root.find("PalwHeldMoveV1::Round => {").expect("its end")];
+        assert!(module.contains_code("PalwAttnHeldFilingV1::from_object_checked_v1("), "a filing stands the fold's own checks");
+        let root = &module[module.find_code("PalwHeldMoveV1::Root => {").expect("the root arm")..];
+        let root = &root[..root.find_code("PalwHeldMoveV1::Round => {").expect("its end")];
         assert!(
-            root.contains("evidence.root_claim_held_v1(&site, duty.session_id, ctx.arity)"),
+            root.contains_code("evidence.root_claim_held_v1(&site, duty.session_id, ctx.arity)"),
             "C2: the held form the builder makes"
         );
         assert!(
-            root.contains("palw_attn_root_claim_message_v1(&duty.session_id, root), PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT"),
+            root.contains_code("palw_attn_root_claim_message_v1(&duty.session_id, root), PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT"),
             "signed as every root claim is"
         );
         assert!(
-            !module.contains("CourtAttnRootClaimedAnchored {") && !module.contains("CourtAttnRootClaimed {"),
+            !module.contains_code("CourtAttnRootClaimedAnchored {") && !module.contains_code("CourtAttnRootClaimed {"),
             "never the other forms"
         );
         assert!(
             top_of(module, "pub(crate) fn palw_held_responder_evidence_v1(")
-                .contains("palw_da_material_v1(backend, facts, kept, keep)?")
+                .contains_code("palw_da_material_v1(backend, facts, kept, keep)?")
         );
-        assert!(module.contains("role: \"held-dissection\""), "a build under the one ledger");
-        assert!(module.contains("role: \"held-evidence\""), "and its evidence");
-        assert!(module.contains("tokio::task::spawn_blocking(move ||"), "off the tick");
+        assert!(module.contains_code("role: \"held-dissection\""), "a build under the one ledger");
+        assert!(module.contains_code("role: \"held-evidence\""), "and its evidence");
+        assert!(module.contains_code("tokio::task::spawn_blocking(move ||"), "off the tick");
     }
 
     fn top_of<'a>(source: &'a str, head: &str) -> &'a str {

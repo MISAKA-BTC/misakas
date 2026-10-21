@@ -1,0 +1,177 @@
+{
+  "date": "2026-10-21",
+  "candidate_parent": "d4896737cb01cc77cb71620906cdea9f5f3f691d",
+  "selected_unique_passes": 84,
+  "selected_failed": 0,
+  "selected_ignored": 0,
+  "selection": "Native32 + existing public-prefix17 + service codec/policy/gates/activation/release35 =84. Targeted1 is included in32. Cancelled build and all historical67/31/62/89 are excluded.",
+  "scope": "Semantic dependency/Owner TTL retention, proposed contract write validation with original pledge/binding immutability and native Panel update, shared semantic/history absence-charge denial before producer/signer-only branches. Not a complete F02/F03 or termination/funding graph.",
+  "fixture_limits": "Extended guard-only original fixture, shape-valid semantic contract/empty OwnerBundle, dummy history signatures and synthetic service packet costs. Exercises actual native writer/sweep/Panel callback/common charge method, not real signed semantic original admission/fees or a complete semantic court close. Existing service-absent public-prefix17 and native32 are separate regression scopes; not node T05 or full-family signoff.",
+  "known_open_paths": [
+    "Normal court ladder/backstop sweep_court_deadlines has no service hold guard; fix next with non-starving index traversal and responder/challenger/terminal/orphan/real-close tests.",
+    "Constraint/Prefix jobs share tail enum; current TIR original quote/prepare rejects tails. Do not blindly remove the guard or enable deferred V5/Gen/Eval.",
+    "Original complete all-branch fees/reservations and public lifecycle, actual supply/inclusion, all dependent actor/bond/end-effect/retention graph, T01\u2013T15, full R-D2/families, tag230 and real-model door<=3120 remain incomplete."
+  ],
+  "no_activation": "No preset, schema/ordinal, signed clock, numerical cap/fee/price, model tier, production arming record, pre merge, push or deployment changed.",
+  "extra_costs": "Retaining semantic Owner/contract rows plus structural checks/comparisons/index/journal work must be included in the complete profile; no zero-cost or measured capacity claim.",
+  "heavy_lock": "/Users/wata/.cache/misaka-heavy-lock.sh",
+  "commands": [
+    {
+      "command": "cargo test --release -p kaspa-consensus-core --lib rooted_service_semantic_custody_guard_rejects_missing_short_and_substituted_contracts -- --nocapture",
+      "log": "semantic-contract-retention-targeted-release.log",
+      "exit_code": 0,
+      "selected": false
+    },
+    {
+      "command": "target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1",
+      "log": "semantic-contract-retention-native-release.log",
+      "exit_code": 0,
+      "selected": true
+    },
+    {
+      "command": "target/release/deps/kaspa_consensus_core-cd85ed321316b157 public_prefix_fold_v1",
+      "log": "semantic-contract-retention-prefix-release.log",
+      "exit_code": 0,
+      "selected": true
+    },
+    {
+      "command": "cargo test --release -p kaspa-consensus-core --test palw_court_service_state_v2 --test palw_court_policy_v1 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move",
+      "log": "semantic-contract-retention-regressions.log",
+      "exit_code": 0,
+      "selected": true
+    },
+    {
+      "command": "cargo check --release -p kaspa-consensus",
+      "log": "semantic-contract-retention-consensus-check.log",
+      "exit_code": 0,
+      "selected": false
+    }
+  ],
+  "cancelled_build": {
+    "log": "semantic-contract-retention-cancelled-build.log",
+    "observed_terminal_exit_code": 130,
+    "source_patch": "semantic-contract-retention-before-immutable.patch",
+    "reason": "Own obsolete compile explicitly interrupted for signed pledge/binding immutability. Before the resumed test build, the discovered semantic absence-charge guard was added as well. No tests completed in the cancelled build; not a timeout restart or test failure."
+  },
+  "source_sha256": {
+    "consensus/core/src/palw_court_service_state_v2.rs": "22ee4287a77e89ae8bc25e9447c5dc0fe66cfb02a275d2e55d09098f2c4b8968",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "0082ebff949c718dbea0ad9659cb59a2b231401918285d7fb87d1b9c0d47c962",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "501a4aa1d87a9435f9f19a0a159aa77b5160f0e93a5bb3aba3871c89f7a518c5",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "374e37bbd8a5b4bdc3455787f02ce811785c63f97ad0b05896a86c0a220caf32",
+    "consensus/core/src/palw_state_v2/deadlines.rs": "c5fa80005d156f7f4baa6caf9a9aee72d08a01bdd08e1d8897b1a15cdda36054",
+    "consensus/core/src/palw_staged_court_state_v1.rs": "352b3f5d089615787acf891b50c393ba6fa32d6f0567b2b9d8ab7d80e8343d8d",
+    "consensus/core/src/palw_state_v2/tests/public_prefix_fold_v1.rs": "a0dc20f145892ec18b8d4197f59c9f0a18de9f94cb9b55905621ee379dba120b"
+  },
+  "patches": {
+    "semantic-contract-retention-runtime.patch": "1ce3731074a01fa69c0f8d1de79962e0f0cea658e96efc9788e7e49dbef03ab8",
+    "semantic-contract-retention-before-immutable.patch": "2cefa35ea065450c31b42340f390b80617a2bdf4b2685f137f9c0b5a65dfab6d"
+  },
+  "core_unit_executable_sha256": "24ff8fe3bb99065993ecaa29bfcc7362156cf234d5a1bdd830814c29b75fd9ab",
+  "integration_executable_sha256": {
+    "target/release/deps/g14_close_gates-07a58aeba402f266": "6d344cffac7591fc7a23e6c5dd2e7b0616a45c2c1e706e0eaf690e5c5c73ff6f",
+    "target/release/deps/palw_activation_pool_is_t12_only-19bd1d2a52f9c5c6": "3c79ac17268b396f47fe58ecb82d5bf4be101a3b0b6ad275cee9c4c83dfe6860",
+    "target/release/deps/palw_court_policy_v1-411f3ee2af7ee8dc": "1e07cc6f3a58f8869a6264419132ce8fd9638eb12e2dacc5296696faad7b85fc",
+    "target/release/deps/palw_court_service_state_v2-84a662caba178f3c": "3fd72d96b0cedf56dfa40ffadedb57ec7b8a61438516c3dc72d2c3d9798b4216",
+    "target/release/deps/palw_the_release_did_not_move-c8b47338cdf2801d": "b4d2458c2a40a72339098ffe51fd033393015b7e4232cbf615d98761a93829b4"
+  },
+  "logs": [
+    {
+      "path": "semantic-contract-retention-cancelled-build.log",
+      "sha256": "6d16ae67f3fce597f9e79f910a71975e4c1d8bcdd9ab1ed31f93d453877e9e0d",
+      "test_results": [],
+      "selected": false
+    },
+    {
+      "path": "semantic-contract-retention-consensus-check.log",
+      "sha256": "acedecc554213d0550b8e58b6ad229a2d5d140b8e9551f6fece9eb22a96bae62",
+      "test_results": [],
+      "selected": false
+    },
+    {
+      "path": "semantic-contract-retention-native-release.log",
+      "sha256": "6f8f5aeb3e755e136e237da33c904254006cb88630850cbfe7fe7bab6961a91c",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 32,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "selected": true
+    },
+    {
+      "path": "semantic-contract-retention-prefix-release.log",
+      "sha256": "05f0c626b37c19a440ec0b73efed2c8d4e1542c63dce8189db3ff079d678eb93",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "selected": true
+    },
+    {
+      "path": "semantic-contract-retention-regressions.log",
+      "sha256": "b878b9781e63bc5c48fcf3461678f8430045c340a915541ed25518f991b9cbca",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "selected": true
+    },
+    {
+      "path": "semantic-contract-retention-targeted-release.log",
+      "sha256": "d7de5242b784cb169aba7eabb6773ffc1af7dfff8db8adea5b4f58a230b1443b",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "selected": false
+    }
+  ],
+  "documentation_check": {
+    "command": "python3 docs/maintenance/check_docs.py",
+    "exit_code": 1,
+    "log": "semantic-contract-retention-docs-check.log",
+    "sha256": "dc19f573973adc984747a8f3dafb3d662218d4a7f1fcba9609ecef8bcde62e9c",
+    "inherited_imported_issues": 5,
+    "known_baseline_occurrences": 43,
+    "new_authored_issues": 0
+  },
+  "raw_evidence_note": "Raw logs and git-generated patches are preserved verbatim; source/Markdown whitespace checks exclude raw log endings and patch context."
+}

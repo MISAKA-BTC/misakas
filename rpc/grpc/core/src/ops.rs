@@ -155,6 +155,7 @@ pub enum KaspadPayloadOps {
     GetPalwStagedPreclaimQuote,
     GetPalwRouterBindingV2,
     GetPalwPaidClaim,
+    GetPalwAcceptanceReads,
     GetPalwRfc0016Report,
     GetPalwKernelClaim,
     GetPalwKernelRows,
