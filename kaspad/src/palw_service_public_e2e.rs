@@ -2687,7 +2687,12 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
             );
             break;
         }
-        if demanded {
+        if recovery.as_ref().is_some_and(|recovery| recovery.recovering_pruned_round()) {
+            // One actual native/template block per pass while the real restarted
+            // workers drain the existing parallel round and reacquire pruned input.
+            // Keep the original hard clock and the real-Honest/release assertions.
+            pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
+        } else if demanded {
             for _ in 0..50 {
                 pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
             }

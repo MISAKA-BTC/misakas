@@ -301,6 +301,15 @@ impl RecoveryRun {
         self.pruned_numbered_before = Some((reservation.sessions_opened, reservation.reserved_daa));
     }
 
+    /// After the body is actually pruned, let both restarted production workers
+    /// consume the ordinary block stream. The generic harness's 50-block bursts
+    /// can expire the original reservation while a two-second worker is draining
+    /// its sixteen carriers. This changes only test-clock pacing, never a chain
+    /// deadline, fee, session/lane limit or the native acceptance path.
+    pub(super) fn recovering_pruned_round(&self) -> bool {
+        self.mode == RecoveryMode::PrunedRound && self.pruned_round.is_some()
+    }
+
     pub(super) fn verifier_paused(&self) -> bool {
         self.mode == RecoveryMode::PrunedRound && self.paused_input && self.pruned_round.is_none()
     }
