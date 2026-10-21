@@ -1,0 +1,66 @@
+{
+  "base": "50d64cf58",
+  "scope": "Validator family dispatch and explicit immutable handler inputs; remaining runtime/backend/rule-view work is unfinished.",
+  "source_pins": "validator-source-hashes.json",
+  "source_projection": "validator-split-projection.json",
+  "patch_reconstruction": "validator-patch-reconstruction.json",
+  "node_executable": "validator-binary.json",
+  "checks": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus --lib --tests",
+      "exit_code": 0,
+      "log": "validator-lib-tests-check.log"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspad --lib palw_panel:: -- --skip palw_panel::palw_service_public_e2e:: --skip palw_panel::palw_service_violations_e2e:: --test-threads=2",
+      "exit_code": 0,
+      "passed": 463,
+      "failed": 0,
+      "log": "validator-panel-tests.log"
+    },
+    {
+      "runner": "Gated Python runner under heavy lock; refused to run until the 463-case suite completed successfully and all source pins matched. Uses the preserved executable recorded in validator-binary.json.",
+      "argv": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/palw-validator-checkpoint-t2z9vdmb/panel-tests",
+        "palw_panel::palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default",
+        "palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job",
+        "palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "passed": 3,
+      "failed": 0,
+      "log": "validator-selected-service-tests.log"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only",
+      "exit_code": 0,
+      "passed_by_target": {
+        "palw_the_release_did_not_move": 9,
+        "palw_activation_pool_is_t12_only": 5
+      },
+      "failed": 0,
+      "log": "validator-t12-identity-and-activation.log"
+    }
+  ],
+  "source_guard_support": {
+    "passed": 1,
+    "log": "validator-guard-harness.log",
+    "scope": "Original t12_030 guard body and actual source inventory loader extracted into a standalone std-only Rust harness, with manifest/include paths made absolute. Not counted as a full core-crate test run.",
+    "generator": "build_validator_guard_harness.py",
+    "source": "validator-guard-harness.rs"
+  },
+  "documentation": {
+    "command": "python3 docs/maintenance/check_docs.py",
+    "exit_code": 1,
+    "log": "validator-docs-check.log",
+    "result": "Five existing imported missing references plus 43 baseline-known; no new authored missing links, baseline unchanged."
+  },
+  "limits": [
+    "The targeted projection and representative runtime cases are not exhaustive execution equivalence.",
+    "The old 232 explicit arm returns are all errors; the 16 transformed continues all targeted the outer object loop, and no nested-loop continue was changed.",
+    "Raw compatibility extras, further canonical rule/view migration, remaining worker orchestration and backend capabilities remain unfinished.",
+    "No wire ordinal, error policy, model coefficient, monetary rule, deadline, cap or activation change; no derive source change.",
+    "No pre merge/push, arming, adoption or deployment."
+  ]
+}

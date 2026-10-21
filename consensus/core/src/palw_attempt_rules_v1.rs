@@ -1027,7 +1027,7 @@ mod tests {
         let arm = &processor[processor
             .find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(\n                        bundle,")
             .expect("the ClassRegistered arm's gate")..];
-        let arm = &arm[..arm.find("Obj::ReceiptLicensed { claim, receipts }").expect("the arm ends")];
+        let arm = &arm[..arm.find("Obj::ClassFrozen { .. }").expect("the next class-registration arm")];
         let held = arm
             .find(
                 "kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v2(\n                        \
