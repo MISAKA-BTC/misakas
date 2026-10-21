@@ -58,3 +58,11 @@ Aの原始materialも、最初の不完全な送信が唯一slotを占有する�
 row-pinは認証済み全IDと、committed token/要求laneの二つのTraceTileから既存native形式へ構成する。whole rowsやlocal cacheへfallbackしない。これらはidentityを保持するデータ変換であり、裁定結果・計算credit・供給証明ではない。
 
 [検証範囲と限界](../evidence/palw/g14-integration-candidate-2026-10-20/prompt-row-material.md)。永続化、promptのbounded wire入口、全originalの依存閉包・供給/保持/原資・予約、完全な費用profile、F02/F03と実node T05は引き続き未完である。
+
+## 8. 保持された終端への署名付きintent（隔離・限定検証済み）
+
+A案のprivate構築入口では、intentがnetwork、original claim、scope、native policy、leaf、canonical root ID、child path、全ancestorに束縛されたparent ID、literal filerを署名する。新しいdomainを使い、既存bottom全文の署名を転用しない。DTOにpublic wire decoder・lifecycle tag・native rowは追加しない。
+
+`SharedTirBuilderStoreV1::build_terminal`は保持されたrootと各ancestorを再検査し、実native規則・元hard内の時点と照合する。callerのphase/binding/evidence bodyを入力にせず、登録programを既存resolverで戻して、認証済みmaterialだけから既存bounded builderを呼ぶ。元leaf/output preimageと一致する完成証拠だけを返し、programの既存carriage省略とnative close byte上限を維持する。資料不足・不正署名・不正path・予算不足では構築拒否となる。状態・予約・最初のfilerの専用slotを作らないため、別の適格署名者のintentは同じmaterialから同じ完成bytesを構成できる。
+
+この入口はread-onlyであり、署名・source/root/ancestor検査・scratch/material・outputの所有費用はcallerの事前admissionを必要とする。返すbuilder meterはその一部分で、実CPU・fee・資本・保持・全original全合法分岐profileではない。public有料ingress・原子的な費用/資本予約・実配送/供給・materialの永続化・qualified裁定/精算・T05/T01–T15と実model doorは引き続き未完。[実行結果・正確な範囲・hash](../evidence/palw/g14-completion-2026-10-21/terminal-intent.md)に保存する。

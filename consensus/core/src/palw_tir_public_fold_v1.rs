@@ -2925,20 +2925,77 @@ mod conviction_e2e_tests {
                     use crate::palw_court_shared_tir_builder_store_v1::SharedTirBuilderStoreV1 as MaterialStore;
                     // Oracle-derived read subset is fixture provisioning, not a proof of
                     // original-wide prefetch/reservation. All inputs are authenticated anew.
-                    let params:Vec<_>=evidence.params.single().unwrap().opened.iter()
+                    let openings:Vec<_>=evidence.params.single().unwrap().opened.iter()
                         .map(|(i,_)|fx.execution.param_opening(*i).unwrap()).collect();
                     let scope=set.scope_id().unwrap();
-                    let store=MaterialStore::new(&round_state,claim,scope,&material_units,&params,None).unwrap();
+                    let store=MaterialStore::new(&round_state,claim,scope,&material_units,&openings,None).unwrap();
                     let replay=crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&store,&court).unwrap();
                     assert_eq!(borsh::to_vec(&replay).unwrap(),borsh::to_vec(&evidence).unwrap());
+                    use crate::palw_court_shared_tir_builder_store_v1::{SignedSharedTerminalIntentV1 as Intent,
+                        SHARED_TERMINAL_INTENT_CONTEXT_V1 as INTENT_CONTEXT};
+                    let mut intent_rules=native;intent_rules.at=at(frame,event_offset);
+                    let mut intent=Intent {version:1,claim,scope_id:scope,policy_id:control.policy_id,leaf,
+                        root_id:prepared.root_id,path:path.clone(),parent_id:prepared.parent_id,filer:outsider(),signature:vec![]};
+                    let sign_intent=|i:&mut Intent| {
+                        i.signature=libcrux_ml_dsa::ml_dsa_87::sign(&filer_keys.signing_key,
+                            i.signing_message(native.network_domain).unwrap().as_byte_slice(),INTENT_CONTEXT,[109;32])
+                            .unwrap().as_ref().to_vec();
+                    };
+                    sign_intent(&mut intent);
+                    // Existing node construction policy, used only as a fixture work cap.
+                    // This is not a new consensus limit, CPU calibration or funded profile.
+                    let limit=crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 {evaluation:court.limits,
+                        max_target_requests:65_536,max_source_reads:court.limits.max_elements
+                            .checked_add(court.limits.max_terms).unwrap().checked_mul(8).unwrap().checked_add(65_536).unwrap()};
+                    let before_intent=round_state.state_root();
+                    let (built,meter)=store.build_terminal(&round_state,&params,&intent_rules,&intent,limit).unwrap();
+                    let mut expected=replay.clone();
+                    crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut expected.binding);
+                    assert_eq!(borsh::to_vec(&built).unwrap(),borsh::to_vec(&expected).unwrap());
+                    assert!(meter.target_requests>0 && meter.source_reads>0);
+                    let exact=crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 {evaluation:misaka_palw_tir::demand::DemandLimits {max_elements:meter.work.elements,max_terms:meter.work.terms},
+                        max_target_requests:meter.target_requests,max_source_reads:meter.source_reads};
+                    let (again,again_meter)=store.build_terminal(&round_state,&params,&intent_rules,&intent,exact).unwrap();
+                    assert_eq!(borsh::to_vec(&again).unwrap(),borsh::to_vec(&built).unwrap());assert_eq!(again_meter,meter);
+                    let mut short=exact;short.max_source_reads-=1;
+                    assert!(store.build_terminal(&round_state,&params,&intent_rules,&intent,short).is_err());
+                    let mut second=intent.clone();second.filer=producer;
+                    second.signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,
+                        second.signing_message(native.network_domain).unwrap().as_byte_slice(),INTENT_CONTEXT,[110;32])
+                        .unwrap().as_ref().to_vec();
+                    assert_eq!(borsh::to_vec(&store.build_terminal(&round_state,&params,&intent_rules,&second,exact).unwrap().0).unwrap(),
+                        borsh::to_vec(&built).unwrap(),"a second authenticated filer has no exclusive body owner to wait for");
+                    if terminals==0 {
+                        for kind in 0..7 {
+                            let mut bad=intent.clone();
+                            match kind {0=>bad.scope_id=h(0xDD01),1=>bad.policy_id=h(0xDD02),2=>bad.root_id=h(0xDD03),
+                                3=>bad.parent_id=h(0xDD04),4=>bad.leaf+=1,5=>{bad.path.pop();},_=>{bad.signature[0]^=1;}};
+                            if kind!=6 {sign_intent(&mut bad);}
+                            assert!(store.build_terminal(&round_state,&params,&intent_rules,&bad,limit).is_err(),"intent mutation {kind}");
+                        }
+                        let mut future=intent_rules;future.at=at(frame,10_000);
+                        assert!(store.build_terminal(&round_state,&params,&future,&intent,limit).is_err());
+                        let mut before=intent_rules;before.at=at(frame,0);
+                        assert!(store.build_terminal(&round_state,&params,&before,&intent,limit).is_err());
+                        let mut network=intent_rules;network.network_domain=h(0xDD05);
+                        assert!(store.build_terminal(&round_state,&params,&network,&intent,limit).is_err());
+                        let mut wrong_context=intent.clone();
+                        wrong_context.signature=libcrux_ml_dsa::ml_dsa_87::sign(&filer_keys.signing_key,
+                            wrong_context.signing_message(native.network_domain).unwrap().as_byte_slice(),
+                            bottoms::SHARED_TIR_BOTTOM_CONTEXT_V1,[111;32]).unwrap().as_ref().to_vec();
+                        assert!(store.build_terminal(&round_state,&params,&intent_rules,&wrong_context,limit).is_err());
+                    }
+                    assert_eq!(round_state.state_root(),before_intent,"intent construction cannot mutate or reserve a slot");
                     let no_params=MaterialStore::new(&round_state,claim,scope,&material_units,&[],None).unwrap();
                     assert!(crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&no_params,&court).is_err());
-                    let no_steps=MaterialStore::new(&round_state,claim,scope,&[],&params,None).unwrap();
+                    assert!(no_params.build_terminal(&round_state,&params,&intent_rules,&intent,limit).is_err());
+                    let no_steps=MaterialStore::new(&round_state,claim,scope,&[],&openings,None).unwrap();
                     assert!(crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&no_steps,&court).is_err());
-                    assert!(MaterialStore::new(&round_state,claim,Hash64::default(),&material_units,&params,None).is_err());
-                    let duplicate=vec![params[0].clone(),params[0].clone()];
+                    assert!(no_steps.build_terminal(&round_state,&params,&intent_rules,&intent,limit).is_err());
+                    assert!(MaterialStore::new(&round_state,claim,Hash64::default(),&material_units,&openings,None).is_err());
+                    let duplicate=vec![openings[0].clone(),openings[0].clone()];
                     assert!(MaterialStore::new(&round_state,claim,scope,&material_units,&duplicate,None).is_err());
-                    let mut bad=params.clone();bad[0].operand.bytes[0]^=1;
+                    let mut bad=openings.clone();bad[0].operand.bytes[0]^=1;
                     assert!(MaterialStore::new(&round_state,claim,scope,&material_units,&bad,None).is_err());
                     assert!(store.prompt_token_ids().is_none());assert!(store.decode_pin().is_none());
                 }

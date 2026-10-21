@@ -1,0 +1,47 @@
+
+running 42 tests
+test evm::log_index::tests::bucket_is_the_shared_prefix ... ok
+test palw_bond_budget_v1::tests::the_window_is_shared_and_concurrent_draws_never_pass_the_cap ... ok
+test palw_claim_local_v1::tests::rfc23s2_independence_shared_execution_and_actual_reservations ... ok
+test palw_court_shared_tir_builder_store_v1::prompt_material_tests::flat_prompt_checks_count_commitment_and_native_form ... ok
+test palw_court_shared_tir_builder_store_v1::prompt_material_tests::merkle_prompt_checks_ragged_tiles_order_count_and_commitment ... ok
+test palw_attempt_rules_v1::tests::t12_030_the_processors_attribution_calls_are_the_shared_gates ... ok
+test palw_court_shared_tir_frontier_v1::tests::court_tir_shared_frontier_never_promotes_provisional_ids_to_public_data ... ok
+test palw_court_shared_tir_frontier_v1::tests::court_tir_shared_frontier_real_signatures_coalesce_without_exclusive_choices ... ok
+test palw_court_shared_tir_response_v1::tests::court_tir_shared_data_response_codec_bounds_signature_before_allocation ... ok
+test palw_court_shared_tir_response_v1::tests::court_tir_shared_data_response_real_signatures_bind_query_block_and_data ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_codec_rejects_lengths_before_reading_allocated_payload ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_geometry_retains_existing_part_ceiling ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_real_signature_binds_every_control_field ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_slot_does_not_multiply_with_declarations ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_node_first_frontier_dominates_ragged_last_nodes ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_requests_check_large_geometry_and_run_family_boundaries ... ok
+test palw_court_shared_tir_frontier_v1::tests::court_tir_shared_frontier_signed_intent_decoder_bounds_signature_before_allocation ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_source_cost_overflow_is_atomic ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_source_data_upper_covers_every_native_unit ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_requests_match_native_validator_and_bind_scope ... ok
+test palw_flat_execution_capacity_v22::tests::shared_bursts_retry_and_blocking_mass_refuse_overbook_atomically ... ok
+test palw_flat_execution_capacity_v22::tests::smaller_deadline_and_original_slot_cooldown_are_part_of_shared_guard ... ok
+test palw_fork_choice_rule_e_leaf_v2::tests::the_pair_from_openings_cancels_shared_claims_and_counts_only_the_forks_bonds ... ok
+test palw_freeprompt_v3::tests::the_hoisted_f1_and_f2_checks_are_in_the_shared_validator ... ok
+test palw_gen_step_v1::level_path_tests::shared_levels_give_the_paths_the_rebuilt_tree_gave_at_every_size ... ok
+test palw_model_lines_v1::tests::a_line_id_carries_its_founder_so_a_name_is_shared_and_never_squatted ... ok
+test palw_native_resource_v1::ledger_expansion::tests::shared_cache_keeps_ticket_until_last_arc_and_codec_does_not_include_it ... ok
+test palw_native_resource_v1::retained::tests::cache_replacement_cannot_release_live_shared_payload_ticket ... ok
+test palw_native_resource_v1::wire::carriage_preflight_tests::shared_arc_preflight_covers_typed_heap_without_vector_slack ... ok
+test palw_native_settlement_v1::tests::rfc0012_concentration_and_shared_anchor_do_not_buy_depth ... ok
+test palw_panel_economy_v1::tests::headroom_is_the_shared_ceiling_and_counts_what_the_bond_already_backs ... ok
+test palw_rfc0016_v1::capacity::tests::v8_each_resource_binds_and_shared_da_and_court_are_spent_once ... ok
+test palw_rfc0018_v1::tests::rfc18_a_slow_model_a_claim_stops_only_the_shared_frontier_not_model_b_final_certification_or_payment ... ok
+test palw_shard_plan_v1::tests::tied_and_shared_rows_land_where_they_are_held ... ok
+test palw_court_tir_requests_v1::tests::court_tir_shared_transport_counts_actual_signed_codecs_and_all_source_choices ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_shared_query_and_signed_streams_work_with_all_native_owner_slots_occupied_and_reload ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_shared_wide_leaf_stream_crosses_part_boundary_and_reloads ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::shared_material_two_tile_row_pins_match_native_without_full_rows ... ok
+test palw_state_v2::tests::claim_local_v1::rfc23s2_admission_reader_distinguishes_merged_carrier_and_shared_acceptor ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::shared_owned_rows_preserve_every_old_box_encoding_and_copy_only_the_written_owner ... ok
+test palw_tir_public_owned_v1::tests::work_actor_nonce_survives_responder_interleaving_without_shared_head_preconditions ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::shared_history_root_binds_public_original_policy_and_literal_producer_signature ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 4659 filtered out; finished in 8.98s
+

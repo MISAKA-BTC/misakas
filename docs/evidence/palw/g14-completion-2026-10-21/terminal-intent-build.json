@@ -1,0 +1,35 @@
+{
+  "parent": "c0137d340842323de073cd01dda0a6238cf34d5d",
+  "source_sha256": {
+    "consensus/core/src/palw_court_shared_tir_builder_store_v1.rs": "1b649510aea2b8f4924d1e0e889fdf7d42429859f98f3ca03912a8d7fd2a9a04",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "afbfb165e31606f34e90b67818a29082dca94e4a0089f35dd9e8f129727151e8"
+  },
+  "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib shared_history_root_binds_public_original_policy_and_literal_producer_signature -- --nocapture --test-threads=1",
+  "binary": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-terminal-intent-_1avolue/core-tests",
+  "binary_sha256": "ae829152c8c1fc0eea2e6cb3901f400a8b1af9aab293c6ae189211791ae02c54",
+  "targeted": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "seconds": 8.63
+  },
+  "build_and_test_log": "terminal-intent-targeted.log",
+  "regressions": {
+    "passed": 42,
+    "failed": 0,
+    "ignored": 0,
+    "seconds": 8.98,
+    "log": "terminal-intent-regressions.log",
+    "targeted_overlaps_selection": true
+  },
+  "non_test_check": {
+    "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib",
+    "exit_code": 0,
+    "log": "terminal-intent-nontest-check.log"
+  },
+  "log_sha256": {
+    "terminal-intent-targeted.log": "9fa80d70211228846cba3b0d90caa82328861ca8182d4622cea21f887892a6fe",
+    "terminal-intent-regressions.log": "bec4e88e7024d6d2389bfd47ffadfa10111c39e8a21b17446caab219d9be7d9b",
+    "terminal-intent-nontest-check.log": "5b462f5ac0ca01502abc0852c69e7fd7a53f7d4f4d04709144be595a83baf65b"
+  }
+}
