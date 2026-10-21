@@ -371,3 +371,6 @@ pub(crate) mod tokenizer_terminal;
 
 #[path = "palw_court_shared_prefix_builder_v1.rs"]
 pub(crate) mod prefix_terminal;
+
+#[path = "palw_court_shared_semantic_material_v1.rs"]
+pub(crate) mod semantic_material;

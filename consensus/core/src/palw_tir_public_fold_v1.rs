@@ -75,6 +75,13 @@ pub fn palw_funded_original_candidate_v1(
     if producer.pubkey != fp.commitment.job.executor_pubkey || !matches!(producer.status, PalwBondStatusV2::Active) {
         return Invalid("current producer authority or status");
     }
+    // Codec already binds pledge identity to these exact original bytes. Only
+    // the actual current producer key can authenticate this separate consent;
+    // payer signature or a nonzero resource/profile hash cannot replace it.
+    if original.pledge.validate_signature_v1(&producer.pubkey,
+        crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1).is_err() {
+        return Invalid("current producer source pledge signature");
+    }
     if state.claim(&fp.claim_id()).is_some() {
         return Invalid("original claim already exists");
     }
@@ -86,8 +93,9 @@ pub fn palw_funded_original_candidate_v1(
     }
     // Do not enter prepare_original/source graph expansion without its complete
     // native allocation preflight. Fixed header bytes have been decoded/paired,
-    // but registered source geometry, producer pledge and full branch grammar
-    // remain UNCHECKED, as do native profiles and ordered accepted-prefix state.
+    // but registered source geometry, producer pledge native plan/horizon and
+    // full branch grammar remain UNCHECKED, as do native profiles and ordered
+    // accepted-prefix state. Pledge signature alone establishes none of those.
     Missing("native source construction meter, full grammar/profiles and ordered original coordinator")
 }
 

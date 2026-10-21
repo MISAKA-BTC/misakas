@@ -84,6 +84,23 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     b.write_staged_row_v1(Key::CourtSharedContext(claim), Some(Row::CourtSharedContext(Box::new(c)))).unwrap();
     let store = Store::new(&b.state, claim, scope, &[], &[], None).unwrap();
+    // Existing registered program, signed custody/semantic bundle and rooted EOF:
+    // private retained all-ID data authentication, not funded original admission.
+    {
+        let encoded=(0..table.vocab()).map(|id|borsh::to_vec(&table.opening_of(id).unwrap()).unwrap()).collect::<Vec<_>>();
+        let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let eog=borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
+        let owner=store.retain_semantic_material_v1(&b.state,claim,&bodies,&eog,&raw).unwrap();
+        assert_eq!(owner.counts_v1().vocabulary,table.vocab());
+        assert_eq!(owner.counts_v1().raw_bytes,eof.actual_bytes);
+        assert_eq!(owner.raw_v1(),raw);
+        owner.check_scope_v1(p.source_id,claim,scope,semantics.commitment(),eof.inventory_id).unwrap();
+        assert!(owner.check_scope_v1(h(996),claim,scope,semantics.commitment(),eof.inventory_id).is_err());
+        assert!(store.retain_semantic_material_v1(&b.state,h(997),&bodies,&eog,&raw).is_err());
+        assert!(store.retain_semantic_material_v1(&b.state,claim,&bodies[..bodies.len()-1],&eog,&raw).is_err());
+        let mut changed=raw.clone();changed[0]^=1;
+        assert!(store.retain_semantic_material_v1(&b.state,claim,&bodies,&eog,&changed).is_err());
+    }
     // Production data paths generated under a local target context; the final signed
     // material intent below uses a different context and rechecks the same paths.
     let rendering = table.opening_of(0).unwrap();

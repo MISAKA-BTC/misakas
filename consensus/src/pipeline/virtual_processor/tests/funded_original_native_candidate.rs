@@ -79,6 +79,24 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
     assert_eq!(state.state_root(),root);
     assert!(state.claim(&fp.claim_id()).is_none());
     assert_eq!(validated.calculated_fee,value-envelope.funding.terms.funding_amount_sompi);
+    // Full native inputs and payer consent stay valid. Corrupt ONLY the
+    // producer's separate source pledge signature, keeping its signed scope,
+    // original FP commitment, funding profile IDs/output/amount unchanged.
+    let mut bad_source_envelope=envelope.clone();
+    let mut bad_source_original=bad_source_envelope.original_v1().unwrap();
+    bad_source_original.pledge.signature[0]^=1;
+    bad_source_envelope.original_envelope=bad_source_original.encode_v1().unwrap();
+    bad_source_envelope.funding.verify_signature_v1(&bad_source_envelope.payer_pubkey).unwrap();
+    bad_source_envelope.original_v1().unwrap().original_fp_v1().unwrap()
+        .validate_signature_v3(kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1).unwrap();
+    let bad_source=make(bad_source_envelope.encode_v1().unwrap());
+    let bad_source_validated=vp.validate_transaction_in_utxo_context(&bad_source,&view,now,full,None).unwrap();
+    assert_eq!(bad_source_validated.calculated_fee,validated.calculated_fee);
+    assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&state,now,&bad_source_validated),
+        PalwFundedOriginalCandidateV1::Invalid("current producer source pledge signature"));
+    assert_eq!(bad_source.outputs,tx.outputs);
+    assert_eq!(state.state_root(),root);
+    assert!(state.claim(&fp.claim_id()).is_none());
     // Unknown profiles in the signed consent never create funded standing.
     // The ordinary own output remains spendable with the actual payer signature.
     let fallback=TransactionOutpoint::new(tx.id(),0);

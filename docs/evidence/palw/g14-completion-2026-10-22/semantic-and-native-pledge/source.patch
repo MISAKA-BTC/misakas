@@ -1,0 +1,330 @@
+diff --git a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+index 55278d1cb..1851a71c1 100644
+--- a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
++++ b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+@@ -371,3 +371,6 @@ pub(crate) mod tokenizer_terminal;
+ 
+ #[path = "palw_court_shared_prefix_builder_v1.rs"]
+ pub(crate) mod prefix_terminal;
++
++#[path = "palw_court_shared_semantic_material_v1.rs"]
++pub(crate) mod semantic_material;
+diff --git a/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs b/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs
+index 224172bd9..30997920f 100644
+--- a/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs
+@@ -84,6 +84,23 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
+     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+     b.write_staged_row_v1(Key::CourtSharedContext(claim), Some(Row::CourtSharedContext(Box::new(c)))).unwrap();
+     let store = Store::new(&b.state, claim, scope, &[], &[], None).unwrap();
++    // Existing registered program, signed custody/semantic bundle and rooted EOF:
++    // private retained all-ID data authentication, not funded original admission.
++    {
++        let encoded=(0..table.vocab()).map(|id|borsh::to_vec(&table.opening_of(id).unwrap()).unwrap()).collect::<Vec<_>>();
++        let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
++        let eog=borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
++        let owner=store.retain_semantic_material_v1(&b.state,claim,&bodies,&eog,&raw).unwrap();
++        assert_eq!(owner.counts_v1().vocabulary,table.vocab());
++        assert_eq!(owner.counts_v1().raw_bytes,eof.actual_bytes);
++        assert_eq!(owner.raw_v1(),raw);
++        owner.check_scope_v1(p.source_id,claim,scope,semantics.commitment(),eof.inventory_id).unwrap();
++        assert!(owner.check_scope_v1(h(996),claim,scope,semantics.commitment(),eof.inventory_id).is_err());
++        assert!(store.retain_semantic_material_v1(&b.state,h(997),&bodies,&eog,&raw).is_err());
++        assert!(store.retain_semantic_material_v1(&b.state,claim,&bodies[..bodies.len()-1],&eog,&raw).is_err());
++        let mut changed=raw.clone();changed[0]^=1;
++        assert!(store.retain_semantic_material_v1(&b.state,claim,&bodies,&eog,&changed).is_err());
++    }
+     // Production data paths generated under a local target context; the final signed
+     // material intent below uses a different context and rechecks the same paths.
+     let rendering = table.opening_of(0).unwrap();
+diff --git a/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs b/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs
+index 018ab2675..df34b911d 100644
+--- a/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs
++++ b/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs
+@@ -443,6 +443,66 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
+     Ok(shape)
+ }
+ 
++/// Actual field counts from an allocation-free second pass over the same wire.
++/// These are allocation bounds, not semantic validation or scheduling authority.
++#[derive(Clone, Copy, Debug)]
++struct StepSpaceShapeV1 {
++    blocks: u64,
++    nodes: u64,
++    layers: u64,
++    fixed_global: u64,
++    fixed_layer: u64,
++    hist_global: u64,
++    hist_layer: u64,
++    params: u64,
++}
++fn step_space_shape_v1(bytes: &[u8]) -> io::Result<StepSpaceShapeV1> {
++    use misaka_palw_tir::{program::{ParamDecl, ConstDecl, Node}, types::{DType, TensorType}};
++    let mut r = NativeWireReaderV1::new(bytes, bytes.len() as u64);
++    if r.short()? != misaka_palw_tir::program::TIR_PROGRAM_VERSION_V1 {
++        return Err(wire::wire_bad("unknown TIR program version for StepSpace shape"));
++    }
++    r.skip(64 + 4 + 4)?;
++    let mut out = StepSpaceShapeV1 { blocks:0,nodes:0,layers:0,fixed_global:0,fixed_layer:0,hist_global:0,hist_layer:0,params:0 };
++    out.params = u64::from(r.word()?);
++    for _ in 0..out.params { ParamDecl::scan_native_wire_v1(&mut r)?; }
++    let constants = r.word()?;
++    for _ in 0..constants { ConstDecl::scan_native_wire_v1(&mut r)?; }
++    let states = r.word()?;
++    for _ in 0..states {
++        String::scan_native_wire_v1(&mut r)?;
++        let fixed = match r.byte()? {
++            0 => { r.skip(16)?; true },
++            1 => { r.skip(4)?; false },
++            _ => return Err(wire::wire_bad("unknown state kind for StepSpace shape")),
++        };
++        DType::scan_native_wire_v1(&mut r)?;
++        Vec::<u32>::scan_native_wire_v1(&mut r)?;
++        let per_layer = match r.byte()? { 0=>false,1=>true,_=>return Err(wire::wire_bad("invalid state per_layer boolean")) };
++        let count=match (fixed,per_layer) {
++            (true,false)=>&mut out.fixed_global,(true,true)=>&mut out.fixed_layer,
++            (false,false)=>&mut out.hist_global,(false,true)=>&mut out.hist_layer,
++        };
++        *count=count.checked_add(1).ok_or_else(||wire::wire_bad("StepSpace state count overflow"))?;
++    }
++    out.blocks=u64::from(r.word()?);
++    for _ in 0..out.blocks {
++        String::scan_native_wire_v1(&mut r)?;
++        Vec::<TensorType>::scan_native_wire_v1(&mut r)?;
++        let nodes=u64::from(r.word()?);
++        out.nodes=out.nodes.checked_add(nodes).ok_or_else(||wire::wire_bad("StepSpace node count overflow"))?;
++        for _ in 0..nodes { Node::scan_native_wire_v1(&mut r)?; }
++        Vec::<u16>::scan_native_wire_v1(&mut r)?;
++    }
++    r.byte()?; // schedule.pre
++    out.layers=u64::from(r.word()?);
++    r.skip(out.layers)?;
++    r.byte()?; // schedule.post
++    r.skip(2+64)?; // logits and logits scheme
++    if r.remaining()!=0 { return Err(wire::wire_bad("StepSpace shape trailing bytes")); }
++    Ok(out)
++}
++
+ /// Borrowed scanner output only. No public fields/constructor: a caller cannot
+ /// substitute a budget or declared count for the actual canonical-byte scan.
+ /// This quote owns no lease and certifies neither semantic validity nor Source.
+@@ -450,10 +510,17 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
+ pub(crate) struct NativeTirProgramShapeV1 {
+     program_requests: u64,
+     structural_items: u64,
++    step_space: StepSpaceShapeV1,
+ }
+ impl NativeTirProgramShapeV1 {
+     pub(crate) fn program_requests_v1(&self) -> u64 { self.program_requests }
+     pub(crate) fn structural_items_v1(&self) -> u64 { self.structural_items }
++    pub(crate) fn step_space_counts_v1(&self) -> (u64,u64,u64,u64,u64,u64,u64) {
++        let s=self.step_space;
++        (s.blocks,s.nodes,s.layers,s.fixed_global,s.fixed_layer,s.hist_global,s.hist_layer)
++    }
++    #[cfg(test)]
++    pub(crate) fn parameter_count_v1(&self)->u64 { self.step_space.params }
+ }
+ /// Same audited program codec/analysis walk used by ledger restoration.
+ /// The stack prefix supplies framing; actual bytes are scanned without a copy.
+@@ -471,7 +538,7 @@ pub(crate) fn standalone_tir_program_shape_v1(bytes: &[u8]) -> io::Result<Native
+     // in particular schedule.layers is byte-valued and still bounds occurrences.
+     let structural_items = shape.collection_entries.checked_add(shape.byte_entries)
+         .ok_or_else(|| wire::wire_bad("TIR structural item count overflow"))?;
+-    Ok(NativeTirProgramShapeV1 { program_requests, structural_items })
++    Ok(NativeTirProgramShapeV1 { program_requests, structural_items, step_space: step_space_shape_v1(bytes)? })
+ }
+ pub(crate) fn standalone_tir_program_requests_v1(bytes: &[u8]) -> io::Result<u64> {
+     Ok(standalone_tir_program_shape_v1(bytes)?.program_requests_v1())
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index 30ee67fce..940b4258b 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -75,6 +75,13 @@ pub fn palw_funded_original_candidate_v1(
+     if producer.pubkey != fp.commitment.job.executor_pubkey || !matches!(producer.status, PalwBondStatusV2::Active) {
+         return Invalid("current producer authority or status");
+     }
++    // Codec already binds pledge identity to these exact original bytes. Only
++    // the actual current producer key can authenticate this separate consent;
++    // payer signature or a nonzero resource/profile hash cannot replace it.
++    if original.pledge.validate_signature_v1(&producer.pubkey,
++        crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1).is_err() {
++        return Invalid("current producer source pledge signature");
++    }
+     if state.claim(&fp.claim_id()).is_some() {
+         return Invalid("original claim already exists");
+     }
+@@ -86,8 +93,9 @@ pub fn palw_funded_original_candidate_v1(
+     }
+     // Do not enter prepare_original/source graph expansion without its complete
+     // native allocation preflight. Fixed header bytes have been decoded/paired,
+-    // but registered source geometry, producer pledge and full branch grammar
+-    // remain UNCHECKED, as do native profiles and ordered accepted-prefix state.
++    // but registered source geometry, producer pledge native plan/horizon and
++    // full branch grammar remain UNCHECKED, as do native profiles and ordered
++    // accepted-prefix state. Pledge signature alone establishes none of those.
+     Missing("native source construction meter, full grammar/profiles and ordered original coordinator")
+ }
+ 
+diff --git a/consensus/core/src/palw_tir_step_v1.rs b/consensus/core/src/palw_tir_step_v1.rs
+index a3c4d55e2..26a560637 100644
+--- a/consensus/core/src/palw_tir_step_v1.rs
++++ b/consensus/core/src/palw_tir_step_v1.rs
+@@ -229,33 +229,38 @@ pub(crate) fn floor_sum(n: u128, m: u128, a: u128, b: u128) -> u128 {
+ pub(crate) fn native_tir_step_space_additional_requests_v1(
+     shape: &crate::palw_native_resource_v1::NativeTirProgramShapeV1,
+ ) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+-    step_space_requests_from_count_v1(shape.structural_items_v1())
++    let (blocks,nodes,layers,fixed_global,fixed_layer,hist_global,hist_layer)=shape.step_space_counts_v1();
++    step_space_requests_from_counts_v1(blocks,nodes,layers,fixed_global,fixed_layer,hist_global,hist_layer)
+ }
+-fn step_space_requests_from_count_v1(items: u64) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
++fn step_space_requests_from_counts_v1(blocks:u64,nodes:u64,layers:u64,
++    fixed_global:u64,fixed_layer:u64,hist_global:u64,hist_layer:u64,
++) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+     use crate::palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1};
+     let overflow = || NativeCoverageV1::overflow::<PalwTirStepSpaceV1>("StepSpace structural cardinality");
+     let mut q = TirNativeRequestsV1::new();
+-    // B blocks, N nodes, S states, L layer references are each bounded by the
+-    // sum of actual parsed collection/byte elements (not canonical frame size).
+-    let n = items;
+-    let occurrences = n.checked_add(2).ok_or_else(overflow)?;
+-    q.exact_v1::<BlockSpaceV1>(n)?; // Vec::with_capacity(blocks.len())
+-    // Commit Vecs grow independently. Sum 2*max(nodes_in_block, minimum)
+-    // <= 2*N + B*(2*minimum). Quote the ordinary one-Vec envelope for N,
+-    // plus one one-item envelope per B; the helper supplies its pinned minimum.
+-    q.vec_v1::<CommitNodeV1>(n)?;
+-    let mut one = TirNativeRequestsV1::new();
++    let occurrences=layers.checked_add(2).ok_or_else(overflow)?;
++    q.exact_v1::<BlockSpaceV1>(blocks)?;
++    // Every commit is one actual node. Independently growing per-block Vecs
++    // need a pinned minimum even for blocks with just one committed node.
++    q.vec_v1::<CommitNodeV1>(nodes)?;
++    let mut one=TirNativeRequestsV1::new();
+     one.vec_v1::<CommitNodeV1>(1)?;
+-    q.add_v1(n.checked_mul(one.bytes_v1()).ok_or_else(overflow)?)?;
+-    q.exact_v1::<(u8, Option<u16>)>(occurrences)?; // retained occurrences
+-    q.exact_v1::<(u8, Option<u16>)>(occurrences)?; // occurrence_slot_bases temporary occurrences
+-    q.vec_v1::<u32>(occurrences)?; // collect slot bases
+-    // A global state has one instance; a per-layer state at most L. Count both
+-    // output Vecs conservatively even though each state chooses only one kind.
+-    let instances = n.checked_mul(occurrences).ok_or_else(overflow)?;
+-    q.vec_v1::<PalwTirStateInstanceV1>(instances)?;
+-    q.vec_v1::<PalwTirStateInstanceV1>(instances)?;
+-    q.vec_v1::<Option<u16>>(occurrences)?; // one transient layers list
++    q.add_v1(blocks.checked_mul(one.bytes_v1()).ok_or_else(overflow)?)?;
++    // occurrences() uses exact layers+2; occurrence_slot_bases creates a second
++    // such list, then collects its bases while that temporary is still live.
++    q.exact_v1::<(u8, Option<u16>)>(occurrences)?;
++    q.exact_v1::<(u8, Option<u16>)>(occurrences)?;
++    q.vec_v1::<u32>(occurrences)?;
++    // Global states always instantiate once. Per-layer states instantiate at
++    // only the schedule layers referencing that state, hence <= actual layers.
++    // Separate fixed/history bounds avoid charging both kinds for every state.
++    let fixed=fixed_layer.checked_mul(layers).and_then(|n|n.checked_add(fixed_global)).ok_or_else(overflow)?;
++    let hist=hist_layer.checked_mul(layers).and_then(|n|n.checked_add(hist_global)).ok_or_else(overflow)?;
++    q.vec_v1::<PalwTirStateInstanceV1>(fixed)?;
++    q.vec_v1::<PalwTirStateInstanceV1>(hist)?;
++    // At most one layers Vec coexists with both output Vecs; global [None]
++    // still allocates one entry when there are zero scheduled layers.
++    q.vec_v1::<Option<u16>>(layers.max(1))?;
+     Ok(q.bytes_v1())
+ }
+ 
+@@ -1130,6 +1135,12 @@ mod native_step_space_inventory_tests_v1 {
+         let class = &x.binding.class;
+         let shape = crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&class.program).unwrap();
+         assert!(shape.structural_items_v1() > 0 && shape.program_requests_v1() > 0);
++        let decoded=class.decode_program().unwrap();
++        let (b,n,l,fg,fl,hg,hl)=shape.step_space_counts_v1();
++        assert_eq!((b,n,l),(decoded.blocks.len() as u64,decoded.blocks.iter().map(|b|b.nodes.len() as u64).sum::<u64>(),decoded.schedule.layers.len() as u64));
++        assert_eq!(shape.parameter_count_v1(),decoded.params.len() as u64);
++        let count=|fixed:bool,layer:bool| decoded.states.iter().filter(|s|matches!(s.kind,StateKind::Fixed{..})==fixed && s.per_layer==layer).count() as u64;
++        assert_eq!((fg,fl,hg,hl),(count(true,false),count(true,true),count(false,false),count(false,true)));
+         let quote = native_tir_step_space_additional_requests_v1(&shape).unwrap();
+         let space = PalwTirStepSpaceV1::new(class).unwrap();
+         let mut actual = space.blocks.capacity() * std::mem::size_of::<BlockSpaceV1>();
+@@ -1140,9 +1151,53 @@ mod native_step_space_inventory_tests_v1 {
+         assert!(quote >= actual as u64);
+     }
+     #[test]
++    fn actual_fixed_history_step_space_capacities_fit_scanned_quote() {
++        for committed in [false,true] {
++            let fx=crate::palw_tir_public_claim_v1::palw_tir_public_fixed_history_frame_fixture_v1(
++                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,committed);
++            let class=&fx.execution.binding.class;
++            let shape=crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&class.program).unwrap();
++            let space=PalwTirStepSpaceV1::new(class).unwrap();
++            assert!(!space.fixed_instances().is_empty());
++            assert!(!space.hist_instances().is_empty());
++            let (blocks,nodes,layers,fg,fl,hg,hl)=shape.step_space_counts_v1();
++            assert_eq!(blocks,space.program.blocks.len() as u64);
++            assert_eq!(nodes,space.program.blocks.iter().map(|b|b.nodes.len() as u64).sum::<u64>());
++            assert_eq!(layers,space.program.schedule.layers.len() as u64);
++            assert_eq!(space.occurrences.len() as u64,layers+2);
++            assert!((space.fixed_instances().len() as u64)<=fg+fl*layers);
++            assert!((space.hist_instances().len() as u64)<=hg+hl*layers);
++            let mut actual=space.blocks.capacity()*std::mem::size_of::<BlockSpaceV1>();
++            actual+=space.blocks.iter().map(|b|b.commits.capacity()*std::mem::size_of::<CommitNodeV1>()).sum::<usize>();
++            actual+=space.occurrences.capacity()*std::mem::size_of::<(u8,Option<u16>)>();
++            actual+=space.slot_bases.capacity()*std::mem::size_of::<u32>();
++            actual+=(space.fixed.capacity()+space.hist.capacity())*std::mem::size_of::<PalwTirStateInstanceV1>();
++            let quote=native_tir_step_space_additional_requests_v1(&shape).unwrap();
++            assert!(quote>=actual as u64,"committed={committed} quote={quote} actual retained capacity={actual}");
++        }
++    }
++    #[test]
++    fn scanned_step_space_counts_distinguish_state_kinds_and_layer_flags() {
++        let x=crate::palw_tir_court_v1::test_support::tiny_execution(None);
++        let mut p=x.binding.class.decode_program().unwrap();
++        p.states.clear();
++        for (index,(kind,per_layer)) in [
++            (StateKind::Fixed{lo:-1,hi:1},false),(StateKind::Fixed{lo:-1,hi:1},true),
++            (StateKind::Hist{window:4},false),(StateKind::Hist{window:4},true),
++        ].into_iter().enumerate() {
++            p.states.push(misaka_palw_tir::program::StateDecl{name:format!("scan-{index}"),kind,dtype:misaka_palw_tir::types::DType::I8,shape:vec![4],per_layer});
++        }
++        p.schedule.layers=vec![p.schedule.pre;7];
++        // Wire-metadata test only: this synthetic state/schedule combination is
++        // NOT passed off as a valid executable class or Source constructor.
++        let s=crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&p.encode()).unwrap();
++        let (_,_,layers,fg,fl,hg,hl)=s.step_space_counts_v1();
++        assert_eq!((layers,fg,fl,hg,hl),(7,1,1,1,1));
++    }
++    #[test]
+     fn structural_overflow_and_hostile_canonical_shape_are_refused_before_space_construction() {
+-        assert!(step_space_requests_from_count_v1(u64::MAX).is_err());
+-        assert!(step_space_requests_from_count_v1(u64::MAX / 2).is_err());
++        assert!(step_space_requests_from_counts_v1(0,0,u64::MAX,0,0,0,0).is_err());
++        assert!(step_space_requests_from_counts_v1(0,0,2,0,u64::MAX,0,0).is_err());
+         assert!(crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&[]).is_err());
+         let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+         let mut bytes = x.binding.class.program.clone();
+diff --git a/consensus/src/pipeline/virtual_processor/tests/funded_original_native_candidate.rs b/consensus/src/pipeline/virtual_processor/tests/funded_original_native_candidate.rs
+index 438cf4399..23084edde 100644
+--- a/consensus/src/pipeline/virtual_processor/tests/funded_original_native_candidate.rs
++++ b/consensus/src/pipeline/virtual_processor/tests/funded_original_native_candidate.rs
+@@ -79,6 +79,24 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
+     assert_eq!(state.state_root(),root);
+     assert!(state.claim(&fp.claim_id()).is_none());
+     assert_eq!(validated.calculated_fee,value-envelope.funding.terms.funding_amount_sompi);
++    // Full native inputs and payer consent stay valid. Corrupt ONLY the
++    // producer's separate source pledge signature, keeping its signed scope,
++    // original FP commitment, funding profile IDs/output/amount unchanged.
++    let mut bad_source_envelope=envelope.clone();
++    let mut bad_source_original=bad_source_envelope.original_v1().unwrap();
++    bad_source_original.pledge.signature[0]^=1;
++    bad_source_envelope.original_envelope=bad_source_original.encode_v1().unwrap();
++    bad_source_envelope.funding.verify_signature_v1(&bad_source_envelope.payer_pubkey).unwrap();
++    bad_source_envelope.original_v1().unwrap().original_fp_v1().unwrap()
++        .validate_signature_v3(kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1).unwrap();
++    let bad_source=make(bad_source_envelope.encode_v1().unwrap());
++    let bad_source_validated=vp.validate_transaction_in_utxo_context(&bad_source,&view,now,full,None).unwrap();
++    assert_eq!(bad_source_validated.calculated_fee,validated.calculated_fee);
++    assert_eq!(vp.palw_funded_original_candidate_from_native_v1(&state,now,&bad_source_validated),
++        PalwFundedOriginalCandidateV1::Invalid("current producer source pledge signature"));
++    assert_eq!(bad_source.outputs,tx.outputs);
++    assert_eq!(state.state_root(),root);
++    assert!(state.claim(&fp.claim_id()).is_none());
+     // Unknown profiles in the signed consent never create funded standing.
+     // The ordinary own output remains spendable with the actual payer signature.
+     let fallback=TransactionOutpoint::new(tx.id(),0);

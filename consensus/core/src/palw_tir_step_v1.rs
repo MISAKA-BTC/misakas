@@ -229,33 +229,38 @@ pub(crate) fn floor_sum(n: u128, m: u128, a: u128, b: u128) -> u128 {
 pub(crate) fn native_tir_step_space_additional_requests_v1(
     shape: &crate::palw_native_resource_v1::NativeTirProgramShapeV1,
 ) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
-    step_space_requests_from_count_v1(shape.structural_items_v1())
+    let (blocks,nodes,layers,fixed_global,fixed_layer,hist_global,hist_layer)=shape.step_space_counts_v1();
+    step_space_requests_from_counts_v1(blocks,nodes,layers,fixed_global,fixed_layer,hist_global,hist_layer)
 }
-fn step_space_requests_from_count_v1(items: u64) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+fn step_space_requests_from_counts_v1(blocks:u64,nodes:u64,layers:u64,
+    fixed_global:u64,fixed_layer:u64,hist_global:u64,hist_layer:u64,
+) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
     use crate::palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1};
     let overflow = || NativeCoverageV1::overflow::<PalwTirStepSpaceV1>("StepSpace structural cardinality");
     let mut q = TirNativeRequestsV1::new();
-    // B blocks, N nodes, S states, L layer references are each bounded by the
-    // sum of actual parsed collection/byte elements (not canonical frame size).
-    let n = items;
-    let occurrences = n.checked_add(2).ok_or_else(overflow)?;
-    q.exact_v1::<BlockSpaceV1>(n)?; // Vec::with_capacity(blocks.len())
-    // Commit Vecs grow independently. Sum 2*max(nodes_in_block, minimum)
-    // <= 2*N + B*(2*minimum). Quote the ordinary one-Vec envelope for N,
-    // plus one one-item envelope per B; the helper supplies its pinned minimum.
-    q.vec_v1::<CommitNodeV1>(n)?;
-    let mut one = TirNativeRequestsV1::new();
+    let occurrences=layers.checked_add(2).ok_or_else(overflow)?;
+    q.exact_v1::<BlockSpaceV1>(blocks)?;
+    // Every commit is one actual node. Independently growing per-block Vecs
+    // need a pinned minimum even for blocks with just one committed node.
+    q.vec_v1::<CommitNodeV1>(nodes)?;
+    let mut one=TirNativeRequestsV1::new();
     one.vec_v1::<CommitNodeV1>(1)?;
-    q.add_v1(n.checked_mul(one.bytes_v1()).ok_or_else(overflow)?)?;
-    q.exact_v1::<(u8, Option<u16>)>(occurrences)?; // retained occurrences
-    q.exact_v1::<(u8, Option<u16>)>(occurrences)?; // occurrence_slot_bases temporary occurrences
-    q.vec_v1::<u32>(occurrences)?; // collect slot bases
-    // A global state has one instance; a per-layer state at most L. Count both
-    // output Vecs conservatively even though each state chooses only one kind.
-    let instances = n.checked_mul(occurrences).ok_or_else(overflow)?;
-    q.vec_v1::<PalwTirStateInstanceV1>(instances)?;
-    q.vec_v1::<PalwTirStateInstanceV1>(instances)?;
-    q.vec_v1::<Option<u16>>(occurrences)?; // one transient layers list
+    q.add_v1(blocks.checked_mul(one.bytes_v1()).ok_or_else(overflow)?)?;
+    // occurrences() uses exact layers+2; occurrence_slot_bases creates a second
+    // such list, then collects its bases while that temporary is still live.
+    q.exact_v1::<(u8, Option<u16>)>(occurrences)?;
+    q.exact_v1::<(u8, Option<u16>)>(occurrences)?;
+    q.vec_v1::<u32>(occurrences)?;
+    // Global states always instantiate once. Per-layer states instantiate at
+    // only the schedule layers referencing that state, hence <= actual layers.
+    // Separate fixed/history bounds avoid charging both kinds for every state.
+    let fixed=fixed_layer.checked_mul(layers).and_then(|n|n.checked_add(fixed_global)).ok_or_else(overflow)?;
+    let hist=hist_layer.checked_mul(layers).and_then(|n|n.checked_add(hist_global)).ok_or_else(overflow)?;
+    q.vec_v1::<PalwTirStateInstanceV1>(fixed)?;
+    q.vec_v1::<PalwTirStateInstanceV1>(hist)?;
+    // At most one layers Vec coexists with both output Vecs; global [None]
+    // still allocates one entry when there are zero scheduled layers.
+    q.vec_v1::<Option<u16>>(layers.max(1))?;
     Ok(q.bytes_v1())
 }
 
@@ -1130,6 +1135,12 @@ mod native_step_space_inventory_tests_v1 {
         let class = &x.binding.class;
         let shape = crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&class.program).unwrap();
         assert!(shape.structural_items_v1() > 0 && shape.program_requests_v1() > 0);
+        let decoded=class.decode_program().unwrap();
+        let (b,n,l,fg,fl,hg,hl)=shape.step_space_counts_v1();
+        assert_eq!((b,n,l),(decoded.blocks.len() as u64,decoded.blocks.iter().map(|b|b.nodes.len() as u64).sum::<u64>(),decoded.schedule.layers.len() as u64));
+        assert_eq!(shape.parameter_count_v1(),decoded.params.len() as u64);
+        let count=|fixed:bool,layer:bool| decoded.states.iter().filter(|s|matches!(s.kind,StateKind::Fixed{..})==fixed && s.per_layer==layer).count() as u64;
+        assert_eq!((fg,fl,hg,hl),(count(true,false),count(true,true),count(false,false),count(false,true)));
         let quote = native_tir_step_space_additional_requests_v1(&shape).unwrap();
         let space = PalwTirStepSpaceV1::new(class).unwrap();
         let mut actual = space.blocks.capacity() * std::mem::size_of::<BlockSpaceV1>();
@@ -1140,9 +1151,53 @@ mod native_step_space_inventory_tests_v1 {
         assert!(quote >= actual as u64);
     }
     #[test]
+    fn actual_fixed_history_step_space_capacities_fit_scanned_quote() {
+        for committed in [false,true] {
+            let fx=crate::palw_tir_public_claim_v1::palw_tir_public_fixed_history_frame_fixture_v1(
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,committed);
+            let class=&fx.execution.binding.class;
+            let shape=crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&class.program).unwrap();
+            let space=PalwTirStepSpaceV1::new(class).unwrap();
+            assert!(!space.fixed_instances().is_empty());
+            assert!(!space.hist_instances().is_empty());
+            let (blocks,nodes,layers,fg,fl,hg,hl)=shape.step_space_counts_v1();
+            assert_eq!(blocks,space.program.blocks.len() as u64);
+            assert_eq!(nodes,space.program.blocks.iter().map(|b|b.nodes.len() as u64).sum::<u64>());
+            assert_eq!(layers,space.program.schedule.layers.len() as u64);
+            assert_eq!(space.occurrences.len() as u64,layers+2);
+            assert!((space.fixed_instances().len() as u64)<=fg+fl*layers);
+            assert!((space.hist_instances().len() as u64)<=hg+hl*layers);
+            let mut actual=space.blocks.capacity()*std::mem::size_of::<BlockSpaceV1>();
+            actual+=space.blocks.iter().map(|b|b.commits.capacity()*std::mem::size_of::<CommitNodeV1>()).sum::<usize>();
+            actual+=space.occurrences.capacity()*std::mem::size_of::<(u8,Option<u16>)>();
+            actual+=space.slot_bases.capacity()*std::mem::size_of::<u32>();
+            actual+=(space.fixed.capacity()+space.hist.capacity())*std::mem::size_of::<PalwTirStateInstanceV1>();
+            let quote=native_tir_step_space_additional_requests_v1(&shape).unwrap();
+            assert!(quote>=actual as u64,"committed={committed} quote={quote} actual retained capacity={actual}");
+        }
+    }
+    #[test]
+    fn scanned_step_space_counts_distinguish_state_kinds_and_layer_flags() {
+        let x=crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let mut p=x.binding.class.decode_program().unwrap();
+        p.states.clear();
+        for (index,(kind,per_layer)) in [
+            (StateKind::Fixed{lo:-1,hi:1},false),(StateKind::Fixed{lo:-1,hi:1},true),
+            (StateKind::Hist{window:4},false),(StateKind::Hist{window:4},true),
+        ].into_iter().enumerate() {
+            p.states.push(misaka_palw_tir::program::StateDecl{name:format!("scan-{index}"),kind,dtype:misaka_palw_tir::types::DType::I8,shape:vec![4],per_layer});
+        }
+        p.schedule.layers=vec![p.schedule.pre;7];
+        // Wire-metadata test only: this synthetic state/schedule combination is
+        // NOT passed off as a valid executable class or Source constructor.
+        let s=crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&p.encode()).unwrap();
+        let (_,_,layers,fg,fl,hg,hl)=s.step_space_counts_v1();
+        assert_eq!((layers,fg,fl,hg,hl),(7,1,1,1,1));
+    }
+    #[test]
     fn structural_overflow_and_hostile_canonical_shape_are_refused_before_space_construction() {
-        assert!(step_space_requests_from_count_v1(u64::MAX).is_err());
-        assert!(step_space_requests_from_count_v1(u64::MAX / 2).is_err());
+        assert!(step_space_requests_from_counts_v1(0,0,u64::MAX,0,0,0,0).is_err());
+        assert!(step_space_requests_from_counts_v1(0,0,2,0,u64::MAX,0,0).is_err());
         assert!(crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&[]).is_err());
         let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
         let mut bytes = x.binding.class.program.clone();

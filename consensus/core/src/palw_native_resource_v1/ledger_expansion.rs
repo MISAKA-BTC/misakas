@@ -443,6 +443,66 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
     Ok(shape)
 }
 
+/// Actual field counts from an allocation-free second pass over the same wire.
+/// These are allocation bounds, not semantic validation or scheduling authority.
+#[derive(Clone, Copy, Debug)]
+struct StepSpaceShapeV1 {
+    blocks: u64,
+    nodes: u64,
+    layers: u64,
+    fixed_global: u64,
+    fixed_layer: u64,
+    hist_global: u64,
+    hist_layer: u64,
+    params: u64,
+}
+fn step_space_shape_v1(bytes: &[u8]) -> io::Result<StepSpaceShapeV1> {
+    use misaka_palw_tir::{program::{ParamDecl, ConstDecl, Node}, types::{DType, TensorType}};
+    let mut r = NativeWireReaderV1::new(bytes, bytes.len() as u64);
+    if r.short()? != misaka_palw_tir::program::TIR_PROGRAM_VERSION_V1 {
+        return Err(wire::wire_bad("unknown TIR program version for StepSpace shape"));
+    }
+    r.skip(64 + 4 + 4)?;
+    let mut out = StepSpaceShapeV1 { blocks:0,nodes:0,layers:0,fixed_global:0,fixed_layer:0,hist_global:0,hist_layer:0,params:0 };
+    out.params = u64::from(r.word()?);
+    for _ in 0..out.params { ParamDecl::scan_native_wire_v1(&mut r)?; }
+    let constants = r.word()?;
+    for _ in 0..constants { ConstDecl::scan_native_wire_v1(&mut r)?; }
+    let states = r.word()?;
+    for _ in 0..states {
+        String::scan_native_wire_v1(&mut r)?;
+        let fixed = match r.byte()? {
+            0 => { r.skip(16)?; true },
+            1 => { r.skip(4)?; false },
+            _ => return Err(wire::wire_bad("unknown state kind for StepSpace shape")),
+        };
+        DType::scan_native_wire_v1(&mut r)?;
+        Vec::<u32>::scan_native_wire_v1(&mut r)?;
+        let per_layer = match r.byte()? { 0=>false,1=>true,_=>return Err(wire::wire_bad("invalid state per_layer boolean")) };
+        let count=match (fixed,per_layer) {
+            (true,false)=>&mut out.fixed_global,(true,true)=>&mut out.fixed_layer,
+            (false,false)=>&mut out.hist_global,(false,true)=>&mut out.hist_layer,
+        };
+        *count=count.checked_add(1).ok_or_else(||wire::wire_bad("StepSpace state count overflow"))?;
+    }
+    out.blocks=u64::from(r.word()?);
+    for _ in 0..out.blocks {
+        String::scan_native_wire_v1(&mut r)?;
+        Vec::<TensorType>::scan_native_wire_v1(&mut r)?;
+        let nodes=u64::from(r.word()?);
+        out.nodes=out.nodes.checked_add(nodes).ok_or_else(||wire::wire_bad("StepSpace node count overflow"))?;
+        for _ in 0..nodes { Node::scan_native_wire_v1(&mut r)?; }
+        Vec::<u16>::scan_native_wire_v1(&mut r)?;
+    }
+    r.byte()?; // schedule.pre
+    out.layers=u64::from(r.word()?);
+    r.skip(out.layers)?;
+    r.byte()?; // schedule.post
+    r.skip(2+64)?; // logits and logits scheme
+    if r.remaining()!=0 { return Err(wire::wire_bad("StepSpace shape trailing bytes")); }
+    Ok(out)
+}
+
 /// Borrowed scanner output only. No public fields/constructor: a caller cannot
 /// substitute a budget or declared count for the actual canonical-byte scan.
 /// This quote owns no lease and certifies neither semantic validity nor Source.
@@ -450,10 +510,17 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
 pub(crate) struct NativeTirProgramShapeV1 {
     program_requests: u64,
     structural_items: u64,
+    step_space: StepSpaceShapeV1,
 }
 impl NativeTirProgramShapeV1 {
     pub(crate) fn program_requests_v1(&self) -> u64 { self.program_requests }
     pub(crate) fn structural_items_v1(&self) -> u64 { self.structural_items }
+    pub(crate) fn step_space_counts_v1(&self) -> (u64,u64,u64,u64,u64,u64,u64) {
+        let s=self.step_space;
+        (s.blocks,s.nodes,s.layers,s.fixed_global,s.fixed_layer,s.hist_global,s.hist_layer)
+    }
+    #[cfg(test)]
+    pub(crate) fn parameter_count_v1(&self)->u64 { self.step_space.params }
 }
 /// Same audited program codec/analysis walk used by ledger restoration.
 /// The stack prefix supplies framing; actual bytes are scanned without a copy.
@@ -471,7 +538,7 @@ pub(crate) fn standalone_tir_program_shape_v1(bytes: &[u8]) -> io::Result<Native
     // in particular schedule.layers is byte-valued and still bounds occurrences.
     let structural_items = shape.collection_entries.checked_add(shape.byte_entries)
         .ok_or_else(|| wire::wire_bad("TIR structural item count overflow"))?;
-    Ok(NativeTirProgramShapeV1 { program_requests, structural_items })
+    Ok(NativeTirProgramShapeV1 { program_requests, structural_items, step_space: step_space_shape_v1(bytes)? })
 }
 pub(crate) fn standalone_tir_program_requests_v1(bytes: &[u8]) -> io::Result<u64> {
     Ok(standalone_tir_program_shape_v1(bytes)?.program_requests_v1())
