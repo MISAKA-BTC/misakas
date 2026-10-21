@@ -65,3 +65,7 @@ impl<'a> TokenizerFamilyV1<'a>{
         evidence.recheck(store,state,params,rules,budget)?;Ok(evidence)
     }
 }
+
+impl TokenizerFamilyV1<'_>{
+    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.frame.plan_v1().original_claim,self.source.source_id_v1(),self.scope,self.semantics,self.inventory)}
+}

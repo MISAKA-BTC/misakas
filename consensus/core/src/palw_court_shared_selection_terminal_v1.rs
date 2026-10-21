@@ -167,3 +167,7 @@ impl<'s> Store<'s>{
         }
     }
 }
+
+impl NativeSelectionUniverseV1<'_>{
+    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.frame.plan_v1().original_claim,self.source.source_id_v1(),self.graph.scope_v3(),self.graph.absolute_scope_v3(),self.profile)}
+}

@@ -710,3 +710,7 @@ impl Store<'_> {
         )
     }
 }
+
+impl NativeOutputDutyV1 {
+    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.claim,self.source,self.relative_graph,self.absolute_graph,self.profile)}
+}

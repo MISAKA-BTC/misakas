@@ -73,3 +73,7 @@ impl<'a> NativePrefixFamilyV1<'a>{
         if replay.leaves()!=self.total{return Err(bad("Prefix family replay count changed"));}Ok(replay)
     }
 }
+
+impl NativePrefixFamilyV1<'_>{
+    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.frame.plan_v1().original_claim,self.source.source_id_v1(),self.graph.scope_v3(),self.graph.absolute_scope_v3(),self.profile)}
+}
