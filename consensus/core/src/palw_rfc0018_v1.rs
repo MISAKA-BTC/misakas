@@ -285,7 +285,7 @@ pub fn palw_gate_c_advances_frontier_v1(
 
 /// **Gate C's receipt-lane refusal** (RFC-0018 18-A): a governed free-prompt claim that is `Final` but not `SecurityCertified` licenses no
 /// receipt block. `status` is the RPC's certification state (`pending`, `no-population`, `not-certified`, `vetoed`, `expired`,
-/// `withdrawn`, `revoked`).
+/// `withdrawn`, `revoked`) or `accusation-pending` (certified, but an accusation is open on it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("free-prompt claim {claim} is Final but not SecurityCertified ({status}): Gate C licenses no receipt block before certification")]
 pub struct PalwFpReceiptUncertifiedV1 {
@@ -302,6 +302,8 @@ pub struct PalwFpReceiptUncertifiedV1 {
 /// * governed and `SecurityCertified` ([`palw_independently_work_certified_v1`]): `Ok(max(final_daa, certified_daa))` — the lane opens at
 ///   certification, so its draw beacon lies after the decision and the use window is not consumed while certification is pending (an
 ///   honest claim is paid in full once certified);
+/// * governed, certified, but an accusation pending on it ([`PalwChainStateV2::palw_accusation_pending_v1`]): `Err`
+///   (`accusation-pending`) until the accusation closes — the same one predicate, so admission, fold, RPC and coinbase agree;
 /// * governed and not certified (pending, no population, rejected, voided — a late conviction voids the claim, so its later quanta
 ///   are refused here too): `Err` — no receipt block, no coinbase worker share. Weight 0 alone was not enough: the block right and the
 ///   worker share are paid outside the weight.
@@ -320,6 +322,13 @@ pub fn palw_fp_receipt_clock_v1(
     if !palw_independently_work_certified_v1(claim_id, claim, &PalwGateCViewV1::of(params, chain)) {
         let status = crate::palw_security_certification_v1::palw_claim_certification_status_v1(chain, params, claim_id, claim);
         return Err(PalwFpReceiptUncertifiedV1 { claim: *claim_id, status });
+    }
+    // G14 gatec-capacity: Gate C is `Final ∧ SecurityCertified ∧ ¬accusation-pending`. Certification decides only with nothing
+    // pending, but an accusation opened AFTER it (a late court / DA session / dispute) must suspend the lane until its verdict: a
+    // conviction voids the claim (refused above as `revoked`), an acquittal re-opens the lane. Governed claims only — below Gate C's
+    // fence nothing here is read.
+    if chain.palw_accusation_pending_v1(claim_id) {
+        return Err(PalwFpReceiptUncertifiedV1 { claim: *claim_id, status: "accusation-pending" });
     }
     let certified_daa = crate::palw_security_certification_v1::palw_claim_certified_daa_v1(chain, claim_id).unwrap_or(final_daa);
     Ok(final_daa.max(certified_daa))
