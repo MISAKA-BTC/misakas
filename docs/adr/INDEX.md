@@ -195,3 +195,4 @@
 | ADR-0195 | [native court 応答の前提受理時刻を保持する](0195-rooted-court-response-eligibility-history.md) | 原文と後続改定を参照 |
 | ADR-0196 | [owner 非依存の TIR 要求と認証済み公開データ](0196-owner-independent-shared-tir-query-data.md) | 原文と後続改定を参照 |
 | ADR-0197 | [court終了効果と未解決責任の保存方式](0197-court-end-effects-and-pending-liability-archive.md) | 原文と後続改定を参照 |
+| ADR-0198 | [共有courtのinitial noticeの等号](0198-shared-court-initial-notice-boundary.md) | 原文と後続改定を参照 |

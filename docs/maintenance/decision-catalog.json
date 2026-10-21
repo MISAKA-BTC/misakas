@@ -1514,6 +1514,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0198",
+      "path": "docs/adr/0198-shared-court-initial-notice-boundary.md",
+      "title": "ADR-0198 — 共有courtのinitial noticeの等号",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1750,6 +1758,14 @@
       "number": "0030",
       "path": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
       "title": "RFC-0030 — court終了効果と未解決責任の保存",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0031",
+      "path": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
+      "title": "RFC-0031 — 共有courtのinitial notice境界",
       "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     }

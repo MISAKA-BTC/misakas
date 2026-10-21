@@ -214,4 +214,5 @@
 - [ADR-0193 — sequential witness filing の versioned clock](0193-sequential-witness-filing-clock.md)
 - [ADR-0195 — native court 応答の前提受理時刻を保持する](0195-rooted-court-response-eligibility-history.md)
 - [ADR-0197 — court終了効果と未解決責任の保存方式](0197-court-end-effects-and-pending-liability-archive.md)
+- [ADR-0198 — 共有courtのinitial noticeの等号](0198-shared-court-initial-notice-boundary.md)
 

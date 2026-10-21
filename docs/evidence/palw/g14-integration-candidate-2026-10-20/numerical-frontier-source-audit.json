@@ -1,0 +1,9 @@
+{
+  "parent": "65dd205cd982a6d199e41d1ee6ef0329d134fef9",
+  "native_apply_round_expanded_body_sha256": "374612cd575dfd595a0baa02c692a7091bcf8254ec8d0e628caa0ec8d217fc70",
+  "native_apply_round_byte_identical_after_helper_expansion": true,
+  "phase_borsh_fields_unchanged": true,
+  "native_apply_choice_unchanged": true,
+  "bounds": "At least two nonempty children per disclosed range gives at most N-1 disclosures for N terminal tiles, per one fixed root. Not all roots/leafs/actors/claims or costs.",
+  "limits": "Unrooted numerical material only. No signer/original authentication, timestamps, accepted choices, finances, public ingress or complete profile. Projected phases retain historic clocks and cannot authorize default."
+}

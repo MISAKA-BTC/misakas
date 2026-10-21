@@ -366,3 +366,13 @@ CPU/RSS削減の実測や全profile校正ではない。traceのouter hash・既
 三つの変更runtime sourceは親commit＋保存patchから再構成しSHA-256一致。文書検査は同じimport済み欠損5件とbaseline既知43件によりFAIL/exit1で、新規著者リンク欠損は0、baseline更新なし。
 
 次のP0は、データ共有だけで止まっているclaim共通frontierをsemantic/courtの義務・終端へ接続し、元originalの全合法分岐・全actor資本と実feeを原子的に導出/予約するcoordinatorを具体化すること。今回のcopy除去や署名envelope部分上限だけを完全profile/有料受付済みにしない。公開node入口・実供給/配送収録前提・T05/T01–T15と実doorの元条件は残す。
+## 全childを保持する数値frontier
+
+親`65dd205cd`。固定された初期TIR rootに対し、元のpinned child pathごとに開示を保存し、先のchildを調べても他のchildを失わない非排他的な数値部品を追加する。[RFC-0029 §13](../../../rfc/0029-owner-independent-shared-tir-query-data.md#13-nonexclusive-numerical-disclosure-frontier)。nativeのshape/interval/数値fold検査を共通化し、展開後の時限付き`apply_round`本体は親とbyte一致。旧phaseのBorsh fieldと`apply_choice`は変更しない。unrooted projectionは実choice/署名/受理clockを作らず、native状態へ設置したりabsence帰責へ使ったりしない。
+
+最終選択42件（F7の7＋service6/policy3/gate12/activation5/t12同一性9）。新規1ケースは7に含み、過去99等を加算しない。24 positions/2-position tilesの既存dense-GQA corpus、arity2/4、正常root/false-sum rootで全分岐と既存bottom検査を比較する。正しい12終端range、fold不整合の原子的拒否、重複統合・差替え拒否、native状態/clock不変を確認する。fixture署名は従来のexact-message verifierで、実ML-DSA/UTXO node受付やpublic originalの試験ではない。[source/log/実行file/patchと境界](../../../evidence/palw/g14-integration-candidate-2026-10-20/numerical-frontier-artifact.json)。
+
+`N-1`開示の上限は単一固定rootのtree幾何だけで、全leaf/root/claim/actorの費用ではない。root認証、canonical claim/source/leaf/rules/profile identity、新署名domain、原子的な全分岐資本/実fee予約、rooted writer・公開入口・実供給・qualified終了/精算は未完。旧actor別session署名を共有権限に転用しない。G14未完・武装/統合/配備保留を維持する。
+
+notice等号について[RFC-0031](../../../rfc/0031-shared-court-initial-notice-boundary.md) / [ADR-0198](../../../adr/0198-shared-court-initial-notice-boundary.md)にA（`<= a+3,120`）/B（`< a+3,120`）の区間表を具体化し、利用者へ詳細仕様化の選択を質問した。runtimeは未選択で、値・hard起点・旧claim・本番採択を変更しない。未回答でもcanonical root/資本/全graphの独立作業を継続する。
+non-test consensus release checkとcore全testsの型検査はexit0。二つの変更source/test fileを親＋保存patchから再構成しSHA-256一致。RFC/ADR追加による索引staleを標準generatorで修正し、修正前文書検査logも保存した。最終文書検査は同じimport済み欠損5件とbaseline既知43件によりFAIL/exit1で、新規著者リンク欠損は0、baseline更新なし。

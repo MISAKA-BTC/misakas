@@ -52,4 +52,5 @@
 - [RFC-0026 — court の主契約:時計・帰責・責任期間・置換関係の一本化](0026-court-policy-master-contract.md)
 - [RFC-0028 — rooted court response eligibility history](0028-rooted-court-response-eligibility-history.md)
 - [RFC-0030 — court終了効果と未解決責任の保存](0030-court-end-effects-and-pending-liability-archive.md)
+- [RFC-0031 — 共有courtのinitial notice境界](0031-shared-court-initial-notice-boundary.md)
 
