@@ -2381,7 +2381,21 @@ impl VirtualStateProcessor {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Vec::new();
         };
-        let txs = self.accepted_txs_from_acceptance_data(acceptance);
+        let mut txs = self.accepted_txs_from_acceptance_data(acceptance);
+        // RFC-0035 A is a separate contract, never a legacy FP decoder view.
+        // Keep this refusal independent of both existing history/TIR fences:
+        // merely decoding its embedded TFP1 must not admit an unfunded ordinary
+        // claim while complete-graph, native UTXO locks and settlement are absent.
+        // Ordinary accepted carrier fees and payer-only fallback outputs remain
+        // ordinary UTXO effects; none is installed as funded escrow here.
+        txs.retain(|tx| {
+            let pending_funded_original =
+                kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(tx);
+            if pending_funded_original {
+                info!("[palw-funded-original] carrier {} refused: native funded-original coordinator is incomplete", tx.id());
+            }
+            !pending_funded_original
+        });
         let history_armed = self.palw_staged_public_court_v1.is_some_and(|fence| fence.is_active(block_daa));
         let tir_public_armed = self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(block_daa));
         let mut tir_public_carriers = std::collections::HashMap::new();

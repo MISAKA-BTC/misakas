@@ -80,3 +80,13 @@ original carrier transactionの実入力から、元のbond/予約資本・既�
 ### 7.1 同じcarrierの実feeの一回割当
 
 新adapterは `F = Σ実input UTXO額 − Σ実output額` をchecked arithmeticで一度だけ求める。専用escrowの新output額はoutput側に既に含まれるため、同じ額をfee原資にも加えない。旧bond burn・旧rent burn・新escrowの実burn/承認feeを同carrierで併用する場合、それぞれが単独で`F ≥ 自分の額`を満たすだけでは不足する。すべての割当の合計を`F`と照合し、miner collectibleから差し引く実burn総額、実支出、rooted escrow debitを一致させる。`palw_bond_burn_paid`等の既存単独検査を新複合会計の保存則に流用しない。
+
+## 8. Aの隔離実装の第一段階
+
+新しい`TFO1` transportは旧`TFP1`のliteral bytesを保持し、新payer consentを別署名domainで束縛する。全wire幅は旧TFP1のouter ceiling以内とし、新metadataを理由に上限を増やさない。署名は元claim/job/execution/source、canonical相対graphと各profileの識別子、受付interval、必要material horizon、実資金output index/amount、payerと返還鍵、nonceを束縛する。最終carrier txidを自己参照で署名せず、実transactionからoutpointを取得する。
+
+実出力との照合は既存version0の厳密なpayer P2PKH-MLDSA87 fallbackだけを認める。未知script version、OP_TRUE、別出力、異なる額/返還鍵を準備成功としない。payer署名とnative expected scopeを検査したopaque preparationも、UTXO検証済み・lock済み・全graph導出済み・actor同意済み・funded original受付済みではない。expected scopeのDTOをpeer入力から作るだけではnative導出にならない。
+
+同carrierのpopulated input/outputからchecked differenceを求め、一つのfee budget上でallocation identityの重複と合計超過を拒否する。これは実UTXO viewの供給と通常script検証、nativeでのallocation適格性、burn/collectibleの更新を代替しない。個別helperを呼び直して別budgetを作る経路で保存則を迂回させないことが、将来coordinatorの責務として残る。
+
+accepted transactionのobject extractionでは、既存history/TIR fenceとは独立してTFO1を拒否し、内包TFP1を旧originalとして受理しない。通常carrierのUTXO/feeは残り得るが、rooted escrow残高を作らない。新rooted row、同mergeset lock、停止Minerに依存しない適格支出、全分岐の原子的受付・精算は未接続である。第一段階の署名・codec・実出力検査を、Aの実escrow確保やG14完了とは扱わない。
