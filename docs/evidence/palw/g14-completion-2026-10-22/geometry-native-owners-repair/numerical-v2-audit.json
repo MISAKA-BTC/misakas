@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "candidate_sha256": "9af1be1e79166b349c80bcdc1a5c829cd3ed03502b524df9ccfc21f878325921",
+  "old_public_derive_byte_identical": false,
+  "shared_private_materializer_with_typed_resource_errors": true,
+  "legacy_string_behavior_intended_preserved_not_executed": true,
+  "built": false,
+  "applied": false
+}

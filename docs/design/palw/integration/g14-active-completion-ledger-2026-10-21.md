@@ -52,6 +52,8 @@ Next primary integration work is the original coordinator: derive canonical comp
 
 ## Latest parallel checkpoint
 
+[Native numerical and source-graph owners](../../../evidence/palw/g14-completion-2026-10-22/geometry-native-owners.md): 37 unique parent tests plus two isolated Source quota workers pass. Preparation/output/index scratch reservations now remain with the returned geometry; old path/graph identities and local limits remain. Parameter/prompt/semantic acquisition, complete duties/service/financial profiles, atomic escrow and full native campaign remain incomplete.
+
 [Single decoded-original policy path](../../../evidence/palw/g14-completion-2026-10-22/fp-original-projection.md): core34 and actual-signature/native3 selected tests pass. Existing policy checks and object fields are reused through one crate-private helper; carrier decoding/routing remain separate. No policy, activation, funded-success capability or current-authority shortcut is introduced.
 
 [Retained native Source constructor](../../../evidence/palw/g14-completion-2026-10-22/source-native-owner.md): 21 unique parent tests plus two isolated quota-worker invocations pass. The explicit constructor reserves conservative construction-peak typed requests before allocation and holds the ticket with Source; insufficient quota, holding/release and semantic-failure release are tested. Old call sites and activation are unchanged. Numerical/source-graph retained owners, complete canonical original and actual escrow remain incomplete.

@@ -109,7 +109,102 @@ pub struct NativeSourceMaterialGraphV3 {
 fn hash<T: BorshSerialize>(scope: Hash64, kind: &T) -> Result<Hash64, String> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/source-material-graph/v3", &(scope, kind))
 }
+/// Frame validation has its own temporary plan clone and Borsh/FP hash
+/// writers. No Source/StepSpace reconstruction is performed by this owner.
+fn native_source_graph_prelude_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64)
+    ->Result<u64,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeCoverageV1,NativeHeapV1,TirNativeRequestsV1};
+    // Native original preparation currently excludes tails. Do not claim that
+    // this owner inventories every version-specific carried-tail decoder.
+    if frame.original_v1().job.tail.is_some() {
+        return Err(E::Resource(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>(
+            "native source graph frame parser","carried job-tail parser inventory is unavailable")));
+    }
+    let mut q=TirNativeRequestsV1::new();
+    // Full frame heap is a conservative bound on the actual plan-only clone
+    // in accepted_id_v1, plus frame subobject clones during structural checks.
+    let clone=frame.native_heap_v1("source graph frame validation clone");
+    q.add_v1(clone.bytes().ok_or(E::Resource(clone))?).map_err(E::Resource)?;
+    let f=borsh::object_length(frame).map_err(|e|E::Decode(e.to_string()))? as u64;
+    // Exact field widths of set.scope_id. Values are borrowed actual scope
+    // facts; no invented source/profile is authenticated by a size exemplar.
+    let p=frame.plan_v1();
+    let scope=borsh::object_length(&(1u16,p.original_claim,p.allocation_id,p.rules_id,profile,source.source_id_v1(),0u64))
+        .map_err(|e|E::Decode(e.to_string()))? as u64;
+    let writer=f.max(scope).max(1024).checked_mul(2).ok_or_else(||E::Resource(
+        NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>("source graph Borsh hash writer")))?;
+    // Claim/job/header/pledge/receipt/plan writers execute sequentially; each
+    // serializes a frame subobject. scope_id is the other fixed tuple above.
+    // node/relative/absolute hashes stream directly and allocate no Vec writer.
+    q.exact_v1::<u8>(writer).map_err(E::Resource)?;
+    Ok(q.bytes_v1())
+}
+fn native_source_graph_output_v3(extent:SourceGraphExtentV3,queries:u64,roles:u64)
+    ->Result<u64,crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1,TirNativeRequestsV1,NativeRetainedV1,btree_node_envelope_bytes_v1};
+    if std::mem::size_of::<usize>()!=8 {
+        return Err(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>("source graph BTree inventory","64-bit native BTree profile required"));
+    }
+    let mut q=TirNativeRequestsV1::new();
+    let overflow=||NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>("source graph native counts");
+    let mut tree=|entries:u64,width:usize|->Result<(),NativeCoverageV1> {
+        q.add_v1(entries.checked_mul(width as u64).ok_or_else(overflow)?)
+    };
+    tree(extent.vertices,btree_node_envelope_bytes_v1::<Hash64,SourceMaterialNodeV3>())?;
+    tree(queries,btree_node_envelope_bytes_v1::<u64,Hash64>())?;
+    tree(extent.vertices,btree_node_envelope_bytes_v1::<Hash64,usize>())?; // check indegree
+    tree(extent.vertices,btree_node_envelope_bytes_v1::<Hash64,Vec<Hash64>>())?; // check children
+    // Variable parent/children Vecs each have independent minimum capacity.
+    // This counts the aggregate E elements AND a one-item growth envelope per
+    // possible nonempty Vec, not E as one monolithic flat array.
+    let mut minimum=TirNativeRequestsV1::new();minimum.vec_v1::<Hash64>(1)?;
+    let minimum_bytes=minimum.bytes_v1();
+    for _ in 0..2 {
+        q.vec_v1::<Hash64>(extent.edges)?;
+        q.add_v1(extent.vertices.checked_mul(minimum_bytes).ok_or_else(overflow)?)?;
+    }
+    q.vec_v1::<u64>(queries)?; // FullIds ordinal list, conservative <= Q
+    q.vec_v1::<Hash64>(roles)?; // one live streams() finishes list
+    q.vec_v1::<Hash64>(extent.vertices)?; // check ready list, may grow by push
+    q.exact_v1::<NativeRetainedV1<NativeSourceMaterialGraphV3>>(1)?;
+    Ok(q.bytes_v1())
+}
+
 impl NativeSourceMaterialGraphV3 {
+    /// Explicit allocation owner only. Retains construction/index scratch
+    /// conservatively through graph lifetime; no paid/native profile or complete
+    /// original is certified. Old budgets, graph IDs and old derive remain.
+    pub fn derive_native_v3(frame:&PalwTirPublicClaimV1,
+        source:&crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>,profile:Hash64,budget:SourceGraphBudgetV3)
+        ->Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        Self::derive_native_reserved_v3(frame,source,profile,budget,crate::palw_native_resource_v1::reserve_native_requests_v1)
+    }
+    fn derive_native_reserved_v3<R>(frame:&PalwTirPublicClaimV1,
+        source:&crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>,profile:Hash64,budget:SourceGraphBudgetV3,reserve:R)
+        ->Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+        where R:FnOnce(u64)->Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeRetainedV1};
+        let prelude=native_source_graph_prelude_v3(frame,source,profile)?;
+        let mut lease=reserve(prelude).map_err(E::Resource)?;
+        frame.check_structure_v1(&frame.key_v1()).map_err(E::Decode)?;
+        let set=TirSharedRequestSetV1::new(frame,source,profile).map_err(E::Decode)?;
+        let roles=frame.custody_v1().pledge_v1().maximum_custodians;
+        if set.len()>budget.max_queries || roles==0 || roles>budget.max_roles {
+            return Err(E::Decode("source graph query/role budget exhausted".into()));
+        }
+        let upper=set.signed_data_transport_upper().map_err(E::Decode)?;
+        let extent=graph_extent_from_transport_v3(upper,set.has_full_ids_stream_v3()).map_err(E::Decode)?;
+        if extent.vertices>budget.max_vertices || extent.edges>budget.max_edges {
+            return Err(E::Decode("source graph metadata vertex/edge budget exhausted before expansion".into()));
+        }
+        let output=native_source_graph_output_v3(extent,set.len(),roles).map_err(E::Resource)?;
+        if let Some(ticket)=lease.as_mut() {ticket.grow_memory_v1(output).map_err(E::Resource)?;}
+        // All shape/query maps and predecessor/check indices are now covered.
+        // Stream/control hashes use fixed request descriptors and streaming sink.
+        let graph=Self::derive_v3(frame,source,profile,budget).map_err(E::Decode)?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(graph,lease))
+    }
+
     /// `frame` and `source` must be resolved from the native original by the
     /// caller. Structure/geometry are rechecked here; custody signatures and
     /// role-slot authority are not certified by a capacity-bound role count.
@@ -452,6 +547,41 @@ mod tests {
     }
     fn graph(f: &crate::palw_tir_public_claim_v1::PalwTirPublicFrameFixtureV1) -> NativeSourceMaterialGraphV3 {
         NativeSourceMaterialGraphV3::derive_v3(&f.frame, &source(f), Hash64::from_u64_word(71), B).unwrap()
+    }
+    #[test]
+    fn native_source_graph_owner_keeps_exact_nodes_and_releases_growth_on_refusal() {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeDemandCheckerV1,NativeSnapshotResourceLimitsV1};
+        let profile=Hash64::from_u64_word(71);
+        for f in [fixture(),crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1()] {
+            let original=f.frame.original_v1();
+            let source=PalwTirPublicSourceV1::new_native_v1(&f.record,&f.layout,f.frame.header_v1(),
+                original.execution_root,original.trace_root,f.rules.maximum_leaves).unwrap();
+            let old=NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,profile,B).unwrap();
+            let set=TirSharedRequestSetV1::new(&f.frame,&source,profile).unwrap();
+            let extent=graph_extent_from_transport_v3(set.signed_data_transport_upper().unwrap(),set.has_full_ids_stream_v3()).unwrap();
+            let prelude=native_source_graph_prelude_v3(&f.frame,&source,profile).unwrap();
+            let output=native_source_graph_output_v3(extent,set.len(),old.roles).unwrap();
+            let total=prelude.checked_add(output).unwrap();
+            for quota in [prelude-1,total-1,total] {
+                let checker=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {memory_bytes:quota,database_bytes:0});
+                let result=NativeSourceMaterialGraphV3::derive_native_reserved_v3(&f.frame,&source,profile,B,
+                    |bytes|checker.reserve_requests_v1(bytes,0).map(Some));
+                if quota==total {
+                    let graph=result.unwrap();
+                    assert_eq!(graph.nodes,old.nodes);
+                    assert_eq!(graph.scope,old.scope);
+                    assert_eq!(graph.absolute_scope,old.absolute_scope);
+                    assert_eq!(graph.edges,old.edges);
+                    assert_eq!(checker.outstanding(),(total,0));
+                    drop(graph);
+                } else {assert!(matches!(result,Err(E::Resource(_))));}
+                assert_eq!(checker.outstanding(),(0,0));
+            }
+            assert!(matches!(NativeSourceMaterialGraphV3::derive_native_v3(&f.frame,&source,profile,
+                SourceGraphBudgetV3 {max_edges:extent.edges-1,..B}),Err(E::Decode(_))));
+        }
+        assert!(native_source_graph_output_v3(SourceGraphExtentV3 {vertices:u64::MAX,edges:1},1,1).is_err());
+        assert!(native_source_graph_output_v3(SourceGraphExtentV3 {vertices:1,edges:u64::MAX},1,1).is_err());
     }
     #[test]
     fn grouped_graph_extent_rejects_local_budget_before_expansion() {
