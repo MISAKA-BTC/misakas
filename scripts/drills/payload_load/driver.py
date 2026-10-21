@@ -5,6 +5,7 @@ Requires the reviewed MLDSA measurement candidate capabilities and pinned binary
 import argparse, hashlib, json, os, signal, stat, subprocess, time
 from pathlib import Path
 from owned_process import cleanup_owned
+from native_peers import require_loopback_peers_v1
 
 def prepare(a):
     if not (1<=a.tps<=100 and 1<=a.seconds<=3600 and 1<=a.fanout_timeout<=3600 and 0<=a.payload_bytes<=20000):
@@ -65,12 +66,7 @@ def main():
     rpc.call('getVirtualChainFromBlock',{'startHash':network['sink'],'includeAcceptedTransactionIds':True,'minConfirmationCount':None})
     rpc.call('getBlocks',{'lowHash':network['sink'],'includeBlocks':True,'includeTransactions':True})
     peers=rpc.call('getConnectedPeerInfo')
-    import ipaddress
-    if not isinstance(peers.get('infos'),list):raise ValueError('peer inventory schema missing')
-    for peer in peers['infos']:
-        # Local four-node drill uses IPv4 loopback; fail closed on unknown formatting.
-        host=peer['address'].rsplit(':',1)[0]
-        if not ipaddress.ip_address(host.strip('[]')).is_loopback: raise ValueError('external peer detected')
+    require_loopback_peers_v1(peers)
     rpc.close()
     for name in ['launch.json','sender.stdout','sender.stderr','sender-events.jsonl','observer.jsonl.gz','observer-ready.json']:
         if (work/name).exists(): raise ValueError('refusing evidence overwrite: '+name)

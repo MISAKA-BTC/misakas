@@ -2,9 +2,10 @@
 """Managed public-seed local devnet launcher. Default prints plan, starts nothing.
 Four floor-only nodes and lane 0,2,10 follow the existing round-lane drill.
 """
-import argparse, hashlib, importlib.util, ipaddress, json, os, signal, socket, subprocess, time
+import argparse, hashlib, importlib.util, json, os, signal, socket, subprocess, time
 from pathlib import Path
 from owned_process import cleanup_owned
+from native_peers import require_loopback_peers_v1
 
 def checked_binary(path,expected):
     path=path.resolve(strict=True)
@@ -106,10 +107,7 @@ def main():
         isolation=mod.WsRpc(host='127.0.0.1',port=a.json_port,timeout=10)
         peers=isolation.call('getConnectedPeerInfo');isolation.close()
         (work/'funding-peer-check.json').write_text(json.dumps(peers))
-        if not isinstance(peers.get('infos'),list):raise ValueError('peer inventory schema missing')
-        for peer in peers['infos']:
-            host=peer['address'].rsplit(':',1)[0].strip('[]')
-            if not ipaddress.ip_address(host).is_loopback:raise ValueError('external peer before funding')
+        require_loopback_peers_v1(peers)
         # Only public devnet premine funds; actual CLI response retained without secret material.
         funding=[str(bins['cli']),'--network','devnet','--rpc',f'127.0.0.1:{a.borsh_base}',
                  'wallet','send','--key-file',str(mainkey),'--to',payaddress,'--amount',str(a.fund_msk),'--yes','--output','json']
