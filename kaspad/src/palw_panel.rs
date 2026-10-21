@@ -71,6 +71,9 @@ mod palw_service_public_e2e;
 #[path = "palw_service_violations_e2e.rs"]
 mod palw_service_violations_e2e;
 
+mod carrier_chain;
+use carrier_chain::{CarrierBookMutV1, CarrierChainV1, CarrierInFlightUpdateV1, PreparedCarrierV1};
+
 pub(crate) mod court_outbox;
 use court_outbox::CourtOutboxV1;
 
@@ -5671,10 +5674,9 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         duty: &PalwReadinessDutyV1,
         current_daa: u64,
-        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
-        inflight: &mut usize,
+        carrier: &mut CarrierBookMutV1<'_>,
     ) -> bool {
-        self.carry_readiness_proof_on_v1(session, duty, current_daa, funding, inflight, false).await
+        self.carry_readiness_proof_on_v1(session, duty, current_daa, carrier, false).await
     }
 
     /// **V07: carry one possession proof on the readiness lane** (`PalwReadinessLaneV1`) — a proof the
@@ -5714,7 +5716,15 @@ impl PalwPanelService {
             }
         }
         let mut inflight = lane.inflight;
-        let carried = self.carry_readiness_proof_on_v1(session, duty, current_daa, &mut lane.funding, &mut inflight, true).await;
+        let carried = self
+            .carry_readiness_proof_on_v1(
+                session,
+                duty,
+                current_daa,
+                &mut CarrierBookMutV1::new(&mut lane.funding, &mut inflight),
+                true,
+            )
+            .await;
         lane.inflight = inflight;
         carried
     }
@@ -5765,8 +5775,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         duty: &PalwReadinessDutyV1,
         current_daa: u64,
-        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
-        inflight: &mut usize,
+        carrier: &mut CarrierBookMutV1<'_>,
         lane: bool,
     ) -> bool {
         // ADR-0133 §11.2: the submitter builds V1 below the fence and V2 past it, and both ride the
@@ -5776,38 +5785,28 @@ impl PalwPanelService {
             | PalwConsensusObjectV2::SeatReadinessProvedV2 { class_id, span, .. } => (*class_id, *span),
             _ => return false,
         };
-        let Some((funding_outpoint, funding_entry)) = funding.clone() else { return false };
-        match self.build_lifecycle_tx(&duty.object, funding_outpoint, &funding_entry) {
-            Ok(tx) => {
-                let txid = tx.id();
-                let change = tx.outputs[0].clone();
-                match self.submit_carrier_v1(session, tx).await {
-                    Ok(()) => {
+        let Some((funding_outpoint, funding_entry)) = carrier.funding().clone() else { return false };
+        match self.prepare_lifecycle_carrier_v1(&duty.object, funding_outpoint, &funding_entry, current_daa) {
+            Ok(prepared_carrier) => {
+                let txid = prepared_carrier.id();
+                match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
+                    Ok(sent_carrier) => {
                         info!(
                             "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}{}{}",
                             if duty.escalates() { " — escalated: its row is lapsing or lapsed" } else { "" },
                             if lane { " — on the readiness lane (V07)" } else { "" }
                         );
                         self.readiness_submitted.lock().unwrap().insert(duty.slot, span);
-                        let next = TransactionOutpoint::new(txid, 0);
-                        if !lane {
-                            self.persist_fee_outpoint(next);
-                        }
-                        *funding = Some((
-                            next,
-                            UtxoEntry {
-                                amount: change.value,
-                                script_public_key: change.script_public_key,
-                                block_daa_score: current_daa,
-                                is_coinbase: false,
-                            },
-                        ));
-                        *inflight += 1;
+                        sent_carrier.record_change(carrier, CarrierInFlightUpdateV1::Increment, |next| {
+                            if !lane {
+                                self.persist_fee_outpoint(next);
+                            }
+                        });
                         true
                     }
                     Err(e) => {
                         warn!("[{PALW_PANEL}] the mempool refused the readiness proof for class {class_id}: {e}");
-                        *funding = None;
+                        carrier.set_funding(None);
                         false
                     }
                 }
@@ -5827,16 +5826,15 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         object: &PalwConsensusObjectV2,
         current_daa: u64,
-        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
-        inflight: usize,
+        carrier: &mut CarrierBookMutV1<'_>,
     ) -> Option<u64> {
-        if inflight != 0 || self.carrier_replacement.lock().unwrap().is_some() {
+        if carrier.inflight() != 0 || self.carrier_replacement.lock().unwrap().is_some() {
             return None;
         }
         let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, object, current_daa);
-        if funding.as_ref().is_none_or(|(_, entry)| entry.amount < minimum) {
+        if carrier.funding().as_ref().is_none_or(|(_, entry)| entry.amount < minimum) {
             if let Some(next) = self.resolve_fee_funding(session, minimum).await {
-                *funding = Some(next);
+                carrier.set_funding(Some(next));
             } else {
                 // Keep a smaller usable float for later cheap moves; no sticky global floor.
                 return Some(minimum);
@@ -5853,35 +5851,23 @@ impl PalwPanelService {
         object: &PalwConsensusObjectV2,
         what: &str,
         current_daa: u64,
-        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
-        inflight: &mut usize,
+        carrier: &mut CarrierBookMutV1<'_>,
     ) -> bool {
-        let _ = self.ensure_carrier_funding_v2(session, object, current_daa, funding, *inflight).await;
-        let Some((funding_outpoint, funding_entry)) = funding.clone() else { return false };
-        match self.build_lifecycle_tx(object, funding_outpoint, &funding_entry) {
-            Ok(tx) => {
-                let txid = tx.id();
-                let change = tx.outputs[0].clone();
-                match self.submit_carrier_v1(session, tx).await {
-                    Ok(()) => {
+        let _ = self.ensure_carrier_funding_v2(session, object, current_daa, carrier).await;
+        let Some((funding_outpoint, funding_entry)) = carrier.funding().clone() else { return false };
+        match self.prepare_lifecycle_carrier_v1(object, funding_outpoint, &funding_entry, current_daa) {
+            Ok(prepared_carrier) => {
+                let txid = prepared_carrier.id();
+                match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
+                    Ok(sent_carrier) => {
                         info!("[{PALW_PANEL}] submitted {what} ({}) in tx {txid}", object_name(object));
-                        let next = TransactionOutpoint::new(txid, 0);
-                        self.persist_fee_outpoint(next);
-                        *funding = Some((
-                            next,
-                            UtxoEntry {
-                                amount: change.value,
-                                script_public_key: change.script_public_key,
-                                block_daa_score: current_daa,
-                                is_coinbase: false,
-                            },
-                        ));
-                        *inflight += 1;
+                        sent_carrier
+                            .record_change(carrier, CarrierInFlightUpdateV1::Increment, |next| self.persist_fee_outpoint(next));
                         true
                     }
                     Err(e) => {
                         warn!("[{PALW_PANEL}] the mempool refused {what}: {e}");
-                        *funding = None;
+                        carrier.set_funding(None);
                         false
                     }
                 }
@@ -5910,8 +5896,7 @@ impl PalwPanelService {
         stuck: kaspa_consensus_core::tx::TransactionId,
         unconfirmed_daa: u64,
         current_daa: u64,
-        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
-        inflight: &mut usize,
+        carrier: &mut CarrierBookMutV1<'_>,
     ) -> bool {
         let (class_id, span) = match &duty.object {
             PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. }
@@ -5956,10 +5941,10 @@ impl PalwPanelService {
                 return false;
             }
         };
-        let txid = tx.id();
-        let change = tx.outputs[0].clone();
-        match self.flow_context.submit_rpc_transaction_replacement(session, tx).await {
-            Ok(replaced) => {
+        let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
+        let txid = prepared_carrier.id();
+        match self.submit_prepared_replacement_v1(session, prepared_carrier).await {
+            Ok((sent_carrier, replaced)) => {
                 warn!(
                     "[{PALW_PANEL}] replaced our carrier {} ({unconfirmed_daa} DAA unconfirmed, never mined) with the readiness proof \
                      for class {class_id} (span {span}) in tx {txid}{} — the replaced object is its lane's to re-offer",
@@ -5967,18 +5952,9 @@ impl PalwPanelService {
                     if duty.escalates() { ", escalated: its row is lapsing or lapsed" } else { "" }
                 );
                 self.readiness_submitted.lock().unwrap().insert(duty.slot, span);
-                let next = TransactionOutpoint::new(txid, 0);
-                self.persist_fee_outpoint(next);
-                *funding = Some((
-                    next,
-                    UtxoEntry {
-                        amount: change.value,
-                        script_public_key: change.script_public_key,
-                        block_daa_score: current_daa,
-                        is_coinbase: false,
-                    },
-                ));
-                *inflight = MAX_INFLIGHT_CARRIERS;
+                sent_carrier.record_change(carrier, CarrierInFlightUpdateV1::Set(MAX_INFLIGHT_CARRIERS), |next| {
+                    self.persist_fee_outpoint(next)
+                });
                 true
             }
             Err(e) => {
@@ -6994,8 +6970,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         current_daa: u64,
         court_outbox: &mut CourtOutboxV1,
-        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
-        inflight: &mut usize,
+        carrier: &mut CarrierBookMutV1<'_>,
         challenged: &mut HashSet<Hash64>,
     ) {
         // The court's moves first: a rung has a deadline and a receipt quorum does not — and among
@@ -7010,11 +6985,13 @@ impl PalwPanelService {
             // same unavailable heavy budget for every queued proof; cheap moves may still use
             // the smaller float we retained. A successful submission ends the free slot.
             if failed_minimum.is_none_or(|failed| minimum < failed)
-                && let Some(failed) = self.ensure_carrier_funding_v2(session, &object, current_daa, funding, *inflight).await
+                && let Some(failed) = self.ensure_carrier_funding_v2(session, &object, current_daa, carrier).await
             {
                 failed_minimum = Some(failed);
             }
-            let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| *inflight < MAX_INFLIGHT_CARRIERS) else {
+            let Some((funding_outpoint, funding_entry)) =
+                carrier.funding().clone().filter(|_| carrier.inflight() < MAX_INFLIGHT_CARRIERS)
+            else {
                 // Lane g14-court-capacity-r2: the funding scan failed at this object's minimum — a FEE SHORTFALL, not a busy UTXO:
                 // the G14 funnel counts it against the claim this node detected (`detection_loss_once(.., FeeShortfall)`).
                 if failed_minimum.is_some_and(|failed| minimum >= failed)
@@ -7032,12 +7009,11 @@ impl PalwPanelService {
                 unsent.push((session_id, round, mine_is_responder, object));
                 continue;
             };
-            match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                Ok(tx) => {
-                    let txid = tx.id();
-                    let change = tx.outputs[0].clone();
-                    match self.submit_carrier_v1(session, tx).await {
-                        Ok(()) => {
+            match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
+                Ok(prepared_carrier) => {
+                    let txid = prepared_carrier.id();
+                    match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
+                        Ok(sent_carrier) => {
                             if palw_da_accusation_queued_v1(round, mine_is_responder, &object) {
                                 info!("[{PALW_PANEL}] submitted this seat's DefaultAccused of claim {session_id} in tx {txid} (P2-6)");
                             } else if reporter_filer::palw_filer_queued_v1(round, mine_is_responder, &object) {
@@ -7051,18 +7027,8 @@ impl PalwPanelService {
                                     object_name(&object)
                                 );
                             }
-                            let next = TransactionOutpoint::new(txid, 0);
-                            self.persist_fee_outpoint(next);
-                            *funding = Some((
-                                next,
-                                UtxoEntry {
-                                    amount: change.value,
-                                    script_public_key: change.script_public_key,
-                                    block_daa_score: current_daa,
-                                    is_coinbase: false,
-                                },
-                            ));
-                            *inflight += 1;
+                            sent_carrier
+                                .record_change(carrier, CarrierInFlightUpdateV1::Increment, |next| self.persist_fee_outpoint(next));
                             court_outbox.mark_submitted((session_id, round, mine_is_responder), current_daa);
                             if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
                                 challenged.insert(*claim);
@@ -7070,7 +7036,7 @@ impl PalwPanelService {
                         }
                         Err(e) => {
                             warn!("[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}", object_name(&object));
-                            *funding = None;
+                            carrier.set_funding(None);
                         }
                     }
                 }
@@ -7082,10 +7048,10 @@ impl PalwPanelService {
         // the evidence proves itself, so any funded panel may carry it. Behind the court's
         // moves (they have deadlines) and in the priority lane; one carrier a tick at most,
         // and evidence the carrier cannot take goes back to the queue.
-        if *inflight < MAX_INFLIGHT_CARRIERS
+        if carrier.inflight() < MAX_INFLIGHT_CARRIERS
             && let Some(evidence) = self.flow_context.palw_round_relay().take_evidence()
         {
-            match funding.clone() {
+            match carrier.funding().clone() {
                 None => self.flow_context.palw_round_relay().return_evidence(evidence),
                 // V01's panel side: refused evidence is not retried, so it never rides a replacement of
                 // our stuck carrier (whose refusal would say nothing of the evidence) — it waits a slot.
@@ -7095,25 +7061,15 @@ impl PalwPanelService {
                 Some((funding_outpoint, funding_entry)) => {
                     let (round, index) = (evidence.round, evidence.permit_index);
                     let object = PalwConsensusObjectV2::RoundPermitEquivocated { evidence: Box::new(evidence) };
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                        Ok(tx) => {
-                            let txid = tx.id();
-                            let change = tx.outputs[0].clone();
-                            match self.submit_carrier_v1(session, tx).await {
-                                Ok(()) => {
+                    match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
+                        Ok(prepared_carrier) => {
+                            let txid = prepared_carrier.id();
+                            match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
+                                Ok(sent_carrier) => {
                                     info!("[{PALW_PANEL}] filed a permit signed twice (round {round}, permit {index}) in tx {txid}");
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    *funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    *inflight += 1;
+                                    sent_carrier.record_change(carrier, CarrierInFlightUpdateV1::Increment, |next| {
+                                        self.persist_fee_outpoint(next)
+                                    });
                                 }
                                 // Refused evidence is not retried: the mempool judged it against the
                                 // same rules the chain would, and a burned permit burns once.
@@ -7121,7 +7077,7 @@ impl PalwPanelService {
                                     warn!(
                                         "[{PALW_PANEL}] the mempool refused the equivocation evidence (round {round}, permit {index}): {e}"
                                     );
-                                    *funding = None;
+                                    carrier.set_funding(None);
                                 }
                             }
                         }
@@ -7131,7 +7087,7 @@ impl PalwPanelService {
             }
         }
         // **RFC-0007 §I.6: and a seat's two vertices of one round**, filed behind the permit evidence in the same slot.
-        self.carry_vertex_equivocations_v1(session, current_daa, funding, inflight).await;
+        self.carry_vertex_equivocations_v1(session, current_daa, carrier).await;
     }
 
     /// **RFC-0007 §I.6: carry the equivocations this node has seen** (a seat's two vertices of one round) — one carrier a tick at most,
@@ -7141,10 +7097,9 @@ impl PalwPanelService {
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         current_daa: u64,
-        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
-        inflight: &mut usize,
+        carrier: &mut CarrierBookMutV1<'_>,
     ) {
-        if *inflight >= MAX_INFLIGHT_CARRIERS || self.consensus_config.params.palw_verification_vertex_fence().is_none() {
+        if carrier.inflight() >= MAX_INFLIGHT_CARRIERS || self.consensus_config.params.palw_verification_vertex_fence().is_none() {
             return;
         }
         let mut sent = self.vertex_equivocations_sent.lock().unwrap().clone();
@@ -7156,7 +7111,7 @@ impl PalwPanelService {
         }) else {
             return;
         };
-        let Some((funding_outpoint, funding_entry)) = funding.clone() else { return };
+        let Some((funding_outpoint, funding_entry)) = carrier.funding().clone() else { return };
         if self.stuck_carrier_open_on_v1(&funding_outpoint) {
             return;
         }
@@ -7173,34 +7128,23 @@ impl PalwPanelService {
             self.vertex_equivocations_sent.lock().unwrap().insert(key, current_daa);
             return;
         }
-        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-            Ok(tx) => {
-                let txid = tx.id();
-                let change = tx.outputs[0].clone();
-                match self.submit_carrier_v1(session, tx).await {
-                    Ok(()) => {
+        match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
+            Ok(prepared_carrier) => {
+                let txid = prepared_carrier.id();
+                match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
+                    Ok(sent_carrier) => {
                         info!(
                             "[{PALW_PANEL}] filed a vertex equivocation (seat {:?}, round {}) in tx {txid} (RFC-0007)",
                             key.1, key.0
                         );
-                        let next = TransactionOutpoint::new(txid, 0);
-                        self.persist_fee_outpoint(next);
-                        *funding = Some((
-                            next,
-                            UtxoEntry {
-                                amount: change.value,
-                                script_public_key: change.script_public_key,
-                                block_daa_score: current_daa,
-                                is_coinbase: false,
-                            },
-                        ));
-                        *inflight += 1;
+                        sent_carrier
+                            .record_change(carrier, CarrierInFlightUpdateV1::Increment, |next| self.persist_fee_outpoint(next));
                         self.vertex_equivocations_sent.lock().unwrap().insert(key, current_daa);
                     }
                     Err(e) => {
                         warn!("[{PALW_PANEL}] the mempool refused the vertex equivocation (seat {:?}, round {}): {e}", key.1, key.0);
                         self.vertex_equivocations_sent.lock().unwrap().insert(key, current_daa);
-                        *funding = None;
+                        carrier.set_funding(None);
                     }
                 }
             }
@@ -8964,7 +8908,7 @@ impl PalwPanelService {
         let mut accused: HashSet<Hash64> = HashSet::new();
         // The fee UTXO we are currently spending from, carried across ticks so a mempool chain is
         // not rebuilt from a stale root every two seconds. See the note at its first use.
-        let mut chained_funding: Option<(TransactionOutpoint, UtxoEntry)> = None;
+        let mut carrier_chain = CarrierChainV1::default();
         // **The class registration, built once and retried until it lands.** Built lazily rather
         // than at startup because it needs the chain: the share it must take is the ruleset's
         // minimum grantable one, and a node cannot know that before it has state to read.
@@ -8988,7 +8932,7 @@ impl PalwPanelService {
         let mut class_registration_known_id: Option<Option<Hash64>> = None;
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
-        let mut inflight: usize = 0;
+
         // V07: the readiness lane's own funding chain — possession proofs the main slot cannot take.
         let mut readiness_lane = PalwReadinessLaneV1::default();
         // RFC-0018 (iv), 2026-10-18: the per-class receipt lanes — a seat's own supplementary receipt the main slot cannot take
@@ -9375,25 +9319,18 @@ impl PalwPanelService {
                     if let Some(object) = class_registration.clone() {
                         match self.build_class_registration_tx(&object, funding_outpoint, &funding_entry, current_daa) {
                             Ok(tx) => {
-                                let txid = tx.id();
-                                let change = tx.outputs[0].clone();
-                                match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
-                                    Ok(()) => {
+                                let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
+                                let txid = prepared_carrier.id();
+                                match self.submit_prepared_direct_v1(&session, prepared_carrier).await {
+                                    Ok(sent_carrier) => {
                                         info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
                                         class_registration_inflight = Some((txid, current_daa));
                                         class_registration_left_pool = None;
-                                        let next = TransactionOutpoint::new(txid, 0);
-                                        self.persist_fee_outpoint(next);
-                                        chained_funding = Some((
-                                            next,
-                                            UtxoEntry {
-                                                amount: change.value,
-                                                script_public_key: change.script_public_key,
-                                                block_daa_score: current_daa,
-                                                is_coinbase: false,
-                                            },
-                                        ));
-                                        inflight = inflight.saturating_add(1);
+                                        sent_carrier.record_change(
+                                            &mut carrier_chain.book(),
+                                            CarrierInFlightUpdateV1::SaturatingIncrement,
+                                            |next| self.persist_fee_outpoint(next),
+                                        );
                                     }
                                     Err(e) => warn!("[{PALW_PANEL}] the mempool refused the class registration: {e}"),
                                 }
@@ -13984,20 +13921,20 @@ impl PalwPanelService {
                 // So the chained entry is held across ticks and only re-resolved when we have none
                 // — and dropped the moment a submission is refused, because that is the signal that
                 // the chain we were extending is not one the mempool will accept.
-                if chained_funding.is_none() {
-                    chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;
-                    inflight = 0;
-                } else if let Some((tip, _)) = chained_funding.clone() {
+                if carrier_chain.funding().is_none() {
+                    carrier_chain.set_funding(self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await);
+                    carrier_chain.set_inflight(0);
+                } else if let Some((tip, _)) = carrier_chain.funding().clone() {
                     if session.get_virtual_utxo_entry(tip).is_some() {
                         // The tip of our own chain is in the UTXO set, so every carrier behind it
                         // was mined. Nothing is in flight and the budget is whole again.
-                        inflight = 0;
+                        carrier_chain.set_inflight(0);
                         // **P2-6 (F13) on the drain path** (the P2-6 review, MEDIUM): a tip too small
                         // to fund a carrier is exhausted, and was offered every tick while every
                         // carrier failed on it and the matured rewards were never looked at. With
                         // nothing in flight, the funding is resolved afresh — the largest usable
                         // output that pays, never the residue (`palw_fee_funding_floor_v1`).
-                        if palw_fee_chain_drained_v1(chained_funding.as_ref()) {
+                        if palw_fee_chain_drained_v1(carrier_chain.funding().as_ref()) {
                             info!(
                                 "[{PALW_PANEL}] the carrier chain's change {}:{} holds under {} sompi — too little for a \
                                  carrier; resolving funding afresh",
@@ -14005,7 +13942,7 @@ impl PalwPanelService {
                                 tip.index,
                                 palw_fee_funding_floor_v1()
                             );
-                            chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;
+                            carrier_chain.set_funding(self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await);
                         }
                     } else if !self
                         .flow_context
@@ -14024,8 +13961,8 @@ impl PalwPanelService {
                             "[{PALW_PANEL}] carrier {} was neither mined nor kept — re-resolving funding from the chain",
                             tip.transaction_id
                         );
-                        chained_funding = None;
-                        inflight = 0;
+                        carrier_chain.set_funding(None);
+                        carrier_chain.set_inflight(0);
                     }
                 }
                 // V07: the readiness lane's funding, read as the main chain's tip is (`settle`).
@@ -14062,7 +13999,7 @@ impl PalwPanelService {
                         lane.settle(false, false, false);
                     }
                 }
-                let mut held = inflight >= MAX_INFLIGHT_CARRIERS;
+                let mut held = carrier_chain.inflight() >= MAX_INFLIGHT_CARRIERS;
                 // **Our own tip carrier, unconfirmed since it was sent, and for how long** (the pre-t12
                 // drill of 2026-09-25). Held means the checks above found it neither mined nor gone:
                 // it is in this node's mempool, and `block_daa_score` on its change is the DAA it was
@@ -14073,7 +14010,8 @@ impl PalwPanelService {
                 // kept every possession proof behind it until the 8k class went HELD. A proof that is
                 // due replaces such a carrier (`palw_readiness_replaces_carrier_v1`).
                 let stuck_tip: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = if held {
-                    chained_funding
+                    carrier_chain
+                        .funding()
                         .as_ref()
                         .map(|(tip, entry)| (tip.transaction_id, current_daa.saturating_sub(entry.block_daa_score)))
                 } else {
@@ -14089,7 +14027,8 @@ impl PalwPanelService {
                     if held {
                         info!(
                             "[{PALW_PANEL}] holding every carrier: {inflight} of ours are unconfirmed (cap {MAX_INFLIGHT_CARRIERS}); a \
-                             chained carrier is mined only after its parent, so this clears one block at a time"
+                             chained carrier is mined only after its parent, so this clears one block at a time",
+                            inflight = carrier_chain.inflight()
                         );
                     } else {
                         info!("[{PALW_PANEL}] carrier chain confirmed; submitting again");
@@ -14102,12 +14041,15 @@ impl PalwPanelService {
                     // carriers the network will drop before anyone reads them.
                     None
                 } else {
-                    chained_funding.clone()
+                    carrier_chain.funding().clone()
                 };
                 if held {
                     // Not the same condition as "no fee UTXO", and it must not print as one: this
                     // panel is waiting for its own chain to confirm, which is the system working.
-                    trace!("[{PALW_PANEL}] holding: {inflight} carriers unconfirmed (cap {MAX_INFLIGHT_CARRIERS})");
+                    trace!(
+                        "[{PALW_PANEL}] holding: {inflight} carriers unconfirmed (cap {MAX_INFLIGHT_CARRIERS})",
+                        inflight = carrier_chain.inflight()
+                    );
                 } else if funding.is_none() && receipt_pool_v2.claim_ids().iter().any(|c| !submitted.contains_key(c)) {
                     // Once per tick, not once per claim: a pending carrier keeps every quorum
                     // unfundable until it is mined, and that used to be tens of thousands of
@@ -14160,7 +14102,7 @@ impl PalwPanelService {
                         match self.open_stuck_carrier_v1(&session, stuck, late).await {
                             Some(opened) => {
                                 funding = Some(opened);
-                                inflight = 0;
+                                carrier_chain.set_inflight(0);
                                 held = false;
                                 true
                             }
@@ -14184,22 +14126,32 @@ impl PalwPanelService {
                 });
                 if replacing.is_some() {
                     // The late carrier leaves with its replacement: the site is entered with the slot free.
-                    inflight = 0;
+                    carrier_chain.set_inflight(0);
                 }
-                slots.at(PalwCarrierSiteV1::ReadinessEscalated, inflight);
+                slots.at(PalwCarrierSiteV1::ReadinessEscalated, carrier_chain.inflight());
                 if let Some((stuck, late)) = replacing
                     && let Some(duties) = readiness.as_mut()
                     && let Some(at) = crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)
                 {
                     let duty = duties.remove(at);
-                    if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight).await {
+                    if self
+                        .replace_late_carrier_v1(
+                            &session,
+                            &duty,
+                            stuck,
+                            late,
+                            current_daa,
+                            &mut carrier_chain.book_with_funding(&mut funding),
+                        )
+                        .await
+                    {
                         readiness_waiting = false;
                         held = false;
                         tip_replaced = true;
                     } else {
                         // The late carrier still holds the slot: nothing went out at this site.
-                        inflight = MAX_INFLIGHT_CARRIERS;
-                        slots.rewind_v1(inflight);
+                        carrier_chain.set_inflight(MAX_INFLIGHT_CARRIERS);
+                        slots.rewind_v1(carrier_chain.inflight());
                         // V07: a declined replacement is a proof the main slot cannot take this tick — our
                         // court move or data-availability answer keeps its turn until LOST
                         // (`palw_carrier_keeps_its_turn_v1`), a carrier that moves money or registers is
@@ -14209,20 +14161,23 @@ impl PalwPanelService {
                         // audit of 2026-09-26, the n1 x n2 composition).
                         let main: Vec<TransactionOutpoint> = funding
                             .iter()
-                            .chain(chained_funding.iter())
+                            .chain(carrier_chain.funding().iter())
                             .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
                             .map(|(outpoint, _)| *outpoint)
                             .collect();
                         readiness_waiting =
                             !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;
                     }
-                } else if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, inflight)
+                } else if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, carrier_chain.inflight())
                     && funding.is_some()
                     && let Some(duties) = readiness.as_mut()
                     && let Some(at) = crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)
                 {
                     let duty = duties.remove(at);
-                    if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {
+                    if self
+                        .carry_readiness_proof_v1(&session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding))
+                        .await
+                    {
                         readiness_waiting = false;
                     }
                 } else if replacing.is_none()
@@ -14232,7 +14187,7 @@ impl PalwPanelService {
                     // V07: the main slot cannot take the escalated proof this tick — the lane can.
                     let main: Vec<TransactionOutpoint> = funding
                         .iter()
-                        .chain(chained_funding.iter())
+                        .chain(carrier_chain.funding().iter())
                         .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
                         .map(|(outpoint, _)| *outpoint)
                         .collect();
@@ -14242,14 +14197,20 @@ impl PalwPanelService {
                     }
                 }
                 if replacing.is_some() && !tip_replaced {
-                    inflight = inflight.max(MAX_INFLIGHT_CARRIERS);
+                    carrier_chain.set_inflight(carrier_chain.inflight().max(MAX_INFLIGHT_CARRIERS));
                 }
-                slots.at(PalwCarrierSiteV1::PriorityFirst, inflight);
-                if slots.offers(PalwCarrierSiteV1::PriorityFirst, inflight) {
-                    self.carry_priority_v1(&session, current_daa, &mut court_outbox, &mut funding, &mut inflight, &mut challenged)
-                        .await;
+                slots.at(PalwCarrierSiteV1::PriorityFirst, carrier_chain.inflight());
+                if slots.offers(PalwCarrierSiteV1::PriorityFirst, carrier_chain.inflight()) {
+                    self.carry_priority_v1(
+                        &session,
+                        current_daa,
+                        &mut court_outbox,
+                        &mut carrier_chain.book_with_funding(&mut funding),
+                        &mut challenged,
+                    )
+                    .await;
                 }
-                slots.at(PalwCarrierSiteV1::Own, inflight);
+                slots.at(PalwCarrierSiteV1::Own, carrier_chain.inflight());
                 // **The class registration, ahead of every other ordinary carrier and only once.**
                 //
                 // A class that is not registered mines nothing, so this is the one object whose
@@ -14260,7 +14221,7 @@ impl PalwPanelService {
                 // own job and commit it as a canonical free-prompt claim, one per interval per
                 // bond, funded like any other carrier. A failed build is retried next interval,
                 // not next tick — an inference is not something to spin on.
-                if slots.offers(PalwCarrierSiteV1::Own, inflight)
+                if slots.offers(PalwCarrierSiteV1::Own, carrier_chain.inflight())
                     && self.config.canonical_claims
                     && current_daa >= canonical_last_daa.saturating_add(self.config.canonical_interval_daa)
                     // V01's panel side: a claim's commitment is priced and paid by its own builder, so
@@ -14274,10 +14235,10 @@ impl PalwPanelService {
                         .await
                     {
                         Ok((tx, claim_id, material)) => {
-                            let txid = tx.id();
-                            let change = tx.outputs[0].clone();
-                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
-                                Ok(()) => {
+                            let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
+                            let txid = prepared_carrier.id();
+                            match self.submit_prepared_direct_v1(&session, prepared_carrier).await {
+                                Ok(sent_carrier) => {
                                     info!("[{PALW_PANEL}] committed canonical claim {claim_id} in tx {txid}");
                                     // The answer beside the question, retained under the claim id
                                     // (the resolver serves it) and broadcast to the seats.
@@ -14291,18 +14252,11 @@ impl PalwPanelService {
                                         material
                                     };
                                     self.flow_context.broadcast_palw_material(claim_id, served).await;
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    inflight += 1;
+                                    sent_carrier.record_change(
+                                        &mut carrier_chain.book_with_funding(&mut funding),
+                                        CarrierInFlightUpdateV1::Increment,
+                                        |next| self.persist_fee_outpoint(next),
+                                    );
                                 }
                                 Err(e) => {
                                     warn!("[{PALW_PANEL}] the mempool refused the canonical claim: {e}");
@@ -14316,9 +14270,16 @@ impl PalwPanelService {
                 // **RFC-0004 (A10): an evaluation claim the executor finished**, carried beside the
                 // canonical claim at the same site and funded the same way. Nothing here runs below the
                 // fence: no run is ever ready.
-                if slots.offers(PalwCarrierSiteV1::Own, inflight) && !stuck_opened && funding.is_some() {
+                if slots.offers(PalwCarrierSiteV1::Own, carrier_chain.inflight()) && !stuck_opened && funding.is_some() {
                     let _ = self
-                        .improve_carry_v1(&mut improve, &session, network_domain, bond, current_daa, &mut funding, &mut inflight)
+                        .improve_carry_v1(
+                            &mut improve,
+                            &session,
+                            network_domain,
+                            bond,
+                            current_daa,
+                            &mut carrier_chain.book_with_funding(&mut funding),
+                        )
                         .await;
                 }
                 // **ADR-0135 / audit C-1: a class registered before the registry fence never gets a
@@ -14342,7 +14303,7 @@ impl PalwPanelService {
                         )
                     });
                 }
-                if slots.offers(PalwCarrierSiteV1::Own, inflight)
+                if slots.offers(PalwCarrierSiteV1::Own, carrier_chain.inflight())
                     && !registration_waits
                     && self.config.register_class.is_some()
                     && !class_registration_done
@@ -14395,25 +14356,18 @@ impl PalwPanelService {
                     {
                         match self.build_class_registration_tx(&object, funding_outpoint, &funding_entry, current_daa) {
                             Ok(tx) => {
-                                let txid = tx.id();
-                                let change = tx.outputs[0].clone();
-                                match self.submit_carrier_v1(&session, tx).await {
-                                    Ok(()) => {
+                                let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
+                                let txid = prepared_carrier.id();
+                                match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                                    Ok(sent_carrier) => {
                                         info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
                                         class_registration_inflight = Some((txid, current_daa));
                                         class_registration_left_pool = None;
-                                        let next = TransactionOutpoint::new(txid, 0);
-                                        self.persist_fee_outpoint(next);
-                                        funding = Some((
-                                            next,
-                                            UtxoEntry {
-                                                amount: change.value,
-                                                script_public_key: change.script_public_key,
-                                                block_daa_score: current_daa,
-                                                is_coinbase: false,
-                                            },
-                                        ));
-                                        inflight += 1;
+                                        sent_carrier.record_change(
+                                            &mut carrier_chain.book_with_funding(&mut funding),
+                                            CarrierInFlightUpdateV1::Increment,
+                                            |next| self.persist_fee_outpoint(next),
+                                        );
                                     }
                                     Err(e) => {
                                         warn!("[{PALW_PANEL}] the mempool refused the class registration: {e}");
@@ -14442,17 +14396,27 @@ impl PalwPanelService {
                         && palw_readiness_replaces_carrier_v1(duty.escalates(), late)
                     {
                         tip_replaced = true;
-                        if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight).await {
+                        if self
+                            .replace_late_carrier_v1(
+                                &session,
+                                &duty,
+                                stuck,
+                                late,
+                                current_daa,
+                                &mut carrier_chain.book_with_funding(&mut funding),
+                            )
+                            .await
+                        {
                             readiness_waiting = false;
                             held = false;
                             continue;
                         }
                     }
-                    if funding.is_none() || !slots.offers(PalwCarrierSiteV1::Own, inflight) {
+                    if funding.is_none() || !slots.offers(PalwCarrierSiteV1::Own, carrier_chain.inflight()) {
                         // V07: the main slot cannot take it this tick — the readiness lane can, past R-core+.
                         let main: Vec<TransactionOutpoint> = funding
                             .iter()
-                            .chain(chained_funding.iter())
+                            .chain(carrier_chain.funding().iter())
                             .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
                             .map(|(outpoint, _)| *outpoint)
                             .collect();
@@ -14467,16 +14431,20 @@ impl PalwPanelService {
                             format!(
                                 "[{PALW_PANEL}] a possession proof for class {} waits for a carrier slot ({inflight} of ours \
                                  unconfirmed, cap {MAX_INFLIGHT_CARRIERS}); receipts yield until it lands",
-                                duty.class_id().unwrap_or_default()
+                                duty.class_id().unwrap_or_default(),
+                                inflight = carrier_chain.inflight()
                             )
                         });
                         break;
                     }
-                    if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {
+                    if self
+                        .carry_readiness_proof_v1(&session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding))
+                        .await
+                    {
                         readiness_waiting = false;
                     }
                 }
-                slots.at(PalwCarrierSiteV1::Licences, inflight);
+                slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());
                 // The claims the V2 pool holds anything for — heard V2 receipts, and every claim this
                 // node filed on (its V3 filings keep their inner half there) — as `receipts.keys()`
                 // named them before the pools were rebuilt.
@@ -14513,7 +14481,7 @@ impl PalwPanelService {
                 tick_guard.phase("tail-pre-licence");
                 let assemble_started = std::time::Instant::now();
                 for claim in claims {
-                    if !slots.offers(PalwCarrierSiteV1::Licences, inflight) || readiness_waiting {
+                    if !slots.offers(PalwCarrierSiteV1::Licences, carrier_chain.inflight()) || readiness_waiting {
                         break;
                     }
                     if assemble_started.elapsed() >= COLLECTOR_ASSEMBLE_BUDGET {
@@ -14564,14 +14532,11 @@ impl PalwPanelService {
                     };
                     licence_idle.remove(&claim);
                     let through_v1 = door == kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1::Quorum;
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                        Ok(tx) => {
-                            let txid = tx.id();
-                            // The change this carrier creates, read off the carrier itself rather
-                            // than recomputed — it is the next carrier's input.
-                            let change = tx.outputs[0].clone();
-                            match self.submit_carrier_v1(&session, tx).await {
-                                Ok(()) => {
+                    match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
+                        Ok(prepared_carrier) => {
+                            let txid = prepared_carrier.id();
+                            match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                                Ok(sent_carrier) => {
                                     info!(
                                         "[{PALW_PANEL}] submitted {} for claim {claim} in tx {txid}{}",
                                         object_name(&object),
@@ -14580,18 +14545,11 @@ impl PalwPanelService {
                                             .map(|panel| format!(" (bound {} DAA ago)", current_daa.saturating_sub(panel.bound_daa)))
                                             .unwrap_or_default()
                                     );
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    inflight += 1;
+                                    sent_carrier.record_change(
+                                        &mut carrier_chain.book_with_funding(&mut funding),
+                                        CarrierInFlightUpdateV1::Increment,
+                                        |next| self.persist_fee_outpoint(next),
+                                    );
                                     submitted.insert(claim, current_daa);
                                     submit_attempts.remove(&claim);
                                     if through_v1 {
@@ -14640,7 +14598,7 @@ impl PalwPanelService {
                 // set never takes a licence's slot and a slot neither wanted still goes to the court.
                 tick_guard.phase("licences");
                 if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)
-                    && slots.offers(PalwCarrierSiteV1::Licences, inflight)
+                    && slots.offers(PalwCarrierSiteV1::Licences, carrier_chain.inflight())
                     && !readiness_waiting
                     && funding.is_some()
                 {
@@ -14681,16 +14639,15 @@ impl PalwPanelService {
                     }
                     palw_supplementary_offer_order_v1(&mut offers);
                     for (claim, offer) in offers {
-                        if !slots.offers(PalwCarrierSiteV1::Licences, inflight) || readiness_waiting {
+                        if !slots.offers(PalwCarrierSiteV1::Licences, carrier_chain.inflight()) || readiness_waiting {
                             break;
                         }
                         let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
-                        match self.build_lifecycle_tx(&offer.object, funding_outpoint, &funding_entry) {
-                            Ok(tx) => {
-                                let txid = tx.id();
-                                let change = tx.outputs[0].clone();
-                                match self.submit_carrier_v1(&session, tx).await {
-                                    Ok(()) => {
+                        match self.prepare_lifecycle_carrier_v1(&offer.object, funding_outpoint, &funding_entry, current_daa) {
+                            Ok(prepared_carrier) => {
+                                let txid = prepared_carrier.id();
+                                match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                                    Ok(sent_carrier) => {
                                         info!(
                                             "[{PALW_PANEL}] submitted a {} supplementary set for claim {claim} in tx {txid} — {} seat(s) \
                                              credited, {} recounted, basis {} → {}{}{} (SR-10, V3S-01)",
@@ -14705,18 +14662,11 @@ impl PalwPanelService {
                                             if offer.effect.upgrades { ", lifting the S2 gate" } else { "" },
                                             if offer.effect.releases_escrow { ", releasing the escrow" } else { "" },
                                         );
-                                        let next = TransactionOutpoint::new(txid, 0);
-                                        self.persist_fee_outpoint(next);
-                                        funding = Some((
-                                            next,
-                                            UtxoEntry {
-                                                amount: change.value,
-                                                script_public_key: change.script_public_key,
-                                                block_daa_score: current_daa,
-                                                is_coinbase: false,
-                                            },
-                                        ));
-                                        inflight += 1;
+                                        sent_carrier.record_change(
+                                            &mut carrier_chain.book_with_funding(&mut funding),
+                                            CarrierInFlightUpdateV1::Increment,
+                                            |next| self.persist_fee_outpoint(next),
+                                        );
                                         supplementary_v3_submitted.insert(claim, current_daa);
                                     }
                                     Err(e) => {
@@ -14746,10 +14696,12 @@ impl PalwPanelService {
                             .map(|(what, object)| (what, object, None)),
                     );
                     for (what, object, part_of) in offers {
-                        if !slots.offers(PalwCarrierSiteV1::Licences, inflight) || readiness_waiting {
+                        if !slots.offers(PalwCarrierSiteV1::Licences, carrier_chain.inflight()) || readiness_waiting {
                             break;
                         }
-                        if self.carry_object_v1(&session, &object, &what, current_daa, &mut funding, &mut inflight).await
+                        if self
+                            .carry_object_v1(&session, &object, &what, current_daa, &mut carrier_chain.book_with_funding(&mut funding))
+                            .await
                             && let Some(claim) = part_of
                         {
                             shard_books.note_part_carried(claim, current_daa);
@@ -14759,12 +14711,18 @@ impl PalwPanelService {
                 // **P2-6: the licences' turn passes the slot to the priority lane** when the collector
                 // had nothing to carry, in the same tick.
                 tick_guard.phase("supplementary");
-                slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);
-                if slots.offers(PalwCarrierSiteV1::PriorityAfterLicences, inflight) {
-                    self.carry_priority_v1(&session, current_daa, &mut court_outbox, &mut funding, &mut inflight, &mut challenged)
-                        .await;
+                slots.at(PalwCarrierSiteV1::PriorityAfterLicences, carrier_chain.inflight());
+                if slots.offers(PalwCarrierSiteV1::PriorityAfterLicences, carrier_chain.inflight()) {
+                    self.carry_priority_v1(
+                        &session,
+                        current_daa,
+                        &mut court_outbox,
+                        &mut carrier_chain.book_with_funding(&mut funding),
+                        &mut challenged,
+                    )
+                    .await;
                 }
-                slots.at(PalwCarrierSiteV1::OwnReceipts, inflight);
+                slots.at(PalwCarrierSiteV1::OwnReceipts, carrier_chain.inflight());
                 // **ADR-0124 Decision 2: a seat carries its own receipt after the licence.** For
                 // every claim this seat answered `Valid` on, once the chain has licensed it without
                 // crediting this seat, the receipt rides a supplementary `ReceiptLicensed` while
@@ -14775,7 +14733,7 @@ impl PalwPanelService {
                 // **RFC-0007: a sealed vertex rides once, in the seat's own slot** — the oldest not yet sent (or whose carrier has waited out the
                 // replan interval), as an ordinary lifecycle carrier; every node relays it and any block takes it, so there is no collector.
                 if vertex_fence.is_some()
-                    && slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight)
+                    && slots.offers(PalwCarrierSiteV1::OwnReceipts, carrier_chain.inflight())
                     && !readiness_waiting
                     && let Some((funding_outpoint, funding_entry)) = funding.clone()
                     // (DRILL ONLY: after the round's first vertex has gone out, its deliberate second one — `take_drill_extra` is `None`
@@ -14792,29 +14750,21 @@ impl PalwPanelService {
                         trace!("[{PALW_PANEL}] this seat's vertex of round {} is not offered a carrier now: {answer:?}", vertex.round);
                         vertex_book.mark_sent(vertex.round, current_daa);
                     } else {
-                        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                            Ok(tx) => {
-                                let txid = tx.id();
-                                let change = tx.outputs[0].clone();
-                                match self.submit_carrier_v1(&session, tx).await {
-                                    Ok(()) => {
+                        match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
+                            Ok(prepared_carrier) => {
+                                let txid = prepared_carrier.id();
+                                match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                                    Ok(sent_carrier) => {
                                         info!(
                                             "[{PALW_PANEL}] submitted this seat's vertex of round {} ({} leaves) in tx {txid} (RFC-0007)",
                                             vertex.round,
                                             vertex.leaves.len()
                                         );
-                                        let next = TransactionOutpoint::new(txid, 0);
-                                        self.persist_fee_outpoint(next);
-                                        funding = Some((
-                                            next,
-                                            UtxoEntry {
-                                                amount: change.value,
-                                                script_public_key: change.script_public_key,
-                                                block_daa_score: current_daa,
-                                                is_coinbase: false,
-                                            },
-                                        ));
-                                        inflight += 1;
+                                        sent_carrier.record_change(
+                                            &mut carrier_chain.book_with_funding(&mut funding),
+                                            CarrierInFlightUpdateV1::Increment,
+                                            |next| self.persist_fee_outpoint(next),
+                                        );
                                         vertex_book.mark_sent(vertex.round, current_daa);
                                     }
                                     Err(e) => {
@@ -14833,7 +14783,7 @@ impl PalwPanelService {
                 // claim's audit window has closed), each carried once from `palw-traps.json`'s plans, rehearsed on the tip first.
                 if vertex_fence.is_some()
                     && self.consensus_config.params.palw_audit_mesh_active_at(current_daa)
-                    && slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight)
+                    && slots.offers(PalwCarrierSiteV1::OwnReceipts, carrier_chain.inflight())
                     && !readiness_waiting
                     && let Some((funding_outpoint, funding_entry)) = funding.clone()
                     && let Some(kp) = self.keypair.as_ref()
@@ -14859,28 +14809,20 @@ impl PalwPanelService {
                                 if is_reveal { "reveal" } else { "commitment" }
                             );
                         } else {
-                            match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                                Ok(tx) => {
-                                    let txid = tx.id();
-                                    let change = tx.outputs[0].clone();
-                                    match self.submit_carrier_v1(&session, tx).await {
-                                        Ok(()) => {
+                            match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
+                                Ok(prepared_carrier) => {
+                                    let txid = prepared_carrier.id();
+                                    match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                                        Ok(sent_carrier) => {
                                             info!(
                                                 "[{PALW_PANEL}] submitted this seat's trap {} in tx {txid} (RFC-0007 Part IV.1)",
                                                 if is_reveal { "reveal" } else { "commitment" }
                                             );
-                                            let next = TransactionOutpoint::new(txid, 0);
-                                            self.persist_fee_outpoint(next);
-                                            funding = Some((
-                                                next,
-                                                UtxoEntry {
-                                                    amount: change.value,
-                                                    script_public_key: change.script_public_key,
-                                                    block_daa_score: current_daa,
-                                                    is_coinbase: false,
-                                                },
-                                            ));
-                                            inflight += 1;
+                                            sent_carrier.record_change(
+                                                &mut carrier_chain.book_with_funding(&mut funding),
+                                                CarrierInFlightUpdateV1::Increment,
+                                                |next| self.persist_fee_outpoint(next),
+                                            );
                                             if is_reveal {
                                                 trap_book.mark_revealed(index);
                                             } else {
@@ -14907,7 +14849,9 @@ impl PalwPanelService {
                     {
                         continue;
                     }
-                    let main_takes = slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight) && !readiness_waiting && funding.is_some();
+                    let main_takes = slots.offers(PalwCarrierSiteV1::OwnReceipts, carrier_chain.inflight())
+                        && !readiness_waiting
+                        && funding.is_some();
                     if !main_takes {
                         // RFC-0018 (iv): the main slot is taken (one carrier in flight, a court storm, a waiting possession proof):
                         // the receipt rides its class's lane, if this seat holds a spare output for it.
@@ -14917,7 +14861,7 @@ impl PalwPanelService {
                         }
                         let held: Vec<TransactionOutpoint> = funding
                             .iter()
-                            .chain(chained_funding.iter())
+                            .chain(carrier_chain.funding().iter())
                             .chain(readiness_lane.funding.iter())
                             .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
                             .map(|(outpoint, _)| *outpoint)
@@ -14935,25 +14879,19 @@ impl PalwPanelService {
                         }
                         let Some(object) = session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt]) else { continue };
                         let Some((lane_outpoint, lane_entry)) = lane.funding.clone() else { continue };
-                        match self.build_lifecycle_tx(&object, lane_outpoint, &lane_entry) {
-                            Ok(tx) => {
-                                let txid = tx.id();
-                                let change = tx.outputs[0].clone();
-                                match self.submit_carrier_v1(&session, tx).await {
-                                    Ok(()) => {
+                        match self.prepare_lifecycle_carrier_v1(&object, lane_outpoint, &lane_entry, current_daa) {
+                            Ok(prepared_carrier) => {
+                                let txid = prepared_carrier.id();
+                                match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                                    Ok(sent_carrier) => {
                                         info!(
                                             "[{PALW_PANEL}] submitted this seat's own receipt for claim {claim} on class {class}'s lane in tx {txid}"
                                         );
-                                        lane.funding = Some((
-                                            TransactionOutpoint::new(txid, 0),
-                                            UtxoEntry {
-                                                amount: change.value,
-                                                script_public_key: change.script_public_key,
-                                                block_daa_score: current_daa,
-                                                is_coinbase: false,
-                                            },
-                                        ));
-                                        lane.inflight = 1;
+                                        sent_carrier.record_change(
+                                            &mut CarrierBookMutV1::new(&mut lane.funding, &mut lane.inflight),
+                                            CarrierInFlightUpdateV1::Set(1),
+                                            |_| {},
+                                        );
                                         supplementary_submitted.insert(claim, current_daa);
                                     }
                                     Err(e) => {
@@ -14968,27 +14906,19 @@ impl PalwPanelService {
                     }
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { continue };
                     let Some(object) = session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt]) else { continue };
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                        Ok(tx) => {
-                            let txid = tx.id();
-                            let change = tx.outputs[0].clone();
-                            match self.submit_carrier_v1(&session, tx).await {
-                                Ok(()) => {
+                    match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
+                        Ok(prepared_carrier) => {
+                            let txid = prepared_carrier.id();
+                            match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                                Ok(sent_carrier) => {
                                     info!(
                                         "[{PALW_PANEL}] submitted this seat's own receipt for claim {claim} (supplementary) in tx {txid}"
                                     );
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    inflight += 1;
+                                    sent_carrier.record_change(
+                                        &mut carrier_chain.book_with_funding(&mut funding),
+                                        CarrierInFlightUpdateV1::Increment,
+                                        |next| self.persist_fee_outpoint(next),
+                                    );
                                     supplementary_submitted.insert(claim, current_daa);
                                 }
                                 Err(e) => {
@@ -15000,14 +14930,14 @@ impl PalwPanelService {
                         Err(e) => warn!("[{PALW_PANEL}] cannot build the supplementary carrier for claim {claim}: {e}"),
                     }
                 }
-                last_lane = slots.finish(inflight);
+                last_lane = slots.finish(carrier_chain.inflight());
                 // V01's panel side: the opening closes with the tick. One the pool took in the stuck
                 // carrier's place is the chain's new tip (written back below); one nothing took leaves
                 // the stuck carrier holding the slot, exactly as it did before the tick.
                 if stuck_opened {
                     let opening = self.carrier_replacement.lock().unwrap().take();
                     if opening.is_none_or(|opening| opening.replaced_by.is_none()) {
-                        inflight = MAX_INFLIGHT_CARRIERS;
+                        carrier_chain.set_inflight(MAX_INFLIGHT_CARRIERS);
                         held = true;
                     }
                 }
@@ -15021,7 +14951,7 @@ impl PalwPanelService {
                 // was in no UTXO set at all. Measured on testnet-11: node 0 held at the cap once and
                 // never carried another object, 6,343 warnings later.
                 if !held {
-                    chained_funding = funding;
+                    carrier_chain.set_funding(funding);
                 }
             }
 

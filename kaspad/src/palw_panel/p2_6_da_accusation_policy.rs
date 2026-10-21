@@ -9,6 +9,8 @@
 //! book that files each claim once, the fee funder's age and B-3 rules, and the lane order — and
 //! the tick's wiring, pinned where it runs.
 use super::*;
+#[cfg(test)]
+use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1;
 use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as C;
 use kaspa_consensus_core::palw_state_v2::{PalwDaAdmissionV1, PalwStateV2Error};
 
@@ -316,13 +318,14 @@ fn f13_a_drained_residue_is_left_for_a_mature_coinbase() {
     assert!(scan.found.is_none() && scan.busy == 1);
     // And the tick asks it where the chain's tip is mined, then resolves afresh.
     let source = the_source();
-    let mined = source.find("if session.get_virtual_utxo_entry(tip).is_some() {").expect("the mined tip");
-    let drained = mined + source[mined..].find("if palw_fee_chain_drained_v1(chained_funding.as_ref()) {").expect("the drain rule");
+    let mined = source.find_code("if session.get_virtual_utxo_entry(tip).is_some() {").expect("the mined tip");
+    let drained =
+        mined + source[mined..].find_code("if palw_fee_chain_drained_v1(carrier_chain.funding().as_ref()) {").expect("the drain rule");
     let resolved = drained
         + source[drained..]
-            .find("chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;")
+            .find_code("carrier_chain.set_funding(self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await);")
             .expect("resolved afresh");
-    assert!(!source[mined..resolved].contains("} else if"), "inside the mined-tip branch");
+    assert!(!source[mined..resolved].contains_code("} else if"), "inside the mined-tip branch");
     assert!(resolved - mined < 1_500);
 }
 
@@ -454,19 +457,19 @@ fn a_panel_tick_is_recorded_with_its_slowest_phase_on_every_way_out_of_the_itera
 #[test]
 fn the_tick_runs_every_carrier_site_through_the_one_scheduler_in_tick_order() {
     let source = the_source();
-    let submitter = &source[source.find("// --- the collector + submitter's half ---").expect("the submitter")..];
-    let submitter = &submitter[..submitter.find("// Forget what the chain has moved past").expect("its end")];
-    let built = submitter.find("let mut slots = PalwCarrierSlotsV1::new(last_lane);").expect("one scheduler");
+    let submitter = &source[source.find_code("// --- the collector + submitter's half ---").expect("the submitter")..];
+    let submitter = &submitter[..submitter.find_code("// Forget what the chain has moved past").expect("its end")];
+    let built = submitter.find_code("let mut slots = PalwCarrierSlotsV1::new(last_lane);").expect("one scheduler");
     let sites = &submitter[built..];
     let mut at = 0;
     for site in PalwCarrierSiteV1::TICK_ORDER {
-        let mark = format!("slots.at(PalwCarrierSiteV1::{site:?}, inflight);");
-        let found = sites.find(&mark).unwrap_or_else(|| panic!("{mark}"));
+        let mark = format!("slots.at(PalwCarrierSiteV1::{site:?}, carrier_chain.inflight());");
+        let found = sites.find_code(&mark).unwrap_or_else(|| panic!("{mark}"));
         assert!(found >= at, "{site:?} in TICK_ORDER");
         assert_eq!(sites.matches(&mark).count(), 1, "{site:?} marked once");
         at = found;
     }
-    let gate = |site: &str| sites.matches(&format!("slots.offers(PalwCarrierSiteV1::{site}, inflight)")).count();
+    let gate = |site: &str| sites.matches(&format!("slots.offers(PalwCarrierSiteV1::{site}, carrier_chain.inflight())")).count();
     assert_eq!(gate("ReadinessEscalated"), 1, "M1: the one escalated possession proof, ahead of the court queue");
     assert_eq!(gate("PriorityFirst"), 1);
     assert_eq!(
@@ -480,27 +483,38 @@ fn the_tick_runs_every_carrier_site_through_the_one_scheduler_in_tick_order() {
         "the collector's licences; the supplementary collector's entry and each offer (F4 part 2); RFC-0006's carriage of a layer-shard part, \
              plan declaration or shard possession proof"
     );
-    let supplementary = sites.find("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
-    let licences_at = sites.find("slots.at(PalwCarrierSiteV1::Licences, inflight);").expect("the Licences site");
-    let priority_after = sites.find("slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);").expect("the priority lane after");
+    let supplementary = sites.find_code("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
+    let licences_at = sites.find_code("slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());").expect("the Licences site");
+    let priority_after = sites
+        .find_code("slots.at(PalwCarrierSiteV1::PriorityAfterLicences, carrier_chain.inflight());")
+        .expect("the priority lane after");
     assert!(
         licences_at < supplementary && supplementary < priority_after,
         "the supplementary collector rides the Licences site: after the licences, before the priority lane's turn after them"
     );
     assert_eq!(gate("PriorityAfterLicences"), 1);
     assert_eq!(gate("OwnReceipts"), 3, "a seat's own receipt, and (RFC-0007) its sealed vertex and its trap object (Part IV.1)");
-    assert!(sites.contains("if slots.offers(PalwCarrierSiteV1::Own, inflight)\n                    && self.config.canonical_claims"));
-    assert!(sites.contains("if slots.offers(PalwCarrierSiteV1::Own, inflight)\n                    && !registration_waits"));
+    assert!(sites.contains_code(
+        "if slots.offers(PalwCarrierSiteV1::Own, carrier_chain.inflight())\n                    && self.config.canonical_claims"
+    ));
+    assert!(sites.contains_code(
+        "if slots.offers(PalwCarrierSiteV1::Own, carrier_chain.inflight())\n                    && !registration_waits"
+    ));
     assert_eq!(sites.matches(".carry_priority_v1(").count(), 2, "two call sites, each behind its gate");
     for call in sites.match_indices(".carry_priority_v1(").map(|(i, _)| i) {
         let gated = sites[..call].rfind("if slots.offers(PalwCarrierSiteV1::Priority").expect("gated");
         assert!(call - gated < 120, "the call is the gate's body");
     }
-    for own_gate in ["inflight < MAX_INFLIGHT_CARRIERS", "inflight >= MAX_INFLIGHT_CARRIERS"] {
+    for own_gate in [
+        "inflight < MAX_INFLIGHT_CARRIERS",
+        "inflight >= MAX_INFLIGHT_CARRIERS",
+        "carrier_chain.inflight() < MAX_INFLIGHT_CARRIERS",
+        "carrier_chain.inflight() >= MAX_INFLIGHT_CARRIERS",
+    ] {
         assert!(!sites.contains(own_gate), "no site asks the cap by itself: {own_gate}");
     }
-    assert!(sites.contains("last_lane = slots.finish(inflight);"));
-    assert!(!submitter.contains("std::mem::take(&mut court_pending)"), "the court queue is the priority lane's alone");
+    assert!(sites.contains_code("last_lane = slots.finish(carrier_chain.inflight());"));
+    assert!(!submitter.contains_code("std::mem::take(&mut court_pending)"), "the court queue is the priority lane's alone");
 }
 
 /// **N-5 / P2-6: an accusation stands on a seat that was never served** (the P2-6 review, HIGH and

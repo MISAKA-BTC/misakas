@@ -5,6 +5,56 @@ use super::*;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_readiness_escalation_v1::PALW_READINESS_ESCALATION_LANDING_DAA_V1;
 
+/// Match code shapes across rustfmt line wrapping while returning original source offsets.
+pub(super) trait CodeNeedleV1 {
+    fn find_code(&self, needle: &str) -> Option<usize>;
+    fn contains_code(&self, needle: &str) -> bool {
+        self.find_code(needle).is_some()
+    }
+    fn count_code(&self, needle: &str) -> usize;
+}
+fn code_span_v1(source: &str, needle: &str) -> Option<std::ops::Range<usize>> {
+    // Known call-shape guards only: not encoded-value or general Rust AST equality.
+    let compact = |text: &str| {
+        let positions: Vec<usize> = text.bytes().enumerate().filter_map(|(at, b)| (!b.is_ascii_whitespace()).then_some(at)).collect();
+        positions
+            .iter()
+            .enumerate()
+            .filter_map(|(at, original)| {
+                let trailing_argument_comma =
+                    text.as_bytes()[*original] == b',' && positions.get(at + 1).is_some_and(|next| text.as_bytes()[*next] == b')');
+                (!trailing_argument_comma).then_some((*original, text.as_bytes()[*original]))
+            })
+            .collect::<Vec<_>>()
+    };
+    let haystack = compact(source);
+    let wanted: Vec<u8> = compact(needle).into_iter().map(|(_, byte)| byte).collect();
+    if wanted.is_empty() {
+        return Some(0..0);
+    }
+    haystack
+        .windows(wanted.len())
+        .position(|window| window.iter().map(|(_, byte)| byte).copied().eq(wanted.iter().copied()))
+        .map(|at| haystack[at].0..haystack[at + wanted.len() - 1].0 + 1)
+}
+impl CodeNeedleV1 for str {
+    fn find_code(&self, needle: &str) -> Option<usize> {
+        code_span_v1(self, needle).map(|span| span.start)
+    }
+    fn count_code(&self, needle: &str) -> usize {
+        let mut rest = self;
+        let mut count = 0;
+        while let Some(span) = code_span_v1(rest, needle) {
+            if span.is_empty() {
+                break;
+            }
+            count += 1;
+            rest = &rest[span.end..];
+        }
+        count
+    }
+}
+
 fn production() -> &'static str {
     let whole = include_str!("../palw_panel.rs");
     &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the test module")]
@@ -241,28 +291,37 @@ fn a_carrier_stuck_in_our_own_mempool_yields_to_the_proof_within_the_escalation_
 #[test]
 fn the_tick_replaces_our_own_late_carrier_with_the_proof() {
     let source = production();
-    let tick = &source[source.find("let mut held = inflight >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
-    let stuck = tick.find("let stuck_tip: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = if held {").expect("the late tip");
-    let escalated = tick.find("palw_readiness_replaces_carrier_v1(true, *late)").expect("the escalated site's test");
+    let tick =
+        &source[source.find_code("let mut held = carrier_chain.inflight() >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
+    let stuck =
+        tick.find_code("let stuck_tip: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = if held {").expect("the late tip");
+    let escalated = tick.find_code("palw_readiness_replaces_carrier_v1(true, *late)").expect("the escalated site's test");
     let replace = tick
-        .find("self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight)")
+        .find_code("self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut carrier_chain.book_with_funding(&mut funding))")
         .expect("replace");
-    let carry =
-        tick.find("self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight)").expect("the carry");
-    let own = tick.find("palw_readiness_replaces_carrier_v1(duty.escalates(), late)").expect("the Own site's test");
+    let carry = tick
+        .find_code("self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding))")
+        .expect("the carry");
+    let own = tick.find_code("palw_readiness_replaces_carrier_v1(duty.escalates(), late)").expect("the Own site's test");
     assert!(
         stuck < escalated && escalated < replace && replace < carry && carry < own,
         "measured, then the escalated site, then the Own site"
     );
-    assert!(tick.contains("slots.rewind_v1(inflight);"), "a failed replacement is not the lane of record");
-    let tail = &tick[tick.find("last_lane = slots.finish(inflight);").expect("the tail")..];
-    assert!(tail.contains("if !held {\n                    chained_funding = funding;"), "a replaced tip writes the chain back");
-    let body = &source[source.find("    async fn replace_late_carrier_v1(").expect("the replacement fn")..];
+    assert!(tick.contains_code("slots.rewind_v1(carrier_chain.inflight());"), "a failed replacement is not the lane of record");
+    let tail = &tick[tick.find_code("last_lane = slots.finish(carrier_chain.inflight());").expect("the tail")..];
+    assert!(
+        tail.contains_code("if !held {\n                    carrier_chain.set_funding(funding);"),
+        "a replaced tip writes the chain back"
+    );
+    let body = &source[source.find_code("    async fn replace_late_carrier_v1(").expect("the replacement fn")..];
     let body = &body[..body.find("\n    }\n").expect("its end")];
-    assert!(body.contains("palw_carrier_replaceable_v1(&late.tx)"));
-    assert!(body.contains("session.get_virtual_utxo_entry(input)"), "only a confirmed input");
-    assert!(body.contains("Some(late_feerate)"), "above the late carrier's feerate");
-    assert!(body.contains("submit_rpc_transaction_replacement(session, tx)"), "the pool's RBF, never a double spend");
+    assert!(body.contains_code("palw_carrier_replaceable_v1(&late.tx)"));
+    assert!(body.contains_code("session.get_virtual_utxo_entry(input)"), "only a confirmed input");
+    assert!(body.contains_code("Some(late_feerate)"), "above the late carrier's feerate");
+    assert!(
+        body.contains_code("self.submit_prepared_replacement_v1(session, prepared_carrier)"),
+        "the pool's RBF, never a double spend"
+    );
 }
 
 fn carrier(object: PalwConsensusObjectV2, outputs: usize) -> Transaction {
@@ -448,12 +507,15 @@ fn a_court_move_is_replaced_only_once_its_lane_re_plans_it() {
     // it declined still rides the readiness lane (V07, rcore/n1-carrier), which the escalated site
     // offers only when nothing is being replaced: the declined arm offers it the removed duty
     // (the int-4 audit, n1 x n2), so the ordinary proofs never ride the lane ahead of it.
-    let tick = &source[source.find("let mut held = inflight >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
+    let tick =
+        &source[source.find_code("let mut held = carrier_chain.inflight() >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
     let site = tick
-        .find("if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight).await {")
+        .find_code("if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await {")
         .expect("the escalated site's replacement");
     let site = &tick[site..];
-    let site = &site[..site.find("} else if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, inflight)").expect("the next arm")];
+    let site = &site[..site
+        .find_code("} else if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, carrier_chain.inflight())")
+        .expect("the next arm")];
     let declined = &site[site.find("} else {").expect("the declined arm")..];
     assert!(
         declined.contains("!self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;"),
@@ -626,55 +688,52 @@ fn the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof() 
         let rest = &source[start..];
         &rest[..rest.find("\n    }\n").expect("its end")]
     };
-    let settle = source.find("readiness_lane.settle(confirmed, spent_in_pool, kept);").expect("the lane is settled");
-    let held = source.find("let mut held = inflight >= MAX_INFLIGHT_CARRIERS;").expect("the held tick");
+    let settle = source.find_code("readiness_lane.settle(confirmed, spent_in_pool, kept);").expect("the lane is settled");
+    let held = source.find_code("let mut held = carrier_chain.inflight() >= MAX_INFLIGHT_CARRIERS;").expect("the held tick");
     assert!(settle < held && held - settle < 1_500, "settled with the main chain, before the sites");
     let tick = &source[held..];
     let main_escalated =
-        tick.find("if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {").unwrap();
+        tick.find_code("if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await {").unwrap();
     let lane_escalated = tick
-        .find("if self.carry_on_readiness_lane_v1(&session, &duties[at], current_daa, &mut readiness_lane, &main).await {")
+        .find_code("if self.carry_on_readiness_lane_v1(&session, &duties[at], current_daa, &mut readiness_lane, &main).await {")
         .expect("the escalated site's lane");
-    let priority = tick.find("slots.at(PalwCarrierSiteV1::PriorityFirst, inflight);").unwrap();
+    let priority = tick.find_code("slots.at(PalwCarrierSiteV1::PriorityFirst, carrier_chain.inflight());").unwrap();
     assert!(main_escalated < lane_escalated && lane_escalated < priority, "after the main slot's offer, before the court");
     // A declined replacement of our late tip is a proof the main slot cannot take either (the int-4
     // audit, n1 x n2): the escalated duty it removed from the tick's list is offered to the lane on
     // the declined arm, and the proof waits only when the lane does not take it.
     let replace_escalated = tick
-        .find("if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight).await {")
+        .find_code("if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await {")
         .expect("the escalated site's replacement");
     assert!(replace_escalated < main_escalated, "the escalated site's replacement comes first");
     let declined = &tick[replace_escalated..main_escalated];
-    let declined = &declined[declined.find("} else {").expect("the declined arm")..];
+    let declined = &declined[declined.find_code("} else {").expect("the declined arm")..];
     let lane_declined = declined
-            .find("readiness_waiting =\n                            !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;")
+            .find_code("readiness_waiting =\n                            !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;")
             .expect("the declined replacement offers the removed duty to the lane");
-    assert!(declined[..lane_declined].contains("slots.rewind_v1(inflight);"), "after the site is rewound");
+    assert!(declined[..lane_declined].contains_code("slots.rewind_v1(carrier_chain.inflight());"), "after the site is rewound");
     assert!(
         declined[..lane_declined].chars().filter(|c| !c.is_whitespace()).collect::<String>().contains(
-            "funding.iter().chain(chained_funding.iter()).chain(receipt_lanes.values().filter_map(|l|l.funding.as_ref())).map(|(outpoint,_)|*outpoint).collect();"
+            "funding.iter().chain(carrier_chain.funding().iter()).chain(receipt_lanes.values().filter_map(|l|l.funding.as_ref())).map(|(outpoint,_)|*outpoint).collect();"
         ),
         "the lane's funding excludes both main and receipt-lane chains"
     );
-    assert!(!declined.contains("readiness_waiting = true;"), "the proof waits only when the lane refuses it too");
+    assert!(!declined.contains_code("readiness_waiting = true;"), "the proof waits only when the lane refuses it too");
     let lane_own = tick
-        .find("&& self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await")
+        .find_code("&& self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await")
         .expect("the Own site's lane");
-    let waits = tick.find("a possession proof for class {} waits for a carrier slot").unwrap();
+    let waits = tick.find_code("a possession proof for class {} waits for a carrier slot").unwrap();
     assert!(priority < lane_own && lane_own < waits, "before the proof waits");
     let gate = tick[..lane_own].rfind("self.consensus_config.params.palw_rcore_plus_active_at(current_daa)").expect("the gate");
     assert!(lane_own - gate < 200, "past R-core+ only");
     let funder = body("    async fn resolve_readiness_lane_funding_v1(");
-    assert!(funder.contains("!main.contains(o) && !self.flow_context.mining_manager().outpoint_is_spent_in_mempool(o)"));
-    assert!(funder.contains("palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)"));
-    assert!(funder.contains("scan.offer(outpoint, entry, usable, is_free);"), "the largest output that pays");
-    assert!(!funder.contains("persist_fee_outpoint"), "nothing remembered");
+    assert!(funder.contains_code("!main.contains(o) && !self.flow_context.mining_manager().outpoint_is_spent_in_mempool(o)"));
+    assert!(funder.contains_code("palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)"));
+    assert!(funder.contains_code("scan.offer(outpoint, entry, usable, is_free);"), "the largest output that pays");
+    assert!(!funder.contains_code("persist_fee_outpoint"), "nothing remembered");
     let carry = body("    async fn carry_readiness_proof_on_v1(");
-    assert!(
-        carry.contains("if !lane {\n                            self.persist_fee_outpoint(next);"),
-        "the main chain's memory is its own"
-    );
-    assert!(body("    async fn carry_on_readiness_lane_v1(").contains("lane.unfunded_at == Some(current_daa)"), "one scan a DAA");
+    assert!(carry.contains_code("if !lane { self.persist_fee_outpoint(next);"), "the main chain's memory is its own");
+    assert!(body("    async fn carry_on_readiness_lane_v1(").contains_code("lane.unfunded_at == Some(current_daa)"), "one scan a DAA");
 }
 
 /// **The tick is wired as the test above reads it** (V01's panel side): the stuck tip is measured
@@ -691,41 +750,71 @@ fn the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door() {
         let rest = &source[start..];
         &rest[..rest.find("\n    }\n").expect("its end")]
     };
-    let tick = &source[source.find("let mut held = inflight >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
-    let stuck = tick.find("let stuck_tip: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = if held {").expect("stuck");
-    let open = tick.find("Some((stuck, late)) if palw_stuck_carrier_opens_slot_v1(late) => {").expect("the opening");
-    let escalated = tick.find("palw_readiness_replaces_carrier_v1(true, *late)").expect("the escalated site");
+    let tick =
+        &source[source.find_code("let mut held = carrier_chain.inflight() >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
+    let stuck = tick.find_code("let stuck_tip: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = if held {").expect("stuck");
+    let open = tick.find_code("Some((stuck, late)) if palw_stuck_carrier_opens_slot_v1(late) => {").expect("the opening");
+    let escalated = tick.find_code("palw_readiness_replaces_carrier_v1(true, *late)").expect("the escalated site");
     assert!(stuck < open && open < escalated, "measured, opened, then the escalated site");
     let opened = &tick[open..escalated];
-    for line in ["self.open_stuck_carrier_v1(&session, stuck, late)", "funding = Some(opened);", "inflight = 0;", "held = false;"] {
+    for line in [
+        "self.open_stuck_carrier_v1(&session, stuck, late)",
+        "funding = Some(opened);",
+        "carrier_chain.set_inflight(0);",
+        "held = false;",
+    ] {
         assert!(opened.contains(line), "the opening: {line}");
     }
     assert!(tick[..escalated].trim_end().ends_with("!stuck_opened\n                        &&"), "the escalated site defers to it");
-    let tail_at = tick.find("last_lane = slots.finish(inflight);").expect("the tail");
+    let tail_at = tick.find_code("last_lane = slots.finish(carrier_chain.inflight());").expect("the tail");
     let (sites, tail) = tick.split_at(tail_at);
     assert_eq!(
-        sites.matches("self.submit_carrier_v1(&session, tx)").count(),
+        sites.count_code("self.submit_prepared_carrier_v1(&session, prepared_carrier)"),
         7,
         "the existing main sites and RFC-0018 receipt-lane site all use the shared submission door"
     );
-    assert_eq!(sites.matches("self.flow_context.submit_rpc_transaction(").count(), 1, "the canonical claim alone");
-    let canonical = sites.find("self.flow_context.submit_rpc_transaction(").unwrap();
+    assert_eq!(sites.count_code("self.submit_prepared_direct_v1("), 1, "the canonical claim alone");
+    let canonical = sites.find_code("self.submit_prepared_direct_v1(").unwrap();
     assert!(sites[..canonical].rfind("&& !stuck_opened").is_some_and(|guard| canonical - guard < 2_000), "and it never replaces");
     let priority = body("    async fn carry_priority_v1(");
-    assert_eq!(priority.matches("self.submit_carrier_v1(session, tx)").count(), 2, "court moves and evidence");
-    assert!(!priority.contains("flow_context.submit_rpc_transaction("));
-    assert!(priority.contains("Some((funding_outpoint, _)) if self.stuck_carrier_open_on_v1(&funding_outpoint) =>"), "evidence waits");
-    assert!(body("    async fn carry_readiness_proof_on_v1(").contains("self.submit_carrier_v1(session, tx)"));
+    assert_eq!(priority.count_code("self.submit_prepared_carrier_v1(session, prepared_carrier)"), 2, "court moves and evidence");
+    assert!(!priority.contains_code("flow_context.submit_rpc_transaction("));
+    assert!(
+        priority.contains_code("Some((funding_outpoint, _)) if self.stuck_carrier_open_on_v1(&funding_outpoint) =>"),
+        "evidence waits"
+    );
+    assert!(
+        body("    async fn carry_readiness_proof_on_v1(").contains_code("self.submit_prepared_carrier_v1(session, prepared_carrier)")
+    );
     let door = body("    async fn submit_carrier_v1(");
-    assert!(door.contains("opening.is_replaced_by(&tx)") && door.contains("submit_rpc_transaction_replacement(session, tx)"));
-    assert!(door.contains("open.replaced_by = Some(txid);"));
+    assert!(
+        door.contains_code("opening.is_replaced_by(&tx)") && door.contains_code("submit_rpc_transaction_replacement(session, tx)")
+    );
+    assert!(door.contains_code("open.replaced_by = Some(txid);"));
+    let shared = include_str!("carrier_chain.rs");
+    for (name, door) in [
+        ("submit_prepared_carrier_v1", "self.submit_carrier_v1(session, tx).await?;"),
+        (
+            "submit_prepared_direct_v1",
+            "self.flow_context.submit_rpc_transaction(session, tx, kaspa_mining::mempool::tx::Orphan::Forbidden).await?;",
+        ),
+        ("submit_prepared_replacement_v1", "self.flow_context.submit_rpc_transaction_replacement(session, tx).await?;"),
+    ] {
+        let method = &shared[shared.find_code(&format!("fn {name}(")).expect(name)..];
+        let method = &method[..method.find("\n    }").expect("submission method ends")];
+        assert!(method.contains_code(door), "the original submission door and error remain: {name}");
+        assert!(!method.contains_code("record_change("), "caller flags still precede persistence/bookkeeping: {name}");
+    }
     let opener = body("    async fn open_stuck_carrier_v1(");
-    assert!(opener.contains("palw_carrier_replaceable_v1(&late.tx)"), "only a lane object");
-    assert!(opener.contains("palw_carrier_keeps_its_turn_v1(&late.tx, unconfirmed_daa)"), "a court move only once lost");
-    assert!(opener.contains("session.get_virtual_utxo_entry(input)?"), "only a confirmed input");
-    assert!(body("    fn build_lifecycle_tx_priced_v1(").contains("opening.floor_for(&funding_outpoint)"), "priced above it");
-    let close = tail.find("let opening = self.carrier_replacement.lock().unwrap().take();").expect("closed with the tick");
-    let write_back = tail.find("if !held {\n                    chained_funding = funding;").expect("the write-back");
+    assert!(opener.contains_code("palw_carrier_replaceable_v1(&late.tx)"), "only a lane object");
+    assert!(opener.contains_code("palw_carrier_keeps_its_turn_v1(&late.tx, unconfirmed_daa)"), "a court move only once lost");
+    assert!(opener.contains_code("session.get_virtual_utxo_entry(input)?"), "only a confirmed input");
+    assert!(body("    fn build_lifecycle_tx_priced_v1(").contains_code("opening.floor_for(&funding_outpoint)"), "priced above it");
+    let close = tail.find_code("let opening = self.carrier_replacement.lock().unwrap().take();").expect("closed with the tick");
+    let write_back = tail.find_code("if !held {\n                    carrier_chain.set_funding(funding);").expect("the write-back");
     assert!(close < write_back, "a tick that sent nothing is held again before the chain is written back");
-    assert!(tail[close..write_back].contains("inflight = MAX_INFLIGHT_CARRIERS;\n                        held = true;"));
+    assert!(
+        tail[close..write_back]
+            .contains_code("carrier_chain.set_inflight(MAX_INFLIGHT_CARRIERS);\n                        held = true;")
+    );
 }

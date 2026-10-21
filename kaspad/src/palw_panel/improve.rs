@@ -37,6 +37,8 @@
 
 use super::*;
 use crate::palw_panel::court_outbox::CourtOutboxV1;
+#[cfg(test)]
+use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1;
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -729,10 +731,9 @@ impl PalwPanelService {
         network_domain: Hash64,
         bond: TransactionOutpoint,
         current_daa: u64,
-        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
-        inflight: &mut usize,
+        carrier: &mut CarrierBookMutV1<'_>,
     ) -> bool {
-        let Some((funding_outpoint, funding_entry)) = funding.clone() else { return false };
+        let Some((funding_outpoint, funding_entry)) = carrier.funding().clone() else { return false };
         let Some((work, finished_daa)) = st.ready.pop_front() else { return false };
         // The drill lie follows its claim: if this is the faulted run, a claim not carried is a lie not told.
         let lying = matches!(st.lie, PalwImproveLieV1::Pending { job } if job == work.task.job_id);
@@ -790,10 +791,10 @@ impl PalwPanelService {
                 return false;
             }
         };
-        let txid = tx.id();
-        let change = tx.outputs[0].clone();
-        match self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await {
-            Ok(()) => {
+        let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
+        let txid = prepared_carrier.id();
+        match self.submit_prepared_direct_v1(session, prepared_carrier).await {
+            Ok(sent_carrier) => {
                 info!(
                     "[{PALW_PANEL}] [palw-improve] carried evaluation claim {claim_id} in tx {txid}: item {} of epoch {} for {:?} \
                      ({:?}), {} leaves (finished at DAA {finished_daa})",
@@ -824,24 +825,13 @@ impl PalwPanelService {
                 if lying {
                     st.lie = PalwImproveLieV1::Carried { job: work.task.job_id, claim: claim_id, daa: current_daa };
                 }
-                let next = TransactionOutpoint::new(txid, 0);
-                self.persist_fee_outpoint(next);
-                *funding = Some((
-                    next,
-                    UtxoEntry {
-                        amount: change.value,
-                        script_public_key: change.script_public_key,
-                        block_daa_score: current_daa,
-                        is_coinbase: false,
-                    },
-                ));
-                *inflight += 1;
+                sent_carrier.record_change(carrier, CarrierInFlightUpdateV1::Increment, |next| self.persist_fee_outpoint(next));
                 true
             }
             Err(e) => {
                 warn!("[{PALW_PANEL}] [palw-improve] the mempool refused the evaluation claim: {e}");
                 // The job is offered again at the retry age; the funding outpoint may be stale.
-                *funding = None;
+                carrier.set_funding(None);
                 if lying {
                     st.lie = PalwImproveLieV1::Idle;
                 }
@@ -1371,31 +1361,32 @@ mod tests {
     #[test]
     fn the_panel_loop_hooks_the_improvement_loop_in_its_four_places() {
         let panel = include_str!("../palw_panel.rs");
-        assert!(panel.contains("self.improve_tick_v1(&mut improve, current_daa).await"));
-        let one_move = panel.find("self.tir_one_move_pass_v1(").expect("the IR one-move pass");
+        assert!(panel.contains_code("self.improve_tick_v1(&mut improve, current_daa).await"));
+        let one_move = panel.find_code("self.tir_one_move_pass_v1(").expect("the IR one-move pass");
         let court = panel
-            .find("self.improve_court_pass_v1(&mut improve, bond_key, current_daa, &mut court_outbox)")
+            .find_code("self.improve_court_pass_v1(&mut improve, bond_key, current_daa, &mut court_outbox)")
             .expect("the evaluation court's pass");
         assert!(one_move < court, "the evaluation accusations are queued after the IR pass, on the same court path");
         assert!(
             court
                 < panel[one_move..]
-                    .find("// --- the court's half: answer the disputes this bond is a party to ---")
+                    .find_code("// --- the court's half: answer the disputes this bond is a party to ---")
                     .expect("the court's half")
                     + one_move,
             "and before the court's half answers its duties"
         );
         assert!(
             panel
-                .contains(".improve_carry_v1(&mut improve, &session, network_domain, bond, current_daa, &mut funding, &mut inflight)")
+                .contains_code(".improve_carry_v1(&mut improve, &session, network_domain, bond, current_daa, &mut carrier_chain.book_with_funding(&mut funding))")
         );
-        let verdict = &panel[panel.find("let verdict = 'verdict: {").expect("the verdict block")..];
-        let hook = verdict.find("self.improve_seat_step_v1(&mut improve, duty).await").expect("the seat's hook");
-        let capable =
-            verdict.find("self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err()").expect("the capability check");
+        let verdict = &panel[panel.find_code("let verdict = 'verdict: {").expect("the verdict block")..];
+        let hook = verdict.find_code("self.improve_seat_step_v1(&mut improve, duty).await").expect("the seat's hook");
+        let capable = verdict
+            .find_code("self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err()")
+            .expect("the capability check");
         assert!(capable < hook, "a seat that does not hold the class is Incapable before it is asked to replay");
         assert!(
-            hook < verdict.find("if duty.free_prompt {").expect("the free-prompt arms"),
+            hook < verdict.find_code("if duty.free_prompt {").expect("the free-prompt arms"),
             "the evaluation step precedes the FP arms"
         );
     }
