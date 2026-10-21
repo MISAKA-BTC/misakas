@@ -2821,6 +2821,25 @@ mod conviction_e2e_tests {
             let prepared=rounds::prepare_shared_tir_round_v1(&round_state,claim,leaf,&path).unwrap();
             if prepared.phase.terminal_range().is_some(){
                 let mut evidence=crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&fx.execution,&court).unwrap();
+                // Observe actual dependencies without changing the fixture, builder or native rules.
+                let observed=crate::palw_tir_court_v1::ObservedEvidenceStoreV1 {
+                    inner:&fx.execution,calls:Default::default(),deny:None,
+                };
+                let rebuilt=crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&observed,&court).unwrap();
+                assert_eq!(borsh::to_vec(&rebuilt).unwrap(),borsh::to_vec(&evidence).unwrap());
+                let calls=observed.calls.into_inner();
+                let before_root=round_state.state_root();
+                for family in ["param_opening","param_multiproof","param_carriage","prompt_token_ids","prompt_ids_opening","decode_pin"] {
+                    if calls.iter().any(|c|c.starts_with(&format!("{family}("))) {
+                        let missing=crate::palw_tir_court_v1::ObservedEvidenceStoreV1 {
+                            inner:&fx.execution,calls:Default::default(),deny:Some(family),
+                        };
+                        assert!(crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&missing,&court).is_err(),
+                            "missing {family} unexpectedly built terminal {path:?}");
+                        assert_eq!(round_state.state_root(),before_root);
+                    }
+                }
+                eprintln!("terminal dependencies false_partition={false_partition} path={path:?} calls={calls:?}");
                 crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut evidence.binding);
                 let native_proof=crate::palw_court_v2::PalwCourtVerdictProofV2::TirDissection {bottom:Box::new(evidence.clone())};
                 let bytes=bottoms::shared_bottom_close_bytes_v1(&evidence).unwrap();

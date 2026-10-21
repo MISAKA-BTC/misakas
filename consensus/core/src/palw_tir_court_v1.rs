@@ -309,6 +309,78 @@ pub trait PalwTirEvidenceStoreV1 {
     }
 }
 
+
+/// Test-only observation of unchanged builder store calls; never a custody certificate.
+#[cfg(test)]
+pub(crate) struct ObservedEvidenceStoreV1<'a> {
+    pub inner: &'a dyn PalwTirEvidenceStoreV1,
+    pub calls: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    pub deny: Option<&'static str>,
+}
+#[cfg(test)]
+impl PalwTirEvidenceStoreV1 for ObservedEvidenceStoreV1<'_> {
+    fn begin_builder_move_v1(&self) { self.inner.begin_builder_move_v1(); }
+    fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
+        self.calls.borrow_mut().insert(format!("step_leaf({:?})" ,index));
+        if self.deny == Some("step_leaf") { return None; }
+        self.inner.step_leaf(index)
+    }
+    fn step_opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
+        self.calls.borrow_mut().insert(format!("step_opening({:?})" ,index));
+        if self.deny == Some("step_opening") { return None; }
+        self.inner.step_opening(index)
+    }
+    fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>> {
+        self.calls.borrow_mut().insert(format!("step_range_siblings({:?},{:?})" ,first,count));
+        if self.deny == Some("step_range_siblings") { return None; }
+        self.inner.step_range_siblings(first,count)
+    }
+    fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
+        self.calls.borrow_mut().insert(format!("param_opening({:?})" ,leaf));
+        if self.deny == Some("param_opening") { return None; }
+        self.inner.param_opening(leaf)
+    }
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1>  {
+        self.calls.borrow_mut().insert(format!("param_multiproof({:?})" ,leaves));
+        if self.deny == Some("param_multiproof") { return None; }
+        self.inner.param_multiproof(leaves)
+    }
+    fn param_carriage(&self, leaves: &[u32]) -> Option<PalwTirParamOpeningV1>  {
+        self.calls.borrow_mut().insert(format!("param_carriage({:?})" ,leaves));
+        if self.deny == Some("param_carriage") { return None; }
+        self.inner.param_carriage(leaves)
+    }
+    fn prompt_token_ids(&self) -> Option<Vec<u32>> {
+        self.calls.borrow_mut().insert(format!("prompt_token_ids()"));
+        if self.deny == Some("prompt_token_ids") { return None; }
+        self.inner.prompt_token_ids()
+    }
+    fn prompt_ids_opening(&self, tile: u32) -> Option<PalwPromptIdsOpeningV1> {
+        self.calls.borrow_mut().insert(format!("prompt_ids_opening({:?})" ,tile));
+        if self.deny == Some("prompt_ids_opening") { return None; }
+        self.inner.prompt_ids_opening(tile)
+    }
+    fn decode_pin(&self) -> Option<PalwDecodeTokenPinV1> {
+        self.calls.borrow_mut().insert(format!("decode_pin()"));
+        if self.deny == Some("decode_pin") { return None; }
+        self.inner.decode_pin()
+    }
+    fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1>  {
+        self.calls.borrow_mut().insert(format!("row_pin({:?},{:?})" ,row,lane));
+        if self.deny == Some("row_pin") { return None; }
+        self.inner.row_pin(row,lane)
+    }
+    fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)>  {
+        self.calls.borrow_mut().insert(format!("step_node({:?},{:?})" ,level,index));
+        if self.deny == Some("step_node") { return None; }
+        self.inner.step_node(level,index)
+    }
+    fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)>  {
+        self.calls.borrow_mut().insert(format!("row_node({:?},{:?})" ,level,index));
+        if self.deny == Some("row_node") { return None; }
+        self.inner.row_node(level,index)
+    }
+}
 /// Why a builder could not build a refutation.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwTirEvidenceErrorV1 {

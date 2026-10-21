@@ -30,3 +30,13 @@ Before implementing persistent terminal transport, close one full path: either a
 4. Add full source/assembly/invalid-ingress resource and funding terms, then persistence/recovery and actual-node T05. Codec success and this source audit do not discharge these gates.
 
 Source SHA-256 values and scope exclusions are recorded in `terminal-dependencies-source-audit.json`. No tests were added or rerun for this source-only audit; prior pass counts are not new evidence for these dependencies.
+
+## Runtime follow-up (parent `7834659e2`)
+
+The existing signed-history test now wraps the unchanged `TinyExecution` store with a cfg(test)-only delegating observer. Both honest and false numerical partition histories traverse the same named leaf's twelve terminals: 24 observations total, not every eligible leaf of the original. Every rebuilt terminal is byte-identical to direct construction. All 24 request parameter openings and parameter carriage, and each of those two APIs is separately withheld: 48 refusal assertions pass. These are builder refusals, not convictions or financial transitions. The surrounding consensus state root stays unchanged during construction/refusal; this read-only builder has no state writer.
+
+Outer API coordinates are in the raw log. Delegated implementations' internal calls are not recursively traced. This fixture's terminal builders use step leaves, output openings, range siblings and parameter data. No terminal requests prompt or decode-pin data, so no corresponding negative assertion is exercised. General conditional prompt/decode dependencies in the source audit remain unresolved, not disproven. There is no new custody/funding assumption or source reconstruction adapter.
+
+The selected public-fold suite passes 42 tests. Test count is unchanged: the existing native history test was extended. The 24 rebuilds and 48 refusal assertions are cases within that test and must not be added to the test count. See `terminal-dependencies-runtime.json` for machine-readable scope and source hashes, and `terminal-dependencies-native.log` for raw output. Earlier source-audit statements about no new runtime experiment describe that earlier checkpoint only.
+
+Fresh t12 identity (9) and activation (5) tests also pass: 56 unique selected tests total with the 42 public-fold tests. No whole-G14 or node T05 success is inferred. Documentation check remains exit1 with the same five imported missing references and 43 baseline-known occurrences; no new authored missing reference.
