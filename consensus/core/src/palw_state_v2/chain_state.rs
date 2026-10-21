@@ -3892,6 +3892,12 @@ impl PalwChainStateV2 {
                 clock.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
             use crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 as R;
+            if let R::CourtArchiveProgress(r)=row {
+                // Preserve local construction refusal instead of converting it
+                // into a malformed state/offence while loading accepted bytes.
+                r.check_loaded_context(self)?;
+                continue;
+            }
             match row {
                 R::CourtSharedContext(c)=>c.check_context(self),
                 R::CourtSharedQuery(q)=>q.check_context(self),

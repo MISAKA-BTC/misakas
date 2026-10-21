@@ -267,6 +267,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             Key::CourtCloseReceipt(..) => match self.staged_court_row_v1(key) {
                 Some(Row::CourtCloseReceipt(r))=>Some(r.session.claim),_=>None,
             },
+            Key::CourtArchiveProgress(..) => match self.staged_court_row_v1(key) {
+                Some(Row::CourtArchiveProgress(r)) => Some(r.claim), _ => None,
+            },
             Key::CourtEndArchive(_) => match self.staged_court_row_v1(key) {
                 Some(Row::CourtEndArchive(a)) => Some(a.session.claim), _ => None,
             },

@@ -59,3 +59,107 @@ fn gather_and_select_single_execution_read_sets_are_not_a_potential_cover() {
     assert_eq!(sets,vec![vec![(1,0)],vec![(0,1)]]);
     assert_ne!(sets[0],sets[1],"neither legal execution's reads cover the other branch/index");
 }
+
+#[path="common/palw_tir_parameter_cover_fixture.rs"] mod cover_fixture;
+use cover_fixture::dynamic_fixture;
+
+fn named_leaf(f:&Fixture,target:u16,position:u32,occurrence:u16)->u64 {
+    f.leaves.iter().position(|l|l.position==position&&matches!(l.kind,
+        kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit{node,occurrence:o,..} if node==target&&o==u32::from(occurrence)))
+        .expect("the named native commit leaf exists") as u64
+}
+fn assert_subset(params:&PalwTirParamOpeningV1,cover:&[u32]) {
+    for leaf in coordinates(params) {assert!(cover.binary_search(&leaf).is_ok(),"potential cover misses native parameter{leaf}");}
+}
+#[test]
+fn derived_dynamic_cover_has_both_branches_every_row_and_no_unrelated_piece() {
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
+    let (f,target)=dynamic_fixture(false,false,false);let x=f.honest();let leaf=named_leaf(&f,target,3,1);
+    let cover=derive_parameter_cover_v1(&x.binding,leaf,BUDGET).unwrap();
+    let inventory=PalwTirInventoryIndexV1::new(&f.space.program).unwrap();
+    let mut expected=Vec::new();
+    for param in [0u16,1] {for row in 0u64..4 {expected.push(inventory.leaf_of(param,None,(row*8193+8192)*4).unwrap());}}
+    expected.sort_unstable();assert_eq!(cover.leaves,expected,"only actual possible tail pieces of the two branches");
+    assert!(cover.leaves.len()<inventory.leaf_count() as usize,"never substitute the entire registered inventory");
+}
+#[test]
+fn parameter_free_dissection_has_empty_cover_and_per_layer_scopes_remain_separate() {
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
+    let (f,target)=dynamic_fixture(true,false,false);let x=f.honest();
+    let leaf=named_leaf(&f,target,3,1);let cover=derive_parameter_cover_v1(&x.binding,leaf,BUDGET).unwrap();
+    assert!(cover.leaves.is_empty(),"an unrelated parameter does not make this cone require model bytes");
+    let (f,target)=dynamic_fixture(false,true,false);let x=f.honest();let inventory=PalwTirInventoryIndexV1::new(&f.space.program).unwrap();
+    let mut covers=Vec::new();for layer in [0u16,1] {
+        let leaf=named_leaf(&f,target,3,layer+1);let cover=derive_parameter_cover_v1(&x.binding,leaf,BUDGET).unwrap();
+        let mut expected=Vec::new();for param in [0u16,1] {for row in 0u64..4 {expected.push(inventory.leaf_of(param,Some(layer),(row*8193+8192)*4).unwrap());}}
+        expected.sort_unstable();assert_eq!(cover.leaves,expected);covers.push(cover.leaves);
+    }
+    assert!(covers[0].iter().all(|p|!covers[1].contains(p)),"another occurrence must not authorize another layer's model bytes");
+}
+#[test]
+fn fixed_replay_adds_the_actual_writer_parameter_only_before_the_checkpoint() {
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
+    let (f,target)=dynamic_fixture(false,false,true);let x=f.honest();let inventory=PalwTirInventoryIndexV1::new(&f.space.program).unwrap();
+    let writer=inventory.leaf_of(3,None,0).unwrap();
+    let replay=derive_parameter_cover_v1(&x.binding,named_leaf(&f,target,1,1),BUDGET).unwrap();
+    let checkpoint=derive_parameter_cover_v1(&x.binding,named_leaf(&f,target,2,1),BUDGET).unwrap();
+    assert!(replay.leaves.contains(&writer),"noncommit writer from the previous context really replays");
+    assert!(!checkpoint.leaves.contains(&writer),"native checkpoint is authenticated claim material, not a model-byte demand");
+}
+
+#[test]
+fn adversarial_dynamic_roots_and_every_terminal_path_stay_inside_the_cover() {
+    use kaspa_consensus_core::Hash64;
+    use kaspa_consensus_core::palw_artifact::{open_artifact_leaf_v1,palw_artifact_multiproof_from_openings_v1};
+    use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
+    use kaspa_consensus_core::palw_tir_court_v1::{PalwTirInventoryIndexV1,check_tir_root_claim_v1,
+        build_tir_dissect_round_v1,build_tir_dissect_bottom_v1,check_tir_dissect_bottom_v1};
+    use kaspa_consensus_core::palw_tir_dissect_v1::{PalwTirDissectPhaseV1,PalwTirDissectChoiceV1,PALW_TIR_DISSECT_OBJECT_VERSION_V1};
+    let (f,target)=dynamic_fixture(false,false,false);let x=f.honest();let store=Store{f:&f,x:&x};
+    let leaf=named_leaf(&f,target,3,1);let site=palw_tir_dissect_site_v1(&f.space,f.intervals.as_ref().unwrap(),&f.leaves[leaf as usize]).unwrap();
+    let cover=derive_parameter_cover_v1(&x.binding,leaf,BUDGET).unwrap();
+    let honest=build_tir_root_claim_v1(&x.binding,leaf,&store,&RULES).unwrap();
+    assert_eq!(honest.totals.partials.len(),1);assert_eq!(honest.totals.partials[0].len(),1);
+    let inventory=PalwTirInventoryIndexV1::new(&f.space.program).unwrap();
+    let mut played=0;let mut roots=Vec::new();
+    for total in 0i128..=3 {
+        let mut root=honest.clone();root.totals.partials[0][0]=total;
+        let param=if total==0 {1}else{0};
+        let coordinate=inventory.leaf_of(param,None,(total as u64*8193+8192)*4).unwrap();
+        let opening=open_artifact_leaf_v1(&f.ops,coordinate).unwrap();
+        root.finalize.params=PalwTirParamOpeningV1::Single(palw_artifact_multiproof_from_openings_v1(&[opening]).unwrap());
+        check_tir_root_claim_v1(&root,leaf,&RULES).unwrap_or_else(|e|panic!("adversarial total{total}: {e}"));
+        assert_subset(&root.finalize.params,&cover.leaves);roots.push(coordinates(&root.finalize.params));
+        let session=Hash64::from_bytes([0xC1;64]);
+        let phase=PalwTirDissectPhaseV1::open(session,leaf,&site,&root,2,0,10).unwrap();
+        let mut pending=vec![(phase,1u64)];
+        while let Some((mut phase,t))=pending.pop() {
+            if phase.turn()==PalwBisectTurnV1::Terminal {
+                let bottom=build_tir_dissect_bottom_v1(&x.binding,&phase,&store,&RULES).unwrap();
+                assert_subset(&bottom.params,&cover.leaves);
+                // False totals may be convicted. Malformed/missing carriage is
+                // never accepted as evidence that a path was exercised.
+                let verdict=check_tir_dissect_bottom_v1(&phase,&bottom,leaf,&RULES);
+                assert!(verdict.is_ok()||matches!(verdict,Err(kaspa_consensus_core::palw_step_refute::PalwStepRefuteError::NoFaultFound)));
+                played+=1;continue;
+            }
+            let round=build_tir_dissect_round_v1(&x.binding,&phase,site.tile_positions,&store,&RULES).unwrap();
+            // The adversary supplies bounded nonnegative child claims which
+            // fold to its false total; truth remains an independent bottom read.
+            let mut round=round;
+            for (reduction,claimed) in phase.claim().partials.iter().enumerate() {
+                for (e,total) in claimed.iter().enumerate() {
+                    for child in &mut round.children {child.partials[reduction][e]=0;}
+                    round.children.last_mut().unwrap().partials[reduction][e]=*total;
+                }
+            }
+            phase.apply_round(&round,t,10).unwrap();
+            for child in 0..phase.child_ranges().len() {
+                let mut branch=phase.clone();branch.apply_choice(&PalwTirDissectChoiceV1{version:PALW_TIR_DISSECT_OBJECT_VERSION_V1,session_id:session,round:phase.round(),child:child as u8},t+1,10).unwrap();
+                pending.push((branch,t+2));
+            }
+        }
+    }
+    assert!(roots.windows(2).all(|w|w[0]!=w[1]),"each accepted false total selects another authenticated parameter leaf");
+    assert_eq!(played,8,"four legal root totals times both terminal history tiles");
+}

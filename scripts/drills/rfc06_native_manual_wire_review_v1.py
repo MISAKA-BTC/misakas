@@ -5,6 +5,11 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# G14 snapshot rows: decoder consumes derived field order; version, exact ML-DSA
+# key/signature and path bounds narrow acceptance without changing field framing.
+'crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1': ('reviewed-field-layout','54395a01de88dee1dc2ffbe105ba68a8621fd16cdedc2a827e79e3d8ff18a9de'),
+'crate::palw_court_shared_tir_round_v1::SharedTirRoundRowV1': ('reviewed-field-layout','908103e1fe58fe35610bf054fb7f5a93fbfc806bbcac006bccc7c35c580b31b4'),
+'crate::palw_court_shared_tir_bottom_v1::SharedTirBottomRowV1': ('reviewed-field-layout','8d4ff323e6fa4dd713582c7301b903185fbc78512721a340101a840d9eca5c27'),
 # Same field order as derived serialize; only bytes Vec decode is narrowed to existing PART.
 'crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1': ('reviewed-field-layout','5252de7400c7c9e3ed9a231f3286f9429dea9d1f652e24aebff67a5026fd1dd8'),
 'crate::palw_bond_budget_v1::PalwBondBudgetStateV1': ('adapter','163e6501bd1b84fdf6f3ac7eff4cf62cee3495a3658c9047bcba633ac5d86abf'),

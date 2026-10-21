@@ -25,8 +25,18 @@ S1を推奨する。実際に受理された期限内の正しい履行を解消
 
 実装・検証結果は未記録。G14全体の受入条件、RFC-0030 E01–E10、T01–T15を縮小しない。
 
+## S1 private実装初稿
+
+[RFC-0034 §7](../rfc/0034-archived-close-qualified-financial-discharge.md#7-s1のprivate実装初稿)に、同checkpointのactive prefix出所、native chunk全数の元時限資格、元署名/v5と同root、once-only名目責任解消を接続する候補を記録した。新key25 / row31で既存wireを保持する。旧時刻なしappendや出所不明prefixは、最後のchunkが元期限内でもholdを維持する。実徴収・返還・他side・元stake・claim creditは変更しない。試験結果はまだ未記録で、公開有料入口、全原資、全責任解消/pruning、G14全体の完了とはしない。
+
 ## 2026-10-21 ユーザー選択 — S1の詳細仕様化・隔離実装
 
 ユーザーは「S1：期限内の実履行だけ責任解消」を選択した。元の期限内に実際に受理・完成した正しい応答だけ当該sideの未決責任を一度解消し、期限後のproof-valid資料の妥当性と金融上の履行を分離する。上の未選択表記は選択前の履歴である。
 
 この選択は詳細仕様化・隔離実装の承認であり、新料金・本番採択・pre統合・武装・配備を含まない。公開有料入口・実原資・同一rootのnative v5・全必要materialの時限資格・once-only処理・他責任保持の接続と試験は別途必要である。実装・試験の成功をこの選択だけから導かない。
+
+## 2026-10-21 隔離候補の検証checkpoint
+
+S1のprivate native writer・別rooted provenance（key25/row31）・同一root/native v5・当該declaration名目責任の一回解消まで接続した。nativeの期限内再提出で既存同値bytesの現在pointを新規記録でき、過去時刻は遡及しない。wire/OOMのNativeResource分類、実serializer/decode容量の事前予約も修正した。caps・元deadline・旧wire/署名domainは変えていない。
+
+関連84 unique selected pass（重複除外、archive filter11とnative frame42は7件重複）、core全tests型検査・非test consensus lib検査はexit0。これはprivate native fixtureであり、実原資・公開有料入口・実返還/徴収・全exit/pruning・別claim金融composition・実node全T01–T15・G14全体の完成ではない。[正確な範囲・raw log・source/binary hash](../evidence/palw/g14-completion-2026-10-21/s1-and-original-cover.md)。文書検査は既存の参照欠損によりFAILのまま。

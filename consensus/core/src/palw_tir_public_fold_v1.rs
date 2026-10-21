@@ -4230,6 +4230,64 @@ mod conviction_e2e_tests {
                 let mut changed=b.state.clone();changed.last_point=Some(at(&frame,8));assert!(!token.matches_state(&changed));
             }
             assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
+            // RFC-0034 S1: actual native event + original active-prefix
+            // provenance + the retained v5 verifier can discharge this one
+            // declaration. These are private native fixtures, not public fee
+            // admission or a delivery/throughput measurement.
+            for edge in [0u64,1] {
+                let mut trial=TransitionBuilder::new(&b.state,&params,false,false,false,false,&extras);
+                let before=trial.state.clone();let before_root=before.state_root();
+                let origin=before.court_archive_progress_v1(id,side).unwrap();
+                assert_eq!(origin.initial_native_present,1);assert!(origin.native_chunks.is_empty());assert!(origin.completed.is_none());
+                let deadline=before.court_end_archive_v1(id).unwrap().groups[&side].assembly_deadline_daa;
+                let point=at(&frame,deadline-edge-frame.plan_v1().terms.accepted_daa);
+                let chunk=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:raw[split..].to_vec()};
+                assert!(super::super::objects::apply_object(&mut trial,&point,&chunk).is_err(),"public intake remains closed");
+                trial.prepare_native_court_end_cause_v1(&point,&chunk).unwrap();
+                let result=trial.apply_native_archived_chunk_v1();
+                if wrong_verdict {
+                    assert!(result.is_err());assert_eq!(trial.state.state_root(),before_root);assert!(trial.entries.is_empty());
+                }else{
+                    assert_eq!(result.unwrap(),true);
+                    let progress=trial.state.court_archive_progress_v1(id,side).unwrap().clone();
+                    assert_eq!(progress.native_chunks.get(&1),Some(&point));assert!(progress.completed.is_some());
+                    assert_eq!(trial.state.court_archive_pending_exposure_v1(&outsider()),0);
+                    assert_eq!(trial.state.bond(&outsider()),before.bond(&outsider()));
+                    assert_eq!(trial.state.claim(&frame.plan_v1().original_claim),before.claim(&frame.plan_v1().original_claim));
+                    let a=trial.state.court_end_archive_v1(id).unwrap();let old=before.court_end_archive_v1(id).unwrap();
+                    assert_eq!(a.evidence,old.evidence);assert_eq!(a.fulfilled_groups,old.fulfilled_groups);
+                    assert_eq!(a.applied_deposit_debits,old.applied_deposit_debits);assert_eq!(a.court_stake_nominal,old.court_stake_nominal);
+                    assert!(!trial.state.court_archive_holds_bond_v1(&outsider()),"only this declaration's nominal hold is discharged");
+                    let changed=trial.state.state_root();let entries=trial.entries.len();
+                    assert!(trial.apply_native_archived_chunk_v1().is_err());assert_eq!(trial.state.state_root(),changed);assert_eq!(trial.entries.len(),entries);
+                    assert!(trial.write_staged_row_v1(Key::CourtArchiveProgress(id,side),None).is_err());
+                    let mut reverted=progress.clone();reverted.completed=None;
+                    assert!(trial.write_staged_row_v1(Key::CourtArchiveProgress(id,side),Some(Row::CourtArchiveProgress(Box::new(reverted).into()))).is_err());
+                    assert_eq!(trial.state.state_root(),changed);assert_eq!(trial.entries.len(),entries);
+                    let old=trial.state.last_point;trial.state.last_point=Some(point);
+                    trial.entries.push(PalwDeltaEntryV2::LastPoint {old,new:Some(point)});
+                    progress.check_loaded_context(&trial.state).unwrap();
+                    let mut malformed=progress.clone();
+                    malformed.completed.as_mut().unwrap().close=Box::new(chunk.clone());
+                    assert!(matches!(malformed.check_loaded_context(&trial.state),Err(PalwStateV2Error::CarriageInconsistent(_))),
+                        "loaded semantic mismatch remains distinct from local construction capacity");
+                    let saved=trial.state.clone();
+                    let wire=borsh::to_vec(&PalwStateCarriageV2::from_state(&saved)).unwrap();
+                    let fresh=borsh::from_slice::<PalwStateCarriageV2>(&wire).unwrap().into_state(&params,Some(saved.state_root())).unwrap();
+                    assert_eq!(fresh.state_root(),saved.state_root());assert_eq!(fresh.court_archive_pending_exposure_v1(&outsider()),0);
+                    let mut backwards=saved.clone();for e in trial.entries.iter().rev(){apply_delta_entry(&mut backwards,e,true).unwrap();}
+                    assert_eq!(backwards.state_root(),before_root);assert_eq!(backwards.court_archive_pending_exposure_v1(&outsider()),before.court_archive_pending_exposure_v1(&outsider()));
+                    for e in &trial.entries{apply_delta_entry(&mut backwards,e,false).unwrap();}
+                    assert_eq!(backwards.state_root(),saved.state_root());
+                }
+                // A peer/caller timestamp never seeds missing provenance.
+                let mut old=before.clone();old.staged_courts.remove(&Key::CourtArchiveProgress(id,side));
+                let mut unproven=TransitionBuilder::new(&old,&params,false,false,false,false,&extras);
+                let root=unproven.state.state_root();unproven.prepare_native_court_end_cause_v1(&point,&chunk).unwrap();
+                assert!(unproven.apply_native_archived_chunk_v1().is_err());assert_eq!(unproven.state.state_root(),root);assert!(unproven.entries.is_empty());
+                assert!(unproven.capture_archive_native_origins_v1(id).is_err(),"no retroactive native prefix from an existing archive");
+                assert_eq!(unproven.state.state_root(),root);assert!(unproven.entries.is_empty());
+            }
             for mutation in 0..4 {
                 let mut bad=candidate.clone();
                 match mutation {0=>{bad.chunks.get_mut(&0).unwrap()[0]^=1;},1=>{bad.deposit+=1;},2=>{bad.present^=1;},_=>{bad.chunks.remove(&1);}}
@@ -4281,6 +4339,86 @@ mod conviction_e2e_tests {
             let tip=*b.state.last_point().unwrap();
             archive_roundtrip(&mut b,&params,&frame,id,tip,state.state_root());
         }}}
+    }
+
+    #[test]
+    fn archive_s1_does_not_credit_an_unclocked_middle_chunk_or_release_the_other_side() {
+        use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
+        use crate::palw_court_v2::{palw_court_close_declaration_message_v1 as message,PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT as DOMAIN};
+        let fx=palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF,1)),4);let frame=fx.frame.clone();
+        let (mut state,params,mut extras)=world(&fx,&frame);let params=params.with_tir_from_daa(Some(0));
+        let keys=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([83;32]);state.bonds.get_mut(&outsider()).unwrap().pubkey=keys.verification_key.as_ref().to_vec();
+        extras.native_court_rules_v1=Some(NativeCourtRulesV1 {network_domain:h(0x881),at:at(&frame,5),
+            court:crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap(),
+            step_ladder:frame.header_v1().step_leaf_count,prompt_ids_merkle:false,held_regime:false,decode_close_convicts_only:true,
+            fp_decode_from_daa:None,cell_closure_from_daa:None,memory_routing_from_daa:None,
+            tir_active:true,gen_active:false,task_heads_active:false,improvement_active:false,constraint_active:false});
+        extras.offence_attribution_active=true;
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);archive_service(&mut b,&frame);
+        let (id,_)=archive_session(&mut b,&frame);let side=PalwCourtSideV1::Challenger;
+        b.write_court_close_group((id,side),None).unwrap();
+        let Evidence::Arithmetic {proof}=cone(&fx) else {unreachable!()};
+        let close=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:PalwCourtVerdictV2::ExecutorGuilty,proof:*proof};
+        let raw=borsh::to_vec(&close).unwrap();let cut=raw.len()/3;assert!(cut>0);
+        let chunks=[&raw[..cut],&raw[cut..2*cut],&raw[2*cut..]];
+        let digests=chunks.iter().map(|b|palw_court_close_chunk_digest_v1(b)).collect::<Vec<_>>();let digest=palw_court_close_chunk_digest_v1(&raw);
+        let signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,&message(&id,side,3,&digests,&digest,PalwCourtVerdictV2::ExecutorGuilty),DOMAIN,[84;32]).unwrap().as_ref().to_vec();
+        let declaration=PalwConsensusObjectV2::CourtCloseDeclared {session_id:id,side,count:3,chunk_digests:digests,close_digest:digest,verdict:PalwCourtVerdictV2::ExecutorGuilty,signature};
+        super::super::objects::apply_object(&mut b,&at(&frame,5),&declaration).unwrap();
+        super::super::objects::apply_object(&mut b,&at(&frame,6),&PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:0,bytes:chunks[0].to_vec()}).unwrap();
+        super::super::objects::apply_object(&mut b,&at(&frame,7),&close).unwrap();
+        let native_parent=b.state.clone();
+        for middle_clocked in [false,true] {
+            let mut trial=TransitionBuilder::new(&native_parent,&params,false,false,false,false,&extras);
+            let producer=frame.custody_v1().pledge_v1().producer;
+            let other=trial.state.court_end_archive_v1(id).unwrap().groups[&PalwCourtSideV1::Executor].clone();
+            let other_exposure=trial.state.court_archive_pending_exposure_v1(&producer);
+            let own=trial.state.court_archive_pending_exposure_v1(&outsider());
+            let money=trial.state.bond(&outsider()).unwrap().clone();
+            if middle_clocked {
+                let object=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:chunks[1].to_vec()};
+                trial.prepare_native_court_end_cause_v1(&at(&frame,8),&object).unwrap();
+                assert_eq!(trial.apply_native_archived_chunk_v1().unwrap(),false);
+            }else{trial.append_archived_close_chunk_v1(id,side,1,chunks[1]).unwrap();}
+            let deadline=trial.state.court_end_archive_v1(id).unwrap().groups[&side].assembly_deadline_daa;
+            let point=at(&frame,deadline-frame.plan_v1().terms.accepted_daa);
+            let final_chunk=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:2,bytes:chunks[2].to_vec()};
+            let saved=trial.state.clone();let entries=trial.entries.len();
+            trial.prepare_native_court_end_cause_v1(&at(&frame,deadline+1-frame.plan_v1().terms.accepted_daa),&final_chunk).unwrap();
+            assert!(trial.apply_native_archived_chunk_v1().is_err());assert_eq!(trial.state,saved);assert_eq!(trial.entries.len(),entries);
+            trial.prepare_native_court_end_cause_v1(&point,&final_chunk).unwrap();
+            assert_eq!(trial.apply_native_archived_chunk_v1().unwrap(),middle_clocked);
+            assert_eq!(trial.state.court_archive_pending_exposure_v1(&outsider()),if middle_clocked {0}else{own});
+            assert_eq!(trial.state.court_archive_pending_exposure_v1(&producer),other_exposure);
+            assert_eq!(trial.state.court_end_archive_v1(id).unwrap().groups[&PalwCourtSideV1::Executor],other);
+            assert_eq!(trial.state.bond(&outsider()),Some(&money));
+            assert!(trial.state.court_archive_holds_bond_v1(&producer));
+            if !middle_clocked {assert!(trial.state.court_archive_holds_bond_v1(&outsider()));}
+            assert!(trial.state.court_end_archive_v1(id).unwrap().groups[&side].is_complete());
+            if !middle_clocked {
+                // Retention alone supplied no time proof. A new genuine native
+                // event can now deliver that SAME middle chunk before/equal to
+                // the old deadline; the current point is not backdated.
+                let archive=trial.state.court_end_archive_v1(id).unwrap().clone();
+                let before=trial.state.state_root();let entries=trial.entries.len();
+                let reobserve=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:chunks[1].to_vec()};
+                trial.prepare_native_court_end_cause_v1(&at(&frame,deadline+1-frame.plan_v1().terms.accepted_daa),&reobserve).unwrap();
+                assert!(trial.apply_native_archived_chunk_v1().is_err());
+                let forged=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:vec![0xAA]};
+                trial.prepare_native_court_end_cause_v1(&point,&forged).unwrap();assert!(trial.apply_native_archived_chunk_v1().is_err());
+                trial.prepare_native_court_end_cause_v1(&point,&final_chunk).unwrap();assert!(trial.apply_native_archived_chunk_v1().is_err(),"already qualified final chunk is not another delivery");
+                assert_eq!(trial.state.state_root(),before);assert_eq!(trial.entries.len(),entries);
+                trial.prepare_native_court_end_cause_v1(&point,&reobserve).unwrap();assert!(trial.apply_native_archived_chunk_v1().unwrap());
+                let progress=trial.state.court_archive_progress_v1(id,side).unwrap();
+                assert_eq!(progress.native_chunks.get(&1),Some(&point));assert!(progress.completed.is_some());
+                assert_eq!(trial.state.court_end_archive_v1(id),Some(&archive),"same bytes and original cause stay exactly intact");
+                assert_eq!(trial.state.court_archive_pending_exposure_v1(&outsider()),0);
+                assert_eq!(trial.state.court_archive_pending_exposure_v1(&producer),other_exposure);
+                assert_eq!(trial.state.bond(&outsider()),Some(&money));
+                let after=trial.state.state_root();let entries=trial.entries.len();
+                assert!(trial.apply_native_archived_chunk_v1().is_err());assert_eq!(trial.state.state_root(),after);assert_eq!(trial.entries.len(),entries);
+            }
+        }
     }
 
     #[test]

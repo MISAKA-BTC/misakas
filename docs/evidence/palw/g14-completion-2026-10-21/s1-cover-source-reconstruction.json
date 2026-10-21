@@ -1,0 +1,13 @@
+{
+  "base": "510039f9d5628cf7ab3ab10e144f0183795d30da",
+  "tracked_patch": "s1-cover-final-tracked.patch",
+  "added_sources": {
+    "consensus/core/src/palw_court_archive_discharge_v1.rs": "s1-cover-added-source/consensus/core/src/palw_court_archive_discharge_v1.rs",
+    "consensus/core/src/palw_tir_public_parameter_cover_v1.rs": "s1-cover-added-source/consensus/core/src/palw_tir_public_parameter_cover_v1.rs",
+    "consensus/core/tests/palw_tir_original_parameter_cover.rs": "s1-cover-added-source/consensus/core/tests/palw_tir_original_parameter_cover.rs",
+    "consensus/core/tests/palw_tir_parameter_cover_fixture.rs": "s1-cover-added-source/consensus/core/tests/palw_tir_parameter_cover_fixture.rs"
+  },
+  "hashes_match": true,
+  "source_count": 20,
+  "reconstruction_directory": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-s1-cover-reconstruct-prkkl7n0"
+}

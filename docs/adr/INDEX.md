@@ -199,3 +199,4 @@
 | ADR-0199 | [共有court終端materialと非独占提出方式](0199-shared-court-terminal-material-and-nonblocking-ingress.md) | 原文と後続改定を参照 |
 | ADR-0200 | [D2 readiness rootの認証path供給](0200-d2-readiness-root-opening-availability.md) | 原文と後続改定を参照 |
 | ADR-0201 | [archived closeの期限内実受付と責任解消](0201-archived-close-qualified-financial-discharge.md) | 原文と後続改定を参照 |
+| ADR-0202 | [shared court originalの実原資と役割別同意](0202-court-original-funded-contract-and-role-consent.md) | 原文と後続改定を参照 |

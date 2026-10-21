@@ -34,6 +34,16 @@ fn same_contract(a:&PalwCourtCloseGroupV2,b:&PalwCourtCloseGroupV2)->bool {
 }
 fn refusal(message:impl Into<String>)->PalwStateV2Error {PalwStateV2Error::CarriageInconsistent(message.into())}
 
+/// Quote the existing message builder's hash-vector clone and Borsh serializer
+/// capacity without first constructing either buffer. A borrowed slice has the
+/// identical Borsh length prefix and elements as the builder's Vec.
+pub(super) fn quote_close_signature_v1(q:&mut native_writers::NativeWriteQuoteV1,id:&Hash64,side:PalwCourtSideV1,group:&PalwCourtCloseGroupV2)
+    ->Result<(),PalwStateV2Error>{
+    q.exact::<Hash64>(group.chunk_digests.len() as u64)?
+        .encoded(&(*id,side,group.count,group.chunk_digests.as_slice(),group.close_digest,group.verdict))?;
+    Ok(())
+}
+
 /// Inspection of the current native chunk event, not a peer-supplied point or
 /// a financial capability. The native dispatcher has not yet installed public
 /// archive intake. Completion, v5 adjudication and funded qualification remain
@@ -63,11 +73,154 @@ impl InspectedArchivedNativeChunkV1 {
 /// Syntax/truncation remains a semantic refusal; budget/OOM is retryable local
 /// NativeResource, including the wire reader's actual CPU/arithmetic limits.
 pub(super) fn inspection_io_error(stage:&str,error:std::io::Error)->PalwStateV2Error {
-    if matches!(error.kind(),std::io::ErrorKind::TimedOut | std::io::ErrorKind::OutOfMemory) {
-        native_writers::native_err_v1(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwConsensusObjectV2>(stage,&error.to_string()))
-    }else{refusal(format!("{stage}: {error}"))}
+    crate::palw_court_archive_discharge_v1::archive_inspection_io_error_v1(stage,error)
 }
 impl TransitionBuilder<'_> {
+    /// Capture only the active native prefix removed in THIS checkpoint. Old
+    /// archives or unclocked private appends cannot acquire retroactive origin.
+    pub(super) fn capture_archive_native_origins_v1(&mut self,id:Hash64)->Result<(),PalwStateV2Error>{
+        use crate::palw_court_archive_discharge_v1::ArchiveDeclarationProgressV1 as Progress;
+        use crate::palw_court_end_archive_v1::CourtEndEvidenceV1;
+        for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {
+            let a=self.state.court_end_archive_v1(id).ok_or_else(||refusal("new archive missing"))?;
+            let Some(g)=a.groups.get(&side) else {continue;};
+            if a.fulfilled_groups.contains(&side)||a.applied_deposit_debits.contains_key(&side){continue;}
+            let captured_at=match a.evidence.as_ref(){CourtEndEvidenceV1::Native {point,..}|CourtEndEvidenceV1::TirConviction {point,..}=>*point,
+                CourtEndEvidenceV1::Uncaptured=>continue};
+            let Some(Row::CourtCloseReceipt(r))=self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) else {continue;};
+            if r.rules.is_none(){continue;}
+            let row=Progress {version:1,session_id:id,side,claim:a.session.claim,service_profile_id:a.service_profile_id,
+                allocation_id:a.allocation_id,source_id:a.source_id,material_until_daa:a.material_until_daa,
+                captured_at,initial_native_present:g.present,native_chunks:BTreeMap::new(),completed:None};
+            if self.native_writers_tracking_v1(){
+                let mut q=native_writers::NativeWriteQuoteV1::new("archive native prefix record before ownership");
+                q.exact::<Progress>(2)?.exact::<usize>(2)?;self.admit_native_write_v1(q)?;
+            }
+            self.write_staged_row_v1(Key::CourtArchiveProgress(id,side),Some(Row::CourtArchiveProgress(Box::new(row).into())))?;
+        }Ok(())
+    }
+
+    /// Private S1 transaction. It is deliberately absent from public dispatch
+    /// until funded ingress exists. The event point comes only from the native
+    /// wrapper. Correct bytes are not a refund or a claim-credit authorization.
+    #[allow(dead_code)]
+    pub(super) fn apply_native_archived_chunk_v1(&mut self)->Result<bool,PalwStateV2Error>{
+        use crate::palw_court_archive_discharge_v1::ArchivedPositiveFulfillmentV1;
+        use crate::palw_court_end_archive_v1::CourtEndEvidenceV1;
+        let saved=self.try_checkpoint()?;
+        let result=(||{
+            let inspected=self.inspect_archived_native_chunk_v1()?;
+            let id=inspected.session_id;let side=inspected.side;let index=inspected.index;
+            let progress=self.state.court_archive_progress_v1(id,side).ok_or_else(||refusal("archive prefix has no native provenance"))?;
+            progress.check_context(&self.state).map_err(refusal)?;
+            if progress.completed.is_some(){return Err(refusal("archived declaration already discharged"));}
+            let group=&self.state.court_end_archive_v1(id).unwrap().groups[&side];
+            let Some(CourtEndEvidenceV1::Native {object,..})=self.court_end_evidence.as_deref() else {unreachable!()};
+            let PalwConsensusObjectV2::CourtCloseChunk {bytes,..}=object.as_ref() else {unreachable!()};
+            if self.native_writers_tracking_v1(){
+                let mut q=native_writers::NativeWriteQuoteV1::new("archive native completion before candidate and progress copies");
+                q.copy(progress)?.copy(group)?.exact::<u8>(bytes.len() as u64)?.member::<u8,Vec<u8>>(1)?
+                    .member::<u8,PalwBlockContextV2>(1)?;
+                self.admit_native_write_v1(q)?;
+            }
+            let mut next=self.state.court_archive_progress_v1(id,side).unwrap().clone();
+            let mut candidate=self.state.court_end_archive_v1(id).unwrap().groups[&side].clone();
+            let Some(CourtEndEvidenceV1::Native {object,..})=self.court_end_evidence.as_deref() else {unreachable!()};
+            let PalwConsensusObjectV2::CourtCloseChunk {bytes,..}=object.as_ref() else {unreachable!()};
+            candidate.chunks.insert(index,bytes.clone());candidate.present|=1u64<<index;
+            next.native_chunks.insert(index,inspected.point);
+            let qualifies=candidate.is_complete()&&next.qualified_mask()==PalwCourtCloseGroupV2::full_mask(candidate.count);
+            if qualifies {
+                let verified=self.verify_archived_close_v1(id,side,&candidate)?;
+                if !verified.matches_state(&self.state)||!inspected.matches_state(&self.state)
+                    || verified.session_id()!=id||verified.side()!=side||verified.group()!=&candidate
+                {return Err(refusal("archive completion changed its verified native root or contract"));}
+                if self.native_writers_tracking_v1(){
+                    let mut q=native_writers::NativeWriteQuoteV1::new("retained qualified native close before copy");
+                    q.copy(verified.close())?.exact::<PalwConsensusObjectV2>(1)?;self.admit_native_write_v1(q)?;
+                }
+                next.completed=Some(ArchivedPositiveFulfillmentV1 {point:inspected.point,close:Box::new(verified.close().clone())});
+            }
+            let bytes=&candidate.chunks[&index];
+            if !inspected.matches_state(&self.state)||!inspected.matches_chunk(id,side,index,bytes){return Err(refusal("native chunk inspection became stale"));}
+            if !self.state.court_end_archive_v1(id).unwrap().groups[&side].has(index){
+                self.append_archived_close_chunk_v1(id,side,index,bytes)?;
+            }
+            self.write_staged_row_v1(Key::CourtArchiveProgress(id,side),Some(Row::CourtArchiveProgress(Box::new(next).into())))?;
+            Ok(qualifies)
+        })();
+        if result.is_err(){self.restore(saved);}result
+    }
+
+    /// All forward writes require the actual removal/native event and retained
+    /// v5 inputs; a deserialized progress record is not a mutation capability.
+    pub(super) fn check_archive_progress_write_v1(&mut self,key:&Key,new:Option<&Row>)->Result<(),PalwStateV2Error>{
+        use crate::palw_court_end_archive_v1::CourtEndEvidenceV1;
+        let is_key=matches!(key,Key::CourtArchiveProgress(..));
+        if !is_key&&!matches!(new,Some(Row::CourtArchiveProgress(_))){return Ok(());}
+        let Some(Row::CourtArchiveProgress(next))=new else{return Err(refusal("archive provenance cannot be removed or retyped"));};
+        next.check(key).and_then(|()|next.check_context(&self.state)).map_err(refusal)?;
+        let a=self.state.court_end_archive_v1(next.session_id).ok_or_else(||refusal("archive missing"))?;
+        let group=&a.groups[&next.side];
+        let old=match self.state.staged_court_row_v1(key){Some(Row::CourtArchiveProgress(r))=>Some(r.as_ref()),None=>None,
+            _=>return Err(refusal("archive provenance foreign row"))};
+        if let Some(old)=old {
+            if next.as_ref()==old{return Ok(());}
+            if old.completed.is_some() || (next.version,next.session_id,next.side,next.claim,next.service_profile_id,next.allocation_id,next.source_id,
+                    next.material_until_daa,next.captured_at,next.initial_native_present)
+                !=(old.version,old.session_id,old.side,old.claim,old.service_profile_id,old.allocation_id,old.source_id,
+                    old.material_until_daa,old.captured_at,old.initial_native_present)
+                || next.native_chunks.len()!=old.native_chunks.len()+1
+                || old.native_chunks.iter().any(|(i,p)|next.native_chunks.get(i)!=Some(p))
+            {return Err(refusal("archive provenance changes accepted history or discharged responsibility"));}
+            let Some(CourtEndEvidenceV1::Native {point,object})=self.court_end_evidence.as_deref() else{return Err(refusal("archive progress lacks native event"));};
+            let PalwConsensusObjectV2::CourtCloseChunk {session_id,side,index,bytes}=object.as_ref() else{return Err(refusal("archive progress event is not a chunk"));};
+            // A precommitted chunk retained earlier without a clock can be
+            // observed again in this actual native event. Its new point is a
+            // current positive delivery, never a retroactive timestamp. Already
+            // qualified identities cannot be charged/reused a second time.
+            let newly_appended=self.entries.iter().rev().any(|e|matches!(e,PalwDeltaEntryV2::StagedCourtSeed {key:Key::CourtEndArchive(id),old:Some(Row::CourtEndArchive(before)),new:Some(Row::CourtEndArchive(after))}
+                if *id==*session_id && before.groups.get(side).is_some_and(|g|*index<g.count&&!g.has(*index))
+                && after.groups.get(side).is_some_and(|g|g.chunks.get(index)==Some(bytes))));
+            let retained_reobservation=*index<group.count && old.qualified_mask()&(1u64<<index)==0 && group.chunks.get(index)==Some(bytes);
+            if *session_id!=next.session_id || *side!=next.side || old.native_chunks.contains_key(index)
+                || next.native_chunks.get(index)!=Some(point) || group.chunks.get(index)!=Some(bytes)
+                || old.native_chunks.values().any(|prior|prior.daa_score>point.daa_score)
+                || (!newly_appended&&!retained_reobservation)
+            {return Err(refusal("archive progress has no matching actual chunk append"));}
+        }else{
+            if !next.native_chunks.is_empty()||next.completed.is_some()||next.initial_native_present!=group.present
+                || !self.entries.iter().any(|e|matches!(e,PalwDeltaEntryV2::Court {key,old:Some(s),new:None} if *key==next.session_id && s==&a.session))
+                || !self.entries.iter().any(|e|matches!(e,PalwDeltaEntryV2::CourtCloseGroup {key,old:Some(g),new:None}
+                    if *key==(next.session_id,next.side) && g==group))
+                || !self.entries.iter().any(|e|matches!(e,PalwDeltaEntryV2::StagedCourtSeed {key:Key::CourtEndArchive(id),old:None,new:Some(Row::CourtEndArchive(saved))}
+                    if *id==next.session_id && saved.as_ref()==a))
+                || self.court_end_evidence.as_deref()!=Some(a.evidence.as_ref())
+            {return Err(refusal("archive provenance was not captured with its active native prefix"));}
+        }
+        if self.native_writers_tracking_v1(){
+            let mut q=native_writers::NativeWriteQuoteV1::new("archive progress receipt and v5 inspection before buffers");
+            quote_close_signature_v1(&mut q,&next.session_id,next.side,group)?;
+            if next.completed.is_some(){
+                q.copy(group)?;
+            }
+            self.admit_native_write_v1(q)?;
+        }
+        let r=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(next.session_id,next.side)){Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>unreachable!()};
+        r.check_context(&self.state).map_err(refusal)?;
+        if let Some(done)=&next.completed {
+            // Reuse the native verifier's actual-wire shape admission and typed
+            // resource errors. A retained clone's capacities do not bound a new
+            // Borsh decoder's allocations.
+            let candidate=self.state.court_end_archive_v1(next.session_id).unwrap().groups[&next.side].clone();
+            let verified=self.verify_archived_close_v1(next.session_id,next.side,&candidate)?;
+            if !verified.matches_state(&self.state)||verified.close()!=done.close.as_ref(){
+                return Err(refusal("archive qualified close changed its native replay root or bytes"));
+            }
+        }
+        Ok(())
+    }
+
     /// Inspect the point/object pair captured by the actual native wrapper.
     /// Never infer an accepting point from last_point (still the parent while
     /// a block is being built), a supplied timestamp or an old material append.
@@ -82,8 +235,11 @@ impl TransitionBuilder<'_> {
         let archive=self.state.court_end_archive_v1(*session_id).ok_or_else(||refusal("court archive missing"))?;
         archive.check_context(&self.state).map_err(refusal)?;
         let group=archive.groups.get(side).ok_or_else(||refusal("archived declaration missing"))?;
+        let retained_reobservation=group.chunks.get(index)==Some(bytes)
+            && self.state.court_archive_progress_v1(*session_id,*side).is_some_and(|p|p.completed.is_none()
+                && *index<group.count && p.check_context(&self.state).is_ok() && p.qualified_mask()&(1u64<<index)==0);
         if archive.fulfilled_groups.contains(side) || archive.applied_deposit_debits.contains_key(side)
-            || *index>=group.count || group.has(*index) || bytes.is_empty() || bytes.len()>PALW_COURT_CLOSE_CHUNK_MAX_BYTES
+            || *index>=group.count || (group.has(*index)&&!retained_reobservation) || bytes.is_empty() || bytes.len()>PALW_COURT_CLOSE_CHUNK_MAX_BYTES
             || palw_court_close_chunk_digest_v1(bytes)!=group.chunk_digests[usize::from(*index)]
         {return Err(refusal("native archived chunk is not missing declared material"));}
         let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(*session_id,*side)) {
@@ -107,7 +263,7 @@ impl TransitionBuilder<'_> {
             side:*side,index:*index,chunk_digest:group.chunk_digests[usize::from(*index)],point:*point,assembly_deadline_daa:deadline};
         if self.native_writers_tracking_v1(){
             let mut q=native_writers::NativeWriteQuoteV1::new("archived native chunk original signature before buffers");
-            q.exact::<Hash64>(2*u64::from(group.count))?.exact::<u8>(256)?;
+            quote_close_signature_v1(&mut q,&inspected.session_id,inspected.side,group)?;
             self.admit_native_write_v1(q)?;
         }
         let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(inspected.session_id,inspected.side)) {
@@ -135,8 +291,8 @@ impl TransitionBuilder<'_> {
             let mut q=native_writers::NativeWriteQuoteV1::new("archive material append before copy and signature message");
             q.copy(archive)?.exact::<crate::palw_court_end_archive_v1::PendingCourtArchiveV1>(2)?
                 .exact::<u8>((2*std::mem::size_of::<usize>()+std::mem::align_of::<crate::palw_court_end_archive_v1::PendingCourtArchiveV1>()) as u64)?
-                .exact::<u8>(bytes.len() as u64)?.member::<u8,Vec<u8>>(1)?
-                .exact::<Hash64>(2*u64::from(group.count))?.exact::<u8>(256)?;
+                .exact::<u8>(bytes.len() as u64)?.member::<u8,Vec<u8>>(1)?;
+            quote_close_signature_v1(&mut q,&id,side,group)?;
             self.admit_native_write_v1(q)?;
         }
         let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {
@@ -182,7 +338,8 @@ impl TransitionBuilder<'_> {
         if self.native_writers_tracking_v1(){
             let mut q=native_writers::NativeWriteQuoteV1::new("archive complete signed v5 replay before buffers");
             q.copy(candidate)?.exact::<PalwCourtCloseGroupV2>(1)?
-                .exact::<Hash64>(2*u64::from(candidate.count))?.exact::<u8>(256)?.exact::<u8>(total)?;
+                .exact::<u8>(total)?;
+            quote_close_signature_v1(&mut q,&id,side,candidate)?;
             self.admit_native_write_v1(q)?;
         }
         let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>unreachable!()};
@@ -190,7 +347,9 @@ impl TransitionBuilder<'_> {
         let rules=receipt.rules.ok_or_else(||refusal("original native v5 inputs missing; no default fallback"))?;
         crate::palw_court_v2::check_close_declared_chunk_count_v2(&id,candidate.count,&rules.court).map_err(|e|refusal(e.to_string()))?;
         let total=usize::try_from(total).map_err(|_|refusal("archive completion cannot fit native address space"))?;
-        let mut assembled=Vec::with_capacity(total);
+        let mut assembled=Vec::new();
+        assembled.try_reserve_exact(total).map_err(|e|PalwStateV2Error::NativeResource(
+            crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwConsensusObjectV2>("archive v5 assembly allocation",&e.to_string())))?;
         for i in 0..candidate.count {assembled.extend_from_slice(&candidate.chunks[&i]);}
         if palw_court_close_chunk_digest_v1(&assembled)!=candidate.close_digest {return Err(refusal("archive completion whole digest mismatch"));}
         let mut reader=NativeWireReaderV1::new(assembled.as_slice(),assembled.len() as u64);

@@ -32,15 +32,44 @@ pub struct PotentialParameterCoverV1 {
 /// limits neither their allocation nor the later cost of acquiring this cover.
 pub fn derive_parameter_cover_v1(binding: &PalwTirStepBindingV1, leaf: u64,
     budget: ParameterCoverBudgetV1) -> Result<PotentialParameterCoverV1, String> {
-    let (v, leaf, inventory) = builder_prelude(binding, leaf).map_err(|e| e.to_string())?;
-    let intervals = analyze_ranges(&v.space.program).map_err(|e| e.to_string())?;
-    let site = palw_tir_dissect_site_v1(&v.space, &intervals, &leaf).ok_or("parameter cover needs a dissected commit leaf")?;
-    let block = occurrence_block(&v.space, site.ctx.occurrence).ok_or("cover occurrence missing")?;
-    let layer = v.space.occurrences().get(usize::from(site.ctx.occurrence)).ok_or("cover occurrence missing")?.1;
+    let verified = match check_binding(binding).map_err(|e|e.to_string())? {
+        BindingOutcome::Verified(v)=>v,
+        BindingOutcome::Convicted(v)=>return Err(format!("the binding itself convicts ({:?})",v.fault)),
+    };
+    let prepared=PreparedParameterCoverV1::new(verified,binding.job_context.clone())?;
+    prepared.named(leaf,budget)?.ok_or("parameter cover needs a dissected commit leaf".into())
+}
+
+/// One original's immutable native analysis, shared by every named root. This
+/// owns no model bytes, producer roots or caller-provided dependency assertions.
+/// Allocation/decoding of this prelude requires separate native admission.
+pub(crate) struct PreparedParameterCoverV1 {
+    verified: Box<PalwTirVerifiedBindingV1>,
+    context: PalwJobContextV2,
+    inventory: PalwTirInventoryIndexV1,
+    intervals: Vec<Vec<Interval>>,
+}
+impl PreparedParameterCoverV1 {
+    pub(crate) fn new(verified:Box<PalwTirVerifiedBindingV1>,context:PalwJobContextV2)->Result<Self,String> {
+        let inventory=PalwTirInventoryIndexV1::new(&verified.space.program).ok_or("the class has no inventory")?;
+        let intervals=analyze_ranges(&verified.space.program).map_err(|e|e.to_string())?;
+        Ok(Self {verified,context,inventory,intervals})
+    }
+    /// None means an existing canonical leaf has no numerical dissection.
+    /// A missing leaf, failed analysis or exhausted exploration is always Err.
+    pub(crate) fn named(&self,index:u64,budget:ParameterCoverBudgetV1)->Result<Option<PotentialParameterCoverV1>,String> {
+        self.named_with_leaf_limit(index,budget,budget.max_coordinates)
+    }
+    pub(crate) fn named_with_leaf_limit(&self,index:u64,budget:ParameterCoverBudgetV1,max_leaves:u64)
+        ->Result<Option<PotentialParameterCoverV1>,String> {
+        let leaf=self.verified.space.leaf_at(&self.context,index).ok_or("parameter cover original leaf missing")?;
+        let Some(site)=palw_tir_dissect_site_v1(&self.verified.space,&self.intervals,&leaf) else {return Ok(None)};
+    let block = occurrence_block(&self.verified.space, site.ctx.occurrence).ok_or("cover occurrence missing")?;
+    let layer = self.verified.space.occurrences().get(usize::from(site.ctx.occurrence)).ok_or("cover occurrence missing")?.1;
     let h = usize::try_from(site.history_positions).map_err(|_| "cover H overflow")?;
-    let mut walk = Walk { program: &v.space.program, block: usize::from(block), layer, h,
-        space: &v.space, pos: site.ctx.pos, occurrence: site.ctx.occurrence,
-        inventory: &inventory, budget,
+    let mut walk = Walk { program: &self.verified.space.program, block: usize::from(block), layer, h,
+        space: &self.verified.space, pos: site.ctx.pos, occurrence: site.ctx.occurrence,
+        inventory: &self.inventory, budget, leaf_limit:max_leaves,
         edges: 0, seen: BTreeSet::new(), pending: Vec::new(), leaves: BTreeSet::new() };
     for element in leaf_elements(&leaf) { walk.node(site.node, element)?; }
     // Every legal root element/closure and every legal bottom range is covered.
@@ -51,15 +80,16 @@ pub fn derive_parameter_cover_v1(binding: &PalwTirStepBindingV1, leaf: u64,
             walk.node(*node, element)?;
         }
     }
-    walk.run()?;
-    Ok(PotentialParameterCoverV1 { leaves: walk.leaves.into_iter().collect(),
-        explored_edges: walk.edges, explored_coordinates: walk.seen.len() as u64 })
+        walk.run()?;
+        Ok(Some(PotentialParameterCoverV1 { leaves:walk.leaves.into_iter().collect(),
+            explored_edges:walk.edges,explored_coordinates:walk.seen.len() as u64 }))
+    }
 }
 
 struct Walk<'a> {
     program: &'a TirProgramV1, block: usize, layer: Option<u16>, h: usize,
     space: &'a PalwTirStepSpaceV1, pos: u32, occurrence: u16,
-    inventory: &'a PalwTirInventoryIndexV1, budget: ParameterCoverBudgetV1,
+    inventory: &'a PalwTirInventoryIndexV1, budget: ParameterCoverBudgetV1, leaf_limit:u64,
     edges: u64, seen: BTreeSet<(u32, u16, u16, usize)>, pending: Vec<(u32, u16, u16, usize)>, leaves: BTreeSet<u32>,
 }
 fn count(shape: &[usize]) -> Result<usize, String> {
@@ -124,7 +154,7 @@ impl Walk<'_> {
         match r {
             Ref::Node(j)=>{if !self.program.blocks[self.block].nodes[j as usize].commit {self.node(j,i)?;}},
             Ref::Param(j)=>{let p=&self.program.params[j as usize]; let byte=(i as u64).checked_mul(p.dtype.width() as u64).ok_or("cover param byte overflow")?;
-                let leaf=self.inventory.leaf_of(j,if p.per_layer {self.layer}else{None},byte).ok_or("cover parameter coordinate missing")?; if !self.leaves.contains(&leaf) && self.leaves.len() as u64>=self.budget.max_coordinates {return Err("parameter cover leaf budget exhausted".into());} self.leaves.insert(leaf);},
+                let leaf=self.inventory.leaf_of(j,if p.per_layer {self.layer}else{None},byte).ok_or("cover parameter coordinate missing")?; if !self.leaves.contains(&leaf) && self.leaves.len() as u64>=self.leaf_limit {return Err("parameter cover leaf budget exhausted".into());} self.leaves.insert(leaf);},
             Ref::State(j)=>{
                 if self.pos>0 && !self.pos.is_multiple_of(self.space.layout.checkpoint_interval) {
                     let state=&self.program.states[j as usize];

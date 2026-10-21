@@ -1546,6 +1546,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0202",
+      "path": "docs/adr/0202-court-original-funded-contract-and-role-consent.md",
+      "title": "ADR-0202 — shared court originalの実原資と役割別同意",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1815,6 +1823,14 @@
       "path": "docs/rfc/0034-archived-close-qualified-financial-discharge.md",
       "title": "RFC-0034 — archived closeの実受付と金融責任の適格解消",
       "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0035",
+      "path": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
+      "title": "RFC-0035 — shared court originalの実原資と役割別同意",
+      "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     }
   ]

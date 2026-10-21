@@ -369,6 +369,7 @@ native_struct!(crate::palw_monetary_material_v1::PalwMonetaryMaterialReplacement
 native_enum!(crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1; SegmentedChallenge { root, provider, dependency, position, part, valid_until_daa }, SegmentedAnswer { root, provider, dependency, position, part, bytes }, HeldChallenge { root, dependency, provider, missing, binding, valid_until_daa }, HeldAnswer { root, dependency, provider, missing, disclosure }, Challenge { root, provider, dependency, stage, position, valid_until_daa }, Answer { root, provider, dependency, stage, position, bytes }, Release { root, consent, tail_block }, RecoveryV2(f0), ChallengeCurrentV4 { root, consent, provider, dependency, stage, position, valid_until_daa });
 native_struct!(crate::palw_gdn_court_v2::PalwGdnCourtAccusationV2; version, claim, execution_root, trace_root, executor_bond, accuser_bond, leaf_index, refutation, artifact_openings, signature);
 native_enum!(crate::palw_memory_routing_v2::PalwMemoryRoutingObjectV2; RouterBindingDeclared { declaration, signature }, Accused { accusation });
+native_struct!(crate::palw_court_close_receipt_v1::NativeCourtRulesV1; network_domain, at, court, step_ladder, prompt_ids_merkle, held_regime, decode_close_convicts_only, fp_decode_from_daa, cell_closure_from_daa, memory_routing_from_daa, tir_active, gen_active, task_heads_active, improvement_active, constraint_active);
 native_struct!(crate::palw_work_target_v1::PalwWorkTargetFoldV1; rate_sompi_per_giga, block_bits, max_factor, works);
 native_struct!(crate::palw_state_v2::PalwEconomicSafetyFoldV1; target_time_per_block_ms, permit_value_sompi, maturity_daa);
 native_struct!(crate::evm::model_market::PalwEvmMarketActionV1; seq, account, line_id, kind, gross_sompi);
@@ -487,8 +488,8 @@ native_struct!(crate::palw_model_registry_v1::PalwSeatReadinessRowV1; proved_daa
 native_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; opened_daa, hard_deadline_daa, live, closed, dismissed_held, reacquiring, courts, court_reserve_used);
 native_struct!(crate::palw_class_semantics_v1::PalwClassSemanticsV1; version, class_id, artifact_root, bound_from_daa, model_profile_id, runtime_manifest_hash, runtime_class_id, tokenizer_id, cu_ruleset_id, token_table_root, rendering_rule, raw_tokenizer_bytes, tokenizer_key_events, prefix_state_relation);
 native_struct!(crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2; declaration, deadline_daa, parts);
-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService, CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0, f1), CourtSharedResponse(f0, f1), CourtEndArchive(f0), CourtCloseReceipt(f0, f1), CourtSharedRoot(f0, f1), CourtSharedRound(f0), CourtSharedBottom(f0));
-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0), CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0), CourtSharedResponse(f0), CourtEndArchive(f0), CourtCloseReceipt(f0), CourtSharedRoot(f0), CourtSharedRound(f0), CourtSharedBottom(f0));
+native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService, CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0, f1), CourtSharedResponse(f0, f1), CourtEndArchive(f0), CourtCloseReceipt(f0, f1), CourtSharedRoot(f0, f1), CourtSharedRound(f0), CourtSharedBottom(f0), CourtArchiveProgress(f0, f1));
+native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0), CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0), CourtSharedResponse(f0), CourtEndArchive(f0), CourtCloseReceipt(f0), CourtSharedRoot(f0), CourtSharedRound(f0), CourtSharedBottom(f0), CourtArchiveProgress(f0));
 native_struct!(crate::palw_terminal_carriage_v1::PalwPendingTerminalV1; declaration, deadline_daa, parts);
 native_struct!(crate::palw_state_v2::PalwPanelDutyRowV1; seats, seat_exposure);
 native_struct!(crate::palw_execution_lane_v1::PalwExecFinalV1; domain, bond, operator_id, claim_id, execution_root, credit, accepted_blue_score);
@@ -856,6 +857,12 @@ native_struct!(crate::palw_court_shared_tir_state_v1::SharedTirIdsV1; version, c
 native_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1; version, claim, scope_id, target, signer, slot_id, stream_id, total_bytes, body_hash, begun_block, begun_daa, begin_intent, last_block, last_daa, accepted_bytes, head, finished, material_until_daa);
 native_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1; version, claim, slot_id, stream_id, offset, previous, bytes, block, daa, intent, material_until_daa);
 native_struct!(crate::palw_court_shared_tir_response_v1::SharedDataResponseV1; version, claim, scope_id, request_id, signer, query_block, query_daa, data_digest, accepted_block, accepted_daa, intent_digest, material_until_daa);
+native_struct!(crate::palw_court_end_archive_v1::PendingCourtArchiveV1; version, session_id, service_profile_id, archive_profile_id, allocation_id, source_id, producer, material_until_daa, session, court_stake_nominal, tir_phase, groups, applied_deposit_debits, fulfilled_groups, evidence);
+native_struct!(crate::palw_court_close_receipt_v1::CourtCloseReceiptV1; version, service_profile_id, allocation_id, source_id, material_until_daa, point, session, tir_phase, declarer, declarer_pubkey, declaration, rules);
+native_struct!(crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1; version, control, rules, signer_pubkey, material_until_daa);
+native_struct!(crate::palw_court_shared_tir_round_v1::SharedTirRoundRowV1; version, control, rules, signer_pubkey, material_until_daa);
+native_struct!(crate::palw_court_shared_tir_bottom_v1::SharedTirBottomRowV1; version, control, rules, filer_pubkey, material_until_daa, outcome_digest);
+native_struct!(crate::palw_court_archive_discharge_v1::ArchiveDeclarationProgressV1; version, session_id, side, claim, service_profile_id, allocation_id, source_id, material_until_daa, captured_at, initial_native_present, native_chunks, completed);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetBondRowV1; window, open_claims, latest_release_daa, open_liability_sompi, open_final_weight, liability_hold_until);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetClaimRowV1; bond, model, accepted_daa, reuse_not_before, reserved, consumed, open, in_window, live, origin, liability_sompi);
 native_struct!(crate::palw_bond_budget_v1::PalwCapitalAssignmentRowV1; sequence, effective, pending, pending_since_epoch);
@@ -1070,6 +1077,11 @@ native_struct!(crate::palw_court_service_state_v2::ServiceClaimBinding; claim, a
 native_struct!(crate::palw_court_shared_tir_state_v1::SharedTirBodyV1; block, accepted_daa, digest, bytes);
 native_enum!(crate::palw_court_shared_tir_stream_v1::SharedStreamTargetV1; Unit { ordinal, request_id }, FullIds);
 native_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedStreamFinishedV1; block, daa);
+native_enum!(crate::palw_court_end_archive_v1::CourtEndEvidenceV1; Uncaptured, Native { point, object }, TirConviction { point, claim, filer, evidence });
+native_struct!(crate::palw_court_shared_tir_root_v1::SignedSharedTirRootV1; version, claim, scope_id, policy_id, leaf, arity, signer, root, signature);
+native_struct!(crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1; version, claim, leaf, root_id, path, parent_id, signer, round, signature);
+native_struct!(crate::palw_court_shared_tir_bottom_v1::SignedSharedTirBottomV1; version, claim, leaf, root_id, path, parent_id, filer, bottom, signature);
+native_struct!(crate::palw_court_archive_discharge_v1::ArchivedPositiveFulfillmentV1; point, close);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetVectorV1; claims, block_units, reward_sompi, final_weight, round_rights);
 native_enum!(crate::palw_bond_budget_v1::PalwBudgetOriginV1; Attempt, Rider, FreePrompt, Legacy, KernelRoute, RoundRights, MarketFee, RoundFee, SourceFee, NativeIncome, NativeIncomeQueued, NativeIncomePartial, DeferredReporterIncome, HoldDay, HoldBurst, HoldLiability);
 native_enum!(crate::palw_bond_budget_v1::PalwMaterialPaymentV1; Pending { income }, Queued { income, queue, queued_daa, paid_daa, release_daa }, Historical { until }, UnprovenPhysicalPayment { until });
@@ -1228,18 +1240,3 @@ native_enum!(misaka_palw_kernel::spec::composite::TokenSourceV1; JobPrompt, Stag
 native_enum!(misaka_palw_kernel::spec::composite::QuerySourceV1; JobQuery, StageLogits { stage });
 native_struct!(crate::palw_decode_constraint_v1::PalwConstraintEdgeV1; lo, hi, action);
 native_enum!(crate::palw_decode_constraint_v1::PalwConstraintActionV1; Goto(f0), Push { frame, resume }, Pop, Key { index, next }, Close { required, next });
-
-native_enum!(crate::palw_court_end_archive_v1::CourtEndEvidenceV1; Uncaptured, Native { point, object }, TirConviction { point, claim, filer, evidence });
-native_struct!(crate::palw_court_end_archive_v1::PendingCourtArchiveV1; version, session_id, service_profile_id, archive_profile_id, allocation_id, source_id, producer, material_until_daa, session, court_stake_nominal, tir_phase, groups, applied_deposit_debits, fulfilled_groups, evidence);
-
-native_struct!(crate::palw_court_close_receipt_v1::NativeCourtRulesV1; network_domain, at, court, step_ladder, prompt_ids_merkle, held_regime, decode_close_convicts_only, fp_decode_from_daa, cell_closure_from_daa, memory_routing_from_daa, tir_active, gen_active, task_heads_active, improvement_active, constraint_active);
-native_struct!(crate::palw_court_close_receipt_v1::CourtCloseReceiptV1; version, service_profile_id, allocation_id, source_id, material_until_daa, point, session, tir_phase, declarer, declarer_pubkey, declaration, rules);
-
-native_struct!(crate::palw_court_shared_tir_root_v1::SignedSharedTirRootV1; version, claim, scope_id, policy_id, leaf, arity, signer, root, signature);
-native_struct!(crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1; version, control, rules, signer_pubkey, material_until_daa);
-
-native_struct!(crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1; version, claim, leaf, root_id, path, parent_id, signer, round, signature);
-native_struct!(crate::palw_court_shared_tir_round_v1::SharedTirRoundRowV1; version, control, rules, signer_pubkey, material_until_daa);
-
-native_struct!(crate::palw_court_shared_tir_bottom_v1::SignedSharedTirBottomV1; version, claim, leaf, root_id, path, parent_id, filer, bottom, signature);
-native_struct!(crate::palw_court_shared_tir_bottom_v1::SharedTirBottomRowV1; version, control, rules, filer_pubkey, material_until_daa, outcome_digest);

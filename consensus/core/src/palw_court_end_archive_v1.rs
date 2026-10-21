@@ -189,11 +189,18 @@ impl PalwChainStateV2 {
     }
     /// Conservative financial exposure, not an escrow or a supply certificate.
     pub fn court_archive_pending_exposure_v1(&self, bond: &PalwBondKeyV2) -> u128 {
-        self.staged_cache_lease_rows_v1().filter_map(|(_,r)| match r { Row::CourtEndArchive(a) => Some(a.pending_nominal(bond)), _ => None })
+        self.staged_cache_lease_rows_v1().filter_map(|(_,r)| match r { Row::CourtEndArchive(a) => Some(self.archive_pending_nominal_v1(a,bond)), _ => None })
             .fold(0u128, u128::saturating_add)
     }
     pub fn court_archive_holds_bond_v1(&self, bond: &PalwBondKeyV2) -> bool {
-        self.staged_cache_lease_rows_v1().any(|(_,r)| matches!(r, Row::CourtEndArchive(a) if a.pending_nominal(bond) != 0))
+        self.staged_cache_lease_rows_v1().any(|(_,r)| matches!(r, Row::CourtEndArchive(a) if self.archive_pending_nominal_v1(a,bond) != 0))
+    }
+    fn archive_pending_nominal_v1(&self,a:&PendingCourtArchiveV1,bond:&PalwBondKeyV2)->u128{
+        let discharged=a.groups.iter().filter(|(side,g)|g.declarer==*bond
+            && !a.applied_deposit_debits.contains_key(side) && !a.fulfilled_groups.contains(side)
+            && self.qualified_archive_deposit_v1(a.session_id,**side))
+            .map(|(_,g)|u128::from(g.deposit)).sum::<u128>();
+        a.pending_nominal(bond).saturating_sub(discharged)
     }
 }
 

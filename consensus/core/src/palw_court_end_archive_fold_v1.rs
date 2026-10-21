@@ -6,7 +6,7 @@ use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key};
 impl TransitionBuilder<'_> {
     pub(super) fn retain_native_close_declaration_v1(&mut self,ctx:&PalwBlockContextV2,object:&PalwConsensusObjectV2)->Result<(),PalwStateV2Error>{
         use crate::palw_court_close_receipt_v1::CourtCloseReceiptV1 as Receipt;
-        let PalwConsensusObjectV2::CourtCloseDeclared {session_id,side,count,..}=object else {
+        let PalwConsensusObjectV2::CourtCloseDeclared {session_id,side,..}=object else {
             return Err(PalwStateV2Error::CarriageInconsistent("native close declaration expected".into()));
         };
         let session=self.state.court_session(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?;
@@ -19,9 +19,7 @@ impl TransitionBuilder<'_> {
             let mut q=native_writers::NativeWriteQuoteV1::new("retain original signed court declaration and native rules");
             q.copy(object)?.copy(session)?.copy(&bond.pubkey)?.exact::<Receipt>(2)?.exact::<usize>(2)?;
             if let Some(p)=self.state.tir_dissections.get(session_id){q.copy(p)?;}
-            // The existing declaration-message constructor clones its bounded
-            // hash list and encodes it. Include both buffers before verification.
-            q.exact::<Hash64>(2*u64::from(*count))?.exact::<u8>(256)?;
+            super::palw_court_archive_verify_v1::quote_close_signature_v1(&mut q,session_id,*side,group)?;
             self.admit_native_write_v1(q)?;
         }
         let service=self.state.court_service_state_v1().unwrap();

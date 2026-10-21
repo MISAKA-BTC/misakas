@@ -8674,7 +8674,8 @@ impl<'a> TransitionBuilder<'a> {
             let pending = self.build_pending_court_archive_v1(key)?;
             self.write_court_inner_v1(key,new,true)?;
             self.write_staged_row_v1(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtEndArchive(key),
-                Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtEndArchive(Box::new(pending).into())))
+                Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtEndArchive(Box::new(pending).into())))?;
+            self.capture_archive_native_origins_v1(key)
         })();
         if result.is_err() {self.restore(saved);}
         result

@@ -973,6 +973,7 @@ impl TransitionBuilder<'_> {
     }
 
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        self.check_archive_progress_write_v1(&key,new.as_ref())?;
         if matches!(key,PalwStagedCourtKeyV1::CourtSharedBottom(_)) || matches!(&new,Some(PalwStagedCourtRowV1::CourtSharedBottom(_))) {
             let Some(PalwStagedCourtRowV1::CourtSharedBottom(r))=&new else {
                 return Err(PalwStateV2Error::CarriageInconsistent("shared bottom evidence cannot be removed or retyped".into()));
@@ -3421,6 +3422,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtSharedResponse(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtEndArchive(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtCloseReceipt(r) => (r.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtArchiveProgress(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedRoot(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedRound(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedBottom(r) => (r.material_until_daa,Vec::new()),
@@ -3761,6 +3763,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtSharedResponse(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtEndArchive(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtCloseReceipt(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtArchiveProgress(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedRoot(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedRound(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedBottom(row) => Some(row.material_until_daa),

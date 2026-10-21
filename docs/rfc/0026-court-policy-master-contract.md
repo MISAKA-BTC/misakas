@@ -188,3 +188,7 @@ RFC-0024 本文(B)の各 round の数値 fold 検査を、現行の規範とし�
 監査の T01〜T15([0026-assets/audit-report.md](0026-assets/audit-report.md) §7)を、関連 fence の有効化条件とする。主なもの:正直な Miner と誤った challenger(T01)、Miner の永久沈黙(T02)、偽署名・Panel の架空の完了申告(T03)、正常 tx flood・有料 court・不正 codec flood の分離測定(T04)、全 owner 枠の共謀占有下の外部 1 人(T05)、最後の受付時刻での notice と最遅応答(T06)、境界 −1 / 一致 / +1(T07)、Miner の PC 停止後の court(T08)、最短の依存 lease と同じ bond の複数 claim(T09)、内部 fold だけの不正(T10)、1〜10,000 件の最終段だけ不正(T11)、10,000 DAA への集中(T12)、最古 claim の service 失敗と独立 claim(T13)、reorg・restart・pruning・pruned IBD(T14)、新旧 fence 境界(T15)。
 
 fixture での `close_cone_acquit` の軽さ(`docs/measurements/2026-10-19-court-verify-cpu.md`、`release/t12-16000`)や、中央値の小ささは、これらの最悪 case・転送・収録・復旧の代わりにならない。
+
+## 2026-10-21 追加隔離checkpoint — original parameter footprint / archive S1
+
+original全numerical leafのparameter関係を登録program/layout/headerから一度の解析で導出する部品と、native時限資格＋元署名/native v5によるarchive当該declaration名目責任の一回解消を追加した。84 unique selected pass、core全tests/非test consensus lib型検査exit0。全graph・役割契約・実UTXO原資・有料公開入口・実供給/default・全金融精算/pruning・実model door・T01–T15は引き続き未完である。追加部品や選択数をこの主契約全体の達成へ置換しない。[raw logと厳密な範囲](../evidence/palw/g14-completion-2026-10-21/s1-and-original-cover.md)。

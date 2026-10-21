@@ -218,4 +218,5 @@
 - [ADR-0197 — court終了効果と未解決責任の保存方式](0197-court-end-effects-and-pending-liability-archive.md)
 - [ADR-0198 — 共有courtのinitial noticeの等号](0198-shared-court-initial-notice-boundary.md)
 - [ADR-0199 — 共有court終端materialと非独占提出方式](0199-shared-court-terminal-material-and-nonblocking-ingress.md)
+- [ADR-0202 — shared court originalの実原資と役割別同意](0202-court-original-funded-contract-and-role-consent.md)
 
