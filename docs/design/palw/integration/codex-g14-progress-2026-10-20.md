@@ -376,3 +376,11 @@ CPU/RSS削減の実測や全profile校正ではない。traceのouter hash・既
 
 notice等号について[RFC-0031](../../../rfc/0031-shared-court-initial-notice-boundary.md) / [ADR-0198](../../../adr/0198-shared-court-initial-notice-boundary.md)にA（`<= a+3,120`）/B（`< a+3,120`）の区間表を具体化し、利用者へ詳細仕様化の選択を質問した。runtimeは未選択で、値・hard起点・旧claim・本番採択を変更しない。未回答でもcanonical root/資本/全graphの独立作業を継続する。
 non-test consensus release checkとcore全testsの型検査はexit0。二つの変更source/test fileを親＋保存patchから再構成しSHA-256一致。RFC/ADR追加による索引staleを標準generatorで修正し、修正前文書検査logも保存した。最終文書検査は同じimport済み欠損5件とbaseline既知43件によりFAIL/exit1で、新規著者リンク欠損は0、baseline更新なし。
+## sessionを捏造しない実claim指定のroot検査
+
+親`e69fbcac4`。[RFC-0029 §14](../../../rfc/0029-owner-independent-shared-tir-query-data.md#14-named-root-binding-without-a-fabricated-session)のread-only入口は、実claim IDとleafからnative class/program・artifact/execution/trace root・arity文脈・finalizeを検査する。既存session経由は従来のsession/phase/terminal guardを残し、同じ検査本体を呼ぶ。本体・guardは親とbyte一致。新しいchallenger/ladder/session/phaseを作らず、旧session署名を共有権限へ転用しない。
+
+既存の数値frontierケースを拡張し、session 0件で正常/false-sum rootを検査してから同じrootを旧native経路へ通す。存在しないclaim、別leaf、arity不一致、execution root差替えの拒否と状態不変を確認する。最終選択42件（F7の7＋service6/policy3/gate12/activation5/t12同一性9）。新規test件数を加算せず、過去42等も除外する。[コマンド・source/実行file/log hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/named-root-artifact.json)。native-claim corpus/従来のexact-message署名fixtureであり、public-original frameや実ML-DSA/UTXO node受付ではない。
+
+このpredicateは共有署名・notice・public-original/source/profile・原資を認証しない。次のcoordinatorは実contextと新しい共有domainの署名、canonical rootの一意性、copy/finalize仕事、依存horizon、全分岐の資本・実feeを原子的に接続する必要がある。Rootのfinalize一致は全reduction値の正しさやclaimのcreditではなく、底の裁定を残す。notice等号はADR-0198で未選択。武装・統合・配備/G14完了へは変更しない。
+core全testsの型検査・non-test consensus release checkはexit0。変更source/test二つは親＋保存patchから再構成しSHA-256一致。文書検査は同じimport済み欠損5件とbaseline既知43件によりFAIL/exit1、新規著者リンク欠損0、baseline更新なし。

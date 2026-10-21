@@ -841,6 +841,42 @@ pub fn check_court_tir_root_claim_admits_v1(
         return Err(PalwCourtV2Error::DissectionAlreadyOpen(*session_id));
     }
     let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
+    check_resolved_tir_root_for_claim_v1(state,claim,narrowed,root,arity,derived_arity,court,step_ladder,prompt_ids_form)
+}
+
+/// Check a named leaf against the actual retained claim/program/roots without
+/// inventing a challenger, ladder or court session. Read-only numerical/source
+/// validation only: no signature, notice, funding, custody or default authority.
+/// A future shared coordinator supplies actual native rules and admits clone/
+/// finalize work before calling; wire-supplied rules are not authorization.
+#[allow(clippy::too_many_arguments)]
+pub fn check_named_tir_root_for_claim_v1(
+    state:&PalwChainStateV2,
+    claim_id:&Hash64,
+    narrowed:u64,
+    root:&crate::palw_tir_dissect_v1::PalwTirRootClaimV1,
+    arity:u8,
+    derived_arity:u8,
+    court:&crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder:u64,
+    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+)->Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1,PalwCourtV2Error>{
+    let claim=state.claim(claim_id).ok_or(PalwCourtV2Error::MissingClaim(*claim_id))?;
+    check_resolved_tir_root_for_claim_v1(state,claim,narrowed,root,arity,derived_arity,court,step_ladder,prompt_ids_form)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_resolved_tir_root_for_claim_v1(
+    state:&PalwChainStateV2,
+    claim:&crate::palw_state_v2::PalwClaimStateV2,
+    narrowed:u64,
+    root:&crate::palw_tir_dissect_v1::PalwTirRootClaimV1,
+    arity:u8,
+    derived_arity:u8,
+    court:&crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder:u64,
+    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+)->Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1,PalwCourtV2Error>{
     if state.tir_class_v1(&claim.class_id).is_none() {
         return Err(PalwCourtV2Error::TirDissectionRefused(
             "the session disputes a claim of a class that is not an IR program".into(),

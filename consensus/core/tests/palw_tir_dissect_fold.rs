@@ -566,7 +566,23 @@ fn numerical_frontier_preserves_all_children_and_native_fold_checks(){
         let (root,x)=if forged {let (r,x,_)=lie_in(&w,sum).unwrap();(r,x)}else{
             (build_tir_root_claim_v1(&w.honest.binding,w.leaf,&Store {f:&w.f,x:&w.honest},&RULES).unwrap(),w.honest.clone())
         };
-        let (mut run,claim)=licensed(&w,&x);let sid=court_at_leaf(&mut run,claim,&x,w.leaf);
+        let (mut run,claim)=licensed(&w,&x);
+        let before=run.s.state_root();assert_eq!(run.s.court_sessions_len(),0);
+        let wire=carried(root.clone());
+        let check_named=|claim_id:&Hash64,leaf,root:&PalwTirRootClaimV1,a,derived| {
+            kaspa_consensus_core::palw_court_v2::check_named_tir_root_for_claim_v1(
+                &run.s,claim_id,leaf,root,a,derived,&court(),LADDER,PalwPromptIdsFormV1::Flat)
+        };
+        let site=check_named(&claim,w.leaf,&wire,arity,arity).unwrap();
+        assert_eq!(site.history_positions,w.site.history_positions);assert_eq!(site.reductions,w.site.reductions);
+        assert!(matches!(check_named(&h64(0xA113),w.leaf,&wire,arity,arity),Err(PalwCourtV2Error::MissingClaim(_))));
+        assert!(check_named(&claim,w.leaf+1,&wire,arity,arity).is_err());
+        assert!(matches!(check_named(&claim,w.leaf,&wire,arity,if arity==2 {4}else{2}),Err(PalwCourtV2Error::ArityIsNotTheDerivedOne {..})));
+        let mut foreign=wire.clone();foreign.finalize.binding.committed_execution_root=h64(0xA114);
+        assert!(check_named(&claim,w.leaf,&foreign,arity,arity).is_err());
+        assert_eq!(run.s.state_root(),before);assert_eq!(run.s.court_sessions_len(),0,"root checks do not fabricate sessions");
+        let sid=court_at_leaf(&mut run,claim,&x,w.leaf);
+        check_court_tir_root_claim_admits_v1(&run.s,&sid,&wire,arity,arity,&court(),LADDER,PalwPromptIdsFormV1::Flat).unwrap();
         run.step(&[root_claimed(&run,sid,root,arity)]);
         let initial=run.phase(&sid);let native_root=run.s.state_root();
         let mut frontier=PalwTirNumericalFrontierV1::new(initial.clone()).unwrap();
