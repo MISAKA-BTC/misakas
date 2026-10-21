@@ -1124,6 +1124,30 @@ pub(crate) struct TirInventoryOpeningVerifierV1<'a> {
     root: Hash64,
 }
 impl<'a> TirInventoryOpeningVerifierV1<'a> {
+    /// Concrete allocation envelope for both existing param-instance analysis passes
+    /// and the retained index. Derived from actual program readers/layers, not codec size.
+    pub(crate) fn index_requests(program: &TirProgramV1) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, btree_node_envelope_bytes_v1};
+        let mut q = TirNativeRequestsV1::new();
+        let count = program.params.len() as u64;
+        q.exact_v1::<ParamIndexV1>(count)?;
+        // leaf_count_prefix and index construction each call param_instances.
+        for _ in 0..2 {
+            q.exact_v1::<BTreeSet<u8>>(count)?;
+            q.vec_v1::<Vec<Option<u16>>>(count)?;
+            for (j, param) in program.params.iter().enumerate() {
+                let reads = |block: usize| program.blocks[block].nodes.iter().any(|n|
+                    n.inputs.iter().any(|r| matches!(r, misaka_palw_tir::Ref::Param(k) if usize::from(*k) == j)));
+                let readers = (0..program.blocks.len()).filter(|b| reads(*b)).count() as u64;
+                q.add_v1(TirNativeRequestsV1::product_v1(readers, btree_node_envelope_bytes_v1::<u8, ()>() as u64)?)?;
+                if param.per_layer {
+                    let layers = program.schedule.layers.iter().filter(|k| program.blocks.get(usize::from(**k)).is_some() && reads(usize::from(**k))).count();
+                    q.vec_v1::<Option<u16>>(layers as u64)?;
+                } else { q.exact_v1::<Option<u16>>(1)?; }
+            }
+        }
+        Ok(q.bytes_v1())
+    }
     pub(crate) fn new(program: &'a TirProgramV1, root: Hash64) -> Option<Self> {
         Some(Self { program, inventory: PalwTirInventoryIndexV1::new(program)?, root })
     }
@@ -4457,6 +4481,9 @@ mod inventory_material_tests {
         let verifier = TirInventoryOpeningVerifierV1::new(&program, x.binding.artifact_root).unwrap();
         let BindingOutcome::Verified(v) = check_binding(&x.binding).unwrap() else { panic!("honest fixture") };
         let inventory = PalwTirInventoryIndexV1::new(&program).unwrap();
+        let retained_index_bytes = inventory.params.capacity() * std::mem::size_of::<ParamIndexV1>()
+            + inventory.params.iter().map(|p| p.layers.capacity() * std::mem::size_of::<Option<u16>>()).sum::<usize>();
+        assert!(TirInventoryOpeningVerifierV1::index_requests(&program).unwrap() >= retained_index_bytes as u64);
         for leaf in 0..inventory.leaf_count() {
             let opening = x.param_opening(leaf).unwrap();
             verifier.check(&opening).unwrap();

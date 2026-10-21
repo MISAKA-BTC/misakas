@@ -2616,6 +2616,23 @@ mod conviction_e2e_tests {
             held_regime: false, decode_close_convicts_only: false, fp_decode_from_daa: None,
             cell_closure_from_daa: None, memory_routing_from_daa: None, tir_active: true, gen_active: false,
             task_heads_active: false, improvement_active: false, constraint_active: false };
+        {
+            use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+            let c=shared::context(&state,claim).unwrap();
+            let opening=fx.execution.param_opening(0).unwrap();
+            let before=state.state_root();
+            c.check_parameter_opening(&state,c.scope_id,&opening).unwrap();
+            assert!(c.check_parameter_opening(&state,Hash64::default(),&opening).is_err());
+            let mut bad=opening.clone();bad.operand.bytes[0]^=1;
+            assert!(c.check_parameter_opening(&state,c.scope_id,&bad).is_err());
+            let mut other=c.clone();other.scope_id=Hash64::default();
+            assert!(other.check_parameter_opening(&state,other.scope_id,&opening).is_err());
+            let mut missing=state.clone();missing.tir_classes.remove(&frame.descriptor_v1().class_id);
+            assert!(c.check_parameter_opening(&missing,c.scope_id,&opening).is_err());
+            let mut corrupt=state.clone();corrupt.tir_classes.get_mut(&frame.descriptor_v1().class_id).unwrap().program=std::sync::Arc::new(vec![]);
+            assert!(c.check_parameter_opening(&corrupt,c.scope_id,&opening).is_err());
+            assert_eq!(state.state_root(),before);
+        }
         let binding = &fx.execution.binding;
         let space = crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&binding.class).unwrap();
         let intervals = misaka_palw_tir::interval::analyze_ranges(&space.program).unwrap();

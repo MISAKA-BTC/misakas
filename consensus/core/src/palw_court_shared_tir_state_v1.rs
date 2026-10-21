@@ -70,6 +70,24 @@ impl SharedTirContextV1 {
         if self.scope_id!=set.scope_id()? || self.queries!=set.len() {return Err("shared context substitutes closed universe".into());}
         Ok(source)
     }
+    /// Read-only original-bound parameter identity check. The caller admits source
+    /// reconstruction/CPU/IO separately; known program/index owners are reserved here.
+    /// No insertion, delivery/custody, timely notice, payer or eligibility follows.
+    pub(crate) fn check_parameter_opening(&self,state:&PalwChainStateV2,scope:Hash64,
+        opening:&crate::palw_artifact::PalwArtifactOpeningV1)->Result<(),String> {
+        if scope!=self.scope_id {return Err("shared parameter scope substitution".into());}
+        // Require this exact retained row, not a caller-constructed context with valid fields.
+        if context(state,self.claim)?!=self {return Err("shared parameter context is not retained".into());}
+        let source=self.source(state)?;
+        let record=state.tir_class_v1(&source.header_v1().job_context.shape_profile_id)
+            .ok_or("shared parameter registered program absent")?;
+        let program=crate::palw_native_resource_v1::decode_native_tir_program_v1(record.program.as_slice()).map_err(|e|e.to_string())?;
+        let requests=crate::palw_tir_court_v1::TirInventoryOpeningVerifierV1::index_requests(&program).map_err(|e|e.to_string())?;
+        let _index=crate::palw_native_resource_v1::reserve_native_requests_v1(requests).map_err(|e|e.to_string())?;
+        let verifier=crate::palw_tir_court_v1::TirInventoryOpeningVerifierV1::new(&program,source.header_v1().artifact_root)
+            .ok_or("shared parameter inventory is not derivable")?;
+        verifier.check(opening).map_err(|e|e.to_string())
+    }
     pub fn check_context(&self,state:&PalwChainStateV2)->Result<(),String> {self.source(state).map(|_|())}
 }
 pub(crate) fn context(state:&PalwChainStateV2,claim:Hash64)->Result<&SharedTirContextV1,String> {
