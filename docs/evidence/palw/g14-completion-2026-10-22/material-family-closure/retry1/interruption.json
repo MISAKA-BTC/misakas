@@ -1,0 +1,26 @@
+{
+  "reason": "Confirmed source-level repeated whole-graph supplier scan invokes unrelated StepRun ordinal reconstruction per needed StepLeaf; stop to replace with canonical indexed lookup, not a timeout success or completed test.",
+  "process_group": 52343,
+  "observed_members": [
+    [
+      "52343",
+      "976",
+      "52343",
+      "/bin/bash /Users/wata/.cache/misaka-heavy-lock.sh python3 /tmp/g14-retry-material-family-closure.py"
+    ],
+    [
+      "52349",
+      "52343",
+      "52343",
+      "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python /tmp/g14-retry-material-family-closure.py"
+    ],
+    [
+      "52914",
+      "52349",
+      "52343",
+      "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-material-family-closure-2i45tl1f/kaspa_consensus_core numerical_material_join_actual_all_root_readset_and_supplier_finishes --nocapture"
+    ]
+  ],
+  "signal": "SIGTERM",
+  "completed_test_result": false
+}

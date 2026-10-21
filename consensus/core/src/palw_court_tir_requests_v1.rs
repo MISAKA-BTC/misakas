@@ -262,6 +262,13 @@ impl<'a> TirSharedRequestSetV1<'a> {
         self.source.check_request_v1(&request)?;
         Ok(request)
     }
+    /// Checked inverse for the actual StepLeaf family. No overlapping StepRun
+    /// ordinal reconstruction or heap/index allocation is involved.
+    pub fn step_leaf_ordinal_v1(&self,index:u64)->Result<u64,String>{
+        if index>=self.geometry.n{return Err("shared StepLeaf index outside native source".into());}
+        let ordinal=self.geometry.families[0].checked_add(index).ok_or("shared StepLeaf ordinal overflow")?;
+        if self.request_at(ordinal)?!=(Request::StepLeaf{index}){return Err("shared StepLeaf ordinal roundtrip differs".into());}Ok(ordinal)
+    }
     /// Shared request identity only, NOT a complete service-packet/duty ID:
     /// signer role, turn, carrier fragment and original eligibility remain to bind.
     pub fn request_id(&self, ordinal: u64) -> Result<Hash64, String> {

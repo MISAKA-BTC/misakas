@@ -477,6 +477,12 @@ impl PalwTokenizerJsonStreamV1 {
     pub fn pending_key(&self) -> Option<(u64, Hash64)> {
         self.pending
     }
+    /// Identity already authenticated by native seal/finish; no caller flag.
+    pub(crate) fn sealed_artifact_binding_v1(&self)->Result<(Hash64,u64),String>{
+        self.check()?;
+        if !self.sealed||self.offset!=self.length||self.pending.is_some()||self.hash.finish()!=self.tokenizer{return Err("parser artifact binding before authenticated exact EOF".into());}
+        Ok((self.tokenizer,self.length))
+    }
     pub fn key_set_root(&self) -> Hash64 {
         self.keys.root()
     }

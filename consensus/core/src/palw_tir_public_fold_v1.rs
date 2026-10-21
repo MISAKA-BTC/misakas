@@ -1643,7 +1643,9 @@ mod tests {
 mod conviction_e2e_tests {
     include!("palw_court_shared_output_native_tests.rs");
     include!("palw_court_shared_selection_native_tests.rs");
+    include!("palw_court_shared_numerical_material_native_tests.rs");
     include!("palw_prefix_material_native_tests.rs");
+    include!("palw_court_shared_prefix_family_native_tests.rs");
     include!("palw_root_input_material_native_tests.rs");
     include!("palw_court_shared_constraint_native_tests.rs");
     include!("palw_court_shared_tokenizer_native_tests.rs");
@@ -3032,6 +3034,8 @@ mod conviction_e2e_tests {
             crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
                 max_original_leaves:1_000_000,max_total_edges:10_000_000,
                 max_total_coordinates:1_000_000,max_root_memberships:1_000_000}).unwrap();
+        let (material_join_graph,material_join_numerical,material_join_profile,material_join_visits)=include!("palw_numerical_join_terminal_setup.rs");
+        let material_join=crate::palw_court_shared_tir_builder_store_v1::numerical_material_join::NumericalMaterialJoinV1::derive_native_v1(frame,&parameter_source,&material_join_graph,&material_join_numerical,&parameter_cover,material_join_profile,&native.court,crate::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7,material_join_visits).unwrap();
         // A genuine different original's opaque cover; no cover DTO/roots are
         // forged or edited. Even an empty numerical set cannot be substituted.
         let foreign_parameter_fixture=crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1();
@@ -3152,6 +3156,7 @@ mod conviction_e2e_tests {
                         &round_state,&params,&intent_rules,&intent,limit,&parameter_cover).unwrap();
                     assert_eq!(borsh::to_vec(&covered).unwrap(),borsh::to_vec(&built).unwrap());
                     assert_eq!(covered_meter,meter);
+                    include!("palw_numerical_join_terminal_selected.rs");
                     // Same valid signed intent and retained terminal phase as
                     // positive path: rejection must occur at source affinity,
                     // not an invalid signature/root/phase shortcut.

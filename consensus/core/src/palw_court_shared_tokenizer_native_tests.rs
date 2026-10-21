@@ -164,6 +164,7 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     let all_bodies=all_encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let eog_encoded=borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
     let retained=store.retain_semantic_material_v1(&b.state,claim,&all_bodies,&eog_encoded,&raw).unwrap();
+    include!("palw_court_tokenizer_family_native_test_block.rs");
     let retained_evidence=store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,proofs,budget).unwrap();
     assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),
         evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());

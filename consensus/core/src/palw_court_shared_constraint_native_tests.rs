@@ -72,7 +72,7 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
     crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(&state, frame, p.terms.material_until_daa).unwrap();
 
     let state = bind_clock_service(&state, frame, &params, &extras);
-    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let source=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(&fx.record,&fx.layout,frame.header_v1(),frame.original_v1().execution_root,frame.original_v1().trace_root,fx.rules.maximum_leaves).unwrap();
     let profile = shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
     let scope = set.scope_id().unwrap();
@@ -167,7 +167,44 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
     };
     sign(&mut intent);
     let before = b.state.state_root();
+    use crate::palw_court_shared_tir_builder_store_v1::constraint_family::{ConstraintUniverseV1 as Universe,ConstraintTargetV1 as FamilyTarget,ConstraintSemanticSupplyV1};
+    use crate::palw_court_source_material_graph_v3::{NativeSourceMaterialGraphV3 as FamilyGraph,SourceGraphBudgetV3};
+    let upper=set.signed_data_transport_upper().unwrap();
+    let graph_edges=upper.fresh_responses.checked_mul(upper.maximum_custodians+1).unwrap().checked_add(upper.streams.checked_mul(2).unwrap()).unwrap().checked_add(upper.parts).unwrap();
+    let family_graph=FamilyGraph::derive_native_v3(frame,&source,profile,SourceGraphBudgetV3{max_queries:set.len(),max_roles:upper.maximum_custodians,max_vertices:upper.signed_controls,max_edges:graph_edges}).unwrap();
+    let family=Universe::derive_native_v1(&b.state,frame,&source,&family_graph,profile).unwrap();
+    assert_eq!(family.semantic_supply_v1(),ConstraintSemanticSupplyV1::UnresolvedTableSupply{table:semantics.token_table_root.unwrap(),vocabulary:source.vocab_v1()});
+    let mut rank=0;
+    for position in 0..source.decode_count_v1(){for beat in 0..source.vocab_v1(){for w in 0..=source.vocab_v1(){
+        assert_eq!(family.target_at_v1(rank),Some(FamilyTarget::Token{position,beat,witness:if w==0{None}else{Some(w-1)}}));rank+=1;
+    }}}
+    assert_eq!(family.target_at_v1(rank),Some(FamilyTarget::Stop));assert_eq!(family.len_v1(),rank+1);assert!(family.target_at_v1(rank+1).is_none());
+    let visits=family_graph.nodes_v3().count() as u64;
+    assert!(family.project_native_v1(FamilyTarget::Token{position:source.decode_count_v1(),beat:0,witness:None},visits).is_err());
+    assert!(family.project_native_v1(FamilyTarget::Token{position:0,beat:source.vocab_v1(),witness:None},visits).is_err());
+    assert!(family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:Some(source.vocab_v1())},visits).is_err());
+    let last=family.project_native_v1(FamilyTarget::Token{position:source.decode_count_v1()-1,beat:source.vocab_v1()-1,witness:Some(source.vocab_v1()-1)},visits).unwrap();
+    assert_eq!(last.full_ids_dependencies_v1().len() as u64,family_graph.role_slots_v3());
+    let tiles=u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+    assert_eq!(last.row_dependencies_v1().len() as u64,tiles*family_graph.role_slots_v3());
+    assert_ne!(last.logical_id_v1(),Hash64::default());assert_ne!(last.absolute_id_v1(),Hash64::default());
+    assert!(matches!(family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:None},0),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+    let duty=family.project_native_v1(FamilyTarget::Token{position:intent.position,beat:intent.beat_lane,witness:intent.witness},visits).unwrap();
+    let checked=store.build_constraint_token_with_duty_v1(&b.state,&params,&rules,&intent,&retained,budget,&duty).unwrap();
+    let stop_duty=family.project_native_v1(FamilyTarget::Stop,visits).unwrap();
+    assert!(stop_duty.row_dependencies_v1().is_empty());
+    assert!(store.build_constraint_token_with_duty_v1(&b.state,&params,&rules,&intent,&retained,budget,&stop_duty).is_err());
     let evidence = store.build_constraint_terminal(&b.state, &params, &rules, &intent, material, budget).unwrap();
+    assert_eq!(checked.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    let selected_id=fx.execution.generated[intent.position as usize];
+    assert!(!eog.ids.contains(&selected_id),"fixture requires actual selected rendering");
+    let sparse_material=ConstraintMaterialV1{eog:&eog,renderings:std::slice::from_ref(&renderings[selected_id as usize])};
+    let mut sparse_intent=intent.clone();sparse_intent.material_id=sparse_material.identity(budget).unwrap();sign(&mut sparse_intent);
+    let sparse_evidence=store.build_constraint_token_material_with_duty_v1(&b.state,&params,&rules,&sparse_intent,sparse_material,budget,&duty).unwrap();
+    assert_eq!(sparse_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    assert!(sparse_material.renderings.len()<renderings.len(),"selected target does not require every potential rendering");
+    let missing_material=ConstraintMaterialV1{eog:&eog,renderings:&[]};let mut missing_intent=intent.clone();missing_intent.material_id=missing_material.identity(budget).unwrap();sign(&mut missing_intent);
+    assert!(store.build_constraint_token_material_with_duty_v1(&b.state,&params,&rules,&missing_intent,missing_material,budget,&duty).is_err());
     let retained_evidence=store.build_constraint_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,budget).unwrap();
     assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),
         evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
@@ -276,7 +313,7 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(&state, frame, p.terms.material_until_daa).unwrap();
 
     let state = bind_clock_service(&state, frame, &params, &extras);
-    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let source=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(&fx.record,&fx.layout,frame.header_v1(),frame.original_v1().execution_root,frame.original_v1().trace_root,fx.rules.maximum_leaves).unwrap();
     let profile = shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
     let scope = set.scope_id().unwrap();
@@ -347,6 +384,34 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let eog_wire=borsh::to_vec(&eog).unwrap();
     let owner=store.retain_semantic_table_material_v1(&b.state,claim,&bodies,&eog_wire).unwrap();
+    use crate::palw_court_shared_tir_builder_store_v1::constraint_family::{ConstraintUniverseV1 as Universe,ConstraintTargetV1 as FamilyTarget,ConstraintSemanticSupplyV1};
+    use crate::palw_court_source_material_graph_v3::{NativeSourceMaterialGraphV3 as FamilyGraph,SourceGraphBudgetV3};
+    let upper=set.signed_data_transport_upper().unwrap();
+    let graph_edges=upper.fresh_responses.checked_mul(upper.maximum_custodians+1).unwrap().checked_add(upper.streams.checked_mul(2).unwrap()).unwrap().checked_add(upper.parts).unwrap();
+    let family_graph=FamilyGraph::derive_native_v3(frame,&source,profile,SourceGraphBudgetV3{max_queries:set.len(),max_roles:upper.maximum_custodians,max_vertices:upper.signed_controls,max_edges:graph_edges}).unwrap();
+    let family=Universe::derive_native_v1(&b.state,frame,&source,&family_graph,profile).unwrap();
+    assert_eq!(family.semantic_supply_v1(),ConstraintSemanticSupplyV1::UnresolvedTableSupply{table:semantics.token_table_root.unwrap(),vocabulary:source.vocab_v1()});
+    let mut rank=0;
+    for position in 0..source.decode_count_v1(){for beat in 0..source.vocab_v1(){for w in 0..=source.vocab_v1(){
+        assert_eq!(family.target_at_v1(rank),Some(FamilyTarget::Token{position,beat,witness:if w==0{None}else{Some(w-1)}}));rank+=1;
+    }}}
+    assert_eq!(family.target_at_v1(rank),Some(FamilyTarget::Stop));assert_eq!(family.len_v1(),rank+1);assert!(family.target_at_v1(rank+1).is_none());
+    let visits=family_graph.nodes_v3().count() as u64;
+    assert!(family.project_native_v1(FamilyTarget::Token{position:source.decode_count_v1(),beat:0,witness:None},visits).is_err());
+    assert!(family.project_native_v1(FamilyTarget::Token{position:0,beat:source.vocab_v1(),witness:None},visits).is_err());
+    assert!(family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:Some(source.vocab_v1())},visits).is_err());
+    let last=family.project_native_v1(FamilyTarget::Token{position:source.decode_count_v1()-1,beat:source.vocab_v1()-1,witness:Some(source.vocab_v1()-1)},visits).unwrap();
+    assert_eq!(last.full_ids_dependencies_v1().len() as u64,family_graph.role_slots_v3());
+    let tiles=u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+    assert_eq!(last.row_dependencies_v1().len() as u64,tiles*family_graph.role_slots_v3());
+    assert_ne!(last.logical_id_v1(),Hash64::default());assert_ne!(last.absolute_id_v1(),Hash64::default());
+    assert!(matches!(family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:None},0),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+    let duty=family.project_native_v1(FamilyTarget::Stop,visits).unwrap();
+    assert!(duty.row_dependencies_v1().is_empty());assert_eq!(duty.semantic_supply_v1(),ConstraintSemanticSupplyV1::UnresolvedEogOnlySupply{table:semantics.token_table_root.unwrap(),vocabulary:source.vocab_v1()});assert_eq!(duty.full_ids_dependencies_v1().len() as u64,family_graph.role_slots_v3());
+    let checked=store.build_constraint_stop_with_duty_v1(&b.state,&params,&rules,&intent,&owner,budget,&duty).unwrap();
+    assert_eq!(checked.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    let token_duty=family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:None},visits).unwrap();
+    assert!(store.build_constraint_stop_with_duty_v1(&b.state,&params,&rules,&intent,&owner,budget,&token_duty).is_err());
     let retained=store.build_constraint_stop_terminal_retained_v1(&b.state,&params,&rules,&intent,&owner,budget).unwrap();
     assert_eq!(retained.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
     let view=crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(source.header_v1(),&fx.record,fx.rules.maximum_leaves).unwrap();
@@ -386,6 +451,9 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     // unrelated invalid-rendering result can make the positive pass by accident.
     let eog_only=ConstraintMaterialV1{eog:&eog,renderings:&[]};
     let mut end_only=intent.clone();end_only.material_id=eog_only.identity(budget).unwrap();sign(&mut end_only);
+    let projected_end=store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&duty).unwrap();
+    assert_eq!(projected_end.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    assert!(store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&token_duty).is_err());
     let end_only=store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&end_only,eog_only,budget).unwrap();
     assert_eq!(end_only.recheck(&store,&b.state,&params,&rules,budget).unwrap().is_some(),fault);
     // Negative-only altered native facts, never installed as a valid original.

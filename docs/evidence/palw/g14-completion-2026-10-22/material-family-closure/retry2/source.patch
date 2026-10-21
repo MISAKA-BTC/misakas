@@ -1,0 +1,455 @@
+diff --git a/consensus/core/src/palw_court_shared_constraint_native_tests.rs b/consensus/core/src/palw_court_shared_constraint_native_tests.rs
+index 41bca97a1..20870ab31 100644
+--- a/consensus/core/src/palw_court_shared_constraint_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_constraint_native_tests.rs
+@@ -72,7 +72,7 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
+     crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(&state, frame, p.terms.material_until_daa).unwrap();
+ 
+     let state = bind_clock_service(&state, frame, &params, &extras);
+-    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
++    let source=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(&fx.record,&fx.layout,frame.header_v1(),frame.original_v1().execution_root,frame.original_v1().trace_root,fx.rules.maximum_leaves).unwrap();
+     let profile = shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
+     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
+     let scope = set.scope_id().unwrap();
+@@ -167,7 +167,44 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
+     };
+     sign(&mut intent);
+     let before = b.state.state_root();
++    use crate::palw_court_shared_tir_builder_store_v1::constraint_family::{ConstraintUniverseV1 as Universe,ConstraintTargetV1 as FamilyTarget,ConstraintSemanticSupplyV1};
++    use crate::palw_court_source_material_graph_v3::{NativeSourceMaterialGraphV3 as FamilyGraph,SourceGraphBudgetV3};
++    let upper=set.signed_data_transport_upper().unwrap();
++    let graph_edges=upper.fresh_responses.checked_mul(upper.maximum_custodians+1).unwrap().checked_add(upper.streams.checked_mul(2).unwrap()).unwrap().checked_add(upper.parts).unwrap();
++    let family_graph=FamilyGraph::derive_native_v3(frame,&source,profile,SourceGraphBudgetV3{max_queries:set.len(),max_roles:upper.maximum_custodians,max_vertices:upper.signed_controls,max_edges:graph_edges}).unwrap();
++    let family=Universe::derive_native_v1(&b.state,frame,&source,&family_graph,profile).unwrap();
++    assert_eq!(family.semantic_supply_v1(),ConstraintSemanticSupplyV1::UnresolvedTableSupply{table:semantics.token_table_root.unwrap(),vocabulary:source.vocab_v1()});
++    let mut rank=0;
++    for position in 0..source.decode_count_v1(){for beat in 0..source.vocab_v1(){for w in 0..=source.vocab_v1(){
++        assert_eq!(family.target_at_v1(rank),Some(FamilyTarget::Token{position,beat,witness:if w==0{None}else{Some(w-1)}}));rank+=1;
++    }}}
++    assert_eq!(family.target_at_v1(rank),Some(FamilyTarget::Stop));assert_eq!(family.len_v1(),rank+1);assert!(family.target_at_v1(rank+1).is_none());
++    let visits=family_graph.nodes_v3().count() as u64;
++    assert!(family.project_native_v1(FamilyTarget::Token{position:source.decode_count_v1(),beat:0,witness:None},visits).is_err());
++    assert!(family.project_native_v1(FamilyTarget::Token{position:0,beat:source.vocab_v1(),witness:None},visits).is_err());
++    assert!(family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:Some(source.vocab_v1())},visits).is_err());
++    let last=family.project_native_v1(FamilyTarget::Token{position:source.decode_count_v1()-1,beat:source.vocab_v1()-1,witness:Some(source.vocab_v1()-1)},visits).unwrap();
++    assert_eq!(last.full_ids_dependencies_v1().len() as u64,family_graph.role_slots_v3());
++    let tiles=u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
++    assert_eq!(last.row_dependencies_v1().len() as u64,tiles*family_graph.role_slots_v3());
++    assert_ne!(last.logical_id_v1(),Hash64::default());assert_ne!(last.absolute_id_v1(),Hash64::default());
++    assert!(matches!(family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:None},0),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
++    let duty=family.project_native_v1(FamilyTarget::Token{position:intent.position,beat:intent.beat_lane,witness:intent.witness},visits).unwrap();
++    let checked=store.build_constraint_token_with_duty_v1(&b.state,&params,&rules,&intent,&retained,budget,&duty).unwrap();
++    let stop_duty=family.project_native_v1(FamilyTarget::Stop,visits).unwrap();
++    assert!(stop_duty.row_dependencies_v1().is_empty());
++    assert!(store.build_constraint_token_with_duty_v1(&b.state,&params,&rules,&intent,&retained,budget,&stop_duty).is_err());
+     let evidence = store.build_constraint_terminal(&b.state, &params, &rules, &intent, material, budget).unwrap();
++    assert_eq!(checked.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
++    let selected_id=fx.execution.generated[intent.position as usize];
++    assert!(!eog.ids.contains(&selected_id),"fixture requires actual selected rendering");
++    let sparse_material=ConstraintMaterialV1{eog:&eog,renderings:std::slice::from_ref(&renderings[selected_id as usize])};
++    let mut sparse_intent=intent.clone();sparse_intent.material_id=sparse_material.identity(budget).unwrap();sign(&mut sparse_intent);
++    let sparse_evidence=store.build_constraint_token_material_with_duty_v1(&b.state,&params,&rules,&sparse_intent,sparse_material,budget,&duty).unwrap();
++    assert_eq!(sparse_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
++    assert!(sparse_material.renderings.len()<renderings.len(),"selected target does not require every potential rendering");
++    let missing_material=ConstraintMaterialV1{eog:&eog,renderings:&[]};let mut missing_intent=intent.clone();missing_intent.material_id=missing_material.identity(budget).unwrap();sign(&mut missing_intent);
++    assert!(store.build_constraint_token_material_with_duty_v1(&b.state,&params,&rules,&missing_intent,missing_material,budget,&duty).is_err());
+     let retained_evidence=store.build_constraint_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,budget).unwrap();
+     assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),
+         evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+@@ -276,7 +313,7 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
+     crate::palw_court_service_state_v2::require_tir_service_custody_window_v1(&state, frame, p.terms.material_until_daa).unwrap();
+ 
+     let state = bind_clock_service(&state, frame, &params, &extras);
+-    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
++    let source=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(&fx.record,&fx.layout,frame.header_v1(),frame.original_v1().execution_root,frame.original_v1().trace_root,fx.rules.maximum_leaves).unwrap();
+     let profile = shared::shared_native_profile_id_v1(state.court_service_state_v1().unwrap().profile_id);
+     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
+     let scope = set.scope_id().unwrap();
+@@ -347,6 +384,34 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
+     let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+     let eog_wire=borsh::to_vec(&eog).unwrap();
+     let owner=store.retain_semantic_table_material_v1(&b.state,claim,&bodies,&eog_wire).unwrap();
++    use crate::palw_court_shared_tir_builder_store_v1::constraint_family::{ConstraintUniverseV1 as Universe,ConstraintTargetV1 as FamilyTarget,ConstraintSemanticSupplyV1};
++    use crate::palw_court_source_material_graph_v3::{NativeSourceMaterialGraphV3 as FamilyGraph,SourceGraphBudgetV3};
++    let upper=set.signed_data_transport_upper().unwrap();
++    let graph_edges=upper.fresh_responses.checked_mul(upper.maximum_custodians+1).unwrap().checked_add(upper.streams.checked_mul(2).unwrap()).unwrap().checked_add(upper.parts).unwrap();
++    let family_graph=FamilyGraph::derive_native_v3(frame,&source,profile,SourceGraphBudgetV3{max_queries:set.len(),max_roles:upper.maximum_custodians,max_vertices:upper.signed_controls,max_edges:graph_edges}).unwrap();
++    let family=Universe::derive_native_v1(&b.state,frame,&source,&family_graph,profile).unwrap();
++    assert_eq!(family.semantic_supply_v1(),ConstraintSemanticSupplyV1::UnresolvedTableSupply{table:semantics.token_table_root.unwrap(),vocabulary:source.vocab_v1()});
++    let mut rank=0;
++    for position in 0..source.decode_count_v1(){for beat in 0..source.vocab_v1(){for w in 0..=source.vocab_v1(){
++        assert_eq!(family.target_at_v1(rank),Some(FamilyTarget::Token{position,beat,witness:if w==0{None}else{Some(w-1)}}));rank+=1;
++    }}}
++    assert_eq!(family.target_at_v1(rank),Some(FamilyTarget::Stop));assert_eq!(family.len_v1(),rank+1);assert!(family.target_at_v1(rank+1).is_none());
++    let visits=family_graph.nodes_v3().count() as u64;
++    assert!(family.project_native_v1(FamilyTarget::Token{position:source.decode_count_v1(),beat:0,witness:None},visits).is_err());
++    assert!(family.project_native_v1(FamilyTarget::Token{position:0,beat:source.vocab_v1(),witness:None},visits).is_err());
++    assert!(family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:Some(source.vocab_v1())},visits).is_err());
++    let last=family.project_native_v1(FamilyTarget::Token{position:source.decode_count_v1()-1,beat:source.vocab_v1()-1,witness:Some(source.vocab_v1()-1)},visits).unwrap();
++    assert_eq!(last.full_ids_dependencies_v1().len() as u64,family_graph.role_slots_v3());
++    let tiles=u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
++    assert_eq!(last.row_dependencies_v1().len() as u64,tiles*family_graph.role_slots_v3());
++    assert_ne!(last.logical_id_v1(),Hash64::default());assert_ne!(last.absolute_id_v1(),Hash64::default());
++    assert!(matches!(family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:None},0),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
++    let duty=family.project_native_v1(FamilyTarget::Stop,visits).unwrap();
++    assert!(duty.row_dependencies_v1().is_empty());assert_eq!(duty.semantic_supply_v1(),ConstraintSemanticSupplyV1::UnresolvedEogOnlySupply{table:semantics.token_table_root.unwrap(),vocabulary:source.vocab_v1()});assert_eq!(duty.full_ids_dependencies_v1().len() as u64,family_graph.role_slots_v3());
++    let checked=store.build_constraint_stop_with_duty_v1(&b.state,&params,&rules,&intent,&owner,budget,&duty).unwrap();
++    assert_eq!(checked.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
++    let token_duty=family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:None},visits).unwrap();
++    assert!(store.build_constraint_stop_with_duty_v1(&b.state,&params,&rules,&intent,&owner,budget,&token_duty).is_err());
+     let retained=store.build_constraint_stop_terminal_retained_v1(&b.state,&params,&rules,&intent,&owner,budget).unwrap();
+     assert_eq!(retained.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+     let view=crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(source.header_v1(),&fx.record,fx.rules.maximum_leaves).unwrap();
+@@ -386,6 +451,9 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
+     // unrelated invalid-rendering result can make the positive pass by accident.
+     let eog_only=ConstraintMaterialV1{eog:&eog,renderings:&[]};
+     let mut end_only=intent.clone();end_only.material_id=eog_only.identity(budget).unwrap();sign(&mut end_only);
++    let projected_end=store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&duty).unwrap();
++    assert_eq!(projected_end.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
++    assert!(store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&token_duty).is_err());
+     let end_only=store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&end_only,eog_only,budget).unwrap();
+     assert_eq!(end_only.recheck(&store,&b.state,&params,&rules,budget).unwrap().is_some(),fault);
+     // Negative-only altered native facts, never installed as a valid original.
+diff --git a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+index c74205578..f0e5832ea 100644
+--- a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
++++ b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+@@ -110,11 +110,21 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
+     /// No fallback, acquisition, paid supply or future retention is asserted.
+     pub(crate) fn check_root_input_cover_v1(&self,
+         cover:&crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1)->Result<(),String> {
++        if cover.parameters_v1().source_id!=self.source.source_id_v1(){return Err("builder input cover from another original source".into());}
++        for root in cover.roots_v1(){self.check_root_input_entry_v1(root)?;}Ok(())
++    }
++    /// Runtime requirements for one actual selected root. Other roots remain
++    /// allocation dependencies; they are not demanded as runtime material.
++    pub(crate) fn check_named_root_input_cover_v1(&self,
++        cover:&crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1,leaf:u64)->Result<(),String> {
++        if cover.parameters_v1().source_id!=self.source.source_id_v1(){return Err("builder input cover from another original source".into());}
++        // Opaque native cover enumerates original leaves strictly ascending.
++        let i=cover.roots_v1().binary_search_by_key(&leaf,|r|r.leaf).map_err(|_|"builder input cover lacks requested numerical root")?;
++        self.check_root_input_entry_v1(&cover.roots_v1()[i])
++    }
++    fn check_root_input_entry_v1(&self,root:&crate::palw_tir_public_source_v1::parameter_cover_v1::NamedRootInputCoverV1)->Result<(),String>{
+         use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1 as I;
+-        if cover.parameters_v1().source_id!=self.source.source_id_v1() {
+-            return Err("builder input cover from another original source".into());
+-        }
+-        for root in cover.roots_v1() {for input in &root.inputs {
++        for input in &root.inputs {
+             match *input {
+                 I::PromptPosition(pos)=>match self.prompt {
+                     PromptMaterialV1::Flat(ids) if ids.get(pos as usize).is_some()=>{},
+@@ -138,7 +148,7 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
+                     }
+                 },
+             }
+-        }}
++        }
+         Ok(())
+     }
+     /// Material sufficiency for ONE actual numerical root, not a union-based
+@@ -383,3 +393,15 @@ pub(crate) mod output_terminal;
+ 
+ #[path = "palw_court_shared_selection_terminal_v1.rs"]
+ pub(crate) mod selection_terminal;
++
++#[path = "palw_court_shared_constraint_family_v1.rs"]
++pub(crate) mod constraint_family;
++
++#[path = "palw_court_shared_prefix_family_v1.rs"]
++pub(crate) mod prefix_family;
++
++#[path = "palw_court_shared_numerical_material_join_v1.rs"]
++pub(crate) mod numerical_material_join;
++
++#[path = "palw_court_shared_tokenizer_family_v1.rs"]
++pub(crate) mod tokenizer_family;
+diff --git a/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs b/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs
+index 9abf0f919..36e62d667 100644
+--- a/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs
+@@ -164,6 +164,7 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
+     let all_bodies=all_encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+     let eog_encoded=borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
+     let retained=store.retain_semantic_material_v1(&b.state,claim,&all_bodies,&eog_encoded,&raw).unwrap();
++    include!("palw_court_tokenizer_family_native_test_block.rs");
+     let retained_evidence=store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,proofs,budget).unwrap();
+     assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),
+         evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+diff --git a/consensus/core/src/palw_court_source_material_graph_v3.rs b/consensus/core/src/palw_court_source_material_graph_v3.rs
+index d7034bde9..c5e0d92cb 100644
+--- a/consensus/core/src/palw_court_source_material_graph_v3.rs
++++ b/consensus/core/src/palw_court_source_material_graph_v3.rs
+@@ -115,18 +115,137 @@ fn source_graph_relative_scope_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPub
+         frame.plan_v1().rules_id,profile,queries,roles,PART))
+ }
+ 
++/// Structural material-graph coverage for the EXACT Constraint tail only.
++/// This is not admission of a constraint form at a native activation point.
++fn native_constraint_graph_tail_requests_v3(
++    frame: &PalwTirPublicClaimV1,
++) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
++    use crate::palw_freeprompt_v3::PalwFpJobTailV1;
++    use crate::palw_native_resource_v1::{
++        NativeCoverageV1, NativeDecodeErrorV1 as E, TirNativeRequestsV1, preflight_native_value_v1,
++    };
++    let job = &frame.original_v1().job;
++    let bytes = match &job.tail {
++        None => return Ok(0),
++        Some(PalwFpJobTailV1::Prefix(_)) if job.version==crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION => {
++            // Fixed Copy tail; existing normative shape check is allocation-free.
++            // Prefix StepSpace/template ownership is the separate family owner.
++            crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job).map_err(|e|E::Decode(e.to_string()))?;
++            return Ok(0);
++        }
++        Some(PalwFpJobTailV1::Constraint(tail)) if job.is_constraint() => &tail.constraint,
++        _ => {
++            return Err(E::Resource(NativeCoverageV1::unsupported::<
++                NativeSourceMaterialGraphV3,
++            >(
++                "native source graph frame parser",
++                "this carried job-tail parser inventory is unavailable",
++            )));
++        }
++    };
++    let max = match bytes.get(..2).map(|x| u16::from_le_bytes([x[0], x[1]])) {
++        Some(crate::palw_decode_constraint_v1::PALW_DECODE_CONSTRAINT_VERSION_V1) => {
++            crate::palw_decode_constraint_v1::PALW_CONSTRAINT_MAX_BYTES_V1
++        }
++        Some(crate::palw_fp_constraint_v2::PALW_DECODE_CONSTRAINT_VERSION_V2) => {
++            crate::palw_fp_constraint_v2::PALW_CONSTRAINT_MAX_BYTES_V2
++        }
++        _ => {
++            return Err(E::Decode(
++                "source graph Constraint form is unknown/truncated".into(),
++            ));
++        }
++    };
++    if bytes.len() > max {
++        return Err(E::Decode(
++            "source graph Constraint exceeds its existing form byte limit".into(),
++        ));
++    }
++    let parsed = preflight_native_value_v1::<
++        crate::palw_decode_constraint_v1::PalwDecodeConstraintV1,
++    >(bytes.as_slice(), bytes.len() as u64)
++    .map_err(|e| match e.kind() {
++        std::io::ErrorKind::OutOfMemory
++        | std::io::ErrorKind::TimedOut
++        | std::io::ErrorKind::Unsupported => E::Resource(NativeCoverageV1::unsupported::<
++            NativeSourceMaterialGraphV3,
++        >(
++            "native source graph Constraint scanner",
++            &e.to_string(),
++        )),
++        _ => E::Decode(e.to_string()),
++    })?;
++    let mut q = TirNativeRequestsV1::new();
++    q.add_v1(parsed.logical_requests_v1())
++        .map_err(E::Resource)?;
++    // Parsed frames/nodes/edges coexist with ONE canonical serialization from
++    // validate_form/from_bytes_form. The next writer replaces the previous;
++    // *2 covers Borsh growth from the existing 1024-byte starting buffer.
++    let writer = (bytes.len() as u64)
++        .max(1024)
++        .checked_mul(2)
++        .ok_or_else(|| {
++            E::Resource(NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>(
++                "Constraint canonical writer",
++            ))
++        })?;
++    q.exact_v1::<u8>(writer).map_err(E::Resource)?;
++    Ok(q.bytes_v1())
++}
++fn native_check_constraint_graph_tail_v3(
++    frame: &PalwTirPublicClaimV1,
++) -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
++    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E};
++    let job = &frame.original_v1().job;
++    if let Some(bytes) = crate::palw_fp_constraint_job_v1::palw_fp_constraint_tail_v1(job) {
++        if job.decode.is_some() {
++            return Err(E::Decode("Constraint job has decode configuration".into()));
++        }
++        // Same typed decoder + existing normative validate_form/canonical check
++        // as from_bytes_form. IO resource errors keep their cause, rather than
++        // crossing the legacy enum's string-only Malformed boundary.
++        let parsed: crate::palw_decode_constraint_v1::PalwDecodeConstraintV1 =
++            borsh::from_slice(bytes).map_err(|e| match e.kind() {
++                std::io::ErrorKind::OutOfMemory
++                | std::io::ErrorKind::TimedOut
++                | std::io::ErrorKind::Unsupported => E::Resource(NativeCoverageV1::unsupported::<
++                    NativeSourceMaterialGraphV3,
++                >(
++                    "native Constraint decode",
++                    &e.to_string(),
++                )),
++                _ => E::Decode(e.to_string()),
++            })?;
++        let (version, nodes, max) = match parsed.version {
++            crate::palw_decode_constraint_v1::PALW_DECODE_CONSTRAINT_VERSION_V1 => (
++                crate::palw_decode_constraint_v1::PALW_DECODE_CONSTRAINT_VERSION_V1,
++                crate::palw_decode_constraint_v1::PALW_CONSTRAINT_MAX_NODES_V1,
++                crate::palw_decode_constraint_v1::PALW_CONSTRAINT_MAX_BYTES_V1,
++            ),
++            crate::palw_fp_constraint_v2::PALW_DECODE_CONSTRAINT_VERSION_V2 => (
++                crate::palw_fp_constraint_v2::PALW_DECODE_CONSTRAINT_VERSION_V2,
++                crate::palw_fp_constraint_v2::PALW_CONSTRAINT_MAX_NODES_V2,
++                crate::palw_fp_constraint_v2::PALW_CONSTRAINT_MAX_BYTES_V2,
++            ),
++            _ => return Err(E::Decode("unknown Constraint form".into())),
++        };
++        parsed
++            .validate_form(version, nodes, max)
++            .map_err(|e| E::Decode(e.to_string()))?;
++        if parsed.to_bytes() != *bytes {
++            return Err(E::Decode("noncanonical Constraint form".into()));
++        }
++    }
++    Ok(())
++}
++
+ /// Frame validation has its own temporary plan clone and Borsh/FP hash
+ /// writers. No Source/StepSpace reconstruction is performed by this owner.
+ fn native_source_graph_prelude_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64)
+     ->Result<u64,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+     use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeCoverageV1,NativeHeapV1,TirNativeRequestsV1};
+-    // Native original preparation currently excludes tails. Do not claim that
+-    // this owner inventories every version-specific carried-tail decoder.
+-    if frame.original_v1().job.tail.is_some() {
+-        return Err(E::Resource(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>(
+-            "native source graph frame parser","carried job-tail parser inventory is unavailable")));
+-    }
+     let mut q=TirNativeRequestsV1::new();
++    q.add_v1(native_constraint_graph_tail_requests_v3(frame)?).map_err(E::Resource)?;
+     // Full frame heap is a conservative bound on the actual plan-only clone
+     // in accepted_id_v1, plus frame subobject clones during structural checks.
+     let clone=frame.native_heap_v1("source graph frame validation clone");
+@@ -205,6 +324,7 @@ impl NativeSourceMaterialGraphV3 {
+         use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeRetainedV1};
+         let prelude=native_source_graph_prelude_v3(frame,source,profile)?;
+         let mut lease=reserve(prelude).map_err(E::Resource)?;
++        native_check_constraint_graph_tail_v3(frame)?;
+         frame.check_structure_v1(&frame.key_v1()).map_err(E::Decode)?;
+         let set=TirSharedRequestSetV1::new(frame,source,profile).map_err(E::Decode)?;
+         let roles=frame.custody_v1().pledge_v1().maximum_custodians;
+@@ -437,6 +557,13 @@ impl NativeSourceMaterialGraphV3 {
+     pub fn nodes_v3(&self) -> impl Iterator<Item = &SourceMaterialNodeV3> {
+         self.nodes.values()
+     }
++    /// Read the SAME existing logical Finish identity generated by insert().
++    /// Does not allocate a new index or issue a material-completion receipt.
++    pub fn finish_node_v3(&self,target:SourceMaterialTargetV3,role:u64)->Result<Option<&SourceMaterialNodeV3>,String>{
++        if role>=self.roles||matches!(target,SourceMaterialTargetV3::Unit(n) if n>=self.queries){return Err("source Finish target/role outside native graph".into());}
++        let kind=SourceMaterialNodeKindV3::Finish{target,role};let id=hash(self.scope,&kind)?;
++        match self.nodes.get(&id){Some(node) if node.kind!=kind=>Err("source Finish identity/kind mismatch".into()),node=>Ok(node)}
++    }
+     /// Absolute allocation identity cannot be borrowed by another accepting
+     /// instance even when its source and relative grammar are identical.
+     pub fn absolute_packet_id_v3(&self, logical_id: Hash64) -> [u8; 64] {
+@@ -560,6 +687,8 @@ pub fn declared_part_length_v3(maximum: u64, actual: u64, offset: u64) -> Result
+ 
+ #[cfg(test)]
+ mod tests {
++    include!("palw_court_canonical_finish_lookup_tests.rs");
++    include!("palw_court_constraint_graph_native_tests.rs");
+     use super::*;
+     use crate::palw_court_service_v1::ServiceCost;
+     const B: SourceGraphBudgetV3 =
+diff --git a/consensus/core/src/palw_court_tir_requests_v1.rs b/consensus/core/src/palw_court_tir_requests_v1.rs
+index 72e45e6d4..a308c8ce2 100644
+--- a/consensus/core/src/palw_court_tir_requests_v1.rs
++++ b/consensus/core/src/palw_court_tir_requests_v1.rs
+@@ -262,6 +262,13 @@ impl<'a> TirSharedRequestSetV1<'a> {
+         self.source.check_request_v1(&request)?;
+         Ok(request)
+     }
++    /// Checked inverse for the actual StepLeaf family. No overlapping StepRun
++    /// ordinal reconstruction or heap/index allocation is involved.
++    pub fn step_leaf_ordinal_v1(&self,index:u64)->Result<u64,String>{
++        if index>=self.geometry.n{return Err("shared StepLeaf index outside native source".into());}
++        let ordinal=self.geometry.families[0].checked_add(index).ok_or("shared StepLeaf ordinal overflow")?;
++        if self.request_at(ordinal)?!=(Request::StepLeaf{index}){return Err("shared StepLeaf ordinal roundtrip differs".into());}Ok(ordinal)
++    }
+     /// Shared request identity only, NOT a complete service-packet/duty ID:
+     /// signer role, turn, carrier fragment and original eligibility remain to bind.
+     pub fn request_id(&self, ordinal: u64) -> Result<Hash64, String> {
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index 57fcf8e6e..ac745e3c1 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -1643,7 +1643,9 @@ mod tests {
+ mod conviction_e2e_tests {
+     include!("palw_court_shared_output_native_tests.rs");
+     include!("palw_court_shared_selection_native_tests.rs");
++    include!("palw_court_shared_numerical_material_native_tests.rs");
+     include!("palw_prefix_material_native_tests.rs");
++    include!("palw_court_shared_prefix_family_native_tests.rs");
+     include!("palw_root_input_material_native_tests.rs");
+     include!("palw_court_shared_constraint_native_tests.rs");
+     include!("palw_court_shared_tokenizer_native_tests.rs");
+@@ -3032,6 +3034,8 @@ mod conviction_e2e_tests {
+             crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
+                 max_original_leaves:1_000_000,max_total_edges:10_000_000,
+                 max_total_coordinates:1_000_000,max_root_memberships:1_000_000}).unwrap();
++        let (material_join_graph,material_join_numerical,material_join_profile,material_join_visits)=include!("palw_numerical_join_terminal_setup.rs");
++        let material_join=crate::palw_court_shared_tir_builder_store_v1::numerical_material_join::NumericalMaterialJoinV1::derive_native_v1(frame,&parameter_source,&material_join_graph,&material_join_numerical,&parameter_cover,material_join_profile,&native.court,crate::palw_tir_fence2_v1::PalwTirDemandRulesV1::H7,material_join_visits).unwrap();
+         // A genuine different original's opaque cover; no cover DTO/roots are
+         // forged or edited. Even an empty numerical set cannot be substituted.
+         let foreign_parameter_fixture=crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1();
+@@ -3152,6 +3156,7 @@ mod conviction_e2e_tests {
+                         &round_state,&params,&intent_rules,&intent,limit,&parameter_cover).unwrap();
+                     assert_eq!(borsh::to_vec(&covered).unwrap(),borsh::to_vec(&built).unwrap());
+                     assert_eq!(covered_meter,meter);
++                    include!("palw_numerical_join_terminal_selected.rs");
+                     // Same valid signed intent and retained terminal phase as
+                     // positive path: rejection must occur at source affinity,
+                     // not an invalid signature/root/phase shortcut.
+diff --git a/consensus/core/src/palw_tokenizer_json_stream_v1.rs b/consensus/core/src/palw_tokenizer_json_stream_v1.rs
+index ea41e9ee9..f5b4b6e74 100644
+--- a/consensus/core/src/palw_tokenizer_json_stream_v1.rs
++++ b/consensus/core/src/palw_tokenizer_json_stream_v1.rs
+@@ -477,6 +477,12 @@ impl PalwTokenizerJsonStreamV1 {
+     pub fn pending_key(&self) -> Option<(u64, Hash64)> {
+         self.pending
+     }
++    /// Identity already authenticated by native seal/finish; no caller flag.
++    pub(crate) fn sealed_artifact_binding_v1(&self)->Result<(Hash64,u64),String>{
++        self.check()?;
++        if !self.sealed||self.offset!=self.length||self.pending.is_some()||self.hash.finish()!=self.tokenizer{return Err("parser artifact binding before authenticated exact EOF".into());}
++        Ok((self.tokenizer,self.length))
++    }
+     pub fn key_set_root(&self) -> Hash64 {
+         self.keys.root()
+     }
+diff --git a/consensus/core/src/palw_tokenizer_key_producer_v1.rs b/consensus/core/src/palw_tokenizer_key_producer_v1.rs
+index 66b531def..9f205adb3 100644
+--- a/consensus/core/src/palw_tokenizer_key_producer_v1.rs
++++ b/consensus/core/src/palw_tokenizer_key_producer_v1.rs
+@@ -18,6 +18,8 @@ pub(crate) struct Budget {
+ }
+ #[derive(Debug)]
+ pub(crate) struct Generated {
++    artifact_binding:(Hash64,u64),
++    signed_key_bound:u64,
+     proofs: Vec<PalwJsonKeyCompactProofV1>,
+     root: Hash64,
+     pub(crate) hash_calls: u64,
+@@ -26,6 +28,8 @@ pub(crate) struct Generated {
+     pub(crate) raw_packet_calls: u64,
+ }
+ impl Generated {
++    pub(crate) fn artifact_binding_v1(&self)->(Hash64,u64){self.artifact_binding}
++    pub(crate) fn key_work_bound_v1(&self)->u64{self.signed_key_bound}
+     pub(crate) fn proofs(&self) -> &[PalwJsonKeyCompactProofV1] {
+         &self.proofs
+     }
+@@ -204,6 +208,8 @@ where
+     // Flat EOF authentication is mandatory even after duplicate/overrun/invalid JSON.
+     let _authenticated_json_verdict = c.parser.finish().map_err(decode)?;
+     let result = Generated {
++        artifact_binding:c.parser.sealed_artifact_binding_v1().map_err(decode)?,
++        signed_key_bound:c.signed_key_bound,
+         native_proof_calls: proofs.len() as u64,
+         proofs,
+         root: tree.root(),

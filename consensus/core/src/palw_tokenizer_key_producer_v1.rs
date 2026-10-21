@@ -18,6 +18,8 @@ pub(crate) struct Budget {
 }
 #[derive(Debug)]
 pub(crate) struct Generated {
+    artifact_binding:(Hash64,u64),
+    signed_key_bound:u64,
     proofs: Vec<PalwJsonKeyCompactProofV1>,
     root: Hash64,
     pub(crate) hash_calls: u64,
@@ -26,6 +28,8 @@ pub(crate) struct Generated {
     pub(crate) raw_packet_calls: u64,
 }
 impl Generated {
+    pub(crate) fn artifact_binding_v1(&self)->(Hash64,u64){self.artifact_binding}
+    pub(crate) fn key_work_bound_v1(&self)->u64{self.signed_key_bound}
     pub(crate) fn proofs(&self) -> &[PalwJsonKeyCompactProofV1] {
         &self.proofs
     }
@@ -204,6 +208,8 @@ where
     // Flat EOF authentication is mandatory even after duplicate/overrun/invalid JSON.
     let _authenticated_json_verdict = c.parser.finish().map_err(decode)?;
     let result = Generated {
+        artifact_binding:c.parser.sealed_artifact_binding_v1().map_err(decode)?,
+        signed_key_bound:c.signed_key_bound,
         native_proof_calls: proofs.len() as u64,
         proofs,
         root: tree.root(),

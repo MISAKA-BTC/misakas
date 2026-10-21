@@ -1,0 +1,7 @@
+{
+  "runner_exit_code": 1,
+  "all_frozen_source_hashes_match": true,
+  "native_build_reached": false,
+  "reason": "two Constraint selected-material tests fail; runner stops after core suite",
+  "live_owned_processes": false
+}

@@ -115,18 +115,137 @@ fn source_graph_relative_scope_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPub
         frame.plan_v1().rules_id,profile,queries,roles,PART))
 }
 
+/// Structural material-graph coverage for the EXACT Constraint tail only.
+/// This is not admission of a constraint form at a native activation point.
+fn native_constraint_graph_tail_requests_v3(
+    frame: &PalwTirPublicClaimV1,
+) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::palw_freeprompt_v3::PalwFpJobTailV1;
+    use crate::palw_native_resource_v1::{
+        NativeCoverageV1, NativeDecodeErrorV1 as E, TirNativeRequestsV1, preflight_native_value_v1,
+    };
+    let job = &frame.original_v1().job;
+    let bytes = match &job.tail {
+        None => return Ok(0),
+        Some(PalwFpJobTailV1::Prefix(_)) if job.version==crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION => {
+            // Fixed Copy tail; existing normative shape check is allocation-free.
+            // Prefix StepSpace/template ownership is the separate family owner.
+            crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job).map_err(|e|E::Decode(e.to_string()))?;
+            return Ok(0);
+        }
+        Some(PalwFpJobTailV1::Constraint(tail)) if job.is_constraint() => &tail.constraint,
+        _ => {
+            return Err(E::Resource(NativeCoverageV1::unsupported::<
+                NativeSourceMaterialGraphV3,
+            >(
+                "native source graph frame parser",
+                "this carried job-tail parser inventory is unavailable",
+            )));
+        }
+    };
+    let max = match bytes.get(..2).map(|x| u16::from_le_bytes([x[0], x[1]])) {
+        Some(crate::palw_decode_constraint_v1::PALW_DECODE_CONSTRAINT_VERSION_V1) => {
+            crate::palw_decode_constraint_v1::PALW_CONSTRAINT_MAX_BYTES_V1
+        }
+        Some(crate::palw_fp_constraint_v2::PALW_DECODE_CONSTRAINT_VERSION_V2) => {
+            crate::palw_fp_constraint_v2::PALW_CONSTRAINT_MAX_BYTES_V2
+        }
+        _ => {
+            return Err(E::Decode(
+                "source graph Constraint form is unknown/truncated".into(),
+            ));
+        }
+    };
+    if bytes.len() > max {
+        return Err(E::Decode(
+            "source graph Constraint exceeds its existing form byte limit".into(),
+        ));
+    }
+    let parsed = preflight_native_value_v1::<
+        crate::palw_decode_constraint_v1::PalwDecodeConstraintV1,
+    >(bytes.as_slice(), bytes.len() as u64)
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::OutOfMemory
+        | std::io::ErrorKind::TimedOut
+        | std::io::ErrorKind::Unsupported => E::Resource(NativeCoverageV1::unsupported::<
+            NativeSourceMaterialGraphV3,
+        >(
+            "native source graph Constraint scanner",
+            &e.to_string(),
+        )),
+        _ => E::Decode(e.to_string()),
+    })?;
+    let mut q = TirNativeRequestsV1::new();
+    q.add_v1(parsed.logical_requests_v1())
+        .map_err(E::Resource)?;
+    // Parsed frames/nodes/edges coexist with ONE canonical serialization from
+    // validate_form/from_bytes_form. The next writer replaces the previous;
+    // *2 covers Borsh growth from the existing 1024-byte starting buffer.
+    let writer = (bytes.len() as u64)
+        .max(1024)
+        .checked_mul(2)
+        .ok_or_else(|| {
+            E::Resource(NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>(
+                "Constraint canonical writer",
+            ))
+        })?;
+    q.exact_v1::<u8>(writer).map_err(E::Resource)?;
+    Ok(q.bytes_v1())
+}
+fn native_check_constraint_graph_tail_v3(
+    frame: &PalwTirPublicClaimV1,
+) -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E};
+    let job = &frame.original_v1().job;
+    if let Some(bytes) = crate::palw_fp_constraint_job_v1::palw_fp_constraint_tail_v1(job) {
+        if job.decode.is_some() {
+            return Err(E::Decode("Constraint job has decode configuration".into()));
+        }
+        // Same typed decoder + existing normative validate_form/canonical check
+        // as from_bytes_form. IO resource errors keep their cause, rather than
+        // crossing the legacy enum's string-only Malformed boundary.
+        let parsed: crate::palw_decode_constraint_v1::PalwDecodeConstraintV1 =
+            borsh::from_slice(bytes).map_err(|e| match e.kind() {
+                std::io::ErrorKind::OutOfMemory
+                | std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::Unsupported => E::Resource(NativeCoverageV1::unsupported::<
+                    NativeSourceMaterialGraphV3,
+                >(
+                    "native Constraint decode",
+                    &e.to_string(),
+                )),
+                _ => E::Decode(e.to_string()),
+            })?;
+        let (version, nodes, max) = match parsed.version {
+            crate::palw_decode_constraint_v1::PALW_DECODE_CONSTRAINT_VERSION_V1 => (
+                crate::palw_decode_constraint_v1::PALW_DECODE_CONSTRAINT_VERSION_V1,
+                crate::palw_decode_constraint_v1::PALW_CONSTRAINT_MAX_NODES_V1,
+                crate::palw_decode_constraint_v1::PALW_CONSTRAINT_MAX_BYTES_V1,
+            ),
+            crate::palw_fp_constraint_v2::PALW_DECODE_CONSTRAINT_VERSION_V2 => (
+                crate::palw_fp_constraint_v2::PALW_DECODE_CONSTRAINT_VERSION_V2,
+                crate::palw_fp_constraint_v2::PALW_CONSTRAINT_MAX_NODES_V2,
+                crate::palw_fp_constraint_v2::PALW_CONSTRAINT_MAX_BYTES_V2,
+            ),
+            _ => return Err(E::Decode("unknown Constraint form".into())),
+        };
+        parsed
+            .validate_form(version, nodes, max)
+            .map_err(|e| E::Decode(e.to_string()))?;
+        if parsed.to_bytes() != *bytes {
+            return Err(E::Decode("noncanonical Constraint form".into()));
+        }
+    }
+    Ok(())
+}
+
 /// Frame validation has its own temporary plan clone and Borsh/FP hash
 /// writers. No Source/StepSpace reconstruction is performed by this owner.
 fn native_source_graph_prelude_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64)
     ->Result<u64,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeCoverageV1,NativeHeapV1,TirNativeRequestsV1};
-    // Native original preparation currently excludes tails. Do not claim that
-    // this owner inventories every version-specific carried-tail decoder.
-    if frame.original_v1().job.tail.is_some() {
-        return Err(E::Resource(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>(
-            "native source graph frame parser","carried job-tail parser inventory is unavailable")));
-    }
     let mut q=TirNativeRequestsV1::new();
+    q.add_v1(native_constraint_graph_tail_requests_v3(frame)?).map_err(E::Resource)?;
     // Full frame heap is a conservative bound on the actual plan-only clone
     // in accepted_id_v1, plus frame subobject clones during structural checks.
     let clone=frame.native_heap_v1("source graph frame validation clone");
@@ -205,6 +324,7 @@ impl NativeSourceMaterialGraphV3 {
         use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeRetainedV1};
         let prelude=native_source_graph_prelude_v3(frame,source,profile)?;
         let mut lease=reserve(prelude).map_err(E::Resource)?;
+        native_check_constraint_graph_tail_v3(frame)?;
         frame.check_structure_v1(&frame.key_v1()).map_err(E::Decode)?;
         let set=TirSharedRequestSetV1::new(frame,source,profile).map_err(E::Decode)?;
         let roles=frame.custody_v1().pledge_v1().maximum_custodians;
@@ -437,6 +557,13 @@ impl NativeSourceMaterialGraphV3 {
     pub fn nodes_v3(&self) -> impl Iterator<Item = &SourceMaterialNodeV3> {
         self.nodes.values()
     }
+    /// Read the SAME existing logical Finish identity generated by insert().
+    /// Does not allocate a new index or issue a material-completion receipt.
+    pub fn finish_node_v3(&self,target:SourceMaterialTargetV3,role:u64)->Result<Option<&SourceMaterialNodeV3>,String>{
+        if role>=self.roles||matches!(target,SourceMaterialTargetV3::Unit(n) if n>=self.queries){return Err("source Finish target/role outside native graph".into());}
+        let kind=SourceMaterialNodeKindV3::Finish{target,role};let id=hash(self.scope,&kind)?;
+        match self.nodes.get(&id){Some(node) if node.kind!=kind=>Err("source Finish identity/kind mismatch".into()),node=>Ok(node)}
+    }
     /// Absolute allocation identity cannot be borrowed by another accepting
     /// instance even when its source and relative grammar are identical.
     pub fn absolute_packet_id_v3(&self, logical_id: Hash64) -> [u8; 64] {
@@ -560,6 +687,8 @@ pub fn declared_part_length_v3(maximum: u64, actual: u64, offset: u64) -> Result
 
 #[cfg(test)]
 mod tests {
+    include!("palw_court_canonical_finish_lookup_tests.rs");
+    include!("palw_court_constraint_graph_native_tests.rs");
     use super::*;
     use crate::palw_court_service_v1::ServiceCost;
     const B: SourceGraphBudgetV3 =

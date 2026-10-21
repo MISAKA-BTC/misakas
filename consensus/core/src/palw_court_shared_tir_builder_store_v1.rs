@@ -110,11 +110,21 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
     /// No fallback, acquisition, paid supply or future retention is asserted.
     pub(crate) fn check_root_input_cover_v1(&self,
         cover:&crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1)->Result<(),String> {
+        if cover.parameters_v1().source_id!=self.source.source_id_v1(){return Err("builder input cover from another original source".into());}
+        for root in cover.roots_v1(){self.check_root_input_entry_v1(root)?;}Ok(())
+    }
+    /// Runtime requirements for one actual selected root. Other roots remain
+    /// allocation dependencies; they are not demanded as runtime material.
+    pub(crate) fn check_named_root_input_cover_v1(&self,
+        cover:&crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1,leaf:u64)->Result<(),String> {
+        if cover.parameters_v1().source_id!=self.source.source_id_v1(){return Err("builder input cover from another original source".into());}
+        // Opaque native cover enumerates original leaves strictly ascending.
+        let i=cover.roots_v1().binary_search_by_key(&leaf,|r|r.leaf).map_err(|_|"builder input cover lacks requested numerical root")?;
+        self.check_root_input_entry_v1(&cover.roots_v1()[i])
+    }
+    fn check_root_input_entry_v1(&self,root:&crate::palw_tir_public_source_v1::parameter_cover_v1::NamedRootInputCoverV1)->Result<(),String>{
         use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1 as I;
-        if cover.parameters_v1().source_id!=self.source.source_id_v1() {
-            return Err("builder input cover from another original source".into());
-        }
-        for root in cover.roots_v1() {for input in &root.inputs {
+        for input in &root.inputs {
             match *input {
                 I::PromptPosition(pos)=>match self.prompt {
                     PromptMaterialV1::Flat(ids) if ids.get(pos as usize).is_some()=>{},
@@ -138,7 +148,7 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
                     }
                 },
             }
-        }}
+        }
         Ok(())
     }
     /// Material sufficiency for ONE actual numerical root, not a union-based
@@ -383,3 +393,15 @@ pub(crate) mod output_terminal;
 
 #[path = "palw_court_shared_selection_terminal_v1.rs"]
 pub(crate) mod selection_terminal;
+
+#[path = "palw_court_shared_constraint_family_v1.rs"]
+pub(crate) mod constraint_family;
+
+#[path = "palw_court_shared_prefix_family_v1.rs"]
+pub(crate) mod prefix_family;
+
+#[path = "palw_court_shared_numerical_material_join_v1.rs"]
+pub(crate) mod numerical_material_join;
+
+#[path = "palw_court_shared_tokenizer_family_v1.rs"]
+pub(crate) mod tokenizer_family;
