@@ -1,0 +1,9 @@
+
+running 4 tests
+test palw_tir_step_v1::native_step_space_inventory_tests_v1::structural_overflow_and_hostile_canonical_shape_are_refused_before_space_construction ... ok
+test palw_tir_step_v1::native_step_space_inventory_tests_v1::scanned_step_space_counts_distinguish_state_kinds_and_layer_flags ... ok
+test palw_tir_step_v1::native_step_space_inventory_tests_v1::actual_scanned_nonempty_step_space_vectors_fit_additional_quote ... ok
+test palw_tir_step_v1::native_step_space_inventory_tests_v1::actual_fixed_history_step_space_capacities_fit_scanned_quote ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4776 filtered out; finished in 0.09s
+

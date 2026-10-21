@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::prefix_family_actual_canonical_boundaries_all_suppliers_and_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4779 filtered out; finished in 4.18s
+
