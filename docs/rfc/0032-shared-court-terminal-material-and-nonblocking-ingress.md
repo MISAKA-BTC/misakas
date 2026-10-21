@@ -42,3 +42,11 @@ Aの原始materialも、最初の不完全な送信が唯一slotを占有する�
 4. 実nodeで全owner共謀・不完了/再充填・外部一人・restart/reorg/pruned IBDを含むT05を実施する。全T01–T15/R-D2、実費用、実model doorを別途満たすまで武装を拒否する。
 
 未決の単価・受付率・配送時間・保持期間・actor契約は仮値で埋めない。本書だけで上限引上げ、model排除、モデル審査、暗号学的計算証明、本番規則の採択を行わない。
+
+## 6. 隔離borrowed material viewの実装範囲
+
+`SharedTirBuilderStoreV1`は保持済みoriginal/sourceへ束縛した認証済みunitと、登録programで再検査したparameter openingだけを読む。必要materialがなければNone/構築拒否とし、fixture execution・disk・networkへfallbackしない。元sourceに束縛した両端のStepLeaf openingから連続runのcanonical siblingsを導くnative変換を追加し、全leaf hash treeの隠れた読み出しを避ける。新しい計算証明ではなく、既存Merkle commitment上のデータ変換である。
+
+[実装・検証記録](../evidence/palw/g14-integration-candidate-2026-10-20/material-builder.md)では既存GQA fixtureの正直/偽数値履歴・24終端で従来builderとのbyte一致と欠落拒否を検査する。parameter集合の試験供給には直接builderのread-setを用いるため、全originalの先読み・依存閉包を実装済みとはしない。
+
+現在はborrowed read-only viewであり、prompt・row-pin、永続化・再起動、materialの供給/保持/原資・全分岐予約、実際の処理機会と公平なmulti-block提出は未完。clone・multiproof/range組立・builder outputを含む完全な資源/費用profileも別途必要である。本節はAの限定的な隔離実装記録であり、F03/T05や本番規則の採択・有効化を示さない。

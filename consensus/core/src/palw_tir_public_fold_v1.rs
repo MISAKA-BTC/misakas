@@ -2831,6 +2831,15 @@ mod conviction_e2e_tests {
 
         use crate::palw_court_shared_tir_round_v1 as rounds;
         use crate::palw_court_shared_tir_bottom_v1 as bottoms;
+        // Authenticated source material only; the builder view never sees fx.execution.
+        let material_units: Vec<_> = (0..binding.step_leaf_count).map(|index| {
+            use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+            let q=crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf {index};
+            let r=crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+                preimage:fx.execution.step_leaf(index).unwrap(),opening:fx.execution.step_opening(index).unwrap(),
+            };
+            source.authenticate_v1(&q,&r,None).unwrap()
+        }).collect();
         for false_partition in [false,true] {
         let mut round_state=fresh.clone();
         let filer_keys=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([101;32]);
@@ -2852,6 +2861,28 @@ mod conviction_e2e_tests {
                 let rebuilt=crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&observed,&court).unwrap();
                 assert_eq!(borsh::to_vec(&rebuilt).unwrap(),borsh::to_vec(&evidence).unwrap());
                 let calls=observed.calls.into_inner();
+                {
+                    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+                    use crate::palw_court_shared_tir_builder_store_v1::SharedTirBuilderStoreV1 as MaterialStore;
+                    // Oracle-derived read subset is fixture provisioning, not a proof of
+                    // original-wide prefetch/reservation. All inputs are authenticated anew.
+                    let params:Vec<_>=evidence.params.single().unwrap().opened.iter()
+                        .map(|(i,_)|fx.execution.param_opening(*i).unwrap()).collect();
+                    let scope=set.scope_id().unwrap();
+                    let store=MaterialStore::new(&round_state,claim,scope,&material_units,&params,None).unwrap();
+                    let replay=crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&store,&court).unwrap();
+                    assert_eq!(borsh::to_vec(&replay).unwrap(),borsh::to_vec(&evidence).unwrap());
+                    let no_params=MaterialStore::new(&round_state,claim,scope,&material_units,&[],None).unwrap();
+                    assert!(crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&no_params,&court).is_err());
+                    let no_steps=MaterialStore::new(&round_state,claim,scope,&[],&params,None).unwrap();
+                    assert!(crate::palw_tir_court_v1::build_tir_dissect_bottom_v1(binding,&prepared.phase,&no_steps,&court).is_err());
+                    assert!(MaterialStore::new(&round_state,claim,Hash64::default(),&material_units,&params,None).is_err());
+                    let duplicate=vec![params[0].clone(),params[0].clone()];
+                    assert!(MaterialStore::new(&round_state,claim,scope,&material_units,&duplicate,None).is_err());
+                    let mut bad=params.clone();bad[0].operand.bytes[0]^=1;
+                    assert!(MaterialStore::new(&round_state,claim,scope,&material_units,&bad,None).is_err());
+                    assert!(store.prompt_token_ids().is_none());assert!(store.decode_pin().is_none());
+                }
                 let before_root=round_state.state_root();
                 for family in ["param_opening","param_multiproof","param_carriage","prompt_token_ids","prompt_ids_opening","decode_pin"] {
                     if calls.iter().any(|c|c.starts_with(&format!("{family}("))) {

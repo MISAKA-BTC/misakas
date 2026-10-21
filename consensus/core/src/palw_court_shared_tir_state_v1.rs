@@ -82,7 +82,7 @@ impl SharedTirContextV1 {
         ->Result<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_artifact::PalwArtifactOpeningV1>,String> {
         self.with_parameter_verifier(state,scope,|v|v.decode(leaf,bytes))
     }
-    fn with_parameter_verifier<T>(&self,state:&PalwChainStateV2,scope:Hash64,
+    pub(crate) fn with_parameter_verifier<T>(&self,state:&PalwChainStateV2,scope:Hash64,
         check:impl FnOnce(&crate::palw_tir_court_v1::TirInventoryOpeningVerifierV1<'_>)->Result<T,String>)->Result<T,String> {
         if scope!=self.scope_id {return Err("shared parameter scope substitution".into());}
         // Require this exact retained row, not a caller-constructed context with valid fields.
