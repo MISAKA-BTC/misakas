@@ -206,7 +206,10 @@ impl NativeWireScanV1 for String {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         let bytes = reader.word()? as u64;
         reader.skip(bytes)?;
-        NativeWireShapeV1::default().allocation(bytes as u64, 1)
+        // String restores from Borsh's byte Vec. Match the existing typed
+        // String/Vec geometric-capacity envelope; do not underquote names in
+        // nested artifact openings. This changes requests, never bytes or caps.
+        NativeWireShapeV1::default().allocation(bytes.checked_mul(2).ok_or_else(overflow)?, 1)
     }
 }
 macro_rules! wire_tuple { ($($ty:ident),+) => {

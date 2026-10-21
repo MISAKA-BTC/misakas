@@ -2570,6 +2570,81 @@ mod conviction_e2e_tests {
         assert!(check_shared_tir_root_v1(&exited, &params, &rules, &control).is_err());
         assert_eq!(state.state_root(), before);
         assert_eq!(state.court_sessions_len(), 0);
+
+        use super::super::palw_court_shared_tir_fold_v1 as fold;
+        use crate::palw_native_resource_v1::{NativeHeapV1, preflight_native_value_v1, preflight_native_carriage_v1};
+        let mut native = rules; native.at = at(frame, 5);
+        let mut root_extras = extras.clone(); root_extras.native_court_rules_v1 = Some(native);
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &root_extras);
+        assert!(fold::root(&mut b, &native.at, &control).unwrap());
+        let key = Key::CourtSharedRoot(claim, leaf);
+        let Some(Row::CourtSharedRoot(retained)) = b.state.staged_court_row_v1(&key).cloned() else { panic!() };
+        assert_eq!(retained.rules, native);
+        let frontier = retained.numerical_frontier(&b.state).unwrap();
+        assert_eq!(frontier.terminal_tiles(), 12);
+        assert_eq!(frontier.maximum_disclosures(), 11);
+        let canonical = b.state.state_root(); let entries = b.entries.len();
+        let mut retry = control.clone();
+        retry.signature = libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,
+            retry.signing_message(native.network_domain).unwrap().as_byte_slice(), SHARED_TIR_ROOT_CONTEXT_V1, [94;32])
+            .unwrap().as_ref().to_vec();
+        assert_ne!(retry.signature, control.signature);
+        assert!(!fold::root(&mut b, &native.at, &retry).unwrap());
+        assert_eq!(b.state.state_root(), canonical); assert_eq!(b.entries.len(), entries);
+        assert_eq!(b.state.staged_court_row_v1(&key), Some(&Row::CourtSharedRoot(retained.clone())));
+        assert!(b.write_staged_row_v1(key, None).is_err());
+        assert!(b.write_staged_row_v1(Key::CourtSharedRoot(claim, leaf + 1), Some(Row::CourtSharedRoot(retained.clone()))).is_err());
+        let mut changed = retained.clone(); changed.material_until_daa += 1;
+        assert!(b.write_staged_row_v1(key, Some(Row::CourtSharedRoot(changed))).is_err());
+        assert_eq!(b.state.state_root(), canonical); assert_eq!(b.entries.len(), entries);
+        // A genuinely valid signature under a different actual policy still
+        // cannot evade the single (claim,leaf) slot by choosing another policy ID.
+        let mut alternative = native; alternative.held_regime = !native.held_regime;
+        let mut alt = control.clone(); alt.policy_id = shared_tir_root_policy_id_v1(&alternative).unwrap(); sign(&mut alt);
+        check_shared_tir_root_v1(&b.state, &params, &alternative, &alt).unwrap();
+        let mut alt_extras = root_extras.clone(); alt_extras.native_court_rules_v1 = Some(alternative);
+        let mut other = TransitionBuilder::new(&b.state, &params, false, false, false, false, &alt_extras);
+        assert!(fold::root(&mut other, &alternative.at, &alt).is_err());
+        assert_eq!(other.state.state_root(), canonical); assert!(other.entries.is_empty());
+        let row = Row::CourtSharedRoot(retained.clone());
+        let wire = borsh::to_vec(&row).unwrap();
+        assert_eq!(borsh::to_vec(&key).unwrap()[0], 22); assert_eq!(wire[0], 28);
+        let shape = preflight_native_value_v1::<Row>(wire.as_slice(), wire.len() as u64).unwrap();
+        assert!(shape.logical_requests_v1() >= row.native_heap_v1("root row").bytes().unwrap() + std::mem::size_of::<Row>() as u64);
+        assert_eq!(borsh::from_slice::<Row>(&wire).unwrap(), row);
+        for cut in [0, 1, wire.len()/2, wire.len()-1] {
+            assert!(preflight_native_value_v1::<Row>(&wire[..cut], cut as u64).is_err());
+        }
+        let mut trailing = wire.clone(); trailing.push(0);
+        assert!(preflight_native_value_v1::<Row>(trailing.as_slice(), trailing.len() as u64).is_err());
+        let signature_at = 1 + 2 + borsh::to_vec(&control).unwrap().len() - SIG - 4;
+        let mut oversized = wire.clone(); oversized[signature_at..signature_at+4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(preflight_native_value_v1::<Row>(oversized.as_slice(), oversized.len() as u64).is_err());
+        assert!(borsh::from_slice::<Row>(&oversized).is_err());
+        let mut undone = b.state.clone();
+        for entry in b.entries.iter().rev() { apply_delta_entry(&mut undone, entry, true).unwrap(); }
+        assert_eq!(undone.state_root(), state.state_root());
+        for entry in &b.entries { apply_delta_entry(&mut undone, entry, false).unwrap(); }
+        assert_eq!(undone.state_root(), canonical);
+        let mut accepted = b.state.clone(); accepted.set_last_point_for_tests(Some(native.at));
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&accepted)).unwrap();
+        preflight_native_carriage_v1(bytes.as_slice(), bytes.len() as u64).unwrap();
+        let fresh = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params, Some(accepted.state_root())).unwrap();
+        assert_eq!(fresh.state_root(), accepted.state_root());
+        let Some(Row::CourtSharedRoot(loaded)) = fresh.staged_court_row_v1(&key) else { panic!() };
+        assert_eq!(loaded.numerical_frontier(&fresh).unwrap(), frontier);
+        let mut rotated = fresh.clone(); rotated.bonds.get_mut(&producer).unwrap().pubkey = vec![0; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN];
+        rotated.bonds.get_mut(&producer).unwrap().collateral = 0;
+        loaded.check_loaded_context(&rotated).unwrap();
+        assert!(check_shared_tir_root_v1(&rotated, &params, &native, &control).is_err());
+        let mut future = (*loaded).clone(); future.rules.at = at(frame, 6);
+        assert!(future.check_loaded_context(&fresh).is_err());
+        let mut swept = TransitionBuilder::new(&fresh, &params, false, false, false, false, &root_extras);
+        let past = at(frame, frame.plan_v1().terms.material_until_daa - frame.plan_v1().terms.accepted_daa + 1);
+        super::super::palw_staged_court_fold_v1::sweep(&mut swept, &past).unwrap();
+        assert!(swept.state.staged_court_row_v1(&key).is_some());
+        assert!(swept.write_staged_row_v1(key, None).is_err());
+        assert_eq!(fresh.court_sessions_len(), 0);
     }
 
     #[test]

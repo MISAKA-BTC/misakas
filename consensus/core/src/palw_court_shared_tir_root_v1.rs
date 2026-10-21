@@ -1,11 +1,13 @@
 //! Private RFC-0029 candidate: literal producer signature and named numerical
-//! root tied to the retained public original/source/profile. Read-only, no wire
-//! dispatcher/decoder, rooted uniqueness, paid admission, notice or default right.
+//! root tied to the retained public original/source/profile, plus private native
+//! canonical retention. No public lifecycle decoder/dispatcher, paid admission,
+//! notice or default right.
 use crate::{Hash64, palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2, PalwBondStatusV2}};
 use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
 use crate::palw_tir_dissect_v1::{PalwTirRootClaimV1, PalwTirDissectSiteV1};
 use crate::palw_court_shared_tir_stream_v1::stream_digest;
-use borsh::BorshSerialize;
+use borsh::{BorshSerialize, BorshDeserialize};
+use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as Key;
 
 pub const SHARED_TIR_ROOT_CONTEXT_V1: &[u8] = b"misaka-palw/court-shared-tir-root/v1/mldsa87";
 
@@ -63,6 +65,17 @@ impl<'a> CheckedSharedTirRootV1<'a> {
 /// follows; canonical root uniqueness and full funded ingress remain separate.
 pub fn check_shared_tir_root_v1<'a>(state: &PalwChainStateV2, params: &PalwStateParamsV2,
     rules: &NativeCourtRulesV1, control: &'a SignedSharedTirRootV1) -> Result<CheckedSharedTirRootV1<'a>, String> {
+    let bond = state.bond(&control.signer).ok_or("shared TIR root producer bond missing")?;
+    if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < params.min_collateral_sompi() {
+        return Err("shared TIR root producer not active/above existing floor".into());
+    }
+    check_shared_tir_root_statement_v1(state, rules, control, &bond.pubkey)
+}
+
+/// Historical verification uses the key authenticated at acceptance. Later exit
+/// or key change must not invalidate retained public numerical material.
+fn check_shared_tir_root_statement_v1<'a>(state: &PalwChainStateV2, rules: &NativeCourtRulesV1,
+    control: &'a SignedSharedTirRootV1, pubkey: &[u8]) -> Result<CheckedSharedTirRootV1<'a>, String> {
     if control.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
         return Err("shared TIR root signature shape".into());
     }
@@ -82,11 +95,7 @@ pub fn check_shared_tir_root_v1<'a>(state: &PalwChainStateV2, params: &PalwState
             != *source.header_v1() {
         return Err("shared TIR root substitutes literal producer or original header".into());
     }
-    let bond = state.bond(&control.signer).ok_or("shared TIR root producer bond missing")?;
-    if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < params.min_collateral_sompi() {
-        return Err("shared TIR root producer not active/above existing floor".into());
-    }
-    if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(&bond.pubkey,
+    if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(pubkey,
         control.signing_message(rules.network_domain)?.as_byte_slice(), &control.signature, SHARED_TIR_ROOT_CONTEXT_V1) {
         return Err("shared TIR root producer signature invalid".into());
     }
@@ -96,4 +105,89 @@ pub fn check_shared_tir_root_v1<'a>(state: &PalwChainStateV2, params: &PalwState
         &control.root, control.arity, rules.court.dissection_arity(), &rules.court, rules.step_ladder, prompt)
         .map_err(|e| e.to_string())?;
     Ok(CheckedSharedTirRootV1 { control, site })
+}
+
+/// Private native snapshot material, not a public lifecycle DTO. Native carriage
+/// preflight scans the complete nested shape before this row is deserialized.
+/// Retains the first signed root and accepting rules; duplicate legal finalize
+/// spellings with the same numerical root do not allocate another root.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct SharedTirRootRowV1 {
+    pub version: u16,
+    pub control: SignedSharedTirRootV1,
+    pub rules: NativeCourtRulesV1,
+    pub signer_pubkey: Vec<u8>,
+    pub material_until_daa: u64,
+}
+impl BorshDeserialize for SharedTirRootRowV1 {
+    fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
+        let version = u16::deserialize_reader(r)?;
+        if version != 1 { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "shared root row version")); }
+        // This is a native snapshot row only. Its enclosing native reader has
+        // already scanned root vectors/boxes and reserved their actual shape.
+        let control = SignedSharedTirRootV1 {
+            version: u16::deserialize_reader(r)?, claim: Hash64::deserialize_reader(r)?,
+            scope_id: Hash64::deserialize_reader(r)?, policy_id: Hash64::deserialize_reader(r)?,
+            leaf: u64::deserialize_reader(r)?, arity: u8::deserialize_reader(r)?,
+            signer: PalwBondKeyV2::deserialize_reader(r)?, root: Box::deserialize_reader(r)?,
+            signature: crate::palw_public_binding_v1::read_signature_v1(r)?,
+        };
+        let rules = NativeCourtRulesV1::deserialize_reader(r)?;
+        let signer_pubkey = crate::palw_public_binding_v1::read_bounded_bytes_v1(r, crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN)?;
+        if signer_pubkey.len() != crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "shared root row public key length"));
+        }
+        let material_until_daa = u64::deserialize_reader(r)?;
+        Ok(Self { version, control, rules, signer_pubkey, material_until_daa })
+    }
+}
+impl SharedTirRootRowV1 {
+    pub fn check(&self, key: &Key) -> Result<(), String> {
+        if self.version != 1 || self.control.version != 1 || *key != Key::CourtSharedRoot(self.control.claim, self.control.leaf)
+            || self.control.policy_id != shared_tir_root_policy_id_v1(&self.rules)?
+            || self.control.arity != self.rules.court.dissection_arity()
+            || self.signer_pubkey.len() != crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN
+            || self.control.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
+            return Err("invalid canonical shared root key/version/policy/signature shape".into());
+        }
+        Ok(())
+    }
+    fn checked_statement(&self, state: &PalwChainStateV2) -> Result<CheckedSharedTirRootV1<'_>, String> {
+        self.check(&Key::CourtSharedRoot(self.control.claim, self.control.leaf))?;
+        let c = crate::palw_court_shared_tir_state_v1::context(state, self.control.claim)?;
+        if self.material_until_daa != c.material_until_daa { return Err("shared root changes original material horizon".into()); }
+        check_shared_tir_root_statement_v1(state, &self.rules, &self.control, &self.signer_pubkey)
+    }
+    pub fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        self.checked_statement(state).map(|_| ())
+    }
+    /// Arithmetic view only; never install its projected phases or interpret
+    /// historic phase clocks as an accepted shared response/default deadline.
+    pub fn numerical_frontier(&self, state: &PalwChainStateV2)
+        -> Result<crate::palw_tir_dissect_v1::PalwTirNumericalFrontierV1, String>
+    {
+        let checked = self.checked_statement(state)?;
+        let id = stream_digest(b"misaka-palw/shared-tir-numerical-slot/v1",
+            &(self.control.claim, self.control.scope_id, self.control.leaf))?;
+        let phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open(id, self.control.leaf,
+            checked.site(), &self.control.root, self.control.arity, self.rules.at.daa_score,
+            self.rules.court.turn_deadline_daa()).map_err(|e| e.to_string())?;
+        crate::palw_tir_dissect_v1::PalwTirNumericalFrontierV1::new(phase)
+    }
+    pub fn check_loaded_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        self.check_context(state)?;
+        if state.last_point().is_none_or(|p| p.daa_score < self.rules.at.daa_score) {
+            return Err("shared root lies beyond accepted snapshot".into());
+        }
+        Ok(())
+    }
+    /// A second already-validated carriage may have other legitimate finalize
+    /// openings/signature bytes. Only the fixed numerical statement coalesces;
+    /// a changed policy/arity/root cannot replace or create a parallel slot.
+    pub fn same_numerical_root(&self, other: &SignedSharedTirRootV1) -> bool {
+        let a = &self.control;
+        (a.version,a.claim,a.scope_id,a.policy_id,a.leaf,a.arity,a.signer)
+            == (other.version,other.claim,other.scope_id,other.policy_id,other.leaf,other.arity,other.signer)
+            && a.root.version == other.root.version && a.root.elements == other.root.elements && a.root.totals == other.root.totals
+    }
 }

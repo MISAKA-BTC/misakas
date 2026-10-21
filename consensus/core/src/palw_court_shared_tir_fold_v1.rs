@@ -207,3 +207,51 @@ pub(super) fn data_response(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2
     })();
     if result.is_err() {b.restore(saved);}result
 }
+
+/// Private canonical numerical root installer. Still no public dispatcher,
+/// notice certificate, original all-branch funded admission or default right.
+pub(super) fn root(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2,
+    control: &crate::palw_court_shared_tir_root_v1::SignedSharedTirRootV1) -> Result<bool, PalwStateV2Error> {
+    use crate::palw_court_shared_tir_root_v1::{check_shared_tir_root_v1, SharedTirRootRowV1};
+    use crate::palw_native_resource_v1::NativeHeapV1;
+    let saved = b.try_checkpoint()?;
+    let result = (|| {
+        let rules = b.extras.native_court_rules_v1.ok_or_else(|| refused("shared root lacks native accepting rules"))?;
+        if rules.at != *ctx || b.extras.tir_public_network_domain_v1 != Some(rules.network_domain) {
+            return Err(refused("shared root accepting point/network mismatch"));
+        }
+        // Covers the retained control and simultaneous native root-verifier
+        // clone, including its temporary binding clone and registered program.
+        // Source analysis/CPU/IO/full-profile work remains separately unclosed.
+        let bond = b.state.bond(&control.signer).ok_or_else(|| refused("shared root producer missing"))?;
+        let claim = b.state.claim(&control.claim).ok_or_else(|| refused("shared root claim missing"))?;
+        let record = b.state.tir_class_v1(&claim.class_id).ok_or_else(|| refused("shared root registered program missing"))?;
+        let bytes = control.native_heap_v1("canonical shared root copies").bytes()
+            .and_then(|n| n.checked_mul(2))
+            .and_then(|n| n.checked_add(control.root.finalize.binding.native_heap_v1("root temporary binding").bytes()?))
+            .and_then(|n| n.checked_add(record.program.len() as u64))
+            .and_then(|n| n.checked_add(std::mem::size_of::<SharedTirRootRowV1>() as u64))
+            .and_then(|n| n.checked_add(bond.pubkey.len() as u64))
+            .ok_or_else(|| refused("shared root clone inventory missing/overflow"))?;
+        let _lease = crate::palw_native_resource_v1::reserve_native_requests_v1(bytes)
+            .map_err(PalwStateV2Error::NativeResource)?;
+        check_shared_tir_root_v1(&b.state, b.params, &rules, control).map_err(refused)?;
+        let key = Key::CourtSharedRoot(control.claim, control.leaf);
+        if let Some(old) = b.state.staged_court_row_v1(&key) {
+            let Row::CourtSharedRoot(old) = old else { return Err(refused("shared root slot contains foreign row")); };
+            old.check(&key).and_then(|()| old.check_context(&b.state)).map_err(refused)?;
+            if ctx.daa_score < old.rules.at.daa_score || !old.same_numerical_root(control) {
+                return Err(refused("canonical shared root cannot be replaced or forked"));
+            }
+            return Ok(false);
+        }
+        let c = shared::context(&b.state, control.claim).map_err(refused)?;
+        let bond = b.state.bond(&control.signer).ok_or_else(|| refused("shared root producer missing"))?;
+        let row = SharedTirRootRowV1 { version: 1, control: control.clone(), rules,
+            signer_pubkey: bond.pubkey.clone(), material_until_daa: c.material_until_daa };
+        b.write_staged_row_v1(key, Some(Row::CourtSharedRoot(Box::new(row).into())))?;
+        Ok(true)
+    })();
+    if result.is_err() { b.restore(saved); }
+    result
+}
