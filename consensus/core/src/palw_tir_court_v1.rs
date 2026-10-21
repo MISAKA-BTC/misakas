@@ -1151,6 +1151,28 @@ impl<'a> TirInventoryOpeningVerifierV1<'a> {
     pub(crate) fn new(program: &'a TirProgramV1, root: Hash64) -> Option<Self> {
         Some(Self { program, inventory: PalwTirInventoryIndexV1::new(program)?, root })
     }
+    /// Exact existing Borsh width for one requested native inventory coordinate.
+    fn opening_bytes(&self, leaf: u32) -> Result<u64, String> {
+        let (param, layer, _, len) = self.inventory.piece_of(leaf).ok_or("parameter coordinate outside inventory")?;
+        let name = &self.program.params.get(usize::from(param)).ok_or("parameter declaration absent")?.name;
+        let path = palw_artifact_opening_path_len_v1(self.inventory.leaf_count(), leaf).ok_or("parameter path not derivable")?;
+        palw_artifact_operand_borsh_len_v1(name.len(), layer.is_some(), len as usize)
+            .checked_add(12).and_then(|n| path.checked_mul(64).and_then(|p| n.checked_add(p)))
+            .ok_or_else(|| "parameter opening byte count overflow".into())
+    }
+    /// Native bounded read: always preflight and reserve nested ownership before Borsh allocation.
+    /// The returned owner is authenticated data only, not a paid/custody/availability certificate.
+    pub(crate) fn decode(&self, leaf: u32, bytes: &[u8])
+        -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwArtifactOpeningV1>, String> {
+        use crate::palw_native_resource_v1::{preflight_native_value_v1, reserve_native_requests_v1, NativeRetainedV1};
+        if bytes.len() as u64 != self.opening_bytes(leaf)? { return Err("parameter opening exceeds exact coordinate width".into()); }
+        let shape = preflight_native_value_v1::<PalwArtifactOpeningV1>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+        let lease = reserve_native_requests_v1(shape.logical_requests_v1()).map_err(|e| e.to_string())?;
+        let opening: PalwArtifactOpeningV1 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
+        if opening.leaf_index != leaf { return Err("parameter opening substitutes requested coordinate".into()); }
+        self.check(&opening).map_err(|e| e.to_string())?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(opening, lease))
+    }
     /// Checks borrowed material without cloning its payload, paths or program.
     pub(crate) fn check(&self, opening: &PalwArtifactOpeningV1) -> Result<(), PalwStepRefuteError> {
         if opening.leaf_count != self.inventory.leaf_count() {
@@ -4487,6 +4509,22 @@ mod inventory_material_tests {
         for leaf in 0..inventory.leaf_count() {
             let opening = x.param_opening(leaf).unwrap();
             verifier.check(&opening).unwrap();
+            let wire = borsh::to_vec(&opening).unwrap();
+            assert_eq!(verifier.opening_bytes(leaf).unwrap(), wire.len() as u64);
+            assert_eq!(*verifier.decode(leaf, &wire).unwrap(), opening);
+            for cut in [0, wire.len()/2, wire.len()-1] { assert!(verifier.decode(leaf, &wire[..cut]).is_err()); }
+            let mut extra = wire.clone(); extra.push(0); assert!(verifier.decode(leaf, &extra).is_err());
+            let mut huge_name = wire.clone(); huge_name[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(verifier.decode(leaf, &huge_name).is_err());
+            let body_prefix = 4 + opening.operand.tensor_name.len() + if opening.operand.layer.is_some() { 3 } else { 1 } + 4;
+            let mut huge_body = wire.clone(); huge_body[body_prefix..body_prefix+4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(verifier.decode(leaf, &huge_body).is_err());
+            let path_prefix = wire.len() - 64 * opening.path.len() - 4;
+            let mut huge_path = wire.clone(); huge_path[path_prefix..path_prefix+4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(verifier.decode(leaf, &huge_path).is_err());
+            assert!(verifier.decode(inventory.leaf_count(), &wire).is_err());
+            let next = (leaf + 1) % inventory.leaf_count();
+            assert!(verifier.decode(next, &wire).is_err());
             let proof = palw_artifact_multiproof_from_openings_v1(&[opening.clone()]).unwrap();
             let native = authenticate_params(&x.binding, &v, &inventory, &PalwTirParamOpeningV1::Single(proof)).unwrap();
             assert_eq!(native.get(&leaf), Some(&(opening.operand.row_start, opening.operand.bytes.clone())));

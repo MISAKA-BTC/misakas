@@ -2622,6 +2622,13 @@ mod conviction_e2e_tests {
             let opening=fx.execution.param_opening(0).unwrap();
             let before=state.state_root();
             c.check_parameter_opening(&state,c.scope_id,&opening).unwrap();
+            let wire=borsh::to_vec(&opening).unwrap();
+            assert_eq!(*c.decode_parameter_opening(&state,c.scope_id,0,&wire).unwrap(),opening);
+            assert!(c.decode_parameter_opening(&state,Hash64::default(),0,&wire).is_err());
+            assert!(c.decode_parameter_opening(&state,c.scope_id,1,&wire).is_err());
+            for cut in [0,wire.len()/2,wire.len()-1] {assert!(c.decode_parameter_opening(&state,c.scope_id,0,&wire[..cut]).is_err());}
+            let mut hostile=wire.clone();hostile[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(c.decode_parameter_opening(&state,c.scope_id,0,&hostile).is_err());
             assert!(c.check_parameter_opening(&state,Hash64::default(),&opening).is_err());
             let mut bad=opening.clone();bad.operand.bytes[0]^=1;
             assert!(c.check_parameter_opening(&state,c.scope_id,&bad).is_err());

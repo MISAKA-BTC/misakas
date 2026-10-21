@@ -1,6 +1,6 @@
 # RFC-0032 — 共有courtの終端materialと非独占提出
 
-Status: **Draft / Review Required**。隔離候補の詳細方式を比較する。採択・本番規則の置換・公開wire・有効化は行わない。判断案は[ADR-0199](../adr/0199-shared-court-terminal-material-and-nonblocking-ingress.md)。既存の[共有frontier契約](0029-owner-independent-shared-tir-query-data.md)と[正本](0026-court-policy-master-contract.md)の未完を埋めるための提案。
+Status: **Draft / Review Required**。利用者はA（認証済みmaterialと終端intent）の詳細仕様化・隔離実装を承認済み（2026-10-21）。採択・本番規則の置換・公開wire・有効化は行わない。判断案は[ADR-0199](../adr/0199-shared-court-terminal-material-and-nonblocking-ingress.md)。既存の[共有frontier契約](0029-owner-independent-shared-tir-query-data.md)と[正本](0026-court-policy-master-contract.md)の未完を埋めるための提案。
 
 ## 1. 解く問題と確認済み範囲
 
@@ -15,7 +15,7 @@ Status: **Draft / Review Required**。隔離候補の詳細方式を比較する
 | A: 認証済みmaterialと終端intent | 任意filerのbody prefixを共有終端slotの所有権にしない。原始materialを認証・保持し、適格な外部filerのintentに対して既存builderで終端を構成する | parameter/promptを含む閉じた依存集合、担当者・保持契約・搬送予約、構築予算、決定論的canonical化、全合法分岐費用と現実の原資 |
 | B: filer別の独立証拠stream | filer間でbody進行を分離し、完了証拠のみroot/path結果へ統合する | 無限のfiler/streamに対する有限の有料受付・記憶上限、共謀者の再充填下でも一人が完了できる予約・公平性の実証 |
 
-推奨はAの詳細仕様化・隔離実装。Aも現段階ではF03を保証しない。Bを単にActive bond/fee/先着slot数で解決済みと扱わない。Aを採る場合でも、既存のcomplete-bundle入力を無条件の有料・公平提出保証に昇格させない。
+利用者の選択に従い、Aで詳細仕様化・隔離実装を進める。Aも現段階ではF03を保証しない。Bを単にActive bond/fee/先着slot数で解決済みと扱わない。Aを採る場合でも、既存のcomplete-bundle入力を無条件の有料・公平提出保証に昇格させない。
 
 ## 3. Aの認証・canonical化境界
 

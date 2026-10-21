@@ -1,0 +1,52 @@
+{
+  "parent": "14f12af50",
+  "scope": "coordinate-bounded complete parameter opening decoder and native retained-context resolution; no material writer or partial-stream slot",
+  "user_choice": "ADR-0199 A approved for detailed specification and isolated implementation; production adoption/fees/holding obligations/pre integration/arming/deployment excluded",
+  "commands": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib palw_tir_court_v1:: -- --nocapture",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1:: --nocapture",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus --lib",
+      "exit": 0
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "exit": 1
+    }
+  ],
+  "selected_tests": {
+    "court_inventory": 11,
+    "public_fold": 42,
+    "t12_identity": 9,
+    "activation": 5,
+    "unique_passes": 67
+  },
+  "unit_executable_sha256": "7f79dda72e19094693ea1214e5b4e5d8b95163f7a55034f39baade814356d98f",
+  "docs": {
+    "baseline_known": 43,
+    "previously_imported_missing": 5,
+    "new_authored_missing": 0
+  },
+  "limitations": [
+    "Complete existing artifact opening only; no lifecycle dispatcher or material row",
+    "Returned owner is data, not custody/availability/payment/default permission",
+    "Source reconstruction, path-width scratch, full CPU/IO/planning/retention/fees and physical calibration remain unclosed",
+    "Fixture registration/payment/service setup remains synthetic verified-half",
+    "No full-original builder dependency closure or no-fallback material store yet",
+    "F02/F03/T05/T01-T15/R-D2/real-model door and G14 remain incomplete"
+  ]
+}

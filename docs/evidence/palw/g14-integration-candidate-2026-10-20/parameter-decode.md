@@ -1,0 +1,19 @@
+# Coordinate-bounded complete parameter opening decode
+
+Parent `14f12af50`. Independent of the Proposed ADR-0199 transport/custody choice. This internal entry point is not a lifecycle dispatcher, material writer or paid admission.
+
+The retained-context adapter resolves the actual original/service/source and registered program/root through the preceding read-only authentication path. Typed checking and byte decoding share one resolution helper. A requested inventory coordinate is a separate argument: the received opening cannot choose a different valid leaf. The verifier derives the canonical operand name/layer/piece length, inventory count and Merkle path length. Exact wire width is the existing operand Borsh width plus leaf index, leaf count, path count (12 bytes total) and 64 bytes per actual path sibling. No extra payload allowance or capacity is adopted.
+
+A complete input must have that exact derived width before nested input decoding. The existing allocation-free native wire scanner always visits the complete actual shape, even with logical resource enforcement disabled. Its actual nested ownership request is reserved before the unchanged Borsh opening reader allocates. The received index must equal the requested coordinate, and the existing program-geometry and Merkle predicate must then succeed. The returned native owner retains its ownership ticket; no unbounded new global Borsh decoder, peer quote or checked flag is introduced. Input bytes are borrowed and not concatenated into a receive buffer.
+
+This does not make all preparatory work allocation-free: original/source reconstruction, index construction and the existing path-width helper have their own analysis/scratch work. Known program/index and decoded-owner requests are admitted; a complete source/planning/CPU/IO/retention/invalid-ingress/physical calibration and fee profile remains unfinished. The byte bound is one artifact opening, not a transaction/mass or fair transport guarantee. Resource/format/semantic failure is only an error here, without state mutation, default, slash or payment.
+
+Tests extend every leaf of the unchanged tiny inventory: actual serialization equals the derived width and roundtrips byte-exactly. Truncation/trailing data, unsupported coordinate, a valid opening for another coordinate and hostile u32-max name/body/path lengths refuse. Existing native multiproof comparisons and hostile valid-root geometry cases remain. The public-original GQA history test separately checks retained-context decoding, wrong scope/coordinate, truncation and hostile length. Fixtures remain synthetic/verified-half for registration/payment/service, and are not all original leaves or real models.
+
+Still missing: shared parameter/prompt material storage and authenticated availability, no-fallback builder adapter, all-branch paid reservation, current actor/notice/admission rules, nonblocking multiblock persistence/recovery, end effects, actual-node T05/T01-T15/R-D2 and real-model door. No ADR-0199 choice is inferred, and no pre integration/push, arming or deployment follows.
+
+## Checkpoint and user choice
+
+Fresh court/inventory tests: 11 passed; public-original fold tests in the same unit executable: 42 passed; t12 identity: 9 passed; activation: 5 passed. Total 67 unique selected tests. The existing tests were extended; negative cases are not additional test counts. Type-check results are recorded in the artifact after completion.
+
+During this checkpoint the user selected ADR-0199 A (authenticated material and terminal intent) for detailed specification and isolated implementation. RFC-0032/ADR-0199 record that limited approval; production adoption, new fees/holding obligations, pre integration, arming and deployment remain excluded. The decoder is a preparatory component, not the promised complete material store or F03/T05 closure.

@@ -75,6 +75,15 @@ impl SharedTirContextV1 {
     /// No insertion, delivery/custody, timely notice, payer or eligibility follows.
     pub(crate) fn check_parameter_opening(&self,state:&PalwChainStateV2,scope:Hash64,
         opening:&crate::palw_artifact::PalwArtifactOpeningV1)->Result<(),String> {
+        self.with_parameter_verifier(state,scope,|v|v.check(opening).map_err(|e|e.to_string()))
+    }
+    /// The input is one complete existing artifact opening, never an incomplete-prefix slot.
+    pub(crate) fn decode_parameter_opening(&self,state:&PalwChainStateV2,scope:Hash64,leaf:u32,bytes:&[u8])
+        ->Result<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_artifact::PalwArtifactOpeningV1>,String> {
+        self.with_parameter_verifier(state,scope,|v|v.decode(leaf,bytes))
+    }
+    fn with_parameter_verifier<T>(&self,state:&PalwChainStateV2,scope:Hash64,
+        check:impl FnOnce(&crate::palw_tir_court_v1::TirInventoryOpeningVerifierV1<'_>)->Result<T,String>)->Result<T,String> {
         if scope!=self.scope_id {return Err("shared parameter scope substitution".into());}
         // Require this exact retained row, not a caller-constructed context with valid fields.
         if context(state,self.claim)?!=self {return Err("shared parameter context is not retained".into());}
@@ -86,7 +95,7 @@ impl SharedTirContextV1 {
         let _index=crate::palw_native_resource_v1::reserve_native_requests_v1(requests).map_err(|e|e.to_string())?;
         let verifier=crate::palw_tir_court_v1::TirInventoryOpeningVerifierV1::new(&program,source.header_v1().artifact_root)
             .ok_or("shared parameter inventory is not derivable")?;
-        verifier.check(opening).map_err(|e|e.to_string())
+        check(&verifier)
     }
     pub fn check_context(&self,state:&PalwChainStateV2)->Result<(),String> {self.source(state).map(|_|())}
 }
