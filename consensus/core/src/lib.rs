@@ -720,6 +720,8 @@ pub mod palw_state_auth_map_v1;
 pub mod palw_state_proof_v1;
 /// RFC-0036 (Proposed): parent-root-pinned row reads and change-set writes, a bounded cache, and the full-state adapter (dormant).
 pub mod palw_state_row_access_v1;
+/// RFC-0037 / ADR-0204 (Proposed, node-local, dormant): incremental verification of a PALW row stream against the committed root.
+pub mod palw_row_stream_v1;
 pub mod palw_state_v2;
 /// MISAKA PALW step function v1 (ADR-0030): the frozen operator taxonomy, the shape-profile
 /// v3 schema and identity, and the step-index bijection a one-step refutation names steps

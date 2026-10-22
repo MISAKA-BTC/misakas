@@ -154,7 +154,7 @@ impl MultiConsensusManagementStore {
             data
         })?;
         self.db.write(batch)?;
-        Ok(())
+        self.sync_metadata()
     }
 
     pub fn new_staging_consensus_entry(&mut self) -> StoreResult<ConsensusEntry> {
@@ -169,6 +169,9 @@ impl MultiConsensusManagementStore {
         self.metadata.write(BatchDbWriter::new(&mut batch), &metadata)?;
         self.entries.write(BatchDbWriter::new(&mut batch), new_key.into(), new_entry.clone())?;
         self.db.write(batch)?;
+        // Write-ahead: the staging key is durable before its directory exists, so a crash at any later point leaves an
+        // entry the next start recognises as staging and deletes (never an unreferenced directory nobody reclaims).
+        self.sync_metadata()?;
 
         Ok(new_entry)
     }
@@ -179,6 +182,16 @@ impl MultiConsensusManagementStore {
             data.current_consensus_key = data.staging_consensus_key.take();
             data
         })?;
+        // **The switch is durable before the old consensus directory is deleted** (G14 storage, IBD lane). RocksDB's
+        // default write is not synced: it survives a process kill but not an OS crash or power loss. The caller deletes
+        // the previous consensus directory right after this returns, so without the fsync an OS crash could leave the
+        // metadata naming the deleted directory as current — an empty "existing" consensus with no genesis.
+        self.sync_metadata()
+    }
+
+    /// fsync the management DB's WAL, making every metadata write before it durable across an OS crash.
+    fn sync_metadata(&self) -> StoreResult<()> {
+        self.db.flush_wal(true)?;
         Ok(())
     }
 
@@ -466,6 +479,12 @@ impl ConsensusFactory for Factory {
 
     fn new_staging_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
         assert!(!self.notification_root.is_closed());
+
+        // G14 storage (IBD lane): the losing generation goes BEFORE new space is reserved or used. A staging DB whose
+        // cancel could not remove its directory (or any other non-active entry) would otherwise sit beside the new one
+        // until restart — three DBs where the budget holds two. (The capacity lane's staging reservation, when merged,
+        // belongs right after this call.)
+        self.delete_inactive_consensus_entries();
 
         // G14 capacity lane: under a storage budget, reserve the staging DB's whole envelope BEFORE
         // anything is created (after reclaiming obsolete data), so the staging DB and the active DB
