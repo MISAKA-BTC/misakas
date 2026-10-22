@@ -7,10 +7,16 @@
 testnet-12 で DAA 16,000 の fence に全機能を載せるには、各 fence の **値**（金額・上限・予算・期間）と **実測**（arming record の evidence）が必要です。現在、すべての record list は空で、値は `None`（typed-missing）なので、fence を武装しても validation が拒否します。あなたの担当は次の 3 つです。
 
 1. **実測する。** 計測 harness を実行し、生データ・環境・binary の sha256 を残す。
-2. **値の案を導出する。** 各値の定義元（RFC / ADR の該当節）にある式・制約に、実測値を入れて案を出す。式が無い値は、選択肢と、それぞれを選んだときの影響を並べる。
-3. **arming record の候補を作る。** 各 gated fence の requirement 1 件ごとに evidence 文書を作り、その sha256 を requirement の順で並べた候補表を作る。
+2. **値を決める。** 各値の定義元（RFC / ADR の該当節）にある式・制約に実測値を入れ、経済監査を踏まえて最適な値を決定する（下の手順）。
+3. **arming record を作る。** 各 gated fence の requirement 1 件ごとに evidence 文書を作り、その sha256 を requirement の順で並べた候補表を作る。
 
-**値の採択はユーザーが行います。** あなたは値を決定せず、コードの定数（`None` の値、`*_RECORDS_V1` の list）にも書き込みません。案と根拠を返し、ユーザーが承認した後に MacBook 側がコードへ pin します。
+**値の決定はあなたに委任されています（ユーザー指示 2026-10-22）。** ユーザーは「経済の監査を踏まえた最適な値に指定して良い」と判断を委ねました。したがって、案を出すだけで止めず、次の手順で値を**決定し、コードに pin する**ところまで進めてください。
+
+1. **経済監査を先に行う。** 各値について、攻撃者の最大利益・必要資本・発覚時の損失と、正直な参加者（producer・seat・challenger・payer・relay）の収支・必要資本・待ち時間を、実測した費用で評価する。基準は PRINCIPLES の最終目標（「非公開・不正を経済的に不利にする」、p=0 は cap で有界化）と、memory にある担保設計の基準（持ち逃げの最大利益 ≤ 回収可能な価値、同時に未解決のリスクだけを予約する）。liveness の基準（攻撃者が払う額あたりの node の仕事量が有界）も入れる。
+2. **値を決める。** 式が RFC / ADR にある値はその式に従う。式が無い値は、候補を比較して最も安全側で、かつ正直な参加者が成立する値を選ぶ。仮値・推定だけの値は採らない。最低要件ハードウェアでの計測がまだの項目は、換算倍率に安全余裕を掛けた保守的な値にして、その旨を記録する。
+3. **独立に検証する。** 決めた値の一覧を、別の担当（別 agent か、別の pass）が経済監査の観点で反証を試みる。反例が出た値は直す。
+4. **記録して pin する。** `docs/governance/parameter-register.md` と `parameters.json` に、旧値・新値・根拠・試験・承認（「ユーザー委任 2026-10-22、経済監査 <evidence へのリンク>」）を記録する。そのうえで、コードの `None` 定数と policy・schedule に値を入れる。arming record の list への pin は §4 の要件をすべて満たした fence だけにする（未充足の requirement を埋めた形にしない）。
+5. **値を入れたら、その経路のテストを有効な値で回す。** これまで `cfg(test)` の schedule でしか通らなかった経路を、決めた値で実行し、成功経路と拒否経路の両方を確認する。
 
 ## 1. 計測の共通ルール
 
@@ -28,7 +34,7 @@ testnet-12 で DAA 16,000 の fence に全機能を載せるには、各 fence �
   - `docs/evidence/palw/g14-measure-2026-10-18/`
   - `docs/measurements/2026-10-19-t12-passive-daa-blocks.md`（t12 の実測ペース: 中央値 184 s/DAA、block の tx bytes の最大 111,949 B）
 
-## 2. 値の一覧（すべて案を出す）
+## 2. 値の一覧（すべて決定する）
 
 定義の正本は `docs/design/palw/integration/g14-t12-16000-decisions-2026-10-22.md`（V1〜V12）と、各 lane の notes（`docs/evidence/palw/g14-parallel-2026-10-22/*.md`、`docs/evidence/palw/rfc-gaps-2026-10-22/*.md`）です。
 
@@ -54,7 +60,7 @@ testnet-12 で DAA 16,000 の fence に全機能を載せるには、各 fence �
 | R6 | TIR frame の費用 record | `PALW_TIR_FRAME_COST_RECORDS_V1` | `frame_measure.rs` |
 | R7 | RFC-0002: PALWQ361 の logit scale と f32 参照窓 | `--palwq36-logit-scale`、reference-windows file | §3 M-Q36 |
 
-値ごとに必ず書くこと: 定義元（RFC / ADR の節）、式、入力した実測値、案の値、余裕（何倍か）、その値で何が保証され何が保証されないか、ほかの値との依存関係。式が RFC / ADR に無い場合は、候補 2〜3 個と、それぞれの影響を書く。
+値ごとに必ず書くこと: 定義元（RFC / ADR の節）、式、入力した実測値、決定した値、余裕（何倍か）、経済監査の結論（攻撃者の利益と正直な参加者の収支）、その値で何が保証され何が保証されないか、ほかの値との依存関係。式が RFC / ADR に無い場合は、比較した候補と、選んだ理由を書く。
 
 ## 3. 実測の一覧
 
@@ -97,13 +103,13 @@ requirement 1 件ごとに、evidence 文書を `docs/evidence/palw/studio-value
 
 ## 5. 返し方
 
-- push 先: `studio/values` branch。evidence は `docs/evidence/palw/studio-values-2026-10-22/`。
+- push 先: `studio/values` branch（値と record の pin を含むコード変更もここ）。evidence は `docs/evidence/palw/studio-values-2026-10-22/`。
 - 中心の成果物は次の 3 つです。
-  - `values-proposal.md`: §2 の全値について、案・根拠・依存関係
+  - `values-decided.md`: §2 の全値について、決定値・経済監査・独立検証の結果・依存関係
   - `measurements.md`: §3 の全実測について、結果表・環境・未実行の項目
-  - `records-candidates.md`: §4 の候補表
+  - `records-candidates.md`: §4 の表（pin した fence と未充足の fence）
 - 最後に `SUMMARY.md` を書きます。中身は次のとおりです。
-  - ユーザーが承認すべき値の一覧（そのまま判断できる形）
+  - 決定して pin した値の一覧と、pin を見送った値とその理由
   - 最低要件ハードウェアでの再計測が必要な項目
   - DAA 16,000 に武装できる fence と、できない fence の区別
 - docs を編集したら `python3 docs/maintenance/generate_indexes.py` と `python3 docs/maintenance/check_docs.py` を実行する。
