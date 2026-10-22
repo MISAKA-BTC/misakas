@@ -164,6 +164,7 @@ mod tests {
             exec_lane: None,
             // RFC-0018 Gate C is dormant on every shipped network.
             security_certification: "not-governed",
+            claim_local_settlement: String::new(),
         }
     }
 
