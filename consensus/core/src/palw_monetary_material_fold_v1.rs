@@ -17,8 +17,7 @@ fn policy(builder: &TransitionBuilder<'_>, now: u64) -> Result<PalwMonetaryMater
     Ok(p)
 }
 fn write(builder: &mut TransitionBuilder<'_>, root: Hash64, row: Option<&PalwMonetaryMaterialRowV1>) -> Result<(), PalwStateV2Error> {
-    builder.write_kernel_row(PALW_MONETARY_MATERIAL_TABLE_V1, root.as_byte_slice().to_vec(), row.map(|r| borsh::to_vec(r).unwrap()))?;
-    Ok(())
+    builder.write_kernel_row_encoded_v1(PALW_MONETARY_MATERIAL_TABLE_V1, root.as_byte_slice(), row)
 }
 fn active(builder: &TransitionBuilder<'_>, key: &PalwBondKeyV2) -> Result<PalwBondStateV2, PalwStateV2Error> {
     builder
@@ -1741,8 +1740,8 @@ pub(super) fn routed_answer_v2(
             crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
             crate::palw_material_release_recovery_v2::material_provider_stream_key_v2(&a.provider),
             Some(borsh::to_vec(checkpoint).unwrap()),
-        );
+        )?;
     }
-    write(b, root, Some(&row));
+    write(b, root, Some(&row))?;
     Ok(())
 }
