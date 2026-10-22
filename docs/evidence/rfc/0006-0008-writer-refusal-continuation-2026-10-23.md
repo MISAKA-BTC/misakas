@@ -149,3 +149,29 @@ table number 136 while the checked-in scanner uses 147 (and the adjacent
 bootstrap namespaces have moved too). Full generator reconciliation and
 idempotency remain open; do not overwrite the current scanner with the old
 namespace output or claim reproducible generation from this check.
+
+## Generator reconciliation (`48fd931b1`)
+
+An isolated copy reproduced the generator's failure at the old aux134 marker.
+The generator now emits material checkpoint namespaces in 137 and routing/
+bootstrap namespaces in 147/148/149. Two isolated generations matched. The
+three differing generated files were reviewed and installed after the Rust
+test process finished; no target types were removed. The inventory now also
+includes the selected-source bootstrap fields previously omitted from the
+transition-extras visitor.
+
+The official command then exited 0 in the real checkout:
+
+```text
+python3 scripts/drills/check_rfc06_native_wire_idempotent.py
+idempotent; committed outputs are the generator output
+```
+
+Output: `/tmp/misaka-rfc06-generator-idempotent.log`. This closes the observed
+generator-numbering/reproducibility gap for this tree.
+
+The first ordinary-registration test run failed before exercising profile
+retention because the shared fixture specified slash value 1 whereas its
+existing floor specifies 5. The fixture now reads that value from its floor
+row rather than changing any network parameter. The runtime recheck is
+compiling; output: `/tmp/misaka-rfc06-registered-profile-recheck.log`.
