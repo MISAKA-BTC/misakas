@@ -11,9 +11,9 @@
 //! slot and supply is recorded, and resumes the default; if H passes first the existing release sweep releases the fee WITHOUT a
 //! slash (`release_held_native_fees_v1`, unchanged).
 //!
-//! Dormant three ways: `palw_native_liability_horizon_v1` (the hold), `court_service_f02_active_v1` (the conviction fence and a
-//! pinned service profile — typed-missing today) and the typed-missing slash amount [`PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1`]
-//! (a money amount = user decision). "Silent" is a family fact: [`native_post_final_duty_answered_v1`] answers it from the native
+//! Dormant two ways: `palw_native_liability_horizon_v1` (the hold) and `court_service_f02_active_v1` (the conviction fence and a
+//! pinned service profile — typed-missing today). The slash rule [`PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1`] is decided (lane P3,
+//! 2026-10-22, awaiting independent verification): the claim's collectible reserve, as a conviction of the same Final collects. "Silent" is a family fact: [`native_post_final_duty_answered_v1`] answers it from the native
 //! post-Final duty record (G14 r6 D4, `palw_native_post_final_duty_v1`: accusation → clocks → answers → supplied opportunity); a
 //! job with a recorded accusation is decided from that record alone, one without falls back to the TIR service binding below.
 use super::*;
@@ -27,9 +27,39 @@ fn refused(why: impl ToString) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(why.to_string())
 }
 
-/// **The slash charged to a silent, opportunity-supplied actor on a post-Final default.** Typed-missing: a money amount is a user
-/// decision (lane rule). While `None` a decided `PartyDefault` is refused whole (no refund without the slash, no half effect).
-pub const PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1: Option<u64> = None;
+/// **How the slash of a post-Final default is sized.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwNativePostFinalDefaultSlashV1 {
+    /// The claim's own reserve — exactly what a conviction of the same held Final collects (funded v11 `claim.reserved_original`,
+    /// text29 `maximum.producer_reserve`), bounded by what the producer's bond still holds (G-14: never refused for less).
+    ClaimReserve,
+}
+
+/// **The slash charged to a silent, opportunity-supplied actor on a post-Final default: the claim's reserve.** **Decided 2026-10-22
+/// (lane P3, user delegation of value decisions), awaiting independent verification** —
+/// `docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md` V6. Consistent with the families' existing default rules
+/// (the pre-Final DA default collects the same collectible reserve a conviction does, `palw_flat_execution_da_fold_v11`): a fixed
+/// amount below the reserve would make silence cheaper than an answer that convicts, and one above it would reach collateral the
+/// budget reserved for other claims. `None` would refuse a decided `PartyDefault` whole (no refund without the slash).
+pub const PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1: Option<PalwNativePostFinalDefaultSlashV1> =
+    Some(PalwNativePostFinalDefaultSlashV1::ClaimReserve);
+
+/// **The production slash amount of a post-Final default of `row`** under `rule`: the family's collectible reserve.
+pub(super) fn native_post_final_default_slash_v1(
+    b: &TransitionBuilder<'_>,
+    rule: PalwNativePostFinalDefaultSlashV1,
+    row: &PalwNativeHeldFeeRowV1,
+) -> Result<u64, PalwStateV2Error> {
+    match rule {
+        PalwNativePostFinalDefaultSlashV1::ClaimReserve => {
+            let reserve = super::palw_flat_execution_fold_v11::native_held_final_reserve_v1(b, row.family, &row.job)?;
+            Ok(crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
+                b.state.bond(&row.producer).map(|bond| bond.collateral),
+                reserve,
+            ))
+        }
+    }
+}
 /// At most this many post-Final defaults are applied by one closing tick (key order).
 pub const PALW_NATIVE_POST_FINAL_DEFAULTS_PER_BLOCK_V1: usize = 64;
 
@@ -156,8 +186,11 @@ pub(super) fn apply_native_post_final_default_v1(
     {
         return Err(PalwStateV2Error::ObjectiveOffenceDormant);
     }
-    let slash = PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1
+    let rule = PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1
         .ok_or_else(|| refused("post-Final default slash amount is not adopted (user decision); no default"))?;
+    let row = super::palw_native_liability_hold_fold_v1::native_accusable_after_final_v1(&b.state, family, job, ctx.daa_score)
+        .ok_or_else(|| refused("no held native fee inside its liability horizon"))?;
+    let slash = native_post_final_default_slash_v1(b, rule, &row)?;
     match apply_native_post_final_default_with_v1(b, ctx, family, job, slash, &native_post_final_duty_answered_v1)? {
         NativePostFinalDefaultV1::Defaulted { .. } => Ok(()),
         NativePostFinalDefaultV1::NoSlashHold(why) => Err(refused(why)),
@@ -173,8 +206,13 @@ pub(super) fn recover_native_post_final_defaults_v1(b: &mut TransitionBuilder<'_
     if !super::palw_court_service_lifecycle_fold_v1::court_service_f02_active_v1(b) {
         return Ok(());
     }
-    let Some(slash) = PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1 else { return Ok(()) };
-    recover_native_post_final_defaults_with_v1(b, ctx, slash, &native_post_final_duty_answered_v1)
+    let Some(rule) = PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1 else { return Ok(()) };
+    recover_native_post_final_defaults_by_v1(
+        b,
+        ctx,
+        &|b: &TransitionBuilder<'_>, row: &PalwNativeHeldFeeRowV1| native_post_final_default_slash_v1(b, rule, row),
+        &native_post_final_duty_answered_v1,
+    )
 }
 
 /// [`recover_native_post_final_defaults_v1`] under an explicit slash amount and silence fact (fixtures).
@@ -182,6 +220,20 @@ pub(super) fn recover_native_post_final_defaults_with_v1(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     slash: u64,
+    answered: &dyn Fn(&TransitionBuilder<'_>, &PalwNativeHeldFeeRowV1, &CourtDutyClockV1) -> Result<bool, &'static str>,
+) -> Result<(), PalwStateV2Error> {
+    recover_native_post_final_defaults_by_v1(b, ctx, &|_: &TransitionBuilder<'_>, _: &PalwNativeHeldFeeRowV1| Ok(slash), answered)
+}
+
+/// The slash of one held row (production: [`native_post_final_default_slash_v1`]; fixtures: a constant).
+type SlashOfV1<'f> = dyn Fn(&TransitionBuilder<'_>, &PalwNativeHeldFeeRowV1) -> Result<u64, PalwStateV2Error> + 'f;
+
+/// [`recover_native_post_final_defaults_v1`] with the slash read per held row. A row whose slash cannot be read stays held (fail
+/// closed: no refund without its slash; released at H as every undecided row is).
+fn recover_native_post_final_defaults_by_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    slash_of: &SlashOfV1<'_>,
     answered: &dyn Fn(&TransitionBuilder<'_>, &PalwNativeHeldFeeRowV1, &CourtDutyClockV1) -> Result<bool, &'static str>,
 ) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
@@ -206,6 +258,7 @@ pub(super) fn recover_native_post_final_defaults_with_v1(
         super::palw_native_post_final_duty_v1::reopen_unsupplied_turn_v1(b, ctx, &row)?;
     }
     for row in due {
+        let Ok(slash) = slash_of(b, &row) else { continue };
         let _ = apply_native_post_final_default_with_v1(b, ctx, row.family, &row.job, slash, answered);
     }
     let Some(service) = b.state.court_service_state_v1() else { return Ok(()) };
@@ -238,6 +291,7 @@ pub(super) fn recover_native_post_final_defaults_with_v1(
     }
     for row in due {
         // Each default is atomic on its own; a refusal (e.g. a refund queue collision) leaves that row held and the block standing.
+        let Ok(slash) = slash_of(b, &row) else { continue };
         let _ = apply_native_post_final_default_with_v1(b, ctx, row.family, &row.job, slash, answered);
     }
     Ok(())

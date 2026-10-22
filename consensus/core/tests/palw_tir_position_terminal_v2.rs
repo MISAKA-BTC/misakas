@@ -245,10 +245,17 @@ fn a_two_level_lookahead_and_one_choice_path_equal_the_old_two_rounds() {
                 continue;
             }
             let (msg, level1) = honest_lookahead(&x, &store, &phase, site.tile_positions);
-            // The frontier bound is typed-missing: unadopted, the bundle is refused by name.
+            // No bound passed: the bundle is refused by name.
             assert!(phase.expand_lookahead_v2(&msg, None).is_err());
             // A bound below the body refuses too (RFC-0024 §5.5).
             assert!(phase.expand_lookahead_v2(&msg, Some(0)).is_err());
+            // V8 (decided 2026-10-22, lane P3): the adopted bound admits the fixture's honest frontier; one below its size refuses.
+            let values = kaspa_consensus_core::palw_tir_dissect_v1::PalwTirLookaheadExpansionV2::frontier_values(&msg);
+            let adopted = kaspa_consensus_core::palw_tir_position_terminal_v2::PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2;
+            assert_eq!(adopted, Some(3_072));
+            assert!(values <= 3_072, "the fixture frontier ({values} values) is inside the adopted bound");
+            assert!(phase.expand_lookahead_v2(&msg, adopted).is_ok());
+            assert!(phase.expand_lookahead_v2(&msg, Some(values - 1)).is_err());
             let expansion = phase.expand_lookahead_v2(&msg, CAP).expect("the honest frontier is checked");
             assert_eq!(expansion.level1, level1, "the omitted level is reconstructed exactly by Σ/max");
 
@@ -362,12 +369,16 @@ fn the_position_witness_budget_refuses_without_an_adopted_bound_and_never_convic
                     proof: PalwCourtVerdictProofV2::TirDissection { bottom: Box::new(bottom) },
                     step_multiproof: None,
                 };
-                assert_eq!(PALW_TIR_POSITION_WITNESS_BUDGET_V2, None);
+                // No budget passed: refused by name (RFC-0024 §4.4), never a conviction.
                 assert_eq!(
-                    check_tir_position_witness_budget_v2(&close, PALW_TIR_POSITION_WITNESS_BUDGET_V2),
+                    check_tir_position_witness_budget_v2(&close, None),
                     Err(PalwTirPositionWitnessErrorV2::PositionWitnessBudgetIncomplete)
                 );
                 let bytes = borsh::to_vec(&close).unwrap().len() as u64;
+                // V8 (decided 2026-10-22, lane P3): the fixture's real honest position close fits the adopted one-part budget.
+                assert_eq!(PALW_TIR_POSITION_WITNESS_BUDGET_V2, Some(83_333));
+                assert_eq!(check_tir_position_witness_budget_v2(&close, PALW_TIR_POSITION_WITNESS_BUDGET_V2), Ok(bytes));
+                eprintln!("[p3-v8] fixture position close: {bytes} B against the adopted budget 83,333 B");
                 assert!(matches!(
                     check_tir_position_witness_budget_v2(&close, Some(bytes - 1)),
                     Err(PalwTirPositionWitnessErrorV2::PositionWitnessOverBudget { .. })

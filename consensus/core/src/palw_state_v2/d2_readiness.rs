@@ -169,7 +169,7 @@ mod tests {
             let p = params(armed);
             let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
             assert!(b.record_d2_readiness_root_v1(&root, NonZeroU32::new(3), FENCE - 1).is_err(), "below the fence");
-            assert!(b.record_d2_readiness_root_v1(&root, rr::PALW_D2_READINESS_DRAW_CAP_V1, FENCE).is_err(), "unadopted cap");
+            assert!(b.record_d2_readiness_root_v1(&root, None, FENCE).is_err(), "no cap passed");
             b.sweep_d2_disclosures_v1(FENCE + 10_000, true).unwrap();
             assert!(b.entries.is_empty());
             assert!(b.state.d2_readiness_v1().is_empty());

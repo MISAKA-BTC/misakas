@@ -162,7 +162,48 @@ fn r5_f02_wire_post_final_default_is_dormant_and_production_is_typed_missing() {
         assert!(matches!(apply_native_post_final_default_v1(&mut b, &at, family, &JOB), Err(PalwStateV2Error::ObjectiveOffenceDormant)));
         recover_native_post_final_defaults_v1(&mut b, &at).unwrap();
         assert_eq!(b.entries.len(), before);
-        assert!(PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1.is_none(), "the slash amount is a user decision");
+        // V6 (decided 2026-10-22, lane P3): the rule is the claim's reserve; the production stays dormant on the service profile.
+        assert_eq!(PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1, Some(PalwNativePostFinalDefaultSlashV1::ClaimReserve));
+    }
+}
+
+/// V6 (decided 2026-10-22, lane P3): the production slash is read from the family's anchored book — a held row whose job book is
+/// absent has no readable reserve, so the production amount is refused (never a default at a guessed amount, never zero).
+#[test]
+fn p3_v6_the_production_slash_needs_the_claims_readable_reserve() {
+    for family in [PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_FAMILY_FUNDED_V11] {
+        let state = parent(service(None), 1_200);
+        let (p, extras) = (armed(), conviction_extras());
+        let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+        hold_native_fee_v1(&mut b, &held(family)).unwrap();
+        let rule = PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1.expect("decided");
+        assert!(native_post_final_default_slash_v1(&b, rule, &held(family)).is_err(), "no anchored book: no amount");
+        let mut other = held(family);
+        other.family = crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39;
+        assert!(native_post_final_default_slash_v1(&b, rule, &other).is_err(), "job v39 has no post-Final F02 default");
+    }
+}
+
+/// V6 (decided 2026-10-22, lane P3): the amount is the collectible reserve — the reserve when the bond holds it, what the bond still
+/// holds when it holds less (G-14), 0 for a vanished bond — the same function the families' conviction and DA default use.
+#[test]
+fn p3_v6_the_slash_is_the_collectible_reserve() {
+    use crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1 as collectible;
+    assert_eq!(collectible(Some(1_000_000), 250_000), 250_000);
+    assert_eq!(collectible(Some(100_000), 250_000), 100_000);
+    assert_eq!(collectible(None, 250_000), 0);
+    // Through the fixture path at that amount: refund + slash of exactly the collectible reserve.
+    for family in [PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_FAMILY_FUNDED_V11] {
+        let state = parent(service(None), 1_200);
+        let (p, extras) = (armed(), conviction_extras());
+        let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+        hold_native_fee_v1(&mut b, &held(family)).unwrap();
+        let before = collateral(&b.state);
+        let reserve = before / 4;
+        let slash = collectible(Some(before), reserve);
+        let out = apply_native_post_final_default_with_v1(&mut b, &ctx(2, 2_000, 2), family, &JOB, slash, &silent).unwrap();
+        assert_eq!(out, NativePostFinalDefaultV1::Defaulted { refunded: 7_000, slashed: reserve });
+        assert_eq!(collateral(&b.state), before - reserve);
     }
 }
 

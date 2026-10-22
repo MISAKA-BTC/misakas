@@ -361,8 +361,16 @@ impl PalwStagedPublicCourtConfigV1 {
                 reorg_replay_moves: 64,
             },
             acquisition_daa: 4_096,
-            collection_daa: 4_096,
-            reorg_retention_daa: 256,
+            // V9 (decided 2026-10-22, lane P3, user delegation of value decisions; awaiting independent verification —
+            // docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md): the staged material must cover a clock-v2 dispute
+            // extension, `a + 10,000 + max(W_disclose, reorg_retention)` (`palw_court_clock_v2_dependencies_cover_v2`), or every
+            // governed staged claim's extension is refused as a short Custody dependency. With W_disclose = 1,200 (testnet-12) that is
+            // a + 11,200; acquisition + collection = 11,200 alone covers it (collect_until ≥ a + 11,200 before any inclusion term), and
+            // the reorg term adds 360 more. Was 4,096 (material a + 8,448 + inclusion: short).
+            collection_daa: 7_104,
+            // V9: testnet-12's finality depth, FINALITY_DURATION 43,200 s / 120 s per block = 360 (`new_two_minute_bps`): a reorg
+            // can never un-record a court object deeper than this. Was 256 (below the finality depth).
+            reorg_retention_daa: 360,
             maximum_owned_rows_per_reserver: 1,
         }
     }
