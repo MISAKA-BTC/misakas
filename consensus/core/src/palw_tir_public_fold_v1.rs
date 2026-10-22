@@ -6363,4 +6363,108 @@ mod conviction_e2e_tests {
             std::fs::write(out, serde_json::to_string(&record).unwrap()).unwrap();
         }
     }
+
+    /// **audit(b) B-01 reproducer** (round 1, not a fix): the TIR default guard reads the service book only in its LEGACY row
+    /// variant (`Row::CourtService`). Once the book is rewritten in its released form (`Row::CourtServiceV3`, which the D1 release
+    /// step does at the first release and never undoes), the same bound claim with the same unsupplied packet is defaulted.
+    #[test]
+    fn audit_b01_released_service_row_skips_the_f02_default_guard() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras, acquisition, _) = demanded_world(&fx, &frame, 0);
+        let (demand_id, until, turn, _) = owner_pending(&frame, &state, acquisition);
+        let base = frame.plan_v1().terms.accepted_daa;
+        let ctx = at(&frame, until - base);
+        let control = Control { version: 1, claim: frame.plan_v1().original_claim,
+            allocation_id: frame.plan_v1().allocation_id, source_id: frame.plan_v1().source_id,
+            target: acquisition, expected_turn: turn, declared_rent_sompi: 0, signer: outsider(),
+            action: A::Acquisition(Owned::Collect { demand_id }), signature: vec![5; SIG] };
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id: [1; 64], release_daa: base + 1, service_before: base + 2, cost }], base + 10_000).unwrap();
+        // The packet's slot (base+1) is never supplied: the assessment is MissingSupply (a no-slash hold under F02).
+        book.observe_block(base + 2, [12; 64], Default::default()).unwrap();
+        let service = CourtServiceStateV2 { version: 2, source_profile_id: Hash64::from_u64_word(42),
+            profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(42)), book,
+            claims: std::collections::BTreeMap::from([(control.claim, ServiceClaimBinding {
+                claim: control.claim, allocation_id: control.allocation_id, source_id: control.source_id,
+                original_accepted_daa: base, hard_deadline_daa: base + 10_000,
+                packet_ids: std::collections::BTreeSet::from([[1; 64]]) })]) };
+        let mut extras = extras.clone();
+        extras.tir_public_conviction_active = true;
+        // Legacy row: denied, nothing moves.
+        let mut v2 = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        v2.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service.clone()).into()))).unwrap();
+        let err = apply_verified_control_v1(&mut v2, &ctx, &frame, &control).unwrap_err();
+        assert!(format!("{err:?}").contains("supply is missing"), "{err:?}");
+        // The SAME book and binding in the released row form (nothing released yet).
+        let mut v3 = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let row3 = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&service);
+        v3.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(row3).into()))).unwrap();
+        assert!(v3.state.court_service_holds_claim_v1(&control.claim), "the claim is still bound");
+        let before = v3.state.state_root();
+        let result = apply_verified_control_v1(&mut v3, &ctx, &frame, &control);
+        eprintln!("[audit-b01] released-row default: {result:?}; state changed: {}", v3.state.state_root() != before);
+        assert!(result.is_ok() && v3.state.state_root() != before,
+            "B-01: with the released row the unsupplied claim is defaulted (expected: the same no-slash denial)");
+    }
+
+    /// **audit(b) B-04 reproducer** (round 1, not a fix): a court session on a service-bound claim has no terminal path for
+    /// silence. The deadline sweep skips it at every height (here 100,000 DAA past the claim's hard deadline), so the session holds
+    /// a global court slot forever, the binding can never be released (`open_courts_of > 0`) and the producer's collateral stays
+    /// held by the service book forever.
+    #[test]
+    fn audit_b04_a_silent_session_on_a_bound_claim_never_ends() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras) = world(&fx, &frame);
+        let plan = frame.plan_v1();
+        let a = plan.terms.accepted_daa;
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id: [41; 64], release_daa: a + 1, service_before: a + 2, cost }], a + 10_000).unwrap();
+        book.observe_block(a + 1, [42; 64], Default::default()).unwrap();
+        book.observe_block(a + 10_001, [43; 64], Default::default()).unwrap();
+        let service = CourtServiceStateV2 { version: 2, source_profile_id: Hash64::from_u64_word(43),
+            profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(43)), book,
+            claims: std::collections::BTreeMap::from([(plan.original_claim, ServiceClaimBinding {
+                claim: plan.original_claim, allocation_id: plan.allocation_id, source_id: plan.source_id,
+                original_accepted_daa: a, hard_deadline_daa: a + 10_000,
+                packet_ids: std::collections::BTreeSet::from([[41; 64]]) })]) };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        let opened = a + 3;
+        let ladder = PalwBisectLadderV1::open(
+            &frame.header_v1().job_context.context_hash(), &frame.original_v1().execution_root,
+            &h(0xC1), &h(0xC2), PalwBisectSpaceV1::StepLeaves,
+            frame.header_v1().step_leaf_count, opened, opened + 1,
+        ).unwrap();
+        // The challenger opens and then never moves; the responder never moves either.
+        let session = PalwCourtSessionStateV2 {
+            claim: plan.original_claim, challenger_bond: outsider(), opened_daa: opened,
+            deadline_daa: opened + 10, ladder, dissection: None,
+        };
+        let id = h(0xC3);
+        b.write_court(id, Some(session)).unwrap();
+        let slots_before = b.state.court_sessions.len();
+        for far in [10_001u64, 20_000, 100_000] {
+            super::super::sweep_court_deadlines(&mut b, &at(&frame, far)).unwrap();
+        }
+        let producer = frame.custody_v1().pledge_v1().producer;
+        eprintln!(
+            "[audit-b04] after sweeps to a+100,000: session open {}, slots {}, release eligible {}, producer held {}",
+            b.state.court_sessions.contains_key(&id), b.state.court_sessions.len(),
+            b.state.court_service_release_eligible_v1(&plan.original_claim), b.state.court_service_holds_bond_v1(&producer),
+        );
+        assert!(b.state.court_sessions.contains_key(&id), "B-04: the silent session is never ended");
+        assert_eq!(b.state.court_sessions.len(), slots_before, "B-04: it keeps its global court slot");
+        assert!(!b.state.court_service_release_eligible_v1(&plan.original_claim), "B-04: the binding can never be released");
+        assert!(b.state.court_service_holds_bond_v1(&producer), "B-04: the producer's collateral stays held");
+    }
 }

@@ -392,6 +392,31 @@ mod tests {
         ));
     }
 
+    /// **audit(b) B-03 reproducer** (round 1, not a fix): the attribution is not bound to the duty being defaulted. The actor's
+    /// CURRENT turn (turn 1, window opening after every supplied unit) had no supplied opportunity, yet an EARLIER clock of the
+    /// same actor on the same claim (turn 0, already past) supplies the "opportunity" and the default is attributed.
+    #[test]
+    fn audit_b03_an_earlier_turns_clock_attributes_the_current_turns_default() {
+        let (mut s, _) = bound(1_000);
+        observe_all(&mut s, 1_001, 1_101, None);
+        let unpaid: BTreeSet<_> = [bond(2)].into_iter().collect();
+        let mut current = clock(bond(2), 1_150, 1_200);
+        current.turn = 1;
+        current.duty_id = h(20);
+        // Alone, the current turn is a no-slash hold (correct).
+        assert!(matches!(
+            attribute_service_default_v1(&s, h(1), &[&current], &unpaid, true),
+            Ok(CourtServiceAttributionV1::NoSlashHold(_))
+        ));
+        // With the actor's earlier turn-0 clock in the claim's history (what `court_duty_clocks_for_claim_v1` returns): default.
+        let earlier = clock(bond(2), 1_001, 1_040);
+        assert_eq!(
+            attribute_service_default_v1(&s, h(1), &[&earlier, &current], &unpaid, true),
+            Ok(CourtServiceAttributionV1::PartyDefault),
+            "B-03: the turn-1 default is attributed from the turn-0 window"
+        );
+    }
+
     #[test]
     fn court_f02_pending_or_unbound_is_undecided() {
         let (mut s, _) = bound(1_000);

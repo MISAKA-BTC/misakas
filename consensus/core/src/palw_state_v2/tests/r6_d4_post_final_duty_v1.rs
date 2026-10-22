@@ -249,3 +249,42 @@ fn r6_d4_reorg_restores_clocks_answers_and_the_default() {
     }
     assert_eq!(back.state_root(), done);
 }
+
+/// **audit(b) B-02 reproducer** (round 1, not a fix): the post-Final duty is content-free. A decoy accusation by the producer's
+/// ally (any Active bond, a free 64-byte digest) answered with ONE arbitrary byte (never judged) closes the job's post-Final path for
+/// the whole liability horizon: an honest verifier's later accusation is refused ("one at a time") and the fee is released to the
+/// producer at H without any judgement.
+#[test]
+fn audit_b02_a_decoy_accusation_answered_with_garbage_closes_the_post_final_path() {
+    let family = PALW_NATIVE_FAMILY_TEXT_V29;
+    let (mut state, _) = apply_palw_transition_v2(
+        &PalwChainStateV2::genesis(),
+        &params(),
+        &ctx(1, 10, 1),
+        &[
+            bond_registration_with_collateral(5, 7, 21, 1_000_000),
+            bond_registration_with_collateral(6, 8, 22, 1_000_000),
+            bond_registration_with_collateral(7, 9, 23, 1_000_000),
+        ],
+        None,
+    )
+    .expect("the bonds register");
+    state.kernel_route = parent().kernel_route.clone();
+    let honest = bond_key(7);
+    let (p, e) = (armed(), conviction_extras());
+    let mut b = accused(&state, &p, &e, family); // the ally (bond 6) accuses with an arbitrary digest
+    observe_native_post_final_duties_with_v1(&mut b, &ctx(3, ACCUSED + 1, 3), &profile()).unwrap();
+    // The producer "answers" with one garbage byte.
+    answer_post_final_v1(&mut b, &ctx(3, ACCUSED + 2, 3), &producer(), family, &JOB, &[0u8]).unwrap();
+    let after = ctx(4, deadline(&p) + 1, 4);
+    assert!(decide_native_post_final_default_v1(&b, &held(family), after.daa_score, &production).is_err(), "answered: no default");
+    // An honest verifier can no longer accuse this job for the rest of H.
+    assert!(b.state.bond(&honest).is_some_and(|v| matches!(v.status, PalwBondStatusV2::Active)));
+    let refused = accuse_post_final_v1(&mut b, &ctx(5, deadline(&p) + 2, 5), &honest, family, &JOB, [0x77; 64]);
+    eprintln!("[audit-b02] honest accusation after the decoy: {refused:?}");
+    assert!(refused.is_err(), "B-02: the decoy blocks every later post-Final accusation of the job");
+    let refused_late = accuse_post_final_v1(&mut b, &ctx(6, HORIZON - 100, 6), &honest, family, &JOB, [0x78; 64]);
+    assert!(refused_late.is_err());
+    release_held_native_fees_v1(&mut b, HORIZON + 1, |_, _| false).unwrap();
+    assert_eq!(queued(&b.state, held(family).queue), Some((h64(0xB1), 7_000)), "released to the producer at H, never judged");
+}
