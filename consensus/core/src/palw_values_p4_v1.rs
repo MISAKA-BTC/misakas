@@ -8,7 +8,8 @@
 //!
 //! **Nothing here arms a fence, pins an arming or measured record, or changes a shipped preset.** No preset reads these values; each
 //! fence's validator still refuses its activation exactly as before (the tests below check that the refusal stands with the decided
-//! value in place). The lead pins them after the independent verification.
+//! value in place). The 2026-10-22 pin is the parameter register
+//! (`docs/governance/parameter-register.md`), not an activation height.
 //!
 //! No value here is, or relies on, a cryptographic proof of computation (PRINCIPLES §8); the hash below is a nothing-up-my-sleeve
 //! derivation of a public seed, not evidence of any computation. No per-model verification is introduced (PRINCIPLES §9).
@@ -19,8 +20,9 @@ use crate::palw_bond_budget_v1::{
 };
 use misaka_palw_kernel::hash::{Digest, object_id};
 
-/// The status every value in this module carries until the independent verification and the lead's pin.
-pub const PALW_P4_VALUES_STATUS_V1: &str = "decided, awaiting independent verification";
+/// The status of this module after the 2026-10-22 parameter-register pin. Fences stay unarmed.
+pub const PALW_P4_VALUES_STATUS_V1: &str =
+    "pinned 2026-10-22 in the parameter register; fences unarmed";
 
 /// **V12 / R1: the allocation epoch, DAA** — one day-equivalent (720 DAA): the coarsest epoch that divides the user's 7-day average
 /// (5,040 DAA) into whole days, equal to the common 1-day hold of both Panel modes.
@@ -206,7 +208,10 @@ mod tests {
         assert_eq!(p.average_epochs(), Some(7), "7 day-equivalents over 1-day epochs");
         assert_eq!(p.curve.alpha_halves, 3, "alpha = 1.5");
         assert_eq!(p.epoch_daa, 720);
-        assert_eq!(PALW_P4_VALUES_STATUS_V1, "decided, awaiting independent verification");
+        assert_eq!(
+            PALW_P4_VALUES_STATUS_V1,
+            "pinned 2026-10-22 in the parameter register; fences unarmed"
+        );
         // Refusals: every user term is pinned by validate, and the lane's terms keep their invariants.
         let refused = |f: &dyn Fn(&mut PalwModelAllocationPolicyV1)| {
             let mut q = palw_model_allocation_policy_decided_v1();
