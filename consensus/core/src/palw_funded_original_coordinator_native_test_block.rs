@@ -72,8 +72,14 @@
             let payer = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x7A; 32]);
             let payer_pub = payer.verification_key.as_ref().to_vec();
             let refund = kaspa_hashes::blake2b_512_address_payload(&payer_pub);
-            let carrier_of = |amount: u64, sign_amount: u64| -> (Transaction, PalwFundedOriginalPairingV1) {
-                let terms = FundingTermsV1 {
+            // `edit` changes the terms BEFORE the payer signs (the payer really signed them); `stale` changes them AFTER (a signature
+            // over other terms). Construction and pairing refusals surface as `Err` (the carrier is then never a funded pairing).
+            let carrier_with = |amount: u64,
+                                sign_amount: u64,
+                                edit: &dyn Fn(&mut FundingTermsV1),
+                                stale: &dyn Fn(&mut FundingTermsV1)|
+             -> Result<(Transaction, PalwFundedOriginalPairingV1), String> {
+                let mut terms = FundingTermsV1 {
                     version: 1,
                     network_domain: extras.tir_public_network_domain_v1.unwrap(),
                     claim,
@@ -94,10 +100,12 @@
                     refund_payload: refund,
                     nonce: h(0x0CE),
                 };
+                edit(&mut terms);
                 let signature = libcrux_ml_dsa::ml_dsa_87::sign(&payer.signing_key, terms.id_v1().as_byte_slice(),
                     COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1, [0x7B; 32]).unwrap().as_ref().to_vec();
+                stale(&mut terms);
                 let tfo1 = crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::new_v1(
-                    envelope.encode_v1().unwrap(), FundingConsentV1 { terms, signature }, payer_pub.clone()).unwrap();
+                    envelope.encode_v1().unwrap(), FundingConsentV1 { terms, signature }, payer_pub.clone())?;
                 let tx = Transaction::new(
                     0,
                     vec![TransactionInput::new(TransactionOutpoint::new(h(0xF00D), 0), vec![], 0, 0)],
@@ -108,11 +116,12 @@
                     0,
                     crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
                     0,
-                    tfo1.encode_v1().unwrap(),
+                    tfo1.encode_v1()?,
                 );
-                let pairing = palw_funded_original_pairing_v1(&tx).unwrap();
-                (tx, pairing)
+                let pairing = palw_funded_original_pairing_v1(&tx)?;
+                Ok((tx, pairing))
             };
+            let carrier_of = |amount: u64, sign_amount: u64| carrier_with(amount, sign_amount, &|_| {}, &|_| {}).unwrap();
             let (_carrier, pairing) = carrier_of(1_000, 1_000);
             let with = |sched: Option<PalwFundedOriginalScheduleV1>, pairing: &PalwFundedOriginalPairingV1| {
                 let mut e = probe_extras.clone();
@@ -216,9 +225,74 @@
             let required = crate::palw_funded_original_admission_v1::funded_required_amount_v1(700, 300, 0, deposit).unwrap();
             let (_, short) = carrier_of(required - 1, required - 1);
             assert!(matches!(run(&served, &with(Some(schedule(all_roles)), &short)), Err(FundedOriginalRefusalV1::Invalid(_))));
-            // 6. A schedule profile the payer did not sign (caller profile hash is not policy) → refused.
-            let other = PalwFundedOriginalScheduleV1::test_only_v1([h(1), profiles[1], profiles[2], profiles[3]], 700, 300, budgets.0, budgets.1, budgets.2, all_roles);
-            assert!(matches!(run(&served, &with(Some(other), &pairing)), Err(FundedOriginalRefusalV1::Invalid(_))));
+            // 6. A schedule profile the payer did not sign (caller profile hash is not policy) → refused by the payer-consent check.
+            // fix-funded: the schedule must carry the admission values, or the earlier typed-missing `AdmissionSchedule` answers
+            // first and the profile comparison is never reached (the original reproducer's schedule had none).
+            let consent_refused = |r: Result<_, FundedOriginalRefusalV1>| {
+                matches!(r, Err(FundedOriginalRefusalV1::Invalid(why)) if why == "payer consent does not cover the native scope, amount, horizon or interval")
+            };
+            for slot in 0..4 {
+                let mut unsigned = profiles;
+                unsigned[slot] = h(0x1_000 + slot as u64);
+                let other = PalwFundedOriginalScheduleV1::test_only_v1(unsigned, 700, 300, budgets.0, budgets.1, budgets.2, all_roles)
+                    .with_admission_v1(admission);
+                assert!(consent_refused(run(&served, &with(Some(other), &pairing))), "unsigned schedule profile slot {slot} is refused");
+                // At the seam: the typed refusal writes nothing (no FP, frame or escrow delta); the carrier stays ordinary and its
+                // funding output stays the payer's own P2PKH fallback.
+                let other_extras = with(Some(other), &pairing);
+                let b = TransitionBuilder::try_new(&served, &params, false, false, false, false, &other_extras).unwrap();
+                let before = b.state.state_root();
+                let prepared = prepare_paired_original_v1(&b, &ctx, &object, Some(&fp.commitment)).unwrap();
+                assert!(admit_original_v1(&b, &ctx, claim, prepared).is_err());
+                assert_eq!(b.state.state_root(), before);
+                assert!(b.state.funded_escrows_v1().is_empty() && b.state.claim(&claim).is_none());
+                let out = &pairing.carrier().outputs[pairing.outpoint().index as usize];
+                assert_eq!(crate::mldsa87_primitives::p2pkh_mldsa87_payload(&out.script_public_key), Some(refund));
+            }
+            // 6b. fix-funded: every signed term is bound. (i) Terms the coordinator re-derives natively (network, source, graph scope,
+            // the four profiles, material horizon, acceptance interval): the payer validly signed a different value, the TFO1 pairs,
+            // and the coordinator refuses it.
+            assert!(ctx.daa_score >= 2);
+            let rederived: Vec<(&str, Box<dyn Fn(&mut FundingTermsV1)>)> = vec![
+                ("network_domain", Box::new(|t| t.network_domain = h(0xD0))),
+                ("source_id", Box::new(|t| t.source_id = h(0xD1))),
+                ("relative_graph_id", Box::new(|t| t.relative_graph_id = h(0xD2))),
+                ("fee_profile_id", Box::new(|t| t.fee_profile_id = h(0xD3))),
+                ("capital_profile_id", Box::new(|t| t.capital_profile_id = h(0xD4))),
+                ("retention_profile_id", Box::new(|t| t.retention_profile_id = h(0xD5))),
+                ("settlement_policy_id", Box::new(|t| t.settlement_policy_id = h(0xD6))),
+                ("material_until_daa short", Box::new(|t| t.material_until_daa = material_until - 1)),
+                ("acceptance not yet open", Box::new(|t| t.accept_from_daa = ctx.daa_score + 1)),
+                ("acceptance already closed", Box::new(|t| {
+                    t.accept_from_daa = ctx.daa_score - 2;
+                    t.accept_until_daa = ctx.daa_score - 1;
+                })),
+            ];
+            for (field, edit) in &rederived {
+                let (_, signed) = carrier_with(1_000, 1_000, edit.as_ref(), &|_| {}).unwrap_or_else(|e| panic!("{field}: {e}"));
+                assert!(consent_refused(run(&served, &with(Some(schedule(all_roles)), &signed))), "{field}: refused");
+            }
+            // (ii) Terms fixed by the literal original or the actual output (claim, job identity, execution root, payer key, refund
+            // payload, funding output index and amount): the TFO1 is not constructible or does not pair with its own carrier, so it
+            // never reaches the coordinator as a funded pairing.
+            let unpairable: Vec<(&str, u64, Box<dyn Fn(&mut FundingTermsV1)>)> = vec![
+                ("claim", 1_000, Box::new(|t| t.claim = h(0xE0))),
+                ("job_identity", 1_000, Box::new(|t| t.job_identity = h(0xE1))),
+                ("execution_root", 1_000, Box::new(|t| t.execution_root = h(0xE2))),
+                ("payer_key_id", 1_000, Box::new(|t| t.payer_key_id = h(0xE3))),
+                ("refund_payload", 1_000, Box::new(|t| t.refund_payload = h(0xE4))),
+                ("funding_output_index other output", 1_000, Box::new(|t| t.funding_output_index = 0)),
+                ("funding_output_index absent", 1_000, Box::new(|t| t.funding_output_index = 2)),
+                ("funding_amount below actual", 999, Box::new(|_| {})),
+                ("funding_amount above actual", 1_001, Box::new(|_| {})),
+            ];
+            for (field, signed_amount, edit) in &unpairable {
+                assert!(carrier_with(1_000, *signed_amount, edit.as_ref(), &|_| {}).is_err(), "{field}: never a funded pairing");
+            }
+            // (iii) A signature over other terms (terms changed after signing; scope untouched) → refused by the payer signature.
+            let (_, tampered) = carrier_with(1_000, 1_000, &|_| {}, &|t| t.nonce = h(0xE5)).unwrap();
+            assert!(consent_refused(run(&served, &with(Some(schedule(all_roles)), &tampered))));
+            assert!(served.funded_escrows_v1().is_empty(), "a refused coordination writes nothing");
             // 7. The current producer authority changed after signing → refused by the actor catalog.
             {
                 let mut rotated = served.clone();
