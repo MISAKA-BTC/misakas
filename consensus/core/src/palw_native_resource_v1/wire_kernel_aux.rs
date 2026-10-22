@@ -109,7 +109,9 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 140=>return Err(wire::wire_bad("unallocated settlement-once row namespace")),
 // RFC-0018 (2026-10-15): SecurityCertified rows (aux 136, 65-byte keys: prefix ‖ 64-byte id).
 144 if key_bytes==65 && prefix==b'F'=>crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1::scan_native_wire_v1(frame)?,
-144 if key_bytes==65 && prefix==b'R'=>crate::palw_claim_local_v1::PalwClaimLocalRewardHoldV1::scan_native_wire_v1(frame)?,144 if key_bytes==65 && prefix==b'C'=>crate::palw_claim_local_v1::PalwClaimLocalCheckpointV1::scan_native_wire_v1(frame)?,
+144 if key_bytes==65 && prefix==b'R'=>crate::palw_claim_local_v1::PalwClaimLocalRewardHoldV1::scan_native_wire_v1(frame)?,
+// RFC-0023 stage 2 (2026-10-22): the single claim-local checkpoint row, key 'C' followed by 64 zero bytes.
+144 if key_bytes==65 && prefix==b'C' && k[1..].iter().all(|b|*b==0)=>crate::palw_claim_local_v1::PalwClaimLocalCheckpointV1::scan_native_wire_v1(frame)?,
 144=>return Err(wire::wire_bad("unallocated claim-local liability namespace")),
 136 if n==72 && ((key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_FRONTIER_FLOOR_PREFIX_V1 && k[1..].iter().all(|b|*b==0)) || k==b"f")=><(u64,[u8;64]) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
 136 if key_bytes==65 && matches!(prefix,crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1|crate::palw_security_certification_v1::CERTIFICATION_NATIVE_MINING_PREFIX_V39)=>crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?,

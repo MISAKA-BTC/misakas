@@ -5,6 +5,12 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# Claude 2026-10-22: upstream ScriptPublicKey = (u16 version, Vec<u8> script) in derived order; reached via funded-original pairing.
+'crate::tx::script_public_key::ScriptPublicKey': ('reviewed-field-layout','b09c259eb179559998c7f9db8a51f40dc7afd81c0b2b5851f126ccba479b7f4b'),
+# Claude 2026-10-22: TransactionMass = one u64 (AtomicU64 wrapper), reached via the funded-original pairing's carrier in extras.
+'crate::tx::TransactionMass': ('reviewed-field-layout','65e95a8b99dee19d4612d720ab0fa64e28ef24c2f571a0c862690dbb22773151'),
+# Claude 2026-10-22: TFO1 derived order (version, bytes, consent, bytes); decoder bounds both byte fields, checks version/structure.
+'crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1': ('reviewed-field-layout','ab92c70ec6b555e0ba099174e87f63c4d654a48799c7d95869a7ef28628597ba'),
 # Claude 2026-10-22: same field order as derived serialize; only bytes decode bounded to PART (read_bounded_bytes_v1).
 'crate::palw_court_shared_material_intake_v1::MaterialPartV1': ('reviewed-field-layout','53e3c9266ea706f9362179965fb9fe26dce3e3a07f9ba1cccb2fb996b36c451a'),
 # Claude 2026-10-22: derived serialize (terms, u32 len, bytes); decoder only adds terms check and exact ML-DSA-87 signature length.
@@ -34,7 +40,8 @@ PINNED = {
 'crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1': ('reviewed-field-layout','049c32133b7944f49670cbffd8ad581e47bd0e7f8cc3369b969fb93969026178'),
 'crate::palw_staged_bundle_v1::PalwStagedFamilyCheckpointV1': ('reviewed-field-layout','734f45329f56538ee85d85977e841f357de05634b6b37b846622feaea926780b'),
 'crate::palw_staged_bundle_v1::PalwStagedFamilyRowV1': ('reviewed-field-layout','b92b6935c58487df4bdf9f5e254db9a43e018a57463827d3cf49b1bc0c01270a'),
-'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','81bf93a51e0c411f0a9b1ddfbd872bdf498f206686b96672d072e4701461abcd'),
+# Claude 2026-10-22: + funded-escrow tail 0xFB (unique among 74 tails), written only when non-empty; empty == old bytes.
+'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','fae49b9fb9176b4cac4efb8e35f6d99e508d1462a3e2d6b7e139fbf2339e6066'),
 'crate::palw_tir_prefix_owned_v1::PalwTirPrefixLeafAnswerV1': ('reviewed-field-layout','1aa6332539dd6d430025fdd6d15e1737c9ccd0fad6ced34bc4798e4dcbfad422'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicChunkRecordV1': ('reviewed-field-layout','394604fa55e5ec254a05265c967a3604f9584f90505e54083bcd28b91b626d92'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicContractV1': ('reviewed-field-layout','a37709c03faa51fcc923e9055aa29a280ab0b09ef3cfa086ef66997762cf745f'),
