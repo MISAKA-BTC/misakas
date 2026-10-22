@@ -1082,8 +1082,13 @@ fn apply_verified_control_inner_v1(
         Effect::PreparationDefault(default) => Some(std::iter::once(default.actor).collect()),
         _ => None,
     };
+    // audit B-01 (fix-b): the book is read in EITHER row variant (`court_service_state_v1`); the released (V3) form must not skip
+    // the guard. audit N-1/B-03 (fix-b): the guard collects each unpaid actor's OUTSTANDING duty clock (the defaulted duty) and the
+    // F02 attribution decides from it alone; a `PartyDefault` it returns is what lets the charge below proceed on a bound claim.
+    let mut f02_attributed = false;
     if unpaid.is_some() {
-        if let Some(Row::CourtService(service)) = b.state.staged_court_row_v1(&Key::CourtService) {
+        if let Some(service) = b.state.court_service_state_v1().cloned() {
+            let mut defaulted: Vec<crate::palw_court_duty_clock_v1::CourtDutyClockV1> = Vec::new();
             if service.claims.contains_key(&frame.plan_v1().original_claim) {
                 if let T::Acquisition { owner, reserved_daa } = control.target {
                     let key = owner_key(frame, owner, reserved_daa)?;
@@ -1094,17 +1099,21 @@ fn apply_verified_control_inner_v1(
                         if !duty.response_fits_original_hard {
                             return Err(refused("native response exceeds original service hard bound; no party default"));
                         }
+                        if let Some(Row::CourtDutyClock(clock)) = b.state.staged_court_row_v1(&Key::CourtDutyClock(duty.id)) {
+                            defaulted.push((**clock).clone());
+                        }
                     }
                 }
             }
             // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): with the explicit inclusion premise in force (the conviction fence
-            // and a pinned service profile), attribute from the RECORDED reserved supply and the actors' native duty clocks:
-            // supplied-and-silent defaults through the existing path below; unsupplied is a no-slash hold. Otherwise the legacy
+            // and a pinned service profile), attribute from the RECORDED reserved supply and the defaulted duty's own clock:
+            // supplied-and-silent defaults through the attributed charge below; unsupplied is a no-slash hold. Otherwise the legacy
             // deny-only guard is unchanged.
             if super::palw_court_service_lifecycle_fold_v1::court_service_f02_active_v1(b) {
                 let unpaid = unpaid.as_ref().expect("default effect was matched");
-                match service.default_attribution_v1(&b.state, &frame, unpaid, true).map_err(refused)? {
-                    crate::palw_court_service_binding_v1::CourtServiceAttributionV1::PartyDefault => {}
+                let refs: Vec<&crate::palw_court_duty_clock_v1::CourtDutyClockV1> = defaulted.iter().collect();
+                match service.default_attribution_v1(&frame, &refs, unpaid, true).map_err(refused)? {
+                    crate::palw_court_service_binding_v1::CourtServiceAttributionV1::PartyDefault => f02_attributed = true,
                     crate::palw_court_service_binding_v1::CourtServiceAttributionV1::NoSlashHold(why) => return Err(refused(why)),
                 }
             } else {
@@ -1191,14 +1200,27 @@ fn apply_verified_control_inner_v1(
     }
     if let Some(unpaid) = unpaid {
         let claim = b.state.claim(&control.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(control.claim))?;
-        b.staged_selected_default_charge_v1(
-            ctx,
-            control.claim,
-            &claim,
-            frame.custody_v1().pledge_v1().producer,
-            &unpaid,
-            control.signer,
-        )?;
+        if f02_attributed {
+            // audit N-1 (fix-b): the adopted F02 attribution (ADR-0192 A) established THIS duty's supplied opportunity and the
+            // actors' silence, so the bound claim's default is charged through the common economic leg.
+            b.staged_selected_default_charge_attributed_v1(
+                ctx,
+                control.claim,
+                &claim,
+                frame.custody_v1().pledge_v1().producer,
+                &unpaid,
+                control.signer,
+            )?;
+        } else {
+            b.staged_selected_default_charge_v1(
+                ctx,
+                control.claim,
+                &claim,
+                frame.custody_v1().pledge_v1().producer,
+                &unpaid,
+                control.signer,
+            )?;
+        }
     }
     Ok(())
 }
@@ -6364,54 +6386,8 @@ mod conviction_e2e_tests {
         }
     }
 
-    /// **audit(b) B-01 reproducer** (round 1, not a fix): the TIR default guard reads the service book only in its LEGACY row
-    /// variant (`Row::CourtService`). Once the book is rewritten in its released form (`Row::CourtServiceV3`, which the D1 release
-    /// step does at the first release and never undoes), the same bound claim with the same unsupplied packet is defaulted.
-    #[test]
-    fn audit_b01_released_service_row_skips_the_f02_default_guard() {
-        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
-        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
-        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
-        let fx = palw_tir_public_frame_fixture_v1(None, 4);
-        let frame = fx.frame.clone();
-        let (state, params, extras, acquisition, _) = demanded_world(&fx, &frame, 0);
-        let (demand_id, until, turn, _) = owner_pending(&frame, &state, acquisition);
-        let base = frame.plan_v1().terms.accepted_daa;
-        let ctx = at(&frame, until - base);
-        let control = Control { version: 1, claim: frame.plan_v1().original_claim,
-            allocation_id: frame.plan_v1().allocation_id, source_id: frame.plan_v1().source_id,
-            target: acquisition, expected_turn: turn, declared_rent_sompi: 0, signer: outsider(),
-            action: A::Acquisition(Owned::Collect { demand_id }), signature: vec![5; SIG] };
-        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
-        let mut book = ServiceReservations::new(cost).unwrap();
-        book.reserve(&[ServicePacket { id: [1; 64], release_daa: base + 1, service_before: base + 2, cost }], base + 10_000).unwrap();
-        // The packet's slot (base+1) is never supplied: the assessment is MissingSupply (a no-slash hold under F02).
-        book.observe_block(base + 2, [12; 64], Default::default()).unwrap();
-        let service = CourtServiceStateV2 { version: 2, source_profile_id: Hash64::from_u64_word(42),
-            profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(42)), book,
-            claims: std::collections::BTreeMap::from([(control.claim, ServiceClaimBinding {
-                claim: control.claim, allocation_id: control.allocation_id, source_id: control.source_id,
-                original_accepted_daa: base, hard_deadline_daa: base + 10_000,
-                packet_ids: std::collections::BTreeSet::from([[1; 64]]) })]) };
-        let mut extras = extras.clone();
-        extras.tir_public_conviction_active = true;
-        // Legacy row: denied, nothing moves.
-        let mut v2 = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        v2.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service.clone()).into()))).unwrap();
-        let err = apply_verified_control_v1(&mut v2, &ctx, &frame, &control).unwrap_err();
-        assert!(format!("{err:?}").contains("supply is missing"), "{err:?}");
-        // The SAME book and binding in the released row form (nothing released yet).
-        let mut v3 = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        let row3 = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&service);
-        v3.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(row3).into()))).unwrap();
-        assert!(v3.state.court_service_holds_claim_v1(&control.claim), "the claim is still bound");
-        let before = v3.state.state_root();
-        let result = apply_verified_control_v1(&mut v3, &ctx, &frame, &control);
-        eprintln!("[audit-b01] released-row default: {result:?}; state changed: {}", v3.state.state_root() != before);
-        assert!(result.is_ok() && v3.state.state_root() != before,
-            "B-01: with the released row the unsupplied claim is defaulted (expected: the same no-slash denial)");
-    }
-
+    // fix-b: the round-1 reproducer `audit_b01_…` asserted the DEFECT (a V3-row default) and is superseded by
+    // `verify2_b01_…` below, which asserts the corrected behaviour.
     /// **audit(b) B-04 reproducer** (round 1, not a fix): a court session on a service-bound claim has no terminal path for
     /// silence. The deadline sweep skips it at every height (here 100,000 DAA past the claim's hard deadline), so the session holds
     /// a global court slot forever, the binding can never be released (`open_courts_of > 0`) and the producer's collateral stays
@@ -6516,7 +6492,9 @@ mod conviction_e2e_tests {
         // "supply is missing"), but `staged_selected_default_charge_v1` (transition_builder.rs:3039) refuses every default charge on
         // a service-held claim, and `apply_verified_control_v1`'s checkpoint restores the transition. Regression guard: nothing moves.
         assert!(result.is_err() && !changed, "B-01: a released-row bound claim must not be defaulted; got {result:?}");
-        assert!(!format!("{:?}", result.unwrap_err()).contains("supply is missing"), "observation: the F02 guard itself is bypassed");
+        // fix-b (B-01 hygiene, load-bearing since N-1 connects the attributed charge): the guard now reads the book in EITHER row
+        // variant, so the released row is refused by the F02 guard itself (the round-2 observation recorded the bypass).
+        assert!(format!("{:?}", result.unwrap_err()).contains("supply is missing"), "the F02 guard reads the released (V3) row");
     }
 
     /// **audit(verify-2) B-04** expected-vs-actual (FAILS on current code): a court session on a service-bound claim has no terminal path for

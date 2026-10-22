@@ -178,6 +178,14 @@ pub enum CourtServiceAttributionV1 {
 
 /// **RFC-0026 §4 / ADR-0192 A: attribution from RECORDED reserved supply.** `Err` = not decidable yet (pending, unknown
 /// obligation, inconsistent book, premise not adopted); never a default.
+///
+/// **audit B-03 (fix-b): bound to the duty being defaulted.** `clocks` are the clocks of the duty being defaulted (callers pass
+/// exactly that duty's clock; a caller that hands over an actor's history is read the same way): for each actor only its LATEST clock
+/// per acquisition (highest `(turn, first_eligible_daa)`) is the defaulted duty — an earlier turn's clock is superseded history and
+/// never supplies the opportunity. That duty counts as opportunity-supplied only through the actor's OWN canonical packet for that
+/// turn (`court_service_packet_id_v1(claim, allocation, source, actor, turn)`): reserved in the binding, `OpportunityProvided`, and
+/// assigned to a DAA inside that clock's eligible window. Another signer's packet, another turn's packet, or a supplied unit outside
+/// the window is a no-slash hold.
 pub fn attribute_service_default_v1(
     service: &CourtServiceStateV2,
     claim: Hash64,
@@ -189,7 +197,6 @@ pub fn attribute_service_default_v1(
     if service.check_live_v1().is_err() {
         return Err("court service state is inconsistent");
     }
-    let mut supplied = Vec::with_capacity(binding.packet_ids.len());
     let mut missing = false;
     for id in &binding.packet_ids {
         match service.book.assess(id) {
@@ -197,7 +204,7 @@ pub fn attribute_service_default_v1(
             ServiceAssessment::Pending => return Err("court service opportunity is still pending"),
             ServiceAssessment::MissingSupply => missing = true,
             ServiceAssessment::OpportunityProvided => {
-                supplied.push(*service.book.assignments.get(id).ok_or("court service assignment is missing")?)
+                service.book.assignments.get(id).ok_or("court service assignment is missing")?;
             }
         }
     }
@@ -213,12 +220,22 @@ pub fn attribute_service_default_v1(
         return Err("court service default names no responsible actor");
     }
     for actor in unpaid {
-        let had = clocks.iter().any(|c| {
-            c.claim == claim && c.answerer == *actor && supplied.iter().any(|daa| c.stage_started_before_unit(*daa))
+        let mine: Vec<&CourtDutyClockV1> = clocks.iter().copied().filter(|c| c.claim == claim && c.answerer == *actor).collect();
+        // The defaulted duty: the actor's latest clock of each acquisition (an earlier turn/stage is superseded history).
+        let latest = mine.iter().copied().filter(|c| {
+            !mine.iter().any(|o| {
+                o.acquisition == c.acquisition && (o.turn, o.first_eligible_daa) > (c.turn, c.first_eligible_daa)
+            })
+        });
+        let had = latest.into_iter().any(|c| {
+            let own = court_service_packet_id_v1(claim, binding.allocation_id, binding.source_id, actor, c.turn);
+            binding.packet_ids.contains(&own)
+                && service.book.assess(&own) == ServiceAssessment::OpportunityProvided
+                && service.book.assigned_daa(&own).is_some_and(|daa| c.stage_started_before_unit(daa))
         });
         if !had {
             return Ok(CourtServiceAttributionV1::NoSlashHold(
-                "responsible actor had no supplied reserved unit inside its eligible response window; no party default",
+                "responsible actor had no supplied reserved unit of its own for the defaulted turn inside that duty's window; no party default",
             ));
         }
     }
@@ -408,13 +425,13 @@ mod tests {
             attribute_service_default_v1(&s, h(1), &[&current], &unpaid, true),
             Ok(CourtServiceAttributionV1::NoSlashHold(_))
         ));
-        // With the actor's earlier turn-0 clock in the claim's history (what `court_duty_clocks_for_claim_v1` returns): default.
+        // With the actor's earlier turn-0 clock in the claim's history (what `court_duty_clocks_for_claim_v1` returns): fix-b binds
+        // the attribution to the defaulted (latest) turn and its own packet, so the earlier window no longer attributes it.
         let earlier = clock(bond(2), 1_001, 1_040);
-        assert_eq!(
+        assert!(matches!(
             attribute_service_default_v1(&s, h(1), &[&earlier, &current], &unpaid, true),
-            Ok(CourtServiceAttributionV1::PartyDefault),
-            "B-03: the turn-1 default is attributed from the turn-0 window"
-        );
+            Ok(CourtServiceAttributionV1::NoSlashHold(_))
+        ), "B-03 fixed: the turn-1 default is not attributed from the turn-0 window");
     }
 
     /// **audit(verify-2) B-03** — expected-vs-actual: the duty being defaulted is the actor's CURRENT turn (window 1,150..1,200,
