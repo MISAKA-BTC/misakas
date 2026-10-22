@@ -202,6 +202,8 @@ mod palw_court_capacity_fold_v1;
 mod palw_staged_court_fold_v1;
 #[path = "palw_court_shared_tir_fold_v1.rs"]
 mod palw_court_shared_tir_fold_v1;
+#[path = "palw_court_service_lifecycle_fold_v1.rs"]
+mod palw_court_service_lifecycle_fold_v1;
 #[path = "palw_tir_public_fold_v1.rs"]
 mod palw_tir_public_fold_v1;
 pub use palw_tir_public_fold_v1::{
@@ -14703,6 +14705,10 @@ fn apply_palw_transition_v7_inner(
     for object in accepted_objects {
         apply_object(&mut builder, ctx, object)?;
     }
+    // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): this accepting block's actual reserved court service supply, after every
+    // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned
+    // service profile only (none is pinned).
+    palw_court_service_lifecycle_fold_v1::observe_court_service_block_v1(&mut builder, ctx)?;
     // 3″. G14 lane D: the kernel route's closing step — demand deadlines, windows, Final, liability release, and the settlements
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;

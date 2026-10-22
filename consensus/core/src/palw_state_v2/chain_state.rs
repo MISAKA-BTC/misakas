@@ -2433,6 +2433,32 @@ impl PalwChainStateV2 {
         self.staged_courts.get(key)
     }
 
+    /// **G14 lane court-f02: every native duty clock of `claim`** (RFC-0028 history read by the F02 attribution). A scan of the
+    /// staged rows: duty clocks are keyed by duty id, not claim.
+    pub fn court_duty_clocks_for_claim_v1(&self, claim: Hash64) -> Vec<&crate::palw_court_duty_clock_v1::CourtDutyClockV1> {
+        self.staged_courts
+            .values()
+            .filter_map(|row| match row {
+                crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtDutyClock(clock) if clock.claim == claim => {
+                    Some(clock.as_ref())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// **G14 lane court-f02 (RFC-0031): the DAA of `claim`'s initial shared notice** — the earliest native shared request row
+    /// (`CourtSharedQuery`) recorded for it, if any. Rooted: the rows come and go with the staged-court delta on reorg.
+    pub fn court_shared_initial_notice_daa_v1(&self, claim: Hash64) -> Option<u64> {
+        self.staged_courts
+            .values()
+            .filter_map(|row| match row {
+                crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtSharedQuery(q) if q.claim == claim => Some(q.opened_daa),
+                _ => None,
+            })
+            .min()
+    }
+
     /// Derived lifecycle consistency only, not proof of a new paid acquisition
     /// or raw-source grant. Admission remains disabled until the full native
     /// allocation and distinct custody pledge/grants are wired.

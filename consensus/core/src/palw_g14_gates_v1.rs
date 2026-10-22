@@ -485,10 +485,26 @@ impl Params {
             | PalwG14GatedFenceV1::LegacyPublicFilerV1
             | PalwG14GatedFenceV1::LegacyHeldDaV2
         ) {
-            return Err(PalwModeV2Error::Invalid(
-                "OneOutsiderCapacityIncomplete: RFC-0026 F03 shared localization under colluding owner occupancy is incomplete; \
-                 ServiceOpportunityIncomplete: F02 deterministic service opportunities and inclusion assumptions are not adopted",
-            ));
+            // G14 lane court-f02: each half clears only on its own evidence. F02 needs the attribution, the admission binding, the
+            // shared lifecycle dispatch and native notice intake (all present) AND a pinned service profile (typed-missing, so it
+            // still refuses). F03's outsider capacity clears only when the court-owner outsider lane is in force at or below this
+            // fence.
+            let service = crate::palw_court_service_binding_v1::palw_court_service_opportunity_complete_v1();
+            let outsider = fence.armed(self).zip(self.palw_court_outsider_lane_v1_fence())
+                .is_some_and(|(at, lane)| lane.daa_score() <= at.daa_score());
+            match (outsider, service) {
+                (true, true) => {}
+                (false, false) => return Err(PalwModeV2Error::Invalid(
+                    "OneOutsiderCapacityIncomplete: RFC-0026 F03 shared localization under colluding owner occupancy is incomplete; \
+                     ServiceOpportunityIncomplete: F02 deterministic service opportunities and inclusion assumptions are not adopted",
+                )),
+                (false, true) => return Err(PalwModeV2Error::Invalid(
+                    "OneOutsiderCapacityIncomplete: RFC-0026 F03 needs palw_court_outsider_lane_v1 in force at or below this fence",
+                )),
+                (true, false) => return Err(PalwModeV2Error::Invalid(
+                    "ServiceOpportunityIncomplete: RFC-0026 F02 has no pinned court service profile (PALW_COURT_SERVICE_PROFILE_V1)",
+                )),
+            }
         }
         Ok(())
     }

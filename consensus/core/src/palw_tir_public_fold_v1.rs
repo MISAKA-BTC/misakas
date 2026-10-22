@@ -675,8 +675,12 @@ pub(super) fn install_original_v1(
     keep_original_prompt_ids_v1(b, &frame, native.prompt_form, prompt)?;
     // The native dispatcher atomically owns the ordinary FP writes and these two
     // rows. Neither a separately submitted quote nor a historical FP can enter.
+    let original_claim = p.original_claim;
     b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(Box::new(prep).into())))?;
     b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
+    // G14 lane court-f02 (RFC-0028): ordinary admission installs the original's court service binding once its frame row exists.
+    // Dormant (no row) below `palw_tir_public_conviction_v1` or without a pinned service profile.
+    super::palw_court_service_lifecycle_fold_v1::install_court_service_binding_v1(b, ctx, original_claim)?;
     Ok(())
 }
 
@@ -1092,7 +1096,19 @@ fn apply_verified_control_inner_v1(
                     }
                 }
             }
-            service.default_hold(&frame).map_err(refused)?;
+            // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): with the explicit inclusion premise in force (the conviction fence
+            // and a pinned service profile), attribute from the RECORDED reserved supply and the actors' native duty clocks:
+            // supplied-and-silent defaults through the existing path below; unsupplied is a no-slash hold. Otherwise the legacy
+            // deny-only guard is unchanged.
+            if super::palw_court_service_lifecycle_fold_v1::court_service_f02_active_v1(b) {
+                let unpaid = unpaid.as_ref().expect("default effect was matched");
+                match service.default_attribution_v1(&b.state, &frame, unpaid, true).map_err(refused)? {
+                    crate::palw_court_service_binding_v1::CourtServiceAttributionV1::PartyDefault => {}
+                    crate::palw_court_service_binding_v1::CourtServiceAttributionV1::NoSlashHold(why) => return Err(refused(why)),
+                }
+            } else {
+                service.default_hold(&frame).map_err(refused)?;
+            }
         }
     }
     if let Some(unpaid) = &unpaid {
