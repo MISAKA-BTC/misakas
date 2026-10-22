@@ -78,6 +78,8 @@ def decimal(value, name):
 
 
 def require_real(rows):
+    if not rows:
+        raise NotObservable('no real-process observation was recorded')
     for row in rows:
         if not isinstance(row, dict) or row.get('source') not in AUTHORITATIVE_SOURCES or row.get('synthetic'):
             raise NotObservable('fixture-sourced or synthetic evidence cannot certify an RFC-0012 predicate')
@@ -267,6 +269,8 @@ def root_consistency(rows):
 
 def finalized_history(rows_by_role):
     """Publication history over each role's own DB: no silent relabel, sticky conflict, named withdrawal."""
+    if not rows_by_role:
+        raise NotObservable('no process publication history was recorded')
     unknown, transitions, conflicts, withdrawals = 0, 0, 0, 0
     for role, rows in rows_by_role.items():
         require_real(rows)

@@ -35,6 +35,14 @@ def verdict(function, *args):
 
 
 class ConsumerCoherence(unittest.TestCase):
+    def test_empty_evidence_cannot_be_observed(self):
+        cases = ((J.agreement, []), (J.finalized_history, {}),
+                 (J.finalized_history, {'A': []}),
+                 (J.finalized_history, {'A': [row()], 'B': []}))
+        for predicate, evidence in cases:
+            with self.subTest(predicate=predicate.__name__, evidence=evidence):
+                self.assertEqual(verdict(predicate, evidence), J.BLOCKED)
+
     def test_coherent_row_is_observed_with_executed_order(self):
         facts = J.consumer_row(row(), IDENTITY)
         self.assertEqual(facts['evmNumbers'], dict(latest=30, safe=20, finalized=10))
