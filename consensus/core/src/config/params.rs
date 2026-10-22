@@ -3218,8 +3218,8 @@ pub struct Params {
     /// class's registration DAA), its claims are refused at the claim gate where the fold holds its graph, and a court close of a
     /// claim accepted past it convicts where the fold does not (keyed on the claim's acceptance DAA). Pays and weights nothing.
     /// **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only in both
-    /// fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_cell_coverage_closure_v1`]) until its
-    /// rule is verified.
+    /// fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_cell_coverage_closure_v1`]) until an
+    /// arm-readiness record for the network and height is pinned (`PALW_CELL_COVERAGE_CLOSURE_ARMING_RECORDS_V1`, empty).
     pub palw_cell_coverage_closure_v1: Option<ForkActivation>,
     /// **palw_g14_route_required_v1** — the audit's G-01 option (b), adopted by the user 2026-10-16 for the legacy route at the DAA
     /// 14,000 release ([`crate::palw_g14_gates_v1`]): past it a newly admitted claim of a family with no armed G14 public-conviction

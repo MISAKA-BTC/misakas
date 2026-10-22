@@ -89,6 +89,66 @@ fn req_cell_the_fence_is_dormant_everywhere_and_refused_when_armed() {
     assert!(!crate::palw_beacon_bootstrap_v1::PALW_N3_GATED_REWARD_FENCES_V1.contains(&"palw_cell_coverage_closure_v1"));
 }
 
+const EVIDENCE_4: [[u8; 32]; 4] = [[1; 32], [2; 32], [3; 32], [4; 32]];
+
+fn closure_record(genesis: Hash64, at: u64) -> PalwCellClosureArmingRecordV1 {
+    PalwCellClosureArmingRecordV1 {
+        version: PALW_CELL_COVERAGE_CLOSURE_ARMING_RECORD_VERSION_V1,
+        genesis,
+        activation_daa: at,
+        source_commit: [9; 20],
+        evidence: &EVIDENCE_4,
+        review: [0xAA; 32],
+    }
+}
+
+/// **U11 (lane rfcgap-a): the closure is refused by RECORD, not by name.** The binary pins no record, so an armed real network is
+/// still refused — now naming the missing arm-readiness record; a well-formed record for exactly this network and height admits it
+/// (the mirror is still checked first); another height, another genesis or a malformed record does not.
+#[test]
+fn req_cell_the_closure_is_refused_until_a_record_for_this_network_and_height_is_pinned() {
+    use crate::palw_g14_gates_v1::PalwG14ArmingRefusalV1 as R;
+    assert!(PALW_CELL_COVERAGE_CLOSURE_ARMING_RECORDS_V1.is_empty(), "no record is pinned in this binary");
+    assert_eq!(EVIDENCE_4.len(), PALW_CELL_COVERAGE_CLOSURE_ARMING_REQUIREMENTS_V1.len());
+    assert!(PALW_CELL_COVERAGE_CLOSURE_ARMING_REQUIREMENTS_V1.iter().any(|r| r.starts_with("drill")), "a fence-crossing drill");
+    let mut p = t12();
+    p.palw_cell_coverage_closure_v1 = Some(ForkActivation::new(FENCE));
+    // An unsynced mirror is refused before the record is asked.
+    let Err(PalwModeV2Error::Invalid(why)) = p.validate_palw_cell_coverage_closure_in_v1(&[closure_record(p.genesis.hash, FENCE)])
+    else {
+        panic!("an unsynced mirror passed")
+    };
+    assert!(why.contains("mirror"), "{why}");
+    p.sync_palw_cell_coverage_closure_v1();
+    let Err(PalwModeV2Error::Invalid(why)) = p.validate_palw_cell_coverage_closure_v1() else { panic!("armed without a record") };
+    assert!(why.contains("palw_cell_coverage_closure_v1") && why.contains("no arm-readiness record"), "{why}");
+    assert!(!why.contains("not built"), "the rule is built; the refusal names the record: {why}");
+    let g = p.genesis.hash;
+    p.validate_palw_cell_coverage_closure_in_v1(&[closure_record(g, FENCE)]).expect("the exact record admits");
+    assert!(p.validate_palw_cell_coverage_closure_in_v1(&[closure_record(g, FENCE + 1)]).is_err(), "another height");
+    assert!(p.validate_palw_cell_coverage_closure_in_v1(&[closure_record(Hash64::from_bytes([5; 64]), FENCE)]).is_err(), "another net");
+    // Malformed records refuse by reason.
+    let mut r = closure_record(g, FENCE);
+    r.version = 2;
+    assert_eq!(palw_cell_closure_arming_record_form_v1(&r), Err(R::Version));
+    let mut r = closure_record(g, FENCE);
+    r.source_commit = [0; 20];
+    assert_eq!(palw_cell_closure_arming_record_form_v1(&r), Err(R::SourceCommit));
+    let mut r = closure_record(g, FENCE);
+    r.evidence = &EVIDENCE_4[..3];
+    assert_eq!(palw_cell_closure_arming_record_form_v1(&r), Err(R::EvidenceCount { expected: 4, got: 3 }));
+    let mut r = closure_record(g, FENCE);
+    r.review = [0; 32];
+    assert_eq!(palw_cell_closure_arming_record_form_v1(&r), Err(R::Review));
+    const REPEATED: [[u8; 32]; 4] = [[1; 32], [2; 32], [2; 32], [4; 32]];
+    let mut r = closure_record(g, FENCE);
+    r.evidence = &REPEATED;
+    assert_eq!(palw_cell_closure_arming_record_form_v1(&r), Err(R::Evidence(2)));
+    assert!(p.validate_palw_cell_coverage_closure_in_v1(&[r]).is_err(), "a malformed record never arms");
+    // The whole V2 validation still refuses the armed closure on the shipped list (the node's path).
+    assert!(p.validate_palw_v2().is_err());
+}
+
 /// **REQ-CELL-1**: an unknown map is refused at registration at/after the fence (keyed on the registration's own DAA), admitted
 /// below it; a covered profile is admitted either side.
 #[test]

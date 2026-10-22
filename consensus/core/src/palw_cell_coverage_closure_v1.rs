@@ -374,14 +374,18 @@ impl Params {
         }
     }
 
-    /// **Refused when armed at a real height** until its rule is verified (2026-10-15: written, not run); `None` and `Some(never())`
-    /// pass. The mirror must agree with the fence.
+    /// **Refused when armed at a real height until an arm-readiness record is pinned** (lane rfcgap-a, 2026-10-22: the rule is built
+    /// — REQ-CELL-1 at registration, REQ-CELL-1b at the claim gate, REQ-CELL-2 in `adjudicate_court_close_v4` and the step-leg
+    /// closure form — so the refusal is by record, never by name); `None` and `Some(never())` pass. The mirror must agree with the
+    /// fence first. The binary's list ([`PALW_CELL_COVERAGE_CLOSURE_ARMING_RECORDS_V1`]) is EMPTY, so every real network is refused.
     pub fn validate_palw_cell_coverage_closure_v1(&self) -> Result<(), PalwModeV2Error> {
-        if self.palw_cell_coverage_closure_v1_from_daa().is_some() {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_cell_coverage_closure_v1 cannot be armed: its rule (RFC-0006 R6-CELL round 4) is not built and verified yet",
-            ));
-        }
+        self.validate_palw_cell_coverage_closure_in_v1(PALW_CELL_COVERAGE_CLOSURE_ARMING_RECORDS_V1)
+    }
+
+    /// [`Self::validate_palw_cell_coverage_closure_v1`] against `records` in place of the binary's pinned list (tests and arm-readiness
+    /// tooling; the node validates with the pinned list). An isolated G14 test genesis ([`Params::has_isolated_g14_genesis_v1`]) skips
+    /// the record pin, as the G14 gates do; no shipped preset carries one.
+    pub fn validate_palw_cell_coverage_closure_in_v1(&self, records: &[PalwCellClosureArmingRecordV1]) -> Result<(), PalwModeV2Error> {
         if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
             && bundle.state.cell_coverage_closure_from_daa() != self.palw_cell_coverage_closure_v1_from_daa()
         {
@@ -389,8 +393,99 @@ impl Params {
                 "palw_cell_coverage_closure_v1 disagrees with the V2 bundle's mirror: Params::sync_palw_cell_coverage_closure_v1",
             ));
         }
-        Ok(())
+        let Some(at) = self.palw_cell_coverage_closure_v1_from_daa() else { return Ok(()) };
+        if self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
+        match palw_cell_closure_arming_record_admits_v1(self.genesis.hash, at, records) {
+            Ok(()) => Ok(()),
+            Err(crate::palw_g14_gates_v1::PalwG14ArmingRefusalV1::NoRecord) => Err(PalwModeV2Error::Invalid(
+                "palw_cell_coverage_closure_v1 cannot be armed: the closure rule (RFC-0006 R6-CELL round 4) is built, but no arm-readiness \
+                 record (REQ-CELL fold suite, node E2E, the blame-path review, fence-crossing drill) is pinned for this network and height \
+                 (PALW_CELL_COVERAGE_CLOSURE_ARMING_RECORDS_V1 is empty; the arming itself is a user decision)",
+            )),
+            Err(other) => Err(PalwModeV2Error::Invalid(other.reason())),
+        }
     }
+}
+
+// =================================================================================================================================
+// The arm-readiness record (lane rfcgap-a, 2026-10-22; survey row U11)
+// =================================================================================================================================
+
+/// **The closure's arm-readiness requirements**, one evidence digest each, in this order (RFC-0006 R6-CELL "Remaining"). The closure
+/// only REFUSES (registration, claim gate) or convicts from the binding alone; it pays and weights nothing, so no economic value is
+/// measured. The arming decision itself stays the user's: a record is pinned only by a reviewed change.
+pub const PALW_CELL_COVERAGE_CLOSURE_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "V1 build, regressions and boundary decode: the REQ-CELL suite (palw_cell_coverage_closure_v1 tests), palw_cell_coverage_v1 \
+     round4_every_uncovered_kind_is_enumerated_with_its_disposition, palw_step_leg req_cell_2_an_unknown_map_is_never_no_fault_under_the_closure \
+     and the adjudicate_court_close_v4 closure fixture (palw_court_v2)",
+    "node E2E: past the fence an uncoverable legacy class is refused at registration (REQ-CELL-1) and at the claim gate \
+     (REQ-CELL-1b, CELL_UNCOVERABLE), and a court close of a claim accepted past it over a pre-fence uncoverable class convicts \
+     ExecutorGuilty from the binding alone (REQ-CELL-2); the block stands",
+    "review: the Panel false-valid structural routes' closure mode (palw_offence_v1 / palw_offence_attribution_v1, \
+     PalwCellClosureModeV1::for_blame_path) — the open R6-CELL question, decided and recorded",
+    "drill: the shipped binary crosses the fence; restart / IBD / reorg replay identical across it; claims accepted before it keep \
+     the old rules (REQ-CELL-3)",
+];
+
+/// The record format's version.
+pub const PALW_CELL_COVERAGE_CLOSURE_ARMING_RECORD_VERSION_V1: u16 = 1;
+
+/// **An arm-readiness record** for `palw_cell_coverage_closure_v1` — the same fields and form checks as
+/// [`crate::palw_g14_gates_v1::PalwG14ArmingRecordV1`] (a separate type because the closure is not a G14 conviction fence: adding it to
+/// `PalwG14GatedFenceV1::ALL` would put it under the G14-from-genesis set and the court-policy completeness gate, which do not apply).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwCellClosureArmingRecordV1 {
+    pub version: u16,
+    pub genesis: crate::Hash64,
+    pub activation_daa: u64,
+    pub source_commit: [u8; 20],
+    pub evidence: &'static [[u8; 32]],
+    pub review: [u8; 32],
+}
+
+/// **The pinned records — EMPTY.** The closure armed at a real height on a real network is refused.
+pub const PALW_CELL_COVERAGE_CLOSURE_ARMING_RECORDS_V1: &[PalwCellClosureArmingRecordV1] = &[];
+
+/// A record's own form (not whether it is pinned): version, a non-zero source commit, one non-zero distinct evidence digest per
+/// requirement (none equal to the review), a non-zero review.
+pub fn palw_cell_closure_arming_record_form_v1(
+    record: &PalwCellClosureArmingRecordV1,
+) -> Result<(), crate::palw_g14_gates_v1::PalwG14ArmingRefusalV1> {
+    use crate::palw_g14_gates_v1::PalwG14ArmingRefusalV1 as R;
+    if record.version != PALW_CELL_COVERAGE_CLOSURE_ARMING_RECORD_VERSION_V1 {
+        return Err(R::Version);
+    }
+    if record.source_commit == [0; 20] {
+        return Err(R::SourceCommit);
+    }
+    let expected = PALW_CELL_COVERAGE_CLOSURE_ARMING_REQUIREMENTS_V1.len();
+    if record.evidence.len() != expected {
+        return Err(R::EvidenceCount { expected, got: record.evidence.len() });
+    }
+    if record.review == [0; 32] {
+        return Err(R::Review);
+    }
+    for (i, digest) in record.evidence.iter().enumerate() {
+        if *digest == [0; 32] || *digest == record.review || record.evidence[..i].contains(digest) {
+            return Err(R::Evidence(i));
+        }
+    }
+    Ok(())
+}
+
+/// **Does `records` authorize arming the closure at `activation_daa` on the network whose genesis is `genesis`?** The first record
+/// naming exactly this (network, height) decides; none is `NoRecord`.
+pub fn palw_cell_closure_arming_record_admits_v1(
+    genesis: crate::Hash64,
+    activation_daa: u64,
+    records: &[PalwCellClosureArmingRecordV1],
+) -> Result<(), crate::palw_g14_gates_v1::PalwG14ArmingRefusalV1> {
+    let Some(first) = records.iter().find(|r| r.genesis == genesis && r.activation_daa == activation_daa) else {
+        return Err(crate::palw_g14_gates_v1::PalwG14ArmingRefusalV1::NoRecord);
+    };
+    palw_cell_closure_arming_record_form_v1(first)
 }
 
 #[cfg(test)]

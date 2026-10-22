@@ -268,7 +268,8 @@ impl Params {
         self.validate_palw_legacy_public_filer_in_v1(records)?;
         // **The three fences of the 2026-10-12 rulings** (register §3): refused when armed until their rules are built.
         self.validate_palw_2026_10_12_ruling_fences_in_v1(records)?;
-        // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed.
+        // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed until its
+        // arm-readiness record is pinned (the list is empty).
         self.validate_palw_cell_coverage_closure_v1()?;
         // **RFC-0016's two dormant fences** (`crate::palw_rfc0016_v1`): refused when armed until measured values are pinned.
         self.validate_palw_model_block_rights_v1()?;
