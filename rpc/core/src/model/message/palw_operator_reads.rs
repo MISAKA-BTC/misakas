@@ -125,12 +125,24 @@ pub struct RpcPalwClaimRow {
     /// premise-based (see `GetPalwSettlementResponse::security_certification_premise`).
     #[serde(default)]
     pub security_certification: String,
+    /// **Version 7 — RFC-0023 stage 2**: the claim's own settlement state from its actual dependency closure (`settled`,
+    /// `held:<daa>`, `held`, `denied`, `not-retained`, `unavailable`). An unrelated unresolved claim never holds it. Empty below
+    /// `palw_claim_local_settlement_v1` (every shipped network) and from a version-6 peer.
+    #[serde(default)]
+    pub claim_local_settlement: String,
 }
 
 impl Serializer for RpcPalwClaimRow {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         // RFC-0018: version 6 only where the row carries a Gate C state (never on a shipped network), so older readers are unaffected.
-        let version: u16 = if self.security_certification.is_empty() { 5 } else { 6 };
+        // RFC-0023 stage 2: version 7 only where the row carries a claim-local settlement state (never on a shipped network).
+        let version: u16 = if !self.claim_local_settlement.is_empty() {
+            7
+        } else if self.security_certification.is_empty() {
+            5
+        } else {
+            6
+        };
         store!(u16, &version, writer)?;
         store!(String, &self.claim_id, writer)?;
         store!(bool, &self.is_free_prompt, writer)?;
@@ -177,6 +189,9 @@ impl Serializer for RpcPalwClaimRow {
         store!(String, &self.reservation_split, writer)?;
         if version >= 6 {
             store!(String, &self.security_certification, writer)?;
+        }
+        if version >= 7 {
+            store!(String, &self.claim_local_settlement, writer)?;
         }
         Ok(())
     }
@@ -236,6 +251,9 @@ impl Deserializer for RpcPalwClaimRow {
         }
         if version >= 6 {
             row.security_certification = load!(String, reader)?;
+        }
+        if version >= 7 {
+            row.claim_local_settlement = load!(String, reader)?;
         }
         Ok(row)
     }

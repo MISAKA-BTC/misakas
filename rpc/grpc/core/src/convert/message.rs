@@ -774,6 +774,7 @@ from!(item: &kaspa_rpc_core::RpcPalwClaimRow, protowire::RpcPalwClaimRow, {
         committed_sompi: item.committed_sompi.clone(),
         reservation_split: item.reservation_split.clone(),
         security_certification: item.security_certification.clone(),
+        claim_local_settlement: item.claim_local_settlement.clone(),
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClaimsRequest, protowire::GetPalwClaimsRequestMessage, {
@@ -3302,6 +3303,7 @@ try_from!(item: &protowire::RpcPalwClaimRow, kaspa_rpc_core::RpcPalwClaimRow, {
         committed_sompi: item.committed_sompi.clone(),
         reservation_split: item.reservation_split.clone(),
         security_certification: item.security_certification.clone(),
+        claim_local_settlement: item.claim_local_settlement.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwClaimsRequestMessage, kaspa_rpc_core::GetPalwClaimsRequest, {

@@ -839,6 +839,16 @@ impl VirtualStateProcessor {
                 (a, b) => header.blue_score <= a.into_iter().chain(b).min().unwrap_or(u64::MAX),
             };
         }
+        // **RFC-0023 stage 2 (`palw_claim_local_settlement_v1`)**: the frontier is now the claim-local IRREVERSIBLE frontier and may
+        // stand above an unrelated unresolved claim. Pruning keeps the conservative progress bound as well (below the oldest open claim
+        // and undecided certification), so A's block history stays until A resolves; the checkpoint row additionally carries A's
+        // liability material through the pruning-point carriage. Below the fence: the frontier rule, unchanged.
+        if state_params.claim_local_settlement_active_at(state.last_point().map_or(0, |point| point.daa_score))
+            && kaspa_consensus_core::palw_security_certification_v1::palw_pruning_progress_ceiling_v1(&state)
+                .is_some_and(|ceiling| header.blue_score > ceiling)
+        {
+            return false;
+        }
         kaspa_consensus_core::palw_fork_authority_v2::pruning_point_allowed_v2(header.blue_score, frontier)
     }
 

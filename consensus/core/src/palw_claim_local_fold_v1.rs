@@ -113,6 +113,8 @@ impl PalwChainStateV2 {
     }
 
     pub(super) fn assert_claim_local_context_v1(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+        // RFC-0023 stage 2: the stored checkpoint equals the recomputation (and is absent below the fence).
+        super::palw_claim_local_checkpoint_fold_v1::assert_claim_local_checkpoint_v1(self, params)?;
         if !self.last_point.is_some_and(|point| params.claim_local_settlement_active_at(point.daa_score)) {
             return Ok(());
         }
@@ -121,6 +123,13 @@ impl PalwChainStateV2 {
         };
         for ((table, key), bytes) in &route.aux {
             if *table != PALW_CLAIM_LOCAL_TABLE_V1 {
+                continue;
+            }
+            if key.first() == Some(&b'C') {
+                // RFC-0023 stage 2 checkpoint: judged whole below, against a recomputation.
+                if key.as_slice() != super::palw_claim_local_checkpoint_fold_v1::palw_claim_local_checkpoint_key_v1() {
+                    return Err(PalwStateV2Error::CarriageInconsistent("bad claim-local checkpoint key".into()));
+                }
                 continue;
             }
             if key.first() == Some(&b'R') {

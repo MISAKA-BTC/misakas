@@ -1828,6 +1828,8 @@ message RpcPalwClaimRow {
   string reservationSplit = 38;
   // RFC-0018 Gate C: the claim's certification state; empty below the fence.
   string securityCertification = 39;
+  // RFC-0023 stage 2: the claim's own settlement state from its dependency closure; empty below the fence.
+  string claimLocalSettlement = 40;
 }
 
 // Testnet-12 lifecycle audit T12-058: one live Valid lock on a bond.

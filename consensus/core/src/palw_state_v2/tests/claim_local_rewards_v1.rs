@@ -80,6 +80,9 @@ fn world_at(all: bool, first: u64) -> (PalwStateParamsV2, PalwChainStateV2, [Has
     // The old-cohort case isolates certification-time payment, with retirement
     // disabled. Its released scheduling rules are deliberately left untouched.
     let p = if first < 100 { rules().with_claim_retirement_daa(0).unwrap() } else { rules() };
+    world_with(all, first, p)
+}
+fn world_with(all: bool, first: u64, p: PalwStateParamsV2) -> (PalwStateParamsV2, PalwChainStateV2, [Hash64; 3]) {
     let mut objects = register_class_and_bond();
     objects.push(seat_bond_reg(2, 1000));
     let (mut s, _) = step(&PalwChainStateV2::genesis(), &p, 1, first - 1, &objects, None, &extra());
@@ -118,7 +121,9 @@ fn world_at(all: bool, first: u64) -> (PalwStateParamsV2, PalwChainStateV2, [Has
     s = step(&s, &p, 9, 128, &[], None, &extra()).0;
     for id in ids.iter().skip(if all { 0 } else { 1 }) {
         assert!(row(&s, *id).outcome.unwrap().0.certifies());
-        assert_eq!(row(&s, *id).held_reward, 620);
+        if p.claim_local_settlement_active_at(first) {
+            assert_eq!(row(&s, *id).held_reward, 620);
+        }
     }
     (p, s, ids)
 }
@@ -331,4 +336,117 @@ fn rfc23s2_claim_local_settlement_read_settles_independent_b_while_a_is_unresolv
     let root = s.state_root();
     let _ = read(&s, &p, c, 1001).unwrap();
     assert_eq!(s.state_root(), root);
+}
+
+// ---- RFC-0023 stage 2: the fold-derived checkpoint and its consumers (lane rfc23-stage2) ----------------------------------
+
+fn checkpoint_bytes(s: &PalwChainStateV2) -> Option<Vec<u8>> {
+    use crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1;
+    let key = super::super::palw_claim_local_checkpoint_key_v1();
+    s.kernel_route.as_ref()?.aux.get(&(PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec())).cloned()
+}
+
+#[test]
+fn rfc23s2_checkpoint_row_is_written_each_block_and_binds_the_unresolved_set() {
+    use crate::palw_claim_local_v1::*;
+    let (p, s, [a, b, _c]) = world(false);
+    let raw = checkpoint_bytes(&s).expect("past the fence every block writes the checkpoint");
+    let cp = palw_decode_claim_checkpoint_v1(&raw).unwrap();
+    assert_eq!(cp.point, s.last_point().copied().unwrap(), "the checkpoint is the state's own point");
+    let ra = &cp.records[&PalwClaimLocalWorkRefV1::ChainClaim { claim: a }];
+    assert!(!ra.final_claim && !ra.liability_closed, "A is open and stays bound, not disguised as resolved");
+    assert!(!ra.material.is_empty() && ra.material.iter().all(|m| cp.material.contains_key(m)), "A's material travels in the row");
+    assert!(!cp.liability_state.is_empty(), "the open set's claim/court state is bound");
+    let rb = &cp.records[&PalwClaimLocalWorkRefV1::ChainClaim { claim: b }];
+    assert!(rb.final_claim && rb.certified, "B is Final and SecurityCertified");
+    // The reader validates the stored row against a recomputation, never on its own word.
+    let status = super::super::palw_claim_local_checkpoint_status_v1(&s, &p, b).unwrap().unwrap();
+    assert!(status.credit_eligible, "B's closure does not contain A");
+    let status_a = super::super::palw_claim_local_checkpoint_status_v1(&s, &p, a).unwrap().unwrap();
+    assert!(!status_a.credit_eligible && !status_a.irreversible);
+}
+
+#[test]
+fn rfc23s2_checkpoint_frontier_passes_unresolved_a_when_independent_b_settles() {
+    let (p, s, [a, b, c]) = world(false);
+    let (a_blue, b_blue, b_daa) = {
+        let (ca, cb) = (s.claim(&a).unwrap(), s.claim(&b).unwrap());
+        (ca.accepted_blue_score, cb.accepted_blue_score, cb.accepted_daa)
+    };
+    assert!(a_blue < b_blue, "A is older than B");
+    assert!(s.safe_frontier().0 < a_blue, "before B's liability ends nothing stands past A");
+    // B retires (its own liability ends by the chain's retirement rule) while A is still unresolved.
+    let (s2, _) = step(&s, &p, 10, 148, &[], None, &extra());
+    assert!(s2.claim(&b).is_none() && s2.claim(&a).is_some() && s2.claim(&c).is_some());
+    assert_eq!(s2.safe_frontier().0, b_blue, "past the fence B's irreversible credit moves the frontier past unresolved A");
+    // Settlement reads that one frontier: an effect at B's DAA settles without waiting for A.
+    let read = crate::palw_settlement_v1::palw_settlement_v1(&s2, &p, Some(b_daa), b_daa).unwrap();
+    assert!(read.settled, "B's effects settle at B's own time");
+    // C shares A's execution root: it is not irreversible and does not move the frontier.
+    let st_c = super::super::palw_claim_local_checkpoint_status_v1(&s2, &p, c).unwrap().unwrap();
+    assert!(!st_c.irreversible);
+    // Fork choice's first key is the same frontier.
+    assert_eq!(s2.candidate_order(ctx(10, 148, 10).block).safe_frontier_blue_score, b_blue);
+}
+
+#[test]
+fn rfc23s2_checkpoint_below_the_fence_keeps_the_shared_frontier() {
+    let p = rules().with_claim_local_settlement_from_daa(None);
+    let (p, s, [a, b, _c]) = world_with(false, 100, p);
+    assert!(checkpoint_bytes(&s).is_none(), "no row below the fence");
+    let a_blue = s.claim(&a).unwrap().accepted_blue_score;
+    let (s2, _) = step(&s, &p, 10, 148, &[], None, &extra());
+    assert!(checkpoint_bytes(&s2).is_none());
+    if s2.claim(&a).is_some() && !matches!(s2.claim(&a).unwrap().phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. }) {
+        assert!(s2.safe_frontier().0 < a_blue, "below the fence an unresolved A still holds the shared frontier");
+    }
+    let _ = b;
+    // The fence armed later than this history: byte-identical to the unarmed rules.
+    let later = rules().with_claim_local_settlement_from_daa(Some(10_000));
+    let (_, s_late, _) = world_with(false, 100, later.clone());
+    assert_eq!(s_late.state_root(), s.state_root(), "a not-yet-reached fence changes nothing");
+}
+
+#[test]
+fn rfc23s2_checkpoint_reorg_reverts_the_row_and_the_frontier() {
+    let (p, s, _) = world(false);
+    let before = (checkpoint_bytes(&s), s.safe_frontier(), s.state_root());
+    let (s2, delta) = step(&s, &p, 10, 148, &[], None, &extra());
+    assert_ne!(checkpoint_bytes(&s2), before.0, "the row moved with the block");
+    let back = revert_delta_v2(&s2, &delta, &p).unwrap();
+    assert_eq!((checkpoint_bytes(&back), back.safe_frontier(), back.state_root()), before, "a reorg restores row and frontier exactly");
+    let again = apply_delta_v2(&back, &delta, &p).unwrap();
+    assert_eq!(again.state_root(), s2.state_root());
+}
+
+#[test]
+fn rfc23s2_checkpoint_pruned_import_reproduces_and_refuses_a_forged_row() {
+    use crate::palw_claim_local_v1::*;
+    let (p, s, [a, _, _]) = world(false);
+    let (s, _) = step(&s, &p, 10, 148, &[], None, &extra());
+    // The pruning-point carriage carries the row; the import rebuilds and checks it against the recomputation.
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+    let restored =
+        borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state_v3(&p, Some(s.state_root()), false, None).unwrap();
+    assert_eq!(restored.state_root(), s.state_root());
+    assert_eq!(checkpoint_bytes(&restored), checkpoint_bytes(&s));
+    assert_eq!(restored.safe_frontier(), s.safe_frontier());
+    restored.assert_internal_consistency(&p).unwrap();
+    // The next block folds identically on the imported state.
+    let (n1, _) = step(&s, &p, 11, 149, &[], None, &extra());
+    let (n2, _) = step(&restored, &p, 11, 149, &[], None, &extra());
+    assert_eq!(n1.state_root(), n2.state_root());
+    // A row that disguises unresolved A as closed is refused by the recomputation check.
+    let mut forged = s.clone();
+    let key = (PALW_CLAIM_LOCAL_TABLE_V1, super::super::palw_claim_local_checkpoint_key_v1().to_vec());
+    let mut cp = (*palw_decode_claim_checkpoint_v1(&forged.kernel_route.as_ref().unwrap().aux[&key]).unwrap()).clone();
+    let ra = cp.records.get_mut(&PalwClaimLocalWorkRefV1::ChainClaim { claim: a }).unwrap();
+    ra.voided = true;
+    ra.liability_closed = true;
+    forged.kernel_route.as_mut().unwrap().aux.insert(key.clone(), borsh::to_vec(&cp).unwrap());
+    assert!(forged.assert_internal_consistency(&p).is_err(), "a stored row is never its own authority");
+    // And a missing row past the fence is refused, not read as "nothing open".
+    let mut missing = s.clone();
+    missing.kernel_route.as_mut().unwrap().aux.remove(&key);
+    assert!(missing.assert_internal_consistency(&p).is_err());
 }

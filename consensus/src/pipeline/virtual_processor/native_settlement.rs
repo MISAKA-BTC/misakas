@@ -480,6 +480,9 @@ impl VirtualStateProcessor {
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return stopped(result, gap(HistoryGapV1::ParamsAbsent, None));
         };
+        // RFC-0023 stage 2: past `palw_claim_local_settlement_v1` the fold itself raises this frontier to the claim-local checkpoint's
+        // irreversible frontier (`palw_claim_local_checkpoint_fold_v1`), so an unrelated unresolved claim no longer holds it and this
+        // read stays the one fork choice weighs — no second, divergent settlement read here. Below the fence: unchanged.
         let (frontier_blue, frontier) = state.safe_frontier();
         result.frontier = (frontier != BlockHash::default()).then_some(frontier);
         let frontier_on_branch =
