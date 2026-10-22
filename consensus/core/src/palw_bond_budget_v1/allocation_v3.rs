@@ -207,8 +207,9 @@ impl PalwBondBudgetStateV1 {
     /// `tier(model) = (registered, c_permille)`. Each live row's weight is `A_m = c_m · S̄_m^α` — the ONE place the tier is applied;
     /// the resulting `P_m = A_m / ΣA` feeds RFC-0016 V+ block rights and the coinbase allocation alike, and no accepted block's
     /// reward is multiplied by the tier again. With `registered_cap_permille = Some(ρ)` the registered (0.3) models' weights are
-    /// scaled so they total at most `ρ` of `ΣA` (the header keeps the UNSCALED `ΣA`): N registrations never multiply the tier's share,
-    /// and what the cap removes is never allocated (never minted, never redistributed to the approved tier).
+    /// scaled so they total at most `ρ` of `ΣA`, and `ΣA` is the sum of the SAME scaled weights (user correction 2026-10-22: the header
+    /// once kept the unscaled `ΣA`, which let registered capital dilute the approved tier whatever `ρ` was). N registrations never
+    /// multiply the tier's share; the approved tier keeps at least `1 − ρ` of the allocation.
     #[allow(clippy::too_many_arguments)]
     pub fn roll_epoch_v3_tiered(
         &mut self,
@@ -308,11 +309,20 @@ impl PalwBondBudgetStateV1 {
             }
             rows.push((model, average, weight, registered));
         }
+        let canonical_sum = sum_a.saturating_sub(registered_sum);
         let factor = registered_cap_permille
-            .map(|cap| crate::palw_model_tier_v1::palw_model_tier_cap_factor_ppm_v1(sum_a, registered_sum, cap))
+            .map(|cap| crate::palw_model_tier_v1::palw_model_tier_cap_factor_ppm_v1(canonical_sum, registered_sum, cap))
             .unwrap_or(1_000_000);
+        // ADR-0179 (user correction 2026-10-22): `ΣA` is the sum of the same scaled `A_m` the rows carry. Identical to the sum above
+        // whenever the cap does not bind (factor 1,000,000: every weight unchanged), so the untiered roll is byte for byte the old one.
+        if factor < 1_000_000 {
+            sum_a = PalwAllocationWeightV1::ZERO;
+        }
         for (model, average, weight, registered) in rows {
             let weight = if registered { crate::palw_model_tier_v1::palw_model_tier_scale_v1(weight, factor) } else { weight };
+            if factor < 1_000_000 {
+                sum_a = sum_a.saturating_add(weight);
+            }
             put(
                 &mut self.models,
                 PALW_BUDGET_TABLE_MODELS_V1,

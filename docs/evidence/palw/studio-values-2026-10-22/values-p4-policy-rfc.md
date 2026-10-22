@@ -6,6 +6,8 @@
 - **機材:** `sysctl hw.model hw.memsize hw.ncpu` = `Mac13,1`（Apple M1 Max の Mac Studio）、34,359,738,368 B（32 GiB）、10。最低要件ハードウェアではない。
 - **前提の禁止事項:** 計算の暗号学的証明は使わず提案もしない（PRINCIPLES §8）。モデル単位の検証・審査・昇格は提案しない（§9）。下の hash は公開 seed の導出であり、計算の証明ではない。
 
+> **2026-10-22 夜の追記（ユーザー指示 2 件）:** (1) U-5 の前提 f = 0.25 と R9 の分母の修正 → §6a.2・§6a.3（コード変更あり）。(2) 「パラメーターは目安で決めていい　方針をあとから変更にする　pin まで進めて」→ 下の表で「未決定」とした値に **目安（provisional, user 2026-10-22）** を付け、§10 にまとめてコードに入れた。measured record の一覧と arming record の一覧は、引き続き空のまま（Lead の統合 lane が pin する）。実行していない計測は作っていない。
+
 ## 0. まとめ
 
 | # | 値 | 決定 | 拘束条件（binding constraint） | 状態 |
@@ -25,8 +27,8 @@
 | R6 | TIR frame の費用 record | 空のまま | lane P1 の `frame_measure.rs` の実測が branch `values/p1-measure`（4e6df6ad4）に無い — harness だけで measurements.md も実測値も無い（P1 の commit 文: build は disk 30 GB 未満で停止）。既存の Huihui-2B 測定は frame が `Incomplete` | 未決定（実測なし） |
 | R7 | PALWQ361 の logit scale と f32 参照窓 | この機材では決められない | 35B MoE の f32 長系列実行が要り、32 GiB では足りない。既存の実測も無い | 決定不能（この機材） |
 | R8 | RFC-0016 本番値・クラス別負荷・§14 record | epoch 720 DAA、`ε = 0`、`k = 1`、V11 = 移行しない。ほかは未決定、record は空 | 3 段階導出・M-C・M-DA が無い | 一部決定（doc のみ） |
-| R9 | tier κ・c・catalog edition・RFC-0019 U-3/U-4/U-6 | c = 300‰（§9、測定対象でない）。**κ は未決定**（分母を縮めないため登録 tier が正規 tier の発行を希釈できる反例、§6a.2） | 構造の判断が先 | 未決定 |
-| R10 | RFC-0018 U-1〜U-8 | U-1 validator の順、U-2 通常分割、U-3 認証まで保留、U-6 不採用、U-7 承認推奨。**U-5 は未決定**（47/32 は f = 0.25 で正直な claim の 46% が認証失敗、§6a.3）。U-4・U-8 は実測待ち | U-2・U-3 は実装（GAP-C4・C3）が要る | 一部決定（doc のみ） |
+| R9 | tier κ・c・catalog edition・RFC-0019 U-3/U-4/U-6 | **配分の修正（コード）:** `ΣA` を縮めた後の `A_m` の和にした（ユーザー指示 2026-10-22、ADR-0179 の式どおり）。**κ = 300‰**（決定済み・独立検証待ち）、c = 300‰（§9、測定対象でない）。catalog edition・U-3・U-4・U-6 は未決定 | 修正後は正規 tier が `≥ 1 − κ` を保つ。κ は前提（f = 0.25）が成り立つ限り攻撃者の取り分に効かず、正直な登録モデルの枠を決める | 一部決定 |
+| R10 | RFC-0018 U-1〜U-8 | **U-5: m/k = 75/41**（コード、前提 f = 0.25 はユーザー決定 2026-10-22）。U-1 validator の順、U-2 通常分割、U-3 認証まで保留、U-6 不採用、U-7 承認推奨。U-4・U-8 は実測待ち | U-5: 誤認証の年間期待件数 ≤ 1e-3（draw 上限を全部埋めても）と、正直な claim の認証率 ≥ 99%（応答率 90%）・≥ 95%（85%）を満たす最小の m。U-2・U-3 は実装（GAP-C4・C3）が要る | 一部決定 |
 | R11 | RFC-0008・RFC-0012 の名前付き parameter | min providers 2、`W_budget` 720、legacy evidence horizon 10,080、wallet margin 1,000 承認。ほかは未決定 | 実測・census | 一部決定（doc のみ） |
 
 **16000 への影響（重要）:** r7-fence-16000 の一覧のうち、`palw_settlement_once_v1`（#24、`palw_bond_budget_v1` が前提）・`palw_model_tier_v1`（#32、`palw_model_bond_allocation_v1` が前提）・`palw_monetary_material_v1`（#34、`palw_material_income_v3` が前提）は、この lane の結果では前提が満たせない。V12-b は実測が無く、V12-a は値が決まっても validator が値以外の理由で拒否し、V12-c は値の対象外である。したがって、16000 の一覧からこの 3 つ（とそれに依存するもの: #25 `palw_native_liability_horizon_v1` は #24 に依存）を外すか、Stage 1 実測と各 validator の非値ブロッカーの解消を先に行う必要がある。
@@ -175,11 +177,17 @@ ALL-MODEL 5 の「Allocation curve: USER DECISION REQUIRED（暫定 α = 1.5、2
 ### 6a.2 R9 — モデル tier（κ、c、catalog edition、RFC-0019 U-3/U-4/U-6）
 
 - **c = 300‰:** ユーザー決定（PRINCIPLES §9、ADR-0179）。「c の実測 record」は §9 と両立しない（c は審査・測定で動かない固定値）。record の 1 件目の要件（`…the user's approval of c and κ…, with their measured record`）のうち c については「ユーザー決定 2026-10-15、測定なし（§9 により測定の対象でない）」を evidence とすべき。モデル単位の検証は提案しない。
-- **κ: 未決定 — 先に解くべき反例がある。** `roll_epoch_v3_tiered` は登録 tier の重みを `κ·ΣA` に縮めるが、分母の `ΣA` は縮める前の値のまま（`palw_model_tier_cap_factor_ppm_v1` の doc、ADR-0179 5「縮めた分は発行しない、再配分もしない」）。このため:
-  - 例: 正規 tier の `A = 1`、登録 tier の `A = 100`（大きな capital を登録モデルの claim に拘束）→ `ΣA = 101`。登録 tier は κ に縮むが、正規 tier の取り分は `1/101 ≈ 1%` に下がる。残りは発行されない。
-  - つまり登録モデルに capital を積む者は、自分の取り分（≤ κ）に関係なく、**正規モデルの miner の発行を希釈できる**。費用は capital の拘束（と claim の担保）だけで、登録モデルが非公開でも Gate C で credit が止まるだけで、`S_m`（claim に拘束された capital）は数えられる。κ の値はこの希釈を止めない。
-  - 分母を縮めた後の重みにすれば、正規 tier の取り分は `≥ 1 − κ` で下から抑えられる。ただしこれは ADR-0179 の構造の変更で、§11 の手続き（RFC + ADR）が要る。値ではないので、この lane では変更しない。**Lead・ユーザーの判断事項。**
-  - κ の候補: 300‰（設計値）、230‰（`κ/(1−κ) = 0.3`、縮めた分母のもとで「登録 tier 全体 ≤ 正規 tier 全体の 0.3 倍」になる値）。どちらを選ぶかは分母の扱いで意味が変わるため、上の判断の後で決める。
+- **見つけた反例（2026-10-22 前半）:** `roll_epoch_v3_tiered` は登録 tier の重みを κ で縮めていたが、分母の `ΣA` は縮める前の値だった。そのため、登録モデルに capital を積むと、κ に関係なく正規 tier の発行を希釈できた。例: 正規 1,000 KAS・登録 100,000 KAS では、正規モデルの取り分が `1/(1 + 0.3·1000) ≈ 3‰` まで落ち、残りは発行されなかった。
+- **修正（ユーザー指示 2026-10-22、コード）:** ADR-0179 の式 `A_m = c_m · S̄_m^1.5` と、同じ縮めた `A_m` の和を `ΣA` とする。κ の係数は「登録 tier ≤ 縮めた `ΣA` の κ」⇔ `R_s ≤ κ/(1−κ) · C`（C = 正規 tier の `ΣA_m`）から `⌊κ·C·10^6 / ((1000−κ)·R)⌋` ppm（`palw_model_tier_cap_factor_ppm_v1`、引数は (正規, 登録, κ) に変更）。
+  - κ が効かない（登録 tier ≤ κ）とき、すべての重みと `ΣA` は修正前と同一。tier fence の下（untiered の roll）は byte 単位で同じ。
+  - κ が効くとき、正規 tier は `≥ 1 − κ`、登録 tier はちょうど κ を受け取る。正規 tier が 0 なら登録 tier も 0（κ of nothing）。
+  - **ADR-0179 5 の文言との関係（Lead へ）:** 「縮めた分は発行しない。1.0 の tier へ再配分もしない」は、修正後は成り立たない。縮めた分は分母からも消えるので、正規 tier の取り分が上がる（その分は発行される）。希釈を止めることと「縮めた分を発行しない」ことは両立しない（発行しない分が分母に残ることが、すなわち希釈）。ユーザー指示で前者を採ったので、ADR-0179 5 の 2 点目には注記・改定が要る。この lane では ADR を編集していない。
+- **κ = 300‰（決定済み・独立検証待ち、`PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1` のまま）:**
+  - 修正後の κ の意味は「登録 tier 全体の発行 ≤ 30%、正規 tier ≥ 70%」。
+  - 攻撃者: 前提 f = 0.25 が成り立つ限り、閉鎖モデルの claim の認証確率は 1 件あたり 3.99e-8（75/41）で、保留された発行由来 leg は焼却される。κ は攻撃者の取り分に効かず、前提が崩れたときの上限（≤ 30%）になる。
+  - 正直な参加者: κ は正直な登録モデル全体の枠を決める。230‰（「登録 tier 全体 ≤ 正規 tier 全体の 0.3 倍」）は、前提の下での安全を変えずに正直な登録モデルの枠を 23% 狭めるので採らない。設計値 300‰ は、ユーザーの「0.3 倍程度」と同じ尺度。
+  - 保証しないこと: 前提が崩れた（f > k/m に近い）ときの正規 tier の保護は `1 − κ` まで。
+- **c の record:** c = 300‰ はユーザー決定（§9）で、測定の対象ではない。record の要件 1 の「measured record」には「ユーザー決定 2026-10-15、§9 により測定なし」を evidence とすべき（モデル単位の検証は提案しない）。
 - **最新 catalog edition:** genesis 8 の edition 0 の root は、実変換（PALWART3 → HF Misakachain）が NOT_RUN のため確定していない。record は edition と root を名指すので、**未決定**。
 - **RFC-0019 U-3（manifest の署名者集合と k-of-n、独立 builder 数）:** 署名者の人選は値ではなく、ユーザーの判断事項。**未決定。**
 - **U-4（edition の中身と H）:** モデル 8 個はユーザー決定（2026-10-15）。root・kernel version・plan id は変換の後。**未決定。**
@@ -193,23 +201,34 @@ ALL-MODEL 5 の「Allocation curve: USER DECISION REQUIRED（暫定 α = 1.5、2
 | U-2 発行由来 leg の保留後の支払い先 | **通常の Final と同じ分割**（Panel share・buyback・vesting）。producer への 1 leg にしない | 認証を経た claim だけ Panel seat の取り分が消えると、seat が検証する誘因が下がり、producer は認証待ちを通すだけで通常より多く受け取る。認証の有無で受取人が変わらないことが中立。**実装が要る（GAP-C4）** — 値ではないので、この lane ではコードを変えていない。R7-ECON 8 の同じ問いにも同じ答えを当てる |
 | U-3 free-prompt の認証前 spend の coinbase carve | **認証まで保留、認証で支払い、失敗で名付けない（発行しない）** | 未認証 claim は決済を進めない（CLAUDE.md、ADR-0179 6）。今の実装は weight だけ止めて carve は払うので、未認証の仕事に発行が出る。正直な producer の損は待ち（承認期限 2 日 + 抽選期限 3 日の設計値）だけ。**実装が要る（GAP-C3）** |
 | U-4 DAG 幅 schedule | **未決定** | block 伝播の実測が要る。`palw_dag_width_schedule_v1` は probe しか無く、16000 から除外済み |
-| U-5 `m`/`k` | **未決定 — 設計値 47/32 は liveness の反例がある** | 下の表。誤認証確率 `P(Bin(m,f) ≥ k)` と、攻撃者が承認を出さない（withhold）ときの正直な claim の認証確率 `P(Bin(m,(1−f)·a) ≥ k)`（a = 正直な検証者の応答率 0.9 と仮定）。47/32 では f = 0.25 で正直な claim の 46% が認証に失敗し、その発行由来 leg は焼却される（§7.4）。f = 0.25 の攻撃者は費用なしで正直な発行の約半分を止められる。前提 f（正直な割合の明示的前提）はユーザーが置く値なので、f を決めてから `k` を選ぶ。認証失敗後に再抽選があるか（あれば liveness は改善）も確かめること |
+| U-5 `m`/`k` | **75 / 41**（決定済み・独立検証待ち。前提 f = 0.25 はユーザー決定 2026-10-22。`PALW_CERT_M_DECIDED_V1` / `PALW_CERT_K_DECIDED_V1`、`PALW_CERT_PREMISE_ADVERSARY_PERMILLE_V1 = 250`、`PALW_CERT_HONEST_RESPONSE_PERMILLE_V1 = 900`） | 下の「U-5 の決定」 |
 | U-6 veto | **採らない（v = 0）** | 抽選された 1 人の否定で正直な claim を止められるので、U-5 の liveness 問題を悪化させる |
 | U-7 credit なし同士の tie を GHOSTDAG 順に | **承認を推奨**（規則の承認なので最終は Lead・ユーザー） | 既存の合意順序で決定的。hash 順など producer が grind できる順序より安全 |
 | U-8 公開 check 経路に固定する class と計測記録 | **未決定** | class ごとの実測が要る |
 
-U-5 の計算（`python3 -I`、二項分布の上側確率、a = 0.9）:
+#### U-5 の決定（前提 f = 0.25、ユーザー決定 2026-10-22）
 
-| m/k | f = 0.10 誤認証 / 正直 | f = 0.20 | f = 0.25 | f = 1/3 |
-|---|---|---|---|---|
-| 47/32（設計値） | 1.6e-21 / 0.989 | 1.3e-12 / 0.779 | 6.4e-10 / 0.535 | 1.2e-6 / 0.163 |
-| 47/28 | 1.0e-16 / 1.000 | 3.2e-9 / 0.977 | 5.2e-7 / 0.904 | 2.0e-4 / 0.586 |
-| 47/26 | 1.5e-14 / 1.000 | 9.6e-8 / 0.995 | 8.9e-6 / 0.971 | 1.6e-3 / 0.790 |
-| 47/24 | 1.6e-12 / 1.000 | 2.1e-6 / 0.999 | 1.1e-4 / 0.994 | 9.0e-3 / 0.918 |
-| 63/36 | 3.1e-20 / 1.000 | 9.9e-11 / 0.996 | 5.8e-8 / 0.968 | 8.9e-5 / 0.725 |
-| 95/56 | 1.3e-31 / 1.000 | 1.0e-16 / 0.998 | 2.4e-12 / 0.969 | 2.8e-7 / 0.626 |
+- **模型:** 抽選された m 席のうち、敵対的な席の数は `Bin(m, f)`。正直な席は確率 a で応答する。承認を出さない（withhold）敵対者の下で、正直な claim の承認数は `Bin(m, (1−f)·a)`。k 以上で認証。`validate` は `k > m/2` を要求する。
+- **(a) 誤認証の基準:** 攻撃者が network 全体の抽選上限（4,096 draw/日 → 1 日 `⌊4,096/m⌋` 件の認証）をすべて自分の不正 claim で埋めても、誤認証の期待件数が **1 年に 1e-3 件以下**。理由: 1 件の誤認証は、その claim 1 件分の合意 credit と発行由来 leg を与える。その claim もなお 7 日の公開告発窓で court の対象で、検出は 90〜99%（ユーザー決定 2026-10-17）なので、実害の期待値は年に 1e-4〜1e-5 件の水準になる。10 年でも 0.01 件未満。claim 単位の上限（1 件あたり）ではなく年間の件数で決めたのは、攻撃者の試行回数が draw 上限で有界であり、その上限まで試行されることを前提にするため。
+- **(b) liveness の基準:** 正直な claim の認証率が、応答率 a = 90% で **≥ 99%**、余裕として a = 85% でも **≥ 95%**。認証に失敗した claim の発行由来 leg は焼却される（RFC-0018 §7.4）ので、f = 0.25 の敵対者が承認を出さないだけで止められる正直な発行は 1% 未満になる。
+- **(c) 費用:** 認証 1 件あたり m 回の再実行（検証者の仕事）。抽選上限 4,096/日のもとで、1 日に認証できる claim は `⌊4,096/m⌋`。遅延は窓（抽選期限 3 日・承認期限 2 日の設計値）で決まり、m に依らない。ただし認証の需要が 1 日の上限を超えると、claim は抽選期限まで待ち、超えれば `Expired` になる。
+- **結果:** `k > m/2` で (a) と (b) を満たす最小の m は **75（k = 41）**（m = 7〜74 を全探索。テスト `p4_u5_decided_m_k_meet_false_certification_and_liveness_at_the_premise` が同じ探索を確かめる）。
 
-`k/m` は `f`（安全）と `(1−f)·a`（liveness）の間に置く必要がある。`m` を増やすと両方が改善するが、費用は認証 1 件あたり `m` 回の再実行で、network 全体の抽選上限（設計値 4,096/日）からは 1 日に `⌊4,096/m⌋` 件（47 で 87 件、95 で 43 件）しか認証できない。この上限と t12 の claim 率の比較も、決定の前に要る。
+| m/k | 1 件の誤認証確率（f = 0.25） | 年間期待件数（draw 上限を全部埋める） | 正直な認証率 a = 0.80 | 0.85 | 0.90 | 0.95 | 1 日の認証上限 |
+|---|---|---|---|---|---|---|---|
+| 47/32（旧設計値） | 6.4e-10 | 2.0e-5 | 0.1630 | 0.3246 | **0.5351** | 0.7433 | 87 |
+| 63/34 | 8.4e-7 | 2.0e-2 | 0.8653 | 0.9579 | 0.9911 | 0.9988 | 65 |
+| 71/38 | 2.6e-7 | 5.4e-3 | 0.8911 | 0.9708 | 0.9950 | 0.9995 | 57 |
+| 73/38 | 6.6e-7 | 1.3e-2 | 0.9329 | 0.9849 | 0.9979 | 0.9998 | 56 |
+| **75/41（決定）** | **4.0e-8** | **7.9e-4** | 0.8554 | **0.9589** | **0.9926** | 0.9992 | **54** |
+| 79/41 | 2.7e-7 | 5.0e-3 | 0.9425 | 0.9885 | 0.9986 | 0.9999 | 51 |
+| 88/49 | 8.5e-10 | 1.4e-5 | 0.8255 | 0.9526 | 0.9924 | 0.9994 | 46 |
+
+（`python3 -I`、二項分布の上側確率。f = 1/3 では 75/41 の 1 件の誤認証確率は 1.2e-4。）
+
+- **感度:** 応答率が 80% に落ちると、75/41 でも正直な claim の約 14% が認証に失敗する。応答率は実ノードで測って報告すること。
+- **依存・保証しないこと:** 前提 f ≤ 0.25 が崩れると (a) は成り立たない（f = 1/3 で 1 件あたり約 1e-4）。draw 上限 4,096/日（設計値、未承認）は 75 席で 1 日 54 件の認証にしかならないので、t12 の claim 率と比べる必要がある（この lane では claim 率の実測が無い）。認証失敗後の再抽選は無い前提で計算した。withhold した検証者に罰則があれば (b) の数字は良くなる。
+- **コード:** `PALW_CERT_M_DESIGN_V1` / `_K_` を決定値 75/41 に向けた。fence はどの preset でも `None` なので、出荷 id は変わらない。`palw_native_mining_v39` の certification 値も同じ定数を読む。
 
 ### 6a.4 R11 — RFC-0008・RFC-0012 の名前付き parameter
 
@@ -227,6 +246,31 @@ U-5 の計算（`python3 -I`、二項分布の上側確率、a = 0.9）:
 | R12-OPS 4 release 観測上限、100k block latency 上限 | 未決定 | 実測 |
 | R12-OPS 7 wallet の 1,000 DAA margin | **1,000 DAA を承認**（client 側の確認、consensus 外） | t12 の 184 s/DAA で約 51 時間。退役の予定を知ってから wallet が更新するまでに 2 日以上ある。consensus の値ではない |
 | R12-MONEY split・fee schedule | 未決定 | RFC 自身が「ADR-0177 D4 の claim escrow 配分が未決なので推奨しない」とする |
+
+## 10. 目安（provisional, user 2026-10-22）— 未決定だった値
+
+いずれも `consensus/core/src/palw_values_p4_v1.rs` に入れた（preset からは読まれず、fence も武装しない）。各値は「目安」で、見直しのきっかけ（trigger）を併記する。
+
+| # | 値（コード） | 目安 | 根拠 | 見直しのきっかけ |
+|---|---|---|---|---|
+| V12-b | `palw_bond_budget_policy_provisional_v1()` — capital unit | 13,000 KAS | t12 の最小 producer bond（ADR-0176 計画 §3） | 対象 ruleset の最小 bond が変わったとき |
+| V12-b | 日あたり claim・reward block・Round rights（per unit） | 72 | 名目 720 DAA/日の 1/10。t12 の実測ペース（184 s/DAA ≈ 470 DAA/日）では、最小 bond 1 つで 1 日のブロックの約 15%。1 bond がブロック機会の大半を取れない | ADR-0176 Stage 1: REAL が cap で止まる（TooLow）、正直な miner の使用率が 80% 未満（TooHigh） |
+| V12-b | 日あたり reward（per unit） | capital の 0.25 | export cap と同じ。1 日分の偽造 claim の発行由来 reward を全部輸出しても、回収できる slash 0.51·K を下回る（§10.4-1） | Stage 1 の `S/K` |
+| V12-b | export cap | 250‰ | PESG §6 の上限 510 の半分。`0.51 − 0.25 = 0.26·K` を節約計算 `S` に残す | Stage 1 の `S/K` |
+| V12-b | `H_L`（責任の hold） | 10,000 DAA | court clock v2 の最長延長 `a + 10,000`（F07・V9） | X3 の実測 Δ（`hard = accepted + 5,520 + Δ` を覆うこと） |
+| V12-b | open claims / bond、Final weight / unit、burst、同時責任 | 72、1,000（`Unknown` の価値）、72 DAA × 4、1000‰ | 1 日分の claim、mechanics の尺度、既存の interim 定数 | Stage 1・2 |
+| R2 | `palw_claim_challenge_policy_provisional_v1()` | classes 64、jobs 1,024、live claims 1,008、enrollments/job 8、stream blocks 1,000,000、rounds 1、bootstrap seed = 決定済みの導出値 | live claims = court の同時 42 session × 24。M-C の検証時間（負荷下の M1 Max で 1 verify の中央値 ≤ 1.5 ms）なら、全部が偽造で全部検出されても court cap の 24 巡に収まる。rounds 1 は NonInteractive の初期契約。review digest は外部 review なので 0 のまま（fence は拒否されたまま） | 最低要件ハードウェアでの M-C、court session の DAA 長、interactive compiler |
+| R2 | `d_src` | 28.6（KAS 単位） | econ B12 の parity 値（interim の項、報告者 49%） | beacon の形と受付料が pin されたとき |
+| R2 | `N_max` | 3 | interim の sealed shape の `R + 1` | 遅延の価値 ν の実測 |
+| R2 / R3 | beacon の `k`・`D`・anchor delay・window・retry | 3、200 DAA、2、40、2 | k = 3: f = 0.25 で 3 source 全部が敵対的になる確率 1.6%。D: 静穏時 finality 深さ 7〜10 h（184 s/DAA で 140〜200 DAA）の上端。anchor・window: econ B12 で測った interim shape。retry 2: 最後の寄与者が選べる出力は最大 3 通り | 外部の bias review（§VI.8 item 2、P0-10）。**承認一覧（`approved_panel_beacon_policies_v1`）には入れていない** |
+| R1 | draw: retry 上限、stratum あたり seat・outsider、retained population | 2、1 + 1、4 | beacon の retry と同じ。mechanics はすでに 5 つ目を拒否する | 実 sharded class の測定 |
+| R1 | price: 最悪 cell の material bytes、fresh-verifier 時間、shard ごとの court 容量 | 33,629 B、134 ms、42 session | M-C で測った最大の court object（position close、ML-DSA-87 署名 2 本込み）。負荷下の 1 verify の最大（中央値の約 100 倍）。court cap | release ハードウェアでの実測。watcher の報酬は V4（court 受付料、別 lane）に従う |
+| R4 / R8 | `palw_rfc0016_values_provisional_v1()` | calibration の開始値（σ 250、φ 500、pace 1,200、queue 8・720 DAA、h 2、検証者取り分 200‰ ほか）に、ε = 0・entrant 上限 0（ADR-0179）、capacity safety 500‰ | ユーザー決定 2026-10-15 の開始値。測った容量の半分だけ数える | RFC-0016 §3.6 の 3 段階導出。**`PALW_RFC0016_MEASURED_RECORDS_V1` は空のまま** |
+| R4 / R8 | クラス別負荷 `PALW_RFC0016_CLAIM_LOADS_V1` | 入れない | 実モデルの per-claim DA が測られていない（Huihui-2B の frame は Incomplete）。測っていない値を作らない | M-DA |
+| R5 | `PALW_RFC0608_MEASURED_RECORDS_V1` | 入れない | record は fence ごとの policy root と実測 evidence の digest。record 一覧の pin は統合 lane | — |
+| R6 | TIR frame の費用 record | 入れない | 同上。P1 の R6（frame）は計測中 | P1 の追記 |
+| R7 | PALWQ361 の logit scale・f32 参照窓 | 入れない | 35B f32 の実行がこの機材では不可能で、根拠になる数値が無い。目安で窓を作ると fit guard の意味が無くなる | 64 GB 以上の機材での実行 |
+| R9 | κ、c、catalog edition | κ = 300‰、c = 300‰（決定済み、§6a.2）。edition は入れない | edition の root は実変換が NOT_RUN で存在しない | genesis 8 の変換 |
 
 ## 7. 独立検証への依頼（反証を試みてほしい点）
 
@@ -250,6 +294,8 @@ U-5 の計算（`python3 -I`、二項分布の上側確率、a = 0.9）:
 | `cargo test --release -p kaspa-consensus-core --test adr0177_allocation_v3`（30 日 → 7 日の訂正後、merge 前の tree） | 5 passed, 0 failed |
 | 558619700 を含む `g14/integration-r7`（193c2c65b）を merge した後: `… --lib --test adr0177_allocation_v3 -- palw_values_p4_v1 palw_bond_budget_v1 selected_approval_tests palw_cell_coverage_closure the_ miner_ block_ rfc0017_gap_e1` | lib: **2,692 passed, 8 failed**。`the_` の filter が広すぎて 2,700 件ほどが選ばれた。P4・bond budget・cell closure・selected approval の 103 件はすべて ok。失敗した 8 件はこの lane の変更と無関係な module（`fork_id_v1` 2 件: 「`palw_tir_container_identity_v1` … this probe cannot set — add it here」、`palw_lifecycle_objects_v2` a2u: 「TirDesignatedEventV1 (tag 245) sits in exactly one row of PALW_A2_KIND_FENCE_TABLE_V1」left 0、`palw_court_model_scope_routes_v1` 2 件（`DemandExpired` と `RootNotCommitted` の不一致ほか）、`palw_ruling_fences_v1` X3、`palw_state_v2` claim_local_rewards / r5_f02_wire）。integration-r7 側の回帰と見られ、この lane では直していない（Lead へ報告） |
 | merge 後に `… --test adr0177_allocation_v3` だけ | 5 passed, 0 failed |
+| aa54ab8c5 を merge、U-5 = 75/41、R9 の分母修正、目安の module を入れた後（初回）: `… --lib --test adr0177_allocation_v3 --test rfc0016_v1 -- palw_model_tier_v1 palw_annual_catalog_v1 palw_security_certification_v1 palw_rfc0018_v1 palw_bond_budget_v1 palw_values_p4_v1 palw_native_mining palw_model_eligibility rfc0016 …` | lib 228 passed / **3 failed**（model tier の 3 件）。原因は私の 2 つの誤り: 分母の再計算で正規 tier の重みを二重に足していた（`sum_a` を正規分の和から始めて全行を足していた）こと、新しいテストが 3 epoch しか回さず 7 epoch 平均が満ちていなかったこと。U-5 のテストと RFC-0018 の 39 件は 75/41 で ok |
+| 修正後（`sum_a` を 0 から全行で足す、テストは 9 epoch）、同じコマンド + `--no-fail-fast` | **lib 232 passed, 0 failed**（新規: `p4_registered_capital_cannot_dilute_the_approved_tier_beyond_its_scaled_weight`、`p4_canonical_only_and_unbound_allocations_are_unchanged`、`p4_registered_models_receive_exactly_their_scaled_share`、`p4_u5_decided_m_k_meet_false_certification_and_liveness_at_the_premise`、`p4_provisional_policies_validate_and_their_fences_stay_refused`）。`adr0177_allocation_v3` 5 passed。`rfc0016_v1` はこの filter で 0 件選択（実行なし） |
 
 P4 のテスト（`consensus/core/src/palw_values_p4_v1.rs`）の内容:
 
