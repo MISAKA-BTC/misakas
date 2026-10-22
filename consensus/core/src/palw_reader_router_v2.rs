@@ -365,7 +365,8 @@ pub(crate) mod tests {
         let (_, d) = profile_and_mapping(false);
         let object =
             crate::palw_state_v2::PalwConsensusObjectV2::ReaderRouterDeclaredV2 { declaration: Box::new(d), signature: vec![1] };
-        assert_eq!(borsh::to_vec(&object).unwrap()[0], 244);
+        // 244 belongs to MemoryRoutingV2; the additive declaration has its own tag.
+        assert_eq!(borsh::to_vec(&object).unwrap()[0], 248);
         assert!(crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).is_ok());
         let mut p = crate::config::params::TESTNET_PARAMS;
         p.palw_memory_routing_court_v2 = Some(crate::config::params::ForkActivation::new(1));
