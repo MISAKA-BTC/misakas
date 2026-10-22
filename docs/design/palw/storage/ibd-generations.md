@@ -56,7 +56,7 @@ DB 切替・再起動・reorg の間もその上限内に留まる」ための I
 | staging 構築中 | **active DB(全量)+ staging DB(proof・headers・trusted・PALW)** | 2 DB。UTXO と bodies は commit 後に新 active へ入るので、staging 側は「全量」ではない |
 | commit の瞬間 | 両 DB → 旧 DB 削除 | 削除は commit 直後、同期的 |
 | PALW install | carriage × 2 行(tip + pruning snapshot)+ WAL | 一時的に carriage の約 4 倍(現 t12 ≈ 57 MB、上限 384 MiB なら最大 ≈ 1.5 GB) |
-| PALW 受信 | spill 384 MiB × 2 session | **temp_dir = 管理領域の外**(本 lane で設定可能にした) |
+| PALW 受信 | spill 384 MiB × 2 session | **temp_dir = 管理領域の外**(capacity lane が管理領域へ移す) |
 | UTXO 再 import | clear の tombstone + 新行 + compaction 一時 | WAL/compaction 予算側 |
 
 実測(live t12 node1, DAA ≈ 13.7k): consensus 7.5 GB。staging の実測は未取得(drill 後の宿題、§6)。
@@ -67,8 +67,8 @@ DB 切替・再起動・reorg の間もその上限内に留まる」ための I
 | --- | --- | --- |
 | F1 | 切替 metadata の書き込みが fsync されない(RocksDB 既定 `sync=false`)。process kill には耐えるが OS crash / 電源断には耐えない。commit 直後に旧ディレクトリを消すので、OS crash で metadata が旧 key に戻ると**消えたディレクトリを current と呼ぶ**(genesis なしの空 consensus)。 | **修正**: `commit_staging_consensus` / `new_staging_consensus_entry` / `save_new_active_consensus` の後に `flush_wal(true)` |
 | F2 | cancel 時に staging ディレクトリの削除に失敗すると、次の staging が作られても再起動まで残る(3 DB)。 | **修正**: `new_staging_consensus` の先頭で非 active 世代を削除してから予約・作成 |
-| F3 | PALW spill が `temp_dir`(管理領域の外、tmpfs のことも)。 | **修正(設定可能・既定不変)**: `configure_snapshot_spill_v1{dir, reserver}` |
-| F4 | staging DB・spill の前に容量予約がない(並行タスクが同じ空きを数える)。 | **修正(既定 off)**: `StorageReserver` を staging 作成と spill session に接続 |
+| F3 | PALW spill が `temp_dir`(管理領域の外、tmpfs のことも)。 | **capacity lane が実装中**(`managed_temp_dir()`、`--storage-cap-bytes` 時のみ)。本 lane は重複実装を取り下げた |
+| F4 | staging DB・spill の前に容量予約がない(並行タスクが同じ空きを数える)。 | **capacity lane が実装中**(`StorageBudget::reserve_after_reclaim(StagingDb / IbdSpill)`)。本 lane の F2 cleanup はその予約の直前に来る |
 | F5 | commit で旧世代を即削除するため、切替をまたぐ巻き戻しができない。commit 後・UTXO import 完了前の crash は `is_utxo_stable=false` で「未検証」と判別できるが、戻る先はない(再 sync)。 | 設計(§3.4)。IBD の意味を変えるため本 lane では未変更 |
 | F6 | proof 経路で PALW carriage を 2 回取得(staging と commit 後)。disk ピークではなく時間と帯域。 | 記録のみ(consensus 側 flow の変更になるため別途) |
 | F7 | 受信 carriage は全量メモリ decode。row 単位の検証・spill はない。 | §3.2 の verifier を実装(wire は休眠) |
@@ -78,8 +78,8 @@ DB 切替・再起動・reorg の間もその上限内に留まる」ための I
 | 項目 | 予算 | 本 lane の上限の作り方 |
 | --- | ---: | --- |
 | active DB | 10,497,346,816 | capacity lane |
-| staging DB | 10,497,346,816 | `StagingReservationPolicy.estimate_bytes` で作成前に予約 |
-| IBD spill | 805,306,368 (= 384 MiB × 2) | `SpillArea`(1 file ≤ cap、同時 ≤ 2、各 file の cap を作成前に予約)/ 既存 `SnapshotSpill` は session ごとに 384 MiB を予約 |
+| staging DB | 10,497,346,816 | 作成前に予約(capacity lane の `StagingDb`)。本 lane は予約前に負けた世代を削除(F2) |
+| IBD spill | 805,306,368 (= 384 MiB × 2) | `SpillArea`(1 file ≤ cap、同時 ≤ 2、各 file の cap を作成前に予約)/ 既存 `SnapshotSpill` は capacity lane が session ごとに 384 MiB を予約 |
 | WAL/compaction | 4,000,000,000 | capacity lane。PALW install の ~4× 一時はここに入る |
 
 「設定値の合計は保証ではない」— 本 lane が保証するのは「世代は同時に最大 2」「spill は file ごとに cap 超過で失敗」
@@ -180,32 +180,32 @@ index/range 検査へ移す。`into_state_v3` の検査を分類すると:
 
 ### 3.5 容量 lane とのインタフェース
 
-`storage/capacity` には本 lane 作業時点で予約 API が無かったため、最小の trait を定義した
-(`database/src/storage_generations/reserve.rs`):
+作業開始時、`storage/capacity` には予約 API が無かったので最小の trait を定義した。作業中に capacity lane の
+worktree(未 commit)に `kaspa_utils::storage_budget::{StorageBudget, StorageCategory, StorageReservation}` が現れ、
+staging DB と PALW spill の予約・管理領域配置はそちらが実装していた。そのため本 lane は同じ箇所への重複実装
+(Factory の staging 予約、`SnapshotSpill` の配置・予約)を**取り下げ**、generation store / `SpillArea` が使う
+trait だけを残した。trait は RAII guard を返す 1 メソッドにしてあり、統合時の adapter は数行
+(`database/src/storage_generations/reserve.rs` の doc に雛形):
 
 ```rust
 pub trait StorageReserver: Send + Sync {
-    fn try_reserve(&self, purpose: StoragePurpose, bytes: u64) -> Result<(), ReserveRefused>; // 原子的
-    fn release(&self, purpose: StoragePurpose, bytes: u64);
+    fn reserve(&self, purpose: StoragePurpose, bytes: u64) -> Result<ReservationGuard, ReserveRefused>;
 }
+// StagingGeneration → StorageCategory::StagingDb, IbdSpill → StorageCategory::IbdSpill
 ```
 
-capacity lane の manager がこれを実装すれば、staging DB(`Factory::with_staging_reservation`)、PALW spill
-(`configure_snapshot_spill_v1`)、`SpillArea`、`GenerationStore::begin_staging` がそのまま使う。名前が衝突・重複する
-場合は capacity 側の名前に合わせて rename してよい(呼び出し箇所は上の 4 つだけ)。拒否は常に local な容量不足
-(IBD は停止・再試行)で、peer や block の判定に変換しない。
+拒否は常に local な容量不足(IBD は停止・再試行)で、peer や block の判定に変換しない。
 
 ## 4. 実装したもの
 
 | ファイル | 内容 |
 | --- | --- |
 | `database/src/storage_generations/mod.rs` | `GenerationStore`(journal・VERIFIED marker・復旧・退役・切替・巻き戻し・crash point) |
-| `database/src/storage_generations/reserve.rs` | `StorageReserver` / `StorageReservation`(RAII)/ `UnboundedReserver`(既定)/ `FixedBudgetReserver` |
+| `database/src/storage_generations/reserve.rs` | `StorageReserver`(RAII guard を返す)/ `StorageReservation` / `UnboundedReserver`(既定)/ `FixedBudgetReserver` |
 | `database/src/storage_generations/spill.rs` | `SpillArea` / `SpillFile`(cap 超過は `StorageFull` で失敗、作成前予約、drop で削除、起動時 sweep、high-water) |
 | `database/src/storage_generations/undo.rs` | `UndoLog`(fsync 追記、torn tail 切詰め、pop) |
 | `consensus/core/src/palw_row_stream_v1.rs` | `PalwCollectionRootStreamV1`、`PalwRowStreamVerifierV1`、2 段の証拠型、spill 読み戻し |
-| `consensus/src/consensus/factory.rs` | F1 fsync、F2 cleanup-before-reserve、`with_staging_reservation`(既定 off) |
-| `protocol/flows/src/palw_snapshot_chunks.rs` | F3/F4: `configure_snapshot_spill_v1`(既定 = temp_dir・予約なし) |
+| `consensus/src/consensus/factory.rs` | F1 切替 metadata の fsync、F2 staging 作成前に非 active 世代を削除 |
 
 テスト:
 
@@ -222,13 +222,14 @@ capacity lane の manager がこれを実装すれば、staging DB(`Factory::wit
 - P2P message(RFC-0037)は未登録。serve 側(preimage と全 collection の row 生成、collection ごとの codec 表)も未実装。
 - 受信 row → typed carriage の組み立て(第 2 段の PALW 実体)は未実装。テストでは第 2 段を toy の全体不変条件で代替した。
 - consensus-NNN を `GenerationStore` に載せる phase B(§3.4)、旧世代削除の遅延、PALW 2 回取得の解消は未実施。
-- `--ibd-spill-dir` 等の kaspad flag は未追加(capacity lane の管理領域設定と一本化するため)。API は公開済み。
+- staging DB・PALW spill の予約と管理領域配置は capacity lane の実装に委ねた(重複を避けるため本 lane では取り下げ)。
+- `StorageReserver` → `StorageBudget` の adapter は capacity lane の merge 後に追加する。
 - staging DB の実測、30 GB 超 canonical state での IBD drill は未実施(共通方針どおり drill は後)。
 
 ## 6. 次の手順
 
-1. capacity lane が `StorageReserver` を実装 → kaspad で `Factory::with_staging_reservation` と
-   `configure_snapshot_spill_v1` を管理領域に向けて設定。
+1. capacity lane の merge 後、`StorageReserver` の adapter を足し、generation store / `SpillArea` を
+   `StorageBudget` に接続。factory.rs は両 lane が同じ関数を触るので、F2 cleanup → capacity の予約 の順で統合する。
 2. RFC-0037 / ADR-0204 の review。採択されたら serve 側と組み立て段を実装し、新 protocol version の下で
    既存 106/107 と並存(旧 peer は従来の carriage 転送のまま)。
 3. phase B(§3.4)を別 RFC/ADR なしで入れられるか(node-local か)を review で判断。

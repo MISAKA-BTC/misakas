@@ -281,19 +281,6 @@ pub struct Factory {
     rocksdb_preset: RocksDbPreset,
     wal_dir: Option<PathBuf>,
     cache_budget: Option<usize>,
-    /// G14 storage (IBD lane): reserve the staging DB's estimated bytes before it is created. `None` (the default)
-    /// keeps the historical behaviour: no reservation.
-    staging_reservation: Option<StagingReservationPolicy>,
-    /// The live staging DB's reservation, released when the staging entry is committed or deleted.
-    staging_reservation_held: parking_lot::Mutex<Option<kaspa_database::storage_generations::reserve::StorageReservation>>,
-}
-
-/// How a staging consensus is reserved: through which capacity manager, and how many bytes (the design budget for a
-/// staging DB; the capacity lane measures and adjusts it).
-#[derive(Clone)]
-pub struct StagingReservationPolicy {
-    pub reserver: Arc<dyn kaspa_database::storage_generations::reserve::StorageReserver>,
-    pub estimate_bytes: u64,
 }
 
 impl Factory {
@@ -335,19 +322,9 @@ impl Factory {
             rocksdb_preset,
             wal_dir,
             cache_budget,
-            staging_reservation: None,
-            staging_reservation_held: parking_lot::Mutex::new(None),
         };
         factory.delete_inactive_consensus_entries();
         factory
-    }
-
-    /// Reserve `policy.estimate_bytes` before every staging consensus is created (G14 storage). A refusal fails the
-    /// staging creation with a LOCAL capacity error — the IBD pauses and retries; nothing about the peer or the chain
-    /// is judged.
-    pub fn with_staging_reservation(mut self, policy: StagingReservationPolicy) -> Self {
-        self.staging_reservation = Some(policy);
-        self
     }
 
     /// **The block cache a consensus database is opened with.** `--rocksdb-cache-size` (and the HDD preset's own
@@ -417,21 +394,11 @@ impl ConsensusFactory for Factory {
     fn new_staging_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
         assert!(!self.notification_root.is_closed());
 
-        // G14 storage: the losing generation goes BEFORE new space is reserved. A staging DB whose cancel could not
-        // remove its directory (or any other non-active entry) would otherwise sit beside the new one until restart —
-        // three DBs where the budget holds two.
+        // G14 storage (IBD lane): the losing generation goes BEFORE new space is reserved or used. A staging DB whose
+        // cancel could not remove its directory (or any other non-active entry) would otherwise sit beside the new one
+        // until restart — three DBs where the budget holds two. (The capacity lane's staging reservation, when merged,
+        // belongs right after this call.)
         self.delete_inactive_consensus_entries();
-        if let Some(policy) = &self.staging_reservation {
-            use kaspa_database::storage_generations::reserve::{StoragePurpose, StorageReservation};
-            let reservation =
-                StorageReservation::acquire(&policy.reserver, StoragePurpose::StagingGeneration, policy.estimate_bytes).map_err(|why| {
-                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Factory>(
-                        "staging consensus storage reservation",
-                        &why.to_string(),
-                    )
-                })?;
-            *self.staging_reservation_held.lock() = Some(reservation);
-        }
 
         let entry = self.management_store.write().new_staging_consensus_entry().unwrap();
         let dir = self.db_root_dir.join(entry.directory_name);
@@ -482,8 +449,6 @@ impl ConsensusFactory for Factory {
     fn delete_inactive_consensus_entries(&self) {
         // Staging entry is deleted also by archival nodes since it represents non-final data
         self.delete_staging_entry();
-        // Committed or cancelled: either way the staging reservation has become measured usage or freed space.
-        drop(self.staging_reservation_held.lock().take());
 
         if self.config.is_archival {
             return;
@@ -515,7 +480,6 @@ impl ConsensusFactory for Factory {
     }
 
     fn delete_staging_entry(&self) {
-        drop(self.staging_reservation_held.lock().take());
         let mut write_guard = self.management_store.write();
         if let Some(entry) = write_guard.staging_consensus_entry() {
             let dir = self.db_root_dir.join(entry.directory_name.clone());
