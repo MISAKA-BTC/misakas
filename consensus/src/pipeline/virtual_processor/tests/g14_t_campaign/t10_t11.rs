@@ -32,18 +32,18 @@ async fn t10_an_internal_fold_only_lie_is_convicted_by_the_fold_arithmetic() {
 /// **T10 (full)**: fixture coverage does NOT stand in for every paid original — a funded original whose numerical families are not
 /// covered by an admitted fixture/detection policy is refused at admission (typed refusal), never admitted on the strength of a
 /// different fixture's coverage.
-// DEPENDS ON lane r5-original-admission (funded original admission + family coverage refusal).
+// MERGED on g14/integration-r7 (studio T4) — the remaining blocker is the #[ignore] reason; was: DEPENDS ON lane r5-original-admission (funded original admission + family coverage refusal).
 #[tokio::test]
-#[ignore = "needs lane r5-original-admission merge"]
+#[ignore = "blocked on value V2 (lanes merged on r7)"]
 async fn t10_fixture_coverage_does_not_cover_every_paid_original() {
-    #[cfg(feature = "g14-t-campaign-merged")]
+    #[cfg(feature = "g14-t-campaign-intended-api")]
     {
         let w = World::new().await;
         let refusal = w.net.chain.tip_state().1.palw_funded_original_admission_preview_v1(&w.class, /* uncovered family */ 0xFFFF);
         assert!(matches!(refusal, Err(e) if e.contains("not covered")), "typed refusal for an uncovered paid original");
     }
-    #[cfg(not(feature = "g14-t-campaign-merged"))]
-    pending_lane!("r5-original-admission");
+    #[cfg(not(feature = "g14-t-campaign-intended-api"))]
+    blocked_on!("every node-level funded admission is refused at the schedule (palw_funded_original_schedule_v1 typed-missing, V2) before family coverage is consulted (see tests/funded_original_native_candidate.rs); intended palw_funded_original_admission_preview_v1 does not exist");
 }
 
 /// **T11 (scaled): N concurrent pursuits, only the LAST one false; every retained liability and the capacity accounted.** N claims
@@ -76,11 +76,13 @@ async fn t11_n_concurrent_pursuits_only_the_last_false_with_full_retained_liabil
     assert_eq!(w.net.ledger().job_escrows.len(), n, "N escrows live at once");
     let escrow_total: u128 = w.net.ledger().job_escrows.values().map(|e| u128::from(e.amount)).sum();
     assert_eq!(escrow_total, n as u128 * u128::from(pol.claim_reward), "and fully funded");
+    // The last claim's seats are read while its interim assignment exists (it is gone once the receipts cover it). Studio T4
+    // (2026-10-22): the first run read them after `cover` and panicked in the harness ("the claim has an interim assignment").
+    let last = claims.last().unwrap();
+    let seats = w.seats(&last.id);
     for c in &claims {
         w.cover(&c.id).await;
     }
-    let last = claims.last().unwrap();
-    let seats = w.seats(&last.id);
     let outsider = w.outsiders(last, &seats, 1)[0];
     // The outsider checks every claim; only the last is prosecutable.
     for c in &claims[..n - 1] {
@@ -104,8 +106,18 @@ async fn t11_n_concurrent_pursuits_only_the_last_false_with_full_retained_liabil
         assert!(matches!(w.net.claim_state(&c.id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&c.id));
     }
     assert_eq!(w.net.slashed(last.producer), pol.claim_collateral, "the liar is slashed once, for the last claim only");
+    // Studio T4 (2026-10-22): the first full run failed here with 183,333,333 slashed from an honest producer — a card that ALSO sat
+    // on the last claim's Panel and (the harness's colluding seats) signed passing receipts for the lie. That is its seat's G-K1
+    // signer liability, not its honest claim: a producer outside the lie's Panel is never slashed, and a producer on it loses at
+    // most its seat liability — never its honest claim's collateral (which is released, below).
     for c in &claims[..n - 1] {
-        if c.producer != last.producer {
+        if c.producer == last.producer {
+            continue;
+        }
+        if seats.contains(&c.producer) {
+            let s = w.net.slashed(c.producer);
+            assert!(s > 0 && s < pol.claim_collateral, "a colluding seat pays its seat liability only, never its honest claim: {s}");
+        } else {
             assert_eq!(w.net.slashed(c.producer), 0, "an honest producer is never slashed");
         }
     }

@@ -64,11 +64,11 @@ async fn t06_last_inclusive_notice_and_latest_lawful_response_fit_the_hard_bound
 /// **T06 (full)**: every remaining LEGAL BRANCH of the shared original (appeal/escalation, relay, recovery, settlement) fits the
 /// original's hard bound when notice is at its last inclusive DAA and every response is at its latest lawful DAA — computed by the
 /// node from the original's signed dependency horizon, not by the test.
-// DEPENDS ON lane r5-clock-deps-relay (signed dependency horizon / atomic deadline update), r5-original-admission.
+// MERGED on g14/integration-r7 (studio T4) — the remaining blocker is the #[ignore] reason; was: DEPENDS ON lane r5-clock-deps-relay (signed dependency horizon / atomic deadline update), r5-original-admission.
 #[tokio::test]
-#[ignore = "needs lane r5-clock-deps-relay + r5-original-admission merge"]
+#[ignore = "blocked on values V2+V9 and unrecorded lease horizons (lanes merged on r7)"]
 async fn t06_every_remaining_legal_branch_fits_the_original_hard_bound() {
-    #[cfg(feature = "g14-t-campaign-merged")]
+    #[cfg(feature = "g14-t-campaign-intended-api")]
     {
         let mut w = World::new().await;
         let (claim, _) = covered_claim(&mut w, 0, true).await;
@@ -79,8 +79,8 @@ async fn t06_every_remaining_legal_branch_fits_the_original_hard_bound() {
             assert!(latest <= original.hard_until_daa(), "branch {branch:?} ends at {latest} past the hard bound");
         }
     }
-    #[cfg(not(feature = "g14-t-campaign-merged"))]
-    pending_lane!("r5-clock-deps-relay + r5-original-admission");
+    #[cfg(not(feature = "g14-t-campaign-intended-api"))]
+    blocked_on!("legal branches are derived only by derive_funded_admission_v1 under FundedAdmissionScheduleV1, whose only constructor is #[cfg(test)] (V2); EXEC worker / provider lease horizons are not state fields (r5-clock-deps-relay notes 3 OPEN); the staged court retention on network_v1 is below a+10,256 (V9); intended palw_funded_original_v1().legal_branches() does not exist");
 }
 
 /// **T07 (demand window, node-level): −1 / = / +1 at `window_end`.** One card files a demand for every position in ONE send: the i-th
@@ -133,9 +133,14 @@ async fn t07_demand_window_minus_one_equal_plus_one_at_the_node() {
     }
 }
 
-/// **T07 (court deadline, node-level): a response folding at `deadline − 1` answers; at `deadline` the tick has already defaulted.**
-/// Fresh worlds with the response sent at decreasing leads; each observed fold DAA decides the expected outcome; −1 and ≥ 0 must
-/// both be exercised.
+/// **T07 (court deadline, node-level): a response folding at `deadline − 1` or AT `deadline` answers; at `deadline + 1` the demand is
+/// already gone (the deadline block's tick defaulted it).** The kernel ledger folds a block's objects before its tick
+/// (`Ledger::apply_block`: inputs, then `tick`, whose availability default is `daa >= deadline_daa`), so the deadline block is the
+/// last lawful response block — the rule the kernel's own route test pins (`misaka/palw/kernel/tests/k2_ledger_route.rs`, "the
+/// producer answers both at the deadline (79)"). Studio T4 (2026-10-22): the first run expected `fold < deadline` and failed at
+/// `fold == deadline` (answered); that expectation contradicted the ledger's rule and is corrected here, and −1, = and +1 are now all
+/// REQUIRED to be exercised (was: −1 and any ≥ 0).
+/// Fresh worlds with the response sent at decreasing leads; each observed fold DAA decides the expected outcome.
 #[tokio::test]
 async fn t07_court_deadline_minus_one_equal_plus_one_at_the_node() {
     kaspa_core::log::try_init_logger("warn");
@@ -155,11 +160,11 @@ async fn t07_court_deadline_minus_one_equal_plus_one_at_the_node() {
         let fold = daas[1];
         let defaulted = matches!(w.net.claim_state(&claim.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. });
         let answered = w.net.ledger().served.contains_key(&(claim.id, 0, claim.at.0));
-        assert_eq!(answered, fold < deadline, "fold {fold} vs deadline {deadline}: answered = {answered}");
+        assert_eq!(answered, fold <= deadline, "fold {fold} vs deadline {deadline}: answered = {answered}");
         assert_eq!(defaulted, !answered, "exactly one of answer / default");
         seen.insert(fold as i64 - deadline as i64, answered);
     }
-    assert!(seen.contains_key(&-1) && seen.keys().any(|k| *k >= 0), "−1 and ≥0 exercised: {seen:?}");
+    assert!(seen.contains_key(&-1) && seen.contains_key(&0) && seen.contains_key(&1), "−1, = and +1 exercised: {seen:?}");
 }
 
 /// **T07 (liability horizon, node-level): a proof folding at `liability_until` still convicts; at `liability_until + 1` it is refused
@@ -196,11 +201,11 @@ async fn t07_liability_horizon_minus_one_equal_plus_one_at_the_node() {
 /// **T07 (full)**: −1 / = / +1 at EVERY connected native deadline and rule boundary — original admission accept_until, the dependency
 /// lease end, the escrow settlement deadline, the position-terminal deadline and the original's hard bound — on the node, each the
 /// observed fold DAA. Pure predicates are only partial evidence (the ledger row says so).
-// DEPENDS ON lane r5-clock-deps-relay, r5-escrow-settlement, r5-p2-terminal, r5-original-admission.
+// MERGED on g14/integration-r7 (studio T4) — the remaining blocker is the #[ignore] reason; was: DEPENDS ON lane r5-clock-deps-relay, r5-escrow-settlement, r5-p2-terminal, r5-original-admission.
 #[tokio::test]
-#[ignore = "needs lane r5-clock-deps-relay + r5-escrow-settlement + r5-p2-terminal + r5-original-admission merge"]
+#[ignore = "blocked on values V2+V3+V8 and unrecorded lease horizons (lanes merged on r7)"]
 async fn t07_every_connected_native_deadline_minus_one_equal_plus_one() {
-    #[cfg(feature = "g14-t-campaign-merged")]
+    #[cfg(feature = "g14-t-campaign-intended-api")]
     {
         let w = World::new().await;
         // INTENDED API: the node lists every connected deadline of an admitted original; each is driven like the three above.
@@ -213,6 +218,6 @@ async fn t07_every_connected_native_deadline_minus_one_equal_plus_one() {
             }
         }
     }
-    #[cfg(not(feature = "g14-t-campaign-merged"))]
-    pending_lane!("r5-clock-deps-relay + r5-escrow-settlement + r5-p2-terminal + r5-original-admission");
+    #[cfg(not(feature = "g14-t-campaign-intended-api"))]
+    blocked_on!("funded-original accept_until, escrow settlement and position-terminal deadlines live only on rows no node can create (V2, V3, V8 typed-missing); the dependency lease end is not a state field; intended palw_connected_deadlines_v1 does not exist");
 }

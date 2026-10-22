@@ -62,11 +62,11 @@ async fn t01_honest_miner_and_wrong_challenger_route_outcomes_are_funded_and_exa
 /// **T01 (shared-original part)**: the same honest miner / wrong challenger, but through the COMPLETE shared-original duty graph —
 /// funded original admission reserving every legal branch, the paid public ingress carrying the challenger, and the escrow
 /// settlement paying the miner and charging the challenger by the funded outcome table.
-// DEPENDS ON lane r5-original-admission (funded original admission), r5-escrow-settlement (settlement paths), r5-f03-ingress.
+// MERGED on g14/integration-r7 (studio T4) — the remaining blocker is the #[ignore] reason; was: DEPENDS ON lane r5-original-admission (funded original admission), r5-escrow-settlement (settlement paths), r5-f03-ingress.
 #[tokio::test]
-#[ignore = "needs lane r5-original-admission + r5-escrow-settlement + r5-f03-ingress merge"]
+#[ignore = "blocked on values V2+V3+V4 and a node-level shared original (lanes merged on r7)"]
 async fn t01_honest_miner_and_wrong_challenger_through_shared_original_duties_and_funded_outcomes() {
-    #[cfg(feature = "g14-t-campaign-merged")]
+    #[cfg(feature = "g14-t-campaign-intended-api")]
     {
         use kaspa_consensus_core::palw_court_original_escrow_v1::PalwOriginalEscrowOutcomeV1 as Outcome;
         let mut w = World::new().await;
@@ -85,8 +85,8 @@ async fn t01_honest_miner_and_wrong_challenger_through_shared_original_duties_an
         let outcome = w.net.chain.tip_state().1.palw_original_escrow_outcome_v1(&honest.id).expect("settled");
         assert_eq!(outcome, Outcome::HonestFinal { challenger_charged: ticket.fee });
     }
-    #[cfg(not(feature = "g14-t-campaign-merged"))]
-    pending_lane!("r5-original-admission + r5-escrow-settlement + r5-f03-ingress");
+    #[cfg(not(feature = "g14-t-campaign-intended-api"))]
+    blocked_on!("no funded original can be admitted on a node (palw_funded_original_schedule_v1 typed-missing, V2) so no PalwFundedEscrowRowV1 exists; escrow dues palw_escrow_fee_schedule_v1 = None (V3); there is no paid-ingress object (the paid ingress is a once-only fee on TIR CourtOpened, palw_court_ingress_schedule_v1 typed-missing, V4); intended palw_funded_original_v1 / palw_paid_ingress_quote_v1 / palw_original_escrow_outcome_v1 / K::PaidIngressOpen do not exist; a kernel-route claim carries no shared original");
 }
 
 /// **T02 (route part): permanent miner silence.** The miner publishes everything but one value and never answers again; an outsider
@@ -132,11 +132,11 @@ async fn t02_permanent_miner_silence_is_a_correct_eligible_default_after_an_actu
 
 /// **T02 (native shared-original part)**: the silent miner's default is classified by the CURRENT duty authority on the shared
 /// original (F02 wire), against an actually supplied service window, never a caller's flag.
-// DEPENDS ON lane r5-f02-wire (shared-court op object / F02 wire), r5-clock-deps-relay (current-duty authority).
+// MERGED on g14/integration-r7 (studio T4) — the remaining blocker is the #[ignore] reason; was: DEPENDS ON lane r5-f02-wire (shared-court op object / F02 wire), r5-clock-deps-relay (current-duty authority).
 #[tokio::test]
-#[ignore = "needs lane r5-f02-wire + r5-clock-deps-relay merge"]
+#[ignore = "blocked: no production CourtSharedContext installer; tag 178 has no OpenDuty op (lanes merged on r7)"]
 async fn t02_permanent_silence_on_the_shared_original_uses_current_duty_authority() {
-    #[cfg(feature = "g14-t-campaign-merged")]
+    #[cfg(feature = "g14-t-campaign-intended-api")]
     {
         let mut w = World::new().await;
         let (silent, seats) = covered_claim(&mut w, 0, true).await;
@@ -150,8 +150,8 @@ async fn t02_permanent_silence_on_the_shared_original_uses_current_duty_authorit
         w.net.beat_to(duty.deadline_daa).await;
         assert!(w.net.chain.tip_state().1.palw_shared_duty_v1(&silent.id).unwrap().defaulted_by_current_authority());
     }
-    #[cfg(not(feature = "g14-t-campaign-merged"))]
-    pending_lane!("r5-f02-wire + r5-clock-deps-relay");
+    #[cfg(not(feature = "g14-t-campaign-intended-api"))]
+    blocked_on!("tag 178 SharedCourtOpV1 carries Body/Ids/Request/Numerical/NativeHeldDefault (no OpenDuty) and needs a CourtSharedContext row that only #[cfg(test)] code installs; the post-Final default (NativeHeldDefault) needs a text29/funded11 held row and its slash PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1 = None (V6); the real reader court_duty_clocks_for_claim_v1 is empty for every kernel-route claim; intended palw_shared_duty_v1 does not exist");
 }
 
 /// **T03: forged signatures and fake Panel completion reports are rejected before any culpability or monetary effect.** (a) A proof

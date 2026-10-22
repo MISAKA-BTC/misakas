@@ -28,6 +28,7 @@ mod t10_t11;
 mod t12_t13;
 mod t14;
 mod t15;
+mod value_gates;
 
 /// A scaled campaign parameter: `var` from the environment, else `default` (never zero).
 pub(super) fn campaign_n(var: &str, default: usize) -> usize {
@@ -88,3 +89,16 @@ macro_rules! pending_lane {
     };
 }
 pub(super) use pending_lane;
+
+/// **Studio T4 (2026-10-22)**: the gate of an `#[ignore]`d campaign test whose lanes ARE merged on `g14/integration-r7` but whose
+/// intended API does not exist there and whose path is refused on a node until a value is adopted. Its intended body is kept under
+/// the OFF feature `g14-t-campaign-intended-api`; run with `--ignored`, the test panics with the real blocker (a BLOCKED row, never
+/// a PASS). The value gates themselves are asserted by `value_gates::t_campaign_value_gated_paths_are_refused_in_a_node_build`.
+#[allow(unused_macros)]
+macro_rules! blocked_on {
+    ($why:literal) => {
+        panic!(concat!("BLOCKED (lanes merged on g14/integration-r7; intended API absent / value not adopted): ", $why))
+    };
+}
+#[allow(unused_imports)]
+pub(super) use blocked_on;
