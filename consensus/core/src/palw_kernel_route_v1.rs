@@ -115,6 +115,22 @@ pub const PALW_KERNEL_CHUNK_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/chunk-
 /// The most seats one claim's interim assignment draws, and the per-segment quorum the tally needs.
 pub const PALW_KERNEL_ROUTE_INTERIM_SEATS_V1: usize = 3;
 pub const PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1: u8 = 3;
+/// **Panel=1** (PRINCIPLES §5, RFC-0010 §0 addendum): one assigned seat per claim, quorum 1 — selected by
+/// `Params::palw_kernel_route_panel_one_v1` (dormant; USER DECISION PENDING between this and the interim 3-of-3). The seat's receipt
+/// is one input to the claim-level verification; the public court, the challenge window and bond/slash decide a dispute exactly as
+/// under 3-of-3 (a seat's signature never justifies a fault, PRINCIPLES §5).
+pub const PALW_KERNEL_ROUTE_PANEL_ONE_SEATS_V1: usize = 1;
+pub const PALW_KERNEL_ROUTE_PANEL_ONE_QUORUM_V1: u8 = 1;
+
+/// **The seat policy at `daa_score`**: `(seats, quorum)`, Panel=1 from `panel_one_from` (the mirror of
+/// `Params::palw_kernel_route_panel_one_v1`), the interim 3-of-3 otherwise (and always when `None`).
+pub fn palw_kernel_route_seats_and_quorum_v1(panel_one_from: Option<u64>, daa_score: u64) -> (usize, u8) {
+    if panel_one_from.is_some_and(|from| daa_score >= from) {
+        (PALW_KERNEL_ROUTE_PANEL_ONE_SEATS_V1, PALW_KERNEL_ROUTE_PANEL_ONE_QUORUM_V1)
+    } else {
+        (PALW_KERNEL_ROUTE_INTERIM_SEATS_V1, PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1)
+    }
+}
 
 /// **What one kernel route object can be, in encoded bytes** — the bound a node with the real carriers can honour: an object rides
 /// one `0x4b` carrier directly, or in `ObjectChunk`s ([`crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES`] ×

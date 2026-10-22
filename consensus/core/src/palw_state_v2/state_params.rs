@@ -190,6 +190,7 @@ impl PalwStateParamsV2 {
             detection_policy_v1: None,
             reward_liability_horizon_from_daa: None,
             court_outsider_lane_from_daa: None,
+            kernel_route_panel_one_from_daa: None,
             cell_coverage_closure_from_daa: None,
             memory_routing_court_from_daa: None,
             class_registration_origin_from_daa: None,
@@ -735,6 +736,24 @@ impl PalwStateParamsV2 {
     /// Is the G14 F03 outsider court lane / owner reclamation in force at `daa_score`? `false` on every shipped preset.
     pub fn court_outsider_lane_active_v1(&self, daa_score: u64) -> bool {
         self.court_outsider_lane_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **Kernel route Panel=1 seat policy mirror** (`Params::palw_kernel_route_panel_one_v1`, lane g14p/kernel-route U02), written by
+    /// `Params::sync_palw_g14_gates_v1` (and by fixtures).
+    pub fn with_kernel_route_panel_one_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.kernel_route_panel_one_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_kernel_route_panel_one_v1`'s height, if armed (the mirror).
+    pub fn kernel_route_panel_one_from_daa(&self) -> Option<u64> {
+        self.kernel_route_panel_one_from_daa
+    }
+
+    /// **The kernel route's assigned seats and per-segment quorum for a draw at `daa_score`**: `(1, 1)` (Panel=1) past
+    /// `palw_kernel_route_panel_one_v1`, otherwise the interim `(3, 3)`. Every seat draw and committee reads this.
+    pub fn kernel_route_seats_and_quorum_v1(&self, daa_score: u64) -> (usize, u8) {
+        crate::palw_kernel_route_v1::palw_kernel_route_seats_and_quorum_v1(self.kernel_route_panel_one_from_daa, daa_score)
     }
 
     /// **Does the reward liability horizon govern a claim accepted at `accepted_daa`?** `false` on every shipped preset.
