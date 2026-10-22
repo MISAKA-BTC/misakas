@@ -151,10 +151,13 @@ impl CourtServiceStateV2 {
     /// [`crate::palw_court_service_binding_v1::attribute_service_default_v1`]: the same original-scope guard as
     /// [`Self::default_hold`], then attribution from the RECORDED reserved supply and each unpaid actor's native duty clocks on
     /// `state`. [`Self::default_hold`] is unchanged (the legacy deny-only guard below the fence / without a pinned profile).
+    ///
+    /// **audit B-03 (fix-b):** `defaulted` are the clocks of the duty being defaulted (one per unpaid actor: the clock row the
+    /// actor's outstanding native response duty wrote); the claim's other clocks (earlier turns, other acquisitions) are not read.
     pub fn default_attribution_v1(
         &self,
-        state: &crate::palw_state_v2::PalwChainStateV2,
         frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+        defaulted: &[&crate::palw_court_duty_clock_v1::CourtDutyClockV1],
         unpaid: &BTreeSet<crate::palw_state_v2::PalwBondKeyV2>,
         inclusion_premise_adopted: bool,
     ) -> Result<crate::palw_court_service_binding_v1::CourtServiceAttributionV1, &'static str> {
@@ -166,11 +169,13 @@ impl CourtServiceStateV2 {
         {
             return Err("court service binding substitutes original scope");
         }
-        let clocks = state.court_duty_clocks_for_claim_v1(plan.original_claim);
+        if defaulted.iter().any(|c| c.claim != plan.original_claim) {
+            return Err("court service default names another claim's duty clock");
+        }
         crate::palw_court_service_binding_v1::attribute_service_default_v1(
             self,
             plan.original_claim,
-            &clocks,
+            defaulted,
             unpaid,
             inclusion_premise_adopted,
         )

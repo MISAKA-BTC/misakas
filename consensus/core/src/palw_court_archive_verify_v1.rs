@@ -89,7 +89,7 @@ impl TransitionBuilder<'_> {
             let Some(g)=a.groups.get(&side) else {continue;};
             if a.fulfilled_groups.contains(&side)||a.applied_deposit_debits.contains_key(&side){continue;}
             let captured_at=match a.evidence.as_ref(){CourtEndEvidenceV1::Native {point,..}|CourtEndEvidenceV1::TirConviction {point,..}=>*point,
-                CourtEndEvidenceV1::Uncaptured=>continue};
+                CourtEndEvidenceV1::Uncaptured|CourtEndEvidenceV1::DeadlineSweep{..}=>continue};
             let Some(Row::CourtCloseReceipt(r))=self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) else {continue;};
             if r.rules.is_none(){continue;}
             let row=Progress {version:1,session_id:id,side,claim:a.session.claim,service_profile_id:a.service_profile_id,
@@ -328,7 +328,7 @@ impl TransitionBuilder<'_> {
             .ok_or_else(||refusal("archive original binding missing"))?;
         let ended_at=match archive.evidence.as_ref(){
             CourtEndEvidenceV1::Native {point,..}|CourtEndEvidenceV1::TirConviction {point,..}=>Some(point.daa_score),
-            CourtEndEvidenceV1::Uncaptured=>None,
+            CourtEndEvidenceV1::Uncaptured|CourtEndEvidenceV1::DeadlineSweep{..}=>None,
         };
         if deadline!=group.assembly_deadline_daa || point.daa_score<receipt.point.daa_score
             || point.daa_score>deadline || point.daa_score>receipt.session.deadline_daa

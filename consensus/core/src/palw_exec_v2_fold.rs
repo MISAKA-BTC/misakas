@@ -939,6 +939,28 @@ pub(super) fn apply_root_declared_v2(
     if declaration.expiry_daa <= daa || declaration.expiry_daa > daa.saturating_add(PALW_EXEC_V2_MAX_ROOT_LIFETIME_DAA) {
         return Err(no(R::BadExpiry));
     }
+    // audit B-06 (fix-b): under clock v2 the root's signed EXEC floor (`expiry + window_court`, or the kernel policy's floor — the
+    // same horizon the dispute extension reads) must cover the claim's extended window `a + 10,000 + max(W_disclose, reorg)`, else a
+    // producer-chosen short expiry makes the claim indisputable on the legacy route. A claim clock v2 does not govern: unchanged.
+    {
+        use crate::palw_court_clock_v2::{PalwCourtDependencyKindV2 as Kind, PalwCourtDependencyV2 as Dep};
+        let floor = match &builder.state.kernel_route {
+            Some(kernel) => super::palw_kernel_route_fold_v1::exec_liability_floor_v1(
+                declaration.expiry_daa,
+                builder.params.window_court(),
+                &kernel.header.policy,
+            )?,
+            None => declaration.expiry_daa.checked_add(builder.params.window_court()).ok_or(PalwStateV2Error::Overflow("EXEC floor"))?,
+        };
+        crate::palw_court_clock_v2::palw_court_clock_v2_admission_dependencies_v2(
+            builder.params,
+            &claim,
+            palw_da_disclose_window_daa_v1(builder.params),
+            crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(builder.extras.staged_public_court.as_ref()),
+            &[Dep { kind: Kind::Exec, signed_horizon_daa: floor }],
+        )
+        .map_err(|_| no(R::BadExpiry))?;
+    }
     let job_work_id = declaration.job_work_id(&claim.class_id);
     if builder.state.exec_v2.jobs.contains_key(&job_work_id)
         || builder.state.exec_v2_job_uses.get(&job_work_id).is_some_and(|row| daa < row.expires_daa)

@@ -623,6 +623,7 @@ mod tests {
             bond_collateral: None,
             budget: None,
             certification: crate::palw_fork_choice_rule_e_v1::PalwRuleECertificationV1::NotGoverned,
+            claim_local_irreversible: false,
         }
     }
 

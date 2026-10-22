@@ -59,6 +59,10 @@ testnet-12 で DAA 16,000 の fence に全機能を載せるには、各 fence �
 | R5 | RFC-0006/0008 の実測 record | `PALW_RFC0608_MEASURED_RECORDS_V1` | m/k、取得・検査・court の費用 |
 | R6 | TIR frame の費用 record | `PALW_TIR_FRAME_COST_RECORDS_V1` | `frame_measure.rs` |
 | R7 | RFC-0002: PALWQ361 の logit scale と f32 参照窓 | `--palwq36-logit-scale`、reference-windows file | §3 M-Q36 |
+| R8 | RFC-0016 の本番値（各 §14 条件）とクラス別の負荷、arming record | `PALW_RFC0016_ARMING_RECORDS_V1`（空） | M-C、M-DA、`docs/evidence/palw/rfc-gaps-2026-10-22/b.md` |
+| R9 | モデル tier: κ（設計値 300‰）、c の実測 record、最新 catalog edition。RFC-0019 U-3・U-4・U-6 | tier fence の arming record（record は fence 自身の c・κ・edition を名指す） | RFC-0017 / ADR-0179 / RFC-0019 §16 |
+| R10 | RFC-0018 U-1〜U-8（とくに U-2・U-3: 認証前の free-prompt coinbase の取り分、U-5） | RFC-0018 の record gate | RFC-0018 §12 |
+| R11 | RFC-0008・RFC-0012 の名前付き parameter | 各 policy | `rfc-gaps-2026-10-22/b.md` |
 
 値ごとに必ず書くこと: 定義元（RFC / ADR の節）、式、入力した実測値、決定した値、余裕（何倍か）、経済監査の結論（攻撃者の利益と正直な参加者の収支）、その値で何が保証され何が保証されないか、ほかの値との依存関係。式が RFC / ADR に無い場合は、比較した候補と、選んだ理由を書く。
 

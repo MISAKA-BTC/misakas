@@ -6,7 +6,7 @@
 //!     --key-file <seed> --checkpoint <daa>:<block hash> [--pin <block hash>] \
 //!     --executor-cmd <program> [--executor-arg <arg> …] --state-dir <dir> [--steps N] [--poll-secs N]
 //!     [--verify-headers [--fork-choice-issuer <label>=<pubkey file> … --fork-choice-attestations <dir>]]
-//!     [--pin <block hash> --native-provider <txid>:<index>=<url>=<pubkey hex|@file> … [--native-max-body-mib N]]
+//!     [--pin <block hash> --native-provider <txid>:<index>=tcp://<host>:<port>=<pubkey hex|@file> … [--native-max-body-mib N]]
 //! ```
 //!
 //! **RFC-0009 L2 by attestation (option D).** With `--verify-headers`, `--fork-choice-issuer` names an issuer YOU chose (its label and
@@ -764,7 +764,7 @@ fn main() {
     // bond key as the attempt signature (a second handle on the same seed; the journal guards the attempt signature, not the seal).
     let network_domain_for_exchange = palw_network_domain_v2_for(args.network.as_bytes(), Some(params.genesis.hash));
     let mut native_exchange = (!native_endpoints.is_empty()).then(|| {
-        use misaka_palw_remote::native_custody_exchange_v3::{HttpProviderLinkV3, ProviderExchangeV3};
+        use misaka_palw_remote::native_custody_exchange_v3::{ProviderExchangeV3, TcpProviderLinkV3};
         let seal_key = ValidatorKey::from_seed(load_validator_seed(&args.key_file).unwrap_or_else(|e| die(e)));
         ProviderExchangeV3::new(
             network_domain_for_exchange,
@@ -772,11 +772,16 @@ fn main() {
             pubkey.clone(),
             native_endpoints.clone(),
             args.native_max_body,
-            Box::new(HttpProviderLinkV3 { max_response: args.native_max_body as usize }),
+            Box::new(TcpProviderLinkV3 { max_response: args.native_max_body, timeout: std::time::Duration::from_secs(600) }),
             Box::new(move |message: &[u8], context: &[u8]| Ok(seal_key.sign_with_context(message, context).to_vec())),
             Box::new(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)),
         )
         .unwrap_or_else(|e| die(e))
+        // Audit C-02: consensus filters sessions by their release-recovery enrollment past this fence; the row view cannot.
+        .with_recovery_fence({
+            let fence = params.palw_material_release_recovery_v2.as_ref().map(|f| f.activation);
+            Box::new(move |daa| fence.is_some_and(|a| a.is_active(daa)))
+        })
     });
     let mut executor = CommandExecutor { program: args.executor.clone(), args: args.executor_args.clone() };
 

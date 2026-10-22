@@ -62,7 +62,7 @@ impl ArchiveDeclarationProgressV1 {
         };
         let binding=state.court_service_state_v1().and_then(|s|s.claims.get(&self.claim)).ok_or("archive progress lost original service binding")?;
         let ended=match a.evidence.as_ref(){CourtEndEvidenceV1::Native {point,..}|CourtEndEvidenceV1::TirConviction {point,..}=>point,
-            CourtEndEvidenceV1::Uncaptured=>return Err("archive progress has no native origin point".into())};
+            CourtEndEvidenceV1::Uncaptured|CourtEndEvidenceV1::DeadlineSweep{..}=>return Err("archive progress has no native origin point".into())};
         if (self.claim,self.service_profile_id,self.allocation_id,self.source_id,self.material_until_daa)
             !=(a.session.claim,a.service_profile_id,a.allocation_id,a.source_id,a.material_until_daa)
             || self.captured_at!=*ended || r.point.daa_score!=g.declared_daa

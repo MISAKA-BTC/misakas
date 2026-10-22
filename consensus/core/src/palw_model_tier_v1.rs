@@ -288,15 +288,38 @@ pub fn palw_model_tier_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, 
     palw_model_tier_at_v1(state, params, class_id, daa)
 }
 
-/// The tier of an ALLOCATION model key (a class, or a model line keyed by its own id — read through its founding class).
+/// **The tier of an ALLOCATION model key** — a class (its founding line), or a model line keyed by its own id.
+///
+/// audit(compute-weight) W-1 (§9.1–9.2, ADR-0175): a tier belongs to `(model id, artifact root)`, never to the graph a model runs.
+/// * **A non-founding line is a later registration** — its own id, its own root (other weights: `claim_artifact_root` refuses the
+///   class's own root to any other line) — so it is `Registered` (0.3), whatever its class's tier. It used to be read through
+///   `line.class_id`, i.e. the CLASS's root and registrant, so any weights on an approved graph — an all-zero artifact whose trace costs
+///   nothing — collected 1.0 outside the registered tier's cap κ.
+/// * **A class keeps an approved tier only while every root in force on its founding line is the class's own** (the root a listing
+///   names, or the one the genesis assembly registered). A claim naming a later founding-line version is keyed to the class id
+///   (`artifact_line_of_root`), so an approved id running unlisted weights is `Registered` until those weights leave force.
+///
+/// Read only by the tiered allocation roll, i.e. past `palw_model_tier_v1` (dormant on every preset): below it nothing changes.
 pub fn palw_model_tier_of_model_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, model: &Hash64, daa: u64) -> PalwModelTierV1 {
-    if state.class(model).is_some() {
-        return palw_model_tier_at_v1(state, params, model, daa);
+    let Some(class) = state.class(model) else {
+        // A model line that is not a class's founding line, or an unknown key: never in `ApprovedModels`.
+        return PalwModelTierV1::Registered;
+    };
+    let tier = palw_model_tier_at_v1(state, params, model, daa);
+    if tier.is_approved() && palw_founding_line_runs_another_root_v1(state, model, &class.artifact_root, daa) {
+        return PalwModelTierV1::Registered;
     }
-    match state.model_line(model) {
-        Some(line) => palw_model_tier_at_v1(state, params, &line.class_id, daa),
-        None => PalwModelTierV1::Registered,
+    tier
+}
+
+/// Whether the class's founding line (its id is the class id) has a version in force at `daa` whose root is not `class_root`. A
+/// founding line nothing touched is the class's registration (version 1 = `class_root`) and answers `false`.
+fn palw_founding_line_runs_another_root_v1(state: &PalwChainStateV2, class_id: &Hash64, class_root: &Hash64, daa: u64) -> bool {
+    let Some(line) = state.model_line_or_founding(class_id) else { return false };
+    if line.retired_daa.is_some_and(|retired| daa >= retired) {
+        return false;
     }
+    (1..=line.versions_published).any(|n| state.model_version(class_id, n).is_some_and(|v| v.in_force_at(daa) && v.root != *class_root))
 }
 
 impl PalwStateParamsV2 {
@@ -332,9 +355,10 @@ impl Params {
 
     /// **The fence's refusals**: the mirror agrees; a malformed value (the add-only rule included) is named; the allocation it is
     /// applied in (`palw_model_bond_allocation_v1`) and RFC-0018 Gate C (`palw_independently_work_certified_v1` — with model review
-    /// abolished, the per-claim drawn certification is the one safety gate, for every tier) at or below it; then any armed height is
-    /// refused — 0.3, 1.0 and the cap are design values without a measured record, and no annual list process exists.
-    pub fn validate_palw_model_tier_v1(&self) -> Result<(), PalwModeV2Error> {
+    /// abolished, the per-claim drawn certification is the one safety gate, for every tier) at or below it; then the arm-readiness
+    /// record for exactly this network and height, naming the fence's own c, κ and catalog tip ([`PalwModelTierArmingRecordV1`]).
+    /// [`Self::validate_palw_model_tier_v1`] with `records` as the pinned list (tests and arm-readiness tooling only).
+    pub fn validate_palw_model_tier_with_records_v1(&self, records: &[PalwModelTierArmingRecordV1]) -> Result<(), PalwModeV2Error> {
         if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
             && bundle.state.model_tier_v1().cloned() != self.palw_model_tier_v1_mirror()
         {
@@ -356,12 +380,98 @@ impl Params {
                 "palw_model_tier_v1 needs palw_independently_work_certified_v1 (RFC-0018 Gate C) at or below it: with no model review, per-claim certification is the safety gate for every tier",
             ));
         }
-        // RFC-0019 §10: the catalog chain is the value; its release process (signed manifest, mixed-binary drill across the switch)
-        // has produced no record yet, so arming stays refused whatever the chain says.
-        Err(PalwModeV2Error::Invalid(
-            "palw_model_tier_v1 cannot be armed: the 0.3 / 1.0 coefficients and the registered-tier cap are design values without a measured record, and no annual catalog edition has a signed release manifest and a recorded mixed-binary switch drill (RFC-0019 §10)",
-        ))
+        // RFC-0019 §16 / ADR-0179: the catalog chain is the value; c, κ and every edition's release process (signed manifest,
+        // mixed-binary drills across the switch) are admitted only by a pinned arm-readiness record (lane rfcgap-b, 2026-10-22: was a
+        // fixed refusal). The list is empty, so arming stays refused whatever the chain says.
+        palw_model_tier_arming_record_admits_v1(self.genesis.hash, fence, records).map_err(PalwModeV2Error::Invalid)
     }
+
+    /// **The fence's refusals with the binary's pinned record list** ([`PALW_MODEL_TIER_ARMING_RECORDS_V1`], empty).
+    pub fn validate_palw_model_tier_v1(&self) -> Result<(), PalwModeV2Error> {
+        self.validate_palw_model_tier_with_records_v1(PALW_MODEL_TIER_ARMING_RECORDS_V1)
+    }
+}
+
+// ---- The arm-readiness record gate (ADR-0179 数値表, RFC-0019 §16; lane rfcgap-b 2026-10-22) -------------------------------------
+
+/// The evidence a tier arm-readiness record must carry, one digest per entry, in this order (ADR-0179's gate and RFC-0019 §16's
+/// `ACTIVATION_ALLOWED`). The values themselves are not evidence: the record names them and must equal the fence's.
+pub const PALW_MODEL_TIER_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "RFC-0019 U-6 / ADR-0179: the user's approval of the registered coefficient c and the registered-tier cap κ named by this record, with their measured record",
+    "ADR-0179 test sources PASS (palw_model_tier_v1 tests and the tiered allocation roll across reorg / IBD / restart)",
+    "RFC-0019 §11 unit tests A–E PASS",
+    "RFC-0019 R-1–R-3, R-5, R-6 run with the shipped binary, convergence recorded",
+    "RFC-0019 R-4 boundary for every edition that lists a model at 1.0 after the fence (or the record states none does)",
+    "RFC-0019 R-7 model-add and R-8 local-llm for every edition adding a new local LLM (or the record states none does)",
+    "every catalog edition's signed release manifest verifies (misaka/release-manifest/v1: signatures, checksums, reproduction, fingerprint, catalog, add-only)",
+    "RFC-0019 readiness M1–M5 reported to the user",
+];
+
+/// The record format's version.
+pub const PALW_MODEL_TIER_ARMING_RECORD_VERSION_V1: u16 = 1;
+
+/// **A tier arm-readiness record** for one network and fence height. It names the approved `c` and `κ` and the catalog chain's tip
+/// (last edition number and root), which must equal the fence's value: a new annual edition changes the tip root, so every edition
+/// needs its own record (RFC-0019 §16: "palw_model_tier_v1 とその各 edition").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwModelTierArmingRecordV1 {
+    pub version: u16,
+    pub genesis: Hash64,
+    pub activation_daa: u64,
+    pub registered_permille: u32,
+    pub registered_cap_permille: u32,
+    pub catalog_tip_edition: u32,
+    pub catalog_tip_root: Hash64,
+    pub source_commit: [u8; 20],
+    pub evidence: &'static [[u8; 32]],
+    pub review: [u8; 32],
+}
+
+/// **The pinned records — EMPTY.** No `κ` is approved and no edition has a release record: every armed height is refused.
+pub const PALW_MODEL_TIER_ARMING_RECORDS_V1: &[PalwModelTierArmingRecordV1] = &[];
+
+/// Does `records` authorize `fence` on the network `genesis`? The first record naming exactly this (network, height) decides; it must
+/// name the fence's own `c`, `κ` and catalog tip, and its form must hold. `Err` carries the refusal text.
+pub fn palw_model_tier_arming_record_admits_v1(
+    genesis: Hash64,
+    fence: &PalwModelTierFenceV1,
+    records: &[PalwModelTierArmingRecordV1],
+) -> Result<(), &'static str> {
+    let at = fence.activation.daa_score();
+    let Some(r) = records.iter().find(|r| r.genesis == genesis && r.activation_daa == at) else {
+        return Err(
+            "palw_model_tier_v1 cannot be armed: no arm-readiness record is pinned for this network and height \
+             (PALW_MODEL_TIER_ARMING_RECORDS_V1 is empty: c and κ are design values without approval and a measured record, and no annual \
+             catalog edition has a signed release manifest and recorded mixed-binary drills; ADR-0179, RFC-0019 §16)",
+        );
+    };
+    if r.version != PALW_MODEL_TIER_ARMING_RECORD_VERSION_V1 {
+        return Err("the model-tier arm-readiness record's version is not this binary's");
+    }
+    if r.registered_permille != fence.registered_permille || r.registered_cap_permille != fence.registered_cap_permille {
+        return Err("the model-tier arm-readiness record approves another c or κ than the fence carries");
+    }
+    let Some(tip) = fence.catalogs.editions.last() else {
+        return Err("the model-tier fence carries no catalog edition");
+    };
+    if r.catalog_tip_edition != tip.edition || r.catalog_tip_root != tip.root() {
+        return Err("the model-tier arm-readiness record was made for another catalog chain (each edition needs its own record)");
+    }
+    if r.source_commit == [0; 20] {
+        return Err("the model-tier arm-readiness record names no source commit");
+    }
+    if r.evidence.len() != PALW_MODEL_TIER_ARMING_REQUIREMENTS_V1.len() {
+        return Err("the model-tier arm-readiness record does not carry one evidence digest per requirement");
+    }
+    if r.review == [0; 32] {
+        return Err("the model-tier arm-readiness record carries no review digest");
+    }
+    for (i, d) in r.evidence.iter().enumerate() {
+        if *d == [0; 32] || *d == r.review || r.evidence[..i].contains(d) {
+            return Err("a model-tier arm-readiness evidence digest is zero, repeated, or equal to the review");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -564,3 +564,34 @@ fn every_one_move_filing_site_reads_the_class_ladder_past_the_fence() {
     assert!(helper.contains_code("return refutation_cap;"), "below it, the network's cap unchanged");
     assert!(helper.contains_code("self.class_step_ladder(class_id)"), "past it, the class's own ladder");
 }
+
+/// **Audit C-04: a seat judges a claim under the class semantics consensus binds to it** — a statement applies only from its
+/// `bound_from_daa` (the claim accepted earlier keeps the facts it was produced under), and only over its own artifact; the
+/// tip read (no claim) is unchanged.
+#[test]
+fn audit_fixcd_c04_semantics_bind_a_claim_only_from_their_bound_daa() {
+    let semantics = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1 {
+        version: 1,
+        class_id: Hash64::from_u64_word(1),
+        artifact_root: Hash64::from_u64_word(2),
+        bound_from_daa: 500,
+        model_profile_id: Hash64::from_u64_word(3),
+        runtime_manifest_hash: Hash64::from_u64_word(4),
+        runtime_class_id: Hash64::from_u64_word(5),
+        tokenizer_id: Hash64::from_u64_word(6),
+        cu_ruleset_id: Hash64::from_u64_word(7),
+        token_table_root: None,
+        rendering_rule: None,
+        raw_tokenizer_bytes: None,
+        tokenizer_key_events: None,
+        prefix_state_relation: None,
+    };
+    let root = Hash64::from_u64_word(2);
+    assert!(!palw_semantics_bind_claim_v1(&semantics, root, Some(499)), "accepted before the declaration: not bound");
+    assert!(palw_semantics_bind_claim_v1(&semantics, root, Some(500)), "accepted at the declaration's DAA: bound");
+    assert!(palw_semantics_bind_claim_v1(&semantics, root, Some(501)));
+    assert!(palw_semantics_bind_claim_v1(&semantics, root, None), "the tip read is unchanged");
+    assert!(!palw_semantics_bind_claim_v1(&semantics, Hash64::from_u64_word(9), None), "another artifact never binds");
+    let source = include_str!("../palw_panel.rs");
+    assert!(source.contains("kept.facts == facts"), "the executor's kept instance is reused only under the same semantics");
+}

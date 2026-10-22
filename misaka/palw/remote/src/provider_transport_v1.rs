@@ -56,6 +56,11 @@ pub enum ProviderTransportPurposeV1 {
     /// context are replayed by every new provider, which persists material and the new signed generation before
     /// answering 241/242. A queued replacement is not native acceptance.
     KernelMaterialReplacementV4,
+    /// Audit C-03 (appended; earlier variants keep their bytes): a producer without a model backend (the remote miner) asks a
+    /// roster provider for the one-scope manifest — and the prompt — the provider rebuilt from the capture under its own node's
+    /// authority. Body: borsh `PalwNativeReadyRequestV3` (the draw envelope) / `PalwNativeManifestResponseV3`. Nothing is
+    /// published or signed over a Ready.
+    NativeManifestV3,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

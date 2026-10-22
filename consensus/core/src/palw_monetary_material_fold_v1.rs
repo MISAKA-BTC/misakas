@@ -73,6 +73,15 @@ fn check_enrollment(
         {
             return Err(refused("prospective native session policy/capacity is substituted"));
         }
+        // The canonical session of an executor is the smallest-root eligible row naming it (`select_native_session_v3`), and
+        // acceptance verifies only the sponsor's and the providers' signatures. A session is therefore the EXECUTOR's own
+        // consent: its sponsor must be the executor, whose signature covers the whole payload. Otherwise any bond with two
+        // bonded providers could enrol a smaller root naming another executor, withhold the Ready signatures and block that
+        // executor's native mining (audit fix-cd). Dormant fence (`palw_monetary_material_v1` is armed nowhere), so no
+        // accepted enrollment is reinterpreted.
+        if t.sponsor != session.executor {
+            return Err(refused("a prospective native session must be sponsored (consented) by the executor it names"));
+        }
         let class = builder.state.class(&session.class_id).ok_or_else(|| refused("prospective native class absent"))?;
         let executor = active(builder, &session.executor)?;
         if class.artifact_root != session.artifact_root || executor.operator_id != session.operator {
@@ -1141,6 +1150,89 @@ mod tests {
         recovery::action(&mut b, &ctx(1002), &retire, &bond(2)).unwrap();
         assert!(b.state.material_provider_ack_checkpoint_v2(&bond(2)).is_none());
         assert!(recovery::action(&mut b, &ctx(1003), &retire, &bond(2)).is_err());
+    }
+    /// **audit fix-cd (verify-3 note on C-02): a prospective native session is the executor's own consent.** The enrollment's
+    /// acceptance verifies only the sponsor's and the providers' signatures, and `select_native_session_v3` takes the
+    /// smallest-root eligible row for an executor. A third party who could enrol a session NAMING another executor (any root it
+    /// likes) would therefore become that executor's canonical roster, and its own providers then withhold their Ready
+    /// signatures: every non-floor native attempt of the victim (the in-node producer included) is refused by `verify_prior`.
+    /// The sponsor's signature covers the whole payload, so requiring `sponsor == native_session.executor` makes that signature
+    /// the executor's consent without a new wire field. Every in-tree producer of a native session (the recovery quote, the CLI
+    /// spec, the e2e conformance) already sponsors as the executor.
+    #[test]
+    fn audit_fixcd_a_third_party_cannot_enrol_the_canonical_native_session_of_another_executor() {
+        let (mut state, params, base) = fixture();
+        let class_id = h(40);
+        state.classes.insert(
+            class_id,
+            PalwClassStateV2 {
+                artifact_root: h(41),
+                slash_value_per_pwu: 1,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1),
+                status: PalwClassStatusV2::Active,
+                registered_daa: 0,
+                registrant_bond: Some(bond(5)),
+                fused_attention: false,
+            },
+        );
+        let victim = bond(4);
+        let session = |executor: PalwBondKeyV2| crate::palw_attempt_material_v3::PalwNativeMaterialSessionV3 {
+            version: 3,
+            class_id,
+            artifact_root: h(41),
+            executor,
+            operator: h(4),
+            job_policy: crate::palw_attempt_material_v3::native_job_policy_v3(),
+            codec: crate::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldComplete,
+            max_units: 1,
+            one_claim_cap: 1,
+            admit_from_daa: 0,
+            admit_until_daa: 100,
+        };
+        let extras = PalwTransitionExtrasV1 {
+            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+                network_domain: h(1),
+                ruleset_digest: h(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        // The victim's own session (it sponsors and names itself): accepted.
+        let mut own = base.clone();
+        own.terms.root = h(20);
+        own.terms.nonce = h(21);
+        own.terms.sponsor = victim;
+        own.terms.native_session = Some(session(victim));
+        enroll(&mut builder, &ctx(2), &own).unwrap();
+        // A third party (bond 1, two bonded providers 2 and 3) names the victim with a smaller root.
+        let mut capture = base.clone();
+        capture.terms.root = h(10);
+        capture.terms.native_session = Some(session(victim));
+        let before = builder.state.clone();
+        let entries = builder.entries.len();
+        let refused = enroll(&mut builder, &ctx(2), &capture);
+        let mut attempt = crate::palw_attempt_v2::tests::attempt();
+        attempt.class_id = class_id;
+        attempt.artifact_root = h(41);
+        attempt.executor_bond = victim.0;
+        attempt.operator_id = h(4);
+        let canonical = crate::palw_attempt_material_v3::select_native_session_v3(
+            builder.state.monetary_material_rows_v1(),
+            &attempt,
+            2,
+            |p| builder.state.bond(p).map(|b| b.operator_id),
+        )
+        .map(|row| row.terms.root);
+        assert!(
+            refused.is_err() && canonical == Some(h(20)),
+            "audit fix-cd: a third party's session naming the victim executor was {:?}; the victim's canonical session is now {:?} (own session is {:?})",
+            refused,
+            canonical,
+            h(20),
+        );
+        assert_eq!(builder.state, before, "a refused capture writes nothing");
+        assert_eq!(builder.entries.len(), entries);
     }
     #[test]
     fn monetary_material_consent_preflights_all_funding_and_preserves_earned_cash_on_recovery() {

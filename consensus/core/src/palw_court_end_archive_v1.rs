@@ -13,6 +13,12 @@ pub enum CourtEndEvidenceV1 {
     Native { point: PalwBlockContextV2, object: Box<PalwConsensusObjectV2> },
     TirConviction { point: PalwBlockContextV2, claim: Hash64, filer: PalwBondKeyV2,
         evidence: Box<crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1> },
+    /// **audit B-04/B-05 (fix-b): the session was ended by the per-block court deadline sweep at `point`.** The sweep's outcome is a
+    /// deterministic function of the archived session (its ladder / phase / groups) and this point, and the sweep applied every
+    /// charge it decides in the same block (a silent challenger's challenger-side close; a silent responder on a service-bound claim
+    /// is a no-fault close, never a default). Nothing stays owed through the archive, so it is resolvable and prunable after its
+    /// material retention (user decision D3).
+    DeadlineSweep { point: PalwBlockContextV2 },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PendingCourtArchiveV1 {
@@ -39,6 +45,8 @@ pub struct PendingCourtArchiveV1 {
 pub enum CourtEndDispositionV1 {
     Uncaptured, NativeCourtVerdict(PalwCourtVerdictV2), TirClaimFault,
     CompletedAssemblyFault(PalwCourtSideV1), RelatedNativeTransition,
+    /// audit B-05 (fix-b): ended by the deadline sweep; every charge was applied by the sweep itself.
+    DeadlineSwept,
 }
 impl PendingCourtArchiveV1 {
     /// Forward material append only. Neither completion nor elapsed time is a
@@ -79,6 +87,7 @@ impl PendingCourtArchiveV1 {
                 _=>CourtEndDispositionV1::RelatedNativeTransition,
             },
             CourtEndEvidenceV1::TirConviction {claim,..} if *claim==self.session.claim=>CourtEndDispositionV1::TirClaimFault,
+            CourtEndEvidenceV1::DeadlineSweep {..}=>CourtEndDispositionV1::DeadlineSwept,
             _=>CourtEndDispositionV1::RelatedNativeTransition,
         }
     }
@@ -137,6 +146,7 @@ impl PendingCourtArchiveV1 {
             CourtEndEvidenceV1::Uncaptured => None,
             CourtEndEvidenceV1::Native { point, .. } => Some(point),
             CourtEndEvidenceV1::TirConviction { point, .. } => Some(point),
+            CourtEndEvidenceV1::DeadlineSweep { point } => Some(point),
         };
         if point.is_some_and(|p| p.daa_score < self.session.opened_daa) {
             return Err("court archive cause predates the active session".into());
@@ -170,7 +180,8 @@ impl PendingCourtArchiveV1 {
         self.check_context(state)?;
         let point = match self.evidence.as_ref() {
             CourtEndEvidenceV1::Uncaptured => None,
-            CourtEndEvidenceV1::Native {point,..} | CourtEndEvidenceV1::TirConviction {point,..} => Some(point),
+            CourtEndEvidenceV1::Native {point,..} | CourtEndEvidenceV1::TirConviction {point,..}
+                | CourtEndEvidenceV1::DeadlineSweep {point} => Some(point),
         };
         if point.is_some_and(|p| state.last_point().is_none_or(|tip| p.daa_score > tip.daa_score)) {
             return Err("court archive receipt is beyond the loaded accepted clock".into());
@@ -179,6 +190,10 @@ impl PendingCourtArchiveV1 {
     }
     /// Nominal outstanding charge, NOT a posted balance or a guaranteed debit.
     pub fn pending_nominal(&self, bond: &PalwBondKeyV2) -> u128 {
+        // audit B-05 (fix-b): a deadline-swept ending charged (or deliberately did not charge) every party in its own block.
+        if self.adjudication() == CourtEndDispositionV1::DeadlineSwept {
+            return 0;
+        }
         let groups: u128 = self.groups.iter().filter(|(side, g)| g.declarer == *bond
             && !self.applied_deposit_debits.contains_key(side) && !self.fulfilled_groups.contains(side))
             .map(|(_, g)| u128::from(g.deposit)).sum();
@@ -216,7 +231,8 @@ impl PalwChainStateV2 {
     pub fn court_archive_fully_resolved_v1(&self,id:Hash64,now:u64)->bool{
         let Some(a)=self.court_end_archive_v1(id) else {return false};
         now>a.material_until_daa
-            && a.groups.keys().all(|side|self.court_archive_side_resolved_v1(a,*side))
+            && (a.adjudication()==CourtEndDispositionV1::DeadlineSwept
+                || a.groups.keys().all(|side|self.court_archive_side_resolved_v1(a,*side)))
             && self.archive_pending_nominal_v1(a,&a.producer)==0
             && self.archive_pending_nominal_v1(a,&a.session.challenger_bond)==0
     }

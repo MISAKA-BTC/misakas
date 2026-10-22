@@ -3027,7 +3027,6 @@ impl<'a> TransitionBuilder<'a> {
         unpaid: &std::collections::BTreeSet<PalwBondKeyV2>,
         winner: PalwBondKeyV2,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_offence_id_v1};
         if producer != claim.bond || ctx.daa_score < claim.accepted_daa || winner == producer || unpaid.contains(&winner) {
             return Err(PalwStateV2Error::CarriageInconsistent(
                 "retained source default changes producer, independent winner or literal signer roles".into(),
@@ -3042,6 +3041,42 @@ impl<'a> TransitionBuilder<'a> {
                 "unresolved court service has no adopted semantic default permission".into(),
             ));
         }
+        self.staged_selected_default_charge_inner_v1(ctx, claim_id, claim, producer, unpaid, winner)
+    }
+
+    /// **audit N-1 (fix-b): the same charge for a SERVICE-BOUND claim, only after the adopted F02 attribution (ADR-0192 A) decided
+    /// `PartyDefault` for exactly this default** (`apply_verified_control_v1`, past the conviction fence with a pinned service
+    /// profile). Every other caller keeps the blanket refusal above.
+    pub(super) fn staged_selected_default_charge_attributed_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        producer: PalwBondKeyV2,
+        unpaid: &std::collections::BTreeSet<PalwBondKeyV2>,
+        winner: PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        if producer != claim.bond || ctx.daa_score < claim.accepted_daa || winner == producer || unpaid.contains(&winner) {
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "retained source default changes producer, independent winner or literal signer roles".into(),
+            ));
+        }
+        if !self.state.court_service_holds_claim_v1(&claim_id) {
+            return Err(PalwStateV2Error::CarriageInconsistent("an attributed service default needs the claim's service binding".into()));
+        }
+        self.staged_selected_default_charge_inner_v1(ctx, claim_id, claim, producer, unpaid, winner)
+    }
+
+    fn staged_selected_default_charge_inner_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        producer: PalwBondKeyV2,
+        unpaid: &std::collections::BTreeSet<PalwBondKeyV2>,
+        winner: PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_offence_id_v1};
         let covering: std::collections::BTreeSet<PalwBondKeyV2> = unpaid.iter().copied().filter(|bond| *bond != producer).collect();
         if !unpaid.contains(&producer) {
             // The producer answered to EOF: no void, no producer record, no session release.

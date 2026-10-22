@@ -273,6 +273,7 @@ pub use palw_claim_local_rewards_v1::{PalwClaimLocalSettlementV1, palw_claim_loc
 mod palw_claim_local_checkpoint_fold_v1;
 pub use palw_claim_local_checkpoint_fold_v1::{
     PalwClaimLocalCheckpointStatusV1, palw_claim_local_checkpoint_key_v1, palw_claim_local_checkpoint_status_v1,
+    palw_claim_local_irreversible_anchors_v1,
 };
 // RFC-0008: the once-only settlement registry (dormant `palw_settlement_once_v1`; kernel route aux 140) — every settlement consumer
 // checks and writes its exact obligation's marker in the same transition before any value moves.
@@ -12755,7 +12756,9 @@ pub fn palw_court_claim_admission_v1(
     trace_retention_daa: u64,
     span_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
-    palw_court_capacity_fold_v1::check_court_claim_admission_v1(state, params, class_id, now_daa, trace_retention_daa, span_daa)
+    palw_court_capacity_fold_v1::check_court_claim_admission_v1(state, params, class_id, now_daa, trace_retention_daa, span_daa)?;
+    // rfcgap-c: and the paid ingress's claim admission, in the fold's order (`apply_attempt`), so the producer's pre-check agrees.
+    palw_court_capacity_fold_v1::palw_court_ingress_claim_admits_v1(state, params, class_id, now_daa)
 }
 
 /// **RFC-0002 Part II Proposal A: would the fold at a block with these `extras` find `class_id` seated for `executor`?**
@@ -21824,6 +21827,12 @@ fn apply_attempt(
         attempt.trace_retention_daa,
         builder.extras.model_registry.as_ref().map_or(0, |fold| fold.span_daa),
     )?;
+    // **rfcgap-c (RFC-0014 2026-10-19 E, RFC-0026 §3.2 / F03; ADR-0192 advance reservation): the paid ingress's claim admission** —
+    // past `palw_court_outsider_lane_v1` with an adopted ingress schedule, a new claim is taken only while fewer than
+    // `R = ⌊cap / 2⌋` claims are in flight, so every admitted claim holds its own outside-side court reservation. Before
+    // `apply_attempt`'s first write; the refusal is `CourtClaimAdmissionFull` (skipped, like the bucket above). `Ok` while the
+    // schedule is typed-missing (every shipped build) or below the fence.
+    palw_court_capacity_fold_v1::palw_court_ingress_claim_admits_v1(&builder.state, builder.params, &attempt.class_id, ctx.daa_score)?;
     // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for this executor** — one function, the
     // same every other door asks; before the reservation is taken, so a class no panel can be drawn for voids nothing.
     // **Lane MU (ADR-0173, past `palw_audit_1004_v1`): over the seats that hold the root the attempt names**, and that root's own

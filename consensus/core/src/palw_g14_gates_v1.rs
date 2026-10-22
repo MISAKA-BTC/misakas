@@ -490,8 +490,13 @@ impl Params {
             // still refuses). F03's outsider capacity clears only when the court-owner outsider lane is in force at or below this
             // fence.
             let service = crate::palw_court_service_binding_v1::palw_court_service_opportunity_complete_v1();
+            // audit B-07 (fix-b): the outsider lane alone is an economic bound (a coalition Sybil bond is "outside" and takes the
+            // claim's outside-first slot); F03 additionally needs the PAID INGRESS adopted (its per-session fee and the per-claim
+            // outside reservation), typed-missing today, so F03 keeps refusing until V4 is decided. Residual (documented): even with
+            // the ingress, a Sybil outsider that shares no recorded operator/payout with the claim's side is bounded only by cost.
             let outsider = fence.armed(self).zip(self.palw_court_outsider_lane_v1_fence())
-                .is_some_and(|(at, lane)| lane.daa_score() <= at.daa_score());
+                .is_some_and(|(at, lane)| lane.daa_score() <= at.daa_score())
+                && crate::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1().is_ok();
             match (outsider, service) {
                 (true, true) => {}
                 (false, false) => return Err(PalwModeV2Error::Invalid(
@@ -499,7 +504,8 @@ impl Params {
                      ServiceOpportunityIncomplete: F02 deterministic service opportunities and inclusion assumptions are not adopted",
                 )),
                 (false, true) => return Err(PalwModeV2Error::Invalid(
-                    "OneOutsiderCapacityIncomplete: RFC-0026 F03 needs palw_court_outsider_lane_v1 in force at or below this fence",
+                    "OneOutsiderCapacityIncomplete: RFC-0026 F03 needs palw_court_outsider_lane_v1 in force at or below this fence and \
+                     an adopted paid court ingress (PalwCourtIngressScheduleV1)",
                 )),
                 (true, false) => return Err(PalwModeV2Error::Invalid(
                     "ServiceOpportunityIncomplete: RFC-0026 F02 has no pinned court service profile (PALW_COURT_SERVICE_PROFILE_V1)",

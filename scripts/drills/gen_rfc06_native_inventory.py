@@ -140,7 +140,9 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        'crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1',
        # G14 r6 (2026-10-22): receipt use-window pause rows, kernel route aux 145 (dormant behind Gate C).
        'crate::palw_receipt_pause_v2::PalwReceiptPauseRowV2',
-       'crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalDutyRowV1']; visited=set(); generated=[]; unresolved=[]
+       'crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalDutyRowV1',
+       # audit B-02 (fix-b): recorded post-Final material units, aux 144 prefix 0x03 (dormant; no production writer).
+       'crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalMaterialRowV1']; visited=set(); generated=[]; unresolved=[]
 
 # Resolve dependency types; concrete names, aliases/primitive containers are left
 # to Rust's existing type system, so there is no byte-size inference from codec.

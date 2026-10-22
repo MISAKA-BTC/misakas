@@ -37,6 +37,7 @@
 * tier fence の下では、審査の code はすべて到達しない。全ての資格 read は「対象外」になり、inner 74/75 の審査 object は拒否され、sweep は何もしない。
 * 審査の code は、休眠のまま履歴として残す。審査は一度も live になっていない。
 * 試験の対応は ADR-0179 §試験 source にある。
+* **arm の gate(2026-10-22、lane rfcgap-b):** tier fence の固定拒否を arm-readiness record(`PALW_MODEL_TIER_ARMING_RECORDS_V1`、空)に置き換えた。record は (network, 高さ)、承認された `c`・`κ`、カタログ連鎖の先端 edition と root に一致し、ADR-0179 と RFC-0019 §16 の各条件に証拠 digest を 1 つずつ持つ。新しい年次 edition は先端 root を変えるので edition ごとに record が要る。空なので arm は拒否される。平均期間は 7 日(2026-10-16 決定・10-22 再確認)。
 
 ---
 

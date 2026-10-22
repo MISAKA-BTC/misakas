@@ -258,3 +258,66 @@ fn the_tiered_roll_is_the_same_after_reorg_ibd_and_restart() {
         assert_eq!(back.model_row(&m), a.model_row(&m));
     }
 }
+
+/// **rfcgap-b (ADR-0179, RFC-0019 §16):** the fixed refusal is replaced by an arm-readiness record gate for exactly (network, height)
+/// that must name the fence's own c, κ and catalog tip; the pinned list is empty, so every armed height is still refused, by name. A
+/// later annual edition changes the tip root and needs its own record.
+#[test]
+fn rfcgap_b_tier_arm_record_gate_is_exact_and_the_pinned_list_is_empty() {
+    assert!(PALW_MODEL_TIER_ARMING_RECORDS_V1.is_empty());
+    assert_eq!(PALW_MODEL_TIER_ARMING_REQUIREMENTS_V1.len(), 8);
+    static EVIDENCE: [[u8; 32]; 8] = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32], [7; 32], [8; 32]];
+    static REPEATED: [[u8; 32]; 8] = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32], [7; 32], [1; 32]];
+    let mut p = t12();
+    p.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1::at(ForkActivation::new(FENCE)));
+    p.palw_model_bond_allocation_v1 = Some(PalwModelBondAllocationFenceV1 {
+        activation: ForkActivation::new(FENCE),
+        policy: PalwModelAllocationPolicyV1::decided_unapproved_v3(),
+    });
+    p.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE));
+    p.palw_model_tier_v1 = Some(fence());
+    p.sync_palw_model_tier_v1();
+    let why = format!("{:?}", p.validate_palw_model_tier_v1().unwrap_err());
+    assert!(why.contains("PALW_MODEL_TIER_ARMING_RECORDS_V1"), "the prerequisites hold, the record gate refuses by name: {why}");
+    let tip = fence().catalogs.editions.last().cloned().unwrap();
+    let record = PalwModelTierArmingRecordV1 {
+        version: PALW_MODEL_TIER_ARMING_RECORD_VERSION_V1,
+        genesis: p.genesis.hash,
+        activation_daa: FENCE,
+        registered_permille: PALW_MODEL_TIER_REGISTERED_PERMILLE_DESIGN_V1,
+        registered_cap_permille: PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1,
+        catalog_tip_edition: tip.edition,
+        catalog_tip_root: tip.root(),
+        source_commit: [9; 20],
+        evidence: &EVIDENCE,
+        review: [10; 32],
+    };
+    p.validate_palw_model_tier_with_records_v1(&[record]).unwrap();
+    let with = |f: &dyn Fn(&mut PalwModelTierArmingRecordV1)| {
+        let mut r = record;
+        f(&mut r);
+        p.validate_palw_model_tier_with_records_v1(&[r]).map_err(|e| format!("{e:?}"))
+    };
+    assert!(with(&|r| r.activation_daa = FENCE + 1).unwrap_err().contains("PALW_MODEL_TIER_ARMING_RECORDS_V1"), "another height");
+    assert!(with(&|r| r.genesis = h(77)).unwrap_err().contains("PALW_MODEL_TIER_ARMING_RECORDS_V1"), "another network");
+    assert!(with(&|r| r.registered_cap_permille = 250).unwrap_err().contains("another c or κ"));
+    assert!(with(&|r| r.registered_permille = 299).unwrap_err().contains("another c or κ"));
+    assert!(with(&|r| r.catalog_tip_root = h(78)).unwrap_err().contains("another catalog chain"));
+    assert!(with(&|r| r.version = 2).is_err());
+    assert!(with(&|r| r.source_commit = [0; 20]).is_err());
+    assert!(with(&|r| r.review = [0; 32]).is_err());
+    assert!(with(&|r| r.review = [3; 32]).is_err(), "review equal to an evidence digest");
+    assert!(with(&|r| r.evidence = &EVIDENCE[..7]).is_err());
+    assert!(with(&|r| r.evidence = &REPEATED).is_err());
+    // A new annual edition moves the tip: the old record no longer admits.
+    let mut next = fence();
+    next.catalogs = next.catalogs.with_edition(FENCE + 720, vec![ApprovedModelV1::of(h(5), h(6))]);
+    p.palw_model_tier_v1 = Some(next);
+    p.sync_palw_model_tier_v1();
+    let why = format!("{:?}", p.validate_palw_model_tier_with_records_v1(&[record]).unwrap_err());
+    assert!(why.contains("another catalog chain"), "{why}");
+    // Below the gate nothing changed: shipped presets pass, never() collapses.
+    for q in [MAINNET_PARAMS, TESTNET_PARAMS, t12()] {
+        q.validate_palw_model_tier_v1().unwrap();
+    }
+}

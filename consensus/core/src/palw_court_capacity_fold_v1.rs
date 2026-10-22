@@ -370,9 +370,25 @@ pub(super) fn legacy_court_cap_admits_v1(
 /// **Round 2 (risk 2): the claim's own side.** The bonds the chain records as the claim's accused/colluding side: its producer
 /// (`claim.bond`) and the bonds of its panel's seats (`panels[claim].seats[].bond`). Rooted facts only — the claim and panel rows of
 /// the chain state. A missing claim or panel contributes nothing.
+///
+/// **audit B-07 (fix-b): and every bond the state LINKS to that side** — one whose recorded operator id (derived from its key at
+/// registration) or payout payload (where its rewards are paid) equals the producer's or a seat's. Such a bond is the same
+/// operator / funding destination, so it is not an outsider and cannot take the outside-first slot. A Sybil that shares neither is
+/// indistinguishable from an honest outsider on chain; that residual is bounded only by cost (the floor collateral, the failed
+/// accusation's charge and, once adopted, the paid ingress).
 fn court_outsider_lane_inside_v1(state: &PalwChainStateV2, claim_id: Hash64, bond: &PalwBondKeyV2) -> bool {
-    state.claims.get(&claim_id).is_some_and(|claim| claim.bond == *bond)
-        || state.panels.get(&claim_id).is_some_and(|panel| panel.seats.iter().any(|seat| seat.bond == *bond))
+    let mut side: Vec<PalwBondKeyV2> = Vec::new();
+    if let Some(claim) = state.claims.get(&claim_id) {
+        side.push(claim.bond);
+    }
+    if let Some(panel) = state.panels.get(&claim_id) {
+        side.extend(panel.seats.iter().map(|seat| seat.bond));
+    }
+    if side.contains(bond) {
+        return true;
+    }
+    let Some(record) = state.bonds.get(bond) else { return false };
+    side.iter().filter_map(|k| state.bonds.get(k)).any(|s| s.operator_id == record.operator_id || s.payout_payload == record.payout_payload)
 }
 
 /// A session opened by `opener` on `claim_id` is a FOLLOW-ON iff the claim already has a running session opened from the same side
@@ -476,12 +492,27 @@ pub fn palw_court_ingress_claim_admits_v1(
     class_id: &Hash64,
     now: u64,
 ) -> Result<(), PalwStateV2Error> {
+    court_ingress_claim_admits_excluding_v1(state, params, class_id, now, None)
+}
+
+/// [`palw_court_ingress_claim_admits_v1`] for an admission path that has ALREADY written the new claim's row before the check
+/// (the RFC-0035 A funded install): the claim itself is not counted among the in-flight claims it competes with. `None` is the
+/// ordinary pre-write check (the attempt fold and the producer's pre-check). rfcgap-c (RFC-0014 2026-10-19 E / RFC-0026 §3.2 F03):
+/// the coordinator call the r5-f03-ingress lane exposed.
+pub(super) fn court_ingress_claim_admits_excluding_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    now: u64,
+    exclude: Option<Hash64>,
+) -> Result<(), PalwStateV2Error> {
     if court_ingress_schedule_at_v1(params, now).is_none() {
         return Ok(());
     }
     let cap = palw_max_concurrent_court_sessions_v1(params.turn_deadline_daa());
     let reserved_cap = crate::palw_court_paid_ingress_v1::palw_court_ingress_reserved_claims_cap_v1(cap);
-    let admitted = court_ingress_inflight_v1(state, params, now).len() as u64;
+    let admitted =
+        court_ingress_inflight_v1(state, params, now).into_iter().filter(|(_, id)| Some(*id) != exclude).count() as u64;
     if admitted >= reserved_cap {
         return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: *class_id, bucket: 0, admitted, cap: reserved_cap });
     }

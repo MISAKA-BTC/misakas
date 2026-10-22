@@ -364,7 +364,18 @@ pub(super) fn install_original_admission_v1(
             let claim_id = row.claim;
             b.install_funded_escrow_v1(row)?;
             // G14 lane r6-d1-release (r5 open 4): reserve the claim's court capacity under `palw_court_capacity_v1` (dormant below it).
-            super::palw_court_capacity_fold_v1::check_funded_court_reserve_v1(&b.state, b.params, claim_id, ctx.daa_score)
+            super::palw_court_capacity_fold_v1::check_funded_court_reserve_v1(&b.state, b.params, claim_id, ctx.daa_score)?;
+            // rfcgap-c (RFC-0014 2026-10-19 E / RFC-0026 §3.2 F03): and the paid ingress's claim admission (the claim's row is already
+            // written, so it is not counted against itself). `Ok` while the ingress schedule is typed-missing; a refusal restores
+            // the whole funded install through the caller's checkpoint.
+            let class_id = b.state.claims.get(&claim_id).map(|c| c.class_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
+            super::palw_court_capacity_fold_v1::court_ingress_claim_admits_excluding_v1(
+                &b.state,
+                b.params,
+                &class_id,
+                ctx.daa_score,
+                Some(claim_id),
+            )
         }
     }
 }
