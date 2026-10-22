@@ -3547,3 +3547,8 @@ mod g14_lane_closure;
 mod detection_policy;
 // RFC-0023 stage 1 (2026-10-18): restart and genesis replay agree on the resolved prefix across the fence.
 mod rfc23_stage1_node;
+// RFC-0026 §10 T01–T15 node-level campaign (lane r5-t-campaign, 2026-10-22): one module, one file per T group, on THIS harness (real
+// mempool -> template -> fold, Full UTXO, real ML-DSA signatures). Items whose objects live on parallel lanes are `#[ignore]`d and
+// compile their bodies only with `--features g14-t-campaign-merged`: `g14_t_campaign/mod.rs`.
+#[path = "g14_t_campaign/mod.rs"]
+mod g14_t_campaign;
