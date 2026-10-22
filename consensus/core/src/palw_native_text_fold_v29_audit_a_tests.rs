@@ -136,3 +136,31 @@ fn audit_a_text29_held_final_releases_the_producer_reserve_while_liable() {
         "A-1: a held text29 Final (accusable to H, conviction collects min(collateral, reserve)) must keep its reserve committed"
     );
 }
+
+/// **audit A-1 fix, boundaries**: the re-added reserve lives exactly as long as the job's held row for THIS producer — a row of
+/// another producer adds nothing, and once the row leaves (release at H, or refund/conviction) the Final commits 0 again, once.
+#[test]
+fn audit_a_text29_held_final_reserve_leaves_with_its_held_row() {
+    const RESERVE: u64 = 1_000;
+    let book = crate::palw_native_text_stop_v29::audit_verify1_unpaid_final_v29();
+    let live = header(NativeTextTerminalV29::Challengeable, RESERVE);
+    let mut state = crate::palw_state_v2::PalwChainStateV2::genesis();
+    state.kernel_route = Some(route_with(&live));
+    let params = crate::palw_state_v2::PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0)
+        .unwrap();
+    let extras = crate::palw_state_v2::PalwTransitionExtrasV1::default();
+    let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let mut fin = live.clone();
+    write_book(&mut tb, &mut fin, &book).unwrap();
+    let route = |tb: &TransitionBuilder<'_>| tb.state.kernel_route.clone().unwrap();
+    let hold_key = palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_TEXT_V29, &fin.job);
+    assert_eq!(reserved(&route(&tb), &fin.producer), 0, "an unheld (below-fence / released) Final commits nothing, as before");
+    let mut other = held_row(&fin);
+    other.producer = bond(9);
+    tb.write_kernel_row(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, hold_key.clone(), Some(key(&other))).unwrap();
+    assert_eq!(reserved(&route(&tb), &fin.producer), 0, "another producer's held row adds nothing");
+    tb.write_kernel_row(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, hold_key.clone(), Some(key(&held_row(&fin)))).unwrap();
+    assert_eq!(reserved(&route(&tb), &fin.producer), RESERVE as u128, "held: the signed reserve stays committed");
+    tb.write_kernel_row(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, hold_key, None).unwrap();
+    assert_eq!(reserved(&route(&tb), &fin.producer), 0, "the fee left (released or refunded): the reserve is free exactly once");
+}

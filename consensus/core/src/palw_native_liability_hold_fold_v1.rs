@@ -40,6 +40,16 @@ pub(super) fn held_native_fee_v1(state: &PalwChainStateV2, family: u8, job: &[u8
         .filter(|row| row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1 && row.family == family && row.job == *job)
 }
 
+/// **Is `(family, job)`'s Final fee held for `producer`?** The route-level form the committed-collateral readers use (audit A-1):
+/// while the row exists the producer is still liable (accusable to H, a post-Final conviction collects its signed reserve), so the
+/// family's reader keeps that reserve committed until the fee is released (at H) or refunded (conviction). No row exists below the
+/// `palw_native_liability_horizon_v1` fence, so the readers are unchanged there.
+pub(super) fn native_fee_held_for_v1(r: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1, family: u8, job: &[u8; 64], producer: &PalwBondKeyV2) -> bool {
+    r.aux_row::<PalwNativeHeldFeeRowV1>(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, &palw_native_held_fee_key_v1(family, job)).is_some_and(
+        |row| row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1 && row.family == family && row.job == *job && row.producer == *producer,
+    )
+}
+
 /// **Is `(family, job)` still accusable after its Final at `now`?** A held fee whose horizon has not passed.
 pub(super) fn native_accusable_after_final_v1(
     state: &PalwChainStateV2,

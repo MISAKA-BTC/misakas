@@ -94,7 +94,34 @@ fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, b: &Native
 }
 pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128 {
     let Some(ids) = read::<Vec<Digest>>(r, EXECUTION_JOB_OWNER_TABLE_V11, 1, bond, 4 + 8 * 64) else { return 0 };
-    ids.iter().take(8).filter_map(|id| original_header(r, *id).ok()).filter(|h| h.producer == *bond).map(|h| h.reserved as u128).sum()
+    ids.iter()
+        .take(8)
+        .filter_map(|id| original_header(r, *id).ok())
+        .filter(|h| h.producer == *bond)
+        .fold(0u128, |n, h| n.saturating_add(h.reserved as u128).saturating_add(held_final_reserve(r, &h)))
+}
+/// **audit A-1: a HELD Final keeps its signed producer reserve committed** (as native39 does). `write_book` writes `reserved = 0`
+/// at every terminal but Funded / Challengeable (unchanged, so the rows below the liability-horizon fence stay byte-identical);
+/// while the job's fee is held in aux 144 the producer is accusable to H and a post-Final conviction collects
+/// `min(collateral, maximum.producer_reserve)`, so the reader re-adds that signed reserve from the header-anchored book until the
+/// held row leaves (released at H, or refunded/convicted). Unreadable anchored book under a live hold: fail closed (all committed).
+fn held_final_reserve(r: &PalwKernelRouteStateV1, h: &JobHeader) -> u128 {
+    if h.terminal != NativeTextTerminalV29::Final
+        || !super::super::palw_native_liability_hold_fold_v1::native_fee_held_for_v1(
+            r,
+            crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29,
+            &h.job,
+            &h.producer,
+        )
+    {
+        return 0;
+    }
+    r.aux
+        .get(&(EXECUTION_JOB_TABLE_V11, k(1, &h.job)))
+        .filter(|raw| raw.len() == h.book_bytes as usize && raw.len() <= TEXT_STOP_BOOK_BYTES_V29)
+        .and_then(|raw| borsh::from_slice::<NativeTextBookV29>(raw).ok())
+        .filter(|b| b.root() == h.book && b.terminal() == NativeTextTerminalV29::Final)
+        .map_or(u64::MAX as u128, |b| b.funding().maximum.producer_reserve as u128)
 }
 fn class(builder: &TransitionBuilder<'_>, id: Digest) -> Result<(ClassHeader, NativeTextRegisterV29, TirProgramV1), PalwStateV2Error> {
     let r = builder.state.kernel_route.as_ref().unwrap();
