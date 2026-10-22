@@ -7306,6 +7306,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
         O::TirDesignatedEventV1 { .. } => "TirDesignatedEventV1",
         O::SeatReadinessRootV1 { .. } => "SeatReadinessRootV1",
+        O::SeatReadinessDemandedV1 { .. } => "SeatReadinessDemandedV1",
+        O::SeatReadinessAnsweredV1 { .. } => "SeatReadinessAnsweredV1",
         O::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
         O::BondShardsDeclared { .. } => "BondShardsDeclared",
         O::ShardReceiptLicensed { .. } => "ShardReceiptLicensed",

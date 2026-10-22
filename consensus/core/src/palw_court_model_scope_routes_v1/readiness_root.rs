@@ -152,6 +152,38 @@ impl SeatReadinessRootV1 {
         }
         Ok(())
     }
+    /// **ADR-0200 C1: authenticate a disclosed path at a committed ordinal** (the disclosure court's check). Binds the recorded
+    /// root's own context, count and the ordinal; the inventory coordinate and digest are what the seat committed there. Whether
+    /// that coordinate is the native draw's is the refutation's question ([`Self::refute`]), not the disclosure's.
+    pub fn check_path_at_ordinal_v1(&self, ordinal: u32, path: &ReadinessDigestPathV1) -> Result<(), &'static str> {
+        if ordinal >= self.leaf_count {
+            return Err("readiness ordinal outside the committed count");
+        }
+        let expected_len =
+            crate::palw_artifact::palw_artifact_opening_path_len_v1(self.leaf_count, ordinal).ok_or("readiness path coordinate")?;
+        if path.siblings.len() as u64 != expected_len {
+            return Err("readiness path length is not canonical");
+        }
+        let (mut index, mut width) = (u64::from(ordinal), u64::from(self.leaf_count));
+        let mut acc = leaf(&self.context(), path.leaf_index, path.claimed_digest);
+        let mut siblings = path.siblings.iter();
+        while width > 1 {
+            if !(index == width - 1 && width % 2 == 1) {
+                let sibling = siblings.next().ok_or("readiness sibling missing")?;
+                acc = if index % 2 == 0 {
+                    crate::palw_artifact::artifact_node_v1(&acc, sibling)
+                } else {
+                    crate::palw_artifact::artifact_node_v1(sibling, &acc)
+                };
+            }
+            index /= 2;
+            width = width.div_ceil(2);
+        }
+        if siblings.next().is_some() || acc != self.root {
+            return Err("readiness root mismatch");
+        }
+        Ok(())
+    }
     /// Uses the verifier's own registered opening and the existing exact digest
     /// predicate. Returns a local result only; no slash, reward or model review.
     pub fn refute(
@@ -233,6 +265,27 @@ pub fn palw_d2_readiness_root_fold_v1(
     Ok(key)
 }
 
+/// **The seat's path builder** (ADR-0200 C1): the authenticated path of `ordinal` over the seat's OWN committed digests — what
+/// the seat's node answers a disclosure demand with ([`ReadinessDigestPathV1`]; no model bytes). The reference tree walk of
+/// [`SeatReadinessRootV1::from_digests`]. Panics on an ordinal outside `ds` (callers pass a committed ordinal).
+pub fn palw_d2_readiness_path_v1(c: &ReadinessContextV1, ds: &[(u32, Hash64)], ordinal: usize) -> ReadinessDigestPathV1 {
+    let mut level: Vec<_> = ds.iter().map(|(i, d)| leaf(c, *i, *d)).collect();
+    let mut i = ordinal;
+    let mut siblings = vec![];
+    while level.len() > 1 {
+        let partner = i ^ 1;
+        if partner < level.len() {
+            siblings.push(level[partner]);
+        }
+        level = level
+            .chunks(2)
+            .map(|p| if p.len() == 2 { crate::palw_artifact::artifact_node_v1(&p[0], &p[1]) } else { p[0] })
+            .collect();
+        i /= 2;
+    }
+    ReadinessDigestPathV1 { leaf_index: ds[ordinal].0, claimed_digest: ds[ordinal].1, siblings }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +337,11 @@ mod tests {
             for i in 0..count as usize {
                 let p = path(&c, &ds, i);
                 root.check_path(&c, &draw, cap, &p).unwrap();
+                root.check_path_at_ordinal_v1(i as u32, &p).unwrap();
+                assert!(root.check_path_at_ordinal_v1(count, &p).is_err());
+                if count > 1 {
+                    assert!(root.check_path_at_ordinal_v1(((i as u32) + 1) % count, &p).is_err());
+                }
                 assert_eq!(borsh::from_slice::<ReadinessDigestPathV1>(&borsh::to_vec(&p).unwrap()).unwrap(), p);
                 let mut bad = p.clone();
                 bad.siblings.push(h(99));

@@ -864,6 +864,61 @@ impl VirtualStateProcessor {
                         return Err("the readiness root is not signed by its seat's bond".into());
                     }
                 }
+                // ADR-0200 C1 (tags 231/232, G14 item 6): dormant below `palw_court_model_scope_v1`; past it the unadopted draw cap
+                // refuses first (as for 230), then the literal signer: the challenger's bond for a demand, the RECORDED root's seat
+                // bond for an answer (read from the rooted registry, never from the object). The court's rules are the fold's.
+                Obj::SeatReadinessDemandedV1 { demand, signature } => {
+                    use kaspa_consensus_core::palw_court_model_scope_routes_v1::{readiness_disclosure as dc, readiness_root as rr};
+                    if !state_params.court_model_scope_from_daa().is_some_and(|from| point.daa_score >= from) {
+                        return Err("the readiness disclosure demand is dormant on this network (palw_court_model_scope_v1)".into());
+                    }
+                    if rr::PALW_D2_READINESS_DRAW_CAP_V1.is_none() || dc::PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1.is_none() {
+                        return Err("the readiness draw cap or disclosure fee schedule is unadopted".into());
+                    }
+                    let record = state.bond(&demand.challenger).ok_or("a readiness demand names a challenger bond this chain does not have")?;
+                    let message = dc::palw_d2_disclosure_demand_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        demand,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        dc::PALW_D2_DISCLOSURE_DEMAND_MLDSA87_CONTEXT_V1,
+                    ) {
+                        return Err("the readiness demand is not signed by its challenger's bond".into());
+                    }
+                }
+                Obj::SeatReadinessAnsweredV1 { answer, signature } => {
+                    use kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_disclosure as dc;
+                    if !state_params.court_model_scope_from_daa().is_some_and(|from| point.daa_score >= from) {
+                        return Err("the readiness disclosure answer is dormant on this network (palw_court_model_scope_v1)".into());
+                    }
+                    let Some(dc::PalwD2ReadinessEntryV1::Root(row)) =
+                        state.d2_readiness_v1().get(&dc::PalwD2ReadinessKeyV1::Root(answer.root_key))
+                    else {
+                        return Err("a readiness answer names no recorded readiness root".into());
+                    };
+                    let record = state.bond(&row.root.seat).ok_or("a readiness answer's seat bond is not on this chain")?;
+                    let message = dc::palw_d2_disclosure_answer_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        answer,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        dc::PALW_D2_DISCLOSURE_ANSWER_MLDSA87_CONTEXT_V1,
+                    ) {
+                        return Err("the readiness answer is not signed by the root's seat bond".into());
+                    }
+                }
                 Obj::MemoryRoutingV2 { object } => {
                     use kaspa_consensus_core::palw_memory_routing_v2 as mr;
                     if !self.palw_memory_routing_court_v2_at(point.daa_score) {

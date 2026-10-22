@@ -2306,6 +2306,74 @@ pub(super) fn palw_fraud_filer_d2_route_v1(
     }
 }
 
+/// **G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the node's move in the D2 readiness disclosure court.**
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum PalwD2C1NodeMoveV1 {
+    /// As the root's seat: answer an open case with the path from this node's own committed digests (tag 232).
+    Answer(kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureAnswerV1),
+    /// As a challenger: demand the drawn coordinate of another seat's committed root (tag 231).
+    Demand(kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureDemandV1),
+}
+
+/// **The D2 node filer's C1 route** (pure; the U09 route's companion for the readiness root). Below D2 (`d2 == false`) nothing.
+/// As the seat (`me` is the root's seat): every OPEN case still inside its inclusive deadline is answered with `own_path` (the
+/// node's own commitment; `None` → no answer, the chain then decides default or hold). As a challenger: one demand per committed
+/// root of another seat, at [`palw_d2_disclosure_ordinal_draw_v1`]'s coordinate, only when no case exists there and only with an
+/// ADOPTED cap and fee schedule — typed-missing values never produce a demand (`None` is never success).
+pub(super) fn palw_fraud_filer_d2_disclosure_moves_v1(
+    d2: bool,
+    registry: &kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1,
+    me: &PalwBondKeyV2,
+    now_daa: u64,
+    cap: Option<std::num::NonZeroU32>,
+    fees: Option<kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureFeeScheduleV1>,
+    want_demand: impl Fn(&kaspa_hashes::Hash64) -> bool,
+    own_path: impl Fn(
+        &kaspa_hashes::Hash64,
+        u32,
+    ) -> Option<kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_root::ReadinessDigestPathV1>,
+) -> Vec<PalwD2C1NodeMoveV1> {
+    use kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_disclosure::*;
+    let mut moves = Vec::new();
+    if !d2 {
+        return moves;
+    }
+    for (key, entry) in registry {
+        match (key, entry) {
+            (PalwD2ReadinessKeyV1::Case(root_key, ordinal), PalwD2ReadinessEntryV1::Case(case))
+                if case.outcome == PalwD2DisclosureOutcomeV1::Open && now_daa <= case.deadline_daa =>
+            {
+                let mine = matches!(
+                    registry.get(&PalwD2ReadinessKeyV1::Root(*root_key)),
+                    Some(PalwD2ReadinessEntryV1::Root(row)) if row.root.seat == *me
+                );
+                if let (true, Some(path)) = (mine, own_path(root_key, *ordinal)) {
+                    moves.push(PalwD2C1NodeMoveV1::Answer(PalwD2DisclosureAnswerV1 { root_key: *root_key, ordinal: *ordinal, path }));
+                }
+            }
+            (PalwD2ReadinessKeyV1::Root(root_key), PalwD2ReadinessEntryV1::Root(row))
+                if row.root.seat != *me && row.standing == PalwD2ReadinessStandingV1::Committed && want_demand(root_key) =>
+            {
+                let (Some(_), Some(fees), Some(ordinal)) = (cap, fees, palw_d2_disclosure_ordinal_draw_v1(&row.root, me)) else {
+                    continue;
+                };
+                if registry.contains_key(&PalwD2ReadinessKeyV1::Case(*root_key, ordinal)) {
+                    continue;
+                }
+                moves.push(PalwD2C1NodeMoveV1::Demand(PalwD2DisclosureDemandV1 {
+                    root_key: *root_key,
+                    ordinal,
+                    challenger: *me,
+                    fee_sompi: fees.demand_fee_sompi,
+                    valid_until_daa: now_daa.saturating_add(PALW_D2_DISCLOSURE_TURN_DAA_V1),
+                }));
+            }
+            _ => {}
+        }
+    }
+    moves
+}
+
 /// **G14-V: the node's codec-independent step** — the common engine over the authenticated `StepRange` subtree descent
 /// (`palw_fraud_filer_next_subtree_v1`): the claim's committed subtree roots, as authenticated range answers carried them, against
 /// the verifier's own tree (built once from its own run). Replaces the linear scan, which refused every claim past 32,768 leaves; an
@@ -9336,6 +9404,67 @@ pub(super) mod tests {
         let operator = panel.find("self.operator_da_tick_v1(").expect("lane B");
         assert!(tick > operator, "after lane B");
         assert!(panel[tick..tick + 400].contains("seat_replays.has_room(false)"), "the replay yields to the seat's slots");
+    }
+
+    /// G14 item 6 (ADR-0200 C1): the node filer's C1 route end to end over the pure fold — the challenger's demand is admitted by
+    /// the fold, the seat's node answers it from its own commitment in time and the case is disclosed; a node holding no path
+    /// leaves the case to the deadline sweep; below D2, or with the unadopted cap / fee, no move at all.
+    #[test]
+    fn d2_c1_node_filer_demands_and_the_seat_answers_through_the_fold() {
+        use kaspa_consensus_core::palw_court_model_scope_routes_v1::{readiness_disclosure as dc, readiness_root as rr};
+        use std::num::NonZeroU32;
+        let key = |n: u64| PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(n), 0));
+        let (seat, challenger) = (key(3), key(9));
+        let ctx = rr::ReadinessContextV1 {
+            beacon: kaspa_hashes::Hash64::from_u64_word(11),
+            class_id: kaspa_hashes::Hash64::from_u64_word(12),
+            seat,
+            span: 4,
+        };
+        let ds: Vec<_> = (0..8u32).map(|i| (i * 5, kaspa_hashes::Hash64::from_u64_word(700 + u64::from(i)))).collect();
+        let cap = NonZeroU32::new(8);
+        let fees = Some(dc::PalwD2DisclosureFeeScheduleV1 { demand_fee_sompi: 3 });
+        let root = rr::SeatReadinessRootV1::from_digests(ctx, &ds, cap).unwrap();
+        let mut reg = dc::PalwD2ReadinessRegistryV1::new();
+        let (k, e) = dc::palw_d2_readiness_record_v1(&reg, &root, cap, 100).unwrap();
+        reg.insert(k, e);
+        let all = |_: &kaspa_hashes::Hash64| true;
+        let no_path = |_: &kaspa_hashes::Hash64, _: u32| None;
+
+        // Dormant and typed-missing: nothing.
+        assert!(palw_fraud_filer_d2_disclosure_moves_v1(false, &reg, &challenger, 101, cap, fees, all, no_path).is_empty());
+        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 101, rr::PALW_D2_READINESS_DRAW_CAP_V1, fees, all, no_path).is_empty());
+        assert!(
+            palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 101, cap, dc::PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1, all, no_path).is_empty()
+        );
+        // The seat never demands its own root.
+        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &seat, 101, cap, fees, all, no_path).is_empty());
+
+        // Challenger: one demand at its drawn ordinal; the fold admits it.
+        let moves = palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 101, cap, fees, all, no_path);
+        let [PalwD2C1NodeMoveV1::Demand(demand)] = moves.as_slice() else { panic!("{moves:?}") };
+        assert_eq!(Some(demand.ordinal), dc::palw_d2_disclosure_ordinal_draw_v1(&root, &challenger));
+        let (k, e) = dc::palw_d2_disclosure_open_v1(&reg, demand, cap, fees, 101).unwrap();
+        reg.insert(k, e);
+        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 102, cap, fees, all, no_path).is_empty(), "no second demand");
+
+        // Seat: answers from its own commitment inside the deadline, not after; without a path it files nothing.
+        let ordinal = demand.ordinal;
+        let own = |_: &kaspa_hashes::Hash64, o: u32| Some(rr::palw_d2_readiness_path_v1(&ctx, &ds, o as usize));
+        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &seat, 102, cap, fees, all, no_path).is_empty());
+        let deadline = 101 + dc::PALW_D2_DISCLOSURE_TURN_DAA_V1;
+        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &seat, deadline + 1, cap, fees, all, own).is_empty());
+        let moves = palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &seat, deadline, cap, fees, all, own);
+        let [PalwD2C1NodeMoveV1::Answer(answer)] = moves.as_slice() else { panic!("{moves:?}") };
+        assert_eq!(answer.ordinal, ordinal);
+        for (k, e) in dc::palw_d2_disclosure_answer_v1(&reg, answer, deadline).unwrap() {
+            reg.insert(k, e);
+        }
+        assert!(matches!(
+            reg.get(&dc::PalwD2ReadinessKeyV1::Case(answer.root_key, ordinal)),
+            Some(dc::PalwD2ReadinessEntryV1::Case(c)) if matches!(c.outcome, dc::PalwD2DisclosureOutcomeV1::Disclosed { .. })
+        ));
+        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &seat, deadline, cap, fees, all, own).is_empty(), "answered once");
     }
 
     /// R-D2-NODE: the node-side D2 mirror — unarmed, `never()`, and a claim accepted below the fence are all the OLD rule.

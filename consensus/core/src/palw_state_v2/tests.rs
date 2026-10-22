@@ -17117,6 +17117,8 @@ fn every_delta_entry_kind_round_trips_through_borsh() {
                 PalwDeltaEntryV2::TirDesignated { .. } => "tir_designated",
                 // G14 lane escrow-rfc08: its round trip is the funded-escrow suite's.
                 PalwDeltaEntryV2::FundedEscrow { .. } => "funded_escrow",
+                // G14 item 6: its round trip is the d2_readiness suite's.
+                PalwDeltaEntryV2::D2Readiness { .. } => "d2_readiness",
                 PalwDeltaEntryV2::PublicFpJob { .. } => "public_fp_job",
                 PalwDeltaEntryV2::ClassSemantics { .. } => "class_semantics",
                 PalwDeltaEntryV2::ClaimSemantics { .. } => "claim_semantics",
@@ -18239,6 +18241,8 @@ fn the_state_root_preimage_is_exactly_the_adr_0043_list() {
         tir_designated: _,
         // G14 lane escrow-rfc08: one Some-only block (`funded_escrow/v1`), empty here.
         funded_escrows: _,
+        // G14 item 6: one Some-only block (`d2_readiness/v1`), empty here.
+        d2_readiness: _,
         fp_public_jobs: _,
         class_semantics: _,
         claim_semantics: _,

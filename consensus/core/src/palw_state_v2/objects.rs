@@ -696,12 +696,33 @@ fn apply_object_inner(
         // R-D2-READY (tag 230, ADR-0188 B): the acceptance gate routes it by `palw_court_model_scope_v1`, so below that fence it never
         // reaches this fold (A-2). Past it the fold admits against the ADOPTED draw cap, which is unadopted (`None`): a refusal, never a
         // default. The persistent registry write (`palw_d2_readiness_root_fold_v1`) waits on that cap and on the C1 supply (ADR-0200).
+        // G14 item 6 (lane r5-d2-c1): the admitted root is RECORDED in the rooted registry (`d2_readiness`, delta 230) — which
+        // still refuses with the unadopted cap, so nothing is written on any network until the cap is adopted.
         PalwConsensusObjectV2::SeatReadinessRootV1 { root, .. } => {
             crate::palw_court_model_scope_routes_v1::readiness_root::palw_d2_readiness_root_admit_v1(
                 root,
                 crate::palw_court_model_scope_routes_v1::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1,
             )
             .map_err(PalwStateV2Error::ReadinessRootRefused)?;
+            builder.record_d2_readiness_root_v1(
+                root,
+                crate::palw_court_model_scope_routes_v1::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1,
+                ctx.daa_score,
+            )?;
+        }
+        // ADR-0200 C1 (tags 231/232): the disclosure court. Signatures were checked at acceptance (validator); the fold applies the
+        // court's typed rules against the rooted registry. Cap and fee schedule unadopted: every demand refuses, so no case exists
+        // for an answer to name.
+        PalwConsensusObjectV2::SeatReadinessDemandedV1 { demand, .. } => {
+            builder.open_d2_disclosure_v1(
+                demand,
+                crate::palw_court_model_scope_routes_v1::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1,
+                crate::palw_court_model_scope_routes_v1::readiness_disclosure::PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1,
+                ctx.daa_score,
+            )?;
+        }
+        PalwConsensusObjectV2::SeatReadinessAnsweredV1 { answer, .. } => {
+            builder.answer_d2_disclosure_v1(answer, ctx.daa_score)?;
         }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {

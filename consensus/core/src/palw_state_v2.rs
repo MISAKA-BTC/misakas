@@ -7587,6 +7587,19 @@ pub enum PalwConsensusObjectV2 {
         root: crate::palw_court_model_scope_routes_v1::readiness_root::SeatReadinessRootV1,
         signature: Vec<u8>,
     } = 230,
+    /// **(tag 231): a demand for the digest path of one committed coordinate of a recorded readiness root** (ADR-0200 C1, G14 item
+    /// 6). Signed by the challenger's bond (ML-DSA-87 over `crate::palw_court_model_scope_routes_v1::readiness_disclosure::palw_d2_disclosure_demand_message_v1`). Dormant
+    /// behind `palw_court_model_scope_v1`; past it refused while the draw cap or the fee schedule is unadopted.
+    SeatReadinessDemandedV1 {
+        demand: crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureDemandV1,
+        signature: Vec<u8>,
+    } = 231,
+    /// **(tag 232): the seat's answer — the authenticated digest path** (no model bytes). Signed by the ROOT's seat bond. A path its
+    /// own root refutes convicts the root (no computation fault); an authenticated one is the shared opening.
+    SeatReadinessAnsweredV1 {
+        answer: crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureAnswerV1,
+        signature: Vec<u8>,
+    } = 232,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -11084,6 +11097,10 @@ pub struct PalwChainStateV2 {
     /// Empty on every network (nothing installs a row yet); enters the root (`funded_escrow/v1`) and the carriage (tail `0xFB`) only
     /// when non-empty.
     funded_escrows: BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
+    /// **G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the D2 readiness registry** — recorded tag-230 roots and their digest/path
+    /// disclosure cases ([`crate::palw_court_model_scope_routes_v1::readiness_disclosure`]). Written only past `palw_court_model_scope_v1` with an ADOPTED draw cap (unadopted: nothing is
+    /// ever written), journaled as delta 230; enters the root (`d2_readiness/v1`) and the carriage (tail `0xE5`) only when non-empty.
+    d2_readiness: crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1,
     /// Accepted public FP commitment metadata, without prompt IDs or capture. Kept with the claim
     /// past the never-armed public-filer fence, rooted and carried through pruning snapshots.
     fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
@@ -12286,6 +12303,14 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
         new: Option<crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
     } = 235,
+    /// **G14 item 6 (delta number 230, declared explicitly — the D2 readiness tag's number): a readiness root or disclosure case
+    /// was written** by the registry's one writer (`d2_readiness::write_d2_readiness_v1`). Dormant: nothing writes it while the
+    /// draw cap is unadopted.
+    D2Readiness {
+        key: crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessKeyV1,
+        old: Option<crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessEntryV1>,
+        new: Option<crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessEntryV1>,
+    } = 230,
     /// **Lane BUDGET (delta number 190, declared explicitly; 190–199 are the bond budget's): a row of the bond budget** was written,
     /// rewritten or dropped — `table` names the table ([`crate::palw_bond_budget_v1::PALW_BUDGET_TABLE_BONDS_V1`] …), the key and row
     /// ride as their Borsh bytes. One entry for every table. Dormant: `palw_bond_budget_v1` is armed on no network.
@@ -13687,6 +13712,8 @@ mod block_preparation;
 mod input_views;
 // G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow rows' one writer.
 mod funded_escrow;
+// G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the D2 readiness registry's one writer and the disclosure court's fold.
+mod d2_readiness;
 pub use input_views::{PalwBlockFactsV1, PalwRulesAtBlockV1, PalwRulesForClaimV1};
 
 // ---------------------------------------------------------------------------------------------
@@ -14738,6 +14765,12 @@ fn apply_palw_transition_v7_inner(
     // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned
     // service profile only (none is pinned).
     palw_court_service_lifecycle_fold_v1::observe_court_service_block_v1(&mut builder, ctx)?;
+    // G14 item 6 (ADR-0200 C1): the D2 disclosure deadlines, after every object (an answer in this block is in time at its deadline
+    // DAA). A no-op below `palw_court_model_scope_v1` and on an empty registry (every network).
+    builder.sweep_d2_disclosures_v1(
+        ctx.daa_score,
+        crate::palw_court_model_scope_routes_v1::readiness_disclosure::palw_d2_disclosure_supply_premise_v1(),
+    )?;
     // 3″. G14 lane D: the kernel route's closing step — demand deadlines, windows, Final, liability release, and the settlements
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;
@@ -22541,6 +22574,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::LegacyDispute { key, old, new } => swap_write!(state.legacy_disputes, key, old, new),
         PalwDeltaEntryV2::TirDesignated { key, old, new } => swap_write!(state.tir_designated.records, key, old, new),
         PalwDeltaEntryV2::FundedEscrow { key, old, new } => swap_write!(state.funded_escrows, key, old, new),
+        PalwDeltaEntryV2::D2Readiness { key, old, new } => swap_write!(state.d2_readiness, key, old, new),
         // RFC-0010: the permissionless Panel engine's keyed decomposition (see `palw_panel_v3_fold_v1`).
         PalwDeltaEntryV2::PanelV3Cursor { old, new } => palw_panel_v3_fold_v1::apply_cursor_entry_v1(state, old, new, revert)?,
         PalwDeltaEntryV2::PanelV3Claim { key, old, new } => palw_panel_v3_fold_v1::apply_claim_entry_v1(state, key, old, new, revert)?,
@@ -22999,6 +23033,8 @@ pub struct PalwStateCarriageV2 {
     pub tir_designated: crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1,
     /// G14 lane escrow-rfc08: the rooted funded-escrow rows, in appended tail `0xFB`, present only when non-empty.
     pub funded_escrows: BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
+    /// G14 item 6 (lane r5-d2-c1): the D2 readiness registry, in appended tail `0xE5`, present only when non-empty.
+    pub d2_readiness: crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1,
     /// Original accepted FP metadata, appended tail 0xF0; omitted when empty below the public-filer fence.
     pub fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
     /// Immutable signed registration semantics, optional tail 0xF7.
@@ -23760,6 +23796,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_funded_escrow_v1::PALW_CARRIAGE_FUNDED_ESCROW_TAIL_V1.serialize(writer)?;
             self.funded_escrows.serialize(writer)?;
         }
+        if !self.d2_readiness.is_empty() {
+            crate::palw_court_model_scope_routes_v1::readiness_disclosure::PALW_CARRIAGE_D2_READINESS_TAIL_V1.serialize(writer)?;
+            self.d2_readiness.serialize(writer)?;
+        }
         if let Some(budget) = &self.bond_budget {
             crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1.serialize(writer)?;
             budget.serialize(writer)?;
@@ -23991,6 +24031,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_tir_designated = false;
         let mut funded_escrows: BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1> = BTreeMap::new();
         let mut seen_funded_escrows = false;
+        let mut d2_readiness = crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1::new();
+        let mut seen_d2_readiness = false;
         let mut bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1> = None;
         let mut seen_bond_budget = false;
         let mut exec_v2 = crate::palw_work_slice_v2::PalwExecV2StateV1::default();
@@ -24350,6 +24392,20 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "a funded-escrow row violates its invariants"));
                     }
                 }
+                crate::palw_court_model_scope_routes_v1::readiness_disclosure::PALW_CARRIAGE_D2_READINESS_TAIL_V1 if !seen_d2_readiness => {
+                    seen_d2_readiness = true;
+                    d2_readiness = crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1::deserialize_reader(reader)?;
+                    if d2_readiness.is_empty() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "an empty D2 readiness tail (written only when non-empty)",
+                        ));
+                    }
+                    // A row is carried only as the court wrote it: under its own key, a case under a recorded root's ordinal.
+                    if d2_readiness.iter().any(|(key, entry)| !crate::palw_court_model_scope_routes_v1::readiness_disclosure::palw_d2_readiness_entry_consistent_v1(&d2_readiness, key, entry)) {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "a D2 readiness row violates its invariants"));
+                    }
+                }
                 crate::palw_tir_designated_answers_v1::PALW_CARRIAGE_TIR_DESIGNATED_TAIL_V1 if !seen_tir_designated => {
                     seen_tir_designated = true;
                     tir_designated = crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1::deserialize_reader(reader)?;
@@ -24510,6 +24566,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             legacy_disputes,
             tir_designated,
             funded_escrows,
+            d2_readiness,
             fp_public_jobs,
             class_semantics,
             claim_semantics,
@@ -24662,6 +24719,7 @@ impl PalwStateCarriageV2 {
             legacy_disputes: state.legacy_disputes.clone(),
             tir_designated: state.tir_designated.clone(),
             funded_escrows: state.funded_escrows.clone(),
+            d2_readiness: state.d2_readiness.clone(),
             fp_public_jobs: state.fp_public_jobs.clone(),
             class_semantics: state.class_semantics.clone(),
             claim_semantics: state.claim_semantics.clone(),
@@ -24944,6 +25002,7 @@ impl PalwStateCarriageV2 {
             legacy_disputes: self.legacy_disputes,
             tir_designated: self.tir_designated,
             funded_escrows: self.funded_escrows,
+            d2_readiness: self.d2_readiness,
             fp_public_jobs: self.fp_public_jobs,
             class_semantics: self.class_semantics,
             claim_semantics: self.claim_semantics,
