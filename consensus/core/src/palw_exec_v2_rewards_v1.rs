@@ -700,3 +700,109 @@ pub(super) fn consistent(state: &PalwChainStateV2, params: &PalwStateParamsV2) -
     }
     Ok(())
 }
+
+// =================================================================================================================================
+// G14 r6 (item 2): the EXEC and provider dependency horizons the clock-v2 dispute extension must not outrun (RFC-0026 §3.3 F07)
+// =================================================================================================================================
+
+/// A kernel claim's stored row, or a typed refusal (a dependency that is named but missing is never zero-filled).
+fn kernel_dependency_row_v2(
+    kernel: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+    claim: &Hash64,
+) -> Result<misaka_palw_kernel::ledger::ClaimRowV1, PalwStateV2Error> {
+    kernel
+        .rows
+        .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, borsh::to_vec(&claim.as_bytes()).expect("a digest serializes")))
+        .and_then(|bytes| borsh::from_slice(bytes).ok())
+        .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("clock v2: an EXEC dependency's kernel claim row is missing".into()))
+}
+
+/// **The provider quorum horizon of a transferred kernel claim**: the last DAA through which at least
+/// [`crate::palw_provider_court_v1::PALW_PROVIDER_MIN_PROVIDERS_V1`] distinct non-producer operators still serve it, from the leases
+/// live at `now` (each operator counted at its longest lease). `None`: the claim's DA was never transferred to leases (no provider
+/// dependency). `Some(0)`: transferred but lapsed, or fewer live operators than the quorum — a dependency that covers nothing.
+pub(super) fn provider_quorum_horizon_v2(
+    state: &PalwChainStateV2,
+    claim: &Hash64,
+    producer_operator: Option<Hash64>,
+    now: u64,
+) -> Option<u64> {
+    use crate::palw_provider_court_v1::{PALW_PROVIDER_MIN_PROVIDERS_V1, ProviderSubjectV1};
+    let route = state.kernel_route.as_ref()?;
+    let subject = ProviderSubjectV1::KernelClaim { claim: *claim };
+    let transfer = route.provider_subject_v1(&subject).filter(|t| t.transferred_daa.is_some())?;
+    if transfer.lapsed_daa.is_some() {
+        return Some(0);
+    }
+    let mut per_operator: BTreeMap<Hash64, u64> = BTreeMap::new();
+    for (provider, row) in route.provider_leases_of_v1(&subject) {
+        if !row.live_at(now) {
+            continue;
+        }
+        let Some(operator) = state.bond(&provider).map(|b| b.operator_id) else { continue };
+        if Some(operator) == producer_operator {
+            continue;
+        }
+        let until = per_operator.entry(operator).or_insert(0);
+        *until = (*until).max(row.serve_until_daa);
+    }
+    Some(crate::palw_court_clock_v2::palw_provider_quorum_horizon_of_v2(per_operator.into_values(), PALW_PROVIDER_MIN_PROVIDERS_V1))
+}
+
+/// **Every EXEC and provider dependency of `claim_id`, with its signed horizon** — what the clock-v2 dispute extension
+/// (`palw_dispute_record_hard_deadline_v2`) must see covered, beside the claim's own trace and its staged custody:
+///
+/// * `Exec`: when `claim_id` is an EXEC root — the root's signed liability floor (`expiry + window_court`, or the kernel policy's
+///   floor), and EACH kernel claim it rests on (its prefix claim and every slice's evidence root) at its own `liability_until`
+///   (F07 is per dependency: one longer-lived dependency never supplies another's material). A retired root's unpaid receipt carries
+///   its `liability_until`. A named kernel claim whose row or horizon is missing is a typed refusal.
+/// * `Provider`: for each of those kernel claims, and for `claim_id` itself as a kernel subject, whose DA moved to leases (tag 153) —
+///   the provider quorum horizon ([`provider_quorum_horizon_v2`]), excluding the producer's own operator.
+///
+/// Nothing here writes; the caller refuses the extension atomically on the first short horizon.
+pub(super) fn court_clock_v2_exec_provider_dependencies_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    now: u64,
+) -> Result<Vec<crate::palw_court_clock_v2::PalwCourtDependencyV2>, PalwStateV2Error> {
+    use crate::palw_court_clock_v2::{PalwCourtDependencyKindV2 as Kind, PalwCourtDependencyV2 as Dep};
+    let mut out = Vec::new();
+    let mut kernel_claims: Vec<Hash64> = vec![*claim_id];
+    if let Some(root) = state.exec_v2.roots.get(claim_id) {
+        let floor = match &state.kernel_route {
+            Some(kernel) => {
+                super::palw_kernel_route_fold_v1::exec_liability_floor_v1(root.expiry_daa, params.window_court(), &kernel.header.policy)?
+            }
+            None => root.expiry_daa.checked_add(params.window_court()).ok_or(PalwStateV2Error::Overflow("EXEC dependency horizon"))?,
+        };
+        out.push(Dep { kind: Kind::Exec, signed_horizon_daa: floor });
+        if let Some(kernel) = &state.kernel_route {
+            let claims = std::iter::once(root.prefix_claim)
+                .chain(state.exec_v2.slices.range((*claim_id, 0)..=(*claim_id, u32::MAX)).map(|(_, row)| row.evidence_root));
+            for claim in claims {
+                let row = kernel_dependency_row_v2(kernel, &claim)?;
+                let until = row.liability_until.ok_or_else(|| {
+                    PalwStateV2Error::CarriageInconsistent("clock v2: an EXEC dependency has no liability horizon".into())
+                })?;
+                out.push(Dep { kind: Kind::Exec, signed_horizon_daa: until });
+                kernel_claims.push(claim);
+            }
+        }
+    } else if let Some(receipt) = state.exec_v2_rewards.get(claim_id) {
+        out.push(Dep { kind: Kind::Exec, signed_horizon_daa: receipt.liability_until });
+    }
+    if let Some(kernel) = &state.kernel_route {
+        for claim in kernel_claims {
+            // The producer's own operator never counts toward the quorum (as `require_exec_provider_horizon_v1`).
+            let producer_operator = kernel
+                .kernel_claim_row_v1(&claim)
+                .and_then(|row| kernel.bond_key_of(&row.producer))
+                .and_then(|bond| state.bond(&bond).map(|b| b.operator_id));
+            if let Some(until) = provider_quorum_horizon_v2(state, &claim, producer_operator, now) {
+                out.push(Dep { kind: Kind::Provider, signed_horizon_daa: until });
+            }
+        }
+    }
+    Ok(out)
+}

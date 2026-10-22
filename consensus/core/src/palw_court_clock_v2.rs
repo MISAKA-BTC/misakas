@@ -232,6 +232,17 @@ pub fn palw_court_clock_v2_required_retention_with(
         .ok_or(CourtPolicyError::Overflow)
 }
 
+/// **G14 r6: a provider quorum's horizon** — given each distinct serving operator's longest live lease end, the last DAA through
+/// which at least `quorum` of them still serve (the `quorum`-th largest). Fewer operators than the quorum: `0` (covers nothing).
+pub fn palw_provider_quorum_horizon_of_v2(per_operator_until: impl IntoIterator<Item = u64>, quorum: usize) -> u64 {
+    let mut ends: Vec<u64> = per_operator_until.into_iter().collect();
+    ends.sort_unstable_by(|a, b| b.cmp(a));
+    match quorum {
+        0 => u64::MAX,
+        q => ends.get(q - 1).copied().unwrap_or(0),
+    }
+}
+
 /// **Do ALL dependencies cover the maximal extension?** `Err(TooShort(kind))` names the first short one (boundary: `horizon ==
 /// need` covers; `need − 1` does not).
 pub fn palw_court_clock_v2_dependencies_cover_v2<'a>(
@@ -358,6 +369,16 @@ pub fn palw_claim_route_hard_v2(params: &PalwStateParamsV2, claim: &PalwClaimSta
         return Some(palw_court_clock_v2_extended_hard(claim.accepted_daa));
     }
     crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(params, claim)
+}
+
+/// **G14 r6 (item 3): X3's cap, under the X3 × clock-v2 combined rule** — the hard deadline every site that CAPS a claim by X3's
+/// `dispute_hard_deadline` reads. `None` where X3 does not govern the claim (no cap, the old rule — unchanged whether or not clock v2
+/// governs). Where X3 governs: clock v2's finish line `a + 10,000` when clock v2 also governs (it takes precedence, as the pursuit start
+/// rule [`palw_claim_pursuit_may_start_v2`] already reads it — X3's own policy hard is not read for a v2-governed claim), else X3's
+/// policy hard. Fixed at acceptance either way.
+pub fn palw_claim_x3_cap_hard_v2(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> Option<u64> {
+    let x3 = crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(params, claim)?;
+    if palw_court_clock_v2_governs(params, claim) { Some(palw_court_clock_v2_extended_hard(claim.accepted_daa)) } else { Some(x3) }
 }
 
 // =================================================================================================================================
@@ -755,5 +776,53 @@ mod tests {
         pause.dismiss(base + 9_999);
         assert_eq!(palw_fp_receipt_window_start_v2(base, &pause), Some(base + 1_010));
         assert_eq!(palw_fp_receipt_window_start_v2(u64::MAX, &pause), None, "overflow refuses");
+    }
+
+    /// **G14 r6 (item 2): the provider quorum horizon** — the `quorum`-th longest operator lease end; fewer operators than the quorum
+    /// cover nothing (0).
+    #[test]
+    fn r6_provider_quorum_horizon_is_the_quorum_th_longest_operator() {
+        assert_eq!(palw_provider_quorum_horizon_of_v2([5_000, 9_000, 7_000], 2), 7_000);
+        assert_eq!(palw_provider_quorum_horizon_of_v2([9_000, 9_000], 2), 9_000);
+        assert_eq!(palw_provider_quorum_horizon_of_v2([9_000], 2), 0, "one operator is no quorum");
+        assert_eq!(palw_provider_quorum_horizon_of_v2(std::iter::empty(), 2), 0);
+        assert_eq!(palw_provider_quorum_horizon_of_v2([1], 0), u64::MAX);
+    }
+
+    /// **G14 r6 (item 2): an EXEC or provider dependency one DAA short refuses the extension; equal covers.** The kinds the fold now
+    /// hands over (`court_clock_v2_exec_provider_dependencies_v2`) go through the same atomic check as the claim's trace and custody.
+    #[test]
+    fn r6_exec_and_provider_dependencies_refuse_a_short_extension() {
+        let sp = clock_sp();
+        let need = palw_court_clock_v2_required_retention_with(F, W, 256).unwrap();
+        let c = claim(F, need);
+        for kind in [PalwCourtDependencyKindV2::Exec, PalwCourtDependencyKindV2::Provider] {
+            let deps = |h| [dep(PalwCourtDependencyKindV2::Custody, u64::MAX), dep(kind, h)];
+            assert!(palw_dispute_record_hard_deadline_v2(&sp, &c, W, 256, &deps(need - 1), F + 10).is_err(), "{kind:?} short");
+            assert_eq!(palw_dispute_record_hard_deadline_v2(&sp, &c, W, 256, &deps(need), F + 10), Ok(F + DISPUTE_WINDOW_DAA));
+        }
+        // A transferred claim whose provider quorum covers nothing (lapsed / one operator) refuses.
+        let quorum = palw_provider_quorum_horizon_of_v2([u64::MAX], 2);
+        assert!(
+            palw_dispute_record_hard_deadline_v2(&sp, &c, W, 256, &[dep(PalwCourtDependencyKindV2::Provider, quorum)], F + 10).is_err()
+        );
+    }
+
+    /// **G14 r6 (item 3): X3's cap under the combined rule.** X3 alone: X3's hard. X3 and clock v2: `a + 10,000`. Clock v2 alone or
+    /// neither: no cap (`None`, the old rule).
+    #[test]
+    fn r6_x3_cap_reads_the_combined_rule() {
+        let c = claim(F, u64::MAX);
+        let x3_only = with_x3(t12_sp());
+        assert_eq!(
+            palw_claim_x3_cap_hard_v2(&x3_only, &c),
+            crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(&x3_only, &c)
+        );
+        assert!(palw_claim_x3_cap_hard_v2(&x3_only, &c).is_some());
+        assert_eq!(palw_claim_x3_cap_hard_v2(&with_x3(clock_sp()), &c), Some(F + DISPUTE_WINDOW_DAA));
+        assert_eq!(palw_claim_x3_cap_hard_v2(&clock_sp(), &c), None);
+        assert_eq!(palw_claim_x3_cap_hard_v2(&t12_sp(), &c), None);
+        // A claim accepted below both fences: no cap.
+        assert_eq!(palw_claim_x3_cap_hard_v2(&with_x3(clock_sp()), &claim(F - 1, u64::MAX)), None);
     }
 }

@@ -502,7 +502,7 @@ pub(super) fn apply_dispute_reserved_v1(
     // G14 r5 (item 3, F07): the extension must not outrun ANY dependency — the claim's own trace, plus the staged route's custody
     // horizon when the claim carries one. The reorg-retention term comes from the staged court config (0 on the legacy route).
     let reorg_retention = crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(builder.extras.staged_public_court.as_ref());
-    let dependencies: Vec<crate::palw_court_clock_v2::PalwCourtDependencyV2> = builder
+    let mut dependencies: Vec<crate::palw_court_clock_v2::PalwCourtDependencyV2> = builder
         .state
         .staged_claim_contract_v1(&claim_id)
         .map(|c| crate::palw_court_clock_v2::PalwCourtDependencyV2 {
@@ -511,6 +511,19 @@ pub(super) fn apply_dispute_reserved_v1(
         })
         .into_iter()
         .collect();
+    // G14 r6 (item 2): the EXEC root / kernel-claim liability horizons and the provider-lease quorum horizons the claim rests on, read
+    // from the rooted rows that hold them. Only when a NEW record is created under clock v2 (the extension); an existing record, or a
+    // claim clock v2 does not govern, reads none of this (the old formula ignores dependencies), so below the fence nothing changes.
+    if !builder.state.legacy_disputes.contains_key(&claim_id)
+        && crate::palw_court_clock_v2::palw_court_clock_v2_governs(builder.params, &claim)
+    {
+        dependencies.extend(super::palw_exec_v2_rewards_v1::court_clock_v2_exec_provider_dependencies_v2(
+            &builder.state,
+            builder.params,
+            &claim_id,
+            now,
+        )?);
+    }
     let mut record = match builder.state.legacy_disputes.get(&claim_id).cloned() {
         Some(record) => record,
         None => PalwDisputeClaimV1 {

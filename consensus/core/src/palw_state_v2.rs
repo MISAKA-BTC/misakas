@@ -4133,9 +4133,10 @@ pub fn palw_rcore_deadline_v1(
             let mut floor = palw_claim_final_floor_v1(state, params, claim_id, claim, licensed_daa)?;
             // **X3 (REQ-X3-2): `effective = min(proposed, hard)`** — the claim's hard deadline, fixed at acceptance, caps the proposed
             // challenge deadline. `None` (unchanged) for a claim accepted below the fence.
+            // G14 r6: through the X3 × clock-v2 combined rule (clock v2's `a + 10,000` replaces X3's hard where both govern).
             floor = crate::palw_ruling_fences_v1::palw_claim_effective_deadline_v1(
                 floor,
-                crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(params, claim),
+                crate::palw_court_clock_v2::palw_claim_x3_cap_hard_v2(params, claim),
             );
             // M4, Q-5's gate: an S2 licence not yet raised to 2 waits out both supplementary doors
             // (`max(L + wc, B* + W_r(c) + 1, H, last)` — the receipt deadline reads the claim's `W_r(c)`).

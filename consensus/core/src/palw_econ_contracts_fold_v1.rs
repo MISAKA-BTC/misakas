@@ -649,7 +649,7 @@ pub(super) fn consent_horizon_extension_v1(
                 .state
                 .claims
                 .get(&Hash64::from_bytes(terms.root))
-                .and_then(|root| crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(builder.params, root));
+                .and_then(|root| crate::palw_court_clock_v2::palw_claim_x3_cap_hard_v2(builder.params, root));
             let hard = palw_horizon_extension_hard_deadline_v1(claim.committed_daa, &policy)
                 .map(|own| crate::palw_ruling_fences_v1::palw_claim_effective_deadline_v1(own, root_x3));
             if hard != Some(terms.hard_deadline_daa) {

@@ -53,7 +53,8 @@ impl TransitionBuilder<'_> {
         }
         // X3 (REQ-X3-6): an X3 claim's material hold must cover its claim-fixed hard deadline — prosecution may start from public
         // material any time X3 admits it, and the material is what it reads. `None` below the fence.
-        if let Some(hard) = crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(self.params, claim)
+        // G14 r6: through the X3 × clock-v2 combined rule (`a + 10,000` where clock v2 also governs).
+        if let Some(hard) = crate::palw_court_clock_v2::palw_claim_x3_cap_hard_v2(self.params, claim)
             && terms.material_until < hard
         {
             return Err(PalwStateV2Error::ExecV2Refused(
