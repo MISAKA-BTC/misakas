@@ -1697,8 +1697,16 @@ impl VirtualStateProcessor {
                     heavy_prompt_claims.insert(charge.claim_id);
                 }
             }
-            let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
-                || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
+            let completes_a_close = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object);
+            let spends_the_court_slot =
+                completes_a_close || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
+            // **Liveness fix L-COURT-01 (`palw_court_completion_attempt_v1`): a completion is charged on ATTEMPT.** A completing chunk
+            // makes `palw_v2_validate_objects` assemble, digest, decode and adjudicate its close (up to 2.7 MB) — the work the slot
+            // exists to bound (`palw_court_close_completes_a_group_v1`'s doc) — and a refused one leaves its group intact, so under
+            // AC-SLOT's charge-on-apply a block could carry that refused completion any number of times, one adjudication each. Past the
+            // fence the attempt spends the slot (and its court cost) whether it applies or is refused. Only completions: AC-SLOT's other
+            // slot-spending moves (a replayed root claim the fold refuses) keep charge-on-apply, so a copy cannot crowd out a filer.
+            let charge_on_attempt = completes_a_close && self.palw_court_completion_attempt_at(point.daa_score);
             let court_policy = state_params.court_capacity_at_v1(point.daa_score);
             let accounted = match kaspa_consensus_core::palw_court_transport_v1::palw_court_accounted_op_v1(
                 &folded, state_params, point.daa_score, &object,
@@ -1969,6 +1977,20 @@ impl VirtualStateProcessor {
                         }
                         Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why),
                         Err(why) => {
+                            // L-COURT-01: the refused completion was adjudicated; past the fence it spends what it was attempted
+                            // against (below the audit fence the slot was charged on acceptance already).
+                            if charge_on_attempt {
+                                if audit_active {
+                                    court_closes_completed += 1;
+                                }
+                                if let Some(cost) = court_cost {
+                                    if court_one_move {
+                                        court_one_move_spent = court_one_move_spent.checked_add(cost).expect("court cost prechecked");
+                                    } else {
+                                        court_cost_spent = court_cost_spent.checked_add(cost).expect("court cost prechecked");
+                                    }
+                                }
+                            }
                             info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                         }
                     }
@@ -1978,6 +2000,18 @@ impl VirtualStateProcessor {
                     // from another slot in this block (see the charging site).
                     if let Some(registrant) = bought_registration {
                         class_registrants_refused.insert(registrant);
+                    }
+                    // L-COURT-01: a completion the acceptance layer refused was assembled and adjudicated there; past the fence it
+                    // spends the slot and its court cost all the same.
+                    if charge_on_attempt {
+                        court_closes_completed += 1;
+                        if let Some(cost) = court_cost {
+                            if court_one_move {
+                                court_one_move_spent = court_one_move_spent.checked_add(cost).expect("court cost prechecked");
+                            } else {
+                                court_cost_spent = court_cost_spent.checked_add(cost).expect("court cost prechecked");
+                            }
+                        }
                     }
                     info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                 }

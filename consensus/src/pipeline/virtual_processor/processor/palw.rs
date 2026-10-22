@@ -9122,6 +9122,12 @@ impl VirtualStateProcessor {
         self.palw_audit_2026_09_11.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **The liveness fix L-COURT-01's fence** (`Params::palw_court_completion_attempt_v1`), at the accepting block's DAA: a
+    /// completion the acceptance walk attempts spends the court slot / cost whether it applies or is refused. `false` on every preset.
+    pub(super) fn palw_court_completion_attempt_at(&self, daa_score: u64) -> bool {
+        self.palw_court_completion_attempt.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     pub(super) fn palw_audit_2026_09_11_deep_at(&self, daa_score: u64) -> bool {
         self.palw_audit_2026_09_11_deep.is_some_and(|fence| fence.is_active(daa_score))
     }

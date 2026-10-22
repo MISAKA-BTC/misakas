@@ -1005,6 +1005,8 @@ mod tests {
             // RFC-0018's five dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_dag_sibling_attribution_v1" => params.palw_dag_sibling_attribution_v1 = Some(at),
             "palw_panel_anchor_permissionless_v1" => params.palw_panel_anchor_permissionless_v1 = Some(at),
+            // The liveness fix L-COURT-01: a bare height (needs palw_audit_2026_09_11, in force wherever this probe arms it).
+            "palw_court_completion_attempt_v1" => params.palw_court_completion_attempt_v1 = Some(at),
             "palw_rule_e_participation_v2" => params.palw_rule_e_participation_v2 = Some(at),
             "palw_independently_work_certified_v1" => params.palw_independently_work_certified_v1 = Some(at),
             "palw_dag_width_schedule_v1" => {

@@ -14969,6 +14969,12 @@ struct AcSlotFixture {
 }
 
 fn ac_slot_fixture() -> AcSlotFixture {
+    ac_slot_fixture_with(false)
+}
+
+/// [`ac_slot_fixture`], with the liveness fix L-COURT-01's fence (`palw_court_completion_attempt_v1`) armed from genesis when
+/// `completion_attempt`.
+fn ac_slot_fixture_with(completion_attempt: bool) -> AcSlotFixture {
     use kaspa_consensus_core::config::params::ForkActivation;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwStateCarriageV2, PalwStateParamsV2};
@@ -15005,6 +15011,9 @@ fn ac_slot_fixture() -> AcSlotFixture {
                 p.palw_kary_court = Some(ForkActivation::always());
                 // AC-SLOT charges the court slot post-apply only past the audit flag day; arm it.
                 p.palw_audit_2026_09_11 = Some(ForkActivation::always());
+                if completion_attempt {
+                    p.palw_court_completion_attempt_v1 = Some(ForkActivation::always());
+                }
                 *p = p.clone().with_palw_v2_cadence();
             }
         })
@@ -15111,6 +15120,91 @@ async fn a_fold_failing_court_move_does_not_spend_the_block_slot() {
         "AC-SLOT: a root claim the fold REFUSED spent the block's only court slot (PALW_COURT_CLOSE_MAX_PER_BLOCK), and the \
          honest root claim behind it was dropped"
     );
+}
+
+/// **Liveness fix L-COURT-01 (`palw_court_completion_attempt_v1`): a refused split-close completion spends the block's court slot.**
+///
+/// A completing chunk makes the acceptance layer assemble, digest, decode and adjudicate its close; one whose close does not
+/// adjudicate is refused there and leaves its group intact. Under AC-SLOT's charge-on-apply the refusal spent nothing, so a block
+/// could carry the same refused completion in any number of carriers — one adjudication each for every validator. Here a group on
+/// the fixture's session holds chunk 0 of a close (a decode-token proof the court refuses), and the block carries the completing
+/// chunk three times and then the honest root claim, which spends the slot by itself.
+///
+/// * Below the fence (AC-SLOT, unchanged): the three refused completions spend nothing; the honest root claim is carried.
+/// * Past it: the first refused completion spends the slot; the two copies behind it are dropped BEFORE their adjudication, and so is
+///   the root claim — the block's one court adjudication was the refused completion's. The block stands either way.
+/// * A root claim the fold refuses (AC-SLOT's junk copy) still spends nothing past the fence: only completions are charged on attempt.
+#[tokio::test]
+async fn l_court_01_a_refused_split_close_completion_spends_the_slot_past_the_fence() {
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwConsensusObjectV2 as Obj, PalwCourtCloseGroupV2, PalwCourtSideV1, PalwCourtVerdictV2, PalwStateCarriageV2,
+        palw_court_close_chunk_digest_v1, palw_court_close_completes_a_group_v1,
+    };
+    for armed in [false, true] {
+        let f = ac_slot_fixture_with(armed);
+        let vp = f.ctx.consensus.virtual_processor();
+        let point = ac_slot_point(f.daa);
+        let Obj::CourtAttnRootClaimed { binding, .. } = &f.honest else { unreachable!() };
+        let close = Obj::CourtClosed {
+            session_id: f.sid,
+            verdict: PalwCourtVerdictV2::ExecutorGuilty,
+            proof: kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::DecodeToken {
+                binding: (**binding).clone(),
+                pin: kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: vec![], generated_token_ids: vec![] },
+                position: 0,
+            },
+        };
+        let bytes = borsh::to_vec(&close).unwrap();
+        let (head, tail) = bytes.split_at(bytes.len() / 2);
+        let mut carriage = PalwStateCarriageV2::from_state(&f.state);
+        let declarer = carriage.claims.get(&f.claim).expect("the drill's claim").bond;
+        carriage.court_close_groups.insert(
+            (f.sid, PalwCourtSideV1::Executor),
+            PalwCourtCloseGroupV2 {
+                declarer,
+                count: 2,
+                chunk_digests: vec![palw_court_close_chunk_digest_v1(head), palw_court_close_chunk_digest_v1(tail)],
+                close_digest: palw_court_close_chunk_digest_v1(&bytes),
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                declared_daa: f.daa,
+                assembly_deadline_daa: f.daa + 8,
+                present: 1,
+                deposit_outpoint: Default::default(),
+                deposit: 0,
+                chunks: [(0u8, head.to_vec())].into_iter().collect(),
+            },
+        );
+        let state = carriage.into_state(&f.params, None).expect("the fixture with a half-assembled close loads");
+        let completing = Obj::CourtCloseChunk { session_id: f.sid, side: PalwCourtSideV1::Executor, index: 1, bytes: tail.to_vec() };
+        assert!(palw_court_close_completes_a_group_v1(&state, &completing), "the tail completes the group on its face");
+        let why = vp
+            .palw_v2_validate_objects(&state, &f.params, &point, std::slice::from_ref(&completing))
+            .expect_err("the assembled close does not adjudicate");
+        eprintln!("L-COURT-01 (armed = {armed}): the completion is refused by the acceptance layer: {why}");
+
+        // Control: the honest root claim alone is carried on this state.
+        let alone = vp.palw_v2_accepted_objects_for_tests(&state, &f.params, &point, vec![f.honest.clone()], point.block);
+        assert_eq!(alone, vec![f.honest.clone()], "control: the honest root claim is carried");
+
+        let carried = vp.palw_v2_accepted_objects_for_tests(
+            &state,
+            &f.params,
+            &point,
+            vec![completing.clone(), completing.clone(), completing.clone(), f.honest.clone()],
+            point.block,
+        );
+        if armed {
+            assert!(
+                carried.is_empty(),
+                "past the fence the refused completion spent the block's one court slot; its copies and the root claim are dropped"
+            );
+        } else {
+            assert_eq!(carried, vec![f.honest.clone()], "below the fence AC-SLOT is unchanged: a refused completion spends nothing");
+        }
+        // AC-SLOT's own property holds on both sides: a root claim the FOLD refuses spends nothing.
+        let carried = vp.palw_v2_accepted_objects_for_tests(&state, &f.params, &point, vec![f.junk.clone(), f.honest.clone()], point.block);
+        assert_eq!(carried, vec![f.honest.clone()], "armed = {armed}: a fold-refused root claim still spends no slot");
+    }
 }
 
 /// **AC-SLOT, to the rung deadline: a replayed signature cannot crowd the filer into a conviction.**

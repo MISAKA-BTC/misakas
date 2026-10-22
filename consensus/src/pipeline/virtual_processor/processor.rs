@@ -857,6 +857,8 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The liveness fix L-COURT-01's fence, resolved once in [`Self::palw_court_completion_attempt_at`].
+    pub(super) palw_court_completion_attempt: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit DEEP fence (B-1/C-01/B-4/court cluster), resolved once in
     /// [`Self::palw_audit_2026_09_11_deep_at`]; the fold's extras read it there. A later flag day
     /// than the shallow fence above.
@@ -1539,6 +1541,9 @@ impl VirtualStateProcessor {
             palw_fp_constraint_v2: params.palw_fp_constraint_v2_fence(),
             palw_fp_tokenizer_match: params.palw_fp_tokenizer_match_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
+            palw_court_completion_attempt: params
+                .palw_court_completion_attempt_v1
+                .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),

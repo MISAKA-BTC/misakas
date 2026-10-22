@@ -3302,6 +3302,14 @@ pub struct Params {
     /// per bond, the producer's own excluded, and the seed is their aggregate. Replaces lane A's privilege; claims anchored below
     /// keep lane A. **Dormant** exactly like [`Self::palw_dag_sibling_attribution_v1`].
     pub palw_panel_anchor_permissionless_v1: Option<ForkActivation>,
+    /// **palw_court_completion_attempt_v1** — liveness fix L-COURT-01 (the acceptance walk, `palw_v2_accepted_objects_and_refunds_inner`): past it (the
+    /// ACCEPTING block's DAA) a split-close (or owned-terminal) completion the acceptance walk ATTEMPTS — assembled, decoded and
+    /// adjudicated — spends the block's court slot (or its court cost) whether it applies or is refused, so one block cannot ask every
+    /// validator for an unbounded number of refused 2.7 MB adjudications. Below it the 2026-09-11 audit's AC-SLOT rule (charged only on
+    /// apply) is unchanged; other slot-spending moves keep AC-SLOT on both sides. **Dormant**: `None` on every preset, on the
+    /// full-activation list (after the court capacity entry), Some-only in both fingerprints, collapsed from `Some(never())`; needs
+    /// `palw_audit_2026_09_11` at or below it ([`Self::validate_palw_court_completion_attempt_v1`]).
+    pub palw_court_completion_attempt_v1: Option<ForkActivation>,
     /// **palw_rule_e_participation_v2** — RFC-0018 §6: past it (the INCUMBENT's DAA, as rule E) rule E's participation is the
     /// capital, in the common past, of the distinct bonds with a non-voided, Gate-C-certified attempt in a side's exclusive past
     /// (split-neutral, bounded by the bond's collateral), and the even split is a third of the common capital. Needs
@@ -6279,6 +6287,7 @@ impl Params {
             palw_detection_policy_v1: self.palw_detection_policy_v1.clone(),
             palw_dag_sibling_attribution_v1: self.palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1: self.palw_panel_anchor_permissionless_v1,
+            palw_court_completion_attempt_v1: self.palw_court_completion_attempt_v1,
             palw_rule_e_participation_v2: self.palw_rule_e_participation_v2,
             palw_independently_work_certified_v1: self.palw_independently_work_certified_v1,
             palw_dag_width_schedule_v1: self.palw_dag_width_schedule_v1,
@@ -7451,6 +7460,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
+    palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
     palw_dag_width_schedule_v1: None,
@@ -7819,6 +7829,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
+    palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
     palw_dag_width_schedule_v1: None,
@@ -8169,6 +8180,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
+    palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
     palw_dag_width_schedule_v1: None,
@@ -13722,6 +13734,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
+    palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
     palw_dag_width_schedule_v1: None,
