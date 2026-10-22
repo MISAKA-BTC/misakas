@@ -2668,7 +2668,7 @@ async fn palw_v2_an_unbonded_merged_blue_is_not_paid() {
 
     // Honest chain: nothing is withheld. A filter that dropped an honest miner's subsidy would be
     // a worse bug than the one it closes.
-    let unentitled = vp.palw_v2_unentitled_blues(&parent_state, &ghostdag_data, &non_daa, &point);
+    let unentitled = vp.palw_v2_unentitled_blues_checked_v1(&parent_state, &ghostdag_data, &non_daa, &point).expect("the merged pay set resolves");
     assert!(unentitled.is_empty(), "every blue of an honest V2 chain is bonded and paid, got {unentitled:?}");
 
     // And the predicate really separates: the same attempt, naming a bond this chain does not hold.
@@ -3195,7 +3195,7 @@ async fn palw_v2_a_merged_blocks_carve_is_withheld_and_escrowed_past_the_deep_fe
     };
 
     // The withhold map the sink's coinbase used, recomputed from the same selected-parent state.
-    let withheld = vp.palw_v2_merged_escrow_withheld(&parent_state, &ghostdag_data, &non_daa, &point);
+    let withheld = vp.palw_v2_merged_escrow_withheld_checked_v1(&parent_state, &ghostdag_data, &non_daa, &point).expect("the merged pay set resolves");
     assert!(!withheld.is_empty(), "past the fence, a merged attempt's carve is withheld — otherwise this proves nothing");
     for (blue, carve) in &withheld {
         assert!(*carve > 0, "the withheld carve is the merged block's worker share, non-zero");
@@ -14508,7 +14508,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
     //      produces a spend the pay set accepts. If this failed, an empty result below would be
     //      "both rejected", not "both paid". ----
     let gd_one = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![r1]), anticone());
-    let unentitled_one = vp.palw_v2_unentitled_blues(&injected, &gd_one, &non_daa, &point);
+    let unentitled_one = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_one, &non_daa, &point).expect("the merged pay set resolves");
     assert!(
         unentitled_one.is_empty(),
         "positive control: one valid receipt spend must be entitled (paid), so the fixture really produces a valid spend; \
@@ -14517,7 +14517,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
 
     // ---- The finding: TWO siblings spending ONE quantum in one mergeset. ----
     let gd = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![r1, r2]), anticone());
-    let unentitled = vp.palw_v2_unentitled_blues(&injected, &gd, &non_daa, &point);
+    let unentitled = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd, &non_daa, &point).expect("the merged pay set resolves");
 
     // Concrete effect: BOTH receipt siblings are paid (neither marked unentitled).
     let both_paid = !unentitled.contains(&r1) && !unentitled.contains(&r2);
@@ -14813,7 +14813,7 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     // Positive control: ONE valid V4 spend, as a merged red, is entitled — and the payout map names the executor bond's registered payout
     // (`0x9A11`, derived to a script) and the authorization's fee, so the coinbase splits it.
     let gd_one = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a]), anticone());
-    let unentitled_one = vp.palw_v2_unentitled_blues(&injected, &gd_one, &non_daa, &point);
+    let unentitled_one = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_one, &non_daa, &point).expect("the merged pay set resolves");
     assert!(unentitled_one.is_empty(), "positive control: a valid V4 spend is entitled; got unentitled={unentitled_one:?}");
     let payouts = vp.palw_v2_receipt_v4_payouts(&injected, &gd_one, &non_daa, &unentitled_one);
     let expected_script = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_miner_script(&h64(0x9A11));
@@ -14825,7 +14825,7 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     // Two V4 siblings of ONE quantum: exactly one is entitled, and only that one has a payout entry (B-5's dedup runs on the fold view).
     let gd_two =
         GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a, v4_b]), anticone());
-    let unentitled_two = vp.palw_v2_unentitled_blues(&injected, &gd_two, &non_daa, &point);
+    let unentitled_two = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_two, &non_daa, &point).expect("the merged pay set resolves");
     assert_eq!(unentitled_two.len(), 1, "one quantum, two V4 siblings: paid once");
     assert!(unentitled_two.contains(&v4_b) && !unentitled_two.contains(&v4_a), "the first in acceptance order wins");
     let payouts_two = vp.palw_v2_receipt_v4_payouts(&injected, &gd_two, &non_daa, &unentitled_two);
@@ -14834,7 +14834,7 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     // A V3 and a V4 spend of the SAME quantum are the same double spend: paid once, whichever is first.
     let gd_mixed =
         GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v3_hash, v4_a]), anticone());
-    let unentitled_mixed = vp.palw_v2_unentitled_blues(&injected, &gd_mixed, &non_daa, &point);
+    let unentitled_mixed = vp.palw_v2_unentitled_blues_checked_v1(&injected, &gd_mixed, &non_daa, &point).expect("the merged pay set resolves");
     assert_eq!(unentitled_mixed.len(), 1, "V3 and V4 share one spent-quantum ledger: paid once");
     assert!(unentitled_mixed.contains(&v4_a));
     let payouts_mixed = vp.palw_v2_receipt_v4_payouts(&injected, &gd_mixed, &non_daa, &unentitled_mixed);
@@ -16589,7 +16589,7 @@ async fn adr0126_a_palw_chain_crosses_the_overlay_carve() {
 
         // The escrows its coinbase withholds for the merged blocks it did not select, sized from the
         // record its fold escrowed from.
-        let merged_withheld = vp.palw_v2_merged_escrow_withheld(&state_before, &ghostdag, &non_daa, &point);
+        let merged_withheld = vp.palw_v2_merged_escrow_withheld_checked_v1(&state_before, &ghostdag, &non_daa, &point).expect("the merged pay set resolves");
         for (merged, carve) in &merged_withheld {
             let merged_daa = vp.headers_store.get_daa_score(*merged).unwrap();
             let subsidy = vp.coinbase_manager.calc_block_subsidy(merged_daa) as u128;

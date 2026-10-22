@@ -266,6 +266,44 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwLifecycleKindFenceV1::CourtModelScopeV1 => params.palw_court_model_scope_v1 = Some(at),
             // RFC-0024 (tags 201-204): the bounded door.
             PalwLifecycleKindFenceV1::TirBoundedDoorV1 => params.palw_tir_bounded_door_v1 = Some(at),
+            // Selected-source bootstrap (aux 148). Public validation still refuses activation; this arm only
+            // makes the kind fence exhaustive for the harness, which already expects that refusal.
+            PalwLifecycleKindFenceV1::SelectedSourceBootstrapV1 => {
+                let base = at.daa_score();
+                let h = |n: u8| kaspa_consensus_core::Hash64::from_bytes([n; 64]);
+                params.palw_selected_source_bootstrap_v1 =
+                    Some(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1 {
+                        at,
+                        policy: kaspa_consensus_core::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1 {
+                            version: 1,
+                            chain_genesis: h(3),
+                            network: h(4),
+                            ruleset: h(5),
+                            epoch: 1,
+                            freeze_cutoff_daa: base,
+                            anchor_cutoff_daa: base + 1,
+                            starts_at_daa: base + 2,
+                            ends_at_daa: base + 3,
+                            stake_release_daa: base + 4,
+                            selection: misaka_palw_challenge::bootstrap_epoch_v1::BootstrapPolicyV1 {
+                                version: 1,
+                                seats: 2,
+                                quorum: 2,
+                                maximum_population: 2,
+                                maximum_draw_attempts: 2,
+                                maximum_source_works: 2,
+                            },
+                            source_profile: h(6),
+                            checker_scope: h(7),
+                            maximum_claim_bytes: 100,
+                            maximum_check_work: 100,
+                            maximum_history_headers: 100,
+                            security_review: h(8),
+                            economic_review: h(9),
+                        },
+                    });
+                params.sync_palw_selected_source_bootstrap_v1();
+            }
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {

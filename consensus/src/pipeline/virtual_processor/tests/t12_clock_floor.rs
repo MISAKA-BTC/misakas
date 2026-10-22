@@ -1409,3 +1409,39 @@ async fn t12_validation_clock_preserves_the_lead_cap_and_retry() {
     assert_eq!(admitted.header.hash, hash);
     assert_eq!(daa_of(&ctx, hash), daa_of(&ctx, holder.header.hash) + 1, "and it ticks the clock");
 }
+
+/// The unarmed public target: heartbeats on shipped testnet-12, stamped on the 120 s recovery
+/// cadence from genesis, keep being accepted after DAA 16_000. The activation height stays unset.
+/// `PALW_DRILL_DAA` overrides the stop for a short timing run.
+#[tokio::test]
+async fn t12_unarmed_chain_advances_past_daa_16000() {
+    kaspa_core::log::try_init_logger("warn");
+    let (mut ctx, _config) = t12_clock(true);
+    assert_eq!(
+        kaspa_consensus_core::config::params::PALW_T12_FULL_ACTIVATION_DAA,
+        None,
+        "this run is the unarmed ruleset"
+    );
+    let stop = std::env::var("PALW_DRILL_DAA").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(16_001);
+    let started = std::time::Instant::now();
+    let mut nonce = 1u64;
+    let mut daa = daa_of(&ctx, ctx.consensus.get_sink());
+    let mut marked = 0u64;
+    while daa < stop {
+        let block = honest_slot(&mut ctx, nonce).await;
+        nonce = nonce.saturating_add(4);
+        daa = daa_of(&ctx, block.header.hash);
+        let bucket = daa / 500;
+        if bucket != marked {
+            marked = bucket;
+            eprintln!("t12 unarmed drill daa {daa} after {:?}", started.elapsed());
+        }
+    }
+    assert!(daa >= stop, "virtual DAA {daa} did not reach {stop}");
+    assert_eq!(
+        ctx.consensus.block_status(ctx.consensus.get_sink()),
+        BlockStatus::StatusUTXOValid,
+        "the block past the public target is accepted"
+    );
+    eprintln!("t12 unarmed drill reached daa {daa} in {:?}", started.elapsed());
+}

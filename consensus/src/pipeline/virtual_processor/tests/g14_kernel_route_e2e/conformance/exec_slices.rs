@@ -254,7 +254,7 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     // PAV3 prices the custody-bound execution (session, consent, roster; never signatures), so the lottery is drawn over the
     // provisional envelope before any provider is asked.
     let ready_for = |attempt: &PalwAttemptUnsignedV2| {
-        session.as_ref().map(|row| native_ready(row, attempt, anchor, &run))
+        session.as_ref().and_then(|row| row.as_ref()).map(|row| native_ready(row, attempt, anchor, &run))
     };
     let mut wins = |draw: u64| {
         attempt.trace_root = Hash64::from_u64_word((nonce << 32) ^ draw ^ 0x7B00_0000_0000_0000);
