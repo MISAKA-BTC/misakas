@@ -191,6 +191,7 @@ impl PalwStateParamsV2 {
             reward_liability_horizon_from_daa: None,
             court_outsider_lane_from_daa: None,
             kernel_route_panel_one_from_daa: None,
+            court_clock_v2_from_daa: None,
             cell_coverage_closure_from_daa: None,
             memory_routing_court_from_daa: None,
             class_registration_origin_from_daa: None,
@@ -731,6 +732,18 @@ impl PalwStateParamsV2 {
     /// `Params::palw_court_outsider_lane_v1`'s height, if armed (the mirror).
     pub fn court_outsider_lane_from_daa(&self) -> Option<u64> {
         self.court_outsider_lane_from_daa
+    }
+
+    /// **G14 U06/U07 court clock v2 mirror** (`Params::palw_court_clock_v2`), written by `Params::sync_palw_g14_gates_v1` (and by
+    /// fixtures).
+    pub fn with_court_clock_v2_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.court_clock_v2_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_court_clock_v2`'s height, if armed (the mirror).
+    pub fn court_clock_v2_from_daa(&self) -> Option<u64> {
+        self.court_clock_v2_from_daa
     }
 
     /// Is the G14 F03 outsider court lane / owner reclamation in force at `daa_score`? `false` on every shipped preset.
