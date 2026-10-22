@@ -603,6 +603,28 @@ pub fn check_eval_dissect_bottom_v1(
     }
 }
 
+/// **RFC-0024 A: [`check_eval_dissect_bottom_v1`] over the one position a checked position round named.**
+pub fn check_eval_dissect_position_bottom_v1(
+    phase: &crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+    narrowing: &crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1,
+    bottom: &PalwEvalConeCloseV1,
+    facts: &PalwEvalClaimFactsV1<'_>,
+    narrowed: u64,
+    limits: &misaka_palw_tir::demand::DemandLimits,
+) -> PalwEvalCloseOutcomeV1 {
+    use crate::palw_gen_court_v1::{PalwGenParamsV1, PalwGenVerdictV1, palw_gen_check_dissect_position_bottom_with_v1};
+    if narrowed != phase.leaf_index() {
+        return Err(PalwEvalCourtErrorV1::NotTheNarrowedLeaf { opened: phase.leaf_index(), narrowed });
+    }
+    let (v, close, params) = open_eval_cone_close_v1(bottom, facts, Some(narrowed))?;
+    match palw_gen_check_dissect_position_bottom_with_v1(&v.case(), &close, phase, narrowing, PalwGenParamsV1::Authenticated(&params), limits)
+        .map_err(PalwEvalCourtErrorV1::Refused)?
+    {
+        PalwGenVerdictV1::Acquitted => Ok(None),
+        PalwGenVerdictV1::Convicted { fault, .. } => Ok(Some(fault)),
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // An executor's evidence: every court move built from its own run
 // ---------------------------------------------------------------------------------------------

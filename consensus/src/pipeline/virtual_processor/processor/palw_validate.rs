@@ -91,6 +91,10 @@ impl VirtualStateProcessor {
                 | Obj::MemoryRoutingV2 { .. }
                 | Obj::TirDesignatedEventV1 { .. }
                 | Obj::SeatReadinessRootV1 { .. }
+                | Obj::TirPositionDissectedV2 { .. }
+                | Obj::TirPositionClosedV2 { .. }
+                | Obj::TirLookaheadDisclosedV2 { .. }
+                | Obj::TirLookaheadChosenV2 { .. }
                 | Obj::ShardCourtAccused { .. }
                 | Obj::CheckpointAccused { .. }
                 | Obj::DefaultAccusedTirStep { .. }

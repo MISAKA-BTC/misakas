@@ -7587,6 +7587,29 @@ pub enum PalwConsensusObjectV2 {
         root: crate::palw_court_model_scope_routes_v1::readiness_root::SeatReadinessRootV1,
         signature: Vec<u8>,
     } = 230,
+    /// **(tag 201) RFC-0024 §4 `PositionDissectionV2`**: the responder's signed position round over the terminal tile
+    /// (`crate::palw_tir_position_terminal_v2`). Dormant behind `palw_tir_bounded_door_v1` (below it the live build's
+    /// undecodable payload, A-2). Folds no state: the round is re-checked inside the close that names a position.
+    TirPositionDissectedV2 {
+        dissection: Box<crate::palw_tir_position_terminal_v2::PalwTirPositionDissectionV2>,
+        signature: Vec<u8>,
+    } = 201,
+    /// **(tag 202) RFC-0024 §4 `PositionCloseV2`**: a court close graded over ONE history position, adjudicated by
+    /// `palw_court_v2::adjudicate_tir_position_close_v2` and applied through the `CourtClosed` arm. Dormant behind
+    /// `palw_tir_bounded_door_v1`.
+    TirPositionClosedV2 {
+        close: Box<crate::palw_tir_position_terminal_v2::PalwTirPositionCloseV2>,
+    } = 202,
+    /// **(tag 203) RFC-0024 §5 `LookaheadDisclosureV2`**: the responder's depth-2 disclosure; folds as the phase's
+    /// round (its level-1 reconstruction). Dormant behind `palw_tir_bounded_door_v1`.
+    TirLookaheadDisclosedV2 {
+        body: Box<crate::palw_tir_position_terminal_v2::PalwTirLookaheadDisclosedV2>,
+    } = 203,
+    /// **(tag 204) RFC-0024 §5 `ChoicePathV2`**: the challenger's one path over the pending lookahead (up to two
+    /// children). Dormant behind `palw_tir_bounded_door_v1`.
+    TirLookaheadChosenV2 {
+        body: Box<crate::palw_tir_position_terminal_v2::PalwTirLookaheadChosenV2>,
+    } = 204,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -18956,6 +18979,8 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
             builder.extras.staged_public_court.is_some() && builder.extras.staged_float_constraint_active
         }
         K::Fence(F::TirContainerIdentityV1) => builder.extras.tir_container_identity_active,
+        // RFC-0024 (tags 201-204): the bounded door's mirror at this block.
+        K::Fence(F::TirBoundedDoorV1) => builder.extras.tir_bounded_door_active,
     }
 }
 
@@ -20208,6 +20233,9 @@ pub struct PalwTransitionExtrasV1 {
     /// `palw_tir_designated_answers_v1` at this block (ADR-0191 step B): a tag-245 event folds into the designated registry.
     /// `false` by `Default` and below the fence (every shipped preset). The processor sets it from `palw_tir_designated_answers_v1`.
     pub tir_designated_answers_active: bool,
+    /// RFC-0024 §4 / §5: `palw_tir_bounded_door_v1` in force at this block — the position terminal and lookahead moves
+    /// (tags 201-204) fold only where it is. False on every preset (a strict no-op, as tag 245 below its fence).
+    pub tir_bounded_door_active: bool,
     /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
     /// admitted with the rooted f32 row court. False below it: refused.
     pub staged_float_constraint_active: bool,

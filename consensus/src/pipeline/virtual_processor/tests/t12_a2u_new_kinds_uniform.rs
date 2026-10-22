@@ -264,6 +264,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwLifecycleKindFenceV1::TirDesignatedAnswersV1 => params.palw_tir_designated_answers_v1 = Some(at),
             // R-D2-READY (tag 230): D2's fence. Its mirror on the state params comes from `sync_palw_2026_10_12_ruling_fences_v1`.
             PalwLifecycleKindFenceV1::CourtModelScopeV1 => params.palw_court_model_scope_v1 = Some(at),
+            // RFC-0024 (tags 201-204): the bounded door.
+            PalwLifecycleKindFenceV1::TirBoundedDoorV1 => params.palw_tir_bounded_door_v1 = Some(at),
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {

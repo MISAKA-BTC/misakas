@@ -580,6 +580,32 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             if signature.is_empty() { return Err("a readiness root must carry its seat's signature"); }
             Ok(())
         }
+        // RFC-0024 (tags 201-204): signed court moves; the signature's presence and, for a close, the existing close-byte ceiling
+        // here. Binding, budget, adjudication and the lookahead bound are the fence-gated acceptance layer's and the fold's.
+        PalwConsensusObjectV2::TirPositionDissectedV2 { signature, .. } => {
+            if signature.is_empty() { return Err("a position round must carry its responder's signature"); }
+            Ok(())
+        }
+        PalwConsensusObjectV2::TirPositionClosedV2 { close } => {
+            if close.responder_signature.is_empty() || close.challenger_signature.is_empty() {
+                return Err("a position close must carry both movers' signatures");
+            }
+            if !close.proof.is_dissection_bottom_v1() || matches!(close.proof, crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { .. }) {
+                return Err("a position close carries a TIR, generative or evaluation dissection bottom");
+            }
+            if crate::palw_tir_position_terminal_v2::palw_tir_position_witness_bytes_v2(close) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("a position close exceeds the existing close-byte ceiling");
+            }
+            Ok(())
+        }
+        PalwConsensusObjectV2::TirLookaheadDisclosedV2 { body } => {
+            if body.signature.is_empty() { return Err("a lookahead must carry its responder's signature"); }
+            Ok(())
+        }
+        PalwConsensusObjectV2::TirLookaheadChosenV2 { body } => {
+            if body.signature.is_empty() { return Err("a choice path must carry its challenger's signature"); }
+            Ok(())
+        }
         // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
         // registrant and by the bond, checked at acceptance against their registered keys — and
         // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
@@ -1214,11 +1240,13 @@ pub enum PalwLifecycleKindFenceV1 {
     TirDesignatedAnswersV1 = 18,
     /// `Params::palw_court_model_scope_v1` — D2 (ADR-0188 B / ADR-0200 C1): the seat readiness root (tag 230). Local slot (not wire).
     CourtModelScopeV1 = 19,
+    /// `Params::palw_tir_bounded_door_v1` — RFC-0024 §4/§5's position terminal and lookahead moves (tags 201-204). Local slot (not wire).
+    TirBoundedDoorV1 = 20,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1239,6 +1267,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::TirContainerIdentityV1,
         Self::TirDesignatedAnswersV1,
         Self::CourtModelScopeV1,
+        Self::TirBoundedDoorV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1264,6 +1293,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::TirContainerIdentityV1 => "palw_tir_container_identity_v1",
             Self::TirDesignatedAnswersV1 => "palw_tir_designated_answers_v1",
             Self::CourtModelScopeV1 => "palw_court_model_scope_v1",
+            Self::TirBoundedDoorV1 => "palw_tir_bounded_door_v1",
         }
     }
 }
@@ -1492,6 +1522,11 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::TirDesignatedEventV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirDesignatedAnswersV1),
         // R-D2-READY (ADR-0188 B): the seat readiness root (tag 230), dormant behind D2's fence.
         O::SeatReadinessRootV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtModelScopeV1),
+        // RFC-0024 §4/§5 (lane r5-p2-terminal): the position terminal and the lookahead moves (tags 201-204).
+        O::TirPositionDissectedV2 { .. }
+        | O::TirPositionClosedV2 { .. }
+        | O::TirLookaheadDisclosedV2 { .. }
+        | O::TirLookaheadChosenV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirBoundedDoorV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
@@ -1647,6 +1682,10 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (244, "MemoryRoutingV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (245, "TirDesignatedEventV1", PalwLifecycleKindFenceV1::TirDesignatedAnswersV1),
     (230, "SeatReadinessRootV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
+    (201, "TirPositionDissectedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
+    (202, "TirPositionClosedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
+    (203, "TirLookaheadDisclosedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
+    (204, "TirLookaheadChosenV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (170, "TirPublicControlV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
@@ -1753,6 +1792,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::TirContainerIdentityV1 => self.palw_tir_container_identity_v1_fence(),
                     PalwLifecycleKindFenceV1::TirDesignatedAnswersV1 => self.palw_tir_designated_answers_v1_fence(),
                     PalwLifecycleKindFenceV1::CourtModelScopeV1 => self.palw_court_model_scope_v1,
+                    PalwLifecycleKindFenceV1::TirBoundedDoorV1 => self.palw_tir_bounded_door_v1_fence(),
                 },
             )
         })
@@ -2346,6 +2386,13 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::ObjectTags { lo: 244, hi: 244 },
         "palw_memory_routing_court_v2",
         "RFC06 router binding and checkpoint/routed accusations (consumer v2)",
+        true,
+    ),
+    // RFC-0024 §4/§5 (lane r5-p2-terminal, 2026-10-22): position round 201, position close 202, lookahead 203, choice path 204.
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 201, hi: 204 },
+        "palw_tir_bounded_door_v1",
+        "RFC-0024 position terminal and lookahead moves (dormant; witness and frontier bounds unadopted)",
         true,
     ),
     a2_row(
@@ -3039,6 +3086,8 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // d2-x3-finish) as THE tag for that kind: no other allocation row uses 230, and the kind is dormant behind `palw_court_model_scope_v1`.
     // 2026-10-22 (lane d2-finish): landed as `SeatReadinessRootV1` (ADR-0188 B codec, A-2 kind row, fence-gated validation/fold).
     (230, 230, "D2 seat readiness root", &["palw_court_model_scope_v1"]),
+    // 201-204: lowest unused tags above 200 (lane r5-p2-terminal, 2026-10-22) — RFC-0024 §4/§5's versioned court moves.
+    (201, 204, "RFC-0024 position terminal and lookahead", &["palw_tir_bounded_door_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
     (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
     // 244: the RFC06 GDN/router lane's allocation (2026-10-15; moved from 170, which G14's public conviction took first on integ)
@@ -5352,6 +5401,12 @@ pub(crate) mod tests {
             // by `scripts/drills/a2u_new_kind_wire_pins.py` (lane d2-finish, 2026-10-22); the Rust test stays the authority.
             // (Tags 245 and 175 were already unpinned at the lane base 8b036ed38 — not this lane's rows.)
             (230, 0x9cfea943bbe78428),
+            // RFC-0024 §4/§5 (tags 201-204, lane r5-p2-terminal), owned by `palw_tir_bounded_door_v1`. Derived without a build by
+            // `scripts/drills/a2u_new_kind_wire_pins.py` (2026-10-22); the Rust test stays the authority.
+            (201, 0xf42a9ee61f5d6def),
+            (202, 0x0621a77518b81c8d),
+            (203, 0x0710d31c2ea14fab),
+            (204, 0x15481d7f346cf561),
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),

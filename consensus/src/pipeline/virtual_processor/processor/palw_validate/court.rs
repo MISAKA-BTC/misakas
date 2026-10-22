@@ -864,6 +864,84 @@ impl VirtualStateProcessor {
                         return Err("the readiness root is not signed by its seat's bond".into());
                     }
                 }
+                // RFC-0024 §4 / §5 (tags 201-204): below `palw_tir_bounded_door_v1` the dormant payload (A-2), refused by name.
+                // Past it: the mover's signature (responder: the claim's bond; challenger: the session's), the position round's
+                // binding to the terminal phase, and — for a close — the full adjudication, whose verdict must be the declared
+                // one (either direction is the same lie, as for `CourtClosed`). The lookahead bundle itself is checked by the fold
+                // against the adopted frontier bound (typed-missing: refused while unadopted).
+                Obj::TirPositionDissectedV2 { dissection, signature } => {
+                    if !self.palw_tir_bounded_door_v1_at(point.daa_score) {
+                        return Err("the position terminal is dormant on this network (palw_tir_bounded_door_v1)".into());
+                    }
+                    kaspa_consensus_core::palw_court_v2::check_tir_position_dissected_acceptance_v2(
+                        state,
+                        dissection,
+                        signature,
+                        &Self::verify_mldsa87_with_context_bool,
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::TirPositionClosedV2 { close } => {
+                    if !self.palw_tir_bounded_door_v1_at(point.daa_score) {
+                        return Err("the position close is dormant on this network (palw_tir_bounded_door_v1)".into());
+                    }
+                    if close.proof.is_tir_v1() && !self.palw_tir_at(point.daa_score) {
+                        return Err("a TIR position close is refused: palw_tir_v1 is not in force at this block".into());
+                    }
+                    if close.proof.is_gen_v1() && !self.palw_gen_at(point.daa_score) {
+                        return Err("a generative position close is refused: palw_gen_v1 is not in force at this block".into());
+                    }
+                    if close.proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score) {
+                        return Err("an evaluation position close is refused: palw_improvement_v1 is not in force at this block".into());
+                    }
+                    kaspa_consensus_core::palw_court_v2::check_tir_position_close_signatures_v2(
+                        state,
+                        close,
+                        Self::verify_mldsa87_with_context_bool,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a position close on a network with no V2 court parameters".to_string())?;
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_tir_position_close_v2(
+                        state,
+                        close,
+                        court,
+                        self.palw_court_step_ladder_at(point.daa_score, court),
+                        self.palw_prompt_ids_form_at(point.daa_score),
+                        kaspa_consensus_core::palw_tir_position_terminal_v2::PALW_TIR_POSITION_WITNESS_BUDGET_V2,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    if derived != close.verdict {
+                        return Err(format!(
+                            "position close {} declares {:?}; its own proof adjudicates {derived:?}",
+                            close.session_id, close.verdict
+                        ));
+                    }
+                }
+                Obj::TirLookaheadDisclosedV2 { body } => {
+                    if !self.palw_tir_bounded_door_v1_at(point.daa_score) {
+                        return Err("the lookahead disclosure is dormant on this network (palw_tir_bounded_door_v1)".into());
+                    }
+                    kaspa_consensus_core::palw_court_v2::check_tir_lookahead_disclosed_acceptance_v2(
+                        state,
+                        body,
+                        Self::verify_mldsa87_with_context_bool,
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::TirLookaheadChosenV2 { body } => {
+                    if !self.palw_tir_bounded_door_v1_at(point.daa_score) {
+                        return Err("the lookahead choice path is dormant on this network (palw_tir_bounded_door_v1)".into());
+                    }
+                    kaspa_consensus_core::palw_court_v2::check_tir_lookahead_chosen_acceptance_v2(
+                        state,
+                        body,
+                        Self::verify_mldsa87_with_context_bool,
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
                 Obj::MemoryRoutingV2 { object } => {
                     use kaspa_consensus_core::palw_memory_routing_v2 as mr;
                     if !self.palw_memory_routing_court_v2_at(point.daa_score) {

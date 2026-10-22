@@ -121,6 +121,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::TirDesignatedEventV1 { .. } => false,
         // R-D2-READY (tag 230): seat readiness, not an H-1 obligation.
         O::SeatReadinessRootV1 { .. } => false,
+        // RFC-0024 (tags 201-204): the position terminal and lookahead are court moves, like tags 64-66.
+        O::TirPositionDissectedV2 { .. } | O::TirPositionClosedV2 { .. } | O::TirLookaheadDisclosedV2 { .. } | O::TirLookaheadChosenV2 { .. } => true,
         // RFC-0002 Phase F (tag 62): the IR one-move accusation, a court opening like the one above.
         O::TirShardCourtAccused { .. } => true,
         // RFC-0003 §I.4.7: the generative one-move accusation, a court opening too.
