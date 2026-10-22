@@ -668,6 +668,7 @@ pub mod palw_g14_gates_v1;
 /// Court capacity (audit G-07, user direction 2026-10-16): court admission through the LG14-A reservation, a deterministic per-block
 /// court budget, time-priced occupancy and a deadline-aware queue. Dormant behind `palw_court_capacity_v1` on every preset.
 pub mod palw_court_capacity_v1;
+pub mod palw_court_paid_ingress_v1;
 pub mod palw_unresolved_bound_v1;
 pub mod palw_claim_local_v1;
 /// Panel collateral (audit G-13's capacity, user direction 2026-10-16): Active and Resolved liability on one bond, `R_new`, and the

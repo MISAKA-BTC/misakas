@@ -580,6 +580,19 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             if signature.is_empty() { return Err("a readiness root must carry its seat's signature"); }
             Ok(())
         }
+        // RFC-0032 A material intake (tag 255): signed, and a Part inside the one-part bound. Authentication against the original,
+        // the per-target bound and the per-submitter budget are the fold's (`material_intake`).
+        PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
+            if intake.signature.is_empty() {
+                return Err("a material intake step must carry its submitter's signature");
+            }
+            if let crate::palw_court_shared_material_intake_v1::MaterialActionV1::Part { bytes, .. } = &intake.action
+                && (bytes.is_empty() || bytes.len() > crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1)
+            {
+                return Err("a material part is empty or exceeds the one-part bound");
+            }
+            Ok(())
+        }
         // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
         // registrant and by the bond, checked at acceptance against their registered keys — and
         // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
@@ -1492,6 +1505,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::TirDesignatedEventV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirDesignatedAnswersV1),
         // R-D2-READY (ADR-0188 B): the seat readiness root (tag 230), dormant behind D2's fence.
         O::SeatReadinessRootV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtModelScopeV1),
+        // RFC-0032 A material intake (tag 255): the shared TIR court's own fence (G-10), no new fence.
+        O::MaterialIntakeV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
@@ -1647,6 +1662,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (244, "MemoryRoutingV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (245, "TirDesignatedEventV1", PalwLifecycleKindFenceV1::TirDesignatedAnswersV1),
     (230, "SeatReadinessRootV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
+    (255, "MaterialIntakeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (170, "TirPublicControlV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
@@ -5492,5 +5508,37 @@ pub(crate) mod tests {
                 listing.join("\n")
             );
         }
+    }
+
+    /// Lane r5-f03-ingress: the material-intake kind (tag 255) is owned by `palw_staged_tir_route_v1` (no new fence), encodes with
+    /// its declared tag, and its stateless shape rule refuses an unsigned step and an empty or over-wide part.
+    #[test]
+    fn r5_f03_material_intake_kind_255_is_owned_tagged_and_shaped() {
+        use crate::palw_court_shared_material_intake_v1::{MaterialActionV1, MaterialTargetV1, SignedMaterialIntakeV1};
+        use crate::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+        let step = |action: MaterialActionV1, signature: Vec<u8>| PalwConsensusObjectV2::MaterialIntakeV1 {
+            intake: Box::new(SignedMaterialIntakeV1 {
+                version: 1,
+                claim: crate::Hash64::from_u64_word(1),
+                scope_id: crate::Hash64::from_u64_word(2),
+                target: MaterialTargetV1::PromptFlat,
+                submitter: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), 0)),
+                action,
+                signature,
+            }),
+        };
+        let begin = step(MaterialActionV1::Begin { total_bytes: 8, body_hash: crate::Hash64::from_u64_word(3) }, vec![1; 4]);
+        assert_eq!(borsh::to_vec(&begin).unwrap()[0], 255, "the declared tag");
+        assert_eq!(
+            super::palw_lifecycle_kind_owner_v1(&begin),
+            super::PalwLifecycleKindOwnerV1::Fence(super::PalwLifecycleKindFenceV1::StagedTirRouteV1)
+        );
+        assert!(super::PALW_LIFECYCLE_NEW_KINDS_V1.contains(&(255, "MaterialIntakeV1", super::PalwLifecycleKindFenceV1::StagedTirRouteV1)));
+        super::palw_lifecycle_object_may_ride_v2(&begin).expect("a signed Begin rides");
+        assert!(super::palw_lifecycle_object_may_ride_v2(&step(MaterialActionV1::Finish { draft_id: Default::default() }, vec![])).is_err());
+        let part = |n: usize| step(MaterialActionV1::Part { draft_id: Default::default(), offset: 0, bytes: vec![7; n] }, vec![1; 4]);
+        super::palw_lifecycle_object_may_ride_v2(&part(16_384)).expect("one full part rides");
+        assert!(super::palw_lifecycle_object_may_ride_v2(&part(0)).is_err());
+        assert!(super::palw_lifecycle_object_may_ride_v2(&part(16_385)).is_err());
     }
 }

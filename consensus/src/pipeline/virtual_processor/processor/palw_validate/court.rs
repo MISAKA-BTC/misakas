@@ -838,6 +838,20 @@ impl VirtualStateProcessor {
                         return Err("the designated-custodian event is dormant on this network".into());
                     }
                 }
+                // RFC-0032 A material intake (tag 255, lane r5-f03-ingress). A-2: below its owning fence (`palw_staged_tir_route_v1`)
+                // the kind rides unjudged, as every build without it reads it. Past it: the submitter's registered Active bond and
+                // its ML-DSA-87 signature over the network-bound step. The material itself (exact native width, input cover,
+                // checksum, per-submitter budget) and the typed-missing storage schedule are judged by the typed fold.
+                Obj::MaterialIntakeV1 { intake } => {
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        return Ok(());
+                    }
+                    let record = state.bond(&intake.submitter).ok_or("a material intake names a bond this chain does not have")?;
+                    if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err("a material intake submitter's bond is not Active".into());
+                    }
+                    intake.verify_v1(self.palw_network_domain_v2(), &record.pubkey)?;
+                }
                 // R-D2-READY (tag 230, ADR-0188 B / ADR-0200 C1): below `palw_court_model_scope_v1` the dormant payload (A-2), refused.
                 // Past it: the ADOPTED draw cap first — unadopted (`None`), so every root is refused here; then the literal seat
                 // authority (the seat bond's ML-DSA-87 signature over the network-bound root). No ready credit or slash is granted.

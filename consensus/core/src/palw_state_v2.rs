@@ -204,9 +204,9 @@ mod palw_staged_court_fold_v1;
 mod palw_court_shared_tir_fold_v1;
 #[path = "palw_court_service_lifecycle_fold_v1.rs"]
 mod palw_court_service_lifecycle_fold_v1;
-// RFC-0032 A material intake fold (lane material-intake); no dispatcher calls it yet.
+// RFC-0032 A material intake fold (lane material-intake); dispatched from tag 255 (`MaterialIntakeV1`, lane r5-f03-ingress).
 #[path = "palw_court_shared_material_intake_fold_v1.rs"]
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))] // `expire_material_drafts` is test/sweep-only
 mod palw_court_shared_material_intake_fold_v1;
 #[path = "palw_tir_public_fold_v1.rs"]
 mod palw_tir_public_fold_v1;
@@ -7587,6 +7587,14 @@ pub enum PalwConsensusObjectV2 {
         root: crate::palw_court_model_scope_routes_v1::readiness_root::SeatReadinessRootV1,
         signature: Vec<u8>,
     } = 230,
+    /// **(tag 255, lane r5-f03-ingress): one signed material-intake step** (RFC-0032 A / ADR-0199 — non-exclusive terminal
+    /// material ingress: Begin / Part / Finish of a rooted body by any Active bond at the floor). Folded by
+    /// `palw_court_shared_material_intake_fold_v1::material_intake`. Dormant behind `palw_staged_tir_route_v1` (below it the live
+    /// build's undecodable payload, A-2) AND behind the typed-missing storage fee schedule (`material_intake_schedule_v1`): past
+    /// the fence every intake is refused until that schedule is adopted. Highest free tag, chosen to avoid the parallel wire lane.
+    MaterialIntakeV1 {
+        intake: Box<crate::palw_court_shared_material_intake_v1::SignedMaterialIntakeV1>,
+    } = 255,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -12663,8 +12671,8 @@ pub fn palw_class_admits_claim_v1(
 /// the producer's pre-check beside [`palw_class_admits_claim_v1`], so a producer does not spend an inference on a skipped attempt.
 pub use palw_court_capacity_fold_v1::{
     PALW_COURT_REFUSAL_NO_RESERVATION_V1, PALW_COURT_REFUSAL_QUEUED_V1, PALW_COURT_REFUSAL_RUNNING_V1,
-    PALW_COURT_REFUSAL_TICKET_EXPIRED_V1, PalwCourtProsecutionStepV1, palw_court_outsider_lane_followon_cap_v1,
-    palw_court_prosecution_step_v1, palw_court_refusal_waits_v1,
+    PALW_COURT_REFUSAL_TICKET_EXPIRED_V1, PalwCourtProsecutionStepV1, palw_court_ingress_claim_admits_v1, palw_court_ingress_fee_due_v1,
+    palw_court_outsider_lane_followon_cap_v1, palw_court_prosecution_step_v1, palw_court_refusal_waits_v1,
 };
 
 pub fn palw_court_claim_admission_v1(

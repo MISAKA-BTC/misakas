@@ -349,6 +349,180 @@ pub(super) fn court_outsider_lane_followons_v1(state: &PalwChainStateV2) -> u64 
     followons
 }
 
+// ---- lane r5-f03-ingress (G14 item 3): the paid public ingress and the per-claim outside reservation --------------------------
+//
+// Dormant unless `palw_court_outsider_lane_v1` is in force AND the ingress fee schedule resolves
+// (`crate::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1`, typed-missing in every non-test build). With the schedule
+// missing every function below reduces to the court-owner lane's rule above, byte for byte.
+
+/// The paid ingress's schedule at `now`: `Some` only past the outsider lane fence and with an adopted (test-injected) schedule.
+pub(super) fn court_ingress_schedule_at_v1(
+    params: &PalwStateParamsV2,
+    now: u64,
+) -> Option<crate::palw_court_paid_ingress_v1::PalwCourtIngressScheduleV1> {
+    if !params.court_outsider_lane_active_v1(now) {
+        return None;
+    }
+    crate::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1().ok()
+}
+
+/// **The once-only court ingress fee the fold burns from a session's opener at `now`** — `None` while the paid ingress is dormant
+/// (below `palw_court_outsider_lane_v1`, or the schedule typed-missing: every shipped build). For a node's filer, which pays it
+/// only when its operator opted in (`--palw-court-paid-ingress`).
+pub fn palw_court_ingress_fee_due_v1(params: &PalwStateParamsV2, now: u64) -> Option<u64> {
+    court_ingress_schedule_at_v1(params, now).map(|schedule| schedule.fee_sompi_per_session)
+}
+
+/// **In-flight claims that the ingress counts** at `now`: accepted at or past the lane fence, still in a reservable phase (not
+/// Final, not voided), hard deadline not passed. Ordered by `(accepted_daa, claim id)` — the admission order, which every node
+/// derives alike. Rooted facts only (the claim rows and the params' clock).
+fn court_ingress_inflight_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, now: u64) -> Vec<(u64, Hash64)> {
+    let Some(from) = params.court_outsider_lane_from_daa() else { return Vec::new() };
+    let w_disclose = palw_da_disclose_window_daa_v1(params);
+    let mut inflight: Vec<(u64, Hash64)> = state
+        .claims
+        .iter()
+        .filter(|(_, claim)| {
+            claim.accepted_daa >= from
+                && crate::palw_legacy_public_filer_v1::palw_dispute_phase_reservable_v1(&claim.phase, false)
+                && crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, w_disclose) >= now
+        })
+        .map(|(id, claim)| (claim.accepted_daa, *id))
+        .collect();
+    inflight.sort_unstable();
+    inflight
+}
+
+/// **The claims that hold an outside-side reservation at `now`** (ADR-0192 advance reservation): the first
+/// `R = ⌊cap / 2⌋` in-flight claims in admission order. With the admission coordinator calling
+/// [`palw_court_ingress_claim_admits_v1`] no more than `R` are ever in flight, so every admitted claim holds one.
+pub(super) fn court_ingress_reserved_claims_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, now: u64) -> Vec<Hash64> {
+    let cap = palw_max_concurrent_court_sessions_v1(params.turn_deadline_daa());
+    let mut inflight = court_ingress_inflight_v1(state, params, now);
+    inflight.truncate(crate::palw_court_paid_ingress_v1::palw_court_ingress_reserved_claims_cap_v1(cap) as usize);
+    inflight.into_iter().map(|(_, id)| id).collect()
+}
+
+/// Does `claim_id` have a running OUTSIDE-side session (opener neither its producer nor a panel seat)? That session holds the
+/// claim's reservation.
+pub(super) fn court_ingress_outside_running_v1(state: &PalwChainStateV2, claim_id: Hash64) -> bool {
+    state
+        .court_sessions
+        .values()
+        .any(|s| s.claim == claim_id && !court_outsider_lane_inside_v1(state, claim_id, &s.challenger_bond))
+}
+
+/// **The admission coordinator's call at ORIGINAL admission** (G14 item 3, court-owner risk 1): may a new claim (of `class_id`)
+/// be admitted at `now` with its outside reservation? `Ok` when the paid ingress is dormant (fence or schedule missing). Past it, a
+/// new claim is admitted only while fewer than `R = ⌊cap / 2⌋` claims are in flight — so a coalition filling the first-session
+/// room with its OWN distinct claims cannot take the target claim's reservation: each claim's reservation is its own, and the
+/// count of claims is what is bounded (the round-2 bounded-admission pattern of `palw_court_capacity_v1`, structural `R`). A
+/// refusal is `CourtClaimAdmissionFull` (no claim, no reward — liveness degrades, safety does not). A pure read of state.
+pub fn palw_court_ingress_claim_admits_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    if court_ingress_schedule_at_v1(params, now).is_none() {
+        return Ok(());
+    }
+    let cap = palw_max_concurrent_court_sessions_v1(params.turn_deadline_daa());
+    let reserved_cap = crate::palw_court_paid_ingress_v1::palw_court_ingress_reserved_claims_cap_v1(cap);
+    let admitted = court_ingress_inflight_v1(state, params, now).len() as u64;
+    if admitted >= reserved_cap {
+        return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: *class_id, bucket: 0, admitted, cap: reserved_cap });
+    }
+    Ok(())
+}
+
+/// **The concurrency cap under the paid ingress** (past the lane fence, schedule adopted). The overall cap is unchanged. A claim's
+/// FIRST outside-side session opens on its claim's own reservation (it never competes with any other session). Every other
+/// session competes for the non-reserved room `cap − #reserved claims` (a reserved claim's slot counts as taken whether or not its
+/// outside session runs), and then keeps the court-owner lane's follow-on share (`legacy_court_cap_admits_v1`).
+///
+/// Design decision (flagged): a direct evidence-carrying accusation stays exempt from the follow-on share (court-owner round 2), but
+/// NOT from the reserved room — otherwise cone accusations could fill the reserved slots and the per-claim guarantee would not hold.
+pub(super) fn paid_court_cap_admits_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: Hash64,
+    opener: PalwBondKeyV2,
+    direct_evidence: bool,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    let open_sessions = state.court_sessions.len() as u64;
+    let max_sessions = palw_max_concurrent_court_sessions_v1(params.turn_deadline_daa());
+    let at_capacity = || PalwStateV2Error::CourtSessionsAtCapacity {
+        open: open_sessions,
+        max: max_sessions,
+        turn_deadline_daa: params.turn_deadline_daa(),
+        per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+    };
+    if open_sessions >= max_sessions {
+        return Err(at_capacity());
+    }
+    let reserved = court_ingress_reserved_claims_v1(state, params, now);
+    let outside = !court_outsider_lane_inside_v1(state, claim_id, &opener);
+    if outside && reserved.contains(&claim_id) && !court_ingress_outside_running_v1(state, claim_id) {
+        // The claim's own reservation: no other session can hold it.
+        return Ok(());
+    }
+    let reserved_in_use = reserved.iter().filter(|c| court_ingress_outside_running_v1(state, **c)).count() as u64;
+    let non_reserved_open = open_sessions.saturating_sub(reserved_in_use);
+    if non_reserved_open.saturating_add(reserved.len() as u64) >= max_sessions {
+        return Err(at_capacity());
+    }
+    legacy_court_cap_admits_v1(state, params, claim_id, opener, direct_evidence, now)
+}
+
+/// **Court admission through the paid ingress** — what the session-opening sites call (`CourtOpened`, the named-leaf dissection).
+/// Below the lane fence or with the schedule missing: exactly `court_admission_v1` then, on `Legacy`, the court-owner lane's cap.
+/// Past both: the same, with [`paid_court_cap_admits_v1`] in place of the legacy cap, and the ingress fee burned ONCE from the
+/// opener — at the session's admission on the legacy path; past `palw_court_capacity_v1` when its court row is created (the
+/// deadline-aware queue then decides, queued honest prosecution first, G-07), never again when its ticket opens it. A refused
+/// admission writes nothing (the fold's object is atomic), so a refused try is never charged.
+pub(super) fn court_ingress_admission_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    opener: PalwBondKeyV2,
+    direct_evidence: bool,
+    session_window: u64,
+) -> Result<PalwCourtAdmissionV1, PalwStateV2Error> {
+    let now = ctx.daa_score;
+    let schedule = court_ingress_schedule_at_v1(builder.params, now);
+    let had_row = builder.state.legacy_disputes.get(&claim_id).is_some_and(|record| record.courts.contains_key(&opener));
+    let admission = court_admission_v1(builder, ctx, claim_id, opener, session_window)?;
+    let charge = match admission {
+        PalwCourtAdmissionV1::Legacy => {
+            if schedule.is_some() {
+                paid_court_cap_admits_v1(&builder.state, builder.params, claim_id, opener, direct_evidence, now)?;
+            } else {
+                legacy_court_cap_admits_v1(&builder.state, builder.params, claim_id, opener, direct_evidence, now)?;
+            }
+            schedule.is_some()
+        }
+        PalwCourtAdmissionV1::Open | PalwCourtAdmissionV1::Queued => schedule.is_some() && !had_row,
+    };
+    if charge && let Some(schedule) = schedule {
+        charge_court_ingress_fee_v1(builder, opener, schedule.fee_sompi_per_session)?;
+    }
+    Ok(admission)
+}
+
+/// Burn the once-only ingress fee from `opener`'s bond. Never clamps: a bond that cannot pay it in full is refused.
+fn charge_court_ingress_fee_v1(builder: &mut TransitionBuilder<'_>, opener: PalwBondKeyV2, fee: u64) -> Result<(), PalwStateV2Error> {
+    if fee == 0 {
+        return Ok(());
+    }
+    let collateral = builder.state.bonds.get(&opener).ok_or(PalwStateV2Error::MissingBond(opener))?.collateral;
+    if collateral < fee {
+        return Err(refused(format!("the court ingress fee {fee} exceeds the opener's collateral {collateral}")));
+    }
+    builder.slash_bond(opener, u128::from(fee)).map(|_| ())
+}
+
 /// **Court admission** where a court session is about to open (`open_dissection_at_named_leaf_v1`, `CourtOpened`). Past the fence:
 /// the challenger's own live LG14-A reservation on the claim (its claim-fixed hard deadline, its Final hold), an Active bond at or
 /// above the floor, and the occupancy escrow (ρ × (ticket window + `session_window`) × weight × the claim's row count, round 2) on its
