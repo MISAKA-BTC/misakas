@@ -77,6 +77,11 @@ pub enum PalwEscrowRefusalV1 {
     PayeeOutputMismatch,
     /// **G14 r5:** a settlement that pays no due and returns nothing (the escrow would be spent for nothing).
     NothingToSettle,
+    /// **audit A-2:** the escrow input is not input 0. Every qualified spend (the payer's own as well as a relay's) carries its escrow
+    /// at input 0, so a transaction discharges at most ONE escrow row: a second rooted escrow input is never qualified (the spend
+    /// filter refuses the whole transaction), so two rows can never be satisfied by one set of due outputs, an escrow input is never
+    /// counted as the other rows' "foreign" funding, and no two continued rows can share one change-back outpoint.
+    EscrowNotFirstInput,
 }
 
 /// **The rooted escrow row.** Keyed by `contract_id` in the state. Written only by the funded-original installer, by a qualified
@@ -418,7 +423,8 @@ fn payload_of(output: &crate::tx::TransactionOutput) -> Option<Hash64> {
 
 /// **Is `tx`'s spend of `row`'s outpoint qualified at `daa`?** Native check against the rooted row (and, for a settlement, the
 /// schedule) only:
-/// * exactly one input spends the row's current outpoint, and its populated entry (`input_amounts`, aligned to `tx.inputs`)
+/// * exactly one input spends the row's current outpoint, and it is input 0 (audit A-2: one escrow row per transaction), and its
+///   populated entry (`input_amounts`, aligned to `tx.inputs`)
 ///   carries exactly the row's unreleased value;
 /// * after the hard deadline with no open liability: the **payer return** — output 0 pays exactly the unreleased value to the
 ///   rooted return payload (no schedule needed);
@@ -539,6 +545,14 @@ pub fn palw_escrow_qualified_spend_v1(
     // for this path, with the escrow at input 0 (see `palw_escrow_relay_template_payload_v1`).
     if !tx.payload.is_empty() && (tx.payload != palw_escrow_relay_template_payload_v1(row.contract_id, row.funding_outpoint, path) || input_index != 0) {
         return Err(PalwEscrowRefusalV1::RelayTemplateMismatch);
+    }
+    // audit A-2: one escrow row per transaction — the escrow is input 0 for every spend (the payer's own included). Each row's plan
+    // walks the outputs from index 0 and counts every other input as funding, so a second escrow input would let two rows be
+    // discharged by the same due outputs and alias one change-back outpoint. Exactly one input can be input 0, so at most one row of
+    // a transaction is ever qualified; the block filter, the mempool and the template (one rule, `refusal_with_bond_burn`) refuse the
+    // transaction for the other row's outpoint, and an escrow input never stands as "foreign" funding of an accepted spend.
+    if input_index != 0 {
+        return Err(PalwEscrowRefusalV1::EscrowNotFirstInput);
     }
     // Conservation of this one spend, checked: in = paid + burned + returned + continued.
     if sum_checked([paid_now, burned_now, returned_now, continued_now])? != unreleased {

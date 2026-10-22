@@ -94,6 +94,15 @@ impl TransitionBuilder<'_> {
         if self.state.funded_escrows.get(&fact.contract_id) != Some(&fact.old) {
             return Err(refused("a settlement fact whose row is not the rooted row"));
         }
+        // audit A-2 (defence in depth behind the one-escrow-per-transaction rule): a continued row never re-locks on an outpoint
+        // another unsettled row already holds — one change-back outpoint backs exactly one row.
+        if fact.new.settled_by.is_none()
+            && self.state.funded_escrows.iter().any(|(id, row)| {
+                *id != fact.contract_id && row.settled_by.is_none() && row.funding_outpoint == fact.new.funding_outpoint
+            })
+        {
+            return Err(refused("a continued escrow row whose change-back outpoint is another live row's"));
+        }
         self.write_funded_escrow_v1(fact.contract_id, Some(fact.new))
     }
 
