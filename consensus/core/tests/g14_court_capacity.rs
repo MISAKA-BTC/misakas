@@ -890,7 +890,8 @@ fn spread(mut samples: Vec<u128>) -> (u128, u128, u128) {
 #[ignore]
 fn palw_court_op_timing_harness() {
     use std::time::Instant;
-    const RUNS: usize = 7;
+    // values/p1-measure (2026-10-22): `MEASURE_RUNS` overrides the run count (default 7, as before).
+    let runs: usize = std::env::var("MEASURE_RUNS").ok().map(|v| v.parse().expect("MEASURE_RUNS usize")).unwrap_or(7);
     let policy = test_policy();
     let (mut c, row, seats) = held_chain(Some(test_measurement()), 42);
     let (d1, _) = licensed(&mut c, &row, &seats, COALITION_PRODUCER, 11);
@@ -902,13 +903,16 @@ fn palw_court_op_timing_harness() {
     );
     println!("[palw_court_op_timing_harness] {host}; NOT A MEASURED RECORD — arming stays refused until one is pinned");
     let time = |c: &Held, objects: &[PalwConsensusObjectV2], rule: Rule| -> Vec<u128> {
-        (0..RUNS)
+        let samples: Vec<u128> = (0..runs)
             .map(|_| {
                 let t = Instant::now();
                 c.try_fold(c.daa + 1, objects, PalwBlockWorkV3::None, Hash64::default(), rule).expect("the timed block folds");
                 t.elapsed().as_nanos()
             })
-            .collect()
+            .collect();
+        // values/p1-measure: the raw block fold samples (run 0 = warm-up), so p95 can be computed outside.
+        println!("[palw_court_op_timing_harness] raw objects={} block_fold_ns={samples:?}", objects.len());
+        samples
     };
     let net = |samples: Vec<u128>, empty: u128, ops: u128| -> (u128, u128, u128) {
         let (lo, mid, hi) = spread(samples);

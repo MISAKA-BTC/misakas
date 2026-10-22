@@ -351,4 +351,107 @@ fn fix_b02_a_live_accusation_is_kept_and_only_authenticated_material_discharges(
     );
     // A fresh accusation past the deadline cannot wipe the pending default.
     assert!(accuse_post_final_v1(&mut b, &ctx(4, deadline(&p) + 1, 4), &bond_key(7), family, &JOB, [0x79; 64]).is_err());
+/// **values/p1-measure (2026-10-22, test side only): post-Final duty accusation / answer / per-block observe / default sweep wall
+/// time at N held fees.** Ignored. `MEASURE_SCALES` (default `10,100,1000`) is the number of held fees in the parent (and, for the
+/// observe and sweep, the number of open accusations); `MEASURE_RUNS` (default 21; run 0 is the warm-up) fresh builders per op.
+/// The slash here is a measurement-only 100 sompi (the production value is typed-missing). Builder construction is outside the timer.
+/// Run: `cargo test --release -p kaspa-consensus-core --lib -- --ignored --nocapture r6_d4_measure_post_final_duty_wall_time`
+#[test]
+#[ignore]
+fn r6_d4_measure_post_final_duty_wall_time() {
+    use std::time::Instant;
+    const MEASURE_SLASH: u64 = 100;
+    let runs: usize = std::env::var("MEASURE_RUNS").ok().map(|v| v.parse().unwrap()).unwrap_or(21);
+    let scales: Vec<usize> = std::env::var("MEASURE_SCALES")
+        .ok()
+        .unwrap_or_else(|| "10,100,1000".into())
+        .split(',')
+        .map(|v| v.trim().parse().unwrap())
+        .collect();
+    let family = PALW_NATIVE_FAMILY_TEXT_V29;
+    let job = |i: usize| -> [u8; 64] {
+        let mut j = JOB;
+        j[..8].copy_from_slice(&(i as u64).to_le_bytes());
+        j
+    };
+    let held_i = |i: usize| -> PalwNativeHeldFeeRowV1 {
+        let mut r = held(family);
+        r.job = job(i);
+        r.claim = h64(0xC2A2_0000 + i as u64).as_bytes();
+        r.income_root = job(i);
+        r
+    };
+    let stats = |mut v: Vec<u128>| -> (u128, u128, u128, u128) {
+        let warm = v[0];
+        let mut rest = v.split_off(1);
+        rest.sort_unstable();
+        let pick = |q: f64| rest[((rest.len() as f64 - 1.0) * q).round() as usize];
+        (warm, pick(0.5), pick(0.95), *rest.last().unwrap())
+    };
+    let host = format!("{}-{} {}", std::env::consts::OS, std::env::consts::ARCH, if cfg!(debug_assertions) { "debug" } else { "release" });
+    let (p, e) = (armed(), conviction_extras());
+    for &n in &scales {
+        let parent0 = parent();
+        let mut b = TransitionBuilder::new(&parent0, &p, false, false, false, false, &e);
+        for i in 0..n {
+            hold_native_fee_v1(&mut b, &held_i(i)).unwrap();
+        }
+        let held_state = b.state.clone();
+        // One accusation against one of the N held fees.
+        let accuse: Vec<u128> = (0..runs)
+            .map(|r| {
+                let mut b = TransitionBuilder::new(&held_state, &p, false, false, false, false, &e);
+                let t = Instant::now();
+                accuse_post_final_v1(&mut b, &ctx(2, ACCUSED, 2), &accuser(), family, &job(r % n), [0xAC; 64]).unwrap();
+                t.elapsed().as_nanos()
+            })
+            .collect();
+        // Every held fee accused (the worst open set the observe and the sweep walk).
+        let mut b = TransitionBuilder::new(&held_state, &p, false, false, false, false, &e);
+        for i in 0..n {
+            accuse_post_final_v1(&mut b, &ctx(2, ACCUSED, 2), &accuser(), family, &job(i), [0xAC; 64]).unwrap();
+        }
+        let accused_state = b.state.clone();
+        let observe: Vec<u128> = (0..runs)
+            .map(|_| {
+                let mut b = TransitionBuilder::new(&accused_state, &p, false, false, false, false, &e);
+                let t = Instant::now();
+                observe_native_post_final_duties_with_v1(&mut b, &ctx(3, ACCUSED + 1, 3), &profile()).unwrap();
+                t.elapsed().as_nanos()
+            })
+            .collect();
+        let mut b = TransitionBuilder::new(&accused_state, &p, false, false, false, false, &e);
+        observe_native_post_final_duties_with_v1(&mut b, &ctx(3, ACCUSED + 1, 3), &profile()).unwrap();
+        let observed_state = b.state.clone();
+        let supplied = (0..n)
+            .filter(|i| native_post_final_duty_row_v1(&observed_state, family, &job(*i)).unwrap().duties[0].supplied_daa.is_some())
+            .count();
+        let answer: Vec<u128> = (0..runs)
+            .map(|r| {
+                let mut b = TransitionBuilder::new(&observed_state, &p, false, false, false, false, &e);
+                let t = Instant::now();
+                answer_post_final_v1(&mut b, &ctx(3, ACCUSED + 2, 3), &producer(), family, &job(r % n), b"the material").unwrap();
+                t.elapsed().as_nanos()
+            })
+            .collect();
+        let after = ctx(4, deadline(&p) + 1, 4);
+        let sweep: Vec<u128> = (0..runs)
+            .map(|_| {
+                let mut b = TransitionBuilder::new(&observed_state, &p, false, false, false, false, &e);
+                let t = Instant::now();
+                recover_native_post_final_defaults_with_v1(&mut b, &after, MEASURE_SLASH, &production).unwrap();
+                t.elapsed().as_nanos()
+            })
+            .collect();
+        for (op, v) in [("accusation", accuse), ("observe_all_open", observe), ("answer", answer), ("default_sweep_all_open", sweep)] {
+            let (warm, med, p95, max) = stats(v);
+            eprintln!(
+                "MEASURE in_crate=true host={host} op=post_final_{op} held_fees={n} open_accusations={} supplied={supplied} runs={runs} \
+                 warmup_wall_ns={warm} median_wall_ns={med} p95_wall_ns={p95} max_wall_ns={max}",
+                if op == "accusation" { 0 } else { n }
+            );
+        }
+        let row = native_post_final_duty_row_v1(&observed_state, family, &job(0)).unwrap();
+        eprintln!("MEASURE_DA in_crate=true op=post_final_duty_row bytes={} answer_payload_bytes=12", borsh::to_vec(&row).unwrap().len());
+    }
 }

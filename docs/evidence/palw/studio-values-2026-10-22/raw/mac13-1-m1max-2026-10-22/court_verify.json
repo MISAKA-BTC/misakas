@@ -1,0 +1,3549 @@
+{
+ "batch": "court_verify",
+ "executable": "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+ "host": {
+  "hw.memsize": "34359738368",
+  "hw.model": "Mac13,1",
+  "hw.ncpu": "10",
+  "hw.perflevel0.physicalcpu": "8",
+  "hw.perflevel1.physicalcpu": "2",
+  "machdep.cpu.brand_string": "Apple M1 Max",
+  "machine": "arm64",
+  "ncpu": 10,
+  "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.6"
+ },
+ "load_after": {
+  "loadavg": [
+   60.82861328125,
+   51.19921875,
+   54.08447265625
+  ],
+  "t": 1792666911.331025,
+  "uptime": "20:01  up 10:04, 1 user, load averages: 60.83 51.20 54.08"
+ },
+ "load_before": {
+  "loadavg": [
+   58.396484375,
+   51.32080078125,
+   43.70263671875
+  ],
+  "t": 1792662071.805537,
+  "uptime": "18:41  up  8:43, 1 user, load averages: 58.40 51.32 43.70"
+ },
+ "runs": [
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "fixture_setup_only"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=fixture_setup_only n=0 distinct=5 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    58.396484375,
+    51.32080078125,
+    43.70263671875
+   ],
+   "peak_rss_bytes": 12992512,
+   "process_wall_s": 0.397,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "fixture_setup_only"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=fixture_setup_only n=0 distinct=5 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    58.396484375,
+    51.32080078125,
+    43.70263671875
+   ],
+   "peak_rss_bytes": 12877824,
+   "process_wall_s": 0.04,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "fixture_setup_only"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=fixture_setup_only n=0 distinct=5 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    58.396484375,
+    51.32080078125,
+    43.70263671875
+   ],
+   "peak_rss_bytes": 12533760,
+   "process_wall_s": 0.06,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "close_cone_acquit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_acquit n=0 distinct=984 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    58.396484375,
+    51.32080078125,
+    43.70263671875
+   ],
+   "peak_rss_bytes": 36012032,
+   "process_wall_s": 73.191,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.17,
+   "under_load": true,
+   "user_s": 43.27
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "close_cone_acquit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_acquit n=0 distinct=984 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    56.55615234375,
+    52.80517578125,
+    44.94189453125
+   ],
+   "peak_rss_bytes": 33652736,
+   "process_wall_s": 84.279,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.29,
+   "under_load": true,
+   "user_s": 43.53
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "close_cone_acquit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_acquit n=0 distinct=984 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    44.88232421875,
+    50.58154296875,
+    44.87255859375
+   ],
+   "peak_rss_bytes": 35880960,
+   "process_wall_s": 79.326,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.17,
+   "under_load": true,
+   "user_s": 43.29
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "10",
+    "MEASURE_OP": "close_cone_acquit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_acquit n=10 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=249000 median_wall_ns=290292 p95_wall_ns=590584 p99_wall_ns=590584 max_wall_ns=590584 total_wall_ns=3198710 observed_expected_outcomes=10"
+   ],
+   "loadavg_at_start": [
+    46.9091796875,
+    49.30859375,
+    44.83056640625
+   ],
+   "peak_rss_bytes": 36126720,
+   "process_wall_s": 75.318,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.15,
+   "under_load": true,
+   "user_s": 43.34
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "100",
+    "MEASURE_OP": "close_cone_acquit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_acquit n=100 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=226584 median_wall_ns=296792 p95_wall_ns=770500 p99_wall_ns=2094917 max_wall_ns=24181625 total_wall_ns=68314666 observed_expected_outcomes=100"
+   ],
+   "loadavg_at_start": [
+    49.9306640625,
+    50.30859375,
+    45.650390625
+   ],
+   "peak_rss_bytes": 36159488,
+   "process_wall_s": 74.652,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.17,
+   "under_load": true,
+   "user_s": 43.15
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "close_cone_acquit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_acquit n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=225750 median_wall_ns=380750 p95_wall_ns=2839542 p99_wall_ns=16270667 max_wall_ns=32684583 total_wall_ns=1014841410 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    54.12890625,
+    51.91162109375,
+    46.6484375
+   ],
+   "peak_rss_bytes": 36306944,
+   "process_wall_s": 73.837,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.17,
+   "under_load": true,
+   "user_s": 43.71
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "close_cone_acquit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_acquit n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=227250 median_wall_ns=380583 p95_wall_ns=3175000 p99_wall_ns=24663083 max_wall_ns=127682875 total_wall_ns=1325075128 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    60.42138671875,
+    54.73681640625,
+    48.1865234375
+   ],
+   "peak_rss_bytes": 36356096,
+   "process_wall_s": 80.514,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.19,
+   "under_load": true,
+   "user_s": 43.99
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "close_cone_acquit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_acquit n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=230667 median_wall_ns=382417 p95_wall_ns=3482125 p99_wall_ns=20252208 max_wall_ns=70317208 total_wall_ns=1227464182 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    61.7001953125,
+    56.759765625,
+    49.5595703125
+   ],
+   "peak_rss_bytes": 35995648,
+   "process_wall_s": 83.413,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.18,
+   "under_load": true,
+   "user_s": 44.14
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "close_cone_forged_last_stage"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=0 distinct=984 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    67.2626953125,
+    60.39501953125,
+    51.67138671875
+   ],
+   "peak_rss_bytes": 35995648,
+   "process_wall_s": 78.4,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.16,
+   "under_load": true,
+   "user_s": 43.45
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "close_cone_forged_last_stage"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=0 distinct=984 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    67.57373046875,
+    61.94287109375,
+    53.03515625
+   ],
+   "peak_rss_bytes": 36257792,
+   "process_wall_s": 77.275,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.15,
+   "under_load": true,
+   "user_s": 43.46
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "close_cone_forged_last_stage"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=0 distinct=984 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    68.74755859375,
+    63.03173828125,
+    54.16552734375
+   ],
+   "peak_rss_bytes": 35946496,
+   "process_wall_s": 67.768,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.15,
+   "under_load": true,
+   "user_s": 43.44
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "10",
+    "MEASURE_OP": "close_cone_forged_last_stage"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=10 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=218959 median_wall_ns=292916 p95_wall_ns=590209 p99_wall_ns=590209 max_wall_ns=590209 total_wall_ns=3185877 observed_expected_outcomes=10"
+   ],
+   "loadavg_at_start": [
+    61.54150390625,
+    62.3583984375,
+    54.6328125
+   ],
+   "peak_rss_bytes": 35930112,
+   "process_wall_s": 60.767,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.16,
+   "under_load": true,
+   "user_s": 43.83
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "100",
+    "MEASURE_OP": "close_cone_forged_last_stage"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=100 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=219416 median_wall_ns=338542 p95_wall_ns=1431750 p99_wall_ns=6848208 max_wall_ns=30120917 total_wall_ns=86284753 observed_expected_outcomes=100"
+   ],
+   "loadavg_at_start": [
+    52.20166015625,
+    59.63427734375,
+    54.1455078125
+   ],
+   "peak_rss_bytes": 36159488,
+   "process_wall_s": 78.384,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.17,
+   "under_load": true,
+   "user_s": 44.25
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "close_cone_forged_last_stage"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=215458 median_wall_ns=390958 p95_wall_ns=2717375 p99_wall_ns=21990917 max_wall_ns=46367458 total_wall_ns=1094439501 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    54.93994140625,
+    58.8916015625,
+    54.3291015625
+   ],
+   "peak_rss_bytes": 36372480,
+   "process_wall_s": 74.88,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.16,
+   "under_load": true,
+   "user_s": 45.06
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "close_cone_forged_last_stage"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=221750 median_wall_ns=386875 p95_wall_ns=2254375 p99_wall_ns=16866834 max_wall_ns=33262042 total_wall_ns=995351800 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    49.36181640625,
+    56.45703125,
+    53.79736328125
+   ],
+   "peak_rss_bytes": 36421632,
+   "process_wall_s": 77.323,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.17,
+   "under_load": true,
+   "user_s": 44.42
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "close_cone_forged_last_stage"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=218875 median_wall_ns=386667 p95_wall_ns=3203792 p99_wall_ns=18293542 max_wall_ns=43727709 total_wall_ns=1096259090 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    57.3203125,
+    56.97216796875,
+    54.20263671875
+   ],
+   "peak_rss_bytes": 36093952,
+   "process_wall_s": 76.064,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.16,
+   "under_load": true,
+   "user_s": 44.18
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "root_claim_admit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=root_claim_admit n=0 distinct=96 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    70.208984375,
+    61.1962890625,
+    56.0458984375
+   ],
+   "peak_rss_bytes": 16515072,
+   "process_wall_s": 51.667,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.11,
+   "under_load": true,
+   "user_s": 29.29
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "root_claim_admit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=root_claim_admit n=0 distinct=96 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    68.220703125,
+    62.00390625,
+    56.6357421875
+   ],
+   "peak_rss_bytes": 16596992,
+   "process_wall_s": 52.926,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.1,
+   "under_load": true,
+   "user_s": 29.34
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "root_claim_admit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=root_claim_admit n=0 distinct=96 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.0498046875,
+    60.859375,
+    56.55029296875
+   ],
+   "peak_rss_bytes": 16547840,
+   "process_wall_s": 50.788,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.09,
+   "under_load": true,
+   "user_s": 28.98
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "10",
+    "MEASURE_OP": "root_claim_admit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=root_claim_admit n=10 distinct=96 exemplar_body_bytes=16571 warmup_wall_ns=1949750 median_wall_ns=1315500 p95_wall_ns=1345916 p99_wall_ns=1345916 max_wall_ns=1345916 total_wall_ns=13839375 observed_expected_outcomes=10"
+   ],
+   "loadavg_at_start": [
+    59.27197265625,
+    60.36083984375,
+    56.6015625
+   ],
+   "peak_rss_bytes": 16646144,
+   "process_wall_s": 53.017,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.1,
+   "under_load": true,
+   "user_s": 29.42
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "100",
+    "MEASURE_OP": "root_claim_admit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=root_claim_admit n=100 distinct=96 exemplar_body_bytes=16571 warmup_wall_ns=3374083 median_wall_ns=1476542 p95_wall_ns=12706958 p99_wall_ns=24995375 max_wall_ns=44448042 total_wall_ns=304853170 observed_expected_outcomes=100"
+   ],
+   "loadavg_at_start": [
+    61.18896484375,
+    60.49853515625,
+    56.875
+   ],
+   "peak_rss_bytes": 16777216,
+   "process_wall_s": 50.689,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.1,
+   "under_load": true,
+   "user_s": 29.47
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "root_claim_admit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=root_claim_admit n=1000 distinct=96 exemplar_body_bytes=16571 warmup_wall_ns=4883916 median_wall_ns=1463000 p95_wall_ns=9884417 p99_wall_ns=24904917 max_wall_ns=75423625 total_wall_ns=2757883265 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    59.5517578125,
+    60.09619140625,
+    56.92724609375
+   ],
+   "peak_rss_bytes": 16433152,
+   "process_wall_s": 57.133,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.12,
+   "under_load": true,
+   "user_s": 31.01
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "root_claim_admit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=root_claim_admit n=1000 distinct=96 exemplar_body_bytes=16571 warmup_wall_ns=1420083 median_wall_ns=1462833 p95_wall_ns=5247083 p99_wall_ns=15653417 max_wall_ns=32779708 total_wall_ns=2069136500 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    56.9072265625,
+    59.189453125,
+    56.783203125
+   ],
+   "peak_rss_bytes": 16793600,
+   "process_wall_s": 43.704,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.12,
+   "under_load": true,
+   "user_s": 30.68
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "root_claim_admit"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=root_claim_admit n=1000 distinct=96 exemplar_body_bytes=16571 warmup_wall_ns=1417208 median_wall_ns=1464125 p95_wall_ns=6289917 p99_wall_ns=14033167 max_wall_ns=25029625 total_wall_ns=2130865337 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    54.68798828125,
+    58.240234375,
+    56.552734375
+   ],
+   "peak_rss_bytes": 16334848,
+   "process_wall_s": 42.71,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.11,
+   "under_load": true,
+   "user_s": 30.72
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "dissect_round_apply"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_round_apply n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    52.0166015625,
+    57.171875,
+    56.25439453125
+   ],
+   "peak_rss_bytes": 14401536,
+   "process_wall_s": 51.108,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.14,
+   "under_load": true,
+   "user_s": 36.68
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "dissect_round_apply"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_round_apply n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.19384765625,
+    58.44580078125,
+    56.767578125
+   ],
+   "peak_rss_bytes": 14319616,
+   "process_wall_s": 50.92,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.16,
+   "under_load": true,
+   "user_s": 37.29
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "dissect_round_apply"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_round_apply n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.21533203125,
+    58.9375,
+    57.056640625
+   ],
+   "peak_rss_bytes": 14319616,
+   "process_wall_s": 49.859,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.13,
+   "under_load": true,
+   "user_s": 36.7
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "10",
+    "MEASURE_OP": "dissect_round_apply"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_round_apply n=10 distinct=64 exemplar_body_bytes=806 warmup_wall_ns=1833 median_wall_ns=292 p95_wall_ns=583 p99_wall_ns=583 max_wall_ns=583 total_wall_ns=4875 observed_expected_outcomes=10"
+   ],
+   "loadavg_at_start": [
+    63.3603515625,
+    59.8046875,
+    57.47314453125
+   ],
+   "peak_rss_bytes": 14368768,
+   "process_wall_s": 48.261,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.13,
+   "under_load": true,
+   "user_s": 36.45
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "100",
+    "MEASURE_OP": "dissect_round_apply"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_round_apply n=100 distinct=64 exemplar_body_bytes=806 warmup_wall_ns=1709 median_wall_ns=292 p95_wall_ns=1625 p99_wall_ns=1916 max_wall_ns=1958 total_wall_ns=41207 observed_expected_outcomes=100"
+   ],
+   "loadavg_at_start": [
+    67.6845703125,
+    61.43408203125,
+    58.1904296875
+   ],
+   "peak_rss_bytes": 14745600,
+   "process_wall_s": 48.191,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.12,
+   "under_load": true,
+   "user_s": 36.14
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "dissect_round_apply"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_round_apply n=1000 distinct=64 exemplar_body_bytes=806 warmup_wall_ns=1875 median_wall_ns=292 p95_wall_ns=1375 p99_wall_ns=1750 max_wall_ns=3875 total_wall_ns=392917 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    59.63134765625,
+    60.40673828125,
+    58.005859375
+   ],
+   "peak_rss_bytes": 17580032,
+   "process_wall_s": 49.19,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.13,
+   "under_load": true,
+   "user_s": 36.37
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "dissect_round_apply"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_round_apply n=1000 distinct=64 exemplar_body_bytes=806 warmup_wall_ns=2166 median_wall_ns=292 p95_wall_ns=1250 p99_wall_ns=1709 max_wall_ns=2917 total_wall_ns=388001 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    59.68603515625,
+    60.31103515625,
+    58.10595703125
+   ],
+   "peak_rss_bytes": 17448960,
+   "process_wall_s": 48.998,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.12,
+   "under_load": true,
+   "user_s": 36.32
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "dissect_round_apply"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_round_apply n=1000 distinct=64 exemplar_body_bytes=806 warmup_wall_ns=2458 median_wall_ns=292 p95_wall_ns=1334 p99_wall_ns=1708 max_wall_ns=5459 total_wall_ns=391462 observed_expected_outcomes=1000"
+   ],
+   "loadavg_at_start": [
+    53.00537109375,
+    58.48095703125,
+    57.5576171875
+   ],
+   "peak_rss_bytes": 15106048,
+   "process_wall_s": 61.283,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.2,
+   "under_load": true,
+   "user_s": 37.06
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "dissect_bottom_honest"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_bottom_honest n=0 distinct=96 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    56.314453125,
+    58.26416015625,
+    57.5283203125
+   ],
+   "peak_rss_bytes": 16384000,
+   "process_wall_s": 108.247,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.19,
+   "under_load": true,
+   "user_s": 49.12
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "dissect_bottom_honest"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_bottom_honest n=0 distinct=96 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    64.85302734375,
+    61.53076171875,
+    58.94189453125
+   ],
+   "peak_rss_bytes": 16252928,
+   "process_wall_s": 132.078,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.2,
+   "under_load": true,
+   "user_s": 49.43
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "dissect_bottom_honest"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_bottom_honest n=0 distinct=96 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    65.83203125,
+    62.65185546875,
+    59.72802734375
+   ],
+   "peak_rss_bytes": 16531456,
+   "process_wall_s": 77.346,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.19,
+   "under_load": true,
+   "user_s": 49.04
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "10",
+    "MEASURE_OP": "dissect_bottom_honest"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_bottom_honest n=10 distinct=96 exemplar_body_bytes=14834 warmup_wall_ns=1016291 median_wall_ns=983084 p95_wall_ns=1077625 p99_wall_ns=1077625 max_wall_ns=1077625 total_wall_ns=10152168 observed_expected_outcomes=10 max_rounds_to_terminal=2 max_bottom_bytes=23225"
+   ],
+   "loadavg_at_start": [
+    58.9111328125,
+    61.349609375,
+    59.48779296875
+   ],
+   "peak_rss_bytes": 16220160,
+   "process_wall_s": 68.74,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.16,
+   "under_load": true,
+   "user_s": 48.58
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "100",
+    "MEASURE_OP": "dissect_bottom_honest"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_bottom_honest n=100 distinct=96 exemplar_body_bytes=14834 warmup_wall_ns=1050334 median_wall_ns=1190500 p95_wall_ns=4779458 p99_wall_ns=21292334 max_wall_ns=53033167 total_wall_ns=218178916 observed_expected_outcomes=100 max_rounds_to_terminal=2 max_bottom_bytes=23225"
+   ],
+   "loadavg_at_start": [
+    63.1767578125,
+    62.1171875,
+    59.92138671875
+   ],
+   "peak_rss_bytes": 16433152,
+   "process_wall_s": 81.505,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.17,
+   "under_load": true,
+   "user_s": 49.0
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "dissect_bottom_honest"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_bottom_honest n=1000 distinct=96 exemplar_body_bytes=14834 warmup_wall_ns=1058292 median_wall_ns=1201416 p95_wall_ns=6383625 p99_wall_ns=16865625 max_wall_ns=29683792 total_wall_ns=1986297995 observed_expected_outcomes=1000 max_rounds_to_terminal=2 max_bottom_bytes=23225"
+   ],
+   "loadavg_at_start": [
+    58.08056640625,
+    60.79541015625,
+    59.6142578125
+   ],
+   "peak_rss_bytes": 16678912,
+   "process_wall_s": 77.303,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.24,
+   "under_load": true,
+   "user_s": 51.05
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "dissect_bottom_honest"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_bottom_honest n=1000 distinct=96 exemplar_body_bytes=14834 warmup_wall_ns=1999291 median_wall_ns=1201125 p95_wall_ns=8361167 p99_wall_ns=24392000 max_wall_ns=67576792 total_wall_ns=2207008781 observed_expected_outcomes=1000 max_rounds_to_terminal=2 max_bottom_bytes=23225"
+   ],
+   "loadavg_at_start": [
+    58.22998046875,
+    59.7607421875,
+    59.298828125
+   ],
+   "peak_rss_bytes": 16695296,
+   "process_wall_s": 77.684,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.19,
+   "under_load": true,
+   "user_s": 50.67
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "dissect_bottom_honest"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=dissect_bottom_honest n=1000 distinct=96 exemplar_body_bytes=14834 warmup_wall_ns=1020167 median_wall_ns=1198875 p95_wall_ns=4407667 p99_wall_ns=24538042 max_wall_ns=133485125 total_wall_ns=2058381615 observed_expected_outcomes=1000 max_rounds_to_terminal=2 max_bottom_bytes=23225"
+   ],
+   "loadavg_at_start": [
+    58.3251953125,
+    59.8203125,
+    59.3818359375
+   ],
+   "peak_rss_bytes": 16678912,
+   "process_wall_s": 88.22,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.21,
+   "under_load": true,
+   "user_s": 50.97
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "lookahead_expand"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=lookahead_expand n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    58.4599609375,
+    59.57470703125,
+    59.33837890625
+   ],
+   "peak_rss_bytes": 14368768,
+   "process_wall_s": 66.082,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.13,
+   "under_load": true,
+   "user_s": 38.15
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "lookahead_expand"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=lookahead_expand n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    57.27099609375,
+    59.17822265625,
+    59.21435546875
+   ],
+   "peak_rss_bytes": 14319616,
+   "process_wall_s": 67.351,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.14,
+   "under_load": true,
+   "user_s": 38.5
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "lookahead_expand"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=lookahead_expand n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.72802734375,
+    59.77490234375,
+    59.4326171875
+   ],
+   "peak_rss_bytes": 14401536,
+   "process_wall_s": 66.63,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.14,
+   "under_load": true,
+   "user_s": 38.59
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "10",
+    "MEASURE_OP": "lookahead_expand"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=lookahead_expand n=10 distinct=64 exemplar_body_bytes=814 warmup_wall_ns=3250 median_wall_ns=625 p95_wall_ns=1125 p99_wall_ns=1125 max_wall_ns=1125 total_wall_ns=9500 observed_expected_outcomes=10 max_disclosure_bytes=1214 max_frontier_values=72"
+   ],
+   "loadavg_at_start": [
+    50.46484375,
+    57.3681640625,
+    58.57861328125
+   ],
+   "peak_rss_bytes": 14286848,
+   "process_wall_s": 71.891,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.14,
+   "under_load": true,
+   "user_s": 38.86
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "100",
+    "MEASURE_OP": "lookahead_expand"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=lookahead_expand n=100 distinct=64 exemplar_body_bytes=814 warmup_wall_ns=3334 median_wall_ns=667 p95_wall_ns=2000 p99_wall_ns=2167 max_wall_ns=4292 total_wall_ns=111293 observed_expected_outcomes=100 max_disclosure_bytes=1214 max_frontier_values=72"
+   ],
+   "loadavg_at_start": [
+    67.62353515625,
+    60.93701171875,
+    59.81396484375
+   ],
+   "peak_rss_bytes": 14417920,
+   "process_wall_s": 68.599,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.14,
+   "under_load": true,
+   "user_s": 38.94
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "lookahead_expand"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=lookahead_expand n=1000 distinct=64 exemplar_body_bytes=814 warmup_wall_ns=3500 median_wall_ns=625 p95_wall_ns=1875 p99_wall_ns=1958 max_wall_ns=3917 total_wall_ns=1016252 observed_expected_outcomes=1000 max_disclosure_bytes=1214 max_frontier_values=72"
+   ],
+   "loadavg_at_start": [
+    59.443359375,
+    60.11083984375,
+    59.6025390625
+   ],
+   "peak_rss_bytes": 14434304,
+   "process_wall_s": 67.024,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.14,
+   "under_load": true,
+   "user_s": 38.17
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "lookahead_expand"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=lookahead_expand n=1000 distinct=64 exemplar_body_bytes=814 warmup_wall_ns=3292 median_wall_ns=625 p95_wall_ns=1958 p99_wall_ns=2292 max_wall_ns=4250 total_wall_ns=1034469 observed_expected_outcomes=1000 max_disclosure_bytes=1214 max_frontier_values=72"
+   ],
+   "loadavg_at_start": [
+    56.6748046875,
+    59.0625,
+    59.23779296875
+   ],
+   "peak_rss_bytes": 14254080,
+   "process_wall_s": 77.925,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.14,
+   "under_load": true,
+   "user_s": 38.1
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "lookahead_expand"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=lookahead_expand n=1000 distinct=64 exemplar_body_bytes=814 warmup_wall_ns=7167 median_wall_ns=708 p95_wall_ns=5417 p99_wall_ns=6042 max_wall_ns=106209 total_wall_ns=1688219 observed_expected_outcomes=1000 max_disclosure_bytes=1214 max_frontier_values=72"
+   ],
+   "loadavg_at_start": [
+    54.94287109375,
+    57.978515625,
+    58.80908203125
+   ],
+   "peak_rss_bytes": 14270464,
+   "process_wall_s": 65.466,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.16,
+   "under_load": true,
+   "user_s": 38.58
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "mldsa87_verify"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=mldsa87_verify n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    56.046875,
+    58.3525390625,
+    58.9248046875
+   ],
+   "peak_rss_bytes": 13926400,
+   "process_wall_s": 0.072,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.05
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "mldsa87_verify"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=mldsa87_verify n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    56.046875,
+    58.3525390625,
+    58.9248046875
+   ],
+   "peak_rss_bytes": 13467648,
+   "process_wall_s": 0.061,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.04
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "mldsa87_verify"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=mldsa87_verify n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    56.046875,
+    58.3525390625,
+    58.9248046875
+   ],
+   "peak_rss_bytes": 13418496,
+   "process_wall_s": 0.061,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.04
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "10",
+    "MEASURE_OP": "mldsa87_verify"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=mldsa87_verify n=10 distinct=64 exemplar_body_bytes=4627 warmup_wall_ns=189209 median_wall_ns=126375 p95_wall_ns=127458 p99_wall_ns=127458 max_wall_ns=127458 total_wall_ns=1327666 observed_expected_outcomes=10 public_key_bytes=2592"
+   ],
+   "loadavg_at_start": [
+    56.046875,
+    58.3525390625,
+    58.9248046875
+   ],
+   "peak_rss_bytes": 13451264,
+   "process_wall_s": 0.064,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.05
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "100",
+    "MEASURE_OP": "mldsa87_verify"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=mldsa87_verify n=100 distinct=64 exemplar_body_bytes=4627 warmup_wall_ns=152250 median_wall_ns=126292 p95_wall_ns=135041 p99_wall_ns=142666 max_wall_ns=154458 total_wall_ns=12755168 observed_expected_outcomes=100 public_key_bytes=2592"
+   ],
+   "loadavg_at_start": [
+    56.046875,
+    58.3525390625,
+    58.9248046875
+   ],
+   "peak_rss_bytes": 13451264,
+   "process_wall_s": 0.075,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.06
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "mldsa87_verify"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=mldsa87_verify n=1000 distinct=64 exemplar_body_bytes=4627 warmup_wall_ns=158125 median_wall_ns=126167 p95_wall_ns=135125 p99_wall_ns=361083 max_wall_ns=2237083 total_wall_ns=136019330 observed_expected_outcomes=1000 public_key_bytes=2592"
+   ],
+   "loadavg_at_start": [
+    56.046875,
+    58.3525390625,
+    58.9248046875
+   ],
+   "peak_rss_bytes": 13762560,
+   "process_wall_s": 0.204,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.18
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "mldsa87_verify"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=mldsa87_verify n=1000 distinct=64 exemplar_body_bytes=4627 warmup_wall_ns=156667 median_wall_ns=126208 p95_wall_ns=133667 p99_wall_ns=139583 max_wall_ns=240292 total_wall_ns=127167887 observed_expected_outcomes=1000 public_key_bytes=2592"
+   ],
+   "loadavg_at_start": [
+    56.046875,
+    58.3525390625,
+    58.9248046875
+   ],
+   "peak_rss_bytes": 13631488,
+   "process_wall_s": 0.212,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.18
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "mldsa87_verify"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=mldsa87_verify n=1000 distinct=64 exemplar_body_bytes=4627 warmup_wall_ns=157750 median_wall_ns=126042 p95_wall_ns=126709 p99_wall_ns=136708 max_wall_ns=140916 total_wall_ns=126364381 observed_expected_outcomes=1000 public_key_bytes=2592"
+   ],
+   "loadavg_at_start": [
+    56.046875,
+    58.3525390625,
+    58.9248046875
+   ],
+   "peak_rss_bytes": 13877248,
+   "process_wall_s": 0.218,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.18
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "position_close_honest",
+    "MEASURE_SCALE": "4"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_honest n=0 distinct=90 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    56.046875,
+    58.3525390625,
+    58.9248046875
+   ],
+   "peak_rss_bytes": 15548416,
+   "process_wall_s": 134.817,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.4,
+   "under_load": true,
+   "user_s": 89.1
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "position_close_honest",
+    "MEASURE_SCALE": "4"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_honest n=1000 distinct=90 exemplar_body_bytes=25900 warmup_wall_ns=1084875 median_wall_ns=1115375 p95_wall_ns=3838791 p99_wall_ns=9852875 max_wall_ns=43482833 total_wall_ns=1507033940 observed_expected_outcomes=1000 tile_positions=4 max_close_bytes=33555 signature_bytes=9254"
+   ],
+   "loadavg_at_start": [
+    48.74609375,
+    53.21826171875,
+    56.67431640625
+   ],
+   "peak_rss_bytes": 15794176,
+   "process_wall_s": 106.329,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.36,
+   "under_load": true,
+   "user_s": 88.32
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "position_close_honest",
+    "MEASURE_SCALE": "8"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_honest n=0 distinct=80 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    52.2431640625,
+    52.6787109375,
+    56.00341796875
+   ],
+   "peak_rss_bytes": 14172160,
+   "process_wall_s": 134.459,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.31,
+   "under_load": true,
+   "user_s": 82.92
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "position_close_honest",
+    "MEASURE_SCALE": "8"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_honest n=1000 distinct=80 exemplar_body_bytes=25900 warmup_wall_ns=1069292 median_wall_ns=1112667 p95_wall_ns=4195250 p99_wall_ns=24466667 max_wall_ns=79862083 total_wall_ns=1993217771 observed_expected_outcomes=1000 tile_positions=8 max_close_bytes=33629 signature_bytes=9254"
+   ],
+   "loadavg_at_start": [
+    78.0361328125,
+    66.4013671875,
+    61.2470703125
+   ],
+   "peak_rss_bytes": 16154624,
+   "process_wall_s": 146.852,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.29,
+   "under_load": true,
+   "user_s": 83.97
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "position_close_honest",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_honest n=0 distinct=80 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    53.38037109375,
+    61.2763671875,
+    60.04638671875
+   ],
+   "peak_rss_bytes": 16351232,
+   "process_wall_s": 135.622,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.31,
+   "under_load": true,
+   "user_s": 83.55
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "position_close_honest",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_honest n=1000 distinct=80 exemplar_body_bytes=25900 warmup_wall_ns=1071000 median_wall_ns=1124333 p95_wall_ns=6708333 p99_wall_ns=14728209 max_wall_ns=26426666 total_wall_ns=2089850237 observed_expected_outcomes=1000 tile_positions=16 max_close_bytes=33629 signature_bytes=9254"
+   ],
+   "loadavg_at_start": [
+    55.67822265625,
+    59.30810546875,
+    59.419921875
+   ],
+   "peak_rss_bytes": 15745024,
+   "process_wall_s": 136.897,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.43,
+   "under_load": true,
+   "user_s": 84.01
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "position_close_forged",
+    "MEASURE_SCALE": "4"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_forged n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    57.330078125,
+    59.03564453125,
+    59.30224609375
+   ],
+   "peak_rss_bytes": 15826944,
+   "process_wall_s": 170.56,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.37,
+   "under_load": true,
+   "user_s": 86.86
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "position_close_forged",
+    "MEASURE_SCALE": "4"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_forged n=1000 distinct=64 exemplar_body_bytes=26752 warmup_wall_ns=1079584 median_wall_ns=1123834 p95_wall_ns=2879416 p99_wall_ns=5144084 max_wall_ns=24225791 total_wall_ns=1375395071 observed_expected_outcomes=1000 tile_positions=4 max_close_bytes=33363 signature_bytes=9254"
+   ],
+   "loadavg_at_start": [
+    59.416015625,
+    59.1875,
+    59.30419921875
+   ],
+   "peak_rss_bytes": 15761408,
+   "process_wall_s": 121.566,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.38,
+   "under_load": true,
+   "user_s": 86.44
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "position_close_forged",
+    "MEASURE_SCALE": "8"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_forged n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    51.36181640625,
+    56.90966796875,
+    58.42919921875
+   ],
+   "peak_rss_bytes": 15728640,
+   "process_wall_s": 125.497,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.3,
+   "under_load": true,
+   "user_s": 81.52
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "position_close_forged",
+    "MEASURE_SCALE": "8"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_forged n=1000 distinct=64 exemplar_body_bytes=26752 warmup_wall_ns=1099416 median_wall_ns=1122250 p95_wall_ns=1256292 p99_wall_ns=1574500 max_wall_ns=2135584 total_wall_ns=1103123390 observed_expected_outcomes=1000 tile_positions=8 max_close_bytes=33821 signature_bytes=9254"
+   ],
+   "loadavg_at_start": [
+    54.4267578125,
+    56.51220703125,
+    58.0625
+   ],
+   "peak_rss_bytes": 13926400,
+   "process_wall_s": 99.061,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.47,
+   "under_load": true,
+   "user_s": 80.73
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "position_close_forged",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_forged n=0 distinct=64 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    39.29638671875,
+    50.74365234375,
+    55.6435546875
+   ],
+   "peak_rss_bytes": 14712832,
+   "process_wall_s": 89.333,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.19,
+   "under_load": true,
+   "user_s": 78.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "position_close_forged",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=position_close_forged n=1000 distinct=64 exemplar_body_bytes=26752 warmup_wall_ns=9210708 median_wall_ns=1118750 p95_wall_ns=2464250 p99_wall_ns=16483750 max_wall_ns=25290958 total_wall_ns=1484532261 observed_expected_outcomes=1000 tile_positions=16 max_close_bytes=33821 signature_bytes=9254"
+   ],
+   "loadavg_at_start": [
+    28.64892578125,
+    44.39892578125,
+    52.73876953125
+   ],
+   "peak_rss_bytes": 15990784,
+   "process_wall_s": 107.656,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.27,
+   "under_load": true,
+   "user_s": 80.98
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=0 distinct=16 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12779520,
+   "process_wall_s": 0.051,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=1000 distinct=16 exemplar_body_bytes=152 warmup_wall_ns=500 median_wall_ns=41 p95_wall_ns=42 p99_wall_ns=42 max_wall_ns=42 total_wall_ns=23875 observed_expected_outcomes=1000 draw_count=16 signed_bytes=4779"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 13025280,
+   "process_wall_s": 0.047,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=1000 distinct=16 exemplar_body_bytes=152 warmup_wall_ns=500 median_wall_ns=41 p95_wall_ns=42 p99_wall_ns=42 max_wall_ns=42 total_wall_ns=24209 observed_expected_outcomes=1000 draw_count=16 signed_bytes=4779"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12697600,
+   "process_wall_s": 0.055,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=1000 distinct=16 exemplar_body_bytes=152 warmup_wall_ns=542 median_wall_ns=41 p95_wall_ns=42 p99_wall_ns=42 max_wall_ns=42 total_wall_ns=24044 observed_expected_outcomes=1000 draw_count=16 signed_bytes=4779"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12697600,
+   "process_wall_s": 0.05,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=0 distinct=256 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12746752,
+   "process_wall_s": 0.04,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=1000 distinct=256 exemplar_body_bytes=152 warmup_wall_ns=667 median_wall_ns=41 p95_wall_ns=42 p99_wall_ns=42 max_wall_ns=84 total_wall_ns=24163 observed_expected_outcomes=1000 draw_count=256 signed_bytes=4779"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12910592,
+   "process_wall_s": 0.054,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=1000 distinct=256 exemplar_body_bytes=152 warmup_wall_ns=709 median_wall_ns=41 p95_wall_ns=42 p99_wall_ns=42 max_wall_ns=84 total_wall_ns=25793 observed_expected_outcomes=1000 draw_count=256 signed_bytes=4779"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12632064,
+   "process_wall_s": 0.042,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=1000 distinct=256 exemplar_body_bytes=152 warmup_wall_ns=583 median_wall_ns=41 p95_wall_ns=42 p99_wall_ns=42 max_wall_ns=83 total_wall_ns=24125 observed_expected_outcomes=1000 draw_count=256 signed_bytes=4779"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12566528,
+   "process_wall_s": 0.039,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=0 distinct=1000 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12910592,
+   "process_wall_s": 0.047,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=1000 distinct=1000 exemplar_body_bytes=152 warmup_wall_ns=958 median_wall_ns=83 p95_wall_ns=84 p99_wall_ns=167 max_wall_ns=209 total_wall_ns=76531 observed_expected_outcomes=1000 draw_count=4096 signed_bytes=4779"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12730368,
+   "process_wall_s": 0.052,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=1000 distinct=1000 exemplar_body_bytes=152 warmup_wall_ns=291 median_wall_ns=41 p95_wall_ns=42 p99_wall_ns=42 max_wall_ns=84 total_wall_ns=24164 observed_expected_outcomes=1000 draw_count=4096 signed_bytes=4779"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 13189120,
+   "process_wall_s": 0.061,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_demand_open",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_demand_open n=1000 distinct=1000 exemplar_body_bytes=152 warmup_wall_ns=583 median_wall_ns=41 p95_wall_ns=42 p99_wall_ns=42 max_wall_ns=84 total_wall_ns=24290 observed_expected_outcomes=1000 draw_count=4096 signed_bytes=4779"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12926976,
+   "process_wall_s": 0.05,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=0 distinct=16 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 13090816,
+   "process_wall_s": 0.047,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=1000 distinct=16 exemplar_body_bytes=396 warmup_wall_ns=2625 median_wall_ns=1875 p95_wall_ns=1917 p99_wall_ns=1917 max_wall_ns=2042 total_wall_ns=1862434 observed_expected_outcomes=1000 draw_count=16 registry_entries=17 signed_bytes=5023"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 13074432,
+   "process_wall_s": 0.051,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=1000 distinct=16 exemplar_body_bytes=396 warmup_wall_ns=2542 median_wall_ns=1875 p95_wall_ns=1958 p99_wall_ns=2334 max_wall_ns=33625 total_wall_ns=1915307 observed_expected_outcomes=1000 draw_count=16 registry_entries=17 signed_bytes=5023"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12828672,
+   "process_wall_s": 0.051,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=1000 distinct=16 exemplar_body_bytes=396 warmup_wall_ns=2709 median_wall_ns=1875 p95_wall_ns=1917 p99_wall_ns=1958 max_wall_ns=2000 total_wall_ns=1867426 observed_expected_outcomes=1000 draw_count=16 registry_entries=17 signed_bytes=5023"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 12746752,
+   "process_wall_s": 0.045,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=0 distinct=256 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 13008896,
+   "process_wall_s": 0.115,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.09
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=1000 distinct=256 exemplar_body_bytes=652 warmup_wall_ns=7500 median_wall_ns=3083 p95_wall_ns=3167 p99_wall_ns=3292 max_wall_ns=5875 total_wall_ns=3095963 observed_expected_outcomes=1000 draw_count=256 registry_entries=257 signed_bytes=5279"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 13058048,
+   "process_wall_s": 0.114,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.09
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=1000 distinct=256 exemplar_body_bytes=652 warmup_wall_ns=5833 median_wall_ns=3084 p95_wall_ns=3209 p99_wall_ns=3334 max_wall_ns=4625 total_wall_ns=3112568 observed_expected_outcomes=1000 draw_count=256 registry_entries=257 signed_bytes=5279"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 13352960,
+   "process_wall_s": 0.117,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.09
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=1000 distinct=256 exemplar_body_bytes=652 warmup_wall_ns=5000 median_wall_ns=3083 p95_wall_ns=3167 p99_wall_ns=3250 max_wall_ns=3458 total_wall_ns=3081077 observed_expected_outcomes=1000 draw_count=256 registry_entries=257 signed_bytes=5279"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 13025280,
+   "process_wall_s": 0.099,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.08
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=0 distinct=1000 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    59.23095703125,
+    49.595703125,
+    53.68701171875
+   ],
+   "peak_rss_bytes": 15286272,
+   "process_wall_s": 5.362,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.01,
+   "under_load": true,
+   "user_s": 3.76
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=1000 distinct=1000 exemplar_body_bytes=908 warmup_wall_ns=10875 median_wall_ns=4292 p95_wall_ns=11084 p99_wall_ns=27125 max_wall_ns=7914083 total_wall_ns=16439240 observed_expected_outcomes=1000 draw_count=4096 registry_entries=1001 signed_bytes=5535"
+   ],
+   "loadavg_at_start": [
+    58.57177734375,
+    49.61865234375,
+    53.6708984375
+   ],
+   "peak_rss_bytes": 15253504,
+   "process_wall_s": 4.957,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.01,
+   "under_load": true,
+   "user_s": 3.82
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=1000 distinct=1000 exemplar_body_bytes=908 warmup_wall_ns=13000 median_wall_ns=4250 p95_wall_ns=5458 p99_wall_ns=5833 max_wall_ns=7042 total_wall_ns=4384702 observed_expected_outcomes=1000 draw_count=4096 registry_entries=1001 signed_bytes=5535"
+   ],
+   "loadavg_at_start": [
+    59.80712890625,
+    50.02294921875,
+    53.78955078125
+   ],
+   "peak_rss_bytes": 15253504,
+   "process_wall_s": 4.997,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.02,
+   "under_load": true,
+   "user_s": 3.88
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_disclosed",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_disclosed n=1000 distinct=1000 exemplar_body_bytes=908 warmup_wall_ns=7875 median_wall_ns=4250 p95_wall_ns=5292 p99_wall_ns=9125 max_wall_ns=78625 total_wall_ns=4587598 observed_expected_outcomes=1000 draw_count=4096 registry_entries=1001 signed_bytes=5535"
+   ],
+   "loadavg_at_start": [
+    60.462890625,
+    50.3212890625,
+    53.87255859375
+   ],
+   "peak_rss_bytes": 15237120,
+   "process_wall_s": 4.676,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.01,
+   "under_load": true,
+   "user_s": 3.79
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=0 distinct=16 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.42578125,
+    50.48193359375,
+    53.908203125
+   ],
+   "peak_rss_bytes": 12484608,
+   "process_wall_s": 0.04,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=1000 distinct=16 exemplar_body_bytes=396 warmup_wall_ns=2291 median_wall_ns=1834 p95_wall_ns=1875 p99_wall_ns=1917 max_wall_ns=4958 total_wall_ns=1850632 observed_expected_outcomes=1000 draw_count=16 registry_entries=17 signed_bytes=5023"
+   ],
+   "loadavg_at_start": [
+    60.42578125,
+    50.48193359375,
+    53.908203125
+   ],
+   "peak_rss_bytes": 12697600,
+   "process_wall_s": 0.054,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=1000 distinct=16 exemplar_body_bytes=396 warmup_wall_ns=2791 median_wall_ns=1834 p95_wall_ns=1916 p99_wall_ns=2250 max_wall_ns=2542 total_wall_ns=1855283 observed_expected_outcomes=1000 draw_count=16 registry_entries=17 signed_bytes=5023"
+   ],
+   "loadavg_at_start": [
+    60.42578125,
+    50.48193359375,
+    53.908203125
+   ],
+   "peak_rss_bytes": 12648448,
+   "process_wall_s": 0.04,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=1000 distinct=16 exemplar_body_bytes=396 warmup_wall_ns=2625 median_wall_ns=1834 p95_wall_ns=1875 p99_wall_ns=1917 max_wall_ns=2000 total_wall_ns=1846974 observed_expected_outcomes=1000 draw_count=16 registry_entries=17 signed_bytes=5023"
+   ],
+   "loadavg_at_start": [
+    60.42578125,
+    50.48193359375,
+    53.908203125
+   ],
+   "peak_rss_bytes": 12926976,
+   "process_wall_s": 0.04,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=0 distinct=256 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.42578125,
+    50.48193359375,
+    53.908203125
+   ],
+   "peak_rss_bytes": 13205504,
+   "process_wall_s": 0.105,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.09
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=1000 distinct=256 exemplar_body_bytes=652 warmup_wall_ns=5000 median_wall_ns=3042 p95_wall_ns=3167 p99_wall_ns=3667 max_wall_ns=3834 total_wall_ns=3060404 observed_expected_outcomes=1000 draw_count=256 registry_entries=257 signed_bytes=5279"
+   ],
+   "loadavg_at_start": [
+    60.42578125,
+    50.48193359375,
+    53.908203125
+   ],
+   "peak_rss_bytes": 13107200,
+   "process_wall_s": 0.112,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.09
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=1000 distinct=256 exemplar_body_bytes=652 warmup_wall_ns=5292 median_wall_ns=3042 p95_wall_ns=3250 p99_wall_ns=3667 max_wall_ns=3875 total_wall_ns=3071009 observed_expected_outcomes=1000 draw_count=256 registry_entries=257 signed_bytes=5279"
+   ],
+   "loadavg_at_start": [
+    60.42578125,
+    50.48193359375,
+    53.908203125
+   ],
+   "peak_rss_bytes": 13025280,
+   "process_wall_s": 0.101,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.09
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=1000 distinct=256 exemplar_body_bytes=652 warmup_wall_ns=7709 median_wall_ns=3042 p95_wall_ns=3166 p99_wall_ns=3250 max_wall_ns=4833 total_wall_ns=3060619 observed_expected_outcomes=1000 draw_count=256 registry_entries=257 signed_bytes=5279"
+   ],
+   "loadavg_at_start": [
+    60.42578125,
+    50.48193359375,
+    53.908203125
+   ],
+   "peak_rss_bytes": 12910592,
+   "process_wall_s": 0.1,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.08
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=0 distinct=1000 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.42578125,
+    50.48193359375,
+    53.908203125
+   ],
+   "peak_rss_bytes": 15400960,
+   "process_wall_s": 4.721,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.01,
+   "under_load": true,
+   "user_s": 3.79
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=1000 distinct=1000 exemplar_body_bytes=908 warmup_wall_ns=6167 median_wall_ns=4209 p95_wall_ns=7709 p99_wall_ns=12042 max_wall_ns=509083 total_wall_ns=5788748 observed_expected_outcomes=1000 draw_count=4096 registry_entries=1001 signed_bytes=5535"
+   ],
+   "loadavg_at_start": [
+    59.2705078125,
+    50.4072265625,
+    53.86181640625
+   ],
+   "peak_rss_bytes": 15368192,
+   "process_wall_s": 4.667,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.01,
+   "under_load": true,
+   "user_s": 3.77
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=1000 distinct=1000 exemplar_body_bytes=908 warmup_wall_ns=11125 median_wall_ns=4250 p95_wall_ns=5209 p99_wall_ns=5667 max_wall_ns=6708 total_wall_ns=4343142 observed_expected_outcomes=1000 draw_count=4096 registry_entries=1001 signed_bytes=5535"
+   ],
+   "loadavg_at_start": [
+    60.44970703125,
+    50.798828125,
+    53.9794921875
+   ],
+   "peak_rss_bytes": 15286272,
+   "process_wall_s": 4.731,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.01,
+   "under_load": true,
+   "user_s": 3.81
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "1000",
+    "MEASURE_OP": "d2_answer_convicted",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_answer_convicted n=1000 distinct=1000 exemplar_body_bytes=908 warmup_wall_ns=10584 median_wall_ns=4250 p95_wall_ns=5250 p99_wall_ns=5666 max_wall_ns=6750 total_wall_ns=4330920 observed_expected_outcomes=1000 draw_count=4096 registry_entries=1001 signed_bytes=5535"
+   ],
+   "loadavg_at_start": [
+    60.81396484375,
+    51.0341796875,
+    54.0439453125
+   ],
+   "peak_rss_bytes": 15417344,
+   "process_wall_s": 4.919,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.01,
+   "under_load": true,
+   "user_s": 3.8
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=0 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 12795904,
+   "process_wall_s": 0.045,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "21",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=21 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=4666 median_wall_ns=750 p95_wall_ns=834 p99_wall_ns=1000 max_wall_ns=1000 total_wall_ns=19750 observed_expected_outcomes=21 open_cases=16 registry_entries=17"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 12976128,
+   "process_wall_s": 0.049,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "21",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=21 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=4000 median_wall_ns=709 p95_wall_ns=875 p99_wall_ns=5625 max_wall_ns=5625 total_wall_ns=23459 observed_expected_outcomes=21 open_cases=16 registry_entries=17"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 12877824,
+   "process_wall_s": 0.044,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "21",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "16"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=21 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=3625 median_wall_ns=709 p95_wall_ns=750 p99_wall_ns=958 max_wall_ns=958 total_wall_ns=18207 observed_expected_outcomes=21 open_cases=16 registry_entries=17"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 12795904,
+   "process_wall_s": 0.049,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=0 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 12943360,
+   "process_wall_s": 0.053,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "21",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=21 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=20458 median_wall_ns=8667 p95_wall_ns=8875 p99_wall_ns=11083 max_wall_ns=11083 total_wall_ns=196499 observed_expected_outcomes=21 open_cases=256 registry_entries=260"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 12746752,
+   "process_wall_s": 0.037,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "21",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=21 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=20750 median_wall_ns=8583 p95_wall_ns=9084 p99_wall_ns=9750 max_wall_ns=9750 total_wall_ns=194040 observed_expected_outcomes=21 open_cases=256 registry_entries=260"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 13303808,
+   "process_wall_s": 0.042,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.02
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "21",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "256"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=21 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=17458 median_wall_ns=8791 p95_wall_ns=9250 p99_wall_ns=10375 max_wall_ns=10375 total_wall_ns=195208 observed_expected_outcomes=21 open_cases=256 registry_entries=260"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 13221888,
+   "process_wall_s": 0.048,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "0",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=0 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=0 median_wall_ns=0 p95_wall_ns=0 p99_wall_ns=0 max_wall_ns=0 total_wall_ns=0 observed_expected_outcomes=0"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 15400960,
+   "process_wall_s": 0.041,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "21",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=21 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=503666 median_wall_ns=207709 p95_wall_ns=217833 p99_wall_ns=221000 max_wall_ns=221000 total_wall_ns=4683501 observed_expected_outcomes=21 open_cases=4096 registry_entries=4160"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 18743296,
+   "process_wall_s": 0.063,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.04
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "21",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=21 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=486250 median_wall_ns=206750 p95_wall_ns=216083 p99_wall_ns=225834 max_wall_ns=225834 total_wall_ns=4663831 observed_expected_outcomes=21 open_cases=4096 registry_entries=4160"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 18219008,
+   "process_wall_s": 0.051,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "court_verify_cpu_measure",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MEASURE_N": "21",
+    "MEASURE_OP": "d2_sweep",
+    "MEASURE_SCALE": "4096"
+   },
+   "lines": [
+    "MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=d2_sweep n=21 distinct=1 exemplar_body_bytes=0 warmup_wall_ns=412084 median_wall_ns=206542 p95_wall_ns=216125 p99_wall_ns=252750 max_wall_ns=252750 total_wall_ns=4605962 observed_expected_outcomes=21 open_cases=4096 registry_entries=4160"
+   ],
+   "loadavg_at_start": [
+    60.82861328125,
+    51.19921875,
+    54.08447265625
+   ],
+   "peak_rss_bytes": 18087936,
+   "process_wall_s": 0.053,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.0,
+   "under_load": true,
+   "user_s": 0.03
+  }
+ ],
+ "source_commit": "4e6df6ad4",
+ "under_load": true
+}
