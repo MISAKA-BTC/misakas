@@ -93,3 +93,22 @@ success. The accepted-history/service tests are compiling with output at
 `/tmp/misaka-rfc06-gdn-history-tests.log`. The new test's outcome is not yet
 known. Cross-tick continuation, runtime failure/retry controls and production
 acceptance are still required.
+
+## Service/history execution and wider GDN failures
+
+The history/service run subsequently passed all 15 tests, including the new
+GDN page error/continuation control. The wider `gdn` filter ran 20 tests:
+17 passed and 3 failed (`/tmp/misaka-rfc06-gdn-all-tests.log`). Ordinary signed
+registration and host resolution passed. Two held-court E2E cases (answering
+forger and silent forger) stopped at claim acceptance with
+`ImmutableModelUpdate("V2 claim needs its native canonical profile")`.
+These are failed acceptance tests; no conviction/slash success is established
+by those two runs. The routing gate reads `fp_work_profile_of`; tracing the
+canonical registered-profile source and its consumer connection remains work.
+Do not bypass that guard or add model-level review to make the fixture pass.
+
+The third failure expected the fold ladder refusal but attempted to construct
+evidence first, producing unrelated unsupported-kernel/coordinate diagnostics.
+`757e52a4c` now rejects a served leaf outside the fold's ladder before evidence
+allocation/recompute. Its targeted recheck is running with output in
+`/tmp/misaka-rfc06-gdn-ladder-recheck.log`. No result is claimed yet.
