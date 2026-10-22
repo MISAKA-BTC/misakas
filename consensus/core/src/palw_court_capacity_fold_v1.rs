@@ -280,6 +280,8 @@ pub(super) fn legacy_court_cap_admits_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     claim_id: Hash64,
+    opener: PalwBondKeyV2,
+    direct_evidence: bool,
     now: u64,
 ) -> Result<(), PalwStateV2Error> {
     let open_sessions = state.court_sessions.len() as u64;
@@ -293,20 +295,52 @@ pub(super) fn legacy_court_cap_admits_v1(
     if open_sessions >= max_sessions {
         return Err(at_capacity());
     }
-    if !params.court_outsider_lane_active_v1(now) {
+    // Round 2 (requirement): a DIRECT accusation that already carries its evidence (the IR / generative cone accusations, whose
+    // proof is the whole refutation) is never refused by the follow-on share — only by the overall cap above, exactly as before
+    // the fence. So nothing admitted below the fence on that route is refused past it.
+    if direct_evidence || !params.court_outsider_lane_active_v1(now) {
         return Ok(());
     }
-    let mut claims = std::collections::BTreeSet::new();
-    let mut followons = 0u64;
-    for session in state.court_sessions.values() {
-        if !claims.insert(session.claim) {
-            followons += 1;
-        }
-    }
-    if claims.contains(&claim_id) && followons >= palw_court_outsider_lane_followon_cap_v1(max_sessions) {
+    if court_outsider_lane_is_followon_v1(state, claim_id, opener)
+        && court_outsider_lane_followons_v1(state) >= palw_court_outsider_lane_followon_cap_v1(max_sessions)
+    {
         return Err(at_capacity());
     }
     Ok(())
+}
+
+/// **Round 2 (risk 2): the claim's own side.** The bonds the chain records as the claim's accused/colluding side: its producer
+/// (`claim.bond`) and the bonds of its panel's seats (`panels[claim].seats[].bond`). Rooted facts only — the claim and panel rows of
+/// the chain state. A missing claim or panel contributes nothing.
+fn court_outsider_lane_inside_v1(state: &PalwChainStateV2, claim_id: Hash64, bond: &PalwBondKeyV2) -> bool {
+    state.claims.get(&claim_id).is_some_and(|claim| claim.bond == *bond)
+        || state.panels.get(&claim_id).is_some_and(|panel| panel.seats.iter().any(|seat| seat.bond == *bond))
+}
+
+/// A session opened by `opener` on `claim_id` is a FOLLOW-ON iff the claim already has a running session opened from the same side
+/// (inside = producer/seat, outside = any other bond). So a colluder (seat or producer) holding the claim's first session does not
+/// turn the outsider into a follow-on: the outsider's session is the outside side's first and counts against the first-session room.
+/// The record read is `PalwCourtSessionStateV2::challenger_bond` — the opener the state records.
+pub(super) fn court_outsider_lane_is_followon_v1(state: &PalwChainStateV2, claim_id: Hash64, opener: PalwBondKeyV2) -> bool {
+    let inside = court_outsider_lane_inside_v1(state, claim_id, &opener);
+    state
+        .court_sessions
+        .values()
+        .any(|s| s.claim == claim_id && court_outsider_lane_inside_v1(state, claim_id, &s.challenger_bond) == inside)
+}
+
+/// Follow-on sessions now running: per claim, every session beyond the first of each side (at most two firsts per claim: one inside,
+/// one outside). Consistent with [`court_outsider_lane_is_followon_v1`].
+pub(super) fn court_outsider_lane_followons_v1(state: &PalwChainStateV2) -> u64 {
+    let mut firsts = std::collections::BTreeSet::new();
+    let mut followons = 0u64;
+    for session in state.court_sessions.values() {
+        let side = court_outsider_lane_inside_v1(state, session.claim, &session.challenger_bond);
+        if !firsts.insert((session.claim, side)) {
+            followons += 1;
+        }
+    }
+    followons
 }
 
 /// **Court admission** where a court session is about to open (`open_dissection_at_named_leaf_v1`, `CourtOpened`). Past the fence:

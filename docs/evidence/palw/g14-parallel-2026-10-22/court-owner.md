@@ -71,3 +71,48 @@ routing text29 outsiders through the claim-common frontier (ADR-0192) instead of
 ## Scope citations
 ADR-0192 (owner-independent frontier, advance reservation), ADR-0199 (no first-come exclusive occupancy), RFC-0026 F03. No RFC-0025
 parameter adopted; the ½ partition is structural (derived from the existing cap), flagged for user review.
+
+## Round 2 (2026-10-22) — written, not compiled, not run
+
+All behind the existing `palw_court_outsider_lane_v1` (no new fence; same arming as above).
+
+### 1. Direct evidence-carrying accusations are exempt from the follow-on share
+`legacy_court_cap_admits_v1(state, params, claim, opener, direct_evidence, now)` (`palw_court_capacity_fold_v1.rs`): when
+`direct_evidence` it returns after the overall cap check — exactly the pre-fence rule (`open >= cap` refuses), so nothing admitted
+below the fence on that route is refused past it. `open_dissection_at_named_leaf_v1` gained a trailing `direct_evidence: bool`:
+- `true`: the IR / generative cone accusations (`TirShardCourtAccused`, `GenShardCourtAccused`, objects.rs) — their proof is the
+  whole refutation (tags 62 / 88).
+- `false`: held attention accusation `ShardCourtAccused` (`open_held_dissection_v1`; the decoy route of the G-07 test, argued in the
+  dissection), held leaf challenge (`palw_held_close_fold_v1`), `CourtOpened`.
+Design decision (flag for review): "direct accusation that carries its evidence" = the cone accusations. If the user means the held
+attention accusation too, the follow-on share covers only `CourtOpened` + leaf challenges and the G-07 decoy test no longer holds.
+Residual: exempt sessions still count toward the follow-on tally and the cap, so a coalition filing cone accusations on its own
+claim can occupy the cap (each such filing carries a full refutation that must verify, and a failed one costs the accuser).
+
+### 2. A colluder's first session does not demote the outsider
+Identity read: `PalwCourtSessionStateV2::challenger_bond` (the only opener identity the state records). Inside side of a claim =
+`claims[claim].bond` (producer) ∪ `panels[claim].seats[].bond`; anything else is outside. A new session is a follow-on iff the claim
+already has a running session from the SAME side (`court_outsider_lane_is_followon_v1`); the tally counts every session beyond the
+first of each side per claim (`court_outsider_lane_followons_v1`, ≤ 2 firsts per claim). Cost: a decoy claim can now hold 2 first
+sessions (one inside, one outside) instead of 1 — still bounded by distinct claims.
+
+### 3. Text29 lifetime owner catalogue reclamation (cap 4 kept)
+`palw_native_text_fold_v29.rs::own`: past the fence a full catalogue (`EXECUTION_SEAL_ACTOR_TABLE_V11` kind 0) may evict the first
+(catalogue order) member that `text29_owner_reclaimable_v29` accepts: archival seal retired (`expire_owner` ran), past its horizon,
+NO progress (`text29_owner_made_no_progress_v29`: no part attempt, accepted part, assembly, court move, conversion), its caller row
+26 retired with nothing remaining, no open public request. On eviction: `status.owners_admitted -= 1` (the token's `>= 4` check then
+reads live-plus-progressed, as v39's `admitted`), the member leaves the catalogue, and its `(29u8, job, id)` / `(26u8, job, id)`
+rows are deleted at once (what collection kind 2 would delete; nothing orphaned). Physical slots already free at `retire_owner`;
+`paid_owners` already zeroed by `expire_owner`. No struct/borsh/generated.rs change needed.
+Not done: namespace 28 (`palw_flat_stage_fold_v28.rs` table 19 catalogue, line ~224) keeps its lifetime cap — same mechanism would
+apply; left for a follow-up. Uncertain: whether any audit/redemption path reads the evicted owner's archival seal (29u8,job,id) after
+eviction (grep found collection and expiry only).
+
+### Tests added (round 2)
+- `kaspa-consensus-core` lib, `palw_state_v2::tests::rcore_s1_api::court_outsider_lane_round2::`
+  `g14_f03_r2_a_direct_evidence_accusation_is_exempt_from_the_followon_share`,
+  `g14_f03_r2_a_colluder_first_session_does_not_make_the_outsider_a_followon`.
+- `kaspa-consensus-core` lib, `palw_flat_execution_fold_v11::...::palw_native_text_fold_v29::g14_f03_owner_reclaim_tests::`
+  (filter `g14_f03_r2`): `g14_f03_r2_four_stalled_owners_yield_a_slot_to_an_outsider_after_the_deadline`,
+  `g14_f03_r2_progressing_owners_are_never_evicted`, `g14_f03_r2_below_the_fence_the_catalogue_is_unchanged`.
+The text29 tests cover the pure admission + progress predicate; the full `own()` path with eviction has no fixture (needs E2E).

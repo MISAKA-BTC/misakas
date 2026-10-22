@@ -32301,6 +32301,121 @@ mod rcore_s1_api {
         assert_eq!(palw_bond_class_unlicensed_v1(&s, &h64(0xC1), &bond_key(2)), 1);
         assert_eq!(palw_bond_class_unlicensed_v1(&s, &h64(0xC9), &bond_key(1)), 0);
     }
+
+    /// **G14 F03 round 2 (lane g14p/court-owner): the outsider lane's follow-on share, on hand-made states.** The pure admission
+    /// `legacy_court_cap_admits_v1`; the overall cap is the network's, unchanged.
+    mod court_outsider_lane_round2 {
+        use super::*;
+        use crate::palw_state_v2::palw_court_capacity_fold_v1::{
+            court_outsider_lane_followons_v1, court_outsider_lane_is_followon_v1, legacy_court_cap_admits_v1,
+        };
+
+        fn lane(armed: bool) -> PalwStateParamsV2 {
+            rcore_params().with_court_outsider_lane_from_daa(armed.then_some(0))
+        }
+
+        fn session(claim_id: Hash64, challenger: PalwBondKeyV2) -> PalwCourtSessionStateV2 {
+            PalwCourtSessionStateV2 {
+                claim: claim_id,
+                challenger_bond: challenger,
+                opened_daa: 20,
+                deadline_daa: 520,
+                ladder: ladder(),
+                dissection: None,
+            }
+        }
+
+        /// A claim `id` produced by `producer` with a panel of `seats`.
+        fn claimed(s: &mut PalwChainStateV2, id: Hash64, producer: PalwBondKeyV2, seats: &[PalwBondKeyV2]) {
+            let mut c = claim(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 120 });
+            c.bond = producer;
+            s.claims.insert(id, c);
+            s.panels.insert(
+                id,
+                PalwPanelStateV2 {
+                    anchor: h64(0xA0),
+                    seats: seats.iter().enumerate().map(|(i, b)| PalwPanelSeatV2 { bond: *b, operator_id: op_id(0x22 + i as u64) }).collect(),
+                    bound_daa: 110,
+                },
+            );
+        }
+
+        /// Fill the follow-on room with outside sessions stacked on one decoy claim. Returns the state and the cap.
+        fn decoy_full(p: &PalwStateParamsV2) -> (PalwChainStateV2, u64) {
+            let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
+            let room = palw_court_outsider_lane_followon_cap_v1(cap);
+            assert!(cap >= 3 && room >= 1, "cap {cap}");
+            let mut s = PalwChainStateV2::genesis();
+            claimed(&mut s, h64(0xDEC0), bond_key(0x70), &[bond_key(0x71)]);
+            for n in 0..=room {
+                s.court_sessions.insert(h64(0x5E00 + n), session(h64(0xDEC0), bond_key(0x100 + n)));
+            }
+            assert_eq!(court_outsider_lane_followons_v1(&s), room);
+            (s, cap)
+        }
+
+        /// Requirement (round 2, item 1): a direct evidence-carrying accusation is never refused by the follow-on share — it is
+        /// admitted exactly where it was below the fence (open < cap), and refused only by the overall cap.
+        #[test]
+        fn g14_f03_r2_a_direct_evidence_accusation_is_exempt_from_the_followon_share() {
+            let armed = lane(true);
+            let (mut s, cap) = decoy_full(&armed);
+            let outsider = bond_key(0x900);
+            // A follow-on on the decoy claim (outside side already present): refused when it argues in a dissection...
+            assert!(court_outsider_lane_is_followon_v1(&s, h64(0xDEC0), outsider));
+            assert!(matches!(
+                legacy_court_cap_admits_v1(&s, &armed, h64(0xDEC0), outsider, false, 1_000),
+                Err(PalwStateV2Error::CourtSessionsAtCapacity { .. })
+            ));
+            // ...admitted when it carries its evidence, exactly as below the fence.
+            legacy_court_cap_admits_v1(&s, &armed, h64(0xDEC0), outsider, true, 1_000).expect("direct evidence: exempt");
+            legacy_court_cap_admits_v1(&s, &lane(false), h64(0xDEC0), outsider, false, 1_000).expect("below the fence: admitted");
+            // The overall cap still binds it, armed or not, exactly as before.
+            let mut n = 0u64;
+            while (s.court_sessions.len() as u64) < cap {
+                s.court_sessions.insert(h64(0x6E00 + n), session(h64(0xF000 + n), bond_key(0x300 + n)));
+                n += 1;
+            }
+            for p in [lane(true), lane(false)] {
+                assert!(matches!(
+                    legacy_court_cap_admits_v1(&s, &p, h64(0xDEC0), outsider, true, 1_000),
+                    Err(PalwStateV2Error::CourtSessionsAtCapacity { .. })
+                ));
+            }
+        }
+
+        /// Risk 2 (round 2, item 2): a colluder (the claim's producer or a panel seat) holding the target claim's first session does
+        /// not make the outsider a follow-on — the outsider's session is the outside side's first and opens while the follow-on
+        /// room is full; a second outside session on the same claim is a follow-on again.
+        #[test]
+        fn g14_f03_r2_a_colluder_first_session_does_not_make_the_outsider_a_followon() {
+            let p = lane(true);
+            let (mut s, cap) = decoy_full(&p);
+            let target = h64(0x7A60);
+            let producer = bond_key(0x80);
+            let seat = bond_key(0x81);
+            claimed(&mut s, target, producer, &[seat, bond_key(0x82)]);
+            s.court_sessions.insert(h64(0x7700), session(target, seat));
+            let outsider = bond_key(0x900);
+            assert!(!court_outsider_lane_is_followon_v1(&s, target, outsider), "a seat's session is the inside side's");
+            legacy_court_cap_admits_v1(&s, &p, target, outsider, false, 1_000).expect("the outsider counts as a first session");
+            // The producer's own session alone behaves the same.
+            let mut by_producer = s.clone();
+            by_producer.court_sessions.remove(&h64(0x7700));
+            by_producer.court_sessions.insert(h64(0x7701), session(target, producer));
+            legacy_court_cap_admits_v1(&by_producer, &p, target, outsider, false, 1_000).expect("producer-held first session");
+            // A second seat stacking on the target is a follow-on (inside side present) and is refused while the room is full.
+            assert!(court_outsider_lane_is_followon_v1(&s, target, bond_key(0x82)));
+            assert!(legacy_court_cap_admits_v1(&s, &p, target, bond_key(0x82), false, 1_000).is_err());
+            // Once the outsider opens, a further outside session on the target is a follow-on.
+            s.court_sessions.insert(h64(0x7702), session(target, outsider));
+            assert_eq!(court_outsider_lane_followons_v1(&s), palw_court_outsider_lane_followon_cap_v1(cap), "two firsts on the target");
+            assert!(court_outsider_lane_is_followon_v1(&s, target, bond_key(0x901)));
+            assert!(legacy_court_cap_admits_v1(&s, &p, target, bond_key(0x901), false, 1_000).is_err());
+            // Below the fence the old rule (open < cap) alone.
+            legacy_court_cap_admits_v1(&s, &lane(false), target, bond_key(0x901), false, 1_000).expect("below: old rule");
+        }
+    }
 }
 
 // ---- ADR-0152 v3.1 M4: `Sampled` (Q-1) and the V3 supplementary door (SR-10, SR-1b) --------

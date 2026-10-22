@@ -15935,6 +15935,8 @@ fn open_held_dissection_v1(
             binding: &accusation.refutation.binding,
             openings: &accusation.artifact_openings,
         },
+        // A held attention accusation names a leaf and is argued in the dissection: it is subject to the lane's follow-on share.
+        false,
     )
     .map(|_| ())
 }
