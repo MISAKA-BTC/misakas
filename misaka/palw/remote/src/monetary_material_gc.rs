@@ -19,7 +19,7 @@
 //! the contract is observed gone from the reopened in-memory store; the journal is rewritten the same atomic way.
 use crate::monetary_material::DurableMonetaryMaterialProviderV1;
 use borsh::{BorshDeserialize, BorshSerialize};
-use kaspa_consensus_core::{BlockHash, Hash64, palw_monetary_material_v1::PalwMonetaryMaterialRowV1};
+use kaspa_consensus_core::{palw_monetary_material_v1::PalwMonetaryMaterialRowV1, BlockHash, Hash64};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
@@ -821,7 +821,7 @@ mod tests {
     fn typed_store(
         file: &Path,
     ) -> (DurableMonetaryMaterialProviderV1, PalwMonetaryMaterialRowV1, misaka_palw_kernel::ledger::KernelLedgerV1) {
-        use crate::monetary_gc_kernel_fixture::ledger_world::{World, position};
+        use crate::monetary_gc_kernel_fixture::ledger_world::{position, World};
         use kaspa_consensus_core::{
             palw_material_capacity_v1::{PalwKernelMaterialBundleV1, PalwMaterialManifestV1},
             palw_monetary_material_v1::*,
@@ -883,6 +883,38 @@ mod tests {
         };
         (store, row, world.l)
     }
+    #[test]
+    fn replacement_observation_requires_its_durable_exact_consent_not_just_sequence() {
+        use crate::monetary_material::replacement_generation_observed_v4 as observed;
+        use kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4;
+        let dir = std::env::temp_dir().join(format!("misaka-replacement-observation-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (store, mut row, _) = typed_store(&dir.join("store"));
+        let intent = PalwKernelMaterialReplacementIntentV4 {
+            version: 4,
+            root: row.terms.root,
+            context_request: h(70),
+            previous: row.consent,
+            sequence: 1,
+            providers: vec![],
+            valid_until_daa: 100,
+        };
+        let expected = h(71);
+        assert!(!observed(&intent, Some(expected), &row).unwrap());
+        row.sequence = 1;
+        assert!(observed(&intent, Some(expected), &row).is_err(), "competing replacement at same sequence");
+        row.consent = expected;
+        assert!(observed(&intent, None, &row).is_err(), "old WAL without saved grant cannot infer acceptance");
+        assert!(observed(&intent, Some(expected), &row).unwrap());
+        row.sequence = 2;
+        assert!(observed(&intent, Some(expected), &row).is_err(), "later sequence needs exact historical evidence");
+        row.sequence = 1;
+        row.terms.root = h(72);
+        assert!(observed(&intent, Some(expected), &row).is_err());
+        drop(store);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn typed_provider_reopen_scans_every_generation_with_budget_one_and_requires_true_gc_witness() {
         // Actual typed dense/MoE kernel material, real fsync/reopen and janitor.

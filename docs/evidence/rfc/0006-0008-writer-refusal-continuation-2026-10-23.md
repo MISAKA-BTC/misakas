@@ -288,3 +288,36 @@ registration. Output: `/tmp/misaka-rfc06-paged-gdn-full-regression.log`.
 These controls are not real
 multi-process restart/reorg/prune acceptance or physical cost measurements.
 Those and the other RFC requirements remain open; no campaign gate is promoted.
+
+## RFC-0008 exact replacement observation
+
+The core material/provider court/recovery/once-settlement controls passed 41
+tests (zero failures or ignored tests, 0.35s), using the current core test binary.
+Output: `/tmp/misaka-rfc08-material-consumers-tests.log`. A pre-change
+`cargo check -p kaspad --lib --features private-integration-config` also passed
+(1m32s); output: `/tmp/misaka-rfc08-private-consumers-check.log`.
+These are fold and compilation controls, not physical coinbase or network
+provider acceptance.
+
+Inspection found that the private `kernel_paid_replace_v4` worker declared
+acceptance whenever the current sequence reached or exceeded its saved intent.
+A competing replacement could therefore produce a false success report. The
+worker now durably publishes its exact native grant consent before provider
+exchange, reuses it on restart, and requires the own-native row to match its
+root, exact sequence and consent. Missing old consent records, competing or
+later generations fail closed with acceptance unconfirmed. Saved intent
+identity, provider roster and deadline must also match the explicit work/spec;
+retrying may not rebind the durable subject. Later historical acceptance is
+not inferred from a current higher sequence.
+
+The observation regression covers an unchanged old generation, a competing
+same-sequence consent, missing durable consent, an exact match, a later
+sequence and a different root. The remote material tests passed all 7 controls
+(zero failures or ignored tests, 0.75s), including that regression and typed
+material reopen/GC/history/journal controls. Output:
+`/tmp/misaka-rfc08-remote-material-tests.log`. The post-change private consumer
+library check passed (2m46s including the build lock wait); output:
+`/tmp/misaka-rfc08-replacement-check.log`. Documentation checks pass with no
+new issues and the unchanged 43-issue baseline. Public activation and source-economic
+parameters are unchanged; this fix does not close the restart/reorg/prune,
+real-provider or campaign requirements.

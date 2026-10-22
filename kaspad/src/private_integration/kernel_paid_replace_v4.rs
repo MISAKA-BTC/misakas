@@ -8,12 +8,14 @@
 use super::kernel_paid_producer_v4::{hash, owned_dir, publish_borsh, read_bounded, regular};
 use crate::palw_native_custody_v3::{PalwNativeCustodyContextV3, PalwNativeExchangeHandleV3};
 use kaspa_consensus_core::{
-    Hash64,
     palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
     palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
-    palw_native_resource_v1::{NativeDemandLeaseV1, preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_v1},
+    palw_native_resource_v1::{
+        preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_v1, NativeDemandLeaseV1,
+    },
     palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
     palw_state_v2::PalwBondKeyV2,
+    Hash64,
 };
 use std::{
     fs::{self, OpenOptions},
@@ -43,11 +45,7 @@ impl PrivateKernelPaidReplaceSpecV4 {
             .ok_or("replacement spec metadata overflow")?;
         let owner = reserve_native_requests_v1(parse).map_err(|e| e.to_string())?;
         let mut spec: Self = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
-        if spec.version != 4
-            || !(2..=8).contains(&spec.providers.len())
-            || spec.max_input_bytes == 0
-            || spec.valid_until_daa == 0
-        {
+        if spec.version != 4 || !(2..=8).contains(&spec.providers.len()) || spec.max_input_bytes == 0 || spec.valid_until_daa == 0 {
             return Err("kernel replacement spec has invalid version, roster, lifetime or input cap".into());
         }
         hash(&spec.root)?;
@@ -86,10 +84,14 @@ impl PrivateKernelPaidReplaceSpecV4 {
         if lock_path.exists() {
             regular(&lock_path)?;
         }
-        let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(lock_path).map_err(|e| e.to_string())?;
+        let lock =
+            OpenOptions::new().read(true).write(true).create(true).truncate(false).open(lock_path).map_err(|e| e.to_string())?;
         lock.try_lock().map_err(|e| format!("kernel replacement is already owned: {e}"))?;
-        let providers =
-            self.providers.iter().map(|p| crate::palw_producer::parse_outpoint(p).map(PalwBondKeyV2)).collect::<Result<Vec<_>, _>>()?;
+        let providers = self
+            .providers
+            .iter()
+            .map(|p| crate::palw_producer::parse_outpoint(p).map(PalwBondKeyV2))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(PreparedKernelPaidReplaceV4 {
             root,
             providers,
@@ -134,8 +136,7 @@ impl PreparedKernelPaidReplaceV4 {
         let request = retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwProspectiveKernelMaterialRequestV4>(&raw))
             .map_err(|e| e.to_string())?;
         let (raw, _raw_context) = read_bounded(&self.dir.join("context.borsh"), self.max_input_bytes)?;
-        preflight_native_value_v1::<PalwProspectiveKernelMaterialContextV4>(&raw[..], raw.len() as u64)
-            .map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<PalwProspectiveKernelMaterialContextV4>(&raw[..], raw.len() as u64).map_err(|e| e.to_string())?;
         let context = retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwProspectiveKernelMaterialContextV4>(&raw))
             .map_err(|e| e.to_string())?;
         if context.intent.manifest.root != self.root || context.request != request.id() {
@@ -145,6 +146,28 @@ impl PreparedKernelPaidReplaceV4 {
         let intent_path = self.dir.join("replacement-intent.borsh");
         let mut intent: Option<PalwKernelMaterialReplacementIntentV4> = if intent_path.exists() {
             let (raw, _raw_intent) = read_bounded(&intent_path, 64 * 1024)?;
+            Some(borsh::from_slice(&raw).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        if let Some(saved) = &intent {
+            if saved.version != 4
+                || saved.root != self.root
+                || saved.context_request != context.request
+                || saved.providers != self.providers
+                || saved.valid_until_daa != self.valid_until_daa
+            {
+                return Err("saved replacement intent differs from the explicit work/spec; retained without rebinding".into());
+            }
+        }
+        // Publish the exact grant identity before any provider exchange can
+        // queue it. A restart must not infer our acceptance from sequence alone.
+        let consent_path = self.dir.join("replacement-consent.borsh");
+        let mut expected_consent: Option<Hash64> = if consent_path.exists() {
+            let (raw, _raw_consent) = read_bounded(&consent_path, 64)?;
+            if intent.is_none() {
+                return Err("replacement consent exists without its saved intent".into());
+            }
             Some(borsh::from_slice(&raw).map_err(|e| e.to_string())?)
         } else {
             None
@@ -167,8 +190,7 @@ impl PreparedKernelPaidReplaceV4 {
                 return Err("the root has no current native covenant; nothing to replace".into());
             };
             if let Some(saved) = &intent {
-                // Acceptance: the native row moved past the signed previous generation to the new sequence.
-                if current.sequence >= saved.sequence {
+                if misaka_palw_remote::monetary_material::replacement_generation_observed_v4(saved, expected_consent, current)? {
                     kaspa_core::info!(
                         "private kernel provider replacement accepted natively for {} (sequence {})",
                         faster_hex::hex_string(&self.root.as_bytes()),
@@ -204,6 +226,16 @@ impl PreparedKernelPaidReplaceV4 {
                     continue;
                 }
             };
+            let (_, consent, _) =
+                kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&grant.proposal)?;
+            if let Some(expected) = expected_consent {
+                if expected != consent {
+                    return Err("replacement grant differs from the durable consent; retained without rebinding".into());
+                }
+            } else {
+                publish_borsh(&consent_path, &consent, 64)?;
+                expected_consent = Some(consent);
+            }
             match exchange.0.replace_kernel_material_v4(&context, &request.bundle, saved, &grant) {
                 Ok(()) => queued = true,
                 Err(e) => kaspa_core::debug!("private kernel replacement provider exchange retries: {e}"),

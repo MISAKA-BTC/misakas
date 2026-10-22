@@ -2,16 +2,35 @@
 //! A fixed old manifest TTL cannot delete these bytes. Every reopen rechecks
 //! full codec coverage; GC requires the native finalized accepted-release API.
 use kaspa_consensus_core::{
-    Hash64,
     palw_material_capacity_v1::{PalwHeldMaterialBundleV1, PalwMaterialManifestV1, PalwMonetaryMaterialProviderStoreV1},
     palw_monetary_material_v1::{PalwMonetaryMaterialActionV1, PalwMonetaryMaterialEnrollmentV1},
     palw_state_v2::PalwBondKeyV2,
+    Hash64,
 };
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
 };
+
+/// Observe this exact replacement in an own-native covenant read. A higher
+/// sequence alone may belong to a competing replacement and is not acceptance.
+pub fn replacement_generation_observed_v4(
+    intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    expected_consent: Option<Hash64>,
+    current: &kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+) -> Result<bool, String> {
+    if current.terms.root != intent.root {
+        return Err("replacement observation belongs to another root".into());
+    }
+    if current.sequence < intent.sequence {
+        return Ok(false);
+    }
+    if current.sequence == intent.sequence && expected_consent == Some(current.consent) {
+        return Ok(true);
+    }
+    Err("native generation advanced without the exact saved replacement consent; acceptance unconfirmed".into())
+}
 
 pub struct DurableMonetaryMaterialProviderV1 {
     // The kernel releases this lease on crash; a PID-file lease would strand
@@ -727,7 +746,7 @@ fn load_routed_authority_v2(
 > {
     use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
     use kaspa_consensus_core::palw_native_resource_v1::{
-        NativeDecodeErrorV1, reserve_native_requests_v1, retain_native_value_decode_classified_v1,
+        reserve_native_requests_v1, retain_native_value_decode_classified_v1, NativeDecodeErrorV1,
     };
     let source = File::open(routed_authority_path_v2(file, claim)).map_err(|e| E::Authentication(e.to_string()))?;
     let n = source.metadata().map_err(|e| E::Authentication(e.to_string()))?.len();
