@@ -1708,6 +1708,26 @@ pub trait ConsensusApi: Send + Sync {
         Err("RFC-0016 report unavailable".into())
     }
 
+    /// **Tooling lane (op 225): one claim's consolidated user view** (`palw_user_views_v1::palw_claim_detail_json_v1`) at the tip,
+    /// judged at the next block's DAA: `Ok(None)` off ConsensusV2 / with no PALW tip; `Ok(Some((now_daa, None)))` for a claim the state
+    /// does not hold; `Ok(Some((now_daa, Some(json))))` otherwise. Read-only.
+    fn palw_claim_detail_v1(&self, _claim: crate::Hash64) -> Result<Option<(u64, Option<String>)>, String> {
+        Ok(None)
+    }
+
+    /// **Tooling lane (op 226): the court around a claim or one session**, as [`Self::palw_claim_detail_v1`] answers.
+    fn palw_court_state_v1(
+        &self,
+        _target: crate::palw_user_views_v1::PalwCourtTargetV1,
+    ) -> Result<Option<(u64, Option<String>)>, String> {
+        Ok(None)
+    }
+
+    /// **Tooling lane (op 228): one bond's consolidated user view**, as [`Self::palw_claim_detail_v1`] answers.
+    fn palw_bond_detail_v1(&self, _bond: crate::palw_state_v2::PalwBondKeyV2) -> Result<Option<(u64, Option<String>)>, String> {
+        Ok(None)
+    }
+
     /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding** (kernel-route aux 139) at the virtual tip:
     /// `(now_daa, armed, Some((bound_from_daa, the row's borsh bytes)))`, `None` for the row where the class declared none. `Ok(None)`
     /// off ConsensusV2 or with no PALW tip.

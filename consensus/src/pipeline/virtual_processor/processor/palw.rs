@@ -1873,6 +1873,30 @@ impl VirtualStateProcessor {
         Ok(Some((now, armed, row)))
     }
 
+    /// **Tooling lane (ops 225, 226, 228): a user view of the committed tip**, judged at the next block's DAA with the raw second-clock
+    /// depth and `palw_objective_offence` there (the facts `getPalwClaims` passes the bond-lock read) and the panel's anchor delay (the
+    /// V08 bind-slot date). `view` is one of `palw_user_views_v1`'s pure builders; `Ok(None)` with no PALW tip.
+    pub fn palw_user_view_v1_impl<F>(&self, view: F) -> Result<Option<(u64, Option<String>)>, String>
+    where
+        F: FnOnce(
+            &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+            &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+            &kaspa_consensus_core::palw_user_views_v1::PalwUserViewClockV1,
+            Option<u64>,
+        ) -> Option<String>,
+    {
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        let Some((_, state)) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())? else { return Ok(None) };
+        let next_daa = self.palw_next_block_daa_for_reads(&state);
+        let clock = kaspa_consensus_core::palw_user_views_v1::PalwUserViewClockV1 {
+            next_daa,
+            raw_depth: self.palw_settled_anchor_depth_at(next_daa),
+            objective_offence: self.palw_objective_offence_at(next_daa),
+        };
+        let anchor_delay = self.palw_panel_params_v2.as_ref().map(|panel| panel.anchor_delay());
+        Ok(Some((next_daa, view(&state, params, &clock, anchor_delay))))
+    }
+
     pub fn palw_rfc0016_report_v1_impl(
         &self,
         class: Option<kaspa_consensus_core::Hash64>,

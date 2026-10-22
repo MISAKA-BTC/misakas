@@ -1121,6 +1121,8 @@ pub mod palw_court_policy_v1;
 pub mod palw_court_clock_v2;
 /// G14 r6: the rooted receipt use-window pause row (kernel route aux 145; dormant behind Gate C).
 pub mod palw_receipt_pause_v2;
+/// Tooling lane (read-only): the consolidated claim / court / bond / fence documents RPC ops 225–228 serve. No rule reads them.
+pub mod palw_user_views_v1;
 pub mod palw_native_post_final_duty_row_v1;
 
 /// Unconnected RFC-0026 deterministic service reservation component.

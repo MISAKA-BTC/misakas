@@ -2303,7 +2303,7 @@ pub fn palw_claim_rows_v1(
     include_terminal: bool,
     limit: usize,
 ) -> (Vec<PalwClaimRowV1>, bool) {
-    use crate::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
+    use crate::palw_state_v2::PalwClaimPhaseV2 as P;
     let payouts: std::collections::BTreeMap<&Hash64, u64> = state.pending_payouts_iter().map(|(id, p)| (id, p.amount)).collect();
     let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
     let mut courts: std::collections::BTreeMap<Hash64, (usize, u64)> = std::collections::BTreeMap::new();
@@ -2325,48 +2325,15 @@ pub fn palw_claim_rows_v1(
             if !ours {
                 return None;
             }
-            let (quanta, quanta_spent, free_prompt) = match &claim.source {
-                S::FreePrompt { quanta, spent } => (*quanta, spent.len() as u32, true),
-                S::Attempt => (0, 0, false),
-            };
-            let court = courts.get(id).copied();
-            Some(PalwClaimRowV1 {
-                claim_id: *id,
-                free_prompt,
-                quanta,
-                quanta_spent,
-                class_id: claim.class_id,
-                executor_bond: claim.bond,
-                phase: claim.phase.clone(),
-                accepted_daa: claim.accepted_daa,
-                accepted_block: claim.accepted_block,
-                rebound_daa: claim.rebound_daa,
-                seats: panel.map(|p| p.seats.iter().map(|s| s.bond).collect()).unwrap_or_default(),
-                bound_daa: panel.map(|p| p.bound_daa),
-                deadline_daa: palw_claim_phase_deadline_v1(state, id, claim, state_params, court.map(|c| c.1)),
-                reserved: claim.reserved,
-                committed: crate::palw_state_v2::palw_claim_commitment_v1(state_params, claim, tip_daa),
-                reservation_split: crate::palw_bond_formula_v2::palw_bond_formula_claim_split_v2(state_params, claim),
-                security_certification: crate::palw_security_certification_v1::palw_claim_certification_status_v1(
-                    state,
-                    state_params,
-                    id,
-                    claim,
-                ),
-                claim_local_settlement: palw_claim_local_settlement_label_v1(state, state_params, *id, tip_daa),
-                escrowed_reward: claim.escrowed_reward,
-                // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
-                // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.
-                payout_pending: match claim.phase {
-                    P::Final { final_daa } if state_params.rcore_plus_active_at(final_daa) => {
-                        payouts.get(&crate::palw_vesting_v1::palw_vesting_payout_key_v1(id)).copied()
-                    }
-                    _ => payouts.get(id).copied(),
-                },
-                work_leaves: claim.work_leaves,
-                open_courts: court.map(|c| c.0).unwrap_or(0),
-                exec_lane: palw_claim_exec_lane_v1(state, id),
-            })
+            Some(palw_claim_row_build_v1(
+                state,
+                state_params,
+                id,
+                claim,
+                courts.get(id).copied(),
+                |key| payouts.get(key).copied(),
+                tip_daa,
+            ))
         })
         .collect();
     rows.sort_by(|a, b| b.accepted_daa.cmp(&a.accepted_daa).then_with(|| a.claim_id.cmp(&b.claim_id)));
@@ -2375,6 +2342,77 @@ pub fn palw_claim_rows_v1(
         rows.truncate(limit);
     }
     (rows, truncated)
+}
+
+/// **One claim's operator row** — exactly the row [`palw_claim_rows_v1`] builds for it (the same builder), for a read that names the
+/// claim rather than a bond (`getPalwClaimDetail`). `None` for a claim the state does not hold.
+pub fn palw_claim_row_v1(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, claim_id: &Hash64) -> Option<PalwClaimRowV1> {
+    let claim = state.claim(claim_id)?;
+    let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+    let mut court: Option<(usize, u64)> = None;
+    for (_, session) in state.court_sessions_iter().filter(|(_, s)| s.claim == *claim_id) {
+        let entry = court.get_or_insert((0, u64::MAX));
+        entry.0 += 1;
+        entry.1 = entry.1.min(session.deadline_daa);
+    }
+    let payout_of = |key: &Hash64| state.pending_payouts_iter().find(|(id, _)| *id == key).map(|(_, p)| p.amount);
+    Some(palw_claim_row_build_v1(state, state_params, claim_id, claim, court, payout_of, tip_daa))
+}
+
+/// The one row builder [`palw_claim_rows_v1`] and [`palw_claim_row_v1`] share: `court` is `(open sessions, earliest backstop)` on the
+/// claim, `payout_of` reads the pending payout queue by key.
+fn palw_claim_row_build_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    id: &Hash64,
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    court: Option<(usize, u64)>,
+    payout_of: impl Fn(&Hash64) -> Option<u64>,
+    tip_daa: u64,
+) -> PalwClaimRowV1 {
+    use crate::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
+    let panel = state.panel(id);
+    let (quanta, quanta_spent, free_prompt) = match &claim.source {
+        S::FreePrompt { quanta, spent } => (*quanta, spent.len() as u32, true),
+        S::Attempt => (0, 0, false),
+    };
+    PalwClaimRowV1 {
+        claim_id: *id,
+        free_prompt,
+        quanta,
+        quanta_spent,
+        class_id: claim.class_id,
+        executor_bond: claim.bond,
+        phase: claim.phase.clone(),
+        accepted_daa: claim.accepted_daa,
+        accepted_block: claim.accepted_block,
+        rebound_daa: claim.rebound_daa,
+        seats: panel.map(|p| p.seats.iter().map(|s| s.bond).collect()).unwrap_or_default(),
+        bound_daa: panel.map(|p| p.bound_daa),
+        deadline_daa: palw_claim_phase_deadline_v1(state, id, claim, state_params, court.map(|c| c.1)),
+        reserved: claim.reserved,
+        committed: crate::palw_state_v2::palw_claim_commitment_v1(state_params, claim, tip_daa),
+        reservation_split: crate::palw_bond_formula_v2::palw_bond_formula_claim_split_v2(state_params, claim),
+        security_certification: crate::palw_security_certification_v1::palw_claim_certification_status_v1(
+            state,
+            state_params,
+            id,
+            claim,
+        ),
+        claim_local_settlement: palw_claim_local_settlement_label_v1(state, state_params, *id, tip_daa),
+        escrowed_reward: claim.escrowed_reward,
+        // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
+        // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.
+        payout_pending: match claim.phase {
+            P::Final { final_daa } if state_params.rcore_plus_active_at(final_daa) => {
+                payout_of(&crate::palw_vesting_v1::palw_vesting_payout_key_v1(id))
+            }
+            _ => payout_of(id),
+        },
+        work_leaves: claim.work_leaves,
+        open_courts: court.map(|c| c.0).unwrap_or(0),
+        exec_lane: palw_claim_exec_lane_v1(state, id),
+    }
 }
 
 /// **The bond itself, read beside its claims** (ADR-0122 §6.5, `getPalwClaims`): what the registry
