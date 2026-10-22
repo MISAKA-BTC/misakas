@@ -31,6 +31,11 @@ fn ordinary_registration_keeps_routing_profile_without_certification_or_price_in
     assert_eq!(&*child.reader_router_profile_v2(class).unwrap().unwrap(), &profile);
     assert!(child.fp_work_profile_of(&class).is_none(), "registration must not populate the price/deadline index");
     assert!(!child.fp_certified_classes.contains_key(&class), "graph identity is not model approval");
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&child)).unwrap();
+    let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap()
+        .into_state(&p, Some(child.state_root())).unwrap();
+    assert_eq!(restored, child, "native snapshot restore retains the registered graph");
+    assert_eq!(&*restored.reader_router_profile_v2(class).unwrap().unwrap(), &profile);
     assert_eq!(apply_delta_v2(&parent, &delta, &p).unwrap(), child);
     assert_eq!(revert_delta_v2(&child, &delta, &p).unwrap(), parent);
 }
