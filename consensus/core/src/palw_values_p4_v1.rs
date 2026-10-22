@@ -67,6 +67,115 @@ impl crate::config::params::Params {
     }
 }
 
+// ---- 目安 (provisional, user 2026-10-22: 「パラメーターは目安で決めていい　方針をあとから変更にする」) ------------------------------
+// Each value below is a conservative PROVISIONAL estimate from the best data available on 2026-10-22 (design values, code constants,
+// the under-load Mac Studio M-C measurements on studio/values-p1-measure, the t12 passive pace 184 s/DAA). None is a measured record,
+// none arms anything, and each names the trigger that revises it. Evidence: values-p4-policy-rfc.md §10.
+
+/// 目安: the capital unit the bond budget's rates are quoted against — the testnet-12 minimum producer bond (13,000 KAS; ADR-0176
+/// plan §3). Revise: when the target ruleset's minimum bond changes.
+pub const PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1: u64 = 13_000 * crate::constants::SOMPI_PER_KASPA;
+/// 目安: claims (and reward-bearing blocks, and Round rights) per capital unit per DAY — one per 10 nominal DAA slots (72 of 720).
+/// At the measured t12 pace (184 s/DAA, ≈ 470 DAA/day) that is ≈ 15 % of a day's blocks per minimum bond, so one bond cannot take
+/// most of the block opportunity. Revise: ADR-0176 Stage 1 (the reference miner's sustained honest rate) — TooLow if REAL stalls on
+/// the cap, TooHigh if the honest miner uses < 80 % of it.
+pub const PALW_BOND_BUDGET_DAILY_CLAIMS_PROVISIONAL_V1: u64 = 72;
+/// 目安: the export cap, permille of the collateral still held — half of PESG §6's 510 bound, leaving `0.51 − 0.25 = 0.26·K` for the
+/// saved-compute term in `slash loss 0.51·K > export + S` (PRINCIPLES §10.4-1). Revise: Stage 1's measured `S/K`.
+pub const PALW_BOND_BUDGET_EXPORT_CAP_PROVISIONAL_PERMILLE_V1: u16 = 250;
+/// 目安: `H_L`, the liability hold after a claim is terminal — 10,000 DAA, the longest court-clock v2 extension horizon
+/// (`a + 10,000`, F07 / V9). Revise: X3's measured `Δ` (`hard = accepted + 5,520 + Δ`) — `H_L` must cover the hard deadline.
+pub const PALW_BOND_BUDGET_LIABILITY_HOLD_PROVISIONAL_DAA_V1: u64 = 10_000;
+
+/// **V12-b 目安: `palw_bond_budget_v1`'s V3 policy.** Per-day rates per minimum bond: 72 claims, 72 reward blocks, 72 Round rights;
+/// reward 0.25 of the unit per day (a day of issuance-bound reward never exceeds the export cap of the capital, so a whole day of
+/// forged claims stays below the 0.51 collectable slash); Final weight 1,000 per unit (the mechanics scale — its value is `Unknown`);
+/// open claims = one day's claims; burst and concurrent liability at the interim constants (72 DAA × 4, 1000 ‰). The validator still
+/// refuses the fence (non-value blockers); the lead pins.
+pub fn palw_bond_budget_policy_provisional_v1() -> crate::palw_bond_budget_v1::PalwBondBudgetPolicyV1 {
+    use crate::palw_bond_budget_v1::*;
+    let mut p = PalwBondBudgetPolicyV1::hold_baseline_unapproved_v1();
+    p.capital_unit_sompi = PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1;
+    p.rho = 1;
+    p.claims_per_unit = PALW_BOND_BUDGET_DAILY_CLAIMS_PROVISIONAL_V1;
+    p.block_units_per_unit = PALW_BOND_BUDGET_DAILY_CLAIMS_PROVISIONAL_V1 * PALW_BUDGET_BLOCK_UNIT_V1;
+    p.reward_per_unit_sompi =
+        PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1 / 1_000 * PALW_BOND_BUDGET_EXPORT_CAP_PROVISIONAL_PERMILLE_V1 as u64;
+    p.final_weight_per_unit = 1_000;
+    p.max_open_claims_per_bond = PALW_BOND_BUDGET_DAILY_CLAIMS_PROVISIONAL_V1 as u32;
+    p.slice_rights_by_rho = false;
+    p.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: PALW_BOND_BUDGET_DAILY_CLAIMS_PROVISIONAL_V1 };
+    p.liability_hold_daa = PALW_BOND_BUDGET_LIABILITY_HOLD_PROVISIONAL_DAA_V1;
+    p.export_cap_permille = PALW_BOND_BUDGET_EXPORT_CAP_PROVISIONAL_PERMILLE_V1;
+    p.weight_value = PalwWeightValuePolicyV1::Unknown;
+    p
+}
+
+/// **R2 目安: `PalwClaimChallengePolicyV2`'s resource limits, with the decided bootstrap seed.** 64 classes, 1,024 jobs, 1,008 live
+/// claims (42 concurrent court sessions × 24: at the measured court-op times — ≤ 1.5 ms median per verify, M1 Max under load —
+/// every live claim forged and detected still fits 24 rounds of the court cap), 8 enrollments per job, 1,000,000 stream blocks,
+/// 1 round (the initial contract is NonInteractive, R7-RANDOM 4). The review / evidence digests stay zero (external review, not
+/// values), so the fence stays refused. Revise: M-C on minimum hardware, the court session length in DAA, an interactive compiler.
+pub fn palw_claim_challenge_policy_provisional_v1(
+    params: &crate::config::params::Params,
+) -> crate::palw_claim_challenge_v2::PalwClaimChallengePolicyV2 {
+    let probe =
+        crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2::unapproved_probe_at(crate::config::params::ForkActivation::never());
+    crate::palw_claim_challenge_v2::PalwClaimChallengePolicyV2 {
+        maximum_classes: 64,
+        maximum_jobs: 1_024,
+        maximum_live_claims: 42 * 24,
+        maximum_enrollments_per_job: 8,
+        maximum_stream_blocks: 1_000_000,
+        maximum_rounds: 1,
+        bootstrap_seed: Some(params.palw_paid_claim_bootstrap_seed_decided_v1()),
+        ..probe.policy
+    }
+}
+
+/// R2 目安: the opt-in source seal deposit `d_src` — econ B12's parity value `c_ab·T_w/T_ab − carrier` at the interim terms (28.6,
+/// 49 % reporter share). Revise: when the beacon shape and admission fees are pinned.
+pub const PALW_SOURCE_SEAL_DEPOSIT_PROVISIONAL_SOMPI_V1: u64 = 28_600 * (crate::constants::SOMPI_PER_KASPA / 1_000);
+/// R2 目安: `N_max`, sampled attempts per seal window (S4) — the interim sealed shape's `R + 1 = 3`. Revise: a measured delay value.
+pub const PALW_SOURCE_MAX_CONCURRENT_ATTEMPTS_PROVISIONAL_V1: u32 = 3;
+
+/// **R2 / R3 目安: the work-beacon shape** (RFC-0007 §VI.2 `k, D, delay, retry`; the RFC-0010 Panel beacon uses the same). NOT an
+/// approval: `approved_panel_beacon_policies_v1()` stays empty until the external bias review (§VI.8 item 2 / P0-10), which revises it.
+/// `k = 3` distinct works (P(all three adversarial) = 1.6 % at f = 0.25); `D = 200` DAA (the upper end of the observed quiet-time
+/// finality depth, 7–10 h at 184 s/DAA); anchor delay 2 and window 40 slots (the interim sealed shape econ B12 measured); retry 2
+/// (the interim `R + 1 = 3`: an adaptive last mover picks among at most 3 outputs).
+pub const PALW_WORK_BEACON_K_PROVISIONAL_V1: u32 = 3;
+pub const PALW_WORK_BEACON_SETTLEMENT_DEPTH_PROVISIONAL_DAA_V1: u64 = 200;
+pub const PALW_WORK_BEACON_ANCHOR_DELAY_PROVISIONAL_SLOTS_V1: u64 = 2;
+pub const PALW_WORK_BEACON_WINDOW_PROVISIONAL_SLOTS_V1: u64 = 40;
+pub const PALW_WORK_BEACON_RETRY_LIMIT_PROVISIONAL_V1: u32 = 2;
+
+/// **R1 目安: RFC-0006 R6-DRAW / R6-PRICE** (dormant behind N3; values only). Retry bound 2; 1 class seat + 1 outsider per stratum;
+/// at most 4 retained 100k populations (the mechanics already refuse a fifth); worst-cell public material 33,629 B (the largest court
+/// object M-C measured: a position close with two ML-DSA-87 signatures); worst fresh-verifier time 134 ms (the largest per-verify
+/// maximum under load, ≈ 100× the medians); per-shard court capacity 42 sessions (the court cap). Revise: release-hardware
+/// measurements of a real sharded class.
+pub const PALW_RFC0006_DRAW_RETRY_BOUND_PROVISIONAL_V1: u32 = 2;
+pub const PALW_RFC0006_SEATS_PER_STRATUM_PROVISIONAL_V1: u32 = 1;
+pub const PALW_RFC0006_OUTSIDERS_PER_STRATUM_PROVISIONAL_V1: u32 = 1;
+pub const PALW_RFC0006_RETAINED_POPULATIONS_PROVISIONAL_V1: u32 = 4;
+pub const PALW_RFC0006_WORST_CELL_BYTES_PROVISIONAL_V1: u64 = 33_629;
+pub const PALW_RFC0006_WORST_CELL_VERIFY_PROVISIONAL_US_V1: u64 = 134_000;
+pub const PALW_RFC0006_SHARD_COURT_CAPACITY_PROVISIONAL_V1: u32 = 42;
+
+/// **R4 / R8 目安: RFC-0016's value set** — the calibration starting point (user decisions 2026-10-15) with ε = 0 and no entrant cap
+/// (ADR-0179: no entrants under the tier fence) and the capacity safety factor at 0.5 (half the measured capacity is credited); the
+/// swept probes kept. NOT a measured record: `PALW_RFC0016_MEASURED_RECORDS_V1` stays empty (the lead's consolidation pins). Revise:
+/// RFC-0016 §3.6's three-stage derivation.
+pub fn palw_rfc0016_values_provisional_v1() -> crate::palw_rfc0016_v1::PalwRfc0016ValuesV1 {
+    crate::palw_rfc0016_v1::PalwRfc0016ValuesV1 {
+        entrant_reserve_permille: 0,
+        entrant_max_per_model_permille: 0,
+        capacity_safety_permille: 500,
+        ..crate::palw_rfc0016_v1::values::PALW_RFC0016_CALIBRATION_START_V1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +306,42 @@ mod tests {
         let history = s.models.values().filter(|r| r.reserved_sompi == PALW_ALLOCATION_HISTORY_MARKER_V1).count();
         assert!(history <= 2 * 7, "history rows bounded by the 7-epoch span: {history}");
         s.check_consistency().expect("consistent");
+    }
+
+    #[test]
+    fn p4_provisional_policies_validate_and_their_fences_stay_refused() {
+        let t12 = palw_t12_shipped_params();
+        // V12-b: the V3 budget policy is well formed, and the fence is still refused by its non-value blockers.
+        let b = palw_bond_budget_policy_provisional_v1();
+        b.validate().expect("the provisional budget policy validates");
+        let daily = palw_bond_hold_daily_caps_v1(&b, PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1);
+        assert_eq!(daily.claims, 72);
+        assert_eq!(daily.reward_sompi, PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1 / 4, "a day's reward = 0.25 of the capital");
+        assert!(daily.reward_sompi < PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1 / 1_000 * 510, "below the 0.51 collectable");
+        let mut armed = t12.clone();
+        armed.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(16_000), policy: b.clone() });
+        assert!(armed.validate_palw_bond_budget_v1().is_err(), "still refused (non-value blockers)");
+        let mut bad = b.clone();
+        bad.export_cap_permille = 511;
+        assert!(bad.validate().is_err());
+        // R2: the provisional paid-claim policy validates; the fence stays refused (no review evidence).
+        let c = palw_claim_challenge_policy_provisional_v1(&t12);
+        c.validate().expect("the provisional paid-claim policy validates");
+        assert_eq!(c.bootstrap_seed, Some(t12.palw_paid_claim_bootstrap_seed_decided_v1()));
+        let mut armed = t12.clone();
+        armed.palw_claim_challenge_v2 =
+            Some(crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2 { activation: ForkActivation::new(16_000), policy: c });
+        assert!(armed.validate_palw_claim_challenge_v2().is_err());
+        // R4/R8: the provisional RFC-0016 set is no placeholder and conforms, but no measured record pins it.
+        let v = palw_rfc0016_values_provisional_v1();
+        assert!(!v.is_placeholder());
+        crate::palw_rfc0016_v1::values::palw_rfc0016_calibration_conforms_v1(&v).expect("k = 1, ε = 0");
+        assert!(!crate::palw_rfc0016_v1::values::palw_rfc0016_values_measured_v1(
+            &v,
+            crate::palw_rfc0016_v1::values::PALW_RFC0016_MEASURED_RECORDS_V1
+        ));
+        // R3: the beacon shape is not an approval.
+        assert!(crate::palw_panel_beacon_v1::approved_panel_beacon_policies_v1().is_empty());
     }
 
     #[test]
