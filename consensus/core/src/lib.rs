@@ -368,6 +368,7 @@ pub mod palw_fp_interval_v1;
 pub mod palw_fp_job_v5;
 pub mod palw_fp_objects_v3;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.
+pub mod palw_fp_answer_accounting_v1;
 pub mod palw_fp_prefix_v1;
 pub mod palw_fp_tokenizer_v1;
 pub mod palw_fp_v4_vectors;

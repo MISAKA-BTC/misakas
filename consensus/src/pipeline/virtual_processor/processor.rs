@@ -550,6 +550,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_tir_public_conviction_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// RFC-0002 02-A: the TIR container identity's effective fence; `None` on every shipped preset.
     pub(super) palw_tir_container_identity_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// Compute-claim audit CX-01/CX-02: `palw_fp_answer_accounting_v1` (dormant; refused when armed until its carriage is built).
+    pub(super) palw_fp_answer_accounting_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The TIR frame's measured cost model (G14 audit §10); `None` on every shipped preset, so the frame route resolves no rules.
     pub(super) palw_tir_frame_cost_v1: Option<kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
     pub(super) palw_tir_bounded_door_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1417,6 +1419,7 @@ impl VirtualStateProcessor {
             palw_staged_tir_route_v1: params.palw_staged_tir_route_v1_fence(),
             palw_tir_public_conviction_v1: params.palw_tir_public_conviction_v1_fence(),
             palw_tir_container_identity_v1: params.palw_tir_container_identity_v1_fence(),
+            palw_fp_answer_accounting_v1: params.palw_fp_answer_accounting_v1_fence(),
             palw_tir_frame_cost_v1: params.palw_tir_frame_cost_v1,
             palw_tir_bounded_door_v1: params.palw_tir_bounded_door_v1_fence(),
             palw_staged_float_constraint_v1: params.palw_staged_float_constraint_v1_fence(),

@@ -971,6 +971,10 @@ mod tests {
             // The three fences of the 2026-10-12 rulings: bare heights, refused when armed by `validate_palw_v2`.
             "palw_court_model_scope_v1" => params.palw_court_model_scope_v1 = Some(at),
             "palw_public_evidence_reward_v1" => params.palw_public_evidence_reward_v1 = Some(at),
+            // Compute-claim audit CX-01/CX-02: a bare height, refused when armed without its prerequisites by `validate_palw_v2`.
+            "palw_fp_answer_accounting_v1" => params.palw_fp_answer_accounting_v1 = Some(at),
+            // RFC-0002 02-A (pre-existing gap the probe panicked on; found by lane compute-exec): a bare height.
+            "palw_tir_container_identity_v1" => params.palw_tir_container_identity_v1 = Some(at),
             "palw_claim_hard_deadline_v1" => {
                 params.palw_claim_hard_deadline_v1 =
                     Some(crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at))

@@ -292,6 +292,8 @@ impl Params {
         self.validate_palw_fp_prefix_inherit_v1()?;
         // **palw_fp_prefix_state** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_state_v1()?;
+        // **palw_fp_answer_accounting_v1** (`crate::palw_fp_answer_accounting_v1`, compute-claim audit CX-01/CX-02).
+        self.validate_palw_fp_answer_accounting_v1()?;
         // **palw_fp_tokenizer_match** (`crate::palw_fp_tokenizer_v1`).
         self.validate_palw_fp_tokenizer_match_v1()?;
         // **palw_fp_constraint_v2** (`crate::palw_fp_constraint_v2`).

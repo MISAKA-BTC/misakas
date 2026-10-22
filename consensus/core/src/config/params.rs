@@ -3211,6 +3211,13 @@ pub struct Params {
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
     /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/integration/mainnet-spec-register-2026-10-12.md).
     pub palw_public_evidence_reward_v1: Option<ForkActivation>,
+    /// **palw_fp_answer_accounting_v1** — compute-claim audit CX-01/CX-02 (lane compute-exec, 2026-10-22; ADR-0205 draft): past it a
+    /// compute-priced free-prompt commitment carries its decoded answer ids, the chain records `prompt ‖ answer` as what the class was
+    /// paid to compute, and a claim is credited only for positions no paid claim of the class computed with the same tokens.
+    /// **Dormant**: `None` on every preset; an entry of the testnet-12 full-activation list (height `None`); hashed Some-only in both
+    /// fingerprints and the fork id, collapsed from `Some(never())`; refused when armed without `palw_fp_derived_work` and
+    /// `palw_canonical_work` at or below it ([`crate::palw_fp_answer_accounting_v1`]).
+    pub palw_fp_answer_accounting_v1: Option<ForkActivation>,
     /// **palw_claim_hard_deadline_v1** — register X3: past it a claim's dispute hard deadline is fixed at acceptance and never extended. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
     /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/integration/mainnet-spec-register-2026-10-12.md).
@@ -6264,6 +6271,7 @@ impl Params {
             palw_legacy_public_filer_v1: self.palw_legacy_public_filer_v1,
             palw_court_model_scope_v1: self.palw_court_model_scope_v1,
             palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
+            palw_fp_answer_accounting_v1: self.palw_fp_answer_accounting_v1,
             palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1: self.palw_g14_route_required_v1,
@@ -7436,6 +7444,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_legacy_public_filer_v1: None,
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
+    palw_fp_answer_accounting_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -7804,6 +7813,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_legacy_public_filer_v1: None,
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
+    palw_fp_answer_accounting_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -8154,6 +8164,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_legacy_public_filer_v1: None,
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
+    palw_fp_answer_accounting_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -13707,6 +13718,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_legacy_public_filer_v1: None,
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
+    palw_fp_answer_accounting_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,

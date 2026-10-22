@@ -43,3 +43,4 @@
 | RFC-0035 | [shared court originalの実原資と役割別同意](0035-court-original-funded-contract-and-role-consent.md) | 原文と後続改定を参照 |
 | RFC-0036 | [認証付き PALW state map と行単位アクセス](0036-authenticated-palw-state-map-and-row-access.md) | 原文と後続改定を参照 |
 | RFC-0037 | [IBD の有界 authenticated row stream と世代番号付き保存](0037-ibd-bounded-row-stream-and-storage-generations.md) | 原文と後続改定を参照 |
+| RFC-0038 | [free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)](0038-palw-fp-answer-accounting.md) | 原文と後続改定を参照 |
