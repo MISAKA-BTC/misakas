@@ -155,6 +155,18 @@ without a record / unconditionally refused, **M** missing, **V** needs measureme
 
 No new fence, wire tag, aux row, carriage tail, RPC op or borsh layout. No preset changes; fork id and identities unchanged.
 
+### Runs (shared lock, `CARGO_TARGET_DIR=/Users/wata/Downloads/MISAKA-g14/target`)
+
+- `cargo test --release -p kaspa-consensus-core --lib -- rfcgap_b_ palw_rfc0016_v1:: palw_model_tier_v1:: palw_rfc0018_v1::tests::gatec_decouple`:
+  `test result: ok. 49 passed; 0 failed`, including
+  `palw_rfc0016_v1::values::tests::rfcgap_b_rfc0016_arm_record_gate_is_exact_and_the_pinned_list_is_empty ... ok` and
+  `palw_model_tier_v1::tests::rfcgap_b_tier_arm_record_gate_is_exact_and_the_pinned_list_is_empty ... ok`.
+- `cargo test --release -p kaspa-consensus-core --test rfc0016_v1`: `test result: ok. 19 passed; 0 failed`.
+- `cargo check --release --workspace --tests --exclude misaka-palw-worker`: `Finished`. The first attempt failed in `kaspa-grpc-core`
+  on request variants (`GetPalwClaimDetailRequest`, …) that do not exist in this tree: the shared target held `protowire` generated
+  from another worktree's `.proto` (workspace members share OUT_DIR across worktrees and the build script reruns only on mtime).
+  Touching this tree's two `.proto` files regenerated it; no source change was needed.
+
 ## Open decisions (not implemented: need a user value)
 
 - RFC-0017/ADR-0179: approve κ (design 300 ‰) and c's measured record; RFC-0019 U-3/U-4/U-6 (signers, edition contents, activation).
