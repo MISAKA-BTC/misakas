@@ -100,6 +100,10 @@ impl PalwModelAllocationPolicyV1 {
         if !average.verifier_capital || !average.block_opportunity {
             return Err("S_m counts miner + claim-bound verifier capital, and P_m applies to block opportunity and coinbase (2026-10-14)");
         }
+        // A zero epoch is refused here, before the remainder below (`validate`'s own zero check runs after this one).
+        if self.epoch_daa == 0 {
+            return Err("the allocation epoch must be positive");
+        }
         if average.span_daa() % self.epoch_daa != 0 {
             return Err("the allocation epoch must divide the averaging span");
         }

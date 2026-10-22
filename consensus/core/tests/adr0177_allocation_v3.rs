@@ -1,4 +1,4 @@
-//! **ADR-0177 / RFC-0015 §8.5.5 — the allocation as decided 2026-10-14** (`α = 1.5`, the 30-day average of miner + claim-bound
+//! **ADR-0177 / RFC-0015 §8.5.5 — the allocation as decided 2026-10-14** (`α = 1.5`, the 7-day average (2026-10-16; 30 days before) of miner + claim-bound
 //! verifier capital, `P_m` for block opportunity and coinbase), on the budget engine (`roll_epoch_v3`, `model_blocks_available_v1`).
 //!
 //! **TEST SOURCES ONLY — not run in the round that wrote them; nothing here is a PASS.** Values are TEST values.
@@ -36,17 +36,18 @@ fn state() -> PalwBondBudgetStateV1 {
 fn the_decided_terms_are_pinned() {
     let p = policy();
     assert_eq!(p.curve.alpha_halves, 3, "alpha = 1.5");
-    assert_eq!(p.average_epochs(), Some(30), "30 day-equivalents over 1-day epochs");
+    assert_eq!(p.average_epochs(), Some(7), "7 day-equivalents over 1-day epochs (user decision 2026-10-16)");
     let bad = |f: &dyn Fn(&mut PalwModelAllocationPolicyV1)| {
         let mut q = policy();
         f(&mut q);
         q.validate().is_err()
     };
     assert!(bad(&|q| q.curve.alpha_halves = 4), "alpha is decided");
-    assert!(bad(&|q| q.average.as_mut().unwrap().average_days = 7));
+    assert!(bad(&|q| q.average.as_mut().unwrap().average_days = 30), "the superseded 30-day average");
     assert!(bad(&|q| q.average.as_mut().unwrap().verifier_capital = false), "miner + verifier capital");
     assert!(bad(&|q| q.average.as_mut().unwrap().block_opportunity = false), "P_m applies to block opportunity too");
-    assert!(bad(&|q| q.epoch_daa = 7), "the epoch divides the span");
+    assert!(bad(&|q| q.epoch_daa = 1_000), "the epoch divides the span (1,000 does not divide 5,040)");
+    assert!(bad(&|q| q.epoch_daa = 0), "a zero epoch is refused, never a division by zero");
     assert!(bad(&|q| q.average = None));
     // V2 bytes untouched.
     let v2 = PalwModelAllocationPolicyV1::unapproved_probe_v1();
@@ -73,7 +74,7 @@ fn miner_and_verifier_capital_count_once_per_bond() {
 }
 
 #[test]
-fn the_average_spans_thirty_epochs_and_a_new_model_ramps_in() {
+fn the_average_spans_seven_epochs_and_a_new_model_ramps_in() {
     let p = policy();
     let mut s = state();
     let mut j = Vec::new();
@@ -91,14 +92,14 @@ fn the_average_spans_thirty_epochs_and_a_new_model_ramps_in() {
         let a = s.model_row(&model(0xA)).map(|r| r.capital).unwrap_or(0);
         let b = s.model_row(&model(0xB)).map(|r| r.capital).unwrap_or(0);
         assert!(a <= (900 * KAS) as u128 && b <= a, "epoch {epoch}: averages never exceed the capital, the newcomer ramps");
-        if epoch >= 17 + 29 {
+        if epoch >= 17 + 6 {
             assert_eq!(b, a, "after a full span the newcomer's average equals the incumbent's");
             assert_eq!(a, (900 * KAS) as u128);
         }
     }
-    // History rows never outlive the span: at most 30 per model, and no block rows of past epochs.
+    // History rows never outlive the span: at most 7 per model, and no block rows of past epochs.
     let history = s.models.values().filter(|r| r.reserved_sompi == PALW_ALLOCATION_HISTORY_MARKER_V1).count();
-    assert!(history <= 2 * 30, "{history} history rows");
+    assert!(history <= 2 * 7, "{history} history rows");
     s.check_consistency().expect("consistent");
 }
 
