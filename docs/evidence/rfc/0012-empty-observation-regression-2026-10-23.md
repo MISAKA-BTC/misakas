@@ -19,10 +19,11 @@ Ran 188 tests
 OK
 ```
 
-`git diff --check` succeeds. The documentation checker fails on two missing
-links already present in the unchanged remaining-work document at the base:
+`git diff --check` succeeds. The documentation checker initially found two
+incorrect relative links in the remaining-work document at the base:
 `rfc06-kimi-k3-runtime-gap-2026-10-18.md` and
-`rfc06-native-routing-execution-context-2026-10-18.md`. The baseline is unchanged.
+`rfc06-native-routing-execution-context-2026-10-18.md`. Both documents exist one
+directory above; the links now point there. The baseline is unchanged.
 
 These are offline harness unit tests, not real-process acceptance evidence.
 The 15-gate campaign, 100k, pruned IBD, OS crash, actual reward/coinbase,
