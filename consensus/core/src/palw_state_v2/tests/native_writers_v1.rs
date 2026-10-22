@@ -14,12 +14,14 @@ fn zero_capacity(builder: &mut TransitionBuilder<'_>) -> std::sync::Arc<NativeDe
 #[test]
 fn ordinary_registration_keeps_routing_profile_without_certification_or_price_index_changes() {
     let old = params();
-    let (mut parent, _) = apply(&PalwChainStateV2::genesis(), &old, &ctx(1, 100, 1), &register_class_and_bond(), None);
-    parent.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
-        crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h64(1), h64(2)),
-        None,
-        misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 100, burned: 0 },
-    ));
+    let (parent, _) = apply(&PalwChainStateV2::genesis(), &old, &ctx(1, 100, 1), &register_class_and_bond(), None);
+    assert!(parent.kernel_route().is_none());
+    let extras = PalwTransitionExtrasV1 {
+        kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+            network_domain: h64(1), ruleset_digest: h64(2), ..Default::default()
+        }),
+        ..Default::default()
+    };
     let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap();
     let class = profile.shape_profile_id();
     let p = old.with_memory_routing_court_from_daa(Some(101));
@@ -27,7 +29,9 @@ fn ordinary_registration_keeps_routing_profile_without_certification_or_price_in
     if let PalwConsensusObjectV2::ClassRegistered { slash_value_per_pwu, .. } = &mut object {
         *slash_value_per_pwu = parent.class(&h64(1)).unwrap().slash_value_per_pwu;
     }
-    let (child, delta) = apply(&parent, &p, &ctx(2, 101, 2), &[object], None);
+    let (child, delta) = apply_palw_transition_v2_with_extras(
+        &parent, &p, &ctx(2, 101, 2), &[object], None, false, false, false, false, &extras,
+    ).unwrap();
     assert_eq!(&*child.reader_router_profile_v2(class).unwrap().unwrap(), &profile);
     assert!(child.fp_work_profile_of(&class).is_none(), "registration must not populate the price/deadline index");
     assert!(!child.fp_certified_classes.contains_key(&class), "graph identity is not model approval");

@@ -1843,6 +1843,9 @@ fn apply_object_inner(
                             return Err(PalwStateV2Error::ImmutableModelUpdate("registered routing profile is immutable"));
                         }
                     }
+                    if builder.state.kernel_route().is_none() {
+                        super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+                    }
                     builder.write_reader_router_cell_v2(
                         &reader_router_v2::profile_key_v2(*class_id), Some(&carriage.profile),
                     )?;
