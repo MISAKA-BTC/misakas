@@ -583,6 +583,15 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             if signature.is_empty() { return Err("a readiness root must carry its seat's signature"); }
             Ok(())
         }
+        // ADR-0200 C1 (tags 231/232): fixed-field demand; an answer's path is bounded by its decoder (u32 tree depth). Both signed.
+        PalwConsensusObjectV2::SeatReadinessDemandedV1 { signature, .. } => {
+            if signature.is_empty() { return Err("a readiness demand must carry its challenger's signature"); }
+            Ok(())
+        }
+        PalwConsensusObjectV2::SeatReadinessAnsweredV1 { signature, .. } => {
+            if signature.is_empty() { return Err("a readiness answer must carry its seat's signature"); }
+            Ok(())
+        }
         // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
         // registrant and by the bond, checked at acceptance against their registered keys — and
         // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
@@ -1495,6 +1504,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::TirDesignatedEventV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirDesignatedAnswersV1),
         // R-D2-READY (ADR-0188 B): the seat readiness root (tag 230), dormant behind D2's fence.
         O::SeatReadinessRootV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtModelScopeV1),
+        // ADR-0200 C1 (G14 item 6): the disclosure court's demand and answer, under D2's fence.
+        O::SeatReadinessDemandedV1 { .. } | O::SeatReadinessAnsweredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtModelScopeV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
@@ -1650,6 +1661,8 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (244, "MemoryRoutingV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (245, "TirDesignatedEventV1", PalwLifecycleKindFenceV1::TirDesignatedAnswersV1),
     (230, "SeatReadinessRootV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
+    (231, "SeatReadinessDemandedV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
+    (232, "SeatReadinessAnsweredV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (170, "TirPublicControlV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
@@ -2358,6 +2371,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "D2 seat readiness root (ADR-0188 B; refused while the draw cap is unadopted)",
         true,
     ),
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 231, hi: 232 },
+        "palw_court_model_scope_v1",
+        "D2 readiness digest/path disclosure demand and answer (ADR-0200 C1; refused while the draw cap / fee are unadopted)",
+        true,
+    ),
     // 140–149: BUDGET (ADR-0176/0177, allocated 2026-10-10). 140 `BondCapitalAssignedV1` (landed, owned by the allocation fence, which
     // needs `palw_bond_budget_v1` at or below it); 141–149 unallocated within the lane: no row until a kind lands there.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 140, hi: 140 }, "palw_model_bond_allocation_v1", "BUDGET capital assignment", true),
@@ -3052,6 +3071,10 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // d2-x3-finish) as THE tag for that kind: no other allocation row uses 230, and the kind is dormant behind `palw_court_model_scope_v1`.
     // 2026-10-22 (lane d2-finish): landed as `SeatReadinessRootV1` (ADR-0188 B codec, A-2 kind row, fence-gated validation/fold).
     (230, 230, "D2 seat readiness root", &["palw_court_model_scope_v1"]),
+    // 231–232: G14 item 6 (lane r5-d2-c1, 2026-10-22) — the ADR-0200 C1 disclosure court's demand and answer, next to 230 under the
+    // same D2 fence. No existing court object fits (the provider court's 151/152 need a lease and a kernel subject; LG14-B's 157/158
+    // are claim-bound). PROPOSED by the lane: the central merge confirms the allocation.
+    (231, 232, "D2 readiness disclosure court (ADR-0200 C1)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
     (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
     // 244: the RFC06 GDN/router lane's allocation (2026-10-15; moved from 170, which G14's public conviction took first on integ)
@@ -5372,6 +5395,10 @@ pub(crate) mod tests {
             // by `scripts/drills/a2u_new_kind_wire_pins.py` (lane d2-finish, 2026-10-22); the Rust test stays the authority.
             // (Tags 245 and 175 were already unpinned at the lane base 8b036ed38 — not this lane's rows.)
             (230, 0x9cfea943bbe78428),
+            // ADR-0200 C1 disclosure court (tags 231/232, G14 item 6, lane r5-d2-c1): derived without a build by
+            // `scripts/drills/a2u_new_kind_wire_pins.py`; the Rust test stays the authority.
+            (231, 0xab43ed01657d7094),
+            (232, 0xc982f0b31e567ae7),
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),

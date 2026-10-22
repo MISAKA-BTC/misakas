@@ -140,6 +140,7 @@ impl PalwChainStateV2 {
             legacy_disputes: BTreeMap::new(),
             tir_designated: Default::default(),
             funded_escrows: BTreeMap::new(),
+            d2_readiness: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
             class_semantics: BTreeMap::new(),
             claim_semantics: BTreeMap::new(),
@@ -669,6 +670,11 @@ impl PalwChainStateV2 {
     /// (the unsettled rows' outpoints, `crate::palw_funded_escrow_v1::palw_escrow_rows_by_outpoint_v1`). Empty on every network.
     pub fn funded_escrows_v1(&self) -> &BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1> {
         &self.funded_escrows
+    }
+
+    /// G14 item 6 (ADR-0200 C1): the D2 readiness registry (recorded tag-230 roots and their disclosure cases). Empty on every network.
+    pub fn d2_readiness_v1(&self) -> &crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1 {
+        &self.d2_readiness
     }
 
     /// ADR-0191 step B: every designated-custodian record in the registry (empty below the fence).
@@ -2936,6 +2942,11 @@ impl PalwChainStateV2 {
         if !self.funded_escrows.is_empty() {
             state.update(b"funded_escrow/v1");
             state.update(collection_root(b"funded_escrow", &self.funded_escrows).as_byte_slice());
+        }
+        // **G14 item 6 (ADR-0200 C1).** Its own block: empty until a root is recorded with an adopted draw cap, which nothing can yet.
+        if !self.d2_readiness.is_empty() {
+            state.update(b"d2_readiness/v1");
+            state.update(collection_root(b"d2_readiness", &self.d2_readiness).as_byte_slice());
         }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a

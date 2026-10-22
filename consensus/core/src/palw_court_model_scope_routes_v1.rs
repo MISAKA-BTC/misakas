@@ -40,6 +40,8 @@
 //! registered past the fence takes no readiness proof and seats it by the possession floor's other conditions.
 
 pub mod readiness_root;
+/// ADR-0200 C1: the digest/path disclosure court over recorded tag-230 roots (G14 item 6).
+pub mod readiness_disclosure;
 
 use borsh::BorshSerialize;
 

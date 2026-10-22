@@ -10594,6 +10594,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
         PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => "TirDesignatedEventV1",
         PalwConsensusObjectV2::SeatReadinessRootV1 { .. } => "SeatReadinessRootV1",
+        PalwConsensusObjectV2::SeatReadinessDemandedV1 { .. } => "SeatReadinessDemandedV1",
+        PalwConsensusObjectV2::SeatReadinessAnsweredV1 { .. } => "SeatReadinessAnsweredV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

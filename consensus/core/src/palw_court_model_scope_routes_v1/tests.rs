@@ -364,3 +364,25 @@ fn r_d2_cover_the_opening_does_not_derive_the_finalize_read_set_and_the_finalize
     assert!(tir.contains("the artifact multiproof is not the set the evaluation reads"));
     assert_eq!(palw_d2_named_leaf_operands_admit_v1(&c, leaf, &PalwD2OpeningOperandsV1::CarriedUnchecked, root, None, LADDER), Ok(()));
 }
+
+/// **G14 item 6 / ADR-0188 R-D2-COVER at admission (lane r5-d2-c1).** On a claim D2 governs, the named-leaf opening's operand check
+/// runs at ADMISSION — gated on `palw_court_model_scope_governs_claim_v1`, before the X3 pursuit gate and before any court-capacity
+/// write (`court_admission_v1`) — and an opening that publishes nothing is refused there. What admission does NOT secure is the
+/// finalize's exact read set (data-dependent; ADR-0188 "残余"): the finalize's Step 8 stays the exact gate. Pins both, by order.
+#[test]
+fn r_d2_cover_admission_gate_precedes_every_write_and_the_finalize_stays_the_exact_gate() {
+    let sessions = include_str!("../palw_state_v2/da_sessions.rs");
+    let governs = sessions.find("if crate::palw_ruling_fences_v1::palw_court_model_scope_governs_claim_v1(builder.params, claim) {").unwrap();
+    let admit = sessions.find("crate::palw_court_model_scope_routes_v1::palw_d2_named_leaf_operands_admit_v1(").unwrap();
+    let pursuit = sessions.find("crate::palw_ruling_fences_v1::palw_claim_pursuit_may_start_v1(builder.params, claim, ctx.daa_score)").unwrap();
+    let capacity = sessions.find("super::palw_court_capacity_fold_v1::court_admission_v1(builder, ctx, claim_id, challenger_bond").unwrap();
+    assert!(governs < admit && admit < pursuit && pursuit < capacity, "the D2 operand gate is the first refusal, before any write");
+    let (fx, leaf) = fused_fixture(None);
+    let c = claim_record(&fx, FENCE);
+    assert_eq!(
+        palw_d2_named_leaf_operands_admit_v1(&c, leaf, &PalwD2OpeningOperandsV1::None, h64(ARTIFACT_ROOT), None, LADDER),
+        Err(PalwD2RouteErrorV1::NoChallengerOperands)
+    );
+    let tir = include_str!("../palw_tir_court_v1.rs");
+    assert!(tir.contains("if used.params.len() != r.params.opened_count() {"));
+}
