@@ -28476,6 +28476,8 @@ mod evm_market {
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
             funded_escrow_settlements: Vec::new(),
+            tir_funded_originals: Default::default(),
+            funded_original_test_schedule_v1: None,
             exec_v2_covered: Vec::new(),
             exec_v2_origin_headers: BTreeMap::new(),
             #[cfg(test)]
@@ -28754,6 +28756,8 @@ mod evm_market {
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
             funded_escrow_settlements: Vec::new(),
+            tir_funded_originals: Default::default(),
+            funded_original_test_schedule_v1: None,
             exec_v2_covered: Vec::new(),
             exec_v2_origin_headers: BTreeMap::new(),
             #[cfg(test)]

@@ -20134,6 +20134,14 @@ pub struct PalwTransitionExtrasV1 {
     /// transaction was decoded into this exact original FP object by native ingress.
     /// A matching claim found elsewhere must never lend a pledge to another TX.
     pub tir_public_originals: BTreeMap<Hash64, crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
+    /// **G14 item 1 (RFC-0035 A): transaction-paired funded TFO1 originals**, keyed by the literal original's claim. Each claim here
+    /// is ALSO in [`Self::tir_public_originals`] (its literal TFP1) and is admitted ONLY through the funded-original coordinator; a
+    /// refusal leaves the carrier an ordinary transaction. Empty below `palw_tir_public_conviction_v1` (`Default`: byte-identical).
+    pub tir_funded_originals: BTreeMap<Hash64, crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1>,
+    /// **TEST ONLY — the unadopted funded-original schedule injected for the coordinator's success path.** Absent from every
+    /// non-test build; production resolution is always typed-missing.
+    #[cfg(test)]
+    pub funded_original_test_schedule_v1: Option<crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1>,
     /// **G14 G-03: `Params::palw_tir_public_conviction_v1` is in force at this block** (its own fence, read from the params, NOT
     /// from whether [`Self::tir_public_allocation_rules_v1`] resolved). Past it a Free Prompt commitment on a registered TIR class
     /// is admitted only WITH its transaction-paired `TFP1` ORIGINAL frame: a frameless one is refused at acceptance, so it earns

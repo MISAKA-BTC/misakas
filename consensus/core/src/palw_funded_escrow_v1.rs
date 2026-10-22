@@ -2,8 +2,8 @@
 //!
 //! Pure rules. The processor and the fold read them only past `palw_tir_public_conviction_v1` (the fence that owns the public
 //! original TFP1 route the funded TFO1 carrier wraps; `None` on every preset). No fence of its own is added: the funded original is
-//! a sub-route of that public original route, and every path here is additionally unreachable until a funded-original coordinator
-//! installs a row, which nothing does yet (`palw_funded_original_candidate_v1` never reaches an admitted result).
+//! a sub-route of that public original route. Rows are installed only by the funded-original coordinator (round 2,
+//! `palw_funded_original_coordinator_fold_v1.rs`), whose schedule is typed-missing in production, so no row exists on any network.
 //!
 //! What this module decides, and what it does not:
 //! * **The row** ([`PalwFundedEscrowRowV1`]) records the actual funding outpoint, its amount, the payer's key id and native return
@@ -64,6 +64,9 @@ pub enum PalwEscrowRefusalV1 {
     EscrowFundsOtherOutputs,
     /// The hard deadline has no source (X3 does not govern the acceptance) or overflows.
     HardDeadlineUnsourced,
+    /// A spend carrying a payload that is not exactly this row's relay authorization template, or a templated spend whose escrow
+    /// input is not input 0 (the only index a `SIGHASH_SINGLE` pre-signature pairs with output 0).
+    RelayTemplateMismatch,
 }
 
 /// **The rooted escrow row.** Keyed by `contract_id` in the state. Written only by the funded-original installer and by a
@@ -307,11 +310,49 @@ pub fn palw_escrow_qualified_spend_v1(
     if other_in < other_out {
         return Err(PalwEscrowRefusalV1::EscrowFundsOtherOutputs);
     }
+    // **Third-party relay (RFC-0035 §7.4), narrowest form.** The escrow output stays the payer's P2PKH, so its ordinary signature
+    // check always runs; no input skips it. A relay can still execute the return without a FUTURE payer signature: the payer signs
+    // once, when it builds the carrier, a `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` signature over THIS template (payload bound by the
+    // ML-DSA sighash; outpoint, amount and output 0 bound by SINGLE|ANYONECANPAY) and hands it out. Here the payload must be empty
+    // (the payer's own spend) or exactly the template for this row's contract, outpoint and rule, with the escrow at input 0.
+    if !tx.payload.is_empty()
+        && (tx.payload != palw_escrow_relay_template_payload_v1(row.contract_id, row.funding_outpoint, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline)
+            || input_index != 0)
+    {
+        return Err(PalwEscrowRefusalV1::RelayTemplateMismatch);
+    }
     let mut new = *row;
     new.returned_sompi = new.returned_sompi.checked_add(unreleased).ok_or(PalwEscrowRefusalV1::Conservation)?;
     new.settled_by = Some(tx.id());
     new.check_v1()?;
     Ok(PalwEscrowSpendPlanV1 { input_index, path: PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline, old: *row, new })
+}
+
+/// The framing of a relay authorization template payload (RFC-0035 §7.4; G14 lane escrow-rfc08 round 2).
+pub const PALW_ESCROW_RELAY_TEMPLATE_MAGIC_V1: &[u8; 4] = b"TER1";
+
+/// **The settlement rule's identity** — a domain hash of the path, so a pre-signature for one rule never authorizes another.
+pub fn palw_escrow_settlement_rule_id_v1(path: PalwEscrowSpendPathV1) -> Hash64 {
+    let name: &[u8] = match path {
+        PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline => b"payer-return-after-hard-deadline",
+    };
+    let digest = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/funded-escrow/settlement-rule/v1").hash(name);
+    Hash64::from_bytes(digest.as_bytes().try_into().expect("64-byte settlement rule id"))
+}
+
+/// **The relay authorization template payload**: `TER1 ‖ contract_id ‖ funding txid ‖ funding index (u32 LE) ‖ rule id`. A spend that
+/// carries it is qualified only for exactly that row and rule ([`palw_escrow_qualified_spend_v1`]); the payer's pre-signature binds
+/// it through the ML-DSA sighash's payload hash. Why the template is not inside the TFO1 consent itself: the carrier's txid (and so
+/// the outpoint the signature must commit) depends on the TFO1 payload, so the payer signs the template right after building the
+/// carrier and distributes it off-chain — still once, at funding time, never a future signature.
+pub fn palw_escrow_relay_template_payload_v1(contract_id: Hash64, outpoint: TransactionOutpoint, path: PalwEscrowSpendPathV1) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + 64 + 64 + 4 + 64);
+    out.extend_from_slice(PALW_ESCROW_RELAY_TEMPLATE_MAGIC_V1);
+    out.extend_from_slice(contract_id.as_byte_slice());
+    out.extend_from_slice(outpoint.transaction_id.as_byte_slice());
+    out.extend_from_slice(&outpoint.index.to_le_bytes());
+    out.extend_from_slice(palw_escrow_settlement_rule_id_v1(path).as_byte_slice());
+    out
 }
 
 /// **The same-mergeset provisional lock**: the outpoint of `tx`'s OWN declared funding output, when `tx` is a TFO1 carrier whose
@@ -469,5 +510,88 @@ mod tests {
         truncated.payload = b"TFO1".to_vec();
         truncated.finalize();
         assert_eq!(palw_tfo1_provisional_lock_v1(&truncated), None);
+    }
+
+    /// **G14 lane escrow-rfc08 round 2 (RFC-0035 §7.4): a relay presents the payer's pre-signed template.** The template binds the
+    /// row's contract id, its exact outpoint and the rule; any other payload, another contract's or outpoint's template, or a
+    /// templated spend whose escrow is not input 0 is refused. An empty payload (the payer's own spend) stays qualified.
+    #[test]
+    fn funded_escrow_relay_template_binds_contract_outpoint_and_rule() {
+        let r = row(false);
+        let rule = PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline;
+        let ret = TransactionOutput::new(1_000, payer_spk());
+        let change = TransactionOutput::new(40, ScriptPublicKey::default());
+        let relay_in = TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(600), 0), vec![], 0, 0);
+        let escrow_in = TransactionInput::new(outpoint(), vec![], 0, 0);
+        let tx = |inputs: Vec<TransactionInput>, payload: Vec<u8>| {
+            Transaction::new(0, inputs, vec![ret.clone(), change.clone()], 0, crate::subnets::SUBNETWORK_ID_NATIVE, 0, payload)
+        };
+        let template = palw_escrow_relay_template_payload_v1(r.contract_id, r.funding_outpoint, rule);
+        let ok = tx(vec![escrow_in.clone(), relay_in.clone()], template.clone());
+        let plan = palw_escrow_qualified_spend_v1(&r, &ok, &[1_000, 50], 10_100, None).unwrap();
+        assert_eq!(plan.input_index, 0);
+        assert_eq!(plan.new.settled_by, Some(ok.id()));
+        // Payer's own spend, no template: still qualified.
+        assert!(palw_escrow_qualified_spend_v1(&r, &tx(vec![escrow_in.clone(), relay_in.clone()], vec![]), &[1_000, 50], 10_100, None).is_ok());
+        // Another contract's template, another outpoint's template, arbitrary payload, escrow not at input 0.
+        let other_contract = palw_escrow_relay_template_payload_v1(h(9), r.funding_outpoint, rule);
+        let other_outpoint = palw_escrow_relay_template_payload_v1(r.contract_id, TransactionOutpoint::new(Hash64::from_u64_word(77), 2), rule);
+        for payload in [other_contract, other_outpoint, vec![1, 2, 3]] {
+            assert_eq!(
+                palw_escrow_qualified_spend_v1(&r, &tx(vec![escrow_in.clone(), relay_in.clone()], payload), &[1_000, 50], 10_100, None),
+                Err(PalwEscrowRefusalV1::RelayTemplateMismatch)
+            );
+        }
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &tx(vec![relay_in.clone(), escrow_in.clone()], template.clone()), &[50, 1_000], 10_100, None),
+            Err(PalwEscrowRefusalV1::RelayTemplateMismatch)
+        );
+        // Before the hard deadline the template authorizes nothing.
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &ok, &[1_000, 50], 10_099, None),
+            Err(PalwEscrowRefusalV1::SettlementScheduleMissing)
+        );
+        // The rule id is domain-separated and stable.
+        assert_ne!(palw_escrow_settlement_rule_id_v1(rule), Hash64::default());
+        assert_eq!(&template[..4], PALW_ESCROW_RELAY_TEMPLATE_MAGIC_V1);
+    }
+
+    /// **No new script or opcode is needed:** under `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` the payer's ML-DSA sighash of the escrow
+    /// input over the template transaction (escrow input 0 → return output 0, template payload) is identical after a relay adds its
+    /// own fee input and change output — so the payer's one pre-signature verifies in the relay's transaction under the ordinary
+    /// P2PKH check, and changing the payload (another contract/rule) or output 0 changes the sighash.
+    #[test]
+    fn funded_escrow_relay_presignature_survives_relay_inputs_and_change() {
+        use crate::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
+        use crate::hashing::sighash_type::{SIG_HASH_ANY_ONE_CAN_PAY, SIG_HASH_SINGLE, SigHashType};
+        use crate::tx::{PopulatedTransaction, UtxoEntry};
+        let r = row(false);
+        let hash_type = SigHashType(SIG_HASH_SINGLE.0 | SIG_HASH_ANY_ONE_CAN_PAY.0);
+        let template = palw_escrow_relay_template_payload_v1(r.contract_id, r.funding_outpoint, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+        let escrow_entry = UtxoEntry::new(1_000, payer_spk(), 100, false);
+        let relay_entry = UtxoEntry::new(50, ScriptPublicKey::default(), 100, false);
+        let ret = TransactionOutput::new(1_000, payer_spk());
+        let escrow_in = TransactionInput::new(outpoint(), vec![], 0, 1);
+        let presigned = Transaction::new(0, vec![escrow_in.clone()], vec![ret.clone()], 0, crate::subnets::SUBNETWORK_ID_NATIVE, 0, template.clone());
+        let relayed = Transaction::new(
+            0,
+            vec![escrow_in.clone(), TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(600), 0), vec![], 0, 1)],
+            vec![ret.clone(), TransactionOutput::new(40, ScriptPublicKey::default())],
+            0,
+            crate::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            template.clone(),
+        );
+        let sighash = |tx: &Transaction, entries: Vec<UtxoEntry>| {
+            calc_mldsa87_signature_hash(&PopulatedTransaction::new(tx, entries), 0, hash_type, &Mldsa87SigHashReusedValuesUnsync::new())
+        };
+        let signed = sighash(&presigned, vec![escrow_entry.clone()]);
+        assert_eq!(signed, sighash(&relayed, vec![escrow_entry.clone(), relay_entry.clone()]));
+        let mut other = relayed.clone();
+        other.payload = palw_escrow_relay_template_payload_v1(h(9), r.funding_outpoint, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+        assert_ne!(signed, sighash(&other, vec![escrow_entry.clone(), relay_entry.clone()]));
+        let mut theft = relayed.clone();
+        theft.outputs[0] = TransactionOutput::new(1_000, ScriptPublicKey::default());
+        assert_ne!(signed, sighash(&theft, vec![escrow_entry, relay_entry]));
     }
 }

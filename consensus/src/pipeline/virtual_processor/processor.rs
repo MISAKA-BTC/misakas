@@ -1146,6 +1146,9 @@ pub(super) struct PalwCarriedObjectV1 {
     /// Original transaction-local companion, never borrowed from another carrier.
     pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
     pub(super) tir_public_original: Option<kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
+    /// **G14 item 1 (RFC-0035 A): the same carrier's funded TFO1 pairing** (its own actual transaction). `Some` only for a TFO1
+    /// carrier past `palw_tir_public_conviction_v1`; its object is admitted only through the funded-original coordinator.
+    pub(super) funded_original: Option<kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1>,
     pub(super) original_binding: Option<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
     /// The same carrier's optional producer custody delegation (HFP1 version 2).
     pub(super) custody_delegation: Option<kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
@@ -2548,7 +2551,7 @@ impl VirtualStateProcessor {
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
                                 // P-B1), so past `palw_audit_2026_09_23` the filter also names what
                                 // each such carrier is owed and the transition pays it back.
-                                let (objects, folded, carrier_refunds, tir_public_originals) = self.palw_v2_accepted_objects_and_originals(
+                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals) = self.palw_v2_accepted_objects_and_originals(
                                     state,
                                     state_params,
                                     &point,
@@ -2556,6 +2559,7 @@ impl VirtualStateProcessor {
                                     current,
                                     own_attempt_class,
                                     &ctx.palw_round_fee_incomes,
+                                    &ctx.palw_escrow_settlements,
                                 )?;
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
@@ -2716,6 +2720,7 @@ impl VirtualStateProcessor {
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
                                         extras.history_custody_pledges = history_custody_pledges;
                                         extras.tir_public_originals = tir_public_originals;
+                                        extras.tir_funded_originals = tir_funded_originals;
                                         extras.public_original_bindings = public_original_bindings;
                                         extras.producer_custody_delegations = producer_custody_delegations;
                                         if state_params.exec_v2_active_at(point.daa_score)
@@ -3964,6 +3969,7 @@ impl VirtualStateProcessor {
                 carrier_fee: PALW_RENT_UNPRICED,
                 history_pledge: None,
                 tir_public_original: None,
+                funded_original: None,
                 original_binding: None,
                 custody_delegation: None,
                 refund: None,
@@ -5471,6 +5477,7 @@ impl VirtualStateProcessor {
             virtual_daa_score,
             args,
             bond_gate.as_ref().map(|gate| &gate.burns),
+            bond_gate.as_ref().map(|gate| &gate.escrow),
         )?;
         // **ADR-0152 H-1 (P2-9 review, finding 5):** an H-1 carrier the fold would refuse at the tip
         // is refused here, AFTER the UTXO context, so only a funded, signed carrier costs this node a
@@ -7376,6 +7383,9 @@ pub(super) fn deposit_lock_record(entry: &UtxoEntry) -> Option<kaspa_consensus_c
 pub(super) struct PalwMempoolBondGate {
     pub(super) locked: std::collections::HashSet<TransactionOutpoint>,
     pub(super) burns: std::collections::HashMap<TransactionOutpoint, u64>,
+    /// **G14 lane escrow-rfc08 round 2: the funded-escrow locks at the tip** (rooted rows only — a mempool has no mergeset, so no
+    /// provisional lock; a chained spend of a not-yet-accepted TFO1 output is refused at the merge by the provisional lock).
+    pub(super) escrow: super::utxo_validation::PalwEscrowSpendLocksV1,
 }
 
 /// ADR-0109 Decision 3: the first input of `tx` that spends a locked PALW bond, if any.

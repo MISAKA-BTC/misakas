@@ -227,6 +227,22 @@ impl PalwEscrowSpendLocksV1 {
     fn is_empty(&self) -> bool {
         self.rows.is_empty() && self.provisional.is_empty()
     }
+
+    /// **The one escrow-lock rule** — the block filter (`BondSpendFilter::escrow_refusal`), the mempool
+    /// (`validate_mempool_transaction_in_utxo_context`) and therefore the template all ask this, with the actual populated input
+    /// amounts: the first input that spends a provisionally locked outpoint, or a rooted row's outpoint without a qualified plan.
+    pub(crate) fn refusal(&self, tx: &Transaction, input_amounts: impl IntoIterator<Item = u64>, daa_score: u64) -> Option<TransactionOutpoint> {
+        if self.is_empty() {
+            return None;
+        }
+        let amounts: Vec<u64> = input_amounts.into_iter().collect();
+        tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| {
+            self.provisional.contains(outpoint)
+                || self.rows.get(outpoint).is_some_and(|row| {
+                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(row, tx, &amounts, daa_score, None).is_err()
+                })
+        })
+    }
 }
 
 /// **ADR-0125: a merging block's verdicts on its round blocks.** A round block outside `permitted`
@@ -365,14 +381,7 @@ impl<'a> BondSpendFilter<'a> {
     /// touched — it runs in the ordinary validator after this.
     fn escrow_refusal(&self, tx: &Transaction, entries: &[UtxoEntry]) -> Option<TransactionOutpoint> {
         let locks = self.escrow?;
-        let amounts: Vec<u64> = entries.iter().map(|entry| entry.amount).collect();
-        tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| {
-            locks.provisional.contains(outpoint)
-                || locks.rows.get(outpoint).is_some_and(|row| {
-                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(row, tx, &amounts, self.daa_score, None)
-                        .is_err()
-                })
-        })
+        locks.refusal(tx, entries.iter().map(|entry| entry.amount), self.daa_score)
     }
 
     /// **What this transaction must leave unclaimed, in total** — [`palw_bond_burn_owed`] over this
@@ -406,6 +415,15 @@ impl VirtualStateProcessor {
             return 0;
         }
         if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            // G14 item 1 (RFC-0035 A): a TFO1 carrier burns its literal TFP1's declared rent exactly as that TFP1 carrier would, so
+            // the coordinator's native rent check (`prepare_paired_original_v1`) reads a burn that actually happened. Refused or
+            // admitted, the rent is destroyed (the TFP1 rule); the funding output is untouched (it is an output, not fee).
+            if kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(tx) {
+                return kaspa_consensus_core::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(&tx.payload)
+                    .and_then(|envelope| envelope.original_v1())
+                    .map(|original| original.declared_rent_sompi)
+                    .unwrap_or(0);
+            }
             return kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
                 .map(|envelope| envelope.declared_rent_sompi).unwrap_or(0);
         }
@@ -2098,12 +2116,21 @@ impl VirtualStateProcessor {
         pov_daa_score: u64,
         args: &TransactionValidationArgs,
         palw_burns: Option<&std::collections::HashMap<TransactionOutpoint, u64>>,
+        palw_escrow: Option<&PalwEscrowSpendLocksV1>,
     ) -> TxResult<()> {
         self.populate_mempool_transaction_in_utxo_context(mutable_tx, utxo_view)?;
         if let Some(burns) = palw_burns {
             let owed = palw_bond_burn_owed(&mutable_tx.tx, burns);
             // Every entry is populated here (`populate_…` refused a missing one).
             palw_bond_burn_paid(&mutable_tx.tx, mutable_tx.entries.iter().flatten().map(|entry| entry.amount), owed)?;
+        }
+        // **G14 lane escrow-rfc08 round 2: the escrow half of the mempool gate** — the tip's unsettled rooted rows, asked with the
+        // block path's own rule and the actual populated amounts, before the script check. A locked-escrow spend the merge would
+        // skip is refused here instead of relayed. `None` (no lock) everywhere below `palw_tir_public_conviction_v1`.
+        if let Some(locks) = palw_escrow
+            && let Some(outpoint) = locks.refusal(&mutable_tx.tx, mutable_tx.entries.iter().flatten().map(|entry| entry.amount), pov_daa_score)
+        {
+            return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
         }
 
         // ADR-0134: a compute-overlay transaction is not admitted to the mempool past the
@@ -3643,6 +3670,55 @@ mod tests {
                     vec![],
                 )
             }
+        }
+
+        /// **G14 lane escrow-rfc08 round 2: the mempool asks the block filter's own escrow rule** (`PalwEscrowSpendLocksV1::refusal`,
+        /// which `BondSpendFilter::escrow_refusal` and `validate_mempool_transaction_in_utxo_context` both call), so a spend the merge
+        /// would skip is refused before relay and a qualified one — including a relay's templated payer return — is admitted by both.
+        #[test]
+        fn funded_escrow_mempool_rule_is_the_block_filter_rule() {
+            use kaspa_consensus_core::palw_funded_escrow_v1::{
+                PalwEscrowSpendPathV1, PalwFundedEscrowRowV1, palw_escrow_relay_template_payload_v1,
+            };
+            use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry};
+
+            let payload = kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+            let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let escrow_op = outpoint(21);
+            let row = PalwFundedEscrowRowV1::fresh_v1(
+                Hash64::from_u64_word(5), Hash64::from_u64_word(6), escrow_op, 1_000, Hash64::from_u64_word(7), payload, 100, DAA - 1, false,
+            )
+            .unwrap();
+            let locks = PalwEscrowSpendLocksV1 { rows: [(escrow_op, row)].into_iter().collect(), provisional: Default::default() };
+            let empty = std::collections::HashSet::new();
+            let no_burns = std::collections::HashMap::new();
+            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
+            let relay_op = outpoint(22);
+            let spend = |out0: TransactionOutput, payload: Vec<u8>| {
+                Transaction::new(
+                    0,
+                    vec![TransactionInput::new(escrow_op, vec![], 0, 0), TransactionInput::new(relay_op, vec![], 0, 0)],
+                    vec![out0, TransactionOutput::new(40, ScriptPublicKey::default())],
+                    0,
+                    kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                    0,
+                    payload,
+                )
+            };
+            let entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(50, ScriptPublicKey::default(), 100, false)];
+            let template = palw_escrow_relay_template_payload_v1(row.contract_id, escrow_op, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+            let cases = [
+                (spend(TransactionOutput::new(1_000, ScriptPublicKey::default()), vec![]), Some(escrow_op)),
+                (spend(TransactionOutput::new(1_000, payer.clone()), vec![]), None),
+                (spend(TransactionOutput::new(1_000, payer.clone()), template), None),
+                (spend(TransactionOutput::new(1_000, payer.clone()), vec![7]), Some(escrow_op)),
+            ];
+            for (tx, expected) in cases {
+                let mempool = locks.refusal(&tx, entries.iter().map(|e| e.amount), DAA);
+                assert_eq!(mempool, expected);
+                assert_eq!(filter.escrow_refusal(&tx, &entries), mempool, "mempool and block filter answer alike");
+            }
+            assert_eq!(PalwEscrowSpendLocksV1::default().refusal(&spend(TransactionOutput::new(1, ScriptPublicKey::default()), vec![]), [1_000u64, 50], DAA), None);
         }
     }
 

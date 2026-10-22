@@ -3725,6 +3725,10 @@ fn apply_object_inner(
             let mut claim = claim;
             let public_job_wire = builder.public_fp_job_wire_v1(claim_id, &claim, public_job.as_deref())?;
             let tir_original = palw_tir_public_fold_v1::prepare_paired_original_v1(builder, ctx, object, public_job.as_deref())?;
+            // **G14 item 1 (RFC-0035 A): the funded-original coordinator**, here — after native preparation, before the first
+            // reservation — so a funded TFO1 original is admitted whole (frame + escrow row, installed below) or refused whole by the
+            // paired checkpoint. A claim without a funded pairing keeps the TFP1 path unchanged.
+            let tir_original = palw_tir_public_fold_v1::admit_original_v1(builder, ctx, *claim_id, tir_original)?;
             let staged_contract = if let Some(frame) = &tir_original {
                 // This is an ORIGINAL prospective allocation, not a repricing
                 // of an old claim or a second old required-family bundle.
@@ -3809,7 +3813,7 @@ fn apply_object_inner(
             }
             if let Some(frame) = tir_original {
                 // G14 G-T3: the frame keeps the claim's public prompt ids to its material horizon (derived work or not).
-                palw_tir_public_fold_v1::install_prepared_original_v1(builder, ctx, frame, &prompt_row)?;
+                palw_tir_public_fold_v1::install_original_admission_v1(builder, ctx, frame, &prompt_row)?;
             }
         }
     }

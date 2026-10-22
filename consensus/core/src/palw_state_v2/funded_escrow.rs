@@ -7,8 +7,9 @@
 //! (`apply_delta_entry`), restoring the row and therefore the outpoint lock the spend filter derives from it.
 //!
 //! Callers: settlement facts the processor observed on qualified spends (`PalwTransitionExtrasV1::funded_escrow_settlements`, empty
-//! below `palw_tir_public_conviction_v1`). The installer has NO caller yet: no funded original is ever admitted
-//! (`palw_funded_original_candidate_v1` never reaches an admitted result), and it is never wired to a candidate diagnostic.
+//! below `palw_tir_public_conviction_v1`). The installer's one caller is the funded-original coordinator
+//! (`palw_tir_public_fold_v1::install_original_admission_v1`, round 2), inside the paired checkpoint; it is unreachable in production
+//! because the coordinator's schedule is typed-missing.
 use super::*;
 use crate::palw_funded_escrow_v1::{PalwEscrowSettlementFactV1, PalwFundedEscrowRowV1, palw_escrow_row_transition_v1};
 
@@ -29,9 +30,8 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
-    /// **Install a fresh row** for a fully admitted funded original (future coordinator only). One row per contract and per
+    /// **Install a fresh row** for a fully admitted funded original (the coordinator only). One row per contract and per
     /// outpoint: an outpoint is never escrowed twice.
-    #[allow(dead_code)]
     pub(super) fn install_funded_escrow_v1(&mut self, row: PalwFundedEscrowRowV1) -> Result<(), PalwStateV2Error> {
         if self.state.funded_escrows.contains_key(&row.contract_id)
             || self.state.funded_escrows.values().any(|other| other.funding_outpoint == row.funding_outpoint)

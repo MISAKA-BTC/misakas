@@ -65,6 +65,7 @@
         prepare_original_v1(&builder, &ctx, &object, &fp.commitment, &envelope.header, &pledge).unwrap();
         include!("palw_tir_prepared_original_geometry_native_test_block.rs");
         include!("palw_tir_prepared_original_requirements_native_test_block.rs");
+        include!("palw_funded_original_coordinator_native_test_block.rs");
         assert!(state.claim(&claim).is_none());
         let carriage = PalwStateCarriageV2::from_state(&state);
         let loaded = carriage.clone().into_state(&params, Some(state.state_root())).unwrap();

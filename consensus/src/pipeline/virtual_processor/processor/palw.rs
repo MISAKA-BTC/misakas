@@ -424,6 +424,10 @@ impl VirtualStateProcessor {
         let gate = Arc::new(PalwMempoolBondGate {
             locked: self.palw_v2_locked_bond_outpoints(&state, now_daa),
             burns: self.palw_v2_bond_burn_obligations(&state, now_daa),
+            escrow: super::super::utxo_validation::PalwEscrowSpendLocksV1 {
+                rows: self.palw_escrow_locked_rows_v1(&state, now_daa),
+                provisional: Default::default(),
+            },
         });
         *cache = Some((tip, now_daa, gate.clone()));
         Some(gate)
