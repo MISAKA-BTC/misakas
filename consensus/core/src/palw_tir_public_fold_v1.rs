@@ -6481,4 +6481,47 @@ mod conviction_e2e_tests {
         );
         assert!(!still && !exit_held, "B-05: an Uncaptured archive is never pruned; the challenger's bond exit is held forever");
     }
+
+    /// **audit B-05 widened (fix-a)**: another object voids the bound claim (here an object of ANOTHER session, as a sibling session's
+    /// convicting `CourtClosed` is) and `void_claim` closes this session NEUTRALLY (ADR-0152 §4-ter C3). Its archive's disposition is
+    /// `RelatedNativeTransition`; it used to carry the challenger's court stake as a permanent nominal hold (never prunable, the
+    /// honest challenger's bond exit-held forever). Expected: no stake held, and the archive prunes after its material retention.
+    #[test]
+    fn audit_fixa_b05_a_void_closed_sibling_session_releases_the_challenger_after_material_until() {
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, mut extras) = world(&fx, &frame);
+        extras.offence_attribution_active = true;
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let id = verify1_bound_silent_session(&mut b, &frame);
+        let claim_id = frame.plan_v1().original_claim;
+        let claim = b.state.claim(&claim_id).unwrap().clone();
+        let point = at(&frame, 5);
+        b.court_end_evidence = Some(
+            Box::new(crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native {
+                point,
+                object: Box::new(PalwConsensusObjectV2::CourtCloseChunk {
+                    session_id: h(0xEE),
+                    side: PalwCourtSideV1::Executor,
+                    index: 1,
+                    bytes: vec![8; 16],
+                }),
+            })
+            .into(),
+        );
+        b.void_claim(claim_id, &claim, point.daa_score, PalwVoidReasonV2::CourtFraud).unwrap();
+        b.court_end_evidence = None;
+        assert!(!b.court_neutral_void_close, "the neutral-close scope ends with the void");
+        let archive = b.state.court_end_archive_v1(id).expect("the bound session is archived by the void").clone();
+        assert_eq!(archive.adjudication(), crate::palw_court_end_archive_v1::CourtEndDispositionV1::RelatedNativeTransition);
+        assert_eq!(archive.court_stake_nominal, 0, "the neutral void close owes no court stake");
+        assert_eq!(archive.pending_nominal(&outsider()), 0);
+        let far = archive.material_until_daa.saturating_add(1);
+        assert!(!b.state.court_archive_fully_resolved_v1(id, archive.material_until_daa), "not before the material retention (D3)");
+        b.sweep_resolved_court_archives_v1(far).unwrap();
+        let still = b.state.court_end_archive_v1(id).is_some();
+        let exit_held = b.state.staged_bond_exit_held_v1(&outsider(), far);
+        eprintln!("[fix-a B-05w] void-closed sibling archive at material_until+1: present {still}, challenger exit-held {exit_held}");
+        assert!(!still && !exit_held, "B-05 widened: a void-closed sibling session's archive is resolvable");
+    }
 }

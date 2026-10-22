@@ -100,10 +100,22 @@ impl TransitionBuilder<'_> {
         }}
         let applied_deposit_debits = self.court_settled_deposit.filter(|(sid,_,_)|*sid==id)
             .map(|(_,side,debit)|BTreeMap::from([(side,debit)])).unwrap_or_default();
-        let archive = Archive {version:1,session_id:id,service_profile_id:metadata.0,
+        let mut archive = Archive {version:1,session_id:id,service_profile_id:metadata.0,
             archive_profile_id:crate::palw_court_end_archive_v1::court_end_archive_profile_id_v1(metadata.0),allocation_id:metadata.1,source_id:metadata.2,
             producer:metadata.3,material_until_daa:metadata.4,court_stake_nominal:metadata.5,session,tir_phase:self.state.tir_dissections.get(&id).cloned(),
             groups,applied_deposit_debits,fulfilled_groups,evidence:self.court_end_evidence.clone().unwrap_or_else(||Box::new(Evidence::Uncaptured).into())};
+        // audit B-05 (widened, fix-a): a session closed NEUTRALLY by its claim's void (ADR-0152 §4-ter C3) owes no court stake —
+        // the void decided the dispute moot and released the challenger. Without this, an ending the archive cannot attribute to
+        // this session (another object voided the claim: `RelatedNativeTransition`; or no captured cause: `Uncaptured`) would hold
+        // the honest challenger's stake as a nominal charge forever. Merits endings (this session's own verdict, a TIR fault of
+        // this claim) never counted the stake and are unchanged.
+        if self.court_neutral_void_close
+            && matches!(archive.adjudication(),
+                crate::palw_court_end_archive_v1::CourtEndDispositionV1::RelatedNativeTransition
+                    | crate::palw_court_end_archive_v1::CourtEndDispositionV1::Uncaptured)
+        {
+            archive.court_stake_nominal = 0;
+        }
         archive.check(&Key::CourtEndArchive(id)).map_err(PalwStateV2Error::CarriageInconsistent)?;
         Ok(archive)
     }
