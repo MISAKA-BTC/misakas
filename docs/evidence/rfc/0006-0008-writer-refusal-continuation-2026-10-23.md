@@ -112,3 +112,16 @@ evidence first, producing unrelated unsupported-kernel/coordinate diagnostics.
 `757e52a4c` now rejects a served leaf outside the fold's ladder before evidence
 allocation/recompute. Its targeted recheck is running with output in
 `/tmp/misaka-rfc06-gdn-ladder-recheck.log`. No result is claimed yet.
+
+The targeted ladder recheck subsequently passed (1 test, zero failures,
+0.86s). This resolves that observed probe failure only.
+
+Further source tracing of the two E2E failures found that
+`stamp_reader_router_claim_v2` reads `fp_work_profile_of`, while the only
+production caller of `write_fp_work_profile` is the `ClassLaneCertified`
+object arm. Ordinary `ClassRegistered` does not populate that graph index.
+The index also feeds free-prompt pricing and class deadline/held-context
+calculations, so storing ordinary registration profiles there requires an
+audit of those consumers, not merely a fixture insertion. The missing normal
+registration-to-routing connection remains open. Model-level verification or
+certification must not be added as a workaround (PRINCIPLES section 9).
