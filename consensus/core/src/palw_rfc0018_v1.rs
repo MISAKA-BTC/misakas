@@ -355,6 +355,25 @@ pub fn palw_fp_receipt_clock_paused_v2(
         .ok_or(PalwFpReceiptUncertifiedV1 { claim: *claim_id, status: "accusation-pending" })
 }
 
+/// **G14 r6: THE receipt clock every caller reads** — [`palw_fp_receipt_clock_paused_v2`] with the claim's ROOTED pause account
+/// ([`crate::palw_receipt_pause_v2`], kernel route aux 145). Below Gate C's fence (claim not governed) this is
+/// [`palw_fp_receipt_clock_v1`] byte for byte: the row is never read. A malformed carried row is a typed refusal
+/// (`pause-row-malformed`), never "no pause".
+pub fn palw_fp_receipt_clock_v2(
+    params: &PalwStateParamsV2,
+    chain: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    final_daa: u64,
+) -> Result<u64, PalwFpReceiptUncertifiedV1> {
+    if !palw_gate_c_governs_v1(params, claim) {
+        return palw_fp_receipt_clock_v1(params, chain, claim_id, claim, final_daa);
+    }
+    let pause = crate::palw_receipt_pause_v2::palw_receipt_pause_account_v2(chain, claim_id)
+        .map_err(|_| PalwFpReceiptUncertifiedV1 { claim: *claim_id, status: "pause-row-malformed" })?;
+    palw_fp_receipt_clock_paused_v2(params, chain, claim_id, claim, final_daa, &pause)
+}
+
 // -------------------------------------------------------------------------------------------------
 // Rule E participation v2 (RFC-0018 §6)
 // -------------------------------------------------------------------------------------------------

@@ -292,6 +292,10 @@ mod palw_native_liability_hold_fold_v1;
 // G14 lane closure (2026-10-16): kernel route signer liability locks (aux 143) and the EXEC REAL root's V2 signer charge.
 #[path = "palw_g14_lane_closure_fold_v1.rs"]
 mod palw_g14_lane_closure_fold_v1;
+// G14 r6 (user decision 2026-10-22): the receipt use-window pause rows (kernel route aux 145), reconciled at the end of each
+// block past Gate C's fence.
+#[path = "palw_receipt_pause_fold_v2.rs"]
+mod palw_receipt_pause_fold_v2;
 // RFC-0006 consumer v2 (object tag 244, kernel-route aux 139): the router binding declaration and the checkpoint / routed
 // accusations, past `palw_memory_routing_court_v2`.
 #[path = "palw_memory_routing_fold_v2.rs"]
@@ -4133,9 +4137,10 @@ pub fn palw_rcore_deadline_v1(
             let mut floor = palw_claim_final_floor_v1(state, params, claim_id, claim, licensed_daa)?;
             // **X3 (REQ-X3-2): `effective = min(proposed, hard)`** — the claim's hard deadline, fixed at acceptance, caps the proposed
             // challenge deadline. `None` (unchanged) for a claim accepted below the fence.
+            // G14 r6: through the X3 × clock-v2 combined rule (clock v2's `a + 10,000` replaces X3's hard where both govern).
             floor = crate::palw_ruling_fences_v1::palw_claim_effective_deadline_v1(
                 floor,
-                crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(params, claim),
+                crate::palw_court_clock_v2::palw_claim_x3_cap_hard_v2(params, claim),
             );
             // M4, Q-5's gate: an S2 licence not yet raised to 2 waits out both supplementary doors
             // (`max(L + wc, B* + W_r(c) + 1, H, last)` — the receipt deadline reads the claim's `W_r(c)`).
@@ -15310,6 +15315,8 @@ fn apply_palw_transition_v7_inner(
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx)?;
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx)?;
     palw_staged_court_fold_v1::sweep(&mut builder, ctx)?;
+    // G14 r6: after every accusation this block opened or closed — the receipt pause rows follow `palw_accusation_pending_v1`.
+    palw_receipt_pause_fold_v2::reconcile(&mut builder, ctx)?;
 
     palw_monetary_material_fold_v1::refresh(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
@@ -19725,7 +19732,7 @@ fn apply_receipt_spend(
     // **RFC-0018 18-A (Gate C)**: the one receipt predicate (`palw_fp_receipt_clock_v1`) the processor's pre-check, the admission items
     // and the spendable RPC read. Below Gate C's fence it answers `Ok` for every claim (the released fold, byte for byte).
     if let PalwClaimPhaseV2::Final { final_daa } = claim.phase {
-        crate::palw_rfc0018_v1::palw_fp_receipt_clock_v1(builder.params, &builder.state, &claim_id, &claim, final_daa)
+        crate::palw_rfc0018_v1::palw_fp_receipt_clock_v2(builder.params, &builder.state, &claim_id, &claim, final_daa)
             .map_err(PalwStateV2Error::ReceiptUncertified)?;
     }
     if spend.quantum_index >= *quanta {

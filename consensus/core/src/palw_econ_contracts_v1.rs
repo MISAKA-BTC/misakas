@@ -460,7 +460,7 @@ impl PalwHorizonExtensionFenceV1 {
 /// **The claim-fixed hard deadline** of a kernel claim accepted at `committed_daa` (`d0`): fixed at acceptance, never moved by an
 /// extension. `None` on overflow (refused).
 // X3: the kernel claim has no native `dispute_hard_deadline`; this is its local claim-fixed bound from its own acceptance. The fold
-// caps it with `palw_ruling_fences_v1::palw_claim_effective_deadline_v1(own, palw_claim_hard_deadline_of_v1(root))` — the EXEC root
+// caps it with `palw_ruling_fences_v1::palw_claim_effective_deadline_v1(own, palw_court_clock_v2::palw_claim_x3_cap_hard_v2(root))` — the EXEC root
 // native claim's X3 deadline where `palw_claim_hard_deadline_v1` governs it. The lead may replace the local term once X3 defines a
 // kernel-claim deadline.
 pub fn palw_horizon_extension_hard_deadline_v1(committed_daa: u64, policy: &PalwHorizonExtensionPolicyV1) -> Option<u64> {
