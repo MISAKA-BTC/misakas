@@ -433,3 +433,167 @@ class Palwq36Windows(unittest.TestCase):
         del r["windows"][3]["kl"]
         with self.assertRaises(ValueError):
             gp.palwq36_window_fit(r, "ab", 32768, tol)
+
+
+class Palwq36EstimateR7(unittest.TestCase):
+    """R7 (user decision 2026-10-22, 目安で可): the PALWQ361 logit scale and reference window by ESTIMATE — recorded as one,
+    checked against the windows' own spread, a prefix reference held to a tightened bar, never written as measured."""
+
+    S = gp.PALWQ361_ESTIMATED_LOGIT_SCALE
+
+    def _pipeline(self, d, **kw):
+        import argparse
+
+        base = dict(work=d, hf="/nonexistent/hf", dry_run=True, bin_dir=d, no_fit=False, no_fit_long=False, fit_max_gb=20.0,
+                    local_source=None, gguf_variant=None, context=None)
+        base.update(kw)
+        return gp.Pipeline(argparse.Namespace(**base))
+
+    def _report(self, sha, n=2048, scale=None, kl=0.01, spread_log2=0.02):
+        scale = self.S if scale is None else scale
+        starts = gp.a16_window_starts(n, 32)
+        return {"tool": "qwen36-window-compare", "sequence_tokens": n, "tokens_sha256": sha, "logit_scale": scale,
+                "reference": {"schema": "misaka-palw/qwen36-reference-windows/v1", "tokens_sha256": sha},
+                "windows": [{"window_start": s, "window_len": 64, "positions": 64, "top1_agree": 60,
+                             "logit_scale_spread": scale * 2 ** spread_log2, "kl": {"mean": kl, "max": kl * 2}} for s in starts]}
+
+    def test_the_register_value_is_two_to_the_minus_nine_and_the_prefix_windows_tile_it(self):
+        self.assertEqual(self.S, 0.001953125)
+        self.assertEqual(gp.a16_window_starts(gp.PALWQ361_REFERENCE_PREFIX_DEFAULT, 32), list(range(0, 2048, 64)))
+
+    def test_the_prefix_bar_is_never_looser_than_the_a16_bar(self):
+        tol = gp.load_registry()["calibration_texts"]["fit_tolerance"]
+        bar = gp.palwq36_estimate_tolerance(tol)
+        for k in ("kl_mean_max", "window_kl_mean_max", "drift_floor_kl", "drift_ratio_max"):
+            self.assertLessEqual(bar[k], tol[k], k)
+        self.assertEqual(bar["kl_mean_max"], tol["kl_mean_max"] * gp.PALWQ361_ESTIMATE_KL_MARGIN)
+        self.assertGreaterEqual(bar["top1_min"], tol["top1_min"])
+
+    def test_an_estimate_fit_is_recorded_as_an_estimate_and_never_as_measured(self):
+        tol = gp.load_registry()["calibration_texts"]["fit_tolerance"]
+        fit = gp.palwq36_estimate_fit(self._report("ab"), "ab", 2048, tol, 32, self.S, "prefix", 32768)
+        self.assertFalse(fit["measured"])
+        self.assertTrue(fit["estimated"] and fit["within"] and fit["estimate"]["scale_consistent"])
+        self.assertFalse(fit["long"]["measured"])
+        self.assertTrue(fit["long"]["estimated"])
+        est = fit["estimate"]
+        self.assertEqual((est["status"], est["approval"], est["class"]), (gp.R7_STATUS, gp.R7_APPROVAL, "PALWQ361"))
+        self.assertEqual((est["reference_scope"], est["reference_sequence_tokens"], est["served_context"]), ("prefix", 2048, 32768))
+        self.assertIn("ESTIMATE", fit["measurement_scope"])
+        self.assertIsNone(gp.upload_refusal(fit))
+
+    def test_a_scale_a_power_of_two_off_the_windows_spread_is_refused(self):
+        tol = gp.load_registry()["calibration_texts"]["fit_tolerance"]
+        for off in (1.0, -1.0, 0.3):
+            fit = gp.palwq36_estimate_fit(self._report("ab", spread_log2=off), "ab", 2048, tol, 32, self.S, "prefix", 32768)
+            self.assertFalse(fit["within"], off)
+            self.assertFalse(fit["estimate"]["scale_consistent"], off)
+            self.assertIn("disagrees with the windows' own spread", gp.upload_refusal(fit))
+
+    def test_the_prefix_is_held_to_the_tightened_bar_and_a_full_reference_to_the_a16_bar(self):
+        tol = gp.load_registry()["calibration_texts"]["fit_tolerance"]
+        kl = 0.07  # inside the A16 bar (0.1), outside the prefix bar (0.05)
+        self.assertTrue(gp.palwq36_window_fit(self._report("ab", n=32768, kl=kl), "ab", 32768, tol)["within"])
+        prefix = gp.palwq36_estimate_fit(self._report("ab", kl=kl), "ab", 2048, tol, 32, self.S, "prefix", 32768)
+        self.assertFalse(prefix["within"])
+        self.assertIsNotNone(gp.upload_refusal(prefix))
+        full = gp.palwq36_estimate_fit(self._report("ab", n=32768, kl=kl), "ab", 32768, tol, 32, self.S, "full", 32768)
+        self.assertTrue(full["within"])
+        self.assertFalse(full["measured"])
+
+    def test_the_estimate_reader_refuses_what_it_cannot_check(self):
+        tol = gp.load_registry()["calibration_texts"]["fit_tolerance"]
+        with self.assertRaises(ValueError):  # the run used another scale than the estimate
+            gp.palwq36_estimate_fit(self._report("ab", scale=self.S * 2), "ab", 2048, tol, 32, self.S, "prefix", 32768)
+        r = self._report("ab")
+        del r["windows"][5]["logit_scale_spread"]
+        with self.assertRaises(ValueError):  # a tool that predates the spread
+            gp.palwq36_estimate_fit(r, "ab", 2048, tol, 32, self.S, "prefix", 32768)
+        with self.assertRaises(ValueError):  # a foreign sequence
+            gp.palwq36_estimate_fit(self._report("ab"), "cd", 2048, tol, 32, self.S, "prefix", 32768)
+        with self.assertRaises(ValueError):
+            gp.palwq36_estimate_fit(self._report("ab"), "ab", 2048, tol, 32, float("nan"), "prefix", 32768)
+        with self.assertRaises(ValueError):
+            gp.palwq36_estimate_fit(self._report("ab"), "ab", 2048, tol, 32, self.S, "sampled", 32768)
+
+    def test_the_upload_gate_takes_only_an_approved_palwq36_estimate(self):
+        tol = gp.load_registry()["calibration_texts"]["fit_tolerance"]
+        fit = gp.palwq36_estimate_fit(self._report("ab"), "ab", 2048, tol, 32, self.S, "prefix", 32768)
+        for field, value in (("approval", "someone else"), ("class", "A16"), ("status", "measured")):
+            forged = json.loads(json.dumps(fit))
+            forged["estimate"][field] = value
+            self.assertIn("outside the R7 approval", gp.upload_refusal(forged), field)
+        forged = json.loads(json.dumps(fit))
+        forged["long"]["within"] = False
+        self.assertIsNotNone(gp.upload_refusal(forged))
+        # The pre-existing gate is unchanged for everything that is neither measured nor an R7 estimate.
+        self.assertIn("not measured", gp.upload_refusal({"measured": False, "reason": "x"}))
+
+    def test_reference_windows_are_cut_from_the_converters_logit_rows(self):
+        n, vocab = 6, 3
+        rows = [[float(10 * p + v) for v in range(vocab)] for p in range(n)]
+        with tempfile.TemporaryDirectory() as d:
+            logits, out = Path(d) / "l.bin", Path(d) / "w.bin"
+
+            def write(rs, width=vocab):
+                b = bytearray(len(rs).to_bytes(8, "little"))
+                for r in rs:
+                    b += width.to_bytes(8, "little") + b"".join(__import__("struct").pack("<f", v) for v in r)
+                logits.write_bytes(bytes(b))
+
+            write(rows)
+            header = gp.write_reference_windows_from_logits(logits, out, "ab", n, [0, 4], 2, producer="test")
+            self.assertEqual(header["vocab"], vocab)
+            data = out.read_bytes()
+            hlen = int.from_bytes(data[:4], "little")
+            h = json.loads(data[4:4 + hlen])
+            self.assertEqual((h["schema"], h["tokens_sha256"], h["sequence_tokens"], h["window_starts"], h["window_len"]),
+                             ("misaka-palw/qwen36-reference-windows/v1", "ab", n, [0, 4], 2))
+            import struct
+            body = struct.unpack(f"<{4 * vocab}f", data[4 + hlen:])
+            self.assertEqual(list(body), rows[0] + rows[1] + rows[4] + rows[5])
+            with self.assertRaises(ValueError):  # the converter ran over another length
+                gp.write_reference_windows_from_logits(logits, out, "ab", n + 1, [0, 4], 2)
+            with self.assertRaises(ValueError):  # a window past the sequence
+                gp.write_reference_windows_from_logits(logits, out, "ab", n, [0, 5], 2)
+            logits.write_bytes(logits.read_bytes()[:-4])
+            with self.assertRaises(ValueError):  # truncated
+                gp.write_reference_windows_from_logits(logits, out, "ab", n, [0, 4], 2)
+
+    def test_fit_plan_in_estimate_mode(self):
+        with tempfile.TemporaryDirectory() as d:
+            eight = gp.model_by_id(gp.load_registry(), 8)
+            art = Path(d) / "a.palwq36"
+            ok, why = self._pipeline(d, palwq36_estimated_scale=self.S).fit_plan(eight)
+            self.assertFalse(ok)
+            self.assertIn("--palwq36-artifact not given", why)
+            art.write_bytes(b"x")
+            self.assertEqual(self._pipeline(d, palwq36_estimated_scale=self.S, palwq36_artifact=str(art)).fit_plan(eight), (True, ""))
+            ok, why = self._pipeline(d, palwq36_estimated_scale=self.S, palwq36_logit_scale=0.25, palwq36_artifact=str(art)).fit_plan(eight)
+            self.assertFalse(ok)
+            self.assertIn("not both", why)
+            for bad in (64, 8192):
+                ok, why = self._pipeline(d, palwq36_estimated_scale=self.S, palwq36_artifact=str(art),
+                                         palwq36_reference_prefix=bad).fit_plan(eight)
+                self.assertFalse(ok, bad)
+            ok, _ = self._pipeline(d, palwq36_estimated_scale=self.S, palwq36_artifact=str(art),
+                                   palwq36_reference_windows=f"{d}/none.bin").fit_plan(eight)
+            self.assertFalse(ok)
+            # Without the estimate flag the measured path is unchanged: no reference windows, no fit.
+            self.assertFalse(self._pipeline(d, palwq36_artifact=str(art)).fit_plan(eight)[0])
+
+    def test_dry_run_computes_a_prefix_reference_and_compares_at_the_estimate(self):
+        with tempfile.TemporaryDirectory() as d:
+            art = Path(d) / "a.palwq36"
+            art.write_bytes(b"x")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                rc = gp.main(["run", "--model", "8", "--dry-run", "--work", d, "--hf", "/nonexistent/hf",
+                              "--palwq36-artifact", str(art), "--palwq36-estimated-scale"])
+            out = buf.getvalue()
+            self.assertEqual(rc, 0, out[-2000:])
+            self.assertIn("R7 ESTIMATE mode", out)
+            self.assertIn("--reference-only --prompt", out)
+            self.assertIn("--reference-logits", out)
+            self.assertIn("--logit-scale 0.001953125", out)
+            self.assertIn("q36-prefix2048-reference-windows.bin", out)

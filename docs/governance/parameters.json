@@ -135,6 +135,58 @@
       "source": "kaspad/src/private_integration/paid_claim_factory.rs",
       "changed_by_reorganization": false,
       "symbol": "private service_span_daa"
+    },
+    {
+      "key": "palwq361_logit_scale_estimate",
+      "symbol": "PALWQ361 logit scale (2^-e_logits)",
+      "baseline": "2^-9 = 0.001953125（e_logits = 9、較正 logit absmax A ∈ (16, 32] を仮定）",
+      "unit": "物理 logit / 整数 logit code",
+      "approval_state": "目安（未実測）。承認: ユーザー判断 2026-10-22（目安で可）",
+      "guard": "推定値として記録し実測扱いしない。窓ごとの logit_scale_spread と 2^±0.25 以内で一致しなければ fit 拒否。spread に合わせた snap はしない。実測経路（--palwq36-logit-scale）が優先",
+      "source": "docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md",
+      "changed_by_reorganization": false,
+      "status": "目安（未実測）",
+      "derivation": "docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md §1",
+      "approval": "ユーザー判断 2026-10-22（目安で可）"
+    },
+    {
+      "key": "palwq361_reference_prefix_tokens",
+      "symbol": "L（PALWQ361 縮小 f32 参照の prefix 長）",
+      "baseline": "2048（上限 4096、served context 32768 のうち）",
+      "unit": "token",
+      "approval_state": "目安（未実測）。承認: ユーザー判断 2026-10-22（目安で可）",
+      "guard": "prefix より後ろ（32K drift）は比べない旨を fit と card に記録。32K 全長の参照窓（実測）が得られればそちらを使う",
+      "source": "docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md",
+      "changed_by_reorganization": false,
+      "status": "目安（未実測）",
+      "derivation": "docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md §2",
+      "approval": "ユーザー判断 2026-10-22（目安で可）"
+    },
+    {
+      "key": "palwq361_estimate_scale_spread_log2_max",
+      "symbol": "|log2(spread / scale)| 上限",
+      "baseline": "0.25",
+      "unit": "log2（無次元）",
+      "approval_state": "目安（未実測）。承認: ユーザー判断 2026-10-22（目安で可）",
+      "guard": "緩めると 2 の冪の head 誤りや目安の外れを通す。0.5 以上にする変更は通常調整でない",
+      "source": "docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md",
+      "changed_by_reorganization": false,
+      "status": "目安（未実測）",
+      "derivation": "docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md §1.3",
+      "approval": "ユーザー判断 2026-10-22（目安で可）"
+    },
+    {
+      "key": "palwq361_estimate_kl_margin",
+      "symbol": "prefix 参照の KL 倍率・drift 比",
+      "baseline": "KL 閾値 ×0.5（0.1→0.05、floor 0.01→0.005）、late/early ≤ 1.25、top-1 ≥ 0.8",
+      "unit": "倍率 / 比",
+      "approval_state": "目安（未実測）。承認: ユーザー判断 2026-10-22（目安で可）",
+      "guard": "どの項目も A16 の fit_tolerance より緩くしない（palwq36_estimate_tolerance）",
+      "source": "docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md",
+      "changed_by_reorganization": false,
+      "status": "目安（未実測）",
+      "derivation": "docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md §2.2",
+      "approval": "ユーザー判断 2026-10-22（目安で可）"
     }
   ]
 }

@@ -19,6 +19,10 @@
 //!
 //! KL needs the integer logits in physical units. PALWQ361 has no calibrated logit scale on record; without `--logit-scale` the
 //! report carries no `kl` and the pipeline's reader refuses it (typed missing, never zero). Nothing here is a PASS.
+//!
+//! Every window also reports `logit_scale_spread`, the physical size of one code implied by the window's own spread
+//! (`logit_scale_spread_v1`). The R7 estimate mode of `genesis10_pipeline.py` (user decision 2026-10-22) refuses an estimated
+//! scale that this disagrees with by more than its bound; the measure never replaces the scale the KL is computed at.
 use misaka_palw_base0::qwen36::{Qwen36Cache, Qwen36Engine, Qwen36ResidencyPolicyV1, open_artifact_with_residency};
 use misaka_palw_base0::qwen36_reference::qwen36_score_fidelity;
 use sha2::{Digest, Sha256};
@@ -121,6 +125,31 @@ fn logit_kl_v1(reference: &[f32], integer: &[i32], scale: f64) -> Result<f64, &'
     Ok(kl.max(0.0))
 }
 
+/// **The physical size of one integer logit code, as the window's own spread says it is** (R7, 2026-10-22).
+///
+/// `sqrt(Σ (r − r̄)² / Σ (q − q̄)²)` pooled over the window's rows, each row centred on its own mean (logits are
+/// shift-invariant). PALWQ361 writes `code = logit · 2^e_logits` (`qwen36_calibrate::projection_params`), so for a class that
+/// computes the model this lands near `2^-e_logits`; a logit scale given to this tool that is a power of two away from it
+/// is either a wrong scale or a head that is a power of two off — both are refusals for the reader, never a pass. It is
+/// reported, not used: the scale the KL is computed at is still the one given (`--logit-scale`).
+fn logit_scale_spread_v1(reference: &[Vec<f32>], integer: &[Vec<i32>]) -> Option<f64> {
+    if reference.is_empty() || reference.len() != integer.len() {
+        return None;
+    }
+    let (mut rr, mut qq) = (0f64, 0f64);
+    for (r, q) in reference.iter().zip(integer) {
+        if r.is_empty() || r.len() != q.len() {
+            return None;
+        }
+        let rm = r.iter().map(|v| f64::from(*v)).sum::<f64>() / r.len() as f64;
+        let qm = q.iter().map(|v| f64::from(*v)).sum::<f64>() / q.len() as f64;
+        rr += r.iter().map(|v| (f64::from(*v) - rm).powi(2)).sum::<f64>();
+        qq += q.iter().map(|v| (f64::from(*v) - qm).powi(2)).sum::<f64>();
+    }
+    let spread = (rr / qq).sqrt();
+    (qq > 0.0 && spread.is_finite() && spread > 0.0).then_some(spread)
+}
+
 fn kl_summary_v1(reference: &[Vec<f32>], integer: &[Vec<i32>], scale: f64) -> serde_json::Value {
     if reference.is_empty() || reference.len() != integer.len() {
         die("incomplete comparison window".into());
@@ -189,6 +218,7 @@ fn main() {
             "window_start": start, "window_len": window_len, "positions": full.positions,
             "top1_agree": full.top1_agree, "top5_contains": full.top5_contains,
             "top100_rank_correlation": full.rank_correlation, "cosine": full.cosine,
+            "logit_scale_spread": logit_scale_spread_v1(r, &q),
         });
         if let Some(scale) = scale {
             entry["kl"] = kl_summary_v1(r, &q, scale);
@@ -266,5 +296,21 @@ mod tests {
         for scale in [0.0, -1.0, f64::NAN] {
             assert!(logit_kl_v1(&[1.0], &[1], scale).is_err());
         }
+    }
+
+    #[test]
+    fn qwen36_logit_spread_names_the_power_of_two_and_refuses_a_flat_row() {
+        // codes = logits · 2^9 (+ a per-row shift the measure must ignore): the spread is 2^-9.
+        let reference = vec![vec![3.0f32, -1.0, 0.5, 7.25], vec![-2.0f32, 4.0, 1.0, 0.0]];
+        let integer: Vec<Vec<i32>> =
+            reference.iter().enumerate().map(|(i, r)| r.iter().map(|v| (v * 512.0) as i32 + 1000 * i as i32).collect()).collect();
+        let spread = logit_scale_spread_v1(&reference, &integer).unwrap();
+        assert!((spread.log2() + 9.0).abs() < 1e-9, "{spread}");
+        // A head a power of two off moves the spread by exactly that power.
+        let doubled: Vec<Vec<i32>> = integer.iter().map(|r| r.iter().map(|v| v * 2).collect()).collect();
+        assert!((logit_scale_spread_v1(&reference, &doubled).unwrap().log2() + 10.0).abs() < 1e-9);
+        assert!(logit_scale_spread_v1(&reference, &[vec![5; 4], vec![5; 4]]).is_none(), "a constant integer row has no scale");
+        assert!(logit_scale_spread_v1(&reference, &integer[..1]).is_none());
+        assert!(logit_scale_spread_v1(&[], &[]).is_none());
     }
 }

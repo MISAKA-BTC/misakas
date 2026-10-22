@@ -132,6 +132,8 @@ def upload_refusal(fit: dict | None) -> str | None:
     within tolerance — the short fit and the long-context fit both. "Not measured" (an evicted source, --no-fit, --no-fit-long,
     a host too small) stops the run; it is never a pass. Returns the refusal, or None when the upload may proceed."""
     fit = fit or {}
+    if not fit.get("measured") and fit.get("estimated"):
+        return palwq36_estimate_refusal(fit)
     if not fit.get("measured"):
         return f"the fit was not measured ({fit.get('reason', 'no fit recorded')}); a genesis upload needs a measured fit"
     if not fit.get("within"):
@@ -174,6 +176,135 @@ def palwq36_window_fit(report: dict, tokens_sha256: str, context: int, tolerance
     fit["measurement_scope"] = "PALWQ361 " + fit["measurement_scope"]
     fit["long"]["measurement_scope"] = "PALWQ361 " + fit["long"]["measurement_scope"]
     return fit
+
+
+# ---- R7 (user decision 2026-10-22, "目安で決めて良い"): PALWQ361's logit scale and f32 reference window by ESTIMATE ----------
+# Derivation, inputs, margin and what this does NOT guarantee:
+# docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md; register keys `palwq361_logit_scale_estimate`,
+# `palwq361_reference_prefix_tokens`, `palwq361_estimate_scale_spread_log2_max`, `palwq361_estimate_kl_margin`.
+# The measured path (`--palwq36-logit-scale` + a full `--palwq36-reference-windows`) is unchanged and stays preferred.
+R7_APPROVAL = "ユーザー判断 2026-10-22（目安で可）"
+R7_STATUS = "目安（未実測）"
+R7_DERIVATION = "docs/evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md"
+# PALWQ361 writes a logit code as `logit · 2^e_logits` (qwen36-convert: projection_params(out_scales, e_final, e_logits)), with
+# e_logits = floor(log2(32767 / A)) − 1 and A the f32 reference's logit absmax over the converter's 8-token prompt. A is not on
+# record; A ∈ (16, 32] (Qwen-family next-token logits) gives e_logits = 9.
+PALWQ361_ESTIMATED_LOGIT_SCALE = 2.0 ** -9
+# The window's own spread (qwen36-window-compare `logit_scale_spread`) must agree with the estimated scale within 2^±0.25: a power
+# of two away is a wrong estimate or a head a power of two off, and both refuse.
+PALWQ361_SCALE_SPREAD_LOG2_MAX = 0.25
+# The reduced f32 reference: the first L tokens of the held-out sequence (32 windows of 64 tile 2,048 exactly).
+PALWQ361_REFERENCE_PREFIX_DEFAULT = 2048
+PALWQ361_REFERENCE_PREFIX_MAX = 4096
+# Margin for the prefix reference (the 32K drift it does not see): the KL bars halved and the drift ratio tightened.
+PALWQ361_ESTIMATE_KL_MARGIN = 0.5
+PALWQ361_ESTIMATE_DRIFT_RATIO_MAX = 1.25
+
+
+def palwq36_estimate_tolerance(tolerance: dict) -> dict:
+    """The acceptance bar for a PREFIX reference (R7 estimate mode): the A16 bar with every KL threshold multiplied by the margin
+    and the late/early ratio tightened. Never looser than `tolerance` in any field."""
+    t = dict(tolerance)
+    for k in ("kl_mean_max", "window_kl_mean_max", "drift_floor_kl"):
+        t[k] = tolerance[k] * PALWQ361_ESTIMATE_KL_MARGIN
+    t["drift_ratio_max"] = min(tolerance["drift_ratio_max"], PALWQ361_ESTIMATE_DRIFT_RATIO_MAX)
+    t["source"] = (f"R7 estimate margin ({R7_DERIVATION}): KL bars x{PALWQ361_ESTIMATE_KL_MARGIN}, drift ratio <= "
+                   f"{t['drift_ratio_max']}, over the A16 bar: {tolerance.get('source', '')}")
+    return t
+
+
+def write_reference_windows_from_logits(logits_path: Path, out_path: Path, tokens_sha256: str, n: int, starts: list[int],
+                                        window_len: int = 64, producer: str = "") -> dict:
+    """Turn `qwen36-convert --reference-only --prompt <ids> --reference-logits FILE` (u64 rows, then per row u64 length and that
+    many f32 LE) into the `misaka-palw/qwen36-reference-windows/v1` file `qwen36-window-compare` reads. Rows are copied, never
+    re-computed or rounded. Refuses (ValueError) a file whose row count is not the sequence's, ragged rows, or windows past it."""
+    if n <= 0 or window_len <= 0 or not starts or starts != sorted(set(starts)) or starts[-1] + window_len > n:
+        raise ValueError("reference windows are empty, unsorted or run past the sequence")
+    size = logits_path.stat().st_size
+    with open(logits_path, "rb") as f:
+        head = f.read(16)
+        if len(head) < 16:
+            raise ValueError("reference logits file is shorter than its header")
+        rows, vocab = int.from_bytes(head[:8], "little"), int.from_bytes(head[8:16], "little")
+        if rows != n or vocab <= 0:
+            raise ValueError(f"reference logits hold {rows} rows of {vocab}, the sequence is {n} tokens")
+        stride = 8 + 4 * vocab
+        if size != 8 + rows * stride:
+            raise ValueError("reference logits rows are ragged or truncated")
+        header = {"schema": "misaka-palw/qwen36-reference-windows/v1", "tokens_sha256": tokens_sha256, "sequence_tokens": n,
+                  "window_len": window_len, "window_starts": list(starts), "vocab": vocab, "producer": producer}
+        hb = json.dumps(header, separators=(",", ":")).encode()
+        tmp = out_path.with_name(out_path.name + ".partial")
+        with open(tmp, "wb") as out:
+            out.write(len(hb).to_bytes(4, "little") + hb)
+            for s in starts:
+                for pos in range(s, s + window_len):
+                    f.seek(8 + pos * stride)
+                    length = int.from_bytes(f.read(8), "little")
+                    body = f.read(4 * vocab)
+                    if length != vocab or len(body) != 4 * vocab:
+                        raise ValueError(f"reference logits row {pos} is not {vocab} wide")
+                    out.write(body)
+        os.replace(tmp, out_path)
+    return header
+
+
+def palwq36_estimate_fit(report: dict, tokens_sha256: str, n: int, tolerance: dict, window_count: int, scale: float,
+                         reference_scope: str, served_context: int) -> dict:
+    """Read a `qwen36-window-compare` report run at an ESTIMATED logit scale (R7). Everything `palwq36_window_fit` refuses is
+    refused here, plus: the report's scale is not the estimate, a window without `logit_scale_spread`, or a spread a power of two
+    (beyond 2^±PALWQ361_SCALE_SPREAD_LOG2_MAX) away from the estimate. The result is `measured: False, estimated: True` — it is
+    never written as a measured fit."""
+    if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
+        raise ValueError("the estimated PALWQ361 logit scale is missing or invalid")
+    if reference_scope not in ("prefix", "full"):
+        raise ValueError(f"unknown reference scope {reference_scope!r}")
+    if report.get("logit_scale") != scale:
+        raise ValueError(f"the comparison ran at logit scale {report.get('logit_scale')}, not the estimate {scale}")
+    bar = palwq36_estimate_tolerance(tolerance) if reference_scope == "prefix" else dict(tolerance)
+    fit = palwq36_window_fit(report, tokens_sha256, n, bar, window_count)
+    deviations = []
+    for w in report.get("windows") or []:
+        spread = w.get("logit_scale_spread")
+        if type(spread) not in (int, float) or not math.isfinite(spread) or spread <= 0:
+            raise ValueError("a window has no logit_scale_spread: the estimated scale cannot be checked against the windows")
+        deviations.append(math.log2(spread / scale))
+    consistent = all(abs(x) <= PALWQ361_SCALE_SPREAD_LOG2_MAX for x in deviations)
+    worst = max(deviations, key=abs)
+    scope = (f"R7 ESTIMATE: f32 reference over the first {n:,} of {served_context:,} positions (prefix)" if reference_scope == "prefix"
+             else f"R7 ESTIMATE: f32 reference windows over the whole {n:,}-token sequence")
+    estimate = {"class": "PALWQ361", "status": R7_STATUS, "approval": R7_APPROVAL, "derivation": R7_DERIVATION,
+                "logit_scale": scale, "logit_scale_log2": math.log2(scale),
+                "register_logit_scale": PALWQ361_ESTIMATED_LOGIT_SCALE,
+                "logit_scale_is_register_value": scale == PALWQ361_ESTIMATED_LOGIT_SCALE,
+                "reference_scope": reference_scope, "reference_sequence_tokens": n, "served_context": served_context,
+                "scale_spread_log2": deviations, "scale_spread_log2_worst": worst,
+                "scale_spread_log2_max": PALWQ361_SCALE_SPREAD_LOG2_MAX, "scale_consistent": consistent,
+                "not_guaranteed": "the logit scale is not measured; with a prefix reference, positions past the prefix (the 32K drift) "
+                                  "are not compared; see the derivation"}
+    within = fit["within"] and consistent
+    long = dict(fit["long"], measured=False, estimated=True, within=within, measurement_scope=scope + "; " + fit["long"]["measurement_scope"])
+    if reference_scope == "prefix":
+        long["reason"] = f"no 32K f32 reference on a 32 GiB host: compared over a {n:,}-token prefix only (R7 estimate)"
+    out = dict(fit, measured=False, estimated=True, within=within, measurement_scope=scope + "; " + fit["measurement_scope"],
+               estimate=estimate, long=long)
+    out["reason"] = "R7 estimate mode: the PALWQ361 logit scale is an estimate (目安・未実測)"
+    return out
+
+
+def palwq36_estimate_refusal(fit: dict) -> str | None:
+    """The upload gate for an R7 estimate-mode fit: only a PALWQ361 estimate under the recorded user approval, scale-consistent
+    and within its (tightened) bar, both short and long. Anything else estimated is refused as unmeasured."""
+    est = fit.get("estimate") or {}
+    if est.get("class") != "PALWQ361" or est.get("approval") != R7_APPROVAL or est.get("status") != R7_STATUS:
+        return "the fit is an estimate outside the R7 approval (PALWQ361 only); a genesis upload needs a measured fit"
+    if not est.get("scale_consistent"):
+        return (f"the estimated PALWQ361 logit scale {est.get('logit_scale')} disagrees with the windows' own spread "
+                f"(worst 2^{est.get('scale_spread_log2_worst')}): a wrong estimate or a head a power of two off")
+    long = fit.get("long") or {}
+    if not fit.get("within") or long.get("within") is not True or not long.get("estimated"):
+        return f"the R7 estimate-mode fit is out of its tolerance (KL {fit.get('kl_mean')}, top-1 {fit.get('top1_agreement')})"
+    return None
 
 
 def a16_window_fit(report: dict, digest: str, context: int, tolerance: dict, window_count: int = 32) -> dict:
@@ -623,6 +754,13 @@ def model_card(m: dict, variant: str | None, record: dict | None, manifest: dict
                          f"late/early {lg.get('drift_ratio')}")
         elif lg:
             lines.append(f"- long-context fit: not measured ({lg.get('reason')})")
+    elif fit and fit.get("estimated"):
+        est = fit.get("estimate") or {}
+        lines.append(f"- fit against the float reference: **ESTIMATE, not a measurement** ({est.get('status')}; {est.get('approval')}): "
+                     f"logit scale {est.get('logit_scale')!r} estimated (not measured), {fit.get('measurement_scope')}; mean KL "
+                     f"{fit['kl_mean']:.5f}, top-1 {fit['top1_agreement']:.3f}; over the compared windows mean KL "
+                     f"{(fit.get('long') or {}).get('kl_mean', float('nan')):.5f} (bar: KL <= {fit['tolerance']['kl_mean_max']}); "
+                     f"derivation `{est.get('derivation')}`")
     elif fit:
         lines.append(f"- fit against the float reference: not measured on the conversion host ({fit.get('reason')})")
     if is_legacy_wrap(m):
@@ -1309,6 +1447,25 @@ class Pipeline:
             if self.a.no_fit or getattr(self.a, "no_fit_long", False):
                 return False, "--no-fit or --no-fit-long"
             art, ref = getattr(self.a, "palwq36_artifact", None), getattr(self.a, "palwq36_reference_windows", None)
+            est = getattr(self.a, "palwq36_estimated_scale", None)
+            if est is not None:
+                # R7 estimate mode (user decision 2026-10-22): the scale is the estimate; the reference is the given full windows
+                # file, or else a prefix reference the pipeline computes with qwen36-convert --reference-only (fits 32 GiB).
+                if getattr(self.a, "palwq36_logit_scale", None) is not None:
+                    return False, "give --palwq36-logit-scale (measured) or --palwq36-estimated-scale (R7 estimate), not both"
+                if not (type(est) in (int, float) and math.isfinite(est) and est > 0):
+                    return False, f"--palwq36-estimated-scale {est}: a finite positive scale"
+                problems = [] if art and Path(art).expanduser().is_file() else [f"--palwq36-artifact {art or 'not given'}"]
+                if ref and not Path(ref).expanduser().is_file():
+                    problems.append(f"--palwq36-reference-windows {ref}")
+                if not ref:
+                    try:
+                        self.palwq36_prefix_tokens(m)
+                    except SystemExit as error:
+                        problems.append(str(error))
+                if problems:
+                    return False, "R7 estimate mode needs: " + "; ".join(problems)
+                return True, ""
             missing = [f"{flag} {v}" if v else f"{flag} not given" for flag, v in
                        (("--palwq36-artifact", art), ("--palwq36-reference-windows", ref)) if not (v and Path(v).expanduser().is_file())]
             if missing:
@@ -1440,10 +1597,35 @@ class Pipeline:
             raise SystemExit("A16 fit out of tolerance; no index or card is uploaded")
         st.mark("fit", {"measured": True, "within": True})
 
+    def palwq36_prefix_tokens(self, m: dict) -> int:
+        """R7 estimate mode: the length of the prefix the reduced f32 reference covers (default 2,048, at most 4,096 and the
+        served context; at least two 64-token windows)."""
+        n = int(getattr(self.a, "palwq36_reference_prefix", None) or PALWQ361_REFERENCE_PREFIX_DEFAULT)
+        context = effective_options(m, self.a.context)["context"]
+        if not 128 <= n <= min(PALWQ361_REFERENCE_PREFIX_MAX, context):
+            raise SystemExit(f"--palwq36-reference-prefix {n}: give 128..{min(PALWQ361_REFERENCE_PREFIX_MAX, context)} (the prefix "
+                             "reference holds every position's f32 logit row twice in memory)")
+        return n
+
+    def q36_source_args(self, m: dict, opts: dict, d: dict) -> list[str]:
+        """How qwen36-convert reads #8's GGUF: the local file, or the pinned URL by range — checked against the measuring pass's
+        window digests when they exist, else against the LFS id (whole-file SHA-256)."""
+        if self.a.local_source:
+            return ["--gguf", str(d["src"] / variant_file(m, self.a.gguf_variant))]
+        gw = self.gguf_weight(m)
+        url = ["--url", self.gguf_url(m), "--url-bytes", str(gw["bytes"]),
+               "--url-window-mib", str(opts.get("window_mib", 64)), "--url-cache-windows", str(opts.get("cache_windows", 24))]
+        windows = d["base"] / "q36-windows.json"
+        return url + (["--url-windows-in", str(windows)] if windows.exists() else ["--url-sha256", gw["lfs_sha256"]])
+
     def fit_palwq36(self, m: dict, st: State) -> None:
         """#8: `qwen36-window-compare` over the held-out long sequence. The integer engine advances the whole prefix here; the
         f32 window logits come from `--palwq36-reference-windows` (bound to the sequence's SHA-256 by the tool). The reading is
-        `palwq36_window_fit`, which refuses a report without KL (no PALWQ361 logit scale is on record unless one is given)."""
+        `palwq36_window_fit`, which refuses a report without KL (no PALWQ361 logit scale is on record unless one is given).
+        With `--palwq36-estimated-scale` (R7) the reading is `palwq36_estimate_fit` and the fit is recorded as an ESTIMATE."""
+        if getattr(self.a, "palwq36_estimated_scale", None) is not None:
+            self.fit_palwq36_estimate(m, st)
+            return
         d = model_dirs(self.work, m)
         opts = effective_options(m, self.a.context)
         context = opts["context"]
@@ -1484,6 +1666,89 @@ class Pipeline:
         if not fit["within"]:
             raise SystemExit(f"#{m['id']}: PALWQ361 fit out of tolerance; no index or card is uploaded")
         st.mark("fit", {"measured": True, "within": True})
+
+    def fit_palwq36_estimate(self, m: dict, st: State) -> None:
+        """#8 under R7 (user decision 2026-10-22, 目安で可): the logit scale is `--palwq36-estimated-scale` (an estimate, recorded as
+        one). The reference is `--palwq36-reference-windows` when given (a full one, from another host); otherwise a PREFIX
+        reference computed here: `qwen36-convert --reference-only --prompt <the first L held-out tokens> --reference-logits`, the
+        converter's own layer-major f32 reference (one tensor in memory at a time, so it fits 32 GiB), turned into a
+        reference-windows file over L, and the integer engine advanced over the same L tokens. The reading is
+        `palwq36_estimate_fit`: the windows' own spread must agree with the estimated scale, and a prefix is held to the
+        tightened bar. The fit is written `measured: False, estimated: True`; it is never a measured fit."""
+        d = model_dirs(self.work, m)
+        opts = effective_options(m, self.a.context)
+        context = opts["context"]
+        scale = float(self.a.palwq36_estimated_scale)
+        spec = dict(self.reg["calibration_texts"]["long_evaluation"], len=context)
+        tokens_path = d["calib"] / "eval-q36-long-tokens.json"
+        token_meta = self.tokens_file(spec, d["src"] / "tokenizer.json", tokens_path)
+        full_ref = getattr(self.a, "palwq36_reference_windows", None)
+        n = context if full_ref else self.palwq36_prefix_tokens(m)
+        scope = "full" if full_ref else "prefix"
+        flat = d["calib"] / ("eval-q36-long-sequence.json" if full_ref else f"eval-q36-prefix{n}-sequence.json")
+        ref = Path(full_ref).expanduser() if full_ref else d["base"] / f"q36-prefix{n}-reference-windows.bin"
+        logits = d["base"] / f"q36-prefix{n}-reference-logits.bin"
+        report_path = d["base"] / f"fit-q36-estimate-{scope}-window-report.json"
+        starts = a16_window_starts(n, spec["drift_windows"])
+        compare = [self.tool("qwen36-window-compare"), "--artifact", str(Path(self.a.palwq36_artifact).expanduser()),
+                   "--tokens", str(flat), "--reference-windows", str(ref), "--logit-scale", repr(scale), "--control",
+                   "--out", str(report_path)]
+        log(f"#{m['id']} fit: R7 ESTIMATE mode — logit scale {scale!r} ({R7_STATUS}; {R7_APPROVAL}), {scope} reference over "
+            f"{n:,} of {context:,} positions ({R7_DERIVATION})")
+        if self.a.dry_run:
+            if not full_ref:
+                self.r.run([self.tool("qwen36-convert"), *self.q36_source_args(m, opts, d), "--context", str(context),
+                            "--reference-only", "--prompt", f"<the first {n} held-out token ids>", "--reference-logits", str(logits),
+                            "--out", str(d["base"] / "q36-prefix-reference.unused")])
+            self.r.run(compare)
+            return
+        st.data["fit"] = {"measured": False, "reason": "PALWQ361 R7 estimate-mode window comparison is pending"}
+        if st.data.get("record") is not None:
+            st.data["record"]["fit"] = st.data["fit"]
+        st.data.get("steps", {}).pop("fit", None)
+        st.save()
+        sequences = json.loads(tokens_path.read_text())["sequences"]
+        if len(sequences) != 1:
+            raise SystemExit("PALWQ361 window fit requires exactly one pinned held-out sequence")
+        flat.write_text(json.dumps(sequences[0][:n], separators=(",", ":")) + "\n")
+        flat_sha = sha256_file(flat)
+        reference_meta = {"scope": scope, "path": str(ref)}
+        if not full_ref:
+            argv = [self.tool("qwen36-convert"), *self.q36_source_args(m, opts, d), "--context", str(context), "--reference-only",
+                    "--prompt", ",".join(str(t) for t in sequences[0][:n]), "--reference-logits", str(logits),
+                    "--out", str(d["base"] / "q36-prefix-reference.unused")]
+            log("$ " + " ".join(shlex.quote(a) for a in argv[:-6]) + f" --prompt <{n} ids> --reference-logits {logits} ...")
+            with open(d["base"] / f"q36-prefix{n}-reference.log", "w") as logf:
+                p = subprocess.run(argv, stdout=logf, stderr=subprocess.STDOUT, env=anon_env())
+            if p.returncode != 0:
+                raise SystemExit(f"#{m['id']}: the prefix f32 reference exited {p.returncode} (log: {d['base'] / f'q36-prefix{n}-reference.log'})")
+            try:
+                write_reference_windows_from_logits(
+                    logits, ref, flat_sha, n, starts, 64,
+                    producer=f"qwen36-convert --reference-only --prompt <first {n} held-out ids> (f32 layer-major reference over the "
+                             f"pinned GGUF); R7 estimate-mode prefix reference, genesis10_pipeline")
+            except (ValueError, OSError) as error:
+                raise SystemExit(f"#{m['id']}: the prefix reference could not be windowed: {error}") from error
+            finally:
+                logits.unlink(missing_ok=True)
+            reference_meta["sha256"] = sha256_file(ref)
+        self.r.run(compare, env=anon_env())
+        try:
+            fit = palwq36_estimate_fit(json.loads(report_path.read_text()), flat_sha, n,
+                                       self.reg["calibration_texts"]["fit_tolerance"], spec["drift_windows"], scale, scope, context)
+        except (ValueError, KeyError, TypeError) as error:
+            raise SystemExit(f"#{m['id']}: PALWQ361 estimate-mode report refused: {error} — nothing is uploaded") from error
+        fit["evaluation_tokens_sha256"] = token_meta["tokens_sha256"]
+        fit["window_report_sha256"] = sha256_file(report_path)
+        fit["estimate"]["reference"] = reference_meta
+        st.data["fit"] = fit
+        if st.data.get("record") is not None:
+            st.data["record"]["fit"] = fit
+        st.save()
+        refusal = palwq36_estimate_refusal(fit)
+        if refusal is not None:
+            raise SystemExit(f"#{m['id']}: {refusal}; no index or card is uploaded")
+        st.mark("fit", {"measured": False, "estimated": True, "within": True})
 
     def fit_long(self, m: dict, opts: dict, d: dict, model_path: Path) -> dict:
         """The long-context check: one held-out sequence of the served length (the next 32K tokens of RFC-0002 after the
@@ -1817,6 +2082,13 @@ def main(argv=None) -> int:
     r.add_argument("--palwq36-reference-windows",
                    help="#8: f32 reference window logits over the held-out sequence (misaka-palw/qwen36-reference-windows/v1)")
     r.add_argument("--palwq36-logit-scale", type=float, help="#8: physical logit scale for KL; absent means the fit is refused")
+    r.add_argument("--palwq36-estimated-scale", type=float, nargs="?", const=PALWQ361_ESTIMATED_LOGIT_SCALE,
+                   help=f"#8, R7 ESTIMATE mode ({R7_APPROVAL}): the logit scale is an estimate, recorded as one (alone: the register "
+                        f"value 2^-9 = {PALWQ361_ESTIMATED_LOGIT_SCALE!r}); without --palwq36-reference-windows the f32 reference "
+                        f"is a prefix the pipeline computes. See {R7_DERIVATION}")
+    r.add_argument("--palwq36-reference-prefix", type=int, default=None,
+                   help=f"#8, R7 estimate mode: prefix length of the reduced f32 reference (default {PALWQ361_REFERENCE_PREFIX_DEFAULT}, "
+                        f"at most {PALWQ361_REFERENCE_PREFIX_MAX})")
     r.add_argument("--local-legacy", help="#1: the legacy A16 .palwart already on disk (checked against its pinned SHA-256)")
     r.add_argument("--bin-dir", default=str(ROOT / "target" / "release"))
     r.add_argument("--tokenize-python", default=DEFAULT_TOKENIZE_PY, help="a Python with the `tokenizers` package (offline)")

@@ -57,3 +57,17 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 - 構造・影響: consensus の最短経路 guard は維持し、private service を延長する。class ごとに長い derived receipt が必要な場合は従来どおり planner が拒否する。material の総期間は 6,000 → 6,321 DAA。private parameter/policy fingerprint が変わるため次の検証は fresh factory/appdir を使用する。public preset、T12 公開 identity、認証、lottery、責任 H は変更しない。
 - 実装・試験: review 用の変更を作成。private exact-policy / stale-mirror / public refusal 試験は **1/1 pass**（`/tmp/misaka-rfc12-private-service-derived-floor-stack64-controls.log`、1.93 s）。最初の cargo test は 16m02s のビルド後に既定 test-thread stack 不足で SIGABRT（`/tmp/misaka-rfc12-private-service-derived-floor-tests.log`）。同一バイナリを `RUST_MIN_STACK=67108864`、1 test thread で実行し検証した。修正 profile の live run は未実施。
 - 承認: **2026-10-18 ユーザーが「private 専用の変更を承認する」と明示回答**。この private-only 数値修正と、新指紋・fresh DB による再試験を承認。公開・経済・security policy の採択は含まない。live run は承認後の再ビルド完了を待つ。
+
+## 2026-10-22 R7 PALWQ361 の logit scale と f32 参照窓（目安・未実測）
+
+- 承認: **ユーザー判断 2026-10-22（目安で可）**。理由: 35B MoE の f32 長系列が 32 GiB の機材に収まらない。状態はすべて **目安（未実測）**。導出・入力・余裕・保証しないこと: [r7-palwq361-estimate.md](../evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md)。
+- 対象は genesis #8（PALWQ361）の変換品質 fit（`scripts/genesis/genesis10_pipeline.py --palwq36-estimated-scale`）だけ。合意上の値ではない。実測の経路（`--palwq36-logit-scale` と 32K の参照窓）が優先で、そちらは変更していない。
+
+| キー / 変数 | 値 | 単位 | 状態・出典 |
+| --- | --- | --- | --- |
+| `palwq361_logit_scale_estimate` / 2^-e_logits | 2^-9 = 0.001953125（e_logits = 9。較正 logit absmax A ∈ (16, 32] を仮定） | 物理 logit / 整数 code | 目安（未実測）。PALWQ361 では code = logit·2^e_logits が作りで決まるので、未知なのは A の 2 の冪の区間だけ。[導出 §1](../evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md) |
+| `palwq361_reference_prefix_tokens` / L | 2,048（上限 4,096） | token | 目安（未実測）。`qwen36-convert --reference-only --prompt` の f32 参照を held-out 列の先頭 L で使う。2 × L × 0.99 MB の見積りで 32 GiB に収まる。[導出 §2](../evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md) |
+| `palwq361_estimate_scale_spread_log2_max` | 0.25 | log2 | 目安（未実測）。窓の spread と目安が 2^±0.25 を超えて離れていれば拒否する（目安の外れも head の 2 の冪のずれも、通らずに止まる）。[導出 §1.3](../evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md) |
+| `palwq361_estimate_kl_margin` | KL 閾値 ×0.5、late/early ≤ 1.25、top-1 ≥ 0.8 | 倍率 / 比 | 目安（未実測）。prefix の外の 32K drift は比べていないことへの余裕。A16 の基準より緩い項目はない。[導出 §2.2](../evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md) |
+
+**外さない条件:** fit は `measured: False, estimated: True` として記録し、card には「ESTIMATE」と書く。spread に合わせて scale を選び直すこと（snap）はしない。spread の上限を 0.5 以上にする変更と、KL の基準を A16 より緩める変更は、通常の調整ではない。upload gate の例外は、この承認文字列と PALWQ361 に限る。

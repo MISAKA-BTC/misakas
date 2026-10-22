@@ -835,6 +835,7 @@
 - [evidence/palw/rfc-gaps-2026-10-22/a.md](../evidence/palw/rfc-gaps-2026-10-22/a.md)
 - [evidence/palw/rfc-gaps-2026-10-22/b.md](../evidence/palw/rfc-gaps-2026-10-22/b.md)
 - [evidence/palw/rfc-gaps-2026-10-22/c.md](../evidence/palw/rfc-gaps-2026-10-22/c.md)
+- [evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md](../evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md)
 - [evidence/palw/studio-values-2026-10-22/values-p4-policy-rfc.md](../evidence/palw/studio-values-2026-10-22/values-p4-policy-rfc.md)
 - [evidence/rfc/0007-post-commit-randomness-alignment-2026-10-08.md](../evidence/rfc/0007-post-commit-randomness-alignment-2026-10-08.md)
 - [evidence/rfc/0012-completion-implementation-2026-10-11.md](../evidence/rfc/0012-completion-implementation-2026-10-11.md)

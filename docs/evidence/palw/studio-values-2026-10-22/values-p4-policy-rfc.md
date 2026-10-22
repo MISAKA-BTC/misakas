@@ -154,6 +154,7 @@ ALL-MODEL 5 の「Allocation curve: USER DECISION REQUIRED（暫定 α = 1.5、2
 - 35B MoE（Qwen3.6-35B-A3B）を f32 で長系列実行する必要がある。f32 の重みだけで約 35 × 10^9 × 4 B ≈ 140 GB で、この 32 GiB の機材では実行できない。
 - 既存の実測（`qwen36-window-compare` の出力、`genesis10_pipeline.py` の `fit_plan` に入れる窓）はリポジトリに無い。
 - **この機材では決定不能。** fit guard は窓と scale が無いと拒否する（`genesis10_pipeline.py`）ので、PALWQ361 の変換はそのまま止まる。
+- **2026-10-22 追記（ユーザー判断「目安で決めて良い」）:** 目安の値と estimate mode は [r7-palwq361-estimate.md](r7-palwq361-estimate.md) に記録した（logit scale 2^-9、prefix 参照 2,048 token、spread 検査 2^±0.25、KL 閾値 ×0.5。すべて目安・未実測）。
 
 ## 6a. R8〜R11（2026-10-22 追加分、558619700）
 
