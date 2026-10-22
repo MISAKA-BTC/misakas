@@ -80,7 +80,7 @@ fn keyed(key: &[u8], bytes: &[u8]) -> Hash64 {
 pub fn court_service_packet_id_v1(claim: Hash64, allocation: Hash64, source: Hash64, signer: &PalwBondKeyV2, k: u64) -> [u8; 64] {
     let bytes = borsh::to_vec(&(claim, allocation, source, signer, k)).expect("packet id serialization");
     let digest = keyed(b"misaka-palw/court-service-packet/v1", &bytes);
-    digest.as_byte_slice().try_into().expect("64-byte digest")
+    *digest.as_byte_slice()
 }
 
 /// The canonical packet set of one original: for each liable signer (canonical order) and each turn `k`, one packet released at

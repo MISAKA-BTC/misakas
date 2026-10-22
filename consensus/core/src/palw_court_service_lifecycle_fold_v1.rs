@@ -89,7 +89,7 @@ pub(super) fn observe_court_service_block_v1(b: &mut TransitionBuilder<'_>, ctx:
     }
     let spent = b.court_cost_spent;
     let unreserved = crate::palw_court_service_v1::ServiceCost { bytes: spent.bytes, work: spent.work, io: 0, controls: 0 };
-    let block: [u8; 64] = ctx.block.as_byte_slice().try_into().map_err(|_| refused("accepting block hash width"))?;
+    let block: [u8; 64] = *ctx.block.as_byte_slice();
     let mut next = old.clone();
     match next.book.observe_block(ctx.daa_score, block, unreserved) {
         Ok(crate::palw_court_service_v1::ServiceObservation::FirstBlock) => {}
