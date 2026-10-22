@@ -19,6 +19,8 @@ use misaka_palw_tir::pipeline::{StageDecl, TripRule};
 
 pub(super) const CHALLENGE: u64 = 300;
 
+mod node_e2e;
+
 /// **A stage action, rehearsed then sent**: the object is first folded on the node's tip with the processor's own block fold (so a
 /// refusal names its reason instead of silently changing nothing), then carried and folded by the node.
 async fn act(net: &mut Net, card: usize, action: u8, body: Vec<u8>) {

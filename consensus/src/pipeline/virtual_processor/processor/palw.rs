@@ -10076,6 +10076,19 @@ impl VirtualStateProcessor {
         (works, skips)
     }
 
+    /// **Test seam (RFC-0002 native39 node E2E)**: the processor's own receipt-block gate, unchanged, so a harness can name the reason
+    /// a receipt block would be disqualified (the node logs it only at `info`).
+    #[cfg(test)]
+    pub(in crate::pipeline::virtual_processor) fn palw_v2_check_receipt_spend_for_tests(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3>, String> {
+        self.palw_v2_check_receipt_spend(header, state, state_params, point)
+    }
+
     pub(super) fn palw_v2_check_receipt_spend(
         &self,
         header: &Header,
