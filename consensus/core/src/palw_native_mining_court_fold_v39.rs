@@ -254,6 +254,8 @@ fn answer(
     let expected = (total as usize - (index as usize * MINING_ACCUSATION_PART_BYTES_V39).min(total as usize)).min(MINING_ACCUSATION_PART_BYTES_V39);
     let c = super::super::palw_native_mining_fold_v39::claim(r, &d.claim)?;
     if d.settled
+        // audit A-3: a convicted claim's open demand is refunded to its accuser (`default`), never paid to the convicted producer.
+        || native_mining_convicted_v39(&builder.state, &c.claim_hash())
         || *signer != c.producer
         || ctx.daa_score > d.deadline
         || total == 0
@@ -293,7 +295,8 @@ fn answer(
     close_demand(builder, d)
 }
 
-/// Kind 3: `demand` past its deadline, unanswered → the producer defaulted on its committed answer: conviction.
+/// Kind 3: `demand` past its deadline, unanswered → the producer defaulted on its committed answer: conviction. Of a claim already
+/// convicted by another path: the demand's bond is refunded to its accuser and the demand closes (audit A-3).
 fn default(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -303,12 +306,23 @@ fn default(
 ) -> Result<(), PalwStateV2Error> {
     let r = builder.state.kernel_route.as_ref().unwrap();
     let d = demand_row(r, &w.body)?;
+    let c = super::super::palw_native_mining_fold_v39::claim(r, &d.claim)?;
+    // audit A-3: a claim convicted by ANOTHER path (a verified filing, or another demand's default) while this demand is open owes
+    // no answer any more (`answer` refuses it), so the honest accuser's burned demand bond is refunded once and the demand closes —
+    // without a second conviction and without waiting for a deadline nobody can meet. Unconvicted: the default rule as before.
+    if native_mining_convicted_v39(&builder.state, &c.claim_hash()) {
+        if d.settled {
+            return Err(bad("mining39 accusation refund of a settled demand"));
+        }
+        // No court-work prepay: the refund decodes one fixed demand row and writes two rows (no material, no adjudication), and
+        // succeeds once per demand (a settled demand is refused above before any work).
+        let _ = (signer, p);
+        let refund = Hash64::from_bytes(object_id(b"misaka-palw/native/g14-mining-demand-refund/v39", &d.id));
+        builder.write_payout(refund, Some(PalwPayoutV2 { payload: d.accuser_payout, amount: d.bond }))?;
+        return close_demand(builder, d);
+    }
     if d.settled || ctx.daa_score <= d.deadline {
         return Err(bad("mining39 accusation default before the deadline or of a settled demand"));
-    }
-    let c = super::super::palw_native_mining_fold_v39::claim(r, &d.claim)?;
-    if native_mining_convicted_v39(&builder.state, &c.claim_hash()) {
-        return Err(bad("mining39 accusation default of a convicted claim"));
     }
     let policy = super::super::palw_native_mining_fold_v39::policy(builder, ctx)?;
     if !prepay(builder, ctx, signer, p, 0, w.body.len(), 0)? {
@@ -764,5 +778,17 @@ mod tests {
         let row: NativeMiningDemandV39 = mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_DEMAND_KIND_V39, &id, 1 << 20).unwrap();
         eprintln!("[verify-1 A-3] default after conviction: {defaulted:?}; demand settled {}; refund payout {refunded:?}", row.settled);
         assert_eq!(refunded, Some(50), "A-3: the honest accuser's burned demand bond is never refunded after another path convicts");
+        // Regression (fix): refunded once — the demand is settled and its open count released; a second default and a late answer
+        // of the convicted claim are refused (the producer is never paid the accuser's bond).
+        assert!(defaulted.is_ok() && row.settled);
+        let n: NativeMiningAccusationCountsV39 = mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_COUNT_KIND_V39, &c.id, 64).unwrap();
+        assert_eq!((n.demands, n.open), (1, 0));
+        assert!(default(&mut tb, &ctx(32), &bond(3), &p, &wire).is_err(), "refunded once");
+        let mut late = id.to_vec();
+        late.extend_from_slice(&1u32.to_le_bytes());
+        late.extend_from_slice(&0u16.to_le_bytes());
+        late.push(0);
+        let answer_wire = NativeMiningAccusationWireV39 { version: 39, kind: 2, claim: c.id, stage: 0, body: late };
+        assert!(answer(&mut tb, &ctx(29), &c.producer, &p, &answer_wire).is_err(), "a convicted claim's demand is never answered for pay");
     }
 }
