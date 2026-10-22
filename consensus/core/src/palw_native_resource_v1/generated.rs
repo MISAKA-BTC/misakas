@@ -101,6 +101,7 @@ native_struct!(crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1; versi
 native_struct!(crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1; version, claim, first_blue_score, first_daa);
 native_struct!(crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1; version, family, job, claim, producer, queue, payload, amount, income_root, income_kind, budget, refund_payload, final_daa, horizon_daa);
 native_struct!(crate::palw_receipt_pause_v2::PalwReceiptPauseRowV2; version, claim, open, open_since_daa, paused_total_daa);
+native_struct!(crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalDutyRowV1; version, family, job, claim, accusation, accuser, accused_daa, duties);
 native_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; reserved, filed_daa, serve_until_daa, charged);
 native_struct!(crate::palw_provider_court_v1::ProviderChallengeRowV1; challenger, bond, filed_daa, deadline_daa, answered);
 native_struct!(crate::palw_provider_court_v1::ProviderSubjectRowV1; transferred_daa, lapsed_daa, charged, requested);
@@ -600,6 +601,7 @@ native_enum!(crate::palw_class_registration_origin_v1::PalwClassRegistrationDoor
 native_struct!(crate::palw_settlement_once_v1::PalwSettlementObligationV1; leg, subject, party, ordinal);
 native_enum!(crate::palw_settlement_once_v1::PalwSettlementConsumerV1; NativeFinal, KernelTick, KernelObject, ExecKernelFee, VerificationGate, SecurityCertification, ExecLegMaturity, VestingMaturity, MonetaryMaterial, ReceiptBlock, ReporterReveal, BondBudgetTick, AuditMesh, ImprovementPool, PaidClaimTrap);
 native_enum!(crate::palw_settlement_once_v1::PalwSettlementDebitV1; Issuance { carve }, Escrow { poster, amount }, Held { amount }, Prepaid { sponsor, amount }, Collateral { bond, amount });
+native_struct!(crate::palw_native_post_final_duty_row_v1::NativePostFinalDutyV1; clock, supplied_daa, answered);
 native_struct!(crate::palw_model_vector_v2::ModelVectorHeaderV2; trace_root, class, binding, program_bytes_len, post_bytes_len, max_filing_bytes, max_court_work, poster, posted_daa, liability_until, reserved, refuted, unavailable);
 native_struct!(crate::palw_model_vector_da_v2::ModelVectorUnitV2; position, occurrence, node, axis, line, tile);
 native_struct!(crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3; trace_root, class, binding, profile, scope_root, program_bytes_len, pc_instances, post_bytes_len, max_filing_bytes, max_court_work, max_court_scratch_bytes, poster, posted_daa, liability_until, reserved, refuted);

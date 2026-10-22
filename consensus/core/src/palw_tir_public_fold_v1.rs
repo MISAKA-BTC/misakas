@@ -5297,8 +5297,8 @@ mod conviction_e2e_tests {
         assert_eq!(fresh.court_service_row_v3_v1(), after.court_service_row_v3_v1());
         assert_eq!(fresh.deadlines, after.deadlines);
         // Below the conviction fence the released form is refused by the writer.
-        let mut dormant = TransitionBuilder::new(&before, &params, false, false, false, false, &PalwTransitionExtrasV1 {
-            tir_public_conviction_active: false, ..extras.clone() });
+        let dormant_extras = PalwTransitionExtrasV1 { tir_public_conviction_active: false, ..extras.clone() };
+        let mut dormant = TransitionBuilder::new(&before, &params, false, false, false, false, &dormant_extras);
         assert!(super::super::palw_court_service_lifecycle_fold_v1::release_resolved_court_service_bindings_v1(&mut dormant, &at_hard)
             .is_err());
     }
