@@ -180,6 +180,59 @@ impl SeatReadinessRootV1 {
     }
 }
 
+// =================================================================================================================================
+// Tag 230 as a lifecycle kind (`PalwConsensusObjectV2::SeatReadinessRootV1`, ADR-0188 B / ADR-0200 C1). Dormant behind
+// `palw_court_model_scope_v1`; past it, admission still refuses while the draw cap is unadopted (typed-missing, never zero/default).
+// =================================================================================================================================
+
+/// **The adopted readiness draw cap — NOT adopted** (ADR-0188 "ユーザーに決めてほしいこと"; ADR-0188 B approval 2026-10-21 says the
+/// cap is not chosen). `None` is the typed-missing value: every admission and every fold refuses with it. Changing it is a user decision.
+pub const PALW_D2_READINESS_DRAW_CAP_V1: Option<NonZeroU32> = None;
+
+/// ML-DSA-87 context of the seat's signature over a readiness root (the literal seat authority).
+pub const PALW_D2_READINESS_ROOT_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/d2-readiness-root/mldsa87/v1";
+const MESSAGE_DOMAIN: &[u8] = b"MISAKA/PALW/D2/READINESS-ROOT-MESSAGE/V1";
+const REGISTRY_KEY_DOMAIN: &[u8] = b"MISAKA/PALW/D2/READINESS-ROOT-KEY/V1";
+
+/// **What the seat's bond signs**: the network domain and the whole root object (context, root, count).
+pub fn palw_d2_readiness_root_message_v1(network_domain: Hash64, root: &SeatReadinessRootV1) -> Hash64 {
+    Hash64::from_bytes(misaka_palw_challenge::hash::object_id(MESSAGE_DOMAIN, &(network_domain, root)))
+}
+
+/// **Shape admission of a carried root against an explicit cap.** `None` (the unadopted cap) is always a refusal; a zero count or a
+/// count above the cap is refused. Grants nothing: no ready credit, slash or model review (ADR-0200: no root-only ready/slash door).
+pub fn palw_d2_readiness_root_admit_v1(root: &SeatReadinessRootV1, cap: Option<NonZeroU32>) -> Result<(), &'static str> {
+    let cap = cap.ok_or("readiness draw cap is unadopted/unknown")?.get();
+    if root.leaf_count == 0 || root.leaf_count > cap {
+        return Err("readiness root count must be nonzero and inside the explicit draw cap");
+    }
+    Ok(())
+}
+
+/// The registry key of one root: `(beacon, class, seat, span)` — one root per seat per draw.
+pub fn palw_d2_readiness_root_key_v1(context: &ReadinessContextV1) -> Hash64 {
+    Hash64::from_bytes(misaka_palw_challenge::hash::object_id(REGISTRY_KEY_DOMAIN, context))
+}
+
+/// Recorded readiness roots, keyed by [`palw_d2_readiness_root_key_v1`].
+pub type PalwD2ReadinessRootRegistryV1 = std::collections::BTreeMap<Hash64, SeatReadinessRootV1>;
+
+/// **The fold of a tag-230 object**: admitted against `cap`, written once per `(beacon, class, seat, span)`; a second root for the
+/// same key is refused (no replacement after a refuter could have read the first). Pure; the caller supplies the fence gate.
+pub fn palw_d2_readiness_root_fold_v1(
+    registry: &mut PalwD2ReadinessRootRegistryV1,
+    root: &SeatReadinessRootV1,
+    cap: Option<NonZeroU32>,
+) -> Result<Hash64, &'static str> {
+    palw_d2_readiness_root_admit_v1(root, cap)?;
+    let key = palw_d2_readiness_root_key_v1(&root.context());
+    if registry.contains_key(&key) {
+        return Err("a readiness root for this seat and draw is already recorded");
+    }
+    registry.insert(key, root.clone());
+    Ok(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,5 +383,62 @@ mod tests {
         forged.operand.bytes[0] ^= 1;
         assert!(liar.refute(&c, &roots, &draw, cap, &path(&c, &ds, 1), &forged).is_err());
         assert!(liar.refute(&c, &roots, &draw, cap, &path(&c, &ds, 1), &opens[0]).is_err());
+    }
+    fn root_of(count: u32) -> SeatReadinessRootV1 {
+        let ds: Vec<_> = (0..count).map(|i| (i, h(500 + i))).collect();
+        SeatReadinessRootV1::from_digests(ctx(), &ds, NonZeroU32::new(count)).unwrap()
+    }
+    /// The unadopted cap (the shipped constant) refuses every admission and every fold: `None` is never success.
+    #[test]
+    fn tag230_unadopted_draw_cap_refuses_admission_and_fold() {
+        assert_eq!(PALW_D2_READINESS_DRAW_CAP_V1, None);
+        let root = root_of(3);
+        assert!(palw_d2_readiness_root_admit_v1(&root, PALW_D2_READINESS_DRAW_CAP_V1).is_err());
+        let mut reg = PalwD2ReadinessRootRegistryV1::new();
+        assert!(palw_d2_readiness_root_fold_v1(&mut reg, &root, PALW_D2_READINESS_DRAW_CAP_V1).is_err());
+        assert!(reg.is_empty());
+    }
+    /// With an explicit test cap: count bounds, one root per seat and draw, a different span is a different key.
+    #[test]
+    fn tag230_fold_writes_once_per_seat_and_draw_inside_the_cap() {
+        let root = root_of(3);
+        assert!(palw_d2_readiness_root_admit_v1(&root, NonZeroU32::new(2)).is_err());
+        let mut zero = root.clone();
+        zero.leaf_count = 0;
+        assert!(palw_d2_readiness_root_admit_v1(&zero, NonZeroU32::new(3)).is_err());
+        let mut reg = PalwD2ReadinessRootRegistryV1::new();
+        let key = palw_d2_readiness_root_fold_v1(&mut reg, &root, NonZeroU32::new(3)).unwrap();
+        assert_eq!(reg.get(&key), Some(&root));
+        let mut again = root.clone();
+        again.root = h(77);
+        assert!(palw_d2_readiness_root_fold_v1(&mut reg, &again, NonZeroU32::new(3)).is_err());
+        assert_eq!(reg.get(&key), Some(&root));
+        let mut other = root.clone();
+        other.span += 1;
+        palw_d2_readiness_root_fold_v1(&mut reg, &other, NonZeroU32::new(3)).unwrap();
+        assert_eq!(reg.len(), 2);
+    }
+    /// The lifecycle variant's borsh is the tag-230 codec followed by the signature: round-trip, and boundary decodes refuse.
+    #[test]
+    fn tag230_lifecycle_object_round_trips_and_refuses_boundary_bytes() {
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+        let root = root_of(5);
+        let object = PalwConsensusObjectV2::SeatReadinessRootV1 { root: root.clone(), signature: vec![7; 4] };
+        let bytes = borsh::to_vec(&object).unwrap();
+        assert_eq!(bytes[0], TAG);
+        let codec = root.encode_tagged().unwrap();
+        assert_eq!(&bytes[..codec.len()], codec.as_slice());
+        assert_eq!(borsh::from_slice::<PalwConsensusObjectV2>(&bytes).unwrap(), object);
+        for cut in [1, codec.len() - 1, codec.len(), bytes.len() - 1] {
+            assert!(borsh::from_slice::<PalwConsensusObjectV2>(&bytes[..cut]).is_err(), "cut at {cut}");
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(borsh::from_slice::<PalwConsensusObjectV2>(&trailing).is_err());
+        let m = palw_d2_readiness_root_message_v1(h(1), &root);
+        assert_ne!(m, palw_d2_readiness_root_message_v1(h(2), &root));
+        let mut moved = root.clone();
+        moved.leaf_count += 1;
+        assert_ne!(m, palw_d2_readiness_root_message_v1(h(1), &moved));
     }
 }

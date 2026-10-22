@@ -574,6 +574,12 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::MemoryRoutingV2 { object } => object.may_ride(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES),
         // ADR-0191 step B (tag 245): a designated-custodian event; its bounds are checked by the rules, and the fence gate routes it below.
         PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => Ok(()),
+        // R-D2-READY (tag 230): fixed-field root; a nonzero count and a signature. The cap is checked by the gate (refused while unadopted).
+        PalwConsensusObjectV2::SeatReadinessRootV1 { root, signature } => {
+            if root.leaf_count == 0 { return Err("empty readiness root"); }
+            if signature.is_empty() { return Err("a readiness root must carry its seat's signature"); }
+            Ok(())
+        }
         // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
         // registrant and by the bond, checked at acceptance against their registered keys — and
         // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
@@ -1206,11 +1212,13 @@ pub enum PalwLifecycleKindFenceV1 {
     TirContainerIdentityV1 = 17,
     /// `Params::palw_tir_designated_answers_v1` — ADR-0191 step B's designated-custodian events (tag 245). Local slot (not wire).
     TirDesignatedAnswersV1 = 18,
+    /// `Params::palw_court_model_scope_v1` — D2 (ADR-0188 B / ADR-0200 C1): the seat readiness root (tag 230). Local slot (not wire).
+    CourtModelScopeV1 = 19,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1230,6 +1238,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::MemoryRoutingCourtV2,
         Self::TirContainerIdentityV1,
         Self::TirDesignatedAnswersV1,
+        Self::CourtModelScopeV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1254,6 +1263,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::TirPublicConvictionV1 => "palw_tir_public_conviction_v1",
             Self::TirContainerIdentityV1 => "palw_tir_container_identity_v1",
             Self::TirDesignatedAnswersV1 => "palw_tir_designated_answers_v1",
+            Self::CourtModelScopeV1 => "palw_court_model_scope_v1",
         }
     }
 }
@@ -1480,6 +1490,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::TirClassContainerBoundV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirContainerIdentityV1),
         // ADR-0191 step B: the designated-custodian event (tag 245), dormant behind its own fence.
         O::TirDesignatedEventV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirDesignatedAnswersV1),
+        // R-D2-READY (ADR-0188 B): the seat readiness root (tag 230), dormant behind D2's fence.
+        O::SeatReadinessRootV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtModelScopeV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
@@ -1634,6 +1646,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (243, "GdnStepAccusedV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (244, "MemoryRoutingV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (245, "TirDesignatedEventV1", PalwLifecycleKindFenceV1::TirDesignatedAnswersV1),
+    (230, "SeatReadinessRootV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (170, "TirPublicControlV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
@@ -1739,6 +1752,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::TirPublicConvictionV1 => self.palw_tir_public_conviction_v1_fence(),
                     PalwLifecycleKindFenceV1::TirContainerIdentityV1 => self.palw_tir_container_identity_v1_fence(),
                     PalwLifecycleKindFenceV1::TirDesignatedAnswersV1 => self.palw_tir_designated_answers_v1_fence(),
+                    PalwLifecycleKindFenceV1::CourtModelScopeV1 => self.palw_court_model_scope_v1,
                 },
             )
         })
@@ -2337,8 +2351,8 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(
         PalwA2SlotV1::ObjectTags { lo: 230, hi: 230 },
         "palw_court_model_scope_v1",
-        "D2 seat readiness digest (reserved; not landed)",
-        false,
+        "D2 seat readiness root (ADR-0188 B; refused while the draw cap is unadopted)",
+        true,
     ),
     // 140–149: BUDGET (ADR-0176/0177, allocated 2026-10-10). 140 `BondCapitalAssignedV1` (landed, owned by the allocation fence, which
     // needs `palw_bond_budget_v1` at or below it); 141–149 unallocated within the lane: no row until a kind lands there.
@@ -3023,8 +3037,8 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (170, 171, "G14 original paid TIR conviction", &["palw_tir_public_conviction_v1"]),
     // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Confirmed 2026-10-18 (lane
     // d2-x3-finish) as THE tag for that kind: no other allocation row uses 230, and the kind is dormant behind `palw_court_model_scope_v1`.
-    // Its codec and its A-2 kind-table row are not landed yet (the remaining step of R-D2-READY; register §3.1.1).
-    (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
+    // 2026-10-22 (lane d2-finish): landed as `SeatReadinessRootV1` (ADR-0188 B codec, A-2 kind row, fence-gated validation/fold).
+    (230, 230, "D2 seat readiness root", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
     (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
     // 244: the RFC06 GDN/router lane's allocation (2026-10-15; moved from 170, which G14's public conviction took first on integ)
@@ -5334,6 +5348,10 @@ pub(crate) mod tests {
             // `scripts/drills/gen_rfc06_gdn_wire_pin_v2.py MemoryRoutingV2 244` (the same generator reproduces tag 243's pin; the
             // consolidated test prints the authoritative value if this differs).
             (244, 0xe3c3708bdefde0c0),
+            // R-D2-READY (tag 230, ADR-0188 B): the seat readiness root, owned by `palw_court_model_scope_v1`. Derived without a build
+            // by `scripts/drills/a2u_new_kind_wire_pins.py` (lane d2-finish, 2026-10-22); the Rust test stays the authority.
+            // (Tags 245 and 175 were already unpinned at the lane base 8b036ed38 — not this lane's rows.)
+            (230, 0x9cfea943bbe78428),
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),

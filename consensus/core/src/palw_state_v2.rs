@@ -7559,6 +7559,14 @@ pub enum PalwConsensusObjectV2 {
     TirDesignatedEventV1 {
         event: crate::palw_tir_designated_answers_v1::PalwTirDesignatedEventV1,
     } = 245,
+    /// **(tag 230): a seat's readiness root** (ADR-0188 B / ADR-0200 C1, R-D2-READY): the Merkle root and count of its keyed
+    /// readiness digests over one draw (`crate::palw_court_model_scope_routes_v1::readiness_root`), signed by the seat's bond. No model
+    /// byte. Dormant behind `palw_court_model_scope_v1` (below it the live build's undecodable payload, A-2); past it, refused while the
+    /// draw cap is unadopted (`PALW_D2_READINESS_DRAW_CAP_V1 = None`). Grants no ready credit, slash or model review.
+    SeatReadinessRootV1 {
+        root: crate::palw_court_model_scope_routes_v1::readiness_root::SeatReadinessRootV1,
+        signature: Vec<u8>,
+    } = 230,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -9669,6 +9677,9 @@ pub enum PalwStateV2Error {
     // ADR-0078: derived artifacts.
     #[error("the derived artifact's shape is refused: {0}")]
     DerivedShapeRefused(&'static str),
+    /// R-D2-READY (tag 230): a seat readiness root the fold refuses (the unadopted draw cap, a count outside it, a second root).
+    #[error("the seat readiness root is refused: {0}")]
+    ReadinessRootRefused(&'static str),
     #[error("a derivation names claim {0}, which this chain does not hold")]
     DerivedClaimMissing(Hash64),
     #[error("a derivation names claim {0}, which is not a free-prompt claim — only a person's prompt has an answer to derive from")]
@@ -18906,6 +18917,8 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::MemoryRoutingCourtV2) => builder.extras.memory_routing_court.is_some(),
         // ADR-0191 step B: the extras flag (the fence's mirror at this block) decides whether a tag-245 chunk is in force.
         K::Fence(F::TirDesignatedAnswersV1) => builder.extras.tir_designated_answers_active,
+        // R-D2-READY (tag 230): the bundle's mirror of `palw_court_model_scope_v1` (`court_model_scope_from_daa`).
+        K::Fence(F::CourtModelScopeV1) => builder.params.court_model_scope_from_daa().is_some_and(|from| ctx.daa_score >= from),
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
         K::Fence(F::TirPublicConvictionV1) => {
