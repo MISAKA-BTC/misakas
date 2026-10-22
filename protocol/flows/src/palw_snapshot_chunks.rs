@@ -152,6 +152,56 @@ pub(crate) struct SnapshotSpill {
     _permit: OwnedSemaphorePermit,
     created: Instant,
     native_resource_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    /// G14 storage: the session's worst-case spill bytes, reserved from the node's capacity manager before the file
+    /// exists (`None` when no reserver is configured — today's behaviour).
+    _storage_reservation: Option<kaspa_database::storage_generations::reserve::StorageReservation>,
+}
+
+/// File-name prefix of every snapshot spill; a configured spill directory is swept of these at startup.
+const SPILL_FILE_PREFIX: &str = "misaka-palw-snapshot-";
+
+/// **G14 storage (IBD lane): where snapshot spills live and who reserves their bytes.** Unset (the default) keeps the
+/// historical behaviour exactly: `std::env::temp_dir()` and no reservation. A node that keeps its whole footprint in one
+/// managed storage area points this at a directory inside it, so the two 384 MiB sessions are counted in that area and
+/// reserved before they are written. Node-local; no peer can observe it.
+#[derive(Clone)]
+pub struct SnapshotSpillConfigV1 {
+    pub dir: Option<PathBuf>,
+    pub reserver: Option<Arc<dyn kaspa_database::storage_generations::reserve::StorageReserver>>,
+}
+
+static SPILL_CONFIG: OnceLock<SnapshotSpillConfigV1> = OnceLock::new();
+
+/// Configure once at startup, before the P2P service runs. Creates the directory and removes stale spill files a
+/// killed process left there (on unix a live spill is unlinked at creation, so anything found is an orphan from a
+/// platform or crash where that did not happen). A second call is refused rather than silently ignored.
+pub fn configure_snapshot_spill_v1(config: SnapshotSpillConfigV1) -> io::Result<()> {
+    if let Some(dir) = &config.dir {
+        std::fs::create_dir_all(dir)?;
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(SPILL_FILE_PREFIX) && name.ends_with(".spill") {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+    }
+    SPILL_CONFIG.set(config).map_err(|_| io::Error::new(io::ErrorKind::AlreadyExists, "PALW snapshot spill is already configured"))
+}
+
+fn spill_dir() -> PathBuf {
+    SPILL_CONFIG.get().and_then(|c| c.dir.clone()).unwrap_or_else(std::env::temp_dir)
+}
+
+fn reserve_spill_bytes() -> io::Result<Option<kaspa_database::storage_generations::reserve::StorageReservation>> {
+    use kaspa_database::storage_generations::reserve::{StoragePurpose, StorageReservation};
+    let Some(reserver) = SPILL_CONFIG.get().and_then(|c| c.reserver.as_ref()) else { return Ok(None) };
+    StorageReservation::acquire(reserver, StoragePurpose::IbdSpill, crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64)
+        .map(Some)
+        // A local capacity refusal, like a busy session budget: the caller retries or answers not-found; it is never a
+        // verdict on a peer or a block.
+        .map_err(|why| io::Error::new(io::ErrorKind::WouldBlock, why.to_string()))
 }
 impl SnapshotSpill {
     pub(crate) fn new() -> io::Result<Self> {
@@ -167,7 +217,9 @@ impl SnapshotSpill {
         let permit = budget
             .try_acquire_owned()
             .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "PALW snapshot session budget is busy"))?;
-        let path = std::env::temp_dir().join(format!("misaka-palw-snapshot-{}.spill", uuid::Uuid::new_v4()));
+        // The session permit first (cheap, bounds concurrency), then the bytes, then the file.
+        let storage_reservation = reserve_spill_bytes()?;
+        let path = spill_dir().join(format!("{SPILL_FILE_PREFIX}{}.spill", uuid::Uuid::new_v4()));
         let mut options = OpenOptions::new();
         options.read(true).write(true).create_new(true);
         #[cfg(unix)]
@@ -184,7 +236,14 @@ impl SnapshotSpill {
         let file = options.open(&path)?;
         #[cfg(unix)]
         std::fs::remove_file(&path)?; // Keep only the FD: process death cannot orphan a 384 MiB spill.
-        Ok(Self { file, path, _permit: permit, created: Instant::now(), native_resource_lease: None })
+        Ok(Self {
+            file,
+            path,
+            _permit: permit,
+            created: Instant::now(),
+            native_resource_lease: None,
+            _storage_reservation: storage_reservation,
+        })
     }
     pub(crate) fn expired(&self) -> bool {
         self.created.elapsed() >= SESSION_TTL
