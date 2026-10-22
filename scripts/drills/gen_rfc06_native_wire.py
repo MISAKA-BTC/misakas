@@ -368,6 +368,7 @@ if code.count(router_marker) != 1:
 router_arms = '136 if key_bytes==64=>crate::palw_reader_router_v2::PalwReaderRouterRowV2::scan_native_wire_v1(frame)?,\n'
 router_arms += '136 if key_bytes==65 && prefix==0xA1=><u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
 router_arms += '136 if key_bytes==65 && prefix==0xA2=><crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
+router_arms += '136 if key_bytes==65 && prefix==0xA3=>crate::palw_step::PalwShapeProfileV3::scan_native_wire_v1(frame)?,\n'
 router_arms += '136=>return Err(wire::wire_bad("unallocated reader/router V2 row namespace")),\n'
 # RFC07 finite bootstrap: the full fixed epoch key and the two exact Hash64
 # namespaces, matching the schema owner's epoch/work/canonical-index journal.

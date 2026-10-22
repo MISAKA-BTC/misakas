@@ -12,6 +12,26 @@ fn zero_capacity(builder: &mut TransitionBuilder<'_>) -> std::sync::Arc<NativeDe
 }
 
 #[test]
+fn ordinary_registration_keeps_routing_profile_without_certification_or_price_index_changes() {
+    let old = params();
+    let (mut parent, _) = apply(&PalwChainStateV2::genesis(), &old, &ctx(1, 100, 1), &register_class_and_bond(), None);
+    parent.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
+        crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h64(1), h64(2)),
+        None,
+        misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 100, burned: 0 },
+    ));
+    let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap();
+    let class = profile.shape_profile_id();
+    let p = old.with_memory_routing_court_from_daa(Some(101));
+    let (child, delta) = apply(&parent, &p, &ctx(2, 101, 2), &[registration(class, 0, Some(bond_key(1)))], None);
+    assert_eq!(&*child.reader_router_profile_v2(class).unwrap().unwrap(), &profile);
+    assert!(child.fp_work_profile_of(&class).is_none(), "registration must not populate the price/deadline index");
+    assert!(!child.fp_certified_classes.contains_key(&class), "graph identity is not model approval");
+    assert_eq!(apply_delta_v2(&parent, &delta, &p).unwrap(), child);
+    assert_eq!(revert_delta_v2(&child, &delta, &p).unwrap(), parent);
+}
+
+#[test]
 fn reader_router_consumer_propagates_late_writer_capacity_refusal() {
     let p = params();
     let extras = PalwTransitionExtrasV1::default();

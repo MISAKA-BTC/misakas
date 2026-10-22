@@ -1833,6 +1833,21 @@ fn apply_object_inner(
                     work: work.as_ref().map(|f| f as &dyn Fn() -> Option<crate::palw_model_registry_v1::PalwModelWorkV1>),
                 },
             )?;
+            if builder.params.memory_routing_court_from_daa().is_some_and(|at| ctx.daa_score >= at) {
+                if let Some(carriage) = admission {
+                    if carriage.profile.shape_profile_id() != *class_id {
+                        return Err(PalwStateV2Error::ImmutableModelUpdate("registered routing profile identity differs"));
+                    }
+                    if let Some(previous) = builder.state.reader_router_profile_v2(*class_id)? {
+                        if &*previous != &carriage.profile {
+                            return Err(PalwStateV2Error::ImmutableModelUpdate("registered routing profile is immutable"));
+                        }
+                    }
+                    builder.write_reader_router_cell_v2(
+                        &reader_router_v2::profile_key_v2(*class_id), Some(&carriage.profile),
+                    )?;
+                }
+            }
             if builder.extras.model_court_window_active
                 && admission
                     .as_ref()

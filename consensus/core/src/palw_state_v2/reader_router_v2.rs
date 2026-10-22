@@ -40,7 +40,26 @@ fn first(state: &PalwChainStateV2, class: Hash64) -> Result<Option<u64>, PalwSta
         .transpose()
 }
 
+pub(super) fn profile_key_v2(class: Hash64) -> [u8; 65] { key(0xA3, class) }
+
 impl PalwChainStateV2 {
+    /// Registered graph identity only: no model approval, work eligibility or credit.
+    /// Legacy profile rows remain readable, without writing the price/deadline index.
+    pub fn reader_router_profile_v2(&self, class: Hash64) -> Result<Option<NativeRetainedV1<crate::palw_step::PalwShapeProfileV3>>, PalwStateV2Error> {
+        let profile = if let Some(bytes) = raw(self, &profile_key_v2(class)) {
+            Some(retain_native_value_decode_classified_v1(bytes, || borsh::from_slice(bytes)).map_err(decode_error)?)
+        } else {
+            self.fp_work_profile_of(&class).map(NativeRetainedV1::try_from_clone_v1)
+                .transpose().map_err(PalwStateV2Error::NativeResource)?
+        };
+        if let Some(profile) = &profile {
+            if self.class(&class).is_none() || profile.shape_profile_id() != class {
+                return Err(refused("routing profile differs from its registered class"));
+            }
+        }
+        Ok(profile)
+    }
+
     /// Only a row from this already-authenticated native state may choose a
     /// reader's router. The retained decode owns its full bindings allocation.
     pub fn reader_router_declaration_v2(
@@ -77,7 +96,7 @@ impl PalwChainStateV2 {
         if claim.class_id != class_id {
             return Err(refused("routing stamp names another class"));
         }
-        let profile = self.fp_work_profile_of(&class_id).ok_or_else(|| refused("routing stamp lacks native class graph"))?;
+        let profile = self.reader_router_profile_v2(class_id)?.ok_or_else(|| refused("routing stamp lacks native class graph"))?;
         let (node, _) = profile.resolve_node_slot(slot).ok_or_else(|| refused("V2 consumer reader slot is unresolved"))?;
         if needs_reader_router_v2(node) {
             return Err(refused("V2-stamped routed reader cannot use the V1 implicit router consumer"));
@@ -99,9 +118,8 @@ impl PalwChainStateV2 {
             return Err(refused("routing claim stamp names another class"));
         }
         let row = self.reader_router_declaration_v2(class_id)?.ok_or_else(|| refused("routing claim stamp lacks declaration"))?;
-        row.declaration
-            .check_profile(self.fp_work_profile_of(&class_id).ok_or_else(|| refused("V2 routed claim lacks native graph"))?)
-            .map_err(routing_error)?;
+        let profile = self.reader_router_profile_v2(class_id)?.ok_or_else(|| refused("V2 routed claim lacks native graph"))?;
+        row.declaration.check_profile(&profile).map_err(routing_error)?;
         if claim.accepted_daa < row.bound_from_daa || first(self, class_id)?.is_none_or(|at| at > claim.accepted_daa) {
             return Err(refused("routing claim stamp predates its prospective declaration"));
         }
@@ -132,8 +150,8 @@ impl PalwChainStateV2 {
                     return Err(bad("declaration owner/artifact/clock mismatch"));
                 }
                 let profile =
-                    self.fp_work_profile_of(&row.declaration.class_id).ok_or_else(|| bad("declaration lacks native profile"))?;
-                row.declaration.check_profile(profile).map_err(routing_error)?;
+                    self.reader_router_profile_v2(row.declaration.class_id)?.ok_or_else(|| bad("declaration lacks native profile"))?;
+                row.declaration.check_profile(&profile).map_err(routing_error)?;
             } else if k.len() == 65 && k[0] == 0xA1 {
                 let class = Hash64::from_bytes(k[1..].try_into().expect("64 bytes"));
                 let at: u64 = borsh::from_slice(bytes).map_err(|_| bad("first marker malformed"))?;
@@ -144,6 +162,9 @@ impl PalwChainStateV2 {
             } else if k.len() == 65 && k[0] == 0xA2 {
                 let claim = Hash64::from_bytes(k[1..].try_into().expect("64 bytes"));
                 self.reader_router_of_claim_v2(claim)?.ok_or_else(|| bad("claim stamp vanished"))?;
+            } else if k.len() == 65 && k[0] == 0xA3 {
+                let class = Hash64::from_bytes(k[1..].try_into().expect("64 bytes"));
+                self.reader_router_profile_v2(class)?.ok_or_else(|| bad("registered profile vanished"))?;
             } else {
                 return Err(bad("unknown row family"));
             }
@@ -174,9 +195,9 @@ pub(super) fn declare(
     }
     let profile = builder
         .state
-        .fp_work_profile_of(&declaration.class_id)
+        .reader_router_profile_v2(declaration.class_id)?
         .ok_or_else(|| refused("routing declaration lacks registered profile"))?;
-    declaration.check_profile(profile).map_err(routing_error)?;
+    declaration.check_profile(&profile).map_err(routing_error)?;
     if let Some(previous) = builder.state.reader_router_declaration_v2(declaration.class_id)? {
         if previous.declaration != *declaration || previous.registrant != registrant {
             return Err(refused("reader/router declaration is immutable"));
@@ -241,7 +262,7 @@ impl TransitionBuilder<'_> {
             return Ok(());
         }
         let profile =
-            self.state.fp_work_profile_of(&claim.class_id).ok_or_else(|| refused("V2 claim needs its native canonical profile"))?;
+            self.state.reader_router_profile_v2(claim.class_id)?.ok_or_else(|| refused("V2 claim needs its native canonical profile"))?;
         if !(0..profile.global_node_count()).filter_map(|slot| profile.resolve_node_slot(slot)).any(|(n, _)| needs_reader_router_v2(n))
         {
             return Ok(());
@@ -253,7 +274,7 @@ impl TransitionBuilder<'_> {
         if row.bound_from_daa > claim.accepted_daa {
             return Err(refused("V2 claim predates its router declaration"));
         }
-        row.declaration.check_profile(profile).map_err(routing_error)?;
+        row.declaration.check_profile(&profile).map_err(routing_error)?;
         match first(&self.state, claim.class_id)? {
             None => self.write_reader_router_cell_v2(&key(0xA1, claim.class_id), Some(&claim.accepted_daa))?,
             Some(at) if at > claim.accepted_daa => return Err(refused("V2 routing first-claim clock moved backward")),
@@ -266,7 +287,7 @@ impl TransitionBuilder<'_> {
     }
     pub(super) fn remove_reader_router_class_v2(&mut self, class_id: Hash64) -> Result<(), PalwStateV2Error> {
         // Preserve flags-off legacy class removal exactly when no V2 cell exists.
-        if raw(&self.state, class_id.as_byte_slice()).is_none() && first(&self.state, class_id)?.is_none() {
+        if raw(&self.state, class_id.as_byte_slice()).is_none() && first(&self.state, class_id)?.is_none() && raw(&self.state, &profile_key_v2(class_id)).is_none() {
             return Ok(());
         }
         // Retain the first-use marker through ordinary claim GC and restart.
@@ -274,6 +295,7 @@ impl TransitionBuilder<'_> {
             return Err(refused("cannot remove routing class with live claims"));
         }
         self.write_reader_router_cell_v2::<PalwReaderRouterRowV2>(class_id.as_byte_slice(), None)?;
-        self.write_reader_router_cell_v2::<u64>(&key(0xA1, class_id), None)
+        self.write_reader_router_cell_v2::<u64>(&key(0xA1, class_id), None)?;
+        self.write_reader_router_cell_v2::<crate::palw_step::PalwShapeProfileV3>(&profile_key_v2(class_id), None)
     }
 }
