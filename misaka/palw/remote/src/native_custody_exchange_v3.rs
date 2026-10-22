@@ -511,6 +511,49 @@ mod tests {
         }
     }
 
+    /// **audit(c) C-02 reproducer**: consensus re-selects the canonical session with the operator of EVERY bond on chain
+    /// (`verify_prior` → `select_native_session_v3(.., |p| state.bond(p).operator_id)`), but the remote miner answers `operator_of`
+    /// only for the providers it was configured with. A smaller-root session whose providers the miner does not know is healthy on
+    /// chain and invisible here, so the miner mounts its Ready on a LATER session — which `verify_prior` refuses ("native ready
+    /// substitutes prior session/provider roster") after the inference, the draw and the attempt signature.
+    #[test]
+    fn audit_c02_remote_miner_session_choice_diverges_from_consensus_with_partial_provider_config() {
+        let (mut x, bonds, _, _) = exchange(&[Behaviour::Honest, Behaviour::Honest]);
+        let a = attempt();
+        let daa = 10;
+        let session = kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialSessionV3 {
+            version: 3,
+            class_id: a.class_id,
+            artifact_root: a.artifact_root,
+            executor: PalwBondKeyV2(a.executor_bond),
+            operator: a.operator_id,
+            job_policy: kaspa_consensus_core::palw_attempt_material_v3::native_job_policy_v3(),
+            codec: kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldComplete,
+            max_units: 1,
+            one_claim_cap: 1,
+            admit_from_daa: 0,
+            admit_until_daa: 100,
+        };
+        assert!(session.matches(&a, daa));
+        // Row A: the canonical (smaller root) session, served by two providers this miner was NOT configured with.
+        let unknown = [bond(900), bond(901)];
+        let mut row_a = row_for(&unknown, Hash64::from_u64_word(1));
+        row_a.terms.native_session = Some(session.clone());
+        // Row B: a later session whose roster is exactly the configured providers.
+        let mut row_b = row_for(&bonds, Hash64::from_u64_word(2));
+        row_b.terms.native_session = Some(session);
+        let rows = vec![row_a.clone(), row_b.clone()];
+        // Consensus: every bond's operator is on chain.
+        let chain_operator = |b: &PalwBondKeyV2| Some(Hash64::from_u64_word(1_000 + b.0.transaction_id.as_byte_slice()[0] as u64));
+        let consensus = select_native_session_v3(rows.clone(), &a, daa, chain_operator).expect("consensus selects a session");
+        assert_eq!(consensus.terms.root, row_a.terms.root, "consensus picks the canonical smaller-root session");
+        // The remote miner over the same authenticated rows.
+        x.set_rows(rows, daa);
+        let miner = x.session(&a, daa).expect("the miner selects a session");
+        assert_eq!(miner.terms.root, row_b.terms.root, "the miner, blind to row A's operators, picks row B");
+        assert_ne!(miner.terms.root, consensus.terms.root, "the miner's Ready names a session verify_prior refuses");
+    }
+
     #[test]
     fn native_exchange_session_counts_only_proven_operators() {
         let (mut x, bonds, _, manifest) = exchange(&[Behaviour::Honest]);
