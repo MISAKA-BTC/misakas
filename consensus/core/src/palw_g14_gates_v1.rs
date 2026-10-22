@@ -598,6 +598,18 @@ impl Params {
             if bundle.state.court_clock_v2_from_daa() != Some(clock.daa_score()) {
                 return Err(PalwModeV2Error::Invalid("palw_court_clock_v2 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1"));
             }
+            // G14 r5 (item 6, T06): a notice at exactly a + 3,120 must still fit its whole residual demand (X3's B_remaining when
+            // armed, else W_disclose + window_court) plus reorg retention plus the exclusive 1-DAA margin inside 6,880.
+            let reorg = crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(
+                self.palw_staged_public_court_v1_fence()
+                    .map(|_| crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1())
+                    .as_ref(),
+            );
+            if crate::palw_court_clock_v2::palw_court_clock_v2_t06_of_params_v2(&bundle.state, reorg).is_err() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_court_clock_v2: T06 — the residual demand of a notice at a + 3,120 does not fit 10,000 − 3,120 = 6,880 DAA",
+                ));
+            }
         }
         Ok(())
     }

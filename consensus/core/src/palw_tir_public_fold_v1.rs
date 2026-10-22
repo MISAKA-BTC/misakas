@@ -633,7 +633,8 @@ pub(super) fn install_original_v1(
     // **G14 R1/R6: the frame's absolute clocks are fixed with the claim's own (d0).** The claim reaches `Final` no earlier than
     // the frame's collection door closes (`palw_claim_final_floor_v1`), so a claim whose X3 hard deadline is fixed before that door
     // would have two incompatible d0 contracts; it is refused here rather than extended later (X3: no extension past d0).
-    if let Some(hard) = crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(b.params, c) {
+    // G14 r5 (item 2): clock v2 takes precedence over X3 when it governs (`palw_claim_route_hard_v2`: a + 10,000), else X3's hard.
+    if let Some(hard) = crate::palw_court_clock_v2::palw_claim_route_hard_v2(b.params, c) {
         if hard < p.terms.collect_until_daa {
             return Err(refused("TIR original collection door outlives the claim's fixed X3 hard deadline"));
         }
@@ -1281,7 +1282,16 @@ fn apply_conviction_v1(
     use crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1 as E;
     let claim_id = frame.plan_v1().original_claim;
     let terms = frame.plan_v1().terms;
-    if ctx.daa_score < terms.accepted_daa || ctx.daa_score >= terms.collect_until_daa {
+    // G14 r5 (item 1): the door is the claim's clock-v2 door when it governs (never shorter than the signed one).
+    if !crate::palw_court_clock_v2::palw_route_door_open_v2(
+        b.params,
+        b.state.legacy_disputes.get(&claim_id),
+        b.state.claim(&claim_id),
+        palw_da_disclose_window_daa_v1(b.params),
+        terms.accepted_daa,
+        terms.collect_until_daa,
+        ctx.daa_score,
+    ) {
         return Err(refused("TIR public conviction is outside the frame's original collection door"));
     }
     conviction_filer_v1(b, frame, filer)?;
@@ -1458,7 +1468,15 @@ fn apply_witness_part_v1(
     part.check_v1().map_err(refused)?;
     let claim_id = frame.plan_v1().original_claim;
     let terms = frame.plan_v1().terms;
-    if ctx.daa_score < terms.accepted_daa || ctx.daa_score >= terms.collect_until_daa {
+    if !crate::palw_court_clock_v2::palw_route_door_open_v2(
+        b.params,
+        b.state.legacy_disputes.get(&claim_id),
+        b.state.claim(&claim_id),
+        palw_da_disclose_window_daa_v1(b.params),
+        terms.accepted_daa,
+        terms.collect_until_daa,
+        ctx.daa_score,
+    ) {
         return Err(refused("TIR staged witness is outside the frame's original collection door"));
     }
     conviction_filer_v1(b, frame, filer)?;

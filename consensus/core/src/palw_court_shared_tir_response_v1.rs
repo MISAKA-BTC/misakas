@@ -35,9 +35,11 @@ impl SignedSharedDataResponseV1 {
     /// Identity only. Native query/preparation/data/accepting context are separate.
     pub fn validate_bond_signature(&self,network:Hash64,state:&PalwChainStateV2)->Result<(),String> {
         if self.signature.len()!=SIG {return Err("shared data response signature shape".into());}
-        let bond=state.bond(&self.signer).ok_or("shared data responder bond missing")?;
+        // G14 r5: the signer's CURRENT key at the response DAA (rotation-aware, Retiring still answers); relay-neutral.
+        let key=crate::palw_court_clock_v2::palw_court_current_signer_key_v2(state,&self.signer)
+            .map_err(|_|"shared data responder bond missing")?;
         if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
-            &bond.pubkey,self.signing_message(network)?.as_byte_slice(),&self.signature,SHARED_DATA_RESPONSE_CONTEXT_V1) {
+            key,self.signing_message(network)?.as_byte_slice(),&self.signature,SHARED_DATA_RESPONSE_CONTEXT_V1) {
             return Err("shared data response signature invalid".into());
         }Ok(())
     }
@@ -164,5 +166,34 @@ mod tests {
         let mut wrong_context=c.clone();wrong_context.signature=libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key,c.signing_message(h(10)).unwrap().as_byte_slice(),
             crate::palw_court_shared_tir_stream_v1::SHARED_STREAM_CONTEXT_V1,[42;32]).unwrap().as_ref().to_vec();
         assert!(wrong_context.validate_bond_signature(h(10),&state).is_err());
+    }
+
+    #[test]
+    fn r5_court_response_uses_the_current_key_retiring_answers_and_a_relay_carries_it() {
+        use crate::palw_state_v2::{PalwBondStateV2,PalwBondStatusV2};
+        let mut c=control();let mut state=PalwChainStateV2::genesis();
+        let old=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([51;32]);let new=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([52;32]);
+        let reg=|pk:&[u8],status|PalwBondStateV2 {pubkey:pk.to_vec(),operator_id:h(8),collateral:0,slashed:0,status,
+            registered_daa:0,payout_payload:h(9),capable_classes:Default::default()};
+        let sign=|c:&SignedSharedDataResponseV1,sk:&libcrux_ml_dsa::ml_dsa_87::MLDSA87SigningKey|libcrux_ml_dsa::ml_dsa_87::sign(sk,
+            c.signing_message(h(10)).unwrap().as_byte_slice(),SHARED_DATA_RESPONSE_CONTEXT_V1,[53;32]).unwrap().as_ref().to_vec();
+        // Admitted under the old key.
+        state.set_bond_for_tests(c.signer,Some(reg(old.verification_key.as_ref(),PalwBondStatusV2::Active)));
+        c.signature=sign(&c,&old.signing_key);c.validate_bond_signature(h(10),&state).unwrap();
+        // Rotated before the response DAA: the old key's signature is refused, the new key's accepted.
+        state.set_bond_for_tests(c.signer,Some(reg(new.verification_key.as_ref(),PalwBondStatusV2::Active)));
+        assert!(c.validate_bond_signature(h(10),&state).is_err(),"a key from admission is not the current authority");
+        let mut fresh=c.clone();fresh.signature=sign(&fresh,&new.signing_key);fresh.validate_bond_signature(h(10),&state).unwrap();
+        // Retiring: still backs its claims to resolution, so it still answers.
+        state.set_bond_for_tests(c.signer,Some(reg(new.verification_key.as_ref(),PalwBondStatusV2::Retiring{since_daa:5,settled_at_since:0})));
+        fresh.validate_bond_signature(h(10),&state).unwrap();
+        // Gone: no authority.
+        let mut gone=state.clone();gone.set_bond_for_tests(c.signer,None);assert!(fresh.validate_bond_signature(h(10),&gone).is_err());
+        // Relay: the signed message names no carrier, so the bytes a third party carries verify unchanged (the signer is the authority).
+        let relayed:SignedSharedDataResponseV1=borsh::from_slice(&borsh::to_vec(&fresh).unwrap()).unwrap();
+        relayed.validate_bond_signature(h(10),&state).unwrap();
+        // No replay as a NEW response: the same signature under another request id or query DAA is refused.
+        let mut replay=relayed.clone();replay.request_id=h(77);assert!(replay.validate_bond_signature(h(10),&state).is_err());
+        let mut later=relayed.clone();later.query_daa+=1;assert!(later.validate_bond_signature(h(10),&state).is_err());
     }
 }

@@ -703,8 +703,11 @@ impl<'a> TransitionBuilder<'a> {
                 // horizon. Raised once, here; never moved after. Below the fence: unchanged.
                 if crate::palw_court_clock_v2::palw_court_clock_v2_governs(self.params, &claim) {
                     let w_disclose = crate::palw_state_v2::palw_da_disclose_window_daa_v1(self.params);
-                    let need = crate::palw_court_clock_v2::palw_court_clock_v2_required_retention(claim.accepted_daa, w_disclose)
-                        .map_err(|_| PalwStateV2Error::Overflow("palw_court_clock_v2 retention"))?;
+                    // G14 r5: the reorg-retention term from params (the staged court config; 0 where none is in force).
+                    let reorg = crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(self.extras.staged_public_court.as_ref());
+                    let need =
+                        crate::palw_court_clock_v2::palw_court_clock_v2_required_retention_with(claim.accepted_daa, w_disclose, reorg)
+                            .map_err(|_| PalwStateV2Error::Overflow("palw_court_clock_v2 retention"))?;
                     claim.trace_retention_daa = claim.trace_retention_daa.max(need);
                 }
                 Some(claim)
