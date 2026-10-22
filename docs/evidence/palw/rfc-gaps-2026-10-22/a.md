@@ -189,3 +189,4 @@ Classes: **IC** implemented + connected · **TO** implemented, reachable from te
   (the 100k resource drills) — new: `t12_a_reorg_across_the_freeze_block_unfreezes_and_refreezes_the_epoch_per_branch`.
 - No persisted/carried struct changed, so `gen_rfc06_native_wire.py` was not needed. No new wire tag, kind, aux table or carriage tail.
 - Docs: `generate_indexes.py` run; `check_docs.py` PASS (no new regressions).
+- `cargo check --release --workspace --tests --exclude misaka-palw-worker`: **exit 0** (no errors).
