@@ -5088,6 +5088,7 @@ impl Params {
     /// Kernel route Panel=1 seat policy fence (dormant: `None` on every shipped preset; `never()` reads as `None`).
     pub fn palw_kernel_route_panel_one_v1_fence(&self) -> Option<ForkActivation> {
         self.palw_kernel_route_panel_one_v1.filter(|f| *f != ForkActivation::never())
+    }
     /// G14 U06/U07 court clock v2 fence (dormant: `None` on every shipped preset).
     pub fn palw_court_clock_v2_fence(&self) -> Option<ForkActivation> {
         self.palw_court_clock_v2.filter(|f| *f != ForkActivation::never())
