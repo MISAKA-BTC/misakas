@@ -1888,6 +1888,17 @@ impl PalwChainStateV2 {
     /// at [`PALW_RECEIPT_TARGET_SEED_V1`] and only the receipt retarget moves it, so a test that
     /// needs a generous or a stingy receipt target sets it here rather than through a registration
     /// field that no longer reaches this slot.
+    /// Tests only: mark `open` court sessions on `claim_id` (0 removes the entry) — what
+    /// [`Self::palw_accusation_pending_v1`] reads.
+    #[cfg(test)]
+    pub(crate) fn set_open_courts_for_tests(&mut self, claim_id: Hash64, open: u32) {
+        if open == 0 {
+            self.open_courts_by_claim.remove(&claim_id);
+        } else {
+            self.open_courts_by_claim.insert(claim_id, open);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn set_receipt_target_for_tests(&mut self, class_id: Hash64, target: u128) {
         self.receipt_targets.insert(class_id, PalwClassTargetV2 { target });

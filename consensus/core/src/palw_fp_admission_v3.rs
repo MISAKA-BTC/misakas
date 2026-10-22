@@ -1132,6 +1132,47 @@ mod tests {
         assert_eq!(palw_fp_receipt_clock_v1(&gc, &certified, &h64(0xFC), &voided, 124).map_err(|e| e.status), Err("revoked"));
     }
 
+    /// **G14 gatec-capacity: Gate C = Final ∧ SecurityCertified ∧ ¬accusation-pending.** A certified claim with an accusation opened
+    /// after its certification licenses no receipt (admission and fold both refuse, status `accusation-pending`); once the accusation
+    /// closes without conviction the lane re-opens. Below Gate C (no mirror) an open court does not touch the released rule.
+    #[test]
+    fn gatec_an_accusation_pending_after_certification_suspends_receipts() {
+        use crate::palw_rfc0018_v1::palw_fp_receipt_clock_v1;
+        use crate::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
+        use crate::palw_state_v2::{PalwBlockWorkV3, PalwStateV2Error, apply_palw_transition_v3};
+        let p = params();
+        let gc = gate_c_params();
+        let state = certified_state(u128::MAX);
+        let claim = state.claim(&h64(0xFC)).unwrap().clone();
+        let certified = with_certification(&state, Some(O::Certified), 140);
+        let late = PalwBeaconFactV3 { beacon_block: h64(0xBEAC), beacon_daa: 146, prev_attempt_daa: 120 };
+        let env = spend(0);
+        assert!(admit_gc(&certified, &ctx(6, 150, 6), &late, &env).is_ok());
+
+        let mut accused = certified.clone();
+        accused.set_open_courts_for_tests(h64(0xFC), 1);
+        assert_eq!(
+            palw_fp_receipt_clock_v1(&gc, &accused, &h64(0xFC), &claim, 124).map_err(|e| e.status),
+            Err("accusation-pending")
+        );
+        match admit_gc(&accused, &ctx(6, 150, 6), &late, &env) {
+            Err(PalwFpAdmissionV3Error::Uncertified(u)) => assert_eq!(u.status, "accusation-pending"),
+            other => panic!("admission must refuse while an accusation is pending, got {other:?}"),
+        }
+        match apply_palw_transition_v3(&accused, &gc, &ctx(6, 150, 6), &[], PalwBlockWorkV3::ReceiptSpend(&env.spend)) {
+            Err(PalwStateV2Error::ReceiptUncertified(u)) => assert_eq!(u.status, "accusation-pending"),
+            other => panic!("the fold must refuse (no quantum consumed), got {:?}", other.map(|_| ())),
+        }
+        // Closed without conviction: the lane re-opens.
+        let mut acquitted = accused.clone();
+        acquitted.set_open_courts_for_tests(h64(0xFC), 0);
+        assert!(admit_gc(&acquitted, &ctx(6, 150, 6), &late, &env).is_ok());
+        // Below Gate C an open court changes nothing in the receipt clock (released rule).
+        let mut below = state.clone();
+        below.set_open_courts_for_tests(h64(0xFC), 1);
+        assert_eq!(palw_fp_receipt_clock_v1(&p, &below, &h64(0xFC), &claim, 124), Ok(124));
+    }
+
     /// **User decision 2026-10-17 (Gate C retirement)**: a governed Final free-prompt claim is not retired before its certification can
     /// be decided and its receipt lane run: the deadline the sweep reads is at least `final + certification lifetime + receipt tail`, so
     /// an honest claim certified at the latest possible DAA is still present for its whole use window. Below Gate C: unchanged.

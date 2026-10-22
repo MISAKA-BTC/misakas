@@ -666,6 +666,28 @@ mod tests {
         assert_eq!(exact[&h(1)], 30);
     }
 
+    /// **G14 gatec-capacity**: compute 100 / DA 5 / court 3 claims per span — the attestation-to-supply conversion carries the
+    /// binding minimum (3 claims = 3 × c CCU), never the bare compute figure, and the water-filled allocation admits exactly 3 claims.
+    #[test]
+    fn g14_supply_carries_the_binding_minimum_compute100_da5_court3() {
+        let load = PalwClaimLoadV1 { compute_ccu: 10, memory_bytes: 100, da_bytes: 10, court_permille: 1_000 };
+        let mut a = attestation(1, 1, 1_000);
+        a.capability =
+            PalwCapacityResourcesV1 { compute_ccu_per_span: 1_000, memory_bytes: 100, da_bytes_per_span: 50, court_permille_per_span: 3_000 };
+        assert_eq!(a.capability.compute_ccu_per_span / load.compute_ccu, 100, "compute alone: 100 claims");
+        assert_eq!(a.capability.da_bytes_per_span / load.da_bytes, 5, "DA: 5 claims");
+        assert_eq!(a.capability.court_permille_per_span / load.court_permille, 3, "court: 3 claims");
+        assert_eq!(palw_capacity_claims_per_span_v1(&a.capability, &load), 3);
+        let supply = palw_capacity_supply_from_attestations_v1(&[a], 500, |_| Some(load));
+        assert_eq!(supply.len(), 1);
+        assert_eq!(supply[0].per_span, 3 * load.compute_ccu, "supply = binding claims × CCU per claim, not 1,000");
+        let demand: BTreeMap<Hash64, u128> = [(h(1), 100 * load.compute_ccu)].into_iter().collect();
+        let allocated = palw_waterfill_capacity_v1(&supply, &demand);
+        assert_eq!(allocated[&h(1)] / load.compute_ccu, 3, "the supply bounds admission to 3 claims");
+        assert!(palw_capacity_fits_v1(allocated[&h(1)], 3 * load.compute_ccu));
+        assert!(!palw_capacity_fits_v1(allocated[&h(1)], 4 * load.compute_ccu));
+    }
+
     /// Joint feasibility: what `alloc` (CCU per class) asks of each resource of `v` is within it.
     fn assert_within(v: &PalwVerifierResourceSupplyV1, alloc: &BTreeMap<Hash64, u128>) {
         let (mut ccu, mut da, mut court) = (0u128, 0u128, 0u128);
