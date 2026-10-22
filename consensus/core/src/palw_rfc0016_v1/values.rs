@@ -28,7 +28,8 @@ pub struct PalwRfc0016ValuesV1 {
     pub entrant_max_per_model_permille: u32,
     /// `S_entry`: the seasoned locked capital an entrant needs.
     pub entrant_min_capital_sompi: u64,
-    /// How long after its eligibility a model is an entrant (the 30-day-equivalent DAA is the design value; measured in DAA).
+    /// How long after its eligibility a model is an entrant (the averaging window's DAA, 7 day-equivalents since 2026-10-16, is the
+    /// design value; measured in DAA).
     pub entrant_age_daa: u64,
     /// `sigma_cap` — the safety factor applied to measured verifier capacity.
     pub capacity_safety_permille: u32,
@@ -141,7 +142,8 @@ pub const PALW_RFC0016_CALIBRATION_START_V1: PalwRfc0016ValuesV1 = PalwRfc0016Va
     entrant_max_per_model_permille: PALW_RFC0016_ENTRANT_MAX_PER_MODEL_CALIBRATION_PERMILLE_V1,
     // V3: `S_entry` is the network's eligible minimum producer bond (the fold takes `max(this, min_collateral_sompi)`); 0 adds nothing.
     entrant_min_capital_sompi: 0,
-    // V5: an entrant is a model younger than the 30-day window (21,600 DAA).
+    // V5: an entrant is a model younger than the averaging window (7 epochs = 5,040 DAA; user decision 2026-10-16, re-confirmed
+    // 2026-10-22; was 30 / 21,600).
     entrant_age_daa: PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1,
     // PROBES (measured, not decided):
     capacity_safety_permille: 1_000,
@@ -195,6 +197,141 @@ pub struct PalwRfc0016MeasuredRecordV1 {
 
 /// **The pinned measured records — EMPTY.** No value is measured; arming either fence is refused.
 pub const PALW_RFC0016_MEASURED_RECORDS_V1: &[PalwRfc0016MeasuredRecordV1] = &[];
+
+// ---- The §14 arm-readiness record gate (lane rfcgap-b, 2026-10-22) ------------------------------------------------------------------
+//
+// Before this gate the two validators ended in a fixed "implemented dormant, not adopted for activation" refusal AFTER the
+// measured-value gate, so no evidence could ever arm either fence. RFC-0016's design (V+) is adopted (D-V1); what remains open is
+// §14's AND contract. The gate below names each remaining §14 conjunct and admits an armed height only when a record for exactly
+// (fence, network, height) carrying one evidence digest per conjunct and a review digest is pinned. The list is EMPTY, so every armed
+// height is still refused (same outcome as before, now naming what is missing). The measured-value gate above it is unchanged.
+
+/// The two RFC-0016 fences the §14 record gate governs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PalwRfc0016GatedFenceV1 {
+    /// `palw_model_block_rights_v1` (V+).
+    ModelBlockRightsV1,
+    /// `palw_elastic_final_capacity_v1`.
+    ElasticFinalCapacityV1,
+}
+
+/// RFC-0016 §14's conjuncts shared by both fences (the values conjunct is the measured-value gate, checked before this one).
+const RFC0016_C1_C5: &str = "§13 C1–C5 complete (mode-specific W_hold, S_m = 7-day-average miner + verifier capital, α = 1.5, escrow never clipped, R shortage refused before acceptance)";
+const RFC0016_S12: &str = "§12 tests (T1–T7, N1–N7, P4a/P4b, M1–M7, K1a, H1–H4, A1–A12) PASS on the physical-block and payout columns with independent review";
+const RFC0016_E2E: &str = "real-node E2E PASS: V2 Panel route, Kernel route, Panel=0/Panel=1 mode switch, reorg / restart / IBD";
+const RFC0016_ADR0177: &str = "ADR-0177 two-stage evaluation recomputed with the measured values";
+const RFC0016_COORDINATED: &str = "the single coordinated all-RFC activation release names this network and height";
+
+impl PalwRfc0016GatedFenceV1 {
+    pub const ALL: [Self; 2] = [Self::ModelBlockRightsV1, Self::ElasticFinalCapacityV1];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ModelBlockRightsV1 => "palw_model_block_rights_v1",
+            Self::ElasticFinalCapacityV1 => "palw_elastic_final_capacity_v1",
+        }
+    }
+
+    /// The real height this fence is armed at on `params`, if any.
+    pub fn armed(self, params: &Params) -> Option<u64> {
+        match self {
+            Self::ModelBlockRightsV1 => params.palw_model_block_rights_v1_from_daa(),
+            Self::ElasticFinalCapacityV1 => params.palw_elastic_final_capacity_v1_from_daa(),
+        }
+    }
+
+    /// The evidence a record must carry, one digest per entry, in this order (RFC-0016 §14 ACTIVATION_ALLOWED).
+    pub fn requirements(self) -> &'static [&'static str] {
+        match self {
+            Self::ModelBlockRightsV1 => &[
+                RFC0016_C1_C5,
+                RFC0016_S12,
+                RFC0016_E2E,
+                RFC0016_ADR0177,
+                "§8.6 decision on k and on wiring the tilt into the lottery (V1), recorded with the σ/k measurement",
+                RFC0016_COORDINATED,
+            ],
+            Self::ElasticFinalCapacityV1 => &[
+                RFC0016_C1_C5,
+                RFC0016_S12,
+                RFC0016_E2E,
+                RFC0016_ADR0177,
+                "V8: capacity attestation form, sigma_cap and the compute bound decided; per-class claim loads measured (PALW_RFC0016_CLAIM_LOADS_V1)",
+                RFC0016_COORDINATED,
+            ],
+        }
+    }
+
+    /// The refusal while no record for this fence, network and height is pinned.
+    pub fn no_record_refusal(self) -> &'static str {
+        match self {
+            Self::ModelBlockRightsV1 => {
+                "palw_model_block_rights_v1 cannot be armed: no RFC-0016 §14 arm-readiness record is pinned for this network and height \
+                 (PALW_RFC0016_ARMING_RECORDS_V1 is empty)"
+            }
+            Self::ElasticFinalCapacityV1 => {
+                "palw_elastic_final_capacity_v1 cannot be armed: no RFC-0016 §14 arm-readiness record is pinned for this network and \
+                 height (PALW_RFC0016_ARMING_RECORDS_V1 is empty)"
+            }
+        }
+    }
+}
+
+/// The record format's version.
+pub const PALW_RFC0016_ARMING_RECORD_VERSION_V1: u16 = 1;
+
+/// **An RFC-0016 §14 arm-readiness record** — same shape and form rules as `crate::palw_rfc0018_v1::PalwRfc0018ArmingRecordV1`.
+/// `values` must equal the value set the binary arms (the one the measured-value gate admitted), so a record cannot outlive a value
+/// change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRfc0016ArmingRecordV1 {
+    pub version: u16,
+    pub fence: PalwRfc0016GatedFenceV1,
+    pub genesis: crate::Hash64,
+    pub activation_daa: u64,
+    pub values: PalwRfc0016ValuesV1,
+    pub source_commit: [u8; 20],
+    pub evidence: &'static [[u8; 32]],
+    pub review: [u8; 32],
+}
+
+/// **The pinned §14 records — EMPTY.** Every RFC-0016 fence armed at a real height is refused.
+pub const PALW_RFC0016_ARMING_RECORDS_V1: &[PalwRfc0016ArmingRecordV1] = &[];
+
+/// Does `records` authorize arming `fence` at `activation_daa` on the network `genesis` with `values`? The first record naming exactly
+/// this (fence, network, height) decides; its form must hold. `Err` carries the refusal text.
+pub fn palw_rfc0016_arming_record_admits_v1(
+    fence: PalwRfc0016GatedFenceV1,
+    genesis: crate::Hash64,
+    activation_daa: u64,
+    values: &PalwRfc0016ValuesV1,
+    records: &[PalwRfc0016ArmingRecordV1],
+) -> Result<(), &'static str> {
+    let Some(r) = records.iter().find(|r| r.fence == fence && r.genesis == genesis && r.activation_daa == activation_daa) else {
+        return Err(fence.no_record_refusal());
+    };
+    if r.version != PALW_RFC0016_ARMING_RECORD_VERSION_V1 {
+        return Err("the RFC-0016 arm-readiness record's version is not this binary's");
+    }
+    if r.values != *values {
+        return Err("the RFC-0016 arm-readiness record was made for another value set than the one this binary arms");
+    }
+    if r.source_commit == [0; 20] {
+        return Err("the RFC-0016 arm-readiness record names no source commit");
+    }
+    if r.evidence.len() != fence.requirements().len() {
+        return Err("the RFC-0016 arm-readiness record does not carry one evidence digest per §14 requirement");
+    }
+    if r.review == [0; 32] {
+        return Err("the RFC-0016 arm-readiness record carries no review digest");
+    }
+    for (i, d) in r.evidence.iter().enumerate() {
+        if *d == [0; 32] || *d == r.review || r.evidence[..i].contains(d) {
+            return Err("an RFC-0016 arm-readiness evidence digest is zero, repeated, or equal to the review");
+        }
+    }
+    Ok(())
+}
 
 /// **Calibration builds only: the values a σ/k measurement run arms** — `MISAKA_RFC0016_CALIBRATION_VALUES` at BUILD time, 18
 /// comma-separated integers in the field order of [`PalwRfc0016ValuesV1`]. Read only on an ISOLATED calibration network
@@ -380,8 +517,8 @@ impl Params {
 
     /// **`palw_model_block_rights_v1`'s refusals** (RFC-0016 V+): the mirror; a ConsensusV2 rule; the allocation it issues from
     /// (`palw_bond_budget_v1` and `palw_model_bond_allocation_v1` at or below it, the allocation epoch a whole number of rights epochs so
-    /// `P_m` is constant within one); the measured-value gate; and — implemented dormant, not adopted for activation — any armed
-    /// height is refused until the single full-activation release names one.
+    /// `P_m` is constant within one); the measured-value gate; and the §14 arm-readiness record for exactly this network and height
+    /// ([`PALW_RFC0016_ARMING_RECORDS_V1`], empty: every armed height is refused until the single full-activation release pins one).
     pub fn validate_palw_model_block_rights_v1(&self) -> Result<(), PalwModeV2Error> {
         self.validate_palw_rfc0016_mirror_v1()?;
         let Some(at) = self.palw_model_block_rights_v1_from_daa() else { return Ok(()) };
@@ -431,7 +568,8 @@ impl Params {
                 "palw_model_block_rights_v1: the allocation epoch must be a whole number of rights epochs (P_m constant within one)",
             ));
         }
-        // V5 (user decision 2026-10-15): a calibration run measures ONE epoch = 720 DAA and the 30-day window = 21,600 DAA.
+        // V5 (user decision 2026-10-15; window 7 epochs since 2026-10-16, re-confirmed 2026-10-22): a calibration run measures ONE
+        // epoch = 720 DAA and the 7-day average window = 5,040 DAA.
         if self.has_isolated_native_calibration_v34() {
             let span = allocation.policy.average.map(|a| a.span_daa());
             if rights_epoch != PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1
@@ -439,25 +577,47 @@ impl Params {
                 || span.is_some_and(|span| span != PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1)
             {
                 return Err(PalwModeV2Error::Invalid(
-                    "an RFC-0016 calibration run uses one epoch = 720 DAA (rights and allocation) and the 21,600-DAA 30-day window (V5)",
+                    "an RFC-0016 calibration run uses one epoch = 720 DAA (rights and allocation) and the 5,040-DAA 7-day average window (V5)",
                 ));
             }
         }
         if let Some(verdict) = self.palw_rfc0016_calibration_allows_v1() {
             return verdict;
         }
-        if !palw_rfc0016_values_measured_v1(&PALW_RFC0016_VALUES_V1, PALW_RFC0016_MEASURED_RECORDS_V1) {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_model_block_rights_v1 cannot be armed: σ, k, φ, the pace margin and the entrant terms have no pinned measured-value record (RFC-0016 §8.6)",
-            ));
+        self.palw_rfc0016_value_and_arm_gate_v1(
+            PalwRfc0016GatedFenceV1::ModelBlockRightsV1,
+            &PALW_RFC0016_VALUES_V1,
+            PALW_RFC0016_MEASURED_RECORDS_V1,
+            PALW_RFC0016_ARMING_RECORDS_V1,
+        )
+    }
+
+    /// **The last two gates of either fence** (after its structural refusals and the calibration exception): the measured-value gate
+    /// (`values` must match a pinned measured record), then the §14 arm-readiness record for exactly (fence, network, height). The node
+    /// passes the binary's constants; tests and arm-readiness tooling pass their own lists. An unarmed fence passes.
+    pub fn palw_rfc0016_value_and_arm_gate_v1(
+        &self,
+        fence: PalwRfc0016GatedFenceV1,
+        values: &PalwRfc0016ValuesV1,
+        measured: &[PalwRfc0016MeasuredRecordV1],
+        arming: &[PalwRfc0016ArmingRecordV1],
+    ) -> Result<(), PalwModeV2Error> {
+        let Some(at) = fence.armed(self) else { return Ok(()) };
+        if !palw_rfc0016_values_measured_v1(values, measured) {
+            return Err(PalwModeV2Error::Invalid(match fence {
+                PalwRfc0016GatedFenceV1::ModelBlockRightsV1 => {
+                    "palw_model_block_rights_v1 cannot be armed: σ, k, φ, the pace margin and the entrant terms have no pinned measured-value record (RFC-0016 §8.6)"
+                }
+                PalwRfc0016GatedFenceV1::ElasticFinalCapacityV1 => {
+                    "palw_elastic_final_capacity_v1 cannot be armed: the capacity safety factor, the C7 ceiling and the queue terms have no pinned measured-value record"
+                }
+            }));
         }
-        Err(PalwModeV2Error::Invalid(
-            "palw_model_block_rights_v1 cannot be armed: implemented dormant, not adopted for activation (RFC-0016 §14 gate open)",
-        ))
+        palw_rfc0016_arming_record_admits_v1(fence, self.genesis.hash, at, values, arming).map_err(PalwModeV2Error::Invalid)
     }
 
     /// **`palw_elastic_final_capacity_v1`'s refusals**: the mirror; a ConsensusV2 rule on a network whose model registry governs; the
-    /// measured-value gate (capacity safety, the C7 ceiling, queue terms); and any armed height, as above.
+    /// measured-value gate (capacity safety, the C7 ceiling, queue terms); and the §14 arm-readiness record, as above.
     pub fn validate_palw_elastic_final_capacity_v1(&self) -> Result<(), PalwModeV2Error> {
         self.validate_palw_rfc0016_mirror_v1()?;
         let Some(at) = self.palw_elastic_final_capacity_v1_from_daa() else { return Ok(()) };
@@ -480,14 +640,12 @@ impl Params {
         if let Some(verdict) = self.palw_rfc0016_calibration_allows_v1() {
             return verdict;
         }
-        if !palw_rfc0016_values_measured_v1(&PALW_RFC0016_VALUES_V1, PALW_RFC0016_MEASURED_RECORDS_V1) {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_elastic_final_capacity_v1 cannot be armed: the capacity safety factor, the C7 ceiling and the queue terms have no pinned measured-value record",
-            ));
-        }
-        Err(PalwModeV2Error::Invalid(
-            "palw_elastic_final_capacity_v1 cannot be armed: implemented dormant, not adopted for activation (RFC-0016 §14 gate open)",
-        ))
+        self.palw_rfc0016_value_and_arm_gate_v1(
+            PalwRfc0016GatedFenceV1::ElasticFinalCapacityV1,
+            &PALW_RFC0016_VALUES_V1,
+            PALW_RFC0016_MEASURED_RECORDS_V1,
+            PALW_RFC0016_ARMING_RECORDS_V1,
+        )
     }
 }
 
@@ -525,6 +683,66 @@ mod tests {
         assert_eq!(v, measured());
         assert!(palw_rfc0016_parse_values_v1("1,2,3").is_none());
         assert!(palw_rfc0016_parse_values_v1("x,1000,500,1200,20,5,1,100,800,0,8,50,2,150,100,700,500,10").is_none());
+    }
+
+    /// **rfcgap-b (RFC-0016 §14):** the fixed "not adopted for activation" refusal is replaced by an arm-readiness record gate for
+    /// exactly (fence, network, height); the pinned list is empty, so every armed height is still refused — now by name. A record
+    /// admits only with the value set it was made for, one non-zero distinct evidence digest per §14 requirement and a review digest.
+    #[test]
+    fn rfcgap_b_rfc0016_arm_record_gate_is_exact_and_the_pinned_list_is_empty() {
+        use crate::config::params::palw_t12_shipped_params;
+        assert!(PALW_RFC0016_ARMING_RECORDS_V1.is_empty());
+        static EVIDENCE: [[u8; 32]; 6] = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]];
+        static DUPLICATED: [[u8; 32]; 6] = [[1; 32], [1; 32], [3; 32], [4; 32], [5; 32], [6; 32]];
+        let values = measured();
+        let measured_record = PalwRfc0016MeasuredRecordV1 { values, evidence_digest: [7; 32], review_digest: [8; 32], harness: "test" };
+        for fence in PalwRfc0016GatedFenceV1::ALL {
+            assert_eq!(fence.requirements().len(), 6, "{}: one digest per §14 conjunct", fence.name());
+            let shipped = palw_t12_shipped_params();
+            assert_eq!(fence.armed(&shipped), None, "dormant on the shipped preset");
+            shipped.palw_rfc0016_value_and_arm_gate_v1(fence, &values, &[], &[]).unwrap();
+            let mut p = palw_t12_shipped_params();
+            match fence {
+                PalwRfc0016GatedFenceV1::ModelBlockRightsV1 => p.palw_model_block_rights_v1 = Some(ForkActivation::new(16_000)),
+                PalwRfc0016GatedFenceV1::ElasticFinalCapacityV1 => p.palw_elastic_final_capacity_v1 = Some(ForkActivation::new(16_000)),
+            }
+            assert_eq!(fence.armed(&p), Some(16_000));
+            let record = PalwRfc0016ArmingRecordV1 {
+                version: PALW_RFC0016_ARMING_RECORD_VERSION_V1,
+                fence,
+                genesis: p.genesis.hash,
+                activation_daa: 16_000,
+                values,
+                source_commit: [9; 20],
+                evidence: &EVIDENCE,
+                review: [10; 32],
+            };
+            let gate = |measured: &[PalwRfc0016MeasuredRecordV1], arming: &[PalwRfc0016ArmingRecordV1]| {
+                p.palw_rfc0016_value_and_arm_gate_v1(fence, &values, measured, arming).map_err(|e| format!("{e:?}"))
+            };
+            // The measured-value gate stays first.
+            assert!(gate(&[], &[record]).unwrap_err().contains("measured-value record"));
+            // With the binary's (empty) list: refused by name.
+            let why = gate(&[measured_record], PALW_RFC0016_ARMING_RECORDS_V1).unwrap_err();
+            assert!(why.contains(fence.name()) && why.contains("PALW_RFC0016_ARMING_RECORDS_V1"), "{why}");
+            assert!(gate(&[measured_record], &[record]).is_ok(), "{}: an exact well-formed record admits", fence.name());
+            let other = |f: &dyn Fn(&mut PalwRfc0016ArmingRecordV1)| {
+                let mut r = record;
+                f(&mut r);
+                gate(&[measured_record], &[r])
+            };
+            assert!(other(&|r| r.activation_daa = 16_001).unwrap_err().contains("no RFC-0016"), "another height");
+            assert!(other(&|r| r.genesis = crate::Hash64::from_u64_word(1)).unwrap_err().contains("no RFC-0016"), "another network");
+            assert!(other(&|r| r.values.sigma_permille += 1).unwrap_err().contains("another value set"));
+            assert!(other(&|r| r.version = 2).is_err());
+            assert!(other(&|r| r.source_commit = [0; 20]).is_err());
+            assert!(other(&|r| r.review = [0; 32]).is_err());
+            assert!(other(&|r| r.review = [1; 32]).is_err(), "review equal to an evidence digest");
+            assert!(other(&|r| r.evidence = &EVIDENCE[..5]).is_err(), "one digest short");
+            assert!(other(&|r| r.evidence = &DUPLICATED).is_err(), "repeated digest");
+            let other_fence = PalwRfc0016GatedFenceV1::ALL.into_iter().find(|f| *f != fence).unwrap();
+            assert!(other(&|r| r.fence = other_fence).is_err(), "a record for the other fence does not admit this one");
+        }
     }
 
     #[test]

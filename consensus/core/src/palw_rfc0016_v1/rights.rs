@@ -73,7 +73,7 @@ impl PalwRightsEpochV1 {
     }
 }
 
-/// **The narrow interface to ADR-0177's allocation** (`palw_model_bond_allocation_v1`, rewritten by the ADR lane to the 30-day
+/// **The narrow interface to ADR-0177's allocation** (`palw_model_bond_allocation_v1`, rewritten by the ADR lane to the 7-day (2026-10-16; was 30)
 /// Miner + Verifier `S̄_m` and `α = 1.5`): the current allocation epoch's per-model weights `A_m` and `ΣA`. RFC-0016 consumes `P_m`
 /// only through this trait; it does not compute `S_m` or `A_m` itself.
 pub trait PalwRightsWeightsSourceV1 {

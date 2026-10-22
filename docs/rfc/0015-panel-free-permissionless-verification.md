@@ -628,6 +628,8 @@ coinbase配分からblock頻度/ticket/DAA/難易度を自動変更せず、変�
 
 #### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）
 
+> **整合性注記（2026-10-22、lane rfcgap-b）:** 下の「30日平均」「`N_30`」は2026-10-16のユーザー決定（10-22再確認）で**7日相当DAA**に置き換わった（[PRINCIPLES](../PRINCIPLES.md) §0・§9、コード `consensus/core/src/palw_bond_budget_v1/allocation_v3.rs`）。本文は履歴として残す。
+
 ユーザーの決定により、[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)の配分を次のとおり確定する。
 2026-10-12改定の`S_m · μ(S_m)`（1.3〜2倍）は採用せず、比較試験用に保持する。数値の本番定数化・実装・activationは未了である。
 
