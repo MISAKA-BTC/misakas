@@ -966,6 +966,7 @@ pub mod palw_tir_designated_answers_v1;
 pub mod palw_tir_history_bisection_v1;
 pub mod palw_tir_adjudication_slot_v1;
 pub mod palw_tir_container_v1;
+pub mod palw_artifact_identity_v1;
 pub mod palw_tir_public_source_v1;
 pub mod palw_tir_public_owned_v1;
 pub mod palw_tir_public_allocation_v1;

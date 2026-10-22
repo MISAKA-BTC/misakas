@@ -4527,6 +4527,22 @@ impl PalwPanelService {
         Ok(backend)
     }
 
+    /// **The concrete IR backend of a chain-named class, under the chain's registered semantics** (RFC-0002 Phase H, Audit 02-B,
+    /// lane rfc02-09). The IR-only duty paths (court dissection/close, one-move, shard seat/shadow/watch) resolve the concrete
+    /// `TirBackendV1` through `PalwBackendRegistry::resolve_tir_v1`, which bypasses [`Self::resolve_backend`] and so left the backend
+    /// at its default free-prompt facts. This is the same read [`Self::resolve_backend`] applies, through the builder
+    /// `TirBackendV1::with_fp_class_facts_v1`: a class registered with non-default semantics executes under them on every path.
+    /// Absent a statement (the semantics read is not in force — every shipped chain below its fence) the backend is unchanged.
+    fn resolve_tir_registered_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+    ) -> Option<Result<misaka_palw_sdk::lineages::tir::TirBackendV1, String>> {
+        let resolved = self.backends().resolve_tir_v1(class_id, artifact_root)?;
+        Some(resolved.map(|tir| palw_tir_with_registered_facts_v1(tir, Self::registered_class_facts_v1(session, class_id, artifact_root))))
+    }
+
     /// The registered semantics of `class_id` over `artifact_root` as free-prompt class facts (`None`: no statement, or the read
     /// is not in force).
     fn registered_class_facts_v1(
@@ -14890,5 +14906,17 @@ mod fp_job_v4_material_tests {
                 assert_eq!(unscoped, PalwMaterialVerdictV1::Matches, "a V3 capture is checked as before");
             }
         }
+    }
+}
+
+/// **Apply a class's registered free-prompt facts to a concrete IR backend** (`None`: no statement — the backend is returned as
+/// it was). Factored out of [`PalwPanelService::resolve_tir_registered_v1`] so the rule is testable without a consensus session.
+pub(crate) fn palw_tir_with_registered_facts_v1(
+    tir: misaka_palw_sdk::lineages::tir::TirBackendV1,
+    facts: Option<kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3>,
+) -> misaka_palw_sdk::lineages::tir::TirBackendV1 {
+    match facts {
+        Some(facts) => tir.with_fp_class_facts_v1(facts),
+        None => tir,
     }
 }

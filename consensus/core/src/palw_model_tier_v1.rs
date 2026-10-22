@@ -263,7 +263,19 @@ pub fn palw_model_tier_scale_v1(weight: PalwAllocationWeightV1, factor_ppm: u64)
 pub fn palw_model_tier_at_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, class_id: &Hash64, daa: u64) -> PalwModelTierV1 {
     match state.class(class_id) {
         Some(class) => {
-            palw_model_tier_of_v1(params.model_tier_v1(), class_id, &class.artifact_root, class.registrant_bond.is_none(), daa)
+            let mirror = params.model_tier_v1();
+            let tier = palw_model_tier_of_v1(mirror, class_id, &class.artifact_root, class.registrant_bond.is_none(), daa);
+            if tier.is_approved() {
+                return tier;
+            }
+            // **RFC-0002 Tensor IR identity (lane rfc02-09)**: a genesis-8 catalog names a TIR model by its `PALWART3` container
+            // root, while the class registers (and its courts open) the inner inventory root. The bound container root — recorded
+            // only past `palw_tir_container_identity_v1`, read only at or after the DAA it was bound — is the catalog key the
+            // edition was written against. Below that fence no row exists and this is byte-identical to the registered-root read.
+            match crate::palw_artifact_identity_v1::palw_catalog_container_root_of_class_v1(state, class_id, daa) {
+                Some(container) => palw_model_tier_of_v1(mirror, class_id, &container.hash(), false, daa),
+                None => tier,
+            }
         }
         None => PalwModelTierV1::Registered,
     }

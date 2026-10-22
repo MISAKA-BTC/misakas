@@ -1075,7 +1075,7 @@ impl super::PalwPanelService {
                 }
                 continue;
             }
-            let tir = match self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) {
+            let tir = match self.resolve_tir_registered_v1(session, duty.class_id, duty.artifact_root) {
                 None => continue,
                 Some(Ok(tir)) => std::sync::Arc::new(tir),
                 Some(Err(why)) => {
@@ -1854,7 +1854,7 @@ impl super::PalwPanelService {
                 }
                 continue;
             };
-            let Some(Ok(tir)) = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) else { continue };
+            let Some(Ok(tir)) = self.resolve_tir_registered_v1(session, duty.class_id, duty.artifact_root) else { continue };
             let (s_l, s_p) = plans
                 .iter()
                 .find(|(c, _)| *c == duty.class_id)
@@ -2300,7 +2300,7 @@ impl super::PalwPanelService {
                 }) {
                     continue;
                 }
-                let Some(Ok(tir)) = self.backends().resolve_tir_v1(class_id, class.artifact_root) else { continue };
+                let Some(Ok(tir)) = self.resolve_tir_registered_v1(session, class_id, class.artifact_root) else { continue };
                 // **Per-segment pricing (`palw_tir_shard_segment_v2`, dormant; agent SHARD): readiness is the shard's heaviest cell.**
                 // Past the fence a node proves a shard only when its host can hold the shard's heaviest cell (its last segment's
                 // history), so every ready seat can host every cell of its shard and the draw needs no tier. Below it nothing changes.

@@ -1267,7 +1267,7 @@ impl super::PalwPanelService {
                 continue;
             }
             // Only an IR class is tried here: a legacy claim's held court is its seat's capture arm.
-            let tir = match self.backends().resolve_tir_v1(target.class_id, target.artifact_root) {
+            let tir = match self.resolve_tir_registered_v1(session, target.class_id, target.artifact_root) {
                 None => continue,
                 Some(Ok(tir)) => tir,
                 Some(Err(why)) => {
