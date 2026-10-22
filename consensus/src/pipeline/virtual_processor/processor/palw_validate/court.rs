@@ -838,6 +838,32 @@ impl VirtualStateProcessor {
                         return Err("the designated-custodian event is dormant on this network".into());
                     }
                 }
+                // R-D2-READY (tag 230, ADR-0188 B / ADR-0200 C1): below `palw_court_model_scope_v1` the dormant payload (A-2), refused.
+                // Past it: the ADOPTED draw cap first — unadopted (`None`), so every root is refused here; then the literal seat
+                // authority (the seat bond's ML-DSA-87 signature over the network-bound root). No ready credit or slash is granted.
+                Obj::SeatReadinessRootV1 { root, signature } => {
+                    use kaspa_consensus_core::palw_court_model_scope_routes_v1::readiness_root as rr;
+                    if !state_params.court_model_scope_from_daa().is_some_and(|from| point.daa_score >= from) {
+                        return Err("the seat readiness root is dormant on this network (palw_court_model_scope_v1)".into());
+                    }
+                    rr::palw_d2_readiness_root_admit_v1(root, rr::PALW_D2_READINESS_DRAW_CAP_V1)?;
+                    let record = state.bond(&root.seat).ok_or("a readiness root names a seat bond this chain does not have")?;
+                    let message = rr::palw_d2_readiness_root_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        root,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        rr::PALW_D2_READINESS_ROOT_MLDSA87_CONTEXT_V1,
+                    ) {
+                        return Err("the readiness root is not signed by its seat's bond".into());
+                    }
+                }
                 Obj::MemoryRoutingV2 { object } => {
                     use kaspa_consensus_core::palw_memory_routing_v2 as mr;
                     if !self.palw_memory_routing_court_v2_at(point.daa_score) {

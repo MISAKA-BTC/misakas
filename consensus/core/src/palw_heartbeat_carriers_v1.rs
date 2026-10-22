@@ -119,6 +119,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         }
         // ADR-0191 step B (tag 245): designated-custodian traffic, not an H-1 obligation.
         O::TirDesignatedEventV1 { .. } => false,
+        // R-D2-READY (tag 230): seat readiness, not an H-1 obligation.
+        O::SeatReadinessRootV1 { .. } => false,
         // RFC-0002 Phase F (tag 62): the IR one-move accusation, a court opening like the one above.
         O::TirShardCourtAccused { .. } => true,
         // RFC-0003 §I.4.7: the generative one-move accusation, a court opening too.

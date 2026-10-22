@@ -2265,6 +2265,47 @@ pub(super) fn palw_fraud_filer_legacy_step_v2(
     })
 }
 
+/// **R-D2-NODE: does D2 govern this claim at the node?** `palw_court_model_scope_v1` armed (not `never()`) and the claim accepted at or
+/// past it — the node-side mirror of `palw_ruling_fences_v1::palw_court_model_scope_governs_claim_v1`.
+pub(super) fn palw_fraud_filer_d2_governs_v1(params: &kaspa_consensus_core::config::params::Params, accepted_daa: u64) -> bool {
+    params
+        .palw_court_model_scope_v1
+        .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && accepted_daa >= f.daa_score())
+}
+
+/// **R-D2-NODE: the claim-part route selection** (ADR-0177 D2 / ADR-0188, REQ-T6-4). Below D2 the step is unchanged. On a D2 claim a
+/// located leaf — the engine's held `StepLeaf` demand (refused by the chain on such a claim), its held route, or a terminal without
+/// the leaf's witness — becomes the claim-only `KernelWitness` read/demand (tags 157/158; the producer owes no model rows), and the
+/// terminal only once that witness is held, where [`PalwLegacyReplicaV2::claim_part_terminal`] adds this verifier's own rows. Every
+/// other step (descent, binding, reservation, waits, ends) is untouched. Pure.
+pub(super) fn palw_fraud_filer_d2_route_v1(
+    d2: bool,
+    step: PalwFraudFilerStepV1,
+    witness_leaf: Option<u64>,
+    view: Option<&PalwLegacyDisputeViewV1>,
+    answer_read: impl Fn(&PalwDaUnitV1) -> bool,
+) -> PalwFraudFilerStepV1 {
+    if !d2 {
+        return step;
+    }
+    let leaf = match &step {
+        PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf }))
+        | PalwFraudFilerStepV1::Engine(PalwFilerActionV1::HeldRoute { leaf })
+        | PalwFraudFilerStepV1::LegacyTerminal { leaf } => *leaf,
+        _ => return step,
+    };
+    if witness_leaf == Some(leaf) {
+        return PalwFraudFilerStepV1::LegacyTerminal { leaf };
+    }
+    let probe = PalwLegacyProbeV1::HeldNode { unit: PalwLegacyHeldUnitV2::KernelWitness { leaf } };
+    let unit = probe.unit();
+    match (view.is_some_and(|view| view.unit_was_answered_v1(&unit)), answer_read(&unit)) {
+        (true, true) => PalwFraudFilerStepV1::Learn(probe),
+        (true, false) => PalwFraudFilerStepV1::AwaitAnswer(probe),
+        _ => PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(probe)),
+    }
+}
+
 /// **G14-V: the node's codec-independent step** — the common engine over the authenticated `StepRange` subtree descent
 /// (`palw_fraud_filer_next_subtree_v1`): the claim's committed subtree roots, as authenticated range answers carried them, against
 /// the verifier's own tree (built once from its own run). Replaces the linear scan, which refused every claim past 32,768 leaves; an
@@ -4144,6 +4185,16 @@ impl PalwPanelService {
                         }
                     }
                 };
+                // R-D2-NODE (ADR-0188 / REQ-T6-4): on a claim D2 governs, the located leaf takes the claim-part route — the
+                // claim-only committed kernel witness, then this verifier's own rows — never the refused held `StepLeaf` demand.
+                let d2 = palw_fraud_filer_d2_governs_v1(params, case.candidate.accepted_daa);
+                let step = palw_fraud_filer_d2_route_v1(
+                    d2,
+                    step,
+                    case.witness.as_ref().map(|w| w.refutation.output_opening.leaf_index),
+                    view.as_ref(),
+                    |unit| book.answers.contains_key(&(claim, *unit)),
+                );
                 match step {
                     PalwFraudFilerStepV1::Learn(probe) => {
                         let answer = book.answers.get(&(claim, probe.unit())).cloned().expect("read above");
@@ -4380,7 +4431,16 @@ impl PalwPanelService {
                             params.palw_court_ladder.is_some_and(|f| f.is_active(current_daa)),
                         );
                         let ladder = self.seat_refutation_ladder_v1(bound_to.class_id, fallback, current_daa);
+                        let claim_part = d2 && !palw_legacy_leaf_is_fused_v2(&binding, leaf);
                         let terminal = tokio::task::spawn_blocking(move || {
+                            if claim_part {
+                                // R-D2-NODE: the claim part with this verifier's own rows (a fused site keeps the fused terminal,
+                                // which already reads the witness and own rows only).
+                                let witness = witness.as_deref().ok_or("the claim-part route needs the public committed witness")?;
+                                return replica.claim_part_terminal(
+                                    witness, leaf, claim, &bound_to, trace_root, producer, bond_key, ladder,
+                                );
+                            }
                             replica.terminal(
                                 &binding,
                                 &frontiers,
@@ -9276,5 +9336,81 @@ pub(super) mod tests {
         let operator = panel.find("self.operator_da_tick_v1(").expect("lane B");
         assert!(tick > operator, "after lane B");
         assert!(panel[tick..tick + 400].contains("seat_replays.has_room(false)"), "the replay yields to the seat's slots");
+    }
+
+    /// R-D2-NODE: the node-side D2 mirror — unarmed, `never()`, and a claim accepted below the fence are all the OLD rule.
+    #[test]
+    fn d2_governs_only_claims_accepted_at_or_past_an_armed_fence() {
+        use kaspa_consensus_core::config::params::{ForkActivation, TESTNET_PARAMS};
+        let mut params = TESTNET_PARAMS.clone();
+        params.palw_court_model_scope_v1 = None;
+        assert!(!palw_fraud_filer_d2_governs_v1(&params, u64::MAX));
+        params.palw_court_model_scope_v1 = Some(ForkActivation::never());
+        assert!(!palw_fraud_filer_d2_governs_v1(&params, u64::MAX));
+        params.palw_court_model_scope_v1 = Some(ForkActivation::new(500));
+        assert!(!palw_fraud_filer_d2_governs_v1(&params, 499));
+        assert!(palw_fraud_filer_d2_governs_v1(&params, 500));
+        assert!(palw_fraud_filer_d2_governs_v1(&params, 501));
+    }
+
+    /// R-D2-NODE: below D2 every step is untouched; on a D2 claim the refused held `StepLeaf` demand, the held route and a terminal
+    /// without the leaf's witness all become the claim-only `KernelWitness` (demand / await / learn by what the chain answered), and
+    /// the terminal is selected only once that leaf's witness is held. Non-terminal steps are never rerouted.
+    #[test]
+    fn d2_claims_take_the_claim_part_route_instead_of_the_held_step_leaf() {
+        let leaf = 41;
+        let kw = PalwLegacyProbeV1::HeldNode { unit: PalwLegacyHeldUnitV2::KernelWitness { leaf } };
+        let terminal_demand = PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf }));
+        let none = |_: &PalwDaUnitV1| false;
+        // Below D2: the old rule, byte for byte.
+        for step in [
+            terminal_demand.clone(),
+            PalwFraudFilerStepV1::LegacyTerminal { leaf },
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::HeldRoute { leaf }),
+        ] {
+            assert_eq!(palw_fraud_filer_d2_route_v1(false, step.clone(), None, None, none), step);
+        }
+        // D2, nothing answered: demand the claim-only witness, never the StepLeaf.
+        let unanswered = view(1, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 300 });
+        for step in [
+            terminal_demand.clone(),
+            PalwFraudFilerStepV1::LegacyTerminal { leaf },
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::HeldRoute { leaf }),
+        ] {
+            assert_eq!(
+                palw_fraud_filer_d2_route_v1(true, step, None, Some(&unanswered), none),
+                PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(kw))
+            );
+        }
+        // D2, a witness held for ANOTHER leaf is not this leaf's.
+        assert_eq!(
+            palw_fraud_filer_d2_route_v1(true, terminal_demand.clone(), Some(leaf + 1), Some(&unanswered), none),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(kw))
+        );
+        // D2, the chain answered it: await, then learn once read.
+        let mut answered = unanswered.clone();
+        answered.answered.push(kw.unit());
+        assert_eq!(
+            palw_fraud_filer_d2_route_v1(true, terminal_demand.clone(), None, Some(&answered), none),
+            PalwFraudFilerStepV1::AwaitAnswer(kw)
+        );
+        assert_eq!(
+            palw_fraud_filer_d2_route_v1(true, terminal_demand.clone(), None, Some(&answered), |u| *u == kw.unit()),
+            PalwFraudFilerStepV1::Learn(kw)
+        );
+        // D2, the leaf's witness held: the (claim-part) terminal.
+        assert_eq!(
+            palw_fraud_filer_d2_route_v1(true, terminal_demand, Some(leaf), Some(&answered), none),
+            PalwFraudFilerStepV1::LegacyTerminal { leaf }
+        );
+        // Other steps pass through on a D2 claim.
+        for step in [
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(PalwLegacyProbeV1::Binding { row: 0, tile: 0 })),
+            PalwFraudFilerStepV1::PastStepTree,
+        ] {
+            assert_eq!(palw_fraud_filer_d2_route_v1(true, step.clone(), None, Some(&unanswered), none), step);
+        }
     }
 }

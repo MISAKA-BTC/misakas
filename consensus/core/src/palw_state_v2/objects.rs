@@ -693,6 +693,16 @@ fn apply_object_inner(
         PalwConsensusObjectV2::TirDesignatedEventV1 { event } => {
             apply_tir_designated_event_v1(builder, event)?;
         }
+        // R-D2-READY (tag 230, ADR-0188 B): the acceptance gate routes it by `palw_court_model_scope_v1`, so below that fence it never
+        // reaches this fold (A-2). Past it the fold admits against the ADOPTED draw cap, which is unadopted (`None`): a refusal, never a
+        // default. The persistent registry write (`palw_d2_readiness_root_fold_v1`) waits on that cap and on the C1 supply (ADR-0200).
+        PalwConsensusObjectV2::SeatReadinessRootV1 { root, .. } => {
+            crate::palw_court_model_scope_routes_v1::readiness_root::palw_d2_readiness_root_admit_v1(
+                root,
+                crate::palw_court_model_scope_routes_v1::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1,
+            )
+            .map_err(PalwStateV2Error::ReadinessRootRefused)?;
+        }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
                 return Err(PalwStateV2Error::ShardCourtDormant);
