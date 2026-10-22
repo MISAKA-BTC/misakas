@@ -121,9 +121,24 @@ impl PalwPanelService {
         bond_key: PalwBondKeyV2,
     ) -> Vec<GdnFilerEntryV1> {
         let targets = session.clone().spawn_blocking(move |c| c.palw_disputable_claims_v2(vec![bond_key])).await;
+        let targets: Vec<_> = targets.into_iter().filter(|d| !skip(&d.claim_id)).collect();
+        self.gdn_filer_entries_from_v1(session, targets, materials, network_domain, bond_key)
+    }
+
+    /// The material half of [`Self::gdn_filer_entries_v1`] over targets the caller already discovered (the step filer discovers
+    /// every claim inside tag 243's window, not only `ReceiptLicensed` ones — lane gdn-filer round 2). No await: nothing borrowed
+    /// by the caller is held across a suspension point.
+    pub(super) fn gdn_filer_entries_from_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        targets: Vec<kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2>,
+        materials: &HashMap<Hash64, Vec<Vec<u8>>>,
+        network_domain: Hash64,
+        bond_key: PalwBondKeyV2,
+    ) -> Vec<GdnFilerEntryV1> {
         let mut entries = Vec::new();
         for d in targets {
-            if d.executor_bond == bond_key || skip(&d.claim_id) {
+            if d.executor_bond == bond_key {
                 continue;
             }
             let Some(pooled) = materials.get(&d.claim_id) else { continue };

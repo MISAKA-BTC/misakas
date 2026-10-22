@@ -50,3 +50,27 @@ No new fence. Reuses `palw_memory_routing_court_v2` (owns tag 243; checked befor
 4. Discovery uses `palw_disputable_claims_v2` (ReceiptLicensed only); a case already Filed keeps being tracked past Final via the dispute view, but a claim first seen after Final is not probed.
 5. The `ladder` passed to the local verdict is `material.max_leaves`, while the fold uses `class_step_ladder_v1` — equal for registered classes in the fixtures; unverified for held-ladder classes.
 6. `an_honest_producer_is_probed_to_the_end_and_never_accused` assumes the inventory root equals the class `artifact_root` in the dev world.
+
+## Round 2 (2026-10-22) — written, not compiled, not run
+
+| Fix | Where |
+|---|---|
+| 1. Ladder = the fold's source. New `ConsensusApi::palw_gdn_court_limits_v2(class_id)` returns exactly what `objects.rs` (`GdnStepAccusedV2`) uses: `state.class_step_ladder_v1(class_id, palw_court_step_ladder_at(daa, court))` and `court.max_close_bytes()` (the `memory_routing_court` extras in `palw_accept.rs`); `None` below `palw_memory_routing_court_v2`. The tick overrides the material's `max_leaves` with it (openings cut at the fold's ladder) and passes it as `limits` to `palw_gdn_step_probe_case_v1` / `palw_gdn_step_object_v1`, which now run the fold's order: `validate_shape(ladder)` → verdict at `ladder` → sign → size. | `consensus/core/src/api/mod.rs`, `consensus/src/consensus/mod.rs`, `processor/palw.rs` `palw_gdn_court_limits_v2_impl`; `kaspad/src/palw_gdn_step_filer.rs` |
+| 2. Discovery = every claim inside tag 243's window. `palw_gdn_step_candidate_v1` mirrors the fold: non-terminal (incl. `DefaultDisputed`), or `Final` with own live reservation, or `Final` whose post-Final stage is open (`palw_final_public_dispute_open_v1`: unmatured vesting / FP liability horizon) and still reservable by `me` (public-filer fence, never reserved, ≤ hard deadline); not the executor; below `palw_offence_attribution` not under any court session. Paged by `(accepted_daa, claim_id)` cursor, `PALW_GDN_STEP_DISCOVER_PER_TICK_V1 = 16` a tick (`PalwGdnStepBookV1::discover_after`, `advance_discovery`). The window fn gained `final_row_open`: a Final claim first seen after Final → reserve (tag 154) then file. | `consensus/core/src/palw_legacy_public_filer_fold_v1.rs` (`PalwGdnStepCandidateV1`, `palw_gdn_step_candidate_v1`, `palw_gdn_step_candidates_v1`, re-exported from `palw_state_v2`); API `palw_gdn_step_candidates_v1` / `palw_gdn_step_candidate_v1`; `gdn_filer_tick.rs` split into `gdn_filer_entries_v1` (held filer, unchanged behaviour) + sync `gdn_filer_entries_from_v1` |
+| 3. Borrow friction removed: no closure over `book` across an await (skip set → `book.is_known` after the await); filing loop copies `(object, leaf, sent)` out of the case, decides with no borrow held, then re-looks-up to write `sent` back or `settle`. | `kaspad/src/palw_panel/gdn_step_filer_tick.rs` |
+| 4. Size bound: `palw_gdn_step_fits_close_v1(accusation, max_close_bytes)` — the fold's own `encoded_bytes()` on the SIGNED object vs `max_close_bytes` (fold refuses `>`). Over → `PalwGdnStepOversizeV1::TooLarge{bytes, ceiling, openings}`, case settled "not fileable", nothing submitted. **There is no chunked tag-243 path**; tag 244 (`palw_memory_routing_fold_v2.rs:67`) has the same ceiling and covers only forged checkpoints. | `kaspad/src/palw_gdn_step_filer.rs` |
+
+### Tests added / changed (crate `kaspad`, `cargo test -p kaspad --lib palw_gdn_step_filer`)
+- new `the_probe_judges_at_the_folds_class_ladder_not_the_materials_max_leaves` (dev world, ladder = smallest served leaf ≠ `max_leaves`: every leaf refused at the fold's ladder, nothing signed/filed)
+- new `an_accusation_over_the_close_ceiling_is_never_submitted` (pure size check: fits at exactly `bytes`, `TooLarge` at `bytes-1`)
+- extended `the_window_files_inside_reserves_near_the_reward_and_refuses_after_it` (Final + open post-Final stage → reserve; past hard deadline / reserved before / no fence → closed)
+- extended `the_book_opens_once_settles_for_good_and_is_bounded` (discovery cursor)
+- `an_honest_producer_is_probed_to_the_end_and_never_accused` now passes `limits`
+- Re-run `gdn_filer_tick` / `palw_gdn_held_filer` tests (entry discovery split).
+
+### Open after round 2
+1. Still not compiled. `PalwGdnStepCandidateV1` / discovery has no consensus-core unit test (needs a populated `PalwChainStateV2`; central E2E should cover a Final-first-seen claim).
+2. Limits are read at the tip's virtual DAA; the fold uses the accepting block's DAA. Differs only across the `palw_court_ladder` / memory-routing fence boundary (one block) — a refused object there is retried by the resend path only if it was accepted; acceptable node policy.
+3. Oversize: the real fix is to carry only the inventory openings the refutation reads (not implemented; the held filer has the same issue). Until then an over-ceiling mismatch is logged and settled, not filed.
+4. Discovery scan is O(claims) per tick (sort of keys) even though it returns ≤16 candidates; fine at testnet scale, measure on 8k.
+5. Fences unchanged: `palw_memory_routing_court_v2` (+ parent `palw_shard_court`), `palw_legacy_public_filer_v1` for reservations; `--palw-gdn-step-filer`.

@@ -3702,6 +3702,30 @@ impl ConsensusApi for Consensus {
         kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_target_v1(self.palw_state_v2_tip()?.as_ref(), &claim)
     }
 
+    fn palw_gdn_step_candidates_v1(
+        &self,
+        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        limit: usize,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwGdnStepCandidateV1> {
+        self.virtual_processor.palw_gdn_step_candidates_v1_impl(me, after, limit)
+    }
+
+    fn palw_gdn_step_candidate_v1(
+        &self,
+        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwGdnStepCandidateV1> {
+        self.virtual_processor.palw_gdn_step_candidate_v1_impl(me, claim)
+    }
+
+    fn palw_gdn_court_limits_v2(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2> {
+        self.virtual_processor.palw_gdn_court_limits_v2_impl(class_id)
+    }
+
     fn palw_legacy_disputes_v1(
         &self,
         reserver: Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

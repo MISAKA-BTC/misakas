@@ -1158,3 +1158,113 @@ impl PalwChainStateV2 {
         })
     }
 }
+
+// ---- G14 ③ (lane gdn-filer round 2): the GDN step filer's discovery -----------------------------------------------------------
+
+/// **A claim the GDN step filer (tag 243) may still accuse**, with the window facts its admission reads. Node-side discovery only:
+/// nothing here is folded, rooted or carried.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGdnStepCandidateV1 {
+    pub claim: crate::palw_producer_v2::PalwDisputableClaimV2,
+    /// `(accepted_daa, claim_id)`: the discovery cursor's key.
+    pub accepted_daa: u64,
+    pub phase: PalwClaimPhaseV2,
+    /// The claim's public post-Final stage is open (`palw_final_public_dispute_open_v1`: unmatured vesting, or FP liability past the
+    /// public-filer fence) — a `Final` claim a reservation may still hold, so tag 243 can still land behind one.
+    pub final_row_open: bool,
+    /// `me` holds a live dispute reservation on the claim (`legacy_dispute_reservation_v1`).
+    pub own_reservation_live: bool,
+}
+
+/// **Is `claim_id` inside tag 243's accusation window for `me` at `now_daa`?** The fold's own admission (`objects.rs`,
+/// `GdnStepAccusedV2`): a non-terminal claim, or a `Final` one the accuser's live reservation holds — read one step ahead: a `Final`
+/// claim whose post-Final stage is still open and that `me` may still reserve (past the public-filer fence, never reserved before,
+/// inside the hard deadline) is in the window too, because the filer reserves first (tag 154) and then files. Also mirrors the fold's
+/// two claim-side refusals that do not depend on the evidence: the executor is never `me`, and below `palw_offence_attribution` a
+/// claim already under a court session is refused.
+pub fn palw_gdn_step_candidate_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    me: &PalwBondKeyV2,
+    claim_id: &Hash64,
+    now_daa: u64,
+    offence_attribution_active: bool,
+) -> Option<PalwGdnStepCandidateV1> {
+    let claim = state.claims.get(claim_id)?;
+    if claim.bond == *me {
+        return None;
+    }
+    let own_reservation_live = state.legacy_dispute_reservation_v1(claim_id, me).is_some();
+    let final_row_open = palw_final_public_dispute_open_v1(state, params, claim_id, claim, now_daa);
+    let in_window = match &claim.phase {
+        PalwClaimPhaseV2::Voided { .. } => false,
+        PalwClaimPhaseV2::Final { .. } => {
+            own_reservation_live
+                || (final_row_open
+                    && params.legacy_public_filer_active_at(now_daa)
+                    && !state.legacy_disputes.get(claim_id).is_some_and(|record| record.knows(me))
+                    && now_daa <= palw_dispute_hard_deadline_v1(claim, palw_da_disclose_window_daa_v1(params)))
+        }
+        _ => true,
+    };
+    if !in_window {
+        return None;
+    }
+    if !offence_attribution_active && state.court_sessions_iter().any(|(_, s)| s.claim == *claim_id) {
+        return None;
+    }
+    let artifact_root = state.class(&claim.class_id).map(|c| c.artifact_root)?;
+    Some(PalwGdnStepCandidateV1 {
+        claim: crate::palw_producer_v2::PalwDisputableClaimV2 {
+            accepted_block: claim.accepted_block,
+            claim_id: *claim_id,
+            class_id: claim.class_id,
+            artifact_root,
+            executor_bond: claim.bond,
+            trace_root: claim.trace_root,
+            execution_root: claim.execution_root,
+            // Only a `ReceiptLicensed` claim has a licence DAA; every other phase carries 0 (the step filer never reads it).
+            licensed_daa: match claim.phase {
+                PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => licensed_daa,
+                _ => 0,
+            },
+            free_prompt: matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }),
+        },
+        accepted_daa: claim.accepted_daa,
+        phase: claim.phase.clone(),
+        final_row_open,
+        own_reservation_live,
+    })
+}
+
+/// **The next page of [`palw_gdn_step_candidate_v1`]**: claims in `(accepted_daa, claim_id)` order strictly after `after`, at most
+/// `limit`. The caller keeps the cursor (the last key it saw) and starts over (`None`) when a page comes back short — so a claim
+/// first seen after `Final` (or past any phase) is still reached, and one tick never reads more than `limit` candidates. The scan
+/// itself walks the claim table once (no allocation beyond the matching keys).
+pub fn palw_gdn_step_candidates_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    me: &PalwBondKeyV2,
+    now_daa: u64,
+    offence_attribution_active: bool,
+    after: Option<(u64, Hash64)>,
+    limit: usize,
+) -> Vec<PalwGdnStepCandidateV1> {
+    let mut keys: Vec<(u64, Hash64)> = state
+        .claims
+        .iter()
+        .filter(|(claim_id, claim)| after.is_none_or(|cursor| (claim.accepted_daa, **claim_id) > cursor))
+        .map(|(claim_id, claim)| (claim.accepted_daa, *claim_id))
+        .collect();
+    keys.sort_unstable();
+    let mut out = Vec::new();
+    for (_, claim_id) in keys {
+        if out.len() >= limit {
+            break;
+        }
+        if let Some(candidate) = palw_gdn_step_candidate_v1(state, params, me, &claim_id, now_daa, offence_attribution_active) {
+            out.push(candidate);
+        }
+    }
+    out
+}

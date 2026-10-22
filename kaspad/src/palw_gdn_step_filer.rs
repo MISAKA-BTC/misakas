@@ -33,8 +33,8 @@
 //! from public material and reads every filing's fate back from the chain.
 use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
 use kaspa_consensus_core::palw_gdn_court_v2::{
-    PALW_GDN_COURT_MLDSA87_CONTEXT_V2, PALW_GDN_COURT_VERSION_V2, PalwGdnCourtAccusationV2, palw_gdn_court_session_id_v2,
-    palw_gdn_court_verdict_v2,
+    PALW_GDN_COURT_MLDSA87_CONTEXT_V2, PALW_GDN_COURT_VERSION_V2, PalwGdnCourtAccusationV2, PalwGdnCourtLimitsV2,
+    palw_gdn_court_session_id_v2, palw_gdn_court_verdict_v2,
 };
 use kaspa_consensus_core::palw_shard_court_v1::{PalwOneMoveClaimV2, PalwShardCourtVerdictV1};
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwClaimPhaseV2, PalwConsensusObjectV2, PalwVoidReasonV2};
@@ -48,6 +48,8 @@ use std::collections::BTreeMap;
 pub const PALW_GDN_STEP_PROBES_PER_TICK_V1: usize = 2;
 /// Claims probed per tick.
 pub const PALW_GDN_STEP_CLAIMS_PER_TICK_V1: usize = 1;
+/// Window candidates read per tick (one page of `palw_gdn_step_candidates_v1`; the cursor walks the rest on later ticks).
+pub const PALW_GDN_STEP_DISCOVER_PER_TICK_V1: usize = 16;
 /// The most cases held at once (oldest dropped first).
 pub const PALW_GDN_STEP_MAX_CASES_V1: usize = 64;
 /// DAA after a carrier was handed before its absence from the selected chain reads as lost (a reorg or a dropped carrier) — the
@@ -156,7 +158,7 @@ pub fn palw_gdn_step_object_v1(
     leaf: u64,
     refutation: PalwGdnStepRefutationV2,
     openings: &[PalwArtifactOpeningV1],
-    ladder: u64,
+    limits: PalwGdnCourtLimitsV2,
     sign: &dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>>,
 ) -> Result<PalwConsensusObjectV2, String> {
     if accuser == claim.executor {
@@ -164,14 +166,54 @@ pub fn palw_gdn_step_object_v1(
     }
     let mut accusation = palw_gdn_step_accusation_v1(claim, accuser, leaf, refutation, openings);
     let actual = PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: claim.class_id, artifact_root: claim.artifact_root };
-    match palw_gdn_court_verdict_v2(&accusation, &actual, ladder).map_err(|e| format!("the court refuses the accusation: {e}"))? {
+    // The fold's order (`objects.rs`, `GdnStepAccusedV2`): shape at the claim's ladder, then the close ceiling, then the verdict.
+    accusation.validate_shape(limits.ladder).map_err(|e| format!("the fold refuses the accusation's shape: {e}"))?;
+    match palw_gdn_court_verdict_v2(&accusation, &actual, limits.ladder)
+        .map_err(|e| format!("the court refuses the accusation: {e}"))?
+    {
         PalwShardCourtVerdictV1::ExecutorGuilty => {}
         other => return Err(format!("the court's own verdict on this accusation is {other:?}: nothing is filed")),
     }
     let session = palw_gdn_court_session_id_v2(network_domain, &accusation);
     accusation.signature =
         sign(session.as_byte_slice(), PALW_GDN_COURT_MLDSA87_CONTEXT_V2).ok_or("no signing key for a GDN step accusation")?;
+    // Measured on the SIGNED object — exactly what the fold measures.
+    palw_gdn_step_fits_close_v1(&accusation, limits.max_close_bytes).map_err(|e| e.to_string())?;
     Ok(PalwConsensusObjectV2::GdnStepAccusedV2 { accusation: Box::new(accusation) })
+}
+
+/// Why an accusation does not fit the court's close ceiling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwGdnStepOversizeV1 {
+    /// The encoded accusation (identity, refutation, every class inventory opening, signature) is `bytes`, over `ceiling`.
+    TooLarge { bytes: u64, ceiling: u64, openings: usize },
+    /// The length cannot be represented.
+    Unmeasurable(&'static str),
+}
+
+impl std::fmt::Display for PalwGdnStepOversizeV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge { bytes, ceiling, openings } => write!(
+                f,
+                "the accusation is {bytes} bytes with {openings} class inventory openings, over the court's close ceiling of {ceiling} \
+                 bytes: the fold would refuse it (\"GDN accusation exceeds the current court close ceiling\"), so it is not submitted. \
+                 There is no chunked tag-243 path; tag 244 (the held filer) is bounded by the same ceiling and pursues only a forged \
+                 checkpoint"
+            ),
+            Self::Unmeasurable(why) => write!(f, "the accusation's length cannot be measured ({why}): not submitted"),
+        }
+    }
+}
+
+/// **Does the accusation fit the court's close ceiling?** The fold's own measure (`PalwGdnCourtAccusationV2::encoded_bytes`, the
+/// whole borsh object) against `max_close_bytes` (`objects.rs` refuses `> max_close_bytes`). Pure; `Ok(bytes)` when it fits.
+pub fn palw_gdn_step_fits_close_v1(accusation: &PalwGdnCourtAccusationV2, max_close_bytes: u64) -> Result<u64, PalwGdnStepOversizeV1> {
+    let bytes = accusation.encoded_bytes().map_err(PalwGdnStepOversizeV1::Unmeasurable)?;
+    if bytes > max_close_bytes {
+        return Err(PalwGdnStepOversizeV1::TooLarge { bytes, ceiling: max_close_bytes, openings: accusation.artifact_openings.len() });
+    }
+    Ok(bytes)
 }
 
 // ---- 2. the accusation window vs. the unpaid reward ----------------------------------------------------------------------------
@@ -190,6 +232,9 @@ pub struct PalwGdnStepWindowFactsV1 {
     pub own_reservation_closed: bool,
     /// `palw_legacy_public_filer_v1` is in force (tag 154 is admitted).
     pub reservation_fence: bool,
+    /// A `Final` claim's public post-Final stage is still open (`palw_final_public_dispute_open_v1`: unmatured vesting, or FP
+    /// liability inside its horizon): a reservation may still hold it, so tag 243 can land behind one (round 2).
+    pub final_row_open: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,9 +254,12 @@ pub fn palw_gdn_step_window_v1(f: &PalwGdnStepWindowFactsV1, now: u64, margin: u
             PalwGdnStepWindowV1::Closed(format!("the claim was voided at DAA {voided_daa} ({reason:?}): nothing left to accuse"))
         }
         PalwClaimPhaseV2::Final { .. } if f.own_reservation_live => PalwGdnStepWindowV1::Open { reserve: false },
+        // Final but its post-Final stage is open (vesting unpaid / liability inside its horizon): reserve first, then file.
+        PalwClaimPhaseV2::Final { .. } if f.final_row_open && can_reserve => PalwGdnStepWindowV1::Open { reserve: true },
         PalwClaimPhaseV2::Final { final_daa } => PalwGdnStepWindowV1::Closed(format!(
-            "the claim went Final at DAA {final_daa} (its reward is paid) and this bond holds no live reservation on it: the fold \
-             refuses GdnStepAccusedV2 past that point (now {now})"
+            "the claim went Final at DAA {final_daa} and this bond holds no live reservation on it, and none can be taken (post-Final \
+             stage open {}, fence {}, reserved before {}, hard deadline {}): the fold refuses GdnStepAccusedV2 (now {now})",
+            f.final_row_open, f.reservation_fence, f.own_reservation_closed, f.hard_deadline_daa
         )),
         _ if f.own_reservation_live => PalwGdnStepWindowV1::Open { reserve: false },
         _ => match f.final_deadline_daa {
@@ -339,6 +387,8 @@ pub struct PalwGdnStepBookV1 {
     pub cases: BTreeMap<Hash64, PalwGdnStepCaseV1>,
     /// Claims done with, and why (honest, forged-checkpoint, convicted, window closed, given up).
     pub settled: BTreeMap<Hash64, String>,
+    /// Discovery's cursor: the last `(accepted_daa, claim_id)` read; `None` starts the walk over (round 2).
+    pub discover_after: Option<(u64, Hash64)>,
 }
 
 impl PalwGdnStepBookV1 {
@@ -352,6 +402,14 @@ impl PalwGdnStepBookV1 {
         }
         self.cases.insert(claim.claim, PalwGdnStepCaseV1 { claim, stage: PalwGdnStepStageV1::Probing { cursor: 0 }, opened_daa: now });
         true
+    }
+    /// Advance discovery's cursor past a page of `(accepted_daa, claim_id)` keys: a short page (fewer than `limit`) ends the walk.
+    pub fn advance_discovery(&mut self, page: &[(u64, Hash64)], limit: usize) {
+        self.discover_after = if page.len() < limit { None } else { page.last().copied() };
+    }
+    /// Is the claim already pursued (filed) or done with? Discovery never re-probes it.
+    pub fn is_known(&self, claim: &Hash64) -> bool {
+        self.settled.contains_key(claim) || matches!(self.cases.get(claim), Some(c) if matches!(c.stage, PalwGdnStepStageV1::Filed { .. }))
     }
     pub fn settle(&mut self, claim: &Hash64, why: impl Into<String>) {
         self.cases.remove(claim);
@@ -371,6 +429,7 @@ pub fn palw_gdn_step_probe_case_v1<K: Base0FpRecomputeKernelsV1>(
     accuser: PalwBondKeyV2,
     network_domain: Hash64,
     openings: &[PalwArtifactOpeningV1],
+    limits: PalwGdnCourtLimitsV2,
     sign: &dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>>,
     budget: usize,
 ) -> Vec<String> {
@@ -399,7 +458,12 @@ pub fn palw_gdn_step_probe_case_v1<K: Base0FpRecomputeKernelsV1>(
         let built = base0_gdn_step_evidence_v2(material, coord, &mut kernels).map(PalwGdnStepBuiltV1::from);
         let probe = palw_gdn_step_classify_v1(*leaf, built, |refutation| {
             let trial = palw_gdn_step_accusation_v1(&claim, accuser, *leaf, (**refutation).clone(), openings);
-            match palw_gdn_court_verdict_v2(&trial, &actual, material.max_leaves) {
+            // The fold's ladder (`class_step_ladder_v1` over the network's court ladder), never the material's own `max_leaves`:
+            // a class whose recorded ladder differs is judged here exactly as the fold judges it.
+            if let Err(e) = trial.validate_shape(limits.ladder) {
+                return Err(format!("shape at the fold's ladder {}: {e}", limits.ladder));
+            }
+            match palw_gdn_court_verdict_v2(&trial, &actual, limits.ladder) {
                 Ok(PalwShardCourtVerdictV1::ExecutorGuilty) => Ok(true),
                 Ok(PalwShardCourtVerdictV1::FalseAccusation) => Ok(false),
                 Ok(other) => Err(format!("{other:?}")),
@@ -417,7 +481,7 @@ pub fn palw_gdn_step_probe_case_v1<K: Base0FpRecomputeKernelsV1>(
                 return notes;
             }
             PalwGdnStepProbeV1::Mismatch { leaf, refutation } => {
-                match palw_gdn_step_object_v1(&claim, accuser, network_domain, leaf, *refutation, openings, material.max_leaves, sign) {
+                match palw_gdn_step_object_v1(&claim, accuser, network_domain, leaf, *refutation, openings, limits, sign) {
                     Ok(object) => {
                         let case = book.cases.get_mut(claim_id).expect("held above");
                         case.stage =
@@ -457,6 +521,7 @@ mod tests {
             own_reservation_live: false,
             own_reservation_closed: false,
             reservation_fence: true,
+            final_row_open: false,
         }
     }
 
@@ -512,6 +577,17 @@ mod tests {
         let mut f = facts(PalwClaimPhaseV2::Final { final_daa: 1_000 });
         f.own_reservation_live = true;
         assert_eq!(palw_gdn_step_window_v1(&f, 1_100, 60), PalwGdnStepWindowV1::Open { reserve: false });
+        // Round 2: Final, first seen after Final, its post-Final stage still open (unpaid vesting / liability horizon): reserve first,
+        // then file — but never past the hard deadline, never twice, never below the reservation fence.
+        let mut f = facts(PalwClaimPhaseV2::Final { final_daa: 1_000 });
+        f.final_row_open = true;
+        assert_eq!(palw_gdn_step_window_v1(&f, 1_100, 60), PalwGdnStepWindowV1::Open { reserve: true });
+        assert!(matches!(palw_gdn_step_window_v1(&f, 5_001, 60), PalwGdnStepWindowV1::Closed(_)));
+        f.own_reservation_closed = true;
+        assert!(matches!(palw_gdn_step_window_v1(&f, 1_100, 60), PalwGdnStepWindowV1::Closed(_)));
+        f.own_reservation_closed = false;
+        f.reservation_fence = false;
+        assert!(matches!(palw_gdn_step_window_v1(&f, 1_100, 60), PalwGdnStepWindowV1::Closed(_)));
         // Voided: nothing to accuse.
         let voided = PalwClaimPhaseV2::Voided { voided_daa: 900, reason: PalwVoidReasonV2::CourtFraud };
         assert!(matches!(palw_gdn_step_window_v1(&facts(voided), 950, 60), PalwGdnStepWindowV1::Closed(_)));
@@ -579,6 +655,13 @@ mod tests {
             book.open(claim(100 + n), 100 + n);
         }
         assert_eq!(book.cases.len(), PALW_GDN_STEP_MAX_CASES_V1);
+        // Round 2: discovery's cursor walks full pages and restarts after a short one.
+        let k = |n: u64| (n, Hash64::from_u64_word(n));
+        book.advance_discovery(&[k(1), k(2)], 2);
+        assert_eq!(book.discover_after, Some(k(2)));
+        book.advance_discovery(&[k(3)], 2);
+        assert_eq!(book.discover_after, None);
+        assert!(book.is_known(&Hash64::from_u64_word(1)));
         assert!(!book.cases.contains_key(&Hash64::from_u64_word(100)), "the oldest leaves first");
     }
 
@@ -607,6 +690,7 @@ mod tests {
                 bond(2),
                 Hash64::default(),
                 &w.openings,
+                PalwGdnCourtLimitsV2 { ladder: view.max_leaves, max_close_bytes: 64 << 20 },
                 &sign,
                 PALW_GDN_STEP_PROBES_PER_TICK_V1,
             );
@@ -616,5 +700,89 @@ mod tests {
         }
         let why = book.settled.get(&claim.claim).expect("settled");
         assert!(why.starts_with("honest"), "{why}");
+    }
+
+    fn dev_claim(w: &crate::palw_gdn_held_filer::tests::World) -> PalwGdnStepClaimV1 {
+        PalwGdnStepClaimV1 {
+            claim: Hash64::from_u64_word(0xA1),
+            executor: bond(1),
+            execution_root: w.honest.binding.committed_execution_root,
+            trace_root: Hash64::from_u64_word(2),
+            class_id: w.shape_profile_id,
+            artifact_root: w.inventory_root,
+        }
+    }
+
+    /// Round 2 (1): the local verdict reads the FOLD's ladder (`class_step_ladder_v1`, handed in as `limits.ladder`), never the
+    /// material's own `max_leaves`. A class whose recorded ladder is below every served leaf: the fold refuses every accusation's
+    /// shape, so the probe records the refusal at that ladder and never builds an object.
+    #[test]
+    fn the_probe_judges_at_the_folds_class_ladder_not_the_materials_max_leaves() {
+        let w = crate::palw_gdn_held_filer::tests::world(0);
+        let view = w.honest.view();
+        let claim = dev_claim(&w);
+        let min_served = w.honest.tiles.tiles.iter().map(|(i, _)| *i).min().expect("served tiles");
+        let fold_ladder = min_served; // every served leaf is >= the class's ladder
+        assert_ne!(fold_ladder, view.max_leaves, "the fixture must exercise a ladder that differs from max_leaves");
+        let mut book = PalwGdnStepBookV1::default();
+        book.open(claim.clone(), 1);
+        let sign = |_: &[u8], _: &[u8]| -> Option<Vec<u8>> { panic!("nothing is signed at a ladder the fold refuses") };
+        let mut notes = Vec::new();
+        for _ in 0..=w.honest.tiles.tiles.len() {
+            notes.extend(palw_gdn_step_probe_case_v1(
+                &mut book,
+                &claim.claim,
+                &view,
+                || w.backend.gdn_recompute_kernels_v2().unwrap(),
+                bond(2),
+                Hash64::default(),
+                &w.openings,
+                PalwGdnCourtLimitsV2 { ladder: fold_ladder, max_close_bytes: 64 << 20 },
+                &sign,
+                PALW_GDN_STEP_PROBES_PER_TICK_V1,
+            ));
+            assert!(
+                !matches!(book.cases.get(&claim.claim).map(|c| &c.stage), Some(PalwGdnStepStageV1::Filed { .. })),
+                "nothing is filed"
+            );
+            if book.settled.contains_key(&claim.claim) {
+                break;
+            }
+        }
+        assert!(!notes.is_empty(), "every probed leaf is refused at the fold's ladder");
+        assert!(
+            notes.iter().all(|n| n.contains(&format!("fold's ladder {fold_ladder}"))),
+            "the refusal names the fold's ladder: {notes:?}"
+        );
+    }
+
+    /// Round 2 (4): the size check is the fold's own measure against `max_close_bytes` — fits at exactly the ceiling, refused one
+    /// byte below it with the precise numbers.
+    #[test]
+    fn an_accusation_over_the_close_ceiling_is_never_submitted() {
+        let w = crate::palw_gdn_held_filer::tests::world(0);
+        let view = w.honest.view();
+        let claim = dev_claim(&w);
+        let (profile, ctx) = (&view.binding.shape_profile, &view.binding.job_context);
+        let refutation = w
+            .honest
+            .tiles
+            .tiles
+            .iter()
+            .find_map(|(leaf, _)| {
+                let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, *leaf)?;
+                match base0_gdn_step_evidence_v2(&view, coord, || w.backend.gdn_recompute_kernels_v2().unwrap()).ok()? {
+                    Base0GdnEvidenceV2::Step(r) => Some((*leaf, r)),
+                    Base0GdnEvidenceV2::ForgedCheckpoint { .. } => None,
+                }
+            })
+            .expect("one step tile builds evidence");
+        let mut accusation = palw_gdn_step_accusation_v1(&claim, bond(2), refutation.0, *refutation.1, &w.openings);
+        accusation.signature = vec![0u8; 4627];
+        let bytes = accusation.encoded_bytes().expect("measurable");
+        assert_eq!(palw_gdn_step_fits_close_v1(&accusation, bytes), Ok(bytes));
+        let err = palw_gdn_step_fits_close_v1(&accusation, bytes - 1).expect_err("one byte over");
+        assert_eq!(err, PalwGdnStepOversizeV1::TooLarge { bytes, ceiling: bytes - 1, openings: w.openings.len() });
+        assert!(err.to_string().contains(&format!("{bytes} bytes")), "{err}");
     }
 }
