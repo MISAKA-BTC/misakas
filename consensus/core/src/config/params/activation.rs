@@ -13,6 +13,11 @@ impl Params {
         self.palw_public_evidence_reward_v1.is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// `palw_fp_answer_accounting_v1` is in force at `daa_score` (compute-claim audit CX-01/CX-02).
+    pub fn palw_fp_answer_accounting_v1_active_at(&self, daa_score: u64) -> bool {
+        self.palw_fp_answer_accounting_v1.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa_score))
+    }
+
     /// `palw_claim_hard_deadline_v1` is in force at `daa_score` (register X3).
     pub fn palw_claim_hard_deadline_v1_active_at(&self, daa_score: u64) -> bool {
         self.palw_claim_hard_deadline_v1.is_some_and(|f| f.activation.is_active(daa_score))

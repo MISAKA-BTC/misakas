@@ -550,6 +550,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_tir_public_conviction_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// RFC-0002 02-A: the TIR container identity's effective fence; `None` on every shipped preset.
     pub(super) palw_tir_container_identity_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// Compute-claim audit CX-01/CX-02: `palw_fp_answer_accounting_v1` (dormant; refused when armed until its carriage is built).
+    pub(super) palw_fp_answer_accounting_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The TIR frame's measured cost model (G14 audit §10); `None` on every shipped preset, so the frame route resolves no rules.
     pub(super) palw_tir_frame_cost_v1: Option<kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
     pub(super) palw_tir_bounded_door_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -601,6 +603,12 @@ pub struct VirtualStateProcessor {
     /// refusing a heavier, fully validated candidate on the PALW deep-reorg rule
     /// ([`Self::palw_partition_refusal_v1`]). Memory only; node-local; no verdict reads it.
     pub(super) palw_refusal_streak: parking_lot::Mutex<Option<kaspa_consensus_core::api::PalwPartitionRefusalV1>>,
+    /// **Liveness hotfix (L-LC-02 / L-COURT-01): the H-1 gate's guard** — verdict / refused-txid / invalid-object memories and the
+    /// rehearsal budget (`palw_h1_guard`). Memory only; node-local; no verdict of any block reads it.
+    pub(super) palw_h1_guard: parking_lot::Mutex<palw_h1_guard::PalwH1GateGuardV1>,
+    /// Every scheduled fence height (`Params::palw_fences_v1`): within one DAA of one the guard classifies no refusal as invalid at
+    /// every tip (a flag-day race).
+    pub(super) palw_h1_fence_heights_v1: Vec<u64>,
     /// Test-only: the clock the TEMPLATE BUILDER reads in place of the wall clock (milliseconds; 0 = the wall clock). On an EVM-active
     /// network the builder executes the lane against the stamp it chooses, so a harness cannot re-stamp afterwards; with this it can
     /// make the builder choose a simulated stamp, and `build == validate` holds with a simulated clock. Never set outside a test.
@@ -851,6 +859,8 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The liveness fix L-COURT-01's fence, resolved once in [`Self::palw_court_completion_attempt_at`].
+    pub(super) palw_court_completion_attempt: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit DEEP fence (B-1/C-01/B-4/court cluster), resolved once in
     /// [`Self::palw_audit_2026_09_11_deep_at`]; the fold's extras read it there. A later flag day
     /// than the shallow fence above.
@@ -1204,6 +1214,7 @@ mod dns;
 mod evm;
 mod palw;
 mod palw_accept;
+pub(crate) mod palw_h1_guard;
 mod palw_validate;
 mod template;
 
@@ -1417,6 +1428,7 @@ impl VirtualStateProcessor {
             palw_staged_tir_route_v1: params.palw_staged_tir_route_v1_fence(),
             palw_tir_public_conviction_v1: params.palw_tir_public_conviction_v1_fence(),
             palw_tir_container_identity_v1: params.palw_tir_container_identity_v1_fence(),
+            palw_fp_answer_accounting_v1: params.palw_fp_answer_accounting_v1_fence(),
             palw_tir_frame_cost_v1: params.palw_tir_frame_cost_v1,
             palw_tir_bounded_door_v1: params.palw_tir_bounded_door_v1_fence(),
             palw_staged_float_constraint_v1: params.palw_staged_float_constraint_v1_fence(),
@@ -1434,6 +1446,14 @@ impl VirtualStateProcessor {
             pruning_import_session_lock: Default::default(),
             palw_reader_snapshot: Default::default(),
             palw_refusal_streak: Default::default(),
+            palw_h1_guard: Default::default(),
+            palw_h1_fence_heights_v1: params
+                .palw_fences_v1()
+                .into_iter()
+                .filter_map(|(_, fence)| fence.filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()).map(|f| f.daa_score()))
+                // A genesis-armed fence has no other side to race across.
+                .filter(|at| *at > 0)
+                .collect(),
             #[cfg(test)]
             template_clock: Default::default(),
             #[cfg(test)]
@@ -1524,6 +1544,9 @@ impl VirtualStateProcessor {
             palw_fp_constraint_v2: params.palw_fp_constraint_v2_fence(),
             palw_fp_tokenizer_match: params.palw_fp_tokenizer_match_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
+            palw_court_completion_attempt: params
+                .palw_court_completion_attempt_v1
+                .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
@@ -5486,8 +5509,13 @@ impl VirtualStateProcessor {
         // **ADR-0152 H-1 (P2-9 review, finding 5):** an H-1 carrier the fold would refuse at the tip
         // is refused here, AFTER the UTXO context, so only a funded, signed carrier costs this node a
         // rehearsal — and the template asks again (`validate_block_template_transaction`).
-        if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(&mutable_tx.tx, virtual_daa_score) {
-            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
+        //
+        // **Liveness hotfix (L-LC-02 / L-COURT-01):** at admission the gate (`palw_mempool_h1_carrier_refusal`'s layers) runs behind the
+        // guard — a refused txid or object is not rehearsed again on the same tip, an every-tip-invalid object not again within its
+        // window, and every rehearsal the memories do not answer takes from a work budget — and a refusal that holds at every tip is
+        // `PalwH1CarrierInvalid`, which the relay flow penalises (`palw_h1_guard`).
+        if let Some(refusal) = self.palw_mempool_h1_admission_refusal_v1(&mutable_tx.tx, virtual_daa_score) {
+            return Err(refusal);
         }
         // **G14 GAP 10:** a kernel route carrier the acceptance gate refuses is refused here too (and at the template).
         if let Some(refusal) = self.palw_mempool_kernel_route_refusal(&mutable_tx.tx, virtual_daa_score) {

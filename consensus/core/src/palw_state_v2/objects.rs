@@ -3688,7 +3688,25 @@ fn apply_object_inner(
             // state, which a node also answers a gateway with (`palw_fp_commitment_price_v1`), so the
             // exposure a gateway checks before an inference and the reservation written here are
             // the same number by construction rather than by two readings agreeing.
-            let price = palw_fp_commitment_price_from_state_v1(
+            // **Compute-claim audit CX-01/CX-02 (`palw_fp_answer_accounting_v1`)**: past the fence the commitment's decoded answer
+            // rides beside it (`FPA1`, native ingress), one id per executed decode token, or the commitment is not taken — the price
+            // below credits only positions no paid claim of the class computed with the same tokens, and that needs the tokens.
+            // `None` below the fence: the price is the function it was, byte for byte.
+            let answer = if builder.extras.fp_answer_accounting_active {
+                match builder.extras.fp_claim_answers.get(claim_id) {
+                    Some(answer) if answer.len() == *decode_tokens_executed as usize => Some(answer.clone()),
+                    carried => {
+                        return Err(PalwStateV2Error::FreePromptAnswerNotAccountable {
+                            claim: *claim_id,
+                            carried: carried.map(Vec::len),
+                            decoded: *decode_tokens_executed,
+                        });
+                    }
+                }
+            } else {
+                None
+            };
+            let price = crate::palw_state_v2::palw_fp_commitment_price_answered_v1(
                 &builder.state,
                 builder.params,
                 PalwFpPriceInputsV1 {
@@ -3706,6 +3724,7 @@ fn apply_object_inner(
                 *decode_tokens_executed,
                 *work_leaves,
                 *consumed_prefix_state,
+                answer.as_deref(),
             )?;
             let (quanta, pwu, reserved, in_compute) = (price.quanta, price.pwu, price.reserved, price.priced_in_compute);
             // **2026-09-24 DoS audit review of #11: the gate holds the jobs this claim will count as.**
@@ -3944,6 +3963,20 @@ fn apply_object_inner(
                     builder.seed_fp_pooled_receipt_target()?;
                 }
                 builder.write_fp_claim_prompt((*class_id, *bond, *claim_id), Some(prompt_row.clone()))?;
+                // CX-01/CX-02: and what it DECODED, so neither a continuation of this answer nor a copy of this run under another
+                // bond is sold it again. A second row under its own key, beside the prompt row; swept with it at the same expiry.
+                if let Some(answer) = &answer {
+                    let sequence: Vec<u32> = prompt_token_ids.iter().chain(answer.iter()).copied().collect();
+                    let answer_row = PalwFpClaimPromptV1 {
+                        prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(&sequence),
+                        prompt_token_ids: sequence,
+                        ..prompt_row.clone()
+                    };
+                    builder.write_fp_claim_prompt(
+                        (*class_id, *bond, crate::palw_fp_answer_accounting_v1::palw_fp_answer_row_key_v1(claim_id)),
+                        Some(answer_row),
+                    )?;
+                }
             }
             // ADR-0088 Decision 3's recorded gap: a free-prompt claim names no root, so it is
             // attributed to the class's founding line's current root until the job's v6.

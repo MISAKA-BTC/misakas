@@ -647,6 +647,10 @@ impl Params {
         if self.palw_public_evidence_reward_v1 == Some(ForkActivation::never()) {
             self.palw_public_evidence_reward_v1 = None;
         }
+        // Compute-claim audit CX-01/CX-02's answer accounting, likewise.
+        if self.palw_fp_answer_accounting_v1 == Some(ForkActivation::never()) {
+            self.palw_fp_answer_accounting_v1 = None;
+        }
         if self.palw_claim_hard_deadline_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_claim_hard_deadline_v1 = None;
         }
@@ -709,6 +713,10 @@ impl Params {
         }
         if self.palw_panel_anchor_permissionless_v1 == Some(ForkActivation::never()) {
             self.palw_panel_anchor_permissionless_v1 = None;
+        }
+        // The liveness fix L-COURT-01's fence, likewise.
+        if self.palw_court_completion_attempt_v1 == Some(ForkActivation::never()) {
+            self.palw_court_completion_attempt_v1 = None;
         }
         if self.palw_rule_e_participation_v2 == Some(ForkActivation::never()) {
             self.palw_rule_e_participation_v2 = None;
@@ -1198,6 +1206,7 @@ impl Params {
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
+            palw_fp_answer_accounting_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1,
@@ -1213,6 +1222,7 @@ impl Params {
             palw_detection_policy_v1,
             palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1,
+            palw_court_completion_attempt_v1,
             palw_rule_e_participation_v2,
             palw_independently_work_certified_v1,
             palw_dag_width_schedule_v1,
@@ -1539,6 +1549,7 @@ impl Params {
             ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
             ("palw_court_model_scope_v1", *palw_court_model_scope_v1),
             ("palw_public_evidence_reward_v1", *palw_public_evidence_reward_v1),
+            ("palw_fp_answer_accounting_v1", *palw_fp_answer_accounting_v1),
             ("palw_claim_hard_deadline_v1", palw_claim_hard_deadline_v1.as_ref().map(|f| f.activation)),
             ("palw_cell_coverage_closure_v1", *palw_cell_coverage_closure_v1),
             ("palw_g14_route_required_v1", *palw_g14_route_required_v1),
@@ -1554,6 +1565,7 @@ impl Params {
             ("palw_detection_policy_v1", palw_detection_policy_v1.as_ref().map(|fence| fence.activation)),
             ("palw_dag_sibling_attribution_v1", *palw_dag_sibling_attribution_v1),
             ("palw_panel_anchor_permissionless_v1", *palw_panel_anchor_permissionless_v1),
+            ("palw_court_completion_attempt_v1", *palw_court_completion_attempt_v1),
             ("palw_rule_e_participation_v2", *palw_rule_e_participation_v2),
             ("palw_independently_work_certified_v1", *palw_independently_work_certified_v1),
             ("palw_dag_width_schedule_v1", palw_dag_width_schedule_v1.as_ref().map(|f| f.activation)),
@@ -2078,6 +2090,11 @@ impl Params {
             h.write(b"palw_public_evidence_reward_v1");
             h.write(at.daa_score().to_le_bytes());
         }
+        // Compute-claim audit CX-01/CX-02's answer accounting, NAMED likewise. Some-only.
+        if let Some(at) = self.palw_fp_answer_accounting_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_fp_answer_accounting_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
         if let Some(f) = self.palw_claim_hard_deadline_v1.filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_claim_hard_deadline_v1");
             h.write(f.activation.daa_score().to_le_bytes());
@@ -2152,6 +2169,11 @@ impl Params {
         }
         if let Some(at) = self.palw_panel_anchor_permissionless_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_panel_anchor_permissionless_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The liveness fix L-COURT-01's fence: Some-only, named.
+        if let Some(at) = self.palw_court_completion_attempt_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_court_completion_attempt_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(at) = self.palw_rule_e_participation_v2.filter(|f| *f != ForkActivation::never()) {
@@ -2914,6 +2936,7 @@ impl Params {
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
+            palw_fp_answer_accounting_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1,
@@ -2929,6 +2952,7 @@ impl Params {
             palw_detection_policy_v1,
             palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1,
+            palw_court_completion_attempt_v1,
             palw_rule_e_participation_v2,
             palw_independently_work_certified_v1,
             palw_dag_width_schedule_v1,
@@ -3846,6 +3870,9 @@ impl Params {
         if let Some(activation) = palw_public_evidence_reward_v1.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_fp_answer_accounting_v1.as_mut() {
+            fork(activation, visit);
+        }
         if let Some(f) = palw_claim_hard_deadline_v1.as_mut() {
             fork(&mut f.activation, visit);
         }
@@ -3902,6 +3929,10 @@ impl Params {
             fork(activation, visit);
         }
         if let Some(activation) = palw_panel_anchor_permissionless_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // The liveness fix L-COURT-01's fence. Some-only.
+        if let Some(activation) = palw_court_completion_attempt_v1.as_mut() {
             fork(activation, visit);
         }
         if let Some(activation) = palw_rule_e_participation_v2.as_mut() {
@@ -4461,6 +4492,7 @@ impl Params {
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
+            palw_fp_answer_accounting_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1,
@@ -4476,6 +4508,7 @@ impl Params {
             palw_detection_policy_v1,
             palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1,
+            palw_court_completion_attempt_v1,
             palw_rule_e_participation_v2,
             palw_independently_work_certified_v1,
             palw_dag_width_schedule_v1,
@@ -5538,6 +5571,10 @@ impl Params {
             h.write(b"palw_public_evidence_reward_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = palw_fp_answer_accounting_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_fp_answer_accounting_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         if let Some(f) = palw_claim_hard_deadline_v1.filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_claim_hard_deadline_v1");
             h.write(f.activation.daa_score().to_le_bytes());
@@ -5610,6 +5647,11 @@ impl Params {
         }
         if let Some(activation) = palw_panel_anchor_permissionless_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_panel_anchor_permissionless_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // The liveness fix L-COURT-01's fence, Some-only for the same reason.
+        if let Some(activation) = palw_court_completion_attempt_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_court_completion_attempt_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_rule_e_participation_v2.filter(|f| *f != ForkActivation::never()) {

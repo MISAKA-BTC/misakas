@@ -3211,6 +3211,13 @@ pub struct Params {
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
     /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/integration/mainnet-spec-register-2026-10-12.md).
     pub palw_public_evidence_reward_v1: Option<ForkActivation>,
+    /// **palw_fp_answer_accounting_v1** — compute-claim audit CX-01/CX-02 (lane compute-exec, 2026-10-22; ADR-0205 draft): past it a
+    /// compute-priced free-prompt commitment carries its decoded answer ids, the chain records `prompt ‖ answer` as what the class was
+    /// paid to compute, and a claim is credited only for positions no paid claim of the class computed with the same tokens.
+    /// **Dormant**: `None` on every preset; an entry of the testnet-12 full-activation list (height `None`); hashed Some-only in both
+    /// fingerprints and the fork id, collapsed from `Some(never())`; refused when armed without `palw_fp_derived_work` and
+    /// `palw_canonical_work` at or below it ([`crate::palw_fp_answer_accounting_v1`]).
+    pub palw_fp_answer_accounting_v1: Option<ForkActivation>,
     /// **palw_claim_hard_deadline_v1** — register X3: past it a claim's dispute hard deadline is fixed at acceptance and never extended. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
     /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/integration/mainnet-spec-register-2026-10-12.md).
@@ -3302,6 +3309,14 @@ pub struct Params {
     /// per bond, the producer's own excluded, and the seed is their aggregate. Replaces lane A's privilege; claims anchored below
     /// keep lane A. **Dormant** exactly like [`Self::palw_dag_sibling_attribution_v1`].
     pub palw_panel_anchor_permissionless_v1: Option<ForkActivation>,
+    /// **palw_court_completion_attempt_v1** — liveness fix L-COURT-01 (the acceptance walk, `palw_v2_accepted_objects_and_refunds_inner`): past it (the
+    /// ACCEPTING block's DAA) a split-close (or owned-terminal) completion the acceptance walk ATTEMPTS — assembled, decoded and
+    /// adjudicated — spends the block's court slot (or its court cost) whether it applies or is refused, so one block cannot ask every
+    /// validator for an unbounded number of refused 2.7 MB adjudications. Below it the 2026-09-11 audit's AC-SLOT rule (charged only on
+    /// apply) is unchanged; other slot-spending moves keep AC-SLOT on both sides. **Dormant**: `None` on every preset, on the
+    /// full-activation list (after the court capacity entry), Some-only in both fingerprints, collapsed from `Some(never())`; needs
+    /// `palw_audit_2026_09_11` at or below it ([`Self::validate_palw_court_completion_attempt_v1`]).
+    pub palw_court_completion_attempt_v1: Option<ForkActivation>,
     /// **palw_rule_e_participation_v2** — RFC-0018 §6: past it (the INCUMBENT's DAA, as rule E) rule E's participation is the
     /// capital, in the common past, of the distinct bonds with a non-voided, Gate-C-certified attempt in a side's exclusive past
     /// (split-neutral, bounded by the bond's collateral), and the even split is a third of the common capital. Needs
@@ -6264,6 +6279,7 @@ impl Params {
             palw_legacy_public_filer_v1: self.palw_legacy_public_filer_v1,
             palw_court_model_scope_v1: self.palw_court_model_scope_v1,
             palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
+            palw_fp_answer_accounting_v1: self.palw_fp_answer_accounting_v1,
             palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1: self.palw_g14_route_required_v1,
@@ -6279,6 +6295,7 @@ impl Params {
             palw_detection_policy_v1: self.palw_detection_policy_v1.clone(),
             palw_dag_sibling_attribution_v1: self.palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1: self.palw_panel_anchor_permissionless_v1,
+            palw_court_completion_attempt_v1: self.palw_court_completion_attempt_v1,
             palw_rule_e_participation_v2: self.palw_rule_e_participation_v2,
             palw_independently_work_certified_v1: self.palw_independently_work_certified_v1,
             palw_dag_width_schedule_v1: self.palw_dag_width_schedule_v1,
@@ -7436,6 +7453,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_legacy_public_filer_v1: None,
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
+    palw_fp_answer_accounting_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -7451,6 +7469,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
+    palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
     palw_dag_width_schedule_v1: None,
@@ -7804,6 +7823,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_legacy_public_filer_v1: None,
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
+    palw_fp_answer_accounting_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -7819,6 +7839,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
+    palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
     palw_dag_width_schedule_v1: None,
@@ -8154,6 +8175,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_legacy_public_filer_v1: None,
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
+    palw_fp_answer_accounting_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -8169,6 +8191,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
+    palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
     palw_dag_width_schedule_v1: None,
@@ -13707,6 +13730,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_legacy_public_filer_v1: None,
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
+    palw_fp_answer_accounting_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -13722,6 +13746,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_detection_policy_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
+    palw_court_completion_attempt_v1: None,
     palw_rule_e_participation_v2: None,
     palw_independently_work_certified_v1: None,
     palw_dag_width_schedule_v1: None,

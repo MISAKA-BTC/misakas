@@ -62,6 +62,8 @@ palw_full_activation_bare_entry_v1!(PALW_T12_FULL_COURT_OUTSIDER_LANE_ENTRY, pal
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_COURT_CLOCK_V2_ENTRY, palw_court_clock_v2);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_COURT_MODEL_SCOPE_ENTRY, palw_court_model_scope_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_PUBLIC_EVIDENCE_REWARD_ENTRY, palw_public_evidence_reward_v1);
+// Compute-claim audit CX-01/CX-02 (lane compute-exec, 2026-10-22): a decoded answer is not paid twice.
+palw_full_activation_bare_entry_v1!(PALW_T12_FULL_FP_ANSWER_ACCOUNTING_ENTRY, palw_fp_answer_accounting_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY, palw_settlement_once_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY, palw_native_liability_horizon_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY, palw_reward_liability_horizon_v1);
@@ -72,6 +74,7 @@ palw_full_activation_bare_entry_v1!(PALW_T12_FULL_PANEL_ANCHOR_PERMISSIONLESS_EN
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_MEMORY_ROUTING_COURT_V2_ENTRY, palw_memory_routing_court_v2);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_ELASTIC_FINAL_CAPACITY_ENTRY, palw_elastic_final_capacity_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY, palw_g14_route_required_v1);
+palw_full_activation_bare_entry_v1!(PALW_T12_FULL_COURT_COMPLETION_ATTEMPT_ENTRY, palw_court_completion_attempt_v1);
 
 /// `palw_court_capacity_v1` (audit G-07): a value-carrying fence. `Some(at)` RE-TIMES a policy a reviewed change already installed; with
 /// none installed it installs the codebase's placeholder (`PalwCourtCapacityFenceV1::placeholder_at`), which validation refuses on every
@@ -171,7 +174,9 @@ pub const PALW_T12_FULL_MONETARY_MATERIAL_ENTRY: PalwPostLaunchFenceV1 = PalwPos
 /// 9–10. LG14-A `palw_legacy_public_filer_v1`, LG14-B `palw_legacy_held_da_v2`;
 /// 11–13. the staged court (needs 9, G-18), the staged TIR route and the staged float constraint (need 11);
 /// 14–17. TIR container identity, public conviction (needs 12, 11), designated answers and the bounded door (need 15);
-/// 18–19. outsider lane and court clock v2 (need 9); 20. court capacity (needs 9); 21. D2 court model scope (needs 10);
+/// 18–19. outsider lane and court clock v2 (need 9); 20. court capacity (needs 9); 20a. the liveness fix L-COURT-01's
+///      `palw_court_completion_attempt_v1` (needs the genesis 2026-09-11 audit; after 20, whose cost path it charges too);
+///      21. D2 court model scope (needs 10);
 /// 22. N4 public evidence reward; 23. X3 hard deadline; 24. settlement once (needs 23, 5 — and the ADR-0176 bond budget, NOT on this
 ///     list: see the notes); 25. native liability horizon (needs 24); 26. the reward liability horizon; 27. RFC-0023 unresolved bound
 ///     (RFC-0023 stage 2's claim-local settlement is NOT on this list: its arming needs measurements, audit fix-cd);
@@ -202,8 +207,12 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_COURT_OUTSIDER_LANE_ENTRY,
     PALW_T12_FULL_COURT_CLOCK_V2_ENTRY,
     PALW_T12_FULL_COURT_CAPACITY_ENTRY,
+    // Liveness fix L-COURT-01: a refused completion spends the slot / court cost it was attempted against (needs only the
+    // 2026-09-11 audit, a genesis rule of testnet-12; after court capacity, whose cost path it also charges).
+    PALW_T12_FULL_COURT_COMPLETION_ATTEMPT_ENTRY,
     PALW_T12_FULL_COURT_MODEL_SCOPE_ENTRY,
     PALW_T12_FULL_PUBLIC_EVIDENCE_REWARD_ENTRY,
+    PALW_T12_FULL_FP_ANSWER_ACCOUNTING_ENTRY,
     PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
     PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
     PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY,
