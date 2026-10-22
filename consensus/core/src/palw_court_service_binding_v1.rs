@@ -417,6 +417,28 @@ mod tests {
         );
     }
 
+    /// **audit(verify-2) B-03** — expected-vs-actual: the duty being defaulted is the actor's CURRENT turn (window 1,150..1,200,
+    /// after every supplied unit). Its attribution must not change because the claim's history also holds the actor's EARLIER,
+    /// already-answered-or-expired turn-0 clock. Expected `NoSlashHold`; on the current code this FAILS with `PartyDefault`.
+    #[test]
+    fn verify2_b03_attribution_is_bound_to_the_defaulted_turn() {
+        let (mut s, _) = bound(1_000);
+        observe_all(&mut s, 1_001, 1_101, None);
+        let unpaid: BTreeSet<_> = [bond(2)].into_iter().collect();
+        let mut current = clock(bond(2), 1_150, 1_200);
+        current.turn = 1;
+        current.duty_id = h(20);
+        let earlier = clock(bond(2), 1_001, 1_040);
+        let alone = attribute_service_default_v1(&s, h(1), &[&current], &unpaid, true);
+        let with_history = attribute_service_default_v1(&s, h(1), &[&earlier, &current], &unpaid, true);
+        eprintln!("[verify2-b03] current turn alone: {alone:?}; with the earlier turn's clock in history: {with_history:?}");
+        assert!(matches!(alone, Ok(CourtServiceAttributionV1::NoSlashHold(_))));
+        assert!(
+            matches!(with_history, Ok(CourtServiceAttributionV1::NoSlashHold(_))),
+            "B-03: expected NoSlashHold for the unsupplied current turn, got {with_history:?}"
+        );
+    }
+
     #[test]
     fn court_f02_pending_or_unbound_is_undecided() {
         let (mut s, _) = bound(1_000);

@@ -825,4 +825,29 @@ mod tests {
         // A claim accepted below both fences: no cap.
         assert_eq!(palw_claim_x3_cap_hard_v2(&with_x3(clock_sp()), &claim(F - 1, u64::MAX)), None);
     }
+
+    /// **audit(verify-2) B-06** — expected-vs-actual (FAILS on current code). A governed claim (its own trace raised to the full
+    /// extension by the claim writer) whose dependencies sit at horizons ADMISSION accepts: a TIR custody horizon at the collection
+    /// door (`collect_until <= material_until` is the plan's only lower bound; the install checks only `hard >= collect_until`) and an
+    /// EXEC root floor `expiry + window_court` for an expiry just past the notice window (EXEC admits any `daa < expiry <=
+    /// daa + 100,000`). The first in-window dispute (a + 10) is expected to be admitted (capped or at least not refused); on the
+    /// current code it is REFUSED, so a claim admitted with those dependencies is not disputable on the legacy route at all.
+    #[test]
+    fn verify2_b06_an_admissible_dependency_horizon_refuses_the_first_dispute() {
+        let sp = clock_sp();
+        let reorg = 256;
+        let need = palw_court_clock_v2_required_retention_with(F, W, reorg).unwrap();
+        let c = claim(F, need); // the claim writer raises its own trace to `need` (transition_builder.rs, U06/U07)
+        let hard = palw_claim_route_hard_v2(&sp, &c).expect("governed");
+        let collect_until = F + crate::palw_court_policy_v1::NOTICE_WINDOW_DAA + 1;
+        assert!(hard >= collect_until, "the TIR install's only clock-v2 check passes");
+        let custody = dep(PalwCourtDependencyKindV2::Custody, collect_until);
+        let exec = dep(PalwCourtDependencyKindV2::Exec, collect_until + 1 + sp.window_court());
+        for deps in [vec![custody], vec![exec]] {
+            let got = palw_dispute_record_hard_deadline_v2(&sp, &c, W, reorg, &deps, F + 10);
+            eprintln!("[verify2-b06] window_court {}, need {need}, deps {:?}: {got:?}", sp.window_court(),
+                deps.iter().map(|d| (d.kind, d.signed_horizon_daa)).collect::<Vec<_>>());
+            assert!(got.is_ok(), "B-06: expected the first dispute on an admitted claim to be admitted, got {got:?}");
+        }
+    }
 }

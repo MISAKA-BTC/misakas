@@ -288,3 +288,58 @@ fn audit_b02_a_decoy_accusation_answered_with_garbage_closes_the_post_final_path
     release_held_native_fees_v1(&mut b, HORIZON + 1, |_, _| false).unwrap();
     assert_eq!(queued(&b.state, held(family).queue), Some((h64(0xB1), 7_000)), "released to the producer at H, never judged");
 }
+
+/// Three bonds (producer 5, the producer's ally 6, an honest verifier 7) and the kernel route.
+fn verify2_three_bonds() -> PalwChainStateV2 {
+    let (mut state, _) = apply_palw_transition_v2(
+        &PalwChainStateV2::genesis(),
+        &params(),
+        &ctx(1, 10, 1),
+        &[
+            bond_registration_with_collateral(5, 7, 21, 1_000_000),
+            bond_registration_with_collateral(6, 8, 22, 1_000_000),
+            bond_registration_with_collateral(7, 9, 23, 1_000_000),
+        ],
+        None,
+    )
+    .expect("the bonds register");
+    state.kernel_route = parent().kernel_route.clone();
+    state
+}
+
+/// **audit(verify-2) B-02 (content-free answer)** — expected-vs-actual: a post-Final duty exists to make the producer deliver what
+/// the accusation demands; an answer of ONE arbitrary byte that is bound to nothing (no commitment, no demanded unit) must not
+/// discharge it. On the current code the answer is accepted (only its digest is kept, `decide` reads `answered.is_some()`), so this
+/// FAILS.
+#[test]
+fn verify2_b02_a_one_byte_answer_does_not_discharge_the_post_final_duty() {
+    let family = PALW_NATIVE_FAMILY_TEXT_V29;
+    let state = verify2_three_bonds();
+    let (p, e) = (armed(), conviction_extras());
+    let mut b = accused(&state, &p, &e, family);
+    observe_native_post_final_duties_with_v1(&mut b, &ctx(3, ACCUSED + 1, 3), &profile()).unwrap();
+    let answered = answer_post_final_v1(&mut b, &ctx(3, ACCUSED + 2, 3), &producer(), family, &JOB, &[0u8]);
+    let decided = decide_native_post_final_default_v1(&b, &held(family), deadline(&p) + 1, &production);
+    eprintln!("[verify2-b02a] one-byte answer: {answered:?}; decision past the deadline: {decided:?}");
+    assert!(
+        matches!(decided, Ok(CourtServiceAttributionV1::PartyDefault)),
+        "B-02: expected the unbound one-byte answer to leave the supplied duty in default, got {decided:?}"
+    );
+}
+
+/// **audit(verify-2) B-02 (one accusation per job for all of H)** — expected-vs-actual: once the producer's ally's accusation is
+/// answered (any bytes) and decided, an honest verifier must be able to accuse the same Final job inside its liability horizon.
+/// On the current code the first row stays until the held fee leaves at H, so every later D4 accusation is refused: FAILS.
+#[test]
+fn verify2_b02_an_answered_decoy_does_not_block_the_honest_accuser_for_all_of_h() {
+    let family = PALW_NATIVE_FAMILY_TEXT_V29;
+    let state = verify2_three_bonds();
+    let (p, e) = (armed(), conviction_extras());
+    let mut b = accused(&state, &p, &e, family); // the ally (bond 6) accuses with an arbitrary digest
+    answer_post_final_v1(&mut b, &ctx(3, ACCUSED + 2, 3), &producer(), family, &JOB, &[0u8]).unwrap();
+    assert!(decide_native_post_final_default_v1(&b, &held(family), deadline(&p) + 1, &production).is_err(), "answered: no default");
+    let honest = bond_key(7);
+    let refused = accuse_post_final_v1(&mut b, &ctx(6, HORIZON - 100, 6), &honest, family, &JOB, [0x78; 64]);
+    eprintln!("[verify2-b02b] honest accusation at H-100 after the answered decoy: {refused:?}");
+    assert!(refused.is_ok(), "B-02: expected the honest verifier's accusation to be admitted, got {refused:?}");
+}
