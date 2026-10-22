@@ -1735,6 +1735,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                         "not-governed" => String::new(),
                         other => other.to_string(),
                     },
+                    // RFC-0023 stage 2: empty below the fence (the row's version is then unchanged).
+                    claim_local_settlement: row.claim_local_settlement.clone(),
                     escrow_sompi: row.escrowed_reward,
                     payout_pending_sompi: row.payout_pending,
                     quanta: row.quanta,

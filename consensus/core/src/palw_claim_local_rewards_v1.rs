@@ -43,7 +43,7 @@ fn frame_read<T>(
         PalwClaimCheckpointErrorV1::Semantic(e) => bad(e),
     })?
 }
-fn frames(state: &PalwChainStateV2) -> impl Iterator<Item = (&Vec<u8>, &Vec<u8>)> {
+pub(super) fn frames(state: &PalwChainStateV2) -> impl Iterator<Item = (&Vec<u8>, &Vec<u8>)> {
     state
         .kernel_route
         .iter()
@@ -113,7 +113,7 @@ fn cert_key(id: Hash64) -> [u8; 65] {
     key[1..].copy_from_slice(&palw_certification_id_v1(&id));
     key
 }
-fn cert_bytes<'a>(route: Option<&'a crate::palw_kernel_route_v1::PalwKernelRouteStateV1>, id: Hash64) -> Option<&'a [u8]> {
+pub(super) fn cert_bytes<'a>(route: Option<&'a crate::palw_kernel_route_v1::PalwKernelRouteStateV1>, id: Hash64) -> Option<&'a [u8]> {
     let wanted = cert_key(id);
     route?
         .aux
@@ -127,7 +127,7 @@ pub(super) fn retained_certification_v1(
 ) -> Result<Option<NativeRetainedV1<PalwClaimCertificationRowV1>>, PalwStateV2Error> {
     cert_bytes(state.kernel_route.as_ref(), id).map(decoded).transpose()
 }
-fn approval(
+pub(super) fn approval(
     params: &PalwStateParamsV2,
     id: Hash64,
     c: &PalwClaimStateV2,
@@ -277,7 +277,7 @@ pub(super) fn ordinary_retirement_v1(
         .map(|at| state.staged_retirement_floor_v1(&id, at)))
 }
 
-fn live_source(
+pub(super) fn live_source(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     now: u64,

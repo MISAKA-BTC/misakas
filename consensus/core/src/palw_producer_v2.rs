@@ -868,6 +868,7 @@ mod tests {
                 committed: Some(0),
                 reservation_split: None,
                 security_certification: "not-governed",
+                claim_local_settlement: String::new(),
                 escrowed_reward: 0,
                 payout_pending: None,
                 work_leaves: 0,
@@ -2150,6 +2151,9 @@ pub struct PalwClaimRowV1 {
     /// **RFC-0018 Gate C**: the claim's certification state (`crate::palw_security_certification_v1::
     /// palw_claim_certification_status_v1`): `not-governed` on every shipped network.
     pub security_certification: &'static str,
+    /// **RFC-0023 stage 2**: the claim's own settlement state from its dependency closure (`settled`, `held:<daa>`, `held`,
+    /// `denied`, `not-retained`, `unavailable`); empty below `palw_claim_local_settlement_v1` (every shipped network).
+    pub claim_local_settlement: String,
     /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
     pub escrowed_reward: u64,
     /// The payout queued for the next coinbase, once the claim is final — the producer's leg.
@@ -2349,6 +2353,7 @@ pub fn palw_claim_rows_v1(
                     id,
                     claim,
                 ),
+                claim_local_settlement: palw_claim_local_settlement_label_v1(state, state_params, *id, tip_daa),
                 escrowed_reward: claim.escrowed_reward,
                 // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
                 // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.
@@ -2668,4 +2673,24 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
         }
     }
     out
+}
+
+/// RFC-0023 stage 2: the RPC label of `palw_claim_local_settlement_v1` at `now`. Empty while dormant, so the row's
+/// wire version is unchanged below the fence; a read fault is `unavailable`, never a guessed state.
+pub fn palw_claim_local_settlement_label_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    id: Hash64,
+    now: u64,
+) -> String {
+    use crate::palw_state_v2::PalwClaimLocalSettlementV1 as S;
+    match crate::palw_state_v2::palw_claim_local_settlement_v1(state, params, id, now) {
+        Ok(S::Dormant) => String::new(),
+        Ok(S::Settled) => "settled".into(),
+        Ok(S::Held { until_daa: u64::MAX }) => "held".into(),
+        Ok(S::Held { until_daa }) => format!("held:{until_daa}"),
+        Ok(S::Denied) => "denied".into(),
+        Ok(S::NotRetained) => "not-retained".into(),
+        Err(_) => "unavailable".into(),
+    }
 }

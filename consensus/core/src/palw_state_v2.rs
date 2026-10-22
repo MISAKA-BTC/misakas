@@ -256,6 +256,12 @@ mod palw_claim_local_fold_v1;
 mod palw_claim_local_rewards_v1;
 // RFC-0023 stage 2: per-claim settlement read (dormant `palw_claim_local_settlement_v1`).
 pub use palw_claim_local_rewards_v1::{PalwClaimLocalSettlementV1, palw_claim_local_settlement_v1};
+// RFC-0023 stage 2 (§4.1/§4.5): the fold-derived claim-local checkpoint row and its irreversible frontier (same dormant fence).
+#[path = "palw_claim_local_checkpoint_fold_v1.rs"]
+mod palw_claim_local_checkpoint_fold_v1;
+pub use palw_claim_local_checkpoint_fold_v1::{
+    PalwClaimLocalCheckpointStatusV1, palw_claim_local_checkpoint_key_v1, palw_claim_local_checkpoint_status_v1,
+};
 // RFC-0008: the once-only settlement registry (dormant `palw_settlement_once_v1`; kernel route aux 140) — every settlement consumer
 // checks and writes its exact obligation's marker in the same transition before any value moves.
 #[path = "palw_settlement_once_fold_v1.rs"]
@@ -15169,6 +15175,10 @@ fn apply_palw_transition_v7_inner(
     palw_claim_local_fold_v1::retain_changed_claim_context_v1(
         &mut builder, parent, ctx, accepted_objects, block_work, merged_work, own_execution_key,
     )?;
+    // RFC-0023 stage 2: past `palw_claim_local_settlement_v1` the checkpoint row is written and the frontier raised to its
+    // irreversible frontier (one value for fork choice, settlement and pruning's input). A no-op below the fence.
+    palw_claim_local_checkpoint_fold_v1::write_claim_local_checkpoint_v1(&mut builder, parent, ctx)?;
+    let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
         builder.entries.push(PalwDeltaEntryV2::Weights {
