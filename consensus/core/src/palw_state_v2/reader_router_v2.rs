@@ -223,7 +223,7 @@ impl TransitionBuilder<'_> {
             None
         };
         self.reserve_map_journal_v1(&k, &bytes, absent, "reader/router V2 cell writer")?;
-        self.write_kernel_row(k.0, k.1, bytes);
+        self.write_kernel_row(k.0, k.1, bytes)?;
         Ok(())
     }
 

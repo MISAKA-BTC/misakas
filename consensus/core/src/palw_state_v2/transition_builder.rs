@@ -449,7 +449,7 @@ impl<'a> TransitionBuilder<'a> {
         let key = (TABLE, key.to_vec());
         let bytes = encoded.as_ref().map(|r| r.to_vec());
         self.reserve_map_journal_v1(&key, &bytes, absent, "applied material challenge checkpoint writer")?;
-        self.write_kernel_row(key.0, key.1, bytes);
+        self.write_kernel_row(key.0, key.1, bytes)?;
         Ok(())
     }
 
@@ -495,7 +495,7 @@ impl<'a> TransitionBuilder<'a> {
         let key = (TABLE, key.to_vec());
         let bytes = encoded.as_ref().map(|row| row.to_vec());
         self.reserve_map_journal_v1(&key, &bytes, absent, "applied material challenge history writer")?;
-        self.write_kernel_row(key.0, key.1, bytes);
+        self.write_kernel_row(key.0, key.1, bytes)?;
         Ok(())
     }
 

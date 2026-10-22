@@ -352,7 +352,7 @@ impl TransitionBuilder<'_> {
         let k = (PALW_SELECTED_SOURCE_BOOTSTRAP_TABLE_V1, k.to_vec());
         let bytes = Some(bytes);
         self.reserve_map_journal_v1(&k, &bytes, absent, "bootstrap native journal")?;
-        self.write_kernel_row(k.0, k.1, bytes);
+        self.write_kernel_row(k.0, k.1, bytes)?;
         Ok(())
     }
 }

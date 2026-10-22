@@ -22,7 +22,7 @@ fn put<T: borsh::BorshSerialize>(b: &mut TransitionBuilder<'_>, key: &[u8;65], v
     let key = (PAID_BOOTSTRAP_SOURCE_TABLE_V6, key.to_vec());
     let value = Some(bytes);
     b.reserve_map_journal_v1(&key, &value, absent, "V6 bootstrap source rows")?;
-    b.write_kernel_row(key.0, key.1, value);
+    b.write_kernel_row(key.0, key.1, value)?;
     Ok(())
 }
 pub(super) fn admit(
