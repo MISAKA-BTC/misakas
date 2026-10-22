@@ -182,6 +182,88 @@ impl PalwClaimHardDeadlineFenceV1 {
     }
 }
 
+/// **X3's five `Δ` terms, in DAA.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwX3DeltaTermsV1 {
+    pub cold_fetch_daa: u64,
+    pub check_daa: u64,
+    pub localize_daa: u64,
+    pub carrier_daa: u64,
+    pub reorg_slack_daa: u64,
+}
+
+impl PalwX3DeltaTermsV1 {
+    /// `Δ = B_cold_fetch + B_check + B_localize + B_carrier + B_reorg_slack` (saturating).
+    pub fn delta_daa(&self) -> u64 {
+        [self.cold_fetch_daa, self.check_daa, self.localize_daa, self.carrier_daa, self.reorg_slack_daa].into_iter().fold(0, u64::saturating_add)
+    }
+}
+
+/// **V10: X3's `Δ` terms — 目安 (provisional, user 2026-10-22), lane P3, awaiting independent verification; revision trigger: P1's
+/// M-X3 and the re-measurement on the slowest supported node** (`B_cold_fetch`, `B_check`, `B_localize` are conservative stand-ins) (`docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md` V10;
+/// every term is converted at the 120 s/DAA block target, faster than t12's measured 184 s median, so a seconds-bound task never
+/// takes more DAA than budgeted):
+/// Lane P1's under-load fixture measurements (`studio/values-p1-measure` 13072773c, `measurements.md`): cold fetch compute ≤ 94 ms
+/// (1 DAA), check ≤ 277 ms all leaves (1 DAA), localize 11–462 DAA (11 owner turns × 1–42 DAA per turn), carrier 1–3 DAA, reorg
+/// slack not run. Fixture classes, not real models, so the stand-ins below stay above them:
+/// * `B_cold_fetch` 512: the largest genesis model plus the claim material (≤ 161 GB) at a stated 50 Mbit/s floor = 215 DAA, × 2,
+///   rounded up (P1's 1 DAA is compute only, no transfer).
+/// * `B_check` 512: a claim's check on the slowest supported node — conservative stand-in (4,096 tokens at 60 s per 16 tokens =
+///   128 DAA) × 4 for the unmeasured minimum-hardware factor (P1: 1 DAA on the fixture).
+/// * `B_localize` 512: P1's measured worst 462 DAA (11 owner turns at the 42-DAA turn deadline), rounded up (1.11×).
+/// * `B_carrier` 120: 27 close parts at one part per 2 DAA (half of a 125,000 B block) + 6 DAA worst observed latency, × 2 (P1: 1–3).
+/// * `B_reorg_slack` 360: the testnet-12 finality depth (43,200 s / 120 s): an included object is final or re-included within it
+///   (45× the 8-DAA strict-economic-win reorg bound).
+///
+/// `Δ = 2,016`: with `B_disclose + B_court = 4,200` and the staged reorg retention 360, a notice at `a + 3,120` still fits T06
+/// (`4,200 + 2,016 + 360 + 1 = 6,577 ≤ 6,880`, slack 303 DAA).
+pub const PALW_X3_DECIDED_DELTA_TERMS_V1: PalwX3DeltaTermsV1 =
+    PalwX3DeltaTermsV1 { cold_fetch_daa: 512, check_daa: 512, localize_daa: 512, carrier_daa: 120, reorg_slack_daa: 360 };
+
+/// **V10: `c_retain` = 36,058 sompi per DAA — 目安 (provisional, user 2026-10-22: 「パラメーターは目安で決めていい　方針をあとから
+/// 変更にする」)**, lane P3, awaiting independent verification. Basis: `⌈R × p ÷ T⌉` with `R` = 2,250,000 B (the largest evidence one
+/// court close may carry, `DEFAULT_MAX_CLOSE_BYTES`, as the retained bytes of one claim), `p` = 50 sompi/B (the 49.96 sompi per
+/// transaction byte paid in `docs/measurements/2026-10-22-devnet-payload-carrier.md`, rounded up: the chain's own price of a byte),
+/// `T` = 3,120 DAA (the normal court window the byte is owed for). **Revision trigger:** the retained bytes per claim (measurement
+/// M-DA) or the material storage fee and TTL (V5, lane P2) are adopted — then `⌈M-DA bytes × V5 sompi/B ÷ V5 TTL⌉` replaces it.
+pub const PALW_X3_RETENTION_COST_PER_DAA_SOMPI_V1: Option<u64> = Some(36_058);
+
+/// **The decided X3 policy for a network at `activation`**: the window composition with [`PALW_X3_DECIDED_DELTA_TERMS_V1`] and
+/// [`PALW_X3_RETENTION_COST_PER_DAA_SOMPI_V1`]. `Err` if `c_retain` were undecided (`None`).
+pub fn palw_x3_decided_policy_v1(
+    params: &PalwStateParamsV2,
+    activation: ForkActivation,
+) -> Result<PalwClaimHardDeadlinePolicyV1, &'static str> {
+    let c_retain = PALW_X3_RETENTION_COST_PER_DAA_SOMPI_V1
+        .ok_or("X3: c_retain is not decided (needs the retained bytes per claim and the material storage fee)")?;
+    Ok(palw_x3_policy_with_terms_v1(params, activation, PALW_X3_DECIDED_DELTA_TERMS_V1, c_retain))
+}
+
+/// The X3 policy composed from the windows with explicit `Δ` terms and `c_retain` (pure; the decided policy and its tests).
+pub fn palw_x3_policy_with_terms_v1(
+    params: &PalwStateParamsV2,
+    activation: ForkActivation,
+    terms: PalwX3DeltaTermsV1,
+    c_retain: u64,
+) -> PalwClaimHardDeadlinePolicyV1 {
+    palw_x3_composed_policy_v1(
+        params,
+        activation,
+        PalwClaimHardDeadlinePolicyV1 {
+            version: PALW_CLAIM_HARD_DEADLINE_POLICY_VERSION_V1,
+            prepare_daa: 0,
+            observe_daa: 0,
+            resolve_daa: 0,
+            cold_fetch_daa: terms.cold_fetch_daa,
+            check_daa: terms.check_daa,
+            localize_daa: terms.localize_daa,
+            carrier_daa: terms.carrier_daa,
+            reorg_slack_daa: terms.reorg_slack_daa,
+            retention_cost_per_daa_sompi: c_retain,
+        },
+    )
+}
+
 /// **The X3 policy composed from the network's windows** (user decision 2026-10-18): `T_prepare = window_bind + window_receipt`,
 /// `T_observe = window_challenge_at(activation)`, `T_resolve = B_disclose + B_court + Δ` with
 /// `Δ = B_cold_fetch + B_check + B_localize + B_carrier + B_reorg_slack`. `base` supplies the five `B_*` terms and `c_retain`; its three

@@ -217,9 +217,13 @@ impl SeatReadinessRootV1 {
 // `palw_court_model_scope_v1`; past it, admission still refuses while the draw cap is unadopted (typed-missing, never zero/default).
 // =================================================================================================================================
 
-/// **The adopted readiness draw cap — NOT adopted** (ADR-0188 "ユーザーに決めてほしいこと"; ADR-0188 B approval 2026-10-21 says the
-/// cap is not chosen). `None` is the typed-missing value: every admission and every fold refuses with it. Changing it is a user decision.
-pub const PALW_D2_READINESS_DRAW_CAP_V1: Option<NonZeroU32> = None;
+/// **The adopted readiness draw cap: 64 coordinates per root.** **Decided 2026-10-22 (lane P3, user delegation of value decisions),
+/// awaiting independent verification** — `docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md` V7. Derivation:
+/// a beacon-drawn set of `k` distinct inventory pieces misses a seat that lacks a fraction `f` of the pieces with probability
+/// `(1 − f)^k`; `k = 64` gives ≤ 0.12 % at `f = 10 %` and ≤ 3.8 % at `f = 5 %` (inside the G14 tolerance of 1–10 % missed), and keeps
+/// every opening path at depth 6 and the all-ordinal reservation (RFC-0033 §2) at 64 demands per root. A root over the cap is refused
+/// as shape (no slash). `None` (a caller passing no cap) still refuses every admission and fold: never zero/default.
+pub const PALW_D2_READINESS_DRAW_CAP_V1: Option<NonZeroU32> = NonZeroU32::new(64);
 
 /// ML-DSA-87 context of the seat's signature over a readiness root (the literal seat authority).
 pub const PALW_D2_READINESS_ROOT_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/d2-readiness-root/mldsa87/v1";
@@ -446,15 +450,39 @@ mod tests {
         let ds: Vec<_> = (0..count).map(|i| (i, h(500 + i))).collect();
         SeatReadinessRootV1::from_digests(ctx(), &ds, NonZeroU32::new(count)).unwrap()
     }
-    /// The unadopted cap (the shipped constant) refuses every admission and every fold: `None` is never success.
+    /// No cap passed refuses every admission and every fold: `None` is never success.
     #[test]
     fn tag230_unadopted_draw_cap_refuses_admission_and_fold() {
-        assert_eq!(PALW_D2_READINESS_DRAW_CAP_V1, None);
         let root = root_of(3);
-        assert!(palw_d2_readiness_root_admit_v1(&root, PALW_D2_READINESS_DRAW_CAP_V1).is_err());
+        assert!(palw_d2_readiness_root_admit_v1(&root, None).is_err());
         let mut reg = PalwD2ReadinessRootRegistryV1::new();
-        assert!(palw_d2_readiness_root_fold_v1(&mut reg, &root, PALW_D2_READINESS_DRAW_CAP_V1).is_err());
+        assert!(palw_d2_readiness_root_fold_v1(&mut reg, &root, None).is_err());
         assert!(reg.is_empty());
+    }
+    /// V7 (decided 2026-10-22, lane P3): the adopted cap is 64; a 64-leaf root admits and folds, 65 refuses, the path depth is 6.
+    #[test]
+    fn p3_tag230_adopted_draw_cap_admits_64_and_refuses_65() {
+        assert_eq!(PALW_D2_READINESS_DRAW_CAP_V1.map(NonZeroU32::get), Some(64));
+        let at = root_of(64);
+        palw_d2_readiness_root_admit_v1(&at, PALW_D2_READINESS_DRAW_CAP_V1).unwrap();
+        let mut reg = PalwD2ReadinessRootRegistryV1::new();
+        palw_d2_readiness_root_fold_v1(&mut reg, &at, PALW_D2_READINESS_DRAW_CAP_V1).unwrap();
+        assert_eq!(reg.len(), 1);
+        let mut over = root_of(64);
+        over.leaf_count = 65;
+        assert!(palw_d2_readiness_root_admit_v1(&over, PALW_D2_READINESS_DRAW_CAP_V1).is_err());
+        let ds: Vec<_> = (0..65).map(|i| (i, h(500 + i))).collect();
+        assert!(SeatReadinessRootV1::from_digests(ctx(), &ds, PALW_D2_READINESS_DRAW_CAP_V1).is_err(), "65 digests exceed the cap");
+        // Detection of a seat lacking 10 % / 5 % of the pieces by one beacon draw of 64 (miss = (1 − f)^64, in ppm).
+        let miss_ppm = |f_permille: u64| -> u64 {
+            let mut p: u128 = 1_000_000_000_000;
+            for _ in 0..64 {
+                p = p * u128::from(1_000 - f_permille) / 1_000;
+            }
+            (p / 1_000_000) as u64
+        };
+        assert!(miss_ppm(100) <= 1_200, "10 % missing: miss ≤ 0.12 %");
+        assert!(miss_ppm(50) <= 37_600, "5 % missing: miss ≤ 3.76 %");
     }
     /// With an explicit test cap: count bounds, one root per seat and draw, a different span is a different key.
     #[test]

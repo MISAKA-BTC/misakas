@@ -44,14 +44,24 @@ pub const PALW_TIR_POSITION_CLOSED_TAG_V2: u8 = 202;
 pub const PALW_TIR_LOOKAHEAD_DISCLOSED_TAG_V2: u8 = 203;
 pub const PALW_TIR_LOOKAHEAD_CHOSEN_TAG_V2: u8 = 204;
 
-/// **The adopted position-witness byte budget** (RFC-0024 §4.5 `B_position`). `None`: not derived for
-/// any profile yet — a user/ADR decision (the "約 12 KB" is an estimate, not a bound). While `None`, a
-/// position close is refused (`PositionWitnessBudgetIncomplete`), never zero-filled.
-pub const PALW_TIR_POSITION_WITNESS_BUDGET_V2: Option<u64> = None;
+/// **The adopted position-witness byte budget** (RFC-0024 §4.5 `B_position`): the counted bytes ONE
+/// chunk-group part carries after framing, `palw_close_bytes_for_chunks_v1(1)` = 83,333 B — so a
+/// position close is always one carrier transaction (the terminal adds at most one carrier unit).
+/// **Decided 2026-10-22 (lane P3, user delegation of value decisions), awaiting independent
+/// verification** — `docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md` V8. The
+/// "約 12 KB" was an estimate (two ML-DSA-87 signatures alone are 9,262 B). A larger honest witness is
+/// refused as a MOVE (`PositionWitnessOverBudget`), never slashed (§11 A-06), and the whole-tile close
+/// (up to `DEFAULT_MAX_CLOSE_BYTES`) stays the path for it. `None` (a caller passing no budget) still
+/// refuses as `PositionWitnessBudgetIncomplete`; never zero-filled.
+pub const PALW_TIR_POSITION_WITNESS_BUDGET_V2: Option<u64> = Some(crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(1));
 
-/// **The adopted lookahead frontier bound** (RFC-0024 §5.5: `r`, summed over the frontier). `None`:
-/// not derived — a lookahead is refused by name and the V1 one-level rounds stay the path.
-pub const PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2: Option<usize> = None;
+/// **The adopted lookahead frontier bound** (RFC-0024 §5.5: `r`, summed over the frontier): 3,072
+/// values. Derived so that a tag-203 / tag-204 object at the bound fits ONE chunk-group part
+/// (≤ 83,333 counted bytes) at the worst framing of 24 B per value (one-element reductions) with the
+/// ML-DSA-87 signature. A bundle over it is refused by name and the V1 one-level rounds stay the path
+/// (§5.5 "足りない場合は profile 未対応"); never a slash. **Decided 2026-10-22 (lane P3), awaiting
+/// independent verification** — same record, V8.
+pub const PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2: Option<usize> = Some(3_072);
 
 /// Hard parser cap on a multiproof's leaf count, checked before any hashing (RFC-0024 §7).
 pub const PALW_STEP_MULTIPROOF_MAX_LEAVES_V2: usize = 65_536;
@@ -533,9 +543,52 @@ mod tests {
         assert_eq!(one.proof.len(), 12);
     }
 
+    /// V8 (decided 2026-10-22, lane P3): the budget is exactly one framed chunk part.
     #[test]
-    fn the_position_witness_budget_is_typed_missing_until_adopted() {
-        assert_eq!(PALW_TIR_POSITION_WITNESS_BUDGET_V2, None);
-        assert_eq!(PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2, None);
+    fn p3_the_position_witness_budget_is_one_carrier_part() {
+        let budget = PALW_TIR_POSITION_WITNESS_BUDGET_V2.expect("decided");
+        assert_eq!(budget, 83_333);
+        assert_eq!(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(budget), 1, "a close at the budget is one carrier part");
+        // The framing floor lets one part carry 83,334 counted bytes; the budget stays at the exact derivation, one byte under.
+        assert_eq!(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(budget + 1), 1);
+        assert_eq!(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(budget + 2), 2, "two bytes more need a second part");
+        assert!(budget < crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES, "the whole-tile close ceiling stays above it");
+        // r5-p2-terminal §3: fixed part 9,466 B (two ML-DSA-87 signatures are 9,262), the w=16 example round 3,548 B and the
+        // 72-leaf depth-12 multiproof 10,068 B leave 60,251 B for the dissection-bottom carriage.
+        assert_eq!(budget - (9_466 + 3_548 + 10_068), 60_251);
+    }
+
+    /// V8 (decided 2026-10-22, lane P3): a lookahead at the frontier bound fits one carrier part in the worst framing (24 B per
+    /// value: every reduction carries one element), for the disclosure (tag 203) and the chosen path (tag 204).
+    #[test]
+    fn p3_a_lookahead_at_the_frontier_bound_fits_one_carrier_part() {
+        use crate::palw_tir_dissect_v1::{PalwTirChoicePathV2, PalwTirLookaheadDisclosureV2, PalwTirLookaheadExpansionV2, PalwTirRangeClaimV1};
+        let cap = PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2.expect("decided");
+        let budget = PALW_TIR_POSITION_WITNESS_BUDGET_V2.expect("decided");
+        assert_eq!(cap, 3_072);
+        // Worst bytes per value: 16 groups of 192 one-value claims of one one-element reduction (4 + 4 + 16 = 24 B per value).
+        let worst = PalwTirLookaheadDisclosureV2 {
+            version: 2,
+            frontier: vec![vec![PalwTirRangeClaimV1 { partials: vec![vec![i128::MAX]] }; cap / 16]; 16],
+        };
+        // The two-level shape: 16 groups × 16 claims × 12 one-element reductions.
+        let shaped = PalwTirLookaheadDisclosureV2 {
+            version: 2,
+            frontier: vec![vec![PalwTirRangeClaimV1 { partials: vec![vec![i128::MIN]; 12] }; 16]; 16],
+        };
+        for disclosure in [worst, shaped] {
+            assert_eq!(PalwTirLookaheadExpansionV2::frontier_values(&disclosure), cap);
+            let disclosed = PalwTirLookaheadDisclosedV2 {
+                session_id: Hash64::from_bytes([7; 64]),
+                disclosure: disclosure.clone(),
+                signature: vec![0xA5; 4_627],
+            };
+            let path = PalwTirChoicePathV2 { version: 2, session_id: Hash64::from_bytes([7; 64]), round: u32::MAX, path: vec![15, 15] };
+            let chosen = PalwTirLookaheadChosenV2 { disclosure, path, signature: vec![0x5A; 4_627] };
+            for bytes in [borsh::to_vec(&disclosed).unwrap().len() as u64, borsh::to_vec(&chosen).unwrap().len() as u64] {
+                assert!(bytes <= budget, "{bytes} B is over one carrier part");
+                assert_eq!(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(bytes), 1);
+            }
+        }
     }
 }

@@ -9431,12 +9431,10 @@ pub(super) mod tests {
         let all = |_: &kaspa_hashes::Hash64| true;
         let no_path = |_: &kaspa_hashes::Hash64, _: u32| None;
 
-        // Dormant and typed-missing: nothing.
+        // Dormant, or no cap / no fee schedule: nothing.
         assert!(palw_fraud_filer_d2_disclosure_moves_v1(false, &reg, &challenger, 101, cap, fees, all, no_path).is_empty());
-        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 101, rr::PALW_D2_READINESS_DRAW_CAP_V1, fees, all, no_path).is_empty());
-        assert!(
-            palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 101, cap, dc::PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1, all, no_path).is_empty()
-        );
+        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 101, None, fees, all, no_path).is_empty());
+        assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &challenger, 101, cap, None, all, no_path).is_empty());
         // The seat never demands its own root.
         assert!(palw_fraud_filer_d2_disclosure_moves_v1(true, &reg, &seat, 101, cap, fees, all, no_path).is_empty());
 
