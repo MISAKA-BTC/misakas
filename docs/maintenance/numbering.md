@@ -36,3 +36,7 @@ RFC-0010/0012のdormant implementationは主RFCではなくdesignへ移しまし
 ## 2026-10-21 終了効果候補の追加予約
 
 [ADR-0197](../adr/0197-court-end-effects-and-pending-liability-archive.md) / [RFC-0030](../rfc/0030-court-end-effects-and-pending-liability-archive.md)をProposed/Draftとして予約した。利用者はAの詳細仕様化・隔離実装を指示し、本番採択・有効化とは区別する。ローカルの822 unique ref headとactive worktreeを調査し、同番号の別文書は見つからなかった。[調査範囲](../evidence/palw/g14-integration-candidate-2026-10-20/court-end-effects-number-audit.json)。未fetchのremoteや将来branchの未使用保証ではない。次のローカル番号はADR-0198 / RFC-0031。上の過去時点の次番号は履歴である。
+
+## 2026-10-22 認証付き state map の追加予約
+
+[ADR-0203](../adr/0203-authenticated-palw-state-map-and-row-access.md) / [RFC-0036](../rfc/0036-authenticated-palw-state-map-and-row-access.md)をProposed / Review Requiredとして予約した（30 GB pruned node 方針の state lane）。基準 b1eb33960 の tree には ADR-0202 / RFC-0035 までの主文書があり、0198–0202 / 0031–0035 は他 lane の割当で本台帳には未記録。storage 作業の他 lane（IBD）が consensus 可視の形式を起案する場合は ADR-0204 / RFC-0037 以降を使う。次のローカル番号は ADR-0204 / RFC-0037。未 fetch の remote や将来 branch の未使用保証ではない。

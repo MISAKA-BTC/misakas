@@ -203,3 +203,4 @@
 | ADR-0200 | [D2 readiness rootの認証path供給](0200-d2-readiness-root-opening-availability.md) | 原文と後続改定を参照 |
 | ADR-0201 | [archived closeの期限内実受付と責任解消](0201-archived-close-qualified-financial-discharge.md) | 原文と後続改定を参照 |
 | ADR-0202 | [shared court originalの実原資と役割別同意](0202-court-original-funded-contract-and-role-consent.md) | 原文と後続改定を参照 |
+| ADR-0203 | [認証付き PALW state map と行単位アクセス](0203-authenticated-palw-state-map-and-row-access.md) | 原文と後続改定を参照 |
