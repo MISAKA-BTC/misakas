@@ -193,12 +193,7 @@ pub fn palw_gdn_held_step_v1<K: Base0FpRecomputeKernelsV1>(
         return Err("the producer never accuses its own claim".into());
     }
     loop {
-        for (i, unit) in case.demands.iter().enumerate() {
-            if case.answers[i].is_none() {
-                case.answers[i] =
-                    answer_on_chain_v1(objects, &case.claim, material.binding, unit, material.max_leaves, material.prompt_ids_form);
-            }
-        }
+        note_answers_v1(case, material, objects);
         if let Some(i) = case.answers.iter().position(Option::is_none) {
             return Ok(match case.demanded {
                 Some((open, at)) if open == i && now > at.saturating_add(disclose_window) => {
@@ -290,21 +285,42 @@ pub trait PalwGdnHeldHostV1 {
     fn objects(&self, claim: &PalwGdnHeldClaimV1) -> Vec<PalwConsensusObjectV2>;
     /// The class inventory's openings and the oracle over them.
     fn openings(&self, claim: &PalwGdnHeldClaimV1) -> Result<(Vec<PalwArtifactOpeningV1>, PalwProvenOperandsV1), String>;
+    /// Complete accepted-history watermark. None holds moves while a page scan is incomplete.
+    fn observed_through_daa(&self, now: u64) -> Option<u64> { Some(now) }
     fn disclose_window_daa(&self) -> u64;
     fn bond(&self) -> PalwBondKeyV2;
     fn network_domain(&self) -> Hash64;
     fn sign(&self, message: &[u8], context: &[u8]) -> Option<Vec<u8>>;
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct PalwGdnHistoryWalkV1 {
+    pub anchor: Hash64,
+    pub anchor_daa: u64,
+    pub floor: u64,
+    pub next: Option<Hash64>,
+    pub wanted: std::collections::HashSet<Hash64>,
+}
+
 /// The filer's memory across ticks: a case per claim, and the claims settled (honest, accused, defaulted or exhausted).
 #[derive(Default)]
 pub struct PalwGdnHeldBookV1 {
+    pub(crate) history: Option<PalwGdnHistoryWalkV1>,
+    pub(crate) history_failed_claims: std::collections::HashSet<Hash64>,
     pub cases: std::collections::BTreeMap<Hash64, PalwGdnHeldCaseV1>,
     pub settled: std::collections::BTreeMap<Hash64, &'static str>,
 }
 
 /// One object for the priority lane: `(claim, object)`.
 pub type PalwGdnHeldOutV1 = (Hash64, PalwConsensusObjectV2);
+
+fn note_answers_v1(case: &mut PalwGdnHeldCaseV1, material: &Base0GdnMaterialV2<'_>, objects: &[PalwConsensusObjectV2]) {
+    for (i, unit) in case.demands.iter().enumerate() {
+        if case.answers[i].is_none() {
+            case.answers[i] = answer_on_chain_v1(objects, &case.claim, material.binding, unit, material.max_leaves, material.prompt_ids_form);
+        }
+    }
+}
 
 /// The host's boxed kernels, as the base0 builders take them.
 pub struct PalwGdnBoxedKernelsV1<'a>(pub Box<dyn Base0FpRecomputeKernelsV1 + 'a>);
@@ -328,14 +344,25 @@ pub fn palw_gdn_held_filer_tick_v1<H: PalwGdnHeldHostV1>(host: &H, book: &mut Pa
     let mut out = Vec::new();
     let claims = host.accusable_claims();
     let live: std::collections::BTreeSet<Hash64> = claims.iter().map(|c| c.claim).collect();
+    if let Some(history) = &book.history {
+        for claim in &history.wanted {
+            if !live.contains(claim) && !book.settled.contains_key(claim) {
+                book.history_failed_claims.insert(*claim);
+            }
+        }
+    }
     book.cases.retain(|claim, _| live.contains(claim));
     for claim in claims {
         if book.settled.contains_key(&claim.claim) || claim.executor == host.bond() {
             continue;
         }
-        let Ok(owned) = host.material(&claim) else { continue };
+        let Ok(owned) = host.material(&claim) else {
+            if book.history.is_some() { book.history_failed_claims.insert(claim.claim); }
+            continue;
+        };
         let view = owned.view();
         if host.kernels(&claim).is_err() {
+            if book.history.is_some() { book.history_failed_claims.insert(claim.claim); }
             continue;
         }
         let kernels = || PalwGdnBoxedKernelsV1(host.kernels(&claim).expect("the class resolved above"));
@@ -348,16 +375,29 @@ pub fn palw_gdn_held_filer_tick_v1<H: PalwGdnHeldHostV1>(host: &H, book: &mut Pa
                     book.settled.insert(claim.claim, "honest");
                     continue;
                 }
-                Err(_) => continue,
+                Err(_) => {
+                    if book.history.is_some() { book.history_failed_claims.insert(claim.claim); }
+                    continue;
+                },
             }
         }
+        let objects = host.objects(&claim);
+        let case = book.cases.get_mut(&claim.claim).expect("opened above");
+        let Some(observed_daa) = host.observed_through_daa(now)
+            .filter(|_| !book.history_failed_claims.contains(&claim.claim)) else {
+            note_answers_v1(case, &view, &objects);
+            continue;
+        };
         let Ok((openings, oracle)) = host.openings(&claim) else { continue };
         let sign = |m: &[u8], c: &[u8]| host.sign(m, c);
         let accuser = PalwGdnHeldAccuserV1 { bond: host.bond(), network_domain: host.network_domain(), openings: &openings, oracle: &oracle, sign: &sign };
-        let objects = host.objects(&claim);
-        let case = book.cases.get_mut(&claim.claim).expect("opened above");
-        match palw_gdn_held_step_v1(case, &view, kernels, &objects, now, host.disclose_window_daa(), &accuser) {
-            Ok(PalwGdnHeldNextV1::Demand { object, .. }) => out.push((claim.claim, object)),
+        match palw_gdn_held_step_v1(case, &view, kernels, &objects, observed_daa, host.disclose_window_daa(), &accuser) {
+            Ok(PalwGdnHeldNextV1::Demand { object, .. }) => {
+                // A backfilled observation is older than this submission. Its
+                // clock must not shorten a newly queued demand's answer window.
+                if let Some((unit, _)) = case.demanded { case.demanded = Some((unit, now.max(observed_daa))); }
+                out.push((claim.claim, object));
+            }
             Ok(PalwGdnHeldNextV1::Accuse { object }) => {
                 out.push((claim.claim, object));
                 book.settled.insert(claim.claim, "accused");

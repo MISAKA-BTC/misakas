@@ -439,6 +439,40 @@ fn gdn_disclosure_page_keeps_continuation_and_refuses_an_unavailable_suffix() {
 }
 
 #[test]
+fn gdn_history_resumes_frozen_cohort_retries_errors_and_rejects_a_reorg() {
+    use super::gdn_filer_tick::{gdn_history_branch_v1, gdn_history_next_page_v1 as page};
+    let mut chain = repeated_daa_chain();
+    let wanted = HashSet::from([hash(1)]);
+    let (first, _) = page(&chain, None, 100, wanted.clone(), 3).unwrap();
+    assert_eq!(first.next, Some(hash(5)));
+    append(&mut chain, 9, 103, 8);
+    let saved = chain.acceptance.remove(&hash(4)).unwrap();
+    assert!(page(&chain, Some(first.clone()), 103, HashSet::from([hash(2)]), 3).is_err());
+    assert_eq!(first.next, Some(hash(5)), "failed pages do not advance the saved cursor");
+    chain.acceptance.insert(hash(4), saved);
+    let (second, _) = page(&chain, Some(first), 103, HashSet::from([hash(2)]), 3).unwrap();
+    assert_eq!(second.anchor, hash(8));
+    assert_eq!(second.wanted, wanted, "new traffic cannot restart or replace the frozen cohort");
+    assert_eq!(second.next, Some(hash(2)));
+    let (done, _) = page(&chain, Some(second), 103, HashSet::new(), 3).unwrap();
+    assert_eq!(done.next, None);
+    assert_eq!(done.anchor_daa, 102, "completion certifies only the frozen observation clock");
+    let (fresh, _) = page(&chain, Some(done), 100, HashSet::from([hash(2)]), 3).unwrap();
+    assert_eq!(fresh.anchor, hash(9));
+    assert_eq!(fresh.next, Some(hash(6)));
+    chain.sink = hash(5);
+    assert!(!gdn_history_branch_v1(&chain, fresh.anchor).unwrap());
+    assert!(page(&chain, Some(fresh), 100, wanted, 3).is_err(), "old branch answers cannot continue");
+}
+
+#[test]
+fn gdn_history_rejects_branch_replacement_during_a_page() {
+    let mut chain = repeated_daa_chain();
+    chain.flip_sink_on_block = Some((hash(7), hash(5)));
+    assert!(super::gdn_filer_tick::gdn_history_next_page_v1(&chain, None, 100, HashSet::new(), 3).is_err());
+}
+
+#[test]
 fn false_valid_receipt_history_backfills_plateaus_and_retries_missing_suffixes_and_reorgs() {
     use crate::palw_filer_false_valid::palw_false_valid_history_page_v1 as page;
     let mut chain = repeated_daa_chain();

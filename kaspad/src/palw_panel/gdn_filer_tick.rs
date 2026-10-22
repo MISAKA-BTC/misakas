@@ -4,7 +4,7 @@
 //! objects ride the priority lane (`court_pending`, due now). Off below `palw_memory_routing_court_v2` (every preset) and on a node
 //! that does not challenge.
 use super::*;
-use crate::palw_gdn_held_filer::{PalwGdnHeldBookV1, PalwGdnHeldClaimV1, PalwGdnHeldHostV1, palw_gdn_held_filer_tick_v1};
+use crate::palw_gdn_held_filer::{PalwGdnHistoryWalkV1, PalwGdnHeldBookV1, PalwGdnHeldClaimV1, PalwGdnHeldHostV1, palw_gdn_held_filer_tick_v1};
 use crate::palw_panel::court_outbox::CourtOutboxV1;
 use misaka_palw_base0::qwen36_backend::Qwen36Backend;
 
@@ -14,6 +14,7 @@ pub(crate) const PALW_GDN_FILER_ROUND_V1: u32 = (1 << 29) | 0x200;
 struct ServiceGdnHostV1<'a> {
     entries: Vec<(PalwGdnHeldClaimV1, Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, Vec<u8>, Vec<u32>)>,
     objects: HashMap<Hash64, Vec<PalwConsensusObjectV2>>,
+    history_daa: Option<u64>,
     window: u64,
     bond: PalwBondKeyV2,
     domain: Hash64,
@@ -66,6 +67,7 @@ impl PalwGdnHeldHostV1 for ServiceGdnHostV1<'_> {
             .map_err(|e| format!("{e:?}"))?;
         Ok((openings, oracle))
     }
+    fn observed_through_daa(&self, _now: u64) -> Option<u64> { self.history_daa }
     fn disclose_window_daa(&self) -> u64 {
         self.window
     }
@@ -117,6 +119,35 @@ pub(super) fn gdn_disclosure_page_v1(
         }
     })?;
     Ok((next, found))
+}
+
+pub(super) fn gdn_history_branch_v1(c: &dyn kaspa_consensus_core::api::ConsensusApi, anchor: Hash64) -> Result<bool, String> {
+    let tip = c.get_sink();
+    if tip == anchor { return Ok(true); }
+    c.is_chain_ancestor_of(anchor, tip).map_err(|e| format!("GDN history branch: {e}"))
+}
+
+/// Continue a frozen cohort at a fixed native anchor. New claims wait for the
+/// next scan, so arrival traffic cannot restart an unfinished old interval.
+pub(super) fn gdn_history_next_page_v1(
+    c: &dyn kaspa_consensus_core::api::ConsensusApi,
+    previous: Option<PalwGdnHistoryWalkV1>, floor: u64, wanted: HashSet<Hash64>, blocks: usize,
+) -> Result<(PalwGdnHistoryWalkV1, Vec<PalwConsensusObjectV2>), String> {
+    if let Some(previous) = &previous {
+        if !gdn_history_branch_v1(c, previous.anchor)? { return Err("GDN history anchor changed branch".into()); }
+    }
+    let mut walk = match previous.filter(|walk| walk.next.is_some()) {
+        Some(walk) => walk,
+        None => {
+            let anchor = c.get_sink();
+            let anchor_daa = c.get_header(anchor).map_err(|e| format!("GDN history header: {e}"))?.daa_score;
+            PalwGdnHistoryWalkV1 { anchor, anchor_daa, floor, next: Some(anchor), wanted }
+        }
+    };
+    let (next, found) = gdn_disclosure_page_v1(c, walk.next.unwrap_or(walk.anchor), walk.floor, blocks, &walk.wanted)?;
+    if !gdn_history_branch_v1(c, walk.anchor)? { return Err("GDN history branch changed during page".into()); }
+    walk.next = next;
+    Ok((walk, found))
 }
 
 /// One claim a GDN filer may pursue, with the class backend and the served capture (public material) that names it.
@@ -235,7 +266,15 @@ impl PalwPanelService {
             return;
         }
         let Some(kp) = self.keypair.clone() else { return };
-        let entries: Vec<_> = self
+        if let Some(previous) = &book.history {
+            let anchor = previous.anchor;
+            match session.clone().spawn_blocking(move |c| gdn_history_branch_v1(c, anchor)).await {
+                Ok(true) => {},
+                Ok(false) => { book.cases.clear(); book.settled.clear(); book.history = None; book.history_failed_claims.clear(); },
+                Err(why) => { warn!("[{PALW_PANEL}] GDN history unavailable: {why}; filer tick waits"); return; }
+            }
+        }
+        let mut entries: Vec<_> = self
             .gdn_filer_entries_v1(session, |claim| book.settled.contains_key(claim), materials, network_domain, bond_key)
             .await
             .into_iter()
@@ -255,22 +294,22 @@ impl PalwPanelService {
         }
         let floor = entries.iter().map(|(at, ..)| *at).min().unwrap_or(0);
         let wanted: HashSet<Hash64> = entries.iter().map(|(_, c, ..)| c.claim).collect();
-        let found = session
-            .clone()
-            .spawn_blocking(move |c| {
-                let tip = c.get_sink();
-                // Cross-tick continuation remains separate work. Preserve the
-                // page's strict error contract even before that connection.
-                gdn_disclosure_page_v1(c, tip, floor, PALW_GDN_FILER_WALK_BLOCKS_V1, &wanted).map(|(_next, found)| found)
-            })
-            .await;
-        let found = match found {
-            Ok(found) => found,
+        let previous = book.history.clone();
+        let new_scan = previous.as_ref().is_none_or(|walk| walk.next.is_none());
+        let page = session.clone().spawn_blocking(move |c| {
+            gdn_history_next_page_v1(c, previous, floor, wanted, PALW_GDN_FILER_WALK_BLOCKS_V1)
+        }).await;
+        let (walk, found) = match page {
+            Ok(page) => page,
             Err(why) => {
-                warn!("[{PALW_PANEL}] held-GDN disclosure history unavailable: {why}; filer tick waits");
+                warn!("[{PALW_PANEL}] held-GDN disclosure history unavailable: {why}; cursor unchanged");
                 return;
             }
         };
+        if new_scan { book.history_failed_claims.clear(); }
+        entries.retain(|(_, claim, ..)| walk.wanted.contains(&claim.claim));
+        let history_daa = walk.next.is_none().then_some(walk.anchor_daa);
+        book.history = Some(walk);
         let mut objects: HashMap<Hash64, Vec<PalwConsensusObjectV2>> = HashMap::new();
         for object in found {
             if let Some(claim) = disclosure_claim_v1(&object) {
@@ -287,6 +326,7 @@ impl PalwPanelService {
         let host = ServiceGdnHostV1 {
             entries: entries.into_iter().map(|(_, c, b, cap, prompt)| (c, b, cap, prompt)).collect(),
             objects,
+            history_daa,
             window,
             bond: bond_key,
             domain: network_domain,
@@ -321,6 +361,7 @@ mod tests {
         let mut host = ServiceGdnHostV1 {
             entries: vec![(claim.clone(), Box::new(w.backend), w.capture, prompt.clone())],
             objects: HashMap::new(),
+            history_daa: Some(1),
             window: 8,
             bond: outsider,
             domain: Hash64::from_u64_word(0),
@@ -341,8 +382,35 @@ mod tests {
             kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&expected_step_binding);
         assert_eq!(forged.binding, expected_step_binding);
         let mut forged_book = PalwGdnHeldBookV1::default();
-        let _ = palw_gdn_held_filer_tick_v1(&host, &mut forged_book, 1);
+        host.history_daa = None;
+        assert!(palw_gdn_held_filer_tick_v1(&host, &mut forged_book, 1).is_empty());
         assert!(forged_book.cases.contains_key(&forged_claim.claim), "the service host opens the forged checkpoint case");
+        assert!(forged_book.cases[&forged_claim.claim].demanded.is_none(), "partial history emits no demand");
+        forged_book.cases.get_mut(&forged_claim.claim).unwrap().demanded = Some((0, 1));
+        assert!(palw_gdn_held_filer_tick_v1(&host, &mut forged_book, 100).is_empty());
+        assert!(!forged_book.settled.contains_key(&forged_claim.claim), "partial history cannot finalize a timeout");
+        forged_book.history = Some(PalwGdnHistoryWalkV1 {
+            anchor: Hash64::from_u64_word(9), anchor_daa: 100, floor: 0, next: Some(Hash64::from_u64_word(8)),
+            wanted: HashSet::from([forged_claim.claim]),
+        });
+        let unavailable = host.entries.pop().unwrap();
+        assert!(palw_gdn_held_filer_tick_v1(&host, &mut forged_book, 101).is_empty());
+        host.entries.push(unavailable);
+        host.history_daa = Some(102);
+        assert!(palw_gdn_held_filer_tick_v1(&host, &mut forged_book, 102).is_empty());
+        assert!(forged_book.history_failed_claims.contains(&forged_claim.claim),
+            "a claim absent during one page cannot use the cohort's completion as its own complete history");
+
+
+        let sign_demand = |_: &[u8], _: &[u8]| Some(vec![1]);
+        host.sign = &sign_demand;
+        host.history_daa = Some(1);
+        let mut backfilled = PalwGdnHeldBookV1::default();
+        assert_eq!(palw_gdn_held_filer_tick_v1(&host, &mut backfilled, 100).len(), 1);
+        assert_eq!(backfilled.cases[&forged_claim.claim].demanded.unwrap().1, 100,
+            "a newly queued demand uses the current clock, not the historical watermark");
+        assert!(palw_gdn_held_filer_tick_v1(&host, &mut backfilled, 101).is_empty());
+        assert!(!backfilled.settled.contains_key(&forged_claim.claim), "an old snapshot cannot time out a fresh demand");
         claim.execution_root = Hash64::from_u64_word(0xBAD);
         host.entries[0].0 = claim.clone();
         assert!(host.material(&claim).is_err(), "a capture of another execution cannot supply evidence");
