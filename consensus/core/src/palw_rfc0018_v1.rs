@@ -9,7 +9,7 @@
 //! | `palw_dag_width_schedule_v1` | per-block k, parents, mergeset and merge depth; block time fixed; validation refuses arming | the selected parent's DAA |
 //!
 //! **Dormant**: every fence is `None` on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from
-//! `Some(never())`, and refused when armed ([`Params::validate_palw_rfc0018_v1`]). The fold, the processor and the RPC read the four
+//! `Some(never())`, and refused when armed without a pinned arm-readiness record ([`Params::validate_palw_rfc0018_v1`], [`PALW_RFC0018_ARMING_RECORDS_V1`], empty). The fold, the processor and the RPC read the four
 //! state-level fences through ONE mirror on the V2 state params ([`PalwRfc0018MirrorV1`], written by
 //! [`Params::sync_palw_rfc0018_v1`] and by nothing else); `None` there is byte-for-byte the released behaviour (A-2: below each fence
 //! every reader answers as before, and a claim accepted below Gate C's fence keeps its old rule forever).
@@ -667,8 +667,169 @@ pub fn palw_dag_width_red_permille_v1(delay_ms: u64, interval_ms: u64, k: KType)
 // Params: fences, the mirror's sync, validation
 // -------------------------------------------------------------------------------------------------
 
-/// Every fence of this RFC can be armed in this binary? `false`: none can (RFC-0018 §12, user decisions open).
-pub const PALW_RFC0018_ARMABLE_V1: bool = false;
+/// **RFC-0018's arm-readiness record gate** (lane gatec-decouple, 2026-10-22). It replaces the former bare
+/// `PALW_RFC0018_ARMABLE_V1: bool = false`, which refused every fence of this RFC at every real height. That pin gated nothing but
+/// arming (no fold, processor or RPC reader consulted it), and its documented condition was "the RFC's user decisions are made and the
+/// rules are built and verified" (§12 U-1..U-8, §10 T-0..T-5). Those are approvals and measurements, so they are now carried the
+/// same way as the G14 gates (`crate::palw_g14_gates_v1`): a fence armed at a real height passes only when a pinned record names
+/// exactly this (fence, network genesis, height) and carries one non-zero, distinct evidence digest per requirement plus a review
+/// digest. **The pinned list is EMPTY**, so every armed fence is still refused, exactly as with the bool. No isolated-genesis
+/// exception is added (the bool had none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PalwRfc0018GatedFenceV1 {
+    DagSiblingAttributionV1,
+    PanelAnchorPermissionlessV1,
+    RuleEParticipationV2,
+    IndependentlyWorkCertifiedV1,
+    DagWidthScheduleV1,
+}
+
+/// §12 U-1 (fence activation and order) is a requirement of every fence; the rest are per fence.
+const RFC0018_U1: &str = "U-1 user decision: this fence's activation height and its order relative to the other fences (RFC-0018 §12)";
+
+impl PalwRfc0018GatedFenceV1 {
+    pub const ALL: [Self; 5] = [
+        Self::DagSiblingAttributionV1,
+        Self::PanelAnchorPermissionlessV1,
+        Self::RuleEParticipationV2,
+        Self::IndependentlyWorkCertifiedV1,
+        Self::DagWidthScheduleV1,
+    ];
+
+    /// The `Params` field's name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::DagSiblingAttributionV1 => "palw_dag_sibling_attribution_v1",
+            Self::PanelAnchorPermissionlessV1 => "palw_panel_anchor_permissionless_v1",
+            Self::RuleEParticipationV2 => "palw_rule_e_participation_v2",
+            Self::IndependentlyWorkCertifiedV1 => "palw_independently_work_certified_v1",
+            Self::DagWidthScheduleV1 => "palw_dag_width_schedule_v1",
+        }
+    }
+
+    /// The fence's height on `p` (`Some(never())` reads as `None`).
+    pub fn armed(self, p: &Params) -> Option<u64> {
+        match self {
+            Self::DagSiblingAttributionV1 => Params::rfc0018_from(p.palw_dag_sibling_attribution_v1),
+            Self::PanelAnchorPermissionlessV1 => Params::rfc0018_from(p.palw_panel_anchor_permissionless_v1),
+            Self::RuleEParticipationV2 => Params::rfc0018_from(p.palw_rule_e_participation_v2),
+            Self::IndependentlyWorkCertifiedV1 => Params::rfc0018_from(p.palw_independently_work_certified_v1),
+            Self::DagWidthScheduleV1 => {
+                p.palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score())
+            }
+        }
+    }
+
+    /// The evidence a record must carry, one digest per entry, in this order (RFC-0018 §10 tests, §12 decisions).
+    pub fn requirements(self) -> &'static [&'static str] {
+        match self {
+            Self::DagSiblingAttributionV1 => &[
+                RFC0018_U1,
+                "T-1 (§4.4): sibling order is a permutation, merge-order independent, round robin over models (palw_rfc0018_v1 tests)",
+                "§10 real-process drill: three concurrent models on real nodes, partition/IBD convergence (scripts/drills/rfc0018_*)",
+            ],
+            Self::PanelAnchorPermissionlessV1 => &[
+                RFC0018_U1,
+                "T-2 (§5): anchor seed excludes the producer, ignores unadmitted contributions, is committed fold output",
+                "T-2b: measured grinding bound prod(1+q_i) report",
+            ],
+            Self::RuleEParticipationV2 => &[
+                RFC0018_U1,
+                "T-3 (§6.5): participation v2 capital-split neutral, once per bond, excludes voided/uncertified",
+                "U-7 user decision: no-credit tie broken by GHOSTDAG order (§6.4)",
+                "T-5: DNS-retired calibration devnet run (retired)",
+            ],
+            Self::IndependentlyWorkCertifiedV1 => &[
+                RFC0018_U1,
+                "T-0 (§7.11): uncertified claims earn no participation, weight, frontier, settlement or coinbase credit (all tiers)",
+                "U-5 user decision: certification m/k and who bears the m re-executions per certification",
+                "U-6 user decision: veto adopted or not",
+                "U-2/U-3 user decisions: issuance-leg hold payout and free-prompt pre-certification coinbase carve",
+                "§10 real-process drill: Gate C fence crossing, restart/IBD/reorg identical certification rows (scripts/drills/rfc0018_*)",
+            ],
+            Self::DagWidthScheduleV1 => &[
+                RFC0018_U1,
+                "U-4 user decision and measured record: the DAG width schedule's values (T-4 structural check)",
+                "§8.2 measured red fraction at the scheduled k on real propagation",
+            ],
+        }
+    }
+
+    /// The refusal while no record for this fence, network and height is pinned.
+    pub fn no_record_refusal(self) -> &'static str {
+        match self {
+            Self::DagSiblingAttributionV1 => {
+                "palw_dag_sibling_attribution_v1 cannot be armed: no RFC-0018 arm-readiness record is pinned for this network and height \
+                 (PALW_RFC0018_ARMING_RECORDS_V1 is empty; RFC-0018 §12)"
+            }
+            Self::PanelAnchorPermissionlessV1 => {
+                "palw_panel_anchor_permissionless_v1 cannot be armed: no RFC-0018 arm-readiness record is pinned for this network and \
+                 height (PALW_RFC0018_ARMING_RECORDS_V1 is empty; RFC-0018 §12)"
+            }
+            Self::RuleEParticipationV2 => {
+                "palw_rule_e_participation_v2 cannot be armed: no RFC-0018 arm-readiness record is pinned for this network and height \
+                 (PALW_RFC0018_ARMING_RECORDS_V1 is empty; RFC-0018 §12)"
+            }
+            Self::IndependentlyWorkCertifiedV1 => {
+                "palw_independently_work_certified_v1 cannot be armed: no RFC-0018 arm-readiness record is pinned for this network and \
+                 height (PALW_RFC0018_ARMING_RECORDS_V1 is empty; RFC-0018 §12)"
+            }
+            Self::DagWidthScheduleV1 => {
+                "palw_dag_width_schedule_v1 cannot be armed: no RFC-0018 arm-readiness record is pinned for this network and height \
+                 (PALW_RFC0018_ARMING_RECORDS_V1 is empty; RFC-0018 §12)"
+            }
+        }
+    }
+}
+
+/// The record format's version.
+pub const PALW_RFC0018_ARMING_RECORD_VERSION_V1: u16 = 1;
+
+/// **An RFC-0018 arm-readiness record** — same shape and form rules as `crate::palw_g14_gates_v1::PalwG14ArmingRecordV1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRfc0018ArmingRecordV1 {
+    pub version: u16,
+    pub fence: PalwRfc0018GatedFenceV1,
+    pub genesis: Hash64,
+    pub activation_daa: u64,
+    pub source_commit: [u8; 20],
+    pub evidence: &'static [[u8; 32]],
+    pub review: [u8; 32],
+}
+
+/// **The pinned records — EMPTY.** Every RFC-0018 fence armed at a real height is refused (the old `ARMABLE = false`).
+pub const PALW_RFC0018_ARMING_RECORDS_V1: &[PalwRfc0018ArmingRecordV1] = &[];
+
+/// Does `records` authorize arming `fence` at `activation_daa` on the network `genesis`? The first record naming exactly this
+/// (fence, network, height) decides; its form must hold. `Err` carries the refusal text.
+pub fn palw_rfc0018_arming_record_admits_v1(
+    fence: PalwRfc0018GatedFenceV1,
+    genesis: Hash64,
+    activation_daa: u64,
+    records: &[PalwRfc0018ArmingRecordV1],
+) -> Result<(), &'static str> {
+    let Some(r) = records.iter().find(|r| r.fence == fence && r.genesis == genesis && r.activation_daa == activation_daa) else {
+        return Err(fence.no_record_refusal());
+    };
+    if r.version != PALW_RFC0018_ARMING_RECORD_VERSION_V1 {
+        return Err("the RFC-0018 arm-readiness record's version is not this binary's");
+    }
+    if r.source_commit == [0; 20] {
+        return Err("the RFC-0018 arm-readiness record names no source commit");
+    }
+    if r.evidence.len() != fence.requirements().len() {
+        return Err("the RFC-0018 arm-readiness record does not carry one evidence digest per requirement");
+    }
+    if r.review == [0; 32] {
+        return Err("the RFC-0018 arm-readiness record carries no review digest");
+    }
+    for (i, d) in r.evidence.iter().enumerate() {
+        if *d == [0; 32] || *d == r.review || r.evidence[..i].contains(d) {
+            return Err("an RFC-0018 arm-readiness evidence digest is zero, repeated, or equal to the review");
+        }
+    }
+    Ok(())
+}
 
 impl Params {
     /// Histories are keyed on the selected parent's authenticated DAA, never a candidate's declared score.
@@ -739,9 +900,14 @@ impl Params {
     }
 
     /// **Refused when armed at a real height**, every one of the five, until the RFC's user decisions are made and the rules are built
-    /// and verified ([`PALW_RFC0018_ARMABLE_V1`]); `None` and `Some(never())` pass. Ordering rules checked first so a test can tell them
-    /// apart: rule E v2 needs rule E at or below it; Gate C needs nothing (it only removes credit).
+    /// and verified (a pinned [`PalwRfc0018ArmingRecordV1`]; the list is empty); `None` and `Some(never())` pass. Ordering rules checked first so a test can tell them
+    /// apart: rule E v2 needs rule E at or below it; Gate C needs the tier fence and aux 136 at or below it.
     pub fn validate_palw_rfc0018_v1(&self) -> Result<(), PalwModeV2Error> {
+        self.validate_palw_rfc0018_with_records_v1(PALW_RFC0018_ARMING_RECORDS_V1)
+    }
+
+    /// [`Self::validate_palw_rfc0018_v1`] with `records` as the pinned list (tests and arm-readiness tooling only).
+    pub fn validate_palw_rfc0018_with_records_v1(&self, records: &[PalwRfc0018ArmingRecordV1]) -> Result<(), PalwModeV2Error> {
         if let Some(v2) = Self::rfc0018_from(self.palw_rule_e_participation_v2) {
             let rule_e = Self::rfc0018_from(self.palw_fork_choice_rule_e_v1);
             if rule_e.is_none_or(|e| e > v2) {
@@ -750,13 +916,29 @@ impl Params {
                 ));
             }
         }
-        // Gate C reuses RFC-0017's attestation object (inner 75, dropped by the A-2 gate below `palw_model_eligibility_v1`) and keeps
-        // its rows in the kernel route (aux 136, `palw_probabilistic_constraints_v1`): both at or below it.
+        // Gate C's certification attestations ride inner 75's wire form, but the processor admits them on Gate C's own fence (an
+        // attestation naming an existing certification row, `palw_kernel_route_object_is_signed`) and the fold routes them to
+        // `try_attest_claim_certification_v1` before RFC-0017's handler — RFC-0017's exam (`palw_model_eligibility_v1`) is NOT needed.
+        // Model-level review is abolished (PRINCIPLES §9, 2026-10-15): the model tier Gate C sits beside is the frozen two-tier rule
+        // (`palw_model_tier_v1`, genesis/annual-fork 1.0, registered 0.3, applied once in A_m's c_m), so that fence is required at or
+        // below Gate C instead. Its rows live in the kernel route (aux 136, `palw_probabilistic_constraints_v1`): also at or below.
+        // A configuration that still sets `palw_model_eligibility_v1` keeps the old ordering check (that fence can never be armed).
         if let Some(c) = Self::rfc0018_from(self.palw_independently_work_certified_v1) {
             let below = |f: Option<ForkActivation>| Self::rfc0018_from(f).is_some_and(|at| at <= c);
-            if !below(self.palw_model_eligibility_v1) || !below(self.palw_probabilistic_constraints_v1) {
+            if !below(self.palw_probabilistic_constraints_v1) {
                 return Err(PalwModeV2Error::Invalid(
-                    "palw_independently_work_certified_v1 needs palw_model_eligibility_v1 and palw_probabilistic_constraints_v1 at or below it",
+                    "palw_independently_work_certified_v1 needs palw_probabilistic_constraints_v1 at or below it (kernel route aux 136)",
+                ));
+            }
+            if !self.palw_model_tier_v1_from_daa().is_some_and(|tier| tier <= c) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_independently_work_certified_v1 needs palw_model_tier_v1 at or below it: the frozen two-tier rule is the model tier \
+                     source (no per-model exam, PRINCIPLES §9)",
+                ));
+            }
+            if Self::rfc0018_from(self.palw_model_eligibility_v1).is_some() && !below(self.palw_model_eligibility_v1) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_independently_work_certified_v1 needs palw_model_eligibility_v1, where set, at or below it",
                 ));
             }
             if let Some(mirror) = self.palw_rfc0018_expected_mirror_v1()
@@ -797,23 +979,23 @@ impl Params {
                 return Err(PalwModeV2Error::Invalid("DAG width schedule exceeds retained pruning/finality geometry"));
             }
         }
-        let armed = [
-            ("palw_dag_sibling_attribution_v1", Self::rfc0018_from(self.palw_dag_sibling_attribution_v1)),
-            ("palw_panel_anchor_permissionless_v1", Self::rfc0018_from(self.palw_panel_anchor_permissionless_v1)),
-            ("palw_rule_e_participation_v2", Self::rfc0018_from(self.palw_rule_e_participation_v2)),
-            ("palw_independently_work_certified_v1", Self::rfc0018_from(self.palw_independently_work_certified_v1)),
-            (
-                "palw_dag_width_schedule_v1",
-                self.palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score()),
-            ),
-        ];
-        if !PALW_RFC0018_ARMABLE_V1 && armed.iter().any(|(_, at)| at.is_some()) {
-            return Err(PalwModeV2Error::Invalid(
-                "an RFC-0018 fence cannot be armed in this binary: implemented dormant, user decisions open (RFC-0018 §12)",
-            ));
+        self.validate_palw_rfc0018_records_in_v1(records)?;
+        Ok(())
+    }
+}
+
+impl Params {
+    /// **The record gate** against `records` in place of the binary's pinned list (tests and arm-readiness tooling; the node validates
+    /// with [`PALW_RFC0018_ARMING_RECORDS_V1`]). Unarmed fences pass.
+    pub fn validate_palw_rfc0018_records_in_v1(&self, records: &[PalwRfc0018ArmingRecordV1]) -> Result<(), PalwModeV2Error> {
+        for fence in PalwRfc0018GatedFenceV1::ALL {
+            if let Some(at) = fence.armed(self) {
+                palw_rfc0018_arming_record_admits_v1(fence, self.genesis.hash, at, records).map_err(PalwModeV2Error::Invalid)?;
+            }
         }
         Ok(())
     }
+
 }
 
 /// Re-exported for the processor's sibling-order call site (the attempt's model class).

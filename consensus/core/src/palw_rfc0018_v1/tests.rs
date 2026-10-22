@@ -119,9 +119,9 @@ fn rfc18_rule_e_v2_needs_rule_e_at_or_below_it_and_the_mirror_must_agree() {
     assert!(matches!(p.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("needs palw_fork_choice_rule_e_v1")));
     let mut q = palw_t12_shipped_params();
     q.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE));
-    // Gate C's prerequisites at or below it (RFC-0017's attestation object and the kernel route's aux 136), so the mirror is what
-    // the check reaches.
-    q.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE));
+    // Gate C's prerequisites at or below it (the frozen tier rule and the kernel route's aux 136), so the mirror is what the check
+    // reaches.
+    q.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(ForkActivation::new(FENCE)));
     q.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(FENCE));
     // Not synced: the mirror disagrees.
     assert!(matches!(q.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("mirror")));
@@ -1024,4 +1024,108 @@ fn rfc18_width_cannot_change_the_clock_shrink_a_cluster_or_outrun_pruning() {
     f.schedule.merge_depth = base.finality_depth() + 1;
     p.palw_dag_width_schedule_v1 = Some(f);
     assert!(matches!(p.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("geometry")));
+}
+
+// =================================================================================================================================
+// Lane gatec-decouple (2026-10-22): Gate C without RFC-0017's exam; the arm-readiness record gate
+// =================================================================================================================================
+
+fn gate_c_ready() -> Params {
+    let mut p = palw_t12_shipped_params();
+    p.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE));
+    p.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(ForkActivation::new(FENCE)));
+    p.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(FENCE));
+    p.sync_palw_rfc0018_v1();
+    p
+}
+
+const RFC18_DIGESTS: [[u8; 32]; 8] = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32], [7; 32], [8; 32]];
+
+fn record_for(p: &Params, fence: PalwRfc0018GatedFenceV1) -> PalwRfc0018ArmingRecordV1 {
+    PalwRfc0018ArmingRecordV1 {
+        version: PALW_RFC0018_ARMING_RECORD_VERSION_V1,
+        fence,
+        genesis: p.genesis.hash,
+        activation_daa: FENCE,
+        source_commit: [0xAB; 20],
+        evidence: &RFC18_DIGESTS[..fence.requirements().len()],
+        review: [0xEE; 32],
+    }
+}
+
+#[test]
+fn gatec_decouple_gate_c_validates_without_model_eligibility_past_the_fence() {
+    let p = gate_c_ready();
+    assert_eq!(p.palw_model_eligibility_v1, None, "RFC-0017's exam fence is not set");
+    // With no pinned record it is still refused, by the record gate and nothing else.
+    assert!(matches!(p.validate_palw_rfc0018_v1(),
+        Err(PalwModeV2Error::Invalid(why)) if why == PalwRfc0018GatedFenceV1::IndependentlyWorkCertifiedV1.no_record_refusal()));
+    let rec = [record_for(&p, PalwRfc0018GatedFenceV1::IndependentlyWorkCertifiedV1)];
+    p.validate_palw_rfc0018_with_records_v1(&rec).unwrap();
+    // The mirror governs Gate C past the fence: claim-level certification is required.
+    let mirror = p.palw_rfc0018_expected_mirror_v1().expect("Gate C armed");
+    assert!(!mirror.gate_c_governs(FENCE - 1));
+    assert!(mirror.gate_c_governs(FENCE));
+    assert_eq!(mirror.gate_c_rule, PalwGateCRuleV1::SecurityCertifiedV1);
+}
+
+#[test]
+fn gatec_decouple_gate_c_needs_the_tier_fence_and_aux_136_and_a_set_eligibility_fence_below_it() {
+    let mut p = gate_c_ready();
+    let rec = [record_for(&p, PalwRfc0018GatedFenceV1::IndependentlyWorkCertifiedV1)];
+    p.palw_model_tier_v1 = None;
+    assert!(matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_model_tier_v1")));
+    let mut p = gate_c_ready();
+    p.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(ForkActivation::new(FENCE + 1)));
+    assert!(matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_model_tier_v1")));
+    let mut p = gate_c_ready();
+    p.palw_probabilistic_constraints_v1 = None;
+    assert!(matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("aux 136")));
+    // The old dependency is kept where the eligibility fence is set: above Gate C it is refused...
+    let mut p = gate_c_ready();
+    p.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE + 1));
+    assert!(matches!(p.validate_palw_rfc0018_with_records_v1(&rec), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_model_eligibility_v1")));
+    // ...at or below it this check passes (RFC-0017's own validation still refuses arming it).
+    let mut p = gate_c_ready();
+    p.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE));
+    p.validate_palw_rfc0018_with_records_v1(&rec).unwrap();
+    assert!(p.validate_palw_model_eligibility_v1().is_err(), "RFC-0017's exam can never be armed");
+    // Some(never()) eligibility is absence.
+    let mut p = gate_c_ready();
+    p.palw_model_eligibility_v1 = Some(ForkActivation::never());
+    p.validate_palw_rfc0018_with_records_v1(&rec).unwrap();
+}
+
+#[test]
+fn gatec_decouple_rfc18_record_gate_is_exact_and_well_formed() {
+    let p = gate_c_ready();
+    let good = record_for(&p, PalwRfc0018GatedFenceV1::IndependentlyWorkCertifiedV1);
+    let refused = |r: PalwRfc0018ArmingRecordV1| p.validate_palw_rfc0018_with_records_v1(&[r]).is_err();
+    assert!(!refused(good));
+    assert!(refused(PalwRfc0018ArmingRecordV1 { activation_daa: FENCE + 1, ..good }), "another height");
+    assert!(refused(PalwRfc0018ArmingRecordV1 { genesis: Hash64::from_u64_word(9), ..good }), "another network");
+    assert!(refused(PalwRfc0018ArmingRecordV1 { fence: PalwRfc0018GatedFenceV1::DagWidthScheduleV1, ..good }), "another fence");
+    assert!(refused(PalwRfc0018ArmingRecordV1 { version: 2, ..good }));
+    assert!(refused(PalwRfc0018ArmingRecordV1 { source_commit: [0; 20], ..good }));
+    assert!(refused(PalwRfc0018ArmingRecordV1 { review: [0; 32], ..good }));
+    assert!(refused(PalwRfc0018ArmingRecordV1 { evidence: &RFC18_DIGESTS[..1], ..good }));
+    const DUP: [[u8; 32]; 6] = [[1; 32], [1; 32], [3; 32], [4; 32], [5; 32], [6; 32]];
+    assert!(refused(PalwRfc0018ArmingRecordV1 { evidence: &DUP, ..good }));
+    // The binary's list is empty: nothing is armable by this lane.
+    assert!(PALW_RFC0018_ARMING_RECORDS_V1.is_empty());
+    for f in PalwRfc0018GatedFenceV1::ALL {
+        assert!(NAMES.contains(&f.name()));
+        assert!(f.requirements().len() >= 2);
+    }
+}
+
+#[test]
+fn gatec_decouple_shipped_presets_identity_and_validation_unchanged() {
+    for p in [MAINNET_PARAMS, TESTNET_PARAMS, palw_t12_shipped_params()] {
+        for f in PalwRfc0018GatedFenceV1::ALL {
+            assert_eq!(f.armed(&p), None);
+        }
+        p.validate_palw_rfc0018_v1().unwrap();
+        p.validate_palw_rfc0018_with_records_v1(&[]).unwrap();
+    }
 }
