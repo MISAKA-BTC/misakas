@@ -118,6 +118,10 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwPaidClaim);
     impl_into_kaspad_request!(GetPalwAcceptanceReads);
     impl_into_kaspad_request!(GetPalwRfc0016Report);
+    impl_into_kaspad_request!(GetPalwClaimDetail);
+    impl_into_kaspad_request!(GetPalwCourtState);
+    impl_into_kaspad_request!(GetPalwFenceSchedule);
+    impl_into_kaspad_request!(GetPalwBondDetail);
     impl_into_kaspad_request!(GetPalwKernelClaim);
     impl_into_kaspad_request!(GetPalwKernelRows);
     impl_into_kaspad_request!(GetPalwKernelFinals);
@@ -327,6 +331,10 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwPaidClaim);
     impl_into_kaspad_response!(GetPalwAcceptanceReads);
     impl_into_kaspad_response!(GetPalwRfc0016Report);
+    impl_into_kaspad_response!(GetPalwClaimDetail);
+    impl_into_kaspad_response!(GetPalwCourtState);
+    impl_into_kaspad_response!(GetPalwFenceSchedule);
+    impl_into_kaspad_response!(GetPalwBondDetail);
     impl_into_kaspad_response!(GetPalwKernelClaim);
     impl_into_kaspad_response!(GetPalwKernelRows);
     impl_into_kaspad_response!(GetPalwKernelFinals);

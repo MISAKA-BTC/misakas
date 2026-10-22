@@ -3889,6 +3889,78 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_palw_claim_detail_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwClaimDetailRequest,
+    ) -> RpcResult<GetPalwClaimDetailResponse> {
+        // Parsed before any state is read: a malformed id is an error, never an empty answer.
+        let claim = palw_user_view_hash64("claim", &request.claim_hex)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwClaimDetailResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session.spawn_blocking(move |c| c.palw_claim_detail_v1(claim)).await.map_err(RpcError::General)?;
+        let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
+        Ok(GetPalwClaimDetailResponse { available, found, now_daa, view_json })
+    }
+
+    async fn get_palw_court_state_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwCourtStateRequest,
+    ) -> RpcResult<GetPalwCourtStateResponse> {
+        use kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1;
+        let target = match (request.claim_hex.is_empty(), request.session_hex.is_empty()) {
+            (false, true) => PalwCourtTargetV1::Claim(palw_user_view_hash64("claim", &request.claim_hex)?),
+            (true, false) => PalwCourtTargetV1::Session(palw_user_view_hash64("session", &request.session_hex)?),
+            _ => return Err(RpcError::General("name exactly one of a claim id or a court session id".into())),
+        };
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwCourtStateResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session.spawn_blocking(move |c| c.palw_court_state_v1(target)).await.map_err(RpcError::General)?;
+        let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
+        Ok(GetPalwCourtStateResponse { available, found, now_daa, view_json })
+    }
+
+    async fn get_palw_fence_schedule_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _request: GetPalwFenceScheduleRequest,
+    ) -> RpcResult<GetPalwFenceScheduleResponse> {
+        // The node's own ruleset, judged at the virtual DAA — `ForkActivation::is_active`, the predicate every fold site reads.
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let now_daa = session.get_virtual_daa_score();
+        let doc = kaspa_consensus_core::palw_user_views_v1::palw_fence_schedule_json_v1(&self.config.params, now_daa);
+        Ok(GetPalwFenceScheduleResponse { available: true, found: true, now_daa, view_json: doc.to_string() })
+    }
+
+    async fn get_palw_bond_detail_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwBondDetailRequest,
+    ) -> RpcResult<GetPalwBondDetailResponse> {
+        let (txid, index) =
+            request.bond.split_once(':').ok_or_else(|| RpcError::General(format!("bond '{}' is not <txid>:<index>", request.bond)))?;
+        let transaction_id = txid
+            .parse::<kaspa_consensus_core::tx::TransactionId>()
+            .map_err(|_| RpcError::General(format!("bond transaction id '{txid}' is not a transaction id")))?;
+        let index: u32 = index.parse().map_err(|_| RpcError::General(format!("bond index '{index}' is not an output index")))?;
+        let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint {
+            transaction_id,
+            index,
+        });
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwBondDetailResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session.spawn_blocking(move |c| c.palw_bond_detail_v1(bond)).await.map_err(RpcError::General)?;
+        let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
+        Ok(GetPalwBondDetailResponse { available, found, now_daa, view_json })
+    }
+
     async fn get_palw_rfc_0016_report_call(
         &self,
         _connection: Option<&DynRpcConnection>,
@@ -5828,6 +5900,25 @@ pub fn palw_capacity_shadow_response_v1(
                 q_measured_permille: row.q_measured_permille.map(u32::from),
             })
             .collect(),
+    }
+}
+
+/// A 64-byte id named in a user-view request: exactly 128 hex digits, checked before any state is read.
+fn palw_user_view_hash64(what: &str, hex: &str) -> RpcResult<kaspa_consensus_core::Hash64> {
+    if hex.len() != 128 {
+        return Err(RpcError::General(format!("{what} id must be 128 hex digits (a 64-byte id), got {}", hex.len())));
+    }
+    let mut bytes = [0u8; 64];
+    faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("{what} id: {e}")))?;
+    Ok(kaspa_consensus_core::Hash64::from_bytes(bytes))
+}
+
+/// `(available, found, now_daa, view_json)` of a consensus user-view answer (`None`: no PALW tip).
+fn palw_user_view_answer(answer: Option<(u64, Option<String>)>) -> (bool, bool, u64, String) {
+    match answer {
+        None => (false, false, 0, String::new()),
+        Some((now_daa, None)) => (true, false, now_daa, String::new()),
+        Some((now_daa, Some(json))) => (true, true, now_daa, json),
     }
 }
 

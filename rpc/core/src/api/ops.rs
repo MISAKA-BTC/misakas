@@ -340,6 +340,17 @@ pub enum RpcApiOps {
     /// RFC-0016: the per-model report (targets apart from outcomes; node-local observations labelled) and the pre-lottery quote.
     /// Read-only. Op 255 (245–254 are reserved by other lanes).
     GetPalwRfc0016Report = 255,
+    /// Tooling lane (ops 225–228, the unused tail of C2's 220–229 range): one claim's whole standing — operator row, accusation
+    /// pending, receipt pause, court clocks, dispute record, DA and court sessions — as one versioned JSON document. Read-only, no rule
+    /// reads it. Appended in a free slot: a node built before it drops the WebSocket on it (clients feature-detect).
+    GetPalwClaimDetail = 225,
+    /// Tooling lane: the court around one claim or one session (ladder turn, per-turn deadline, backstop, reservations). Read-only.
+    GetPalwCourtState = 226,
+    /// Tooling lane: every top-level PALW fence (`Params::palw_fences_v1`) with its height, whether it is armed at the virtual DAA, and
+    /// the release lists (full activation, int-13, post-launch …) with their adopted heights. Read-only.
+    GetPalwFenceSchedule = 227,
+    /// Tooling lane: one bond — registry row, reserved exposure, live slashable locks, live claims, reservations, prosecutions. Read-only.
+    GetPalwBondDetail = 228,
 }
 
 impl RpcApiOps {

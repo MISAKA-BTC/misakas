@@ -458,6 +458,8 @@
 - [design/palw/tir/tensor-store-bench.md](../design/palw/tir/tensor-store-bench.md)
 - [design/palw/tir/tensor-store.md](../design/palw/tir/tensor-store.md)
 - [design/palw/tir/tir-frontend-pack-v1.md](../design/palw/tir/tir-frontend-pack-v1.md)
+- [design/palw/tooling/README.md](../design/palw/tooling/README.md)
+- [design/palw/tooling/palw-user-interactions.md](../design/palw/tooling/palw-user-interactions.md)
 - [design/palw/verification/README.md](../design/palw/verification/README.md)
 - [design/palw/verification/beacon-source-opt-in-reservation.md](../design/palw/verification/beacon-source-opt-in-reservation.md)
 - [design/palw/verification/court-model-scope-v1.md](../design/palw/verification/court-model-scope-v1.md)
@@ -855,6 +857,10 @@
 - [governance/templates/adr-major-change.md](../governance/templates/adr-major-change.md)
 - [governance/templates/parameter-change.md](../governance/templates/parameter-change.md)
 - [governance/templates/rfc-major-change.md](../governance/templates/rfc-major-change.md)
+
+## guides
+
+- [guides/palw-cli.md](../guides/palw-cli.md)
 
 ## history
 
