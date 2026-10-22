@@ -76,3 +76,20 @@ fn audit_cx02_the_same_run_under_a_second_bond_is_credited_again() {
     let credited = copy.as_ref().ok().and_then(|(state, _)| state.claim(&h64(0xD2))).map_or(0, |claim| claim.pwu);
     assert_eq!(credited, 0, "CX-02: a copy of a paid run under a second bond is credited {credited} pwu for no new position");
 }
+
+/// **CX-01, the live testnet-12 form** (`palw_fp_decode_rules` armed with the int-11 flag day at DAA 5,300 on the int-12 release):
+/// the prompt is priced at zero and the decode is credited, so the ladder re-sells C0's DECODE positions. C2 = (P ‖ g[..4],
+/// decode 20) emits exactly g[4..24] — every one of its positions is one C0 computed.
+#[test]
+fn audit_cx01_live_under_the_decode_rules_a_rung_of_a_paid_answer_is_credited_again() {
+    let (p, chain, _class, armed) = published();
+    let p = p.with_fp_decode_rules_v1(Some(0));
+    let prompt: Vec<u32> = (0..8).collect();
+    let answer: Vec<u32> = (500..524).collect();
+    let (c0_state, _) =
+        apply_derived(&chain, &p, &ctx(4, 103, 4), &[derived_commit(0xC0, &prompt, 24, leaves(8, 24))], &armed).expect("C0 applies");
+    let rung: Vec<u32> = prompt.iter().chain(answer[..4].iter()).copied().collect();
+    let resold = apply_derived(&c0_state, &p, &ctx(5, 104, 5), &[derived_commit(0xC2, &rung, 20, leaves(12, 20))], &armed);
+    let credited = resold.as_ref().ok().and_then(|(state, _)| state.claim(&h64(0xC2))).map_or(0, |claim| claim.pwu);
+    assert_eq!(credited, 0, "CX-01 (decode rules): a rung whose every position C0 computed is credited {credited} pwu");
+}
