@@ -959,6 +959,21 @@ impl PalwFoldReadV1<'_> {
                 why,
             });
         }
+        // **RFC-0002 02-A (`palw_tir_container_identity_v1`)**: past the fence an attempt of a registered TIR class that is not bound
+        // to its `PALWART3` container (tag 175) is not taken — a court opens an attempt's operands under the class's artifact root just
+        // as it opens a free-prompt claim's, so the attempt lane needs the same binding. The free-prompt lane asks it at its own door
+        // (beside G-03), so its refusal order is unchanged. `Ok` below the fence and for every non-TIR class: byte for byte.
+        if incoming == PalwGatedClaimV1::Attempt
+            && self.extras.tir_container_identity_active
+            && self.state.tir_class_v1(class_id).is_some()
+            && crate::palw_tir_container_v1::palw_tir_bound_container_v1(self.state, *class_id).is_none()
+        {
+            return Err(PalwStateV2Error::ClassNotRewardable {
+                class: *class_id,
+                code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
+                why: "past palw_tir_container_identity_v1 a TIR class's attempt needs the class bound to its PALWART3 container".into(),
+            });
+        }
         // **RFC-0006 R6-CELL round 4 (`palw_cell_coverage_closure_v1`, REQ-CELL-1b)**: past the fence, a class whose graph the
         // fold holds and whose cell coverage has a gap takes no claim on any lane — explicitly uncovered and unrewarded.
         // Where the fold does not hold the graph, the court close convicts instead (REQ-CELL-2). Below the fence `None`.
