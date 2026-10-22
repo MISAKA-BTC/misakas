@@ -568,6 +568,24 @@ impl Params {
         Ok(())
     }
 
+    /// **G14 U06/U07 court clock v2 gate (DORMANT, lane g14p/court-clock).** `palw_court_clock_v2` needs `palw_legacy_public_filer_v1`
+    /// in force at or below it (the extension IS the LG14-A dispute record, and that fence carries the arming record), and the fold's
+    /// mirror must agree (`sync_palw_g14_gates_v1`).
+    pub fn validate_palw_court_clock_v2(&self) -> Result<(), PalwModeV2Error> {
+        let Some(clock) = self.palw_court_clock_v2_fence() else { return Ok(()) };
+        if !self.palw_legacy_public_filer_v1.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= clock.daa_score()) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_court_clock_v2 needs palw_legacy_public_filer_v1 in force at or below it (G14 U06/U07 court clock)",
+            ));
+        }
+        if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
+            if bundle.state.court_clock_v2_from_daa() != Some(clock.daa_score()) {
+                return Err(PalwModeV2Error::Invalid("palw_court_clock_v2 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1"));
+            }
+        }
+        Ok(())
+    }
+
     /// **The TIR frame cost gate** (audit §10): `Ok` when `palw_tir_public_conviction_v1` is not armed; otherwise the ruleset must
     /// carry a well-formed `palw_tir_frame_cost_v1` and — unless its genesis is an isolated G14 test genesis — a record in `records`
     /// must name this network, the fence's height and exactly that model.
@@ -664,13 +682,15 @@ impl Params {
         let route = self.palw_g14_route_required_v1_mirror();
         let liability = PalwG14GatedFenceV1::RewardLiabilityHorizonV1.armed(self).map(|f| f.daa_score());
         let outsider_lane = self.palw_court_outsider_lane_v1_fence().map(|f| f.daa_score());
+        let court_clock = self.palw_court_clock_v2_fence().map(|f| f.daa_score());
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle
                 .state
                 .clone()
                 .with_g14_route_required_v1(route)
                 .with_reward_liability_horizon_from_daa(liability)
-                .with_court_outsider_lane_from_daa(outsider_lane);
+                .with_court_outsider_lane_from_daa(outsider_lane)
+                .with_court_clock_v2_from_daa(court_clock);
         }
     }
 }

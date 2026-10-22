@@ -496,11 +496,23 @@ pub(super) fn apply_dispute_reserved_v1(
         return Err(PalwStateV2Error::BondBelowFloor { bond: reserver, collateral: bond.collateral, floor });
     }
     let w_disclose = palw_da_disclose_window_daa_v1(builder.params);
-    let mut record = builder.state.legacy_disputes.get(&claim_id).cloned().unwrap_or_else(|| PalwDisputeClaimV1 {
-        opened_daa: now,
-        hard_deadline_daa: palw_dispute_hard_deadline_v1(&claim, w_disclose),
-        ..Default::default()
-    });
+    // G14 U07 (`palw_court_clock_v2`): for a claim accepted past the fence, creating this record IS the dispute extension — its hard
+    // deadline becomes `a + 10,000` and every clock derived from it (collect, disclosure, retention, Final hold, bond release) moves
+    // in this one write. The first reservation must land in `a <= now <= a + 3,120` (ADR-0198 A). Old claims: the old formula.
+    let mut record = match builder.state.legacy_disputes.get(&claim_id).cloned() {
+        Some(record) => record,
+        None => PalwDisputeClaimV1 {
+            opened_daa: now,
+            hard_deadline_daa: crate::palw_court_clock_v2::palw_dispute_record_hard_deadline_v2(
+                builder.params,
+                &claim,
+                w_disclose,
+                now,
+            )
+            .map_err(refused)?,
+            ..Default::default()
+        },
+    };
     if now > record.hard_deadline_daa {
         return Err(refused("the claim's hard deadline has passed: no data-availability session could still open on it"));
     }
@@ -562,7 +574,12 @@ pub(super) fn apply_dispute_reacquired_v1(
         .state
         .legacy_dispute_reservation_v1(&claim_id, &request.reserver)
         .ok_or_else(|| refused("reacquisition requires this bond's live reservation"))?;
-    let hard = palw_dispute_hard_deadline_v1(&claim, palw_da_disclose_window_daa_v1(builder.params));
+    let hard = crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
+        builder.params,
+        builder.state.legacy_disputes.get(&claim_id),
+        &claim,
+        palw_da_disclose_window_daa_v1(builder.params),
+    );
     if row.reserved_daa != request.reserved_daa
         || row.sessions_opened.checked_add(1) != Some(request.session_number)
         || request.valid_until_daa > hard
@@ -763,7 +780,12 @@ impl PalwChainStateV2 {
             registered_semantics: self.claim_semantics_v1(claim_id).cloned(),
             work_leaves: claim.work_leaves,
             deadline_daa: self.deadline_of(claim_id),
-            hard_deadline_daa: palw_dispute_hard_deadline_v1(claim, palw_da_disclose_window_daa_v1(params)),
+            hard_deadline_daa: crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
+                params,
+                self.legacy_disputes.get(claim_id),
+                claim,
+                palw_da_disclose_window_daa_v1(params),
+            ),
             record: self.legacy_disputes.get(claim_id).cloned(),
             sessions: self.da_sessions_of(claim_id).map(|(accuser, session)| (*accuser, session.clone())).collect(),
             answered: self.da_claims.get(claim_id).map(|record| record.answered.iter().copied().collect()).unwrap_or_default(),
@@ -1098,7 +1120,13 @@ impl PalwChainStateV2 {
                 let final_open = palw_final_public_dispute_open_v1(self, params, &claim_id, claim, now_daa);
                 if !known
                     && (!palw_dispute_phase_reservable_v1(&claim.phase, final_open)
-                        || now_daa > palw_dispute_hard_deadline_v1(claim, palw_da_disclose_window_daa_v1(params)))
+                        || now_daa
+                            > crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
+                                params,
+                                self.legacy_disputes.get(&claim_id),
+                                claim,
+                                palw_da_disclose_window_daa_v1(params),
+                            ))
                 {
                     return None;
                 }
@@ -1203,7 +1231,13 @@ pub fn palw_gdn_step_candidate_v1(
                 || (final_row_open
                     && params.legacy_public_filer_active_at(now_daa)
                     && !state.legacy_disputes.get(claim_id).is_some_and(|record| record.knows(me))
-                    && now_daa <= palw_dispute_hard_deadline_v1(claim, palw_da_disclose_window_daa_v1(params)))
+                    && now_daa
+                        <= crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
+                            params,
+                            state.legacy_disputes.get(claim_id),
+                            claim,
+                            palw_da_disclose_window_daa_v1(params),
+                        ))
         }
         _ => true,
     };

@@ -698,6 +698,15 @@ impl<'a> TransitionBuilder<'a> {
                 if let Some(retention) = crate::palw_ruling_fences_v1::palw_claim_x3_retention_daa_v1(self.params, &claim) {
                     claim.trace_retention_daa = retention;
                 }
+                // **G14 U06/U07 (`palw_court_clock_v2`, RFC-0026 §3.3 F07)**: a claim created past the fence owes its material through
+                // the MAXIMAL extension `a + 10,000 + W_disclose` from acceptance, so a later dispute extension never outruns the signed
+                // horizon. Raised once, here; never moved after. Below the fence: unchanged.
+                if crate::palw_court_clock_v2::palw_court_clock_v2_governs(self.params, &claim) {
+                    let w_disclose = crate::palw_state_v2::palw_da_disclose_window_daa_v1(self.params);
+                    let need = crate::palw_court_clock_v2::palw_court_clock_v2_required_retention(claim.accepted_daa, w_disclose)
+                        .map_err(|_| PalwStateV2Error::Overflow("palw_court_clock_v2 retention"))?;
+                    claim.trace_retention_daa = claim.trace_retention_daa.max(need);
+                }
                 Some(claim)
             }
             other => other,

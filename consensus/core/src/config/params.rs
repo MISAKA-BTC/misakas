@@ -2453,6 +2453,11 @@ pub struct Params {
     /// advanced within its deadline is reclaimed so an outsider's Open is not refused by a full owner catalogue. `None` on every
     /// shipped preset; hashed Some-only. Needs `palw_legacy_public_filer_v1` at or below it (validation).
     pub palw_court_outsider_lane_v1: Option<ForkActivation>,
+    /// **G14 U06/U07 court clock v2 (DORMANT, lane g14p/court-clock; RFC-0026 §2-3, RFC-0014 2026-10-19 §B/§D, ADR-0198 A).** A claim
+    /// whose ORIGINAL acceptance is at/after this height has every court clock derived from that acceptance (`a + 3,120` normal,
+    /// `a + 10,000` once disputed — one rooted extension); older claims keep the old clock (T15). `None` on every shipped preset;
+    /// hashed Some-only. Needs `palw_legacy_public_filer_v1` at or below it (validation).
+    pub palw_court_clock_v2: Option<ForkActivation>,
     /// G14 greedy Float32 Constraint staged route (rooted f32 row court and Float32 sources).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_float_constraint_v1: Option<ForkActivation>,
@@ -5073,6 +5078,11 @@ impl Params {
         self.palw_court_outsider_lane_v1.filter(|f| *f != ForkActivation::never())
     }
 
+    /// G14 U06/U07 court clock v2 fence (dormant: `None` on every shipped preset).
+    pub fn palw_court_clock_v2_fence(&self) -> Option<ForkActivation> {
+        self.palw_court_clock_v2.filter(|f| *f != ForkActivation::never())
+    }
+
     pub fn palw_tir_public_conviction_v1_fence(&self) -> Option<ForkActivation> {
         let never = ForkActivation::never();
         match (
@@ -6144,6 +6154,7 @@ impl Params {
             palw_tir_bounded_door_v1: self.palw_tir_bounded_door_v1,
             palw_tir_designated_answers_v1: self.palw_tir_designated_answers_v1,
             palw_court_outsider_lane_v1: self.palw_court_outsider_lane_v1,
+            palw_court_clock_v2: self.palw_court_clock_v2,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
@@ -7317,6 +7328,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_court_clock_v2: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7682,6 +7694,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_court_clock_v2: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -8029,6 +8042,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_court_clock_v2: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -13557,6 +13571,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_court_clock_v2: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,

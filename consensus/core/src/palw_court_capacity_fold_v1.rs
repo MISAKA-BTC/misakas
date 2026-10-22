@@ -177,7 +177,13 @@ pub(super) fn check_court_claim_admission_v1(
         None => policy.admission_claims_per_bucket(turn),
     };
     let w_disclose = palw_da_disclose_window_daa_v1(params);
-    let bucket = trace_retention_daa.saturating_sub(w_disclose) / width;
+    // G14 U06 (`palw_court_clock_v2`): a claim accepted past the fence is provisioned for its MAXIMAL dispute, `a + 10,000` from
+    // acceptance (RFC-0026 §3.1); `now` is the new claim's acceptance. Below it: the old formula.
+    let bucket = if params.court_clock_v2_from_daa().is_some_and(|from| now >= from) {
+        crate::palw_court_clock_v2::palw_court_clock_v2_extended_hard(now) / width
+    } else {
+        trace_retention_daa.saturating_sub(w_disclose) / width
+    };
     let admitted = state
         .claims
         .values()
@@ -185,7 +191,7 @@ pub(super) fn check_court_claim_admission_v1(
             palw_court_demanding_claim_v1(state, mirror.from_daa, claim)
                 && !matches!(claim.phase, PalwClaimPhaseV2::Voided { .. })
                 && {
-                    let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(claim, w_disclose);
+                    let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, w_disclose);
                     hard >= now && hard / width == bucket
                 }
         })

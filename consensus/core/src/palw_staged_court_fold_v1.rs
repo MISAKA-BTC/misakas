@@ -1515,7 +1515,11 @@ pub(super) fn open(
             return Err(stage_refused(seed.claim, "X3: a paid stage cannot extend a claim's deadlines fixed at acceptance"));
         }
         extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
-        let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
+        // G14 U06 (`palw_court_clock_v2`): a claim accepted past the fence reads its clock from acceptance and its dispute record
+        // (a paid stage's retention never moves it); older claims keep the old formula over the extended retention.
+        let hard = crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
+            b.params,
+            b.state.legacy_disputes.get(&seed.claim),
             &extended_claim,
             palw_da_disclose_window_daa_v1(b.params),
         );
@@ -1635,7 +1639,11 @@ pub(super) fn open(
             return Err(stage_refused(seed.claim, "X3: a paid stage cannot extend a claim's deadlines fixed at acceptance"));
         }
         extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
-        let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
+        // G14 U06 (`palw_court_clock_v2`): a claim accepted past the fence reads its clock from acceptance and its dispute record
+        // (a paid stage's retention never moves it); older claims keep the old formula over the extended retention.
+        let hard = crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
+            b.params,
+            b.state.legacy_disputes.get(&seed.claim),
             &extended_claim,
             palw_da_disclose_window_daa_v1(b.params),
         );
@@ -3254,7 +3262,12 @@ fn bundle_control_v1(
         };
         let mut claim = b.state.claim(&movement.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
         claim.trace_retention_daa = claim.trace_retention_daa.max(plan.terms.material_until_daa);
-        let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(&claim, palw_da_disclose_window_daa_v1(b.params));
+        let hard = crate::palw_court_clock_v2::palw_claim_court_hard_deadline_v2(
+            b.params,
+            b.state.legacy_disputes.get(&movement.claim),
+            &claim,
+            palw_da_disclose_window_daa_v1(b.params),
+        );
         let until = hard
             .checked_add(b.params.window_challenge_at(ctx.daa_score))
             .ok_or(PalwStateV2Error::Overflow("bundle native material window"))?

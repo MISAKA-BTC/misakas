@@ -1111,6 +1111,8 @@ pub mod palw_kernel_material_replacement_v4;
 pub mod palw_court_transport_v1;
 /// RFC-0026 checked clock derivation; not a live fold or wire format.
 pub mod palw_court_policy_v1;
+/// G14 U06/U07: dormant `palw_court_clock_v2` — court clocks from original acceptance, one dispute extension.
+pub mod palw_court_clock_v2;
 
 /// Unconnected RFC-0026 deterministic service reservation component.
 pub mod palw_court_service_v1;

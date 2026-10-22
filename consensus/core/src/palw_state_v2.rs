@@ -2009,6 +2009,10 @@ pub struct PalwStateParamsV2 {
     /// `Params::sync_palw_g14_gates_v1`. `None` on every shipped preset.
     #[borsh(skip)]
     court_outsider_lane_from_daa: Option<u64>,
+    /// **G14 U06/U07 (lane g14p/court-clock): `Params::palw_court_clock_v2`'s height**, mirrored by `Params::sync_palw_g14_gates_v1`
+    /// (`crate::palw_court_clock_v2`). `None` on every shipped preset.
+    #[borsh(skip)]
+    court_clock_v2_from_daa: Option<u64>,
     /// **RFC-0006 R6-CELL round 4: `Params::palw_cell_coverage_closure_v1`'s height**, mirrored by
     /// `Params::sync_palw_cell_coverage_closure_v1` (`crate::palw_cell_coverage_closure_v1`: the registration refusal, the claim gate
     /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
