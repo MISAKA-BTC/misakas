@@ -549,6 +549,8 @@ ACTIVATION_ALLOWED
 | V11 | coinbase経路をPanel=1へ移すか（D-P5: 別途確認） |
 
 確定事項（`α = 1.5`、30日平均、`W_hold` 7日（Panel=0）・1日（Panel=1）、`B = F = 0`、Kernel claimへのcoinbase legなし、escrowのclip禁止）は判断対象ではない。
+
+> **整合性注記（2026-10-22、lane rfcgap-b）:** 平均期間は2026-10-16のユーザー決定（10-22再確認）で**7日相当DAA**に変わった（旧30日）。コードは既に7日（`PALW_ALLOCATION_AVERAGE_DAYS_V1 = 7`、`PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1 = 5,040`）。§14の`ACTIVATION_ALLOWED`は、固定拒否ではなく§14 arm-readiness record（`PALW_RFC0016_ARMING_RECORDS_V1`、空）で検査する。recordは(fence, network, 高さ)と値の組に一致し、上の各conjunctに1つずつ証拠digestを持つ。空なのでどの高さでもarmは拒否される（`consensus/core/src/palw_rfc0016_v1/values.rs`）。
 個別capを引き上げて配分を使い切らせる選択肢は設けない。
 
 ### 14.2 ユーザー判断 2026-10-15（V2〜V11）の実装状況
