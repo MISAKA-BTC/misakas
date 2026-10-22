@@ -363,3 +363,73 @@ class A16Windows(unittest.TestCase):
         self.report["windows"][0]["kl"] = {"mean": 0.0, "max": 0.0}
         self.report["windows"][-1]["kl"] = {"mean": 0.02, "max": 0.03}
         self.assertFalse(gp.a16_window_fit(self.report, self.digest, 32768, self.tol)["within"])
+
+
+class Palwq36Windows(unittest.TestCase):
+    """RFC-0002/0013: #8 is measured by qwen36-window-compare only from a real reference file; no fake pass."""
+
+    def _pipeline(self, d, **kw):
+        import argparse
+
+        base = dict(work=d, hf="/nonexistent/hf", dry_run=True, bin_dir=d, no_fit=False, no_fit_long=False, fit_max_gb=20.0,
+                    local_source=None, gguf_variant=None, context=None)
+        base.update(kw)
+        return gp.Pipeline(argparse.Namespace(**base))
+
+    def test_palwq36_fit_plan_refuses_until_real_files_exist(self):
+        with tempfile.TemporaryDirectory() as d:
+            eight = gp.model_by_id(gp.load_registry(), 8)
+            ok, why = self._pipeline(d).fit_plan(eight)
+            self.assertFalse(ok)
+            self.assertIn("--palwq36-reference-windows not given", why)
+            ok, why = self._pipeline(d, palwq36_artifact=f"{d}/none.palwq36", palwq36_reference_windows=f"{d}/none.bin").fit_plan(eight)
+            self.assertFalse(ok)
+            self.assertIn("none.bin", why)
+            art, ref = Path(d) / "a.palwq36", Path(d) / "r.bin"
+            art.write_bytes(b"x")
+            ref.write_bytes(b"x")
+            self.assertEqual(self._pipeline(d, palwq36_artifact=str(art), palwq36_reference_windows=str(ref)).fit_plan(eight), (True, ""))
+            self.assertFalse(self._pipeline(d, no_fit=True, palwq36_artifact=str(art), palwq36_reference_windows=str(ref)).fit_plan(eight)[0])
+
+    def test_palwq36_dry_run_fit_invokes_the_window_tool(self):
+        with tempfile.TemporaryDirectory() as d:
+            art, ref = Path(d) / "a.palwq36", Path(d) / "r.bin"
+            art.write_bytes(b"x")
+            ref.write_bytes(b"x")
+            p = self._pipeline(d, palwq36_artifact=str(art), palwq36_reference_windows=str(ref), palwq36_logit_scale=0.25)
+            p.tokens_file = lambda spec, tok, out: {"tokens_sha256": "0" * 64}
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                p.fit_palwq36(gp.model_by_id(p.reg, 8), None)
+            out = buf.getvalue()
+            self.assertIn("qwen36-window-compare", out)
+            self.assertIn("--reference-windows " + str(ref), out)
+            self.assertIn("--logit-scale 0.25", out)
+
+    def _report(self, sha, context=32768, scale=0.25, kl=0.01):
+        starts = gp.a16_window_starts(context, 32)
+        return {"tool": "qwen36-window-compare", "sequence_tokens": context, "tokens_sha256": sha, "logit_scale": scale,
+                "reference": {"schema": "misaka-palw/qwen36-reference-windows/v1", "tokens_sha256": sha},
+                "windows": [{"window_start": s, "window_len": 64, "positions": 64, "top1_agree": 60,
+                             "kl": {"mean": kl, "max": kl * 2}} for s in starts]}
+
+    def test_palwq36_reader_scores_a_whole_measurement(self):
+        tol = gp.load_registry()["calibration_texts"]["fit_tolerance"]
+        fit = gp.palwq36_window_fit(self._report("ab"), "ab", 32768, tol)
+        self.assertTrue(fit["measured"] and fit["within"])
+        self.assertFalse(gp.palwq36_window_fit(self._report("ab", kl=0.5), "ab", 32768, tol)["within"])
+
+    def test_palwq36_reader_refuses_missing_scale_foreign_sequence_or_windows(self):
+        tol = gp.load_registry()["calibration_texts"]["fit_tolerance"]
+        with self.assertRaises(ValueError):
+            gp.palwq36_window_fit(self._report("ab", scale=None), "ab", 32768, tol)
+        with self.assertRaises(ValueError):
+            gp.palwq36_window_fit(self._report("ab"), "cd", 32768, tol)
+        r = self._report("ab")
+        r["windows"] = r["windows"][:-1]
+        with self.assertRaises(ValueError):
+            gp.palwq36_window_fit(r, "ab", 32768, tol)
+        r = self._report("ab")
+        del r["windows"][3]["kl"]
+        with self.assertRaises(ValueError):
+            gp.palwq36_window_fit(r, "ab", 32768, tol)
