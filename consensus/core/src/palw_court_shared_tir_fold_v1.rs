@@ -327,6 +327,11 @@ pub(super) fn round(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
         }
         q.vec_v1::<(u64,u64)>(u64::from(r.control.arity)).map_err(PalwStateV2Error::NativeResource)?;
         let _lease=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+        // Lane r6-p2-shared: a version-2 control is the terminal tile's POSITION round (RFC-0024 A), written only past
+        // `palw_tir_bounded_door_v1`; below it the fold refuses it and nothing is stored.
+        if c.version==rounds::SHARED_TIR_POSITION_ROUND_VERSION_V2 && !b.extras.tir_bounded_door_active {
+            return Err(refused("shared position round below palw_tir_bounded_door_v1"));
+        }
         rounds::check_shared_tir_round_v1(&b.state,b.params,&rules,c).map_err(refused)?;
         let key=Key::CourtSharedRound(c.id().map_err(refused)?);
         if let Some(old)=b.state.staged_court_row_v1(&key){
@@ -345,6 +350,20 @@ pub(super) fn round(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
 pub(super) fn bottom(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
     c:&crate::palw_court_shared_tir_bottom_v1::SignedSharedTirBottomV1)
     ->Result<(bool,crate::palw_court_shared_tir_bottom_v1::SharedTirBottomOutcomeV1),PalwStateV2Error>{
+    bottom_inner(b,ctx,c,None)
+}
+/// **RFC-0024 A on the shared court (lane r6-p2-shared).** The single-position bottom: the same retention, resource
+/// admission and replacement rule as [`bottom`], judged over the position the writer row names, stored as a row of
+/// version 2 in its own slot. Refused (nothing written) unless `palw_tir_bounded_door_v1` is in force at this block.
+pub(super) fn position_bottom(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
+    c:&crate::palw_court_shared_tir_bottom_v1::SignedSharedTirPositionBottomV2)
+    ->Result<(bool,crate::palw_court_shared_tir_bottom_v1::SharedTirBottomOutcomeV1),PalwStateV2Error>{
+    if !b.extras.tir_bounded_door_active {return Err(refused("shared position bottom below palw_tir_bounded_door_v1"));}
+    bottom_inner(b,ctx,&c.control,Some(c.position))
+}
+fn bottom_inner(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
+    c:&crate::palw_court_shared_tir_bottom_v1::SignedSharedTirBottomV1,position:Option<u8>)
+    ->Result<(bool,crate::palw_court_shared_tir_bottom_v1::SharedTirBottomOutcomeV1),PalwStateV2Error>{
     use crate::palw_court_shared_tir_bottom_v1 as bottom;
     use crate::palw_court_shared_tir_round_v1 as rounds;
     use crate::palw_native_resource_v1::{NativeHeapV1,TirNativeRequestsV1};
@@ -360,7 +379,8 @@ pub(super) fn bottom(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
         let heap=|v:crate::palw_native_resource_v1::NativeCoverageV1|v.bytes().ok_or_else(||refused("shared bottom clone inventory missing"));
         q.add_v1(heap(r.control.native_heap_v1("bottom root verifier"))?.checked_mul(2).ok_or_else(||refused("root copy overflow"))?).map_err(PalwStateV2Error::NativeResource)?;
         q.add_v1(heap(r.control.root.finalize.binding.native_heap_v1("root binding"))?).map_err(PalwStateV2Error::NativeResource)?;
-        q.add_v1(heap(c.native_heap_v1("bottom verifier/retained copies"))?.checked_mul(2).ok_or_else(||refused("bottom copy overflow"))?).map_err(PalwStateV2Error::NativeResource)?;
+        // A position bottom holds two more transient copies (its signed wrapper and its signing message).
+        q.add_v1(heap(c.native_heap_v1("bottom verifier/retained copies"))?.checked_mul(if position.is_some(){4}else{2}).ok_or_else(||refused("bottom copy overflow"))?).map_err(PalwStateV2Error::NativeResource)?;
         q.add_v1(heap(c.bottom.binding.native_heap_v1("bottom binding"))?).map_err(PalwStateV2Error::NativeResource)?;
         q.add_v1((record.program.len() as u64).checked_mul(2).ok_or_else(||refused("program copy overflow"))?).map_err(PalwStateV2Error::NativeResource)?;
         q.exact_v1::<bottom::SharedTirBottomRowV1>(1).map_err(PalwStateV2Error::NativeResource)?;
@@ -376,9 +396,14 @@ pub(super) fn bottom(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
         }
         q.vec_v1::<(u64,u64)>(u64::from(r.control.arity)).map_err(PalwStateV2Error::NativeResource)?;
         let _lease=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
-        let checked=bottom::check_shared_tir_bottom_v1(&b.state,b.params,&rules,c).map_err(refused)?;
+        let positioned=position.map(|position|bottom::SignedSharedTirPositionBottomV2 {control:c.clone(),position});
+        let checked=match &positioned {
+            None=>bottom::check_shared_tir_bottom_v1(&b.state,b.params,&rules,c),
+            Some(pc)=>bottom::check_shared_tir_position_bottom_v2(&b.state,b.params,&rules,pc),
+        }.map_err(refused)?;
         let digest=checked.outcome_digest().map_err(refused)?;let outcome=checked.outcome().clone();
-        let key=Key::CourtSharedBottom(c.id().map_err(refused)?);
+        let slot=match &positioned {None=>c.id(),Some(pc)=>pc.id()}.map_err(refused)?;
+        let key=Key::CourtSharedBottom(slot);
         if let Some(old)=b.state.staged_court_row_v1(&key){
             let Row::CourtSharedBottom(old)=old else{return Err(refused("shared bottom foreign slot"));};
             if ctx.daa_score<old.rules.at.daa_score || old.control.parent_id!=c.parent_id || old.outcome_digest!=digest {
@@ -386,8 +411,10 @@ pub(super) fn bottom(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
             }
             return Ok((false,outcome));
         }
-        let row=bottom::SharedTirBottomRowV1 {version:1,control:c.clone(),rules,filer_pubkey:bond.pubkey.clone(),
-            material_until_daa:r.material_until_daa,outcome_digest:digest};
+        let row=bottom::SharedTirBottomRowV1 {
+            version:if position.is_some(){bottom::SHARED_TIR_BOTTOM_ROW_POSITION_VERSION_V2}else{1},
+            control:c.clone(),rules,filer_pubkey:bond.pubkey.clone(),
+            material_until_daa:r.material_until_daa,outcome_digest:digest,position};
         b.write_staged_row_v1(key,Some(Row::CourtSharedBottom(Box::new(row).into())))?;
         Ok((true,outcome))
     })();

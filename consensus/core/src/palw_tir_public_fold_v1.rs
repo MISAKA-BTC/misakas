@@ -3338,6 +3338,43 @@ mod conviction_e2e_tests {
                 let (opened,again)=fold::bottom(&mut b,&at_rules.at,&other).unwrap();assert!(!opened);assert_eq!(again,outcome);
                 assert_eq!(b.state.state_root(),canonical);assert_eq!(b.entries.len(),n);
                 assert!(b.write_staged_row_v1(key,None).is_err());
+                // Lane r6-p2-shared (RFC-0024 A): the single-position row form. A version-1 row's bytes are unchanged (no
+                // position byte); version 2 appends exactly one, round-trips, sits in its own slot, and a mismatched
+                // version/position pair neither encodes nor checks. Below `palw_tir_bounded_door_v1` (these extras) the
+                // position bottom is refused by its fold and writes nothing.
+                if let Row::CourtSharedBottom(v1)=&row {
+                    let v1=v1.as_ref().clone();assert_eq!(v1.position,None);
+                    let v1_bytes=borsh::to_vec(&v1).unwrap();
+                    assert_eq!(borsh::from_slice::<bottoms::SharedTirBottomRowV1>(&v1_bytes).unwrap(),v1);
+                    let mut v2=v1.clone();v2.version=bottoms::SHARED_TIR_BOTTOM_ROW_POSITION_VERSION_V2;
+                    v2.control.version=bottoms::SHARED_TIR_POSITION_BOTTOM_VERSION_V2;v2.position=Some(1);
+                    let v2_bytes=borsh::to_vec(&v2).unwrap();
+                    assert_eq!(v2_bytes.len(),v1_bytes.len()+1);assert_eq!(*v2_bytes.last().unwrap(),1u8);
+                    assert_eq!(borsh::from_slice::<bottoms::SharedTirBottomRowV1>(&v2_bytes).unwrap(),v2);
+                    assert_ne!(v2.id().unwrap(),v1.id().unwrap());
+                    assert_ne!(bottoms::shared_position_bottom_id_v2(c.root_id,&c.path,0).unwrap(),bottoms::shared_position_bottom_id_v2(c.root_id,&c.path,1).unwrap());
+                    v2.check(&Key::CourtSharedBottom(v2.id().unwrap())).unwrap();
+                    assert!(v2.check(&Key::CourtSharedBottom(v1.id().unwrap())).is_err());
+                    let mut bad=v2.clone();bad.position=None;assert!(borsh::to_vec(&bad).is_err());
+                    let mut bad=v1.clone();bad.position=Some(0);assert!(borsh::to_vec(&bad).is_err());
+                    let mut positioned=bottoms::SignedSharedTirPositionBottomV2 {control:c.clone(),position:0};
+                    assert!(positioned.signing_message(native.network_domain).is_err(),"a v1 control is not a position bottom");
+                    positioned.control.version=bottoms::SHARED_TIR_POSITION_BOTTOM_VERSION_V2;
+                    let m0=positioned.signing_message(native.network_domain).unwrap();
+                    positioned.position=1;assert_ne!(positioned.signing_message(native.network_domain).unwrap(),m0);
+                    let dormant_root=b.state.state_root();let dormant_n=b.entries.len();
+                    assert!(fold::position_bottom(&mut b,&at_rules.at,&positioned).is_err());
+                    assert_eq!(b.state.state_root(),dormant_root);assert_eq!(b.entries.len(),dormant_n);
+                    // The writer row (a version-2 position round at this terminal path) is refused below the door too.
+                    let position_round=rounds::SignedSharedTirRoundV1 {version:rounds::SHARED_TIR_POSITION_ROUND_VERSION_V2,claim,leaf,
+                        root_id:prepared.root_id,path:path.clone(),parent_id:prepared.parent_id,signer:producer,
+                        round:Box::new(crate::palw_tir_dissect_v1::PalwTirDissectRoundV1 {version:1,children:vec![]}),
+                        signature:vec![0;crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]};
+                    assert!(fold::round(&mut b,&at_rules.at,&position_round).is_err());
+                    assert_eq!(b.state.state_root(),dormant_root);assert_eq!(b.entries.len(),dormant_n);
+                    assert!(bottoms::resolve_shared_position_writer_row_v2(&b.state,claim,leaf,c.root_id,&c.path,at_rules.at.daa_score).is_err(),
+                        "no position round on chain: nothing to resolve");
+                }
                 if let Row::CourtSharedBottom(mut changed)=row.clone(){changed.outcome_digest=h(0xBC03);assert!(changed.check_context(&b.state).is_err());
                     assert!(b.write_staged_row_v1(key,Some(Row::CourtSharedBottom(changed))).is_err());}
                 let mut undone=b.state.clone();for e in b.entries.iter().rev(){apply_delta_entry(&mut undone,e,true).unwrap();}

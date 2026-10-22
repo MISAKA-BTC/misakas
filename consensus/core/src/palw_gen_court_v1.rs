@@ -1161,7 +1161,7 @@ pub fn palw_gen_check_dissect_bottom_with_v1(
     limits: &DemandLimits,
 ) -> Result<PalwGenVerdictV1, PalwGenCloseRefusalV1> {
     use PalwGenCloseRefusalV1 as R;
-    let range = phase.terminal_range().ok_or(R::Unadjudicable("the dissection has not narrowed to one tile".into()))?;
+    let range = phase.whole_tile_terminal_range_v2().ok_or(R::Unadjudicable("the dissection has not narrowed to one tile".into()))?;
     palw_gen_check_dissect_bottom_range_with_v1(case, close, phase, range, phase.claim(), params, limits)
 }
 

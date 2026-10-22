@@ -139,6 +139,10 @@ pub(super) enum SharedCourtOpV1<'a> {
         manifest: &'a crate::palw_court_numerical_transport_v1::NumericalManifestV1,
         parts: &'a [crate::palw_court_numerical_transport_v1::NumericalPartV1],
     },
+    /// RFC-0024 A (lane r6-p2-shared): a single-position shared bottom, judged against the position round (writer row) on
+    /// chain. Dormant below `palw_tir_bounded_door_v1` (refused by its fold). No wire carriage yet: the tag-178 numerical
+    /// transport has no position-bottom kind (see the lane notes).
+    PositionBottom { control: &'a crate::palw_court_shared_tir_bottom_v1::SignedSharedTirPositionBottomV2 },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -191,6 +195,15 @@ pub(super) fn apply_shared_court_op_v1(
                 return Ok(SharedCourtOpEffectV1::Convicted);
             }
             Ok(SharedCourtOpEffectV1::Numerical(effect))
+        }
+        SharedCourtOpV1::PositionBottom { control } => {
+            let (opened, outcome) = fold::position_bottom(b, ctx, control)?;
+            if opened && matches!(outcome, crate::palw_court_shared_tir_bottom_v1::SharedTirBottomOutcomeV1::NativeFault(_)) {
+                // The same conviction funnel as a newly stored whole-tile bottom (claim and filer are the signed control's).
+                apply_shared_bottom_conviction_v1(b, ctx, control.control.claim, control.control.filer)?;
+                return Ok(SharedCourtOpEffectV1::Convicted);
+            }
+            Ok(SharedCourtOpEffectV1::Numerical(fold::NumericalTransportEffectV1::Bottom(opened, outcome)))
         }
     })();
     if result.is_err() {

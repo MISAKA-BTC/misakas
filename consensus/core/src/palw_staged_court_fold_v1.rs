@@ -986,8 +986,18 @@ impl TransitionBuilder<'_> {
                 if Some(r.rules)!=self.extras.native_court_rules_v1 || self.state.bond(&r.control.filer).is_none_or(|b|b.pubkey!=r.filer_pubkey) {
                     return Err(PalwStateV2Error::CarriageInconsistent("shared bottom does not capture native rules/key".into()));
                 }
-                crate::palw_court_shared_tir_bottom_v1::check_shared_tir_bottom_v1(&self.state,self.params,&r.rules,&r.control)
-                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                match r.position {
+                    None=>crate::palw_court_shared_tir_bottom_v1::check_shared_tir_bottom_v1(&self.state,self.params,&r.rules,&r.control)
+                        .map(|_|()),
+                    // Lane r6-p2-shared: a row-v2 (single-position) bottom is written only past `palw_tir_bounded_door_v1`.
+                    Some(position)=>if !self.extras.tir_bounded_door_active {
+                        Err("shared position bottom below palw_tir_bounded_door_v1".to_string())
+                    } else {
+                        let positioned=crate::palw_court_shared_tir_bottom_v1::SignedSharedTirPositionBottomV2 {control:r.control.clone(),position};
+                        crate::palw_court_shared_tir_bottom_v1::check_shared_tir_position_bottom_v2(&self.state,self.params,&r.rules,&positioned)
+                            .map(|_|())
+                    },
+                }.map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
         }
         if let PalwStagedCourtKeyV1::CourtSharedRound(..) = key {
@@ -1001,6 +1011,10 @@ impl TransitionBuilder<'_> {
                 if Some(r.rules)!=self.extras.native_court_rules_v1
                     || self.state.bond(&r.control.signer).is_none_or(|b|b.pubkey!=r.signer_pubkey) {
                     return Err(PalwStateV2Error::CarriageInconsistent("shared round does not capture native rules/key".into()));
+                }
+                // Lane r6-p2-shared: a version-2 (position) round is written only past `palw_tir_bounded_door_v1`.
+                if r.control.version==crate::palw_court_shared_tir_round_v1::SHARED_TIR_POSITION_ROUND_VERSION_V2 && !self.extras.tir_bounded_door_active {
+                    return Err(PalwStateV2Error::CarriageInconsistent("shared position round below palw_tir_bounded_door_v1".into()));
                 }
                 crate::palw_court_shared_tir_round_v1::check_shared_tir_round_v1(&self.state,self.params,&r.rules,&r.control)
                     .map_err(PalwStateV2Error::CarriageInconsistent)?;

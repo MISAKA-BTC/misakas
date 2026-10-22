@@ -1865,7 +1865,7 @@ pub fn check_tir_dissect_bottom_v1(
     narrowed: u64,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    let range = phase.terminal_range().ok_or(bad("the dissection has not narrowed to one tile"))?;
+    let range = phase.whole_tile_terminal_range_v2().ok_or(bad("the dissection has not narrowed to one tile"))?;
     check_tir_dissect_bottom_range_v1(phase, range, phase.claim(), bottom, narrowed, rules)
 }
 

@@ -740,6 +740,12 @@ impl PalwTirDissectPhaseV1 {
             return Err(PalwTirDissectError::UnsupportedVersion { got: msg.version });
         }
         match self.turn {
+            // RFC-0024 A (lane r6-p2-shared): `AwaitDisclosure` on ONE tile is the owed POSITION round
+            // ([`Self::awaits_position_round_v2`]), never a tile round. Unreachable below
+            // `palw_tir_bounded_door_v1` (every older transition sets `Terminal` at one tile).
+            PalwBisectTurnV1::AwaitDisclosure if self.tile_count <= 1 => {
+                return Err(PalwTirDissectError::Turn("the responder owes the position round, not a tile round"))
+            }
             PalwBisectTurnV1::AwaitDisclosure => {}
             PalwBisectTurnV1::AwaitVerdict => return Err(PalwTirDissectError::Turn("the challenger names a child")),
             PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => return Err(PalwTirDissectError::AlreadyTerminal),
@@ -1006,12 +1012,114 @@ impl PalwTirPositionNarrowingV1 {
 }
 
 // =================================================================================================
+// RFC-0024 A — the position round ON CHAIN (lane r6-p2-shared; DORMANT, `palw_tir_bounded_door_v1`)
+// =================================================================================================
+//
+// No phase field and no borsh change: the position round is two encodings the older transitions never write.
+//
+// * **Owed** — `turn == AwaitDisclosure` with `tile_count == 1`. Every older transition sets `Terminal` at one tile,
+//   so this state exists only where the fold put a NEW claim's terminal on the position round
+//   ([`PalwTirDissectPhaseV1::owe_position_round_v2`]). The responder owes the round by `last_deadline_daa`, the
+//   same per-turn deadline every dissection round has (`accepted + turn_deadline_daa`, capped to the session), and
+//   the existing sweep reads it as an ordinary `AwaitDisclosure`: silence is the responder's no-show.
+// * **Disclosed** — `turn == Terminal`, `tile_count == 1`, `pending` = one claim per position. Older transitions
+//   clear `pending` at `Terminal`. The challenger's move is the position close; the whole-tile close is retired
+//   ([`PalwTirDissectPhaseV1::whole_tile_terminal_range_v2`]).
+
+impl PalwTirDissectPhaseV1 {
+    /// The history-position width of tile `first` (ragged at the history's end); `0` outside the history.
+    pub fn tile_width_v2(&self, first: u64) -> usize {
+        let Some(from) = first.checked_mul(self.tile_positions as u64) else { return 0 };
+        let to = from.saturating_add(self.tile_positions as u64).min(self.history_positions as u64);
+        to.saturating_sub(from) as usize
+    }
+
+    /// `true` when the phase is on ONE tile and owes the responder's position round.
+    pub fn awaits_position_round_v2(&self) -> bool {
+        self.turn == PalwBisectTurnV1::AwaitDisclosure && self.tile_count == 1
+    }
+
+    /// The disclosed position round (one claim per position of the terminal tile), once it is on chain.
+    pub fn disclosed_position_round_v2(&self) -> Option<&[PalwTirRangeClaimV1]> {
+        (self.turn == PalwBisectTurnV1::Terminal && self.tile_count == 1 && !self.pending.is_empty()).then_some(&self.pending[..])
+    }
+
+    /// **Put a terminal tile on the position round** (the fold calls it only where the claim's position terminal
+    /// applies). A terminal phase on one tile wider than one position, with nothing pending, becomes "owed"; the
+    /// deadline is the one the move that made it terminal already set. Returns whether it changed.
+    pub fn owe_position_round_v2(&mut self) -> bool {
+        if self.turn != PalwBisectTurnV1::Terminal || self.tile_count != 1 || !self.pending.is_empty() {
+            return false;
+        }
+        if self.tile_width_v2(self.tile_first) <= 1 {
+            return false;
+        }
+        self.turn = PalwBisectTurnV1::AwaitDisclosure;
+        true
+    }
+
+    /// The terminal tile's narrowing, whether the position round is owed (viewed as the terminal it will be),
+    /// disclosed, or the tile is already one position. `None` before the dissection reaches one tile.
+    pub fn position_narrowing_v2(&self) -> Option<PalwTirPositionNarrowingV1> {
+        if self.awaits_position_round_v2() {
+            let mut terminal = self.clone();
+            terminal.turn = PalwBisectTurnV1::Terminal;
+            return terminal.position_narrowing_v1();
+        }
+        self.position_narrowing_v1()
+    }
+
+    /// **Install a checked position round** (from tag 201 or a version-3 lookahead): `Terminal` with the positions
+    /// pending, and the challenger's per-turn deadline (`accepted_daa + w_round`).
+    pub fn install_position_round_v2(&mut self, msg: &PalwTirDissectRoundV1, accepted_daa: u64, w_round: u64) -> Result<(), PalwTirDissectError> {
+        if w_round == 0 {
+            return Err(PalwTirDissectError::ZeroWindow);
+        }
+        if self.tile_count != 1 || !self.pending.is_empty() {
+            return Err(PalwTirDissectError::Turn("a position round only on one tile with nothing pending"));
+        }
+        if !matches!(self.turn, PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::Terminal) {
+            return Err(PalwTirDissectError::AlreadyTerminal);
+        }
+        let narrowing = self.position_narrowing_v2().ok_or(PalwTirDissectError::Turn("no terminal tile"))?;
+        narrowing.check_position_round_v1(msg)?;
+        self.turn = PalwBisectTurnV1::Terminal;
+        self.pending = msg.children.clone();
+        self.last_deadline_daa = accepted_daa.saturating_add(w_round);
+        Ok(())
+    }
+
+    /// **Tag 201's fold**: the owed position round, applied.
+    pub fn apply_position_round_v2(&mut self, msg: &PalwTirDissectRoundV1, accepted_daa: u64, w_round: u64) -> Result<(), PalwTirDissectError> {
+        if !self.awaits_position_round_v2() {
+            return Err(PalwTirDissectError::Turn("no position round is owed"));
+        }
+        self.install_position_round_v2(msg, accepted_daa, w_round)
+    }
+
+    /// **The whole-tile bottom's range**: [`Self::terminal_range`], except once a position round is on chain — then
+    /// the whole-tile close is retired for this phase (RFC-0024 A) and only the position close can end it. Identical
+    /// to `terminal_range` for every phase an older transition wrote.
+    pub fn whole_tile_terminal_range_v2(&self) -> Option<(usize, usize)> {
+        if self.disclosed_position_round_v2().is_some() {
+            return None;
+        }
+        self.terminal_range()
+    }
+}
+
+// =================================================================================================
 // RFC-0024 B — two-level lookahead disclosure (DORMANT, `palw_tir_bounded_door_v1`)
 // =================================================================================================
 
 /// Wire version of the RFC-0024 §5 lookahead objects (a new versioned object beside the V1 round;
 /// the V1 round's encoding and meaning are unchanged).
 pub const PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2: u16 = 2;
+/// **RFC-0024 §4.2 + §5 (lane r6-p2-shared)**: the same disclosure body, version 3 — a level-1 child that is ONE tile
+/// wider than one position carries that tile's position round (one claim per history position) instead of its own
+/// claim, so the bundle's last level ends on a single history position and the responder owes no separate position
+/// round. Folded only where the claim's position terminal applies (`palw_tir_position_terminal_applies_v2`).
+pub const PALW_TIR_LOOKAHEAD_POSITION_VERSION_V2: u16 = 3;
 
 /// **`LookaheadDisclosureV2` (RFC-0024 §5.1)**: the responder discloses, in ONE move, every
 /// candidate the next two levels of the pinned cut can reach. `frontier[i]` is the depth-2 frontier
@@ -1047,6 +1155,9 @@ pub struct PalwTirLookaheadExpansionV2 {
     pub level1: PalwTirDissectRoundV1,
     /// Per level-1 child: its level-2 round, or `None` when the child is one tile.
     pub level2: Vec<Option<PalwTirDissectRoundV1>>,
+    /// Per level-1 child (RFC-0024 §4.2, disclosure version [`PALW_TIR_LOOKAHEAD_POSITION_VERSION_V2`] only): the
+    /// tile's POSITION round when the child is one tile wider than one position; `None` otherwise.
+    pub positions: Vec<Option<PalwTirDissectRoundV1>>,
 }
 
 impl PalwTirLookaheadExpansionV2 {
@@ -1092,10 +1203,14 @@ impl PalwTirDissectPhaseV1 {
         msg: &PalwTirLookaheadDisclosureV2,
         max_frontier_values: Option<usize>,
     ) -> Result<PalwTirLookaheadExpansionV2, PalwTirDissectError> {
-        if msg.version != PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2 {
+        if msg.version != PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2 && msg.version != PALW_TIR_LOOKAHEAD_POSITION_VERSION_V2 {
             return Err(PalwTirDissectError::UnsupportedVersion { got: msg.version });
         }
+        let to_positions = msg.version == PALW_TIR_LOOKAHEAD_POSITION_VERSION_V2;
         match self.turn {
+            PalwBisectTurnV1::AwaitDisclosure if self.tile_count <= 1 => {
+                return Err(PalwTirDissectError::Turn("the responder owes the position round, not a lookahead"))
+            }
             PalwBisectTurnV1::AwaitDisclosure => {}
             PalwBisectTurnV1::AwaitVerdict => return Err(PalwTirDissectError::Turn("the challenger names a child")),
             PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => return Err(PalwTirDissectError::AlreadyTerminal),
@@ -1113,18 +1228,37 @@ impl PalwTirDissectPhaseV1 {
         }
         let mut level1 = Vec::with_capacity(ranges.len());
         let mut level2_children = Vec::with_capacity(ranges.len());
+        let mut positions = Vec::with_capacity(ranges.len());
         for (i, &(first, count)) in ranges.iter().enumerate() {
             let group = &msg.frontier[i];
             for claim in group {
                 self.check_claim_shape_v2(claim)?;
             }
-            if count <= 1 {
+            let width = if count <= 1 { self.tile_width_v2(first) } else { 0 };
+            if count <= 1 && to_positions && width > 1 {
+                // RFC-0024 §4.2 / §5 (lane r6-p2-shared): the last level of the bundle is the tile's
+                // POSITION round — one claim per real history position of the tile, folding exactly to
+                // the tile's (reconstructed) claim. The tile claim itself is not carried.
+                if width > usize::from(u8::MAX) + 1 {
+                    return Err(PalwTirDissectError::Shape("a tile wider than one position round can name"));
+                }
+                if group.len() != width {
+                    return Err(PalwTirDissectError::ChildCount { got: group.len(), expected: width });
+                }
+                let parent = fold_children_v2(&self.folds, &self.elements, group)
+                    .ok_or(PalwTirDissectError::Shape("a position group does not fold (overflow)"))?;
+                level1.push(parent);
+                level2_children.push(None);
+                positions.push(Some(PalwTirDissectRoundV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, children: group.clone() }));
+            } else if count <= 1 {
                 if group.len() != 1 {
                     return Err(PalwTirDissectError::ChildCount { got: group.len(), expected: 1 });
                 }
                 level1.push(group[0].clone());
                 level2_children.push(None);
+                positions.push(None);
             } else {
+                positions.push(None);
                 let sub = palw_attn_child_ranges_v1(first, count, self.arity)?;
                 if group.len() != sub.len() {
                     return Err(PalwTirDissectError::ChildCount { got: group.len(), expected: sub.len() });
@@ -1153,7 +1287,7 @@ impl PalwTirDissectPhaseV1 {
                 }
             }
         }
-        Ok(PalwTirLookaheadExpansionV2 { level1, level2 })
+        Ok(PalwTirLookaheadExpansionV2 { level1, level2, positions })
     }
 
     /// **Apply a responder's lookahead as its disclosure**: the reconstructed level-1 round becomes the
@@ -1223,6 +1357,10 @@ impl PalwTirDissectPhaseV1 {
         if let Some(round) = level2 {
             next.apply_round(round, accepted_daa, w_round)?;
             next.apply_choice(&choice(next.round, path.path[1]), accepted_daa, w_round)?;
+        } else if let Some(Some(positions)) = expansion.positions.get(usize::from(first)) {
+            // The bundle's last level is the tile's position round: installed exactly as tag 201 installs it, so the
+            // challenger's next move is the position close (which names the position under its own signature).
+            next.install_position_round_v2(positions, accepted_daa, w_round)?;
         }
         *self = next;
         Ok(())
