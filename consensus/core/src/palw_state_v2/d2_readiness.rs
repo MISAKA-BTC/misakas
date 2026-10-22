@@ -97,7 +97,18 @@ impl TransitionBuilder<'_> {
         if !self.d2_court_active_v1(daa_score) || self.state.d2_readiness.is_empty() {
             return Ok(());
         }
-        for (key, entry) in dc::palw_d2_disclosure_sweep_v1(&self.state.d2_readiness, daa_score, supply_premise) {
+        // audit B-08 (fix-b): the premise (a pinned service profile) AND a court service opportunity the accepting chain RECORDED
+        // inside this case's own window (`ServiceReservations::supply`, one entry per first block at a DAA that left the reserved
+        // capacity unspent). A case whose window recorded none is a no-supply hold, never a default.
+        let writes = {
+            let book = self.state.court_service_state_v1().map(|s| &s.book);
+            let supplied = |case: &dc::PalwD2DisclosureCaseV1| {
+                supply_premise
+                    && book.is_some_and(|book| book.supply.range(case.opened_daa..=case.deadline_daa).next().is_some())
+            };
+            dc::palw_d2_disclosure_sweep_with_supply_v1(&self.state.d2_readiness, daa_score, &supplied)
+        };
+        for (key, entry) in writes {
             self.write_d2_readiness_v1(key, Some(entry))?;
         }
         Ok(())
@@ -237,15 +248,31 @@ mod tests {
         b.record_d2_readiness_root_v1(&root, cap, FENCE).unwrap();
         let demand = dc::PalwD2DisclosureDemandV1 { root_key: rk, ordinal: 0, challenger: bond_key(9), fee_sompi: 7, valid_until_daa: FENCE };
         b.open_d2_disclosure_v1(&demand, cap, FEES, FENCE).unwrap();
-        let open = b.state.clone();
+        let plain = b.state.clone();
         let deadline = FENCE + dc::PALW_D2_DISCLOSURE_TURN_DAA_V1;
+        // audit B-08 (fix-b): the default needs a court service opportunity RECORDED inside the case's own window.
+        let supplied_at = |daa: u64| {
+            use crate::palw_court_service_v1::{ServiceCost, ServiceReservations};
+            let mut book = ServiceReservations::new(ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 }).unwrap();
+            book.observe_block(daa, [1; 64], Default::default()).unwrap();
+            let h = Hash64::from_u64_word(0xD2);
+            let svc = crate::palw_court_service_state_v2::CourtServiceStateV2 { version: 2, source_profile_id: h,
+                profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(h), book, claims: Default::default() };
+            let mut s = plain.clone();
+            s.staged_courts.insert(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
+                crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(svc).into()));
+            s
+        };
+        let inside = supplied_at(FENCE + 1);
+        let outside = supplied_at(deadline + 1);
 
-        for premise in [false, true] {
+        for (open, premise, closes) in [(&plain, false, 1), (&inside, true, 2), (&plain, true, 1), (&outside, true, 1)] {
+            let open = open.clone();
             let mut b = TransitionBuilder::new(&open, &p, false, false, false, false, &extras);
             b.sweep_d2_disclosures_v1(deadline, premise).unwrap();
             assert!(b.entries.is_empty(), "the deadline DAA itself is in time");
             b.sweep_d2_disclosures_v1(deadline + 1, premise).unwrap();
-            assert_eq!(b.entries.len(), if premise { 2 } else { 1 });
+            assert_eq!(b.entries.len(), closes, "premise {premise}: default only with supply recorded in the case window");
             let swept = b.state.clone();
             let undone = revert_delta_v2(&swept, &delta(deadline + 1, b.entries.clone()), &p).unwrap();
             assert_eq!(undone.state_root(), open.state_root());

@@ -322,6 +322,17 @@ pub fn palw_d2_disclosure_sweep_v1(
     now_daa: u64,
     supply_premise: bool,
 ) -> Vec<(PalwD2ReadinessKeyV1, PalwD2ReadinessEntryV1)> {
+    palw_d2_disclosure_sweep_with_supply_v1(registry, now_daa, &|_| supply_premise)
+}
+
+/// **audit B-08 (fix-b): the sweep with a PER-CASE supply fact.** `supplied(case)` answers whether this case's own response window
+/// (`opened_daa ..= deadline_daa`) had a recorded court service opportunity; only such a case defaults, every other one is a
+/// no-supply hold. (The global premise flag alone defaulted every case once a profile was pinned, with no per-case observation.)
+pub fn palw_d2_disclosure_sweep_with_supply_v1(
+    registry: &PalwD2ReadinessRegistryV1,
+    now_daa: u64,
+    supplied: &dyn Fn(&PalwD2DisclosureCaseV1) -> bool,
+) -> Vec<(PalwD2ReadinessKeyV1, PalwD2ReadinessEntryV1)> {
     let mut writes: Vec<(PalwD2ReadinessKeyV1, PalwD2ReadinessEntryV1)> = Vec::new();
     let mut roots: BTreeMap<Hash64, PalwD2ReadinessRowV1> = BTreeMap::new();
     for (key, entry) in registry {
@@ -330,7 +341,7 @@ pub fn palw_d2_disclosure_sweep_v1(
             continue;
         }
         let mut closed = case.clone();
-        if supply_premise {
+        if supplied(case) {
             closed.outcome = PalwD2DisclosureOutcomeV1::DisclosureDefaulted { at_daa: now_daa };
             if let Ok(row) = root_row(registry, *root_key) {
                 let row = roots.entry(*root_key).or_insert_with(|| row.clone());
