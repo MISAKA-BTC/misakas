@@ -1,0 +1,278 @@
+diff --git a/consensus/core/src/palw_court_shared_constraint_family_v1.rs b/consensus/core/src/palw_court_shared_constraint_family_v1.rs
+index 0b6d0a535..4fddd1c87 100644
+--- a/consensus/core/src/palw_court_shared_constraint_family_v1.rs
++++ b/consensus/core/src/palw_court_shared_constraint_family_v1.rs
+@@ -428,3 +428,9 @@ impl Store<'_>{
+         self.build_constraint_stop_terminal_v1(state,params,rules,intent,material,budget)
+     }
+ }
++
++impl ConstraintUniverseV1<'_>{
++    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.frame.plan_v1().original_claim,self.source.source_id_v1(),self.graph.scope_v3(),self.graph.absolute_scope_v3(),self.profile)}
++}
++
++impl ConstraintUniverseV1<'_>{pub(super) fn aggregate_semantics_v1(&self)->Hash64{self.semantics}}
+diff --git a/consensus/core/src/palw_court_shared_constraint_native_tests.rs b/consensus/core/src/palw_court_shared_constraint_native_tests.rs
+index 36959fb15..23aaf4fb1 100644
+--- a/consensus/core/src/palw_court_shared_constraint_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_constraint_native_tests.rs
+@@ -173,6 +173,7 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
+     let graph_edges=upper.fresh_responses.checked_mul(upper.maximum_custodians+1).unwrap().checked_add(upper.streams.checked_mul(2).unwrap()).unwrap().checked_add(upper.parts).unwrap();
+     let family_graph=FamilyGraph::derive_native_v3(frame,&source,profile,SourceGraphBudgetV3{max_queries:set.len(),max_roles:upper.maximum_custodians,max_vertices:upper.signed_controls,max_edges:graph_edges}).unwrap();
+     let family=Universe::derive_native_v1(&b.state,frame,&source,&family_graph,profile).unwrap();
++    include!("palw_court_original_aggregate_constraint_block.rs");
+     assert_eq!(family.semantic_supply_v1(),ConstraintSemanticSupplyV1::UnresolvedTableSupply{table:semantics.token_table_root.unwrap(),vocabulary:source.vocab_v1()});
+     let mut rank=0;
+     for position in 0..source.decode_count_v1(){for beat in 0..source.vocab_v1(){for w in 0..=source.vocab_v1(){
+diff --git a/consensus/core/src/palw_court_shared_numerical_material_join_v1.rs b/consensus/core/src/palw_court_shared_numerical_material_join_v1.rs
+index 4b41e5dfe..82c0fd025 100644
+--- a/consensus/core/src/palw_court_shared_numerical_material_join_v1.rs
++++ b/consensus/core/src/palw_court_shared_numerical_material_join_v1.rs
+@@ -98,3 +98,7 @@ impl<'a> NumericalMaterialJoinV1<'a>{
+         self.check_named_material_v1(store,intent.leaf)?;store.build_terminal_with_parameter_cover(state,params,rules,intent,limit,self.cover)
+     }
+ }
++
++impl NumericalMaterialJoinV1<'_>{
++    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.frame.plan_v1().original_claim,self.source.source_id_v1(),self.graph.scope_v3(),self.graph.absolute_scope_v3(),self.profile)}
++}
+diff --git a/consensus/core/src/palw_court_shared_numerical_material_native_tests.rs b/consensus/core/src/palw_court_shared_numerical_material_native_tests.rs
+index c9de6b556..a87ebf6cd 100644
+--- a/consensus/core/src/palw_court_shared_numerical_material_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_numerical_material_native_tests.rs
+@@ -30,9 +30,25 @@ fn numerical_material_join_actual_all_root_readset_and_supplier_finishes(){
+         let lookup_work=joined.dependencies_v1().len() as u64;
+         let exact_join=Join::derive_native_v1(frame,&source,&graph,&numerical,&cover,profile,&fx.rules.court,demand,lookup_work).unwrap();assert_eq!(exact_join.dependencies_v1(),joined.dependencies_v1());
+         assert!(matches!(Join::derive_native_v1(frame,&source,&graph,&numerical,&cover,profile,&fx.rules.court,demand,lookup_work-1),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+-        for d in joined.dependencies_v1(){assert!(cover.roots_v1().iter().any(|r|r.leaf==d.root));
+-            assert!(graph.nodes_v3().any(|n|n.id_v3()==d.logical&&graph.absolute_packet_id_v3(n.id_v3())==d.absolute));
+-            if let M::StepLeaf(index)=d.material {assert!(index<source.leaf_count_v1());}}
++        // Independent one-pass test index over actual graph Finish nodes.
++        // No production canonical lookup helper is used to validate its output.
++        // binary_search below requires the opaque cover's strict ascending leaf order.
++        assert!(cover.roots_v1().windows(2).all(|w|w[0].leaf<w[1].leaf),"cover roots strictly ascending by leaf");
++        let mut finish_index=std::collections::BTreeMap::new();
++        for node in graph.nodes_v3(){if matches!(node.kind_v3(),crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{..}){
++            assert!(finish_index.insert(node.id_v3(),node).is_none(),"unique actual Finish identity");
++        }}
++        for d in joined.dependencies_v1(){
++            assert!(cover.roots_v1().binary_search_by_key(&d.root,|r|r.leaf).is_ok());
++            let actual=finish_index.get(&d.logical).expect("dependency belongs to actual opaque graph");
++            assert_eq!(graph.absolute_packet_id_v3(actual.id_v3()),d.absolute);
++            match (d.material,actual.kind_v3()){
++                (M::FullIds,crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::FullIds,role})=>assert_eq!(*role,d.role),
++                (M::StepLeaf(index),crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::Unit(ordinal),role})=>{
++                    assert_eq!(*role,d.role);assert_eq!(set.request_at(*ordinal).unwrap(),Q::StepLeaf{index});assert!(index<source.leaf_count_v1());
++                },_=>panic!("dependency actual Finish kind/target mismatch"),
++            }
++        }
+         for limit in [required.get()-1,required.get()]{let checker=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:limit,database_bytes:0});
+             let got=Join::derive_reserved_v1(frame,&source,&graph,&numerical,&cover,profile,&fx.rules.court,demand,visits,|q|checker.reserve_requests_v1(q,0).map(Some));
+             if limit==required.get(){let held=got.unwrap();assert_eq!(checker.outstanding(),(required.get(),0));drop(held);}else{assert!(matches!(got,Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));}assert_eq!(checker.outstanding(),(0,0));}
+diff --git a/consensus/core/src/palw_court_shared_output_terminal_v1.rs b/consensus/core/src/palw_court_shared_output_terminal_v1.rs
+index cd1025e7a..19b523c58 100644
+--- a/consensus/core/src/palw_court_shared_output_terminal_v1.rs
++++ b/consensus/core/src/palw_court_shared_output_terminal_v1.rs
+@@ -710,3 +710,7 @@ impl Store<'_> {
+         )
+     }
+ }
++
++impl NativeOutputDutyV1 {
++    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.claim,self.source,self.relative_graph,self.absolute_graph,self.profile)}
++}
+diff --git a/consensus/core/src/palw_court_shared_prefix_family_native_tests.rs b/consensus/core/src/palw_court_shared_prefix_family_native_tests.rs
+index 15ee078fc..d32e043d3 100644
+--- a/consensus/core/src/palw_court_shared_prefix_family_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_prefix_family_native_tests.rs
+@@ -19,8 +19,18 @@ fn prefix_family_actual_canonical_boundaries_all_suppliers_and_replay(){
+         assert!(matches!(Family::derive_native_v1(&state,frame,&source,&graph,profile,total,lookup_work-1),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
+         assert_eq!(family.total_v1(),total);assert_eq!(family.dependencies_v1().len() as u64,total*graph.role_slots_v3());
+         let named=crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&frame.original_v1().job).unwrap();
+-        for d in family.dependencies_v1(){let leaf=prefix.space.prefix_state_leaf_v1(&prefix.job_context,named.prefix_tokens,d.ordinal).unwrap();assert_eq!(d.index,leaf.index);
+-            assert!(graph.nodes_v3().any(|n|n.id_v3()==d.logical&&graph.absolute_packet_id_v3(n.id_v3())==d.absolute));}
++        // Independent one-pass test index over actual graph Finish nodes.
++        // No production canonical lookup helper is used to validate its output.
++        let mut finish_index=std::collections::BTreeMap::new();
++        for node in graph.nodes_v3(){if matches!(node.kind_v3(),crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{..}){
++            assert!(finish_index.insert(node.id_v3(),node).is_none(),"unique actual Finish identity");
++        }}
++        for d in family.dependencies_v1(){
++            let leaf=prefix.space.prefix_state_leaf_v1(&prefix.job_context,named.prefix_tokens,d.ordinal).unwrap();assert_eq!(d.index,leaf.index);
++            let actual=finish_index.get(&d.logical).expect("actual Prefix supplier Finish");assert_eq!(graph.absolute_packet_id_v3(actual.id_v3()),d.absolute);
++            let crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::Unit(ordinal),role}=actual.kind_v3() else{panic!("Prefix needs actual StepLeaf Finish")};
++            assert_eq!(*role,d.role);assert_eq!(set.request_at(*ordinal).unwrap(),Q::StepLeaf{index:d.index});
++        }
+         let mut extra=crate::palw_native_resource_v1::TirNativeRequestsV1::new();extra.exact_v1::<crate::palw_court_shared_tir_builder_store_v1::prefix_family::NativePrefixFamilyV1<'_>>(1).unwrap();
+         extra.exact_v1::<crate::palw_court_shared_tir_builder_store_v1::prefix_family::PrefixBoundaryDependencyV1>(total*graph.role_slots_v3()).unwrap();let required=first.get().checked_add(extra.bytes_v1()).unwrap();
+         for limit in [first.get()-1,required-1,required]{let checker=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:limit,database_bytes:0});
+diff --git a/consensus/core/src/palw_court_shared_prefix_family_v1.rs b/consensus/core/src/palw_court_shared_prefix_family_v1.rs
+index ae9ad9685..969830eae 100644
+--- a/consensus/core/src/palw_court_shared_prefix_family_v1.rs
++++ b/consensus/core/src/palw_court_shared_prefix_family_v1.rs
+@@ -73,3 +73,7 @@ impl<'a> NativePrefixFamilyV1<'a>{
+         if replay.leaves()!=self.total{return Err(bad("Prefix family replay count changed"));}Ok(replay)
+     }
+ }
++
++impl NativePrefixFamilyV1<'_>{
++    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.frame.plan_v1().original_claim,self.source.source_id_v1(),self.graph.scope_v3(),self.graph.absolute_scope_v3(),self.profile)}
++}
+diff --git a/consensus/core/src/palw_court_shared_selection_native_tests.rs b/consensus/core/src/palw_court_shared_selection_native_tests.rs
+index 1cfa977e3..cf60d066c 100644
+--- a/consensus/core/src/palw_court_shared_selection_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_selection_native_tests.rs
+@@ -51,13 +51,21 @@ fn shared_selection_family_actual_rules_and_runtime_tiles_recheck(){
+         let duty=universe.project_native_v1(Target{position:pos,beat},visits).unwrap();
+         let tiles=u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+         assert_eq!(duty.dependencies_v1().len() as u64,(tiles+1)*roles);
++        // Independent one-pass test index over actual graph Finish nodes.
++        // No production canonical lookup helper is used to validate its output.
++        let mut finish_index=std::collections::BTreeMap::new();
++        for node in graph.nodes_v3(){if matches!(node.kind_v3(),crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{..}){
++            assert!(finish_index.insert(node.id_v3(),node).is_none(),"unique actual Finish identity");
++        }}
+         for dep in duty.dependencies_v1(){
+-            let expected=graph.nodes_v3().find(|n|match n.kind_v3(){
+-                crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::FullIds,role}=>dep.tile.is_none()&&*role==dep.role,
+-                crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::Unit(n),role}=>
+-                    *role==dep.role&&dep.tile.is_some_and(|t|set.request_at(*n).unwrap()==(Q::TraceTile{row:pos,tile:t as u32})),_=>false,
+-            }).unwrap();
+-            assert_eq!(dep.logical,expected.id_v3());assert_eq!(dep.absolute,graph.absolute_packet_id_v3(expected.id_v3()));
++            let expected=finish_index.get(&dep.logical).expect("actual Selection supplier Finish");
++            match expected.kind_v3(){
++                crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::FullIds,role}=>{assert!(dep.tile.is_none());assert_eq!(*role,dep.role);},
++                crate::palw_court_source_material_graph_v3::SourceMaterialNodeKindV3::Finish{target:crate::palw_court_source_material_graph_v3::SourceMaterialTargetV3::Unit(ordinal),role}=>{
++                    let tile=dep.tile.expect("selected row needs TraceTile, not FullIds");assert_eq!(*role,dep.role);assert_eq!(set.request_at(*ordinal).unwrap(),Q::TraceTile{row:pos,tile:u32::try_from(tile).unwrap()});
++                },_=>panic!("selection needs actual Finish node"),
++            }
++            assert_eq!(dep.absolute,graph.absolute_packet_id_v3(expected.id_v3()));
+         }
+         // Exact local projection owner accounting only. Universe/Source/graph
+         // and builder scratch have independent tickets and are not this quota.
+diff --git a/consensus/core/src/palw_court_shared_selection_terminal_v1.rs b/consensus/core/src/palw_court_shared_selection_terminal_v1.rs
+index bbfaafea6..e97918006 100644
+--- a/consensus/core/src/palw_court_shared_selection_terminal_v1.rs
++++ b/consensus/core/src/palw_court_shared_selection_terminal_v1.rs
+@@ -167,3 +167,7 @@ impl<'s> Store<'s>{
+         }
+     }
+ }
++
++impl NativeSelectionUniverseV1<'_>{
++    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.frame.plan_v1().original_claim,self.source.source_id_v1(),self.graph.scope_v3(),self.graph.absolute_scope_v3(),self.profile)}
++}
+diff --git a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+index f0e5832ea..9b2d55553 100644
+--- a/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
++++ b/consensus/core/src/palw_court_shared_tir_builder_store_v1.rs
+@@ -405,3 +405,6 @@ pub(crate) mod numerical_material_join;
+ 
+ #[path = "palw_court_shared_tokenizer_family_v1.rs"]
+ pub(crate) mod tokenizer_family;
++
++#[path = "palw_court_shared_original_aggregate_v1.rs"]
++pub(crate) mod original_aggregate;
+diff --git a/consensus/core/src/palw_court_shared_tokenizer_family_v1.rs b/consensus/core/src/palw_court_shared_tokenizer_family_v1.rs
+index f231b38c6..26747f362 100644
+--- a/consensus/core/src/palw_court_shared_tokenizer_family_v1.rs
++++ b/consensus/core/src/palw_court_shared_tokenizer_family_v1.rs
+@@ -65,3 +65,7 @@ impl<'a> TokenizerFamilyV1<'a>{
+         evidence.recheck(store,state,params,rules,budget)?;Ok(evidence)
+     }
+ }
++
++impl TokenizerFamilyV1<'_>{
++    pub(super) fn aggregate_binding_v1(&self)->super::original_aggregate::FamilyBindingV1{(self.frame.plan_v1().original_claim,self.source.source_id_v1(),self.scope,self.semantics,self.inventory)}
++}
+diff --git a/consensus/core/src/palw_court_tokenizer_family_native_test_block.rs b/consensus/core/src/palw_court_tokenizer_family_native_test_block.rs
+index 83461b925..0cc6390a4 100644
+--- a/consensus/core/src/palw_court_tokenizer_family_native_test_block.rs
++++ b/consensus/core/src/palw_court_tokenizer_family_native_test_block.rs
+@@ -3,6 +3,7 @@
+     let source_owner=crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(&fx.record,&fx.layout,frame.header_v1(),frame.original_v1().execution_root,frame.original_v1().trace_root,fx.rules.maximum_leaves).unwrap();
+     let required=std::cell::Cell::new(0);
+     let family=Family::derive_reserved_v1(&b.state,frame,&source_owner,&retained,&produced,|q|{required.set(q);Ok(None)}).unwrap();
++    include!("palw_court_original_aggregate_tokenizer_block.rs");
+     assert_eq!(produced.artifact_binding_v1(),(semantics.tokenizer_id,raw.len() as u64));
+     assert_eq!(produced.key_work_bound_v1(),semantics.tokenizer_key_events.unwrap());
+     // A true native Court under a different qualified statement can seal the
+diff --git a/consensus/core/src/palw_funded_original_native_fixture_tests.rs b/consensus/core/src/palw_funded_original_native_fixture_tests.rs
+index 9b4ce85af..5f185445a 100644
+--- a/consensus/core/src/palw_funded_original_native_fixture_tests.rs
++++ b/consensus/core/src/palw_funded_original_native_fixture_tests.rs
+@@ -63,6 +63,8 @@
+         // Reuse the real original preparation, including producer pledge, source,
+         // registered geometry and semantic bundle. This does not install a claim.
+         prepare_original_v1(&builder, &ctx, &object, &fp.commitment, &envelope.header, &pledge).unwrap();
++        include!("palw_tir_prepared_original_geometry_native_test_block.rs");
++        include!("palw_tir_prepared_original_requirements_native_test_block.rs");
+         assert!(state.claim(&claim).is_none());
+         let carriage = PalwStateCarriageV2::from_state(&state);
+         let loaded = carriage.clone().into_state(&params, Some(state.state_root())).unwrap();
+diff --git a/consensus/core/src/palw_state_v2/objects.rs b/consensus/core/src/palw_state_v2/objects.rs
+index 984a0c49e..b11c8b477 100644
+--- a/consensus/core/src/palw_state_v2/objects.rs
++++ b/consensus/core/src/palw_state_v2/objects.rs
+@@ -3723,7 +3723,7 @@ fn apply_object_inner(
+             let staged_contract = if let Some(frame) = &tir_original {
+                 // This is an ORIGINAL prospective allocation, not a repricing
+                 // of an old claim or a second old required-family bundle.
+-                claim.trace_retention_daa = claim.trace_retention_daa.max(frame.plan_v1().terms.material_until_daa);
++                claim.trace_retention_daa = claim.trace_retention_daa.max(frame.frame_v1().plan_v1().terms.material_until_daa);
+                 None
+             } else {
+                 builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?
+@@ -3804,7 +3804,7 @@ fn apply_object_inner(
+             }
+             if let Some(frame) = tir_original {
+                 // G14 G-T3: the frame keeps the claim's public prompt ids to its material horizon (derived work or not).
+-                palw_tir_public_fold_v1::install_original_v1(builder, ctx, frame, &prompt_row)?;
++                palw_tir_public_fold_v1::install_prepared_original_v1(builder, ctx, frame, &prompt_row)?;
+             }
+         }
+     }
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index ac745e3c1..2e89486af 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -10,6 +10,8 @@ use crate::palw_tir_public_owned_v1::{
+ };
+ use crate::palw_tir_public_state_v1::{PalwTirPublicAcquisitionRowV1, PalwTirPublicPreparationRowV1};
+ 
++include!("palw_tir_prepared_original_geometry_v1.rs");
++
+ /// Diagnostics for a funded carrier on the native accepted UTXO path. There is
+ /// deliberately no Admitted/Complete variant and no state or spend capability.
+ #[derive(Clone, Debug, PartialEq, Eq)]
+@@ -270,7 +272,7 @@ pub(super) fn prepare_paired_original_v1(
+     ctx: &PalwBlockContextV2,
+     object: &PalwConsensusObjectV2,
+     public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
+-) -> Result<Option<Frame>, PalwStateV2Error> {
++) -> Result<Option<PreparedOriginalFrameV1>, PalwStateV2Error> {
+     let PalwConsensusObjectV2::FreePromptCommitted { claim, .. } = object else { return Ok(None) };
+     let Some(envelope) = b.extras.tir_public_originals.get(claim) else { return Ok(None) };
+     check_paired_original_v1(b, object)?;
+@@ -282,7 +284,12 @@ pub(super) fn prepare_paired_original_v1(
+     if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi {
+         return Err(refused("TFP1 declared burn differs from the exact original native full-SUM rent"));
+     }
+-    Ok(Some(frame))
++    // Capture native facts without new Source reconstruction/resource scope.
++    // The ordinary old preparation and price/quote paths remain unchanged.
++    let mut native=rules(b)?;
++    native.maximum_leaves=b.state.class_step_ladder_v1(&original.job.class_id,native.maximum_leaves);
++    let registered=b.state.class(&original.job.class_id).map(|c|(c.registered_daa,crate::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(b.params,c.registered_daa)));
++    Ok(Some(PreparedOriginalFrameV1{frame,at:*ctx,native,registered,network:b.extras.tir_public_network_domain_v1,semantic_snapshot:b.state.class_semantics_v1(&original.job.class_id).cloned()}))
+ }
+ 
+ /// Native price derivation on the actual pre-object state. The object must be
+@@ -1646,6 +1653,7 @@ mod conviction_e2e_tests {
+     include!("palw_court_shared_numerical_material_native_tests.rs");
+     include!("palw_prefix_material_native_tests.rs");
+     include!("palw_court_shared_prefix_family_native_tests.rs");
++    include!("palw_court_original_aggregate_native_tests.rs");
+     include!("palw_root_input_material_native_tests.rs");
+     include!("palw_court_shared_constraint_native_tests.rs");
+     include!("palw_court_shared_tokenizer_native_tests.rs");
