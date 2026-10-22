@@ -150,6 +150,32 @@ def a16_window_starts(context: int, count: int) -> list[int]:
     return sorted({i * (context - 64) // (count - 1) for i in range(count)})
 
 
+def palwq36_window_fit(report: dict, tokens_sha256: str, context: int, tolerance: dict, window_count: int = 32) -> dict:
+    """Read a `qwen36-window-compare` report. Refuses (ValueError) anything that is not a whole-sequence measurement of the
+    pinned held-out sequence at the sampled windows with KL in physical units: there is no fake pass for PALWQ361."""
+    starts = a16_window_starts(context, window_count)
+    ref = report.get("reference") or {}
+    if (report.get("tool") != "qwen36-window-compare" or report.get("sequence_tokens") != context
+            or report.get("tokens_sha256") != tokens_sha256 or ref.get("tokens_sha256") != tokens_sha256
+            or ref.get("schema") != "misaka-palw/qwen36-reference-windows/v1"):
+        raise ValueError("the PALWQ361 comparison does not name the held-out sequence and whole context")
+    scale = report.get("logit_scale")
+    if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
+        raise ValueError("PALWQ361 physical logit scale is missing: KL cannot be measured, so the fit is not measured")
+    windows = report.get("windows") or []
+    if [w.get("window_start") for w in windows] != starts:
+        raise ValueError("missing, duplicated or foreign PALWQ361 comparison windows")
+    # The window checks and the tolerance are the A16 reader's: one acceptance bar (RFC-0013) for both legacy classes.
+    shaped = {"sequence_tokens": context, "a16_artifact_digest": "q36",
+              "calibration": {"artifact_digest": "q36", "n_ctx": context, "schema": "misaka-palw/a16-source-calibration/v1",
+                              "logit_scale": scale},
+              "windows": windows}
+    fit = a16_window_fit(shaped, "q36", context, tolerance, window_count)
+    fit["measurement_scope"] = "PALWQ361 " + fit["measurement_scope"]
+    fit["long"]["measurement_scope"] = "PALWQ361 " + fit["long"]["measurement_scope"]
+    return fit
+
+
 def a16_window_fit(report: dict, digest: str, context: int, tolerance: dict, window_count: int = 32) -> dict:
     """Score sampled absolute-position windows; never describe these as every-position scores."""
     starts = a16_window_starts(context, window_count)
@@ -694,7 +720,7 @@ class Pipeline:
         needed = (["palwart"] if is_legacy_wrap(m) else ["qwen25-convert", "palwart"] if is_a16(m)
                   else ["qwen36-convert", "palwart"] if is_palwq36(m) else ["palw-tir-convert", "palwart"])
         if self.fit_plan(m)[0]:
-            needed.append("qwen25-window-compare" if is_a16(m) else "palw-tir-fidelity")
+            needed.append("qwen25-window-compare" if is_a16(m) else "qwen36-window-compare" if is_palwq36(m) else "palw-tir-fidelity")
         for t in needed:
             if not self.a.dry_run and not Path(self.tool(t)).is_file():
                 problems.append(f"binary {self.tool(t)} is missing (cargo build --release -p … --bin {t})")
@@ -1280,11 +1306,17 @@ class Pipeline:
         if is_a16(m):
             return (False, "--no-fit or --no-fit-long") if self.a.no_fit or self.a.no_fit_long else (True, "")
         if is_palwq36(m):
-            return False, ("PALWQ361 at 32K is not measurable on this Mac: no tool compares the legacy engine with the f32 reference "
-                           "at windows along a long sequence (qwen36-run --reference scores the converter's 8-token prompt only), "
-                           "the f32 reference over 32K positions of the 35B-A3B MoE is another full read of the GGUF and hours of "
-                           "compute, and the integer engine needs the ~37 GB artifact on local disk against 32 GB of RAM (the "
-                           "streamed run keeps none of it). The measuring pass's log records the reference's next-token check")
+            if self.a.no_fit or getattr(self.a, "no_fit_long", False):
+                return False, "--no-fit or --no-fit-long"
+            art, ref = getattr(self.a, "palwq36_artifact", None), getattr(self.a, "palwq36_reference_windows", None)
+            missing = [f"{flag} {v}" if v else f"{flag} not given" for flag, v in
+                       (("--palwq36-artifact", art), ("--palwq36-reference-windows", ref)) if not (v and Path(v).expanduser().is_file())]
+            if missing:
+                return False, ("PALWQ361 at 32K is not measurable without a real measurement: qwen36-window-compare advances the "
+                               "legacy integer engine over the whole sequence but needs the ~37 GB artifact on local disk and the f32 "
+                               "reference's window logits written by a host that ran the 35B-A3B MoE over the same sequence ("
+                               + "; ".join(missing) + ")")
+            return True, ""
         if self.a.no_fit:
             return False, "--no-fit"
         if m["converter"] == "tir-gguf" and not self.a.local_source:
@@ -1317,6 +1349,9 @@ class Pipeline:
             return
         if is_a16(m):
             self.fit_a16(m, st)
+            return
+        if is_palwq36(m):
+            self.fit_palwq36(m, st)
             return
         opts = effective_options(m, self.a.context)
         texts = self.reg["calibration_texts"]
@@ -1403,6 +1438,51 @@ class Pipeline:
         st.save()
         if not fit["within"]:
             raise SystemExit("A16 fit out of tolerance; no index or card is uploaded")
+        st.mark("fit", {"measured": True, "within": True})
+
+    def fit_palwq36(self, m: dict, st: State) -> None:
+        """#8: `qwen36-window-compare` over the held-out long sequence. The integer engine advances the whole prefix here; the
+        f32 window logits come from `--palwq36-reference-windows` (bound to the sequence's SHA-256 by the tool). The reading is
+        `palwq36_window_fit`, which refuses a report without KL (no PALWQ361 logit scale is on record unless one is given)."""
+        d = model_dirs(self.work, m)
+        opts = effective_options(m, self.a.context)
+        context = opts["context"]
+        spec = dict(self.reg["calibration_texts"]["long_evaluation"], len=context)
+        tokens_path = d["calib"] / "eval-q36-long-tokens.json"
+        token_meta = self.tokens_file(spec, d["src"] / "tokenizer.json", tokens_path)
+        flat = d["calib"] / "eval-q36-long-sequence.json"
+        report_path = d["base"] / "fit-q36-window-report.json"
+        argv = [self.tool("qwen36-window-compare"), "--artifact", str(Path(self.a.palwq36_artifact).expanduser()),
+                "--tokens", str(flat), "--reference-windows", str(Path(self.a.palwq36_reference_windows).expanduser()),
+                "--control", "--out", str(report_path)]
+        if getattr(self.a, "palwq36_logit_scale", None) is not None:
+            argv += ["--logit-scale", repr(float(self.a.palwq36_logit_scale))]
+        if self.a.dry_run:
+            self.r.run(argv)
+            return
+        st.data["fit"] = {"measured": False, "reason": "PALWQ361 whole-prefix window comparison is pending"}
+        if st.data.get("record") is not None:
+            st.data["record"]["fit"] = st.data["fit"]
+        st.data.get("steps", {}).pop("fit", None)
+        st.save()
+        sequences = json.loads(tokens_path.read_text())["sequences"]
+        if len(sequences) != 1:
+            raise SystemExit("PALWQ361 window fit requires exactly one pinned held-out sequence")
+        flat.write_text(json.dumps(sequences[0], separators=(",", ":")) + "\n")
+        self.r.run(argv, env=anon_env())
+        try:
+            fit = palwq36_window_fit(json.loads(report_path.read_text()), sha256_file(flat), context,
+                                     self.reg["calibration_texts"]["fit_tolerance"], spec["drift_windows"])
+        except (ValueError, KeyError, TypeError) as error:
+            raise SystemExit(f"#{m['id']}: PALWQ361 comparison report refused: {error} — nothing is uploaded") from error
+        fit["evaluation_tokens_sha256"] = token_meta["tokens_sha256"]
+        fit["window_report_sha256"] = sha256_file(report_path)
+        st.data["fit"] = fit
+        if st.data.get("record") is not None:
+            st.data["record"]["fit"] = fit
+        st.save()
+        if not fit["within"]:
+            raise SystemExit(f"#{m['id']}: PALWQ361 fit out of tolerance; no index or card is uploaded")
         st.mark("fit", {"measured": True, "within": True})
 
     def fit_long(self, m: dict, opts: dict, d: dict, model_path: Path) -> dict:
@@ -1733,6 +1813,10 @@ def main(argv=None) -> int:
                    help="measure the fit only when the integer program (held whole by palw-tir-fidelity) is at most this size")
     r.add_argument("--local-source", help="a copy of the source already downloaded at the pinned revision (one --model only); "
                                           "its files are checked against the pins and linked, never modified or deleted")
+    r.add_argument("--palwq36-artifact", help="#8: the PALWQ361 .palwq36 on local disk, for qwen36-window-compare (fit)")
+    r.add_argument("--palwq36-reference-windows",
+                   help="#8: f32 reference window logits over the held-out sequence (misaka-palw/qwen36-reference-windows/v1)")
+    r.add_argument("--palwq36-logit-scale", type=float, help="#8: physical logit scale for KL; absent means the fit is refused")
     r.add_argument("--local-legacy", help="#1: the legacy A16 .palwart already on disk (checked against its pinned SHA-256)")
     r.add_argument("--bin-dir", default=str(ROOT / "target" / "release"))
     r.add_argument("--tokenize-python", default=DEFAULT_TOKENIZE_PY, help="a Python with the `tokenizers` package (offline)")

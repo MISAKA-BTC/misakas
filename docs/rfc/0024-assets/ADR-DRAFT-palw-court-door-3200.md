@@ -3,7 +3,7 @@
 - **Status:** Proposed / Review Required。採択・有効化済みではない。
 - **日付:** 2026-10-19（Asia/Tokyo）。
 - **番号:** 未割当。最新 branch の ADR-0191 等と番号台帳を照合してから割り当てる。
-- **関連 RFC:** [RFC-DRAFT-palw-court-door-3200.md](RFC-DRAFT-palw-court-door-3200.md)。
+- **関連 RFC:** [RFC-0024](../0024-court-door-3200-to-ctx-2m.md)(旧 Draft 名 RFC-DRAFT-palw-court-door-3200.md)。
 - **変更管理:** `PRINCIPLES §11`、RFC-0021、設計凍結規程に従う。
 
 ## 1. 問題

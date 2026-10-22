@@ -2,7 +2,7 @@
 
 **状態:** Proposed / 未採択  
 **日付:** 2026-10-19  
-**対応RFC:** [RFC-DRAFT-palw-scalable-objective-court-v2.md](RFC-DRAFT-palw-scalable-objective-court-v2.md)
+**対応RFC:** [RFC-0025](../0025-scalable-objective-court-many-models-mass-disputes.md)(旧 Draft 名 RFC-DRAFT-palw-scalable-objective-court-v2.md)
 
 ## 背景
 
