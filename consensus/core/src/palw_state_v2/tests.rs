@@ -9,6 +9,7 @@ mod claim_local_rewards_v1;
 // RFC-0017: model eligibility through the actual fold (claim gate, commit-then-draw, fee, promotion, lapse, renewal).
 mod model_eligibility_fold_v1;
 mod public_prefix_fold_v1;
+mod model_tier_line_root_v1;
 mod reward_gate_genesis;
 mod terminal_carriage_v1;
 mod gdn_court_v2;
