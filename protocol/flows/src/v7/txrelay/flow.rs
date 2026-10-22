@@ -52,6 +52,10 @@ pub struct RelayTransactionsFlow {
 
     /// Track the number of spam txs coming from this peer
     spam_counter: u64,
+
+    /// Liveness hotfix (L-LC-02): this peer's budget of H-1 carriers handed to the mempool, and how many were held back over it.
+    palw_carrier_budget: super::palw_carriers::PalwPeerCarrierBudgetV1,
+    palw_carriers_held_back: u64,
 }
 
 /// Holds the state information for whether we will throttle tx relay or not
@@ -74,7 +78,15 @@ impl Flow for RelayTransactionsFlow {
 
 impl RelayTransactionsFlow {
     pub fn new(ctx: FlowContext, router: Arc<Router>, invs_route: IncomingRoute, msg_route: IncomingRoute) -> Self {
-        Self { ctx, router, invs_route, msg_route, spam_counter: 0 }
+        Self {
+            ctx,
+            router,
+            invs_route,
+            msg_route,
+            spam_counter: 0,
+            palw_carrier_budget: Default::default(),
+            palw_carriers_held_back: 0,
+        }
     }
 
     pub fn invs_channel_size() -> usize {
@@ -215,6 +227,24 @@ impl RelayTransactionsFlow {
                 transactions.push(transaction);
             }
         }
+        // Liveness hotfix (L-LC-02): an H-1 carrier over this peer's budget is not handed to the mempool (whose gate rehearses it);
+        // not a fault — the peer may send it again later, and another peer may relay it.
+        if self.ctx.config.params.palw_rcore_plus.is_some() {
+            let now = std::time::Instant::now();
+            let before = transactions.len();
+            transactions.retain(|tx| !super::palw_carriers::palw_is_gated_carrier_v1(tx) || self.palw_carrier_budget.admit(now));
+            let held = (before - transactions.len()) as u64;
+            if held > 0 {
+                let previous = self.palw_carriers_held_back;
+                self.palw_carriers_held_back = previous.saturating_add(held);
+                if previous / 100 != self.palw_carriers_held_back / 100 || previous == 0 {
+                    warn!(
+                        "Peer {} is over its H-1 carrier budget: {} carrier(s) held back so far (liveness hotfix L-LC-02)",
+                        self.router, self.palw_carriers_held_back
+                    );
+                }
+            }
+        }
         let insert_results = self
             .ctx
             .mining_manager()
@@ -228,6 +258,10 @@ impl RelayTransactionsFlow {
                 Err(MiningManagerError::MempoolError(RuleError::RejectInvalid(transaction_id))) => {
                     // TODO: discuss a banning process
                     return Err(ProtocolError::MisbehavingPeer(format!("rejected invalid transaction {}", transaction_id)));
+                }
+                // Liveness hotfix (L-LC-02 / L-COURT-01): an H-1 carrier invalid at every tip is never an honest race.
+                Err(err) if super::palw_carriers::palw_relay_refusal_is_misbehaviour_v1(err) => {
+                    return Err(ProtocolError::MisbehavingPeer(format!("relayed an H-1 carrier invalid at every tip: {err}")));
                 }
                 Err(MiningManagerError::MempoolError(RuleError::RejectNonStandard(..))) => {
                     self.spam_counter += 1;

@@ -42,6 +42,7 @@ const LIST: [&str; 36] = [
     "palw_court_outsider_lane_v1",
     "palw_court_clock_v2",
     "palw_court_capacity_v1",
+    "palw_court_completion_attempt_v1",
     "palw_court_model_scope_v1",
     "palw_public_evidence_reward_v1",
     // Compute-claim audit CX-01/CX-02 (ADR-0205 draft): its prerequisites are genesis fences of testnet-12.

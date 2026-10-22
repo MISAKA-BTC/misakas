@@ -70,6 +70,22 @@ impl Params {
         Ok(())
     }
 
+    /// **`palw_court_completion_attempt_v1`** (liveness fix L-COURT-01): it amends how the acceptance walk charges the court slot past
+    /// the 2026-09-11 audit's AC-SLOT rule, so it needs `palw_audit_2026_09_11` armed at or below it. It carries no values: armable
+    /// wherever its prerequisite holds.
+    pub fn validate_palw_court_completion_attempt_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        let Some(fence) = self.palw_court_completion_attempt_v1.filter(|f| *f != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !self.palw_audit_2026_09_11.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score()) {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "palw_court_completion_attempt_v1 is armed without palw_audit_2026_09_11 at or below it: it amends AC-SLOT's \
+                 charge-on-apply walk",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         self.validate_palw_v2_inner(
             false,
@@ -286,6 +302,8 @@ impl Params {
         // **RFC-0018's five fences** (`crate::palw_rfc0018_v1`): refused when armed; the mirror must agree.
         self.validate_palw_rfc0018_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
+        // **The liveness fix L-COURT-01** (`palw_court_completion_attempt_v1`): needs the 2026-09-11 audit at or below it.
+        self.validate_palw_court_completion_attempt_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).

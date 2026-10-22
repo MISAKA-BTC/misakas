@@ -153,7 +153,9 @@ impl VirtualStateProcessor {
         let object = self.palw_h1_gated_object_at(tx, virtual_daa_score)?;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
-        self.palw_mempool_h1_carrier_refusal_with(&object, virtual_daa_score, chain_point, &state)
+        // Liveness hotfix (L-LC-02): the gate's layers (`palw_mempool_h1_carrier_refusal_with`'s) through the verdict memory, keyed by
+        // every input the answer reads — the template re-asks every carrier at every build.
+        self.palw_h1_gate_memoised_v1(&object, virtual_daa_score, chain_point, &state).map(|refusal| refusal.why)
     }
 
     /// The object [`Self::palw_mempool_h1_carrier_refusal`] puts to the fold: `None` below
@@ -182,6 +184,18 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
     ) -> Option<String> {
         let state_params = self.palw_state_params_v2.as_ref()?;
+        let point = self.palw_h1_gate_point_v1(object, virtual_daa_score, chain_point, state);
+        self.palw_h1_carrier_refusal_on(state, state_params, &point, object)
+    }
+
+    /// The point [`Self::palw_mempool_h1_carrier_refusal_with`] judges `object` at on the tip `chain_point` / `state`.
+    pub(super) fn palw_h1_gate_point_v1(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        virtual_daa_score: u64,
+        chain_point: kaspa_consensus_core::BlockHash,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
         // M1: a proof names its seat's virtual span — judged at that span's first DAA when the seat
         // is at most one block ahead of this node, so a peer the newest block has not reached yet
         // does not turn an honest proof away (`palw_readiness_gate_daa_v1`).
@@ -199,14 +213,13 @@ impl VirtualStateProcessor {
             }
             _ => virtual_daa_score,
         };
-        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
             block: chain_point,
             daa_score,
             // The next block's: past the tip's, which is all the fold asks of it for these objects.
             blue_score: state.last_point().map_or(0, |last| last.blue_score.saturating_add(1)),
             subsidy: 0,
-        };
-        self.palw_h1_carrier_refusal_on(state, state_params, &point, object)
+        }
     }
 
     /// The single-Origin writer starts with a fresh work budget, so this one proof cannot exhaust it.
@@ -245,16 +258,60 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Option<String> {
+        self.palw_h1_carrier_refusal_typed_on(state, state_params, point, object).map(|refusal| refusal.why)
+    }
+
+    /// **[`Self::palw_h1_carrier_refusal_on`] with its refusal classified** (liveness hotfix, L-LC-02 / L-COURT-01; node-local).
+    /// The same decision and text: the read-only pre-check (`palw_h1_precheck_v1`) refuses only what the fold's arm refuses on the
+    /// same condition, before the state copy; the acceptance layer (`self.palw_v2_validate_objects(`) and the fold's own arm
+    /// (`palw_v2_apply_one_object_retained_v1(`) follow as before. The class says whether the refusal holds at every tip (the relay
+    /// flow penalises a peer for that) — see `palw_h1_guard`.
+    pub(in crate::pipeline::virtual_processor) fn palw_h1_carrier_refusal_typed_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<super::palw_h1_guard::PalwH1RefusalV1> {
+        use super::palw_h1_guard::PalwH1RefusalV1 as Refusal;
+        let near_a_fence = self.palw_h1_near_a_fence_v1(point.daa_score);
         if let Some(verdict) = self.palw_exec_origin_rehearsal_v1_on(state, state_params, point, object) {
             use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 as Verdict;
             return match verdict {
                 Verdict::Accepted => None,
-                Verdict::NotAccepted(why) => Some(why),
-                Verdict::Refused(why) => Some(why.to_string()),
+                Verdict::NotAccepted(why) => Some(Refusal::timing(why)),
+                Verdict::Refused(why) => Some(Refusal::timing(why.to_string())),
             };
         }
+        // The read-only pre-check: a possession proof the fold's arm refuses on its face (or on a root that never moves) is refused
+        // before any state copy, with the arm's own text.
+        if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::SeatReadinessProvedV2 { bond, class_id, span, proof, .. } =
+            object
+            && let Some(precheck) = kaspa_consensus_core::palw_h1_precheck_v1::palw_seat_readiness_v2_precheck_v1(
+                state,
+                state_params,
+                point.daa_score,
+                bond,
+                class_id,
+                *span,
+                proof,
+            )
+        {
+            let why = kaspa_consensus_core::palw_state_v2::PalwStateV2Error::ReadinessProofRefused(precheck.reason().to_string())
+                .to_string();
+            return Some(match precheck {
+                kaspa_consensus_core::palw_h1_precheck_v1::PalwH1PrecheckV1::Invalid(_) if !near_a_fence => Refusal::invalid(why),
+                _ => Refusal::timing(why),
+            });
+        }
         if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
-            return Some(why);
+            // A completing split-close chunk is refused here only by the adjudication of a close whose bytes are pinned (rooted
+            // chunks and per-chunk digests): the declarer's own fault at every tip, which no honest node relays.
+            let own = matches!(
+                object,
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CourtCloseChunk { .. }
+            ) && kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(state, object);
+            return Some(if own && !near_a_fence { Refusal::invalid(why) } else { Refusal::timing(why) });
         }
         let refusal = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
             state,
@@ -294,7 +351,9 @@ impl VirtualStateProcessor {
             // applies no conviction: the outside verifier still files its own proof.
             return None;
         }
-        Some(refusal.to_string())
+        // A node-local resource refusal (typed RAM admission) says nothing about the object: never remembered.
+        let memo = !matches!(refusal, kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_));
+        Some(Refusal { memo, ..Refusal::timing(refusal.to_string()) })
     }
 
     /// **The 2026-09-25 sweep, V01: [`Self::palw_mempool_h1_carrier_refusal`] on each of `txs`, at
@@ -331,7 +390,8 @@ impl VirtualStateProcessor {
                     return None;
                 }
                 let object = self.palw_h1_gated_object_at(tx, virtual_daa)?;
-                self.palw_mempool_h1_carrier_refusal_with(&object, virtual_daa, chain_point, &state)
+                // The gate's layers (`palw_mempool_h1_carrier_refusal_with`'s) through the verdict memory (liveness hotfix).
+                self.palw_h1_gate_memoised_v1(&object, virtual_daa, chain_point, &state).map(|refusal| refusal.why)
             })
             .collect()
     }
@@ -9060,6 +9120,12 @@ impl VirtualStateProcessor {
 
     pub(super) fn palw_audit_2026_09_11_at(&self, daa_score: u64) -> bool {
         self.palw_audit_2026_09_11.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **The liveness fix L-COURT-01's fence** (`Params::palw_court_completion_attempt_v1`), at the accepting block's DAA: a
+    /// completion the acceptance walk attempts spends the court slot / cost whether it applies or is refused. `false` on every preset.
+    pub(super) fn palw_court_completion_attempt_at(&self, daa_score: u64) -> bool {
+        self.palw_court_completion_attempt.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     pub(super) fn palw_audit_2026_09_11_deep_at(&self, daa_score: u64) -> bool {
