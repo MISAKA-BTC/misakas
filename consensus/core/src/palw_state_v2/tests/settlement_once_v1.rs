@@ -484,3 +484,90 @@ fn a_source_fee_promise_is_closed_once_and_refused_past_the_fence_for_want_of_so
     let mut d = TransitionBuilder::new(&parent, &q, false, false, false, false, &extras);
     assert_eq!(d.settle_once_liable_v1(10, promise, PalwSettlementConsumerV1::KernelTick, 6, prepaid, unsourced).unwrap(), PalwSettleOnceV1::Dormant);
 }
+
+/// **audit A-4: a source fee payout the once-only predicate refuses goes back to the sponsor.** The sponsor prepaid 50 into the
+/// source fee escrow (`FundSourceFeeEscrow`, an earlier fold); past `palw_settlement_once_v1` the producer's `PaySourceFeeEscrow`
+/// is `Unsourced` → `Refused` (closed at zero), and the kernel ledger's escrow has already counted the promise as discharged, so
+/// no refund instruction would ever follow. Expected: the sponsor's payout +50 once, the producer 0, the marker 0; a second
+/// application pays nothing more (strict: refused). Before the fix the 50 was destroyed.
+#[test]
+fn audit_a4_a_refused_source_fee_payout_returns_the_prepaid_fee_to_the_sponsor() {
+    use misaka_palw_kernel::beacon_source::{BeaconSourceTargetV1, BeaconSourceTermsV1};
+    use misaka_palw_kernel::beacon_source_fee::{BeaconSourceFeeFundingV1, BeaconSourceFeePromiseV1, BeaconSourceFeeTermsV1};
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut parent = with_route(PalwChainStateV2::genesis());
+    parent.bonds.insert(bond_key(1), bond_record(1_000, 1));
+    parent.bonds.insert(bond_key(2), bond_record(1_000, 2));
+    let mut b0 = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let sponsor = b0.note_kernel_bond(&bond_key(1)).unwrap();
+    let producer = b0.note_kernel_bond(&bond_key(2)).unwrap();
+    let mut s1 = b0.state.clone();
+    let context = misaka_palw_challenge::BeaconContextV1 {
+        chain_genesis: [1; 64],
+        ruleset_id: [2; 64],
+        policy: misaka_palw_challenge::sealed_source_policy_v3(2, 2, 40, 1, 1),
+        subject_kind: misaka_palw_challenge::SubjectKindV1::ModelConformance,
+        commitment_root: [0xD1; 64],
+        commitment_position: 10,
+        challenge_epoch: 0,
+        eligible_profiles: Default::default(),
+        excluded_profiles: Default::default(),
+        candidate_profile_id: misaka_palw_challenge::RootV1::Present([0xEF; 64]),
+    };
+    let source = BeaconSourceTermsV1 {
+        context: context.id(),
+        seal_start: 12,
+        seal_end: 52,
+        reveal_end: 92,
+        final_by: 180,
+        hold_until: 400,
+        deposit: 100,
+        max_per_producer: 1,
+        max_total: 1,
+    };
+    let ctx = context.id();
+    let terms = BeaconSourceFeeTermsV1 { source, sponsor, fee_per_source: 50, max_sources: 1 };
+    {
+        let route = s1.kernel_route.as_mut().unwrap();
+        let mut ledger = route.ledger_checked_v1().unwrap();
+        let l = ledger.preview_mut_v1();
+        l.beacon_source_fees.insert(
+            ctx,
+            BeaconSourceFeeFundingV1 {
+                target: BeaconSourceTargetV1 { context, terms: source },
+                terms,
+                funded_daa: 12,
+                held: 50,
+                allocated: 1,
+                paid: 0,
+                refunded: 0,
+                unused_refunded: false,
+            },
+        );
+        l.beacon_source_fee_promises
+            .insert((ctx, producer), BeaconSourceFeePromiseV1 { terms_id: terms.id(), accepted_daa: 12, fee: 50, outcome: None });
+        route.rows = ledger.to_rows();
+        route.ledger_cache.set(ledger.as_rebuilt_from_v1(&route.rows));
+    }
+    let payout = |s: &PalwChainStateV2, v: u64| {
+        s.pending_payouts.get(&crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&h64(0x9A00 + v))).map_or(0, |row| row.amount)
+    };
+    let batch = vec![settlement(producer, 50, SettlementKindV1::PaySourceFeeEscrow, ctx)];
+    let mut b = TransitionBuilder::new(&s1, &p, false, false, false, false, &extras);
+    super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 401).unwrap();
+    let promise = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::SourceFeePromise, ctx, producer, 0);
+    eprintln!(
+        "[fix-a A-4] sponsor payout {}, producer payout {}, marker {:?}",
+        payout(&b.state, 1),
+        payout(&b.state, 2),
+        palw_settled_once_v1(&b.state, &promise).map(|row| row.amount)
+    );
+    assert_eq!(payout(&b.state, 1), 50, "A-4: the withheld fee returns to the sponsor");
+    assert_eq!(payout(&b.state, 2), 0, "the unsourced producer leg pays nothing");
+    assert_eq!(palw_settled_once_v1(&b.state, &promise).map(|row| row.amount), Some(0), "the obligation is closed at zero");
+    assert_eq!(b.state.bonds[&bond_key(1)].collateral, 1_000, "the sponsor's bond is not debited again");
+    // Once: a strict re-application is refused (AlreadySettled) and nothing more is paid.
+    assert!(super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, true, 402).is_err());
+    assert_eq!(payout(&b.state, 1), 50);
+}

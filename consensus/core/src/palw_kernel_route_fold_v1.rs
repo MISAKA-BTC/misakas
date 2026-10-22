@@ -1213,9 +1213,25 @@ fn apply_settlements_to_exec_vesting(
                         ),
                     )?;
                     match once {
-                        // Withheld by the predicate (a policy outcome, not an inconsistency): nothing is debited or paid; the
-                        // obligation is closed at zero.
-                        super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(_) => continue,
+                        // Withheld by the predicate (a policy outcome, not an inconsistency): the producer is not paid and the
+                        // obligation is closed at zero. audit A-4: the sponsor's fee was already debited (`FundSourceFeeEscrow`)
+                        // and the kernel ledger counts this promise as discharged (its escrow `held` drops by the fee, no refund
+                        // instruction ever follows), so the withheld fee goes back to the SPONSOR here — once, because the zero
+                        // marker makes any retry `AlreadySettled` — instead of being destroyed.
+                        super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(_) => {
+                            let held = fee_held.get_mut(&context).ok_or_else(|| refused("source fee escrow missing"))?;
+                            *held = held.checked_sub(s.amount).ok_or_else(|| refused("source fee payout exceeds prepaid escrow"))?;
+                            let sponsor = funding.terms.sponsor;
+                            let payload = builder
+                                .state
+                                .kernel_route
+                                .as_ref()
+                                .and_then(|k| k.bond_key_of(&sponsor))
+                                .and_then(|k| builder.state.bonds.get(&k).map(|b| b.payout_payload))
+                                .ok_or_else(|| refused("source fee sponsor payee missing"))?;
+                            builder.add_kernel_payout(payload, s.amount)?;
+                            continue;
+                        }
                         super::palw_settlement_once_fold_v1::PalwSettleOnceV1::AlreadySettled(_) => {
                             return Err(refused("the source fee promise was already settled by another consumer"));
                         }
