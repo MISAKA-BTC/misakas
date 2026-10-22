@@ -756,6 +756,8 @@ pub mod palw_tir_close_size_v1;
 pub mod palw_tir_court_v1;
 /// RFC-0002 Phase F step F7: the generic history dissection of an IR class — every reduction over H of the disputed cone, folded exactly.
 pub mod palw_tir_dissect_v1;
+/// RFC-0024 §4/§5: versioned position-terminal and lookahead court moves, step multiproof (dormant, `palw_tir_bounded_door_v1`).
+pub mod palw_tir_position_terminal_v2;
 /// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA units `TirStepLeaf` and `TirStepNode`.
 pub mod palw_tir_fence2_v1;
 /// RFC-0002 Phase H: the Free Prompt lane of an IR class — work derived from the admitted program, lane authenticated by coverage,

@@ -698,6 +698,72 @@ fn apply_object_inner(
         PalwConsensusObjectV2::TirDesignatedEventV1 { event } => {
             apply_tir_designated_event_v1(builder, event)?;
         }
+        // RFC-0024 §4 / §5 (tags 201-204): routed by `palw_tir_bounded_door_v1` at acceptance (A-2); here folded only where the
+        // extras flag (that fence's mirror) is set, otherwise a strict no-op, as tag 245.
+        PalwConsensusObjectV2::TirPositionDissectedV2 { dissection, .. } => {
+            if builder.extras.tir_bounded_door_active {
+                // No state: the round is re-checked inside the close that names a position. Bound to the terminal phase here too,
+                // so a block cannot carry a round the phase never asked for.
+                let phase = builder
+                    .state
+                    .tir_dissections
+                    .get(&dissection.session_id)
+                    .ok_or(PalwStateV2Error::NoDissection(dissection.session_id))?;
+                crate::palw_tir_position_terminal_v2::check_tir_position_dissection_v2(phase, dissection)
+                    .map_err(|e| PalwStateV2Error::DissectionRefused(dissection.session_id, e.to_string()))?;
+            }
+        }
+        PalwConsensusObjectV2::TirPositionClosedV2 { close } => {
+            if builder.extras.tir_bounded_door_active {
+                // One close path: the verdict the acceptance layer re-derived (`adjudicate_tir_position_close_v2`) is applied
+                // through the `CourtClosed` arm with the close's own dissection-bottom proof.
+                let as_close = PalwConsensusObjectV2::CourtClosed {
+                    session_id: close.session_id,
+                    verdict: close.verdict,
+                    proof: close.proof.clone(),
+                };
+                return apply_object_inner(builder, ctx, &as_close);
+            }
+        }
+        PalwConsensusObjectV2::TirLookaheadDisclosedV2 { body } => {
+            if builder.extras.tir_bounded_door_active {
+                let session_id = body.session_id;
+                let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+                let mut phase =
+                    builder.state.tir_dissections.get(&session_id).ok_or(PalwStateV2Error::NoDissection(session_id))?.as_ref().clone();
+                phase
+                    .apply_lookahead_disclosure_v2(
+                        &body.disclosure,
+                        crate::palw_tir_position_terminal_v2::PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2,
+                        ctx.daa_score,
+                        builder.params.turn_deadline_daa(),
+                    )
+                    .map_err(|e| PalwStateV2Error::DissectionRefused(session_id, e.to_string()))?;
+                cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
+                builder.write_tir_dissection(session_id, Some(phase))?;
+                builder.write_court(session_id, Some(session))?;
+            }
+        }
+        PalwConsensusObjectV2::TirLookaheadChosenV2 { body } => {
+            if builder.extras.tir_bounded_door_active {
+                let session_id = body.path.session_id;
+                let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+                let mut phase =
+                    builder.state.tir_dissections.get(&session_id).ok_or(PalwStateV2Error::NoDissection(session_id))?.as_ref().clone();
+                phase
+                    .apply_choice_path_v2(
+                        &body.disclosure,
+                        &body.path,
+                        crate::palw_tir_position_terminal_v2::PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2,
+                        ctx.daa_score,
+                        builder.params.turn_deadline_daa(),
+                    )
+                    .map_err(|e| PalwStateV2Error::DissectionRefused(session_id, e.to_string()))?;
+                cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
+                builder.write_tir_dissection(session_id, Some(phase))?;
+                builder.write_court(session_id, Some(session))?;
+            }
+        }
         // R-D2-READY (tag 230, ADR-0188 B): the acceptance gate routes it by `palw_court_model_scope_v1`, so below that fence it never
         // reaches this fold (A-2). Past it the fold admits against the ADOPTED draw cap, which is unadopted (`None`): a refusal, never a
         // default. The persistent registry write (`palw_d2_readiness_root_fold_v1`) waits on that cap and on the C1 supply (ADR-0200).

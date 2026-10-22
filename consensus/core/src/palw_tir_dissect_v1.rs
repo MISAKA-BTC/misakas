@@ -1006,6 +1006,267 @@ impl PalwTirPositionNarrowingV1 {
 }
 
 // =================================================================================================
+// RFC-0024 B — two-level lookahead disclosure (DORMANT, `palw_tir_bounded_door_v1`)
+// =================================================================================================
+
+/// Wire version of the RFC-0024 §5 lookahead objects (a new versioned object beside the V1 round;
+/// the V1 round's encoding and meaning are unchanged).
+pub const PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2: u16 = 2;
+
+/// **`LookaheadDisclosureV2` (RFC-0024 §5.1)**: the responder discloses, in ONE move, every
+/// candidate the next two levels of the pinned cut can reach. `frontier[i]` is the depth-2 frontier
+/// under level-1 child `i`: the claims of `i`'s own pinned children, in order — or, when child `i` is
+/// already one tile (no further cut), exactly one claim, child `i`'s own. The level-1 claims are NOT
+/// carried: they are reconstructed from the frontier by the exact `Σ`/`max` fold (§5.1, "内部の親部分値は
+/// frontier から既存の Sum/Max で復元できるため省略できる"), and every reconstructed level is still
+/// interval- and fold-checked (§5.3 rule 2).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirLookaheadDisclosureV2 {
+    pub version: u16,
+    pub frontier: Vec<Vec<PalwTirRangeClaimV1>>,
+}
+
+/// **`ChoicePathV2` (RFC-0024 §5.3 rule 4)**: the challenger's one move over a checked lookahead:
+/// the level-1 child, then (when that child is cut further) the level-2 child.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirChoicePathV2 {
+    pub version: u16,
+    pub session_id: Hash64,
+    /// The phase round the lookahead was disclosed at.
+    pub round: u32,
+    /// One or two child indices (exactly two when the first child is cut further).
+    pub path: Vec<u8>,
+}
+
+/// A checked lookahead, expanded into the two V1 rounds it stands for (RFC-0024 §11 B-01: the
+/// bundle is equivalent to the old two-step transition by construction — the fold below applies
+/// exactly these rounds through [`PalwTirDissectPhaseV1::apply_round`] / `apply_choice`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirLookaheadExpansionV2 {
+    /// The level-1 round (reconstructed children of the disputed range).
+    pub level1: PalwTirDissectRoundV1,
+    /// Per level-1 child: its level-2 round, or `None` when the child is one tile.
+    pub level2: Vec<Option<PalwTirDissectRoundV1>>,
+}
+
+impl PalwTirLookaheadExpansionV2 {
+    /// The total demanded values a lookahead carries (the body `r` of RFC-0024 §5.5, summed).
+    pub fn frontier_values(msg: &PalwTirLookaheadDisclosureV2) -> usize {
+        msg.frontier.iter().flatten().map(|c| c.partials.iter().map(Vec::len).sum::<usize>()).sum()
+    }
+}
+
+/// The exact parent of `children` under `folds` (`Σ` checked / `max`); `None` on overflow or no child.
+fn fold_children_v2(folds: &[PalwTirFoldV1], elements: &[Vec<u32>], children: &[PalwTirRangeClaimV1]) -> Option<PalwTirRangeClaimV1> {
+    if children.is_empty() {
+        return None;
+    }
+    let mut partials = Vec::with_capacity(folds.len());
+    for (i, fold) in folds.iter().enumerate() {
+        let mut row = Vec::with_capacity(elements[i].len());
+        for e in 0..elements[i].len() {
+            let mut values = children.iter().map(|c| c.partials[i][e]);
+            row.push(match fold {
+                PalwTirFoldV1::Sum => values.try_fold(0i128, |a, v| a.checked_add(v))?,
+                PalwTirFoldV1::Max => values.max()?,
+            });
+        }
+        partials.push(row);
+    }
+    Some(PalwTirRangeClaimV1 { partials })
+}
+
+impl PalwTirDissectPhaseV1 {
+    fn check_claim_shape_v2(&self, child: &PalwTirRangeClaimV1) -> Result<(), PalwTirDissectError> {
+        if child.partials.len() != self.elements.len() || child.partials.iter().zip(&self.elements).any(|(v, e)| v.len() != e.len()) {
+            return Err(PalwTirDissectError::Shape("a frontier claim carries one value per demanded element"));
+        }
+        check_bounds(&self.bounds, child)
+    }
+
+    /// **Check a lookahead and expand it** (RFC-0024 §5.3). `max_frontier_values` is the profile's
+    /// pre-derived body bound (§5.5); `None` — the bound is not adopted for this profile — refuses
+    /// the bundle by name (the profile is "未対応", never zero-filled). Pure.
+    pub fn expand_lookahead_v2(
+        &self,
+        msg: &PalwTirLookaheadDisclosureV2,
+        max_frontier_values: Option<usize>,
+    ) -> Result<PalwTirLookaheadExpansionV2, PalwTirDissectError> {
+        if msg.version != PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2 {
+            return Err(PalwTirDissectError::UnsupportedVersion { got: msg.version });
+        }
+        match self.turn {
+            PalwBisectTurnV1::AwaitDisclosure => {}
+            PalwBisectTurnV1::AwaitVerdict => return Err(PalwTirDissectError::Turn("the challenger names a child")),
+            PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => return Err(PalwTirDissectError::AlreadyTerminal),
+        }
+        let Some(cap) = max_frontier_values else {
+            return Err(PalwTirDissectError::Shape("the lookahead frontier bound is not adopted for this profile (RFC-0024 §5.5)"));
+        };
+        // Lengths before any per-value work (RFC-0024 §7: limits checked before interpretation).
+        let ranges = self.child_ranges();
+        if msg.frontier.len() != ranges.len() {
+            return Err(PalwTirDissectError::ChildCount { got: msg.frontier.len(), expected: ranges.len() });
+        }
+        if PalwTirLookaheadExpansionV2::frontier_values(msg) > cap {
+            return Err(PalwTirDissectError::Shape("the lookahead frontier exceeds the profile's bound"));
+        }
+        let mut level1 = Vec::with_capacity(ranges.len());
+        let mut level2_children = Vec::with_capacity(ranges.len());
+        for (i, &(first, count)) in ranges.iter().enumerate() {
+            let group = &msg.frontier[i];
+            for claim in group {
+                self.check_claim_shape_v2(claim)?;
+            }
+            if count <= 1 {
+                if group.len() != 1 {
+                    return Err(PalwTirDissectError::ChildCount { got: group.len(), expected: 1 });
+                }
+                level1.push(group[0].clone());
+                level2_children.push(None);
+            } else {
+                let sub = palw_attn_child_ranges_v1(first, count, self.arity)?;
+                if group.len() != sub.len() {
+                    return Err(PalwTirDissectError::ChildCount { got: group.len(), expected: sub.len() });
+                }
+                let parent = fold_children_v2(&self.folds, &self.elements, group)
+                    .ok_or(PalwTirDissectError::Shape("a frontier group does not fold (overflow)"))?;
+                level1.push(parent);
+                level2_children.push(Some(group.clone()));
+            }
+        }
+        let level1 = PalwTirDissectRoundV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, children: level1 };
+        // Level 1: interval of every reconstructed parent, and its exact fold to the disputed claim.
+        self.check_round_values(&level1)?;
+        // Level 2: each child's frontier against that child's own projected phase (its pinned cut).
+        let mut level2 = Vec::with_capacity(level2_children.len());
+        for (i, children) in level2_children.into_iter().enumerate() {
+            match children {
+                None => level2.push(None),
+                Some(children) => {
+                    let child = self
+                        .project_unrooted_child_v1(&level1, i as u8)
+                        .map_err(|_| PalwTirDissectError::Shape("a level-1 child does not project"))?;
+                    let round = PalwTirDissectRoundV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, children };
+                    child.check_round_values(&round)?;
+                    level2.push(Some(round));
+                }
+            }
+        }
+        Ok(PalwTirLookaheadExpansionV2 { level1, level2 })
+    }
+
+    /// **Apply a responder's lookahead as its disclosure**: the reconstructed level-1 round becomes the
+    /// phase's pending round exactly as a V1 round would (same turn, same deadline rule).
+    pub fn apply_lookahead_disclosure_v2(
+        &mut self,
+        msg: &PalwTirLookaheadDisclosureV2,
+        max_frontier_values: Option<usize>,
+        accepted_daa: u64,
+        w_round: u64,
+    ) -> Result<PalwTirLookaheadExpansionV2, PalwTirDissectError> {
+        let expansion = self.expand_lookahead_v2(msg, max_frontier_values)?;
+        self.apply_round(&expansion.level1, accepted_daa, w_round)?;
+        Ok(expansion)
+    }
+
+    /// **Apply the challenger's `ChoicePathV2`** over a lookahead already applied as this phase's
+    /// disclosure: the first choice, then the level-2 round the lookahead carried for that child,
+    /// then the second choice — the same three V1 transitions, in one move. The bundle must be the
+    /// one pending (its level-1 reconstruction equals the phase's pending children); a path of the
+    /// wrong length (two when the child is cut further, else one) is refused.
+    pub fn apply_choice_path_v2(
+        &mut self,
+        msg: &PalwTirLookaheadDisclosureV2,
+        path: &PalwTirChoicePathV2,
+        max_frontier_values: Option<usize>,
+        accepted_daa: u64,
+        w_round: u64,
+    ) -> Result<(), PalwTirDissectError> {
+        if path.version != PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2 {
+            return Err(PalwTirDissectError::UnsupportedVersion { got: path.version });
+        }
+        if path.session_id != self.session_id {
+            return Err(PalwTirDissectError::Session);
+        }
+        if self.turn != PalwBisectTurnV1::AwaitVerdict {
+            return Err(PalwTirDissectError::Turn("a lookahead before the choice path"));
+        }
+        if path.round != self.round {
+            return Err(PalwTirDissectError::Round { got: path.round, expected: self.round });
+        }
+        // Re-expand against the phase as it stood at the disclosure (the pending round's parent).
+        let mut at_disclosure = self.clone();
+        at_disclosure.turn = PalwBisectTurnV1::AwaitDisclosure;
+        at_disclosure.pending.clear();
+        let expansion = at_disclosure.expand_lookahead_v2(msg, max_frontier_values)?;
+        if expansion.level1.children != self.pending {
+            return Err(PalwTirDissectError::Turn("the choice path names another disclosure than the pending one"));
+        }
+        let first = *path.path.first().ok_or(PalwTirDissectError::Shape("an empty choice path"))?;
+        let level2 = expansion
+            .level2
+            .get(usize::from(first))
+            .ok_or(PalwTirDissectError::ChildOutOfRange { got: first, children: expansion.level2.len() })?;
+        let expected = 1 + usize::from(level2.is_some());
+        if path.path.len() != expected {
+            return Err(PalwTirDissectError::Shape("a choice path names exactly one child per disclosed level"));
+        }
+        let choice = |round: u32, child: u8| PalwTirDissectChoiceV1 {
+            version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+            session_id: self.session_id,
+            round,
+            child,
+        };
+        let mut next = self.clone();
+        next.apply_choice(&choice(next.round, first), accepted_daa, w_round)?;
+        if let Some(round) = level2 {
+            next.apply_round(round, accepted_daa, w_round)?;
+            next.apply_choice(&choice(next.round, path.path[1]), accepted_daa, w_round)?;
+        }
+        *self = next;
+        Ok(())
+    }
+}
+
+/// The domain a lookahead disclosure's message opens with (responder, ADR-0082 responder context).
+pub const PALW_TIR_LOOKAHEAD_DOMAIN_V2: &[u8] = b"misaka-palw/tir/dissect/lookahead/v2";
+/// The domain a choice path's message opens with (challenger, ADR-0082 challenger context).
+pub const PALW_TIR_CHOICE_PATH_DOMAIN_V2: &[u8] = b"misaka-palw/tir/dissect/choice-path/v2";
+
+/// **The message the responder signs for a lookahead** (RFC-0024 §5.3: bound to session, round and
+/// the disputed parent range — `tile_first`, `tile_count` — and the encoding).
+pub fn palw_tir_lookahead_message_v2(
+    session_id: &Hash64,
+    round: u32,
+    tile_first: u64,
+    tile_count: u64,
+    msg: &PalwTirLookaheadDisclosureV2,
+) -> Vec<u8> {
+    let mut m = PALW_TIR_LOOKAHEAD_DOMAIN_V2.to_vec();
+    m.extend_from_slice(session_id.as_byte_slice());
+    m.extend(round.to_le_bytes());
+    m.extend(tile_first.to_le_bytes());
+    m.extend(tile_count.to_le_bytes());
+    m.extend(borsh::to_vec(msg).expect("borsh"));
+    m
+}
+
+/// **The message the challenger signs for a choice path**.
+pub fn palw_tir_choice_path_message_v2(path: &PalwTirChoicePathV2) -> Vec<u8> {
+    let mut m = PALW_TIR_CHOICE_PATH_DOMAIN_V2.to_vec();
+    m.extend(borsh::to_vec(path).expect("borsh"));
+    m
+}
+
+impl PalwTirDissectPhaseV1 {
+    /// The disputed range `(tile_first, tile_count)` (what a lookahead message is bound to).
+    pub fn disputed_tiles_v2(&self) -> (u64, u64) {
+        (self.tile_first, self.tile_count)
+    }
+}
+
+// =================================================================================================
 // The messages the movers sign
 // =================================================================================================
 

@@ -8883,6 +8883,12 @@ impl VirtualStateProcessor {
         self.palw_tir_designated_answers_v1.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// RFC-0024 / ADR-0190: the bounded court door (`palw_tir_bounded_door_v1`) — owns the position terminal and the
+    /// lookahead moves (tags 201-204). `None` on every preset.
+    pub(super) fn palw_tir_bounded_door_v1_at(&self, daa_score: u64) -> bool {
+        kaspa_consensus_core::palw_tir_court_v1::tir_dissect_terminal_narrows_to_position_v1(self.palw_tir_bounded_door_v1, daa_score)
+    }
+
     /// **ADR-0100 Decision 4, resolved in exactly one place.**
     pub(super) fn palw_shard_licensing_at(&self, daa_score: u64) -> bool {
         self.palw_shard_licensing.is_some_and(|fence| fence.is_active(daa_score))
