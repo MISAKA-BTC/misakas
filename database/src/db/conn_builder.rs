@@ -1,4 +1,5 @@
 use super::rocksdb_preset::RocksDbPreset;
+use super::storage_bounds::StorageDbBounds;
 use crate::db::DB;
 use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::{path::PathBuf, sync::Arc};
@@ -17,6 +18,8 @@ pub struct ConnBuilder<Path, const STATS_ENABLED: bool, StatsPeriod, FDLimit> {
     preset: RocksDbPreset,
     wal_dir: Option<PathBuf>,
     cache_budget: Option<usize>,
+    /// G14 capacity lane: footprint bounds applied after the preset (`None`: RocksDB as before).
+    storage_bounds: Option<StorageDbBounds>,
 }
 
 impl Default for ConnBuilder<Unspecified, false, Unspecified, Unspecified> {
@@ -31,6 +34,7 @@ impl Default for ConnBuilder<Unspecified, false, Unspecified, Unspecified> {
             preset: RocksDbPreset::Default,
             wal_dir: None,
             cache_budget: None,
+            storage_bounds: None,
         }
     }
 }
@@ -47,6 +51,7 @@ impl<Path, const STATS_ENABLED: bool, StatsPeriod, FDLimit> ConnBuilder<Path, ST
             preset: self.preset,
             wal_dir: self.wal_dir,
             cache_budget: self.cache_budget,
+            storage_bounds: self.storage_bounds,
         }
     }
     pub fn with_create_if_missing(self, create_if_missing: bool) -> ConnBuilder<Path, STATS_ENABLED, StatsPeriod, FDLimit> {
@@ -69,6 +74,7 @@ impl<Path, const STATS_ENABLED: bool, StatsPeriod, FDLimit> ConnBuilder<Path, ST
             preset: self.preset,
             wal_dir: self.wal_dir,
             cache_budget: self.cache_budget,
+            storage_bounds: self.storage_bounds,
         }
     }
     pub fn with_preset(self, preset: RocksDbPreset) -> ConnBuilder<Path, STATS_ENABLED, StatsPeriod, FDLimit> {
@@ -79,6 +85,13 @@ impl<Path, const STATS_ENABLED: bool, StatsPeriod, FDLimit> ConnBuilder<Path, ST
     }
     pub fn with_cache_budget(self, cache_budget: Option<usize>) -> ConnBuilder<Path, STATS_ENABLED, StatsPeriod, FDLimit> {
         ConnBuilder { cache_budget, ..self }
+    }
+    /// Bound the DB's WAL / compaction / info-log footprint (only under `--storage-cap-bytes`).
+    pub fn with_storage_bounds(
+        self,
+        storage_bounds: Option<StorageDbBounds>,
+    ) -> ConnBuilder<Path, STATS_ENABLED, StatsPeriod, FDLimit> {
+        ConnBuilder { storage_bounds, ..self }
     }
 }
 
@@ -94,6 +107,7 @@ impl<Path, FDLimit> ConnBuilder<Path, false, Unspecified, FDLimit> {
             preset: self.preset,
             wal_dir: self.wal_dir,
             cache_budget: self.cache_budget,
+            storage_bounds: self.storage_bounds,
         }
     }
 }
@@ -110,6 +124,7 @@ impl<Path, StatsPeriod, FDLimit> ConnBuilder<Path, true, StatsPeriod, FDLimit> {
             preset: self.preset,
             wal_dir: self.wal_dir,
             cache_budget: self.cache_budget,
+            storage_bounds: self.storage_bounds,
         }
     }
     pub fn with_stats_period(self, stats_period: impl Into<u32>) -> ConnBuilder<Path, true, u32, FDLimit> {
@@ -123,6 +138,7 @@ impl<Path, StatsPeriod, FDLimit> ConnBuilder<Path, true, StatsPeriod, FDLimit> {
             preset: self.preset,
             wal_dir: self.wal_dir,
             cache_budget: self.cache_budget,
+            storage_bounds: self.storage_bounds,
         }
     }
 }
@@ -133,6 +149,9 @@ macro_rules! default_opts {
 
         // Apply the preset configuration (includes parallelism and compaction settings)
         $self.preset.apply_to_options(&mut opts, $self.parallelism, $self.mem_budget, $self.cache_budget);
+        if let Some(bounds) = $self.storage_bounds {
+            bounds.apply_to_options(&mut opts);
+        }
 
         // Configure WAL directory if specified (for RAM cache / tmpfs)
         // Auto-generate unique subdirectory from database path to avoid conflicts

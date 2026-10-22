@@ -8,6 +8,8 @@ pub use rocksdb_preset::{DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES, RocksDbPres
 
 mod conn_builder;
 mod rocksdb_preset;
+mod storage_bounds;
+pub use storage_bounds::StorageDbBounds;
 
 /// The DB type used for Kaspad stores
 pub struct DB {
