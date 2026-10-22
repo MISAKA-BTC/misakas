@@ -523,3 +523,15 @@ impl NativeWireScanV1 for crate::palw_onboarding_tile_v3::ArtifactTileOpeningV3 
         leaf_opening_shape_v3(reader, true)
     }
 }
+/// G14 int: the funded-original pairing and its test-only schedule live only in the in-memory `PalwTransitionExtrasV1` (which has
+/// no Borsh codec); they are never persisted, so a wire image claiming to hold one is refused rather than guessed at.
+impl NativeWireScanV1 for crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1 {
+    fn scan_native_wire_v1<R: Read>(_reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        Err(wire_bad("funded-original pairing is transient and has no wire form"))
+    }
+}
+impl NativeWireScanV1 for crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1 {
+    fn scan_native_wire_v1<R: Read>(_reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        Err(wire_bad("funded-original schedule is test-only and has no wire form"))
+    }
+}

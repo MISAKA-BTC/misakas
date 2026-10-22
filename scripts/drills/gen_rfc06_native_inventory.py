@@ -197,6 +197,7 @@ def aux_root(value):
                 aux_root(fm[1]) if fm[1].startswith('mirror:') else references(fm[1],item)
         references(re.sub(r'mirror:[\w:]+','u8',alt),AUX_ORIGIN)
 for _n in AUX.NS:aux_root(_n['value'])
+FUNDED_MANUAL={'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1'}
 while queue:
  path=queue.pop(0)
  if path in visited:continue
@@ -208,6 +209,8 @@ while queue:
     unresolved.append(path);continue
  kind=item['kind']; form=item['form']; body=item['body']
  if path=='crate::palw_kernel_route_v1::KernelLedgerCacheV1':continue
+ # Funded-original pairing (holds a whole carrier Transaction) and its test-only schedule: hand-written visitors in typed.rs.
+ if path in FUNDED_MANUAL:unresolved.append(path);continue
  if kind=='struct' and form=='named':
     fs=fields(item)
     if path in {'misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}:
@@ -251,7 +254,7 @@ while queue:
 
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
-manual={'misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
+manual={'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
 header='//! Generated explicit native field inventory. Regenerate with\n//! scripts/drills/gen_rfc06_native_inventory.py after schema changes.\n//! Every field/variant is exhaustive; private layouts are visited beside owners.\nuse super::*;\n'
 private={}; public=[]
 for item,code,is_private in generated:

@@ -796,9 +796,6 @@ native_enum!(crate::palw_prompt_ids_v1::PalwPromptIdsFormV1; Flat, MerkleV1);
 native_struct!(crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1; version, action_parser_steps, action_parser_steps_per_custodian, frame_passes_per_check, control_bytes, parallel_bytes_per_daa, maximum_door_daa);
 native_struct!(crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1; version, job_context, artifact_root, full_logits_trace_root, step_leaf_count, step_merkle_root, committed_execution_root);
 native_struct!(crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1; version, claim, producer, execution_root, job_identity, source_id, resource_plan_id, maximum_custodians, accept_until_daa, material_until_daa, signature);
-native_struct!(crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1; version, original_envelope, funding, payer_pubkey);
-native_struct!(crate::palw_court_numerical_geometry_v3::NumericalGeometryBudgetV3; max_original_leaves, max_roots, max_paths, max_edges, max_path_bytes);
-native_struct!(crate::palw_tir_public_parameter_cover_v1::OriginalParameterCoverBudgetV1; max_original_leaves, max_total_edges, max_total_coordinates, max_root_memberships);
 native_struct!(crate::palw_public_binding_v1::PalwPublicLegacyBindingHeaderV1; version, job_context, checkpoint_profile, state_chunk_map_id, full_logits_trace_root, activation_leg_root, step_leaf_count, step_merkle_root, checkpoint_count, checkpoint_merkle_root, committed_execution_root);
 native_struct!(crate::palw_panel_v2::PalwSw8DrawPointV1; max_slot, draw_daa, policy, bond_maturity_window, settled_anchor_depth, capability_proof, shard_licensing);
 native_struct!(crate::palw_panel_v2::PalwPanelDrawPolicyV1; weighted, economy, readiness, independence, valid_lock, stake);
@@ -1053,11 +1050,6 @@ native_struct!(crate::palw_tir_container_v1::PalwArtSectionOpeningV1; kind, fami
 native_enum!(crate::palw_memory_routing_v2::PalwMemoryRoutingEvidenceV2; GdnTransition { refutation }, GdnConvWindow { refutation }, RoutedStep { refutation, prompt_ids_opening });
 native_enum!(crate::palw_court_numerical_transport_v1::NumericalKindV1; Root, Round, Bottom);
 native_struct!(crate::palw_exec_v2::PalwWorkRangeV1; start, end);
-native_struct!(crate::tx::TransactionInput; previous_outpoint, signature_script, sequence, sig_op_count);
-native_struct!(crate::tx::TransactionOutput; value, script_public_key);
-native_struct!(crate::palw_court_original_escrow_v1::FundingConsentV1; terms, signature);
-native_struct!(crate::palw_court_service_binding_v1::CourtServiceProfileV1; version, budget, packet_cost, packets_per_signer, service_span_daa);
-native_struct!(crate::palw_court_service_v1::ServiceCost; bytes, work, io, controls);
 native_struct!(crate::palw_panel_economy_v1::PalwSeatEconomyV1; panel_floor_sompi, max_exposure_ratio_permille, reward_multiple_permille);
 native_struct!(crate::palw_model_registry_v1::PalwReadinessPolicyV1; now_daa, max_age_daa, base_class_id, readiness_v2, root_keyed);
 native_struct!(crate::palw_panel_v2::PalwPanelIndependenceV1; from_daa, base_class_id, anchor_daa);
@@ -1186,8 +1178,6 @@ native_enum!(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1; StepNode 
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicWorkDebitV1; expected_nonce, previous_head, scope, work, restart, history);
 native_struct!(crate::palw_step_refute::memory_v2::transition::PalwGdnTransitionRefutationV2; version, binding, node_slot, head, accused, predecessor, inputs);
 native_struct!(crate::palw_step_refute::memory_v2::transition::PalwGdnConvWindowRefutationV2; version, binding, conv_slot, head, accused, inputs);
-native_struct!(crate::tx::script_public_key::ScriptPublicKey; version, script);
-native_struct!(crate::palw_court_original_escrow_v1::FundingTermsV1; version, network_domain, claim, job_identity, execution_root, source_id, relative_graph_id, fee_profile_id, capital_profile_id, retention_profile_id, settlement_policy_id, accept_from_daa, accept_until_daa, material_until_daa, funding_output_index, funding_amount_sompi, payer_key_id, refund_payload, nonce);
 native_struct!(crate::palw_panel_v2::PalwRcoreSeatFilterV1; eligibility, ceiling_permille, resolved_locks_off_ceiling, accuser_reserve, held_charge_floor, gain_scale);
 native_enum!(misaka_palw_challenge::beacon::WorkSourceKindV1; RealUsefulWork, Heartbeat, Base0Fallback, ExecTx, ExecWorkSlice, ReceiptOnly, ProvisionalAttempt, PanelReceipt);
 native_enum!(misaka_palw_challenge::beacon::FinalPathV1; PanelLicensed { panel_seed_id, panel_epoch }, PanelIndependent);
@@ -1232,6 +1222,7 @@ native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicTerminalPlanV1
 native_struct!(crate::palw_tir_public_allocation_v1::PalwTirPublicControlFootprintV1; maximum_frame_bytes, maximum_frame_writes, maximum_native_signature_checks, maximum_state_references, maximum_frame_validation_bytes);
 native_struct!(crate::palw_tir_public_custody_v1::PalwTirPublicOriginalPanelV1; anchor, bound_daa, seats);
 native_struct!(crate::palw_tir_public_custody_v1::PalwTirPublicOriginalCreditV1; receipt, ready);
+native_struct!(crate::palw_court_service_v1::ServiceCost; bytes, work, io, controls);
 native_struct!(crate::palw_court_service_v1::ServicePacket; id, release_daa, service_before, cost);
 native_struct!(crate::palw_court_service_v1::ServiceSupply; accepting_block, reserved);
 native_enum!(misaka_palw_tir::pipeline::TripRule; Fixed { n }, JobSteps, TokenCount, TextStream, Decode);
@@ -1287,4 +1278,3 @@ native_enum!(misaka_palw_kernel::spec::composite::TokenSourceV1; JobPrompt, Stag
 native_enum!(misaka_palw_kernel::spec::composite::QuerySourceV1; JobQuery, StageLogits { stage });
 native_struct!(crate::palw_decode_constraint_v1::PalwConstraintEdgeV1; lo, hi, action);
 native_enum!(crate::palw_decode_constraint_v1::PalwConstraintActionV1; Goto(f0), Push { frame, resume }, Pop, Key { index, next }, Close { required, next });
-native_unsupported!(crate::tx::AtomicU64);

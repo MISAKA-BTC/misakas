@@ -15,10 +15,6 @@ PINNED = {
 'crate::palw_court_numerical_transport_v1::NumericalManifestV1': ('reviewed-field-layout','2f0c22e8f59e71fc823b26b9a23e724c32b9314637db8d19bf3440f3bf75e164'),
 # Claude 2026-10-22: D2 readiness path: derived order (u32, Hash64, Vec<Hash64>); decoder bounds sibling count to MAX_PATH.
 'crate::palw_court_model_scope_routes_v1::readiness_root::ReadinessDigestPathV1': ('reviewed-field-layout','defb98a6ba03ef7a581ec429f587ad00603ac97fda1cec1cdeabd19968624a05'),
-# Claude 2026-10-22: upstream ScriptPublicKey = (u16 version, Vec<u8> script) in derived order; reached via funded-original pairing.
-'crate::tx::script_public_key::ScriptPublicKey': ('reviewed-field-layout','b09c259eb179559998c7f9db8a51f40dc7afd81c0b2b5851f126ccba479b7f4b'),
-# Claude 2026-10-22: TransactionMass = one u64 (AtomicU64 wrapper), reached via the funded-original pairing's carrier in extras.
-'crate::tx::TransactionMass': ('reviewed-field-layout','65e95a8b99dee19d4612d720ab0fa64e28ef24c2f571a0c862690dbb22773151'),
 # Claude 2026-10-22: TFO1 derived order (version, bytes, consent, bytes); decoder bounds both byte fields, checks version/structure.
 'crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1': ('reviewed-field-layout','ab92c70ec6b555e0ba099174e87f63c4d654a48799c7d95869a7ef28628597ba'),
 # Claude 2026-10-22: same field order as derived serialize; only bytes decode bounded to PART (read_bounded_bytes_v1).

@@ -444,3 +444,32 @@ impl NativeHeapV1 for misaka_palw_kernel::flat_quota11::stage14::source26::Stage
         self.native_inventory_parts_v1().native_heap_v1(path)
     }
 }
+/// G14 int: the funded-original pairing holds a whole carrier `Transaction` (whose private `TransactionMass`/`SmallVec` script
+/// layouts the generator cannot visit), so its heap is hand-counted: input/output vector capacities, each input's signature
+/// script, each output's script bytes (conservatively counted as heap whether or not the SmallVec spilled), the payload, and the
+/// TFO1 envelope's three byte vectors.
+impl NativeHeapV1 for crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1 {
+    fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
+        let tx = self.carrier();
+        let env = self.envelope();
+        let mut heap = allocation::<crate::tx::TransactionInput>(tx.inputs.capacity(), path)
+            .add::<Self>(allocation::<crate::tx::TransactionOutput>(tx.outputs.capacity(), path), path)
+            .add::<Self>(allocation::<u8>(tx.payload.capacity(), path), path)
+            .add::<Self>(allocation::<u8>(env.original_envelope.capacity(), path), path)
+            .add::<Self>(allocation::<u8>(env.payer_pubkey.capacity(), path), path)
+            .add::<Self>(allocation::<u8>(env.funding.signature.capacity(), path), path);
+        for input in &tx.inputs {
+            heap = heap.add::<Self>(allocation::<u8>(input.signature_script.capacity(), path), path);
+        }
+        for output in &tx.outputs {
+            heap = heap.add::<Self>(allocation::<u8>(output.script_public_key.script().len(), path), path);
+        }
+        heap
+    }
+}
+/// G14 int: the test-only funded-original schedule is all `Copy` scalars and fixed budgets: no owned heap.
+impl NativeHeapV1 for crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1 {
+    fn native_heap_v1(&self, _path: &str) -> NativeCoverageV1 {
+        NativeCoverageV1::zero()
+    }
+}
