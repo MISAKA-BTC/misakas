@@ -1091,6 +1091,7 @@ pub mod palw_tir_funded_original_envelope_v1;
 /// G14 lane escrow-rfc08 (RFC-0035 A): the rooted funded-escrow row, its spend lock and qualified spend (dormant).
 pub mod palw_funded_escrow_v1;
 pub mod palw_funded_original_coordinator_v1;
+pub mod palw_funded_original_admission_v1;
 
 pub mod palw_native_state_anchor_v39;
 

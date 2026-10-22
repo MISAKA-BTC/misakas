@@ -43,6 +43,9 @@ pub enum PalwFundedOriginalMissingV1 {
     HardDeadline,
     /// The native network domain is not resolved at this block.
     NetworkDomain,
+    /// G14 item 1 (lane r5): the all-branch admission values (service profile, per-branch packet/heap/retention costs and
+    /// capital) are not adopted.
+    AdmissionSchedule,
 }
 
 /// Bit for each role contract a schedule adopts (test-only values; see [`PalwFundedOriginalScheduleV1`]).
@@ -65,6 +68,7 @@ pub struct PalwFundedOriginalScheduleV1 {
     input: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
     source: SourceBudgetV1,
     adopted_roles: u8,
+    admission: Option<crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1>,
 }
 
 /// `SourceGraphBudgetV3` has no `PartialEq`; its four bounds are kept here and rebuilt on read.
@@ -107,7 +111,23 @@ impl PalwFundedOriginalScheduleV1 {
                 max_edges: source.max_edges,
             },
             adopted_roles,
+            admission: None,
         }
+    }
+    /// **TEST ONLY.** Adds the all-branch admission values (lane r5). Without them the coordinator refuses `AdmissionSchedule`.
+    #[cfg(test)]
+    pub fn with_admission_v1(mut self, admission: crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1) -> Self {
+        self.admission = Some(admission);
+        self
+    }
+    pub fn admission_v1(&self) -> Option<crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1> {
+        self.admission
+    }
+    pub fn fee_sompi(&self) -> u64 {
+        self.fee_sompi
+    }
+    pub fn capital_floor_sompi(&self) -> u64 {
+        self.capital_sompi
     }
     pub fn fee_profile_id(&self) -> Hash64 {
         self.fee_profile_id

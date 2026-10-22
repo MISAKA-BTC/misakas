@@ -76,7 +76,11 @@ pub(super) fn install_court_service_binding_with_profile_v1(
 /// assessment is `MissingSupply` → no-slash hold); the block itself stands. The canonical recovery sweep then runs on the
 /// current clock.
 pub(super) fn observe_court_service_block_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    if !court_service_f02_active_v1(b) {
+    // Lane r5: a funded original's all-branch binding (RFC-0035 A, installed under the funded schedule's profile) needs its
+    // supply recorded too, or its packets stay `Pending` and its liability never closes. Bindings exist only past the conviction
+    // fence (F02 with a pinned profile, or a funded admission), and an empty book returns below, so gating on the fence alone
+    // changes nothing where no binding exists.
+    if !(court_service_f02_active_v1(b) || (b.extras.tir_public_conviction_active && !b.state.funded_escrows_v1().is_empty())) {
         return Ok(());
     }
     let Some(old) = b.state.court_service_state_v1() else { return Ok(()) };
