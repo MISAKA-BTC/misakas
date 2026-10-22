@@ -39,6 +39,27 @@ impl<T: BorshDeserialize> BorshDeserialize for PalwSharedCourtV1<T> {
         Ok(Self(std::sync::Arc::new(T::deserialize_reader(reader)?)))
     }
 }
+/// G14 lane r5-f02-wire: kind of an entry of the per-claim court-service index (a derived projection; never serialized).
+pub const COURT_INDEX_SHARED_NOTICE_V1: u8 = 0;
+/// See [`COURT_INDEX_SHARED_NOTICE_V1`].
+pub const COURT_INDEX_DUTY_CLOCK_V1: u8 = 1;
+
+/// The per-claim court-service index entry a staged row projects to, if any: `(claim, (kind, daa, key))`.
+pub fn court_service_claim_index_entry_v1(
+    key: PalwStagedCourtKeyV1,
+    row: &PalwStagedCourtRowV1,
+) -> Option<(Hash64, (u8, u64, PalwStagedCourtKeyV1))> {
+    match (key, row) {
+        (PalwStagedCourtKeyV1::CourtSharedQuery(_), PalwStagedCourtRowV1::CourtSharedQuery(q)) => {
+            Some((q.claim, (COURT_INDEX_SHARED_NOTICE_V1, q.opened_daa, key)))
+        }
+        (PalwStagedCourtKeyV1::CourtDutyClock(_), PalwStagedCourtRowV1::CourtDutyClock(c)) => {
+            Some((c.claim, (COURT_INDEX_DUTY_CLOCK_V1, 0, key)))
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 pub enum PalwStagedCourtKeyV1 {
     Claim(Hash64),

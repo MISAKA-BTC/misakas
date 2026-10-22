@@ -91,6 +91,11 @@ fn apply_object_inner(
             let network = builder.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
             palw_tir_public_fold_v1::apply_grant_ready_v1(builder, ctx, network, grant)?;
         }
+        // ---- G14 lane r5-f02-wire (tag 178): RFC-0029's shared court lifecycle. The acceptance gate routes it by
+        // `palw_tir_public_conviction_v1`; the dispatcher refuses (`ObjectiveOffenceDormant`) unless the outsider lane is in force too.
+        PalwConsensusObjectV2::SharedCourtOpV1 { op } => {
+            palw_court_service_lifecycle_fold_v1::apply_shared_court_wire_op_v1(builder, ctx, op)?;
+        }
         // ---- RFC-0010: a certified epoch output (tag 120): queued; the V3 stage verifies it against the branch and drops it if
         // it does not verify, the block standing ----
         PalwConsensusObjectV2::PanelBeaconProofV3 { proof } => {

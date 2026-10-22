@@ -412,6 +412,9 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             | PalwConsensusObjectV2::TirPublicControlV1 { .. }
             | PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. }
             | PalwConsensusObjectV2::TirClassContainerBoundV1 { .. } => Ok(()),
+        // G14 lane r5-f02-wire (tag 178): a shared court operation rides at every height with NO stateless refusal (A-2: the live
+        // build cannot decode it); its bounds are the decoder's, its fence/signer/signature the acceptance layer's and the fold's.
+        PalwConsensusObjectV2::SharedCourtOpV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1484,7 +1487,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::PublicCourtStreamOpenedNativeV1 { .. } | O::TirClassLayoutPublishedV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1)
         }
-        O::TirPublicControlV1 { .. } | O::TirPublicGrantReadyV1 { .. } => {
+        O::TirPublicControlV1 { .. } | O::TirPublicGrantReadyV1 { .. } | O::SharedCourtOpV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::TirPublicConvictionV1)
         }
         O::TirClassContainerBoundV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::TirContainerIdentityV1),
@@ -1651,6 +1654,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (170, "TirPublicControlV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
     (171, "TirPublicGrantReadyV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
+    (178, "SharedCourtOpV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
     (175, "TirClassContainerBoundV1", PalwLifecycleKindFenceV1::TirContainerIdentityV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
@@ -2379,6 +2383,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "G14 original paid TIR control and atomic Valid grant/Ready",
         true,
     ),
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 178, hi: 178 },
+        "palw_tir_public_conviction_v1",
+        "G14 RFC-0029 shared court operation (r5-f02-wire; fold also needs palw_court_outsider_lane_v1)",
+        true,
+    ),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -3035,6 +3045,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // 168–169: the G14 TIR staged route (native seed opening, TIR class layout publication), merged 2026-10-15.
     (168, 169, "G14 TIR staged route", &["palw_staged_tir_route_v1"]),
     (170, 171, "G14 original paid TIR conviction", &["palw_tir_public_conviction_v1"]),
+    // 178: G14 lane r5-f02-wire (2026-10-22) — RFC-0029 shared court operation carriage. Chosen by the lane (lane rule: one new tag,
+    // collisions detected at central merge); dormant behind the public conviction fence (+ the outsider lane in the fold).
+    (178, 178, "G14 RFC-0029 shared court operation", &["palw_tir_public_conviction_v1"]),
     // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Confirmed 2026-10-18 (lane
     // d2-x3-finish) as THE tag for that kind: no other allocation row uses 230, and the kind is dormant behind `palw_court_model_scope_v1`.
     // 2026-10-22 (lane d2-finish): landed as `SeatReadinessRootV1` (ADR-0188 B codec, A-2 kind row, fence-gated validation/fold).
@@ -4043,6 +4056,13 @@ pub(crate) mod tests {
                 },
                 171 => PalwConsensusObjectV2::TirPublicGrantReadyV1 {
                     grant: Box::new(crate::palw_tir_public_carriage_v1::palw_tir_public_grant_fixture_v1()),
+                },
+                178 => PalwConsensusObjectV2::SharedCourtOpV1 {
+                    op: Box::new(crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1::Ids {
+                        claim: Hash64::from_bytes([0; 64]),
+                        rows_root: Hash64::from_bytes([0; 64]),
+                        ids: Vec::new(),
+                    }),
                 },
                 245 => PalwConsensusObjectV2::TirDesignatedEventV1 {
                     event: crate::palw_tir_designated_answers_v1::PalwTirDesignatedEventV1::Answer {
@@ -5362,6 +5382,9 @@ pub(crate) mod tests {
             // re-pin both from its `[a2u-pins]` listing in the commit that first compiles them.
             (170, 0xb68d62123647ff28),
             (171, 0x68623b7dc7d30b55),
+            // G14 lane r5-f02-wire: RFC-0029 shared court operation (178), under `palw_tir_public_conviction_v1`. Derived without a
+            // build by `scripts/drills/a2u_new_kind_wire_pins.py` (2026-10-22); the Rust test stays the authority.
+            (178, 0x1d759cbe80301463),
             (131, 0xf970df6a8bdc323c),
         ];
 

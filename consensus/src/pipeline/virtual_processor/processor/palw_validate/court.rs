@@ -1546,6 +1546,26 @@ impl VirtualStateProcessor {
                     // A valid signature alone grants no original or owner standing.
                     control.validate_native_signature_v1(self.palw_network_domain_v2(), state)?;
                 }
+                // G14 lane r5-f02-wire (tag 178, RFC-0029): below `palw_tir_public_conviction_v1` the dormant payload (A-2), riding
+                // unjudged; past it the outsider lane must be in force too (the fold's `shared_court_lifecycle_active_v1`), and a
+                // request's literal signer must be a CURRENT Active bond at the floor whose ML-DSA-87 signature verifies over the
+                // network-bound intent. Content authentication (bodies, IDs, numerical controls) and the notice window are the fold's.
+                Obj::SharedCourtOpV1 { op } => {
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        return Ok(());
+                    }
+                    let native_default = matches!(
+                        op.as_ref(),
+                        kaspa_consensus_core::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1::NativeHeldDefault { .. }
+                    );
+                    if native_default && !state_params.native_liability_horizon_active_at(point.daa_score) {
+                        return Err("the post-Final held default is dormant on this network (palw_native_liability_horizon_v1)".into());
+                    }
+                    if !native_default && !state_params.court_outsider_lane_active_v1(point.daa_score) {
+                        return Err("the shared court lifecycle is dormant on this network (palw_court_outsider_lane_v1)".into());
+                    }
+                    op.validate_authority_v1(self.palw_network_domain_v2(), state, state_params.min_collateral_sompi())?;
+                }
                 Obj::TirPublicGrantReadyV1 { grant } => {
                     if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
                         return Ok(());

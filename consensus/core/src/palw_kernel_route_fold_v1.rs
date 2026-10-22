@@ -2293,6 +2293,10 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0007 §4.1 T6: held check fees past their trap reveal window (claim terminal) are released once; conviction rows past
     // their window are forgotten. A no-op below `palw_paid_claim_trap_v1`.
     super::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(builder, ctx.daa_score)?;
+    // G14 lane r5-f02-wire (RFC-0026 F02 × ADR-0184 §1): before release, held text29 / funded v11 fees whose no-slash hold has been
+    // recovered (supply now recorded, actor silent) are defaulted — refund + slash. A no-op unless the hold, F02 and the slash amount
+    // are all in force; a row still past H is released below without a slash.
+    super::palw_native_post_final_default_fold_v1::recover_native_post_final_defaults_v1(builder, ctx)?;
     // RFC08 08-B (ADR-0184 §1): held native fees past their liability horizon, with no open dispute, are released once (the
     // payout the Final deferred). A no-op below `palw_native_liability_horizon_v1`.
     super::palw_native_liability_hold_fold_v1::release_held_native_fees_v1(builder, ctx.daa_score, |b, row| {

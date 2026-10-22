@@ -152,6 +152,7 @@ impl PalwChainStateV2 {
             staged_inventory_by_owner: BTreeSet::new(),
             staged_tir_by_owner: BTreeSet::new(),
             staged_tir_by_claim: BTreeMap::new(),
+            staged_court_service_by_claim: BTreeMap::new(),
             staged_tir_claims_by_producer: BTreeSet::new(),
             staged_tir_responders: BTreeSet::new(),
             staged_tir_preparers: BTreeSet::new(),
@@ -2435,11 +2436,13 @@ impl PalwChainStateV2 {
 
     /// **G14 lane court-f02: every native duty clock of `claim`** (RFC-0028 history read by the F02 attribution). A scan of the
     /// staged rows: duty clocks are keyed by duty id, not claim.
+    /// G14 lane r5-f02-wire: read through the per-claim index (`staged_court_service_by_claim`, kind 1), O(clocks of this claim).
     pub fn court_duty_clocks_for_claim_v1(&self, claim: Hash64) -> Vec<&crate::palw_court_duty_clock_v1::CourtDutyClockV1> {
-        self.staged_courts
-            .values()
-            .filter_map(|row| match row {
-                crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtDutyClock(clock) if clock.claim == claim => {
+        let Some(rows) = self.staged_court_service_by_claim.get(&claim) else { return Vec::new() };
+        rows.iter()
+            .filter(|(kind, _, _)| *kind == crate::palw_staged_court_state_v1::COURT_INDEX_DUTY_CLOCK_V1)
+            .filter_map(|(_, _, key)| match self.staged_courts.get(key) {
+                Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtDutyClock(clock)) if clock.claim == claim => {
                     Some(clock.as_ref())
                 }
                 _ => None,
@@ -2447,16 +2450,31 @@ impl PalwChainStateV2 {
             .collect()
     }
 
-    /// **G14 lane court-f02 (RFC-0031): the DAA of `claim`'s initial shared notice** — the earliest native shared request row
-    /// (`CourtSharedQuery`) recorded for it, if any. Rooted: the rows come and go with the staged-court delta on reorg.
-    pub fn court_shared_initial_notice_daa_v1(&self, claim: Hash64) -> Option<u64> {
-        self.staged_courts
+    /// The full-scan reading of [`Self::court_duty_clocks_for_claim_v1`] and [`Self::court_shared_initial_notice_daa_v1`] — the
+    /// index's specification; tests assert the index agrees with it.
+    pub fn court_service_claim_scan_v1(&self, claim: Hash64) -> (usize, Option<u64>) {
+        use crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 as R;
+        let clocks = self.staged_courts.values().filter(|r| matches!(r, R::CourtDutyClock(c) if c.claim == claim)).count();
+        let notice = self
+            .staged_courts
             .values()
-            .filter_map(|row| match row {
-                crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtSharedQuery(q) if q.claim == claim => Some(q.opened_daa),
+            .filter_map(|r| match r {
+                R::CourtSharedQuery(q) if q.claim == claim => Some(q.opened_daa),
                 _ => None,
             })
-            .min()
+            .min();
+        (clocks, notice)
+    }
+
+    /// **G14 lane court-f02 (RFC-0031): the DAA of `claim`'s initial shared notice** — the earliest native shared request row
+    /// (`CourtSharedQuery`) recorded for it, if any. Rooted: the rows come and go with the staged-court delta on reorg.
+    /// G14 lane r5-f02-wire: the index's first kind-0 entry is the earliest notice (entries sort by `(kind, daa, key)`).
+    pub fn court_shared_initial_notice_daa_v1(&self, claim: Hash64) -> Option<u64> {
+        self.staged_court_service_by_claim
+            .get(&claim)?
+            .iter()
+            .find(|(kind, _, _)| *kind == crate::palw_staged_court_state_v1::COURT_INDEX_SHARED_NOTICE_V1)
+            .map(|(_, daa, _)| *daa)
     }
 
     /// Ordered read of staged rows in `[from, to]` (RFC-0032 A material intake).

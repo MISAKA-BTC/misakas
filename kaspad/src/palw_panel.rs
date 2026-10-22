@@ -10528,6 +10528,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
         PalwConsensusObjectV2::TirClassContainerBoundV1 { .. } => "TirClassContainerBoundV1",
         PalwConsensusObjectV2::TirPublicControlV1 { .. } => "TirPublicControlV1",
+        PalwConsensusObjectV2::SharedCourtOpV1 { .. } => "SharedCourtOpV1",
         PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. } => "TirPublicGrantReadyV1",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",

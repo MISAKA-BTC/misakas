@@ -105,6 +105,7 @@ impl VirtualStateProcessor {
                 | Obj::LegacyHeldAnsweredV2 { .. }
                 | Obj::PublicCourtStreamOpenedV1 { .. }
                 | Obj::TirPublicControlV1 { .. }
+                | Obj::SharedCourtOpV1 { .. }
                 | Obj::TirPublicGrantReadyV1 { .. }
                 | Obj::PublicCourtStreamOpenedNativeV1 { .. }
                 | Obj::PublicCourtStreamLeafV1 { .. }
