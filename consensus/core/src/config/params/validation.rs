@@ -235,6 +235,8 @@ impl Params {
         // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
         self.validate_palw_tir_shard_segment_v2()?;
         self.validate_palw_provider_court_v1()?;
+        // **Lane g14p/kernel-route U02** (`crate::palw_kernel_route_arming_v1`): the Panel=1 seat policy's ordering and mirror.
+        self.validate_palw_kernel_route_panel_one_v1()?;
         self.validate_palw_legacy_held_da_v2_in(records)?;
         // **ADR-0176 / ADR-0177's dormant fences** (`crate::palw_bond_budget_v1`): refused when armed.
         self.validate_palw_bond_budget_v1()?;

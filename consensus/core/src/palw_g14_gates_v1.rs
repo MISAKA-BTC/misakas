@@ -664,13 +664,15 @@ impl Params {
         let route = self.palw_g14_route_required_v1_mirror();
         let liability = PalwG14GatedFenceV1::RewardLiabilityHorizonV1.armed(self).map(|f| f.daa_score());
         let outsider_lane = self.palw_court_outsider_lane_v1_fence().map(|f| f.daa_score());
+        let panel_one = self.palw_kernel_route_panel_one_v1_fence().map(|f| f.daa_score());
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle
                 .state
                 .clone()
                 .with_g14_route_required_v1(route)
                 .with_reward_liability_horizon_from_daa(liability)
-                .with_court_outsider_lane_from_daa(outsider_lane);
+                .with_court_outsider_lane_from_daa(outsider_lane)
+                .with_kernel_route_panel_one_from_daa(panel_one);
         }
     }
 }

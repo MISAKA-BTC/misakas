@@ -647,11 +647,13 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
             *entry = (rank, candidate.bond);
         }
     }
+    // Lane g14p/kernel-route U02: the committee size and quorum (interim 3-of-3, or Panel=1 past `palw_kernel_route_panel_one_v1`).
+    let (seat_count, seat_quorum) = b.params.kernel_route_seats_and_quorum_v1(ctx.daa_score);
     let mut ranked: Vec<_> = entries.into_values().collect();
     ranked.sort();
     let seats: Vec<_> =
-        ranked.into_iter().take(crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_SEATS_V1).map(|(_, k)| k).collect();
-    let quorum = u32::from(crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1);
+        ranked.into_iter().take(seat_count).map(|(_, k)| k).collect();
+    let quorum = u32::from(seat_quorum);
     if seats.len() < quorum as usize {
         return Err(refused("paid claim lacks distinct eligible checker operators"));
     }
@@ -1160,11 +1162,13 @@ fn round_lock(
             *best = (rank, c.bond);
         }
     }
+    // Lane g14p/kernel-route U02: the committee size and quorum (interim 3-of-3, or Panel=1 past `palw_kernel_route_panel_one_v1`).
+    let (seat_count, seat_quorum) = b.params.kernel_route_seats_and_quorum_v1(ctx.daa_score);
     let mut ranked: Vec<_> = operators.into_values().collect();
     ranked.sort();
     let seats: Vec<_> =
-        ranked.into_iter().take(crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_SEATS_V1).map(|(_, b)| b).collect();
-    let quorum = u32::from(crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1);
+        ranked.into_iter().take(seat_count).map(|(_, b)| b).collect();
+    let quorum = u32::from(seat_quorum);
     if seats.len() < quorum as usize {
         return Err(refused("round committee has too few independent native operators"));
     }

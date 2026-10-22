@@ -2453,6 +2453,13 @@ pub struct Params {
     /// advanced within its deadline is reclaimed so an outsider's Open is not refused by a full owner catalogue. `None` on every
     /// shipped preset; hashed Some-only. Needs `palw_legacy_public_filer_v1` at or below it (validation).
     pub palw_court_outsider_lane_v1: Option<ForkActivation>,
+    /// **Kernel route Panel=1 seat policy (DORMANT, lane g14p/kernel-route, survey U02; USER DECISION PENDING).** From this height the
+    /// kernel route's post-commit seat draw (`palw_kernel_route_fold_v1::draw_seats`) and the paid-claim / round committees
+    /// (`palw_claim_challenge_fold_v2`) assign ONE seat with quorum 1 (PRINCIPLES §5, RFC-0010 §0 addendum: Panel=1 is the normal
+    /// mode; claim-level verification, the public court and bond/slash are unchanged). `None` (every shipped preset) keeps the interim
+    /// 3-of-3 ([`crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_SEATS_V1`]). Hashed Some-only. Needs
+    /// `palw_probabilistic_constraints_v1` at or below it (validation); mirrored by `Params::sync_palw_g14_gates_v1`.
+    pub palw_kernel_route_panel_one_v1: Option<ForkActivation>,
     /// G14 greedy Float32 Constraint staged route (rooted f32 row court and Float32 sources).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_float_constraint_v1: Option<ForkActivation>,
@@ -5073,6 +5080,11 @@ impl Params {
         self.palw_court_outsider_lane_v1.filter(|f| *f != ForkActivation::never())
     }
 
+    /// Kernel route Panel=1 seat policy fence (dormant: `None` on every shipped preset; `never()` reads as `None`).
+    pub fn palw_kernel_route_panel_one_v1_fence(&self) -> Option<ForkActivation> {
+        self.palw_kernel_route_panel_one_v1.filter(|f| *f != ForkActivation::never())
+    }
+
     pub fn palw_tir_public_conviction_v1_fence(&self) -> Option<ForkActivation> {
         let never = ForkActivation::never();
         match (
@@ -6144,6 +6156,7 @@ impl Params {
             palw_tir_bounded_door_v1: self.palw_tir_bounded_door_v1,
             palw_tir_designated_answers_v1: self.palw_tir_designated_answers_v1,
             palw_court_outsider_lane_v1: self.palw_court_outsider_lane_v1,
+            palw_kernel_route_panel_one_v1: self.palw_kernel_route_panel_one_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
@@ -7317,6 +7330,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_kernel_route_panel_one_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7682,6 +7696,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_kernel_route_panel_one_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -8029,6 +8044,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_kernel_route_panel_one_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -13557,6 +13573,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_kernel_route_panel_one_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,

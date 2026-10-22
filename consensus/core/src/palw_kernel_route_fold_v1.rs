@@ -1374,7 +1374,10 @@ fn draw_seats(
     claim: &misaka_palw_kernel::hash::Digest,
     producer: &PalwBondKeyV2,
     deadline_daa: u64,
+    draw_daa: u64,
 ) -> KernelAssignmentV1 {
+    // Lane g14p/kernel-route U02: the seat policy (interim 3-of-3, or Panel=1 past `palw_kernel_route_panel_one_v1`) at the draw.
+    let (seat_count, seat_quorum) = builder.params.kernel_route_seats_and_quorum_v1(draw_daa);
     let seed = palw_kernel_interim_seed_v1(claim);
     let producer_operator = builder.state.bonds.get(producer).map(|b| b.operator_id);
     let floor = builder.params.min_collateral_sompi();
@@ -1398,10 +1401,10 @@ fn draw_seats(
     ranked.sort();
     let seats: Vec<KernelSeatV1> = ranked
         .into_iter()
-        .take(PALW_KERNEL_ROUTE_INTERIM_SEATS_V1)
+        .take(seat_count)
         .map(|(_, bond)| KernelSeatV1 { bond, kernel_bond: palw_kernel_bond_id_v1(&bond), scope: ScopeV1::WholeClaim })
         .collect();
-    let quorum = PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1.min(seats.len() as u8);
+    let quorum = seat_quorum.min(seats.len() as u8);
     let (challenge_anchor, sample_seed) = palw_kernel_interim_challenge_v1(claim);
     KernelAssignmentV1 {
         assignment_root: palw_kernel_assignment_root_v1(&seats, quorum),
@@ -2092,7 +2095,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             // RFC-0015: an OptimisticPublicVerification claim has no Panel — no seats, no assignment, no receipts.
             let panel_licensed = ledger.mode_of_claim(claim) == Some(misaka_palw_kernel::mode::VerificationModeV1::PanelLicensed);
             if panel_licensed && matches!(ledger.claims.get(claim).map(|c| &c.body), Some(ClaimBodyV1::Program { .. })) {
-                let assignment = draw_seats(builder, claim, signer, deadline);
+                let assignment = draw_seats(builder, claim, signer, deadline, ctx.daa_score);
                 for seat in &assignment.seats {
                     builder.note_kernel_bond(&seat.bond)?;
                 }

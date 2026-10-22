@@ -602,6 +602,8 @@ pub mod palw_prefix_source_stream_v1;
 pub mod palw_prefix_state_court_v1;
 /// RFC-0011 §15.7: the kernel route's fence `palw_probabilistic_constraints_v1` — dormant, no height, refused when armed.
 pub mod palw_probabilistic_constraints_v1;
+/// Lane g14p/kernel-route (U01–U04): the kernel route fences' arm-readiness record gate (EMPTY list: refused when armed).
+pub mod palw_kernel_route_arming_v1;
 pub mod palw_producer_v2;
 /// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the
 /// prompt's token ids as a tiled Merkle root, so a gather proves ONE id instead of carrying
