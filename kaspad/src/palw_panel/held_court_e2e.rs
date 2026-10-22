@@ -2541,6 +2541,11 @@ fn gdn_step(
     let p = params().with_memory_routing_court_from_daa(Some(0));
     let c = PalwBlockContextV2 { block: Hash64::from_u64_word(0x6D_0000 + daa), daa_score: daa, blue_score: daa, subsidy: 10_000 };
     let mut extras = launch();
+    extras.kernel_route = Some(kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+        network_domain: h64(999),
+        ruleset_digest: h64(998),
+        ..Default::default()
+    });
     extras.memory_routing_court =
         Some(kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2 { ladder: 1 << 26, max_close_bytes: 64 << 20 });
     let (child, delta) = apply_palw_transition_v2_with_extras(parent, &p, &c, objects, att, false, false, false, true, &extras)?;
@@ -2563,7 +2568,7 @@ fn gdn_licensed(w: &crate::palw_gdn_held_filer::tests::World) -> (PalwChainState
         capable_classes: Default::default(),
         signature: Vec::new(),
     };
-    let register = vec![
+    let mut register = vec![
         PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(1),
             artifact_root: h64(11),
@@ -2594,6 +2599,24 @@ fn gdn_licensed(w: &crate::palw_gdn_held_filer::tests::World) -> (PalwChainState
             })),
         },
     ];
+    // The ordinary routing door requires an explicit immutable declaration.
+    // This fixture authors it from its known graph; runtime lookup never guesses.
+    use kaspa_consensus_core::palw_reader_router_v2::{PalwReaderRouterBindingV2, PalwReaderRouterDeclarationV2, needs_reader_router_v2};
+    let mut bindings = Vec::new();
+    for reader_slot in 0..w.profile.global_node_count() {
+        let (reader, layer) = w.profile.resolve_node_slot(reader_slot).unwrap();
+        if !needs_reader_router_v2(reader) { continue; }
+        let routers: Vec<_> = (0..reader_slot).filter(|slot| {
+            let (node, owner) = w.profile.resolve_node_slot(*slot).unwrap();
+            owner == layer && node.kernel_semantics_id == kaspa_consensus_core::palw_step::kernel_semantics_id_v1(
+                kaspa_consensus_core::palw_step_refute::KDESC_Q36_ROUTER_TOPK)
+        }).collect();
+        assert_eq!(routers.len(), 1, "the fixture has one declared router in each layer");
+        bindings.push(PalwReaderRouterBindingV2 { reader_slot, router_slot: routers[0] });
+    }
+    let declaration = PalwReaderRouterDeclarationV2 { version: 2, class_id, artifact_root: w.inventory_root, bindings };
+    declaration.check_profile(&w.profile).expect("fixture declaration binds the actual graph");
+    register.push(PalwConsensusObjectV2::ReaderRouterDeclaredV2 { declaration: Box::new(declaration), signature: vec![1] });
     let s = gdn_step(&PalwChainStateV2::genesis(), 100, &register, None).expect("the registry");
     let network_domain = h64(999);
     let executor_bond = bond_key(PRODUCER).0;
