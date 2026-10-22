@@ -229,3 +229,18 @@ cover local source/context contracts; they do not measure independent source
 availability, participation, cumulative soundness or actual checker income.
 Normal startup remains refused for the private bootstrap paths. The GDN E2E
 recheck at `/tmp/misaka-rfc06-gdn-first-route-recheck.log` is still compiling.
+
+The GDN first-route E2E run subsequently passed both cases (2 tests, 1.82s
+runtime after a 6m27s build): the answering forger reaches the accusation and
+collateral reduction, and the silent forger reaches DA default and collateral
+reduction. Each fold step is delta-applied and reversed. These are in-process
+fold E2E controls, not the real multi-process/100k campaign.
+
+A wider same-binary GDN/history regression ran 31 tests: 30 passed, including
+the two E2E cases, but ordinary node registration failed at genesis because
+the newly used native route had no active probabilistic-constraints policy.
+The log is `/tmp/misaka-rfc06-gdn-history-final-regression.log`.
+`b4792a025` gives that genesis-armed test fixture its native route policy at
+DAA 0 as well. The normal node registration recheck is compiling with output
+at `/tmp/misaka-rfc06-gdn-native-registration-recheck.log`. It is not yet a
+pass; no public preset or activation setting was changed.
