@@ -1272,6 +1272,53 @@ async fn sanity_test() {
                     assert!(!read.available && !read.armed);
                 })
             }
+            KaspadPayloadOps::GetPalwClaimDetail => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Tooling lane (op 225): a malformed claim id is an error before any state is read; this test network runs no
+                    // ConsensusV2 bundle, so a well-formed read answers `available: false`.
+                    let odd = GetPalwClaimDetailRequest { claim_hex: "0".into() };
+                    assert!(rpc_client.get_palw_claim_detail_call(None, odd).await.is_err());
+                    let well = GetPalwClaimDetailRequest { claim_hex: "00".repeat(64) };
+                    let read = rpc_client.get_palw_claim_detail_call(None, well).await.unwrap();
+                    assert!(!read.available && !read.found && read.view_json.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwCourtState => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Tooling lane (op 226): exactly one of claim / session.
+                    let both = GetPalwCourtStateRequest { claim_hex: "00".repeat(64), session_hex: "00".repeat(64) };
+                    assert!(rpc_client.get_palw_court_state_call(None, both).await.is_err());
+                    let neither = GetPalwCourtStateRequest::default();
+                    assert!(rpc_client.get_palw_court_state_call(None, neither).await.is_err());
+                    let well = GetPalwCourtStateRequest { claim_hex: "00".repeat(64), session_hex: String::new() };
+                    let read = rpc_client.get_palw_court_state_call(None, well).await.unwrap();
+                    assert!(!read.available && !read.found);
+                })
+            }
+            KaspadPayloadOps::GetPalwFenceSchedule => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Tooling lane (op 227): read from the node's own ruleset, on every network.
+                    let read = rpc_client.get_palw_fence_schedule_call(None, GetPalwFenceScheduleRequest {}).await.unwrap();
+                    assert!(read.available && read.found);
+                    let doc: serde_json::Value = serde_json::from_str(&read.view_json).unwrap();
+                    assert_eq!(doc["version"], 1);
+                    assert!(doc["fences"].as_array().is_some_and(|f| !f.is_empty()));
+                })
+            }
+            KaspadPayloadOps::GetPalwBondDetail => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Tooling lane (op 228): a malformed outpoint is an error before any state is read.
+                    let odd = GetPalwBondDetailRequest { bond: "nope".into() };
+                    assert!(rpc_client.get_palw_bond_detail_call(None, odd).await.is_err());
+                    let well = GetPalwBondDetailRequest { bond: format!("{}:0", "00".repeat(64)) };
+                    let read = rpc_client.get_palw_bond_detail_call(None, well).await.unwrap();
+                    assert!(!read.available && !read.found);
+                })
+            }
             KaspadPayloadOps::GetPalwRouterBindingV2 => {
                 let rpc_client = client.clone();
                 tst!(op, {

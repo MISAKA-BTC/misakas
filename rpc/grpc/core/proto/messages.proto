@@ -136,6 +136,10 @@ message KaspadRequest {
     GetPalwPaidClaimRequestMessage getPalwPaidClaimRequest = 1312;
     GetPalwAcceptanceReadsRequestMessage getPalwAcceptanceReadsRequest = 1310;
     GetPalwRfc0016ReportRequestMessage getPalwRfc0016ReportRequest = 1330;
+    GetPalwClaimDetailRequestMessage getPalwClaimDetailRequest = 1264;
+    GetPalwCourtStateRequestMessage getPalwCourtStateRequest = 1266;
+    GetPalwFenceScheduleRequestMessage getPalwFenceScheduleRequest = 1268;
+    GetPalwBondDetailRequestMessage getPalwBondDetailRequest = 1270;
     GetPalwKernelClaimRequestMessage getPalwKernelClaimRequest = 1234;
     GetPalwKernelRowsRequestMessage getPalwKernelRowsRequest = 1236;
     GetPalwKernelFinalsRequestMessage getPalwKernelFinalsRequest = 1238;
@@ -277,6 +281,10 @@ message KaspadResponse {
     GetPalwPaidClaimResponseMessage getPalwPaidClaimResponse = 1313;
     GetPalwAcceptanceReadsResponseMessage getPalwAcceptanceReadsResponse = 1311;
     GetPalwRfc0016ReportResponseMessage getPalwRfc0016ReportResponse = 1331;
+    GetPalwClaimDetailResponseMessage getPalwClaimDetailResponse = 1265;
+    GetPalwCourtStateResponseMessage getPalwCourtStateResponse = 1267;
+    GetPalwFenceScheduleResponseMessage getPalwFenceScheduleResponse = 1269;
+    GetPalwBondDetailResponseMessage getPalwBondDetailResponse = 1271;
     GetPalwKernelClaimResponseMessage getPalwKernelClaimResponse = 1235;
     GetPalwKernelRowsResponseMessage getPalwKernelRowsResponse = 1237;
     GetPalwKernelFinalsResponseMessage getPalwKernelFinalsResponse = 1239;

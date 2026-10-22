@@ -1031,6 +1031,58 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwRfc0016ReportResponse::default())
     }
 
+    /// **Tooling lane: one claim's whole standing (op 225)** — a versioned JSON document. Read-only; the default answers `available: false`.
+    async fn get_palw_claim_detail(&self, request: GetPalwClaimDetailRequest) -> RpcResult<GetPalwClaimDetailResponse> {
+        self.get_palw_claim_detail_call(None, request).await
+    }
+    async fn get_palw_claim_detail_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClaimDetailRequest,
+    ) -> RpcResult<GetPalwClaimDetailResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClaimDetailResponse::default())
+    }
+
+    /// **Tooling lane: the court around a claim or session (op 226)** — a versioned JSON document. Read-only; the default answers `available: false`.
+    async fn get_palw_court_state(&self, request: GetPalwCourtStateRequest) -> RpcResult<GetPalwCourtStateResponse> {
+        self.get_palw_court_state_call(None, request).await
+    }
+    async fn get_palw_court_state_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwCourtStateRequest,
+    ) -> RpcResult<GetPalwCourtStateResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwCourtStateResponse::default())
+    }
+
+    /// **Tooling lane: every PALW fence, its height and whether armed (op 227)** — a versioned JSON document. Read-only; the default answers `available: false`.
+    async fn get_palw_fence_schedule(&self, request: GetPalwFenceScheduleRequest) -> RpcResult<GetPalwFenceScheduleResponse> {
+        self.get_palw_fence_schedule_call(None, request).await
+    }
+    async fn get_palw_fence_schedule_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwFenceScheduleRequest,
+    ) -> RpcResult<GetPalwFenceScheduleResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwFenceScheduleResponse::default())
+    }
+
+    /// **Tooling lane: one bond's registry row, exposure and locks (op 228)** — a versioned JSON document. Read-only; the default answers `available: false`.
+    async fn get_palw_bond_detail(&self, request: GetPalwBondDetailRequest) -> RpcResult<GetPalwBondDetailResponse> {
+        self.get_palw_bond_detail_call(None, request).await
+    }
+    async fn get_palw_bond_detail_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwBondDetailRequest,
+    ) -> RpcResult<GetPalwBondDetailResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwBondDetailResponse::default())
+    }
+
     async fn get_palw_staged_preclaim_quote(
         &self,
         request: GetPalwStagedPreclaimQuoteRequest,

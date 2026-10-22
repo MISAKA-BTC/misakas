@@ -2726,6 +2726,56 @@ mod mockery {
     }
     test!(GetPalwForkChoiceOpeningResponse);
 
+    // Tooling lane: ops 225-228 round-trip.
+    impl Mock for GetPalwClaimDetailRequest {
+        fn mock() -> Self {
+            GetPalwClaimDetailRequest { claim_hex: "ab".repeat(64) }
+        }
+    }
+    test!(GetPalwClaimDetailRequest);
+    impl Mock for GetPalwCourtStateRequest {
+        fn mock() -> Self {
+            GetPalwCourtStateRequest { claim_hex: String::new(), session_hex: "cd".repeat(64) }
+        }
+    }
+    test!(GetPalwCourtStateRequest);
+    impl Mock for GetPalwFenceScheduleRequest {
+        fn mock() -> Self {
+            GetPalwFenceScheduleRequest {}
+        }
+    }
+    test!(GetPalwFenceScheduleRequest);
+    impl Mock for GetPalwBondDetailRequest {
+        fn mock() -> Self {
+            GetPalwBondDetailRequest { bond: "ab:1".into() }
+        }
+    }
+    test!(GetPalwBondDetailRequest);
+    impl Mock for GetPalwClaimDetailResponse {
+        fn mock() -> Self {
+            GetPalwClaimDetailResponse { available: true, found: true, now_daa: 11, view_json: "{\"version\":1}".into() }
+        }
+    }
+    test!(GetPalwClaimDetailResponse);
+    impl Mock for GetPalwCourtStateResponse {
+        fn mock() -> Self {
+            GetPalwCourtStateResponse { available: true, found: true, now_daa: 11, view_json: "{\"version\":1}".into() }
+        }
+    }
+    test!(GetPalwCourtStateResponse);
+    impl Mock for GetPalwFenceScheduleResponse {
+        fn mock() -> Self {
+            GetPalwFenceScheduleResponse { available: true, found: true, now_daa: 11, view_json: "{\"version\":1}".into() }
+        }
+    }
+    test!(GetPalwFenceScheduleResponse);
+    impl Mock for GetPalwBondDetailResponse {
+        fn mock() -> Self {
+            GetPalwBondDetailResponse { available: true, found: true, now_daa: 11, view_json: "{\"version\":1}".into() }
+        }
+    }
+    test!(GetPalwBondDetailResponse);
+
     // RFC-0012 acceptance: op 246 round-trips.
     impl Mock for GetPalwAcceptanceReadsRequest {
         fn mock() -> Self {

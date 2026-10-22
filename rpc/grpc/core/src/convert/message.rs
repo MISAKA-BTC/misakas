@@ -6088,6 +6088,56 @@ try_from!(item: &protowire::GetPalwRfc0016ReportResponseMessage, RpcResult<kaspa
     Self { available: item.available, armed: item.armed, now_daa: item.now_daa, report_json: item.report_json.clone() }
 });
 
+// Tooling lane (ops 225-228): the user views.
+from!(item: &kaspa_rpc_core::GetPalwClaimDetailRequest, protowire::GetPalwClaimDetailRequestMessage, {
+    Self { claim_hex: item.claim_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwClaimDetailRequestMessage, kaspa_rpc_core::GetPalwClaimDetailRequest, {
+    Self { claim_hex: item.claim_hex.clone() }
+});
+from!(item: &kaspa_rpc_core::GetPalwCourtStateRequest, protowire::GetPalwCourtStateRequestMessage, {
+    Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwCourtStateRequestMessage, kaspa_rpc_core::GetPalwCourtStateRequest, {
+    Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone() }
+});
+from!(_item: &kaspa_rpc_core::GetPalwFenceScheduleRequest, protowire::GetPalwFenceScheduleRequestMessage, {
+    Self {}
+});
+try_from!(_item: &protowire::GetPalwFenceScheduleRequestMessage, kaspa_rpc_core::GetPalwFenceScheduleRequest, {
+    Self {}
+});
+from!(item: &kaspa_rpc_core::GetPalwBondDetailRequest, protowire::GetPalwBondDetailRequestMessage, {
+    Self { bond: item.bond.clone() }
+});
+try_from!(item: &protowire::GetPalwBondDetailRequestMessage, kaspa_rpc_core::GetPalwBondDetailRequest, {
+    Self { bond: item.bond.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwClaimDetailResponse>, protowire::GetPalwClaimDetailResponseMessage, {
+    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone(), error: None }
+});
+try_from!(item: &protowire::GetPalwClaimDetailResponseMessage, RpcResult<kaspa_rpc_core::GetPalwClaimDetailResponse>, {
+    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwCourtStateResponse>, protowire::GetPalwCourtStateResponseMessage, {
+    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone(), error: None }
+});
+try_from!(item: &protowire::GetPalwCourtStateResponseMessage, RpcResult<kaspa_rpc_core::GetPalwCourtStateResponse>, {
+    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwFenceScheduleResponse>, protowire::GetPalwFenceScheduleResponseMessage, {
+    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone(), error: None }
+});
+try_from!(item: &protowire::GetPalwFenceScheduleResponseMessage, RpcResult<kaspa_rpc_core::GetPalwFenceScheduleResponse>, {
+    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwBondDetailResponse>, protowire::GetPalwBondDetailResponseMessage, {
+    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone(), error: None }
+});
+try_from!(item: &protowire::GetPalwBondDetailResponseMessage, RpcResult<kaspa_rpc_core::GetPalwBondDetailResponse>, {
+    Self { available: item.available, found: item.found, now_daa: item.now_daa, view_json: item.view_json.clone() }
+});
+
 from!(item: &kaspa_rpc_core::GetPalwRouterBindingV2Request, protowire::GetPalwRouterBindingV2RequestMessage, {
     Self { class_hex: item.class_hex.clone() }
 });
