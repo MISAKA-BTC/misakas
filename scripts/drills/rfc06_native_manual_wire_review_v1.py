@@ -5,6 +5,16 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# Claude 2026-10-22: shared request intent: derived order; signature length exactly ML-DSA-87.
+'crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1': ('reviewed-field-layout','c76f9fe8b93578271a6c2f148f69f24fc02db910960bdb2afb99a2f312bd4703'),
+# Claude 2026-10-22: tag 178 shared op: derived enum framing (u8 variant, fields in order, u32-length vecs); every bound checked before allocation.
+'crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1': ('reviewed-field-layout','0fafb0403000d4d65a42bf393e8b21512317a4b552e8143e622d15cedec98f8d'),
+# Claude 2026-10-22: numerical part: derived order; version!=1 and empty/oversize bytes refused.
+'crate::palw_court_numerical_transport_v1::NumericalPartV1': ('reviewed-field-layout','a09dcf897bfeba8adee0da6315f5ccb4c4ba054b7e22fbc2223f16dc312c580d'),
+# Claude 2026-10-22: numerical manifest: derived order; decoder rejects version!=1 only.
+'crate::palw_court_numerical_transport_v1::NumericalManifestV1': ('reviewed-field-layout','2f0c22e8f59e71fc823b26b9a23e724c32b9314637db8d19bf3440f3bf75e164'),
+# Claude 2026-10-22: D2 readiness path: derived order (u32, Hash64, Vec<Hash64>); decoder bounds sibling count to MAX_PATH.
+'crate::palw_court_model_scope_routes_v1::readiness_root::ReadinessDigestPathV1': ('reviewed-field-layout','defb98a6ba03ef7a581ec429f587ad00603ac97fda1cec1cdeabd19968624a05'),
 # Claude 2026-10-22: upstream ScriptPublicKey = (u16 version, Vec<u8> script) in derived order; reached via funded-original pairing.
 'crate::tx::script_public_key::ScriptPublicKey': ('reviewed-field-layout','b09c259eb179559998c7f9db8a51f40dc7afd81c0b2b5851f126ccba479b7f4b'),
 # Claude 2026-10-22: TransactionMass = one u64 (AtomicU64 wrapper), reached via the funded-original pairing's carrier in extras.
@@ -41,7 +51,8 @@ PINNED = {
 'crate::palw_staged_bundle_v1::PalwStagedFamilyCheckpointV1': ('reviewed-field-layout','734f45329f56538ee85d85977e841f357de05634b6b37b846622feaea926780b'),
 'crate::palw_staged_bundle_v1::PalwStagedFamilyRowV1': ('reviewed-field-layout','b92b6935c58487df4bdf9f5e254db9a43e018a57463827d3cf49b1bc0c01270a'),
 # Claude 2026-10-22: + funded-escrow tail 0xFB (unique among 74 tails), written only when non-empty; empty == old bytes.
-'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','fae49b9fb9176b4cac4efb8e35f6d99e508d1462a3e2d6b7e139fbf2339e6066'),
+# Claude 2026-10-22 (2): + D2 readiness tail 0xE5 (non-empty only; 75 tails unique).
+'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','03e35c21cf15a35cbed661234e09ce87b18c50dfcce67ad4b9dbd3a4798780c1'),
 'crate::palw_tir_prefix_owned_v1::PalwTirPrefixLeafAnswerV1': ('reviewed-field-layout','1aa6332539dd6d430025fdd6d15e1737c9ccd0fad6ced34bc4798e4dcbfad422'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicChunkRecordV1': ('reviewed-field-layout','394604fa55e5ec254a05265c967a3604f9584f90505e54083bcd28b91b626d92'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicContractV1': ('reviewed-field-layout','a37709c03faa51fcc923e9055aa29a280ab0b09ef3cfa086ef66997762cf745f'),
