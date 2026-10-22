@@ -85,6 +85,9 @@ workflow-wasm.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+# G14 storage (IBD lane): the row-stream verifier's end-to-end tests run against the node-local generation store and spill.
+kaspa-database.workspace = true
+tempfile.workspace = true
 # DA16: the sketch's fixture weights for the public-material tests (an artifact, its inventory, its kernel commitments).
 misaka-palw-tir-sketch = { path = "../../misaka/palw/tir/sketch" }
 bincode.workspace = true
