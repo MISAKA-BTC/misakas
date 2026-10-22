@@ -17,6 +17,14 @@ stays on the old rules, the switch at a designated DAA, and what must hold on ea
             a partition and rejoin, pruning progress — the same root, tiers and state everywhere afterwards.
   liveness  (§11 R-6) no miner of any catalog model runs: heartbeat / BASE-0 fixtures alone carry the DAA across the switch on
             every upgraded node.
+  model-add (§11 R-7) an annual edition ADDS a model through the catalogue / release path: below the switch every pinned old
+            (class_id, artifact_root) is in force at its pinned tier and no new id is read as annually listed at 1000‰; past it
+            every upgraded node reads the pinned edition, the old pairs unchanged, the new pairs present with their pinned roots and
+            tiers, and nothing reused, overwritten or lost. Each pinned artifact file must exist on disk (sha256 checked if pinned).
+  local-llm (§11 R-8) the old and the new model each served by a REAL loopback gateway / worker on its own fixed artifact: before
+            and after the switch, `GET /health` names the pinned class_id, `GET /v1/models` lists it, and `POST
+            /v1/chat/completions` with the plan's prompt returns a non-empty answer; after the switch the old id still answers and
+            the new id answers under its own id (no fallback to another id). Name-only displays or mocks are never a PASS.
 
 The testnet-12 DAA 14,000 upgrade (docs/design/palw/integration/t12-daa14000-release-plan-2026-10-15.md) is the first use: the SAME catalog
 (edition 0, no new model), a rolling binary upgrade, the switch at the flag-day height. Run it with `switch_daa` = the plan's
@@ -38,7 +46,13 @@ Plan (JSON): {
   "fixtures": {"bootstrap": [[argv]], "produce": [[argv]],          # `produce`: finite, advances the DAA by a few blocks
                "heartbeat": [[argv]], "siblings": {"<ROLE>": [[argv]]}, "advance_to_pruning": [[argv]]},
   "link_delays_ms": {"A>B": 0, ...}, "partition": {"groups": [["A"], ["B", "C"]]},
-  "stale_grace_s": 300, "scenario_timeout_s": 3600, "probe_timeout_s": 30
+  "stale_grace_s": 300, "scenario_timeout_s": 3600, "probe_timeout_s": 30,
+  "model_add": {"edition_after": 1, "catalog_root_after": "<hex, optional>",            # R-7 (and R-8's model list)
+                "old": [{"class_id": "<hex>", "artifact_root": "<hex>", "artifact_path": "<file>", "artifact_sha256": "<hex, opt>",
+                         "tier_permille_before": 1000, "tier_permille_after": 1000}],
+                "new": [{... same keys ..., "tier_permille_before": 300, "tier_permille_after": 1000}]},
+  "local_llm": {"prompt": "<fixed text>", "max_tokens": 32,                              # R-8
+                "gateways": [{"class_id": "<hex>", "url": "http://127.0.0.1:P", "argv": [...optional: started by the driver]}]}
 }
 """
 import argparse
@@ -48,9 +62,113 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import urllib.request
 
 from misaka_wrpc_json import WsRpc
 from rfc0018_dag_drill import Blocked, DelayedLink, field, norm
+
+
+MODEL_ENTRY_KEYS = ('class_id', 'artifact_root', 'artifact_path', 'tier_permille_before', 'tier_permille_after')
+
+
+def model_add_spec(plan):
+    """R-7 / R-8's pinned inputs, refused by name when absent: the drill never guesses a model."""
+    spec = plan.get('model_add')
+    if not isinstance(spec, dict):
+        raise Blocked('the plan has no model_add section (R-7 needs the pinned old and new class_id / artifact_root / artifact / tier)')
+    if not isinstance(spec.get('edition_after'), int):
+        raise Blocked('model_add.edition_after is not pinned')
+    for side in ('old', 'new'):
+        rows = spec.get(side)
+        if not isinstance(rows, list) or not rows:
+            raise Blocked('model_add.%s lists no model' % side)
+        for i, row in enumerate(rows):
+            missing = [k for k in MODEL_ENTRY_KEYS if row.get(k) in (None, '')]
+            if missing:
+                raise Blocked('model_add.%s[%d] lacks %s' % (side, i, ', '.join(missing)))
+    ids = [norm(r['class_id']) for side in ('old', 'new') for r in spec[side]]
+    roots = [norm(r['artifact_root']) for side in ('old', 'new') for r in spec[side]]
+    if len(set(ids)) != len(ids) or len(set(roots)) != len(roots):
+        raise Blocked('model_add reuses a class_id or artifact_root between entries: an addition never overwrites')
+    return spec
+
+
+def check_artifacts(spec):
+    """Every pinned artifact must be a real file on disk (and match its pinned sha256): no artifact, no drill."""
+    seen = {}
+    for side in ('old', 'new'):
+        for row in spec[side]:
+            path = Path(row['artifact_path']).expanduser()
+            if not path.is_file():
+                raise Blocked('artifact for %s class %s is absent: %s (R-7/R-8 run only against the real fixed artifact)'
+                              % (side, norm(row['class_id']), path))
+            if row.get('artifact_sha256'):
+                h = hashlib.sha256()
+                with path.open('rb') as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b''):
+                        h.update(chunk)
+                if h.hexdigest() != norm(row['artifact_sha256']):
+                    raise Blocked('artifact %s does not match its pinned sha256' % path)
+                seen[norm(row['class_id'])] = h.hexdigest()
+    return seen
+
+
+def registry_pairs(registry):
+    """{class_id: (artifact_root, tier_permille)} as one node reads its registry."""
+    out = {}
+    for c in field(registry, 'classes', default=[]) or []:
+        out[norm(field(c, 'classId', 'class_id'))] = (norm(field(c, 'artifactRoot', 'artifact_root')),
+                                                     field(c, 'modelTierPermille', 'tierPermille'))
+    return out
+
+
+def check_model_add(before, after, spec, edition_after_read):
+    """R-7 verdict from one node's registry readings below and past the switch. Raises AssertionError naming the breach."""
+    for row in spec['old']:
+        cid, root = norm(row['class_id']), norm(row['artifact_root'])
+        for label, reading, tier in (('before', before, row['tier_permille_before']), ('after', after, row['tier_permille_after'])):
+            assert cid in reading, 'old class %s is missing %s the switch' % (cid, label)
+            assert reading[cid][0] == root, 'old class %s root changed %s the switch: %r' % (cid, label, reading[cid][0])
+            assert reading[cid][1] == tier, 'old class %s tier %r %s the switch, pinned %r' % (cid, reading[cid][1], label, tier)
+    for row in spec['new']:
+        cid, root = norm(row['class_id']), norm(row['artifact_root'])
+        if cid in before:
+            assert before[cid][1] == row['tier_permille_before'], \
+                'new class %s already read at tier %r below the switch (pinned %r)' % (cid, before[cid][1], row['tier_permille_before'])
+        assert cid in after, 'new class %s is absent after the switch' % cid
+        assert after[cid] == (root, row['tier_permille_after']), 'new class %s reads %r after the switch' % (cid, after[cid])
+    lost = set(before) - set(after)
+    assert not lost, 'classes vanished across the switch: %r' % sorted(lost)
+    for cid, (root, _) in before.items():
+        assert after[cid][0] == root, 'class %s root overwritten across the switch' % cid
+    roots = [r for r, _ in after.values()]
+    assert len(roots) == len(set(roots)), 'an artifact_root is registered under two class ids after the switch'
+    assert edition_after_read == spec['edition_after'], 'edition %r in force, pinned %r' % (edition_after_read, spec['edition_after'])
+
+
+def local_llm_spec(plan):
+    spec = plan.get('local_llm')
+    if not isinstance(spec, dict) or not spec.get('prompt') or not isinstance(spec.get('gateways'), list) or not spec['gateways']:
+        raise Blocked('the plan has no local_llm section with a fixed prompt and gateways (R-8)')
+    for i, g in enumerate(spec['gateways']):
+        if not g.get('class_id') or not str(g.get('url', '')).startswith('http://127.0.0.1:'):
+            raise Blocked('local_llm.gateways[%d] needs a class_id and a loopback http://127.0.0.1:P url' % i)
+    return spec
+
+
+def check_gateway_answer(class_id, health, models, chat):
+    """R-8 verdict for one gateway reading: the pinned class answers under its own id, non-empty. Returns the answer row."""
+    cid = norm(class_id)
+    assert norm(field(health, 'class_id')) == cid, 'gateway /health names class %r, pinned %s' % (field(health, 'class_id'), cid)
+    assert field(models, 'data'), 'gateway /v1/models lists nothing'
+    choices = field(chat, 'choices', default=[]) or []
+    text = field(field(choices[0], 'message', default={}) if choices else {}, 'content', default='')
+    assert isinstance(text, str) and text.strip(), 'empty answer from class %s' % cid
+    misaka = field(chat, 'misaka', default={}) or {}
+    answered = norm(field(misaka, 'class_id'))
+    assert answered in (None, cid), 'class %s answered as %s (fallback to another id)' % (cid, answered)
+    return {'class_id': cid, 'chars': len(text), 'answer_sha256': hashlib.sha256(text.encode()).hexdigest(),
+            'commitment': field(misaka, 'job_id', 'commitment', 'fp_claim_id'), 'runtime_manifest_hash': field(health, 'runtime_manifest_hash')}
 
 
 class Drill:
@@ -385,14 +503,89 @@ class Drill:
         self.report['liveness'] = {'fromDaa': start, 'toDaa': min(self.daa(r) for r in roles),
                                    'note': 'heartbeat / BASE-0 fixtures only; no catalog-model miner ran'}
 
+    def registry_reading(self, role):
+        row = self.probe(role)
+        cat = field(row['registry'], 'annualCatalog', default={}) or {}
+        return registry_pairs(row['registry']), field(cat, 'currentEdition'), norm(field(cat, 'currentRoot'))
 
-def main():
+    def scenario_model_add(self):
+        spec = model_add_spec(self.plan)
+        artifacts = check_artifacts(spec)
+        roles = self.scenario_rolling()
+        before = {r: self.registry_reading(r)[0] for r in roles}
+        assert len({json.dumps(v, sort_keys=True) for v in before.values()}) == 1, 'nodes read different registries below the switch'
+        self.advance(roles, self.switch + self.margin)
+        after = {r: self.registry_reading(r) for r in roles}
+        assert len({json.dumps(v, sort_keys=True) for v in after.values()}) == 1, 'upgraded nodes read different registries: %r' % after
+        pairs, edition, root = next(iter(after.values()))
+        check_model_add(next(iter(before.values())), pairs, spec, edition)
+        if spec.get('catalog_root_after'):
+            assert root == norm(spec['catalog_root_after']), 'the catalog root in force is not the pinned one'
+        self.report['model-add'] = {'edition': edition, 'catalogRoot': root, 'artifactSha256': artifacts,
+                                    'added': sorted(norm(r['class_id']) for r in spec['new']),
+                                    'kept': sorted(norm(r['class_id']) for r in spec['old'])}
+        for role in roles:
+            self.interop_record(role, {'sync': True, 'reorg': None, 'ibd': None, 'model_add': True})
+        return roles, spec
+
+    def http(self, url, body=None):
+        data = None if body is None else json.dumps(body).encode()
+        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'} if data else {})
+        with urllib.request.urlopen(req, timeout=self.plan.get('gateway_timeout_s', 600)) as resp:
+            return json.loads(resp.read())
+
+    def ask_gateway(self, gateway, prompt, max_tokens):
+        base = gateway['url'].rstrip('/')
+        health = self.http(base + '/health')
+        models = self.http(base + '/v1/models')
+        chat = self.http(base + '/v1/chat/completions',
+                         {'model': gateway.get('model', 'misaka'), 'max_tokens': max_tokens,
+                          'messages': [{'role': 'user', 'content': prompt}]})
+        return check_gateway_answer(gateway['class_id'], health, models, chat)
+
+    def scenario_local_llm(self):
+        llm = local_llm_spec(self.plan)
+        spec = model_add_spec(self.plan)
+        check_artifacts(spec)
+        old_ids = {norm(r['class_id']) for r in spec['old']}
+        new_ids = {norm(r['class_id']) for r in spec['new']}
+        served = {norm(g['class_id']) for g in llm['gateways']}
+        if not (served & old_ids) or not (served & new_ids):
+            raise Blocked('local_llm must serve at least one old and one new class id (served %r)' % sorted(served))
+        for i, g in enumerate(llm['gateways']):
+            if g.get('argv'):
+                folder = self.root / ('gateway-%d' % i)
+                folder.mkdir(exist_ok=True)
+                role = 'GATEWAY-%d' % i
+                self.logs[role] = open(folder / 'gateway.log', 'w')
+                self.processes[role] = subprocess.Popen(self.argv(g['argv']), stdout=self.logs[role], stderr=subprocess.STDOUT)
+        roles = self.scenario_rolling()
+        node_roles = roles
+        prompt, max_tokens = llm['prompt'], int(llm.get('max_tokens', 32))
+        before = [self.wait(lambda g=g: self.ask_gateway(g, prompt, max_tokens), 'gateway %s before the switch' % g['class_id'])
+                  for g in llm['gateways'] if norm(g['class_id']) in old_ids]
+        self.advance(node_roles, self.switch + self.margin)
+        pairs, _, _ = self.registry_reading(node_roles[0])
+        after = []
+        for g in llm['gateways']:
+            row = self.wait(lambda g=g: self.ask_gateway(g, prompt, max_tokens), 'gateway %s after the switch' % g['class_id'])
+            assert row['class_id'] in pairs, 'gateway class %s is not registered after the switch' % row['class_id']
+            after.append(row)
+        answered = {r['class_id'] for r in after}
+        assert old_ids & served <= answered and new_ids & served <= answered, 'not every served id answered after the switch'
+        self.report['local-llm'] = {'before': before, 'after': after, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest()}
+
+
+SCENARIOS = ['rolling', 'switch', 'stale', 'boundary', 'restart', 'liveness', 'model-add', 'local-llm']
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('scenario', choices=['rolling', 'switch', 'stale', 'boundary', 'restart', 'liveness'])
+    parser.add_argument('scenario', choices=SCENARIOS)
     parser.add_argument('--plan', required=True)
     parser.add_argument('--out', required=True)
     parser.add_argument('--interop-out', help='where to write the misaka/interop-record/v1 list (readiness M3)')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     raw = Path(args.plan).read_bytes()
     plan = json.loads(raw)
     ports = [n[k] for n in plan['nodes'].values() for k in ('wrpc', 'p2p')]
@@ -403,7 +596,7 @@ def main():
     result = {'scenario': args.scenario, 'planSha256': hashlib.sha256(raw).hexdigest(), 'artifactDirectory': str(root),
               'switchDaa': drill.switch, 'status': 'FAIL', 'approval': False}
     try:
-        getattr(drill, 'scenario_' + args.scenario)()
+        getattr(drill, 'scenario_' + args.scenario.replace('-', '_'))()
         result.update(status='OBSERVED_CONSISTENT', report=drill.report)
     except Blocked as error:
         result.update(status='BLOCKED', reason=str(error))
