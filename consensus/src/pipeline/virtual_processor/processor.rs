@@ -363,6 +363,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_heartbeat_width_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The deepest reorg the sink search will ever offer — ADR-0065 D2's ancestor horizon.
     pub(super) finality_depth: u64,
+    /// **G14 r5 (lane r5-escrow-settlement):** the network's pruning depth, read only to date the retirement of settled funded-escrow
+    /// rows (`PalwTransitionExtrasV1::funded_escrow_retention_daa`).
+    pub(super) palw_escrow_pruning_depth: u64,
     /// kaspa-pq Phase 3 PoW (ADR-0007): BLAKE2b-512 ∥ SHA3-512 (`algo_id = 3`) activation — sets the
     /// block template's `pow_algo_id` so miners produce the network-correct Layer-1 algorithm.
     pub(super) pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
@@ -1547,6 +1550,7 @@ impl VirtualStateProcessor {
             palw_exec_v2: params.palw_exec_payload_v2_fence(),
             palw_exec_v2_virtual_anchor: parking_lot::Mutex::new(None),
             finality_depth: params.blockrate.finality_depth,
+            palw_escrow_pruning_depth: params.blockrate.pruning_depth,
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),

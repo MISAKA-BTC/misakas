@@ -232,16 +232,58 @@ impl PalwEscrowSpendLocksV1 {
     /// (`validate_mempool_transaction_in_utxo_context`) and therefore the template all ask this, with the actual populated input
     /// amounts: the first input that spends a provisionally locked outpoint, or a rooted row's outpoint without a qualified plan.
     pub(crate) fn refusal(&self, tx: &Transaction, input_amounts: impl IntoIterator<Item = u64>, daa_score: u64) -> Option<TransactionOutpoint> {
+        self.refusal_with_bond_burn(tx, input_amounts, daa_score, 0)
+    }
+
+    /// [`Self::refusal`], and **G14 r5 (RFC-0035 §7.1): one allocation of the actual fee F** — a qualified settlement's scheduled
+    /// burns are destroyed from the same F the transaction's released-bond burn (`bond_burn`, `palw_bond_burn_owed`) comes from,
+    /// so the spend is refused unless `F ≥ bond burn + escrow burn` (checked). The qualified-spend rule alone guarantees only
+    /// `F ≥ escrow burn`; without this the two separately-sufficient checks would let one sompi be destroyed twice.
+    pub(crate) fn refusal_with_bond_burn(
+        &self,
+        tx: &Transaction,
+        input_amounts: impl IntoIterator<Item = u64>,
+        daa_score: u64,
+        bond_burn: u64,
+    ) -> Option<TransactionOutpoint> {
         if self.is_empty() {
             return None;
         }
         let amounts: Vec<u64> = input_amounts.into_iter().collect();
-        tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| {
-            self.provisional.contains(outpoint)
-                || self.rows.get(outpoint).is_some_and(|row| {
-                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(row, tx, &amounts, daa_score, None).is_err()
-                })
-        })
+        let mut escrow_burn = 0u64;
+        let mut first_rooted = None;
+        for outpoint in tx.inputs.iter().map(|input| input.previous_outpoint) {
+            if self.provisional.contains(&outpoint) {
+                return Some(outpoint);
+            }
+            if let Some(row) = self.rows.get(&outpoint) {
+                match kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(
+                    row,
+                    tx,
+                    &amounts,
+                    daa_score,
+                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_fee_schedule_v1(row),
+                ) {
+                    Err(_) => return Some(outpoint),
+                    Ok(plan) => {
+                        first_rooted.get_or_insert(outpoint);
+                        let Some(sum) = escrow_burn.checked_add(plan.burned_now) else { return Some(outpoint) };
+                        escrow_burn = sum;
+                    }
+                }
+            }
+        }
+        if escrow_burn == 0 {
+            return None;
+        }
+        let input_sum = amounts.iter().try_fold(0u64, |sum, a| sum.checked_add(*a));
+        let output_sum = tx.outputs.iter().try_fold(0u64, |sum, o| sum.checked_add(o.value));
+        let fee = input_sum.zip(output_sum).and_then(|(i, o)| i.checked_sub(o));
+        let owed = bond_burn.checked_add(escrow_burn);
+        match (fee, owed) {
+            (Some(fee), Some(owed)) if fee >= owed => None,
+            _ => first_rooted,
+        }
     }
 }
 
@@ -381,7 +423,32 @@ impl<'a> BondSpendFilter<'a> {
     /// touched — it runs in the ordinary validator after this.
     fn escrow_refusal(&self, tx: &Transaction, entries: &[UtxoEntry]) -> Option<TransactionOutpoint> {
         let locks = self.escrow?;
-        locks.refusal(tx, entries.iter().map(|entry| entry.amount), self.daa_score)
+        locks.refusal_with_bond_burn(tx, entries.iter().map(|entry| entry.amount), self.daa_score, self.burn_owed(tx))
+    }
+
+    /// **G14 r5: what this transaction's qualified escrow settlements destroy** (their scheduled burns) — the same plans the
+    /// merge records, so the Round fee preflight and the final collectible agree. 0 wherever no rooted row is spent (every network:
+    /// the schedule is typed-missing, so no settlement with a burn qualifies).
+    fn escrow_burned(&self, tx: &Transaction, entries: &[UtxoEntry]) -> u64 {
+        let Some(locks) = self.escrow else { return 0 };
+        if locks.rows.is_empty() {
+            return 0;
+        }
+        let amounts: Vec<u64> = entries.iter().map(|entry| entry.amount).collect();
+        tx.inputs
+            .iter()
+            .filter_map(|input| locks.rows.get(&input.previous_outpoint))
+            .filter_map(|row| {
+                kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(
+                    row,
+                    tx,
+                    &amounts,
+                    self.daa_score,
+                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_fee_schedule_v1(row),
+                )
+                .ok()
+            })
+            .fold(0u64, |sum, plan| sum.saturating_add(plan.burned_now))
     }
 
     /// **What this transaction must leave unclaimed, in total** — [`palw_bond_burn_owed`] over this
@@ -640,7 +707,9 @@ impl VirtualStateProcessor {
                 && let (Some(bond), Some(budget)) = (verdicts.fee_recipients.get(&merged_block), verdicts.fee_budget.as_mut())
             {
                 let maximum = validated_transactions.iter().try_fold(0u64, |sum, (tx, _)| {
-                    let burned = bond_filter.map(|filter| filter.burn_owed(tx.tx)).unwrap_or(0);
+                    let burned = bond_filter
+                        .map(|filter| filter.burn_owed(tx.tx).saturating_add(filter.escrow_burned(tx.tx, &tx.entries)))
+                        .unwrap_or(0);
                     sum.checked_add(self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score))
                 });
                 let income = maximum.map(|maximum_sompi| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
@@ -694,6 +763,9 @@ impl VirtualStateProcessor {
             let escrow_fence_active = self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
             let mut new_provisional_escrows: Vec<TransactionOutpoint> = Vec::new();
             for (validated_tx, _) in validated_transactions.iter() {
+                // G14 r5: what a qualified escrow settlement destroys (its scheduled burns) — withheld from the collectible fee
+                // together with the bond burn, so RFC-0035 §7.1's one allocation of F holds (0 wherever no row exists).
+                let mut escrow_burned = 0u64;
                 if escrow_fence_active {
                     if let Some(outpoint) = kaspa_consensus_core::palw_funded_escrow_v1::palw_tfo1_provisional_lock_v1(validated_tx.tx) {
                         new_provisional_escrows.push(outpoint);
@@ -709,9 +781,15 @@ impl VirtualStateProcessor {
                                     validated_tx.tx,
                                     &amounts,
                                     pov_daa_score,
-                                    None,
+                                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_fee_schedule_v1(row),
                                 )
                                 .expect("the spend filter admitted only a qualified escrow spend over the same row and entries");
+                                // G14 r5: a partial settlement re-locks the escrow on its change-back output — provisionally for the
+                                // rest of this mergeset (like a TFO1 carrier's own output), rooted from the next block on.
+                                if plan.new.settled_by.is_none() {
+                                    new_provisional_escrows.push(plan.new.funding_outpoint);
+                                }
+                                escrow_burned = escrow_burned.saturating_add(plan.burned_now);
                                 ctx.palw_escrow_settlements.push(kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1 {
                                     contract_id: row.contract_id,
                                     old: plan.old,
@@ -740,7 +818,7 @@ impl VirtualStateProcessor {
                 // REDIRECTION to the block's miner rather than a destruction, and `slashed`'s own
                 // documentation ("enters circulation nowhere") would still be false. Burned by
                 // don't-mint, the mechanism the §F service share already uses.
-                let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0);
+                let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0).saturating_add(escrow_burned);
                 if collect_carrier_fees {
                     palw_record_accepted_carrier_fees_v1(
                         validated_tx, owed, &mut ctx.palw_v2_accepted_tx_fees, &mut ctx.palw_v2_rent_available_fees,
@@ -2128,7 +2206,12 @@ impl VirtualStateProcessor {
         // block path's own rule and the actual populated amounts, before the script check. A locked-escrow spend the merge would
         // skip is refused here instead of relayed. `None` (no lock) everywhere below `palw_tir_public_conviction_v1`.
         if let Some(locks) = palw_escrow
-            && let Some(outpoint) = locks.refusal(&mutable_tx.tx, mutable_tx.entries.iter().flatten().map(|entry| entry.amount), pov_daa_score)
+            && let Some(outpoint) = locks.refusal_with_bond_burn(
+                &mutable_tx.tx,
+                mutable_tx.entries.iter().flatten().map(|entry| entry.amount),
+                pov_daa_score,
+                palw_burns.map(|burns| palw_bond_burn_owed(&mutable_tx.tx, burns)).unwrap_or(0),
+            )
         {
             return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
         }

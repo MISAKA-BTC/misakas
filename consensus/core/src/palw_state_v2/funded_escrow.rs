@@ -11,7 +11,10 @@
 //! (`palw_tir_public_fold_v1::install_original_admission_v1`, round 2), inside the paired checkpoint; it is unreachable in production
 //! because the coordinator's schedule is typed-missing.
 use super::*;
-use crate::palw_funded_escrow_v1::{PalwEscrowSettlementFactV1, PalwFundedEscrowRowV1, palw_escrow_row_transition_v1};
+use crate::palw_funded_escrow_v1::{
+    PalwEscrowClaimLiabilityViewV1, PalwEscrowSettlementFactV1, PalwFundedEscrowRowV1, palw_escrow_liability_resolved_v1,
+    palw_escrow_row_retirable_v1, palw_escrow_row_transition_v1,
+};
 
 fn refused(why: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(format!("RFC-0035 A funded escrow: {why:?}"))
@@ -41,13 +44,82 @@ impl TransitionBuilder<'_> {
         self.write_funded_escrow_v1(row.contract_id, Some(row))
     }
 
-    /// **Settle a row from a qualified spend the processor accepted.** The fact's `old` must be exactly the rooted row (the
-    /// processor read the same parent state); anything else is a refusal, never a re-derivation from the processor's word.
+    /// **Settle (or continue) a row from a qualified spend the processor accepted.** The fact's `old` must be exactly the rooted
+    /// row (the processor read the same parent state); anything else is a refusal, never a re-derivation from the processor's word.
+    /// G14 r5: `new` is either the settled row or, after a partial settlement, the continued row on the change-back outpoint —
+    /// [`palw_escrow_row_transition_v1`] (asked by the writer) admits exactly those.
     pub(super) fn settle_funded_escrow_v1(&mut self, fact: &PalwEscrowSettlementFactV1) -> Result<(), PalwStateV2Error> {
         if self.state.funded_escrows.get(&fact.contract_id) != Some(&fact.old) {
             return Err(refused("a settlement fact whose row is not the rooted row"));
         }
         self.write_funded_escrow_v1(fact.contract_id, Some(fact.new))
+    }
+
+    /// **G14 r5: the rooted liability view of a row's claim** — open court sessions, whether the claim record is still rooted and
+    /// voided by its verdict, whether a post-Final liability record still keeps it convictable. From the builder's state only.
+    fn funded_escrow_claim_view_v1(&self, claim: &Hash64) -> PalwEscrowClaimLiabilityViewV1 {
+        let record = self.state.claims.get(claim);
+        PalwEscrowClaimLiabilityViewV1 {
+            open_courts: self.state.open_courts_of(claim),
+            claim_live: record.is_some(),
+            claim_voided: record.is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Voided { .. })),
+            post_final_liability: self.state.panel_liabilities.contains_key(claim),
+        }
+    }
+
+    /// **G14 r5 (item 2): clear one row's liability and release the claim's bond capital reservation with it.** The row's flag
+    /// closes (the only edit the row rules allow on an unsettled row besides a spend), which is what lets the payer's return (after
+    /// the hard deadline, or a scheduled return before it) qualify; and the claim's ADR-0176 reservation, if one is still open, is
+    /// closed through the ordinary `bond_budget_close_v1` (its own liability-hold horizon applies), so the escrow and the bond's
+    /// capital are released by the same event, in the same delta.
+    pub(super) fn clear_funded_escrow_liability_v1(&mut self, contract_id: Hash64, now: u64) -> Result<(), PalwStateV2Error> {
+        let row = *self.state.funded_escrows.get(&contract_id).ok_or_else(|| refused("no such funded escrow"))?;
+        if !row.liability_open || row.settled_by.is_some() {
+            return Err(refused("only an unsettled row with an open liability clears"));
+        }
+        let mut cleared = row;
+        cleared.liability_open = false;
+        self.write_funded_escrow_v1(contract_id, Some(cleared))?;
+        let reservation_open =
+            self.state.bond_budget.as_ref().and_then(|budget| budget.claim_row(&row.claim)).is_some_and(|reservation| reservation.open);
+        if reservation_open {
+            self.bond_budget_close_v1(&row.claim, now)?;
+        }
+        Ok(())
+    }
+
+    /// **G14 r5 (items 2 and 3): the funded-escrow clock**, once per block before the objects (`prepare_block_objects_v1`, right
+    /// after the settlements): every unsettled row whose liability is resolved
+    /// ([`crate::palw_funded_escrow_v1::palw_escrow_liability_resolved_v1`]: a verdict, a discharge, or the hard deadline passed,
+    /// never with a pursuit open) clears it, in contract order; then every settled row past its retention
+    /// (`extras.funded_escrow_retention_daa`) leaves the rooted state. A no-op wherever no row exists — every network today.
+    pub(super) fn sweep_funded_escrows_v1(&mut self, now: u64) -> Result<(), PalwStateV2Error> {
+        if self.state.funded_escrows.is_empty() {
+            return Ok(());
+        }
+        let resolved: Vec<Hash64> = self
+            .state
+            .funded_escrows
+            .values()
+            .filter(|row| row.settled_by.is_none() && row.liability_open)
+            .filter(|row| palw_escrow_liability_resolved_v1(row, &self.funded_escrow_claim_view_v1(&row.claim), now))
+            .map(|row| row.contract_id)
+            .collect();
+        for contract_id in resolved {
+            self.clear_funded_escrow_liability_v1(contract_id, now)?;
+        }
+        let retention = self.extras.funded_escrow_retention_daa;
+        let retired: Vec<Hash64> = self
+            .state
+            .funded_escrows
+            .values()
+            .filter(|row| palw_escrow_row_retirable_v1(row, now, retention))
+            .map(|row| row.contract_id)
+            .collect();
+        for contract_id in retired {
+            self.write_funded_escrow_v1(contract_id, None)?;
+        }
+        Ok(())
     }
 }
 
@@ -126,9 +198,152 @@ mod tests {
         assert_eq!(back.funded_escrows, state.funded_escrows);
         let mut bad = state.clone();
         let mut broken = row();
-        broken.paid_sompi = 1; // value moved on an unsettled row
+        broken.returned_sompi = 1; // a return on an unsettled row
         bad.funded_escrows.insert(h(1), broken);
         let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&bad)).unwrap();
         assert!(borsh::from_slice::<PalwStateCarriageV2>(&bytes).is_err());
+    }
+
+    // ---- G14 r5 (lane r5-escrow-settlement): continuation, liability clearing and retirement under revert ----
+
+    fn open_row() -> PalwFundedEscrowRowV1 {
+        PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), TransactionOutpoint::new(h(77), 1), 1_000, h(3), payload(), 100, 10_100, true).unwrap()
+    }
+    fn payee(n: u8) -> crate::tx::ScriptPublicKey {
+        crate::mldsa87_primitives::p2pkh_mldsa87_spk(
+            &kaspa_hashes::blake2b_512_address_payload(&[n; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN]).as_bytes(),
+        )
+    }
+
+    /// **Item 5: every path reverts.** Install (liability open) → partial settlement with change-back (continuation) → liability
+    /// cleared by the sweep (claim discharged: no record) → final return → retirement past the retention. Reverting each delta in
+    /// reverse order restores every intermediate row and root exactly, and the lock map follows the row (old outpoint, new outpoint,
+    /// none).
+    #[test]
+    fn funded_escrow_every_path_reverts_to_its_parent_row() {
+        use crate::palw_funded_escrow_v1::{PalwEscrowDueKindV1, PalwEscrowDueV1, PalwEscrowFeeScheduleV1};
+        let p = params();
+        let extras = PalwTransitionExtrasV1 { funded_escrow_retention_daa: Some(100), ..Default::default() };
+        let genesis = PalwChainStateV2::genesis();
+        let mut b = TransitionBuilder::new(&genesis, &p, false, false, false, false, &extras);
+        b.install_funded_escrow_v1(open_row()).unwrap();
+        let s0 = b.state.clone();
+
+        // Partial settlement: work 300 + burn 100, 600 continues on the change-back output.
+        let worker = kaspa_hashes::blake2b_512_address_payload(&[11u8; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+        let schedule = PalwEscrowFeeScheduleV1::test_only_v1(
+            h(1),
+            vec![
+                PalwEscrowDueV1 { kind: PalwEscrowDueKindV1::WorkPayment, payee: Some(worker), amount_sompi: 300 },
+                PalwEscrowDueV1 { kind: PalwEscrowDueKindV1::Burn, payee: None, amount_sompi: 100 },
+            ],
+        );
+        let payer_spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&payload().as_bytes());
+        let tx1 = Transaction::new(
+            0,
+            vec![TransactionInput::new(open_row().funding_outpoint, vec![], 0, 0)],
+            vec![TransactionOutput::new(300, payee(11)), TransactionOutput::new(600, payer_spk.clone())],
+            0,
+            crate::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        let plan = palw_escrow_qualified_spend_v1(&open_row(), &tx1, &[1_000], 5_000, Some(&schedule)).unwrap();
+        let mut b = TransitionBuilder::new(&s0, &p, false, false, false, false, &extras);
+        b.settle_funded_escrow_v1(&PalwEscrowSettlementFactV1 { contract_id: h(1), old: plan.old, new: plan.new }).unwrap();
+        let s1 = b.state.clone();
+        let d1 = delta(b.entries.clone());
+        let locks = palw_escrow_rows_by_outpoint_v1(s1.funded_escrows_v1());
+        assert!(locks.contains_key(&TransactionOutpoint::new(tx1.id(), 1)) && locks.len() == 1, "the lock moved to the change-back");
+
+        // The sweep: the claim has no record and no liability record (discharged) ⇒ the liability clears; no budget engine, so no
+        // reservation to close. A second sweep changes nothing.
+        let mut b = TransitionBuilder::new(&s1, &p, false, false, false, false, &extras);
+        b.sweep_funded_escrows_v1(5_001).unwrap();
+        let s2 = b.state.clone();
+        let d2 = delta(b.entries.clone());
+        assert!(!s2.funded_escrows_v1()[&h(1)].liability_open);
+        let mut again = TransitionBuilder::new(&s2, &p, false, false, false, false, &extras);
+        again.sweep_funded_escrows_v1(5_002).unwrap();
+        assert!(again.entries.is_empty(), "a cleared liability is cleared once");
+        assert!(again.clear_funded_escrow_liability_v1(h(1), 5_002).is_err());
+
+        // Before the hard deadline the payer return still needs the (typed-missing) schedule; with it, the rest returns.
+        let tx2 = Transaction::new(
+            0,
+            vec![TransactionInput::new(TransactionOutpoint::new(tx1.id(), 1), vec![], 0, 0)],
+            vec![TransactionOutput::new(600, payer_spk)],
+            0,
+            crate::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        let row2 = s2.funded_escrows_v1()[&h(1)];
+        assert!(palw_escrow_qualified_spend_v1(&row2, &tx2, &[600], 5_003, None).is_err());
+        let plan2 = palw_escrow_qualified_spend_v1(&row2, &tx2, &[600], 5_003, Some(&schedule)).unwrap();
+        assert_eq!((plan2.returned_now, plan2.new.settled_daa), (600, 5_003));
+        let mut b = TransitionBuilder::new(&s2, &p, false, false, false, false, &extras);
+        b.settle_funded_escrow_v1(&PalwEscrowSettlementFactV1 { contract_id: h(1), old: plan2.old, new: plan2.new }).unwrap();
+        let s3 = b.state.clone();
+        let d3 = delta(b.entries.clone());
+        assert!(palw_escrow_rows_by_outpoint_v1(s3.funded_escrows_v1()).is_empty());
+
+        // Retirement: not at settled + retention, only after.
+        let mut b = TransitionBuilder::new(&s3, &p, false, false, false, false, &extras);
+        b.sweep_funded_escrows_v1(5_103).unwrap();
+        assert!(b.entries.is_empty() && b.state.funded_escrows_v1().contains_key(&h(1)));
+        let mut b = TransitionBuilder::new(&s3, &p, false, false, false, false, &extras);
+        b.sweep_funded_escrows_v1(5_104).unwrap();
+        let s4 = b.state.clone();
+        let d4 = delta(b.entries.clone());
+        assert!(s4.funded_escrows_v1().is_empty());
+        assert_eq!(s4.state_root(), genesis.state_root(), "a retired table roots as the empty one");
+
+        // Undo every step.
+        let u3 = revert_delta_v2(&s4, &d4, &p).unwrap();
+        assert_eq!((u3.funded_escrows_v1(), u3.state_root()), (s3.funded_escrows_v1(), s3.state_root()));
+        let u2 = revert_delta_v2(&u3, &d3, &p).unwrap();
+        assert_eq!((u2.funded_escrows_v1(), u2.state_root()), (s2.funded_escrows_v1(), s2.state_root()));
+        let u1 = revert_delta_v2(&u2, &d2, &p).unwrap();
+        assert_eq!((u1.funded_escrows_v1(), u1.state_root()), (s1.funded_escrows_v1(), s1.state_root()));
+        assert!(u1.funded_escrows_v1()[&h(1)].liability_open, "the liability reopens with the undo");
+        let u0 = revert_delta_v2(&u1, &d1, &p).unwrap();
+        assert_eq!((u0.funded_escrows_v1(), u0.state_root()), (s0.funded_escrows_v1(), s0.state_root()));
+        assert!(palw_escrow_rows_by_outpoint_v1(u0.funded_escrows_v1()).contains_key(&open_row().funding_outpoint), "original lock back");
+
+        // Pruned IBD: every intermediate state's carriage reproduces the same rows and root.
+        for state in [&s0, &s1, &s2, &s3, &s4] {
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
+            let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(&back.funded_escrows, state.funded_escrows_v1());
+        }
+    }
+
+    /// The sweep never clears under an open pursuit or for a live claim before the hard deadline; it does past the deadline.
+    #[test]
+    fn funded_escrow_sweep_holds_live_and_pursued_claims() {
+        let p = params();
+        let extras = PalwTransitionExtrasV1::default();
+        let mut state = PalwChainStateV2::genesis();
+        state.funded_escrows.insert(h(1), open_row());
+        state.open_courts_by_claim.insert(h(2), 1);
+        let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+        b.sweep_funded_escrows_v1(50_000).unwrap();
+        assert!(b.entries.is_empty(), "an open pursuit holds the escrow even past the hard deadline");
+        state.open_courts_by_claim.remove(&h(2));
+        let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+        b.sweep_funded_escrows_v1(10_101).unwrap();
+        assert!(!b.state.funded_escrows_v1()[&h(1)].liability_open, "past the hard deadline with no pursuit it clears");
+        // Below the fence (`None` retention) a settled row never retires.
+        let mut settled = open_row();
+        settled.liability_open = false;
+        settled.returned_sompi = 1_000;
+        settled.settled_by = Some(h(9));
+        settled.settled_daa = 200;
+        let mut state = PalwChainStateV2::genesis();
+        state.funded_escrows.insert(h(1), settled);
+        let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+        b.sweep_funded_escrows_v1(u64::MAX).unwrap();
+        assert!(b.entries.is_empty());
     }
 }

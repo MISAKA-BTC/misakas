@@ -630,6 +630,23 @@ fn collect(
     Ok(())
 }
 
+/// **G14 r5 (lane r5-escrow-settlement; user decision 2026-10-22): the settlement leg of a mining receipt quantum is outside the
+/// RFC-0008 combined liability predicate** (`NoLiableClaim`). A quantum pays issuance (the worker carve of the receipt block's own
+/// subsidy) and fork-choice weight — there is no requester fee to hold or refund. Holding it until the claim's horizon `H`
+/// (`palw_native_mining_liability_until_v39`, which is ≥ the receipt's own `expires`) would make every receipt unspendable, and the
+/// escrow-rfc08 `NativeClaim` leg did exactly that: its at-once `paid_now = carve` inside the horizon met the export cap, and its
+/// horizon (certification + receipt lifetime + prosecution) exceeds X3's `a + 10,000` (`HorizonPastHardDeadline`), so the predicate
+/// refused every quantum past `palw_settlement_once_v1`. The quantum's own bounds are unchanged: the strict budget draw within the
+/// 0.51 export (`bond_budget_native_receipt_spend_v39`), Gate C, no open G-N2 accusation, once-only settlement. A post-Final
+/// conviction still slashes the producer's exposure and revokes the receipt, its granted weight and the certification through the
+/// existing G-N2 path (`palw_native_receipt_v39` / stage action 80, `MINING_RECEIPT_GRANTED_KIND_V39`), and the claim's own
+/// collection still waits for `H` (`collect`).
+pub(super) fn native_mining_receipt_leg_v39() -> super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1 {
+    super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
+        "a native mining receipt quantum: issuance and weight, no requester fee; post-Final conviction revokes it (G-N2)",
+    )
+}
+
 /// **The receipt block's own work** (`PNR9`, routed from the shared receipt-spend site): one quantum of a live, Gate-C-certified
 /// receipt, drawn strictly from its budget (one block unit and this block's carve, within the 0.51 export) with its weight
 /// clipped, credited to `safe_weight`. The coinbase pays this block's worker share as for every entitled receipt block.
@@ -667,28 +684,9 @@ pub(super) fn apply_native_receipt_block_v39(
             [0; 64],
             u64::from(spend.quantum_index),
         );
-        // RFC08-2 (G14 lane escrow-rfc08): the mining claim's liability terms are DERIVED from its own record — its actual
-        // accepting DAA under the adopted X3 hard deadline (`a + 10,000`, read from the rooted mirror; unsourced by name where X3
-        // does not govern `a`) and its deterministic horizon `palw_native_mining_liability_until_v39` over the rooted mining and
-        // certification policies. Below `palw_settlement_once_v1` the leg is not read at all. Without RFC-0018's certification
-        // policy the horizon has no source and the leg stays unsourced, never defaulted.
-        let leg = match builder.params.rfc0018_v1().map(|m| m.certification) {
-            Some(certification) => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NativeClaim {
-                budget_id: native_mining_budget_id_v39(&c.id),
-                accepted_daa: c.admitted_daa,
-                liability_until: crate::palw_native_mining_v39::palw_native_mining_liability_until_v39(
-                    c.admitted_daa,
-                    &policy,
-                    &certification,
-                ),
-                // One quantum's carve, drawn strictly from the reservation's R and paid in this block's coinbase.
-                draw: carve,
-                paid_now: carve,
-            },
-            None => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
-                "a native mining receipt: the mining claim's liability horizon needs RFC-0018's certification policy",
-            ),
-        };
+        // G14 r5 (user decision 2026-10-22): a mining receipt quantum is NOT held to the liability horizon — see
+        // `native_mining_receipt_leg_v39`. Once-only settlement still applies (a repeat is refused below).
+        let leg = native_mining_receipt_leg_v39();
         let once = builder.settle_once_liable_v1(
             ctx.daa_score,
             obligation,
@@ -736,4 +734,18 @@ pub fn palw_native_mining_model_view_v39(
     let m = model(r, model_id).ok()?;
     let tier = ModelTierV1SourceV39.tier_permille(state, params, &Hash64::from_bytes(*model_id));
     Some((m, tier))
+}
+
+#[cfg(test)]
+mod r5_mining_receipt_leg_tests {
+    use super::super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1;
+
+    /// **G14 r5 item 6 (user decision 2026-10-22): a mining receipt quantum is never held to `H`.** Its leg is outside the combined
+    /// liability predicate (`leg_liability_terms_v1` answers `Ok(None)` for `NoLiableClaim` whatever the fence), so the quantum pays
+    /// in its receipt block exactly as before the predicate existed; only once-only settlement applies to it.
+    #[test]
+    fn mining39_receipt_leg_is_not_held_to_the_liability_horizon() {
+        assert!(matches!(super::native_mining_receipt_leg_v39(), PalwLegLiabilityV1::NoLiableClaim(_)));
+        assert!(!matches!(super::native_mining_receipt_leg_v39(), PalwLegLiabilityV1::NativeClaim { .. } | PalwLegLiabilityV1::Unsourced(_)));
+    }
 }

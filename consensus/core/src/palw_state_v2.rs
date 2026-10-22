@@ -20131,6 +20131,11 @@ pub struct PalwTransitionExtrasV1 {
     /// refuses the block). Empty below `palw_tir_public_conviction_v1` and wherever no row exists — every network today — so
     /// `Default` is byte-identical to the transition before the field existed.
     pub funded_escrow_settlements: Vec<crate::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
+    /// **G14 r5 (lane r5-escrow-settlement): how long a SETTLED funded-escrow row stays rooted after its settling spend** — the
+    /// processor's `2 × pruning_depth` (DAA advances at least as fast as blue score, so by then the pruning point has passed the
+    /// settling block and a pruned node's carriage no longer needs the row). `None` below `palw_tir_public_conviction_v1` (no row
+    /// ever retires there); every network has no row, so `Default` is byte-identical to the transition before the field existed.
+    pub funded_escrow_retention_daa: Option<u64>,
     /// **RFC-0008 v2: the slice carriers the accepting block's covered set holds**, in the processor's canonical order (root, then
     /// index, then carrier). Each is re-judged by the fold against its own running state; empty unless
     /// `Params::palw_exec_payload_v2` is in force at the block, and then `Default` is byte-identical to the transition before the

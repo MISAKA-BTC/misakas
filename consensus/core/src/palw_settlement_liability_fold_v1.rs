@@ -60,6 +60,11 @@ pub(super) enum PalwLegLiabilityV1 {
     /// the adopted X3 hard deadline (`palw_claim_hard_deadline_v1`, RFC-0014 2026-10-19 amendment `a + 10,000`, RFC-0026 §2) —
     /// never defaulted: where X3 does not govern `accepted_daa` the leg stays unsourced, by name. `liability_until` is the claim's
     /// own deterministic horizon (the family computes it from the claim record and its rooted policy).
+    ///
+    /// G14 r5 (user decision 2026-10-22): NOT used for mining39 receipt quanta (they are issuance + weight with no requester fee and
+    /// are not held to `H`; `palw_native_mining_fold_v39::native_mining_receipt_leg_v39`). Kept for a native family whose leg pays a
+    /// requester-funded fee.
+    #[allow(dead_code)]
     NativeClaim { budget_id: Hash64, accepted_daa: u64, liability_until: u64, draw: u64, paid_now: u64 },
     /// A payee whose liability terms have no authenticated source: the leg is refused past the fence.
     Unsourced(&'static str),
