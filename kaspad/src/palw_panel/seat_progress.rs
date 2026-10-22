@@ -406,7 +406,7 @@ impl PalwPanelService {
                     // try, it waits out the material wait (N-5).
                     if seat_r && seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {
                         let held = pool_books.material.map().get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
-                        let job = self.resolve_backend(&session, duty.class_id, duty.artifact_root).ok().and_then(|resolved| {
+                        let job = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id)).ok().and_then(|resolved| {
                             let (material, ctx) = self.fp_seat_job_v1(resolved.as_ref(), duty, &held)?;
                             let form = self.class_prompt_ids_form(material.job.class_id);
                             let prompt = Self::fp_prompt_for_job(
@@ -564,7 +564,7 @@ impl PalwPanelService {
                     // when the class, the executor or this build cannot do either.
                     let held = pool_books.material.map().get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
                     if let Some(material) = self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
-                        && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
+                        && let Ok(resolved) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
                         && let Some(prompt_ids) = Self::fp_prompt_for_job(
                             kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(resolved.as_ref()),
                             &material,
@@ -739,7 +739,7 @@ impl PalwPanelService {
                                 warn!("[{PALW_PANEL}] claim {}: the served prompt is not this claim's ({why})", duty.claim_id);
                                 continue;
                             }
-                            let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
+                            let Ok(backend) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
                                 break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                             };
                             let roots = PalwClaimRootsV1 {
@@ -1118,7 +1118,7 @@ impl PalwPanelService {
                             warn!("[{PALW_PANEL}] claim {}: the served prompt is not this claim's ({why})", duty.claim_id);
                             continue;
                         }
-                        let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
+                        let Ok(backend) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
                             break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                         };
                         let Some(prompt_ids) = Self::fp_prompt_for_job(
@@ -1201,7 +1201,7 @@ impl PalwPanelService {
                         // toward neither side of the quorum. The chain refuses it for the liveness
                         // floor, where no node can truthfully claim it, so filing it there would
                         // only waste a fee.
-                        let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
+                        let Ok(backend) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
                             break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                         };
                         let Some(anchor) = self.job_anchor_for_claim(
@@ -1269,7 +1269,7 @@ impl PalwPanelService {
                         && let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
                             std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
                         })
-                        && let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
+                        && let Ok(backend) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
                         && let Some(anchor) = self.job_anchor_for_claim(
                             &session,
                             backend.as_ref(),
@@ -1313,7 +1313,7 @@ impl PalwPanelService {
                 // free-prompt lane. `None` falls through to the pull and the half-window
                 // exactly as before.
                 if !duty.free_prompt
-                    && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
+                    && let Ok(resolved) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
                     && let Some((ctx, prompt)) = self.attempt_job_for_claim(
                         &session,
                         resolved.as_ref(),

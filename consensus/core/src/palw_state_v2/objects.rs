@@ -1654,6 +1654,16 @@ fn apply_object_inner(
                     "semantic declaration must name the originally registered artifact and registrant",
                 ));
             }
+            // Audit C-04: a TIR class's FIRST statement sets every field, so its tokenizer must be the one the class was admitted
+            // with (the TIR record's, which its container binding and every TIR court read). Below `palw_class_semantics_v1` no
+            // declaration folds at all.
+            if let Some(record) = builder.state.tir_class_v1(&declaration.class_id)
+                && record.tokenizer_id != declaration.tokenizer_id
+            {
+                return Err(PalwStateV2Error::ImmutableModelUpdate(
+                    "a TIR class's semantic tokenizer must be its registered TIR record's tokenizer",
+                ));
+            }
             if let Some(relation) = declaration.prefix_state_relation {
                 let profile = builder
                     .state

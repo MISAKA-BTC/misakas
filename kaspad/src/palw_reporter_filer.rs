@@ -1771,7 +1771,7 @@ impl PalwPanelService {
             return;
         }
         let Some(probe) = filer.take_probe(duty.claim_id, bytes, current_daa) else { return };
-        let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return };
+        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { return };
         // At the widest prefill run the ledger grants, on this duty's own instance — the one the probe
         // below runs on (int-10.2 A2).
         let backends = self.backends();

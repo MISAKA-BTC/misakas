@@ -1013,3 +1013,43 @@ fn tir_catalog_tier_reaches_a_class_through_its_bound_container_root_only() {
     p.model_tier_v1 = Some(mirror_of(Hash64::from_u64_word(0xC0FFEE)));
     assert!(!palw_model_tier_at_v1(&bound_state, &p, &l.class_id, AT_DAA).is_approved());
 }
+
+/// **Audit C-04 (fold half): a TIR class's first semantic statement names its registered TIR tokenizer.** The first declaration
+/// sets every field, so a tokenizer other than the TIR record's (the one its container binding and every TIR court read) is
+/// refused; the record's own tokenizer folds.
+#[test]
+fn audit_fixcd_c04_a_tir_class_semantic_statement_names_its_registered_tokenizer() {
+    let mut l = lane(false);
+    let mut class = l.state.class(&l.class_id).unwrap().clone();
+    class.registrant_bond = Some(bond_key(PRODUCER));
+    l.state.set_class_for_tests(l.class_id, class);
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
+    let declaration = |tokenizer_id: Hash64| crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1 {
+        version: crate::palw_class_semantics_v1::PALW_CLASS_SEMANTICS_VERSION_V1,
+        class_id: l.class_id,
+        artifact_root,
+        model_profile_id: Hash64::from_u64_word(0x51),
+        runtime_manifest_hash: Hash64::from_u64_word(0x52),
+        runtime_class_id: Hash64::from_u64_word(0x53),
+        tokenizer_id,
+        cu_ruleset_id: Hash64::from_u64_word(0x54),
+        token_table_root: Hash64::from_u64_word(0x55),
+        rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
+        raw_tokenizer_bytes: 16,
+        tokenizer_key_events: 8,
+        prefix_state_relation: None,
+    };
+    let declare = |d| PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { declaration: Box::new(d), signature: Vec::new() };
+    let mut on = l.extras.clone();
+    on.class_semantics_active = true;
+    let other = Hash64::from_u64_word(0xBAD7);
+    assert_ne!(other, record.tokenizer_id);
+    assert_eq!(
+        apply_derived(&l.state, &l.p, &at(), &[declare(declaration(other))], &on).map(|_| ()).unwrap_err(),
+        PalwStateV2Error::ImmutableModelUpdate("a TIR class's semantic tokenizer must be its registered TIR record's tokenizer")
+    );
+    let (declared, _) =
+        apply_derived(&l.state, &l.p, &at(), &[declare(declaration(record.tokenizer_id))], &on).expect("the registered tokenizer folds");
+    assert_eq!(declared.class_semantics_v1(&l.class_id).map(|s| s.tokenizer_id), Some(record.tokenizer_id));
+}
