@@ -319,31 +319,6 @@ fn validate_saved_object(
     }
     Ok(())
 }
-/// RFC07-6: is the saved court action a legacy FileDemand (one unit of a Demand finding)?
-fn saved_is_file_demand(object: &PalwConsensusObjectV2, actor: PalwBondKeyV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. })
-        && saved_kernel_object(object, actor).is_ok_and(|o| matches!(&*o, KernelRouteObjectV1::FileDemand { .. }))
-}
-/// The accepted demands this checker already archived for this enrollment/round (restart: the count is the next index).
-fn archived_demands(outbox: &Path) -> Result<u32, String> {
-    let mut n = 0u32;
-    for entry in fs::read_dir(outbox).map_err(|e| e.to_string())? {
-        let name = entry.map_err(|e| e.to_string())?.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("demand-") && name.ends_with(".borsh") && !name.ends_with("-transaction.borsh") {
-            n = n.checked_add(1).ok_or("archived demand count overflow")?;
-        }
-    }
-    Ok(n)
-}
-/// Move an accepted demand's WAL aside (transaction first, so a crash in between re-archives the same index on restart).
-fn archive_demand_wal(outbox: &Path, object: &Path, transaction: &Path, index: u32) -> Result<(), String> {
-    if transaction.exists() {
-        fs::rename(transaction, outbox.join(format!("demand-{index:05}-transaction.borsh"))).map_err(|e| e.to_string())?;
-    }
-    fs::rename(object, outbox.join(format!("demand-{index:05}.borsh"))).map_err(|e| e.to_string())?;
-    fs::File::open(outbox).and_then(|d| d.sync_all()).map_err(|e| e.to_string())
-}
 fn court_action_accepted(
     route: &PalwKernelRouteStateV1,
     object: &PalwConsensusObjectV2,
@@ -420,7 +395,6 @@ impl PreparedKernelPaidCheckV4 {
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
             &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
         );
-        let mut demands_filed = archived_demands(&self.outbox)?;
         let mut reader_key = Some(self.reader_key);
         let mut client = None;
         loop {
@@ -498,18 +472,6 @@ impl PreparedKernelPaidCheckV4 {
             };
             if a.enrollment.base_claim != base {
                 return Err("checker opening belongs to another enrolled claim".into());
-            }
-            if let Some(signed) = &object {
-                if court_action_accepted(&route, signed, self.checker, base)? && saved_is_file_demand(signed, self.checker) {
-                    archive_demand_wal(&self.outbox, &object_path, &tx_path, demands_filed)?;
-                    demands_filed = demands_filed.checked_add(1).ok_or("checker demand count overflow")?;
-                    kaspa_core::info!(
-                        "private checker demand accepted: {} demand {} (not a conviction)",
-                        self.spec.enrollment,
-                        demands_filed
-                    );
-                    continue;
-                }
             }
             match receipt_accepted(&route, &a, self.spec.round, palw_kernel_bond_id_v1(&self.checker)) {
                 Ok(true) => {

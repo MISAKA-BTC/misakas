@@ -168,6 +168,7 @@ pub(super) fn scan_outbox(
     if funding.is_empty() || funding.len() > 64 {
         return Err("checker action history requires one to 64 explicit funding inputs".into());
     }
+    misaka_palw_remote::checker_outbox_legacy_v4::refuse_legacy_demand_archive_v4(outbox)?;
     // Two retained records (the first pending plus the current scan item),
     // bounded path construction and fixed funding membership. Raw/decoded
     // object and transaction owners are reserved by their own decoders.
@@ -398,9 +399,40 @@ mod tests {
         let first_scan = scan(outbox, &funding, &route(&[], &[]));
         assert_eq!(first_scan.transaction.as_ref().unwrap().id(), tx.id());
         assert!(first_scan.used_funding[0] && !first_scan.used_funding[1]);
+        let accepted = scan(outbox, &funding, &route(&[(7, actor())], &[]));
+        assert_eq!(accepted.slot, 1);
+        assert!(accepted.object.is_none() && accepted.used_funding[0] && !accepted.used_funding[1]);
+        // Advancing to a successor keeps the old signature and funding owner.
+        // A canonical rollback reselects exactly the old transaction, without
+        // turning its input into fresh funding for another obligation.
+        let rollback = scan(outbox, &funding, &route(&[], &[]));
+        assert_eq!(rollback.slot, 0);
+        assert_eq!(rollback.transaction.as_ref().unwrap().id(), tx.id());
+        assert!(rollback.used_funding[0] && !rollback.used_funding[1]);
+        assert_eq!(fs::read(action_paths(outbox, 0).1).unwrap(), borsh::to_vec(&first).unwrap());
+        assert_eq!(fs::read(action_paths(outbox, 0).2).unwrap(), borsh::to_vec(&tx).unwrap());
         let second = save(outbox, 1, 9);
         save_carrier(outbox, 1, &second, funding[0]);
         assert!(scan_outbox(outbox, &funding, CAP, &route(&[], &[]), actor(), BASE, ENROLLMENT, 0).is_err());
+    }
+
+    #[test]
+    fn legacy_moved_demands_never_become_unused_funding_or_a_fresh_action_slot() {
+        let directory = tempfile::tempdir().unwrap();
+        let outbox = directory.path();
+        let object = save(outbox, 0, 7);
+        let carrier = save_carrier(outbox, 0, &object, point(1));
+        let (_, object_path, tx_path) = action_paths(outbox, 0);
+        let archived_object = outbox.join("demand-00000.borsh");
+        let archived_tx = outbox.join("demand-00000-transaction.borsh");
+        fs::rename(object_path, &archived_object).unwrap();
+        fs::rename(tx_path, &archived_tx).unwrap();
+        for native in [route(&[], &[]), route(&[(7, actor())], &[])] {
+            assert!(matches!(scan_outbox(outbox, &[point(1), point(2)], CAP, &native, actor(), BASE, ENROLLMENT, 0),
+                Err(CheckerOutboxErrorV4::Outbox(_))));
+        }
+        assert_eq!(fs::read(archived_object).unwrap(), borsh::to_vec(&object).unwrap());
+        assert_eq!(fs::read(archived_tx).unwrap(), borsh::to_vec(&carrier).unwrap());
     }
 
     #[test]
@@ -482,16 +514,16 @@ mod tests {
             signature: vec![],
         };
         assert!(matches!(
-            observation(&route(&[], &[]), &object, actor(), BASE, [11; 64], 0, false),
+            observation(&route(&[], &[]), &object, actor(), BASE, [11; 64], 0, false, false),
             Err(CheckerOutboxErrorV4::Outbox(_))
         ));
         assert!(matches!(
-            observation(&route(&[], &[]), &object, actor(), BASE, ENROLLMENT, 1, false),
+            observation(&route(&[], &[]), &object, actor(), BASE, ENROLLMENT, 1, false, false),
             Err(CheckerOutboxErrorV4::Outbox(_))
         ));
         assert!(
             matches!(
-                observation(&route(&[], &[]), &object, actor(), BASE, ENROLLMENT, 0, false),
+                observation(&route(&[], &[]), &object, actor(), BASE, ENROLLMENT, 0, false, false),
                 Err(CheckerOutboxErrorV4::NativeView(_))
             ),
             "own enrollment absence is unknown, never a local success marker or permanent worker stop"

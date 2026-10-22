@@ -90,3 +90,5 @@ mod monetary_gc_kernel_fixture;
 pub mod native_carrier_queue_v4;
 
 pub mod kernel_material_context_v4;
+
+pub mod checker_outbox_legacy_v4;

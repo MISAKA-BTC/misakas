@@ -348,3 +348,47 @@ SecurityCertified, and native dependency reads require selected OPV approval.
 Output: `/tmp/misaka-rfc07-selected-consumer-controls.log`. This is evidence for
 these named consumers only; all-consumer coverage and the full campaign remain
 open. No activation or UNKNOWN gate changes.
+
+## RFC-0007 immutable checker action history
+
+Inspection found a stale archive branch in the private checker: it would move
+accepted demand WAL out of its original action slot and retain a file-count
+cursor. The current `scan_outbox` already derives its next action from the
+canonical native view and retains immutable subjects/carriers in funding slots.
+Moving those files would lose the original funding owner and reorg replay
+subject. The obsolete move/count branch and its old test are now removed.
+
+Startup explicitly refuses an outbox containing any legacy `demand-` archive
+entry, including partial, gapped or malformed archives. It retains all files
+and does not reinterpret a count as an acceptance/funding cursor. Existing
+modern `receipt.borsh`/`transaction.borsh` and `action-NN` slots remain in place.
+A remote-helper regression passed 2 tests, zero failures or ignored tests;
+output: `/tmp/misaka-rfc07-checker-legacy-tests.log`.
+
+The existing immutable-slot funding test now additionally checks native
+acceptance followed by rollback: the successor slot is selected without
+releasing the original funding, and rollback reselects the exact original
+transaction and signed subject. A new actual scanner test rejects legacy
+archives both before and after native demand acceptance while preserving bytes.
+The guard runs on every action-history scan, including restart.
+
+The first private test build exposed three existing observation calls missing
+the new finality argument; they now explicitly pass `false` (unfinalized).
+Output: `/tmp/misaka-rfc07-checker-immutable-tests.log`. The next build succeeded,
+but 11 of 15 runtime cases stopped at the owned-directory guard because macOS
+TMPDIR traversed the `/var` symlink; output:
+`/tmp/misaka-rfc07-checker-immutable-recheck.log`. The same compiled binary
+`kaspad_lib-9bd7f4026b4887da`, with TMPDIR resolved to its existing canonical
+`/private/var/.../T` path, passed all 15 checker controls (zero failures or
+ignored tests, 0.46s). The symlink guard was not weakened. Output:
+`/tmp/misaka-rfc07-checker-canonical-tmp-recheck.log`. Coverage includes immutable
+carrier/funding retention, native demand/served/default observations, material
+challenge applied-versus-finalized history, rollback and enrollment/round/actor identity.
+
+An earlier exploratory archive-move helper was discarded after tracing the
+current immutable-slot flow; its local SIGKILL tests are not evidence for this
+final implementation or the node campaign.
+
+The campaign requires implementation-complete execution and still has
+unconnected gate collectors; no executable campaign candidate exists at the
+shared debug binary path. The 15-gate campaign remains unrun and UNKNOWN.
