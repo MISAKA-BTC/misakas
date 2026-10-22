@@ -1,0 +1,50 @@
+=== batch lifecycle_scaling (UNDER_LOAD; waited 0s for load1<5) ===
+commit: 5fd3ba53a7cfdc2815d36ff7300c69b242e17ae2
+binary: /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-ad400d7f5b03d4af8/.t3bin/kaspa_consensus_core-8b341b9604899fc6
+26f2dfa6d7a57d9f3399d663a95a9bfbbc44f6bff03a943f4a8a1af05f3515f9  /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-ad400d7f5b03d4af8/.t3bin/kaspa_consensus_core-8b341b9604899fc6
+--- before
+Thu Oct 22 11:14:36 UTC 2026
+20:14  up 10:16, 1 user, load averages: 27.10 36.30 44.58
+hw.model: Mac13,1
+hw.memsize: 34359738368
+hw.ncpu: 10
+
+running 1 test
+test palw_state_v2::tests::liveness_lifecycle_v1::studio_t3_lifecycle_rehearsal_clone_fold_vs_claim_rows ... STUDIO_T3_LC N=262 runs=20 warmup=2 build_ms=0.1 per_object_us(med/p95/max)=16.7/17.2/30.0 clone_us=14.8/15.2/63.1 empty_fold_us=20.8/21.3/23.3
+STUDIO_T3_LC N=1000 runs=20 warmup=2 build_ms=0.3 per_object_us(med/p95/max)=58.3/63.9/67.4 clone_us=56.1/56.6/58.2 empty_fold_us=64.7/65.7/74.1
+STUDIO_T3_LC N=10000 runs=20 warmup=2 build_ms=3.6 per_object_us(med/p95/max)=1051.1/1125.6/1923.3 clone_us=1072.0/1174.1/1180.3 empty_fold_us=1110.5/1166.4/1185.5
+STUDIO_T3_LC N=50000 runs=20 warmup=2 build_ms=21.0 per_object_us(med/p95/max)=8051.6/8492.8/8565.9 clone_us=8303.9/28122.8/100980.4 empty_fold_us=11113.5/41325.2/58142.1
+STUDIO_T3_LC N=200000 runs=20 warmup=2 build_ms=269.2 per_object_us(med/p95/max)=44475.6/96088.5/133461.8 clone_us=29342.3/71565.6/119535.0 empty_fold_us=52783.3/109412.1/129598.0
+STUDIO_T3_LC N=1000000 runs=10 warmup=2 build_ms=1525.5 per_object_us(med/p95/max)=302707.7/348285.0/348285.0 clone_us=295277.6/351446.5/351446.5 empty_fold_us=352087.6/390547.7/390547.7
+STUDIO_T3_LC_SLOPE per_object log-log slope = 1.241
+STUDIO_T3_LC_SLOPE clone log-log slope = 1.219
+STUDIO_T3_LC_SLOPE empty_fold log-log slope = 1.255
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5023 filtered out; finished in 18.37s
+
+       18.44 real        10.42 user         0.67 sys
+          3287662592  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              201037  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                5470  involuntary context switches
+         36572129895  instructions retired
+         32364697549  cycles elapsed
+          2967341816  peak memory footprint
+exit=0
+--- after
+Thu Oct 22 11:14:54 UTC 2026
+20:14  up 10:17, 1 user, load averages: 25.45 35.33 44.04
+hw.model: Mac13,1
+hw.memsize: 34359738368
+hw.ncpu: 10
