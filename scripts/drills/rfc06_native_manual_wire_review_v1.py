@@ -5,6 +5,10 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# Claude 2026-10-22: same field order as derived serialize; only bytes decode bounded to PART (read_bounded_bytes_v1).
+'crate::palw_court_shared_material_intake_v1::MaterialPartV1': ('reviewed-field-layout','53e3c9266ea706f9362179965fb9fe26dce3e3a07f9ba1cccb2fb996b36c451a'),
+# Claude 2026-10-22: derived serialize (terms, u32 len, bytes); decoder only adds terms check and exact ML-DSA-87 signature length.
+'crate::palw_court_original_escrow_v1::FundingConsentV1': ('reviewed-field-layout','f35702cb4cbba930432c475f4287c0d497d767561b9effe3961a7e47484917d5'),
 # G14 snapshot rows: decoder consumes derived field order; version, exact ML-DSA
 # key/signature and path bounds narrow acceptance without changing field framing.
 'crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1': ('reviewed-field-layout','54395a01de88dee1dc2ffbe105ba68a8621fd16cdedc2a827e79e3d8ff18a9de'),
