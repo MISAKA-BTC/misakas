@@ -45,3 +45,35 @@ restart/reorg/prune and physical resource acceptance, the full model/source/
 adapter/payment requirements, and the 15-gate real-process campaign. No gate
 is promoted from UNKNOWN by these checks. Public presets and the unarmed
 full-activation height remain unchanged.
+
+## Runtime continuation at `a2fcee238`
+
+The reader/router consumer's new late-refusal regression passed: it measures
+the concrete successful write's admitted request, then supplies one byte less.
+The consumer returns `NativeResource`, leaves state and journal unchanged,
+and releases all reservations when the builder drops. This checks the outer
+consumer that previously discarded the writer's result; other outer consumers
+still require their own controls.
+
+The library test build also exposed and repaired two missing closing braces
+in pre-existing post-Final duty/material intake tests and two EVM market
+fixtures missing the dormant selected-source bootstrap fields.
+
+The subsequent filtered library run passed 41 tests covering native writers,
+GDN court, settlement-once and liability. Logs:
+`/tmp/misaka-rfc06-router-capacity-test.log` and
+`/tmp/misaka-rfc06-08-core-consumers-test.log`.
+
+A further material/router/bootstrap/retention/liability run passed 40 tests
+and failed one stale wire-tag assertion. The actual declaration codec and
+lifecycle registry assign `ReaderRouterDeclaredV2` tag 248; 244 belongs to
+`MemoryRoutingV2`. `fc88a4a38` corrects only the assertion. The combined
+recheck is running with output in `/tmp/misaka-rfc06-08-consumers-recheck.log`;
+do not infer its result from the earlier runs.
+
+Source inspection also identified a remaining production GDN history issue:
+`gdn_filer_tick.rs` discards both errors and continuation from its 4096-block
+accepted-lifecycle page read. This is not runtime evidence of a false verdict,
+but completeness of disclosure lookup across the full eligible history has
+not been established. Production GDN acceptance must include paged history,
+read failure, restart and reorg cases rather than treating a prefix as complete.
