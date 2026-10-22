@@ -1011,6 +1011,19 @@ async fn sanity_test() {
                     assert!(response.seats.is_empty());
                 })
             }
+            KaspadPayloadOps::GetPalwAcceptanceReads => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // An empty read is within the 64/64 bound and must be answered.
+                    rpc_client
+                        .get_palw_acceptance_reads_call(
+                            None,
+                            GetPalwAcceptanceReadsRequest { reserve_blocks: Vec::new(), outpoints: Vec::new() },
+                        )
+                        .await
+                        .unwrap();
+                })
+            }
             KaspadPayloadOps::GetPalwPanelStatus => {
                 let rpc_client = client.clone();
                 tst!(op, {
