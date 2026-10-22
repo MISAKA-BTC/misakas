@@ -1117,7 +1117,7 @@ native_struct!(crate::palw_court_service_state_v2::ServiceClaimBinding; claim, a
 native_struct!(crate::palw_court_shared_tir_state_v1::SharedTirBodyV1; block, accepted_daa, digest, bytes);
 native_enum!(crate::palw_court_shared_tir_stream_v1::SharedStreamTargetV1; Unit { ordinal, request_id }, FullIds);
 native_struct!(crate::palw_court_shared_tir_stream_state_v1::SharedStreamFinishedV1; block, daa);
-native_enum!(crate::palw_court_end_archive_v1::CourtEndEvidenceV1; Uncaptured, Native { point, object }, TirConviction { point, claim, filer, evidence });
+native_enum!(crate::palw_court_end_archive_v1::CourtEndEvidenceV1; Uncaptured, Native { point, object }, TirConviction { point, claim, filer, evidence }, DeadlineSweep { point });
 native_struct!(crate::palw_court_shared_tir_root_v1::SignedSharedTirRootV1; version, claim, scope_id, policy_id, leaf, arity, signer, root, signature);
 native_struct!(crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1; version, claim, leaf, root_id, path, parent_id, signer, round, signature);
 native_struct!(crate::palw_court_shared_tir_bottom_v1::SignedSharedTirBottomV1; version, claim, leaf, root_id, path, parent_id, filer, bottom, signature);

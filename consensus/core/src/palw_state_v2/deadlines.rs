@@ -3,28 +3,41 @@
 use super::*;
 
 pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    // A held first entry must not starve unrelated expired sessions. Keep the
-    // persisted clocks intact; this cursor is only for this sweep invocation.
-    let mut after_held = None;
+    // audit B-04/B-05 (fix-b): a session on a service-bound claim is ended here like any other (no held-skip cursor any more), and
+    // its archive records the sweep as its cause. The cause is per session: restored before every iteration and after the sweep.
+    let outer_cause = builder.court_end_evidence.clone();
+    let result = sweep_court_deadlines_inner(builder, ctx, &outer_cause);
+    builder.court_end_evidence = outer_cause;
+    result
+}
+
+fn sweep_court_deadlines_inner(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    outer_cause: &Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::CourtEndEvidenceV1>>,
+) -> Result<(), PalwStateV2Error> {
     loop {
-        let next = match after_held {
-            None => builder.state.court_deadlines.iter().next(),
-            Some(cursor) => builder.state.court_deadlines.range((std::ops::Bound::Excluded(cursor), std::ops::Bound::Unbounded)).next(),
-        }.copied();
+        builder.court_end_evidence = outer_cause.clone();
+        let next = builder.state.court_deadlines.iter().next().copied();
         let Some((deadline, session_id)) = next else { break };
 
         if deadline >= ctx.daa_score {
             break;
         }
         let record = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?;
-        // Quota and elapsed time do not establish a delivered opportunity. No
-        // semantic rung, phase, assembly or backstop default is authorized yet.
-        // Missing claims still take the defensive cleanup path below.
-        if builder.state.claims.contains_key(&record.claim) && builder.state.court_service_holds_claim_v1(&record.claim) {
-            after_held = Some((deadline, session_id));
-            continue;
-        }
+        // **audit B-04 (fix-b): a session on a service-bound claim ends at its own per-turn deadline / backstop too.** It used to be
+        // skipped at every height ("no semantic rung, phase, assembly or backstop default is authorized yet"), so one silent accuser
+        // held a network court slot, the claim's binding and the liable signers' collateral forever. It now takes the existing silence
+        // outcome with one F02 restriction: quota and elapsed time do not establish a delivered opportunity for the RESPONDER (a
+        // ladder turn has no F02 duty clock, so no adopted attribution exists for it), so every arm that would charge the responder
+        // (a rung no-show, a failed executor close declaration) is a NO-FAULT close on a bound claim — never a default. A silent or
+        // unsupported CHALLENGER keeps the challenger-side close (prosecution is its burden; F02 reserves no service for accusers).
+        // The archive records the sweep as the ending's cause (B-05), so the release and pruning can follow.
         let mut session = record.clone();
+        let held = builder.state.claims.contains_key(&session.claim) && builder.state.court_service_holds_claim_v1(&session.claim);
+        if held {
+            builder.prepare_sweep_court_end_cause_v1(ctx)?;
+        }
         // **A missing claim drops the session; it does not fail the block.** `retire_claim` closes
         // a claim's sessions with it, so this should be unreachable — and it is written to be
         // survivable anyway, because the alternative failure mode is a chain that stops forever on
@@ -211,6 +224,11 @@ pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &P
                         // which on a class with no responder is a certainty rather than a risk.
                         rearm_after_unanswered_opening(builder, ctx, session.claim, &claim)?;
                     }
+                    // audit B-04 (fix-b): on a service-bound claim a responder's rung silence has no adopted F02 attribution — a
+                    // no-fault close (nobody convicted, nobody fined), the claim re-armed.
+                    crate::palw_bisect::PalwBisectPartyV1::Responder if held => {
+                        rearm_after_unanswered_opening(builder, ctx, session.claim, &claim)?;
+                    }
                     crate::palw_bisect::PalwBisectPartyV1::Responder => {
                         // Same treatment a proven fault gets, and for the same reason: an
                         // executor that will not stand behind its own announced root at the
@@ -283,6 +301,18 @@ pub(super) fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &P
         // **W10: the assembly reserve is collected, and the direction is W5's.** One spelling with
         // the completing-chunk path, so the two cannot disagree about which bond a failed
         // declaration costs — see [`convict_close_declarer_v1`].
+        // audit B-04 (fix-b): on a service-bound claim an INCOMPLETE assembly is never an assembly-timeout default
+        // (`convict_close_declarer_v1` refuses it there): the session ends and archives its groups; a failed challenger declaration
+        // keeps the challenger-side close, a failed executor declaration is a no-fault close.
+        if held && let Some(side) = failed_declarer_side {
+            builder.write_court(session_id, None)?;
+            match side {
+                PalwCourtSideV1::Challenger => rearm_after_challenger_side_close(
+                    builder, ctx, session.claim, &claim, session.challenger_bond, session.opened_daa)?,
+                PalwCourtSideV1::Executor => rearm_after_unanswered_opening(builder, ctx, session.claim, &claim)?,
+            }
+            continue;
+        }
         if let Some(side) = failed_declarer_side {
             convict_close_declarer_v1(builder, ctx, session_id, side)?;
             continue;

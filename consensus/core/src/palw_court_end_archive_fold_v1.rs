@@ -52,6 +52,17 @@ impl TransitionBuilder<'_> {
         self.court_end_evidence = Some(Box::new(Evidence::Native { point:*ctx, object:Box::new(object.clone()) }).into());
         Ok(())
     }
+    /// **audit B-04/B-05 (fix-b): the cause of a session the court deadline sweep ends** on a service-bound claim (an archived
+    /// ending). Set by the sweep around its own removal; never by an object.
+    pub(super) fn prepare_sweep_court_end_cause_v1(&mut self, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+        if self.native_writers_tracking_v1() {
+        let mut q = native_writers::NativeWriteQuoteV1::new("court end deadline sweep cause");
+        q.exact::<Evidence>(2)?.exact::<usize>(2)?;
+        self.admit_native_write_v1(q)?;
+        }
+        self.court_end_evidence = Some(Box::new(Evidence::DeadlineSweep { point: *ctx }).into());
+        Ok(())
+    }
     pub(super) fn prepare_tir_court_end_cause_v1(&mut self, ctx: &PalwBlockContextV2, claim: Hash64, filer: PalwBondKeyV2,
         evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1) -> Result<(), PalwStateV2Error> {
         if self.native_writers_tracking_v1() {
