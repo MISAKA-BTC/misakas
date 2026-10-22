@@ -13682,22 +13682,33 @@ fn h1_the_template_asks_the_carrier_gate_the_mempool_asks() {
         let end = rest[1..].find("\n    fn ").or_else(|| rest[1..].find("\n    pub")).map(|i| i + 1).unwrap_or(rest.len());
         rest[..end].to_string()
     };
-    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction"] {
-        assert!(
-            body_of(caller).contains("self.palw_mempool_h1_carrier_refusal("),
-            "{caller} must ask the H-1 carrier gate (palw_mempool_h1_carrier_refusal)"
-        );
-    }
+    assert!(
+        body_of("validate_block_template_transaction").contains("self.palw_mempool_h1_carrier_refusal("),
+        "the template must ask the H-1 carrier gate (palw_mempool_h1_carrier_refusal)"
+    );
+    // Liveness hotfix (L-LC-02): admission asks the same gate behind the guard (memories, budget, classification).
+    assert!(
+        body_of("validate_mempool_transaction_impl").contains("self.palw_mempool_h1_admission_refusal_v1("),
+        "admission must ask the H-1 carrier gate behind its guard"
+    );
+    let admission = body_of("palw_mempool_h1_admission_refusal_v1");
+    assert!(admission.contains("self.palw_h1_gated_object_at("), "admission takes the gate's object");
+    assert!(admission.contains("self.palw_h1_gate_point_v1("), "admission judges at the gate's point");
+    assert!(admission.contains("self.palw_h1_carrier_refusal_typed_on("), "admission asks the gate's layers");
     // V01 (the 2026-09-25 sweep): and every node's mempool sweep at each new block — the gate's own
     // two steps (its object, then its layers on a tip), on the one snapshot the sweep checked
-    // against the virtual (the V01 review, MEDIUM).
+    // against the virtual (the V01 review, MEDIUM); through the verdict memory (liveness hotfix).
     for asker in ["palw_mempool_h1_carrier_refusal", "palw_h1_carrier_refusals_v1_impl"] {
         let body = body_of(asker);
         assert!(body.contains("self.palw_h1_gated_object_at("), "{asker} takes the gate's object");
-        assert!(body.contains("self.palw_mempool_h1_carrier_refusal_with("), "{asker} asks the gate's layers");
+        assert!(body.contains("self.palw_h1_gate_memoised_v1("), "{asker} asks the gate's layers through the verdict memory");
     }
-    assert!(body_of("palw_mempool_h1_carrier_refusal_with").contains("self.palw_h1_carrier_refusal_on("));
-    let on = body_of("palw_h1_carrier_refusal_on");
+    let memoised = body_of("palw_h1_gate_memoised_v1");
+    assert!(memoised.contains("self.palw_h1_gate_point_v1(") && memoised.contains("self.palw_h1_carrier_refusal_typed_on("));
+    let with = body_of("palw_mempool_h1_carrier_refusal_with");
+    assert!(with.contains("self.palw_h1_gate_point_v1(") && with.contains("self.palw_h1_carrier_refusal_on("));
+    assert!(body_of("palw_h1_carrier_refusal_on").contains("self.palw_h1_carrier_refusal_typed_on("));
+    let on = body_of("palw_h1_carrier_refusal_typed_on");
     assert!(on.contains("self.palw_v2_validate_objects("), "the acceptance layer");
     // The fold's arm returns its retained owner since RFC-0008's retained ownership (`_retained_v1`).
     assert!(on.contains("palw_v2_apply_one_object_retained_v1("), "and the fold's own arm");

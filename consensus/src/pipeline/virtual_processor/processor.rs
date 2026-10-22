@@ -601,6 +601,12 @@ pub struct VirtualStateProcessor {
     /// refusing a heavier, fully validated candidate on the PALW deep-reorg rule
     /// ([`Self::palw_partition_refusal_v1`]). Memory only; node-local; no verdict reads it.
     pub(super) palw_refusal_streak: parking_lot::Mutex<Option<kaspa_consensus_core::api::PalwPartitionRefusalV1>>,
+    /// **Liveness hotfix (L-LC-02 / L-COURT-01): the H-1 gate's guard** — verdict / refused-txid / invalid-object memories and the
+    /// rehearsal budget (`palw_h1_guard`). Memory only; node-local; no verdict of any block reads it.
+    pub(super) palw_h1_guard: parking_lot::Mutex<palw_h1_guard::PalwH1GateGuardV1>,
+    /// Every scheduled fence height (`Params::palw_fences_v1`): within one DAA of one the guard classifies no refusal as invalid at
+    /// every tip (a flag-day race).
+    pub(super) palw_h1_fence_heights_v1: Vec<u64>,
     /// Test-only: the clock the TEMPLATE BUILDER reads in place of the wall clock (milliseconds; 0 = the wall clock). On an EVM-active
     /// network the builder executes the lane against the stamp it chooses, so a harness cannot re-stamp afterwards; with this it can
     /// make the builder choose a simulated stamp, and `build == validate` holds with a simulated clock. Never set outside a test.
@@ -1204,6 +1210,7 @@ mod dns;
 mod evm;
 mod palw;
 mod palw_accept;
+pub(crate) mod palw_h1_guard;
 mod palw_validate;
 mod template;
 
@@ -1434,6 +1441,14 @@ impl VirtualStateProcessor {
             pruning_import_session_lock: Default::default(),
             palw_reader_snapshot: Default::default(),
             palw_refusal_streak: Default::default(),
+            palw_h1_guard: Default::default(),
+            palw_h1_fence_heights_v1: params
+                .palw_fences_v1()
+                .into_iter()
+                .filter_map(|(_, fence)| fence.filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()).map(|f| f.daa_score()))
+                // A genesis-armed fence has no other side to race across.
+                .filter(|at| *at > 0)
+                .collect(),
             #[cfg(test)]
             template_clock: Default::default(),
             #[cfg(test)]
@@ -5486,8 +5501,13 @@ impl VirtualStateProcessor {
         // **ADR-0152 H-1 (P2-9 review, finding 5):** an H-1 carrier the fold would refuse at the tip
         // is refused here, AFTER the UTXO context, so only a funded, signed carrier costs this node a
         // rehearsal — and the template asks again (`validate_block_template_transaction`).
-        if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(&mutable_tx.tx, virtual_daa_score) {
-            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
+        //
+        // **Liveness hotfix (L-LC-02 / L-COURT-01):** at admission the gate (`palw_mempool_h1_carrier_refusal`'s layers) runs behind the
+        // guard — a refused txid or object is not rehearsed again on the same tip, an every-tip-invalid object not again within its
+        // window, and every rehearsal the memories do not answer takes from a work budget — and a refusal that holds at every tip is
+        // `PalwH1CarrierInvalid`, which the relay flow penalises (`palw_h1_guard`).
+        if let Some(refusal) = self.palw_mempool_h1_admission_refusal_v1(&mutable_tx.tx, virtual_daa_score) {
+            return Err(refusal);
         }
         // **G14 GAP 10:** a kernel route carrier the acceptance gate refuses is refused here too (and at the template).
         if let Some(refusal) = self.palw_mempool_kernel_route_refusal(&mutable_tx.tx, virtual_daa_score) {

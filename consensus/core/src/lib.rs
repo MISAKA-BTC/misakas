@@ -399,6 +399,7 @@ pub mod palw_gen_worker_v1;
 pub mod palw_genesis_v2;
 /// ADR-0152 v3.1 H-1 — the lifecycle objects a heartbeat must be able to carry: the one list the
 /// miner's carrier lane and the relay's exemption read (P2-9). Node policy; no rule reads it.
+pub mod palw_h1_precheck_v1;
 pub mod palw_heartbeat_carriers_v1;
 pub mod palw_heartbeat_v1;
 /// RFC-0003 §I.4.7, decision 22: the held leaf challenge — a named-leaf challenge with the declaration of its close, so a lie at a leaf whose close exceeds one carrier is convictable under the held regime; dormant behind `palw_held_close_chunks_v1`.

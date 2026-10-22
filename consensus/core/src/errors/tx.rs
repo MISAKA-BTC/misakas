@@ -289,6 +289,21 @@ pub enum TxRuleError {
     #[error("an H-1 lifecycle carrier the fold would refuse: {0}")]
     PalwH1CarrierRefused(String),
 
+    /// **Liveness hotfix (L-LC-02 / L-COURT-01): an H-1 carrier refused for a reason that holds at EVERY tip** — node-local admission
+    /// policy, never a block rule. The same refusal as [`Self::PalwH1CarrierRefused`], classified as the object's own fault: a split
+    /// close whose completing chunk assembles a close that does not adjudicate to its declaration, or a possession proof whose shape,
+    /// challenge opening or (immutable) root is wrong. No honest node ahead of or behind this one relays it, so the relay flow treats a
+    /// peer that sends one as misbehaving. Refusals that can move with the next block (a stale tip, a span one block ahead, a missing
+    /// row) stay [`Self::PalwH1CarrierRefused`] and are never penalised.
+    #[error("an H-1 lifecycle carrier that is invalid at every tip: {0}")]
+    PalwH1CarrierInvalid(String),
+
+    /// **Liveness hotfix (L-LC-02 / L-COURT-01): the node's H-1 rehearsal budget is spent** — node-local admission policy, never a
+    /// block rule, and never a peer fault (an honest carrier can meet a full budget during someone else's storm). The carrier is not
+    /// judged; it may be relayed again later.
+    #[error("the node's H-1 carrier rehearsal budget is spent for now: {0}")]
+    PalwH1CarrierThrottled(String),
+
     /// **G14 GAP 10 (lane K2S): a kernel route carrier the acceptance gate refuses at this node's tip** — the
     /// `palw_probabilistic_constraints_v1` fence, an Active signer, its ML-DSA-87 signature, the kernel's strict decode and the OPV
     /// fence of a non-legacy registration (a direct `KernelRouteV1`), or a seat receipt's signature (`KernelConstraintReceiptV1`).
