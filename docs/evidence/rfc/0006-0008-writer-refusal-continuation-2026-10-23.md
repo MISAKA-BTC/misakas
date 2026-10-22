@@ -244,3 +244,17 @@ The log is `/tmp/misaka-rfc06-gdn-history-final-regression.log`.
 DAA 0 as well. The normal node registration recheck is compiling with output
 at `/tmp/misaka-rfc06-gdn-native-registration-recheck.log`. It is not yet a
 pass; no public preset or activation setting was changed.
+
+The normal node registration recheck then passed (1 test, 47.05s runtime),
+including ordinary signed registration acceptance and backend resolution.
+The latest same-binary combined GDN/history run also passed all 31 tests
+(103.99s, zero failures, zero ignored):
+`/tmp/misaka-rfc06-gdn-history-recheck-after-policy.log`.
+This closes the three observed GDN regression failures and the additional
+first-route/genesis-policy failures tracked above for these fixtures.
+
+Still open: cross-tick continuation of the production GDN disclosure page,
+real multi-process/restart/prune/100k acceptance, model-wide cost boundaries,
+and the remaining approval/source/material/payment/campaign requirements.
+The 31-test result is not evidence that the full RFC-0006 or the 15-gate
+campaign is complete. Public activation remains unarmed.
