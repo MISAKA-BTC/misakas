@@ -458,6 +458,8 @@
 - [design/palw/tir/tensor-store-bench.md](../design/palw/tir/tensor-store-bench.md)
 - [design/palw/tir/tensor-store.md](../design/palw/tir/tensor-store.md)
 - [design/palw/tir/tir-frontend-pack-v1.md](../design/palw/tir/tir-frontend-pack-v1.md)
+- [design/palw/tooling/README.md](../design/palw/tooling/README.md)
+- [design/palw/tooling/palw-user-interactions.md](../design/palw/tooling/palw-user-interactions.md)
 - [design/palw/verification/README.md](../design/palw/verification/README.md)
 - [design/palw/verification/beacon-source-opt-in-reservation.md](../design/palw/verification/beacon-source-opt-in-reservation.md)
 - [design/palw/verification/court-model-scope-v1.md](../design/palw/verification/court-model-scope-v1.md)
@@ -778,6 +780,7 @@
 - [evidence/palw/g14-parallel-2026-10-22/r6-d3-d4.md](../evidence/palw/g14-parallel-2026-10-22/r6-d3-d4.md)
 - [evidence/palw/g14-parallel-2026-10-22/r6-p2-shared.md](../evidence/palw/g14-parallel-2026-10-22/r6-p2-shared.md)
 - [evidence/palw/g14-parallel-2026-10-22/r6-pause-deps.md](../evidence/palw/g14-parallel-2026-10-22/r6-pause-deps.md)
+- [evidence/palw/g14-parallel-2026-10-22/r7-fence-16000.md](../evidence/palw/g14-parallel-2026-10-22/r7-fence-16000.md)
 - [evidence/palw/g14-parallel-2026-10-22/rfc02-09.md](../evidence/palw/g14-parallel-2026-10-22/rfc02-09.md)
 - [evidence/palw/g14-parallel-2026-10-22/rfc08-hold.md](../evidence/palw/g14-parallel-2026-10-22/rfc08-hold.md)
 - [evidence/palw/g14-parallel-2026-10-22/rfc09-13-19.md](../evidence/palw/g14-parallel-2026-10-22/rfc09-13-19.md)
@@ -853,6 +856,10 @@
 - [governance/templates/adr-major-change.md](../governance/templates/adr-major-change.md)
 - [governance/templates/parameter-change.md](../governance/templates/parameter-change.md)
 - [governance/templates/rfc-major-change.md](../governance/templates/rfc-major-change.md)
+
+## guides
+
+- [guides/palw-cli.md](../guides/palw-cli.md)
 
 ## history
 
