@@ -1133,6 +1133,7 @@ pub mod palw_court_shared_tir_round_v1;
 pub mod palw_court_shared_tir_bottom_v1;
 pub mod palw_court_numerical_transport_v1;
 pub mod palw_court_shared_tir_frontier_v1;
+pub mod palw_court_shared_op_carriage_v1;
 pub mod palw_court_shared_tir_stream_v1;
 pub mod palw_court_shared_tir_stream_state_v1;
 pub mod palw_court_shared_tir_response_v1;

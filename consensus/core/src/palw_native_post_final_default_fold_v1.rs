@@ -1,0 +1,218 @@
+//! **G14 lane r5-f02-wire (2026-10-22): RFC-0026 F02 default during the RFC08 / ADR-0184 §1 post-Final liability hold** for the
+//! text29 and funded v11 families — written, not compiled. A child module of `palw_state_v2`.
+//!
+//! While a family's Final fee is HELD (aux 144, inside its liability horizon H), the producer stays liable. If its post-Final
+//! service duty was opportunity-SUPPLIED (RFC-0026 / ADR-0192 A: every reserved packet `OpportunityProvided` on the rooted book and a
+//! supplied unit inside the actor's eligible window) and the actor stayed SILENT past its response deadline, the claim defaults:
+//! the held fee is refunded to the requester ([`super::palw_native_liability_hold_fold_v1::refund_native_fee_v1`]) and the actor is
+//! slashed. If supply is MISSING it is a **no-slash hold**: nothing moves, the held fee (and with it the producer's budget
+//! reservation, the evidence retained to H and the quota subject) stays held; the recovery sweep
+//! ([`recover_native_post_final_defaults_v1`], every closing tick) re-evaluates once the canonical recovery sweep has moved the
+//! slot and supply is recorded, and resumes the default; if H passes first the existing release sweep releases the fee WITHOUT a
+//! slash (`release_held_native_fees_v1`, unchanged).
+//!
+//! Dormant three ways: `palw_native_liability_horizon_v1` (the hold), `court_service_f02_active_v1` (the conviction fence and a
+//! pinned service profile — typed-missing today) and the typed-missing slash amount [`PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1`]
+//! (a money amount = user decision). "Silent" is a family fact: [`native_post_final_duty_answered_v1`] answers it per family, and
+//! neither text29 nor funded v11 records post-Final DA answers yet (rfc08-hold open item 1), so both answer a typed refusal — the
+//! default is undecided, never inferred.
+use super::*;
+use crate::palw_court_duty_clock_v1::CourtDutyClockV1;
+use crate::palw_native_liability_hold_v1::{
+    PALW_NATIVE_FAMILY_FUNDED_V11, PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_HELD_FEE_PREFIX_V1, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1,
+    PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, PalwNativeHeldFeeRowV1, palw_native_held_fee_key_v1,
+};
+
+fn refused(why: impl ToString) -> PalwStateV2Error {
+    PalwStateV2Error::CarriageInconsistent(why.to_string())
+}
+
+/// **The slash charged to a silent, opportunity-supplied actor on a post-Final default.** Typed-missing: a money amount is a user
+/// decision (lane rule). While `None` a decided `PartyDefault` is refused whole (no refund without the slash, no half effect).
+pub const PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1: Option<u64> = None;
+/// At most this many post-Final defaults are applied by one closing tick (key order).
+pub const PALW_NATIVE_POST_FINAL_DEFAULTS_PER_BLOCK_V1: usize = 64;
+
+/// The outcome of one post-Final F02 evaluation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum NativePostFinalDefaultV1 {
+    /// Supplied and silent: the fee was refunded to the requester and the actor slashed by this amount (actually collected).
+    Defaulted { refunded: u64, slashed: u64 },
+    /// Supply missing (or the actor had no supplied unit in its window): nothing moved; held until recovery or H.
+    NoSlashHold(&'static str),
+}
+
+/// Families whose held Final may default here.
+fn family_supported_v1(family: u8) -> bool {
+    matches!(family, PALW_NATIVE_FAMILY_TEXT_V29 | PALW_NATIVE_FAMILY_FUNDED_V11)
+}
+
+/// **Was the post-Final duty behind `clock` answered?** A family fact. Neither family records post-Final DA answers (rfc08-hold open
+/// item 1: post-Final DA is not reopened), so both refuse — undecided, never a default by inference.
+pub(super) fn native_post_final_duty_answered_v1(
+    _b: &TransitionBuilder<'_>,
+    row: &PalwNativeHeldFeeRowV1,
+    _clock: &CourtDutyClockV1,
+) -> Result<bool, &'static str> {
+    match row.family {
+        PALW_NATIVE_FAMILY_TEXT_V29 => Err("text29 records no post-Final service answer; post-Final default undecided"),
+        PALW_NATIVE_FAMILY_FUNDED_V11 => Err("funded v11 records no post-Final service answer; post-Final default undecided"),
+        _ => Err("family has no post-Final service duty"),
+    }
+}
+
+/// **Decide (pure read) whether the held Final of `row` defaults at `now`.** `Err` = undecided (pending, unknown, not silent yet,
+/// answer unknown, premise off): nothing may move. `answered` is the family's silence fact (production:
+/// [`native_post_final_duty_answered_v1`]).
+pub(super) fn decide_native_post_final_default_v1(
+    b: &TransitionBuilder<'_>,
+    row: &PalwNativeHeldFeeRowV1,
+    now: u64,
+    answered: &dyn Fn(&TransitionBuilder<'_>, &PalwNativeHeldFeeRowV1, &CourtDutyClockV1) -> Result<bool, &'static str>,
+) -> Result<crate::palw_court_service_binding_v1::CourtServiceAttributionV1, &'static str> {
+    if !family_supported_v1(row.family) {
+        return Err("post-Final default is defined for text29 and funded v11 only");
+    }
+    if now > row.horizon_daa {
+        return Err("held fee is past its liability horizon; released without slash");
+    }
+    let claim = Hash64::from_bytes(row.claim);
+    let service = b.state.court_service_state_v1().ok_or("court service book is absent")?;
+    let clocks: Vec<&CourtDutyClockV1> =
+        b.state.court_duty_clocks_for_claim_v1(claim).into_iter().filter(|c| c.answerer == row.producer).collect();
+    if clocks.is_empty() {
+        return Err("the held claim's actor has no native post-Final duty clock");
+    }
+    for clock in &clocks {
+        if clock.response_deadline_daa >= now {
+            return Err("the actor's response window is still open");
+        }
+        if answered(b, row, clock)? {
+            return Err("the actor answered its duty; no default");
+        }
+    }
+    let unpaid: BTreeSet<PalwBondKeyV2> = std::iter::once(row.producer).collect();
+    crate::palw_court_service_binding_v1::attribute_service_default_v1(service, claim, &clocks, &unpaid, true)
+}
+
+/// **Apply a decided post-Final default of `(family, job)`** under an explicit slash amount (fixtures; a future pinned amount).
+/// Atomic: refund + slash or nothing. A `NoSlashHold` decision moves nothing and is reported, not refused, to the sweep; the object
+/// path ([`apply_native_post_final_default_v1`]) refuses it with its typed reason.
+pub(super) fn apply_native_post_final_default_with_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    family: u8,
+    job: &[u8; 64],
+    slash: u64,
+    answered: &dyn Fn(&TransitionBuilder<'_>, &PalwNativeHeldFeeRowV1, &CourtDutyClockV1) -> Result<bool, &'static str>,
+) -> Result<NativePostFinalDefaultV1, PalwStateV2Error> {
+    let now = ctx.daa_score;
+    // The pinned-profile half of F02 is the production entries' (`court_service_f02_active_v1`); fixtures pass their own profile.
+    if !b.params.native_liability_horizon_active_at(now) || !b.extras.tir_public_conviction_active {
+        return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+    }
+    let row = super::palw_native_liability_hold_fold_v1::native_accusable_after_final_v1(&b.state, family, job, now)
+        .ok_or_else(|| refused("no held native fee inside its liability horizon"))?;
+    match decide_native_post_final_default_v1(b, &row, now, answered).map_err(refused)? {
+        crate::palw_court_service_binding_v1::CourtServiceAttributionV1::NoSlashHold(why) => Ok(NativePostFinalDefaultV1::NoSlashHold(why)),
+        crate::palw_court_service_binding_v1::CourtServiceAttributionV1::PartyDefault => {
+            // The actor's exit must still be held by the very fee being refunded (its budget reservation): no fictitious collection.
+            if b.state.bond(&row.producer).is_none() {
+                return Err(PalwStateV2Error::MissingBond(row.producer));
+            }
+            let saved = b.try_checkpoint()?;
+            let result = (|| {
+                let refunded = super::palw_native_liability_hold_fold_v1::refund_native_fee_v1(b, family, job, now)?;
+                if refunded != row {
+                    return Err(refused("held native fee changed under its own default"));
+                }
+                let slashed = b.slash_bond(row.producer, u128::from(slash))?;
+                Ok(NativePostFinalDefaultV1::Defaulted { refunded: refunded.amount, slashed })
+            })();
+            if result.is_err() {
+                b.restore(saved);
+            }
+            result
+        }
+    }
+}
+
+/// **The wire entry (tag 178, `PalwSharedCourtOpV1::NativeHeldDefault`).** Production silence fact and the pinned slash amount
+/// (typed-missing → refused). A `NoSlashHold` is refused with its reason: the object changes nothing; recovery is the sweep's.
+pub(super) fn apply_native_post_final_default_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    family: u8,
+    job: &[u8; 64],
+) -> Result<(), PalwStateV2Error> {
+    if !b.params.native_liability_horizon_active_at(ctx.daa_score)
+        || !super::palw_court_service_lifecycle_fold_v1::court_service_f02_active_v1(b)
+    {
+        return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+    }
+    let slash = PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1
+        .ok_or_else(|| refused("post-Final default slash amount is not adopted (user decision); no default"))?;
+    match apply_native_post_final_default_with_v1(b, ctx, family, job, slash, &native_post_final_duty_answered_v1)? {
+        NativePostFinalDefaultV1::Defaulted { .. } => Ok(()),
+        NativePostFinalDefaultV1::NoSlashHold(why) => Err(refused(why)),
+    }
+}
+
+/// **The recovery sweep** (closing tick, before the release sweep). Held text29 / funded v11 fees inside H whose claim has a service
+/// binding are re-evaluated; a claim that was held for missing supply and whose slot the canonical recovery sweep has since supplied
+/// now decides `PartyDefault` and is defaulted here (at most [`PALW_NATIVE_POST_FINAL_DEFAULTS_PER_BLOCK_V1`] a block, key order).
+/// Undecided and no-slash rows are left untouched (they stay held; at H the release sweep pays them without a slash). A no-op
+/// unless the hold, F02 and the slash amount are all in force.
+pub(super) fn recover_native_post_final_defaults_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    if !super::palw_court_service_lifecycle_fold_v1::court_service_f02_active_v1(b) {
+        return Ok(());
+    }
+    let Some(slash) = PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1 else { return Ok(()) };
+    recover_native_post_final_defaults_with_v1(b, ctx, slash, &native_post_final_duty_answered_v1)
+}
+
+/// [`recover_native_post_final_defaults_v1`] under an explicit slash amount and silence fact (fixtures).
+pub(super) fn recover_native_post_final_defaults_with_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    slash: u64,
+    answered: &dyn Fn(&TransitionBuilder<'_>, &PalwNativeHeldFeeRowV1, &CourtDutyClockV1) -> Result<bool, &'static str>,
+) -> Result<(), PalwStateV2Error> {
+    let now = ctx.daa_score;
+    if !b.params.native_liability_horizon_active_at(now) || !b.extras.tir_public_conviction_active {
+        return Ok(());
+    }
+    let Some(service) = b.state.court_service_state_v1() else { return Ok(()) };
+    if service.claims.is_empty() {
+        return Ok(());
+    }
+    let Some(route) = b.state.kernel_route.as_ref() else { return Ok(()) };
+    let table = PALW_NATIVE_LIABILITY_HOLD_TABLE_V1;
+    let range = (table, vec![PALW_NATIVE_HELD_FEE_PREFIX_V1])..(table, vec![PALW_NATIVE_HELD_FEE_PREFIX_V1 + 1]);
+    let mut due: Vec<PalwNativeHeldFeeRowV1> = Vec::new();
+    for ((_, key), bytes) in route.aux.range(range) {
+        if due.len() >= PALW_NATIVE_POST_FINAL_DEFAULTS_PER_BLOCK_V1 {
+            break;
+        }
+        let Ok(row) = borsh::from_slice::<PalwNativeHeldFeeRowV1>(bytes) else { continue };
+        if row.version != PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1
+            || *key != palw_native_held_fee_key_v1(row.family, &row.job)
+            || !family_supported_v1(row.family)
+            || now > row.horizon_daa
+            || !service.claims.contains_key(&Hash64::from_bytes(row.claim))
+        {
+            continue;
+        }
+        if matches!(
+            decide_native_post_final_default_v1(b, &row, now, answered),
+            Ok(crate::palw_court_service_binding_v1::CourtServiceAttributionV1::PartyDefault)
+        ) {
+            due.push(row);
+        }
+    }
+    for row in due {
+        // Each default is atomic on its own; a refusal (e.g. a refund queue collision) leaves that row held and the block standing.
+        let _ = apply_native_post_final_default_with_v1(b, ctx, row.family, &row.job, slash, answered);
+    }
+    Ok(())
+}

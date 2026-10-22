@@ -204,6 +204,9 @@ mod palw_staged_court_fold_v1;
 mod palw_court_shared_tir_fold_v1;
 #[path = "palw_court_service_lifecycle_fold_v1.rs"]
 mod palw_court_service_lifecycle_fold_v1;
+// G14 lane r5-f02-wire: RFC-0026 F02 default during the RFC08 post-Final liability hold (text29 / funded v11), dormant.
+#[path = "palw_native_post_final_default_fold_v1.rs"]
+mod palw_native_post_final_default_fold_v1;
 // RFC-0032 A material intake fold (lane material-intake); no dispatcher calls it yet.
 #[path = "palw_court_shared_material_intake_fold_v1.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -7587,6 +7590,13 @@ pub enum PalwConsensusObjectV2 {
         root: crate::palw_court_model_scope_routes_v1::readiness_root::SeatReadinessRootV1,
         signature: Vec<u8>,
     } = 230,
+    /// **(tag 178): one RFC-0029 shared court operation** (`crate::palw_court_shared_op_carriage_v1`): a shared body, the complete
+    /// IDs, a bond-signed request intent (RFC-0031's native notice) or a complete numerical transport bundle. Owned by
+    /// `palw_tir_public_conviction_v1` (below it the live build's undecodable payload, A-2); the fold additionally requires
+    /// `palw_court_outsider_lane_v1` and dispatches through `apply_shared_court_op_v1`. G14 lane r5-f02-wire. **Tag 178.**
+    SharedCourtOpV1 {
+        op: Box<crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1>,
+    } = 178,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -11111,6 +11121,11 @@ pub struct PalwChainStateV2 {
     staged_tir_claims_by_producer: BTreeSet<(PalwBondKeyV2, Hash64)>,
     /// Source/public-job retention for preparation and owner acquisition allocations.
     staged_tir_by_claim: BTreeMap<Hash64, BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>>,
+    /// **G14 lane r5-f02-wire: per-claim court-service index** (RFC-0031 initial notice, RFC-0028 duty clocks) — a projection of the
+    /// rooted `staged_courts` rows (kind 0 = `CourtSharedQuery` at its `opened_daa`; kind 1 = `CourtDutyClock`), maintained by
+    /// `update_indices` on every write AND on delta apply/undo, and by `rebuild_indices` on load: so it is exactly as rooted and as
+    /// reorg-safe as the rows it projects, and replaces the O(all staged rows) scans.
+    staged_court_service_by_claim: BTreeMap<Hash64, BTreeSet<(u8, u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>>,
     staged_tir_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>,
     /// Claim-wide Ready duties; outside owner Opens never recreate these slots.
     staged_tir_preparers: BTreeSet<(PalwBondKeyV2, u64, Hash64, Hash64)>,
@@ -24914,6 +24929,7 @@ impl PalwStateCarriageV2 {
             staged_inventory_by_owner: BTreeSet::new(),
             staged_tir_by_owner: BTreeSet::new(),
             staged_tir_by_claim: BTreeMap::new(),
+            staged_court_service_by_claim: BTreeMap::new(),
             staged_tir_claims_by_producer: BTreeSet::new(),
             staged_tir_responders: BTreeSet::new(),
             staged_tir_preparers: BTreeSet::new(),

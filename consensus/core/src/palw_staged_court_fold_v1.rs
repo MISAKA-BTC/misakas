@@ -1223,6 +1223,14 @@ impl TransitionBuilder<'_> {
         q.member::<Widest, ()>(nodes)?;
         // `staged_tir_by_claim` may add an outer bucket for a new claim.
         q.member::<Hash64, BTreeSet<(u64, PalwStagedCourtKeyV1)>>(u64::from(new.is_some()))?;
+        // G14 lane r5-f02-wire: the per-claim court-service index adds at most one entry and one outer bucket, and only for the two
+        // row kinds it projects (every other write is quoted exactly as before).
+        if let Some(row) = new.as_ref()
+            && crate::palw_staged_court_state_v1::court_service_claim_index_entry_v1(*key, row).is_some()
+        {
+            q.member::<Hash64, BTreeSet<(u8, u64, PalwStagedCourtKeyV1)>>(1)?;
+            q.member::<(u8, u64, PalwStagedCourtKeyV1), ()>(1)?;
+        }
         self.admit_native_write_v1(q)
     }
     pub(super) fn stamp_staged_claim_v1(&mut self, claim: Hash64, contract: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
@@ -3536,6 +3544,7 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
     state.staged_tir_by_owner.clear();
     state.staged_tir_claims_by_producer.clear();
     state.staged_tir_by_claim.clear();
+    state.staged_court_service_by_claim.clear();
     state.staged_tir_responders.clear();
     state.staged_tir_preparers.clear();
     for (key, row) in &state.staged_courts {
@@ -3548,6 +3557,9 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
         }
         if let Some((claim, until)) = tir_source_index_metadata_v1(*key, row) {
             state.staged_tir_by_claim.entry(claim).or_default().insert((until, *key));
+        }
+        if let Some((claim, entry)) = crate::palw_staged_court_state_v1::court_service_claim_index_entry_v1(*key, row) {
+            state.staged_court_service_by_claim.entry(claim).or_default().insert(entry);
         }
         state.staged_tir_preparers.extend(tir_preparation_index_rows_v1(*key, row));
         state.staged_history_responders.extend(history_response_index_rows_v1(row));
@@ -3626,6 +3638,16 @@ pub(super) fn tir_response_index_rows_v1(
     }).map(|signer| (*signer, pending.respond_until_daa, claim, owner, allocation, pending.turn, pending.demand_id)).collect()
 }
 fn update_tir_indices_v1(state: &mut PalwChainStateV2, key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1, insert: bool) {
+    // G14 lane r5-f02-wire: the per-claim court-service index (initial notice, duty clocks). `update_indices` reaches this on every
+    // native write and on delta apply/undo, so the projection follows the rooted rows across reorgs.
+    if let Some((claim, entry)) = crate::palw_staged_court_state_v1::court_service_claim_index_entry_v1(key, row) {
+        if insert {
+            state.staged_court_service_by_claim.entry(claim).or_default().insert(entry);
+        } else if let Some(rows) = state.staged_court_service_by_claim.get_mut(&claim) {
+            rows.remove(&entry);
+            if rows.is_empty() { state.staged_court_service_by_claim.remove(&claim); }
+        }
+    }
     if let Some(entry) = tir_claim_producer_index_v1(key, row) {
         if insert { state.staged_tir_claims_by_producer.insert(entry); }
         else { state.staged_tir_claims_by_producer.remove(&entry); }

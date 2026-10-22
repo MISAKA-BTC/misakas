@@ -102,8 +102,31 @@ pub(super) fn observe_court_service_block_v1(b: &mut TransitionBuilder<'_>, ctx:
     Ok(())
 }
 
-/// One shared-court operation of the owner-independent lifecycle (RFC-0029). The carriage object that delivers these on the wire
-/// is NOT allocated in this lane (new object tag = central step); the dispatcher is the single entry it must call.
+/// **G14 lane r5-f02-wire: the wire entry (tag 178, `PalwConsensusObjectV2::SharedCourtOpV1`)** — maps the carried operation onto
+/// [`apply_shared_court_op_v1`] (borrowed; no copy of bodies or parts).
+pub(super) fn apply_shared_court_wire_op_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    op: &crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1,
+) -> Result<SharedCourtOpEffectV1, PalwStateV2Error> {
+    use crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1 as W;
+    op.validate_shape_v1().map_err(refused)?;
+    let op = match op {
+        W::Body { claim, ordinal, bytes } => SharedCourtOpV1::Body { claim: *claim, ordinal: *ordinal, bytes },
+        W::Ids { claim, rows_root, ids } => SharedCourtOpV1::Ids { claim: *claim, rows_root: *rows_root, ids },
+        W::Request { claim, intent } => SharedCourtOpV1::Request { claim: *claim, intent },
+        W::Numerical { manifest, parts } => SharedCourtOpV1::Numerical { manifest, parts },
+        // RFC-0026 F02 × RFC08 hold: its own gates (hold fence, F02, slash amount); not the shared TIR lifecycle's.
+        W::NativeHeldDefault { family, job } => {
+            super::palw_native_post_final_default_fold_v1::apply_native_post_final_default_v1(b, ctx, *family, job)?;
+            return Ok(SharedCourtOpEffectV1::NativeDefaulted);
+        }
+    };
+    apply_shared_court_op_v1(b, ctx, op)
+}
+
+/// One shared-court operation of the owner-independent lifecycle (RFC-0029). Carried on the wire by tag 178
+/// ([`apply_shared_court_wire_op_v1`]); this is the single entry every carriage reaches.
 pub(super) enum SharedCourtOpV1<'a> {
     Request { claim: Hash64, intent: &'a crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1 },
     Body { claim: Hash64, ordinal: u64, bytes: &'a [u8] },
@@ -121,6 +144,8 @@ pub(super) enum SharedCourtOpEffectV1 {
     Numerical(super::palw_court_shared_tir_fold_v1::NumericalTransportEffectV1),
     /// A newly stored bottom found a native fault and the conviction funnel applied it.
     Convicted,
+    /// A held text29 / funded v11 Final defaulted after Final (refund + slash).
+    NativeDefaulted,
 }
 
 /// **RFC-0029: the shared TIR fold's lifecycle dispatcher.** Dormant (`ObjectiveOffenceDormant`) unless the shared lifecycle is in
@@ -151,7 +176,14 @@ pub(super) fn apply_shared_court_op_v1(
                     }
                     _ => return Err(refused("shared bottom effect lost its stored row")),
                 };
-                apply_shared_bottom_conviction_v1(b, ctx, claim, filer)?;
+                // G14 lane r5-f02-wire (item 5): the court end archive this conviction may build records the ACTUAL bottom
+                // bundle as its native evidence (the accepting point + the tag-178 object carrying this exact manifest and these
+                // parts), never `Uncaptured`. Through `apply_object` it is already this object; a direct dispatcher call captures it
+                // here, and the builder's previous evidence is restored afterwards.
+                let previous = capture_shared_bottom_evidence_v1(b, ctx, manifest, parts)?;
+                let applied = apply_shared_bottom_conviction_v1(b, ctx, claim, filer);
+                b.court_end_evidence = previous;
+                applied?;
                 return Ok(SharedCourtOpEffectV1::Convicted);
             }
             Ok(SharedCourtOpEffectV1::Numerical(effect))
@@ -161,6 +193,34 @@ pub(super) fn apply_shared_court_op_v1(
         b.restore(saved);
     }
     result
+}
+
+/// **G14 lane r5-f02-wire (item 5): capture the shared bottom bundle as the court end evidence** — `Native { point, object }` with
+/// the tag-178 object carrying exactly this manifest and these parts (already so when it arrived through `apply_object`). Returns
+/// the builder's previous evidence, which the caller restores after the conviction.
+pub(super) fn capture_shared_bottom_evidence_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    manifest: &crate::palw_court_numerical_transport_v1::NumericalManifestV1,
+    parts: &[crate::palw_court_numerical_transport_v1::NumericalPartV1],
+) -> Result<
+    Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::CourtEndEvidenceV1>>,
+    PalwStateV2Error,
+> {
+    let carried = PalwConsensusObjectV2::SharedCourtOpV1 {
+        op: Box::new(crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1::Numerical {
+            manifest: manifest.clone(),
+            parts: parts.to_vec(),
+        }),
+    };
+    let previous = b.court_end_evidence.clone();
+    let captured = matches!(previous.as_deref(),
+        Some(crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native { point, object })
+            if point == ctx && object.as_ref() == &carried);
+    if !captured {
+        b.prepare_native_court_end_cause_v1(ctx, &carried)?;
+    }
+    Ok(previous)
 }
 
 /// **RFC-0029: a shared bottom's native fault → claim void / slash / reward refusal**, through the SAME funnel a public TIR

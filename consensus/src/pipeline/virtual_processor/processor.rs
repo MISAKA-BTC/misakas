@@ -7357,6 +7357,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ActivationPoolFunded { .. } => "ActivationPoolFunded",
         // G14 — the original paid TIR control (tag 170) and its atomic Valid grant / Ready (tag 171).
         O::TirPublicControlV1 { .. } => "TirPublicControlV1",
+        O::SharedCourtOpV1 { .. } => "SharedCourtOpV1",
         O::TirPublicGrantReadyV1 { .. } => "TirPublicGrantReadyV1",
     }
 }

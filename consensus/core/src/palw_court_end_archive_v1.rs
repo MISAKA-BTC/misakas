@@ -70,6 +70,12 @@ impl PendingCourtArchiveV1 {
             CourtEndEvidenceV1::Uncaptured=>CourtEndDispositionV1::Uncaptured,
             CourtEndEvidenceV1::Native {object,..}=>match object.as_ref(){
                 PalwConsensusObjectV2::CourtClosed {session_id,verdict,..} if *session_id==self.session_id=>CourtEndDispositionV1::NativeCourtVerdict(*verdict),
+                // G14 lane r5-f02-wire: a shared numerical BOTTOM bundle on this claim is the conviction's own evidence (RFC-0029).
+                PalwConsensusObjectV2::SharedCourtOpV1 {op} if matches!(op.as_ref(),
+                    crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1::Numerical {manifest,..}
+                        if manifest.claim==self.session.claim
+                            && manifest.kind==crate::palw_court_numerical_transport_v1::NumericalKindV1::Bottom)
+                    =>CourtEndDispositionV1::TirClaimFault,
                 _=>CourtEndDispositionV1::RelatedNativeTransition,
             },
             CourtEndEvidenceV1::TirConviction {claim,..} if *claim==self.session.claim=>CourtEndDispositionV1::TirClaimFault,

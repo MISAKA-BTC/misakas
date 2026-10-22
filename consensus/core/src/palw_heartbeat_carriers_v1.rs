@@ -135,6 +135,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::PublicCourtStreamOpenedNativeV1 { .. }
         | O::TirPublicControlV1 { .. }
         | O::TirPublicGrantReadyV1 { .. }
+        | O::SharedCourtOpV1 { .. }
         | O::TirClassLayoutPublishedV1 { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
