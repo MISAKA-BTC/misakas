@@ -26,7 +26,7 @@ pub const PALW_RECEIPT_PAUSE_ROW_VERSION_V2: u8 = 1;
 
 /// One claim's pause account, as stored. `open != 0` ⇔ a suspension is open since `open_since_daa`; `paused_total_daa` is the sum
 /// of the suspensions already closed by dismissal. Fixed-width fields (no `Option`) so the native wire codec is a plain struct.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwReceiptPauseRowV2 {
     pub version: u8,
     pub claim: [u8; 64],
@@ -37,7 +37,7 @@ pub struct PalwReceiptPauseRowV2 {
 
 impl PalwReceiptPauseRowV2 {
     pub fn new(claim: &Hash64) -> Self {
-        Self { version: PALW_RECEIPT_PAUSE_ROW_VERSION_V2, claim: claim.as_bytes(), ..Default::default() }
+        Self { version: PALW_RECEIPT_PAUSE_ROW_VERSION_V2, claim: claim.as_bytes(), open: 0, open_since_daa: 0, paused_total_daa: 0 }
     }
 
     /// The in-memory account.

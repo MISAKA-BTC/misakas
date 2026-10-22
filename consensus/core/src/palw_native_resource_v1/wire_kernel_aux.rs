@@ -467,7 +467,7 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 143 if key_bytes==65 && prefix==crate::palw_g14_lane_closure_v1::PALW_SERVED_MATERIAL_PREFIX_V1=>crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1::scan_native_wire_v1(frame)?,
 143=>return Err(wire::wire_bad("unallocated G14 lane-closure row namespace")),
 144 if key_bytes==66 && prefix==crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_PREFIX_V1=>crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1::scan_native_wire_v1(frame)?,
-144 if key_bytes==66 && prefix==crate::palw_state_v2::palw_native_post_final_duty_v1::PALW_NATIVE_POST_FINAL_DUTY_PREFIX_V1=>crate::palw_state_v2::palw_native_post_final_duty_v1::PalwNativePostFinalDutyRowV1::scan_native_wire_v1(frame)?,
+144 if key_bytes==66 && prefix==crate::palw_state_v2::palw_native_post_final_duty_v1::PALW_NATIVE_POST_FINAL_DUTY_PREFIX_V1=>crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalDutyRowV1::scan_native_wire_v1(frame)?,
 144=>return Err(wire::wire_bad("unallocated native liability hold row namespace")),
 145 if key_bytes==65 && prefix==crate::palw_receipt_pause_v2::PALW_RECEIPT_PAUSE_PREFIX_V2=>crate::palw_receipt_pause_v2::PalwReceiptPauseRowV2::scan_native_wire_v1(frame)?,
 145=>return Err(wire::wire_bad("unallocated receipt pause row namespace")),

@@ -50,28 +50,7 @@ pub const PALW_NATIVE_POST_FINAL_ANSWER_MAX_BYTES_V1: usize = 64 * 1024;
 /// At most this many duty records are observed / recovered by one block (key order).
 pub const PALW_NATIVE_POST_FINAL_DUTIES_PER_BLOCK_V1: usize = 64;
 
-/// One actor's duty in a post-Final accusation.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct NativePostFinalDutyV1 {
-    pub clock: CourtDutyClockV1,
-    /// The first DAA inside the clock's eligible window at which the court service capacity left room for one packet.
-    pub supplied_daa: Option<u64>,
-    /// The DAA and digest of the actor's answer, if it answered in time.
-    pub answered: Option<(u64, [u8; 64])>,
-}
-
-/// A job's post-Final accusation and its duties (aux 144, `0x02 ‖ family ‖ job`).
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PalwNativePostFinalDutyRowV1 {
-    pub version: u8,
-    pub family: u8,
-    pub job: [u8; 64],
-    pub claim: [u8; 64],
-    pub accusation: [u8; 64],
-    pub accuser: PalwBondKeyV2,
-    pub accused_daa: u64,
-    pub duties: Vec<NativePostFinalDutyV1>,
-}
+pub use crate::palw_native_post_final_duty_row_v1::{NativePostFinalDutyV1, PalwNativePostFinalDutyRowV1};
 
 pub fn palw_native_post_final_duty_key_v1(family: u8, job: &[u8; 64]) -> Vec<u8> {
     let mut key = Vec::with_capacity(66);
