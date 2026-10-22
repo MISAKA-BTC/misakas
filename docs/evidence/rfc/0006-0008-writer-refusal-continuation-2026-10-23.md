@@ -32,10 +32,13 @@ explicitly relabels its record for part of the evidence-reader exercise; it
 does not establish an actual registered-model useful-work campaign. It is
 also not a regression run of the new writer changes.
 
-The campaign driver control suite separately passed 14 tests. The new writers'
-library check was launched with output at
-`/tmp/misaka-rfc06-12-writer-check.log`; its result must be inspected before
-claiming compilation success. `git diff --check` succeeds.
+The campaign driver control suite separately passed 14 tests. After both writer
+commits, `cargo check -p kaspa-consensus-core --lib` exited 0 (3m 40s, 385
+warnings). Its output is at `/tmp/misaka-rfc06-12-writer-check.log`. No unused
+`Result` warning remained in that check. This is compilation evidence, not a
+runtime capacity-refusal test. `git diff --check` and the documentation
+no-new-regressions check succeed; the documentation baseline still has 43
+known issues.
 
 Still required: targeted capacity-refusal controls at the outer consumers,
 restart/reorg/prune and physical resource acceptance, the full model/source/
