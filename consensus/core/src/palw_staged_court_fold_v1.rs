@@ -1023,7 +1023,8 @@ impl TransitionBuilder<'_> {
                     .map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
         }
-        if let PalwStagedCourtKeyV1::CourtCloseReceipt(..) = key {
+        let archive_pruned=self.archive_prune_removes_v1(&key,new.as_ref());
+        if let PalwStagedCourtKeyV1::CourtCloseReceipt(..) = key && !archive_pruned {
             if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
                 return Err(PalwStateV2Error::CarriageInconsistent("signed close receipt is immutable".into()));
             }
@@ -1041,7 +1042,7 @@ impl TransitionBuilder<'_> {
             }
             r.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
-        if let PalwStagedCourtKeyV1::CourtEndArchive(_) = key {
+        if let PalwStagedCourtKeyV1::CourtEndArchive(_) = key && !archive_pruned {
             let Some(PalwStagedCourtRowV1::CourtEndArchive(a)) = &new else {
                 return Err(PalwStateV2Error::CarriageInconsistent("court archive cannot be removed or retyped".into()));
             };
@@ -1164,7 +1165,7 @@ impl TransitionBuilder<'_> {
                     .map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
         }
-        if new.is_none() && self.state.court_service_holds_material_v1(&key) {
+        if new.is_none() && !archive_pruned && self.state.court_service_holds_material_v1(&key) {
             return Err(PalwStateV2Error::CarriageInconsistent("unresolved court service retains original evidence".into()));
         }
         self.reserve_map_row_v1(&key, &new, |s| &s.staged_courts, false, "native staged_courts writer")?;

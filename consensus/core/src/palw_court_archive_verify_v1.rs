@@ -152,10 +152,62 @@ impl TransitionBuilder<'_> {
         if result.is_err(){self.restore(saved);}result
     }
 
+    /// True only for a removal of one of the pruned session's own archive
+    /// rows (archive, its two signed receipts, its two provenance records)
+    /// while [`Self::prune_resolved_court_archive_v1`] is running.
+    pub(super) fn archive_prune_removes_v1(&self,key:&Key,new:Option<&Row>)->bool{
+        let Some(id)=self.court_archive_prune else {return false};
+        new.is_none() && match key {
+            Key::CourtEndArchive(k) | Key::CourtCloseReceipt(k,_) | Key::CourtArchiveProgress(k,_) => *k==id,
+            _ => false,
+        }
+    }
+
+    /// RFC-0030 / RFC-0034 S1 / ADR-0201: once every pending liability of an
+    /// archived court is resolved (applied native debit, fulfilled native
+    /// close, or rooted on-time positive fulfillment) and no nominal hold
+    /// remains for either actor, the archive and its per-side receipt and
+    /// provenance rows may be removed. Nothing here moves money: deposits are
+    /// nominal and were never escrow. Gated by the archive's own existence
+    /// condition (the court service book that created it). The removal is
+    /// journaled, so undoing the block restores every row exactly.
+    #[allow(dead_code)]
+    pub(super) fn prune_resolved_court_archive_v1(&mut self,id:Hash64)->Result<(),PalwStateV2Error>{
+        if self.state.court_service_state_v1().is_none(){return Err(refusal("archive pruning requires the court service book"));}
+        let archive=self.state.court_end_archive_v1(id).ok_or_else(||refusal("court archive missing"))?;
+        archive.check_context(&self.state).map_err(refusal)?;
+        for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {
+            if let Some(p)=self.state.court_archive_progress_v1(id,side) {p.check(&Key::CourtArchiveProgress(id,side)).map_err(refusal)?;}
+        }
+        if !self.state.court_archive_fully_resolved_v1(id){
+            return Err(refusal("archived court still carries an unresolved liability or nominal hold"));
+        }
+        if self.court_archive_prune.is_some(){return Err(refusal("archive pruning is not re-entrant"));}
+        let saved=self.try_checkpoint()?;
+        self.court_archive_prune=Some(id);
+        let result=(||{
+            for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {
+                if self.state.staged_court_row_v1(&Key::CourtArchiveProgress(id,side)).is_some(){
+                    self.write_staged_row_v1(Key::CourtArchiveProgress(id,side),None)?;
+                }
+            }
+            for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {
+                if self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)).is_some(){
+                    self.write_staged_row_v1(Key::CourtCloseReceipt(id,side),None)?;
+                }
+            }
+            self.write_staged_row_v1(Key::CourtEndArchive(id),None)
+        })();
+        self.court_archive_prune=None;
+        if result.is_err(){self.restore(saved);}
+        result
+    }
+
     /// All forward writes require the actual removal/native event and retained
     /// v5 inputs; a deserialized progress record is not a mutation capability.
     pub(super) fn check_archive_progress_write_v1(&mut self,key:&Key,new:Option<&Row>)->Result<(),PalwStateV2Error>{
         use crate::palw_court_end_archive_v1::CourtEndEvidenceV1;
+        if self.archive_prune_removes_v1(key,new){return Ok(());}
         let is_key=matches!(key,Key::CourtArchiveProgress(..));
         if !is_key&&!matches!(new,Some(Row::CourtArchiveProgress(_))){return Ok(());}
         let Some(Row::CourtArchiveProgress(next))=new else{return Err(refusal("archive provenance cannot be removed or retyped"));};
