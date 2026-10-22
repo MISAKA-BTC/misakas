@@ -157,6 +157,9 @@ async fn registered_gdn_class_passes_normal_registration_and_host_resolution() {
     let mut params = config.params.clone();
     params.palw_token_lift = Some(ForkActivation::new(0));
     params.palw_gdn_key_heads = Some(ForkActivation::new(0));
+    // The registration graph is retained in native routing aux rows. This
+    // fixture starts that route at genesis, so its policy must be in force too.
+    params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
     params.palw_memory_routing_court_v2 = Some(ForkActivation::new(0));
     params.sync_palw_memory_routing_court_v2();
     let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!() };
