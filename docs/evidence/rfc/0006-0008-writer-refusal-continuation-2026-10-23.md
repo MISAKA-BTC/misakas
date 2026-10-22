@@ -258,3 +258,33 @@ real multi-process/restart/prune/100k acceptance, model-wide cost boundaries,
 and the remaining approval/source/material/payment/campaign requirements.
 The 31-test result is not evidence that the full RFC-0006 or the 15-gate
 campaign is complete. Public activation remains unarmed.
+
+## Production GDN history continuation (`5e5258f11`)
+
+The service now resumes a frozen native anchor/cohort across 4096-block pages
+instead of discarding continuation. New arrivals wait for the next scan.
+Only the current candidate's required authenticated answers are retained in existing cases;
+complete page bodies are not accumulated across ticks. Read failures retain the
+cursor. A replaced anchor clears the old cases/settled cache and starts again;
+branch replacement during a page refuses that page.
+
+Partial scans collect answers without issuing moves or concluding timeout.
+Completion carries the frozen anchor's DAA, not the current tip's later clock.
+A new demand records the current submission clock, so an older backfill cannot
+shorten its window. A claim missing material/kernels or absent from the live
+host during a page is held out of that cohort's completion; a new full scan
+may retry it. The existing native court remains the authority for default.
+
+The targeted history/service controls passed 4 tests, covering frozen-cohort
+progress under new arrivals, unavailable suffix retry, pre-/mid-page reorg,
+partial-history withholding, per-claim incomplete coverage and demand clocks.
+Output: `/tmp/misaka-rfc06-paged-gdn-clock-recheck.log`. An earlier library
+check passed before the final test/coverage additions; the latest test build
+compiled those additions successfully.
+
+The full GDN/history regression passed all 33 tests (104.98s, zero failures,
+zero ignored), including both fold conviction/default cases and ordinary node
+registration. Output: `/tmp/misaka-rfc06-paged-gdn-full-regression.log`.
+These controls are not real
+multi-process restart/reorg/prune acceptance or physical cost measurements.
+Those and the other RFC requirements remain open; no campaign gate is promoted.
