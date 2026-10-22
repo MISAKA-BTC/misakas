@@ -505,6 +505,13 @@ impl TirBackendV1 {
         &self.canonical
     }
 
+    /// [`Self::runner`] after the artifact's weights are checked unmodified since load (audit C-07): every computation a claim,
+    /// a seat verdict or a court answer rests on goes through here, so an in-place rewrite is refused rather than computed on.
+    pub fn checked_runner(&self) -> Result<TirClassRunnerV1<'_>, String> {
+        self.artifact.check_weights_unmodified()?;
+        Ok(self.runner())
+    }
+
     pub fn runner(&self) -> TirClassRunnerV1<'_> {
         TirClassRunnerV1::new(&self.space, self.artifact.plan(), self.artifact.params(), self.class_id)
             .expect("the space and the plan are of one program")
@@ -520,7 +527,7 @@ impl TirBackendV1 {
         if !prompt_token_ids_match_v1(self.prompt_ids_form, prompt, &job.prompt_token_ids_hash) {
             return Err("the prompt does not commit to the job's prompt hash".into());
         }
-        self.runner().retain(&self.class, self.artifact_root, job, prompt, self.ladder)
+        self.checked_runner()?.retain(&self.class, self.artifact_root, job, prompt, self.ladder)
     }
 
     /// [`Self::retain`], through the process-wide memo ([`TIR_RETAINED_MEMO`]): evidence
@@ -590,7 +597,7 @@ impl TirBackendV1 {
         // The drill's consistent boundary lie replaces the single-leaf fault: the lie is committed AND computed on.
         let boundary = fault.and_then(|_| tir_drill_boundary_lie_v1());
         let fault = if boundary.is_some() { None } else { fault };
-        let runner = self.runner().with_boundary_lie(boundary);
+        let runner = self.checked_runner()?.with_boundary_lie(boundary);
         let runner = match selector {
             Some(selector) => runner.with_selector(selector),
             None => runner,
@@ -881,7 +888,7 @@ impl TirBackendV1 {
         // continue to own the old reservation; failed admission publishes nothing.
         *memo = None;
         let lease = super::memory::reserve_v1(&reserver, "tir-fold-hashes", self.class_id, ctx, need)?;
-        let run = self.runner().run(ctx, &capture.prompt, self.ladder, false, &mut |_| {})?;
+        let run = self.checked_runner()?.run(ctx, &capture.prompt, self.ladder, false, &mut |_| {})?;
         let hashes = Arc::new(super::memory::TirFoldHashesLeaseV1 {
             hashes: run.leaf_hashes,
             admission_id,
@@ -917,7 +924,7 @@ impl TirBackendV1 {
         f: impl FnOnce(&TirEvidenceV1<'_>, &PalwTirStepBindingV1) -> Result<R, String>,
     ) -> Result<R, String> {
         let capture = self.decode_capture(material)?;
-        let runner = self.runner();
+        let runner = self.checked_runner()?;
         if capture.is_dense() {
             let store = TirEvidenceV1::dense(
                 &runner,
@@ -1053,7 +1060,7 @@ impl TirBackendV1 {
         own: &TirRetainedJobV1,
         f: impl FnOnce(&TirEvidenceV1<'_>) -> Result<R, String>,
     ) -> Result<R, String> {
-        let runner = self.runner();
+        let runner = self.checked_runner()?;
         let pins: Vec<PalwTiledDecodePinV1> = match &annex.trace {
             PalwTirAnnexTraceV1::Tiled { pin: Some(pin), .. } => vec![pin.clone()],
             _ => Vec::new(),
@@ -1157,7 +1164,7 @@ impl TirBackendV1 {
     ) -> Result<PalwTirConeRefutationV1, String> {
         let own_capture = self.decode_capture(own_material)?;
         let own = self.retain_memo(&own_capture.binding.job_context, &own_capture.prompt)?;
-        let runner = self.runner();
+        let runner = self.checked_runner()?;
         let finalize = &root.finalize;
         let trace = match &finalize.decode_tokens {
             Some(PalwDecodeTokenPinV1::TiledV1(pin)) => {
@@ -1259,7 +1266,7 @@ impl TirBackendV1 {
         rules: &PalwTirCourtRulesV1,
     ) -> Result<PalwTirConeRefutationV1, String> {
         let own = self.retain_memo(&accused.job_context, prompt)?;
-        let runner = self.runner();
+        let runner = self.checked_runner()?;
         let store = TirEvidenceV1::challenger(
             &runner,
             accused,
@@ -1278,7 +1285,7 @@ impl TirBackendV1 {
     /// The logits-consistency accusation over logits leaf `index` of a capture.
     pub fn logits_consistency(&self, material: &[u8], index: u64) -> Result<PalwTirLogitsConsistencyV1, String> {
         let capture = self.decode_capture(material)?;
-        let runner = self.runner();
+        let runner = self.checked_runner()?;
         if !capture.is_dense() {
             return Err("a fold carries no step tile to accuse".into());
         }
@@ -1415,7 +1422,7 @@ impl TirBackendV1 {
         let leaf = self
             .logits_leaf_holding(&accused.job_context, row, lane)
             .ok_or_else(|| format!("no logits step tile of row {row} holds lane {lane}"))?;
-        let runner = self.runner();
+        let runner = self.checked_runner()?;
         let store = TirEvidenceV1::own(&runner, own, self.artifact.as_ref(), self.prompt_ids_form, self.ladder)?;
         let accusation = PalwTirLogitsConsistencyV1 {
             binding: accused.clone(),
@@ -1704,7 +1711,7 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         if !prompt_token_ids_match_v1(self.prompt_ids_form, &ids, &job.prompt_token_ids_hash) {
             return Err("the prompt does not commit to the job's prompt hash".into());
         }
-        let run = self.runner().run(job, &ids, self.ladder, false, &mut |_| {})?;
+        let run = self.checked_runner()?.run(job, &ids, self.ladder, false, &mut |_| {})?;
         Ok(kaspa_consensus_core::palw_backend::PalwReplayRootsV1 {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
@@ -1896,7 +1903,7 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         self.check_tir_own_original_v1(header, job, prompt_token_ids)?;
         let ctx = &header.job_context;
         let select = self.tir_original_selector_v1(job)?;
-        let run = self.runner().with_selector(select).run(ctx, prompt_token_ids, self.ladder, false, &mut |_| {})?;
+        let run = self.checked_runner()?.with_selector(select).run(ctx, prompt_token_ids, self.ladder, false, &mut |_| {})?;
         if run.generated.len() as u64 != u64::from(ctx.exact_decode_tokens) {
             return Err("the TIR replay selected another number of ids than the header's exact decode count".into());
         }
@@ -1942,7 +1949,7 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         cache_directory: &std::path::Path,
     ) -> Result<Arc<dyn kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceV1>, String> {
         let need = self.tir_own_step_source_need_v1(header, job, prompt_token_ids)?;
-        let runner = self.runner().with_selector(self.tir_original_selector_v1(job)?);
+        let runner = self.checked_runner()?.with_selector(self.tir_original_selector_v1(job)?);
         super::own_source::OwnStepSource::build(cache_directory, header, &runner, need.leaf_count, self.ladder, prompt_token_ids)
             .map(|source| Arc::new(source) as Arc<dyn kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceV1>)
     }
@@ -2025,7 +2032,7 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
             Some(pin) => TirTraceV1::Summary { rows_root: pin.rows_root, generated: &pin.generated_token_ids, pins: &[] },
             None => TirTraceV1::Absent,
         };
-        let runner = self.runner();
+        let runner = self.checked_runner()?;
         let store = TirEvidenceV1::public_runs_v1(
             &runner,
             &binding,
