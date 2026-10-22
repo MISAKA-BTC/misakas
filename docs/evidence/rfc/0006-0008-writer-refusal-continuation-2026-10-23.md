@@ -206,3 +206,14 @@ This latest test is queued at `/tmp/misaka-rfc06-first-route-profile-recheck.log
 The earlier snapshot run at `/tmp/misaka-rfc06-profile-snapshot-recheck.log`
 was already live and is allowed to finish; its result must not be attributed
 to the first-use fix. Neither GDN E2E case has passed yet.
+
+The earlier snapshot run subsequently passed (1 test, zero failures) after a
+7m17s library-test build. It verifies retained-profile native carriage restore
+for an already initialized route, in addition to delta apply/revert and the
+unchanged price/deadline/certification indexes. It does not verify first-use
+route initialization.
+
+The revised first-use regression is now compiling under the original handle.
+The GDN E2E recheck of `2ffe0ef32` is queued separately at
+`/tmp/misaka-rfc06-gdn-first-route-recheck.log`; neither of these later runs
+has produced an outcome yet. Earlier failing GDN logs are preserved.
