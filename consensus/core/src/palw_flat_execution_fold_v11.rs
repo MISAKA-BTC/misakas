@@ -942,9 +942,58 @@ fn credit(
         established_daa: ctx.daa_score,
     };
     let original = Hash64::from_bytes(row.header.job_id);
+    // RFC08 08-B (ADR-0184 §1, dormant `palw_native_liability_horizon_v1`): the producer's Final fee of a claim committed past the
+    // fence is held to its liability horizon (signed deadline + window_court) instead of queued; the reservation stays open with it.
+    let held = s.terminal == ExecutionTerminalV11::Final
+        && s.producer_credit > 0
+        && book.claim().is_some_and(|c| {
+            super::palw_native_liability_hold_fold_v1::native_fee_needs_hold_v1(
+                builder.params,
+                c.committed_daa,
+                ctx.daa_score,
+                book.job().deadline_daa,
+            )
+        });
     builder.cancel_native_recipient_v1(original, row.header.producer, 19)?;
-    builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::funded_execution_budget_id_v13(&row.header.job_id), ctx.daa_score)?;
-    if s.producer_credit > 0 {
+    if !held {
+        builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::funded_execution_budget_id_v13(&row.header.job_id), ctx.daa_score)?;
+    }
+    if held {
+        // A held fee is paid later through its own per-job queue only (never the pooled producer payout).
+        let r = builder.state.kernel_route.as_ref().unwrap();
+        if !r.aux.contains_key(&(EXECUTION_POLICY_TABLE_V11, key(&(27u8, row.header.job_id)))) {
+            return Err(refused("native held Final has no INITIAL Final27 right"));
+        }
+        let queue = crate::palw_native_audit_v27::native_final_credit_queue_v27(
+            row.header.job_id,
+            row.header.funded_job_root,
+            s.root(),
+            row.header.producer_payout,
+        );
+        if builder.state.pending_payouts.contains_key(&queue) {
+            return Err(PalwStateV2Error::BondBudgetRefused("native original unique Final27 queue already exists".into()));
+        }
+        let horizon = super::palw_native_liability_hold_fold_v1::native_horizon_v1(builder.params, book.job().deadline_daa);
+        super::palw_native_liability_hold_fold_v1::hold_native_fee_v1(
+            builder,
+            &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1 {
+                version: crate::palw_native_liability_hold_v1::PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1,
+                family: crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_FUNDED_V11,
+                job: row.header.job_id,
+                claim: s.claim_id.unwrap_or([0; 64]),
+                producer: row.header.producer,
+                queue: queue.as_bytes(),
+                payload: row.header.producer_payout.as_bytes(),
+                amount: s.producer_credit,
+                income_root: row.header.job_id,
+                income_kind: 11,
+                budget: super::palw_bond_budget_fold_v1::funded_execution_budget_id_v13(&row.header.job_id).as_bytes(),
+                refund_payload: row.header.requester_payout.as_bytes(),
+                final_daa: ctx.daa_score,
+                horizon_daa: horizon,
+            },
+        )?;
+    } else if s.producer_credit > 0 {
         let unique27 = s.terminal == ExecutionTerminalV11::Final
             && builder
                 .state
@@ -1013,6 +1062,102 @@ fn credit(
     builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&row.header.job_id), Some(key(&credit)))?;
     Ok(())
 }
+/// **RFC08 08-B (ADR-0184 §1): the credit of a conviction of a held Final** (public filing within its liability horizon). The
+/// Final's fee was held (aux 144), never queued: it is refunded to the requester whole through the held row's refund queue, the
+/// producer's reserve was collected by the court as a pre-Final conviction collects it, the finder is paid as [`credit`] pays it,
+/// and the job's credit record is replaced by the conviction's. Refused without a held fee inside its horizon.
+pub(super) fn credit_after_final_v11(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    row: &mut NativeExecutionJobRowV11,
+    book: &ExecutionJobStateV11,
+    s: &ExecutionSettlementV11,
+) -> Result<(), PalwStateV2Error> {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    if !r.aux.contains_key(&(EXECUTION_CREDIT_TABLE_V11, key(&row.header.job_id)))
+        || row.header.terminal != ExecutionTerminalV11::Final
+        || matches!(s.terminal, ExecutionTerminalV11::Final | ExecutionTerminalV11::Funded | ExecutionTerminalV11::Challengeable)
+        || s.producer_credit != 0
+        || s.requester_refund != book.job().reward
+    {
+        return Err(refused("native post-Final conviction settlement differs"));
+    }
+    s.check().map_err(refused)?;
+    let held = super::palw_native_liability_hold_fold_v1::refund_native_fee_v1(
+        builder,
+        crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_FUNDED_V11,
+        &row.header.job_id,
+        ctx.daa_score,
+    )?;
+    if held.amount != s.requester_refund {
+        return Err(refused("native held fee differs from the original reward"));
+    }
+    let original = Hash64::from_bytes(row.header.job_id);
+    if s.finder_credit != 0 {
+        let finder = s.finder.ok_or_else(|| refused("native post-Final finder credit lacks original finder"))?;
+        let bond = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .unwrap()
+            .bond_key_of(&finder)
+            .ok_or_else(|| refused("native post-Final finder bond absent"))?;
+        let payout = builder.state.bonds.get(&bond).ok_or_else(|| refused("native post-Final finder absent"))?.payout_payload;
+        if builder.params.reporter_income_active_at(ctx.daa_score) {
+            let award = Hash64::from_bytes(object_id(
+                b"misaka-palw/native/post-final-funded-court-award/v11",
+                &(row.header.job_id, s.root(), finder),
+            ));
+            builder.stage_reporter_recipient_v1(award, bond, ctx.daa_score, s.finder_credit, original)?;
+        } else {
+            builder.add_kernel_payout(payout, s.finder_credit)?;
+        }
+    }
+    row.replace_book(book).map_err(refused)?;
+    let credit = NativeExecutionCreditV11 {
+        job_id: row.header.job_id,
+        original_funded_job_root: row.header.funded_job_root,
+        terminal_book_root: book.root(),
+        settlement_root: s.root(),
+        requester_refund: s.requester_refund,
+        producer_credit: 0,
+        collected_original_slash: s.collected_original_slash,
+        finder: s.finder,
+        finder_credit: s.finder_credit,
+        burned: s.burned,
+        established_daa: ctx.daa_score,
+    };
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&row.header.job_id), Some(key(row)))?;
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&row.header.job_id), Some(key(&credit)))?;
+    Ok(())
+}
+
+/// RFC08 08-B: a funded v11 held fee has no multi-step dispute (its post-Final accusation is one atomic public filing); only an
+/// unreadable or no-longer-Final job keeps it (fail closed).
+pub(super) fn funded_held_dispute_open_v11(
+    builder: &TransitionBuilder<'_>,
+    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
+) -> bool {
+    let Some(r) = builder.state.kernel_route.as_ref() else { return true };
+    r.execution_job_header_v11(&row.job).is_none_or(|h| h.terminal != ExecutionTerminalV11::Final || h.producer != row.producer)
+}
+
+/// RFC08 08-B (text29): see [`text29::held_dispute_open_v29`].
+pub(super) fn text29_held_dispute_open_v29(
+    builder: &TransitionBuilder<'_>,
+    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
+) -> bool {
+    text29::held_dispute_open_v29(builder, row)
+}
+
+/// RFC08 08-B (text29): see [`text29::held_fee_left_v29`].
+pub(super) fn text29_held_fee_left_v29(
+    builder: &mut TransitionBuilder<'_>,
+    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
+) -> Result<(), PalwStateV2Error> {
+    text29::held_fee_left_v29(builder, row)
+}
+
 fn close_adjudicated_quota(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,

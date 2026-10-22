@@ -228,3 +228,97 @@ fn release_and_refund_remove_only_the_settled_producer_index_entry() {
             "actual release/refund closes retained capacity without refunding attempts or guarantees");
     }
 }
+
+// ---- G14 lane rfc08-hold: text29 and funded v11 held fees (same row, same sweep, family-dispatched side effects) ----
+
+fn family_row(family: u8, horizon: u64) -> PalwNativeHeldFeeRowV1 {
+    PalwNativeHeldFeeRowV1 { family, ..row(horizon) }
+}
+
+/// Honest text29 / funded v11 Finals: held at Final, paid exactly once just past H (never at or before H), to the producer's payee.
+#[test]
+fn rfc08_hold_text29_and_funded11_are_paid_exactly_past_the_horizon() {
+    for family in [PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_FAMILY_FUNDED_V11] {
+        let p = armed();
+        let extras = PalwTransitionExtrasV1::default();
+        let parent = with_route(PalwChainStateV2::genesis());
+        let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+        let r = family_row(family, 500);
+        hold_native_fee_v1(&mut b, &r).unwrap();
+        assert!(queued(&b.state, r.queue).is_none(), "the Final queued nothing");
+        for now in [201, 400, 500] {
+            release_held_native_fees_v1(&mut b, now, |_, _| false).unwrap();
+            assert!(held_native_fee_v1(&b.state, family, &JOB).is_some(), "not before H (family {family}, now {now})");
+            assert!(native_accusable_after_final_v1(&b.state, family, &JOB, now).is_some(), "accusable through H");
+        }
+        release_held_native_fees_v1(&mut b, 501, |_, _| false).unwrap();
+        assert!(held_native_fee_v1(&b.state, family, &JOB).is_none());
+        assert_eq!(queued(&b.state, r.queue), Some((h64(0xB1), 7_000)), "paid at H+1, the deferred amount");
+        assert!(refund_native_fee_v1(&mut b, family, &JOB, 501).is_err(), "a released fee cannot be refunded");
+    }
+}
+
+/// A conviction (court or DA default) within H refunds the requester whole; the producer is paid nothing, ever.
+#[test]
+fn rfc08_hold_text29_and_funded11_convicted_within_the_horizon_refund_the_requester() {
+    for family in [PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_FAMILY_FUNDED_V11] {
+        let p = armed();
+        let extras = PalwTransitionExtrasV1::default();
+        let parent = with_route(PalwChainStateV2::genesis());
+        let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+        let r = family_row(family, 500);
+        hold_native_fee_v1(&mut b, &r).unwrap();
+        let refunded = refund_native_fee_v1(&mut b, family, &JOB, 500).unwrap();
+        assert_eq!(refunded, r);
+        assert_eq!(
+            native_refund_queue_v1(&refunded),
+            native_refund_queue_of_v1(family, r.job, r.claim, r.refund_payload),
+            "a family's collection re-derives the refund queue from its parts"
+        );
+        assert_eq!(queued(&b.state, native_refund_queue_v1(&refunded).as_bytes()), Some((h64(0xB2), 7_000)));
+        release_held_native_fees_v1(&mut b, 10_000, |_, _| false).unwrap();
+        assert!(queued(&b.state, r.queue).is_none(), "the producer is never paid after a refund");
+        // Past H the claim is no longer accusable.
+        let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+        hold_native_fee_v1(&mut b, &r).unwrap();
+        assert!(refund_native_fee_v1(&mut b, family, &JOB, 501).is_err());
+    }
+}
+
+/// The refund queues of different families never collide for the same job id.
+#[test]
+fn rfc08_hold_refund_queues_are_per_family() {
+    let a = native_refund_queue_of_v1(PALW_NATIVE_FAMILY_TEXT_V29, JOB, [1; 64], [2; 64]);
+    let b = native_refund_queue_of_v1(PALW_NATIVE_FAMILY_FUNDED_V11, JOB, [1; 64], [2; 64]);
+    let c = native_refund_queue_of_v1(PALW_NATIVE_FAMILY_JOB_V39, JOB, [1; 64], [2; 64]);
+    assert!(a != b && b != c && a != c);
+}
+
+/// The production dispatcher fails closed: a held text29 / funded v11 / unknown-family row whose job cannot be read is never paid.
+#[test]
+fn rfc08_hold_the_dispute_dispatcher_fails_closed_on_an_unreadable_job() {
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    for family in [PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_FAMILY_FUNDED_V11, 77u8] {
+        let r = PalwNativeHeldFeeRowV1 { job: [family; 64], ..family_row(family, 500) };
+        hold_native_fee_v1(&mut b, &r).unwrap();
+        assert!(native_held_dispute_open_v1(&b, &r), "family {family}: no readable Final, no release");
+    }
+    release_held_native_fees_v1(&mut b, 501, native_held_dispute_open_v1).unwrap();
+    for family in [PALW_NATIVE_FAMILY_TEXT_V29, PALW_NATIVE_FAMILY_FUNDED_V11, 77u8] {
+        assert!(held_native_fee_v1(&b.state, family, &[family; 64]).is_some());
+    }
+}
+
+/// Below the fence (dormant on every preset, or a claim committed before it) text29 / funded v11 take the old immediate payout:
+/// `native_fee_needs_hold_v1` is false, so their `settle` / `credit` arms run the pre-RFC08 writes byte for byte.
+#[test]
+fn rfc08_hold_below_the_fence_text29_and_funded11_keep_the_immediate_payout() {
+    let deadline = 1_000;
+    assert!(!native_fee_needs_hold_v1(&params(), 0, 500, deadline), "dormant fence");
+    assert!(!native_fee_needs_hold_v1(&params(), u64::MAX, 500, deadline));
+    assert!(!native_fee_needs_hold_v1(&armed(), 99, 500, deadline), "committed before the fence");
+    assert!(native_fee_needs_hold_v1(&armed(), 100, 500, deadline));
+}
