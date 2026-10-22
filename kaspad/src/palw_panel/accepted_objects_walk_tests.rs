@@ -426,6 +426,19 @@ fn paged_history_reads_every_block_even_when_daa_does_not_count_the_blocks() {
 }
 
 #[test]
+fn gdn_disclosure_page_keeps_continuation_and_refuses_an_unavailable_suffix() {
+    use super::gdn_filer_tick::gdn_disclosure_page_v1;
+    let mut chain = repeated_daa_chain();
+    let wanted = HashSet::new();
+    let (next, objects) = gdn_disclosure_page_v1(&chain, chain.sink, 100, 3, &wanted).unwrap();
+    assert_eq!(next, Some(hash(5)), "a page cannot label the older interval complete");
+    assert!(objects.is_empty(), "unrelated lifecycle objects are not disclosures");
+    chain.acceptance.remove(&hash(4)).unwrap();
+    assert!(gdn_disclosure_page_v1(&chain, chain.sink, 100, 8, &wanted).is_err(),
+        "an unavailable suffix must not return a successful partial collection");
+}
+
+#[test]
 fn false_valid_receipt_history_backfills_plateaus_and_retries_missing_suffixes_and_reorgs() {
     use crate::palw_filer_false_valid::palw_false_valid_history_page_v1 as page;
     let mut chain = repeated_daa_chain();

@@ -101,6 +101,24 @@ fn disclosure_claim_v1(object: &PalwConsensusObjectV2) -> Option<Hash64> {
 /// How many chain blocks one tick reads back for disclosures, at most.
 const PALW_GDN_FILER_WALK_BLOCKS_V1: usize = 4096;
 
+/// Collect one strict native-history page. A read failure discards the partial
+/// collection; a continuation identifies an unfinished interval, not absence.
+pub(super) fn gdn_disclosure_page_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    start: Hash64,
+    floor: u64,
+    blocks: usize,
+    wanted: &HashSet<Hash64>,
+) -> Result<(Option<Hash64>, Vec<PalwConsensusObjectV2>), String> {
+    let mut found = Vec::new();
+    let next = walk_accepted_lifecycle_page_v1(consensus, start, floor, blocks, &mut |object| {
+        if disclosure_claim_v1(&object).is_some_and(|claim| wanted.contains(&claim)) {
+            found.push(object);
+        }
+    })?;
+    Ok((next, found))
+}
+
 /// One claim a GDN filer may pursue, with the class backend and the served capture (public material) that names it.
 pub(super) struct GdnFilerEntryV1 {
     pub(super) d: kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2,
@@ -240,14 +258,10 @@ impl PalwPanelService {
         let found = session
             .clone()
             .spawn_blocking(move |c| {
-                let mut found: Vec<PalwConsensusObjectV2> = Vec::new();
                 let tip = c.get_sink();
-                let _continuation = walk_accepted_lifecycle_page_v1(c, tip, floor, PALW_GDN_FILER_WALK_BLOCKS_V1, &mut |object| {
-                    if disclosure_claim_v1(&object).is_some_and(|claim| wanted.contains(&claim)) {
-                        found.push(object);
-                    }
-                })?;
-                Ok::<_, String>(found)
+                // Cross-tick continuation remains separate work. Preserve the
+                // page's strict error contract even before that connection.
+                gdn_disclosure_page_v1(c, tip, floor, PALW_GDN_FILER_WALK_BLOCKS_V1, &wanted).map(|(_next, found)| found)
             })
             .await;
         let found = match found {
