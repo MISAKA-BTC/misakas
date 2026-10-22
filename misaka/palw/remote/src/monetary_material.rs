@@ -123,6 +123,106 @@ impl DurableMonetaryMaterialProviderV1 {
         self.publish(candidate)?;
         Ok(ready.id())
     }
+    /// Authority metadata has a separate V2 file family. Its complete identity
+    /// is fsynced before material publication and before a Ready signature.
+    pub fn prepare_native_ready_routed_v2(
+        &mut self,
+        provider: PalwBondKeyV2,
+        row: &kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialReadyV3,
+        bundle: &kaspa_consensus_core::palw_routed_material_v2::PalwHeldMaterialBundleV2,
+        authority: &kaspa_consensus_core::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+    ) -> Result<Hash64, kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+        use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+        if row.terms.root != ready.session
+            || row.consent != ready.consent
+            || row.terms.native_session.is_none()
+            || row.native_binding.is_some()
+            || !ready.providers.contains(&provider)
+            || bundle.claim != ready.binding.claim
+            || row.terms.max_material_bytes > self.max_contract_bytes
+            || authority.record().claim != bundle.claim
+        {
+            return Err(E::Substitution);
+        }
+        let candidate = self.store.provider_admit_routed_held_v2(
+            row.consent,
+            &ready.binding.manifest,
+            row.terms.max_material_bytes,
+            self.total_capacity,
+            bundle,
+            authority,
+        )?;
+        self.sweep_routed_authorities_v2()?;
+        save_routed_authority_v2(&self.file, authority.record(), self.max_contract_bytes)?;
+        self.publish_routed_v2(candidate)?;
+        Ok(ready.id())
+    }
+    /// Explicit versioned response. The caller supplies a fresh native-positive
+    /// authority, selected accepted provider generation and exact challenge
+    /// receipt; a locally recovered authority record cannot call this API.
+    pub fn answer_routed_material_v2(
+        &self,
+        consent: Hash64,
+        root: Hash64,
+        claim: Hash64,
+        provider: PalwBondKeyV2,
+        leaf: u64,
+        authority: &kaspa_consensus_core::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+        receipt: Option<kaspa_consensus_core::palw_routed_material_v2::PalwRoutedMaterialReceiptV2>,
+        sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_routed_material_v2::PalwRoutedMaterialAnswerV2,
+        >,
+        kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1,
+    > {
+        use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+        let historical = load_routed_authority_v2(&self.file, claim, self.max_contract_bytes)?;
+        if &*historical != authority.record() {
+            return Err(E::Substitution);
+        }
+        self.store.provider_routed_answer_v2(consent, root, claim, provider, leaf, authority, receipt, sign)
+    }
+    fn publish_routed_v2(
+        &mut self,
+        candidate: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialProviderStoreV1>,
+    ) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+        use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+        let len = borsh::object_length(&*candidate).map_err(|_| E::Capacity)? as u64;
+        let _encoding =
+            kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(len.checked_mul(2).ok_or(E::Capacity)?)
+                .map_err(E::LocalResource)?;
+        let raw = borsh::to_vec(&*candidate).map_err(|e| E::Authentication(e.to_string()))?;
+        atomic_routed_file_v2(&self.file, &raw)?;
+        self.store = candidate;
+        self.sweep_routed_authorities_v2()?;
+        Ok(())
+    }
+    /// Orphan metadata is never answer authority. With the store's process
+    /// lease/mutex held, remove only this version's rows no retained generation
+    /// references, after its authoritative snapshot publication has completed.
+    fn sweep_routed_authorities_v2(&self) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+        use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+        let directory = self.file.with_extension("routing-authorities-v2");
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(E::Authentication(e.to_string())),
+        };
+        for entry in entries {
+            let path = entry.map_err(|e| E::Authentication(e.to_string()))?.path();
+            if path.extension().is_none_or(|v| v != "v2") {
+                continue;
+            }
+            let claim: Hash64 =
+                path.file_stem().and_then(|v| v.to_str()).ok_or(E::Substitution)?.parse().map_err(|_| E::Substitution)?;
+            if !self.store.holds_routed_native_claim_v2(claim) {
+                fs::remove_file(path).map_err(|e| E::Authentication(e.to_string()))?;
+            }
+        }
+        File::open(directory).and_then(|d| d.sync_all()).map_err(|e| E::Authentication(e.to_string()))
+    }
     pub fn prepare_material(
         &mut self,
         provider: PalwBondKeyV2,
@@ -174,6 +274,11 @@ impl DurableMonetaryMaterialProviderV1 {
         provider: PalwBondKeyV2,
         demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        if self.store.material_generation_scope_v4(consent, root, dependency).is_some_and(|(_, scope)| {
+            scope.codec == kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldCompleteV2
+        }) {
+            return Err("V2 routed material requires its fresh native authority and explicit V2 response API".into());
+        }
         // Every retained generation is examined, not only the first candidate: any kernel-codec generation of this
         // root/dependency must go through the current native-positive replay path (`answer_material_current_v4`).
         if self.contexts.is_some()
@@ -238,6 +343,9 @@ impl DurableMonetaryMaterialProviderV1 {
             let result = (|| {
                 if exact || consent != preferred || self.contexts.is_some() {
                     native.palw_material_generation_authority_v4(root, consent, provider, scope)?;
+                }
+                if scope.codec == PalwMaterialCodecV1::NativeHeldCompleteV2 {
+                    return Err("V2 routed generation requires its explicit own-authority response API".into());
                 }
                 if scope.codec != PalwMaterialCodecV1::NativeHeldComplete {
                     let archive = self.contexts.as_ref().ok_or("kernel answers need explicit durable context capacities")?;
@@ -321,7 +429,7 @@ impl DurableMonetaryMaterialProviderV1 {
                     return Err("provider snapshot changed extent during read".into());
                 }
                 if let Some(archive) = contexts.as_ref() {
-                    kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::<PalwMonetaryMaterialProviderStoreV1>::recover_provider_retaining_kernel_v4(&bytes,max_contract_bytes,total_capacity,authority,|consent,scope,_|{
+                    kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::<PalwMonetaryMaterialProviderStoreV1>::recover_provider_routed_v2(&bytes,max_contract_bytes,total_capacity,None,authority,|claim|load_routed_authority_v2(file,claim,max_contract_bytes),Some(&mut |consent,scope,_|{
                         let record=archive.get(consent)?.ok_or("kernel retention context missing; no answers authorized")?;
                         let (monetary,identity,_)=kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&record.capsule)?;
                         let length=borsh::object_length(&record.capsule).map_err(|e|e.to_string())? as u64;
@@ -330,9 +438,12 @@ impl DurableMonetaryMaterialProviderV1 {
                         // Retention only: this local identity cannot authorize a
                         // response, GC, funding or a native accepted claim.
                         Ok(())
-                    })?
+                    })).map_err(|e|e.to_string())?
                 } else {
-                    kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::<PalwMonetaryMaterialProviderStoreV1>::recover_provider_verified_v1(&bytes,max_contract_bytes,total_capacity,ledger,authority)?
+                    // V2 metadata authenticates retained identity only. Current
+                    // native authority is still required by the serving API.
+                    kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::<PalwMonetaryMaterialProviderStoreV1>::recover_provider_routed_v2(
+                        &bytes,max_contract_bytes,total_capacity,ledger,authority,|claim|load_routed_authority_v2(file,claim,max_contract_bytes),None).map_err(|e|e.to_string())?
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -358,7 +469,10 @@ impl DurableMonetaryMaterialProviderV1 {
                 fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
             }
         }
-        Ok(Self { _lease: lease, file: file.to_path_buf(), max_contract_bytes, total_capacity, store, contexts, expiry_cursor: None })
+        let opened =
+            Self { _lease: lease, file: file.to_path_buf(), max_contract_bytes, total_capacity, store, contexts, expiry_cursor: None };
+        opened.sweep_routed_authorities_v2().map_err(|e| e.to_string())?;
+        Ok(opened)
     }
     fn publish(
         &mut self,
@@ -384,6 +498,7 @@ impl DurableMonetaryMaterialProviderV1 {
             return Err(error.to_string());
         }
         self.store = candidate;
+        self.sweep_routed_authorities_v2().map_err(|e| e.to_string())?;
         Ok(())
     }
     /// Call before signing the enrollment. The complete canonical material and
@@ -595,4 +710,109 @@ pub(crate) fn acquire_provider_lease(path: &Path) -> Result<File, String> {
 #[cfg(not(unix))]
 pub(crate) fn acquire_provider_lease(_path: &Path) -> Result<File, String> {
     Err("durable monetary material provider needs a kernel file lease on this platform".into())
+}
+
+fn routed_authority_path_v2(file: &Path, claim: Hash64) -> PathBuf {
+    file.with_extension("routing-authorities-v2").join(format!("{claim}.v2"))
+}
+fn load_routed_authority_v2(
+    file: &Path,
+    claim: Hash64,
+    max_bytes: u64,
+) -> Result<
+    kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+        kaspa_consensus_core::palw_routed_material_v2::PalwMaterialAuthorityRecordV2,
+    >,
+    kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1,
+> {
+    use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+    use kaspa_consensus_core::palw_native_resource_v1::{
+        NativeDecodeErrorV1, reserve_native_requests_v1, retain_native_value_decode_classified_v1,
+    };
+    let source = File::open(routed_authority_path_v2(file, claim)).map_err(|e| E::Authentication(e.to_string()))?;
+    let n = source.metadata().map_err(|e| E::Authentication(e.to_string()))?.len();
+    if n > max_bytes || n == 0 {
+        return Err(E::Capacity);
+    }
+    let _raw =
+        reserve_native_requests_v1(n.checked_add(1).and_then(|n| n.checked_mul(2)).ok_or(E::Capacity)?).map_err(E::LocalResource)?;
+    let mut raw = Vec::with_capacity(usize::try_from(n.checked_add(1).ok_or(E::Capacity)?).map_err(|_| E::Capacity)?);
+    source.take(n + 1).read_to_end(&mut raw).map_err(|e| E::Authentication(e.to_string()))?;
+    if raw.len() as u64 != n {
+        return Err(E::Substitution);
+    }
+    let record = retain_native_value_decode_classified_v1::<
+        kaspa_consensus_core::palw_routed_material_v2::PalwMaterialAuthorityRecordV2,
+        std::io::Error,
+    >(&raw, || borsh::from_slice(&raw))
+    .map_err(|e| match e {
+        NativeDecodeErrorV1::Resource(e) => E::LocalResource(e),
+        NativeDecodeErrorV1::Decode(e) => E::Authentication(e.to_string()),
+    })?;
+    if record.version != 2 || record.claim != claim {
+        return Err(E::Substitution);
+    }
+    Ok(record)
+}
+fn save_routed_authority_v2(
+    file: &Path,
+    record: &kaspa_consensus_core::palw_routed_material_v2::PalwMaterialAuthorityRecordV2,
+    max_bytes: u64,
+) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+    use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+    let target = routed_authority_path_v2(file, record.claim);
+    if target.exists() {
+        if &*load_routed_authority_v2(file, record.claim, max_bytes)? != record {
+            return Err(E::Substitution);
+        }
+        return Ok(());
+    }
+    let parent = target.parent().ok_or(E::Incomplete)?;
+    fs::create_dir_all(parent).map_err(|e| E::Authentication(e.to_string()))?;
+    if let Some(ancestor) = parent.parent() {
+        File::open(ancestor).and_then(|d| d.sync_all()).map_err(|e| E::Authentication(e.to_string()))?;
+    }
+    let cap = kaspa_consensus_core::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_MAX_CONTRACTS_V1 as usize
+        * kaspa_consensus_core::palw_material_capacity_v1::PALW_MATERIAL_MAX_SCOPES_V1;
+    let mut count = 0usize;
+    for entry in fs::read_dir(parent).map_err(|e| E::Authentication(e.to_string()))? {
+        let entry = entry.map_err(|e| E::Authentication(e.to_string()))?;
+        if entry.path().extension().is_some_and(|v| v == "v2") {
+            count += 1;
+        }
+        if count >= cap {
+            return Err(E::Capacity);
+        }
+    }
+    let n = borsh::object_length(record).map_err(|_| E::Capacity)? as u64;
+    if n > max_bytes {
+        return Err(E::Capacity);
+    }
+    let _raw = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(n.checked_mul(2).ok_or(E::Capacity)?)
+        .map_err(E::LocalResource)?;
+    let raw = borsh::to_vec(record).map_err(|e| E::Authentication(e.to_string()))?;
+    atomic_routed_file_v2(&target, &raw)
+}
+fn atomic_routed_file_v2(
+    target: &Path,
+    bytes: &[u8],
+) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+    use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+    let parent = target.parent().ok_or(E::Incomplete)?;
+    fs::create_dir_all(parent).map_err(|e| E::Authentication(e.to_string()))?;
+    let name = target.file_name().and_then(|n| n.to_str()).ok_or(E::Incomplete)?;
+    let pending = parent.join(format!("{name}.routed-pending-{}", std::process::id()));
+    let result = (|| {
+        let mut output = OpenOptions::new().write(true).create_new(true).open(&pending)?;
+        output.write_all(bytes)?;
+        output.sync_all()?;
+        fs::rename(&pending, target)?;
+        File::open(parent)?.sync_all()?;
+        Ok::<_, std::io::Error>(())
+    })();
+    if let Err(e) = result {
+        let _ = fs::remove_file(pending);
+        return Err(E::Authentication(e.to_string()));
+    }
+    Ok(())
 }

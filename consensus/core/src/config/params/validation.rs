@@ -292,6 +292,8 @@ impl Params {
         self.validate_palw_elastic_final_capacity_v1()?;
         self.validate_palw_memory_routing_court_v2()?;
         self.validate_palw_class_registration_origin_v1()?;
+        self.validate_palw_selected_source_bootstrap_v1()?;
+        self.validate_palw_paid_bootstrap_source_v6()?;
         // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
         self.validate_palw_model_eligibility_v1()?;
         // **ADR-0179's model tiers** (`crate::palw_model_tier_v1`): refused when armed; add-only lists; the mirror must agree.

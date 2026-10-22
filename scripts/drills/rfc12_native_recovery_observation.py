@@ -1,5 +1,6 @@
 """Owned private-child native observations; never public certificates or GC authority."""
 import json
+from pathlib import Path
 
 FILE = 'rfc08-native-recovery-observation-v4.json'
 MAX_BYTES = 16 * 1024 * 1024

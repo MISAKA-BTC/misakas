@@ -40,6 +40,11 @@ pub enum PalwStateWalkError {
 }
 
 impl PalwStateWalkError {
+    pub(crate) fn native_context_v1(
+        &self,
+    ) -> Option<kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1> {
+        if let Self::State(PalwStateV2Error::NativeContextUnavailable(context)) = self { Some(context.clone()) } else { None }
+    }
     pub(crate) fn native_capacity_v1(&self) -> Option<kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
         match self {

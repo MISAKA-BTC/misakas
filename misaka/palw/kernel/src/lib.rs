@@ -85,6 +85,7 @@ pub mod budget;
 pub mod challenge;
 pub mod check;
 pub mod claim_subject;
+pub mod claim_paid_material_generation_v5;
 pub mod court_scope;
 pub mod descriptor;
 pub mod element;
@@ -238,3 +239,5 @@ pub mod flat_component_source39;
 pub mod flat_trace39;
 
 pub mod flat_invocation39;
+
+pub mod claim_paid_bootstrap_source_v6;

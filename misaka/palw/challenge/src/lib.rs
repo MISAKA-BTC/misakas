@@ -1,5 +1,6 @@
 //! **The single post-commit challenge contract** (RFC-0007 Part VI; RFC-0011 §17; RFC-0013 §9) — shared by kernel conformance,
-//! model onboarding, per-claim verification, EXEC work slices and public prosecution. No other crate derives a beacon or a seed.
+//! per-claim verification, EXEC work slices and public prosecution. Historical model-onboarding contracts do not authorize
+//! new model reviews: registered models follow the frozen two-tier policy in PRINCIPLES §9.
 //!
 //! ```text
 //! STATIC SEMANTIC ADMISSION → COMMIT FIRST → FUTURE PALW WORK BEACON → INDEPENDENT PROBABILISTIC CHECK → mismatch → EXACT PUBLIC COURT
@@ -10,14 +11,17 @@
 //! `PUBLIC_PROSECUTION_COMPLETE` gate among them); a beacon mismatch is never a conviction — it localizes, an authenticated opening
 //! goes to the exact court, and withheld material is DA/default, not arithmetic fraud.
 //!
-//! **Dormant**: no consensus code reads this crate; it has no fence, wire id, state tag or activation. Its domains and algorithm
-//! ids are proposed values awaiting the release review of RFC-0007 §VI.8 (codec vectors, source-cost/bias/grinding analysis,
-//! k/D/delay selection). Nothing here is BFT, DNS, validator- or committee-derived.
+//! Individual consumers have versioned activation and policy contracts; importing a helper does not activate a source.
+//! The new [`bootstrap_epoch_v1`] mechanics are dormant: native epoch authority, selected approval receipts and the source
+//! lineage consumer remain unconnected. Its domains and parameters are not release approval. Consensus credit requires
+//! randomly selected verifier approval under explicit honest-fraction, participation and material-availability assumptions.
 //!
 //! [`composition`] is not part of the contract: a pure calculator of the composed false-accept bound for the external soundness
 //! review dossier (`docs/design/palw/soundness-review-dossier/`), called by no consensus or policy code.
 
 pub mod beacon;
+pub mod bootstrap_epoch_v1;
+pub mod approved_source_v1;
 pub mod composition;
 pub mod conformance;
 pub mod hash;

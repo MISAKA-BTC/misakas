@@ -611,6 +611,9 @@ pub(super) fn apply_da_answer_v1(
                 return Err(PalwStateV2Error::HeldContextDormant);
             };
             let ladder = builder.state.class_step_ladder_v1(&claim.class_id, network_ladder);
+            if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure {
+                builder.state.require_implicit_reader_slot_v1(claim_id, evidence.refutation.output_preimage.coord.node_slot)?;
+            }
             crate::palw_held_da_v1::palw_held_da_check_disclosure_v1(
                 &claim.execution_root,
                 missing,
@@ -639,6 +642,7 @@ pub(super) fn apply_da_answer_v1(
                                 .to_string(),
                     });
                 }
+                builder.state.require_implicit_reader_slot_v1(claim_id, evidence.refutation.output_preimage.coord.node_slot)?;
                 crate::palw_step_refute::check_execution_step_committed_half_v1(
                     &evidence.refutation,
                     evidence.prompt_ids_opening.as_ref(),
@@ -657,6 +661,7 @@ pub(super) fn apply_da_answer_v1(
                     class_id: claim.class_id,
                     artifact_root,
                 };
+                builder.state.require_implicit_reader_slot_v1(claim_id, evidence.refutation.output_preimage.coord.node_slot)?;
                 match evidence.verdict_at_v2(&bound_to, ladder, builder.extras.audit_2026_09_23_active).map_err(|e| {
                     PalwStateV2Error::HeldDaRefused { claim: claim_id, why: format!("the evidence does not adjudicate: {e}") }
                 })? {
@@ -863,4 +868,74 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     // The session's id, for a caller that keys something to it (the held leaf challenge's close group); `None` when the prosecution
     // was queued past `palw_court_capacity_v1`.
     Ok(Some(session_id))
+}
+
+/// Explicit V2 routed retrieval. The native claim stamp selects the router;
+/// legacy objects never reinterpret their old selector under a new mapping.
+pub(super) fn apply_routed_material_answer_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    answer: &crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_resource_v1::{TirNativeRequestsV1, native_value_requests_v1, reserve_native_requests_v1};
+    use crate::palw_routed_material_v2::PalwRoutedMaterialTargetV2;
+    use crate::palw_step_refute::routing_v2::{PalwRoutingCourtErrorV2, check_routed_step_committed_half_v2};
+    if let PalwRoutedMaterialTargetV2::Monetary { .. } = answer.target {
+        return super::palw_monetary_material_fold_v1::routed_answer_v2(builder, ctx, answer);
+    }
+    let limits = builder.extras.memory_routing_court.ok_or(PalwStateV2Error::ShardCourtDormant)?;
+    let malformed = |why: &str| PalwStateV2Error::HeldDaRefused { claim: answer.claim, why: why.to_string() };
+    if answer.receipt.is_some() {
+        return Err(malformed("DA answer cannot carry a monetary receipt"));
+    }
+    let native = builder
+        .state
+        .reader_router_of_claim_v2(answer.claim)?
+        .ok_or_else(|| malformed("routed answer has no native V2 claim stamp"))?;
+    let claim = builder.state.claim(&answer.claim).ok_or(PalwStateV2Error::MissingClaim(answer.claim))?;
+    let ladder = builder
+        .state
+        .class_step_ladder_v1(&claim.class_id, builder.extras.held_context_ladder.ok_or(PalwStateV2Error::HeldContextDormant)?);
+    answer.check_shape(ladder).map_err(malformed)?;
+    if borsh::object_length(answer).map_err(|_| malformed("routed answer length unavailable"))? as u64 > limits.max_close_bytes {
+        return Err(malformed("routed answer exceeds native close capacity"));
+    }
+    if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &answer.claim, &answer.refutation.step.binding) {
+        return Err(malformed(&why));
+    }
+    let unit = match answer.target {
+        PalwRoutedMaterialTargetV2::DaHeld => {
+            crate::palw_da_rcore_v1::PalwDaUnitV1::Held(crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf {
+                leaf: answer.refutation.step.output_opening.leaf_index,
+            })
+        }
+        PalwRoutedMaterialTargetV2::DaKernelWitness => {
+            crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::KernelWitness {
+                leaf: answer.refutation.step.output_opening.leaf_index,
+            })
+        }
+        PalwRoutedMaterialTargetV2::Monetary { .. } => unreachable!("dispatched above"),
+    };
+    let mut q = TirNativeRequestsV1::new();
+    q.add_v1(native_value_requests_v1(claim).map_err(PalwStateV2Error::NativeResource)?).map_err(PalwStateV2Error::NativeResource)?;
+    if let Some(record) = builder.state.da_claims.get(&answer.claim) {
+        q.add_v1(native_value_requests_v1(record).map_err(PalwStateV2Error::NativeResource)?)
+            .map_err(PalwStateV2Error::NativeResource)?;
+        q.vec_v1::<crate::palw_da_rcore_v1::PalwDaUnitV1>(1).map_err(PalwStateV2Error::NativeResource)?;
+    }
+    // Existing DA admission/settlement clones the record and sessions. Reserve
+    // actual owned native payloads before entering those common legacy helpers.
+    for (_, session) in builder.state.da_sessions_of(&answer.claim) {
+        q.add_v1(native_value_requests_v1(session).map_err(PalwStateV2Error::NativeResource)?)
+            .map_err(PalwStateV2Error::NativeResource)?;
+    }
+    let _mutation = reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+    let (_, record, in_run) = da_answer_admitted_v1(builder, ctx, answer.claim, &unit, answer.provider)?;
+    check_routed_step_committed_half_v2(&answer.refutation, claim.execution_root, &native.declaration, ladder).map_err(
+        |e| match e {
+            PalwRoutingCourtErrorV2::Resource(e) => PalwStateV2Error::NativeResource(e),
+            other => malformed(&other.to_string()),
+        },
+    )?;
+    da_answer_recorded_v1(builder, answer.claim, record, unit, false, in_run, ctx.daa_score)
 }

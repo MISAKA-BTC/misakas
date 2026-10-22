@@ -13,7 +13,7 @@ use crate::palw_state_chunk_map as maps;
 use crate::palw_step_leg as leg;
 
 mod capture;
-pub use capture::{PalwGdnCaptureV2, gdn_refutation_from_capture_v2};
+pub use capture::{PalwGdnCaptureV2, gdn_refutation_from_capture_v2, gdn_refutation_from_leaves_v2};
 // RFC-0006 consumer v2: the checkpoint's own two facts (delta transition, convolution window), the court that keeps an anchored
 // replay sound — see the module's docs. Public so the generated native scanners can name its wire types by their owner path.
 pub mod transition;
@@ -388,7 +388,7 @@ fn reserve_workspace_v2(
     reserve_native_requests_v1(q.bytes_v1()).map_err(Into::into)
 }
 
-fn verified_input_rows_v2(
+pub(super) fn verified_input_rows_v2(
     binding: &leg::PalwStepBindingV2,
     supplied: &[PalwStepInputRowV1],
     required: &[Vec<(u64, PalwStepCoordinateV1)>],

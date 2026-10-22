@@ -49,6 +49,10 @@ use kaspa_consensus_core::palw_step_refute::{
 use crate::kernels::{a16_attn_scores_fast, a16_attn_values_fast_within};
 use crate::qwen36::{Qwen36Cache, Qwen36Engine, Qwen36Error, Qwen36LayerKind, Qwen36ShapeV1};
 
+#[path = "qwen36_plan/routing_v2.rs"]
+mod routing_v2;
+pub(crate) use routing_v2::Qwen36NativePlanV2;
+
 /// Why the profile could not become a plan. Mirrors `A16PlanErrorV1`: every refusal is the
 /// ADR-0067 kernel boundary — the class declared arithmetic this build does not serve — and the
 /// error names the node.
@@ -267,6 +271,27 @@ pub struct Qwen36ProfilePlanV1 {
     layer_kinds: Vec<Qwen36LayerKind>,
     /// The class's attention history bound (ADR-0116), read off the profile at compile time.
     attn_history: usize,
+    class_id: kaspa_hashes::Hash64,
+    /// None is the historical per-kind table/last_topk plan. An explicit V2
+    /// plan owns one table per actual layer; missing entries never fall back.
+    routing_layers_v2: Option<Vec<Vec<PlanNode>>>,
+    routing_identity_v2: Option<kaspa_hashes::Hash64>,
+}
+
+impl Qwen36ProfilePlanV1 {
+    fn layer_table(&self, layer: usize) -> Result<&[PlanNode], Qwen36Error> {
+        if let Some(tables) = &self.routing_layers_v2 {
+            return tables
+                .get(layer)
+                .map(Vec::as_slice)
+                .ok_or_else(|| Qwen36Error::BadParams("native routing plan lacks the actual layer table".into()));
+        }
+        match self.layer_kinds.get(layer) {
+            Some(Qwen36LayerKind::LinearAttention) => Ok(&self.gdn),
+            Some(Qwen36LayerKind::FullAttention) => Ok(&self.attn),
+            None => Err(Qwen36Error::BadParams("plan layer is absent".into())),
+        }
+    }
 }
 
 /// The committed rows of one planned pass — one row per declared node, per table, in order.
@@ -385,7 +410,17 @@ impl<'a> Qwen36Engine<'a> {
         let post = plan_table(self, &profile.post_nodes, "post", Some(d))?;
         terminal(&profile.post_nodes, "post", s.vocab as u32)?;
         let attn_history = kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(profile);
-        Ok(Qwen36ProfilePlanV1 { pre, gdn, attn, post, layer_kinds, attn_history })
+        Ok(Qwen36ProfilePlanV1 {
+            pre,
+            gdn,
+            attn,
+            post,
+            layer_kinds,
+            attn_history,
+            class_id: profile.shape_profile_id(),
+            routing_layers_v2: None,
+            routing_identity_v2: None,
+        })
     }
 
     /// One position's forward, EXECUTED FROM THE PLAN: one committed row per declared node, in
@@ -400,7 +435,8 @@ impl<'a> Qwen36Engine<'a> {
         position: usize,
     ) -> Result<(Vec<i32>, Qwen36PlanTraceV1), Qwen36Error> {
         let s = &self.artifact.shape;
-        if plan.layer_kinds.len() != s.n_layers() {
+        if plan.layer_kinds.len() != s.n_layers() || plan.routing_layers_v2.as_ref().is_some_and(|layers| layers.len() != s.n_layers())
+        {
             return Err(Qwen36Error::BadParams("the plan and the artifact disagree about the layer count".into()));
         }
         // The compiled engine refuses an out-of-vocabulary token before reading anything.
@@ -413,11 +449,8 @@ impl<'a> Qwen36Engine<'a> {
         let mut h = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty pre table".into()))?;
         trace.pre = rows;
 
-        for (li, kind) in plan.layer_kinds.iter().enumerate() {
-            let table = match kind {
-                Qwen36LayerKind::LinearAttention => &plan.gdn,
-                Qwen36LayerKind::FullAttention => &plan.attn,
-            };
+        for li in 0..plan.layer_kinds.len() {
+            let table = plan.layer_table(li)?;
             let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)), plan.attn_history)?;
             h = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty layer table".into()))?;
             trace.layers.push(rows);
@@ -443,7 +476,8 @@ impl<'a> Qwen36Engine<'a> {
         position: usize,
     ) -> Result<Vec<i32>, Qwen36Error> {
         let s = &self.artifact.shape;
-        if plan.layer_kinds.len() != s.n_layers() {
+        if plan.layer_kinds.len() != s.n_layers() || plan.routing_layers_v2.as_ref().is_some_and(|layers| layers.len() != s.n_layers())
+        {
             return Err(Qwen36Error::BadParams("the plan and the artifact disagree about the layer count".into()));
         }
         if token_id >= s.vocab {
@@ -451,11 +485,8 @@ impl<'a> Qwen36Engine<'a> {
         }
         let rows = self.walk_table(&plan.pre, None, token_id, position, None, plan.attn_history)?;
         let mut h = rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty pre table".into()))?;
-        for (li, kind) in plan.layer_kinds.iter().enumerate() {
-            let table = match kind {
-                Qwen36LayerKind::LinearAttention => &plan.gdn,
-                Qwen36LayerKind::FullAttention => &plan.attn,
-            };
+        for li in 0..plan.layer_kinds.len() {
+            let table = plan.layer_table(li)?;
             let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)), plan.attn_history)?;
             h = rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty layer table".into()))?;
         }
@@ -490,7 +521,8 @@ impl<'a> Qwen36Engine<'a> {
         first_position: usize,
     ) -> Result<(Vec<i32>, Vec<Qwen36PlanTraceV1>), Qwen36Error> {
         let s = &self.artifact.shape;
-        if plan.layer_kinds.len() != s.n_layers() {
+        if plan.layer_kinds.len() != s.n_layers() || plan.routing_layers_v2.as_ref().is_some_and(|layers| layers.len() != s.n_layers())
+        {
             return Err(Qwen36Error::BadParams("the plan and the artifact disagree about the layer count".into()));
         }
         if tokens.is_empty() {
@@ -507,11 +539,8 @@ impl<'a> Qwen36Engine<'a> {
             hs.push(rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty pre table".into()))?);
             traces[i].pre = rows;
         }
-        for (li, kind) in plan.layer_kinds.iter().enumerate() {
-            let table = match kind {
-                Qwen36LayerKind::LinearAttention => &plan.gdn,
-                Qwen36LayerKind::FullAttention => &plan.attn,
-            };
+        for li in 0..plan.layer_kinds.len() {
+            let table = plan.layer_table(li)?;
             for (i, &token) in tokens.iter().enumerate() {
                 let rows = self.walk_table(table, Some(&hs[i]), token, first_position + i, Some((li, cache)), plan.attn_history)?;
                 hs[i] = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty layer table".into()))?;

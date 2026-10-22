@@ -180,3 +180,58 @@ fn versioned_genesis_terminal_agrees_with_legacy_arithmetic_for_honest_and_commi
         );
     }
 }
+
+#[test]
+fn capture_builder_reuses_committed_tiles_and_preserves_the_genesis_terminal() {
+    for wrong in [false, true] {
+        let expected = genesis_evidence(wrong);
+        let b = &expected.step.binding;
+        let (_, _, mut rows) = fixtures::honest_execution();
+        if wrong {
+            rows[2][6][3] ^= 1 << 20;
+        }
+        let mut tiles = Vec::new();
+        let mut hashes = Vec::new();
+        let profile_id = b.shape_profile.shape_profile_id();
+        for index in 0..b.step_leaf_count {
+            let coordinate = crate::palw_step::canonical_step_coordinates(&b.shape_profile, &b.job_context, index).unwrap();
+            let ordinal = if coordinate.call_index == 0 { coordinate.position as usize } else { 2 };
+            let row = &rows[ordinal][coordinate.node_slot as usize];
+            let first = coordinate.tile_index as usize * 16;
+            let values = &row[first..(first + 16).min(row.len())];
+            let leaf = leg::PalwStepTileLeafV1 {
+                version: leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+                coord: coordinate,
+                value_count: values.len() as u32,
+                values_le: values.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            };
+            hashes.push(leg::step_tile_leaf_hash_ctx_v1(&b.job_context, &profile_id, &leaf));
+            tiles.push((index, leaf));
+        }
+        let target = expected.step.output_preimage.coord;
+        let assemble = |tiles: &[(u64, leg::PalwStepTileLeafV1)], hashes: &[Hash64], chunks: &[Vec<u8>]| {
+            gdn_refutation_from_leaves_v2(b, target, hashes, tiles, &[], &[], chunks, leg::PALW_STEP_LEG_MAX_LEAVES)
+        };
+        let assembled = assemble(&tiles, &hashes, &[]).unwrap();
+        assert_eq!(*assembled, expected);
+        assert!(assemble(&tiles, &hashes[..hashes.len() - 1], &[]).is_err());
+        assert!(assemble(&tiles, &hashes, &[vec![0; 4]]).is_err());
+        let mut foreign = hashes.clone();
+        foreign[0] = Hash64::from_bytes([91; 64]);
+        assert!(assemble(&tiles, &foreign, &[]).is_err());
+        let mut duplicate = tiles.clone();
+        duplicate.push(tiles.iter().find(|(i, _)| *i == expected.step.output_opening.leaf_index).unwrap().clone());
+        assert!(assemble(&duplicate, &hashes, &[]).is_err());
+        let mut altered = tiles.clone();
+        altered.iter_mut().find(|(i, _)| *i == expected.step.output_opening.leaf_index).unwrap().1.values_le[0] ^= 1;
+        assert!(assemble(&altered, &hashes, &[]).is_err());
+        let verdict = check_gdn_step_refutation_v2(
+            &assembled,
+            b.committed_execution_root,
+            profile_id,
+            &PalwNoWeightsV1,
+            leg::PALW_STEP_LEG_MAX_LEAVES,
+        );
+        assert_eq!(verdict.is_ok(), wrong);
+    }
+}

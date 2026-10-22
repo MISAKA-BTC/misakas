@@ -7,7 +7,9 @@ use crate::palw_native_custody_v3::{NativeReadyExchangeV3, PalwNativeCustodyCont
 use kaspa_consensus_core::{
     Hash64,
     palw_claim_challenge_v2::{PAID_CLAIM_RECEIPTS_V2, PalwPaidClaimAuthorityV2},
-    palw_kernel_material_query_v4::{PALW_KERNEL_MATERIAL_QUERY_FRAME_BYTES_V4, PalwKernelMaterialUnitQueryV4},
+    palw_kernel_material_query_v4::{
+        PALW_KERNEL_MATERIAL_QUERY_FRAME_BYTES_V4, PalwKernelMaterialUnitQueryV4, material_provider_generation_from_route_v4,
+    },
     palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1},
     palw_native_resource_v1::{
         NativeDemandLeaseV1, NativeRetainedV1, preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_v1,
@@ -47,6 +49,8 @@ pub struct PrivateKernelPaidCheckSpecV4 {
     provider_address: String,
     payer_key: PathBuf,
     #[serde(deserialize_with = "bounded_funding")]
+    /// Each distinct input permits at most one immutable action slot. Include
+    /// funding for every demand and the eventual receipt; no automatic top-up.
     funding_outpoints: Vec<String>,
     maximum_fee_sompi: u64,
     max_input_bytes: u64,
@@ -56,6 +60,10 @@ pub struct PrivateKernelPaidCheckSpecV4 {
     max_requests: u32,
     /// Explicit permission for a funded answer obligation after a classified
     /// remote acquisition failure. No value is inferred from a local timeout.
+
+    /// Explicit admission upper bound for funded availability obligations.
+    /// Each signature uses min(this bound, own DAA + native response window).
+    /// No authorization is inferred from a local timeout.
     challenge_valid_until_daa: Option<u64>,
     #[serde(skip)]
     _owner: Option<NativeDemandLeaseV1>,
@@ -181,11 +189,44 @@ fn receipt_accepted(route: &PalwKernelRouteStateV1, a: &PalwPaidClaimAuthorityV2
         Ok(route.paid_claim_round_v3(&a.enrollment.id(), round)?.receipts.iter().any(|r| r.signer == signer))
     } else {
         let id = misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/PAID-CLAIM-RECEIPT/V2", &(a.enrollment.id(), signer));
-        Ok(route
-            .aux_row::<PaidClaimReceiptV2>(PAID_CLAIM_RECEIPTS_V2, &id)
-            .is_some_and(|r| r.signer == signer && r.enrollment == a.enrollment.id()))
+        let receipt = route.aux_row::<PaidClaimReceiptV2>(PAID_CLAIM_RECEIPTS_V2, &id);
+        if route.paid_bootstrap_binding_v6(&a.enrollment.id()).map_err(|e| e.to_string())?.is_some() {
+            let Some(lock) = route.paid_claim_effective_lock_v6(a)? else { return Ok(false) };
+            return Ok(receipt.is_some_and(|r| {
+                r.signer == signer
+                    && r.enrollment == a.enrollment.id()
+                    && r.round == 0
+                    && lock.source_valid
+                    && r.assignment == lock.assignment
+                    && r.source_context == lock.context
+                    && r.sample_seed == lock.seed
+            }));
+        }
+        Ok(receipt.is_some_and(|r| r.signer == signer && r.enrollment == a.enrollment.id()))
     }
 }
+fn receipt_namespace_matches_v6(
+    route: &PalwKernelRouteStateV1,
+    inner: &KernelRouteObjectV1,
+    enrollment: &Digest,
+) -> Result<(), String> {
+    let KernelRouteObjectV1::PaidClaimV2 { object } = inner else { return Ok(()) };
+    let approved = matches!(object, PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { .. });
+    if !matches!(
+        object,
+        PaidClaimObjectV2::Receipt { .. }
+            | PaidClaimObjectV2::RoundReceipt { .. }
+            | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { .. }
+    ) {
+        return Ok(());
+    }
+    let native = route.paid_bootstrap_binding_v6(enrollment).map_err(|e| e.to_string())?.is_some();
+    if approved != native {
+        return Err("own receipt namespace differs from immutable signed WAL; hold without rebinding".into());
+    }
+    Ok(())
+}
+
 fn receipt_from_saved(object: &PalwConsensusObjectV2, checker: PalwBondKeyV2) -> Result<PaidClaimReceiptV2, String> {
     let PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, .. } = object else {
         return Err("checker WAL is not a native kernel object".into());
@@ -198,7 +239,10 @@ fn receipt_from_saved(object: &PalwConsensusObjectV2, checker: PalwBondKeyV2) ->
     let decoded = retain_native_value_decode_v1(raw, || KernelRouteObjectV1::decode(bytes)).map_err(|e| e.to_string())?;
     match &*decoded {
         KernelRouteObjectV1::PaidClaimV2 {
-            object: PaidClaimObjectV2::Receipt { receipt } | PaidClaimObjectV2::RoundReceipt { receipt },
+            object:
+                PaidClaimObjectV2::Receipt { receipt }
+                | PaidClaimObjectV2::RoundReceipt { receipt }
+                | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { receipt },
         } => Ok(receipt.clone()),
         _ => Err("checker WAL is not a paid seat receipt".into()),
     }
@@ -222,6 +266,7 @@ fn validate_saved_object(
     round: u32,
     source: &VerifiedPaidClaimSourcesV2,
     provider: PalwBondKeyV2,
+    material_consent: Option<Hash64>,
     valid_until: Option<u64>,
 ) -> Result<(), String> {
     if let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, .. } = object {
@@ -240,8 +285,9 @@ fn validate_saved_object(
             || *root != Hash64::from_bytes(base)
             || *dependency != Hash64::from_bytes(base)
             || *consent != Hash64::from_bytes(source.authority().enrollment.material_consent)
+            || material_consent.is_some_and(|expected| *consent != expected)
             || *p != provider
-            || Some(*valid_until_daa) != valid_until
+            || valid_until.is_none_or(|bound| *valid_until_daa > bound)
         {
             return Err("checker material challenge WAL differs from explicit exact generation/actor/deadline".into());
         }
@@ -250,7 +296,12 @@ fn validate_saved_object(
     let decoded = saved_kernel_object(object, actor)?;
     let bond = palw_kernel_bond_id_v1(&actor);
     match &*decoded {
-        KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::Receipt { .. } | PaidClaimObjectV2::RoundReceipt { .. } } => {
+        KernelRouteObjectV1::PaidClaimV2 {
+            object:
+                PaidClaimObjectV2::Receipt { .. }
+                | PaidClaimObjectV2::RoundReceipt { .. }
+                | PaidClaimObjectV2::ReceiptApprovedBootstrapV6 { .. },
+        } => {
             let receipt = receipt_from_saved(object, actor)?;
             if receipt.enrollment != enrollment
                 || receipt.round != round
@@ -301,12 +352,7 @@ fn court_action_accepted(
 ) -> Result<bool, String> {
     if let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, .. } = object {
         let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
-            root,
-            provider,
-            dependency,
-            stage,
-            position,
-            ..
+            root, dependency, ..
         } = &**action
         else {
             return Ok(false);
@@ -314,28 +360,17 @@ fn court_action_accepted(
         if *signer != actor || *root != Hash64::from_bytes(base) || *dependency != Hash64::from_bytes(base) {
             return Err("checker saved material challenge identity differs".into());
         }
-        let raw = route
-            .aux
-            .iter()
-            .find(|((table, key), _)| {
-                *table == kaspa_consensus_core::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_TABLE_V1
-                    && key.as_slice() == root.as_byte_slice()
-            })
-            .map(|(_, bytes)| bytes.as_slice());
-        let Some(raw) = raw else { return Ok(false) };
-        preflight_native_value_v1::<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>(raw, raw.len() as u64)
-            .map_err(|e| e.to_string())?;
-        let row = retain_native_value_decode_v1(raw, || {
-            borsh::from_slice::<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>(raw)
-        })
-        .map_err(|e| e.to_string())?;
-        return Ok(row.challenges.iter().any(|c| {
-            c.provider == *provider
-                && c.dependency == *dependency
-                && c.stage == *stage
-                && c.position == *position
-                && c.challenger == actor
-        }));
+        // Only the native applied-statement checkpoint authenticates this
+        // exact actor/consent/unit/deadline. The old coordinate projection and
+        // a spent funding input establish no such acceptance.
+        let checkpoint =
+            kaspa_consensus_core::palw_material_challenge_checkpoint_v4::material_challenge_checkpoint_from_route_v4(route, actor)
+                .map_err(|why| why.to_string())?;
+        return checkpoint
+            .map(|c| c.matches(Hash64::from_bytes(route.header.policy.network_domain), actor, action))
+            .transpose()
+            .map(|matched| matched.unwrap_or(false))
+            .map_err(str::to_string);
     }
     let decoded = saved_kernel_object(object, actor)?;
     match &*decoded {
@@ -347,7 +382,10 @@ fn court_action_accepted(
             if *claim == base && *demander == palw_kernel_bond_id_v1(&actor) =>
         {
             let ledger = route.ledger()?;
-            Ok(ledger.demands.get(&(base, *stage, *position)).is_some_and(|row| row.demanders.iter().any(|(d, _)| d == demander)))
+            // A public served answer satisfies the objective even after its
+            // demander row is retired. This is not an exact carrier-fee ACK.
+            Ok(ledger.served.contains_key(&(base, *stage, *position))
+                || ledger.demands.get(&(base, *stage, *position)).is_some_and(|row| row.demanders.iter().any(|(d, _)| d == demander)))
         }
         _ => Ok(false),
     }
@@ -379,24 +417,6 @@ impl PreparedKernelPaidCheckV4 {
             return Err("checker refuses unknown canonical work version".into());
         }
         let base = kaspa_consensus_core::palw_prospective_kernel_material_v4::commit_identity_v4(&work.commit).0;
-        let object_path = self.outbox.join("receipt.borsh");
-        let tx_path = self.outbox.join("transaction.borsh");
-        let mut object = if object_path.exists() {
-            let (raw, _raw) = read_bounded(&object_path, self.spec.max_input_bytes)?;
-            preflight_native_value_v1::<PalwConsensusObjectV2>(&raw[..], raw.len() as u64).map_err(|e| e.to_string())?;
-            Some(retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwConsensusObjectV2>(&raw)).map_err(|e| e.to_string())?)
-        } else {
-            None
-        };
-        let mut transaction = None;
-        let mut transaction_lease = None;
-        if tx_path.exists() {
-            let signed = object.as_ref().ok_or("checker tx WAL lacks signed receipt")?;
-            let (raw, _raw) = read_bounded(&tx_path, self.spec.max_input_bytes)?;
-            let (tx, lease) = super::recovery_ack_carrier_v4::decode_carrier(&raw, signed)?;
-            transaction = Some(tx);
-            transaction_lease = lease;
-        }
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
             &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
         );
@@ -407,45 +427,118 @@ impl PreparedKernelPaidCheckV4 {
             if matches!(self.tick.tick(Duration::from_secs(2)).await, kaspa_core::task::tick::TickReason::Shutdown) {
                 return Ok(());
             }
-            let api = self.manager.consensus().unguarded_session();
-            let route = api.palw_kernel_route_v1().ok_or("checker own native route unavailable")?;
-            let a = route.paid_claim_enrollment_v3(&enrollment)?;
+            let instance = self.manager.consensus();
+            let api = instance.unguarded_session_blocking();
+            let Some(route) = api.palw_kernel_route_v1() else {
+                kaspa_core::debug!("checker own native route unavailable; exact WAL retained");
+                continue;
+            };
+            let needs_finality =
+                match challenge_history::needs_finalized_view(&self.outbox, self.spec.max_input_bytes, self.checker, base) {
+                    Ok(needs) => needs,
+                    Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                        kaspa_core::debug!("checker challenge history unknown; exact WAL retained: {error}");
+                        continue;
+                    }
+                    Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+                };
+            let finalized_challenges = if needs_finality {
+                match api.palw_material_challenge_finalized_v4(self.checker) {
+                    Ok(view) => view,
+                    Err(error) => {
+                        kaspa_core::debug!("checker own finalized challenge state unavailable; no action: {error}");
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            let scanned = match outbox::scan_outbox(
+                &self.outbox,
+                &self.funding,
+                self.spec.max_input_bytes,
+                &route,
+                self.checker,
+                base,
+                enrollment,
+                self.spec.round,
+                finalized_challenges.as_ref(),
+            ) {
+                Ok(scanned) => scanned,
+                Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                    kaspa_core::debug!("checker own canonical action observation unknown; exact WAL retained: {error}");
+                    continue;
+                }
+                Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+            };
+            let outbox::CheckerOutboxV4 {
+                slot,
+                mut object,
+                mut transaction,
+                mut transaction_lease,
+                used_funding,
+                accepted_challenges,
+                observed_terminal,
+                awaiting_finality,
+                exhausted,
+                _metadata,
+            } = scanned;
+            // Continue monitoring the same canonical fact. A later rollback
+            // reselects its original WAL; a local completed flag cannot hide it.
+            if observed_terminal || awaiting_finality {
+                continue;
+            }
+            let (action_directory, object_path, tx_path) = outbox::action_paths(&self.outbox, slot);
+            let a = match route.paid_claim_enrollment_v3(&enrollment) {
+                Ok(authority) => authority,
+                Err(error) => {
+                    kaspa_core::debug!("checker own enrollment unavailable; exact WAL retained: {error}");
+                    continue;
+                }
+            };
             if a.enrollment.base_claim != base {
                 return Err("checker opening belongs to another enrolled claim".into());
             }
             if let Some(signed) = &object {
-                if court_action_accepted(&route, signed, self.checker, base)? {
-                    if saved_is_file_demand(signed, self.checker) {
-                        // RFC07-6: a Demand finding is "one round, all at once". Archive this accepted demand and go on with the
-                        // next unfiled unit, or — once the answers land — the re-check's receipt or filing. Bounded by max_requests.
-                        archive_demand_wal(&self.outbox, &object_path, &tx_path, demands_filed)?;
-                        demands_filed = demands_filed.checked_add(1).ok_or("checker demand count overflow")?;
-                        object = None;
-                        transaction = None;
-                        transaction_lease = None;
-                        kaspa_core::info!(
-                            "private checker demand accepted: {} demand {} (not a conviction)",
-                            self.spec.enrollment,
-                            demands_filed
-                        );
-                        continue;
-                    }
+                if court_action_accepted(&route, signed, self.checker, base)? && saved_is_file_demand(signed, self.checker) {
+                    archive_demand_wal(&self.outbox, &object_path, &tx_path, demands_filed)?;
+                    demands_filed = demands_filed.checked_add(1).ok_or("checker demand count overflow")?;
                     kaspa_core::info!(
-                        "private objective court action accepted: {} (not a computation approval)",
-                        self.spec.enrollment
+                        "private checker demand accepted: {} demand {} (not a conviction)",
+                        self.spec.enrollment,
+                        demands_filed
                     );
-                    return Ok(());
+                    continue;
                 }
             }
-            if receipt_accepted(&route, &a, self.spec.round, palw_kernel_bond_id_v1(&self.checker))? {
-                kaspa_core::info!(
-                    "private selected checker receipt accepted: {} round {} (not aggregate Final)",
-                    self.spec.enrollment,
-                    self.spec.round
-                );
-                return Ok(());
+            match receipt_accepted(&route, &a, self.spec.round, palw_kernel_bond_id_v1(&self.checker)) {
+                Ok(true) => {
+                    kaspa_core::info!(
+                        "private selected checker receipt accepted: {} round {} (not aggregate Final)",
+                        self.spec.enrollment,
+                        self.spec.round
+                    );
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    kaspa_core::debug!("checker own round unavailable; exact WAL retained: {error}");
+                    continue;
+                }
             }
             let domain = Hash64::from_bytes(route.header.policy.network_domain);
+            let material_consent = match material_provider_generation_from_route_v4(&route, Hash64::from_bytes(base), self.provider) {
+                Ok(consent) => consent,
+                Err(error) => {
+                    // A local decoding/resource refusal creates no provider
+                    // fault and never causes a receipt/challenge signature.
+                    kaspa_core::debug!("private checker current provider generation pending: {error}");
+                    continue;
+                }
+            };
+            if object.is_none() && material_consent.is_none() {
+                continue;
+            }
             let source = match sources(route, enrollment, self.spec.round) {
                 Ok(s) => s,
                 Err(error) => {
@@ -473,7 +566,7 @@ impl PreparedKernelPaidCheckV4 {
                     let query = PalwKernelMaterialUnitQueryV4 {
                         version: 4,
                         root: Hash64::from_bytes(base),
-                        consent: Hash64::from_bytes(a.enrollment.material_consent),
+                        consent: material_consent.ok_or("checker serving provider has no current active generation")?,
                         dependency: Hash64::from_bytes(base),
                         provider: self.provider,
                         stage,
@@ -496,60 +589,72 @@ impl PreparedKernelPaidCheckV4 {
                     max_workspace_bytes: self.spec.max_workspace_bytes,
                     max_units: self.spec.max_requests,
                 };
-                // PRINCIPLES §8: a retired compact V4 plan is never checked, receipted or credited.
                 if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
                     return Err(misaka_palw_kernel::claim_paid_v2::COMPACT_V4_RETIRED_REASON.into());
                 }
                 let checked_result = source.verify_using_provider_v4(&work.material, limits, query);
                 let signed = match checked_result {
                     Ok(checked) => {
-                        // RFC07-6: every missing unit of a Demand finding is demanded, one carrier each, in finding order,
-                        // skipping the units this checker already demanded on chain.
-                        let index = match checked.finding() {
-                            misaka_palw_kernel::ledger::OutsiderFindingV1::Demand(units) => {
-                                if demands_filed >= self.spec.max_requests {
-                                    return Err("checker demand budget (max_requests) exhausted".into());
-                                }
-                                let ledger = api.palw_kernel_route_v1().ok_or("checker own native route unavailable")?.ledger()?;
-                                let me = palw_kernel_bond_id_v1(&self.checker);
-                                let open = units.iter().position(|(stage, position)| {
-                                    *stage < 254
-                                        && !ledger
-                                            .demands
-                                            .get(&(base, *stage, *position))
-                                            .is_some_and(|row| row.demanders.iter().any(|(d, _)| *d == me))
-                                });
-                                match open {
-                                    Some(index) => index,
-                                    None if units.iter().any(|(stage, _)| *stage >= 254) => {
-                                        return Err(
-                                            "complete provider unit needs a monetary material Challenge, not a legacy FileDemand".into()
-                                        );
-                                    }
-                                    // Every missing unit is demanded by this checker: wait for the answers or the court's default.
-                                    None => continue,
-                                }
-                            }
-                            _ => 0,
+                        let Some(index) =
+                            source.next_provider_objective_action_index_v4(&checked, self.checker).map_err(|e| e.to_string())?
+                        else {
+                            continue;
                         };
-                        let action =
-                            objective_action_from_provider_check_v4(&source, &checked, self.checker, api.get_virtual_daa_score(), index)
-                                .map_err(|e| e.to_string())?;
+                        let action = objective_action_from_provider_check_v4(
+                            &source,
+                            &checked,
+                            self.checker,
+                            api.get_virtual_daa_score(),
+                            index,
+                        )
+                        .map_err(|e| e.to_string())?;
                         sign_provider_objective_action_v4(&self.key, domain, self.checker, &action).map_err(|e| e.to_string())?
                     }
                     Err(error) => {
                         use kaspa_consensus_core::palw_kernel_material_query_v4::{
                             PalwKernelMaterialFetchErrorV4 as E, monetary_material_challenge_object_v4,
                         };
-                        let Some((unit, cause)) = failure.into_inner() else { return Err(error.to_string()) };
+                        let Some((unit, cause)) = failure.into_inner() else {
+                            kaspa_core::debug!(
+                                "checker fresh verification/authority unknown; no new obligation or conviction: {error}"
+                            );
+                            continue;
+                        };
                         if !matches!(cause, E::Unavailable(_) | E::InvalidMaterial(_)) {
-                            return Err(format!("provider acquisition {cause}; no provider obligation or conviction"));
+                            kaspa_core::debug!("provider acquisition {cause}; no provider obligation or conviction");
+                            continue;
                         }
-                        let until = self.spec.challenge_valid_until_daa.ok_or_else(|| {
+                        match challenge_history::has_accepted_unit(
+                            &self.outbox,
+                            self.spec.max_input_bytes,
+                            self.checker,
+                            base,
+                            &accepted_challenges,
+                            &unit,
+                        ) {
+                            Ok(true) => continue,
+                            Ok(false) => {}
+                            Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                                kaspa_core::debug!("checker existing obligation unknown; exact WAL retained: {error}");
+                                continue;
+                            }
+                            Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+                        }
+                        let allowed_until = self.spec.challenge_valid_until_daa.ok_or_else(|| {
                             format!("provider unit {}:{}: {cause}; no explicit answer-obligation deadline", unit.stage, unit.position)
                         })?;
-                        if until <= api.get_virtual_daa_score() {
-                            return Err("explicit material challenge deadline already expired".into());
+                        let now = api.get_virtual_daa_score();
+                        let response_window = self
+                            .config
+                            .params
+                            .palw_monetary_material_v1
+                            .as_ref()
+                            .ok_or("checker monetary material policy absent")?
+                            .policy
+                            .response_window_daa;
+                        let until = allowed_until.min(now.checked_add(response_window).ok_or("checker admission deadline overflow")?);
+                        if until <= now {
+                            return Err("explicit material challenge authorization deadline already expired".into());
                         }
                         // Reacquire exact native generation before signing. A
                         // failed local quota/Unknown never enters this branch.
@@ -562,6 +667,66 @@ impl PreparedKernelPaidCheckV4 {
                 if !matches!(api.palw_object_rehearsal_v1(&signed), Some(PalwObjectRehearsalV1::Accepted)) {
                     continue;
                 }
+                if exhausted {
+                    return Err("checker explicit action/funding budget exhausted; immutable history retained".into());
+                }
+                if matches!(&*signed, PalwConsensusObjectV2::MonetaryMaterialActionV1 { .. }) {
+                    // Baseline survives a crash before signed-object publish;
+                    // no transaction can be relayed without both durable files.
+                    let Some(own) = api.palw_kernel_route_v1() else {
+                        kaspa_core::debug!("checker native route changed before challenge WAL; no publish");
+                        continue;
+                    };
+                    let finalized = match api.palw_material_challenge_finalized_v4(self.checker) {
+                        Ok(view) => view,
+                        Err(error) => {
+                            kaspa_core::debug!("checker finalized baseline unavailable; no publish: {error}");
+                            continue;
+                        }
+                    };
+                    match challenge_history::ensure_base(
+                        &self.outbox,
+                        self.spec.max_input_bytes,
+                        &own,
+                        self.checker,
+                        base,
+                        enrollment,
+                        self.spec.round,
+                        None,
+                        finalized.as_ref(),
+                    ) {
+                        Ok(()) => {}
+                        Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                            kaspa_core::debug!("checker challenge baseline unknown; no publish: {error}");
+                            continue;
+                        }
+                        Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+                    }
+                    // Recheck the same bounded immutable history against these
+                    // latest own snapshots. A different client using this key
+                    // cannot silently insert an unknown predecessor while we
+                    // publish a successor from an older scan.
+                    match outbox::scan_outbox(
+                        &self.outbox,
+                        &self.funding,
+                        self.spec.max_input_bytes,
+                        &own,
+                        self.checker,
+                        base,
+                        enrollment,
+                        self.spec.round,
+                        finalized.as_ref(),
+                    ) {
+                        Ok(latest) if latest.slot == slot && latest.object.is_none() && !latest.exhausted => {}
+                        Ok(_) => continue,
+                        Err(outbox::CheckerOutboxErrorV4::NativeView(error)) => {
+                            kaspa_core::debug!("checker challenge history changed before publish: {error}");
+                            continue;
+                        }
+                        Err(outbox::CheckerOutboxErrorV4::Outbox(error)) => return Err(error),
+                    }
+                }
+                owned_dir(&action_directory)?;
                 publish_borsh(&object_path, &*signed, self.spec.max_input_bytes)?;
                 object = Some(signed);
             }
@@ -574,6 +739,7 @@ impl PreparedKernelPaidCheckV4 {
                 self.spec.round,
                 &source,
                 self.provider,
+                material_consent,
                 self.spec.challenge_valid_until_daa,
             )?;
             let signature_ok = match &**signed {
@@ -617,7 +783,10 @@ impl PreparedKernelPaidCheckV4 {
                 let locked = std::collections::HashSet::new();
                 let minimum =
                     crate::palw_panel::palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.config.params, signed, daa);
-                let Some((point, entry)) = self.funding.iter().find_map(|point| {
+                let Some((point, entry)) = self.funding.iter().enumerate().find_map(|(i, point)| {
+                    if used_funding[i] {
+                        return None;
+                    }
                     api.get_virtual_utxo_entry(*point)
                         .filter(|e| {
                             e.amount >= minimum
@@ -662,6 +831,9 @@ impl PreparedKernelPaidCheckV4 {
             }
             let _hold = &transaction_lease;
             let tx = transaction.as_ref().ok_or("checker transaction WAL absent")?;
+            if tx.inputs.len() != 1 || !self.funding.contains(&tx.inputs[0].previous_outpoint) {
+                return Err("checker exact carrier input outside current explicit authorization; WAL retained".into());
+            }
             if self
                 .flow
                 .mining_manager()
@@ -671,14 +843,45 @@ impl PreparedKernelPaidCheckV4 {
             {
                 continue;
             }
-            let entry = api
-                .get_virtual_utxo_entry(tx.inputs[0].previous_outpoint)
-                .ok_or("checker original UTXO unavailable; exact WAL retained")?;
+            let Some(entry) = api.get_virtual_utxo_entry(tx.inputs[0].previous_outpoint) else {
+                // Reorg/IBD or an unrelated spend does not authorize a new
+                // input, signature or action slot. Keep monitoring exact WAL.
+                kaspa_core::debug!("checker original UTXO unavailable; exact WAL retained");
+                continue;
+            };
+            let fee = tx
+                .outputs
+                .iter()
+                .try_fold(0u64, |sum, output| sum.checked_add(output.value))
+                .and_then(|outputs| entry.amount.checked_sub(outputs));
+            if entry.script_public_key != script
+                || tx.outputs.len() != 1
+                || tx.outputs[0].script_public_key != script
+                || fee.is_none_or(|fee| fee > self.spec.maximum_fee_sompi)
+            {
+                return Err("checker saved carrier exceeds current payer/change/fee authorization; exact WAL retained".into());
+            }
+            if api.palw_bond_payout_payload_v2(PalwBondKeyV2(tx.inputs[0].previous_outpoint)).is_some()
+                || !crate::palw_panel::palw_fee_funding_usable_v1(
+                    &tx.inputs[0].previous_outpoint,
+                    &entry,
+                    api.get_virtual_daa_score(),
+                    self.config.params.coinbase_spend_maturity(),
+                    None,
+                    &std::collections::HashSet::new(),
+                )
+            {
+                continue;
+            }
             let _relay =
                 super::recovery_ack_carrier_v4::reserve_carrier_build_v4(signed, &entry, self.payer.verification_key.as_ref().len())?;
             match tokio::time::timeout(
                 Duration::from_secs(10),
-                self.flow.submit_rpc_transaction(&api, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden),
+                self.flow.submit_rpc_transaction(
+                    &instance.unguarded_session(),
+                    tx.clone(),
+                    kaspa_mining::mempool::tx::Orphan::Forbidden,
+                ),
             )
             .await
             {
@@ -689,6 +892,9 @@ impl PreparedKernelPaidCheckV4 {
         }
     }
 }
+
+mod challenge_history;
+mod outbox;
 
 #[cfg(test)]
 mod tests;

@@ -119,6 +119,10 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         }
         // ADR-0191 step B (tag 245): designated-custodian traffic, not an H-1 obligation.
         O::TirDesignatedEventV1 { .. } => false,
+        // RFC reader/router declaration is registration traffic, like a router binding.
+        O::ReaderRouterDeclaredV2 { .. } | O::SourceBootstrapV1 { .. } | O::RoutedMaterialAnsweredV2 { .. } => false,
+        // A routed step accusation is a court opening, like the GDN one-move accusation.
+        O::RoutedStepAccusedV2 { .. } => true,
         // R-D2-READY (tag 230): seat readiness, not an H-1 obligation.
         O::SeatReadinessRootV1 { .. } => false,
         O::SeatReadinessDemandedV1 { .. } | O::SeatReadinessAnsweredV1 { .. } => false,

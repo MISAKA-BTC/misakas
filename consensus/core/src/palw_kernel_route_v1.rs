@@ -1662,7 +1662,7 @@ impl PalwKernelRouteStateV1 {
             ledger.note_native_candidate_projection_v9(owner, class).map_err(E::Decode)?;
         }
         ledger.commitment_scope_from_daa = commitment_scope;
-        self.apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(E::Decode)?;
+        self.apply_paid_claim_consumer_inputs_checked_v6(&mut ledger)?;
         Ok(crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(ledger, lease))
     }
 }

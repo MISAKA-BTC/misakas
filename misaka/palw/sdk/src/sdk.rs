@@ -662,12 +662,14 @@ impl PalwClassSdk {
             )));
         }
         if let Some(artifact) = crate::lineages::qwen36::qwen36_artifact_by_registered_root(holdings, artifact_root, profile) {
+            let native_identity = crate::lineages::qwen36::native_registered_identity_v2(holdings, &artifact, profile, artifact_root);
             let backend = misaka_palw_base0::qwen36_backend::Qwen36Backend::from_registered_profile(
                 artifact,
                 self.network_id.clone(),
                 profile.clone(),
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
             )?;
+            let backend = if native_identity { backend.with_resolved_artifact_identity_v2(class_id, artifact_root)? } else { backend };
             return Ok(self.ruled_v1(Box::new(
                 backend
                     .with_step_ladder_cap(self.court.max_step_leaf_count())

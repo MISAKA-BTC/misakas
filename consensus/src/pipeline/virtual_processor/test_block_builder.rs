@@ -58,7 +58,7 @@ impl TestBlockBuilder {
                 finality_point,
                 pruning_point,
             )
-            .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+            .map_err(|error| error.into_rule_error_v1())?;
         let (pov_virtual_parents, pov_virtual_ghostdag_data) =
             self.pick_virtual_parents(pov_sink, virtual_parent_candidates, pruning_point, round_tips);
         let pov_sink_multiset = self.utxo_multisets_store.get(pov_sink).unwrap();

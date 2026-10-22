@@ -1490,6 +1490,14 @@ impl PalwPanelService {
                         // At the widest prefill run the ledger grants, on this duty's own instance —
                         // the one offloaded below (int-10.2 A2).
                         let mut resolved = resolved;
+                        let routing_owner =
+                            match self.bind_native_routing_replay_v2(&session, resolved.as_mut(), duty.claim_id, &ctx) {
+                                Ok(owner) => owner,
+                                Err(why) => {
+                                    warn!("[{PALW_PANEL}] claim {}: native routed replay held: {why}", duty.claim_id);
+                                    break 'verdict None;
+                                }
+                            };
                         let backends = self.backends();
                         let reserved = match self.reserve_replay_at_widest_run_v1(
                             "full-seat",
@@ -1523,6 +1531,10 @@ impl PalwPanelService {
                             b.execute_for_verdict(&ctx_for_blocking, &prompt_for_blocking)
                         })
                         .await;
+                        if let Err(why) = self.refresh_native_routing_replay_v2(&session, routing_owner.as_ref()) {
+                            warn!("[{PALW_PANEL}] claim {}: replay context changed: {why}", duty.claim_id);
+                            break 'verdict None;
+                        }
                         crate::palw_backends::log_storage_v1(PALW_PANEL, "replay", &storage_before, &self.class_holdings);
                         match replayed {
                             Ok((backend, Ok(roots))) => {

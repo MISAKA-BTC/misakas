@@ -2933,6 +2933,10 @@ pub struct Params {
     /// aux 141, [`crate::palw_class_registration_origin_v1`]) so a post-genesis class's original canonical identity can be
     /// authenticated by state alone. Dormant: `None` on every preset; requires the kernel route fence at or below it.
     pub palw_class_registration_origin_v1: Option<ForkActivation>,
+    /// Claim-level selected approval for the first useful-work source. No preset activates it.
+    pub palw_selected_source_bootstrap_v1: Option<crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1>,
+    /// Separate paid draw lineage for native approved bootstrap sources. All shipped presets leave it dormant.
+    pub palw_paid_bootstrap_source_v6: Option<crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapSourceFenceV6>,
 
     /// **ADR-0100 Decision 4's fence: a sharded class is licensed per shard.**
     ///
@@ -6229,6 +6233,8 @@ impl Params {
             palw_shard_court: self.palw_shard_court,
             palw_memory_routing_court_v2: self.palw_memory_routing_court_v2,
             palw_class_registration_origin_v1: self.palw_class_registration_origin_v1,
+            palw_selected_source_bootstrap_v1: self.palw_selected_source_bootstrap_v1,
+            palw_paid_bootstrap_source_v6: self.palw_paid_bootstrap_source_v6,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
             palw_kimi_k3: self.palw_kimi_k3,
@@ -7404,6 +7410,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_memory_routing_court_v2: None,
     palw_class_registration_origin_v1: None,
+    palw_selected_source_bootstrap_v1: None,
+    palw_paid_bootstrap_source_v6: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7774,6 +7782,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_memory_routing_court_v2: None,
     palw_class_registration_origin_v1: None,
+    palw_selected_source_bootstrap_v1: None,
+    palw_paid_bootstrap_source_v6: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -8126,6 +8136,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_memory_routing_court_v2: None,
     palw_class_registration_origin_v1: None,
+    palw_selected_source_bootstrap_v1: None,
+    palw_paid_bootstrap_source_v6: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -13681,6 +13693,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_memory_routing_court_v2: None,
     palw_class_registration_origin_v1: None,
+    palw_selected_source_bootstrap_v1: None,
+    palw_paid_bootstrap_source_v6: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,

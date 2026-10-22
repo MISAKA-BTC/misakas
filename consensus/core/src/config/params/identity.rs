@@ -482,6 +482,12 @@ impl Params {
         if self.palw_class_registration_origin_v1 == Some(ForkActivation::never()) {
             self.palw_class_registration_origin_v1 = None;
         }
+        if self.palw_selected_source_bootstrap_v1.is_some_and(|f| f.at == ForkActivation::never()) {
+            self.palw_selected_source_bootstrap_v1 = None;
+        }
+        if self.palw_paid_bootstrap_source_v6.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_paid_bootstrap_source_v6 = None;
+        }
         // ADR-0100 Decision 4, likewise.
         if self.palw_shard_licensing == Some(ForkActivation::never()) {
             self.palw_shard_licensing = None;
@@ -593,11 +599,21 @@ impl Params {
         if self.palw_paid_consumer_lifecycle_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_paid_consumer_lifecycle_v1 = None;
         }
-        if self.palw_panel_lifetime_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_panel_lifetime_v2 = None; }
-        if self.palw_claim_challenge_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_claim_challenge_v2 = None; }
-        if self.palw_claim_compact_v4.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_claim_compact_v4 = None; }
-        if self.palw_material_release_recovery_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_material_release_recovery_v2 = None; }
-        if self.palw_monetary_material_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_monetary_material_v1 = None; }
+        if self.palw_panel_lifetime_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_panel_lifetime_v2 = None;
+        }
+        if self.palw_claim_challenge_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_claim_challenge_v2 = None;
+        }
+        if self.palw_claim_compact_v4.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_claim_compact_v4 = None;
+        }
+        if self.palw_material_release_recovery_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_material_release_recovery_v2 = None;
+        }
+        if self.palw_monetary_material_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_monetary_material_v1 = None;
+        }
         if self.palw_model_verification_gate_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_model_verification_gate_v1 = None;
         }
@@ -1156,6 +1172,8 @@ impl Params {
             palw_shard_court,
             palw_memory_routing_court_v2,
             palw_class_registration_origin_v1,
+            palw_selected_source_bootstrap_v1,
+            palw_paid_bootstrap_source_v6,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -1499,6 +1517,8 @@ impl Params {
             ("palw_shard_court", *palw_shard_court),
             ("palw_memory_routing_court_v2", *palw_memory_routing_court_v2),
             ("palw_class_registration_origin_v1", *palw_class_registration_origin_v1),
+            ("palw_selected_source_bootstrap_v1", palw_selected_source_bootstrap_v1.map(|f| f.at)),
+            ("palw_paid_bootstrap_source_v6", palw_paid_bootstrap_source_v6.map(|f| f.activation)),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
             ("palw_kimi_k3", *palw_kimi_k3),
@@ -1799,6 +1819,16 @@ impl Params {
             h.write(b"palw_class_registration_origin_v1");
             h.write(at.daa_score().to_le_bytes());
         }
+        if let Some(fence) = self.palw_selected_source_bootstrap_v1 {
+            h.write(b"palw_selected_source_bootstrap_v1");
+            h.write(fence.at.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_byte_slice());
+        }
+        if let Some(fence) = self.palw_paid_bootstrap_source_v6 {
+            h.write(b"palw_paid_bootstrap_source_v6");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_slice());
+        }
         // ADR-0100 Decision 4's fence, NAMED likewise: it changes what licenses a claim.
         if let Some(licensing) = self.palw_shard_licensing {
             h.write(b"palw_shard_licensing");
@@ -2012,11 +2042,31 @@ impl Params {
             h.write(f.activation.daa_score().to_le_bytes());
             h.write(f.policy.digest().as_bytes());
         }
-        if let Some(f) = &self.palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &self.palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
-        if let Some(f) = &self.palw_claim_compact_v4 { h.write(b"palw_claim_compact_v4"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
-        if let Some(f) = &self.palw_material_release_recovery_v2 { h.write(b"palw_material_release_recovery_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &self.palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &self.palw_panel_lifetime_v2 {
+            h.write(b"palw_panel_lifetime_v2");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &self.palw_claim_challenge_v2 {
+            h.write(b"palw_claim_challenge_v2");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id());
+        }
+        if let Some(f) = &self.palw_claim_compact_v4 {
+            h.write(b"palw_claim_compact_v4");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id());
+        }
+        if let Some(f) = &self.palw_material_release_recovery_v2 {
+            h.write(b"palw_material_release_recovery_v2");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &self.palw_monetary_material_v1 {
+            h.write(b"palw_monetary_material_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
         if let Some(f) = &self.palw_model_verification_gate_v1 {
             h.write(b"palw_model_verification_gate_v1");
             h.write(f.activation.daa_score().to_le_bytes());
@@ -2886,6 +2936,8 @@ impl Params {
             palw_shard_court,
             palw_memory_routing_court_v2,
             palw_class_registration_origin_v1,
+            palw_selected_source_bootstrap_v1,
+            palw_paid_bootstrap_source_v6,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -3706,6 +3758,12 @@ impl Params {
         if let Some(at) = palw_class_registration_origin_v1.as_mut() {
             fork(at, visit);
         }
+        if let Some(fence) = palw_selected_source_bootstrap_v1.as_mut() {
+            fork(&mut fence.at, visit);
+        }
+        if let Some(fence) = palw_paid_bootstrap_source_v6.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // ADR-0100 Decision 4. Some-only, likewise.
         if let Some(activation) = palw_shard_licensing.as_mut() {
             fork(activation, visit);
@@ -3816,11 +3874,21 @@ impl Params {
         if let Some(f) = palw_paid_consumer_lifecycle_v1.as_mut() {
             fork(&mut f.activation, visit);
         }
-        if let Some(f) = palw_panel_lifetime_v2.as_mut() { fork(&mut f.activation, visit); }
-        if let Some(f) = palw_claim_challenge_v2.as_mut() { fork(&mut f.activation, visit); }
-        if let Some(f) = palw_claim_compact_v4.as_mut() { fork(&mut f.activation, visit); }
-        if let Some(f) = palw_material_release_recovery_v2.as_mut() { fork(&mut f.activation, visit); }
-        if let Some(f) = palw_monetary_material_v1.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_panel_lifetime_v2.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        if let Some(f) = palw_claim_challenge_v2.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        if let Some(f) = palw_claim_compact_v4.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        if let Some(f) = palw_material_release_recovery_v2.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        if let Some(f) = palw_monetary_material_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
         if let Some(f) = palw_model_verification_gate_v1.as_mut() {
             fork(&mut f.activation, visit);
         }
@@ -4442,6 +4510,8 @@ impl Params {
             palw_shard_court,
             palw_memory_routing_court_v2,
             palw_class_registration_origin_v1,
+            palw_selected_source_bootstrap_v1,
+            palw_paid_bootstrap_source_v6,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -5332,6 +5402,16 @@ impl Params {
             h.write(b"palw_class_registration_origin_v1");
             h.write(at.daa_score().to_le_bytes());
         }
+        if let Some(fence) = palw_selected_source_bootstrap_v1 {
+            h.write(b"palw_selected_source_bootstrap_v1");
+            h.write(fence.at.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_byte_slice());
+        }
+        if let Some(fence) = palw_paid_bootstrap_source_v6 {
+            h.write(b"palw_paid_bootstrap_source_v6");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_slice());
+        }
         // ADR-0100 Decision 4, Some-only for the same reason: every shipped preset leaves it
         // `None` and fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_shard_licensing {
@@ -5484,11 +5564,31 @@ impl Params {
             h.write(f.activation.daa_score().to_le_bytes());
             h.write(f.policy.digest().as_bytes());
         }
-        if let Some(f) = &palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
-        if let Some(f) = &palw_claim_compact_v4 { h.write(b"palw_claim_compact_v4"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
-        if let Some(f) = &palw_material_release_recovery_v2 { h.write(b"palw_material_release_recovery_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &palw_panel_lifetime_v2 {
+            h.write(b"palw_panel_lifetime_v2");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &palw_claim_challenge_v2 {
+            h.write(b"palw_claim_challenge_v2");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id());
+        }
+        if let Some(f) = &palw_claim_compact_v4 {
+            h.write(b"palw_claim_compact_v4");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id());
+        }
+        if let Some(f) = &palw_material_release_recovery_v2 {
+            h.write(b"palw_material_release_recovery_v2");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &palw_monetary_material_v1 {
+            h.write(b"palw_monetary_material_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
         if let Some(f) = &palw_model_verification_gate_v1 {
             h.write(b"palw_model_verification_gate_v1");
             h.write(f.activation.daa_score().to_le_bytes());

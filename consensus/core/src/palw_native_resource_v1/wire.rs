@@ -275,6 +275,13 @@ impl<T: NativeWireScanV1> NativeWireScanV1 for crate::palw_staged_court_state_v1
         arc_wire_allocation_v1::<T>(T::scan_native_wire_v1(reader)?)
     }
 }
+/// Retained own-state authority is a runtime reservation, not a wire codec.
+/// Serializing its inner observation does not let a peer recreate that owner.
+impl<T> NativeWireScanV1 for crate::palw_native_resource_v1::NativeRetainedV1<T> {
+    fn scan_native_wire_v1<R: Read>(_reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        Err(wire_bad("retained own-state context cannot be reconstructed from wire"))
+    }
+}
 /// A shared `Arc<T>` field: Borsh is exactly `T`; restore allocates one `Arc<T>` (two counters plus the payload).
 impl<T: NativeWireScanV1> NativeWireScanV1 for std::sync::Arc<T> {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {

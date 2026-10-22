@@ -239,6 +239,15 @@ impl PalwTypedKernelMaterialBundleV4 {
         for (stage, position, data) in &self.units {
             typed_kernel_classify_unit_v4(ledger, &claim, *stage, *position, data).map_err(E::Authentication)?;
         }
+        crate::palw_kernel_parameter_material_v4::verify_kernel_complete_parameters_v4(ledger, &claim, |ordinal| {
+            self.units
+                .binary_search_by_key(
+                    &(crate::palw_kernel_parameter_material_v4::PALW_KERNEL_PARAMETER_STAGE_V4, ordinal),
+                    |(stage, position, _)| (*stage, *position),
+                )
+                .ok()
+                .map(|index| self.units[index].2.as_slice())
+        })?;
         Ok(PalwMaterialScopeV1 {
             claim: self.claim,
             commitment: crate::palw_material_capacity_v1::kernel_material_commitment_v1(row),

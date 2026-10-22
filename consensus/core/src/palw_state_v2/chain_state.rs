@@ -3397,6 +3397,7 @@ impl PalwChainStateV2 {
                 )));
             }
         }
+        self.assert_reader_router_consistency_v2()?;
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;
@@ -3411,6 +3412,7 @@ impl PalwChainStateV2 {
         self.assert_econ_contracts_consistency_v1(params)?;
         // N3 (round 3): aux 130 rounds only past their fence; every stored judgement re-derived.
         self.assert_beacon_bootstrap_consistency_v1(params)?;
+        self.assert_source_bootstrap_consistency_v1(params)?;
         self.assert_panel_source_fee_consistency_v2()?;
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.

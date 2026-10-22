@@ -25,7 +25,52 @@ pub fn id(domain: &[u8], bytes: &[u8]) -> Digest {
 
 /// The id of a borsh-encodable object under `domain`.
 pub fn object_id<T: borsh::BorshSerialize>(domain: &[u8], object: &T) -> Digest {
-    id(domain, &borsh::to_vec(object).expect("borsh into a Vec cannot fail"))
+    // Borsh's length writer traverses fields without retaining an encoded
+    // copy. Feed the same canonical bytes directly into the existing framed
+    // hash, so a large claim/checker set needs no second allocation of itself.
+    let length = borsh::object_length(object).expect("in-memory Borsh identity length");
+    let mut state = keyed(domain);
+    state.update(&(length as u64).to_le_bytes());
+    let mut writer = IdentityWriter { state, written: 0 };
+    object.serialize(&mut writer).expect("in-memory Borsh identity serialization");
+    assert_eq!(writer.written, length, "Borsh identity serialization changed length between passes");
+    finish(writer.state)
+}
+
+struct IdentityWriter {
+    state: blake2b_simd::State,
+    written: usize,
+}
+impl std::io::Write for IdentityWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.written = self.written.checked_add(bytes.len()).ok_or_else(|| std::io::Error::other("Borsh identity length overflow"))?;
+        self.state.update(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod identity_controls {
+    use super::*;
+    #[test]
+    fn streaming_keeps_legacy_framing_for_nested_collections_and_capacity_boundaries() {
+        // Encoding compatibility only, not computation correctness or native
+        // admission. These controls are not an executed acceptance report.
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(9u64, Some("日本語".to_owned()));
+        map.insert(1, None);
+        for size in [0, 1, 1023, 1024, 1025, 65537] {
+            let object = (map.clone(), vec![37u8; size], [Some(2u64), None]);
+            let legacy = borsh::to_vec(&object).unwrap();
+            assert_eq!(
+                object_id(b"misaka-palw/kernel/id-compatibility/control", &object),
+                id(b"misaka-palw/kernel/id-compatibility/control", &legacy)
+            );
+        }
+    }
 }
 
 /// Hex, for messages.

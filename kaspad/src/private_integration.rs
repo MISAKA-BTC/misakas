@@ -43,18 +43,44 @@ pub use paid_v4_factory::private_paid_claim_params_v4;
 mod paid_bootstrap;
 pub use paid_bootstrap::export_private_paid_bootstrap_v3;
 mod paid_v4_bootstrap;
-pub use paid_v4_bootstrap::export_private_paid_bootstrap_v4;
+pub use paid_v4_bootstrap::{export_private_paid_bootstrap_v4, export_private_source_paid_bootstrap_v1};
 mod native_provider;
 pub use native_provider::PrivateNativeCustodySpecV3;
+mod kernel_paid_producer_v4;
+mod paid_claim_observation_v5;
+mod paid_claim_observation_v6;
 pub(crate) mod recovery_ack_carrier_v4;
 mod recovery_observation_v4;
 mod exec_origin_coverage_v1;
-mod kernel_paid_producer_v4;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
 mod kernel_paid_checker_v4;
 pub use kernel_paid_checker_v4::PrivateKernelPaidCheckSpecV4;
 mod kernel_paid_replace_v4;
 pub use kernel_paid_replace_v4::PrivateKernelPaidReplaceSpecV4;
+mod source_bootstrap_checker_v1;
+pub use source_bootstrap_checker_v1::PrivateSourceBootstrapCheckerSpecV1;
+mod source_bootstrap_producer_v1;
+pub use source_bootstrap_producer_v1::PrivateSourceBootstrapProducerSpecV1;
+mod source_bootstrap_factory_v1;
+pub use source_bootstrap_factory_v1::{
+    private_source_bootstrap_paid_params_v1, private_source_bootstrap_paid_params_with_consumer_v6, private_source_bootstrap_params_v1,
+};
+mod paid_material_generation_export_v5;
+pub use paid_material_generation_export_v5::PrivatePaidMaterialGenerationExportSpecV5;
+
+/// Separate explicit worker inputs for a common paid/source campaign Config.
+/// Defaults start no new worker and preserve every older constructor contract.
+#[derive(Default)]
+pub struct AdditionalCampaignWorkersV1 {
+    pub source_checker: Option<PrivateSourceBootstrapCheckerSpecV1>,
+    pub source_producer: Option<PrivateSourceBootstrapProducerSpecV1>,
+    pub generation_export: Option<PrivatePaidMaterialGenerationExportSpecV5>,
+    pub kernel_paid_replace: Option<PrivateKernelPaidReplaceSpecV4>,
+}
+mod kernel_paid_material_generation_worker_v5;
+pub use kernel_paid_material_generation_worker_v5::PrivateKernelPaidMaterialGenerationSpecV5;
+mod kernel_material_replacement_worker_v4;
+pub use kernel_material_replacement_worker_v4::PrivateKernelMaterialReplacementSpecV4;
 pub use recovery_ack_carrier_v4::PrivateRecoveryAckFeeSpecV4;
 
 pub fn parse_private_recovery_provider_roster_v4(
@@ -69,6 +95,40 @@ pub fn parse_private_recovery_provider_roster_v4(
         return Err("recovery providers must be a sorted distinct roster of 2..8 bonds".into());
     }
     Ok(providers)
+}
+
+/// The private observation list has fixed inline storage; CLI parsing cannot
+/// grow an unbounded Vec before the native exporter reserves its own copy.
+pub struct PrivatePaidObservationClaimsV5 {
+    bases: [kaspa_consensus_core::Hash64; paid_claim_observation_v5::MAX_OBSERVED_PAID_CLAIMS_V5],
+    count: usize,
+}
+impl PrivatePaidObservationClaimsV5 {
+    pub fn empty() -> Self {
+        Self { bases: [kaspa_consensus_core::Hash64::default(); paid_claim_observation_v5::MAX_OBSERVED_PAID_CLAIMS_V5], count: 0 }
+    }
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let maximum = paid_claim_observation_v5::MAX_OBSERVED_PAID_CLAIMS_V5;
+        if raw.is_empty() || raw.len() > maximum * 129 || raw.split(',').count() > maximum {
+            return Err("paid observations require 1..64 explicit Hash64 base claims".into());
+        }
+        let mut out = Self::empty();
+        for value in raw.split(',') {
+            let base = kernel_paid_producer_v4::hash(value)?;
+            if base == kaspa_consensus_core::Hash64::default() || out.bases[..out.count].contains(&base) {
+                return Err("paid observation bases must be distinct nonzero Hash64 values".into());
+            }
+            out.bases[out.count] = base;
+            out.count += 1;
+        }
+        Ok(out)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+    fn as_slice(&self) -> &[kaspa_consensus_core::Hash64] {
+        &self.bases[..self.count]
+    }
 }
 
 pub const PRIVATE_PROBE_MARKER_V1: &str = "rfc12-private-probe-v1.json";
@@ -338,6 +398,20 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
         "releaseApproval": false,
         "securitySoundnessMeasured": false,
     });
+    if let Some(fence) = config.params.palw_selected_source_bootstrap_v1 {
+        manifest["sourceBootstrapPrivatePolicy"] = serde_json::json!({
+            "activationDaa": fence.at.daa_score(), "policyId": fence.policy.id().to_string(),
+            "versionedConsumerLineage": "UNAVAILABLE", "releaseApproval": false,
+            "securitySoundnessMeasured": false,
+        });
+    }
+    if let Some(fence) = config.params.palw_paid_bootstrap_source_v6 {
+        manifest["paidBootstrapSourcePrivatePolicyV6"] = serde_json::json!({
+            "activationDaa": fence.activation.daa_score(), "policyId": faster_hex::hex_string(&fence.policy.id()),
+            "bootstrapPolicyId": faster_hex::hex_string(&fence.policy.bootstrap_policy),
+            "sourceNamespace": "approved-bootstrap-v6", "releaseApproval": false, "securitySoundnessMeasured": false,
+        });
+    }
     // Preserve existing native-v1/population-v1/complete-v1 marker bytes. Only
     // the independently fingerprinted new profile gains its additional fields.
     if let Some(fence) = config.params.palw_claim_challenge_v2.filter(|f| f.activation.is_active(0)) {
@@ -464,6 +538,12 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         }
         config.params.validate_palw_v1().map_err(|error| error.to_string())?;
         config.params.validate_palw_v2_with_arming_records_v1(&drill.records).map_err(|error| format!("{error:?}"))?;
+    }
+    if config.params.palw_selected_source_bootstrap_v1.is_some() {
+        if config.private_population.is_some() {
+            return Err("private source profile refuses population overrides".into());
+        }
+        source_bootstrap_factory_v1::validate_private_source_bootstrap_relations_v1(&config.params, salt)?;
     } else if config.params.palw_claim_compact_v4.is_some() || config.params.palw_material_release_recovery_v2.is_some() {
         if config.private_population.is_some() {
             return Err("the paid-v4 private probe has no population override".into());
@@ -630,7 +710,48 @@ pub fn create_private_integration_core_with_native_custody_v4(
         None,
         None,
         None,
+        None,
+        PrivatePaidObservationClaimsV5::empty(),
     )
+}
+
+/// Only the feature-only private binary calls this constructor. An explicit
+/// operator policy pins the same source epoch on every node; checker identity
+/// and its separate carrier funding remain optional per node.
+pub fn create_private_integration_core_with_source_bootstrap_v1(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    checker: Option<PrivateSourceBootstrapCheckerSpecV1>,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    create_private_integration_core_with_source_workers_v1(runtime, args, fd_total_budget, config, checker, None)
+}
+
+pub fn create_private_integration_core_with_source_workers_v1(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    checker: Option<PrivateSourceBootstrapCheckerSpecV1>,
+    producer: Option<PrivateSourceBootstrapProducerSpecV1>,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    if config.params.palw_selected_source_bootstrap_v1.is_none() {
+        return Err("private source constructor requires its explicit policy".into());
+    }
+    prepare_private_integration_probe(args, &config)?;
+    let hook: crate::palw_native_custody_v3::PalwNativeCustodyHookV3 = Box::new(move |ctx| {
+        let checker = checker.map(|value| value.prepare(&ctx)).transpose()?;
+        let producer = producer.map(|value| value.prepare(&ctx)).transpose()?;
+        if let Some(checker) = checker {
+            checker.start()?;
+        }
+        if let Some(producer) = producer {
+            producer.start()?;
+        }
+        Ok(None)
+    });
+    Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config), Some(hook)))
 }
 
 /// Explicit all-target kernel producer entry. Its input and limits are supplied
@@ -660,6 +781,8 @@ pub fn create_private_integration_core_with_kernel_paid_work_v4(
         Some(work),
         None,
         None,
+        None,
+        PrivatePaidObservationClaimsV5::empty(),
     )
 }
 
@@ -678,9 +801,101 @@ pub fn create_private_integration_core_with_kernel_paid_consumers_v4(
     checker: Option<PrivateKernelPaidCheckSpecV4>,
     replace: Option<PrivateKernelPaidReplaceSpecV4>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    if (work.is_some() || replace.is_some()) && (!args.palw_produce || native.is_none()) {
-        return Err("kernel paid work/replacement requires the configured producer (sponsor) and authenticated custody exchange".into());
-    }
+    create_private_integration_core_with_campaign_workers_v1(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        native,
+        ack_fees,
+        recovery_providers,
+        work,
+        checker,
+        None,
+        None,
+        PrivatePaidObservationClaimsV5::empty(),
+        AdditionalCampaignWorkersV1 { kernel_paid_replace: replace, ..AdditionalCampaignWorkersV1::default() },
+    )
+}
+
+/// Explicit replacement sender; the original producer signs through its own
+/// authenticated custody exchange. Provider carrier funding remains separate.
+/// The older consumers constructor preserves its checker-only contract.
+#[allow(clippy::too_many_arguments)]
+pub fn create_private_integration_core_with_kernel_paid_replacement_v4(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: Option<PrivateNativeCustodySpecV3>,
+    ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
+    recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    work: Option<PrivateKernelPaidWorkSpecV4>,
+    checker: Option<PrivateKernelPaidCheckSpecV4>,
+    replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    create_private_integration_core_with_kernel_paid_material_generation_v5(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        native,
+        ack_fees,
+        recovery_providers,
+        work,
+        checker,
+        replacement,
+        None,
+    )
+}
+
+/// Explicit separately funded continuation of the exact original signed paid claim.
+#[allow(clippy::too_many_arguments)]
+pub fn create_private_integration_core_with_kernel_paid_material_generation_v5(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: Option<PrivateNativeCustodySpecV3>,
+    ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
+    recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    work: Option<PrivateKernelPaidWorkSpecV4>,
+    checker: Option<PrivateKernelPaidCheckSpecV4>,
+    replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
+    generation: Option<PrivateKernelPaidMaterialGenerationSpecV5>,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    create_private_integration_core_with_paid_observations_v5(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        native,
+        ack_fees,
+        recovery_providers,
+        work,
+        checker,
+        replacement,
+        generation,
+        PrivatePaidObservationClaimsV5::empty(),
+    )
+}
+
+/// Explicit readonly facts from the same paid-v4 node and its own native state.
+#[allow(clippy::too_many_arguments)]
+pub fn create_private_integration_core_with_paid_observations_v5(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: Option<PrivateNativeCustodySpecV3>,
+    ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
+    recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    work: Option<PrivateKernelPaidWorkSpecV4>,
+    checker: Option<PrivateKernelPaidCheckSpecV4>,
+    replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
+    generation: Option<PrivateKernelPaidMaterialGenerationSpecV5>,
+    observations: PrivatePaidObservationClaimsV5,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
     create_private_native_custody_v4_inner(
         runtime,
         args,
@@ -691,7 +906,9 @@ pub fn create_private_integration_core_with_kernel_paid_consumers_v4(
         recovery_providers,
         work,
         checker,
-        replace,
+        replacement,
+        generation,
+        observations,
     )
 }
 
@@ -706,14 +923,75 @@ fn create_private_native_custody_v4_inner(
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     kernel_work: Option<PrivateKernelPaidWorkSpecV4>,
     kernel_checker: Option<PrivateKernelPaidCheckSpecV4>,
-    kernel_replace: Option<PrivateKernelPaidReplaceSpecV4>,
+    kernel_replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
+    kernel_generation: Option<PrivateKernelPaidMaterialGenerationSpecV5>,
+    observations: PrivatePaidObservationClaimsV5,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    paid_v4_factory::validate_private_paid_claim_relations_v4(&config.params)?;
+    create_private_integration_core_with_campaign_workers_v1(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        native,
+        ack_fees,
+        recovery_providers,
+        kernel_work,
+        kernel_checker,
+        kernel_replacement,
+        kernel_generation,
+        observations,
+        AdditionalCampaignWorkersV1::default(),
+    )
+}
+
+/// One node/Params/DB can run the real paid producer/provider/checker plus the
+/// explicit source opening/checking workers. Every worker keeps its own keys,
+/// exact WAL and carrier funding; the V5 continuation remains available.
+#[allow(clippy::too_many_arguments)]
+pub fn create_private_integration_core_with_campaign_workers_v1(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: Option<PrivateNativeCustodySpecV3>,
+    ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
+    recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    kernel_work: Option<PrivateKernelPaidWorkSpecV4>,
+    kernel_checker: Option<PrivateKernelPaidCheckSpecV4>,
+    kernel_replacement: Option<PrivateKernelMaterialReplacementSpecV4>,
+    kernel_generation: Option<PrivateKernelPaidMaterialGenerationSpecV5>,
+    observations: PrivatePaidObservationClaimsV5,
+    additional: AdditionalCampaignWorkersV1,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    let source_profile = config.params.palw_selected_source_bootstrap_v1.is_some();
+    if (additional.source_checker.is_some() || additional.source_producer.is_some()) && !source_profile {
+        return Err("source workers require the separate explicit source-paid-v1 profile".into());
+    }
+    if kernel_generation.is_some() && (kernel_work.is_some() || kernel_replacement.is_some()) {
+        return Err(
+            "V5 continuation is exclusive with the original producer/replacement worker; it retains the original producer lock".into(),
+        );
+    }
+    if kernel_generation.is_some() && (!args.palw_produce || native.is_none()) {
+        return Err("V5 continuation requires the explicit original producer identity and paid-v4 custody configuration".into());
+    }
+    if (kernel_work.is_some() || kernel_replacement.is_some()) && (!args.palw_produce || native.is_none()) {
+        return Err("kernel work/replacement requires the configured producer and authenticated custody exchange".into());
+    }
+    if source_profile {
+        let salt = config.palw_drill_genesis_salt.as_ref().ok_or("source/paid profile salted identity absent")?;
+        source_bootstrap_factory_v1::validate_private_source_bootstrap_relations_v1(&config.params, salt)?;
+        if config.params.palw_claim_compact_v4.is_none() || config.params.palw_material_release_recovery_v2.is_none() {
+            return Err("combined source campaign constructor requires the exact paid-v4 base".into());
+        }
+    } else {
+        paid_v4_factory::validate_private_paid_claim_relations_v4(&config.params)?;
+    }
     if let Some(native) = &native {
         native.check_fixture(&config, args)?;
-    } else if kernel_checker.is_none()
+    } else if (kernel_checker.is_none() && observations.is_empty() && !source_profile && additional.generation_export.is_none())
         || kernel_work.is_some()
-        || kernel_replace.is_some()
+        || kernel_replacement.is_some()
         || ack_fees.is_some()
         || !recovery_providers.is_empty()
         || args.palw_produce
@@ -748,10 +1026,24 @@ fn create_private_native_custody_v4_inner(
         // consumes the context. An uploaded file supplies work, not authority.
         let producer = kernel_work.map(|work| work.prepare(&ctx)).transpose()?;
         let checker = kernel_checker.map(|checker| checker.prepare(&ctx)).transpose()?;
-        let replacement = kernel_replace.map(|replace| replace.prepare(&ctx)).transpose()?;
+        let generation = kernel_generation.map(|generation| generation.prepare(&ctx)).transpose()?;
+        let replacement = kernel_replacement.map(|replacement| replacement.prepare(&ctx)).transpose()?;
+        let kernel_paid_replace = additional.kernel_paid_replace.map(|replace| replace.prepare(&ctx)).transpose()?;
+        let source_checker = additional.source_checker.map(|checker| checker.prepare(&ctx)).transpose()?;
+        let source_producer = additional.source_producer.map(|producer| producer.prepare(&ctx)).transpose()?;
+        let generation_export = additional.generation_export.map(|export| export.prepare(&ctx)).transpose()?;
         recovery_observation_v4::start(&ctx)?;
         exec_origin_coverage_v1::start(&ctx)?;
+        if !observations.is_empty() {
+            paid_claim_observation_v5::start(&ctx, observations.as_slice())?;
+            if ctx.config.params.palw_paid_bootstrap_source_v6.is_some() {
+                paid_claim_observation_v6::start(&ctx, observations.as_slice())?;
+            }
+        }
         let exchange = hook(ctx)?;
+        if (producer.is_some() || replacement.is_some() || kernel_paid_replace.is_some()) && exchange.is_none() {
+            return Err("kernel work/replacement requires an explicit authenticated provider exchange".into());
+        }
         if let Some(producer) = producer {
             producer
                 .start(exchange.as_ref().ok_or("kernel paid work requires an explicit authenticated provider exchange")?.clone())?;
@@ -759,9 +1051,23 @@ fn create_private_native_custody_v4_inner(
         if let Some(checker) = checker {
             checker.start()?;
         }
+        if let Some(generation) = generation {
+            generation.start()?;
+        }
+        if let Some(checker) = source_checker {
+            checker.start()?;
+        }
+        if let Some(producer) = source_producer {
+            producer.start()?;
+        }
+        if let Some(export) = generation_export {
+            export.start()?;
+        }
         if let Some(replacement) = replacement {
-            replacement
-                .start(exchange.as_ref().ok_or("kernel replacement requires an explicit authenticated provider exchange")?.clone())?;
+            replacement.start(exchange.as_ref().ok_or("replacement provider exchange is absent")?.clone())?;
+        }
+        if let Some(replace) = kernel_paid_replace {
+            replace.start(exchange.as_ref().ok_or("kernel paid replacement exchange is absent")?.clone())?;
         }
         Ok(exchange)
     });

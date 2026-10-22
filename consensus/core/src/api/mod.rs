@@ -51,6 +51,16 @@ pub struct PalwAcceptanceReadsV1 {
     pub outpoints: Vec<(TransactionOutpoint, Option<UtxoEntry>)>,
 }
 
+/// Versioned own-node result for V2-stamped routed material. The old V3 tuple
+/// retains its meaning and cannot authorize this separate journal family.
+/// This runtime authority has no network deserializer.
+#[derive(Debug)]
+pub struct PalwNativeMaterialProviderAuthorityV4 {
+    pub row: crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+    pub material: crate::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+    pub provider_keys: Vec<(crate::palw_state_v2::PalwBondKeyV2, Vec<u8>)>,
+}
+
 /// **LIVE-R1 N2: the consensus half of the partition watchdog.** This node's recent resolves settled on
 /// `sink` after refusing the heavier `refused` on the PALW deep-reorg rule — a candidate it had
 /// UTXO-validated and weighed, and that did not strictly out-weigh its sink on `(safe frontier, safe
@@ -506,6 +516,79 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<crate::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
         Err("native material provider authority unavailable".into())
     }
+    /// Exact V2 reader/router declaration from this node's candidate state.
+    /// The result authenticates material identity, never computation approval.
+    fn palw_native_material_provider_authority_v4(
+        &self,
+        _checkpoint: BlockHash,
+        _header: &Header,
+        _ready: &crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<PalwNativeMaterialProviderAuthorityV4, String> {
+        Err("native routed material provider authority unavailable".into())
+    }
+    /// Before execution-root construction: exact prospective job/class/owner
+    /// routing from this node's stable selected native snapshot. None is only
+    /// dormant policy or an explicitly typed non-routed class.
+    fn palw_native_routing_execution_authority_v2(
+        &self,
+        _checkpoint: BlockHash,
+        _candidate: &Header,
+        _job: &crate::palw_v2::PalwJobContextV2,
+        _executor: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>>, String> {
+        Err("own native routing execution authority unavailable".into())
+    }
+    /// Exact native accepted-claim stamp and whole job, independently of any
+    /// provider record. None preserves historical unstamped V1 claims only.
+    fn palw_native_routing_claim_authority_v2(
+        &self,
+        _claim: crate::Hash64,
+        _job: &crate::palw_v2::PalwJobContextV2,
+    ) -> Result<Option<Arc<crate::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>>, String> {
+        Err("own native routing claim authority unavailable".into())
+    }
+    /// Bounded own-node accepted facts. Availability is a coherent read, not
+    /// selected approval or complete one-time settlement.
+    fn palw_paid_claim_observation_v5(
+        &self,
+        _base: crate::Hash64,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_paid_claim_observation_v5::NativePaidClaimObservationV5>,
+        String,
+    > {
+        Err("own native paid claim observations unavailable".into())
+    }
+    /// Explicit aux138 approved-bootstrap draw facts; legacy lock semantics
+    /// and the V5 observation contract remain separate.
+    fn palw_paid_bootstrap_observation_v6(
+        &self,
+        _base: crate::Hash64,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_paid_claim_observation_v6::NativePaidBootstrapObservationV6>,
+        String,
+    > {
+        Err("own-node paid bootstrap observation unavailable".into())
+    }
+    /// Coherent own selected-state observation for the finite source checker.
+    /// No remote bytes or public RPC projection can construct this authority.
+    fn palw_source_bootstrap_observation_v1(
+        &self,
+        _work: crate::Hash64,
+    ) -> Result<
+        crate::palw_source_bootstrap_v1::PalwSourceBootstrapObservationV1,
+        crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
+    > {
+        Err(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable)
+    }
+    /// The own fixed epoch before any producer has opened a source work.
+    fn palw_source_bootstrap_epoch_observation_v1(
+        &self,
+    ) -> Result<
+        crate::palw_source_bootstrap_v1::PalwSourceBootstrapObservationV1,
+        crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
+    > {
+        Err(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable)
+    }
     fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
         Err("monetary material covenant reads are unavailable".into())
     }
@@ -577,6 +660,15 @@ pub trait ConsensusApi: Send + Sync {
     fn palw_material_recovery_finalized_daa_v4(&self) -> Result<Option<u64>, String> {
         Err("native finalized recovery clock unavailable".into())
     }
+    /// Fixed observation of this actor's challenge prefix in one coherent OWN
+    /// native finalized snapshot. A local/remote copy is not finality authority
+    /// or computation/fee/approval evidence. None means no finalized snapshot.
+    fn palw_material_challenge_finalized_v4(
+        &self,
+        _actor: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<crate::palw_material_challenge_history_v4::PalwMaterialChallengeFinalizedViewV4>, String> {
+        Err("native finalized challenge prefix reads unavailable".into())
+    }
     fn palw_kernel_producer_candidate_v4(
         &self,
         _checkpoint: BlockHash,
@@ -590,6 +682,14 @@ pub trait ConsensusApi: Send + Sync {
     }
     fn palw_kernel_material_consent_accepted_v4(&self, _root: Hash64, _consent: Hash64) -> Result<bool, String> {
         Err("own-node current accepted kernel consent unavailable".into())
+    }
+    /// Metadata for the original immutable enrollment under the own current
+    /// recovery covenant. Caller files are never evidence of native authority.
+    fn palw_paid_material_generation_snapshot_v5(
+        &self,
+        _original: &crate::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Result<crate::palw_paid_material_generation_v5::PalwPaidMaterialGenerationSnapshotV5, String> {
+        Err("own-node paid material generation snapshot unavailable".into())
     }
     fn palw_kernel_material_admission_accepted_v4(
         &self,

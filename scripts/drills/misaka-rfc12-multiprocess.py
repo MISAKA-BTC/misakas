@@ -25,6 +25,8 @@ import time
 import urllib.request
 from misaka_wrpc_json import WsRpc
 from rfc12_owned_resources import OwnedResourceSampler, ResourceLimitExceeded
+import rfc12_kernel_consumers as kernel_consumers
+import rfc08_native_paid_observation as paid_observations
 
 
 class Blocked(RuntimeError):
@@ -223,6 +225,7 @@ class Drill:
     def __init__(self, plan, root):
         self.plan, self.root = plan, root
         self.processes, self.logs, self.links, self.observations = {}, {}, [], []
+        self.launch_sequence = 0
         self.values = {'ROOT': str(root)}
         for role, node in plan['nodes'].items():
             self.values[role + '_APPDIR'] = str(root / role / 'appdir')
@@ -230,6 +233,109 @@ class Drill:
             if 'grpc' in node:
                 self.values[role + '_GRPC'] = node['grpc']
         self.latencies = []
+        kernel_consumers.validate_request(plan)
+        self.kernel_consumers = None
+        self.kernel_observations = []
+        self.paid_observation_claims = {role: paid_observations.claims(node['argv']) for role, node in plan['nodes'].items()}
+        source_policies = [paid_observations.source_policy(node['argv']) for node in plan['nodes'].values()]
+        if any(policy is not None for policy in source_policies) and (
+                any(policy is None for policy in source_policies) or len(set(source_policies)) != 1):
+            raise ValueError('all source-paid-v1 roles including JOIN must declare the same explicit operator policy')
+        paid_policies = [paid_observations.paid_bootstrap_source_policy(node['argv']) for node in plan['nodes'].values()]
+        if any(policy is not None for policy in paid_policies) and (
+                any(policy is None for policy in paid_policies) or len(set(paid_policies)) != 1):
+            raise ValueError('all paid bootstrap roles including JOIN must declare the same explicit V6 policy')
+        self.paid_observation_processes = {}
+        self.paid_observations = []
+
+    def activate_kernel_consumers(self):
+        if self.plan.get('nativeKernelConsumers') is None:
+            return
+        # Bootstrap fixture commands have now exported actual work/specs from
+        # their own native checkpoint. Starting a worker before those class/job
+        # rows exist would terminate it on an authority read, not execute work.
+        self.kernel_consumers = kernel_consumers.prepare(self.plan, self.values)
+        self.wait(lambda: kernel_consumers.bootstrap_checkpoint(self, self.kernel_consumers, probe_context),
+            'own provider P2P import of the exact exported producer checkpoint before activation')
+        live = [row['role'] for row in self.kernel_consumers['workers'] if row['role'] in self.processes]
+        # Bring the native provider listener back before the producer's first
+        # actual upload. A refused upload must not be manufactured by launch
+        # order while its known owned server is still intentionally down.
+        live.sort(key=lambda role: (not any(arg.startswith('--private-probe-native-provider-listen=')
+            for arg in self.plan['nodes'][role]['argv']),
+            any(row['role'] == role and row['kind'] == 'producer' for row in self.kernel_consumers['workers'])))
+        for role in live:
+            self.kill(role)
+        for role in live:
+            self.start(role)
+            self.wait(lambda role=role: self.probe(role), role + ' actual kernel consumer startup')
+        self.kernel_observations.append(dict(milestone='consumer-activation', roles=live,
+            actualSameDatabaseRestart=True, stateCopied=False, selectedVerifierApprovalStatus='UNKNOWN'))
+        self.join_link('B', 'A')
+        self.kernel_checkpoint('shared-bootstrap', ('A', 'B'))
+
+    def kernel_checkpoint(self, label, roles, require_present=True):
+        if self.kernel_consumers is None:
+            self.paid_checkpoint(label, roles)
+            return None
+        def observe():
+            rows = {role: kernel_consumers.observe(self, role, self.kernel_consumers, probe_context) for role in roles}
+            if any(row is None for row in rows.values()):
+                return None if require_present else rows
+            identities = [(row['checkpoint'], row['claim']['ledgerRoot'], row['claim']['auxRoot']) for row in rows.values()]
+            if len(set(identities)) != 1:
+                return None
+            return rows
+        rows = self.wait(observe, 'actual kernel claim ' + label)
+        self.kernel_observations.append(dict(milestone=label, observations=rows,
+            status='ACTUAL_CLAIM_OBSERVED' if all(row is not None for row in rows.values()) else 'UNKNOWN',
+            selectedVerifierApprovalStatus='UNKNOWN', settledFeeStatus='UNKNOWN', releaseApproval=False))
+        self.paid_checkpoint(label, roles)
+        return rows
+
+    def paid_checkpoint(self, label, roles):
+        for role in roles:
+            for claim in self.paid_observation_claims.get(role, ()):
+                try:
+                    row = paid_observations.observe(self, role, claim, import_stamp, probe_context,
+                        self.plan['ruleset_id'], self.rpc_genesis(role))
+                    row['status'] = 'OWN_NATIVE_ROWS_OBSERVED_APPROVAL_UNKNOWN' if row['available'] else 'UNKNOWN'
+                except (OSError, ValueError, AssertionError, KeyError, RuntimeError) as error:
+                    row = dict(role=role, claimId=claim, status='UNKNOWN', reason=str(error), releaseApproval=False)
+                self.paid_observations.append(dict(milestone=label, **row))
+
+    def rpc_genesis(self, role):
+        rpc = self.rpc(role)
+        try:
+            return rpc.call('getPalwNodeStatus')['genesisHash']
+        finally:
+            rpc.close()
+
+    def kernel_checker_crash(self, winner):
+        if self.kernel_consumers is None:
+            return
+        # JOIN is intentionally absent until its fresh pruned P2P import. Crash
+        # an already live checker/provider child without copying any state/DB.
+        candidates = [row for row in self.kernel_consumers['workers']
+            if row['kind'] == 'checker' and row['role'] in self.processes]
+        if not candidates:
+            self.kernel_observations.append(dict(milestone='checker-os-crash', status='UNKNOWN', reason='no checker process live yet'))
+            return
+        worker = candidates[0]
+        peer = 'B' if worker['role'] == 'A' else 'A'
+        before = kernel_consumers.checker_wal(self, worker)
+        if not self.kill(worker['role']):
+            raise Blocked('checker exited before the intended actual OS crash')
+        self.start(worker['role'])
+        self.wait(lambda: self.probe(worker['role']), 'actual checker child cold RPC reopen')
+        self.join_link(worker['role'], peer)
+        self.wait(lambda: self.convergence(('A', 'B'), winner), 'actual checker/provider crash P2P convergence')
+        after = kernel_consumers.checker_wal(self, worker)
+        assert all(after.get(name) == value for name, value in before.items()), 'OS restart changed an immutable checker WAL record'
+        self.kernel_observations.append(dict(milestone='checker-os-crash', role=worker['role'], before=before, after=after,
+            actualOsKill=True, immutableCheckerWalObserved=bool(before), selectedVerifierApprovalStatus='UNKNOWN',
+            status='IMMUTABLE_WAL_OBSERVED' if before else 'UNKNOWN'))
+        self.paid_checkpoint('checker-os-crash', (worker['role'], peer))
 
     def argv(self, template):
         assert isinstance(template, list) and template and all(isinstance(x, str) for x in template), 'commands must be argv lists'
@@ -240,21 +346,45 @@ class Drill:
                               timeout=timeout or self.plan.get('command_timeout_s', 60)).stdout.strip()
 
     def start(self, role):
+        if role in self.processes:
+            raise Blocked('owned child handle still exists before restart: ' + role)
+        kernel_consumers.revalidate(self.kernel_consumers, role)
+        paid_observations.invalidate(self, role)
         folder = self.root / role
+        appdir = Path(self.values[role + '_APPDIR'])
+        if any(path.is_symlink() for path in (folder, appdir) + tuple(appdir.parents)):
+            raise Blocked('owned node/log/appdir path traverses a symlink')
         folder.mkdir(exist_ok=True)
-        log = open(folder / ('node-%d.log' % len(self.logs)), 'w')
         argv = self.argv(self.plan['nodes'][role]['argv'])
         assert '--nodnsseed' in argv and '--outpeers=0' in argv, 'all peer discovery must be controlled by the loopback links'
         assert not any(x.startswith(('--connect', '--addpeer')) for x in argv), 'use driver-owned links, not an unobserved peer route'
-        assert self.values[role + '_APPDIR'] in ' '.join(argv), 'each node must use its own owned appdir'
+        assert [value for value in argv if value.startswith('--appdir=')] == ['--appdir=' + str(appdir)], 'each node must use exactly its own owned appdir'
+        # Exclusive per-launch logs preserve the pre-crash child evidence and
+        # cannot follow a planted file symlink into an unrelated workspace.
+        log = open(folder / ('node-%06d.log' % self.launch_sequence), 'x')
+        self.launch_sequence += 1
+        try:
+            process = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+        except BaseException:
+            log.close()
+            raise
         self.logs[role] = log
-        self.processes[role] = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+        self.processes[role] = process
+        if self.paid_observation_claims.get(role):
+            self.paid_observation_processes[role] = process
 
     def kill(self, role):
-        process = self.processes.pop(role)
-        process.kill()  # own child: actual OS kill, never graceful RPC/destructor shutdown
+        process = self.processes[role]
+        # Preserve the owned handle through a failed kill/wait so final cleanup
+        # can retry and start() cannot silently overwrite a still-live child.
+        running = process.poll() is None
+        if running:
+            process.kill()  # actual OS kill, never graceful RPC shutdown
         process.wait(timeout=20)
-        self.logs[role].close()
+        del self.processes[role]
+        self.paid_observation_processes.pop(role, None)
+        self.logs.pop(role).close()
+        return running
 
     def rpc(self, role):
         host, port = self.plan['nodes'][role]['wrpc'].split(':')
@@ -383,7 +513,18 @@ class Drill:
             self.start(role)
         for role in ('A', 'B'):
             self.wait(lambda role=role: self.probe(role), role + ' RPC startup')
+        if self.plan.get('nativeKernelConsumers') is not None:
+            # Providers authenticate the producer context in THEIR own native
+            # chain. Establish that shared prefix by P2P before real bootstrap;
+            # starting on unrelated private DB histories would strand ingress.
+            self.join_link('B', 'A')
         self.fixture('bootstrap')
+        self.activate_kernel_consumers()
+        if self.kernel_consumers:
+            for owned_link in self.links:
+                owned_link.cut()
+            self.wait(lambda: all(not self.probe(role)['peers']['peerInfo'] for role in ('A', 'B')),
+                'kernel bootstrap links closed before isolated fork measurement')
         for role in ('A', 'B'):
             coherent(self.probe(role), self.plan, require_work=False)
         isolated_start = {role: self.probe(role)['dag']['virtualDaaScore'] for role in ('A', 'B')}
@@ -396,6 +537,7 @@ class Drill:
         winner = separate[self.plan['fork_winner']]['dag']['sink']
         link = self.join_link('B', 'A')
         self.wait(lambda: self.convergence(('A', 'B'), winner), 'initial fork convergence')
+        self.kernel_checkpoint('fork-convergence', ('A', 'B'))
         link.cut()
         self.wait(lambda: all(not self.probe(r)['peers']['peerInfo'] for r in ('A', 'B')), 'real P2P partition')
         self.fixture('partition')
@@ -404,6 +546,8 @@ class Drill:
         winner = separate[self.plan['partition_winner']]['dag']['sink']
         link.enabled.set()
         self.wait(lambda: self.convergence(('A', 'B'), winner), 'partition healing')
+        self.kernel_checkpoint('partition-healed', ('A', 'B'))
+        self.kernel_checker_crash(winner)
         old = self.probe('A')['dag']['sink']
         self.values['OLD_BLOCK'] = old
         self.fixture('prune')
@@ -415,6 +559,7 @@ class Drill:
         coherent(source, self.plan, require_finalized=True)
         assert source['dag']['pruningPointHash'] != source['node']['genesisHash'], 'pruning point never moved'
         assert source['oldBodyAvailable'] is False, 'source did not actually GC the old block body'
+        self.kernel_checkpoint('source-body-pruned', ('A',), require_present=False)
         winner = source['dag']['sink']
         self.start('JOIN')  # fresh DB, never copied from a source
         self.wait(lambda: self.probe('JOIN'), 'fresh join startup')
@@ -425,22 +570,34 @@ class Drill:
         assert joined['oldBodyAvailable'] is False, 'join secretly retained full old history'
         joined_epoch = import_stamp(joined['node'])[0]
         assert joined_epoch > 0, 'fresh pruned join did not complete a durable import session'
-        self.kill('JOIN')
+        self.kernel_checkpoint('fresh-pruned-join', ('A', 'JOIN'), require_present=False)
+        if not self.kill('JOIN'):
+            raise Blocked('JOIN exited before the intended actual OS crash')
         self.start('JOIN')  # the same owned DB after a forced process crash
         self.join_link('JOIN', 'A')
         self.wait(lambda: self.convergence(('A', 'JOIN'), winner, require_finalized=True), 'cold process restart agreement')
         row = self.probe('JOIN')
         coherent(row, self.plan, require_finalized=True)
         assert import_stamp(row['node'])[0] == joined_epoch, 'completed import epoch did not survive cold restart'
+        self.kernel_checkpoint('cold-pruned-join', ('A', 'JOIN'), require_present=False)
         count = exact_u64((row.get('shadow') or {}).get('claimsTotal'), 'native capacity claimsTotal')
         assert count >= self.plan['minimum_claims'], '100k-scale fixture was not reached'
         assert max(self.latencies) <= self.plan['maximum_probe_ms'], 'predeclared release probe latency limit exceeded'
 
     def close(self):
+        failures = []
         for link in self.links:
-            link.close()
+            try:
+                link.close()
+            except Exception as error:
+                failures.append(repr(error))
         for role in list(self.processes):
-            self.kill(role)
+            try:
+                self.kill(role)
+            except Exception as error:
+                failures.append(role + ': ' + repr(error))
+        if failures:
+            raise Blocked('owned child/link cleanup failed: ' + '; '.join(failures))
 
 
 class MeasuredDrill(Drill):
@@ -542,14 +699,17 @@ def main():
     assert len(endpoints) == len(set(endpoints)), 'roles/listeners need distinct owned ports'
     assert plan['fork_winner'] in ('A', 'B') and plan['partition_winner'] in ('A', 'B')
     validate_scenario_bounds(plan)
-    root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-p2p-'))
+    root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-p2p-')).resolve(strict=True)
     drill = MeasuredDrill(plan, root, limits)
     result = {'planSha256': hashlib.sha256(raw).hexdigest(), 'artifactDirectory': str(root),
               'status': 'FAIL', 'fullRfc12SecurityApproval': False, 'resourceLimits': limits, 'resourceLimitsMet': False,
-              'workflowTimeoutSeconds': plan['workflow_timeout_s']}
+              'workflowTimeoutSeconds': plan['workflow_timeout_s'], 'nativeKernelConsumersRequested': plan.get('nativeKernelConsumers') is not None}
     try:
         drill.run()
-        result['status'] = 'SCENARIOS_PASS'
+        drill.paid_checkpoint('run.after', tuple(drill.processes))
+        # Typed paid receipt/source approval is not exposed by the old public
+        # claim RPC. Observed work/process mechanics cannot certify that gate.
+        result['status'] = 'SCENARIOS_OBSERVED_APPROVAL_UNKNOWN' if drill.kernel_consumers or any(drill.paid_observation_claims.values()) else 'SCENARIOS_PASS'
     except Blocked as error:
         result.update(status='BLOCKED', reason=str(error))
     except Exception as error:
@@ -557,14 +717,26 @@ def main():
     finally:
         try:
             drill.close()
+        except Exception as error:
+            result.update(status='FAIL', cleanupError=repr(error))
         finally:
             result['sampledOwnedResources'] = drill.sampler.stop()
         result.update(observations=drill.observations, probeLatenciesMs=drill.latencies)
         result['fixtureCommands'] = drill.command_observations
         result['requiredNodeLaunchSamples'] = drill.node_launches
+        if any(drill.paid_observation_claims.values()):
+            result['nativePaidObservations'] = drill.paid_observations
+            result['selectedVerifierApprovalStatus'] = 'UNKNOWN'
+            result['oneTimeFeeSettlementStatus'] = 'UNKNOWN'
+        if plan.get('nativeKernelConsumers') is not None:
+            result['nativeKernelConsumers'] = drill.kernel_consumers
+            result['kernelWorkMilestones'] = drill.kernel_observations
+            result['usefulWorkAcceptanceStatus'] = 'UNKNOWN'
+            result['selectedVerifierApprovalStatus'] = 'UNKNOWN'
+            result['nativePaidCarrierPaymentsStatus'] = 'UNKNOWN'
         result['ownedDatabaseLogicalBytes'] = {role: sum(file.stat().st_size
             for file in (root / role).rglob('*') if file.is_file()) for role in ('A', 'B', 'JOIN')}
-        if result['status'] == 'SCENARIOS_PASS':
+        if result['status'] in ('SCENARIOS_PASS', 'SCENARIOS_OBSERVED_APPROVAL_UNKNOWN'):
             try:
                 check_process_limits(limits, result)
                 result['resourceLimitsMet'] = True

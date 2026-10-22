@@ -1854,6 +1854,44 @@ impl PalwProducerService {
             job,
             self.consensus_config.params.palw_prefill_draw_active_at(template.block.header.daa_score),
         );
+        // Prospective native routing is bound before executing any weight. Its
+        // authority has no execution root yet and cannot be reconstructed from
+        // a capture or the later material-provider journal.
+        let mut routing_candidate_v2 = template.block.header.clone();
+        routing_candidate_v2.nonce = nonce;
+        let routing_authority_v2 = if self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
+            f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(routing_candidate_v2.daa_score)
+        }) {
+            session.palw_native_routing_execution_authority_v2(
+                template.selected_parent_hash,
+                &routing_candidate_v2,
+                &job,
+                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond),
+            )?
+        } else {
+            None
+        };
+        if let Some(authority) = &routing_authority_v2 {
+            backend.bind_native_routing_execution_v2(Arc::clone(authority)).map_err(|e| e.to_string())?;
+        }
+        // This original owner stays live through signing, retention, submit
+        // and announcement, even when custody consumes the backend in a task.
+        let require_fresh_routing_v2 = || -> Result<(), String> {
+            if let Some(original) = &routing_authority_v2 {
+                let fresh = session
+                    .palw_native_routing_execution_authority_v2(
+                        original.checkpoint(),
+                        &routing_candidate_v2,
+                        &job,
+                        original.executor(),
+                    )?
+                    .ok_or("native routing execution authority disappeared")?;
+                if !original.same_execution_v2(&fresh) {
+                    return Err("native routing execution snapshot/import/declaration changed; next template".into());
+                }
+            }
+            Ok(())
+        };
         // **RFC-0002: never an IR claim its data-availability court cannot hear answered** (Phase F's
         // big-model probe, 2026-09-29). Every IR DA answer is checked by verifying the claim's binding
         // at the answerable ladder ([`palw_tir_da_answerable_leaves_v1`]); a job of more step leaves
@@ -1991,6 +2029,7 @@ impl PalwProducerService {
         .await
         .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: the draw in flight is abandoned"))?
         .map_err(|e| format!("the execution task did not finish: {e}"))??;
+        require_fresh_routing_v2()?;
         let storage_read_mib = crate::palw_backends::log_draw_storage_v1(PALW_PRODUCER, &storage_before, &self.class_holdings);
         let draw_millis = draw_started.elapsed().as_millis() as u64;
 
@@ -2124,6 +2163,7 @@ impl PalwProducerService {
         self.config.telemetry.producer_draw(facts.class_id, class_won, search.is_some(), draw_millis, storage_read_mib.unwrap_or(0));
         if let Some((nonce, won)) = search {
             attempt = won;
+            require_fresh_routing_v2()?;
             // Both under target. Sign the attempt id ONCE and publish.
             let kp = self.keypair.as_ref().ok_or("no signing key")?;
             let message = attempt_id_v2(&attempt);
@@ -2160,6 +2200,7 @@ impl PalwProducerService {
                 None => PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire(),
             };
             // The promise, kept before it is made. See `retain_execution`.
+            require_fresh_routing_v2()?;
             let material = self.retain_execution(message, &run.material)?;
             // **RFC-0007 Part II: the witness is the producer's obligation** (§II.7): a class whose attempts commit witness chunks keeps its
             // witness for the claim — the canonical serving set's `MatMul` outputs, in exactly the pinned number of chunks, with their
@@ -2233,6 +2274,7 @@ impl PalwProducerService {
             // block submitted into it waits forever on its validation result — the AsyncRuntime's
             // join, and the process, with it (8+ minutes at 0 % CPU on a graph-v7@2048 producer whose
             // 97 s draw finished after SIGINT). So the submit and the announcement both yield to it.
+            require_fresh_routing_v2()?;
             palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
                 .await
                 .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: block {hash} was not submitted"))?
@@ -2290,23 +2332,46 @@ impl PalwProducerService {
                     base: base.clone(),
                     ..draw.clone()
                 };
-                let authority = session.palw_native_material_provider_authority_v3(checkpoint, &header, &probe)?;
-                // Nothing below reads consensus: the session's read guard is not held across the providers' work.
+                let routed = row.terms.native_session.as_ref().is_some_and(|native| {
+                    native.codec == kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldCompleteV2
+                });
+                let (authority_row, provider_keys, manifest) = if routed {
+                    let authority = session.palw_native_material_provider_authority_v4(checkpoint, &header, &probe)?;
+                    if authority.row.terms.root != row.terms.root || authority.row.consent != row.consent {
+                        return Err("the V2 native session moved between draw and seal".to_string());
+                    }
+                    let (_, manifest) = crate::palw_native_custody_v3::palw_native_bundle_routed_v2(
+                        backend.as_ref(),
+                        &authority.row,
+                        &attempt,
+                        anchor,
+                        &capture,
+                        &prompt,
+                        prefill_draw,
+                        &authority.material,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    (authority.row, authority.provider_keys, manifest)
+                } else {
+                    let authority = session.palw_native_material_provider_authority_v3(checkpoint, &header, &probe)?;
+                    if authority.row.terms.root != row.terms.root || authority.row.consent != row.consent {
+                        return Err("the native session moved between draw and seal".to_string());
+                    }
+                    let (_, manifest) = palw_native_bundle_v3(
+                        backend.as_ref(),
+                        &authority.row,
+                        &attempt,
+                        anchor,
+                        &capture,
+                        &prompt,
+                        prefill_draw,
+                        authority.material,
+                    )?;
+                    (authority.row, authority.provider_keys, manifest)
+                };
+                // Provider publication re-reads its own candidate authority.
                 drop(session);
-                if authority.row.terms.root != row.terms.root || authority.row.consent != row.consent {
-                    return Err("the native session moved between the draw and the seal".to_string());
-                }
-                let (_, manifest) = palw_native_bundle_v3(
-                    backend.as_ref(),
-                    &authority.row,
-                    &attempt,
-                    anchor,
-                    &capture,
-                    &prompt,
-                    prefill_draw,
-                    authority.material,
-                )?;
-                let ready = draft_native_ready_v3(&authority.row, &attempt, anchor, manifest)?;
+                let ready = draft_native_ready_v3(&authority_row, &attempt, anchor, manifest)?;
                 if ready.session != draw.ready.session
                     || ready.consent != draw.ready.consent
                     || ready.providers != draw.ready.providers
@@ -2322,8 +2387,8 @@ impl PalwProducerService {
                     capture,
                     prompt,
                 };
-                let signatures = exchange.0.request_signatures_authenticated(&request, &authority.provider_keys)?;
-                palw_native_check_signatures_v3(&ready, &authority.provider_keys, &signatures)?;
+                let signatures = exchange.0.request_signatures_authenticated(&request, &provider_keys)?;
+                palw_native_check_signatures_v3(&ready, &provider_keys, &signatures)?;
                 Ok::<_, String>((ready, signatures, request.envelope.base))
             }),
         )

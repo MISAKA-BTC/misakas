@@ -34,6 +34,10 @@ pub enum RuleError {
     /// node capacity, never evidence that the submitted block violates a rule.
     #[error("local native capacity unavailable; virtual resolution was not completed: {0}")]
     LocalNativeCapacityUnavailable(crate::palw_native_resource_v1::NativeCoverageV1),
+    /// Missing own native history/store preparation is retryable local state,
+    /// never evidence against the submitted block or its peer.
+    #[error("local native context unavailable; virtual resolution was not completed: {0}")]
+    LocalNativeStateContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
 
     #[error("wrong block version: got {0} but expected {1}")]
     WrongBlockVersion(u16, u16),

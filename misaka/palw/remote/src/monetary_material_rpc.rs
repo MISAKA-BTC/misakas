@@ -184,7 +184,33 @@ impl MonetaryMaterialProofPagerV1 {
                 return Err("monetary proof changes a row mid-fragment or makes no progress".into());
             }
             self.hash.update(&fragment.bytes);
-            if matches!(fragment.table, PALW_MONETARY_MATERIAL_TABLE_V1 | PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2) {
+            // Challenge application checkpoints are committed by these pages,
+            // but are not provider recovery/ACK authority. Stream their bytes
+            // into the full aux hash without retaining a second population.
+            let challenge_checkpoint = fragment.table == PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2
+                && fragment.key.len() == 69
+                && fragment.key[0]
+                    == kaspa_consensus_core::palw_material_challenge_checkpoint_v4::PALW_MATERIAL_CHALLENGE_CHECKPOINT_PREFIX_V4;
+            if challenge_checkpoint
+                && fragment.row_bytes
+                    != kaspa_consensus_core::palw_material_challenge_checkpoint_v4::PALW_MATERIAL_CHALLENGE_CHECKPOINT_BYTES_V4 as u64
+            {
+                return Err("challenge application checkpoint has an invalid fixed extent".into());
+            }
+            let challenge_history = fragment.table == PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2
+                && fragment.key.len() == 69
+                && fragment.key[0]
+                    == kaspa_consensus_core::palw_material_challenge_history_v4::PALW_MATERIAL_CHALLENGE_HISTORY_PREFIX_V4;
+            if challenge_history
+                && fragment.row_bytes
+                    != kaspa_consensus_core::palw_material_challenge_history_v4::PALW_MATERIAL_CHALLENGE_HISTORY_BYTES_V4 as u64
+            {
+                return Err("challenge application history has an invalid fixed extent".into());
+            }
+            let retain = !challenge_checkpoint
+                && !challenge_history
+                && matches!(fragment.table, PALW_MONETARY_MATERIAL_TABLE_V1 | PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2);
+            if retain {
                 if (fragment.key.len() != 64
                     && !(fragment.table == PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2
                         && fragment.key.len() == 69
@@ -200,7 +226,7 @@ impl MonetaryMaterialProofPagerV1 {
             }
             self.offset += fragment.bytes.len() as u64;
             if self.offset == fragment.row_bytes {
-                if matches!(fragment.table, PALW_MONETARY_MATERIAL_TABLE_V1 | PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2) {
+                if retain {
                     self.retained.push((fragment.table, fragment.key.clone(), std::mem::take(&mut self.monetary_bytes)));
                 }
                 self.previous = Some((fragment.table, fragment.key.clone()));

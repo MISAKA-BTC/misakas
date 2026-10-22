@@ -96,6 +96,8 @@ pub fn kernel_material_replacement_v4(
     {
         return Err("replacement intent identity/roster/signed lifetime differs".into());
     }
+    crate::palw_material_release_recovery_v2::bounded_replacement_deadline_v4(now, intent.valid_until_daa, p.max_enrollment_daa)
+        .map_err(str::to_string)?;
     let old = row::<PalwMonetaryMaterialRowV1>(state, PALW_MONETARY_MATERIAL_TABLE_V1, intent.root)?;
     let rr = row::<PalwMaterialRecoveryRowV2>(state, PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, intent.root)?;
     let PalwMaterialRecoveryRowV2::Active(contract) = &*rr else { return Err("replacement root already terminal".into()) };

@@ -266,6 +266,70 @@ mod tests {
         invalid.version = 3;
         assert!(invalid.validate().is_err());
     }
+    #[test]
+    fn provider_generation_follows_its_own_replacements_cold_route_and_rollback() {
+        use crate::{
+            palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_route_policy_v1},
+            palw_material_release_recovery_v2::{
+                PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 as TABLE, PalwMaterialRecoveryContractV2 as Contract,
+                PalwMaterialRecoveryGenerationV2 as Generation, PalwMaterialRecoveryRowV2 as Row,
+                PalwMaterialRecoveryTermsV2 as Terms, PalwMaterialTerminalReceiptV2 as Terminal,
+            },
+            palw_native_resource_v1::NativeDecodeErrorV1,
+        };
+        // Projection-only fixtures, not an admission test or approved policy.
+        let q = query();
+        let bond = |n| PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes([n; 64]), 0));
+        let (a, b, c) = (bond(4), bond(5), bond(6));
+        let first = Hash64::from_bytes([7; 64]);
+        let next = Hash64::from_bytes([8; 64]);
+        let mut contract = Contract {
+            terms: Terms {
+                version: 2,
+                root: q.root,
+                initial_consent: first,
+                sponsor: bond(9),
+                nonce: Hash64::from_bytes([10; 64]),
+                policy: Hash64::from_bytes([11; 64]),
+                max_generations: 4,
+                all_generation_ack: true,
+            },
+            enrolled_daa: 1,
+            generations: vec![Generation { consent: first, providers: vec![a, b] }],
+        };
+        let policy = palw_kernel_route_policy_v1(Hash64::from_bytes([12; 64]), Hash64::from_bytes([13; 64]));
+        let mut route = PalwKernelRouteStateV1::new(policy, None, Default::default());
+        let key = (TABLE, q.root.as_byte_slice().to_vec());
+        let initial = borsh::to_vec(&Row::Active(contract.clone())).unwrap();
+        route.aux.insert(key.clone(), initial.clone());
+        assert_eq!(material_provider_generation_from_route_v4(&route, q.root, a).unwrap(), Some(first));
+        contract.generations.push(Generation { consent: next, providers: vec![b, c] });
+        route.aux.insert(key.clone(), borsh::to_vec(&Row::Active(contract.clone())).unwrap());
+        assert_eq!(material_provider_generation_from_route_v4(&route, q.root, a).unwrap(), Some(first));
+        assert_eq!(material_provider_generation_from_route_v4(&route, q.root, b).unwrap(), Some(next));
+        assert_eq!(material_provider_generation_from_route_v4(&route, q.root, c).unwrap(), Some(next));
+        assert_eq!(material_provider_generation_from_route_v4(&route, q.root, bond(14)).unwrap(), None);
+        let cold: PalwKernelRouteStateV1 = borsh::from_slice(&borsh::to_vec(&route).unwrap()).unwrap();
+        assert_eq!(material_provider_generation_from_route_v4(&cold, q.root, b).unwrap(), Some(next));
+        route.aux.insert(key.clone(), initial);
+        assert_eq!(material_provider_generation_from_route_v4(&route, q.root, b).unwrap(), Some(first));
+        assert_eq!(material_provider_generation_from_route_v4(&route, q.root, c).unwrap(), None);
+        let terminal = Row::Terminal(Terminal {
+            contract: contract.clone(),
+            final_consent: next,
+            tail_block: Hash64::from_bytes([15; 64]),
+            release_block: Hash64::from_bytes([16; 64]),
+            unused_native_session: false,
+            acknowledged: Default::default(),
+        });
+        route.aux.insert(key.clone(), borsh::to_vec(&terminal).unwrap());
+        assert_eq!(material_provider_generation_from_route_v4(&route, q.root, b).unwrap(), None);
+        contract.terms.root = Hash64::from_bytes([17; 64]);
+        route.aux.insert(key.clone(), borsh::to_vec(&Row::Active(contract)).unwrap());
+        assert!(matches!(material_provider_generation_from_route_v4(&route, q.root, b), Err(NativeDecodeErrorV1::Decode(_))));
+        route.aux.insert(key, vec![0]);
+        assert!(matches!(material_provider_generation_from_route_v4(&route, q.root, b), Err(NativeDecodeErrorV1::Decode(_))));
+    }
 }
 
 /// Build an explicitly funded public availability challenge, never arithmetic
@@ -337,11 +401,24 @@ pub fn material_provider_generation_v4(
     root: Hash64,
     provider: PalwBondKeyV2,
 ) -> Result<Option<Hash64>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    let Some(route) = state.kernel_route() else { return Ok(None) };
+    material_provider_generation_from_route_v4(route, root, provider)
+}
+
+/// Same generation selection for a worker's own accepted route snapshot. This
+/// only selects a data-retention generation; it grants no query authority,
+/// verifier assignment or computation approval. Each actual query must obtain
+/// fresh own-native authority, including across reorg/import and provider swap.
+/// A caller-supplied or remote route is not authenticated by this helper.
+pub fn material_provider_generation_from_route_v4(
+    route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+    root: Hash64,
+    provider: PalwBondKeyV2,
+) -> Result<Option<Hash64>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     use crate::{
         palw_material_release_recovery_v2::{PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, PalwMaterialRecoveryRowV2},
         palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E, retain_native_value_decode_classified_v1},
     };
-    let Some(route) = state.kernel_route() else { return Ok(None) };
     let Some(raw) = route
         .aux
         .iter()
@@ -364,6 +441,9 @@ pub fn material_provider_generation_v4(
                 E::Decode(e) => E::Decode(e.to_string()),
             },
         )?;
+    if row.contract().terms.root != root {
+        return Err(E::Decode("current material generation row substitutes its root key".into()));
+    }
     let PalwMaterialRecoveryRowV2::Active(contract) = &*row else { return Ok(None) };
     Ok(contract.generations.iter().rev().find(|g| g.providers.contains(&provider)).map(|g| g.consent))
 }

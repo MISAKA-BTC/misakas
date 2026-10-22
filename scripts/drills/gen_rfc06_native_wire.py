@@ -65,9 +65,14 @@ def qualify(t,item):
     return re.sub(r'(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*',token,t)
 
 private={};public=[]
+# Runtime authorities retain the own authenticated snapshot. They have no
+# transport codec; reaching one through a future wire field is a source error.
+runtime_authorities={'PalwNativeRoutingExecutionAuthorityV2', 'PalwNativeRoutingClaimAuthorityV2', 'PalwNativeRoutingWorkAuthorityV2'}
 for path in sorted(G['visited']):
     item=defs.get(path)
     if not item or path in manual:continue
+    if item['name'] in runtime_authorities:
+        raise ValueError(('own runtime authority cannot be reconstructed from wire bytes',path))
     if path=='misaka_palw_kernel::ledger::KernelLedgerV1':continue # not a Borsh wire layout
     kind,form,body=(item[k] for k in ['kind','form','body'])
     fieldtypes=[]
@@ -347,6 +352,34 @@ body=code[a:b].removeprefix('let shape=').removesuffix(';').replace('&mut frame'
 code=code[:a]+'let shape=scan_native_aux_row_v1(table,&key[..key_bytes as usize],&mut frame)?;'+code[b:]
 code+='\n/// One aux row\'s exact codec, dispatched on its table and FULL key (`k`) and, where two family layouts share a key shape, its row\n/// length (`n`). Tables 42–106 and 112 follow scripts/drills/rfc06_native_aux_spec.py; a key shape no fold writes fails closed.\npub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1>{let k=key;let n=frame.remaining();let key_bytes=k.len() as u64;let prefix=k.first().copied().unwrap_or(0);if table==crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1 && crate::palw_claim_local_v1::palw_claim_local_frame_scan_active_v1(){return Err(wire::wire_bad("a liability frame contains its own namespace"));}Ok('+body+')}\n'
 code+=AUX_HELPERS
+# Versioned fixed receipt namespace, separate from root64 and old A1 streams.
+# One row per existing challenger bond; restore scans no unbounded history.
+checkpoint_arm = '134 if key_bytes==69 && prefix==0xA2=>crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4::scan_native_wire_v1(frame)?,\n'
+checkpoint_arm += '134 if key_bytes==69 && prefix==0xA3=>crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryV4::scan_native_wire_v1(frame)?,\n'
+checkpoint_marker = '134=>return Err('
+if code.count(checkpoint_marker) != 1:
+ raise ValueError('material checkpoint namespace requires the explicit aux134 fallback')
+code=code.replace(checkpoint_marker, checkpoint_arm+checkpoint_marker, 1)
+# Prospective per-reader identity: an immutable class row, a durable first-use
+# marker and per-claim V2 stamps. Old unstamped claims retain their V1 meaning.
+router_marker = '135=>return Err('
+if code.count(router_marker) != 1:
+ raise ValueError('reader/router namespace requires the explicit aux135 fallback')
+router_arms = '136 if key_bytes==64=>crate::palw_reader_router_v2::PalwReaderRouterRowV2::scan_native_wire_v1(frame)?,\n'
+router_arms += '136 if key_bytes==65 && prefix==0xA1=><u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
+router_arms += '136 if key_bytes==65 && prefix==0xA2=><crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
+router_arms += '136=>return Err(wire::wire_bad("unallocated reader/router V2 row namespace")),\n'
+# RFC07 finite bootstrap: the full fixed epoch key and the two exact Hash64
+# namespaces, matching the schema owner's epoch/work/canonical-index journal.
+router_arms += '137 if key_bytes==1 && prefix==0=>crate::palw_source_bootstrap_v1::PalwSourceBootstrapEpochRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '137 if key_bytes==65 && prefix==1=>crate::palw_source_bootstrap_v1::PalwSourceBootstrapWorkRowV1::scan_native_wire_v1(frame)?,\n'
+router_arms += '137 if key_bytes==65 && prefix==2=><crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,\n'
+router_arms += '137=>return Err(wire::wire_bad("unallocated selected-source bootstrap row namespace")),\n'
+router_arms += '138 if key_bytes==65 && prefix==1=>misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6::scan_native_wire_v1(frame)?,\n'
+router_arms += '138 if key_bytes==65 && prefix==2=>crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6::scan_native_wire_v1(frame)?,\n'
+router_arms += '138=>return Err(wire::wire_bad("unallocated paid bootstrap source V6 row namespace")),\n'
+
+code=code.replace(router_marker, router_arms+router_marker, 1)
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)
 
 # Concrete native ledger row codecs; reflected from the same KernelLedger

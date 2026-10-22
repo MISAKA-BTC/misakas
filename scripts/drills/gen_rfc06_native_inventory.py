@@ -98,14 +98,25 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
 
 primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()'}
 # `PalwSharedCourtV1<T>` (G14) is a generic Arc newtype whose Borsh layout is T's: a container with hand-written visitors.
-containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow','PalwSharedCourtV1'}
+containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow','PalwSharedCourtV1','NativeRetainedV1'}
 queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3','crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
        'crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialIntentV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4','crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4',
        'crate::palw_kernel_parameter_material_v4::PalwKernelSegmentedPartV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterRowV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterOpeningV4',
        'crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4',
        'crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4','crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitResponseV4',
+       'crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4',
+       'crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryV4','crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryAnchorV4',
        'crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4',
        'crate::palw_step_refute::memory_v2::PalwGdnStepRefutationV2',
+       'crate::palw_reader_router_v2::PalwReaderRouterRowV2',
+       'crate::palw_routed_material_v2::PalwMaterialAuthorityRecordV2','crate::palw_routed_material_v2::PalwHeldMaterialBundleV2','crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2',
+       'crate::palw_source_bootstrap_v1::PalwSourceBootstrapEpochRowV1','crate::palw_source_bootstrap_v1::PalwSourceBootstrapWorkRowV1','crate::palw_source_bootstrap_v1::PalwSourceBootstrapActionV1','crate::palw_source_bootstrap_v1::PalwSourceBootstrapOwnContextV1',
+       'misaka_palw_challenge::approved_source_v1::ApprovedSourceEventV1',
+       'misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6',
+       'misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourceBindingV6',
+       'crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6',
+       'crate::palw_routing_court_v2::PalwRoutingCourtAccusationV2',
+       'crate::palw_step_refute::routing_v2::PalwRoutedStepRefutationV2','crate::palw_step_refute::routing_v2::PalwRoutedLeafEvidenceV2',
        'misaka_palw_kernel::spec::retrieval::SliceResponseV1','misaka_palw_kernel::spec::retrieval::EntryResponseV1','misaka_palw_kernel::spec::retrieval::RetrievalItemV1',
        'misaka_palw_kernel::route::KernelRouteObjectV1','crate::palw_state_v2::PalwConsensusObjectV2','crate::palw_state_v2::PalwTransitionExtrasV1',
        'crate::palw_claim_compact_v4::PalwPaidCompactContractV4','crate::palw_claim_compact_v4::PalwPaidCompactProofBindingV4','crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2','crate::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2','crate::palw_material_capacity_v1::PalwMonetaryMaterialProviderStoreV1',

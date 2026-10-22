@@ -330,3 +330,146 @@ pub fn classify_kernel_segmented_v4(
     }
     Ok(())
 }
+
+/// Complete immutable artifact identity requires both native tensor trees to
+/// agree with one reconstructed tensor. Authenticating each row alone leaves
+/// the other tree root unconstrained. This is material identity verification,
+/// never a proof of correct model computation or an approval receipt.
+///
+/// Actual row cardinalities are checked before destination allocation. Each
+/// raw unit is independently preflighted/owned, then the complete Tensor and
+/// dual-tree work are reserved from the registered declaration. A standalone
+/// caller cannot authorize a huge destination merely by sending a short frame.
+pub fn verify_kernel_complete_parameters_v4<'b>(
+    ledger: &KernelLedgerV1,
+    claim: &Digest,
+    get: impl Fn(u32) -> Option<&'b [u8]>,
+) -> Result<(), crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+    use crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+    use crate::palw_native_resource_v1::{
+        NativeCoverageV1, NativeDecodeErrorV1, native_kernel_parameter_auth_requests_v4, native_kernel_parameter_tensor_requests_v4,
+        preflight_native_value_v1, reserve_native_requests_v1, retain_native_value_decode_classified_v1,
+    };
+    let mut first = 0u64;
+    let mut failure = None;
+    let walk = visit_kernel_parameters_v4(ledger, claim, |spec| {
+        if failure.is_some() {
+            return Ok(());
+        }
+        let attempt = (|| -> Result<(), E> {
+            let units = spec.units().map_err(E::Authentication)?;
+            let elements = spec
+                .rows
+                .checked_mul(spec.row_len)
+                .ok_or_else(|| E::Authentication("complete parameter element count overflow".into()))?;
+            if spec.maximum_unit_bytes().map_err(E::Authentication)? > PALW_KERNEL_MATERIAL_UNIT_BYTES_V4
+                || first.checked_add(units).is_none_or(|n| n > u64::from(u32::MAX) + 1)
+            {
+                return Err(E::Authentication("complete parameter exceeds actual supported row/ordinal envelope".into()));
+            }
+            let read = |local: u64| -> Result<crate::palw_native_resource_v1::NativeRetainedV1<PalwKernelParameterRowV4>, E> {
+                let ordinal = u32::try_from(
+                    first.checked_add(local).ok_or_else(|| E::Authentication("complete parameter ordinal overflow".into()))?,
+                )
+                .map_err(|e| E::Authentication(e.to_string()))?;
+                let raw = get(ordinal).ok_or_else(|| E::Authentication("complete parameter row/tile absent".into()))?;
+                if raw.len() as u64 > PALW_KERNEL_MATERIAL_UNIT_BYTES_V4 {
+                    return Err(E::Authentication("complete parameter unit byte cap exceeded".into()));
+                }
+                preflight_native_value_v1::<PalwKernelParameterRowV4>(raw, raw.len() as u64).map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::Unsupported {
+                        E::LocalResource(NativeCoverageV1::unsupported::<PalwKernelParameterRowV4>(
+                            "complete parameter row preflight",
+                            &e.to_string(),
+                        ))
+                    } else {
+                        E::Authentication(e.to_string())
+                    }
+                })?;
+                let value = retain_native_value_decode_classified_v1(raw, || borsh::from_slice::<PalwKernelParameterRowV4>(raw))
+                    .map_err(|error| match error {
+                        NativeDecodeErrorV1::Resource(resource) => E::LocalResource(resource),
+                        NativeDecodeErrorV1::Decode(error) => E::Authentication(error.to_string()),
+                    })?;
+                let _auth = reserve_native_requests_v1(native_kernel_parameter_auth_requests_v4(&value).map_err(E::LocalResource)?)
+                    .map_err(E::LocalResource)?;
+                classify_kernel_parameter_v4(ledger, claim, ordinal, &value).map_err(E::Authentication)?;
+                Ok(value)
+            };
+            let lanes = |unit: &PalwKernelParameterRowV4| -> u64 {
+                match &unit.opening {
+                    PalwKernelParameterOpeningV4::RowV2(o) => o.values.len() as u64,
+                    PalwKernelParameterOpeningV4::TileV3(o) => o.values.len() as u64,
+                }
+            };
+            // This pass allocates only the actual bounded wire row, never a
+            // destination derived solely from an unfulfilled declaration.
+            let mut available = 0u64;
+            for local in 0..units {
+                let unit = read(local)?;
+                available = available
+                    .checked_add(lanes(&unit))
+                    .ok_or_else(|| E::Authentication("complete parameter offered lane count overflow".into()))?;
+                if available > elements {
+                    return Err(E::Authentication("complete parameter offered lanes exceed declared tensor".into()));
+                }
+            }
+            if available != elements {
+                return Err(E::Authentication("complete parameter offered rows do not fill declared tensor".into()));
+            }
+            let requests = native_kernel_parameter_tensor_requests_v4(&spec).map_err(E::LocalResource)?;
+            let _full = reserve_native_requests_v1(requests).map_err(E::LocalResource)?;
+            let mut values = Vec::new();
+            values.try_reserve_exact(usize::try_from(elements).map_err(|e| E::Authentication(e.to_string()))?).map_err(|e| {
+                E::LocalResource(NativeCoverageV1::unsupported::<misaka_palw_tir::Tensor>(
+                    "complete parameter allocation",
+                    &e.to_string(),
+                ))
+            })?;
+            for local in 0..units {
+                let unit = read(local)?;
+                let part = match &unit.opening {
+                    PalwKernelParameterOpeningV4::RowV2(o) => &o.values,
+                    PalwKernelParameterOpeningV4::TileV3(o) => &o.values,
+                };
+                if (values.len() as u64).checked_add(part.len() as u64).is_none_or(|n| n > elements) {
+                    return Err(E::Authentication("complete parameter changed during reconstruction".into()));
+                }
+                values.extend_from_slice(part);
+            }
+            if values.len() as u64 != elements {
+                return Err(E::Authentication("complete parameter reconstruction changed cardinality".into()));
+            }
+            let mut shape = Vec::new();
+            shape.try_reserve_exact(spec.declaration.shape.len()).map_err(|e| {
+                E::LocalResource(NativeCoverageV1::unsupported::<misaka_palw_tir::Tensor>(
+                    "complete parameter shape allocation",
+                    &e.to_string(),
+                ))
+            })?;
+            for dim in &spec.declaration.shape {
+                shape.push(usize::try_from(*dim).map_err(|e| E::Authentication(e.to_string()))?);
+            }
+            let tensor =
+                misaka_palw_tir::Tensor::new(spec.declaration.dtype, shape, values).map_err(|e| E::Authentication(e.to_string()))?;
+            let root = match spec.suite {
+                2 => misaka_palw_kernel::merkle::tensor_commitment_v2(&tensor),
+                3 => misaka_palw_kernel::merkle3::tensor_commitment_v3(&tensor),
+                _ => return Err(E::Authentication("complete parameter has no native tensor suite".into())),
+            };
+            if root != spec.commitment {
+                return Err(E::Authentication("complete parameter rows do not reproduce both registered tensor trees".into()));
+            }
+            first = first.checked_add(units).ok_or_else(|| E::Authentication("complete parameter inventory overflow".into()))?;
+            Ok(())
+        })();
+        if let Err(error) = attempt {
+            failure = Some(error);
+        }
+        Ok(())
+    });
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    walk.map_err(E::Authentication)
+}

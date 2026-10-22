@@ -1102,6 +1102,21 @@ fn qwen36_row(
     // table's unique q36 router, byte for byte the shipped rule).
     bound_router: Option<u32>,
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
+    qwen36_row_routing_v2(op, node, layer, profile, inputs, weights, kv_len, gather, initial_gdn, None)
+}
+
+fn qwen36_row_routing_v2(
+    op: Qwen36Op,
+    node: &crate::palw_step::PalwStepNodeV1,
+    layer: Option<u16>,
+    profile: &PalwShapeProfileV3,
+    inputs: &[Vec<u32>],
+    weights: &dyn PalwWeightOracleV1,
+    kv_len: u64,
+    gather: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'_>, &[u32]),
+    initial_gdn: Option<&[u32]>,
+    selected_router: Option<&crate::palw_step::PalwStepNodeV1>,
+) -> Result<Vec<u32>, PalwStepRefuteError> {
     use crate::palw_base0_a16 as a16;
     use crate::palw_base0_a16::A16QuantParams;
     use crate::palw_qwen36_ops as q36;
@@ -1294,8 +1309,10 @@ fn qwen36_row(
     // router's own — a node whose block count disagrees with the routing is not this graph.
     let routed_ids = |k: usize| -> Result<Vec<usize>, PalwStepRefuteError> {
         let row = router_row()?;
-        let (_, topk_node) = qwen36_router_slot_for_reader_v2(profile, gather.0.node_slot, bound_router)
-            .ok_or(PalwStepRefuteError::Unadjudicable)?;
+        let topk_node = match selected_router {
+            Some(router) => router,
+            None => qwen36_router_topk_slot(profile, gather.0.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?.1,
+        };
         let topk_width = match topk_node.out_len {
             crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as usize,
             crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => return Err(PalwStepRefuteError::Unadjudicable),
@@ -3965,6 +3982,20 @@ fn canonical_input_leaves_with_start_v2(
     // RFC-0006 routed-reader consumer v2: the bound router for a routed reader (`None`: the legacy unique q36 router).
     bound_router: Option<u32>,
 ) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
+    canonical_input_leaves_routing_v2(profile, context, out_slot, out_coord, program, anchored, recurrence_start, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn canonical_input_leaves_routing_v2(
+    profile: &PalwShapeProfileV3,
+    context: &crate::palw_v2::PalwJobContextV2,
+    out_slot: u32,
+    out_coord: &PalwStepCoordinateV1,
+    program: KernelProgram,
+    anchored: bool,
+    recurrence_start: Option<u32>,
+    selected_router: Option<(u32, &crate::palw_step::PalwStepNodeV1)>,
+) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
     let (node, layer) = profile.resolve_node_slot(out_slot)?;
     let table_first_slot = out_slot - intra_table_index(profile, out_slot)? as u32;
     let mut out = Vec::new();
@@ -4226,9 +4257,10 @@ fn canonical_input_leaves_with_start_v2(
     // opens it against the step root like every other input, and refused (`None`) when the table
     // holds zero or two routers: a court that had to choose would be choosing the evidence.
     if qwen36_reads_routing_v1(node) {
-        // RFC-0006 consumer v2: the router the class's binding names for this reader, when one is bound; otherwise the table's
-        // unique q36 router, exactly as before.
-        let (router_slot, router) = qwen36_router_slot_for_reader_v2(profile, out_slot, bound_router)?;
+        let (router_slot, router) = match selected_router {
+            Some(selected) => selected,
+            None => qwen36_router_topk_slot(profile, out_slot)?,
+        };
         let len = match router.out_len {
             crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
             crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => return None,
@@ -5177,6 +5209,35 @@ fn run_program_v2(
     // offset 0; the matmul opens only the challenged tile's weight rows, so it can only return
     // that tile and says so here rather than leaving the caller to assume.
 ) -> Result<(Vec<u32>, usize), PalwStepRefuteError> {
+    run_program_routing_v2(program, node, layer, profile, inputs, weights, kv_len, gather, None)
+}
+
+fn run_program_routing_v2(
+    program: KernelProgram,
+    node: &crate::palw_step::PalwStepNodeV1,
+    layer: Option<u16>,
+    profile: &PalwShapeProfileV3,
+    inputs: &[Vec<u32>],
+    weights: &dyn PalwWeightOracleV1,
+    // The TRUE kv length of the challenged position (G5). The adjudicator used to refuse every
+    // `KvScaled` node for not holding this, while its own caller derives it from the coordinate
+    // it already has — so attention was unadjudicable for want of a value one frame up.
+    kv_len: u64,
+    // G5d: the challenged position and a VERIFIED window over the prompt ids. Only the gather
+    // reads them; every other kernel is a function of its opened rows and its weights.
+    //
+    // A window rather than a slice since ADR-0081 Decision 3: the ids may arrive whole (matched
+    // against a flat `prompt_token_ids_hash`) or as one opened tile of a Merkle root, and both
+    // address the prompt by ABSOLUTE position. The type is what makes G5d structural — a window
+    // exists only on the far side of a check, so there is no path by which this frame reads an id
+    // nobody proved.
+    gather: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'_>, &[u32]),
+    // **The index in the node's output row at which the returned slice begins** (ADR-0049
+    // Decision B). Every kernel but the BASE-0 matmul recomputes the whole row and returns it at
+    // offset 0; the matmul opens only the challenged tile's weight rows, so it can only return
+    // that tile and says so here rather than leaving the caller to assume.
+    selected_router: Option<&crate::palw_step::PalwStepNodeV1>,
+) -> Result<(Vec<u32>, usize), PalwStepRefuteError> {
     // Only the BASE-0 matmul narrows what it computes to the challenged tile; every other kernel
     // is elementwise or a whole-row reduction and returns the row it recomputed, at offset 0.
     let row_offset = match program {
@@ -5235,7 +5296,9 @@ fn run_program_v2(
     };
     let row = match program {
         KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights, kv_len, gather),
-        KernelProgram::Qwen36(op) => qwen36_row(op, node, layer, profile, inputs, weights, kv_len, gather, None, bound_router),
+        KernelProgram::Qwen36(op) => {
+            qwen36_row_routing_v2(op, node, layer, profile, inputs, weights, kv_len, gather, None, selected_router)
+        }
         KernelProgram::Kimi(op) => kimi_row(op, node, profile, inputs, kv_len),
         KernelProgram::L2Norm => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("l2norm needs one input row"))?;
@@ -5727,6 +5790,7 @@ fn i32_len_to_f32_bits(n: u32) -> u32 {
 /// Versioned recurrence state membership and deterministic local adjudication.
 /// No existing evidence tag, state map or root is reinterpreted by this module.
 pub mod memory_v2;
+pub mod routing_v2;
 
 #[cfg(test)]
 pub(crate) mod hostile_totality_tests;

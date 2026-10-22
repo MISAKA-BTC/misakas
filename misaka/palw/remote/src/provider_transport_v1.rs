@@ -482,7 +482,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Provide
     ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
         r.step()?;
         match r.byte()? {
-            0..=4 => Ok(Default::default()),
+            0..=5 => Ok(Default::default()),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown provider transport purpose")),
         }
     }

@@ -924,6 +924,15 @@ impl LoopbackNativeProviderV3 {
         if ours.iter().any(|p| p.operator == attempt.operator_id) {
             return Err("the executor is one of this service's provider operators; self-custody is refused".into());
         }
+        if ready
+            .binding
+            .manifest
+            .scopes
+            .iter()
+            .any(|scope| scope.codec == kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldCompleteV2)
+        {
+            return self.sign_routed_request_v2(request, &ours);
+        }
         let session = self.consensus_manager.consensus().unguarded_session();
         let authority = session.palw_native_material_provider_authority_v3(request.checkpoint, &request.header, &request.envelope)?;
         let params = &self.config.params;
@@ -999,6 +1008,110 @@ impl LoopbackNativeProviderV3 {
             encoded.len() as u64,
         )
         .map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_v1(&encoded, || {
+            borsh::from_slice::<Vec<(PalwBondKeyV2, Vec<u8>)>>(&encoded)
+        })
+        .map_err(|e| e.to_string())
+    }
+    fn sign_routed_request_v2(
+        &self,
+        request: &PalwNativeReadyRequestV3,
+        ours: &[&ServedProviderV3],
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<(PalwBondKeyV2, Vec<u8>)>>, String> {
+        use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1;
+        let ready = &request.envelope.ready;
+        let attempt = &request.envelope.base.attempt;
+        if ready.binding.manifest.scopes.len() != 1
+            || ready.binding.manifest.scopes[0].codec != PalwMaterialCodecV1::NativeHeldCompleteV2
+        {
+            return Err("V2 native Ready requires exactly its one explicit routed scope".into());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session_blocking();
+        let authority = session.palw_native_material_provider_authority_v4(request.checkpoint, &request.header, &request.envelope)?;
+        let params = &self.config.params;
+        let registry = crate::palw_backends::PalwBackendRegistry::for_node_v1(
+            params,
+            self.court,
+            params.palw_prompt_ids_form_v1(),
+            self.holdings.clone(),
+            params.net.to_string().into_bytes(),
+            self.chain_classes,
+        );
+        let backend = registry.resolve_or_chain(attempt.class_id, attempt.artifact_root, |id| {
+            if self.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None }
+        })?;
+        drop(session);
+        let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(
+            attempt.network_domain,
+            kaspa_consensus_core::hashing::header::pre_pow_hash_64(&request.header),
+            attempt.class_id,
+            &attempt.executor_bond,
+            request.header.nonce,
+        );
+        let prompt = palw_native_prompt_v3(backend.as_ref(), anchor)?;
+        if prompt != request.prompt {
+            return Err("V2 native request prompt differs from own anchor job".into());
+        }
+        let (bundle, manifest) = crate::palw_native_custody_v3::palw_native_bundle_routed_v2(
+            backend.as_ref(),
+            &authority.row,
+            attempt,
+            anchor,
+            &request.capture,
+            &prompt,
+            params.palw_prefill_draw_active_at(request.header.daa_score),
+            &authority.material,
+        )
+        .map_err(|e| e.to_string())?;
+        if manifest != ready.binding.manifest {
+            return Err("V2 native provider rebuilt another manifest".into());
+        }
+        // The signatures, encoded handoff and returned decoded owner overlap.
+        // Reserve their exact declared types/counts before creating the new Vecs.
+        let signature_bytes = kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
+        let mut publication = kaspa_consensus_core::palw_routed_material_v2::PalwMaterialConstructionRequestsV2::new();
+        publication.vec_v1::<(PalwBondKeyV2, Vec<u8>)>(ours.len() as u64).map_err(|e| e.to_string())?;
+        let encoded = ours
+            .len()
+            .checked_mul(68 + 4 + signature_bytes)
+            .and_then(|n| n.checked_add(4))
+            .ok_or("V2 provider signature framing overflow")?;
+        publication.vec_v1::<u8>(encoded as u64).map_err(|e| e.to_string())?;
+        for _ in ours {
+            publication.vec_v1::<u8>(signature_bytes as u64).map_err(|e| e.to_string())?;
+        }
+        let _publication = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(publication.bytes_v1())
+            .map_err(|e| e.to_string())?;
+        let mut signatures = Vec::with_capacity(ours.len());
+        for provider in ours {
+            let (_, registered) =
+                authority.provider_keys.iter().find(|(bond, _)| *bond == provider.bond).ok_or("V2 provider native key absent")?;
+            if registered.as_slice() != provider.key.public_key() {
+                return Err("V2 provider key differs from own accepted bond".into());
+            }
+            // Re-read actual own candidate authority before publication/signing.
+            // A persisted pre-admission row never replaces the native reader.
+            let session = self.consensus_manager.consensus().unguarded_session_blocking();
+            let current =
+                session.palw_native_material_provider_authority_v4(request.checkpoint, &request.header, &request.envelope)?;
+            if current.material.record() != authority.material.record() || current.row != authority.row {
+                return Err("V2 native candidate changed before provider publication".into());
+            }
+            drop(session);
+            let mut store = provider.store.lock().map_err(|_| "provider store poisoned")?;
+            let signature = misaka_palw_remote::native_ready_v3::provider_sign_native_ready_routed_v2(
+                &mut store,
+                provider.bond,
+                &current.row,
+                ready,
+                &bundle,
+                &current.material,
+                |message, context| Some(provider.key.sign_with_context(message, context).to_vec()),
+            )
+            .map_err(|e| e.to_string())?;
+            signatures.push((provider.bond, signature));
+        }
+        let encoded = borsh::to_vec(&signatures).map_err(|e| e.to_string())?;
         kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_v1(&encoded, || {
             borsh::from_slice::<Vec<(PalwBondKeyV2, Vec<u8>)>>(&encoded)
         })

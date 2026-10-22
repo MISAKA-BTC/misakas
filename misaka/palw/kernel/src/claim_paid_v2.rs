@@ -226,6 +226,40 @@ pub enum PaidClaimObjectV2 {
         enrollment: Digest,
         commitment: Digest,
     },
+    /// Appended index 15. The generation is signed separately from the exact
+    /// historical V2 commit; none of its fields enter enrollment.id() or a draw.
+    CommitWithMaterialGenerationV5 {
+        enrollment: PaidClaimEnrollmentV2,
+        commit: crate::route::SaltedCommitV1,
+        salt: Digest,
+        generation: crate::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5,
+        original_signature: Vec<u8>,
+    },
+    /// New source policy is signed before its future source window. No old
+    /// Commit or existing enrollment can be switched to this namespace.
+    CommitWithApprovedBootstrapV6 {
+        enrollment: PaidClaimEnrollmentV2,
+        commit: crate::route::SaltedCommitV1,
+        salt: Digest,
+        source_policy: Digest,
+    },
+    LockApprovedBootstrapV6 {
+        enrollment: Digest,
+    },
+    ReceiptApprovedBootstrapV6 {
+        receipt: PaidClaimReceiptV2,
+    },
+    /// Appended index 19 preserves the original signed index16 source policy
+    /// and enrollment while binding a separately signed current generation.
+    /// An already accepted base is monitored, never re-enrolled by this object.
+    CommitApprovedBootstrapWithMaterialGenerationV7 {
+        enrollment: PaidClaimEnrollmentV2,
+        commit: crate::route::SaltedCommitV1,
+        salt: Digest,
+        source_policy: Digest,
+        generation: crate::claim_paid_material_generation_v5::PaidClaimMaterialGenerationV5,
+        original_signature: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -347,6 +381,31 @@ pub fn paid_claim_bootstrap_seed_v2(bootstrap_seed: &Digest, context: &BeaconCon
     object_id(b"MISAKA/PALW/PAID-CLAIM-BOOTSTRAP-SEED/V2", &(bootstrap_seed, context.id(), commitment_root))
 }
 impl PaidClaimCheckAuthorityV2 {
+    pub(crate) fn from_approved_bootstrap_parts_v6(
+        class: &PaidClaimClassV2,
+        enrollment: &PaidClaimEnrollmentV2,
+        context: Digest,
+        seed: Digest,
+    ) -> Result<Self, String> {
+        class.validate()?;
+        Ok(Self {
+            enrollment: enrollment.id(),
+            base_claim: enrollment.base_claim,
+            verification_class: class.id(),
+            evidence_root: enrollment.commit_root,
+            transcript_root: enrollment.prior_transcript,
+            source_context: context,
+            sample_seed: seed,
+            maximum_stream_blocks: class.maximum_stream_blocks,
+            round: 0,
+            message_root: [0; 64],
+            opening_bound: true,
+            interactive_plan: None,
+            compact_proof_root: None,
+            compact_consumer: None,
+            can_complete: true,
+        })
+    }
     pub fn verify(
         class: &PaidClaimClassV2,
         enrollment: &PaidClaimEnrollmentV2,

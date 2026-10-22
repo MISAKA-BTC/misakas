@@ -19,7 +19,49 @@ pub fn h(domain: &[u8], payload: &[u8]) -> Digest {
 
 /// `H(domain; borsh(object))`.
 pub fn object_id<T: borsh::BorshSerialize>(domain: &[u8], object: &T) -> Digest {
-    h(domain, &borsh::to_vec(object).expect("borsh into a Vec cannot fail"))
+    assert!(domain.len() <= 64, "a hash domain is a BLAKE2b key: at most 64 bytes");
+    let length = borsh::object_length(object).expect("in-memory Borsh identity length");
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
+    state.update(&(length as u64).to_le_bytes());
+    let mut writer = IdentityWriter { state, written: 0 };
+    object.serialize(&mut writer).expect("in-memory Borsh identity serialization");
+    assert_eq!(writer.written, length, "Borsh identity serialization changed length between passes");
+    let mut out = [0; 64];
+    out.copy_from_slice(writer.state.finalize().as_bytes());
+    out
+}
+
+struct IdentityWriter {
+    state: blake2b_simd::State,
+    written: usize,
+}
+impl std::io::Write for IdentityWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.written = self.written.checked_add(bytes.len()).ok_or_else(|| std::io::Error::other("Borsh identity length overflow"))?;
+        self.state.update(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod identity_controls {
+    use super::*;
+    #[test]
+    fn streaming_keeps_legacy_framing_for_subject_collections_and_capacity_boundaries() {
+        let mut profiles = std::collections::BTreeSet::new();
+        profiles.insert([7u8; 64]);
+        profiles.insert([2; 64]);
+        for size in [0, 1, 1023, 1024, 1025, 65537] {
+            let object = (&profiles, vec![11u8; size], Some("公開"));
+            assert_eq!(
+                object_id(b"MISAKA/PALW/IDENTITY-COMPATIBILITY/CONTROL", &object),
+                h(b"MISAKA/PALW/IDENTITY-COMPATIBILITY/CONTROL", &borsh::to_vec(&object).unwrap())
+            );
+        }
+    }
 }
 
 /// The id of a named algorithm or policy this binary implements: `H("MISAKA/PALW/ALGORITHM-ID/V1"; name)`.

@@ -266,6 +266,48 @@ pub fn palw_native_bundle_v3(
     Ok((bundle, manifest))
 }
 
+/// Explicit V2 complete bundle, derived by both producer and provider from
+/// their actual capture and fresh own native candidate authority.
+pub fn palw_native_bundle_routed_v2(
+    backend: &dyn PalwExecutionBackendV1,
+    row: &PalwMonetaryMaterialRowV1,
+    attempt: &PalwAttemptUnsignedV2,
+    anchor: Hash64,
+    capture: &[u8],
+    prompt: &[u32],
+    prefill_draw: bool,
+    authority: &kaspa_consensus_core::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+) -> Result<
+    (
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_routed_material_v2::PalwHeldMaterialBundleV2,
+        >,
+        PalwMaterialManifestV1,
+    ),
+    kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1,
+> {
+    use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
+    let a = authority.record();
+    if a.claim != attempt_id_v2(attempt)
+        || a.execution_root != attempt.execution_root
+        || a.class_id != attempt.class_id
+        || a.artifact_root != attempt.artifact_root
+    {
+        return Err(E::Substitution);
+    }
+    let bundle = backend.routed_material_bundle_v2(
+        capture,
+        prompt,
+        palw_native_roots_v3(attempt, anchor, prefill_draw),
+        authority,
+        row.terms.max_material_bytes,
+    )?;
+    let scope = bundle.verify(a, row.terms.max_material_bytes)?;
+    let manifest = PalwMaterialManifestV1 { root: row.terms.root, scopes: vec![scope] };
+    manifest.validate(row.terms.max_material_bytes)?;
+    Ok((bundle, manifest))
+}
+
 /// The prompt an anchor implies, as the u32 ids every capture builder takes.
 pub fn palw_native_prompt_v3(backend: &dyn PalwExecutionBackendV1, anchor: Hash64) -> Result<Vec<u32>, String> {
     let (_, prompt) = backend.job_for_anchor(anchor)?;

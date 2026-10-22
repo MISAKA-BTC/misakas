@@ -70,6 +70,8 @@ pub mod gen_tensor_worker;
 /// RFC-0003 §II.2.1: the generative worker, seat and court halves — FP Job V5 on a registered pipeline class (dormant).
 pub mod gen_worker;
 pub mod gguf;
+pub mod gdn_court_v2;
+pub mod routing_court_v2;
 pub mod inventory;
 pub mod legs;
 pub mod memory_phase;

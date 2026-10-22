@@ -744,6 +744,8 @@ pub mod palw_gdn_court_v2;
 /// and object tag 244 — the binding declaration and the checkpoint-transition / convolution-window / routed-reader accusations.
 pub mod palw_memory_routing_v2;
 pub mod palw_router_binding_v2;
+pub mod palw_reader_router_v2;
+pub mod palw_routing_court_v2;
 pub mod palw_task_heads_v1;
 pub mod palw_terminal;
 pub mod palw_terminal_carriage_v1;
@@ -1167,3 +1169,13 @@ pub mod palw_court_shared_material_intake_v1;
 pub mod palw_court_funding_preflight_v1;
 
 pub mod palw_court_numerical_geometry_v3;
+pub mod palw_material_challenge_checkpoint_v4;
+pub mod palw_material_challenge_history_v4;
+
+pub mod palw_source_bootstrap_v1;
+pub mod palw_routed_material_v2;
+pub mod palw_paid_material_generation_v5;
+pub mod palw_paid_claim_observation_v5;
+
+pub mod palw_paid_bootstrap_source_v6;
+pub mod palw_paid_claim_observation_v6;

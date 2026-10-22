@@ -254,6 +254,8 @@ mod palw_econ_contracts_fold_v1;
 // N3 (round 3): BootstrapExact source rounds (inner 73, aux 130), past `palw_beacon_bootstrap_v1`.
 #[path = "palw_beacon_bootstrap_fold_v1.rs"]
 mod palw_beacon_bootstrap_fold_v1;
+#[path = "palw_state_v2/source_bootstrap_v1.rs"]
+mod source_bootstrap_v1;
 // RFC-0017: model eligibility (inner 74/75, aux 131) and its claim-gate / probation / Final hooks, past `palw_model_eligibility_v1`.
 #[path = "palw_model_eligibility_fold_v1.rs"]
 mod palw_model_eligibility_fold_v1;
@@ -1983,6 +1985,13 @@ pub struct PalwStateParamsV2 {
     /// RFC07/RFC08 economic contracts (`crate::palw_econ_contracts_v1`): the three dormant fences' mirror, synchronized with Params.
     #[borsh(skip)]
     pub(crate) econ_contracts_v1: crate::palw_econ_contracts_v1::PalwEconContractsMirrorV1,
+    /// Some-only policy is committed by Params; skip preserves historical ruleset bytes.
+    #[borsh(skip)]
+    pub(crate) selected_source_bootstrap_v1: Option<(u64, crate::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapPolicyV1)>,
+    /// Some-only Params identity carries this separately versioned lineage contract.
+    #[borsh(skip)]
+    pub(crate) paid_bootstrap_source_v6:
+        Option<(u64, misaka_palw_kernel::claim_paid_bootstrap_source_v6::PaidBootstrapSourcePolicyV6)>,
     #[borsh(skip)]
     paid_consumer_lifecycle: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
@@ -3471,6 +3480,7 @@ pub fn palw_bond_collateral_is_locked_v6(
         // freeze lifts otherwise. The map is empty below `Params::palw_capacity_aggregate_liability`.
         || crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, key)
         || state.staged_bond_exit_held_v1(key, now_daa)
+        || state.source_bootstrap_bond_exit_held_v1(params, now_daa)
 }
 
 /// L-1's escrow term, in permille of the vested-but-unbought escrow per load-bearing signer.
@@ -7651,6 +7661,27 @@ pub enum PalwConsensusObjectV2 {
     TirLookaheadChosenV2 {
         body: Box<crate::palw_tir_position_terminal_v2::PalwTirLookaheadChosenV2>,
     } = 204,
+    /// Prospective immutable per-reader routing identity. Owner signature and
+    /// exact registered graph are checked before any V2-routed claim is admitted.
+    ReaderRouterDeclaredV2 {
+        declaration: Box<crate::palw_reader_router_v2::PalwReaderRouterDeclarationV2>,
+        signature: Vec<u8>,
+    } = 248,
+    /// Version2 routing arithmetic court, only for explicitly V2-stamped claims.
+    /// New wire kind; neither V1 roots nor V1 selector semantics are changed.
+    RoutedStepAccusedV2 {
+        accusation: Box<crate::palw_routing_court_v2::PalwRoutingCourtAccusationV2>,
+    } = 249,
+    /// New claim-level weighted-slot approval, distinct from every V1 Panel final path.
+    SourceBootstrapV1 {
+        actor: PalwBondKeyV2,
+        action: crate::palw_source_bootstrap_v1::PalwSourceBootstrapActionV1,
+        signature: Vec<u8>,
+    } = 246,
+    /// Separate V2 retrieval carrier; old DA selectors and signatures retain their meaning.
+    RoutedMaterialAnsweredV2 {
+        answer: Box<crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2>,
+    } = 247,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -9423,6 +9454,9 @@ pub enum PalwStateV2Error {
     /// Local construction capacity is not a consensus object or block fault.
     #[error("local native construction capacity: {0}")]
     NativeResource(crate::palw_native_resource_v1::NativeCoverageV1),
+    /// Own history/store preparation is unknown; never classify as an invalid block.
+    #[error("{0}")]
+    NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
     #[error("invalid state params: {0}")]
     InvalidParams(&'static str),
     #[error("chain context is not monotone: {0}")]
@@ -13782,6 +13816,7 @@ mod funded_escrow;
 // G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the D2 readiness registry's one writer and the disclosure court's fold.
 mod d2_readiness;
 pub use input_views::{PalwBlockFactsV1, PalwRulesAtBlockV1, PalwRulesForClaimV1};
+mod reader_router_v2;
 
 // ---------------------------------------------------------------------------------------------
 // The transition
@@ -14274,6 +14309,7 @@ pub fn palw_v2_pre_object_base_retained_v1(
     block_preparation::prepare_block_objects_v1(&mut builder, parent, ctx, extras.block_facts(), extras.rules_at(ctx),
         block_preparation::ArtifactMigrationOrderV1::BeforeClassRetarget)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
+    source_bootstrap_v1::prepare(&mut builder, ctx)?;
     builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
 }
 
@@ -14323,6 +14359,7 @@ pub fn palw_v2_apply_one_object_retained_v1(
     // Step 3's reservation for the block's own attempt, as the fold takes it (see
     // `PalwTransitionExtrasV1::own_attempt_class`).
     builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
+    source_bootstrap_v1::prepare(&mut builder, ctx)?;
     apply_object(&mut builder, ctx, object)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
@@ -14726,17 +14763,23 @@ fn apply_palw_transition_v7_inner(
                 &a.executor_bond,
                 header.nonce,
             );
-            if ready
-                .verify_prior_with_recovery_v4(
-                    parent,
-                    params,
-                    anchor,
-                    header.daa_score,
-                    crate::palw_attempt_material_v3::verify_ready_signature_v3,
-                )
-                .is_ok()
-            {
-                builder.monetary_native_ready.insert(ready.ready.binding.claim, (ready.ready.session, ready.ready.binding));
+            match ready.verify_prior_with_recovery_typed_v4(
+                parent,
+                params,
+                anchor,
+                header.daa_score,
+                crate::palw_attempt_material_v3::verify_ready_signature_v3,
+            ) {
+                Ok(()) => {
+                    builder.monetary_native_ready.insert(ready.ready.binding.claim, (ready.ready.session, ready.ready.binding));
+                }
+                Err(crate::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4::LocalResource(why)) => {
+                    return Err(PalwStateV2Error::NativeResource(why));
+                }
+                Err(crate::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4::NativeContext(why)) => {
+                    return Err(PalwStateV2Error::NativeContextUnavailable(why));
+                }
+                Err(crate::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4::Invalid(_)) => {}
             }
         }
     }
@@ -14825,6 +14868,7 @@ fn apply_palw_transition_v7_inner(
             builder.check_class_admits_claim(&envelope.attempt.class_id, ctx.daa_score, PalwGatedClaimV1::Attempt).is_ok();
         builder.own_attempt_class = Some(envelope.attempt.class_id);
     }
+    source_bootstrap_v1::prepare(&mut builder, ctx)?;
     for object in accepted_objects {
         apply_object(&mut builder, ctx, object)?;
     }
@@ -14852,6 +14896,7 @@ fn apply_palw_transition_v7_inner(
     // 3″. G14 lane D: the kernel route's closing step — demand deadlines, windows, Final, liability release, and the settlements
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;
+    source_bootstrap_v1::settle(&mut builder, ctx)?;
     #[cfg(test)]
     for (table, key, row) in &extras.exec_v2_test_kernel_rows {
         builder.write_kernel_row(*table, key.clone(), row.clone())?;
@@ -15130,7 +15175,10 @@ fn apply_palw_transition_v7_inner(
                                     None
                                 }
                                 Err(refused) => {
-                                    if matches!(refused, PalwStateV2Error::NativeResource(_)) {
+                                    if matches!(
+                                        refused,
+                                        PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_)
+                                    ) {
                                         return Err(refused);
                                     }
                                     builder.restore(checkpoint);
@@ -15149,7 +15197,7 @@ fn apply_palw_transition_v7_inner(
                 match apply_receipt_spend(&mut builder, ctx, spend) {
                     Ok(()) => None,
                     Err(refused) => {
-                        if matches!(refused, PalwStateV2Error::NativeResource(_)) {
+                        if matches!(refused, PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_)) {
                             return Err(refused);
                         }
                         builder.restore(checkpoint);
@@ -15859,6 +15907,9 @@ fn apply_legacy_held_answer_v2(
     }
     let network = builder.extras.held_context_ladder.unwrap_or(crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
     let ladder = builder.state.class_step_ladder_v1(&claim.class_id, network);
+    if let crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2::KernelWitness(witness) = &carriage.answer {
+        builder.state.require_implicit_reader_slot_v1(claim_id, witness.refutation.output_preimage.coord.node_slot)?;
+    }
     palw_legacy_held_check_answer_v3(
         &claim.execution_root,
         &carriage.unit,
@@ -15929,6 +15980,27 @@ fn apply_legacy_leaf_recompute_v2(
         class_id: claim.class_id,
         artifact_root,
     };
+    if builder.state.has_reader_router_claim_stamp_v2(claim_id) {
+        // A leaf-hash recompute deliberately has no output preimage coordinate.
+        // Reserve the actual profile's two temporary KV-term inventories before
+        // deriving its canonical coordinate, then refuse a V1 selector for V2 data.
+        let mut routing_q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        routing_q
+            .vec_v1::<(u128, u128, u128)>(u64::from(accusation.refutation.binding.shape_profile.global_node_count()))
+            .map_err(PalwStateV2Error::NativeResource)?;
+        routing_q
+            .vec_v1::<(u128, u128, u128)>(u64::from(accusation.refutation.binding.shape_profile.global_node_count()))
+            .map_err(PalwStateV2Error::NativeResource)?;
+        let _routing_coord = crate::palw_native_resource_v1::reserve_native_requests_v1(routing_q.bytes_v1())
+            .map_err(PalwStateV2Error::NativeResource)?;
+        if let Some(coord) = crate::palw_step::canonical_step_coordinates(
+            &accusation.refutation.binding.shape_profile,
+            &accusation.refutation.binding.job_context,
+            accusation.leaf_index,
+        ) {
+            builder.state.require_implicit_reader_slot_v1(claim_id, coord.node_slot)?;
+        }
+    }
     match crate::palw_legacy_held_da_v2::palw_legacy_leaf_recompute_verdict_v2(accusation, &bound_to, ladder)
         .map_err(|e| refused(e.to_string()))?
     {
@@ -19097,6 +19169,9 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::TirDesignatedAnswersV1) => builder.extras.tir_designated_answers_active,
         // R-D2-READY (tag 230): the bundle's mirror of `palw_court_model_scope_v1` (`court_model_scope_from_daa`).
         K::Fence(F::CourtModelScopeV1) => builder.params.court_model_scope_from_daa().is_some_and(|from| ctx.daa_score >= from),
+        K::Fence(F::SelectedSourceBootstrapV1) => {
+            builder.params.selected_source_bootstrap_v1.as_ref().is_some_and(|(at, _)| ctx.daa_score >= *at)
+        }
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
         K::Fence(F::TirPublicConvictionV1) => {
@@ -20268,6 +20343,13 @@ pub struct PalwTransitionExtrasV1 {
     /// RFC06 version-2 recurrence/routing court, resolved per carrying block.
     /// This is a runtime mirror, not persistent state or a credit approval.
     pub memory_routing_court: Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2>,
+    /// Own selected-chain authority, retained across the fold; never supplied by a carrier.
+    pub selected_source_bootstrap_fault_v1: Option<crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1>,
+    pub selected_source_bootstrap_v1: Option<
+        std::sync::Arc<
+            crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_source_bootstrap_v1::PalwSourceBootstrapOwnContextV1>,
+        >,
+    >,
     /// ADR-0100 Decision 4: `Some` exactly when `Params::palw_shard_licensing` is active at the
     /// block — one shard's seats and quorum, which the fold needs to slice a stratified panel and
     /// count a part, and does not otherwise hold. `None` refuses all three sharding objects and is
@@ -21650,7 +21732,7 @@ fn apply_pending_riders_v1(
         let checkpoint = builder.try_checkpoint()?;
         let seen = builder.seen_exec.clone();
         if let Err(why) = attach_riders_v1(builder, ctx, params, admission, &lead_id, &riders) {
-            if matches!(why, PalwStateV2Error::NativeResource(_)) {
+            if matches!(why, PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_)) {
                 return Err(why);
             }
             builder.restore(checkpoint);
@@ -22206,7 +22288,8 @@ fn apply_attempt(
     // absence must not halt floor liveness). Below the monetary fence both calls below are no-ops for every class, so skipping
     // them for the floor is byte-identical there.
     let floor_exempt = claim.class_id == builder.params.base_class_id();
-    let monetary_ready = if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)? };
+    let monetary_ready =
+        if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id, &claim)? };
     if monetary_ready.is_none() && !floor_exempt {
         builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
     }
@@ -26776,6 +26859,8 @@ mod staged_court_state_tests_v1 {
 
 #[path = "palw_claim_challenge_fold_v2.rs"]
 mod palw_claim_challenge_fold_v2;
+#[path = "palw_paid_bootstrap_source_fold_v6.rs"]
+mod palw_paid_bootstrap_source_fold_v6;
 
 // Read-only native allocation inventory; no state/root/codec field is added.
 #[path = "palw_native_resource_v1/private/palw_state_v2.rs"]

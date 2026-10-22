@@ -1766,6 +1766,46 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family serves no block leaves".to_string())
     }
 
+    /// Complete V2 material is a separate codec. A backend must select reader
+    /// inputs from this native authority, never adapt the old implicit selector.
+    fn routed_material_bundle_v2(
+        &self,
+        _capture: &[u8],
+        _prompt: &[u32],
+        _roots: PalwClaimRootsV1,
+        _authority: &crate::palw_routed_material_v2::PalwMaterialNativeAuthorityV2,
+        _max_bytes: u64,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_routed_material_v2::PalwHeldMaterialBundleV2>,
+        crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1,
+    > {
+        Err(crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::Unsupported(
+            "this backend has no explicit V2 routed capture codec".into(),
+        ))
+    }
+
+    /// A prospective job may only replace the legacy implicit router after
+    /// binding this separate own-native authority. The backend retains it and
+    /// its plan allocation owner through execution and material publication.
+    fn bind_native_routing_execution_v2(
+        &mut self,
+        _authority: std::sync::Arc<crate::palw_reader_router_v2::PalwNativeRoutingExecutionAuthorityV2>,
+    ) -> Result<(), crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+        Err(crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::Unsupported(
+            "backend has no prospective native routed execution plan".into(),
+        ))
+    }
+    /// Replay of an accepted stamped claim uses its own authority and job,
+    /// including free-prompt and rider anchors. It is never block authority.
+    fn bind_native_routing_claim_v2(
+        &mut self,
+        _authority: std::sync::Arc<crate::palw_reader_router_v2::PalwNativeRoutingClaimAuthorityV2>,
+    ) -> Result<(), crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
+        Err(crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::Unsupported(
+            "backend has no accepted native routed execution plan".into(),
+        ))
+    }
+
     /// **ADR-0111 Decision 6, the executor's answer to a held state-chunk accusation** (ADR-0103
     /// Decision 4): checkpoint `checkpoint`'s leaf opened against the binding's checkpoint root, and
     /// chunk `chunk` of its state with the path under the class's map, built from this executor's

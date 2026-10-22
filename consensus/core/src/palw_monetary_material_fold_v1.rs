@@ -374,7 +374,7 @@ fn action_inner_v4(
         | PalwMonetaryMaterialActionV1::Release { root, .. } => *root,
     };
     let mut row = builder.state.monetary_material_row_v1(root).ok_or_else(|| refused("no enrolled monetary material root"))?;
-    if let PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { consent, provider, .. } = a {
+    let challenge_checkpoint = if let PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { consent, provider, .. } = a {
         if builder.params.material_release_recovery_at_v2(ctx.daa_score).is_none() {
             return Err(refused("current generation challenge own fence dormant"));
         }
@@ -383,7 +383,34 @@ fn action_inner_v4(
         if current != Some(*consent) {
             return Err(refused("current challenge substitutes provider generation"));
         }
-    }
+        use crate::palw_material_challenge_checkpoint_v4::{
+            PalwMaterialChallengeCheckpointV4, material_challenge_checkpoint_from_route_v4,
+        };
+        let route = builder.state.kernel_route().ok_or_else(|| refused("challenge checkpoint route absent"))?;
+        let previous = material_challenge_checkpoint_from_route_v4(route, *signer)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+        let previous_history = crate::palw_material_challenge_history_v4::material_challenge_history_from_route_v4(route, *signer)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+        let checkpoint = PalwMaterialChallengeCheckpointV4::next(
+            previous,
+            Hash64::from_bytes(route.header.policy.network_domain),
+            *signer,
+            a,
+            ctx.daa_score,
+        )
+        .map_err(refused)?;
+        let history = crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryV4::next(
+            Hash64::from_bytes(route.header.policy.network_domain),
+            *signer,
+            previous.as_ref(),
+            previous_history.as_ref(),
+            &checkpoint,
+        )
+        .map_err(refused)?;
+        Some((checkpoint, history))
+    } else {
+        None
+    };
     if !recovery_answer
         && builder.state.material_recovery_row_v2(root).is_some()
         && matches!(
@@ -563,6 +590,9 @@ fn action_inner_v4(
                 return Err(refused("native material answer adjudication budget is spent"));
             }
             let claim = builder.state.claim(dependency).ok_or(PalwStateV2Error::MissingClaim(*dependency))?;
+            if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = disclosure.as_ref() {
+                builder.state.require_implicit_reader_slot_v1(*dependency, evidence.refutation.output_preimage.coord.node_slot)?;
+            }
             crate::palw_held_da_v1::palw_held_da_check_disclosure_v1(
                 &claim.execution_root,
                 missing,
@@ -727,6 +757,10 @@ fn action_inner_v4(
             write(builder, root, None)?;
             return Ok(());
         }
+    }
+    if let Some((checkpoint, history)) = challenge_checkpoint {
+        builder.write_material_challenge_checkpoint_v4(*signer, Some(checkpoint))?;
+        builder.write_material_challenge_history_v4(*signer, Some(history))?;
     }
     write(builder, root, Some(&row))?;
     Ok(())
@@ -1054,6 +1088,161 @@ mod tests {
                 .collect(),
         };
         (state, params, e)
+    }
+    #[test]
+    fn applied_challenge_checkpoint_writer_reserves_before_mutation_and_journals_bond_cleanup() {
+        use crate::palw_material_challenge_checkpoint_v4::{
+            PalwMaterialChallengeCheckpointV4 as Checkpoint, material_challenge_checkpoint_from_route_v4 as read,
+        };
+        use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+        let (state, params, _) = fixture();
+        use crate::palw_material_release_recovery_v2::{PalwMaterialReleaseRecoveryMirrorV2, PalwMaterialReleaseRecoveryPolicyV2};
+        let params = params.with_material_release_recovery_v2(Some(PalwMaterialReleaseRecoveryMirrorV2 {
+            from_daa: 1,
+            policy: PalwMaterialReleaseRecoveryPolicyV2 {
+                version: 2,
+                max_reserved_contracts: 1,
+                max_generations_per_contract: 2,
+                max_provider_streams: 4,
+                max_reserved_history_cells: 16,
+                measurement_root: h(77),
+            },
+        }));
+        let extras = PalwTransitionExtrasV1::default();
+        let action = PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
+            root: h(9),
+            consent: h(7),
+            provider: bond(2),
+            dependency: h(9),
+            stage: 255,
+            position: 0,
+            valid_until_daa: 100,
+        };
+        // Storage/owner fixture only; no signature, typed unit or native
+        // admission success is inferred from direct calls to this writer.
+        let checkpoint = Checkpoint::next(None, h(1), bond(4), &action, 2).unwrap();
+        let mut refused = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+        refused.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+        assert!(matches!(
+            refused.write_material_challenge_checkpoint_v4(bond(4), Some(checkpoint)),
+            Err(PalwStateV2Error::NativeResource(_))
+        ));
+        assert!(refused.entries.is_empty());
+        assert!(read(refused.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert_eq!(checker.outstanding(), (0, 0));
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_material_challenge_checkpoint_v4(bond(4), Some(checkpoint)).unwrap();
+        assert_eq!(read(b.state.kernel_route().unwrap(), bond(4)).unwrap(), Some(checkpoint));
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let delta = PalwStateDeltaV2 { point: ctx(2), entries: b.entries.clone() };
+        let applied = apply_delta_v2(&state, &delta, &params).unwrap();
+        assert_eq!(read(applied.kernel_route().unwrap(), bond(4)).unwrap(), Some(checkpoint));
+        let restored = revert_delta_v2(&applied, &delta, &params).unwrap();
+        assert!(read(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        b.write_bond(bond(4), None).unwrap();
+        assert!(b.state.bond(&bond(4)).is_none());
+        assert!(read(b.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let all = PalwStateDeltaV2 { point: ctx(2), entries: b.entries.clone() };
+        let applied = apply_delta_v2(&state, &all, &params).unwrap();
+        assert!(applied.bond(&bond(4)).is_none());
+        let restored = revert_delta_v2(&applied, &all, &params).unwrap();
+        assert!(restored.bond(&bond(4)).is_some());
+        assert!(read(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+    }
+    /// Direct writer/journal controls only: these do not execute signed native
+    /// challenge admission, a complete typed-unit check, or a node restart.
+    #[test]
+    fn applied_challenge_history_pair_reserves_before_mutation_and_cold_journal_rewinds_both_families() {
+        use crate::{
+            palw_material_challenge_checkpoint_v4::{
+                PalwMaterialChallengeCheckpointV4 as Checkpoint, material_challenge_checkpoint_from_route_v4 as read_checkpoint,
+            },
+            palw_material_challenge_history_v4::{
+                PalwMaterialChallengeHistoryV4 as History, material_challenge_history_from_route_v4 as read_history,
+            },
+            palw_material_release_recovery_v2::{PalwMaterialReleaseRecoveryMirrorV2, PalwMaterialReleaseRecoveryPolicyV2},
+            palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1},
+        };
+        let (state, params, _) = fixture();
+        let params = params.with_material_release_recovery_v2(Some(PalwMaterialReleaseRecoveryMirrorV2 {
+            from_daa: 1,
+            // Storage fixture only, not approved production policy values.
+            policy: PalwMaterialReleaseRecoveryPolicyV2 {
+                version: 2,
+                max_reserved_contracts: 1,
+                max_generations_per_contract: 2,
+                max_provider_streams: 4,
+                max_reserved_history_cells: 16,
+                measurement_root: h(77),
+            },
+        }));
+        let action = PalwMonetaryMaterialActionV1::ChallengeCurrentV4 {
+            root: h(9),
+            consent: h(7),
+            provider: bond(2),
+            dependency: h(9),
+            stage: 255,
+            position: 0,
+            valid_until_daa: 100,
+        };
+        let checkpoint = Checkpoint::next(None, h(1), bond(4), &action, 2).unwrap();
+        let history = History::next(h(1), bond(4), None, None, &checkpoint).unwrap();
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_material_challenge_checkpoint_v4(bond(4), Some(checkpoint)).unwrap();
+        // Preserve compatibility with a pre-A3 native A2 checkpoint. The new
+        // history cell is optional until the next explicitly paired write.
+        assert!(read_history(b.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let legacy_state = b.state.clone();
+
+        let mut refused = TransitionBuilder::new(&legacy_state, &params, false, false, false, false, &extras);
+        let before_state = refused.state.clone();
+        let before_entries = refused.entries.clone();
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+        refused.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+        assert!(matches!(
+            refused.write_material_challenge_history_v4(bond(4), Some(history)),
+            Err(PalwStateV2Error::NativeResource(_))
+        ));
+        assert_eq!(refused.state, before_state);
+        assert_eq!(refused.entries, before_entries);
+        assert_eq!(checker.outstanding(), (0, 0));
+        assert!(read_history(refused.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert_eq!(read_checkpoint(refused.state.kernel_route().unwrap(), bond(4)).unwrap(), Some(checkpoint));
+
+        b.write_material_challenge_history_v4(bond(4), Some(history)).unwrap();
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let delta = PalwStateDeltaV2 { point: ctx(2), entries: b.entries.clone() };
+        let applied = apply_delta_v2(&state, &delta, &params).unwrap();
+        assert_eq!(read_checkpoint(applied.kernel_route().unwrap(), bond(4)).unwrap(), Some(checkpoint));
+        assert_eq!(read_history(applied.kernel_route().unwrap(), bond(4)).unwrap(), Some(history));
+        let mut cold = applied.clone();
+        // Rebuild the serialized route rather than relying on a warm native
+        // projection. This is a codec/consistency fixture, not OS crash evidence.
+        cold.kernel_route = Some(borsh::from_slice(&borsh::to_vec(applied.kernel_route().unwrap()).unwrap()).unwrap());
+        cold.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        assert_eq!(read_history(cold.kernel_route().unwrap(), bond(4)).unwrap(), Some(history));
+        let restored = revert_delta_v2(&cold, &delta, &params).unwrap();
+        assert!(read_checkpoint(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert!(read_history(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+
+        b.write_bond(bond(4), None).unwrap();
+        assert!(b.state.bond(&bond(4)).is_none());
+        assert!(read_checkpoint(b.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert!(read_history(b.state.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let all = PalwStateDeltaV2 { point: ctx(2), entries: b.entries.clone() };
+        let removed = apply_delta_v2(&state, &all, &params).unwrap();
+        assert!(removed.bond(&bond(4)).is_none());
+        assert!(read_checkpoint(removed.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert!(read_history(removed.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        let restored = revert_delta_v2(&removed, &all, &params).unwrap();
+        assert!(restored.bond(&bond(4)).is_some());
+        assert!(read_checkpoint(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
+        assert!(read_history(restored.kernel_route().unwrap(), bond(4)).unwrap().is_none());
     }
     /// Fold/storage fixture: native signature and finalized-chain authority are
     /// tested by the integration consumers, not manufactured by this unit test.
@@ -1401,6 +1590,7 @@ pub(super) fn plan_native_ready(
     builder: &TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     claim: Hash64,
+    native_claim: &super::PalwClaimStateV2,
 ) -> Result<Option<PalwMonetaryMaterialRowV1>, PalwStateV2Error> {
     if builder.params.monetary_material_at_v1(ctx.daa_score).is_none() {
         return Ok(None);
@@ -1413,11 +1603,146 @@ pub(super) fn plan_native_ready(
     if row.native_binding.is_some() || !row.healthy(&builder.state) {
         return Err(refused("native ready session consumed or providers defaulted"));
     }
+    let scope = binding.manifest.scope(claim).ok_or_else(|| refused("native Ready has no exact claim scope"))?;
+    if scope.codec != builder.state.native_material_codec_for_claim_v2(claim, native_claim)?
+        || scope.commitment != native_claim.execution_root
+    {
+        return Err(refused("native Ready codec/execution differs from its own prospective routing authority"));
+    }
     row.native_binding = Some(binding.clone());
     row.root_seen = true;
     Ok(Some(row))
 }
 pub(super) fn bind_native_ready(builder: &mut TransitionBuilder<'_>, row: &PalwMonetaryMaterialRowV1) -> Result<(), PalwStateV2Error> {
     write(builder, row.terms.root, Some(row))?;
+    Ok(())
+}
+
+/// Explicit V2 retrieval + exact accepted generation + atomic applied receipt.
+/// A receipt is only a recovery cursor. It grants no computation credit.
+pub(super) fn routed_answer_v2(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    a: &crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_resource_v1::{
+        NativeDecodeErrorV1, TirNativeRequestsV1, native_value_requests_v1, reserve_native_requests_v1,
+        retain_native_value_decode_classified_v1,
+    };
+    use crate::palw_routed_material_v2::PalwRoutedMaterialTargetV2;
+    use crate::palw_step_refute::routing_v2::{PalwRoutingCourtErrorV2, check_routed_step_committed_half_v2};
+    let PalwRoutedMaterialTargetV2::Monetary { root, consent } = a.target else {
+        return Err(refused("routed monetary answer target differs"));
+    };
+    let p = policy(b, ctx.daa_score)?;
+    let limits = b.extras.memory_routing_court.ok_or(PalwStateV2Error::ShardCourtDormant)?;
+    let route = b.state.kernel_route().ok_or_else(|| refused("routed monetary route absent"))?;
+    let bytes = route
+        .aux
+        .iter()
+        .find_map(|((t, k), v)| {
+            (*t == PALW_MONETARY_MATERIAL_TABLE_V1 && k.as_slice() == root.as_byte_slice()).then_some(v.as_slice())
+        })
+        .ok_or_else(|| refused("routed material contract absent"))?;
+    let owned =
+        retain_native_value_decode_classified_v1::<PalwMonetaryMaterialRowV1, std::io::Error>(bytes, || borsh::from_slice(bytes))
+            .map_err(|e| match e {
+                NativeDecodeErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),
+                NativeDecodeErrorV1::Decode(e) => refused(e.to_string()),
+            })?;
+    let native = b.state.reader_router_of_claim_v2(a.claim)?.ok_or_else(|| refused("routed material claim stamp absent"))?;
+    let claim = b.state.claim(&a.claim).ok_or(PalwStateV2Error::MissingClaim(a.claim))?;
+    let ladder =
+        b.state.class_step_ladder_v1(&claim.class_id, b.extras.held_context_ladder.ok_or(PalwStateV2Error::HeldContextDormant)?);
+    a.check_shape(ladder).map_err(refused)?;
+    let encoded = borsh::object_length(a).map_err(|e| refused(e.to_string()))? as u64;
+    if encoded > limits.max_close_bytes || encoded > owned.terms.max_material_bytes || encoded > p.max_bytes_per_contract {
+        return Err(refused("routed material answer exceeds native/signed capacity"));
+    }
+    let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(&b.state, root, a.provider)
+        .map_err(|e| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(e, refused))?;
+    if current != Some(consent) || !owned.providers.iter().any(|v| v.provider == a.provider && !v.charged) {
+        return Err(refused("routed material provider generation differs from own accepted state"));
+    }
+    let scope = owned
+        .native_binding
+        .as_ref()
+        .map(|v| &v.manifest)
+        .or(owned.terms.material_manifest.as_ref())
+        .and_then(|m| m.scope(a.claim))
+        .ok_or_else(|| refused("routed material exact scope absent"))?;
+    if scope.codec != crate::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldCompleteV2
+        || scope.commitment != claim.execution_root
+    {
+        return Err(refused("routed answer scope codec/execution differs"));
+    }
+    let missing = crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: a.refutation.step.output_opening.leaf_index };
+    let index = owned
+        .challenges
+        .iter()
+        .position(|c| c.provider == a.provider && c.dependency == a.claim && c.native_missing == Some(missing))
+        .ok_or_else(|| refused("routed material has no exact challenged unit"))?;
+    let challenge = &owned.challenges[index];
+    if challenge.answered
+        || ctx.daa_score > challenge.deadline_daa
+        || challenge.native_binding.as_deref() != Some(&a.refutation.step.binding)
+    {
+        return Err(refused("routed material challenge is answered/late or binding differs"));
+    }
+    let mut checkpoint = if b.state.material_recovery_row_v2(root).is_some() {
+        if b.params.material_release_recovery_at_v2(ctx.daa_score).is_none() {
+            return Err(refused("routed recovery fence dormant"));
+        }
+        let receipt = a.receipt.as_ref().ok_or_else(|| refused("routed recovery answer requires applied checkpoint"))?;
+        let checkpoint =
+            b.state.material_provider_ack_checkpoint_v2(&a.provider).ok_or_else(|| refused("routed provider stream absent"))?;
+        if receipt.challenge_deadline_daa != challenge.deadline_daa
+            || receipt.stream != checkpoint.stream
+            || receipt.previous != checkpoint.last_receipt
+            || checkpoint.sequence.checked_add(1) != Some(receipt.sequence)
+            || checkpoint.reserved_answer_events == 0
+        {
+            return Err(refused("routed answer replay/substitution in receipt stream"));
+        }
+        Some(checkpoint)
+    } else {
+        if a.receipt.is_some() {
+            return Err(refused("routed legacy contract cannot introduce a receipt stream"));
+        }
+        None
+    };
+    let mut q = TirNativeRequestsV1::new();
+    q.add_v1(native_value_requests_v1(&*owned).map_err(PalwStateV2Error::NativeResource)?)
+        .map_err(PalwStateV2Error::NativeResource)?;
+    // Existing native write encodes, journals and keeps an independent aux row.
+    let row_bytes = borsh::object_length(&*owned).map_err(|e| refused(e.to_string()))? as u64;
+    for _ in 0..4 {
+        q.vec_v1::<u8>(row_bytes).map_err(PalwStateV2Error::NativeResource)?;
+    }
+    q.vec_v1::<u8>(3 * 69 + 4 * 256).map_err(PalwStateV2Error::NativeResource)?;
+    let _mutation = reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+    check_routed_step_committed_half_v2(&a.refutation, claim.execution_root, &native.declaration, ladder).map_err(|e| match e {
+        PalwRoutingCourtErrorV2::Resource(e) => PalwStateV2Error::NativeResource(e),
+        other => refused(other.to_string()),
+    })?;
+    if !super::palw_kernel_route_fold_v1::charge_route_budget_v1(b, ctx, 0, false)? {
+        return Err(refused("routed answer route budget exhausted"));
+    }
+    let mut row = (*owned).clone();
+    b.slash_bond(row.challenges[index].challenger, u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1))?;
+    row.challenges[index].answered = true;
+    if let Some(checkpoint) = &mut checkpoint {
+        let receipt = a.receipt.as_ref().expect("checked above");
+        checkpoint.sequence = receipt.sequence;
+        let network = Hash64::from_bytes(b.state.kernel_route().expect("route checked").header.policy.network_domain);
+        checkpoint.last_receipt = a.message(network);
+        checkpoint.reserved_answer_events -= 1;
+        b.write_kernel_row(
+            crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
+            crate::palw_material_release_recovery_v2::material_provider_stream_key_v2(&a.provider),
+            Some(borsh::to_vec(checkpoint).unwrap()),
+        );
+    }
+    write(b, root, Some(&row));
     Ok(())
 }

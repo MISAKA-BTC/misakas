@@ -386,6 +386,47 @@ impl PalwChainStateV2 {
             if *table != PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 {
                 continue;
             }
+            if key.len() == 69
+                && key.first() == Some(&crate::palw_material_challenge_history_v4::PALW_MATERIAL_CHALLENGE_HISTORY_PREFIX_V4)
+            {
+                use crate::palw_material_challenge_history_v4::{
+                    decode_material_challenge_history_v4, material_challenge_history_key_v4,
+                };
+                let history = decode_material_challenge_history_v4(bytes).map_err(bad)?;
+                let checkpoint = crate::palw_material_challenge_checkpoint_v4::material_challenge_checkpoint_from_route_v4(
+                    route,
+                    history.challenger,
+                )
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |why| bad(&why)))?
+                .ok_or_else(|| bad("challenge history lacks paired native checkpoint"))?;
+                history.validate(Hash64::from_bytes(route.header.policy.network_domain), &checkpoint).map_err(bad)?;
+                if key.as_slice() != material_challenge_history_key_v4(&history.challenger).as_slice()
+                    || self.bond(&history.challenger).is_none()
+                {
+                    return Err(bad("challenge history key/owning bond differs"));
+                }
+                continue;
+            }
+            if key.len() == 69
+                && key.first() == Some(&crate::palw_material_challenge_checkpoint_v4::PALW_MATERIAL_CHALLENGE_CHECKPOINT_PREFIX_V4)
+            {
+                use crate::palw_material_challenge_checkpoint_v4::{
+                    decode_material_challenge_checkpoint_v4, material_challenge_checkpoint_key_v4,
+                };
+                let checkpoint = decode_material_challenge_checkpoint_v4(bytes).map_err(bad)?;
+                checkpoint.validate(Hash64::from_bytes(route.header.policy.network_domain)).map_err(bad)?;
+                // Canonical unique keys plus an existing owning bond bound
+                // this family to one fixed cell per native bond, without a
+                // second population index or a new policy/default number.
+                if key.as_slice() != material_challenge_checkpoint_key_v4(&checkpoint.challenger).as_slice()
+                    || self.bond(&checkpoint.challenger).is_none_or(|bond| bond.registered_daa > checkpoint.created_daa)
+                    || params.material_release_recovery_at_v2(checkpoint.created_daa).is_none()
+                    || params.material_release_recovery_at_v2(checkpoint.applied_daa).is_none()
+                {
+                    return Err(bad("challenge checkpoint key/owner/fence differs"));
+                }
+                continue;
+            }
             if key.len() != 64 {
                 let stream: PalwMaterialProviderAckCheckpointV2 =
                     borsh::from_slice(bytes).map_err(|_| bad("malformed provider stream"))?;
@@ -681,4 +722,12 @@ pub fn material_provider_terminals_owned_v4(
     preflight_native_value_v1::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded[..], encoded.len() as u64).map_err(|e| e.to_string())?;
     retain_native_value_decode_v1(&encoded, || borsh::from_slice::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded))
         .map_err(|e| e.to_string())
+}
+
+/// The admission horizon is native and signed, not elapsed local TTL.
+pub fn bounded_replacement_deadline_v4(now: u64, until: u64, max_window: u64) -> Result<(), &'static str> {
+    if until < now || now.checked_add(max_window).is_none_or(|max| until > max) {
+        return Err("bounded replacement signed admission deadline is expired or outside policy");
+    }
+    Ok(())
 }

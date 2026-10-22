@@ -1452,35 +1452,6 @@ pub fn adjudicate_court_close_v4(
 /// closure and that mirror, REQ-CELL-2's objective conviction reads the consumer-v2 coverage (the solo / composed recurrence maps and,
 /// with the class's covering router binding from aux 139, the routed tables are covered). `None`: byte for byte v4.
 #[allow(clippy::too_many_arguments)]
-pub fn adjudicate_court_close_v5(
-    state: &PalwChainStateV2,
-    session_id: &Hash64,
-    proof: &PalwCourtVerdictProofV2,
-    court: &crate::palw_mode_v2::PalwCourtParamsV2,
-    step_ladder: u64,
-    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    held_regime: bool,
-    decode_close_convicts_only: bool,
-    fp_decode_rules_from_daa: Option<u64>,
-    cell_closure_from_daa: Option<u64>,
-    memory_routing_from_daa: Option<u64>,
-) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
-    // bound has to have: an oversized object must be refusable without a lookup, a decode or a
-    // hash. A close for a session that does not exist and also breaks the ceiling therefore reports
-    // the ceiling, and that is the right answer — the object was inadmissible on its face.
-    check_close_cost_v2(proof, court)?;
-    let (session, claim) = resolve_court_session_v2(state, session_id)?;
-    let tir_phase = match proof {
-        PalwCourtVerdictProofV2::TirDissection { .. } | PalwCourtVerdictProofV2::GenDissection { .. }
-        | PalwCourtVerdictProofV2::EvalDissection { .. } => state.tir_dissection_v1(session_id),
-        _ => None,
-    };
-    adjudicate_court_close_resolved_v5(state,session_id,session,claim,tir_phase,proof,court,step_ladder,prompt_ids_form,
-        held_regime,decode_close_convicts_only,fp_decode_rules_from_daa,cell_closure_from_daa,memory_routing_from_daa)
-}
-
-// =================================================================================================
 // RFC-0024 §4 / §5 — the position terminal and the lookahead moves (DORMANT, `palw_tir_bounded_door_v1`)
 // =================================================================================================
 
@@ -1677,6 +1648,34 @@ where
     Ok(())
 }
 
+pub fn adjudicate_court_close_v5(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    held_regime: bool,
+    decode_close_convicts_only: bool,
+    fp_decode_rules_from_daa: Option<u64>,
+    cell_closure_from_daa: Option<u64>,
+    memory_routing_from_daa: Option<u64>,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
+    // bound has to have: an oversized object must be refusable without a lookup, a decode or a
+    // hash. A close for a session that does not exist and also breaks the ceiling therefore reports
+    // the ceiling, and that is the right answer — the object was inadmissible on its face.
+    check_close_cost_v2(proof, court)?;
+    let (session, claim) = resolve_court_session_v2(state, session_id)?;
+    let tir_phase = match proof {
+        PalwCourtVerdictProofV2::TirDissection { .. } | PalwCourtVerdictProofV2::GenDissection { .. }
+        | PalwCourtVerdictProofV2::EvalDissection { .. } => state.tir_dissection_v1(session_id),
+        _ => None,
+    };
+    adjudicate_court_close_resolved_v5(state,session_id,session,claim,tir_phase,proof,court,step_ladder,prompt_ids_form,
+        held_regime,decode_close_convicts_only,fp_decode_rules_from_daa,cell_closure_from_daa,memory_routing_from_daa)
+}
+
 /// Private retained-record entry. The caller authenticates the rooted session
 /// and its phase; this computes the same v5 kernel without cloning or modifying
 /// chain state. It does not authenticate admission, credit or financial release.
@@ -1724,6 +1723,14 @@ fn adjudicate_court_close_resolved_v5(
     cell_closure_from_daa:Option<u64>,
     memory_routing_from_daa:Option<u64>,
 )->Result<PalwCourtVerdictV2,PalwCourtV2Error>{
+    if let PalwCourtVerdictProofV2::Arithmetic { refutation, .. } | PalwCourtVerdictProofV2::ArithmeticOpened { refutation, .. } =
+        proof
+    {
+        state
+            .require_implicit_reader_slot_v1(session.claim, refutation.output_preimage.coord.node_slot)
+            .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(e.to_string()))?;
+    }
+
     if matches!(proof, PalwCourtVerdictProofV2::DecodeToken { .. } | PalwCourtVerdictProofV2::DecodeTokenTiled { .. }) {
         palw_decode_close_admits_claim_v1(
             session.claim,
