@@ -55,6 +55,12 @@ pub(super) enum PalwLegLiabilityV1 {
     /// what the forfeiture can take of the held `fee`, and the held row itself is its collateral, locked through the horizon by
     /// construction; the hard deadline is the producer-signed paid lifetime; the signer liability beyond the fee is its own leg.
     VerifierCheck { claim: [u8; 64], fee: u64, horizon: u64 },
+    /// **G14 lane escrow-rfc08 (RFC-0008, RFC08-2): a leg of a native claim** (funded / text / job / mining) whose own budget row
+    /// is `budget_id`. Its signed hard deadline is DERIVED from signed/consensus inputs — the original's actual accepting DAA under
+    /// the adopted X3 hard deadline (`palw_claim_hard_deadline_v1`, RFC-0014 2026-10-19 amendment `a + 10,000`, RFC-0026 §2) —
+    /// never defaulted: where X3 does not govern `accepted_daa` the leg stays unsourced, by name. `liability_until` is the claim's
+    /// own deterministic horizon (the family computes it from the claim record and its rooted policy).
+    NativeClaim { budget_id: Hash64, accepted_daa: u64, liability_until: u64, draw: u64, paid_now: u64 },
     /// A payee whose liability terms have no authenticated source: the leg is refused past the fence.
     Unsourced(&'static str),
     /// A leg that pays no liable claim's party (a debit into the books, a slash-funded award): outside the predicate, by name.
@@ -78,6 +84,23 @@ pub(super) enum PalwAdmissionLiabilityV1 {
 /// claim's Final floor, plus `window_court` (the formula every other lane uses after Final). Deterministic from signed inputs.
 pub(super) fn native_claim_hard_deadline_v1(params: &PalwStateParamsV2, signed_deadline: u64) -> u64 {
     signed_deadline.saturating_add(params.window_court())
+}
+
+/// **G14 lane escrow-rfc08 (RFC-0008, RFC08-2): a native claim's signed hard deadline, derived** — the adopted X3 hard deadline
+/// (`palw_claim_hard_deadline_v1`'s policy, `a + prepare + observe + resolve` = RFC-0014's `a + 10,000`) at the claim's actual
+/// accepting DAA `a`, read from the rooted mirror. `Err` (never a default) where X3 does not govern `a`: the fence is unarmed or
+/// `a` precedes it. Checked: an overflowing deadline is refused, never saturated.
+pub(super) fn native_claim_signed_hard_deadline_v1(params: &PalwStateParamsV2, accepted_daa: u64) -> PalwSettlementTermV1<u64> {
+    let mirror = params
+        .claim_hard_deadline_v1()
+        .filter(|mirror| accepted_daa >= mirror.from_daa)
+        .ok_or("the signed hard deadline: X3 (palw_claim_hard_deadline_v1) does not govern the native claim's acceptance")?;
+    let p = &mirror.policy;
+    accepted_daa
+        .checked_add(p.prepare_daa)
+        .and_then(|d| d.checked_add(p.observe_daa))
+        .and_then(|d| d.checked_add(p.resolve_daa))
+        .ok_or("the signed hard deadline: overflow")
 }
 
 /// Refusal as a semantic consensus error (never a local capacity error).
@@ -249,6 +272,37 @@ impl TransitionBuilder<'_> {
                     material_ttl_until,
                     vest_until,
                     retire_not_before,
+                    now,
+                }))
+            }
+            PalwLegLiabilityV1::NativeClaim { budget_id, accepted_daa, liability_until, draw, paid_now } => {
+                if accepted_daa < from {
+                    return Ok(None); // admitted under the old ruleset
+                }
+                let hard = native_claim_signed_hard_deadline_v1(self.params, accepted_daa);
+                let budget = self.state.bond_budget.as_ref().ok_or(unsourced("the native claim's ADR-0176 reservation (no engine)"))?;
+                let row = *budget.claim_row(&budget_id).ok_or(unsourced("the native claim's ADR-0176 reservation row"))?;
+                let own = if row.open { row.liability_sompi } else { 0 };
+                let (bond_collateral, other_live_liability, bond_locked_until) = self.bond_liability_terms_v1(&row.bond, own);
+                Ok(Some(PalwSettlementTermsSourcedV1 {
+                    reserved_reward: Ok(row.reserved.reward_sompi),
+                    consumed_reward: Ok(row.consumed.reward_sompi),
+                    draw,
+                    payment,
+                    paid_now,
+                    exported_before: Ok(row.consumed.reward_sompi),
+                    export_cap: self.export_cap_of_v1(row.liability_sompi),
+                    liability_sompi: Ok(row.liability_sompi),
+                    bond_collateral,
+                    other_live_liability,
+                    bond_locked_until,
+                    liability_until: Ok(liability_until),
+                    signed_hard_deadline: hard,
+                    // No covenant: the material TTL is not a term of the native families (ADR-0184 §1, as at admission).
+                    material_ttl_until: Ok(u64::MAX),
+                    vest_until: None,
+                    // The native kernel keeps the claim's row convictable through its own horizon (its retention rule).
+                    retire_not_before: Ok(liability_until),
                     now,
                 }))
             }

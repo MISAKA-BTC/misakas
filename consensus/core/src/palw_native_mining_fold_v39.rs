@@ -667,17 +667,35 @@ pub(super) fn apply_native_receipt_block_v39(
             [0; 64],
             u64::from(spend.quantum_index),
         );
-        // RFC08-2: a native mining claim is not a V2 claim — X3 defines no hard deadline for it and it carries no signed lifetime
-        // — so its receipt quantum has no liability terms to source: refused past the fence, never defaulted.
+        // RFC08-2 (G14 lane escrow-rfc08): the mining claim's liability terms are DERIVED from its own record — its actual
+        // accepting DAA under the adopted X3 hard deadline (`a + 10,000`, read from the rooted mirror; unsourced by name where X3
+        // does not govern `a`) and its deterministic horizon `palw_native_mining_liability_until_v39` over the rooted mining and
+        // certification policies. Below `palw_settlement_once_v1` the leg is not read at all. Without RFC-0018's certification
+        // policy the horizon has no source and the leg stays unsourced, never defaulted.
+        let leg = match builder.params.rfc0018_v1().map(|m| m.certification) {
+            Some(certification) => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NativeClaim {
+                budget_id: native_mining_budget_id_v39(&c.id),
+                accepted_daa: c.admitted_daa,
+                liability_until: crate::palw_native_mining_v39::palw_native_mining_liability_until_v39(
+                    c.admitted_daa,
+                    &policy,
+                    &certification,
+                ),
+                // One quantum's carve, drawn strictly from the reservation's R and paid in this block's coinbase.
+                draw: carve,
+                paid_now: carve,
+            },
+            None => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                "a native mining receipt: the mining claim's liability horizon needs RFC-0018's certification policy",
+            ),
+        };
         let once = builder.settle_once_liable_v1(
             ctx.daa_score,
             obligation,
             PalwSettlementConsumerV1::ReceiptBlock,
             carve,
             PalwSettlementDebitV1::Issuance { carve },
-            super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
-                "a native mining receipt: its mining claim carries no signed hard deadline (X3 governs V2 claims only)",
-            ),
+            leg,
         )?;
         match once {
             super::palw_settlement_once_fold_v1::PalwSettleOnceV1::AlreadySettled(_) => {

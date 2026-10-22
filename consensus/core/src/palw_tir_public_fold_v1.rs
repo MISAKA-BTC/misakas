@@ -11,6 +11,7 @@ use crate::palw_tir_public_owned_v1::{
 use crate::palw_tir_public_state_v1::{PalwTirPublicAcquisitionRowV1, PalwTirPublicPreparationRowV1};
 
 include!("palw_tir_prepared_original_geometry_v1.rs");
+include!("palw_funded_original_coordinator_fold_v1.rs");
 
 /// Diagnostics for a funded carrier on the native accepted UTXO path. There is
 /// deliberately no Admitted/Complete variant and no state or spend capability.

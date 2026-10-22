@@ -13,6 +13,10 @@ impl PalwBlockFactsV1<'_> {
     pub fn round_fee_incomes(&self) -> &[crate::palw_bond_budget_v1::PalwRoundFeeIncomeV1] {
         &self.extras.round_fee_incomes
     }
+    /// G14 lane escrow-rfc08: the qualified funded-escrow spends UTXO acceptance admitted (empty below the fence).
+    pub fn funded_escrow_settlements(&self) -> &[crate::palw_funded_escrow_v1::PalwEscrowSettlementFactV1] {
+        &self.extras.funded_escrow_settlements
+    }
     pub fn merged_reds(&self) -> &BTreeSet<BlockHash> {
         &self.extras.merged_reds
     }

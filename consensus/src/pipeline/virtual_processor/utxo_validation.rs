@@ -205,6 +205,44 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// every shipped preset walks the mergeset exactly as before.
     pub palw_round_verdicts: Option<PalwRoundVerdictsV1>,
     pub palw_round_fee_incomes: Vec<kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1>,
+    /// **G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow spend locks** — the selected parent's unsettled rooted rows by
+    /// outpoint (set by the walk from the same parent state as `palw_v2_locked_bonds`), and the TFO1 carriers' own funding outputs
+    /// accepted earlier in THIS mergeset (grown by `calculate_utxo_state`). Empty below `palw_tir_public_conviction_v1`.
+    pub palw_escrow_locks: PalwEscrowSpendLocksV1,
+    /// The qualified escrow spends this block accepted, in acceptance order — handed to the fold as
+    /// `PalwTransitionExtrasV1::funded_escrow_settlements`, so the row settles in the same rooted delta as the UTXO spend.
+    pub palw_escrow_settlements: Vec<kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
+}
+
+/// **G14 lane escrow-rfc08 (RFC-0035 A): what the funded-escrow half of the spend filter reads.**
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PalwEscrowSpendLocksV1 {
+    /// Selected-parent rooted rows, unsettled, by funding outpoint: spendable only by a qualified spend.
+    pub rows: std::collections::HashMap<TransactionOutpoint, kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
+    /// TFO1 carriers' OWN funding outputs accepted earlier in this mergeset: not spendable for the rest of it.
+    pub provisional: std::collections::HashSet<TransactionOutpoint>,
+}
+
+impl PalwEscrowSpendLocksV1 {
+    fn is_empty(&self) -> bool {
+        self.rows.is_empty() && self.provisional.is_empty()
+    }
+
+    /// **The one escrow-lock rule** — the block filter (`BondSpendFilter::escrow_refusal`), the mempool
+    /// (`validate_mempool_transaction_in_utxo_context`) and therefore the template all ask this, with the actual populated input
+    /// amounts: the first input that spends a provisionally locked outpoint, or a rooted row's outpoint without a qualified plan.
+    pub(crate) fn refusal(&self, tx: &Transaction, input_amounts: impl IntoIterator<Item = u64>, daa_score: u64) -> Option<TransactionOutpoint> {
+        if self.is_empty() {
+            return None;
+        }
+        let amounts: Vec<u64> = input_amounts.into_iter().collect();
+        tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| {
+            self.provisional.contains(outpoint)
+                || self.rows.get(outpoint).is_some_and(|row| {
+                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(row, tx, &amounts, daa_score, None).is_err()
+                })
+        })
+    }
 }
 
 /// **ADR-0125: a merging block's verdicts on its round blocks.** A round block outside `permitted`
@@ -257,6 +295,8 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_rent_available_fees: Default::default(),
             palw_round_verdicts: None,
             palw_round_fee_incomes: Vec::new(),
+            palw_escrow_locks: Default::default(),
+            palw_escrow_settlements: Vec::new(),
         }
     }
 
@@ -317,6 +357,9 @@ pub(crate) struct BondSpendFilter<'a> {
     /// `palw_locked` because these are the outpoints a spend MAY touch — under an obligation
     /// rather than freely — and a filter that could only say yes or no had no way to express that.
     palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
+    /// **G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow locks.** `None` where none exists (below the fence, and wherever no
+    /// row or same-mergeset carrier exists — every network today), which leaves this filter's answers exactly as before.
+    escrow: Option<&'a PalwEscrowSpendLocksV1>,
 }
 
 impl<'a> BondSpendFilter<'a> {
@@ -329,7 +372,16 @@ impl<'a> BondSpendFilter<'a> {
         palw_locked: &'a std::collections::HashSet<TransactionOutpoint>,
         palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
     ) -> Self {
-        Self { bond_view: None, daa_score, palw_locked, palw_burns }
+        Self { bond_view: None, daa_score, palw_locked, palw_burns, escrow: None }
+    }
+
+    /// **G14 lane escrow-rfc08: the first input of `tx` that spends a locked funded-escrow outpoint without qualification**, or
+    /// `None`. A provisional (same-mergeset) lock refuses every spend; a rooted row admits exactly the spend
+    /// `palw_escrow_qualified_spend_v1` qualifies against it, with the actual populated entries. The input's script check is NOT
+    /// touched — it runs in the ordinary validator after this.
+    fn escrow_refusal(&self, tx: &Transaction, entries: &[UtxoEntry]) -> Option<TransactionOutpoint> {
+        let locks = self.escrow?;
+        locks.refusal(tx, entries.iter().map(|entry| entry.amount), self.daa_score)
     }
 
     /// **What this transaction must leave unclaimed, in total** — [`palw_bond_burn_owed`] over this
@@ -363,6 +415,15 @@ impl VirtualStateProcessor {
             return 0;
         }
         if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            // G14 item 1 (RFC-0035 A): a TFO1 carrier burns its literal TFP1's declared rent exactly as that TFP1 carrier would, so
+            // the coordinator's native rent check (`prepare_paired_original_v1`) reads a burn that actually happened. Refused or
+            // admitted, the rent is destroyed (the TFP1 rule); the funding output is untouched (it is an output, not fee).
+            if kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(tx) {
+                return kaspa_consensus_core::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(&tx.payload)
+                    .and_then(|envelope| envelope.original_v1())
+                    .map(|original| original.declared_rent_sompi)
+                    .unwrap_or(0);
+            }
             return kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
                 .map(|envelope| envelope.declared_rent_sompi).unwrap_or(0);
         }
@@ -551,12 +612,19 @@ impl VirtualStateProcessor {
             // Built when EITHER model has something to lock: the DNS view above the mergeset fence,
             // or a non-empty PALW V2 registry (audit C-08). `None` only when both are inert, which
             // keeps every shipped network byte-identical to the legacy own-body-only gate.
-            let bond_filter = (bond_gate_view.is_some() || !ctx.palw_v2_locked_bonds.is_empty() || !ctx.palw_v2_bond_burns.is_empty())
+            // G14 lane escrow-rfc08: the funded-escrow half joins only when it holds a lock, so every network without one builds
+            // exactly the filter it built before.
+            let escrow_locked = !ctx.palw_escrow_locks.is_empty();
+            let bond_filter = (bond_gate_view.is_some()
+                || !ctx.palw_v2_locked_bonds.is_empty()
+                || !ctx.palw_v2_bond_burns.is_empty()
+                || escrow_locked)
                 .then_some(BondSpendFilter {
                     bond_view: bond_gate_view.as_ref(),
                     daa_score: pov_daa_score,
                     palw_locked: &ctx.palw_v2_locked_bonds,
                     palw_burns: &ctx.palw_v2_bond_burns,
+                    escrow: escrow_locked.then_some(&ctx.palw_escrow_locks),
                 });
             let (mut validated_transactions, mut inner_multiset) =
                 self.validate_transactions_with_muhash_in_parallel(&txs, &composed_view, pov_daa_score, validation_flags, bond_filter);
@@ -620,7 +688,39 @@ impl VirtualStateProcessor {
                     || self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
             let mut block_fee = 0u64;
             let mut finality_fee = 0u64;
+            // G14 lane escrow-rfc08 (RFC-0035 A): past the fence, each accepted TFO1 carrier whose literal payer-signed terms pair
+            // to its own funding output locks THAT output for the rest of this mergeset (never another outpoint). Collected here and
+            // applied after this merged block, so the filter borrowed above is not mutated while it is read.
+            let escrow_fence_active = self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
+            let mut new_provisional_escrows: Vec<TransactionOutpoint> = Vec::new();
             for (validated_tx, _) in validated_transactions.iter() {
+                if escrow_fence_active {
+                    if let Some(outpoint) = kaspa_consensus_core::palw_funded_escrow_v1::palw_tfo1_provisional_lock_v1(validated_tx.tx) {
+                        new_provisional_escrows.push(outpoint);
+                    }
+                    // A rooted row's outpoint reaches acceptance only under a qualified plan (the filter refused the rest); the
+                    // plan is re-derived from the same row and the same actual entries and handed to the fold.
+                    if !ctx.palw_escrow_locks.rows.is_empty() {
+                        let amounts: Vec<u64> = validated_tx.entries.iter().map(|entry| entry.amount).collect();
+                        for input in validated_tx.tx.inputs.iter() {
+                            if let Some(row) = ctx.palw_escrow_locks.rows.get(&input.previous_outpoint) {
+                                let plan = kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(
+                                    row,
+                                    validated_tx.tx,
+                                    &amounts,
+                                    pov_daa_score,
+                                    None,
+                                )
+                                .expect("the spend filter admitted only a qualified escrow spend over the same row and entries");
+                                ctx.palw_escrow_settlements.push(kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1 {
+                                    contract_id: row.contract_id,
+                                    old: plan.old,
+                                    new: plan.new,
+                                });
+                            }
+                        }
+                    }
+                }
                 if let Some((state, accepting_daa)) = candidate_state {
                     if kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(validated_tx.tx) {
                         let diagnostic = self.palw_funded_original_candidate_from_native_v1(state, accepting_daa, validated_tx);
@@ -676,6 +776,7 @@ impl VirtualStateProcessor {
                 debug_assert_eq!(income.actual_sompi, block_fee, "preflight and actual collectible fees share one rule");
                 ctx.palw_round_fee_incomes.push(income);
             }
+            ctx.palw_escrow_locks.provisional.extend(new_provisional_escrows);
 
             ctx.mergeset_acceptance_data.push(MergesetBlockAcceptanceData {
                 block_hash: merged_block,
@@ -1949,6 +2050,11 @@ impl VirtualStateProcessor {
         if let Some(filter) = bond_filter {
             palw_bond_burn_paid(transaction, entries.iter().map(|e| e.amount), filter.burn_owed(transaction))?;
         }
+        // G14 lane escrow-rfc08 (RFC-0035 A): a locked funded-escrow outpoint is spent only by a qualified settlement — checked
+        // natively against the rooted row and these actual entries, before (and in addition to) the ordinary script check below.
+        if let Some(outpoint) = bond_filter.and_then(|filter| filter.escrow_refusal(transaction, &entries)) {
+            return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
+        }
         let populated_tx = PopulatedTransaction::new(transaction, entries);
         // CONSENSUS path: DNS coinbase settlement is deliberately NOT consulted here
         // (`dns_settlement: None`). The settlement's anchor input would have to be a sequential
@@ -2010,12 +2116,21 @@ impl VirtualStateProcessor {
         pov_daa_score: u64,
         args: &TransactionValidationArgs,
         palw_burns: Option<&std::collections::HashMap<TransactionOutpoint, u64>>,
+        palw_escrow: Option<&PalwEscrowSpendLocksV1>,
     ) -> TxResult<()> {
         self.populate_mempool_transaction_in_utxo_context(mutable_tx, utxo_view)?;
         if let Some(burns) = palw_burns {
             let owed = palw_bond_burn_owed(&mutable_tx.tx, burns);
             // Every entry is populated here (`populate_…` refused a missing one).
             palw_bond_burn_paid(&mutable_tx.tx, mutable_tx.entries.iter().flatten().map(|entry| entry.amount), owed)?;
+        }
+        // **G14 lane escrow-rfc08 round 2: the escrow half of the mempool gate** — the tip's unsettled rooted rows, asked with the
+        // block path's own rule and the actual populated amounts, before the script check. A locked-escrow spend the merge would
+        // skip is refused here instead of relayed. `None` (no lock) everywhere below `palw_tir_public_conviction_v1`.
+        if let Some(locks) = palw_escrow
+            && let Some(outpoint) = locks.refusal(&mutable_tx.tx, mutable_tx.entries.iter().flatten().map(|entry| entry.amount), pov_daa_score)
+        {
+            return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
         }
 
         // ADR-0134: a compute-overlay transaction is not admitted to the mempool past the
@@ -3347,7 +3462,7 @@ mod tests {
     // predicate that drives the acceptance-time SKIP — the only bond spend gate since the own-body
     // gate it complemented was removed (it could not run on any network). Exercised per-outpoint.
     mod bond_spend_filter {
-        use super::super::BondSpendFilter;
+        use super::super::{BondSpendFilter, PalwEscrowSpendLocksV1};
         use kaspa_consensus_core::{
             dns_finality::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
             tx::TransactionOutpoint,
@@ -3391,7 +3506,7 @@ mod tests {
             let view = ActiveBondView::from_records([(active, bond(active)), (pending_op, pending), (releasable_op, releasable)]);
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns };
+            let filter = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
 
             assert!(filter.locks(&active), "Active bond's output-0 must be locked (skip the spend)");
             assert!(filter.locks(&pending_op), "Pending bond's output-0 must be locked");
@@ -3415,19 +3530,19 @@ mod tests {
             let no_burns = std::collections::HashMap::new();
 
             // Both models live: each locks its own, and nothing else.
-            let both = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns };
+            let both = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
             assert!(both.locks(&dns_op));
             assert!(both.locks(&palw_op));
             assert!(!both.locks(&outpoint(9)));
 
             // No V2 bundle: byte-identical to the legacy gate — the PALW outpoint is just an
             // outpoint.
-            let dns_only = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns };
+            let dns_only = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
             assert!(dns_only.locks(&dns_op));
             assert!(!dns_only.locks(&palw_op));
 
             // DNS mergeset gate closed (or no DNS params at all): the V2 registry still locks.
-            let palw_only = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns };
+            let palw_only = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
             assert!(palw_only.locks(&palw_op));
             assert!(!palw_only.locks(&dns_op), "a DNS bond is not this model's business when the DNS view is absent");
         }
@@ -3447,7 +3562,7 @@ mod tests {
             let other = outpoint(5);
             let empty = std::collections::HashSet::new();
             let burns: std::collections::HashMap<_, _> = [(bond_op, 900u64)].into_iter().collect();
-            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &burns };
+            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &burns, escrow: None };
 
             let spend = |ops: Vec<TransactionOutpoint>| {
                 Transaction::new(
@@ -3472,11 +3587,138 @@ mod tests {
             assert_eq!(filter.burn_owed(&spend(vec![other])), 0, "an ordinary spend owes nothing");
             // Obligations ADD: one transaction releasing two slashed bonds destroys both.
             let two: std::collections::HashMap<_, _> = [(bond_op, 900u64), (other, 100)].into_iter().collect();
-            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &two };
+            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &two, escrow: None };
             assert_eq!(filter.burn_owed(&spend(vec![bond_op, other])), 1_000);
             // And a LOCKED bond never reaches this question — it cannot be spent at all, so it
             // appears in no obligation map. The two answers are disjoint by construction.
             assert!(!filter.locks(&bond_op), "a bond that owes a burn is one that may be spent");
+        }
+
+        /// **G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow half of the filter.** A rooted row's outpoint (a LATER block's
+        /// view of an installed escrow) refuses a non-qualified spend and admits the qualified payer return; a same-mergeset
+        /// provisional lock refuses every spend of the carrier's own output; and with no lock — a refused contract's output in the
+        /// next block, whose context starts with an empty provisional set and no row — the payer's ordinary spend is untouched.
+        #[test]
+        fn funded_escrow_locks_refuse_unqualified_spends_and_leave_the_payer_fallback() {
+            use kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1;
+            use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry};
+
+            let payload = kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+            let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let escrow_op = outpoint(11);
+            let row = PalwFundedEscrowRowV1::fresh_v1(
+                Hash64::from_u64_word(1),
+                Hash64::from_u64_word(2),
+                escrow_op,
+                1_000,
+                Hash64::from_u64_word(3),
+                payload,
+                100,
+                DAA - 1,
+                false,
+            )
+            .unwrap();
+            let tx = |outputs: Vec<TransactionOutput>| {
+                Transaction::new(
+                    0,
+                    vec![TransactionInput::new(escrow_op, vec![], 0, 0)],
+                    outputs,
+                    0,
+                    kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                    0,
+                    vec![],
+                )
+            };
+            let entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false)];
+            let theft = tx(vec![TransactionOutput::new(1_000, ScriptPublicKey::default())]);
+            let payer_return = tx(vec![TransactionOutput::new(1_000, payer.clone())]);
+            let empty = std::collections::HashSet::new();
+            let no_burns = std::collections::HashMap::new();
+
+            // A later block: the rooted row locks; only the qualified payer return passes.
+            let rooted = PalwEscrowSpendLocksV1 { rows: [(escrow_op, row)].into_iter().collect(), provisional: Default::default() };
+            let filter =
+                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&rooted) };
+            assert_eq!(filter.escrow_refusal(&theft, &entries), Some(escrow_op), "a non-qualified spend of a rooted escrow is skipped");
+            assert_eq!(filter.escrow_refusal(&payer_return, &entries), None, "the payer return after the hard deadline qualifies");
+            // Before the hard deadline even the payer's own return is a settlement, and the schedule is typed-missing.
+            let early =
+                BondSpendFilter { bond_view: None, daa_score: 100, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&rooted) };
+            assert_eq!(early.escrow_refusal(&payer_return, &entries), Some(escrow_op));
+
+            // The same mergeset: the carrier's own output is provisionally locked against every spend, the payer's included.
+            let provisional = PalwEscrowSpendLocksV1 { rows: Default::default(), provisional: [escrow_op].into_iter().collect() };
+            let filter =
+                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&provisional) };
+            assert_eq!(filter.escrow_refusal(&payer_return, &entries), Some(escrow_op));
+            assert_eq!(filter.escrow_refusal(&tx_spending(outpoint(12)), &entries), None, "another outpoint is never locked by it");
+
+            // The next block after a refused contract: no row, no provisional lock — the ordinary payer fallback is spendable.
+            let none =
+                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            assert_eq!(none.escrow_refusal(&payer_return, &entries), None);
+            assert_eq!(none.escrow_refusal(&theft, &entries), None, "an unlocked payer output is an ordinary P2PKH (its script decides)");
+
+            fn tx_spending(op: TransactionOutpoint) -> Transaction {
+                Transaction::new(
+                    0,
+                    vec![TransactionInput::new(op, vec![], 0, 0)],
+                    vec![TransactionOutput::new(1, ScriptPublicKey::default())],
+                    0,
+                    kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                    0,
+                    vec![],
+                )
+            }
+        }
+
+        /// **G14 lane escrow-rfc08 round 2: the mempool asks the block filter's own escrow rule** (`PalwEscrowSpendLocksV1::refusal`,
+        /// which `BondSpendFilter::escrow_refusal` and `validate_mempool_transaction_in_utxo_context` both call), so a spend the merge
+        /// would skip is refused before relay and a qualified one — including a relay's templated payer return — is admitted by both.
+        #[test]
+        fn funded_escrow_mempool_rule_is_the_block_filter_rule() {
+            use kaspa_consensus_core::palw_funded_escrow_v1::{
+                PalwEscrowSpendPathV1, PalwFundedEscrowRowV1, palw_escrow_relay_template_payload_v1,
+            };
+            use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry};
+
+            let payload = kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+            let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let escrow_op = outpoint(21);
+            let row = PalwFundedEscrowRowV1::fresh_v1(
+                Hash64::from_u64_word(5), Hash64::from_u64_word(6), escrow_op, 1_000, Hash64::from_u64_word(7), payload, 100, DAA - 1, false,
+            )
+            .unwrap();
+            let locks = PalwEscrowSpendLocksV1 { rows: [(escrow_op, row)].into_iter().collect(), provisional: Default::default() };
+            let empty = std::collections::HashSet::new();
+            let no_burns = std::collections::HashMap::new();
+            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
+            let relay_op = outpoint(22);
+            let spend = |out0: TransactionOutput, payload: Vec<u8>| {
+                Transaction::new(
+                    0,
+                    vec![TransactionInput::new(escrow_op, vec![], 0, 0), TransactionInput::new(relay_op, vec![], 0, 0)],
+                    vec![out0, TransactionOutput::new(40, ScriptPublicKey::default())],
+                    0,
+                    kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                    0,
+                    payload,
+                )
+            };
+            let entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(50, ScriptPublicKey::default(), 100, false)];
+            let template = palw_escrow_relay_template_payload_v1(row.contract_id, escrow_op, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+            let cases = [
+                (spend(TransactionOutput::new(1_000, ScriptPublicKey::default()), vec![]), Some(escrow_op)),
+                (spend(TransactionOutput::new(1_000, payer.clone()), vec![]), None),
+                (spend(TransactionOutput::new(1_000, payer.clone()), template), None),
+                (spend(TransactionOutput::new(1_000, payer.clone()), vec![7]), Some(escrow_op)),
+            ];
+            for (tx, expected) in cases {
+                let mempool = locks.refusal(&tx, entries.iter().map(|e| e.amount), DAA);
+                assert_eq!(mempool, expected);
+                assert_eq!(filter.escrow_refusal(&tx, &entries), mempool, "mempool and block filter answer alike");
+            }
+            assert_eq!(PalwEscrowSpendLocksV1::default().refusal(&spend(TransactionOutput::new(1, ScriptPublicKey::default()), vec![]), [1_000u64, 50], DAA), None);
         }
     }
 
