@@ -383,3 +383,119 @@ fn material_intake_incomplete_drafts_expire_and_release_reservation() {
     assert_eq!(l.reserved_bytes, 0);
     crate::palw_court_shared_material_intake_v1::set_material_intake_test_schedule_v1(None);
 }
+
+/// **values/p1-measure (2026-10-22, test side only): material intake Begin / Part / Finish wall time and retained bytes.** Ignored.
+/// Uploads every step leaf, every read parameter and the prompt of the history fixture through the real intake fold (the ML-DSA-87
+/// check, the checkpoint clone of the state, the authentication at Finish), `MEASURE_RUNS` times (default 21; the first run is the
+/// warm-up) from a fresh builder each run, with `MEASURE_SCALES` extra bonds in the parent state (default `0,1000,10000`) because
+/// every intake step clones the whole state at its checkpoint. Signing is outside the timer. Prints one `MEASURE` line per action
+/// kind and state size, and one `MEASURE_DA` line for the bytes the upload leaves on chain (rows, deltas).
+/// Run: `cargo test --release -p kaspa-consensus-core --lib -- --ignored --nocapture material_intake_measure_wall_time_and_retained_bytes`
+#[test]
+#[ignore]
+fn material_intake_measure_wall_time_and_retained_bytes() {
+    use crate::palw_court_shared_material_intake_v1::*;
+    use super::super::palw_court_shared_material_intake_fold_v1::material_intake;
+    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1 as Q;
+    use crate::palw_tir_public_source_v1::PalwTirPublicResponseV1 as R;
+    const PART: usize = crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
+    let runs: usize = std::env::var("MEASURE_RUNS").ok().map(|v| v.parse().unwrap()).unwrap_or(21);
+    let scales: Vec<usize> = std::env::var("MEASURE_SCALES").ok().unwrap_or_else(|| "0,1000,10000".into())
+        .split(',').map(|v| v.trim().parse().unwrap()).collect();
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+    let frame = &fx.frame;
+    let (mut state0, params, extras, claim, scope) = material_intake_world(&fx);
+    let who = outsider();
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([76; 32]);
+    state0.bonds.get_mut(&who).unwrap().pubkey = kp.verification_key.as_ref().to_vec();
+    let schedule = material_test_schedule();
+    let net = extras.tir_public_network_domain_v1.unwrap();
+    let binding = &fx.execution.binding;
+    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let profile = crate::palw_court_shared_tir_state_v1::context(&state0, claim).unwrap().profile_id;
+    let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
+    let leaves = required_parameter_leaves_v1(&state0, claim, schedule.cover).unwrap();
+    let mut targets: Vec<(MaterialTargetV1, Vec<u8>)> = Vec::new();
+    for index in 0..binding.step_leaf_count {
+        let ordinal = (0..set.len()).find(|&o| set.request_at(o).unwrap() == Q::StepLeaf { index }).unwrap();
+        targets.push((MaterialTargetV1::Unit { ordinal }, borsh::to_vec(&R::StepLeaf { preimage: fx.execution.step_leaf(index).unwrap(),
+            opening: fx.execution.step_opening(index).unwrap() }).unwrap()));
+    }
+    for leaf in &leaves {
+        targets.push((MaterialTargetV1::Parameter { leaf: *leaf }, borsh::to_vec(&fx.execution.param_opening(*leaf).unwrap()).unwrap()));
+    }
+    if fx.rules.prompt_form == crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat {
+        targets.push((MaterialTargetV1::PromptFlat, borsh::to_vec(&fx.execution.prompt).unwrap()));
+    }
+    // (daa, signed, kind, bytes carried by the action, total body bytes)
+    let mut script: Vec<(u64, SignedMaterialIntakeV1, &'static str, u64, u64)> = Vec::new();
+    let mut daa = 1;
+    for (target, body) in &targets {
+        let hash = crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(body);
+        let total = body.len() as u64;
+        script.push((daa, material_signed(&kp, net, claim, scope, *target, who, MaterialActionV1::Begin { total_bytes: total, body_hash: hash }),
+            "begin", 0, total));
+        let draft = material_draft_id_v1(claim, *target, who, total, hash).unwrap();
+        for (i, part) in body.chunks(PART).enumerate() {
+            daa += 1;
+            script.push((daa, material_signed(&kp, net, claim, scope, *target, who,
+                MaterialActionV1::Part { draft_id: draft, offset: (i * PART) as u64, bytes: part.to_vec() }), "part", part.len() as u64, total));
+        }
+        daa += 1;
+        script.push((daa, material_signed(&kp, net, claim, scope, *target, who, MaterialActionV1::Finish { draft_id: draft }), "finish", 0, total));
+        daa += 1;
+    }
+    let host = format!("{}-{} {}", std::env::consts::OS, std::env::consts::ARCH, if cfg!(debug_assertions) { "debug" } else { "release" });
+    for &extra in &scales {
+        let mut state = state0.clone();
+        let template = state.bond(&who).unwrap().clone();
+        for i in 0..extra {
+            let key = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(0xB0D0_0000 + i as u64), 7));
+            state.bonds.insert(key, template.clone());
+        }
+        let mut samples: std::collections::BTreeMap<&'static str, Vec<(u128, u64, u64)>> = Default::default();
+        let mut warm: std::collections::BTreeMap<&'static str, u128> = Default::default();
+        let mut retained: Option<(u64, u64, u64, usize)> = None;
+        for run in 0..runs {
+            let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            for (daa, signed, kind, carried, total) in &script {
+                let t = std::time::Instant::now();
+                material_intake(&mut b, &at(frame, *daa), signed).expect("honest intake step folds");
+                let ns = t.elapsed().as_nanos();
+                if run == 0 {
+                    warm.entry(*kind).and_modify(|w| *w = (*w).max(ns)).or_insert(ns);
+                } else {
+                    samples.entry(*kind).or_default().push((ns, *carried, *total));
+                }
+            }
+            if run == 0 {
+                let mut rows = 0u64;
+                for (target, _) in &targets {
+                    let id = target.id_v1(claim).unwrap();
+                    if let Some(row) = b.state.staged_court_row_v1(&Key::CourtMaterial(claim, id)) {
+                        rows += borsh::to_vec(row).unwrap().len() as u64;
+                    }
+                }
+                let deltas: u64 = b.entries.iter().map(|e| borsh::to_vec(e).unwrap().len() as u64).sum();
+                let body: u64 = targets.iter().map(|(_, body)| body.len() as u64).sum();
+                retained = Some((body, rows, deltas, b.entries.len()));
+            }
+        }
+        for (kind, mut v) in samples {
+            v.sort_unstable_by_key(|s| s.0);
+            let pick = |q: f64| v[((v.len() as f64 - 1.0) * q).round() as usize].0;
+            let max_carried = v.iter().map(|s| s.1).max().unwrap();
+            let max_total = v.iter().map(|s| s.2).max().unwrap();
+            let per_kib: f64 = v.iter().map(|s| s.0 as f64 / (s.2.max(1) as f64 / 1024.0)).sum::<f64>() / v.len() as f64;
+            eprintln!("MEASURE in_crate=true fixture=history_frame host={host} op=material_intake_{kind} extra_bonds={extra} state_bonds={} \
+                runs={runs} samples={} warmup_max_wall_ns={} median_wall_ns={} p95_wall_ns={} max_wall_ns={} max_part_bytes={max_carried} \
+                max_body_bytes={max_total} mean_ns_per_body_kib={per_kib:.0}",
+                state.bonds.len(), v.len(), warm[kind], pick(0.5), pick(0.95), v.last().unwrap().0);
+        }
+        let (body, rows, deltas, entries) = retained.unwrap();
+        eprintln!("MEASURE_DA in_crate=true fixture=history_frame op=material_intake_upload extra_bonds={extra} targets={} body_bytes={body} \
+            canonical_row_bytes={rows} delta_entries={entries} delta_bytes={deltas} sompi_per_byte_test={}", targets.len(), schedule.sompi_per_byte);
+    }
+    crate::palw_court_shared_material_intake_v1::set_material_intake_test_schedule_v1(None);
+}
