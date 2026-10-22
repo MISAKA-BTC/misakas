@@ -1,0 +1,283 @@
+=== batch fences (UNDER_LOAD; waited 1200s for load1<5) ===
+commit: 5fd3ba53a7cfdc2815d36ff7300c69b242e17ae2
+binary: /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-ad400d7f5b03d4af8/.t3bin/audit_liveness_court_fences-8dd7a5508e932fda
+e4ba57a3251e68a6332d6075fff643fb7ac4f67725c9167114745883f14b39ae  /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-ad400d7f5b03d4af8/.t3bin/audit_liveness_court_fences-8dd7a5508e932fda
+--- before
+Thu Oct 22 11:35:29 UTC 2026
+20:35  up 10:37, 1 user, load averages: 45.54 45.45 44.63
+hw.model: Mac13,1
+hw.memsize: 34359738368
+hw.ncpu: 10
+
+running 1 test
+test audit_liveness_court_print_t12_fences ... FENCE palw_bootstrap_activation                                               0 LIVE
+FENCE palw_unavailable_abstains                                               0 LIVE
+FENCE palw_bond_maturity                                                   1000 LIVE
+FENCE palw_bond_maturity_early                                              750 LIVE
+FENCE palw_frontier_provenance                                             None -
+FENCE palw_reorg_strict_economic_win                                        750 LIVE
+FENCE palw_pruning_proof_strict_economic_win                                750 LIVE
+FENCE palw_capacity_weight_cap                                             1700 LIVE
+FENCE palw_heartbeat                                                          0 LIVE
+FENCE palw_attempt_work                                                       0 LIVE
+FENCE palw_attempt_activation                                              None -
+FENCE dns_bft_gate                                                            0 LIVE
+FENCE palw_inactivity_leak                                                 None -
+FENCE palw_beacon_fold                                                     None -
+FENCE palw_capability_bound                                                   0 LIVE
+FENCE palw_compute_overlay_retired                                            0 LIVE
+FENCE palw_model_registry                                                     0 LIVE
+FENCE palw_economic_payout                                                    0 LIVE
+FENCE palw_work_target                                                        0 LIVE
+FENCE palw_single_lottery                                                     0 LIVE
+FENCE palw_short_challenge_window                                             0 LIVE
+FENCE palw_verification_v2                                                    0 LIVE
+FENCE palw_verification_s3                                                    0 LIVE
+FENCE palw_verification_s2                                                    0 LIVE
+FENCE palw_readiness_v2                                                       0 LIVE
+FENCE palw_anchor_clock                                                       0 LIVE
+FENCE palw_clock_cursor                                                       0 LIVE
+FENCE palw_clock_floor                                                        0 LIVE
+FENCE palw_clock_lead_cap                                                     0 LIVE
+FENCE palw_offence_attribution                                                0 LIVE
+FENCE palw_rcore_plus                                                         0 LIVE
+FENCE palw_panel_seed_execution                                             750 LIVE
+FENCE palw_operator_anchor                                                  750 LIVE
+FENCE palw_final_lock_full_collateral                                       750 LIVE
+FENCE palw_final_lock_life                                                  750 LIVE
+FENCE palw_capacity_aggregate_liability                                    1700 LIVE
+FENCE palw_capacity_aggregate_liability_step_2                             5300 LIVE
+FENCE palw_capacity_aggregate_liability_step_3                             5395 LIVE
+FENCE palw_capacity_aggregate_liability_step_4                             5490 LIVE
+FENCE palw_capacity_aggregate_liability_step_5                             5585 LIVE
+FENCE palw_capacity_aggregate_liability_step_6                             None -
+FENCE palw_capacity_aggregate_liability_step_7                             None -
+FENCE palw_capacity_aggregate_liability_step_8                             None -
+FENCE palw_final_lock_life_retro                                           1300 LIVE
+FENCE palw_class_verify_deadline                                              0 LIVE
+FENCE palw_anchor_at_ceiling                                                750 LIVE
+FENCE palw_lane_accept_parents_first                                        750 LIVE
+FENCE palw_activation_pool                                                    0 LIVE
+FENCE palw_readiness_v2_max_age_spans                                         0 LIVE
+FENCE palw_registry_resilience                                              750 LIVE
+FENCE palw_floor_refusal_retry                                             1300 LIVE
+FENCE palw_artifact_root_ownership                                            0 LIVE
+FENCE palw_operator_id_unique                                                 0 LIVE
+FENCE palw_objective_offence                                                  0 LIVE
+FENCE palw_seat_gate_possession                                               0 LIVE
+FENCE palw_class_receipt_window                                               0 LIVE
+FENCE palw_execution_quanta                                                   0 LIVE
+FENCE palw_public_model_source_required                                       0 LIVE
+FENCE palw_canonical_work                                                     0 LIVE
+FENCE palw_admission_independence                                             0 LIVE
+FENCE palw_context_ladder                                                     0 LIVE
+FENCE palw_panel_da                                                           0 LIVE
+FENCE palw_certification_rent                                                 0 LIVE
+FENCE palw_uncertified_weightless                                             0 LIVE
+FENCE palw_da_court                                                           0 LIVE
+FENCE palw_court_ladder                                                       0 LIVE
+FENCE palw_fp_da_pins                                                         0 LIVE
+FENCE palw_validator_payout_bounds                                            0 LIVE
+FENCE palw_slashing_evidence_utxo_genuine                                   750 LIVE
+FENCE palw_epoch_boundary_budget                                              0 LIVE
+FENCE palw_epoch_budget_release                                               0 LIVE
+FENCE palw_panel_economy                                                      0 LIVE
+FENCE palw_work_priced_reward                                                 0 LIVE
+FENCE palw_execution_lane                                                     0 LIVE
+FENCE palw_execution_lane_widening_1                                       None -
+FENCE palw_execution_lane_widening_2                                       None -
+FENCE palw_execution_lane_widening_3                                       None -
+FENCE palw_execution_lane_widening_4                                       None -
+FENCE palw_execution_lane_widening_5                                       None -
+FENCE palw_execution_lane_widening_6                                       None -
+FENCE palw_execution_lane_widening_7                                       None -
+FENCE palw_execution_lane_widening_8                                       None -
+FENCE palw_execution_lane_widening_9                                       None -
+FENCE palw_execution_lane_span_short                                       None -
+FENCE palw_overlay_carve                                                      0 LIVE
+FENCE palw_dns_retirement_v1                                               None -
+FENCE palw_permissionless_panel_v1                                         None -
+FENCE palw_permissionless_panel_complete_v1                                None -
+FENCE palw_permissionless_panel_retired_v1                                 None -
+FENCE palw_panel_exposure_floor                                               0 LIVE
+FENCE palw_fp_ruleset_caps                                                    0 LIVE
+FENCE palw_model_market                                                       0 LIVE
+FENCE palw_model_lines                                                        0 LIVE
+FENCE palw_model_immutable_v1                                              None -
+FENCE palw_class_semantics_v1                                              None -
+FENCE palw_court_commitment_scope_v1                                       None -
+FENCE palw_staged_public_court_v1                                          None -
+FENCE palw_staged_tir_route_v1                                             None -
+FENCE palw_tir_public_conviction_v1                                        None -
+FENCE palw_tir_container_identity_v1                                       None -
+FENCE palw_staged_float_constraint_v1                                      None -
+FENCE palw_model_benefits                                                     0 LIVE
+FENCE palw_model_leg_v2                                                       0 LIVE
+FENCE palw_model_seed_v2                                                      0 LIVE
+FENCE palw_model_virtual_v1                                                None -
+FENCE palw_model_evm                                                          0 LIVE
+FENCE palw_model_sink_bound                                                 750 LIVE
+FENCE palw_capacity_batch_licence                                          1700 LIVE
+FENCE palw_capacity_verify_room                                            1700 LIVE
+FENCE palw_capacity_audit_door                                             1700 LIVE
+FENCE palw_capacity_issuance_slots                                         1700 LIVE
+FENCE palw_capacity_network_room                                           1700 LIVE
+FENCE palw_capacity_network_verify                                         5300 LIVE
+FENCE palw_panel_unavailable_expiry                                        5300 LIVE
+FENCE palw_panel_fast_switch                                               5300 LIVE
+FENCE palw_seat_availability                                               5300 LIVE
+FENCE palw_capacity_emission_budget                                        5300 LIVE
+FENCE palw_capacity_multi_claim                                            5300 LIVE
+FENCE palw_capacity_rho_breaker                                            5300 LIVE
+FENCE palw_chunk_cap_charge                                                   0 LIVE
+FENCE palw_prompt_ids_merkle                                                  0 LIVE
+FENCE palw_kary_court                                                         0 LIVE
+FENCE palw_model_court_window                                              None -
+FENCE palw_court_responder_coverage                                           0 LIVE
+FENCE palw_fp_decode_rules                                                 5300 LIVE
+FENCE palw_fp_derived_work                                                    0 LIVE
+FENCE palw_fp_decode_constraint                                            5300 LIVE
+FENCE palw_shard_court                                                        0 LIVE
+FENCE palw_memory_routing_court_v2                                         None -
+FENCE palw_class_registration_origin_v1                                    None -
+FENCE palw_shard_licensing                                                 None -
+FENCE palw_token_lift                                                         0 LIVE
+FENCE palw_kimi_k3                                                            0 LIVE
+FENCE palw_tir_v1                                                          2000 LIVE
+FENCE palw_gen_v1                                                          5300 LIVE
+FENCE palw_fp_job_v5                                                       5300 LIVE
+FENCE palw_gen_range_twin_v1                                               None -
+FENCE palw_task_heads_v1                                                   None -
+FENCE palw_probabilistic_constraints_v1                                    None -
+FENCE palw_funded_execution_v11                                            None -
+FENCE palw_stage_execution_v14                                             None -
+FENCE palw_native_final_v27                                                None -
+FENCE palw_stage_execution_v28                                             None -
+FENCE palw_native_execution_v39                                            None -
+FENCE palw_native_mining_v39                                               None -
+FENCE palw_fork_choice_rule_e_v1                                           None -
+FENCE palw_typed_roots_v1                                                  None -
+FENCE palw_fork_choice_commitment_v1                                       None -
+FENCE palw_verifier_pay_v1                                                 None -
+FENCE palw_model_refutation_seal_v1                                        None -
+FENCE palw_window_class_v37                                                None -
+FENCE palw_beacon_source_opt_in_v1                                         None -
+FENCE palw_beacon_source_fee_v1                                            None -
+FENCE palw_panel_free_v1                                                   None -
+FENCE palw_signed_registration_v1                                          None -
+FENCE palw_tir_shard_segment_v2                                            None -
+FENCE palw_provider_court_v1                                               None -
+FENCE palw_legacy_held_da_v2                                               None -
+FENCE palw_bond_budget_v1                                                  None -
+FENCE palw_reporter_income_v2                                              None -
+FENCE palw_material_income_v3                                              None -
+FENCE palw_settlement_once_v1                                              None -
+FENCE palw_paid_claim_trap_v1                                              None -
+FENCE palw_native_liability_horizon_v1                                     None -
+FENCE palw_panel_lifetime_v2                                               None -
+FENCE palw_claim_challenge_v2                                              None -
+FENCE palw_claim_compact_v4                                                None -
+FENCE palw_monetary_material_v1                                            None -
+FENCE palw_material_release_recovery_v2                                    None -
+FENCE palw_model_verification_gate_v1                                      None -
+FENCE palw_horizon_extension_v1                                            None -
+FENCE palw_minimum_price_v1                                                None -
+FENCE palw_beacon_bootstrap_v1                                             None -
+FENCE palw_paid_consumer_lifecycle_v1                                      None -
+FENCE palw_model_bond_allocation_v1                                        None -
+FENCE palw_bond_formula_v2                                                 None -
+FENCE palw_reporter_share_v2                                               None -
+FENCE palw_legacy_public_filer_v1                                          None -
+FENCE palw_court_model_scope_v1                                            None -
+FENCE palw_public_evidence_reward_v1                                       None -
+FENCE palw_claim_hard_deadline_v1                                          None -
+FENCE palw_cell_coverage_closure_v1                                        None -
+FENCE palw_g14_route_required_v1                                           None -
+FENCE palw_reward_liability_horizon_v1                                     None -
+FENCE palw_court_capacity_v1                                               None -
+FENCE palw_court_transport_v1                                              None -
+FENCE palw_unresolved_bound_v1                                             None -
+FENCE palw_claim_local_settlement_v1                                       None -
+FENCE palw_model_block_rights_v1                                           None -
+FENCE palw_elastic_final_capacity_v1                                       None -
+FENCE palw_model_eligibility_v1                                            None -
+FENCE palw_model_tier_v1                                                   None -
+FENCE palw_detection_policy_v1                                             None -
+FENCE palw_dag_sibling_attribution_v1                                      None -
+FENCE palw_panel_anchor_permissionless_v1                                  None -
+FENCE palw_rule_e_participation_v2                                         None -
+FENCE palw_independently_work_certified_v1                                 None -
+FENCE palw_dag_width_schedule_v1                                           None -
+FENCE palw_tir_bounded_door_v1                                             None -
+FENCE palw_tir_designated_answers_v1                                       None -
+FENCE palw_court_outsider_lane_v1                                          None -
+FENCE palw_state_row_map_v1                                                None -
+FENCE palw_kernel_route_panel_one_v1                                       None -
+FENCE palw_court_clock_v2                                                  None -
+FENCE palw_fp_prefix_inherit                                               5300 LIVE
+FENCE palw_fp_prefix_state                                                 5300 LIVE
+FENCE palw_fp_tokenizer_match                                              5300 LIVE
+FENCE palw_fp_constraint_v2                                                5300 LIVE
+FENCE palw_adapter_class_v1                                                5300 LIVE
+FENCE palw_tir_fence2                                                      3600 LIVE
+FENCE palw_tir_shard_v1                                                    5300 LIVE
+FENCE palw_floor_reserve_v1                                                5300 LIVE
+FENCE palw_real_clock_tick_v1                                              5300 LIVE
+FENCE palw_anchor_window_v1                                                5300 LIVE
+FENCE palw_receipt_spend_v4                                                None -
+FENCE palw_evidence_court_v1                                               None -
+FENCE palw_audit_1004_v1                                                   None -
+FENCE palw_improvement_v1                                                  5300 LIVE
+FENCE palw_held_close_chunks_v1                                            5300 LIVE
+FENCE palw_verification_vertex_v1                                          5300 LIVE
+FENCE palw_exec_payload_v2                                                 None -
+FENCE palw_witness_manifest_v1                                             5300 LIVE
+FENCE palw_audit_mesh_v1                                                   5300 LIVE
+FENCE palw_capped_onboarding_v1                                            5300 LIVE
+FENCE palw_class_seating                                                   5300 LIVE
+FENCE palw_tir_only_v1                                                     None -
+FENCE palw_fused_dissectable                                                  0 LIVE
+FENCE palw_attn_anchored_root                                                 0 LIVE
+FENCE palw_held_context                                                       0 LIVE
+FENCE palw_prefill_draw                                                       0 LIVE
+FENCE palw_audit_2026_09_11                                                   0 LIVE
+FENCE palw_audit_2026_09_11_deep                                              0 LIVE
+FENCE palw_audit_2026_09_23                                                   0 LIVE
+FENCE palw_difficulty_priced_rows                                             0 LIVE
+FENCE palw_receipt_rows_unpriced                                              0 LIVE
+FENCE palw_attempt_header_pins                                                0 LIVE
+FENCE palw_signature_contexts_v2                                              0 LIVE
+FENCE palw_heartbeat_transparent                                              0 LIVE
+FENCE palw_heartbeat_transparent_same_chain                                 750 LIVE
+FENCE palw_capacity_escrow_at_licence                                      1700 LIVE
+FENCE palw_share_growth_final                                                 0 LIVE
+FENCE palw_gdn_key_heads                                                   5300 LIVE
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+        0.02 real         0.00 user         0.00 sys
+            14385152  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1088  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                  51  involuntary context switches
+           103907383  instructions retired
+            47787830  cycles elapsed
+             3932544  peak memory footprint
+exit=0
+--- after
+Thu Oct 22 11:35:29 UTC 2026
+20:35  up 10:37, 1 user, load averages: 45.54 45.45 44.63
+hw.model: Mac13,1
+hw.memsize: 34359738368
+hw.ncpu: 10

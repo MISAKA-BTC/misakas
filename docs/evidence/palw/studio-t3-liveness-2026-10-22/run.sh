@@ -20,6 +20,7 @@ REPLAY=$(grep -o "([^)]*audit_liveness_court_close_replay-[^)]*)" "$LOG" | tail 
 FENCES=$(grep -o "([^)]*audit_liveness_court_fences-[^)]*)" "$LOG" | tail -1 | tr -d '()')
 LIB=$(grep -o "([^)]*kaspa_consensus_core-[^)]*)" "$LOG" | tail -1 | tr -d '()')
 if [ "$(uname -s)" = Darwin ]; then TIMEV="/usr/bin/time -l"; else TIMEV="/usr/bin/time -v"; fi
+[ -x /usr/bin/time ] || TIMEV=""   # Linux without GNU time (apt install time): run without the RSS line
 
 hw() {
   if [ "$(uname -s)" = Darwin ]; then sysctl hw.model hw.memsize hw.ncpu; else

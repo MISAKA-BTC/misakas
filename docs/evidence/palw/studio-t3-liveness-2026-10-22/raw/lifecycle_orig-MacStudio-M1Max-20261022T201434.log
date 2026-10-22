@@ -1,0 +1,46 @@
+=== batch lifecycle_orig (UNDER_LOAD; waited 0s for load1<5) ===
+commit: 5fd3ba53a7cfdc2815d36ff7300c69b242e17ae2
+binary: /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-ad400d7f5b03d4af8/.t3bin/kaspa_consensus_core-8b341b9604899fc6
+26f2dfa6d7a57d9f3399d663a95a9bfbbc44f6bff03a943f4a8a1af05f3515f9  /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-ad400d7f5b03d4af8/.t3bin/kaspa_consensus_core-8b341b9604899fc6
+--- before
+Thu Oct 22 11:14:35 UTC 2026
+20:14  up 10:16, 1 user, load averages: 27.10 36.30 44.58
+hw.model: Mac13,1
+hw.memsize: 34359738368
+hw.ncpu: 10
+
+running 1 test
+test palw_state_v2::tests::liveness_lifecycle_v1::liveness_lifecycle_v1_per_object_rehearsal_and_empty_fold_scale_with_state_rows ... t12 shipped: claim_retirement_daa=3000 window_court=3000 window_bind=600 epoch_length=1000
+N=  1000 claims: per-object rehearsal (refused)         61 us | plain clone         57 us | empty-block fold         79 us
+N= 10000 claims: per-object rehearsal (refused)       1033 us | plain clone       1046 us | empty-block fold       1114 us
+N= 50000 claims: per-object rehearsal (refused)       8153 us | plain clone       9313 us | empty-block fold      12487 us
+growth N 1000->50000 (50x): per-object x132.9, empty fold x157.3
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5023 filtered out; finished in 0.28s
+
+        0.29 real         0.23 user         0.03 sys
+           199819264  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               12559  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                  54  involuntary context switches
+          1236429155  instructions retired
+           781516168  cycles elapsed
+           187368024  peak memory footprint
+exit=0
+--- after
+Thu Oct 22 11:14:35 UTC 2026
+20:14  up 10:16, 1 user, load averages: 27.10 36.30 44.58
+hw.model: Mac13,1
+hw.memsize: 34359738368
+hw.ncpu: 10
