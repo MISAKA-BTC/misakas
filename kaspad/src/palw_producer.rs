@@ -962,6 +962,15 @@ impl PalwProducerService {
         // Still the ONE codec — the retention file, the gossip broadcast and the seat's decode all
         // read these exact bytes — it is just applied one frame up now, where the backend is.
         let bytes = material.to_vec();
+        // G14 capacity lane: under a storage budget the bytes are reserved BEFORE the obligation is
+        // written — a refusal here means no block promising them is published, so no liability is
+        // taken on that the node has no room to keep. The reservation covers the write; once the
+        // file exists the scan counts it.
+        let _storage = kaspa_utils::storage_budget::reserve_global(
+            kaspa_utils::storage_budget::StorageCategory::PalwRetained,
+            bytes.len() as u64,
+        )
+        .map_err(|refusal| format!("not retaining {}: {refusal}", path.display()))?;
         let tmp = path.with_extension("material.partial");
         std::fs::write(&tmp, &bytes).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
         // Rename last: a reader never sees a half-written obligation.

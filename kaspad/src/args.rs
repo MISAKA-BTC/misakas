@@ -926,6 +926,21 @@ pub struct Args {
     /// `0` disables the gate; sync-only profiles and `--vps-8gb` default to 15.
     pub min_disk_free_percent: u8,
 
+    /// G14 capacity lane: the byte cap of the node's managed storage root (`<appdir>/<network>`).
+    /// `None` (the default) disables the storage budget entirely; 30_000_000_000 is the pruned-node
+    /// recommendation. Node-local: no consensus rule reads it.
+    pub storage_cap_bytes: Option<u64>,
+    /// Headroom under which the node pauses write intake (default: 1 % of the cap, ≥ 64 MiB).
+    pub storage_safety_margin_bytes: Option<u64>,
+    /// Per-category budget overrides, `<category>=<bytes>` (repeatable; categories: active-db,
+    /// staging-db, wal-maintenance, palw-retained, ibd-spill, logs, other).
+    #[serde(rename = "storage-category-budget")]
+    pub storage_category_budgets: Vec<String>,
+    /// Delete the RPC-only EVM indexes (raw tx, tx lookup, block-hash map, number index, log
+    /// postings) of blocks the pruning processor prunes. Implied by `--storage-cap-bytes`; never on
+    /// an archival node. Node-local: the indexes are no commitment and no validation input.
+    pub storage_gc_pruned_evm_indexes: bool,
+
     /// Node RPC profile (design §9): a named bundle that enables a sensible set of
     /// RPC listeners so operators don't wire each one by hand. Explicit `--rpclisten*`
     /// / `--evm-rpc-listen` flags always win over the profile's defaults.
@@ -1168,6 +1183,10 @@ impl Default for Args {
             node_profile: NodeProfile::Full,
             vps_8gb: false,
             min_disk_free_percent: 0,
+            storage_cap_bytes: None,
+            storage_safety_margin_bytes: None,
+            storage_category_budgets: vec![],
+            storage_gc_pruned_evm_indexes: false,
             profile: None,
             allow_public_rpc: false,
         }
@@ -1191,6 +1210,10 @@ impl Args {
         config.ram_scale = self.ram_scale;
         config.retention_period_days = self.retention_period_days;
         config.evm_history_mode = self.evm_history_mode; // §12: EVM state-history retention
+        // G14 capacity lane: RPC-only EVM indexes of pruned blocks are reclaimed under a storage cap
+        // (or on request); an archival node keeps everything.
+        config.storage_gc_pruned_evm_indexes =
+            !self.archival && (self.storage_gc_pruned_evm_indexes || self.storage_cap_bytes.is_some());
         config.evm_shadow_state_backend = self.evm_shadow_state_backend; // C-01 S4: shadow dual-write
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
@@ -3865,6 +3888,36 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                        maxinpeers=32, rpcmaxclients=8, nogrpc, min-disk-free-percent=15. Warns when system memory is below 7.5GB.")
         )
         .arg(
+            Arg::new("storage-cap-bytes")
+                .long("storage-cap-bytes")
+                .env("KASPAD_STORAGE_CAP_BYTES")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help("G14: cap the node's managed storage root (<appdir>/<network>: DBs, staging DBs, WAL, PALW retention, spill files, logs) at this many bytes. Reservations are taken before IBD staging DBs and spill files, obsolete data is reclaimed first, RocksDB footprints are bounded, and below the safety margin write intake pauses (nothing is invalidated) until space is reclaimed. Off by default; 30000000000 is the pruned-node recommendation. Put the root on a dedicated quota-capable volume."),
+        )
+        .arg(
+            Arg::new("storage-safety-margin-bytes")
+                .long("storage-safety-margin-bytes")
+                .env("KASPAD_STORAGE_SAFETY_MARGIN_BYTES")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help("G14: headroom under --storage-cap-bytes below which write intake pauses (default 1% of the cap, at least 64 MiB). Resumes at twice this."),
+        )
+        .arg(
+            Arg::new("storage-category-budget")
+                .long("storage-category-budget")
+                .value_name("category=bytes")
+                .action(ArgAction::Append)
+                .help("G14: override one per-category budget under --storage-cap-bytes (repeatable). Categories: active-db, staging-db, wal-maintenance, palw-retained, ibd-spill, logs, other."),
+        )
+        .arg(
+            Arg::new("storage-gc-pruned-evm-indexes")
+                .long("storage-gc-pruned-evm-indexes")
+                .env("KASPAD_STORAGE_GC_PRUNED_EVM_INDEXES")
+                .action(clap::ArgAction::SetTrue)
+                .help("G14: when a block is pruned, also delete its RPC-only EVM indexes (raw tx, tx lookup, block-hash map, number index, log postings), which otherwise outlive the pruned bodies forever. Implied by --storage-cap-bytes; ignored on an archival node. Node-local, consensus-neutral."),
+        )
+        .arg(
             Arg::new("min-disk-free-percent")
                 .long("min-disk-free-percent")
                 .env("KASPAD_MIN_DISK_FREE_PERCENT")
@@ -4330,6 +4383,21 @@ impl Args {
                 .cloned()
                 .filter(|_| m.value_source("min-disk-free-percent") != Some(DefaultValue))
                 .unwrap_or(defaults.min_disk_free_percent),
+            storage_cap_bytes: m.get_one::<u64>("storage-cap-bytes").cloned().or(defaults.storage_cap_bytes),
+            storage_safety_margin_bytes: m
+                .get_one::<u64>("storage-safety-margin-bytes")
+                .cloned()
+                .or(defaults.storage_safety_margin_bytes),
+            storage_category_budgets: arg_match_many_unwrap_or::<String>(
+                &m,
+                "storage-category-budget",
+                defaults.storage_category_budgets,
+            ),
+            storage_gc_pruned_evm_indexes: arg_match_unwrap_or::<bool>(
+                &m,
+                "storage-gc-pruned-evm-indexes",
+                defaults.storage_gc_pruned_evm_indexes,
+            ),
             profile: m.get_one::<String>("profile").cloned().or(defaults.profile),
             allow_public_rpc: arg_match_unwrap_or::<bool>(&m, "allow-public-rpc", defaults.allow_public_rpc),
         };

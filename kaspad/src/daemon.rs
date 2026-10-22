@@ -862,6 +862,34 @@ do you confirm? (answer y/n or pass --yes to the Kaspad command line to confirm 
         fs::create_dir_all(utxoindex_db_dir.as_path()).unwrap();
     }
 
+    // **G14 capacity lane: the storage budget, before any database opens** (off without
+    // `--storage-cap-bytes`). Installed process-wide so the consensus factory, the IBD spill and the
+    // intake gates find it; every DB below is opened with footprint bounds when it is in force.
+    let storage_budget = match crate::storage_capacity::storage_budget_config(
+        args.storage_cap_bytes,
+        args.storage_safety_margin_bytes,
+        &args.storage_category_budgets,
+        app_dir.join(network.to_prefixed()),
+    ) {
+        Ok(Some(storage_config)) => Some(crate::storage_capacity::install_storage_budget(
+            storage_config,
+            &crate::storage_capacity::ManagedPaths {
+                db_dir: db_dir.clone(),
+                consensus_db_dir: consensus_db_dir.clone(),
+                meta_db_dir: meta_db_dir.clone(),
+                utxoindex_db_dir: utxoindex_db_dir.clone(),
+                log_dir: runtime.log_dir.as_ref().map(PathBuf::from),
+                wal_dir: wal_dir.clone(),
+            },
+        )),
+        Ok(None) => None,
+        Err(why) => {
+            println!("{why}");
+            exit(1);
+        }
+    };
+    let small_db_bounds = storage_budget.as_ref().map(|_| kaspa_database::prelude::StorageDbBounds::SMALL);
+
     if !args.archival
         && let Some(retention_period_days) = args.retention_period_days
     {
@@ -893,6 +921,7 @@ do you confirm? (answer y/n or pass --yes to the Kaspad command line to confirm 
         .with_preset(rocksdb_preset)
         .with_wal_dir(wal_dir.clone())
         .with_cache_budget(cache_budget)
+        .with_storage_bounds(small_db_bounds)
         .build()
         .unwrap();
 
@@ -1044,6 +1073,7 @@ Do you confirm? (y/n)";
             .with_preset(rocksdb_preset)
             .with_wal_dir(wal_dir.clone())
             .with_cache_budget(cache_budget)
+            .with_storage_bounds(small_db_bounds)
             .build()
             .unwrap();
     }
@@ -1129,6 +1159,21 @@ Do you confirm? (y/n)";
         wal_dir.clone(),
         cache_budget,
     ));
+    // G14 capacity lane: reclaim before use — obsolete consensus dirs, abandoned temp files, old log
+    // archives — and the meta DB's WAL fsync on entering the low-space pause.
+    if let Some(budget) = &storage_budget {
+        let factory = consensus_factory.clone();
+        budget.register_reclaimer(kaspa_utils::storage_budget::FnReclaimer::new("obsolete-consensus-dirs", move |_mode| {
+            factory.reclaim_obsolete_consensus_dirs()
+        }));
+        crate::storage_capacity::register_basic_reclaimers(budget, runtime.log_dir.as_ref().map(PathBuf::from));
+        let weak = Arc::downgrade(&meta_db);
+        budget.add_pause_hook(move || {
+            if let Some(db) = weak.upgrade() {
+                let _ = db.flush_wal(true);
+            }
+        });
+    }
     let consensus_manager = match ConsensusManager::new(consensus_factory) {
         Ok(manager) => Arc::new(manager),
         Err(unavailable) => {
@@ -1189,8 +1234,17 @@ Do you confirm? (y/n)";
             .with_preset(rocksdb_preset)
             .with_wal_dir(wal_dir.clone())
             .with_cache_budget(cache_budget)
+            .with_storage_bounds(small_db_bounds)
             .build()
             .unwrap();
+        if let Some(budget) = &storage_budget {
+            let weak = Arc::downgrade(&utxoindex_db);
+            budget.add_pause_hook(move || {
+                if let Some(db) = weak.upgrade() {
+                    let _ = db.flush_wal(true);
+                }
+            });
+        }
         let utxoindex = UtxoIndexProxy::new(UtxoIndex::new(consensus_manager.clone(), utxoindex_db).unwrap());
         let index_service = Arc::new(IndexService::new(&notify_service.notifier(), subscription_context.clone(), Some(utxoindex)));
         Some(index_service)
@@ -2396,14 +2450,27 @@ Do you confirm? (y/n)";
         )));
     }
     if palw_consensus_v2 {
-        async_runtime.register(Arc::new(crate::palw_retention::PalwRetentionJanitor::new(
+        let janitor = Arc::new(crate::palw_retention::PalwRetentionJanitor::new(
             consensus_manager.clone(),
             app_dir.join(network.to_prefixed()).join("palw-retention"),
             std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
             // ADR-0152 DA-8 (P2-7): past it a `Final` free-prompt claim is still accused, so its
             // capture is kept to the claim's retention.
             config_for_palw_panel.params.palw_rcore_plus_fence(),
-        )));
+        ));
+        // G14: the budget's under-pressure reclaim of retained material goes through the janitor's
+        // plan, which pins every capture the chain can still demand.
+        if let Some(budget) = &storage_budget {
+            let janitor = Arc::clone(&janitor);
+            budget.register_reclaimer(kaspa_utils::storage_budget::FnReclaimer::new("palw-retention-unowed", move |mode| {
+                janitor.reclaim_for_budget(mode)
+            }));
+        }
+        async_runtime.register(janitor);
+    }
+    if let Some(budget) = &storage_budget {
+        let standing = crate::storage_capacity::log_rotation_reservation(budget).into_iter().collect();
+        async_runtime.register(Arc::new(crate::storage_capacity::StorageBudgetService::new(Arc::clone(budget), standing)));
     }
     // **ADR-0067 Decision 6: declarations this node did not watch arrive.** A pruned sync brings
     // the class table and no carriage rows, so an operator on such a node supplies them. The
