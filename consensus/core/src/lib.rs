@@ -713,8 +713,13 @@ pub mod palw_source_guard_v1;
 /// deterministic-integer family's replay state, and the `state_chunk_map_id` that names it.
 /// Land-stage: a map, not a capture — nothing here reads an engine or writes a checkpoint.
 pub mod palw_state_chunk_map;
+/// RFC-0036 / ADR-0203 (Proposed): the authenticated ordered state map — per-row membership, non-membership, range and update
+/// proofs. A pure library; no consensus path calls it (dormant fence `palw_state_row_map_v1`).
+pub mod palw_state_auth_map_v1;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
+/// RFC-0036 (Proposed): parent-root-pinned row reads and change-set writes, a bounded cache, and the full-state adapter (dormant).
+pub mod palw_state_row_access_v1;
 pub mod palw_state_v2;
 /// MISAKA PALW step function v1 (ADR-0030): the frozen operator taxonomy, the shape-profile
 /// v3 schema and identity, and the step-index bijection a one-step refutation names steps

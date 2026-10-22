@@ -1578,6 +1578,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0203",
+      "path": "docs/adr/0203-authenticated-palw-state-map-and-row-access.md",
+      "title": "ADR-0203 — 認証付き PALW state map と行単位アクセス",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1855,6 +1863,14 @@
       "path": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
       "title": "RFC-0035 — shared court originalの実原資と役割別同意",
       "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0036",
+      "path": "docs/rfc/0036-authenticated-palw-state-map-and-row-access.md",
+      "title": "RFC-0036 — 認証付き PALW state map と行単位アクセス",
+      "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
     }
   ]

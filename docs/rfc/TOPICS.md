@@ -12,6 +12,7 @@
 - [RFC-0029 — owner-independent shared TIR query data](0029-owner-independent-shared-tir-query-data.md)
 - [RFC-0033 — D2 readiness rootのdigest opening取得](0033-d2-readiness-root-opening-availability.md)
 - [RFC-0034 — archived closeの実受付と金融責任の適格解消](0034-archived-close-qualified-financial-discharge.md)
+- [RFC-0036 — 認証付き PALW state map と行単位アクセス](0036-authenticated-palw-state-map-and-row-access.md)
 
 ## EVM / wallet
 

@@ -1153,6 +1153,7 @@ mod tests {
             "palw_tir_bounded_door_v1" => params.palw_tir_bounded_door_v1 = Some(at),
             "palw_tir_designated_answers_v1" => params.palw_tir_designated_answers_v1 = Some(at),
             "palw_court_outsider_lane_v1" => params.palw_court_outsider_lane_v1 = Some(at),
+            "palw_state_row_map_v1" => params.palw_state_row_map_v1 = Some(at),
             "palw_kernel_route_panel_one_v1" => params.palw_kernel_route_panel_one_v1 = Some(at),
             "palw_court_clock_v2" => params.palw_court_clock_v2 = Some(at),
             "palw_class_registration_origin_v1" => {
