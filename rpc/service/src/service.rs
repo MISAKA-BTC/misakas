@@ -969,6 +969,15 @@ impl RpcApi for RpcCoreService {
             return Err(RpcError::ConsensusInTransitionalIbdState);
         }
 
+        // G14 capacity lane: no new block is taken in while node storage is in the low-space pause.
+        // The block is not judged (the miner may resubmit once the node resumes).
+        if !kaspa_utils::storage_budget::global_writable() {
+            return Err(RpcError::General(
+                "block not submitted: node storage is in the low-space pause (--storage-cap-bytes); retry once space is reclaimed"
+                    .into(),
+            ));
+        }
+
         // TODO: consider adding an error field to SubmitBlockReport to document both the report and error fields
         let is_synced = self.mining_rule_engine.should_mine(sink_daa_score_timestamp);
 

@@ -258,6 +258,14 @@ impl HandleRelayInvsFlow {
                 continue;
             }
 
+            // G14 capacity lane: while node storage is in the low-space pause, relayed blocks are
+            // not requested (nothing is judged; the block is fetched again by relay or IBD once the
+            // node resumes).
+            if !kaspa_utils::storage_budget::global_writable() {
+                debug!("Relay block {} not requested: node storage is in the low-space pause", inv.hash);
+                continue;
+            }
+
             // We keep the request scope alive until consensus processes the block
             let Some((block, request_scope)) = self.request_block(inv.hash, self.msg_route.id(), self.header_format).await? else {
                 debug!("Relay block {} was already requested from another peer, continuing...", inv.hash);

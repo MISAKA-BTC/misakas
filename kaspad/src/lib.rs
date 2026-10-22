@@ -60,6 +60,7 @@ mod palw_producer_t12_tests;
 pub mod palw_readiness_escalation;
 pub mod palw_receipt_pool;
 pub mod palw_retention;
+pub mod storage_capacity;
 pub mod palw_rider_outbox;
 pub mod palw_root_fetch;
 pub mod palw_round_producer;

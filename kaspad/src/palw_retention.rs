@@ -305,7 +305,46 @@ impl PalwRetentionJanitor {
     }
 
     /// One pass: scan, plan, remove. Returns what it removed and what the space rule could not free.
+    ///
+    /// Under a storage budget (`--storage-cap-bytes`, G14) the space rule plans against the budget
+    /// instead of the raw volume: `free` is the budget's headroom and the floor is its resume margin
+    /// plus whatever the retained material holds above its category budget (a reclaim TARGET — the
+    /// plan still pins every capture the chain can demand, so a target it cannot reach is reported,
+    /// never met by deleting owed material).
     fn pass(&self) -> (usize, u64, u64) {
+        let (free, reserve) = match kaspa_utils::storage_budget::global() {
+            Some(budget) => {
+                use kaspa_utils::storage_budget::StorageCategory;
+                let snapshot = budget.snapshot();
+                let i = StorageCategory::PalwRetained.index();
+                let over_target = snapshot.scanned[i].saturating_sub(budget.config().budgets[i]);
+                (snapshot.headroom, budget.config().resume_margin_bytes.saturating_add(over_target))
+            }
+            None => {
+                let (free, total) = volume_space_v1(&self.dir).unwrap_or((u64::MAX, 0));
+                (free, if total == 0 { 0 } else { retention_reserve_bytes_v1(total) })
+            }
+        };
+        self.pass_with(free, reserve)
+    }
+
+    /// **The storage budget's reclaimer** (G14): the time rule and abandoned partial writes in
+    /// `Obsolete` mode; under pressure, also the space rule for `need` bytes — oldest re-makeable,
+    /// UNOWED captures only (`retention_prune_plan_with_material_v1` pins everything the chain can
+    /// still demand). Returns the bytes removed.
+    pub fn reclaim_for_budget(&self, mode: kaspa_utils::storage_budget::ReclaimMode) -> u64 {
+        let need = crate::storage_capacity::reclaim_need(mode);
+        // `free = need, reserve = 2·need` asks the space rule for exactly `need` bytes (0: time rule only).
+        let (_, bytes, short) = self.pass_with(need, need.saturating_mul(2));
+        if short > 0 {
+            warn!(
+                "[{PALW_RETENTION}] the storage budget asked for {need} bytes; {short} bytes could not be freed without                  deleting material the chain can still demand, so they were not"
+            );
+        }
+        bytes
+    }
+
+    fn pass_with(&self, free: u64, reserve: u64) -> (usize, u64, u64) {
         let now = std::time::SystemTime::now();
         let (claims, abandoned) = scan_retention_v1(&self.dir, now);
         for path in &abandoned {
@@ -316,8 +355,6 @@ impl PalwRetentionJanitor {
         if claims.is_empty() {
             return (abandoned.len(), 0, 0);
         }
-        let (free, total) = volume_space_v1(&self.dir).unwrap_or((u64::MAX, 0));
-        let reserve = if total == 0 { 0 } else { retention_reserve_bytes_v1(total) };
         let session = self.consensus_manager.consensus().unguarded_session();
         let now_daa = session.get_virtual_daa_score();
         let rcore = self.rcore_plus.is_some_and(|fence| fence.is_active(now_daa));

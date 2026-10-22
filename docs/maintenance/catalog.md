@@ -428,6 +428,7 @@
 - [design/palw/rfc-completion-audit-2026-10-17/README.md](../design/palw/rfc-completion-audit-2026-10-17/README.md)
 - [design/palw/rfc-completion-audit-2026-10-17/report_ja.md](../design/palw/rfc-completion-audit-2026-10-17/report_ja.md)
 - [design/palw/rfc-completion-audit-2026-10-17/source_evidence.md](../design/palw/rfc-completion-audit-2026-10-17/source_evidence.md)
+- [design/palw/storage/capacity.md](../design/palw/storage/capacity.md)
 - [design/palw/tir/README.md](../design/palw/tir/README.md)
 - [design/palw/tir/algebraic-verification-measurements.md](../design/palw/tir/algebraic-verification-measurements.md)
 - [design/palw/tir/corpus-v1.md](../design/palw/tir/corpus-v1.md)
