@@ -895,7 +895,7 @@ async fn supply_receipt_beacon(
         for candidate in &candidates {
             let Some(claim) = state.claim(candidate) else { continue };
             let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { continue };
-            let Ok(clock) = kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(
+            let Ok(clock) = kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v2(
                 &chain.bundle.state, state, candidate, claim, final_daa,
             ) else { continue };
             let Some(slot) = kaspa_consensus_core::palw_freeprompt_v3::fp_draw_slot_v3(
@@ -1487,7 +1487,7 @@ async fn tn1_node(forged: bool, declared: bool) {
                 let Some(row) = state.claim(&candidate) else { continue };
                 let PalwClaimPhaseV2::Final { final_daa } = row.phase else { continue };
                 finalized += 1;
-                if kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(
+                if kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v2(
                     &chain.bundle.state, &state, &candidate, row, final_daa,
                 )
                 .ok()

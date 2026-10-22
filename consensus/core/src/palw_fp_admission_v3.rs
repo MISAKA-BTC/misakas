@@ -194,7 +194,7 @@ pub(crate) fn receipt_items_1_to_5<'a>(
     // 1'. RFC-0018 18-A (Gate C): a governed claim licenses receipts only once `SecurityCertified`, and its lane's clock starts at
     //     certification (`None` — the stateless callers and every claim below Gate C's fence — is the released rule: the clock is Final).
     let final_daa = match gate_c {
-        Some(params) => crate::palw_rfc0018_v1::palw_fp_receipt_clock_v1(params, state, &spend.claim_id, claim, final_daa)?,
+        Some(params) => crate::palw_rfc0018_v1::palw_fp_receipt_clock_v2(params, state, &spend.claim_id, claim, final_daa)?,
         None => final_daa,
     };
 
@@ -1171,6 +1171,166 @@ mod tests {
         let mut below = state.clone();
         below.set_open_courts_for_tests(h64(0xFC), 1);
         assert_eq!(palw_fp_receipt_clock_v1(&p, &below, &h64(0xFC), &claim, 124), Ok(124));
+    }
+
+    /// One empty block folded with the kernel route in force (Gate C's rows live there), returning the child and its delta.
+    fn fold_empty_r6(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+    ) -> (PalwChainStateV2, crate::palw_state_v2::PalwStateDeltaV2) {
+        let route = crate::palw_state_v2::PalwTransitionExtrasV1 {
+            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1::default()),
+            ..Default::default()
+        };
+        let (child, delta, _) = crate::palw_state_v2::apply_palw_transition_v7(
+            parent,
+            p,
+            None,
+            c,
+            &[],
+            crate::palw_state_v2::PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &route,
+        )
+        .expect("an empty block folds");
+        (child, delta)
+    }
+
+    /// **G14 r6 (user decision 2026-10-22): the receipt use-window clock pauses while an accusation is pending and resumes on
+    /// dismissal — from a ROOTED, journaled row.** Certified at 140 (clock 140). An accusation is seen pending in the block at DAA 150:
+    /// the fold opens the pause row there (receipts refused, `accusation-pending`). It closes without conviction; the block at DAA 170
+    /// closes the pause and credits 20 DAA: the clock reads `140 + 20 = 160` (the remaining window resumes instead of having lapsed).
+    /// A second accusation 180..185 adds 5 more (165). Below Gate C nothing is written and the clock is the released one.
+    #[test]
+    fn r6_receipt_pause_row_opens_on_accusation_and_dismissal_resumes_the_remaining_window() {
+        use crate::palw_receipt_pause_v2::{palw_receipt_pause_account_v2, palw_receipt_pause_row_v2};
+        use crate::palw_rfc0018_v1::palw_fp_receipt_clock_v2;
+        use crate::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
+        let p = params();
+        let gc = gate_c_params();
+        let state = certified_state(u128::MAX);
+        let claim = state.claim(&h64(0xFC)).unwrap().clone();
+        let certified = with_certification(&state, Some(O::Certified), 140);
+        assert_eq!(palw_fp_receipt_clock_v2(&gc, &certified, &h64(0xFC), &claim, 124), Ok(140));
+
+        // The accusation is pending in the block at DAA 150: the pause opens there.
+        let mut accused = certified.clone();
+        accused.set_open_courts_for_tests(h64(0xFC), 1);
+        let (b150, d150) = fold_empty_r6(&accused, &gc, &ctx(7, 150, 7));
+        let row = palw_receipt_pause_row_v2(&b150, &h64(0xFC)).unwrap().expect("the pause row is written");
+        assert_eq!(row.account().open_since_daa, Some(150));
+        assert_eq!(
+            palw_fp_receipt_clock_v2(&gc, &b150, &h64(0xFC), &claim, 124).map_err(|e| e.status),
+            Err("accusation-pending")
+        );
+        assert!(
+            d150.entries.iter().any(|e| matches!(e, crate::palw_state_v2::PalwDeltaEntryV2::KernelRouteRow { table, .. }
+                if *table == crate::palw_receipt_pause_v2::PALW_RECEIPT_PAUSE_TABLE_V2)),
+            "the row is journaled (a reorg reverts it)"
+        );
+        // A block while still pending: nothing moves (one suspension, opened once).
+        let (b160, _) = fold_empty_r6(&b150, &gc, &ctx(8, 160, 8));
+        assert_eq!(palw_receipt_pause_account_v2(&b160, &h64(0xFC)).unwrap().open_since_daa, Some(150));
+
+        // Dismissed (the court closes without conviction): the block at 170 closes the pause, crediting 20 DAA.
+        let mut dismissed = b160.clone();
+        dismissed.set_open_courts_for_tests(h64(0xFC), 0);
+        let (b170, _) = fold_empty_r6(&dismissed, &gc, &ctx(9, 170, 9));
+        let account = palw_receipt_pause_account_v2(&b170, &h64(0xFC)).unwrap();
+        assert_eq!((account.open_since_daa, account.paused_total_daa), (None, 20));
+        assert_eq!(palw_fp_receipt_clock_v2(&gc, &b170, &h64(0xFC), &claim, 124), Ok(160), "the remaining window resumes");
+        // v1 (unpaused) would have answered 140 — the window consumed during the suspension.
+        assert_eq!(crate::palw_rfc0018_v1::palw_fp_receipt_clock_v1(&gc, &b170, &h64(0xFC), &claim, 124), Ok(140));
+
+        // A second accusation 180..185 accumulates.
+        let mut again = b170.clone();
+        again.set_open_courts_for_tests(h64(0xFC), 2);
+        let (b180, _) = fold_empty_r6(&again, &gc, &ctx(10, 180, 10));
+        let mut cleared = b180.clone();
+        cleared.set_open_courts_for_tests(h64(0xFC), 0);
+        let (b185, _) = fold_empty_r6(&cleared, &gc, &ctx(11, 185, 11));
+        assert_eq!(palw_fp_receipt_clock_v2(&gc, &b185, &h64(0xFC), &claim, 124), Ok(165));
+
+        // Below Gate C: no row, the released clock.
+        let mut below = state.clone();
+        below.set_open_courts_for_tests(h64(0xFC), 1);
+        assert_eq!(palw_fp_receipt_clock_v2(&p, &below, &h64(0xFC), &claim, 124), Ok(124));
+        assert_eq!(palw_receipt_pause_row_v2(&below, &h64(0xFC)), Ok(None));
+    }
+
+    /// **G14 r6: the pause across a reorg.** The block that opened the pause is reverted (its delta undone): the row is gone and the
+    /// sibling chain — which never saw the accusation — reads the unpaused clock. The block that closed it is reverted: the pause is
+    /// open again (receipts refused), exactly as the chain before it held. A sibling that reads the same parent but sees no accusation
+    /// writes nothing.
+    #[test]
+    fn r6_receipt_pause_row_follows_a_reorg() {
+        use crate::palw_receipt_pause_v2::{palw_receipt_pause_account_v2, palw_receipt_pause_row_v2};
+        use crate::palw_rfc0018_v1::palw_fp_receipt_clock_v2;
+        use crate::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
+        use crate::palw_state_v2::revert_delta_v2;
+        let gc = gate_c_params();
+        let state = certified_state(u128::MAX);
+        let claim = state.claim(&h64(0xFC)).unwrap().clone();
+        let certified = with_certification(&state, Some(O::Certified), 140);
+        let mut accused = certified.clone();
+        accused.set_open_courts_for_tests(h64(0xFC), 1);
+        let (b150, d150) = fold_empty_r6(&accused, &gc, &ctx(7, 150, 7));
+        assert!(palw_receipt_pause_row_v2(&b150, &h64(0xFC)).unwrap().is_some());
+        // Reorg out the opening block.
+        let back = revert_delta_v2(&b150, &d150, &gc).expect("the delta reverts");
+        assert_eq!(palw_receipt_pause_row_v2(&back, &h64(0xFC)), Ok(None), "the pause row leaves with its block");
+        assert_eq!(back.state_root(), accused.state_root(), "the parent's root, exactly");
+        // The sibling without the accusation writes nothing and reads the unpaused clock.
+        let (sibling, _) = fold_empty_r6(&certified, &gc, &ctx(12, 150, 7));
+        assert_eq!(palw_receipt_pause_row_v2(&sibling, &h64(0xFC)), Ok(None));
+        assert_eq!(palw_fp_receipt_clock_v2(&gc, &sibling, &h64(0xFC), &claim, 124), Ok(140));
+
+        // Reorg out the closing block: the pause is open again.
+        let mut dismissed = b150.clone();
+        dismissed.set_open_courts_for_tests(h64(0xFC), 0);
+        let (b170, d170) = fold_empty_r6(&dismissed, &gc, &ctx(9, 170, 9));
+        assert_eq!(palw_receipt_pause_account_v2(&b170, &h64(0xFC)).unwrap().paused_total_daa, 20);
+        let reopened = revert_delta_v2(&b170, &d170, &gc).expect("the delta reverts");
+        assert_eq!(palw_receipt_pause_account_v2(&reopened, &h64(0xFC)).unwrap().open_since_daa, Some(150));
+        assert_eq!(palw_receipt_pause_account_v2(&reopened, &h64(0xFC)).unwrap().paused_total_daa, 0);
+    }
+
+    /// **G14 r6: a conviction drops the row** (the claim is `revoked`, there is no window to resume), and a malformed carried row is a
+    /// typed refusal, never "no pause".
+    #[test]
+    fn r6_receipt_pause_row_is_dropped_on_conviction_and_a_malformed_row_refuses() {
+        use crate::palw_receipt_pause_v2::*;
+        use crate::palw_rfc0018_v1::palw_fp_receipt_clock_v2;
+        use crate::palw_security_certification_v1::PalwCertificationOutcomeV1 as O;
+        use crate::palw_state_v2::PalwClaimPhaseV2;
+        let gc = gate_c_params();
+        let state = certified_state(u128::MAX);
+        let claim = state.claim(&h64(0xFC)).unwrap().clone();
+        let certified = with_certification(&state, Some(O::Certified), 140);
+        let mut accused = certified.clone();
+        accused.set_open_courts_for_tests(h64(0xFC), 1);
+        let (b150, _) = fold_empty_r6(&accused, &gc, &ctx(7, 150, 7));
+        let mut convicted = b150.clone();
+        let mut voided = claim.clone();
+        voided.phase = PalwClaimPhaseV2::Voided { reason: crate::palw_state_v2::PalwVoidReasonV2::CourtFraud, voided_daa: 160 };
+        convicted.set_claim_for_tests(h64(0xFC), voided.clone());
+        convicted.set_open_courts_for_tests(h64(0xFC), 0);
+        let (b170, _) = fold_empty_r6(&convicted, &gc, &ctx(9, 170, 9));
+        assert_eq!(palw_receipt_pause_row_v2(&b170, &h64(0xFC)), Ok(None), "a convicted claim keeps no pause row");
+        assert_eq!(palw_fp_receipt_clock_v2(&gc, &b170, &h64(0xFC), &voided, 124).map_err(|e| e.status), Err("revoked"));
+
+        let mut bad = certified.clone();
+        bad.set_kernel_aux_row_for_tests(PALW_RECEIPT_PAUSE_TABLE_V2, palw_receipt_pause_key_v2(&h64(0xFC)), Some(vec![9, 9, 9]));
+        assert_eq!(
+            palw_fp_receipt_clock_v2(&gc, &bad, &h64(0xFC), &claim, 124).map_err(|e| e.status),
+            Err("pause-row-malformed")
+        );
     }
 
     /// **User decision 2026-10-17 (Gate C retirement)**: a governed Final free-prompt claim is not retired before its certification can

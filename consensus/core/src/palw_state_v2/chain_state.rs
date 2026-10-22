@@ -1977,6 +1977,12 @@ impl PalwChainStateV2 {
         self.classes.insert(class_id, class);
     }
 
+    /// Tests only (G14 r6): replace a claim row in place (e.g. voided by a conviction the test does not fold).
+    #[cfg(test)]
+    pub(crate) fn set_claim_for_tests(&mut self, claim_id: Hash64, claim: PalwClaimStateV2) {
+        self.claims.insert(claim_id, claim);
+    }
+
     /// **What `bond` can still lock for a `Valid` signature at `now_daa`**: its posted collateral
     /// less every lock still live on the two clocks. The fold's bind and licence checks and the
     /// panel draw read this one expression (the 2026-09-23 route-matrix audit's #3).

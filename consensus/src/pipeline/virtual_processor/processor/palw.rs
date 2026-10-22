@@ -3674,7 +3674,7 @@ impl VirtualStateProcessor {
             // RFC-0018 18-A (Gate C): an uncertified governed claim is not spendable (the admission refuses it), and a certified one's
             // draw slot counts from its certification — the same predicate the admission and the fold read.
             let Ok(final_daa) =
-                kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(state_params, &state, claim_id, claim, final_daa)
+                kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v2(state_params, &state, claim_id, claim, final_daa)
             else {
                 continue;
             };
@@ -10133,7 +10133,7 @@ impl VirtualStateProcessor {
         // the PARENT state so an own block is disqualified and a merged one unentitled (no coinbase worker share) for the reason the
         // fold would refuse it. Below Gate C's fence (every shipped network): `final_daa`, unchanged.
         let final_daa =
-            kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v1(state_params, state, &envelope.spend.claim_id, claim, final_daa)
+            kaspa_consensus_core::palw_rfc0018_v1::palw_fp_receipt_clock_v2(state_params, state, &envelope.spend.claim_id, claim, final_daa)
                 .map_err(|e| e.to_string())?;
         // 2026-09-24 DoS audit #5: the fold's own refusal (`ReceiptRightsForfeited`), asked here at
         // the same fence against the PARENT state, so an own block is disqualified — and a merged one
