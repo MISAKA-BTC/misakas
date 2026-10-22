@@ -125,3 +125,27 @@ calculations, so storing ordinary registration profiles there requires an
 audit of those consumers, not merely a fixture insertion. The missing normal
 registration-to-routing connection remains open. Model-level verification or
 certification must not be added as a workaround (PRINCIPLES section 9).
+
+## Ordinary registration graph retention (`c4201b296`)
+
+Past the existing memory/routing fence, ordinary legacy class registration
+retains its carried graph in table 147 under `0xA3 || class_id`. Routing
+consumers use that graph, retaining the existing legacy graph fallback without
+writing the free-prompt pricing/deadline index. Decode has a native resource
+owner; writes use the existing reserved cell writer. Class identity,
+immutability, restore consistency and class removal cover the new namespace.
+This stores structural registration data and grants neither model approval nor
+claim credit. No fence is armed.
+
+`cargo check -p kaspa-consensus-core --lib` passed (15.94s). The targeted
+ordinary-registration/profile/delta-reversal test is compiling; output is
+`/tmp/misaka-rfc06-registered-profile-test.log`. The two failed GDN E2E paths
+must still be rerun after their fixture supplies the native route/declaration
+prerequisites; this compilation is not evidence that they now pass.
+
+The concrete aux scanner recognizes the profile row. Its generator source
+also has the profile arm, but the base generator still uses the old router
+table number 136 while the checked-in scanner uses 147 (and the adjacent
+bootstrap namespaces have moved too). Full generator reconciliation and
+idempotency remain open; do not overwrite the current scanner with the old
+namespace output or claim reproducible generation from this check.
