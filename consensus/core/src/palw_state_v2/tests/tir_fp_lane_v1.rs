@@ -478,6 +478,41 @@ fn audit_fixcd_c01_an_active_registrant_keeps_binding_priority_and_an_inactive_o
     );
 }
 
+/// **RFC-0002 02-A, the attempt lane: past `palw_tir_container_identity_v1` an attempt of an unbound TIR class is not taken.** The
+/// class door every attempt (and the producer's pre-check) asks refuses it with `TIR_CLASS_CONTAINER_UNBOUND`; once the registrant's
+/// binding (tag 175) folds, that refusal is gone. Below the fence the door's answer is unchanged.
+#[test]
+fn tir_attempt_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3_container() {
+    use crate::palw_tir_container_v1::{PALW_TIR_UNBOUND_CONTAINER_CODE_V1, test_binding_v1};
+    let mut l = lane(false);
+    let mut class = l.state.class(&l.class_id).unwrap().clone();
+    class.registrant_bond = Some(bond_key(PRODUCER));
+    l.state.set_class_for_tests(l.class_id, class);
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
+    let unbound = |r: &Result<(), PalwStateV2Error>| {
+        matches!(r, Err(PalwStateV2Error::ClassNotRewardable { code, .. }) if *code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1)
+    };
+    let below = palw_class_admits_claim_v1(&l.state, &l.p, &l.extras, &l.class_id, AT_DAA);
+    assert!(!unbound(&below), "below the fence the attempt door does not ask for a container: {below:?}");
+    let mut past = l.extras.clone();
+    past.tir_container_identity_active = true;
+    assert!(unbound(&palw_class_admits_claim_v1(&l.state, &l.p, &past, &l.class_id, AT_DAA)), "an unbound TIR class's attempt");
+    let bound = PalwConsensusObjectV2::TirClassContainerBoundV1 {
+        binding: Box::new(test_binding_v1(&record, artifact_root, b"{\"model\":\"tiny\"}")),
+        signature: Vec::new(),
+    };
+    let (bound_state, _) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).expect("the binding folds");
+    let after = palw_class_admits_claim_v1(&bound_state, &l.p, &past, &l.class_id, AT_DAA);
+    assert!(!unbound(&after), "a bound TIR class's attempt passes the container door: {after:?}");
+    assert_eq!(
+        after,
+        palw_class_admits_claim_v1(&l.state, &l.p, &l.extras, &l.class_id, AT_DAA),
+        "and the rest of the door answers as it does below the fence"
+    );
+}
+
+
 /// **The lane's authentication on a gated network**: an IR class passes the free-prompt certification gate past the fence only
 /// when one certified family covers every primitive its program reaches; below the fence the gate is the legacy one.
 #[test]

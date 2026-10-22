@@ -198,8 +198,11 @@ RSS with an mmapped checkpoint (mapped pages count). Measure with `--ram-account
   `palw_tir_container_identity_v1`, None on every preset); the chain recomputes the container root from its opening and accepts it
   only if the one weight section's inner root is the class's inventory root and the program record is the class's program and
   tokenizer; past the fence an unbound class's TIR original is refused. Tests: `palw_tir_container_v1::tests`,
-  `tir_fp_lane_past_the_container_fence_…`, `misaka-palw-sdk tests/tir_container_binding` (a real packed container). Not done: the
-  restart/IBD/reorg restore of the row, and IR attempt-lane claims are not gated by it.
+  `tir_fp_lane_past_the_container_fence_…`, `misaka-palw-sdk tests/tir_container_binding` (a real packed container). 2026-10-22: the row is an
+  ordinary staged-court row (state snapshot + `StagedCourtSeed` delta), and `tir_fp_lane_past_the_container_fence_…` replays its
+  stored delta (restart/IBD) and reverts it (reorg) to the same roots; past the fence an attempt of an unbound TIR class is refused
+  at the common class door `check_class_admits_claim` (the producer pre-check `palw_class_admits_claim_v1` asks the same), test
+  `tir_attempt_lane_past_the_container_fence_…`. Not done: a restart/IBD run on a real node; the evaluation lane is not gated by it.
 * **K2-TIR activation**: the kernels are implemented, not active; arming them is a fenced decision outside this lane.
 * **#3** awaits the user's decision; **#6**'s calibration tokenizer is the Qwen3.8 tokenizer from
   `huihui-ai/Huihui-Qwen3.8-27B-abliterated@739e3c5b`, checked id by id against the GGUF's own vocabulary before use.
