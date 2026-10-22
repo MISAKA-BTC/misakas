@@ -259,6 +259,90 @@ fn court_pools_v1(state: &PalwChainStateV2, ticket_window: u64) -> (PalwCourtPoo
     (reserve, spare)
 }
 
+/// **G14 F03 (lane g14p/court-owner): how many FOLLOW-ON sessions the unchanged network cap may hold** — a follow-on is a session on
+/// a claim that already has a running session. `⌊(cap − 1) / 2⌋`: at least `cap − ⌊(cap − 1) / 2⌋ ≥ 1` slots stay for first
+/// sessions (one per distinct claim), so stacking decoy dissections on one claim can never fill the cap. A pure function of the cap.
+pub fn palw_court_outsider_lane_followon_cap_v1(cap: u64) -> u64 {
+    cap.saturating_sub(1) / 2
+}
+
+/// **The legacy concurrency cap** (int-12, audit A M-1), and past `palw_court_outsider_lane_v1` its claim-diverse split (G14 F03).
+///
+/// Below the fence, byte for byte the old rule: `open >= cap` refuses with `CourtSessionsAtCapacity`. Past it the cap is the SAME
+/// number (total concurrency, hence the per-block slot's rung guarantee, is unchanged) but follow-on sessions — a second or later
+/// session on a claim that already has one running — may hold at most [`palw_court_outsider_lane_followon_cap_v1`] of it. So a
+/// coalition that stacks Sybil dissections on its own decoy claim (G-07 residual) leaves room for every other claim's first
+/// session: an outsider pursuing a different (lying) claim opens. The rule reads no owner, opener order or identity — only the set
+/// of claims with running sessions — so it is not a first-come exclusive occupancy (ADR-0199): every claim's first session competes
+/// for the first-session room on equal terms, and that room can be exhausted only by `≥ cap − F` DISTINCT claims under dispute,
+/// each a licensed claim whose decoy accusation costs its accuser the claim's reserve when it fails (residual, see the lane notes).
+pub(super) fn legacy_court_cap_admits_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: Hash64,
+    opener: PalwBondKeyV2,
+    direct_evidence: bool,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    let open_sessions = state.court_sessions.len() as u64;
+    let max_sessions = palw_max_concurrent_court_sessions_v1(params.turn_deadline_daa());
+    let at_capacity = || PalwStateV2Error::CourtSessionsAtCapacity {
+        open: open_sessions,
+        max: max_sessions,
+        turn_deadline_daa: params.turn_deadline_daa(),
+        per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+    };
+    if open_sessions >= max_sessions {
+        return Err(at_capacity());
+    }
+    // Round 2 (requirement): a DIRECT accusation that already carries its evidence (the IR / generative cone accusations, whose
+    // proof is the whole refutation) is never refused by the follow-on share — only by the overall cap above, exactly as before
+    // the fence. So nothing admitted below the fence on that route is refused past it.
+    if direct_evidence || !params.court_outsider_lane_active_v1(now) {
+        return Ok(());
+    }
+    if court_outsider_lane_is_followon_v1(state, claim_id, opener)
+        && court_outsider_lane_followons_v1(state) >= palw_court_outsider_lane_followon_cap_v1(max_sessions)
+    {
+        return Err(at_capacity());
+    }
+    Ok(())
+}
+
+/// **Round 2 (risk 2): the claim's own side.** The bonds the chain records as the claim's accused/colluding side: its producer
+/// (`claim.bond`) and the bonds of its panel's seats (`panels[claim].seats[].bond`). Rooted facts only — the claim and panel rows of
+/// the chain state. A missing claim or panel contributes nothing.
+fn court_outsider_lane_inside_v1(state: &PalwChainStateV2, claim_id: Hash64, bond: &PalwBondKeyV2) -> bool {
+    state.claims.get(&claim_id).is_some_and(|claim| claim.bond == *bond)
+        || state.panels.get(&claim_id).is_some_and(|panel| panel.seats.iter().any(|seat| seat.bond == *bond))
+}
+
+/// A session opened by `opener` on `claim_id` is a FOLLOW-ON iff the claim already has a running session opened from the same side
+/// (inside = producer/seat, outside = any other bond). So a colluder (seat or producer) holding the claim's first session does not
+/// turn the outsider into a follow-on: the outsider's session is the outside side's first and counts against the first-session room.
+/// The record read is `PalwCourtSessionStateV2::challenger_bond` — the opener the state records.
+pub(super) fn court_outsider_lane_is_followon_v1(state: &PalwChainStateV2, claim_id: Hash64, opener: PalwBondKeyV2) -> bool {
+    let inside = court_outsider_lane_inside_v1(state, claim_id, &opener);
+    state
+        .court_sessions
+        .values()
+        .any(|s| s.claim == claim_id && court_outsider_lane_inside_v1(state, claim_id, &s.challenger_bond) == inside)
+}
+
+/// Follow-on sessions now running: per claim, every session beyond the first of each side (at most two firsts per claim: one inside,
+/// one outside). Consistent with [`court_outsider_lane_is_followon_v1`].
+pub(super) fn court_outsider_lane_followons_v1(state: &PalwChainStateV2) -> u64 {
+    let mut firsts = std::collections::BTreeSet::new();
+    let mut followons = 0u64;
+    for session in state.court_sessions.values() {
+        let side = court_outsider_lane_inside_v1(state, session.claim, &session.challenger_bond);
+        if !firsts.insert((session.claim, side)) {
+            followons += 1;
+        }
+    }
+    followons
+}
+
 /// **Court admission** where a court session is about to open (`open_dissection_at_named_leaf_v1`, `CourtOpened`). Past the fence:
 /// the challenger's own live LG14-A reservation on the claim (its claim-fixed hard deadline, its Final hold), an Active bond at or
 /// above the floor, and the occupancy escrow (ρ × (ticket window + `session_window`) × weight × the claim's row count, round 2) on its

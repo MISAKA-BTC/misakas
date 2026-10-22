@@ -390,7 +390,23 @@ fn eight_k(p: &Params) -> HeldRow {
 /// testnet-12 (launch) at DAA 1,000 with the 8k row `Active`, the executor, the bystander, the outsider and `sybils` Sybil bonds
 /// registered — every one after genesis; LG14-A armed at genesis when `armed` (validated with its record).
 fn held_chain(armed: bool, sybils: u64) -> (Held, HeldRow, Vec<(PalwBondKeyV2, Hash64)>) {
-    let p = if armed { arm_legacy(palw_t12_launch_params_v1(), 0, false, false).0 } else { palw_t12_launch_params_v1() };
+    held_chain_lane(armed, false, sybils)
+}
+
+/// [`held_chain`] with, when `lane`, the G14 F03 outsider court lane (`palw_court_outsider_lane_v1`) armed at genesis beside LG14-A.
+fn held_chain_lane(armed: bool, lane: bool, sybils: u64) -> (Held, HeldRow, Vec<(PalwBondKeyV2, Hash64)>) {
+    let p = if armed {
+        let (mut p, records) = arm_legacy(palw_t12_launch_params_v1(), 0, false, false);
+        if lane {
+            p.palw_court_outsider_lane_v1 = Some(ForkActivation::new(0));
+            p.sync_palw_g14_gates_v1();
+            p.validate_palw_v2_with_arming_records_v1(&records).unwrap_or_else(|e| panic!("the lane validates beside LG14-A: {e:?}"));
+        }
+        p
+    } else {
+        assert!(!lane, "the outsider lane needs LG14-A");
+        palw_t12_launch_params_v1()
+    };
     let b = bundle(&p);
     let sp = b.state.clone();
     assert_eq!(sp.legacy_public_filer_from_daa(), armed.then_some(0), "the mirror the fold reads, synced by the Params' own sync");
@@ -621,6 +637,44 @@ fn g07_residual_the_network_court_cap_is_shared() {
     // The reservation still holds the lying claim — the residual is a delay bounded by its hard deadline, not a payout.
     assert!(matches!(c.s.claim(&target).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
     assert!(c.s.legacy_dispute_reservation_v1(&target, &bond_key(OUTSIDER)).is_some());
+}
+
+/// **G14 F03 / G-07 residual past `palw_court_outsider_lane_v1`: the outsider opens.** The same coalition (Sybil reservers stacking
+/// decoy dissections on its own claim, refilling as fast as the fold admits) cannot fill the network cap: follow-on sessions hold at
+/// most `⌊(cap − 1) / 2⌋` of it, so the outsider's first session on the lying claim opens while the cap itself is unchanged and the
+/// total never exceeds it. Below the fence the twin above still pins the refusal.
+#[test]
+fn g14_f03_outsider_court_lane_opens_past_decoy_occupancy() {
+    let probe = bundle(&palw_t12_launch_params_v1()).state;
+    let cap = palw_max_concurrent_court_sessions_v1(probe.turn_deadline_daa());
+    let followons = kaspa_consensus_core::palw_state_v2::palw_court_outsider_lane_followon_cap_v1(cap);
+    assert!(cap >= 3 && followons >= 1 && followons < cap - 1, "cap {cap}, follow-on room {followons}");
+    let (mut c, row, seats) = held_chain_lane(true, true, cap);
+    assert_eq!(palw_max_concurrent_court_sessions_v1(c.sp.turn_deadline_daa()), cap, "the cap is unchanged by the lane");
+    let (target, licensed_daa) = licensed(&mut c, &row, &seats, 3);
+    c.step(&[reservation(&c.s, target, bond_key(OUTSIDER))], Rule::T12).expect("the outsider reserves the lying claim");
+    c.skip_to(licensed_daa + c.sp.window_challenge_at(licensed_daa) + 5);
+    let (decoy, _) = licensed(&mut c, &row, &seats, 2);
+    let sybils: Vec<PalwBondKeyV2> = (0..cap - 1).map(|n| bond_key(SYBIL_BASE + n)).collect();
+    let reservations: Vec<PalwConsensusObjectV2> = sybils.iter().map(|sybil| reservation(&c.s, decoy, *sybil)).collect();
+    c.step(&reservations, Rule::T12).expect("the Sybils reserve the decoy claim");
+    open_by(&mut c, &row, decoy, bond_key(BYSTANDER), 1).expect("the first decoy");
+    // Continuous refill: every Sybil tries, one block each, the follow-on room fills and every further try is refused.
+    let mut admitted = 0u64;
+    for sybil in &sybils {
+        let object = accusation_by(&c, &row, decoy, *sybil, 1);
+        match c.step(&[object], Rule::Opening) {
+            Ok(()) => admitted += 1,
+            Err(e) => assert!(matches!(e, PalwStateV2Error::CourtSessionsAtCapacity { .. }), "{e:?}"),
+        }
+        assert!(c.s.court_sessions_iter().count() as u64 <= cap, "the total never exceeds the cap");
+    }
+    assert_eq!(admitted, followons, "follow-ons hold exactly their share of the cap");
+    assert!((c.s.court_sessions_iter().count() as u64) < cap, "decoys on one claim cannot fill the cap");
+    open_by(&mut c, &row, target, bond_key(OUTSIDER), 1).expect("past the lane the outsider's first session on the lying claim opens");
+    assert!(c.s.court_sessions_iter().any(|(_, s)| s.claim == target && s.challenger_bond == bond_key(OUTSIDER)));
+    assert!(c.s.court_sessions_iter().count() as u64 <= cap);
+    assert!(c.s.legacy_dispute_reservation_v1(&target, &bond_key(OUTSIDER)).is_some(), "the reservation still holds Final");
 }
 
 // ---- G-13 -----------------------------------------------------------------------------------------------------------------------

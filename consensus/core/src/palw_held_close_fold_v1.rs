@@ -117,6 +117,7 @@ pub(super) fn apply_held_leaf_challenge_v1(
         ladder,
         turn,
         crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
+        false,
     )?;
     // Lane g14-court-capacity: past `palw_court_capacity_v1` a prosecution may be queued instead of opened; its close group is
     // declared again with its ticket.

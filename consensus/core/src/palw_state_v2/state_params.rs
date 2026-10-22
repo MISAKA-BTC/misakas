@@ -189,6 +189,7 @@ impl PalwStateParamsV2 {
             court_transport_v1: None,
             detection_policy_v1: None,
             reward_liability_horizon_from_daa: None,
+            court_outsider_lane_from_daa: None,
             cell_coverage_closure_from_daa: None,
             memory_routing_court_from_daa: None,
             class_registration_origin_from_daa: None,
@@ -717,6 +718,23 @@ impl PalwStateParamsV2 {
     /// `Params::palw_reward_liability_horizon_v1`'s height, if the network arms it (the mirror).
     pub fn reward_liability_horizon_from_daa(&self) -> Option<u64> {
         self.reward_liability_horizon_from_daa
+    }
+
+    /// **G14 F03 outsider court lane / owner reclamation mirror** (`Params::palw_court_outsider_lane_v1`), written by
+    /// `Params::sync_palw_g14_gates_v1` (and by fixtures).
+    pub fn with_court_outsider_lane_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.court_outsider_lane_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_court_outsider_lane_v1`'s height, if armed (the mirror).
+    pub fn court_outsider_lane_from_daa(&self) -> Option<u64> {
+        self.court_outsider_lane_from_daa
+    }
+
+    /// Is the G14 F03 outsider court lane / owner reclamation in force at `daa_score`? `false` on every shipped preset.
+    pub fn court_outsider_lane_active_v1(&self, daa_score: u64) -> bool {
+        self.court_outsider_lane_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Does the reward liability horizon govern a claim accepted at `accepted_daa`?** `false` on every shipped preset.

@@ -372,7 +372,9 @@ fn apply_object_inner(
                     }
                     _ => crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
                 };
-                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published)?;
+                // Round 2: a cone accusation carries its whole refutation — a direct evidence-carrying accusation, exempt from the
+                // outsider lane's follow-on share (only the overall cap binds it, as before the fence).
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published, true)?;
             } else {
                 match accusation.verdict {
                     PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
@@ -448,7 +450,9 @@ fn apply_object_inner(
                     }
                     _ => crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
                 };
-                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published)?;
+                // Round 2: a cone accusation carries its whole refutation — a direct evidence-carrying accusation, exempt from the
+                // outsider lane's follow-on share (only the overall cap binds it, as before the fence).
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published, true)?;
             } else {
                 match accusation.verdict {
                     PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
@@ -2063,16 +2067,14 @@ fn apply_object_inner(
                 palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(()),
                 palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open => {}
                 palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {
-                    let open_sessions = builder.state.court_sessions.len() as u64;
-                    let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
-                    if open_sessions >= max_sessions {
-                        return Err(PalwStateV2Error::CourtSessionsAtCapacity {
-                            open: open_sessions,
-                            max: max_sessions,
-                            turn_deadline_daa: builder.params.turn_deadline_daa(),
-                            per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
-                        });
-                    }
+                    palw_court_capacity_fold_v1::legacy_court_cap_admits_v1(
+                        &builder.state,
+                        builder.params,
+                        *claim_id,
+                        *challenger_bond,
+                        false,
+                        ctx.daa_score,
+                    )?;
                 }
             }
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();

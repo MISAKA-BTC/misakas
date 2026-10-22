@@ -832,10 +832,14 @@ fn rotate_owner_queue_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
     Ok(())
 }
 
-/// **Lane g14-court-capacity-r2: the owner fair start is in force** — past `palw_court_capacity_v1` (dormant; `false` on every
-/// shipped network, where `open_v1` refuses an Open at K_owner exactly as before).
+/// **Lane g14-court-capacity-r2: the owner fair start is in force** — past `palw_court_capacity_v1`, or (G14 F03 ④, lane
+/// g14p/court-owner) past `palw_court_outsider_lane_v1`, which needs no court-capacity policy: the owner queue, its tenure rotation
+/// (an admitted row past `palw_tir_owner_tenure_v1` yields while a row waits — deadline-based preemption of an owner not finishing)
+/// and idle reclamation (deposit burned) are pure state rules. K_owner = 8 is unchanged: the concurrent custodian load stays 8, and an
+/// outsider's Open is never refused for the cap — it waits, in arrival order, for a slot that a bounded tenure guarantees. Dormant;
+/// `false` on every shipped network, where `open_v1` refuses an Open at K_owner exactly as before.
 fn tir_owner_fair_start_v1(b: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> bool {
-    b.params.court_capacity_at_v1(ctx.daa_score).is_some()
+    b.params.court_capacity_at_v1(ctx.daa_score).is_some() || b.params.court_outsider_lane_active_v1(ctx.daa_score)
 }
 
 fn open_v1(
@@ -5454,6 +5458,23 @@ mod conviction_e2e_tests {
     /// Below the fence the same Open at K_owner is refused (T-N4's world).
     #[test]
     fn g14r2_eight_active_colluding_owners_cannot_lock_out_a_newcomer_who_convicts_in_time() {
+        eight_active_colluders_newcomer_convicts_v1(|params| {
+            params.with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 {
+                from_daa: 0,
+                policy: crate::palw_court_capacity_v1::palw_court_capacity_placeholder_policy_v1(),
+            }))
+        });
+    }
+
+    /// **G14 F03 ④ (lane g14p/court-owner): the same all-colluder occupancy with continuous refill, past `palw_court_outsider_lane_v1`
+    /// alone** (no court-capacity policy, whose RFC-0025 parameters are not adopted): the owner queue's tenure rotation and idle
+    /// reclamation give the outsider a slot in time; K_owner stays 8 (asserted inside); below the fence the Open is refused as before.
+    #[test]
+    fn g14_f03_outsider_lane_eight_active_colluders_cannot_lock_out_a_newcomer() {
+        eight_active_colluders_newcomer_convicts_v1(|params| params.with_court_outsider_lane_from_daa(Some(0)));
+    }
+
+    fn eight_active_colluders_newcomer_convicts_v1(arm: impl Fn(PalwStateParamsV2) -> PalwStateParamsV2) {
         use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
         let fx = palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF, 1)), 4);
         let frame = fx.frame.clone();
@@ -5464,10 +5485,7 @@ mod conviction_e2e_tests {
         let (mut state, params, extras, open_at) = open_world(&fx, &frame, &extra);
         // Below the fence (T-N4's world) the outsider is refused at K_owner; past it, the fair start.
         let below = params.clone();
-        let params = params.with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 {
-            from_daa: 0,
-            policy: crate::palw_court_capacity_v1::palw_court_capacity_placeholder_policy_v1(),
-        }));
+        let params = arm(params);
         let claim_id = frame.plan_v1().original_claim;
         let base = frame.plan_v1().terms.accepted_daa;
         let producer = frame.custody_v1().pledge_v1().producer;

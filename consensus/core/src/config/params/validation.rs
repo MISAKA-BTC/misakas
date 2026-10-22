@@ -317,6 +317,7 @@ impl Params {
         self.validate_palw_tir_frame_cost_in_v1(cost_records)?;
         self.validate_palw_tir_bounded_door_in_v1(cost_records)?;
         self.validate_palw_tir_designated_answers_in_v1()?;
+        self.validate_palw_court_outsider_lane_in_v1()?;
         // **The court-capacity fence** (`crate::palw_court_capacity_v1`, audit G-07): LG14-A at or below it, a sound policy, and on a
         // real network a pinned record and a measured (non-placeholder) policy.
         self.validate_palw_court_capacity_in_v1(records)?;

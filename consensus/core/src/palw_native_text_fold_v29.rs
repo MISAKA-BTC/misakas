@@ -1157,11 +1157,25 @@ fn own(
         remaining: paid.guarantee.clone(),
     };
     let mut owner_ids: Vec<Digest> = read(r, EXECUTION_SEAL_ACTOR_TABLE_V11, 0, &id, 4 + 4 * 64).unwrap_or_default();
-    if owner_ids.len() >= 4 || owner_ids.contains(&own.id()) {
-        return Err(refused("text29 original lifetime owner catalogue exhausted"));
+    // G14 F03 round 2 (lane g14p/court-owner): past `palw_court_outsider_lane_v1` a full lifetime catalogue may reclaim the slot of
+    // an owner that expired WITHOUT progress (mirror of v39's expired-owner reclamation, G-N1). Cap stays 4. Below the fence the
+    // closure is never consulted and the rule is byte for byte the old one.
+    let reclaim_active = builder.params.court_outsider_lane_active_v1(ctx.daa_score);
+    let evicted = text29_owner_catalogue_admit_v29(&owner_ids, own.id(), reclaim_active, |member| {
+        text29_owner_reclaimable_v29(r, id, *member, ctx.daa_score)
+    })
+    .map_err(refused)?;
+    if let Some(gone) = evicted {
+        owner_ids.retain(|v| *v != gone);
     }
     owner_ids.push(own.id());
-    let status = paid_status(r, id)?;
+    let mut status = paid_status(r, id)?;
+    if evicted.is_some() {
+        // The evicted owner holds no paid slot (it expired: `expire_owner` zeroed it), so `owners_admitted` — the LIFETIME count the
+        // admission token refuses at 4 — becomes the live-plus-progressed count, as v39's `admitted` does at expiry.
+        status.owners_admitted =
+            status.owners_admitted.checked_sub(1).ok_or_else(|| refused("text29 reclaimed owner count absent"))?;
+    }
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let shard = quota_shard(builder, p, &epoch, actor, id)?;
     let token = CheckedNativePagedAdmissionV29::from_current_native(status.clone(), own.clone(), &q.paged, &p.quota, &epoch)
@@ -1247,8 +1261,70 @@ fn own(
     write_caller(builder, &caller)?;
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, id, 2u8)), Some(key(&(slots.root(), slots))))?;
     builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id), Some(key(&owner_ids)))?;
+    if let Some(gone) = evicted {
+        // The evicted owner leaves the lifetime catalogue, so collection (kind 2) will no longer iterate it: retire its archival rows
+        // now, exactly the two rows collection deletes per catalogued owner — nothing is orphaned.
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, gone)), None)?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, id, gone)), None)?;
+    }
     builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, nonce_key, Some(key(&(next + 1))))?;
     Ok(())
+}
+
+/// **G14 F03 round 2: the text29 lifetime owner catalogue's admission (cap 4).** `Ok(None)`: the newcomer takes a free entry.
+/// `Ok(Some(member))`: the catalogue is full, the reclamation is in force, and `member` — the FIRST catalogued owner (in catalogue
+/// order, a rooted fact) that `reclaimable` says expired without progress — gives up its entry. Otherwise the old refusal. Below the
+/// fence (`reclaim_active == false`) `reclaimable` is never called. An owner that made progress is never reclaimable, so it is never
+/// evicted.
+pub(crate) fn text29_owner_catalogue_admit_v29(
+    catalogue: &[Digest],
+    newcomer: Digest,
+    reclaim_active: bool,
+    reclaimable: impl Fn(&Digest) -> bool,
+) -> Result<Option<Digest>, &'static str> {
+    const EXHAUSTED: &str = "text29 original lifetime owner catalogue exhausted";
+    if catalogue.contains(&newcomer) {
+        return Err(EXHAUSTED);
+    }
+    if catalogue.len() < 4 {
+        return Ok(None);
+    }
+    if !reclaim_active || catalogue.len() > 4 {
+        return Err(EXHAUSTED);
+    }
+    catalogue.iter().find(|member| reclaimable(member)).copied().map(Some).ok_or(EXHAUSTED)
+}
+
+/// **An owner that made no progress before its deadline** (pure on its archival seal). Expired and retired (`expire_owner` ran, past
+/// its horizon), and it never advanced the proof: no part attempt, no accepted part, no assembly, no court move, no discovery
+/// conversion.
+pub(crate) fn text29_owner_made_no_progress_v29(seal: &NativePagedSealV29, now: u64) -> bool {
+    seal.retired
+        && now > seal.horizon
+        && seal.part_attempts.iter().all(|n| *n == 0)
+        && seal.accepted == [0; 64]
+        && seal.assembly_attempts == 0
+        && seal.court_attempts == 0
+        && seal.conversion_attempts == 0
+}
+
+/// [`text29_owner_made_no_progress_v29`] on the chain rows, plus every liability collection would demand of it already retired:
+/// its caller row (26) retired with nothing remaining, and no open public request on the owner.
+fn text29_owner_reclaimable_v29(r: &PalwKernelRouteStateV1, job: Digest, member: Digest, now: u64) -> bool {
+    use misaka_palw_kernel::flat_quota11::stage14::source26::StageSourceCallerRowV26;
+    let Some(seal) = r.native_paged_seal_original_v29(job, member) else { return false };
+    if seal.namespace != 29 || !text29_owner_made_no_progress_v29(&seal, now) {
+        return false;
+    }
+    let Some((root, caller)) = r.aux_row::<(Digest, StageSourceCallerRowV26)>(EXECUTION_QUOTA_TABLE_V11, &key(&(26u8, job, member)))
+    else {
+        return false;
+    };
+    caller.root() == root
+        && caller.retired
+        && caller.owner == member
+        && caller.remaining == Default::default()
+        && public::owner_open(r, job, member).is_ok_and(|n| n == 0)
 }
 /// A producer Final credit uses the shared unique original-credit queue identity
 /// (job, funding, exact settlement, payout), so the independent audit32 /
@@ -2656,5 +2732,114 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             admitted:f.admitted_daa,commit_deadline:f.commit_deadline,deadline:f.deadline,
             claim:b.claim().map(|c|c.root()),committed:b.claim().map(|c|c.committed_daa),challenge_end:b.claim().map(|c|c.challenge_end),terminal:a.terminal,
         })
+    }
+}
+
+/// G14 F03 round 2 (lane g14p/court-owner): the text29 lifetime owner catalogue's reclamation, on the pure admission.
+#[cfg(test)]
+mod g14_f03_owner_reclaim_tests {
+    use super::*;
+
+    fn d(n: u8) -> Digest {
+        [n; 64]
+    }
+
+    /// Four owners that stalled (expired, no progress) and an outsider after their deadline: past the fence the outsider gets the
+    /// first stalled owner's entry; the cap stays 4.
+    #[test]
+    fn g14_f03_r2_four_stalled_owners_yield_a_slot_to_an_outsider_after_the_deadline() {
+        let catalogue = [d(1), d(2), d(3), d(4)];
+        let got = text29_owner_catalogue_admit_v29(&catalogue, d(9), true, |_| true).expect("a stalled owner yields");
+        assert_eq!(got, Some(d(1)), "catalogue order picks the first stalled owner");
+        let mut after: Vec<Digest> = catalogue.to_vec();
+        after.retain(|v| Some(*v) != got);
+        after.push(d(9));
+        assert_eq!(after.len(), 4, "the cap stays 4");
+        // A fifth newcomer reclaims the next stalled owner; a duplicate is still refused.
+        assert_eq!(text29_owner_catalogue_admit_v29(&after, d(10), true, |m| *m != d(9)), Ok(Some(d(2))));
+        assert!(text29_owner_catalogue_admit_v29(&after, d(9), true, |_| true).is_err());
+    }
+
+    /// Owners that made progress are never evicted: with none reclaimable the full catalogue refuses exactly as before; only the
+    /// stalled one among progressing owners yields.
+    #[test]
+    fn g14_f03_r2_progressing_owners_are_never_evicted() {
+        let catalogue = [d(1), d(2), d(3), d(4)];
+        assert!(text29_owner_catalogue_admit_v29(&catalogue, d(9), true, |_| false).is_err());
+        assert_eq!(text29_owner_catalogue_admit_v29(&catalogue, d(9), true, |m| *m == d(3)), Ok(Some(d(3))));
+        // The progress predicate: any part attempt, accepted part, assembly, court move or conversion is progress; an unexpired or
+        // unretired owner is never reclaimable.
+        let mut seal = probe_seal();
+        seal.retired = true;
+        seal.horizon = 100;
+        assert!(text29_owner_made_no_progress_v29(&seal, 101));
+        assert!(!text29_owner_made_no_progress_v29(&seal, 100), "not past its deadline");
+        for touch in 0..5 {
+            let mut s = seal.clone();
+            match touch {
+                0 => s.part_attempts[7] = 1,
+                1 => s.accepted[0] = 1,
+                2 => s.assembly_attempts = 1,
+                3 => s.court_attempts = 1,
+                _ => s.conversion_attempts = 1,
+            }
+            assert!(!text29_owner_made_no_progress_v29(&s, 101), "progress {touch} is never evicted");
+        }
+        seal.retired = false;
+        assert!(!text29_owner_made_no_progress_v29(&seal, 101), "a live owner is never evicted");
+    }
+
+    /// Below the fence the rule is unchanged: a full catalogue refuses and the reclamation predicate is never consulted.
+    #[test]
+    fn g14_f03_r2_below_the_fence_the_catalogue_is_unchanged() {
+        let catalogue = [d(1), d(2), d(3), d(4)];
+        let refused = text29_owner_catalogue_admit_v29(&catalogue, d(9), false, |_| panic!("never consulted below the fence"));
+        assert_eq!(refused, Err("text29 original lifetime owner catalogue exhausted"));
+        assert_eq!(text29_owner_catalogue_admit_v29(&catalogue[..3], d(9), false, |_| panic!("not full")), Ok(None));
+        assert!(text29_owner_catalogue_admit_v29(&catalogue[..3], d(1), false, |_| false).is_err(), "duplicate refused");
+    }
+
+    fn probe_seal() -> NativePagedSealV29 {
+        NativePagedSealV29 {
+            version: 29,
+            namespace: 29,
+            job: d(0x11),
+            claim: d(0x12),
+            original_funding: d(0x13),
+            maximum_contract: d(0x14),
+            original_plan: d(0x15),
+            original_service: d(0x16),
+            original_lease: d(0x17),
+            maximum_scope: d(0x18),
+            real_parameter: d(0x19),
+            inventory: d(0x1A),
+            bond: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), 0)),
+            actor: d(0x1B),
+            operator: d(0x1C),
+            producer_operator: d(0x1D),
+            proof_root: d(0x1E),
+            seal_root: d(0x1F),
+            original_paid_receipt: d(0x20),
+            count: 1,
+            total_bytes: 68,
+            posted: 10,
+            matures: 20,
+            reveal_until: 30,
+            horizon: 40,
+            admitted_interval: 0,
+            admitted_block: d(0x21),
+            part_attempts: [0; 512],
+            accepted: [0; 64],
+            assembly_attempts: 0,
+            court_attempts: 0,
+            discovery: false,
+            original_ticket: d(0x22),
+            conversion_attempts: 0,
+            retired: false,
+            spent: false,
+            committed: Default::default(),
+            consumed: Default::default(),
+            remaining: Default::default(),
+        }
     }
 }
