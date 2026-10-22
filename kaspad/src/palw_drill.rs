@@ -122,6 +122,9 @@ pub struct PalwDrillExtraFencesV1 {
     /// The int-13 flag day as the release arms it (`--palw-drill-int13-at`): the whole list at H' — instead of the per-fence flag of its
     /// entry that has one (`--palw-drill-model-court-at`), never with it.
     pub int13_at: Option<u64>,
+    /// The full-activation flag day as the release will arm it (`--palw-drill-full-activation-at`): the whole list at H' — it carries the
+    /// int-13 list, so never with `--palw-drill-int13-at` nor `--palw-drill-model-court-at`.
+    pub full_activation_at: Option<u64>,
     /// testnet-12's fourth post-launch flag day (P0a, the GDN key-head count; `palw_gdn_key_heads`), `--palw-drill-fence4-at`: its own
     /// list, no prerequisite among the other fences.
     pub fence4_at: Option<u64>,
@@ -165,6 +168,7 @@ impl PalwDrillExtraFencesV1 {
             tir_shard_at: args.palw_drill_tir_shard_at,
             int11_at: args.palw_drill_int11_at,
             int13_at: args.palw_drill_int13_at,
+            full_activation_at: args.palw_drill_full_activation_at,
             fence4_at: args.palw_drill_fence4_at,
             class_seating_at: args.palw_drill_class_seating_at,
         }
@@ -195,6 +199,7 @@ impl PalwDrillExtraFencesV1 {
             || self.tir_shard_at.is_some()
             || self.int11_at.is_some()
             || self.int13_at.is_some()
+            || self.full_activation_at.is_some()
             || self.fence4_at.is_some()
             || self.class_seating_at.is_some()
     }
@@ -291,6 +296,11 @@ impl PalwDrillExtraFencesV1 {
                 self.int13_at,
                 "the int-13 flag day's whole list (palw_audit_1004_v1, the range twin, the model court window, palw_receipt_spend_v4)",
             ),
+            (
+                "--palw-drill-full-activation-at",
+                self.full_activation_at,
+                "the full-activation flag day's whole list (the int-13 list plus every G14 / RFC fence of the full-activation release)",
+            ),
         ]
         .into_iter()
         .find_map(|(flag, at, what)| at.map(|at| (flag, at, what)))
@@ -350,6 +360,13 @@ impl PalwDrillExtraFencesV1 {
                     .to_owned(),
             );
         }
+        // The full-activation list carries the int-13 list's entries (and so the court window's): a second move of them would undo the first.
+        if self.full_activation_at.is_some() && (self.int13_at.is_some() || self.model_court_at.is_some()) {
+            return Err("--palw-drill-full-activation-at moves the full-activation list, which carries the int-13 list's entries \
+                 (palw_audit_1004_v1, the range twin, the model court window and palw_receipt_spend_v4), and --palw-drill-int13-at / \
+                 --palw-drill-model-court-at move some of them: pick one crossing"
+                .to_owned());
+        }
         let mut moves = Vec::new();
         if let Some(at) = self.fence4_at {
             moves.extend(d::palw_drill_post_launch_fences_v4_at_v1(params, at).map_err(|e| format!("--palw-drill-fence4-at: {e}"))?);
@@ -367,6 +384,11 @@ impl PalwDrillExtraFencesV1 {
         // The int-13 list needs the int-11 list's `palw_gen_v1` at or below it (the range twin): after it.
         if let Some(at) = self.int13_at {
             moves.extend(d::palw_drill_int13_at_v1(params, at).map_err(|e| format!("--palw-drill-int13-at: {e}"))?);
+        }
+        // The full-activation list needs the int-11 list's `palw_gen_v1` at or below it too (its range-twin entry): after it.
+        if let Some(at) = self.full_activation_at {
+            moves
+                .extend(d::palw_drill_full_activation_at_v1(params, at).map_err(|e| format!("--palw-drill-full-activation-at: {e}"))?);
         }
         if let Some(at) = self.capacity_network_room_at {
             moves.extend(
@@ -544,6 +566,7 @@ impl PalwDrillExtraFencesV1 {
             ),
             ("useful_work_at=", "--palw-drill-useful-work-at", palw_drill_marker_fence_text_v1(self.useful_work_at)),
             ("int13_at=", "--palw-drill-int13-at", palw_drill_marker_fence_text_v1(self.int13_at)),
+            ("full_activation_at=", "--palw-drill-full-activation-at", palw_drill_marker_fence_text_v1(self.full_activation_at)),
         ]
     }
 
@@ -1232,6 +1255,7 @@ pub fn palw_drill_write_keyring_v4(
         "useful_work_at": extra.useful_work_at,
         "int11_at": extra.int11_at,
         "int13_at": extra.int13_at,
+        "full_activation_at": extra.full_activation_at,
         "improve_at": extra.improve_at,
         "tir_shard_at": extra.tir_shard_at,
         "fence4_at": extra.fence4_at,

@@ -546,6 +546,14 @@ pub struct Args {
     /// release's int-11 list at 5,300 that is `--palw-drill-int11-at` below it. Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_int13_at: Option<u64>,
+    /// **DRILL ONLY: cross the full-activation flag day as the release will arm it, at this DAA**
+    /// (`config::drill::palw_drill_full_activation_at_v1`): every entry of `PALW_T12_FULL_ACTIVATION_FENCES_V1` — the int-13 list plus
+    /// every G14 / RFC fence of the full-activation release — at H' (the shipped height `PALW_T12_FULL_ACTIVATION_DAA` is `None`; the
+    /// target is 16,000). Excludes `--palw-drill-int13-at` and `--palw-drill-model-court-at`. It needs `palw_gen_v1` in force at or
+    /// below it (`--palw-drill-int11-at` below it), and the result must validate (record-gated entries pass only where validation admits
+    /// them). Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_full_activation_at: Option<u64>,
     /// **DRILL ONLY: arm RFC-0004's improvement fence (`palw_improvement_v1`) at this DAA**
     /// (`config::drill::palw_drill_improve_fence_at_v1`), with the drill's ceilings. It needs
     /// `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1`, `palw_kary_court` and `palw_fp_decode_rules` in
@@ -1020,6 +1028,7 @@ impl Default for Args {
             palw_drill_anchor_duty_after_slots: None,
             palw_drill_int11_at: None,
             palw_drill_int13_at: None,
+            palw_drill_full_activation_at: None,
             palw_drill_improve_at: None,
             palw_drill_tir_shard_at: None,
             palw_improve_evaluate: false,
@@ -2664,6 +2673,19 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-full-activation-at")
+                .long("palw-drill-full-activation-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: cross the full-activation flag day as the release will arm it — every entry \
+                     of PALW_T12_FULL_ACTIVATION_FENCES_V1 (the int-13 list plus every G14 / RFC fence) at this DAA — on the drill \
+                     chain. Nothing else moves. Excludes --palw-drill-int13-at and --palw-drill-model-court-at. Refused without the \
+                     salt, at 0, at a height another fence uses, unless palw_gen_v1 is in force at or below it (--palw-drill-int11-at \
+                     below it), and unless the armed ruleset validates (record-gated fences need their arming records).",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-improve-at")
                 .long("palw-drill-improve-at")
                 .require_equals(true)
@@ -4103,6 +4125,7 @@ impl Args {
             palw_drill_anchor_duty_after_slots: m.get_one::<u64>("palw-drill-anchor-duty-after-slots").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_int13_at: m.get_one::<u64>("palw-drill-int13-at").copied(),
+            palw_drill_full_activation_at: m.get_one::<u64>("palw-drill-full-activation-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_drill_tir_shard_at: m.get_one::<u64>("palw-drill-tir-shard-at").copied(),
             palw_tir_shard_hold: m.get_many::<u16>("palw-tir-shard-hold").map(|v| v.copied().collect()).unwrap_or_default(),

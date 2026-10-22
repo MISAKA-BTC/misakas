@@ -138,5 +138,15 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(rows['F4'], 'FAIL')
 
 
+
+class CrossingFlagTest(unittest.TestCase):
+    def test_the_default_crossing_moves_the_release_list_with_kaspads_flag(self):
+        self.assertEqual(D.crossing_flags('full-activation-flag', 60), ['--palw-drill-full-activation-at=60'])
+        self.assertEqual(D.crossing_flags('factory', 60), [])
+        with self.assertRaises(D.PlanError):
+            D.crossing_flags('nope', 60)
+        argv = D.node_argv('n', 'ab' * 32, 60, 3, Path('/x'), (1, 2, 3, 4, 5), D.crossing_flags('full-activation-flag', 60))
+        self.assertIn('--palw-drill-full-activation-at=60', argv)
+
 if __name__ == '__main__':
     unittest.main()

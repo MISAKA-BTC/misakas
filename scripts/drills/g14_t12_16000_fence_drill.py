@@ -8,6 +8,11 @@ height H the same way the existing drills move flag days:
   * `misaka-rfc12-private-node --private-probe-profile=g14-v1 --private-probe-g14-at=H --private-probe-g14-set=full` (the G14 drill
     factory: testnet-12's shipped rules below H, the G14 candidate set from H; `PRIVATE_G14_DRILL_FLAG_DAYS_V1` must lie below H, so
     H > 28), every arming record naming THIS salted genesis — the shipped ruleset is never edited;
+  * `--crossing=full-activation-flag` (the default): additionally `--palw-drill-full-activation-at=H` — kaspad's own crossing of
+    consensus-core's `PALW_T12_FULL_ACTIVATION_FENCES_V1`, the exact list the release will arm at 16,000 (`PALW_T12_FULL_ACTIVATION_DAA`,
+    `None` until the records are pinned and the user approves). The node refuses it (by name, untouched) while any entry's validation
+    lacks its record for this genesis/height: the node then exits at startup naming the refusal. `--crossing=factory` keeps the factory-only
+    crossing (the G14 candidate set alone);
   * optionally `--extra-node-flag=--palw-drill-int13-at=<H>` etc. for flag days the factory does not own (kaspad's own
     `--palw-drill-*-at` family, each refused unless the drill genesis salt is set).
 
@@ -49,6 +54,9 @@ KIND = 'misaka-g14-t12-16000-fence-drill/v1'
 # kaspad::private_integration::g14_drill_factory::PRIVATE_G14_DRILL_FLAG_DAYS_V1's last entry: H must lie above it.
 PRIVATE_G14_LAST_FLAG_DAY = 28
 TESTNET12_FULL_ACTIVATION_DAA = 16_000
+# kaspad's flag that moves consensus-core's PALW_T12_FULL_ACTIVATION_FENCES_V1 to H on a salted drill chain.
+FULL_ACTIVATION_FLAG = '--palw-drill-full-activation-at'
+CROSSINGS = ('full-activation-flag', 'factory')
 PHASES = ('F0', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7')
 TERMINAL_PHASES = ('final', 'settled', 'convicted', 'defaulted', 'void', 'expired', 'unavailable', 'released')
 
@@ -130,6 +138,15 @@ def node_argv(private_node, salt, at, seats, appdir, ports, extra=()):
             raise PlanError('extra node flag %r is not a drill flag' % f)
         argv.append(f)
     return argv
+
+
+def crossing_flags(crossing, at):
+    """The node flags the chosen crossing adds on top of the factory's: the full-activation list at H, or nothing."""
+    if crossing not in CROSSINGS:
+        raise PlanError('--crossing: one of %s' % ', '.join(CROSSINGS))
+    if crossing == 'full-activation-flag':
+        return ['%s=%d' % (FULL_ACTIVATION_FLAG, at)]
+    return []
 
 
 def split_claims(rows, at):
@@ -291,7 +308,7 @@ def run(args):  # pragma: no cover - drives real processes
         p0 = profile()
         obs['identity'].update({'profileStart': p0, 'genesisMatchesKeyring': G.norm(p0['genesis']) == G.norm(d.keyring['genesis_hash'])})
         roles = roles_for(plan, args.seats)
-        extra = list(args.extra_node_flag)
+        extra = crossing_flags(args.crossing, args.at) + list(args.extra_node_flag)
         P = d.add('P', 0, d.producer_flags(0, host_panel=True, honest=True) + extra)
         Q = d.add('Q', 1, d.producer_flags(roles['Q']['card'], honest=True) + extra)
         P.start(); Q.start()
@@ -384,6 +401,8 @@ def main():
     ap.add_argument('--partition-tail', type=int, default=6)
     ap.add_argument('--restart-after', type=int, default=10)
     ap.add_argument('--extra-node-flag', action='append', default=[], help='an extra --palw-drill-* / --private-probe-* node flag')
+    ap.add_argument('--crossing', choices=CROSSINGS, default='full-activation-flag',
+                    help='full-activation-flag: also pass %s=H (the release list); factory: the G14 factory set only' % FULL_ACTIVATION_FLAG)
     ap.add_argument('--private-node', default=str(REPO / 'target/release/misaka-rfc12-private-node'))
     ap.add_argument('--kaspad', default=str(REPO / 'target/release/kaspad'))
     ap.add_argument('--cli', default=str(REPO / 'target/release/misaka'))
@@ -401,7 +420,8 @@ def main():
         base = args.port_base
         print(json.dumps({'plan': plan, 'roles': roles_for(plan, args.seats),
                           'argvP': node_argv(args.private_node, args.salt, args.at, args.seats, Path(args.work) / 'P' / 'app',
-                                             (base, base + 1, base + 2, base + 3, base + 4), args.extra_node_flag)}, indent=2))
+                                             (base, base + 1, base + 2, base + 3, base + 4),
+                                             crossing_flags(args.crossing, args.at) + list(args.extra_node_flag))}, indent=2))
         return 0
     result = run(args)
     return 0 if result['verdict'] == 'PASS' else 1

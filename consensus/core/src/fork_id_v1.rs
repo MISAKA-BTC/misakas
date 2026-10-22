@@ -1148,6 +1148,13 @@ mod tests {
             "palw_shard_court" => params.palw_shard_court = Some(at),
             // RFC-0006 memory/routing court v2: a bare height, refused when armed by `validate_palw_v2` (the probe does not run it).
             "palw_memory_routing_court_v2" => params.palw_memory_routing_court_v2 = Some(at),
+            // lane g14p/r7-fence-16000: the five G14 fences newly on `palw_fences_v1` — bare heights; their prerequisites and mirrors are
+            // `validate_palw_v2`'s, which the probe does not run.
+            "palw_tir_bounded_door_v1" => params.palw_tir_bounded_door_v1 = Some(at),
+            "palw_tir_designated_answers_v1" => params.palw_tir_designated_answers_v1 = Some(at),
+            "palw_court_outsider_lane_v1" => params.palw_court_outsider_lane_v1 = Some(at),
+            "palw_kernel_route_panel_one_v1" => params.palw_kernel_route_panel_one_v1 = Some(at),
+            "palw_court_clock_v2" => params.palw_court_clock_v2 = Some(at),
             "palw_class_registration_origin_v1" => {
                 params.palw_class_registration_origin_v1 = Some(at);
                 params.sync_palw_class_registration_origin_v1();
