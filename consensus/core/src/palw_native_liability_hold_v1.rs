@@ -27,8 +27,12 @@ pub const PALW_NATIVE_LIABILITY_HOLD_TABLE_V1: u8 = 144;
 pub const PALW_NATIVE_HELD_FEE_PREFIX_V1: u8 = 0x01;
 /// The rows' version.
 pub const PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1: u8 = 1;
-/// Payments a block's tick releases. This bounds payments, not the number of retained rows inspected.
+/// Payments a block's tick releases (also never past the pending-payout ceiling, audit A-5).
 pub const PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1: usize = 256;
+/// **audit A-5: `0x03 ‖ horizon (u64 BE) ‖ family ‖ job` (74 bytes) — the horizon index of the held fees**, written and deleted with
+/// each held row (value: one byte, the row version). The release sweep walks it in horizon order and stops at the first horizon not
+/// yet passed, so a block reads only the past-due rows instead of decoding every held row.
+pub const PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1: u8 = 0x03;
 
 /// The native families the hold covers (ADR-0184 §1). The mining family holds nothing of its own: its claim is accepted only over
 /// Final components whose fees are held to their own horizons, and its Master closes only after they release.
@@ -56,6 +60,16 @@ pub struct PalwNativeHeldFeeRowV1 {
     pub final_daa: u64,
     /// Released once this DAA has passed (the claim's liability horizon); accusable through it.
     pub horizon_daa: u64,
+}
+
+/// The horizon index key of a held fee ([`PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1`]).
+pub fn palw_native_held_fee_horizon_key_v1(horizon_daa: u64, family: u8, job: &[u8; 64]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(74);
+    key.push(PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1);
+    key.extend_from_slice(&horizon_daa.to_be_bytes());
+    key.push(family);
+    key.extend_from_slice(job);
+    key
 }
 
 pub fn palw_native_held_fee_key_v1(family: u8, job: &[u8; 64]) -> Vec<u8> {

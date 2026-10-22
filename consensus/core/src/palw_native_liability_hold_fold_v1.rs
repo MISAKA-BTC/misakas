@@ -5,8 +5,9 @@
 //! byte for byte), and a claim committed below the fence never takes the new rule.
 use super::*;
 use crate::palw_native_liability_hold_v1::{
-    PALW_NATIVE_HELD_FEE_PREFIX_V1, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1, PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
-    PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1, PalwNativeHeldFeeRowV1, palw_native_held_fee_key_v1,
+    PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1, PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+    PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1, PalwNativeHeldFeeRowV1, palw_native_held_fee_horizon_key_v1,
+    palw_native_held_fee_key_v1,
 };
 
 fn refused(why: impl ToString) -> PalwStateV2Error {
@@ -40,6 +41,16 @@ pub(super) fn held_native_fee_v1(state: &PalwChainStateV2, family: u8, job: &[u8
         .filter(|row| row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1 && row.family == family && row.job == *job)
 }
 
+/// **Is `(family, job)`'s Final fee held for `producer`?** The route-level form the committed-collateral readers use (audit A-1):
+/// while the row exists the producer is still liable (accusable to H, a post-Final conviction collects its signed reserve), so the
+/// family's reader keeps that reserve committed until the fee is released (at H) or refunded (conviction). No row exists below the
+/// `palw_native_liability_horizon_v1` fence, so the readers are unchanged there.
+pub(super) fn native_fee_held_for_v1(r: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1, family: u8, job: &[u8; 64], producer: &PalwBondKeyV2) -> bool {
+    r.aux_row::<PalwNativeHeldFeeRowV1>(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, &palw_native_held_fee_key_v1(family, job)).is_some_and(
+        |row| row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1 && row.family == family && row.job == *job && row.producer == *producer,
+    )
+}
+
 /// **Is `(family, job)` still accusable after its Final at `now`?** A held fee whose horizon has not passed.
 pub(super) fn native_accusable_after_final_v1(
     state: &PalwChainStateV2,
@@ -62,6 +73,12 @@ pub(super) fn hold_native_fee_v1(builder: &mut TransitionBuilder<'_>, row: &Palw
         PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
         &palw_native_held_fee_key_v1(row.family, &row.job),
         Some(row),
+    )?;
+    // audit A-5: the horizon index the release sweep walks (same table, same journal; written and deleted with the row).
+    builder.write_kernel_row_encoded_v1(
+        PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+        &palw_native_held_fee_horizon_key_v1(row.horizon_daa, row.family, &row.job),
+        Some(&PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1),
     )
 }
 
@@ -69,6 +86,11 @@ fn delete_v1(builder: &mut TransitionBuilder<'_>, row: &PalwNativeHeldFeeRowV1) 
     builder.write_kernel_row_encoded_v1::<PalwNativeHeldFeeRowV1>(
         PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
         &palw_native_held_fee_key_v1(row.family, &row.job),
+        None,
+    )?;
+    builder.write_kernel_row_encoded_v1::<u8>(
+        PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+        &palw_native_held_fee_horizon_key_v1(row.horizon_daa, row.family, &row.job),
         None,
     )
 }
@@ -167,7 +189,10 @@ pub(super) fn refund_native_fee_v1(
 
 /// **The closing tick's sweep** (a no-op below the fence): held fees whose horizon has passed and whose job has no open dispute
 /// (`open(builder, row)`: the family's own pending demands or proof owners) are released, at most
-/// [`PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1`] a block, in key order. Open disputes do not consume release slots or starve later payable fees.
+/// [`PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1`] a block and never past the pending-payout ceiling, in horizon order. Open
+/// disputes do not consume release slots or starve later payable fees. audit A-5: the sweep walks the horizon index and stops at the
+/// first horizon not yet passed — a block reads only past-due rows, never every held row; a release that does not fit under
+/// [`PALW_V2_MAX_PENDING_PAYOUTS`] waits for a later block (the fee stays held, nothing is lost).
 pub(super) fn release_held_native_fees_v1(
     builder: &mut TransitionBuilder<'_>,
     now: u64,
@@ -178,16 +203,29 @@ pub(super) fn release_held_native_fees_v1(
     }
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let table = PALW_NATIVE_LIABILITY_HOLD_TABLE_V1;
-    let range = (table, vec![PALW_NATIVE_HELD_FEE_PREFIX_V1])..(table, vec![PALW_NATIVE_HELD_FEE_PREFIX_V1 + 1]);
+    // Each release queues exactly one payout row: reserve the room first (the other payout writers' ceiling).
+    let room = PALW_V2_MAX_PENDING_PAYOUTS.saturating_sub(builder.state.pending_payouts.len());
+    let cap = PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1.min(room);
+    let range =
+        (table, vec![PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1])..(table, vec![PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1 + 1]);
     let mut due: Vec<PalwNativeHeldFeeRowV1> = Vec::new();
-    for ((_, key), bytes) in route.aux.range(range) {
-        if due.len() >= PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1 {
+    for ((_, index), _) in route.aux.range(range) {
+        if due.len() >= cap {
             break;
         }
-        let Ok(row) = borsh::from_slice::<PalwNativeHeldFeeRowV1>(bytes) else { continue };
+        let Some(horizon) = index.get(1..9).and_then(|b| <[u8; 8]>::try_from(b).ok()).map(u64::from_be_bytes) else { continue };
+        if horizon >= now {
+            break; // horizon order: nothing later is due either
+        }
+        let (Some(&family), Some(job)) = (index.get(9), index.get(10..74).and_then(|b| <[u8; 64]>::try_from(b).ok())) else {
+            continue;
+        };
+        let Some(row) = route.aux_row::<PalwNativeHeldFeeRowV1>(table, &palw_native_held_fee_key_v1(family, &job)) else { continue };
         if row.version != PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1
-            || *key != palw_native_held_fee_key_v1(row.family, &row.job)
-            || row.horizon_daa >= now
+            || row.family != family
+            || row.job != job
+            || row.horizon_daa != horizon
+            || *index != palw_native_held_fee_horizon_key_v1(row.horizon_daa, row.family, &row.job)
             || open(builder, &row)
         {
             continue;

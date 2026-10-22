@@ -50,6 +50,7 @@ impl<'a> TransitionBuilder<'a> {
             court_settled_deposit: None,
             court_fulfilled_group: None,
             court_archive_prune: None,
+            court_neutral_void_close: false,
             state,
             entries: Vec::new(),
             registration_index: None,
@@ -10034,9 +10035,12 @@ impl<'a> TransitionBuilder<'a> {
         // leaves them to their own sweep, as it always did.
         if self.extras.offence_attribution_active {
             let open: Vec<Hash64> = self.state.court_sessions.iter().filter(|(_, s)| s.claim == id).map(|(k, _)| *k).collect();
-            for session in open {
-                self.write_court(session, None)?;
-            }
+            // audit B-05 (widened): a service-bound session archived by this neutral close must not keep the challenger's court
+            // stake as an unresolvable nominal hold (`build_pending_court_archive_v1`).
+            let neutral = std::mem::replace(&mut self.court_neutral_void_close, true);
+            let closed = open.into_iter().try_for_each(|session| self.write_court(session, None));
+            self.court_neutral_void_close = neutral;
+            closed?;
         }
         // **ADR-0152 DA-6 (M3): a void ends every open DA session on the claim, exposure returned**;
         // a void the PRODUCER is charged for as a fraud refunds the refuted exposure held too:

@@ -77,6 +77,11 @@ pub enum PalwEscrowRefusalV1 {
     PayeeOutputMismatch,
     /// **G14 r5:** a settlement that pays no due and returns nothing (the escrow would be spent for nothing).
     NothingToSettle,
+    /// **audit A-2:** the escrow input is not input 0. Every qualified spend (the payer's own as well as a relay's) carries its escrow
+    /// at input 0, so a transaction discharges at most ONE escrow row: a second rooted escrow input is never qualified (the spend
+    /// filter refuses the whole transaction), so two rows can never be satisfied by one set of due outputs, an escrow input is never
+    /// counted as the other rows' "foreign" funding, and no two continued rows can share one change-back outpoint.
+    EscrowNotFirstInput,
 }
 
 /// **The rooted escrow row.** Keyed by `contract_id` in the state. Written only by the funded-original installer, by a qualified
@@ -418,7 +423,8 @@ fn payload_of(output: &crate::tx::TransactionOutput) -> Option<Hash64> {
 
 /// **Is `tx`'s spend of `row`'s outpoint qualified at `daa`?** Native check against the rooted row (and, for a settlement, the
 /// schedule) only:
-/// * exactly one input spends the row's current outpoint, and its populated entry (`input_amounts`, aligned to `tx.inputs`)
+/// * exactly one input spends the row's current outpoint, and it is input 0 (audit A-2: one escrow row per transaction), and its
+///   populated entry (`input_amounts`, aligned to `tx.inputs`)
 ///   carries exactly the row's unreleased value;
 /// * after the hard deadline with no open liability: the **payer return** — output 0 pays exactly the unreleased value to the
 ///   rooted return payload (no schedule needed);
@@ -539,6 +545,14 @@ pub fn palw_escrow_qualified_spend_v1(
     // for this path, with the escrow at input 0 (see `palw_escrow_relay_template_payload_v1`).
     if !tx.payload.is_empty() && (tx.payload != palw_escrow_relay_template_payload_v1(row.contract_id, row.funding_outpoint, path) || input_index != 0) {
         return Err(PalwEscrowRefusalV1::RelayTemplateMismatch);
+    }
+    // audit A-2: one escrow row per transaction — the escrow is input 0 for every spend (the payer's own included). Each row's plan
+    // walks the outputs from index 0 and counts every other input as funding, so a second escrow input would let two rows be
+    // discharged by the same due outputs and alias one change-back outpoint. Exactly one input can be input 0, so at most one row of
+    // a transaction is ever qualified; the block filter, the mempool and the template (one rule, `refusal_with_bond_burn`) refuse the
+    // transaction for the other row's outpoint, and an escrow input never stands as "foreign" funding of an accepted spend.
+    if input_index != 0 {
+        return Err(PalwEscrowRefusalV1::EscrowNotFirstInput);
     }
     // Conservation of this one spend, checked: in = paid + burned + returned + continued.
     if sum_checked([paid_now, burned_now, returned_now, continued_now])? != unreleased {
@@ -1016,5 +1030,45 @@ mod tests {
         assert!(!palw_escrow_row_retirable_v1(&far, u64::MAX, Some(100)), "an overflowing horizon never retires");
         assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&settled), None), Ok(()));
         assert_eq!(palw_escrow_row_transition_v1(&h(98), Some(&settled), None), Err(PalwEscrowRefusalV1::Transition));
+    }
+
+    /// **audit(a) A-2 reproducer: two escrow inputs in one transaction share the same "escrow-funded" outputs.** Each row's plan
+    /// starts its output walk at index 0 and counts every OTHER input (including the second escrow) as relay funding, so one
+    /// payee output and one change-back/return output satisfy both rows. The books record two payments; the payee receives one; the
+    /// second escrow's value leaves through an unconstrained output (here: back to the payer).
+    #[test]
+    fn audit_a_two_escrow_inputs_alias_one_set_of_due_outputs() {
+        let a = PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), outpoint(), 1_000, h(3), payer_payload(), 100, 10_100, false).unwrap();
+        let b_out = TransactionOutpoint::new(Hash64::from_u64_word(78), 0);
+        let b = PalwFundedEscrowRowV1::fresh_v1(h(21), h(22), b_out, 1_000, h(3), payer_payload(), 100, 10_100, false).unwrap();
+        let dues = || vec![due(PalwEscrowDueKindV1::WorkPayment, Some(11), 300)];
+        let sa = PalwEscrowFeeScheduleV1::test_only_v1(a.contract_id, dues());
+        let sb = PalwEscrowFeeScheduleV1::test_only_v1(b.contract_id, dues());
+        // One payee output (300), one return (700), and 1,000 to the payer: in 2,000 = out 2,000.
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput::new(a.funding_outpoint, vec![], 0, 0), TransactionInput::new(b.funding_outpoint, vec![], 0, 0)],
+            vec![pay(11, 300), TransactionOutput::new(700, payer_spk()), TransactionOutput::new(1_000, payer_spk())],
+            0,
+            crate::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        let pa = palw_escrow_qualified_spend_v1(&a, &tx, &[1_000, 1_000], 500, Some(&sa)).expect("A qualifies");
+        let pb = palw_escrow_qualified_spend_v1(&b, &tx, &[1_000, 1_000], 500, Some(&sb));
+        // Liability still open: both rows continue on the SAME change-back outpoint (one 700 output backs 2 x 700 unreleased).
+        let (ao, bo) = (row(true), PalwFundedEscrowRowV1 { contract_id: h(21), funding_outpoint: b_out, ..row(true) });
+        let pao = palw_escrow_qualified_spend_v1(&ao, &tx, &[1_000, 1_000], 500, Some(&sa)).expect("A continues");
+        let pbo = palw_escrow_qualified_spend_v1(&bo, &tx, &[1_000, 1_000], 500, Some(&sb));
+        let booked_paid = pa.new.paid_sompi + pb.as_ref().map(|p| p.new.paid_sompi).unwrap_or(0);
+        let actually_paid: u64 = tx.outputs.iter().filter(|o| payload_of(o) == Some(party(11))).map(|o| o.value).sum();
+        let aliased = pbo.as_ref().is_ok_and(|p| p.new.funding_outpoint == pao.new.funding_outpoint);
+        eprintln!(
+            "[verify-1 A-2] B on A's outputs: {:?}; booked paid {booked_paid}, payee received {actually_paid}; continued rows share one outpoint: {aliased}",
+            pb.as_ref().map(|p| (p.paid_now, p.returned_now))
+        );
+        // Expected: a transaction's outputs discharge at most one escrow row (the second row is refused, or books equal payments).
+        assert_eq!(booked_paid, actually_paid, "A-2: two escrow rows booked as paid from ONE payee output");
+        assert!(!aliased, "A-2: two continued rows re-locked on ONE outpoint");
     }
 }

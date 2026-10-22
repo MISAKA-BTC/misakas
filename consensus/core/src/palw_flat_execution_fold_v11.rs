@@ -1278,11 +1278,37 @@ impl PalwChainStateV2 {
             .take(EXECUTION_JOBS_PER_REQUESTER_V11)
             .filter_map(|id| r.execution_job_header_v11(&id))
             .filter(|h| h.producer == *bond)
-            .fold(0u128, |sum, h| sum.saturating_add(h.producer_reserved as u128))
+            .fold(0u128, |sum, h| sum.saturating_add(h.producer_reserved as u128).saturating_add(held_final_reserve_v11(r, &h)))
             // Text29 keeps its own namespaced producer catalogue and headers.
             .saturating_add(text29::reserved(r, bond))
             .saturating_add(super::palw_native_job_fold_v39::reserved(r, bond))
     }
+}
+
+/// **audit A-1: a HELD funded-v11 Final keeps its signed producer reserve committed** (as native39 does). `replace_book` writes
+/// `producer_reserved = 0` at every terminal but Challengeable (unchanged — `restore_book` checks exactly that, and the rows below
+/// the liability-horizon fence stay byte-identical); while the job's fee is held in aux 144 the producer is accusable to H and a
+/// post-Final conviction collects `min(collateral, claim.reserved_original)`, so the reader re-adds that signed reserve from the
+/// header-anchored book until the held row leaves (released at H, or refunded/convicted). Unreadable anchored book under a live
+/// hold: fail closed (all committed).
+fn held_final_reserve_v11(r: &PalwKernelRouteStateV1, h: &NativeExecutionJobHeaderV11) -> u128 {
+    if h.terminal != ExecutionTerminalV11::Final
+        || !super::palw_native_liability_hold_fold_v1::native_fee_held_for_v1(
+            r,
+            crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_FUNDED_V11,
+            &h.job_id,
+            &h.producer,
+        )
+    {
+        return 0;
+    }
+    r.execution_job_row_v11(&h.job_id)
+        .ok()
+        .filter(|row| row.book_bytes.len() == h.book_bytes_len as usize && row.book_bytes.len() <= EXECUTION_STATE_MAX_BYTES_V11)
+        .and_then(|row| borsh::from_slice::<ExecutionJobStateV11>(&row.book_bytes).ok())
+        .filter(|b| b.root() == h.book_root && b.terminal() == ExecutionTerminalV11::Final)
+        .and_then(|b| b.claim().map(|c| c.reserved_original as u128))
+        .unwrap_or(u64::MAX as u128)
 }
 
 /// New funded jobs cannot lose original candidate/program/PC through a legacy

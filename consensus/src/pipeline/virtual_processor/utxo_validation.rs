@@ -3755,6 +3755,58 @@ mod tests {
             }
         }
 
+        /// **audit A-2: one escrow row per transaction, in the filter (and so the mempool and the template).** Two rooted rows with the
+        /// same payer and amount, both past their hard deadline: a transaction spending both used to qualify BOTH payer returns on the
+        /// same output 0 (each plan walks outputs from 0 and counts the other escrow as foreign funding). Now the second row's input
+        /// is not input 0, so its outpoint refuses the whole transaction; each row alone still returns.
+        #[test]
+        fn audit_a2_a_transaction_spending_two_escrow_rows_is_refused() {
+            use kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1;
+            use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutput, UtxoEntry};
+
+            let payload = kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+            let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let (a_op, b_op) = (outpoint(11), outpoint(13));
+            let row = |contract: u64, op: TransactionOutpoint| {
+                PalwFundedEscrowRowV1::fresh_v1(
+                    Hash64::from_u64_word(contract),
+                    Hash64::from_u64_word(2),
+                    op,
+                    1_000,
+                    Hash64::from_u64_word(3),
+                    payload,
+                    100,
+                    DAA - 1,
+                    false,
+                )
+                .unwrap()
+            };
+            let spend = |inputs: Vec<TransactionOutpoint>, outputs: Vec<TransactionOutput>| {
+                Transaction::new(
+                    0,
+                    inputs.into_iter().map(|op| TransactionInput::new(op, vec![], 0, 0)).collect(),
+                    outputs,
+                    0,
+                    kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                    0,
+                    vec![],
+                )
+            };
+            let locks = PalwEscrowSpendLocksV1 {
+                rows: [(a_op, row(1, a_op)), (b_op, row(21, b_op))].into_iter().collect(),
+                provisional: Default::default(),
+            };
+            let empty = std::collections::HashSet::new();
+            let no_burns = std::collections::HashMap::new();
+            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
+            let two_entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(1_000, payer.clone(), 100, false)];
+            let both = spend(vec![a_op, b_op], vec![TransactionOutput::new(1_000, payer.clone()), TransactionOutput::new(1_000, payer.clone())]);
+            assert_eq!(filter.escrow_refusal(&both, &two_entries), Some(b_op), "the second escrow row of one transaction is refused");
+            let one_entry = vec![UtxoEntry::new(1_000, payer.clone(), 100, false)];
+            assert_eq!(filter.escrow_refusal(&spend(vec![a_op], vec![TransactionOutput::new(1_000, payer.clone())]), &one_entry), None);
+            assert_eq!(filter.escrow_refusal(&spend(vec![b_op], vec![TransactionOutput::new(1_000, payer.clone())]), &one_entry), None);
+        }
+
         /// **G14 lane escrow-rfc08 round 2: the mempool asks the block filter's own escrow rule** (`PalwEscrowSpendLocksV1::refusal`,
         /// which `BondSpendFilter::escrow_refusal` and `validate_mempool_transaction_in_utxo_context` both call), so a spend the merge
         /// would skip is refused before relay and a qualified one — including a relay's templated payer return — is admitted by both.

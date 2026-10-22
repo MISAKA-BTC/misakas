@@ -13236,6 +13236,11 @@ struct TransitionBuilder<'a> {
     /// RFC-0034 S1 pruning scope: the one archived session whose rows the
     /// private resolved-archive pruner may remove inside this call only.
     court_archive_prune: Option<Hash64>,
+    /// **audit B-05 (widened, fix-a): set only while `void_claim` closes a voided claim's remaining sessions NEUTRALLY** (ADR-0152
+    /// §4-ter C3: nobody is slashed, the challenger's reservation is released). A session archived inside that loop whose ending is
+    /// otherwise unresolvable (`RelatedNativeTransition` — another object voided the claim — or `Uncaptured`) carries no unresolved
+    /// court stake: the neutral close already decided it. Never set by an object.
+    court_neutral_void_close: bool,
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
     entries: Vec<PalwDeltaEntryV2>,
