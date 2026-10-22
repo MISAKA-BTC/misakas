@@ -4,11 +4,3 @@ use crate::palw_native_resource_v1::{NativeHeapV1, NativeCoverageV1, native_stru
 native_struct!(crate::palw_prefix_state_stream_v1::PalwPrefixStateStreamV1; context, binding, prefix_tokens, total_tiles, next_tile, value_bytes, maximum_leaves, digest, pending);
 native_struct!(crate::palw_prefix_state_stream_v1::PalwPrefixStreamCheckpointV1; context, next_tile, value_bytes, digest, pending);
 native_struct!(crate::palw_prefix_state_stream_v1::PalwPrefixTileStreamV1; length, offset, expected, hash);
-
-use super::*;
-#[allow(unused_imports)]
-use crate::palw_native_resource_v1::{NativeWireScanV1,NativeWireReaderV1,NativeWireShapeV1};
-use crate::palw_native_resource_v1::wire::wire_struct;
-wire_struct!(crate::palw_prefix_state_stream_v1::PalwPrefixStateStreamV1; crate::Hash64, crate::palw_step_leg::PalwStepBindingV2, u32, u64, u64, u64, u64, crate::palw_rendering_stream_v1::LeafHashContinuationV1, Option<crate::palw_prefix_state_stream_v1::PalwPrefixTileStreamV1>);
-wire_struct!(crate::palw_prefix_state_stream_v1::PalwPrefixStreamCheckpointV1; crate::Hash64, u64, u64, crate::palw_rendering_stream_v1::LeafHashContinuationV1, Option<crate::palw_prefix_state_stream_v1::PalwPrefixTileStreamV1>);
-wire_struct!(crate::palw_prefix_state_stream_v1::PalwPrefixTileStreamV1; u32, u32, crate::Hash64, crate::palw_rendering_stream_v1::LeafHashContinuationV1);
