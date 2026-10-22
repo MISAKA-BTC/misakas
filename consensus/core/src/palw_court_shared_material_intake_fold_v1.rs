@@ -113,6 +113,17 @@ fn material_intake_inner(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 last_daa: ctx.daa_score, accepted_bytes: 0, head: Hash64::default(), expires_daa,
                 material_until_daa: c.material_until_daa,
             };
+            // audit B-09 (fix-b): the storage fee is actually DEBITED (burned) from the submitter at Begin, never refused for a partial
+            // amount and never clamped: a bond that cannot pay it in full is refused, and nothing is written. (Payer = the submitter;
+            // the schedule, including whether another party pays, stays the typed-missing V5 decision.) A replayed Begin returned
+            // `Retried` above and is never charged twice.
+            if fee > 0 {
+                let collateral = b.state.bond(&s.submitter).ok_or(PalwStateV2Error::MissingBond(s.submitter))?.collateral;
+                if collateral < fee {
+                    return Err(refused("material storage fee exceeds the submitter's collateral"));
+                }
+                b.slash_bond(s.submitter, u128::from(fee))?;
+            }
             b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(ledger))))?;
             b.write_staged_row_v1(key, Some(Row::CourtMaterialDraft(Box::new(draft))))?;
             Ok(MaterialIntakeEffectV1::Begun)
@@ -200,7 +211,7 @@ fn own_draft(b: &TransitionBuilder<'_>, s: &m::SignedMaterialIntakeV1, draft_id:
 }
 
 /// Removes a draft and its parts and returns its reservation. The ledger's
-/// accounting of the charged schedule price is kept (payer unadopted).
+/// accounting of the charged (and, since audit B-09 fix-b, debited) price is kept.
 pub(super) fn release_draft(b: &mut TransitionBuilder<'_>, draft: &m::MaterialDraftV1) -> Result<(), PalwStateV2Error> {
     let mut at = 0u64;
     while at < draft.accepted_bytes {
