@@ -34463,3 +34463,34 @@ fn memory_routing_held_claim_mercy_preserves_acceptance_cohort_and_fails_closed(
     state.fp_work_profiles.insert(class_id, Box::new(foreign));
     assert!(state.held_claim_is_unanswerable_v2(&params, &claim));
 }
+
+/// **G14 lane court-f02: the F02 / RFC-0028 / RFC-0029 fold pieces are dormant below their fences.** No service binding is
+/// installed, no supply is observed, and the shared lifecycle dispatcher refuses as dormant — the builder journals nothing. Past the
+/// conviction fence F02 still waits on a pinned service profile; the shared lifecycle also needs the outsider lane at or below.
+#[test]
+fn court_f02_lifecycle_is_dormant_below_its_fences() {
+    use super::palw_court_service_lifecycle_fold_v1 as lifecycle;
+    let p = params();
+    let state = PalwChainStateV2::genesis();
+    let extras = PalwTransitionExtrasV1::default();
+    let at = ctx(1, 100, 1);
+    let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+    assert!(!lifecycle::court_service_f02_active_v1(&b));
+    assert!(!lifecycle::shared_court_lifecycle_active_v1(&b, 100));
+    assert!(!lifecycle::install_court_service_binding_v1(&mut b, &at, h64(1)).unwrap());
+    lifecycle::observe_court_service_block_v1(&mut b, &at).unwrap();
+    let ids = [1u32];
+    let op = lifecycle::SharedCourtOpV1::Ids { claim: h64(1), rows_root: h64(2), ids: &ids };
+    assert!(matches!(lifecycle::apply_shared_court_op_v1(&mut b, &at, op), Err(PalwStateV2Error::ObjectiveOffenceDormant)));
+    assert!(b.entries.is_empty());
+
+    let mut armed = extras.clone();
+    armed.tir_public_conviction_active = true;
+    let b = TransitionBuilder::new(&state, &p, false, false, false, false, &armed);
+    assert!(!lifecycle::court_service_f02_active_v1(&b), "no court service profile is pinned");
+    assert!(!lifecycle::shared_court_lifecycle_active_v1(&b, 100), "outsider lane not armed");
+    let lane = p.clone().with_court_outsider_lane_from_daa(Some(50));
+    let b = TransitionBuilder::new(&state, &lane, false, false, false, false, &armed);
+    assert!(lifecycle::shared_court_lifecycle_active_v1(&b, 50));
+    assert!(!lifecycle::shared_court_lifecycle_active_v1(&b, 49));
+}

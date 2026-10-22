@@ -1,5 +1,5 @@
-//! Internal rooted shared-data candidate. No lifecycle dispatcher calls these
-//! functions and no production original coordinator installs the context yet.
+//! Internal rooted shared-data candidate. The lifecycle dispatcher is `palw_court_service_lifecycle_fold_v1::apply_shared_court_op_v1`
+//! (no wire object reaches it yet) and no production original coordinator installs the context yet.
 use super::*;
 use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key,PalwStagedCourtRowV1 as Row};
 use crate::palw_court_shared_tir_state_v1 as shared;
@@ -62,6 +62,17 @@ fn request_inner(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,claim:Hash
         q.check_context(&b.state).map_err(refused)?;
         if ctx.daa_score<q.opened_daa {return Err(refused("shared replay precedes its accepted opening"));}
         return Ok(SharedRequestEffectV1::Coalesced);
+    }
+    // G14 lane court-f02 (RFC-0031 / ADR-0198 A): past the shared lifecycle fences a NEW request row is a native notice — the
+    // claim's first is its initial notice (a <= d <= a+3,120), later ones are follow-ups bound to it (before hard). The original
+    // must already be accepted at `a` earlier in this fold (same-DAA causal order is the block's object order). Signature and
+    // dedupe (Coalesced) are checked above; the row is journalled, so reorg removes/restores it with the rooted delta.
+    if super::palw_court_service_lifecycle_fold_v1::shared_court_lifecycle_active_v1(b,ctx.daa_score) {
+        let prior=b.state.court_shared_initial_notice_daa_v1(claim);
+        crate::palw_court_service_binding_v1::classify_shared_notice_v1(c.original_accepted_daa,ctx.daa_score,prior).map_err(refused)?;
+        if !b.state.claim(&claim).is_some_and(|k|k.accepted_daa==c.original_accepted_daa) {
+            return Err(refused("shared notice precedes or substitutes its original's acceptance"));
+        }
     }
     let row=shared::SharedTirQueryV1 {version:1,claim,scope_id:c.scope_id,ordinal:intent.ordinal,request_id:intent.request_id,
         opened_block:ctx.block,opened_daa:ctx.daa_score,opened_by:intent.signer,intent_digest:intent.signing_message(network).map_err(refused)?,

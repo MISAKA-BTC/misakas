@@ -129,6 +129,35 @@ impl CourtServiceStateV2 {
         }
         Err("court service inclusion assumptions and duty eligibility are not adopted; no party default")
     }
+
+    /// **RFC-0026 F02 adopted attribution (ADR-0192 A), lane court-f02.** The frame-scoped form of
+    /// [`crate::palw_court_service_binding_v1::attribute_service_default_v1`]: the same original-scope guard as
+    /// [`Self::default_hold`], then attribution from the RECORDED reserved supply and each unpaid actor's native duty clocks on
+    /// `state`. [`Self::default_hold`] is unchanged (the legacy deny-only guard below the fence / without a pinned profile).
+    pub fn default_attribution_v1(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+        unpaid: &BTreeSet<crate::palw_state_v2::PalwBondKeyV2>,
+        inclusion_premise_adopted: bool,
+    ) -> Result<crate::palw_court_service_binding_v1::CourtServiceAttributionV1, &'static str> {
+        let plan = frame.plan_v1();
+        let binding = self.claims.get(&plan.original_claim).ok_or("court service binding is missing")?;
+        if binding.allocation_id != plan.allocation_id
+            || binding.source_id != plan.source_id
+            || binding.original_accepted_daa != plan.terms.accepted_daa
+        {
+            return Err("court service binding substitutes original scope");
+        }
+        let clocks = state.court_duty_clocks_for_claim_v1(plan.original_claim);
+        crate::palw_court_service_binding_v1::attribute_service_default_v1(
+            self,
+            plan.original_claim,
+            &clocks,
+            unpaid,
+            inclusion_premise_adopted,
+        )
+    }
 }
 
 /// A minimum signed-custody constraint for the proposed service binding, not

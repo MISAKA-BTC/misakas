@@ -1,0 +1,227 @@
+//! **G14 lane court-f02 (2026-10-22): the native fold side of RFC-0026 F02, RFC-0028 and RFC-0029** — written, not compiled.
+//! A child of `palw_state_v2`. Everything here is DORMANT: it acts only past `palw_tir_public_conviction_v1` (the extras flag the
+//! fold already reads), F02's service pieces additionally only once a reviewed service profile is pinned
+//! ([`crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1`], typed-missing), and the shared lifecycle additionally
+//! only past `palw_court_outsider_lane_v1`.
+//!
+//! * [`install_court_service_binding_v1`] — RFC-0028: ordinary original admission installs the claim's service binding (the
+//!   `CourtDutyClockV1` prerequisite: `CourtDutyClockV1::check_context` needs the binding).
+//! * [`observe_court_service_block_v1`] — RFC-0026 §4 / ADR-0192 A: each accepting block's ACTUAL reserved supply is recorded on
+//!   the rooted book; an unsupplied slot is moved by the canonical recovery sweep (hold/recover, never a default).
+//! * [`apply_shared_court_op_v1`] — RFC-0029: the shared TIR fold's lifecycle dispatcher; a newly stored bottom with a native fault
+//!   applies its economic effect through the existing conviction funnel ([`apply_shared_bottom_conviction_v1`]).
+use super::*;
+use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+
+fn refused(why: impl Into<String>) -> PalwStateV2Error {
+    PalwStateV2Error::CarriageInconsistent(why.into())
+}
+
+/// F02's service pieces are in force: past the TIR public conviction fence, with a pinned service profile.
+pub(super) fn court_service_f02_active_v1(b: &TransitionBuilder<'_>) -> bool {
+    b.extras.tir_public_conviction_active && crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1.is_some()
+}
+
+/// The shared (owner-independent) court lifecycle is in force at `daa`: past the TIR public conviction fence AND the court-owner
+/// outsider lane (`palw_court_outsider_lane_v1`, which itself needs `palw_legacy_public_filer_v1` at or below it).
+pub(super) fn shared_court_lifecycle_active_v1(b: &TransitionBuilder<'_>, daa: u64) -> bool {
+    b.extras.tir_public_conviction_active && b.params.court_outsider_lane_active_v1(daa)
+}
+
+/// **RFC-0028: install the original's service binding at ordinary admission.** Called after the original frame row is written
+/// (its context check reads the frame). `Ok(false)`: dormant (fence off or no pinned profile) — the old behaviour, no row.
+pub(super) fn install_court_service_binding_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+) -> Result<bool, PalwStateV2Error> {
+    if !court_service_f02_active_v1(b) {
+        return Ok(false);
+    }
+    let Some(profile) = crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1 else { return Ok(false) };
+    install_court_service_binding_with_profile_v1(b, ctx, claim, &profile).map(|()| true)
+}
+
+/// [`install_court_service_binding_v1`] under an explicit profile (fixtures; a future pinned profile).
+pub(super) fn install_court_service_binding_with_profile_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+    profile: &crate::palw_court_service_binding_v1::CourtServiceProfileV1,
+) -> Result<(), PalwStateV2Error> {
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim)
+        .ok_or_else(|| refused("service binding install has no original frame"))?;
+    let plan = frame.plan_v1();
+    if plan.terms.accepted_daa != ctx.daa_score || plan.original_claim != claim {
+        return Err(refused("service binding installs only at the original's own accepting point"));
+    }
+    let signers = frame.custody_v1().liable_signers_v1();
+    let next = crate::palw_court_service_binding_v1::court_service_binding_candidate_v1(
+        b.state.court_service_state_v1(),
+        claim,
+        plan.allocation_id,
+        plan.source_id,
+        plan.terms.accepted_daa,
+        &signers,
+        profile,
+    )
+    .map_err(|e| refused(format!("court service binding refused: {e:?}")))?;
+    // The native writer re-runs `check_retains_unresolved` and `check_context` (signed custody horizon) and journals the write.
+    b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(next).into())))
+}
+
+/// **ADR-0192 A: record this accepting block's actual reserved service supply.** Called once per block after every object. The
+/// unreserved court cost is the block's deterministic court-capacity spend (`charge_court_op_v1`; zero below
+/// `palw_court_capacity_v1`). When unreserved court operations spent reserved capacity, the slot records NO supply (a later
+/// assessment is `MissingSupply` → no-slash hold); the block itself stands. The canonical recovery sweep then runs on the
+/// current clock.
+pub(super) fn observe_court_service_block_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    if !court_service_f02_active_v1(b) {
+        return Ok(());
+    }
+    let Some(old) = b.state.court_service_state_v1() else { return Ok(()) };
+    if old.claims.is_empty() {
+        return Ok(());
+    }
+    let spent = b.court_cost_spent;
+    let unreserved = crate::palw_court_service_v1::ServiceCost { bytes: spent.bytes, work: spent.work, io: 0, controls: 0 };
+    let block: [u8; 64] = ctx.block.as_byte_slice().try_into().map_err(|_| refused("accepting block hash width"))?;
+    let mut next = old.clone();
+    match next.book.observe_block(ctx.daa_score, block, unreserved) {
+        Ok(crate::palw_court_service_v1::ServiceObservation::FirstBlock) => {}
+        // A later block at the same DAA cannot repair or duplicate the first opportunity.
+        Ok(crate::palw_court_service_v1::ServiceObservation::AdditionalBlockAtSameDaa) => return Ok(()),
+        // Reserved capacity was spent: no supply at this DAA (the clock is not advanced by this block).
+        Err(crate::palw_court_service_v1::ServiceRefusal::ReservedCapacitySpent) => return Ok(()),
+        Err(e) => return Err(refused(format!("court service observation refused: {e:?}"))),
+    }
+    if &next != old {
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(next).into())))?;
+    }
+    b.recover_court_service_supply_v1(ctx)?;
+    Ok(())
+}
+
+/// One shared-court operation of the owner-independent lifecycle (RFC-0029). The carriage object that delivers these on the wire
+/// is NOT allocated in this lane (new object tag = central step); the dispatcher is the single entry it must call.
+pub(super) enum SharedCourtOpV1<'a> {
+    Request { claim: Hash64, intent: &'a crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1 },
+    Body { claim: Hash64, ordinal: u64, bytes: &'a [u8] },
+    Ids { claim: Hash64, rows_root: Hash64, ids: &'a [u32] },
+    Numerical {
+        manifest: &'a crate::palw_court_numerical_transport_v1::NumericalManifestV1,
+        parts: &'a [crate::palw_court_numerical_transport_v1::NumericalPartV1],
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum SharedCourtOpEffectV1 {
+    Request(crate::palw_court_shared_tir_frontier_v1::SharedRequestEffectV1),
+    Stored(bool),
+    Numerical(super::palw_court_shared_tir_fold_v1::NumericalTransportEffectV1),
+    /// A newly stored bottom found a native fault and the conviction funnel applied it.
+    Convicted,
+}
+
+/// **RFC-0029: the shared TIR fold's lifecycle dispatcher.** Dormant (`ObjectiveOffenceDormant`) unless the shared lifecycle is in
+/// force. Atomic: a refused economic effect rolls the stored bottom back with it.
+pub(super) fn apply_shared_court_op_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    op: SharedCourtOpV1<'_>,
+) -> Result<SharedCourtOpEffectV1, PalwStateV2Error> {
+    use super::palw_court_shared_tir_fold_v1 as fold;
+    if !shared_court_lifecycle_active_v1(b, ctx.daa_score) {
+        return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+    }
+    let saved = b.try_checkpoint()?;
+    let result = (|| match op {
+        SharedCourtOpV1::Request { claim, intent } => fold::request(b, ctx, claim, intent).map(SharedCourtOpEffectV1::Request),
+        SharedCourtOpV1::Body { claim, ordinal, bytes } => fold::share_body(b, ctx, claim, ordinal, bytes).map(SharedCourtOpEffectV1::Stored),
+        SharedCourtOpV1::Ids { claim, rows_root, ids } => fold::share_ids(b, ctx, claim, rows_root, ids).map(SharedCourtOpEffectV1::Stored),
+        SharedCourtOpV1::Numerical { manifest, parts } => {
+            let effect = fold::numerical_transport(b, ctx, manifest, parts)?;
+            if let fold::NumericalTransportEffectV1::Bottom(true, crate::palw_court_shared_tir_bottom_v1::SharedTirBottomOutcomeV1::NativeFault(_)) =
+                &effect
+            {
+                // The row the bottom just stored names its claim and filer (signed, verified by `fold::bottom`).
+                let (claim, filer) = match b.entries.last() {
+                    Some(PalwDeltaEntryV2::StagedCourtSeed { key: Key::CourtSharedBottom(_), new: Some(Row::CourtSharedBottom(r)), .. }) => {
+                        (r.control.claim, r.control.filer)
+                    }
+                    _ => return Err(refused("shared bottom effect lost its stored row")),
+                };
+                apply_shared_bottom_conviction_v1(b, ctx, claim, filer)?;
+                return Ok(SharedCourtOpEffectV1::Convicted);
+            }
+            Ok(SharedCourtOpEffectV1::Numerical(effect))
+        }
+    })();
+    if result.is_err() {
+        b.restore(saved);
+    }
+    result
+}
+
+/// **RFC-0029: a shared bottom's native fault → claim void / slash / reward refusal**, through the SAME funnel a public TIR
+/// conviction uses (`apply_conviction_v1`): every credited Valid custodian charged on its own S4 lock, the producer convicted by
+/// `convict_by_court_verdict_as_v1` (void / Final reversal, Gate C revocation, the `CourtConviction` record, the reporter reward and
+/// the refusal of the producer's own reward). The reason is `CourtHeldVerdict` — a dissection's bottom — and nothing is forfeited by
+/// execution root: a bottom fault may concern a signed numerical statement rather than the whole execution.
+pub(super) fn apply_shared_bottom_conviction_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    filer: PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim_id)
+        .ok_or_else(|| refused("shared bottom conviction has no original frame"))?
+        .clone();
+    let producer = frame.custody_v1().pledge_v1().producer;
+    // The filer is any Active bond at the floor that is not liable on this claim (G14 R4's rule).
+    let record = b.state.bond(&filer).ok_or(PalwStateV2Error::MissingBond(filer))?;
+    if filer == producer
+        || frame.original_custody_v1().credit_v1(&filer).is_some()
+        || frame.original_custody_v1().grant_v1(&filer).is_some()
+        || !matches!(record.status, PalwBondStatusV2::Active)
+        || record.collateral < b.params.min_collateral_sompi()
+    {
+        return Err(refused("shared bottom filer is liable on this claim, inactive or below the floor"));
+    }
+    let claim = b.state.claim(&claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
+    if claim.bond != producer || claim.execution_root != frame.original_v1().execution_root {
+        return Err(refused("shared bottom conviction target changes the original claim's producer or execution"));
+    }
+    if b.state.consumed_offences.contains_key(&palw_court_conviction_offence_id_v1(&producer.0, &claim_id))
+        || matches!(
+            claim.phase,
+            PalwClaimPhaseV2::Voided {
+                reason: PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::CourtDefault,
+                ..
+            }
+        )
+    {
+        return Err(refused("original claim is already convicted; a conviction is recorded once"));
+    }
+    let credited: Vec<PalwBondKeyV2> = frame.original_custody_v1().credits_v1().map(|(seat, _)| *seat).collect();
+    for bond in std::iter::once(&producer).chain(credited.iter()) {
+        if !b.state.staged_bond_exit_held_v1(bond, ctx.daa_score) {
+            return Err(refused("shared bottom liable bond lost its original exit hold; refusing a fictitious collection"));
+        }
+    }
+    for seat in &credited {
+        let offence = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim_id);
+        if b.state.consumed_offences.contains_key(&offence) {
+            continue;
+        }
+        if !b.state.slashable_locks.get(&(*seat, claim_id)).is_some_and(|lock| lock.amount > 0 && lock.expiry_daa > ctx.daa_score) {
+            return Err(refused("shared bottom credited Valid seat lost its unconsumed native S4 lock; no silent skip"));
+        }
+    }
+    if !credited.is_empty() {
+        let conv = b.open_conviction_v1(&credited, ctx.daa_score);
+        let g = b.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
+        b.charge_covering_signers_v1(&conv, claim_id, &credited, g)?;
+    }
+    b.convict_by_court_verdict_as_v1(ctx, claim_id, &claim, filer, None, PalwVoidReasonV2::CourtHeldVerdict)
+}

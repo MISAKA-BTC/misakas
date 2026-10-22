@@ -81,3 +81,25 @@ fn shared_initial_notice_includes_original_terminal_daa_without_hard_overflow() 
     // A late retry is still measured from the original, never from that retry.
     assert_eq!(shared_initial_notice_daa_in_window_v1(100, 3_221), Ok(false));
 }
+
+/// G14 lane court-f02: each half of the completeness gate clears only on its own evidence. With the court-owner outsider lane in
+/// force at or below the fence, F03's refusal goes; F02 still refuses because no court service profile is pinned. An outsider lane
+/// ABOVE the fence does not count.
+#[test]
+fn court_f02_completeness_gate_clears_each_half_on_its_own_evidence() {
+    let fence = PalwG14GatedFenceV1::TirPublicConvictionV1;
+    let mut p = palw_t12_shipped_params();
+    p.palw_tir_public_conviction_v1 = Some(ForkActivation::new(20_000));
+    let both = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
+    assert!(both.contains("OneOutsiderCapacityIncomplete") && both.contains("ServiceOpportunityIncomplete"), "{both}");
+    p.palw_court_outsider_lane_v1 = Some(ForkActivation::new(20_001));
+    let above = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
+    assert!(above.contains("OneOutsiderCapacityIncomplete"), "{above}");
+    for at in [19_999, 20_000] {
+        p.palw_court_outsider_lane_v1 = Some(ForkActivation::new(at));
+        let only_f02 = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
+        assert!(!only_f02.contains("OneOutsiderCapacityIncomplete"), "{only_f02}");
+        assert!(only_f02.contains("ServiceOpportunityIncomplete"), "{only_f02}");
+    }
+    assert!(!kaspa_consensus_core::palw_court_service_binding_v1::palw_court_service_opportunity_complete_v1());
+}
