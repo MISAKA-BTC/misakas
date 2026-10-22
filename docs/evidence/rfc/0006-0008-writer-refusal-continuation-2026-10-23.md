@@ -191,3 +191,18 @@ output at `/tmp/misaka-rfc06-gdn-e2e-routing-recheck.log`.
 expected state root in the ordinary-registration test. That expanded test is
 queued with output at `/tmp/misaka-rfc06-profile-snapshot-recheck.log`; its
 outcome and the GDN E2E outcome are not yet known.
+
+The `5452a3186` GDN E2E recheck subsequently failed both cases at registry
+construction with `routing V2 journal requires native kernel route`. The
+fixture supplied route policy, but the route's first header had only been
+initialized by the later closing tick. `2ffe0ef32` calls the existing reserved
+`ensure_route_header` on first profile retention when no route exists, before
+writing the graph. Existing routes and pre-fence registration retain their
+existing path. The ordinary-registration test now starts with no native route
+and supplies route policy through extras, so its delta/restore assertions also
+cover this first-use boundary.
+
+This latest test is queued at `/tmp/misaka-rfc06-first-route-profile-recheck.log`.
+The earlier snapshot run at `/tmp/misaka-rfc06-profile-snapshot-recheck.log`
+was already live and is allowed to finish; its result must not be attributed
+to the first-use fix. Neither GDN E2E case has passed yet.
