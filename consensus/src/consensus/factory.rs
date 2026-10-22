@@ -255,6 +255,22 @@ impl MultiConsensusManagementStore {
     }
 }
 
+/// `consensus-NNN` directories under `root` that no entry in `known` names and whose key is below
+/// `active_key` (G14: what the obsolete-consensus reclaimer may remove).
+fn orphan_consensus_dirs(root: &std::path::Path, known: &[String], active_key: u64) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(root) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            name.strip_prefix("consensus-")
+                .and_then(|k| k.parse::<u64>().ok())
+                .is_some_and(|key| key < active_key && !known.contains(&name) && entry.path().is_dir())
+        })
+        .map(|entry| entry.path())
+        .collect()
+}
+
 pub struct Factory {
     management_store: Arc<RwLock<MultiConsensusManagementStore>>,
     config: Config,
@@ -268,6 +284,10 @@ pub struct Factory {
     rocksdb_preset: RocksDbPreset,
     wal_dir: Option<PathBuf>,
     cache_budget: Option<usize>,
+    /// G14 capacity lane: the staging DB's storage reservation (an envelope over everything the
+    /// staging DB will hold), from creation until commit or cancel. Always `None` on a node without
+    /// `--storage-cap-bytes`.
+    staging_reservation: parking_lot::Mutex<Option<(kaspa_utils::storage_budget::StorageReservation, PathBuf)>>,
 }
 
 impl Factory {
@@ -309,9 +329,73 @@ impl Factory {
             rocksdb_preset,
             wal_dir,
             cache_budget,
+            staging_reservation: parking_lot::Mutex::new(None),
         };
         factory.delete_inactive_consensus_entries();
         factory
+    }
+
+    /// **RocksDB footprint bounds**: on only when the node runs under a storage budget
+    /// (`--storage-cap-bytes`); an uncapped node opens its consensus DBs exactly as before.
+    fn consensus_storage_bounds(&self) -> Option<kaspa_database::prelude::StorageDbBounds> {
+        kaspa_utils::storage_budget::global().map(|_| kaspa_database::prelude::StorageDbBounds::CONSENSUS)
+    }
+
+    /// Under a storage budget, a DB's WAL is fsynced when the node enters the low-space pause.
+    fn register_low_space_flush(db: &Arc<DB>) {
+        if let Some(budget) = kaspa_utils::storage_budget::global() {
+            let weak = Arc::downgrade(db);
+            budget.add_pause_hook(move || {
+                if let Some(db) = weak.upgrade()
+                    && let Err(e) = db.flush_wal(true)
+                {
+                    warn!("low-space pause: consensus WAL fsync failed: {e}");
+                }
+            });
+        }
+    }
+
+    /// **Reclaim before use, for consensus directories** (G14 capacity lane): delete `consensus-NNN`
+    /// directories no metadata entry names any more — left by a crash between a directory's removal
+    /// and its entry's, or by an interrupted reset. Never a directory any entry names (active,
+    /// staging, or an inactive one the factory's own post-commit / startup deletion owns — that one
+    /// may still be open while a commit drops it), and never a directory whose key is not below the
+    /// active key (a consensus being created right now registers its entry only once it opened).
+    /// Returns the bytes freed.
+    pub fn reclaim_obsolete_consensus_dirs(&self) -> u64 {
+        let (known, active_key): (Vec<String>, Option<u64>) = {
+            let store = self.management_store.read();
+            let known = store.iterator().filter_map(|e| e.ok()).map(|e| e.directory_name).collect();
+            let active_key = store.metadata.read().ok().and_then(|m| m.current_consensus_key);
+            (known, active_key)
+        };
+        let Some(active_key) = active_key else { return 0 };
+        let mut freed = 0u64;
+        for path in orphan_consensus_dirs(&self.db_root_dir, &known, active_key) {
+            let bytes = kaspa_utils::storage_budget::disk_usage(&path);
+            match fs::remove_dir_all(&path) {
+                Ok(()) => {
+                    warn!(
+                        "[storage] removed orphaned consensus directory {} ({bytes} bytes; no metadata entry names it)",
+                        path.display()
+                    );
+                    freed = freed.saturating_add(bytes);
+                }
+                Err(e) => warn!("[storage] cannot remove orphaned consensus directory {}: {e}", path.display()),
+            }
+        }
+        freed
+    }
+
+    /// Release the staging reservation and hand the staging directory back to the active category
+    /// (after a commit it IS the active DB; after a cancel it is gone).
+    fn release_staging_reservation(&self) {
+        if let Some((reservation, dir)) = self.staging_reservation.lock().take() {
+            if let Some(budget) = kaspa_utils::storage_budget::global() {
+                budget.unassign_path(&dir);
+            }
+            drop(reservation);
+        }
     }
 
     /// **The block cache a consensus database is opened with.** `--rocksdb-cache-size` (and the HDD preset's own
@@ -352,8 +436,10 @@ impl ConsensusFactory for Factory {
             .with_preset(self.rocksdb_preset)
             .with_wal_dir(self.wal_dir.clone())
             .with_cache_budget(self.consensus_cache_budget())
+            .with_storage_bounds(self.consensus_storage_bounds())
             .build()
             .unwrap();
+        Self::register_low_space_flush(&db);
 
         let session_lock = SessionLock::new();
         let consensus = Arc::new(Consensus::new(
@@ -381,8 +467,32 @@ impl ConsensusFactory for Factory {
     fn new_staging_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
         assert!(!self.notification_root.is_closed());
 
+        // G14 capacity lane: under a storage budget, reserve the staging DB's whole envelope BEFORE
+        // anything is created (after reclaiming obsolete data), so the staging DB and the active DB
+        // never together exceed the cap. A refusal is a local capacity condition: the IBD flow
+        // reports it as such and no peer or chain is condemned for it.
+        let reservation = match kaspa_utils::storage_budget::global() {
+            Some(budget) => {
+                use kaspa_utils::storage_budget::StorageCategory;
+                let bytes = budget.config().budgets[StorageCategory::StagingDb.index()];
+                match budget.reserve_after_reclaim(StorageCategory::StagingDb, bytes) {
+                    Ok(r) => Some(r),
+                    Err(refusal) => {
+                        warn!("staging consensus not created: {refusal}");
+                        return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                            kaspa_utils::storage_budget::StorageReservation,
+                        >("staging consensus DB storage reservation", &refusal.to_string()));
+                    }
+                }
+            }
+            None => None,
+        };
         let entry = self.management_store.write().new_staging_consensus_entry().unwrap();
         let dir = self.db_root_dir.join(entry.directory_name);
+        if let (Some(reservation), Some(budget)) = (reservation, kaspa_utils::storage_budget::global()) {
+            budget.assign_path(dir.clone(), kaspa_utils::storage_budget::StorageCategory::StagingDb);
+            *self.staging_reservation.lock() = Some((reservation, dir.clone()));
+        }
         let db = kaspa_database::prelude::ConnBuilder::default()
             .with_db_path(dir)
             .with_parallelism(self.db_parallelism)
@@ -390,8 +500,10 @@ impl ConsensusFactory for Factory {
             .with_preset(self.rocksdb_preset)
             .with_wal_dir(self.wal_dir.clone())
             .with_cache_budget(self.consensus_cache_budget())
+            .with_storage_bounds(self.consensus_storage_bounds())
             .build()
             .unwrap();
+        Self::register_low_space_flush(&db);
 
         let session_lock = SessionLock::new();
         let consensus = match Consensus::new(
@@ -458,6 +570,9 @@ impl ConsensusFactory for Factory {
         for entry in entries_to_delete {
             write_guard.delete_entry(entry).unwrap();
         }
+        drop(write_guard);
+        // Called after a commit (the staging DB is now the active one) and at startup.
+        self.release_staging_reservation();
     }
 
     fn delete_staging_entry(&self) {
@@ -474,5 +589,27 @@ impl ConsensusFactory for Factory {
             };
             write_guard.cancel_staging_consensus().unwrap();
         }
+        drop(write_guard);
+        self.release_staging_reservation();
+    }
+}
+
+#[cfg(test)]
+mod g14_orphan_dir_tests {
+    use super::*;
+
+    #[test]
+    fn only_unnamed_consensus_dirs_below_the_active_key_are_orphans() {
+        let root = std::env::temp_dir().join(format!("g14-orphan-dirs-{}-{}", std::process::id(), unix_now()));
+        for name in ["consensus-001", "consensus-002", "consensus-003", "consensus-004", "consensus-005", "not-a-consensus"] {
+            fs::create_dir_all(root.join(name)).unwrap();
+        }
+        fs::write(root.join("consensus-000"), b"a file, not a directory").unwrap();
+        // 003 is active, 002 an inactive entry the factory itself deletes, 004 a staging entry, 005 being created.
+        let known = vec!["consensus-002".to_string(), "consensus-003".to_string(), "consensus-004".to_string()];
+        let mut orphans = orphan_consensus_dirs(&root, &known, 3);
+        orphans.sort();
+        assert_eq!(orphans, vec![root.join("consensus-001")]);
+        fs::remove_dir_all(&root).unwrap();
     }
 }

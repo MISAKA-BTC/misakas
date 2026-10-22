@@ -299,6 +299,22 @@ impl DbEvmBlockHashMapStore {
     pub fn write_batch(&self, batch: &mut WriteBatch, rpc_hash: EvmH256, l1_hash: BlockHash) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), rpc_hash, l1_hash)
     }
+
+    /// G14 capacity lane: release `rpc_hash` only if it still maps to `expected` (a pruned block).
+    pub fn delete_if_matches_batch(&self, batch: &mut WriteBatch, rpc_hash: EvmH256, expected: BlockHash) -> Result<(), StoreError> {
+        match self.access.read(rpc_hash) {
+            Ok(h) if h == expected => self.access.delete(BatchDbWriter::new(batch), rpc_hash),
+            Ok(_) | Err(StoreError::KeyNotFound(_)) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// The 32-byte eth-rpc block id of an L1 block (the first 32 bytes of its 64-byte hash).
+pub fn evm_rpc_block_id(block: BlockHash) -> EvmH256 {
+    let mut id = [0u8; 32];
+    id.copy_from_slice(&block.as_bytes()[..32]);
+    EvmH256::from_bytes(id)
 }
 
 impl EvmBlockHashMapStoreReader for DbEvmBlockHashMapStore {
@@ -775,6 +791,17 @@ impl DbEvmLogIndexStore {
         self.access.write(BatchDbWriter::new(batch), log_posting_bucket(kind, selector), encode_log_posting_loc(loc))
     }
 
+    /// G14 capacity lane: remove one posting (the exact member `write_posting_batch` added).
+    pub fn delete_posting_batch(
+        &self,
+        batch: &mut WriteBatch,
+        kind: LogPostingKind,
+        selector: &[u8],
+        loc: &LogPostingLoc,
+    ) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), log_posting_bucket(kind, selector), encode_log_posting_loc(loc))
+    }
+
     /// Iterate the postings of a `(kind, selector)` bucket in ascending block
     /// order (block-global `logIndex` order within a block). Malformed members —
     /// never written by us — are skipped.
@@ -858,6 +885,215 @@ impl EvmCanonicalHeadsStoreReader for DbEvmCanonicalHeadsStore {
 impl EvmCanonicalHeadsStore for DbEvmCanonicalHeadsStore {
     fn set(&mut self, heads: CanonicalEvmHeads) -> StoreResult<()> {
         self.access.write(DirectDbWriter::new(&self.db), &heads)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// G14 capacity lane: the RPC-only EVM indexes of a PRUNED block.
+// ---------------------------------------------------------------------------
+
+/// The RPC-only index stores a pruned block leaves rows in.
+pub struct EvmRpcIndexStoresRef<'a> {
+    pub raw_tx: &'a DbEvmRawTxStore,
+    pub tx_lookup: &'a DbEvmTxIndexStore,
+    pub block_hash_map: &'a DbEvmBlockHashMapStore,
+    pub numbers: &'a DbEvmNumberStore,
+    pub logs: &'a DbEvmLogIndexStore,
+}
+
+/// What [`gc_pruned_block_rpc_indexes_batch`] removed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EvmRpcIndexGcCount {
+    pub raw_txs: u32,
+    pub tx_lookups: u32,
+    pub block_ids: u32,
+    pub numbers: u32,
+    pub log_postings: u32,
+}
+
+/// **Delete the RPC-only EVM index rows derived from `block`, which the pruning processor is
+/// pruning in the same batch** (G14 capacity lane; before this, prefixes 217, 204, 210, 213 and 205
+/// outlived the pruned payload and receipts forever).
+///
+/// * raw tx (217): the row of each payload tx whose `payload_block` is `block` (a later block that
+///   re-carried the tx re-pointed the row; it is left).
+/// * tx lookup (204): deleted only when no reference in it is still live — an inclusion is live
+///   while its block's payload row exists, an acceptance while its receipts row exists, and `block`
+///   itself counts as gone. A row with any live reference is NOT rewritten (no read-modify-write
+///   race with the virtual processor's append); its stale references are what readers already skip.
+/// * block-hash map (210) and number index (213): released only if they still point at `block`.
+/// * log postings (205): exactly the members the receipts of `block` produced.
+///
+/// None of these rows is a commitment or a validation input (each store says so), so this changes
+/// no block's validity — it changes what eth-rpc can answer about a block the node no longer has.
+pub fn gc_pruned_block_rpc_indexes_batch(
+    batch: &mut WriteBatch,
+    block: BlockHash,
+    payload_tx_hashes: &[EvmH256],
+    receipts: Option<&EvmBlockReceipts>,
+    evm_number: Option<u64>,
+    stores: &EvmRpcIndexStoresRef<'_>,
+    inclusion_live: impl Fn(BlockHash) -> bool,
+    acceptance_live: impl Fn(BlockHash) -> bool,
+) -> Result<EvmRpcIndexGcCount, StoreError> {
+    let mut count = EvmRpcIndexGcCount::default();
+    for h in payload_tx_hashes {
+        if let Some(row) = stores.raw_tx.get(*h)?
+            && row.payload_block == block
+        {
+            stores.raw_tx.delete_batch(batch, *h)?;
+            count.raw_txs += 1;
+        }
+    }
+    let accepted: &[EvmH256] = receipts.map(|r| r.tx_hashes.as_slice()).unwrap_or(&[]);
+    let mut seen = std::collections::HashSet::new();
+    for h in payload_tx_hashes.iter().chain(accepted.iter()) {
+        if !seen.insert(*h) {
+            continue;
+        }
+        let row = match stores.tx_lookup.access.read(*h) {
+            Ok(row) => row,
+            Err(StoreError::KeyNotFound(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        let any_live = row.included_in.iter().any(|b| *b != block && inclusion_live(*b))
+            || row.accepted_in.iter().any(|(b, _)| *b != block && acceptance_live(*b));
+        if !any_live {
+            stores.tx_lookup.access.delete(BatchDbWriter::new(batch), *h)?;
+            count.tx_lookups += 1;
+        }
+    }
+    let id = evm_rpc_block_id(block);
+    if stores.block_hash_map.get(id)? == Some(block) {
+        stores.block_hash_map.delete_if_matches_batch(batch, id, block)?;
+        count.block_ids += 1;
+    }
+    if let Some(n) = evm_number
+        && stores.numbers.get(n)? == Some(block)
+    {
+        stores.numbers.delete_if_matches_batch(batch, n, block)?;
+        count.numbers += 1;
+    }
+    if let (Some(receipts), Some(evm_number)) = (receipts, evm_number) {
+        for (rcpt_idx, receipt) in receipts.receipts.iter().enumerate() {
+            for (in_rcpt_idx, log) in receipt.logs.iter().enumerate() {
+                let loc =
+                    LogPostingLoc { evm_number, l1_hash: block, tx_index: rcpt_idx as u32, in_receipt_log_index: in_rcpt_idx as u32 };
+                stores.logs.delete_posting_batch(batch, LogPostingKind::Address, &log.address.as_bytes(), &loc)?;
+                count.log_postings += 1;
+                for (ti, topic) in log.topics.iter().take(4).enumerate() {
+                    if let Some(kind) = LogPostingKind::topic(ti) {
+                        stores.logs.delete_posting_batch(batch, kind, &topic.as_bytes(), &loc)?;
+                        count.log_postings += 1;
+                    }
+                }
+            }
+        }
+    }
+    Ok(count)
+}
+
+#[cfg(test)]
+mod g14_rpc_index_gc_tests {
+    use super::*;
+    use kaspa_consensus_core::evm::{EvmLog, EvmReceipt};
+    use kaspa_database::create_temp_db;
+    use kaspa_database::prelude::ConnBuilder;
+    use kaspa_hashes::Hash64;
+
+    fn bh(b: u8) -> BlockHash {
+        Hash64::from_bytes([b; 64])
+    }
+    fn tx(b: u8) -> EvmH256 {
+        EvmH256::from_bytes([b; 32])
+    }
+
+    /// The pruned block's raw txs, lookup rows, block id, number and log postings go; everything a
+    /// kept block still references stays (a re-carried raw tx, a lookup row with a live acceptance,
+    /// the kept block's id/number/postings).
+    #[test]
+    fn gc_of_a_pruned_block_removes_exactly_its_rpc_index_rows() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let raw = DbEvmRawTxStore::new(db.clone(), CachePolicy::Empty);
+        let lookup = DbEvmTxIndexStore::new(db.clone(), CachePolicy::Empty);
+        let map = DbEvmBlockHashMapStore::new(db.clone(), CachePolicy::Empty);
+        let numbers = DbEvmNumberStore::new(db.clone(), CachePolicy::Empty);
+        let logs = DbEvmLogIndexStore::new(db.clone());
+        let payloads = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty);
+        let receipts = DbEvmReceiptsStore::new(db.clone(), CachePolicy::Empty);
+        let (pruned, kept) = (bh(1), bh(2));
+        let (a, b) = (tx(0xA), tx(0xB));
+        let address = EvmAddress::from_bytes([0x33; 20]);
+        let topic = EvmH256::from_bytes([0x44; 32]);
+        let receipt =
+            EvmReceipt { succeeded: true, logs: vec![EvmLog { address, topics: vec![topic], data: vec![] }], ..Default::default() };
+        let mut batch = WriteBatch::default();
+        // Body processing: P carries A and B; K re-carries B later (the raw row re-points to K).
+        raw.write_batch(&mut batch, a, vec![1], pruned).unwrap();
+        raw.write_batch(&mut batch, b, vec![2], kept).unwrap();
+        payloads
+            .insert_batch(&mut batch, pruned, EvmExecutionPayload { transactions: vec![vec![1], vec![2]], ..Default::default() })
+            .unwrap();
+        payloads.insert_batch(&mut batch, kept, EvmExecutionPayload { transactions: vec![vec![2]], ..Default::default() }).unwrap();
+        // Acceptance: P accepts A (#5), K accepts B (#6).
+        lookup
+            .write_batch(
+                &mut batch,
+                a,
+                EvmTxLocations { included_in: vec![pruned], accepted_in: vec![(pruned, 0)], last_skip_class: None },
+            )
+            .unwrap();
+        lookup
+            .write_batch(
+                &mut batch,
+                b,
+                EvmTxLocations { included_in: vec![pruned, kept], accepted_in: vec![(kept, 0)], last_skip_class: None },
+            )
+            .unwrap();
+        receipts.insert_batch(&mut batch, pruned, EvmBlockReceipts { receipts: vec![receipt.clone()], tx_hashes: vec![a] }).unwrap();
+        receipts.insert_batch(&mut batch, kept, EvmBlockReceipts { receipts: vec![receipt], tx_hashes: vec![b] }).unwrap();
+        for (block, n) in [(pruned, 5u64), (kept, 6u64)] {
+            map.write_batch(&mut batch, evm_rpc_block_id(block), block).unwrap();
+            numbers.write_batch(&mut batch, n, block).unwrap();
+            let loc = LogPostingLoc { evm_number: n, l1_hash: block, tx_index: 0, in_receipt_log_index: 0 };
+            logs.write_posting_batch(&mut batch, LogPostingKind::Address, &address.as_bytes(), &loc).unwrap();
+            logs.write_posting_batch(&mut batch, LogPostingKind::topic(0).unwrap(), &topic.as_bytes(), &loc).unwrap();
+        }
+        db.write(batch).unwrap();
+
+        // The pruning processor's sequence for P: GC the indexes, then delete payload + receipts.
+        let mut batch = WriteBatch::default();
+        let p_receipts = receipts.get(pruned).unwrap();
+        let stores = EvmRpcIndexStoresRef { raw_tx: &raw, tx_lookup: &lookup, block_hash_map: &map, numbers: &numbers, logs: &logs };
+        let count = gc_pruned_block_rpc_indexes_batch(
+            &mut batch,
+            pruned,
+            &[a, b],
+            Some(&p_receipts),
+            Some(5),
+            &stores,
+            |blk| payloads.has(blk).unwrap(),
+            |blk| receipts.has(blk).unwrap(),
+        )
+        .unwrap();
+        payloads.delete_batch(&mut batch, pruned).unwrap();
+        receipts.delete_batch(&mut batch, pruned).unwrap();
+        db.write(batch).unwrap();
+
+        assert_eq!(count, EvmRpcIndexGcCount { raw_txs: 1, tx_lookups: 1, block_ids: 1, numbers: 1, log_postings: 2 });
+        assert_eq!(raw.get(a).unwrap(), None);
+        assert_eq!(raw.get(b).unwrap().map(|r| r.payload_block), Some(kept), "the re-carried tx stays");
+        assert!(matches!(lookup.get(a), Err(StoreError::KeyNotFound(_))));
+        assert!(lookup.get(b).is_ok(), "a lookup row with a live acceptance stays (and is not rewritten)");
+        assert_eq!(map.get(evm_rpc_block_id(pruned)).unwrap(), None);
+        assert_eq!(map.get(evm_rpc_block_id(kept)).unwrap(), Some(kept));
+        assert_eq!(numbers.get(5).unwrap(), None);
+        assert_eq!(numbers.get(6).unwrap(), Some(kept));
+        let left: Vec<_> = logs.bucket_locs(LogPostingKind::Address, &address.as_bytes()).collect();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].l1_hash, kept);
+        let left: Vec<_> = logs.bucket_locs(LogPostingKind::topic(0).unwrap(), &topic.as_bytes()).collect();
+        assert_eq!(left.iter().map(|l| l.l1_hash).collect::<Vec<_>>(), vec![kept]);
     }
 }
 
