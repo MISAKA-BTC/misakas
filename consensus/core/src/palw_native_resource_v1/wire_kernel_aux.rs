@@ -112,7 +112,8 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 144 if key_bytes==65 && prefix==b'R'=>crate::palw_claim_local_v1::PalwClaimLocalRewardHoldV1::scan_native_wire_v1(frame)?,
 // RFC-0023 stage 2 (2026-10-22): the single claim-local checkpoint row, key 'C' followed by 64 zero bytes.
 144 if key_bytes==65 && prefix==b'C' && k[1..].iter().all(|b|*b==0)=>crate::palw_claim_local_v1::PalwClaimLocalCheckpointV1::scan_native_wire_v1(frame)?,
-144=>return Err(wire::wire_bad("unallocated claim-local liability namespace")),
+// 2026-10-22 (integration): no catch-all here — aux 144 is shared with the native liability hold (0x01 held fee,
+// 0x02 post-Final duty), whose arms and the namespace catch-all follow in AUX_SPEC_ARMS; a catch-all here made them unreachable.
 136 if n==72 && ((key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_FRONTIER_FLOOR_PREFIX_V1 && k[1..].iter().all(|b|*b==0)) || k==b"f")=><(u64,[u8;64]) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
 136 if key_bytes==65 && matches!(prefix,crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1|crate::palw_security_certification_v1::CERTIFICATION_NATIVE_MINING_PREFIX_V39)=>crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?,
 136 if key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_CLASS_PREFIX_V1=>crate::palw_security_certification_v1::PalwCertificationClassRowV1::scan_native_wire_v1(frame)?,
@@ -466,7 +467,10 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 143 if key_bytes==65 && prefix==crate::palw_g14_lane_closure_v1::PALW_SERVED_MATERIAL_PREFIX_V1=>crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1::scan_native_wire_v1(frame)?,
 143=>return Err(wire::wire_bad("unallocated G14 lane-closure row namespace")),
 144 if key_bytes==66 && prefix==crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_PREFIX_V1=>crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1::scan_native_wire_v1(frame)?,
+144 if key_bytes==66 && prefix==crate::palw_state_v2::palw_native_post_final_duty_v1::PALW_NATIVE_POST_FINAL_DUTY_PREFIX_V1=>crate::palw_state_v2::palw_native_post_final_duty_v1::PalwNativePostFinalDutyRowV1::scan_native_wire_v1(frame)?,
 144=>return Err(wire::wire_bad("unallocated native liability hold row namespace")),
+145 if key_bytes==65 && prefix==crate::palw_receipt_pause_v2::PALW_RECEIPT_PAUSE_PREFIX_V2=>crate::palw_receipt_pause_v2::PalwReceiptPauseRowV2::scan_native_wire_v1(frame)?,
+145=>return Err(wire::wire_bad("unallocated receipt pause row namespace")),
  _=>return Err(std::io::Error::new(std::io::ErrorKind::Unsupported,NativeCoverageV1::unsupported::<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>(&format!("native aux table {table}"),"nested row codec is not in the explicit supported shape inventory"))),})}
 
 /// The longest aux key any fold writes is far below this; a longer key is malformed, never truncated.

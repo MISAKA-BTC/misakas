@@ -209,7 +209,7 @@ mod palw_court_service_lifecycle_fold_v1;
 mod palw_native_post_final_default_fold_v1;
 // G14 r6 D4: native post-Final duty clocks and answers for text29 / funded v11 (dormant).
 #[path = "palw_native_post_final_duty_v1.rs"]
-mod palw_native_post_final_duty_v1;
+pub(crate) mod palw_native_post_final_duty_v1;
 // RFC-0032 A material intake fold (lane material-intake); dispatched from tag 255 (`MaterialIntakeV1`, lane r5-f03-ingress).
 #[path = "palw_court_shared_material_intake_fold_v1.rs"]
 #[cfg_attr(not(test), allow(dead_code))] // `expire_material_drafts` is test/sweep-only
