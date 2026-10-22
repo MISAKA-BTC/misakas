@@ -36,6 +36,10 @@ pub(super) fn prepare_block_objects_v1(
     for settlement in facts.funded_escrow_settlements() {
         builder.settle_funded_escrow_v1(settlement)?;
     }
+    // G14 r5 (lane r5-escrow-settlement): then the escrow clock — liabilities resolved by the parent state's verdicts, discharges
+    // or passed hard deadlines clear (releasing the claim's bond reservation with them), and settled rows past their retention
+    // retire. Reads only rooted state and `extras.funded_escrow_retention_daa`; a no-op wherever no row exists.
+    builder.sweep_funded_escrows_v1(ctx.daa_score)?;
     // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
     //     by this block is a credit in THIS block's span, never in the one its finals just closed.
     if let Some(lane) = rules.round_lane() {

@@ -2146,6 +2146,11 @@ impl VirtualStateProcessor {
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
             funded_escrow_settlements: Vec::new(),
+            // G14 r5: settled funded-escrow rows retire `2 × pruning_depth` DAA after their settling spend, past the route's fence.
+            funded_escrow_retention_daa: self
+                .palw_tir_public_conviction_v1
+                .is_some_and(|f| f.is_active(daa_score))
+                .then(|| self.palw_escrow_pruning_depth.saturating_mul(2)),
             tir_funded_originals: Default::default(),
             // RFC-0008 v2: the slice carriers the covered set holds (empty until the closure carriage fills it).
             exec_v2_covered: Vec::new(),

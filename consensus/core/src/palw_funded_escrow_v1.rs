@@ -42,17 +42,20 @@ pub enum PalwEscrowRefusalV1 {
     RowShape,
     /// `paid + burned + returned` exceeds `amount`, or an accounting sum overflows.
     Conservation,
-    /// A settled row with value left, an unsettled row with value moved, or a settled row with liability open.
+    /// A settled row with value left (or liability open, or no settlement DAA), an unsettled row with nothing left, a return on an
+    /// unsettled row, or an unsettled row carrying a settlement DAA.
     OnceOnly,
-    /// A transition that rewrites an immutable field (outpoint, amount, payer, return payload, claim, contract, clocks).
+    /// A transition that rewrites an immutable field (amount, payer, return payload, claim, contract, clocks; the outpoint except
+    /// by a continuation).
     ImmutableField,
-    /// A transition this module does not define (a removal, a resettlement, an install of a non-fresh row).
+    /// A transition this module does not define (a removal of an unsettled row, a resettlement, an install of a non-fresh row, an
+    /// accounting decrease).
     Transition,
     /// The transaction does not spend this row's outpoint.
     NotEscrowInput,
     /// The transaction spends this row's outpoint more than once.
     DuplicateEscrowInput,
-    /// The populated input entry's amount differs from the rooted amount, or the entry list is misaligned.
+    /// The populated input entry's amount differs from the row's unreleased value, or the entry list is misaligned.
     EntryMismatch,
     /// The row is already settled.
     AlreadySettled,
@@ -67,10 +70,18 @@ pub enum PalwEscrowRefusalV1 {
     /// A spend carrying a payload that is not exactly this row's relay authorization template, or a templated spend whose escrow
     /// input is not input 0 (the only index a `SIGHASH_SINGLE` pre-signature pairs with output 0).
     RelayTemplateMismatch,
+    /// **G14 r5:** the schedule handed in is not this row's (another contract), or the row's consumed value is not a prefix of the
+    /// schedule's dues (a due paid twice, or an order the schedule never had).
+    SettlementRuleMismatch,
+    /// **G14 r5:** a payee output differs from its due (payload or exact amount), or is missing.
+    PayeeOutputMismatch,
+    /// **G14 r5:** a settlement that pays no due and returns nothing (the escrow would be spent for nothing).
+    NothingToSettle,
 }
 
-/// **The rooted escrow row.** Keyed by `contract_id` in the state. Written only by the funded-original installer and by a
-/// qualified spend's settlement, both journaled as one delta entry with `old`/`new` so revert restores row and lock together.
+/// **The rooted escrow row.** Keyed by `contract_id` in the state. Written only by the funded-original installer, by a qualified
+/// spend's settlement or continuation, by the liability clearing and by the post-pruning retirement — each journaled as one delta
+/// entry with `old`/`new` so revert restores row and lock together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwFundedEscrowRowV1 {
     pub version: u16,
@@ -78,11 +89,13 @@ pub struct PalwFundedEscrowRowV1 {
     pub contract_id: Hash64,
     /// The original claim the terms bind.
     pub claim: Hash64,
-    /// The actual carrier's funding output — obtained from the final accepted carrier, never from the signed terms.
+    /// **The escrow's CURRENT outpoint.** At install: the actual carrier's funding output — obtained from the final accepted
+    /// carrier, never from the signed terms. After a partial settlement (G14 r5): the settlement transaction's change-back output,
+    /// which holds exactly the unreleased value.
     pub funding_outpoint: TransactionOutpoint,
     pub amount_sompi: u64,
     pub payer_key_id: Hash64,
-    /// The native P2PKH-MLDSA87 address payload the funding output pays (and a payer return must pay).
+    /// The native P2PKH-MLDSA87 address payload the funding output pays (and a payer return / change-back must pay).
     pub refund_payload: Hash64,
     /// The carrier's actual accepting DAA.
     pub accepted_daa: u64,
@@ -91,10 +104,13 @@ pub struct PalwFundedEscrowRowV1 {
     pub paid_sompi: u64,
     pub burned_sompi: u64,
     pub returned_sompi: u64,
-    /// A liability this escrow still answers for (a live settlement obligation). Set by the coordinator, never by a spender.
+    /// A liability this escrow still answers for (a live settlement obligation). Set by the coordinator at admission, cleared only
+    /// by the fold's resolution sweep ([`palw_escrow_liability_resolved_v1`]), never by a spender.
     pub liability_open: bool,
-    /// Once-only: the transaction that consumed the outpoint. `Some` exactly when the row is settled.
+    /// Once-only: the transaction that consumed the last outpoint. `Some` exactly when the row is settled.
     pub settled_by: Option<TransactionId>,
+    /// **G14 r5:** the accepting DAA of the settling spend (`0` while unsettled) — what the post-pruning retirement counts from.
+    pub settled_daa: u64,
 }
 
 impl PalwFundedEscrowRowV1 {
@@ -126,6 +142,7 @@ impl PalwFundedEscrowRowV1 {
             returned_sompi: 0,
             liability_open,
             settled_by: None,
+            settled_daa: 0,
         };
         row.check_v1()?;
         Ok(row)
@@ -140,6 +157,16 @@ impl PalwFundedEscrowRowV1 {
             .ok_or(PalwEscrowRefusalV1::Conservation)
     }
 
+    /// `paid + burned`, checked: what settlements have consumed (the prefix of the schedule's dues already discharged).
+    pub fn consumed_v1(&self) -> Result<u64, PalwEscrowRefusalV1> {
+        self.paid_sompi.checked_add(self.burned_sompi).ok_or(PalwEscrowRefusalV1::Conservation)
+    }
+
+    /// Nothing has moved: the row as installed.
+    pub fn is_fresh_v1(&self) -> bool {
+        self.paid_sompi == 0 && self.burned_sompi == 0 && self.returned_sompi == 0 && self.settled_by.is_none()
+    }
+
     /// The row's own invariants: shape, conservation and once-only.
     pub fn check_v1(&self) -> Result<(), PalwEscrowRefusalV1> {
         if self.version != PALW_FUNDED_ESCROW_ROW_VERSION_V1 || self.amount_sompi == 0 || self.accepted_daa > self.hard_deadline_daa {
@@ -147,19 +174,19 @@ impl PalwFundedEscrowRowV1 {
         }
         let unreleased = self.unreleased_v1()?;
         match self.settled_by {
-            // One UTXO, one spend: the whole value is accounted in that spend, and nothing is owed after it.
-            Some(_) if unreleased != 0 || self.liability_open => Err(PalwEscrowRefusalV1::OnceOnly),
-            None if unreleased != self.amount_sompi => Err(PalwEscrowRefusalV1::OnceOnly),
+            // One spend ends the row: the whole value is accounted in it, nothing is owed after it, and it carries its DAA.
+            Some(_) if unreleased != 0 || self.liability_open || self.settled_daa < self.accepted_daa => Err(PalwEscrowRefusalV1::OnceOnly),
+            // Unsettled: the current outpoint holds the unreleased value (> 0); a return only ever ends a row.
+            None if unreleased == 0 || self.returned_sompi != 0 || self.settled_daa != 0 => Err(PalwEscrowRefusalV1::OnceOnly),
             _ => Ok(()),
         }
     }
 
-    fn same_immutables(&self, other: &Self) -> bool {
+    fn same_core_immutables(&self, other: &Self) -> bool {
         (
             self.version,
             self.contract_id,
             self.claim,
-            self.funding_outpoint,
             self.amount_sompi,
             self.payer_key_id,
             self.refund_payload,
@@ -169,7 +196,6 @@ impl PalwFundedEscrowRowV1 {
             other.version,
             other.contract_id,
             other.claim,
-            other.funding_outpoint,
             other.amount_sompi,
             other.payer_key_id,
             other.refund_payload,
@@ -179,9 +205,16 @@ impl PalwFundedEscrowRowV1 {
     }
 }
 
-/// **The only transitions a row may make in a rooted delta**: install a fresh row (`None → fresh`), or settle it once
-/// (`unsettled → settled`, immutables equal, value fully accounted). Removal, resettlement and in-place edits are refused. The
-/// delta writer asks this before journaling, so a revert (which swaps `old` and `new`) restores exactly a row this admitted.
+/// **The only transitions a row may make in a rooted delta** (G14 r5 widened round 1's two):
+/// * install a fresh row (`None → fresh`);
+/// * clear the liability of an unsettled row (`open → closed`, nothing else changes) — the fold's resolution sweep only;
+/// * continue an unsettled row after a partial settlement (value paid/burned grew, outpoint moved to the change-back output, no
+///   return, liability unchanged);
+/// * settle it once (`unsettled → settled`, outpoint unchanged — it is the spent one — value fully accounted);
+/// * retire a settled row (`settled → None`) — the writer adds the post-pruning horizon.
+///
+/// Accounting never decreases; resettlement and every other edit are refused. The delta writer asks this before journaling, so a
+/// revert (which swaps `old` and `new`) restores exactly a row this admitted.
 pub fn palw_escrow_row_transition_v1(
     key: &Hash64,
     old: Option<&PalwFundedEscrowRowV1>,
@@ -190,7 +223,14 @@ pub fn palw_escrow_row_transition_v1(
     match (old, new) {
         (None, Some(row)) => {
             row.check_v1()?;
-            if row.contract_id != *key || row.settled_by.is_some() {
+            if row.contract_id != *key || !row.is_fresh_v1() {
+                return Err(PalwEscrowRefusalV1::Transition);
+            }
+            Ok(())
+        }
+        (Some(row), None) => {
+            row.check_v1()?;
+            if row.contract_id != *key || row.settled_by.is_none() {
                 return Err(PalwEscrowRefusalV1::Transition);
             }
             Ok(())
@@ -198,26 +238,89 @@ pub fn palw_escrow_row_transition_v1(
         (Some(before), Some(after)) => {
             before.check_v1()?;
             after.check_v1()?;
-            if !before.same_immutables(after) {
+            if before.contract_id != *key || !before.same_core_immutables(after) {
                 return Err(PalwEscrowRefusalV1::ImmutableField);
             }
             if before.settled_by.is_some() {
                 return Err(PalwEscrowRefusalV1::AlreadySettled);
             }
-            if after.settled_by.is_none() {
-                // Only the coordinator's liability flag may move on an unsettled row, and only closed.
-                if before.liability_open && !after.liability_open && before.paid_sompi == after.paid_sompi {
-                    return Ok(());
-                }
+            if after.paid_sompi < before.paid_sompi || after.burned_sompi < before.burned_sompi || after.returned_sompi < before.returned_sompi {
                 return Err(PalwEscrowRefusalV1::Transition);
             }
-            Ok(())
+            if after.settled_by.is_some() {
+                // The settling spend consumed exactly the current outpoint.
+                if after.funding_outpoint != before.funding_outpoint {
+                    return Err(PalwEscrowRefusalV1::ImmutableField);
+                }
+                return Ok(());
+            }
+            // Liability clearing: only the flag moves, and only closed.
+            let mut cleared = *before;
+            cleared.liability_open = false;
+            if before.liability_open && *after == cleared {
+                return Ok(());
+            }
+            // Continuation: value consumed, the escrow re-locked on the change-back output.
+            if after.funding_outpoint != before.funding_outpoint
+                && after.liability_open == before.liability_open
+                && after.returned_sompi == before.returned_sompi
+                && after.consumed_v1()? > before.consumed_v1()?
+            {
+                return Ok(());
+            }
+            Err(PalwEscrowRefusalV1::Transition)
         }
         _ => Err(PalwEscrowRefusalV1::Transition),
     }
 }
 
-/// **The hard deadline of a funded escrow**: the adopted X3 hard deadline (`palw_claim_hard_deadline_v1`'s policy; RFC-0014
+/// **G14 r5: may a settled row leave the rooted state at `now`?** Only once `now` is more than `retention_daa` past the settling
+/// spend's DAA (checked; an overflowing horizon never retires). `retention_daa` is the processor's
+/// `PalwTransitionExtrasV1::funded_escrow_retention_daa` (`2 × pruning_depth`: DAA advances at least as fast as blue score, so the
+/// pruning point has passed the settling block by then); `None` (below the fence) never retires. An unsettled row never retires.
+pub fn palw_escrow_row_retirable_v1(row: &PalwFundedEscrowRowV1, now: u64, retention_daa: Option<u64>) -> bool {
+    match (row.settled_by, retention_daa) {
+        (Some(_), Some(retention)) => row.settled_daa.checked_add(retention).is_some_and(|horizon| now > horizon),
+        _ => false,
+    }
+}
+
+/// **G14 r5: what the resolution sweep reads about the row's claim** — the fold fills it from the rooted state (open court
+/// sessions on the claim, whether the claim record still exists and whether it reached a court verdict, whether a post-Final
+/// liability record is still kept). A view, not a caller's word: the sweep builds it from `PalwChainStateV2` only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwEscrowClaimLiabilityViewV1 {
+    /// `open_courts_of(claim)`: a pursuit is open.
+    pub open_courts: u32,
+    /// The claim record is still rooted.
+    pub claim_live: bool,
+    /// The rooted claim reached its court verdict (`Voided`).
+    pub claim_voided: bool,
+    /// A post-Final liability record (`panel_liabilities`) still keeps the claim convictable.
+    pub post_final_liability: bool,
+}
+
+/// **G14 r5 (item 2): is the escrow's liability resolved at `now`?** Never while a pursuit is open. Otherwise when:
+/// * the hard deadline has passed (`now > hard_deadline_daa`) — no new pursuit can start (X3 hard cap, RFC-0014 amendment);
+/// * a court verdict landed: the claim is `Voided` and no post-Final liability record keeps it convictable;
+/// * the claim was discharged (RFC-0034 S1 archived close / retirement): no claim record and no liability record remain.
+///
+/// A `Final` claim with a live liability record, or any live non-terminal claim, stays open until its record goes or the hard
+/// deadline passes.
+pub fn palw_escrow_liability_resolved_v1(row: &PalwFundedEscrowRowV1, view: &PalwEscrowClaimLiabilityViewV1, now: u64) -> bool {
+    if view.open_courts != 0 {
+        return false;
+    }
+    if now > row.hard_deadline_daa {
+        return true;
+    }
+    if view.post_final_liability {
+        return false;
+    }
+    !view.claim_live || view.claim_voided
+}
+
+/// The hard deadline of a funded escrow: the adopted X3 hard deadline (`palw_claim_hard_deadline_v1`'s policy; RFC-0014
 /// 2026-10-19 amendment `a + 10,000`, RFC-0026 §2, RFC-0031) at the carrier's actual accepting DAA `a`, checked. Unsourced where X3
 /// does not govern `a`; never saturated, never defaulted.
 pub fn palw_funded_escrow_hard_deadline_v1(
@@ -233,13 +336,50 @@ pub fn palw_funded_escrow_hard_deadline_v1(
         .ok_or(PalwEscrowRefusalV1::HardDeadlineUnsourced)
 }
 
-/// **The settlement fee schedule — TYPED-MISSING.** Amounts, fees, draw limits and payee shares are not adopted (ADR-0202 承認の範囲;
-/// RFC-0035 §7.5 "数値未決なら受付拒否を維持する"). The type has no constructible value, so every path that needs it refuses with
-/// [`PalwEscrowRefusalV1::SettlementScheduleMissing`]. A reviewed change that adopts the numbers replaces the private field.
-#[derive(Debug)]
-#[allow(dead_code)]
+/// **G14 r5: what one due is for** (RFC-0035 §7.4/§7.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwEscrowDueKindV1 {
+    /// Panel / relay work payment to the payee that performed it.
+    WorkPayment,
+    /// Court fee collection to its collector.
+    CourtFee,
+    /// A burn: destroyed by don't-mint (withheld from the accepting block's collectible fee), never an output.
+    Burn,
+}
+
+/// **G14 r5: one confirmed due of a contract** — the schedule's derivation of what the escrow owes from the rooted fee receipts,
+/// court results and settlement rule. `payee` is the P2PKH-MLDSA87 payload a paying output must carry (`None` exactly for a burn).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwEscrowDueV1 {
+    pub kind: PalwEscrowDueKindV1,
+    pub payee: Option<Hash64>,
+    pub amount_sompi: u64,
+}
+
+/// **The settlement fee schedule — TYPED-MISSING in production.** Amounts, fees, draw limits, payee shares and the derivation of
+/// dues from rooted receipts are not adopted (ADR-0202 承認の範囲; RFC-0035 §7.5 "数値未決なら受付拒否を維持する"). The fields are
+/// private and the only constructor is `#[cfg(test)]`, so no production value can exist: every path that needs it refuses with
+/// [`PalwEscrowRefusalV1::SettlementScheduleMissing`] ([`palw_escrow_fee_schedule_v1`] always returns `None`). A reviewed change
+/// that adopts the numbers adds the production derivation here.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwEscrowFeeScheduleV1 {
-    unadopted: std::convert::Infallible,
+    contract_id: Hash64,
+    /// Every due confirmed so far, in the order they are discharged (cumulative: an earlier settlement's dues stay at the front).
+    dues: Vec<PalwEscrowDueV1>,
+}
+
+impl PalwEscrowFeeScheduleV1 {
+    /// **Tests only**: a schedule for one contract. There is no production constructor.
+    #[cfg(test)]
+    pub fn test_only_v1(contract_id: Hash64, dues: Vec<PalwEscrowDueV1>) -> Self {
+        Self { contract_id, dues }
+    }
+}
+
+/// **The production schedule source: none.** Always `None` until the numbers are adopted; the processor passes this to every
+/// qualified-spend check, so every payee/burn/partial path refuses on every network.
+pub fn palw_escrow_fee_schedule_v1(_row: &PalwFundedEscrowRowV1) -> Option<&'static PalwEscrowFeeScheduleV1> {
+    None
 }
 
 /// Which settlement a qualified spend performs.
@@ -247,25 +387,49 @@ pub struct PalwEscrowFeeScheduleV1 {
 pub enum PalwEscrowSpendPathV1 {
     /// The hard deadline has passed with no open liability: the whole unreleased value returns to the payer's rooted payload.
     PayerReturnAfterHardDeadline,
+    /// **G14 r5:** the schedule's next dues are paid / burned; the rest either continues as escrow (change-back output, liability
+    /// still open) or returns to the payer (liability resolved: the row settles).
+    Settlement,
 }
 
-/// A qualified spend's plan: the exact escrow input and the row before and after (the settlement the fold journals).
+/// A qualified spend's plan: the exact escrow input, the row before and after (the transition the fold journals) and what this
+/// one spend moved (`paid_now + burned_now + returned_now + continued_now = old unreleased`, checked).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwEscrowSpendPlanV1 {
     pub input_index: usize,
     pub path: PalwEscrowSpendPathV1,
     pub old: PalwFundedEscrowRowV1,
     pub new: PalwFundedEscrowRowV1,
+    pub paid_now: u64,
+    /// Destroyed by this spend: the processor withholds it from the block's collectible fee (RFC-0035 §7.1 one allocation of F).
+    pub burned_now: u64,
+    pub returned_now: u64,
+    /// The value re-locked on the change-back output (`new.funding_outpoint`), 0 when the row settled.
+    pub continued_now: u64,
 }
 
-/// **Is `tx`'s spend of `row`'s outpoint qualified at `daa`?** Native check against the rooted row only:
-/// * exactly one input spends the row's outpoint, and its populated entry (`input_amounts`, aligned to `tx.inputs`) carries the
-///   rooted amount;
-/// * before the hard deadline, or while a liability is open, the spend is a settlement and needs `schedule`, which cannot exist
-///   yet — refused `SettlementScheduleMissing`;
-/// * otherwise (payer return) output 0 pays exactly the unreleased value to the rooted return payload, and the rest of the
-///   transaction is funded by its other inputs (`Σ other in ≥ Σ other out`), so neither the relay's fee nor any change is drawn
-///   from the escrow.
+fn sum_checked<I: IntoIterator<Item = u64>>(values: I) -> Result<u64, PalwEscrowRefusalV1> {
+    values.into_iter().try_fold(0u64, |sum, v| sum.checked_add(v)).ok_or(PalwEscrowRefusalV1::Conservation)
+}
+
+fn payload_of(output: &crate::tx::TransactionOutput) -> Option<Hash64> {
+    crate::mldsa87_primitives::p2pkh_mldsa87_payload(&output.script_public_key)
+}
+
+/// **Is `tx`'s spend of `row`'s outpoint qualified at `daa`?** Native check against the rooted row (and, for a settlement, the
+/// schedule) only:
+/// * exactly one input spends the row's current outpoint, and its populated entry (`input_amounts`, aligned to `tx.inputs`)
+///   carries exactly the row's unreleased value;
+/// * after the hard deadline with no open liability: the **payer return** — output 0 pays exactly the unreleased value to the
+///   rooted return payload (no schedule needed);
+/// * otherwise a **settlement**, which needs `schedule` (typed-missing in production ⇒ `SettlementScheduleMissing`): the row's
+///   consumed value must be a prefix of the schedule's dues; every remaining due is discharged — a paying due by the next output
+///   (exact payee payload and amount, in order), a burn by withholding — then, if value remains, the next output pays it to the
+///   rooted payload: a **change-back** that continues the escrow while the liability is open, or the **return** that settles it
+///   once the liability is resolved;
+/// * every output after the escrow's is funded by the other inputs (`Σ other in ≥ Σ other out`), so the relay's fee and change
+///   never draw on the escrow; the burn is the only escrow value inside the fee;
+/// * the payload is empty (the payer's own spend) or exactly this row's relay template for the path, with the escrow at input 0.
 ///
 /// This decides authorization of the escrow ROLE only. The input's ordinary script check (the payer's own P2PKH signature) still
 /// runs in the normal validator: nothing here skips or caches a signature.
@@ -285,47 +449,113 @@ pub fn palw_escrow_qualified_spend_v1(
     if matching.next().is_some() {
         return Err(PalwEscrowRefusalV1::DuplicateEscrowInput);
     }
-    if input_amounts.len() != tx.inputs.len() || input_amounts[input_index] != row.amount_sompi {
+    let unreleased = row.unreleased_v1()?;
+    if input_amounts.len() != tx.inputs.len() || input_amounts[input_index] != unreleased {
         return Err(PalwEscrowRefusalV1::EntryMismatch);
     }
-    if row.liability_open || daa < row.hard_deadline_daa {
-        // No `PalwEscrowFeeScheduleV1` can exist (its only field is `Infallible`), so `schedule` is always `None` today; the
-        // payee rule is written when the numbers are adopted, never inferred here.
-        let _ = schedule;
-        return Err(PalwEscrowRefusalV1::SettlementScheduleMissing);
+    let payer_return = !row.liability_open && daa >= row.hard_deadline_daa;
+    let path = if payer_return { PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline } else { PalwEscrowSpendPathV1::Settlement };
+    // Outputs the escrow funds come first; `next` walks them.
+    let mut next = 0usize;
+    let mut new = *row;
+    let (mut paid_now, mut burned_now, mut returned_now, mut continued_now) = (0u64, 0u64, 0u64, 0u64);
+    if payer_return {
+        let first = tx.outputs.first().ok_or(PalwEscrowRefusalV1::ReturnOutputMismatch)?;
+        if first.value != unreleased || payload_of(first) != Some(row.refund_payload) {
+            return Err(PalwEscrowRefusalV1::ReturnOutputMismatch);
+        }
+        next = 1;
+        returned_now = unreleased;
+    } else {
+        let schedule = schedule.ok_or(PalwEscrowRefusalV1::SettlementScheduleMissing)?;
+        if schedule.contract_id != row.contract_id {
+            return Err(PalwEscrowRefusalV1::SettlementRuleMismatch);
+        }
+        // Once-only: the consumed value must end exactly on a due boundary; the dues after it are the ones still owed.
+        let consumed = row.consumed_v1()?;
+        let mut prefix = 0u64;
+        let mut first_open = None;
+        for (i, due) in schedule.dues.iter().enumerate() {
+            if prefix == consumed {
+                first_open = Some(i);
+                break;
+            }
+            prefix = prefix.checked_add(due.amount_sompi).ok_or(PalwEscrowRefusalV1::Conservation)?;
+        }
+        let first_open = match first_open {
+            Some(i) => i,
+            None if prefix == consumed => schedule.dues.len(),
+            None => return Err(PalwEscrowRefusalV1::SettlementRuleMismatch),
+        };
+        for due in &schedule.dues[first_open..] {
+            if due.amount_sompi == 0 {
+                return Err(PalwEscrowRefusalV1::SettlementRuleMismatch);
+            }
+            match (due.kind, due.payee) {
+                (PalwEscrowDueKindV1::Burn, None) => {
+                    burned_now = burned_now.checked_add(due.amount_sompi).ok_or(PalwEscrowRefusalV1::Conservation)?;
+                }
+                (PalwEscrowDueKindV1::WorkPayment | PalwEscrowDueKindV1::CourtFee, Some(payee)) => {
+                    let output = tx.outputs.get(next).ok_or(PalwEscrowRefusalV1::PayeeOutputMismatch)?;
+                    if output.value != due.amount_sompi || payload_of(output) != Some(payee) {
+                        return Err(PalwEscrowRefusalV1::PayeeOutputMismatch);
+                    }
+                    next += 1;
+                    paid_now = paid_now.checked_add(due.amount_sompi).ok_or(PalwEscrowRefusalV1::Conservation)?;
+                }
+                _ => return Err(PalwEscrowRefusalV1::SettlementRuleMismatch),
+            }
+        }
+        // Conservation: the dues may not exceed what the escrow still holds.
+        let remaining = unreleased
+            .checked_sub(paid_now)
+            .and_then(|v| v.checked_sub(burned_now))
+            .ok_or(PalwEscrowRefusalV1::Conservation)?;
+        if remaining > 0 {
+            let output = tx.outputs.get(next).ok_or(PalwEscrowRefusalV1::ReturnOutputMismatch)?;
+            if output.value != remaining || payload_of(output) != Some(row.refund_payload) {
+                return Err(PalwEscrowRefusalV1::ReturnOutputMismatch);
+            }
+            if row.liability_open {
+                continued_now = remaining;
+                new.funding_outpoint = TransactionOutpoint::new(tx.id(), next as u32);
+            } else {
+                returned_now = remaining;
+            }
+            next += 1;
+        }
+        if paid_now == 0 && burned_now == 0 && returned_now == 0 {
+            // A pure change-back (nothing owed, liability still open) only re-locks the same value: refused.
+            return Err(PalwEscrowRefusalV1::NothingToSettle);
+        }
     }
-    let unreleased = row.unreleased_v1()?;
-    let first = tx.outputs.first().ok_or(PalwEscrowRefusalV1::ReturnOutputMismatch)?;
-    if first.value != unreleased || crate::mldsa87_primitives::p2pkh_mldsa87_payload(&first.script_public_key) != Some(row.refund_payload) {
-        return Err(PalwEscrowRefusalV1::ReturnOutputMismatch);
-    }
-    let other_in = input_amounts
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != input_index)
-        .try_fold(0u64, |sum, (_, amount)| sum.checked_add(*amount))
-        .ok_or(PalwEscrowRefusalV1::Conservation)?;
-    let other_out =
-        tx.outputs.iter().skip(1).try_fold(0u64, |sum, output| sum.checked_add(output.value)).ok_or(PalwEscrowRefusalV1::Conservation)?;
+    // The rest of the transaction is funded by its other inputs: the relay's fee and change never draw on the escrow.
+    let other_in = sum_checked(input_amounts.iter().enumerate().filter(|(i, _)| *i != input_index).map(|(_, a)| *a))?;
+    let other_out = sum_checked(tx.outputs.iter().skip(next).map(|o| o.value))?;
     if other_in < other_out {
         return Err(PalwEscrowRefusalV1::EscrowFundsOtherOutputs);
     }
-    // **Third-party relay (RFC-0035 §7.4), narrowest form.** The escrow output stays the payer's P2PKH, so its ordinary signature
-    // check always runs; no input skips it. A relay can still execute the return without a FUTURE payer signature: the payer signs
-    // once, when it builds the carrier, a `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` signature over THIS template (payload bound by the
-    // ML-DSA sighash; outpoint, amount and output 0 bound by SINGLE|ANYONECANPAY) and hands it out. Here the payload must be empty
-    // (the payer's own spend) or exactly the template for this row's contract, outpoint and rule, with the escrow at input 0.
-    if !tx.payload.is_empty()
-        && (tx.payload != palw_escrow_relay_template_payload_v1(row.contract_id, row.funding_outpoint, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline)
-            || input_index != 0)
-    {
+    // Third-party relay (RFC-0035 §7.4), narrowest form: empty payload (the payer's own spend) or exactly this row's template
+    // for this path, with the escrow at input 0 (see `palw_escrow_relay_template_payload_v1`).
+    if !tx.payload.is_empty() && (tx.payload != palw_escrow_relay_template_payload_v1(row.contract_id, row.funding_outpoint, path) || input_index != 0) {
         return Err(PalwEscrowRefusalV1::RelayTemplateMismatch);
     }
-    let mut new = *row;
-    new.returned_sompi = new.returned_sompi.checked_add(unreleased).ok_or(PalwEscrowRefusalV1::Conservation)?;
-    new.settled_by = Some(tx.id());
+    // Conservation of this one spend, checked: in = paid + burned + returned + continued.
+    if sum_checked([paid_now, burned_now, returned_now, continued_now])? != unreleased {
+        return Err(PalwEscrowRefusalV1::Conservation);
+    }
+    new.paid_sompi = new.paid_sompi.checked_add(paid_now).ok_or(PalwEscrowRefusalV1::Conservation)?;
+    new.burned_sompi = new.burned_sompi.checked_add(burned_now).ok_or(PalwEscrowRefusalV1::Conservation)?;
+    new.returned_sompi = new.returned_sompi.checked_add(returned_now).ok_or(PalwEscrowRefusalV1::Conservation)?;
+    if continued_now == 0 {
+        new.settled_by = Some(tx.id());
+        new.settled_daa = daa;
+        // A drained escrow answers for nothing more; the claim's own liability stays on its bond.
+        new.liability_open = false;
+    }
     new.check_v1()?;
-    Ok(PalwEscrowSpendPlanV1 { input_index, path: PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline, old: *row, new })
+    palw_escrow_row_transition_v1(&row.contract_id, Some(row), Some(&new))?;
+    Ok(PalwEscrowSpendPlanV1 { input_index, path, old: *row, new, paid_now, burned_now, returned_now, continued_now })
 }
 
 /// The framing of a relay authorization template payload (RFC-0035 §7.4; G14 lane escrow-rfc08 round 2).
@@ -335,6 +565,7 @@ pub const PALW_ESCROW_RELAY_TEMPLATE_MAGIC_V1: &[u8; 4] = b"TER1";
 pub fn palw_escrow_settlement_rule_id_v1(path: PalwEscrowSpendPathV1) -> Hash64 {
     let name: &[u8] = match path {
         PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline => b"payer-return-after-hard-deadline",
+        PalwEscrowSpendPathV1::Settlement => b"scheduled-settlement",
     };
     let digest = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/funded-escrow/settlement-rule/v1").hash(name);
     Hash64::from_bytes(digest.as_bytes().try_into().expect("64-byte settlement rule id"))
@@ -427,10 +658,26 @@ mod tests {
         let mut partial = row(false);
         partial.returned_sompi = 999;
         partial.settled_by = Some(Hash64::from_u64_word(1));
+        partial.settled_daa = 200;
         assert_eq!(partial.check_v1(), Err(PalwEscrowRefusalV1::OnceOnly));
+        // G14 r5: an unsettled row may have paid (a continuation) but never returned, never drained, never dated.
         let mut moved = row(false);
         moved.paid_sompi = 1;
-        assert_eq!(moved.check_v1(), Err(PalwEscrowRefusalV1::OnceOnly));
+        assert_eq!(moved.check_v1(), Ok(()));
+        let mut returned = row(false);
+        returned.returned_sompi = 1;
+        assert_eq!(returned.check_v1(), Err(PalwEscrowRefusalV1::OnceOnly));
+        let mut drained = row(false);
+        drained.paid_sompi = 1_000;
+        assert_eq!(drained.check_v1(), Err(PalwEscrowRefusalV1::OnceOnly));
+        let mut dated = row(false);
+        dated.settled_daa = 5;
+        assert_eq!(dated.check_v1(), Err(PalwEscrowRefusalV1::OnceOnly));
+        // A settled row carries its settlement DAA.
+        let mut undated = row(false);
+        undated.returned_sompi = 1_000;
+        undated.settled_by = Some(Hash64::from_u64_word(1));
+        assert_eq!(undated.check_v1(), Err(PalwEscrowRefusalV1::OnceOnly));
         assert_eq!(PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), outpoint(), 0, h(3), payer_payload(), 1, 2, false), Err(PalwEscrowRefusalV1::RowShape));
     }
 
@@ -484,7 +731,11 @@ mod tests {
         let r = row(false);
         assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, None, Some(&r)), Ok(()));
         assert_eq!(palw_escrow_row_transition_v1(&h(99), None, Some(&r)), Err(PalwEscrowRefusalV1::Transition));
+        // An unsettled row never leaves; a non-fresh row is never installed.
         assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&r), None), Err(PalwEscrowRefusalV1::Transition));
+        let mut continued = r;
+        continued.paid_sompi = 10;
+        assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, None, Some(&continued)), Err(PalwEscrowRefusalV1::Transition));
         let mut moved = r;
         moved.amount_sompi = 2_000;
         assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&r), Some(&moved)), Err(PalwEscrowRefusalV1::ImmutableField));
@@ -593,5 +844,177 @@ mod tests {
         let mut theft = relayed.clone();
         theft.outputs[0] = TransactionOutput::new(1_000, ScriptPublicKey::default());
         assert_ne!(signed, sighash(&theft, vec![escrow_entry, relay_entry]));
+    }
+
+    // ---- G14 r5 (lane r5-escrow-settlement): every settlement path, liability resolution, retirement ----
+
+    fn party(n: u8) -> Hash64 {
+        kaspa_hashes::blake2b_512_address_payload(&[n; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN])
+    }
+    fn pay(n: u8, value: u64) -> TransactionOutput {
+        TransactionOutput::new(value, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&party(n).as_bytes()))
+    }
+    fn due(kind: PalwEscrowDueKindV1, payee: Option<u8>, amount: u64) -> PalwEscrowDueV1 {
+        PalwEscrowDueV1 { kind, payee: payee.map(party), amount_sompi: amount }
+    }
+    fn spend_of(escrow: TransactionOutpoint, outputs: Vec<TransactionOutput>, relay_inputs: usize) -> Transaction {
+        let mut inputs = vec![TransactionInput::new(escrow, vec![], 0, 0)];
+        for i in 0..relay_inputs {
+            inputs.push(TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(900 + i as u64), 0), vec![], 0, 0));
+        }
+        Transaction::new(0, inputs, outputs, 0, crate::subnets::SUBNETWORK_ID_NATIVE, 0, vec![])
+    }
+    fn first_dues() -> Vec<PalwEscrowDueV1> {
+        vec![
+            due(PalwEscrowDueKindV1::WorkPayment, Some(11), 300),
+            due(PalwEscrowDueKindV1::CourtFee, Some(12), 100),
+            due(PalwEscrowDueKindV1::Burn, None, 50),
+        ]
+    }
+
+    /// **Work payment + court fee + burn + change back to escrow (partial payment), then the final payment + return.** Each step is
+    /// a qualified spend checked against the rooted row and the schedule, conserves `in = paid + burned + returned + continued`,
+    /// and its transition is one the row rules admit; the continuation re-locks the escrow on the change-back output.
+    #[test]
+    fn funded_escrow_settlement_pays_burns_continues_and_returns_once() {
+        let r = row(true);
+        let schedule = PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, first_dues());
+        let tx1 = spend_of(outpoint(), vec![pay(11, 300), pay(12, 100), TransactionOutput::new(550, payer_spk()), pay(13, 20)], 1);
+        // Production: no schedule exists ⇒ refused.
+        assert_eq!(palw_escrow_qualified_spend_v1(&r, &tx1, &[1_000, 20], 500, None), Err(PalwEscrowRefusalV1::SettlementScheduleMissing));
+        assert_eq!(palw_escrow_fee_schedule_v1(&r), None);
+        let plan = palw_escrow_qualified_spend_v1(&r, &tx1, &[1_000, 20], 500, Some(&schedule)).unwrap();
+        assert_eq!(plan.path, PalwEscrowSpendPathV1::Settlement);
+        assert_eq!((plan.paid_now, plan.burned_now, plan.returned_now, plan.continued_now), (400, 50, 0, 550));
+        let r2 = plan.new;
+        assert_eq!(r2.funding_outpoint, TransactionOutpoint::new(tx1.id(), 2), "the escrow continues on the change-back output");
+        assert_eq!((r2.paid_sompi, r2.burned_sompi, r2.returned_sompi, r2.settled_by), (400, 50, 0, None));
+        assert_eq!(r2.unreleased_v1(), Ok(550));
+        assert!(r2.liability_open);
+        assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&r), Some(&r2)), Ok(()));
+        // The old outpoint is gone: spending it again names nothing.
+        assert_eq!(palw_escrow_qualified_spend_v1(&r2, &tx1, &[1_000, 20], 501, Some(&schedule)), Err(PalwEscrowRefusalV1::NotEscrowInput));
+        // Once-only: the same dues against the continued row pay nothing more, and a bare change-back is not a settlement.
+        let idle = spend_of(r2.funding_outpoint, vec![TransactionOutput::new(550, payer_spk())], 0);
+        assert_eq!(palw_escrow_qualified_spend_v1(&r2, &idle, &[550], 501, Some(&schedule)), Err(PalwEscrowRefusalV1::NothingToSettle));
+        // The entry must carry the CURRENT unreleased value, not the original amount.
+        assert_eq!(palw_escrow_qualified_spend_v1(&r2, &idle, &[1_000], 501, Some(&schedule)), Err(PalwEscrowRefusalV1::EntryMismatch));
+
+        // The liability resolves (the fold's sweep); one more work due, then everything left returns and the row settles.
+        let mut r3 = r2;
+        r3.liability_open = false;
+        assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&r2), Some(&r3)), Ok(()));
+        let mut dues = first_dues();
+        dues.push(due(PalwEscrowDueKindV1::WorkPayment, Some(11), 100));
+        let schedule = PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, dues);
+        let tx2 = spend_of(r3.funding_outpoint, vec![pay(11, 100), TransactionOutput::new(450, payer_spk())], 0);
+        let last = palw_escrow_qualified_spend_v1(&r3, &tx2, &[550], 600, Some(&schedule)).unwrap();
+        assert_eq!((last.paid_now, last.burned_now, last.returned_now, last.continued_now), (100, 0, 450, 0));
+        let done = last.new;
+        assert_eq!((done.paid_sompi, done.burned_sompi, done.returned_sompi), (500, 50, 450));
+        assert_eq!(done.paid_sompi + done.burned_sompi + done.returned_sompi + done.unreleased_v1().unwrap(), done.amount_sompi);
+        assert_eq!((done.settled_by, done.settled_daa, done.liability_open), (Some(tx2.id()), 600, false));
+        assert_eq!(done.funding_outpoint, r3.funding_outpoint, "the settling spend consumed the current outpoint");
+        assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&r3), Some(&done)), Ok(()));
+        assert_eq!(palw_escrow_qualified_spend_v1(&done, &tx2, &[550], 601, Some(&schedule)), Err(PalwEscrowRefusalV1::AlreadySettled));
+    }
+
+    /// Every way a settlement can lie is refused by name.
+    #[test]
+    fn funded_escrow_settlement_refuses_wrong_payees_prefixes_and_overdraws() {
+        let r = row(true);
+        let schedule = PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, first_dues());
+        let ok_outputs = || vec![pay(11, 300), pay(12, 100), TransactionOutput::new(550, payer_spk())];
+        // Another contract's schedule.
+        let foreign = PalwEscrowFeeScheduleV1::test_only_v1(h(99), first_dues());
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &spend_of(outpoint(), ok_outputs(), 0), &[1_000], 500, Some(&foreign)),
+            Err(PalwEscrowRefusalV1::SettlementRuleMismatch)
+        );
+        // Wrong payee, wrong amount, missing payee output.
+        for outputs in [
+            vec![pay(14, 300), pay(12, 100), TransactionOutput::new(550, payer_spk())],
+            vec![pay(11, 299), pay(12, 100), TransactionOutput::new(551, payer_spk())],
+            vec![],
+        ] {
+            assert_eq!(
+                palw_escrow_qualified_spend_v1(&r, &spend_of(outpoint(), outputs, 0), &[1_000], 500, Some(&schedule)),
+                Err(PalwEscrowRefusalV1::PayeeOutputMismatch)
+            );
+        }
+        // The change-back must be exact and the payer's.
+        for change in [TransactionOutput::new(549, payer_spk()), pay(13, 550)] {
+            assert_eq!(
+                palw_escrow_qualified_spend_v1(&r, &spend_of(outpoint(), vec![pay(11, 300), pay(12, 100), change], 0), &[1_000], 500, Some(&schedule)),
+                Err(PalwEscrowRefusalV1::ReturnOutputMismatch)
+            );
+        }
+        // The burn is inside the fee: an extra output drawing on it is escrow-funded.
+        let skim = spend_of(outpoint(), vec![pay(11, 300), pay(12, 100), TransactionOutput::new(550, payer_spk()), pay(13, 50)], 0);
+        assert_eq!(palw_escrow_qualified_spend_v1(&r, &skim, &[1_000], 500, Some(&schedule)), Err(PalwEscrowRefusalV1::EscrowFundsOtherOutputs));
+        // A consumed value that is not a due boundary (paid twice / out of order).
+        let mut off = r;
+        off.paid_sompi = 200;
+        off.funding_outpoint = TransactionOutpoint::new(h(78), 0);
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&off, &spend_of(off.funding_outpoint, vec![TransactionOutput::new(800, payer_spk())], 0), &[800], 500, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::SettlementRuleMismatch)
+        );
+        // Dues beyond what the escrow holds.
+        let greedy = PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, vec![due(PalwEscrowDueKindV1::WorkPayment, Some(11), 1_001)]);
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &spend_of(outpoint(), vec![pay(11, 1_001)], 1), &[1_000, 5], 500, Some(&greedy)),
+            Err(PalwEscrowRefusalV1::Conservation)
+        );
+        // A burn with a payee, or a payment without one, is not a due the rule knows.
+        let malformed = PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, vec![due(PalwEscrowDueKindV1::Burn, Some(11), 10)]);
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&r, &spend_of(outpoint(), vec![TransactionOutput::new(990, payer_spk())], 0), &[1_000], 500, Some(&malformed)),
+            Err(PalwEscrowRefusalV1::SettlementRuleMismatch)
+        );
+        // A burn-everything settlement drains the row and settles it (nothing left to answer with).
+        let all_burn = PalwEscrowFeeScheduleV1::test_only_v1(r.contract_id, vec![due(PalwEscrowDueKindV1::Burn, None, 1_000)]);
+        let burned = palw_escrow_qualified_spend_v1(&r, &spend_of(outpoint(), vec![], 0), &[1_000], 500, Some(&all_burn)).unwrap();
+        assert_eq!((burned.burned_now, burned.new.burned_sompi, burned.new.liability_open), (1_000, 1_000, false));
+        assert!(burned.new.settled_by.is_some());
+    }
+
+    /// **Item 2: the liability clears only when no pursuit is open** — on a verdict, a discharge, or past the hard deadline.
+    #[test]
+    fn funded_escrow_liability_resolves_on_verdict_discharge_or_hard_deadline_only() {
+        let r = row(true); // hard deadline 10,100
+        let live = PalwEscrowClaimLiabilityViewV1 { open_courts: 0, claim_live: true, claim_voided: false, post_final_liability: false };
+        assert!(!palw_escrow_liability_resolved_v1(&r, &live, 5_000), "a live claim keeps its escrow");
+        assert!(palw_escrow_liability_resolved_v1(&r, &live, 10_101), "past the hard deadline nothing new can start");
+        assert!(!palw_escrow_liability_resolved_v1(&r, &live, 10_100), "the deadline itself is still actionable");
+        let pursued = PalwEscrowClaimLiabilityViewV1 { open_courts: 1, ..live };
+        assert!(!palw_escrow_liability_resolved_v1(&r, &pursued, 50_000), "an open pursuit holds it even past the deadline");
+        let verdict = PalwEscrowClaimLiabilityViewV1 { claim_voided: true, ..live };
+        assert!(palw_escrow_liability_resolved_v1(&r, &verdict, 5_000));
+        let discharged = PalwEscrowClaimLiabilityViewV1 { claim_live: false, ..live };
+        assert!(palw_escrow_liability_resolved_v1(&r, &discharged, 5_000));
+        let post_final = PalwEscrowClaimLiabilityViewV1 { claim_live: false, post_final_liability: true, ..live };
+        assert!(!palw_escrow_liability_resolved_v1(&r, &post_final, 5_000), "a post-Final liability record keeps it convictable");
+    }
+
+    /// **Item 3: a settled row retires only past its retention after the settling spend; an unsettled row never does.**
+    #[test]
+    fn funded_escrow_rows_retire_only_settled_and_past_retention() {
+        let r = row(false);
+        assert!(!palw_escrow_row_retirable_v1(&r, u64::MAX, Some(1)));
+        let mut settled = r;
+        settled.returned_sompi = 1_000;
+        settled.settled_by = Some(h(5));
+        settled.settled_daa = 10_200;
+        settled.check_v1().unwrap();
+        assert!(!palw_escrow_row_retirable_v1(&settled, 10_300, Some(100)));
+        assert!(palw_escrow_row_retirable_v1(&settled, 10_301, Some(100)));
+        assert!(!palw_escrow_row_retirable_v1(&settled, u64::MAX, None), "below the fence nothing retires");
+        let mut far = settled;
+        far.settled_daa = u64::MAX - 1;
+        far.accepted_daa = 0;
+        assert!(!palw_escrow_row_retirable_v1(&far, u64::MAX, Some(100)), "an overflowing horizon never retires");
+        assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&settled), None), Ok(()));
+        assert_eq!(palw_escrow_row_transition_v1(&h(98), Some(&settled), None), Err(PalwEscrowRefusalV1::Transition));
     }
 }
