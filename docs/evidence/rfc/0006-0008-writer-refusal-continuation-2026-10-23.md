@@ -175,3 +175,19 @@ retention because the shared fixture specified slash value 1 whereas its
 existing floor specifies 5. The fixture now reads that value from its floor
 row rather than changing any network parameter. The runtime recheck is
 compiling; output: `/tmp/misaka-rfc06-registered-profile-recheck.log`.
+
+The corrected registration test passed (1 test). A further run of native
+writer, reader/router, manual wire and aux registry controls passed 26 tests
+(`/tmp/misaka-rfc06-profile-wire-controls.log`). These are local library/fold
+controls; they do not establish a model-wide cost measurement or real IBD.
+
+`5452a3186` supplies the existing GDN fold E2E fixture with a native kernel
+route and an explicit per-reader declaration authored from the fixture graph.
+It does not insert a profile directly into state, enable model certification,
+or guess a router in production. The two GDN E2E cases are rebuilding with
+output at `/tmp/misaka-rfc06-gdn-e2e-routing-recheck.log`.
+
+`f2cf3663a` additionally checks native carriage encode/decode/restore at the
+expected state root in the ordinary-registration test. That expanded test is
+queued with output at `/tmp/misaka-rfc06-profile-snapshot-recheck.log`; its
+outcome and the GDN E2E outcome are not yet known.
