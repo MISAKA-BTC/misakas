@@ -476,12 +476,27 @@ pub fn palw_court_ingress_claim_admits_v1(
     class_id: &Hash64,
     now: u64,
 ) -> Result<(), PalwStateV2Error> {
+    court_ingress_claim_admits_excluding_v1(state, params, class_id, now, None)
+}
+
+/// [`palw_court_ingress_claim_admits_v1`] for an admission path that has ALREADY written the new claim's row before the check
+/// (the RFC-0035 A funded install): the claim itself is not counted among the in-flight claims it competes with. `None` is the
+/// ordinary pre-write check (the attempt fold and the producer's pre-check). rfcgap-c (RFC-0014 2026-10-19 E / RFC-0026 §3.2 F03):
+/// the coordinator call the r5-f03-ingress lane exposed.
+pub(super) fn court_ingress_claim_admits_excluding_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    now: u64,
+    exclude: Option<Hash64>,
+) -> Result<(), PalwStateV2Error> {
     if court_ingress_schedule_at_v1(params, now).is_none() {
         return Ok(());
     }
     let cap = palw_max_concurrent_court_sessions_v1(params.turn_deadline_daa());
     let reserved_cap = crate::palw_court_paid_ingress_v1::palw_court_ingress_reserved_claims_cap_v1(cap);
-    let admitted = court_ingress_inflight_v1(state, params, now).len() as u64;
+    let admitted =
+        court_ingress_inflight_v1(state, params, now).into_iter().filter(|(_, id)| Some(*id) != exclude).count() as u64;
     if admitted >= reserved_cap {
         return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: *class_id, bucket: 0, admitted, cap: reserved_cap });
     }

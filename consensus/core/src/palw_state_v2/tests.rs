@@ -7939,6 +7939,48 @@ fn r5_f03_colluders_refill_every_slot_and_one_outsider_reaches_a_verdict_in_time
     set_palw_court_ingress_test_schedule_v1(None);
 }
 
+/// **rfcgap-c — RFC-0014 2026-10-19 E / RFC-0026 §3.2 (F03), the admission coordinator's call.** Past the outsider lane with an
+/// adopted (test-injected) ingress schedule, the attempt fold admits a new claim only while fewer than `R = ⌊cap / 2⌋` claims are
+/// in flight (each holds its own outside-side court reservation, ADR-0192): with the fixture's cap 8, four claims are recorded and
+/// the fifth is SKIPPED (the block still applies, no claim row). The producer's pre-check (`palw_court_claim_admission_v1`) gives
+/// the same refusal. With the schedule typed-missing, or below the lane fence, the fifth claim is recorded exactly as before.
+#[test]
+fn rfcgap_c_ingress_claim_admission_bounds_in_flight_claims_in_the_attempt_fold() {
+    use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
+    for (armed, schedule, fifth_recorded) in [
+        (true, Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), false),
+        (true, None, true),
+        (false, Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), true),
+    ] {
+        set_palw_court_ingress_test_schedule_v1(schedule);
+        let p = params().with_turn_deadline_daa(8).unwrap().with_court_outsider_lane_from_daa(armed.then_some(0));
+        let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
+        assert_eq!(crate::palw_court_paid_ingress_v1::palw_court_ingress_reserved_claims_cap_v1(cap), 4, "the fixture's R");
+        let genesis = PalwChainStateV2::genesis();
+        let (mut s, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let mut daa = 101u64;
+        for nonce in 1..=4u64 {
+            let env = attempt(40, nonce);
+            (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &[], Some(&env));
+            assert!(s.claim(&attempt_id_v2(&env.attempt)).is_some(), "armed {armed}: claim {nonce} of R is recorded");
+            daa += 1;
+        }
+        let fifth = attempt(40, 5);
+        let pre = palw_court_claim_admission_v1(&s, &p, &fifth.attempt.class_id, daa, daa.saturating_add(1_000_000), 0);
+        assert_eq!(pre.is_ok(), fifth_recorded, "armed {armed}, schedule {schedule:?}: the pre-check agrees with the fold: {pre:?}");
+        let (next, _) = apply(&s, &p, &ctx(daa, daa, daa), &[], Some(&fifth));
+        assert_eq!(
+            next.claim(&attempt_id_v2(&fifth.attempt)).is_some(),
+            fifth_recorded,
+            "armed {armed}, schedule {schedule:?}: the fifth in-flight claim"
+        );
+        if !fifth_recorded {
+            assert_eq!(next.claims.len(), s.claims.len(), "a skipped attempt writes no claim");
+        }
+    }
+    set_palw_court_ingress_test_schedule_v1(None);
+}
+
 #[test]
 fn a_guilty_verdict_voids_the_claim_and_a_late_verdict_changes_nothing() {
     let p = params();
