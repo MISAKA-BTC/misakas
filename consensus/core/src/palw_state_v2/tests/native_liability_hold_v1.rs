@@ -146,9 +146,72 @@ fn open_disputes_do_not_starve_a_later_payable_fee() {
     release_held_native_fees_v1(&mut b, 501, |_, item| item.job != payable.job).unwrap();
     assert_eq!(queued(&b.state, payable.queue), Some((h64(0xB1), 7_000)));
     assert!(held_native_fee_v1(&b.state, payable.family, &payable.job).is_none());
-    let still_held =
-        b.state.kernel_route.as_ref().unwrap().aux.keys().filter(|(table, _)| *table == PALW_NATIVE_LIABILITY_HOLD_TABLE_V1).count();
-    assert_eq!(still_held, PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1);
+    // audit A-5: the table also holds each row's horizon index (prefix 0x03), so count the held rows (prefix 0x01) and the index.
+    let count = |prefix: u8| {
+        b.state
+            .kernel_route
+            .as_ref()
+            .unwrap()
+            .aux
+            .keys()
+            .filter(|(table, key)| *table == PALW_NATIVE_LIABILITY_HOLD_TABLE_V1 && key.first() == Some(&prefix))
+            .count()
+    };
+    assert_eq!(count(crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_PREFIX_V1), PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1);
+    assert_eq!(count(crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1), PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1);
+}
+
+/// **audit A-5: the sweep is indexed by horizon and respects the pending-payout ceiling.** Rows not yet due are never decoded past
+/// the first future horizon; with the payout queue one short of its ceiling only one due fee is released this block, the other waits
+/// (held, its index intact) and is released by a later block once there is room. Release deletes the row and its index together.
+#[test]
+fn audit_a5_release_walks_the_horizon_index_and_respects_the_payout_ceiling() {
+    use crate::palw_native_liability_hold_v1::{PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1, palw_native_held_fee_horizon_key_v1};
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let item = |n: u64, horizon: u64| {
+        let mut r = PalwNativeHeldFeeRowV1 { horizon_daa: horizon, ..row(horizon) };
+        r.job[..8].copy_from_slice(&n.to_be_bytes());
+        r.income_root = r.job;
+        r.queue = h64(5_000 + n).as_bytes();
+        r
+    };
+    let (early_a, early_b, late) = (item(1, 300), item(2, 300), item(3, 900));
+    for r in [&late, &early_a, &early_b] {
+        hold_native_fee_v1(&mut b, r).unwrap();
+    }
+    let route = |b: &TransitionBuilder<'_>| b.state.kernel_route.clone().unwrap();
+    assert!(route(&b).aux.contains_key(&(
+        PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+        palw_native_held_fee_horizon_key_v1(late.horizon_daa, late.family, &late.job)
+    )));
+    // Fill the payout queue to one below its ceiling.
+    for i in 0..(PALW_V2_MAX_PENDING_PAYOUTS - 1) as u64 {
+        b.write_payout(h64(900_000 + i), Some(PalwPayoutV2 { payload: h64(7), amount: 1 })).unwrap();
+    }
+    release_held_native_fees_v1(&mut b, 301, |_, _| false).unwrap();
+    let released = [early_a, early_b].iter().filter(|r| held_native_fee_v1(&b.state, r.family, &r.job).is_none()).count();
+    assert_eq!(released, 1, "one payout row of room: one release this block");
+    assert_eq!(b.state.pending_payouts.len(), PALW_V2_MAX_PENDING_PAYOUTS, "never past the ceiling");
+    assert!(held_native_fee_v1(&b.state, late.family, &late.job).is_some(), "a future horizon is not due");
+    // Room again: the waiting fee is released, the future one still is not; each release took its index with it.
+    for i in 0..(PALW_V2_MAX_PENDING_PAYOUTS - 1) as u64 {
+        b.write_payout(h64(900_000 + i), None).unwrap();
+    }
+    release_held_native_fees_v1(&mut b, 302, |_, _| false).unwrap();
+    assert!([early_a, early_b].iter().all(|r| held_native_fee_v1(&b.state, r.family, &r.job).is_none()));
+    assert!(held_native_fee_v1(&b.state, late.family, &late.job).is_some());
+    let index: Vec<_> = route(&b)
+        .aux
+        .keys()
+        .filter(|(t, k)| *t == PALW_NATIVE_LIABILITY_HOLD_TABLE_V1 && k.first() == Some(&PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1))
+        .cloned()
+        .collect();
+    assert_eq!(index, vec![(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, palw_native_held_fee_horizon_key_v1(900, late.family, &late.job))]);
+    release_held_native_fees_v1(&mut b, 901, |_, _| false).unwrap();
+    assert!(held_native_fee_v1(&b.state, late.family, &late.job).is_none());
 }
 
 #[test]
