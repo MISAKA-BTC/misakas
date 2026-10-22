@@ -16,6 +16,8 @@ cfg_if::cfg_if! {
         mod logger;
 
         pub use appender::CRESCENDO_KEYWORD;
+        /// The file-log rotation window (G14 capacity lane: the log reclaimer and the logs budget read it).
+        pub use consts::{LOG_FILE_MAX_ROLLS, LOG_FILE_MAX_SIZE};
     }
 }
 
