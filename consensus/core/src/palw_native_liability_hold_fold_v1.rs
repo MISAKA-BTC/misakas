@@ -105,6 +105,8 @@ pub(super) fn release_native_fee_v1(
 /// nothing here (they never hold).
 fn after_held_fee_left_v1(builder: &mut TransitionBuilder<'_>, row: &PalwNativeHeldFeeRowV1) -> Result<(), PalwStateV2Error> {
     use crate::palw_native_liability_hold_v1::{PALW_NATIVE_FAMILY_JOB_V39, PALW_NATIVE_FAMILY_TEXT_V29};
+    // G14 r6 D4: the job's post-Final duty record (if any) leaves with its held fee.
+    super::palw_native_post_final_duty_v1::clear_native_post_final_duties_v1(builder, row)?;
     match row.family {
         PALW_NATIVE_FAMILY_JOB_V39 => super::palw_native_job_fold_v39::clear_held_producer_slot_v39(builder, row),
         PALW_NATIVE_FAMILY_TEXT_V29 => super::palw_flat_execution_fold_v11::text29_held_fee_left_v29(builder, row),

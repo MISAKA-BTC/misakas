@@ -207,6 +207,9 @@ mod palw_court_service_lifecycle_fold_v1;
 // G14 lane r5-f02-wire: RFC-0026 F02 default during the RFC08 post-Final liability hold (text29 / funded v11), dormant.
 #[path = "palw_native_post_final_default_fold_v1.rs"]
 mod palw_native_post_final_default_fold_v1;
+// G14 r6 D4: native post-Final duty clocks and answers for text29 / funded v11 (dormant).
+#[path = "palw_native_post_final_duty_v1.rs"]
+mod palw_native_post_final_duty_v1;
 // RFC-0032 A material intake fold (lane material-intake); dispatched from tag 255 (`MaterialIntakeV1`, lane r5-f03-ingress).
 #[path = "palw_court_shared_material_intake_fold_v1.rs"]
 #[cfg_attr(not(test), allow(dead_code))] // `expire_material_drafts` is test/sweep-only
@@ -14812,6 +14815,12 @@ fn apply_palw_transition_v7_inner(
     // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned
     // service profile only (none is pinned).
     palw_court_service_lifecycle_fold_v1::observe_court_service_block_v1(&mut builder, ctx)?;
+    // G14 r6 D3 (user decision 2026-10-22): resolved court end archives whose material horizon has passed are pruned, after this
+    // block's objects. Gated by the court service book (the archive's own existence condition; absent on every network today).
+    builder.sweep_resolved_court_archives_v1(ctx.daa_score)?;
+    // G14 r6 D4: native post-Final duty clocks (text29 / funded v11) record this block's court service opportunity. Dormant unless
+    // the liability hold, the conviction fence and a pinned service profile are all in force.
+    palw_native_post_final_duty_v1::observe_native_post_final_duties_v1(&mut builder, ctx)?;
     // G14 item 1 (lane r5): close funded-original liabilities whose exact predicate now holds (after this block's supply is
     // recorded). Dormant below `palw_tir_public_conviction_v1`; no funded row exists in production (schedule typed-missing).
     if builder.extras.tir_public_conviction_active {

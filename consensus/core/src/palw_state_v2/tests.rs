@@ -24,6 +24,8 @@ mod paid_claim_trap_v1;
 mod native_liability_hold_v1;
 // G14 lane r5-f02-wire: tag 178 dispatch, the F02 post-Final default / hold / recovery, the per-claim court index, bottom evidence.
 mod r5_f02_wire_v1;
+// G14 r6 D4: native post-Final duty clocks (text29 / funded v11).
+mod r6_d4_post_final_duty_v1;
 mod paid_consumer_retention_v1;
 // RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
 mod tir_fp_lane_v1;

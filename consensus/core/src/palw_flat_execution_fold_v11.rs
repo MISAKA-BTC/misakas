@@ -794,6 +794,14 @@ pub(super) fn apply(
         EXECUTION_ACTION_PUBLIC_FILING_V11 => court::file(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_RELEASE_LAPSED_SEAL_V11 => court::release_lapsed(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_TEXT_PUBLIC_FILING_V29 => text29::public_file(builder, ctx, signer, &p, body),
+        // G14 r6 D4: post-Final accusation / answer of a held text29 / funded v11 Final (dormant below the liability hold and the
+        // TIR public conviction fence; refusals are dropped objects like every action here).
+        super::palw_native_post_final_duty_v1::POST_FINAL_ACCUSE_ACTION_V1 => {
+            super::palw_native_post_final_duty_v1::apply_accuse_action_v1(builder, ctx, signer, body)
+        }
+        super::palw_native_post_final_duty_v1::POST_FINAL_ANSWER_ACTION_V1 => {
+            super::palw_native_post_final_duty_v1::apply_answer_action_v1(builder, ctx, signer, body)
+        }
         EXECUTION_ACTION_DEMAND_V11 => da::demand(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_ANSWER_V11 => da::answer(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_SETTLE_DEMAND_V11 => da::settle(builder, ctx, signer, &p, body),
