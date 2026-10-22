@@ -288,15 +288,38 @@ pub fn palw_model_tier_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, 
     palw_model_tier_at_v1(state, params, class_id, daa)
 }
 
-/// The tier of an ALLOCATION model key (a class, or a model line keyed by its own id — read through its founding class).
+/// **The tier of an ALLOCATION model key** — a class (its founding line), or a model line keyed by its own id.
+///
+/// audit(compute-weight) W-1 (§9.1–9.2, ADR-0175): a tier belongs to `(model id, artifact root)`, never to the graph a model runs.
+/// * **A non-founding line is a later registration** — its own id, its own root (other weights: `claim_artifact_root` refuses the
+///   class's own root to any other line) — so it is `Registered` (0.3), whatever its class's tier. It used to be read through
+///   `line.class_id`, i.e. the CLASS's root and registrant, so any weights on an approved graph — an all-zero artifact whose trace costs
+///   nothing — collected 1.0 outside the registered tier's cap κ.
+/// * **A class keeps an approved tier only while every root in force on its founding line is the class's own** (the root a listing
+///   names, or the one the genesis assembly registered). A claim naming a later founding-line version is keyed to the class id
+///   (`artifact_line_of_root`), so an approved id running unlisted weights is `Registered` until those weights leave force.
+///
+/// Read only by the tiered allocation roll, i.e. past `palw_model_tier_v1` (dormant on every preset): below it nothing changes.
 pub fn palw_model_tier_of_model_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, model: &Hash64, daa: u64) -> PalwModelTierV1 {
-    if state.class(model).is_some() {
-        return palw_model_tier_at_v1(state, params, model, daa);
+    let Some(class) = state.class(model) else {
+        // A model line that is not a class's founding line, or an unknown key: never in `ApprovedModels`.
+        return PalwModelTierV1::Registered;
+    };
+    let tier = palw_model_tier_at_v1(state, params, model, daa);
+    if tier.is_approved() && palw_founding_line_runs_another_root_v1(state, model, &class.artifact_root, daa) {
+        return PalwModelTierV1::Registered;
     }
-    match state.model_line(model) {
-        Some(line) => palw_model_tier_at_v1(state, params, &line.class_id, daa),
-        None => PalwModelTierV1::Registered,
+    tier
+}
+
+/// Whether the class's founding line (its id is the class id) has a version in force at `daa` whose root is not `class_root`. A
+/// founding line nothing touched is the class's registration (version 1 = `class_root`) and answers `false`.
+fn palw_founding_line_runs_another_root_v1(state: &PalwChainStateV2, class_id: &Hash64, class_root: &Hash64, daa: u64) -> bool {
+    let Some(line) = state.model_line_or_founding(class_id) else { return false };
+    if line.retired_daa.is_some_and(|retired| daa >= retired) {
+        return false;
     }
+    (1..=line.versions_published).any(|n| state.model_version(class_id, n).is_some_and(|v| v.in_force_at(daa) && v.root != *class_root))
 }
 
 impl PalwStateParamsV2 {
