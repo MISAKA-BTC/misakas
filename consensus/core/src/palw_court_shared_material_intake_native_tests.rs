@@ -416,6 +416,8 @@ fn fix_b09_a_nonzero_material_fee_refuses_the_intake() {
     set_material_intake_test_schedule_v1(Some(material_test_schedule()));
     material_intake(&mut b, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin)).unwrap();
     set_material_intake_test_schedule_v1(None);
+}
+
 /// **values/p1-measure (2026-10-22, test side only): material intake Begin / Part / Finish wall time and retained bytes.** Ignored.
 /// Uploads every step leaf, every read parameter and the prompt of the history fixture through the real intake fold (the ML-DSA-87
 /// check, the checkpoint clone of the state, the authentication at Finish), `MEASURE_RUNS` times (default 21; the first run is the

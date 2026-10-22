@@ -12,6 +12,47 @@ fn zero_capacity(builder: &mut TransitionBuilder<'_>) -> std::sync::Arc<NativeDe
 }
 
 #[test]
+fn reader_router_consumer_propagates_late_writer_capacity_refusal() {
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut parent = PalwChainStateV2::genesis();
+    parent.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
+        crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h64(1), h64(2)),
+        None,
+        misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 1, burned: 0 },
+    ));
+    // Measure the concrete request of this write, not a policy or model-wide limit.
+    // One byte below it passes the consumer's earlier reservations but refuses
+    // the last reservation inside write_kernel_row, whose Result was discarded.
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
+        memory_bytes: u64::MAX, database_bytes: 0,
+    });
+    let mut builder = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    builder.write_reader_router_cell_v2(&[7; 64], Some(&11u64)).unwrap();
+    let required = checker.outstanding().0;
+    assert!(required > 0);
+    assert!(!builder.entries.is_empty());
+    drop(builder);
+    assert_eq!(checker.outstanding(), (0, 0));
+
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
+        memory_bytes: required - 1, database_bytes: 0,
+    });
+    let mut builder = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(
+        builder.write_reader_router_cell_v2(&[7; 64], Some(&11u64)),
+        Err(PalwStateV2Error::NativeResource(_))
+    ));
+    assert!(checker.outstanding().0 > 0, "earlier reservations were admitted");
+    assert_eq!(builder.state, parent);
+    assert!(builder.entries.is_empty());
+    drop(builder);
+    assert_eq!(checker.outstanding(), (0, 0));
+}
+
+#[test]
 fn remaining_writers_refuse_locally_before_state_or_journal_change() {
     let p = params();
     let extras = PalwTransitionExtrasV1::default();

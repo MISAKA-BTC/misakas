@@ -351,6 +351,8 @@ fn fix_b02_a_live_accusation_is_kept_and_only_authenticated_material_discharges(
     );
     // A fresh accusation past the deadline cannot wipe the pending default.
     assert!(accuse_post_final_v1(&mut b, &ctx(4, deadline(&p) + 1, 4), &bond_key(7), family, &JOB, [0x79; 64]).is_err());
+}
+
 /// **values/p1-measure (2026-10-22, test side only): post-Final duty accusation / answer / per-block observe / default sweep wall
 /// time at N held fees.** Ignored. `MEASURE_SCALES` (default `10,100,1000`) is the number of held fees in the parent (and, for the
 /// observe and sweep, the number of open accusations); `MEASURE_RUNS` (default 21; run 0 is the warm-up) fresh builders per op.
