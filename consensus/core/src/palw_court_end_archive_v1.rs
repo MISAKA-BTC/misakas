@@ -195,6 +195,22 @@ impl PalwChainStateV2 {
     pub fn court_archive_holds_bond_v1(&self, bond: &PalwBondKeyV2) -> bool {
         self.staged_cache_lease_rows_v1().any(|(_,r)| matches!(r, Row::CourtEndArchive(a) if self.archive_pending_nominal_v1(a,bond) != 0))
     }
+    /// RFC-0034 S1 / ADR-0201: a side is resolved only by an actual applied
+    /// native debit, a fulfilled native close, or a rooted on-time positive
+    /// fulfillment record. Late or unclocked material never resolves a side.
+    pub fn court_archive_side_resolved_v1(&self,a:&PendingCourtArchiveV1,side:PalwCourtSideV1)->bool{
+        a.applied_deposit_debits.contains_key(&side) || a.fulfilled_groups.contains(&side)
+            || self.qualified_archive_deposit_v1(a.session_id,side)
+    }
+    /// Every declared side is resolved AND neither financial actor retains a
+    /// nominal hold (including the unresolved court stake of an uncaptured or
+    /// related ending, which therefore is never prunable). Read-only.
+    pub fn court_archive_fully_resolved_v1(&self,id:Hash64)->bool{
+        let Some(a)=self.court_end_archive_v1(id) else {return false};
+        a.groups.keys().all(|side|self.court_archive_side_resolved_v1(a,*side))
+            && self.archive_pending_nominal_v1(a,&a.producer)==0
+            && self.archive_pending_nominal_v1(a,&a.session.challenger_bond)==0
+    }
     fn archive_pending_nominal_v1(&self,a:&PendingCourtArchiveV1,bond:&PalwBondKeyV2)->u128{
         let discharged=a.groups.iter().filter(|(side,g)|g.declarer==*bond
             && !a.applied_deposit_debits.contains_key(side) && !a.fulfilled_groups.contains(side)

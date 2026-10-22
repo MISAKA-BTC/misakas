@@ -49,6 +49,7 @@ impl<'a> TransitionBuilder<'a> {
             court_end_evidence: None,
             court_settled_deposit: None,
             court_fulfilled_group: None,
+            court_archive_prune: None,
             state,
             entries: Vec::new(),
             registration_index: None,

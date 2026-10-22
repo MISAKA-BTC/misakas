@@ -13122,6 +13122,9 @@ struct TransitionBuilder<'a> {
     court_end_evidence: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::CourtEndEvidenceV1>>,
     court_settled_deposit: Option<(Hash64, PalwCourtSideV1, u64)>,
     court_fulfilled_group: Option<(Hash64, PalwCourtSideV1, crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwCourtCloseGroupV2>)>,
+    /// RFC-0034 S1 pruning scope: the one archived session whose rows the
+    /// private resolved-archive pruner may remove inside this call only.
+    court_archive_prune: Option<Hash64>,
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
     entries: Vec<PalwDeltaEntryV2>,
