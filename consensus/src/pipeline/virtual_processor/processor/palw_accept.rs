@@ -2240,6 +2240,9 @@ impl VirtualStateProcessor {
             tir_designated_answers_active: self.palw_tir_designated_answers_v1_at(daa_score),
             // RFC-0024 (tags 201-204): the bounded door's mirror, written explicitly for the same reason.
             tir_bounded_door_active: self.palw_tir_bounded_door_v1_at(daa_score),
+            // Lane r6-p2-shared (RFC-0024 A, T15): the fence's DAA, so the fold keys the position terminal on the CLAIM's
+            // `accepted_daa` (an older claim keeps the whole-tile close).
+            tir_bounded_door_from_daa: self.palw_tir_bounded_door_v1.filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()).map(|f| f.daa_score()),
             // ADR-0100 Decision 4: one shard's seats and quorum ride to the fold when per-shard
             // licensing is armed — the panel parameters the draw and the acceptance layer use.
             shard_licensing: if self.palw_shard_licensing_at(daa_score) {

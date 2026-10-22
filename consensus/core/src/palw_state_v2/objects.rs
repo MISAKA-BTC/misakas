@@ -711,6 +711,22 @@ fn apply_object_inner(
                     .ok_or(PalwStateV2Error::NoDissection(dissection.session_id))?;
                 crate::palw_tir_position_terminal_v2::check_tir_position_dissection_v2(phase, dissection)
                     .map_err(|e| PalwStateV2Error::DissectionRefused(dissection.session_id, e.to_string()))?;
+                // Lane r6-p2-shared: where the round is OWED (a new claim's terminal, `owe_tir_position_round_v2`) it is
+                // installed — `Terminal` with the positions pending and the challenger's per-turn deadline — so the
+                // position close is judged against the round ON CHAIN and the whole-tile close is retired. Elsewhere (a
+                // claim admitted before the fence) it stays stateless, as before.
+                if phase.awaits_position_round_v2() {
+                    let session_id = dissection.session_id;
+                    let session =
+                        builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+                    let mut phase = phase.as_ref().clone();
+                    phase
+                        .apply_position_round_v2(&dissection.round, ctx.daa_score, builder.params.turn_deadline_daa())
+                        .map_err(|e| PalwStateV2Error::DissectionRefused(session_id, e.to_string()))?;
+                    cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
+                    builder.write_tir_dissection(session_id, Some(phase))?;
+                    builder.write_court(session_id, Some(session))?;
+                }
             }
         }
         PalwConsensusObjectV2::TirPositionClosedV2 { close } => {
@@ -729,6 +745,20 @@ fn apply_object_inner(
             if builder.extras.tir_bounded_door_active {
                 let session_id = body.session_id;
                 let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+                // Lane r6-p2-shared: a bundle ending on positions (version 3) only where this claim's position terminal
+                // applies — an older claim keeps the whole-tile close, which a disclosed position round would retire.
+                if body.disclosure.version == crate::palw_tir_dissect_v1::PALW_TIR_LOOKAHEAD_POSITION_VERSION_V2
+                    && !builder
+                        .state
+                        .claims
+                        .get(&session.claim)
+                        .is_some_and(|claim| palw_tir_position_terminal_applies_v2(builder.extras, claim.accepted_daa))
+                {
+                    return Err(PalwStateV2Error::DissectionRefused(
+                        session_id,
+                        "a lookahead ending on positions for a claim whose position terminal does not apply".into(),
+                    ));
+                }
                 let mut phase =
                     builder.state.tir_dissections.get(&session_id).ok_or(PalwStateV2Error::NoDissection(session_id))?.as_ref().clone();
                 phase
@@ -739,6 +769,7 @@ fn apply_object_inner(
                         builder.params.turn_deadline_daa(),
                     )
                     .map_err(|e| PalwStateV2Error::DissectionRefused(session_id, e.to_string()))?;
+                owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
                 cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
                 builder.write_tir_dissection(session_id, Some(phase))?;
                 builder.write_court(session_id, Some(session))?;
@@ -759,6 +790,7 @@ fn apply_object_inner(
                         builder.params.turn_deadline_daa(),
                     )
                     .map_err(|e| PalwStateV2Error::DissectionRefused(session_id, e.to_string()))?;
+                owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
                 cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
                 builder.write_tir_dissection(session_id, Some(phase))?;
                 builder.write_court(session_id, Some(session))?;
@@ -3167,6 +3199,7 @@ fn apply_object_inner(
                 builder.params.turn_deadline_daa(),
             )
             .map_err(|e| refused(e.to_string()))?;
+            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
             builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;
@@ -3204,6 +3237,7 @@ fn apply_object_inner(
                 builder.params.turn_deadline_daa(),
             )
             .map_err(|e| refused(e.to_string()))?;
+            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
             builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;
@@ -3240,6 +3274,7 @@ fn apply_object_inner(
                 builder.params.turn_deadline_daa(),
             )
             .map_err(|e| refused(e.to_string()))?;
+            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
             builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;
@@ -3251,6 +3286,7 @@ fn apply_object_inner(
             phase
                 .apply_round(round, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
             builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;
@@ -3262,6 +3298,7 @@ fn apply_object_inner(
             phase
                 .apply_choice(choice, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            owe_tir_position_round_v2(&builder.state, builder.extras, &session, &mut phase);
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
             builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;

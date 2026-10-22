@@ -11,6 +11,12 @@ use borsh::{BorshSerialize,BorshDeserialize};
 /// Actual root round/terminal geometry is checked too; this is no new clock/cap.
 pub const SHARED_TIR_MAX_PATH_V1: usize = u32::BITS as usize;
 pub const SHARED_TIR_ROUND_CONTEXT_V1: &[u8] = b"misaka-palw/court-shared-tir-round/v1/mldsa87";
+/// **RFC-0024 A on the shared court (lane r6-p2-shared).** A round control at version 2 is the terminal tile's POSITION
+/// round — one claim per history position, folding exactly to the tile's claim — stored at the tile's own path (a slot no
+/// version-1 round can fill: a terminal phase refuses a tile round). The row layout is unchanged; the fold writes it only
+/// past `palw_tir_bounded_door_v1`. It is the writer row a shared position bottom resolves.
+pub const SHARED_TIR_POSITION_ROUND_VERSION_V2: u16 = 2;
+fn round_version_ok(v:u16)->bool {v==1 || v==SHARED_TIR_POSITION_ROUND_VERSION_V2}
 #[derive(Clone,Debug,PartialEq,Eq,BorshSerialize)]
 pub struct SignedSharedTirRoundV1 {
     pub version:u16,pub claim:Hash64,pub leaf:u64,pub root_id:Hash64,pub path:Vec<u8>,
@@ -18,7 +24,7 @@ pub struct SignedSharedTirRoundV1 {
 }
 impl SignedSharedTirRoundV1 {
     pub fn signing_message(&self,network:Hash64)->Result<Hash64,String> {
-        if self.version!=1 || self.path.len()>SHARED_TIR_MAX_PATH_V1 {return Err("shared round version/path".into());}
+        if !round_version_ok(self.version) || self.path.len()>SHARED_TIR_MAX_PATH_V1 {return Err("shared round version/path".into());}
         stream_digest(b"misaka-palw/shared-tir-round-intent/v1",&(network,self.version,self.claim,self.leaf,
             self.root_id,&self.path,self.parent_id,self.signer,self.round.as_ref()))
     }
@@ -49,7 +55,7 @@ pub struct PreparedSharedTirRoundV1 {
 fn check_parts(state:&PalwChainStateV2,root:&SharedTirRootRowV1,rules:&NativeCourtRulesV1,
     control:&SignedSharedTirRoundV1,pubkey:&[u8])->Result<(),String>{
     let c=crate::palw_court_shared_tir_state_v1::context(state,control.claim)?;
-    if control.version!=1 || control.path.len()>SHARED_TIR_MAX_PATH_V1 || control.claim!=root.control.claim
+    if !round_version_ok(control.version) || control.path.len()>SHARED_TIR_MAX_PATH_V1 || control.claim!=root.control.claim
         || control.leaf!=root.control.leaf || control.root_id!=root_statement_id(root)? || control.signer!=root.control.signer
         || shared_tir_root_policy_id_v1(rules)?!=root.control.policy_id
         || rules.at.daa_score<root.rules.at.daa_score || rules.at.daa_score>=c.hard_daa
@@ -74,6 +80,8 @@ pub fn prepare_shared_tir_round_v1(state:&PalwChainStateV2,claim:Hash64,leaf:u64
         let key=Key::CourtSharedRound(round_id(root_id,&path[..depth])?);
         let Some(Row::CourtSharedRound(a))=state.staged_court_row_v1(&key) else{return Err("shared round ancestor missing".into());};
         a.check(&key)?;
+        // A position round (version 2) is a terminal leaf of the tree, never an ancestor of a deeper path.
+        if a.control.version!=1 {return Err("shared round ancestor is a position round".into());}
         if a.control.path!=path[..depth] || a.control.parent_id!=parent_id || a.material_until_daa!=r.material_until_daa {
             return Err("shared round ancestor substitutes path/parent/horizon".into());
         }
@@ -103,6 +111,12 @@ fn check_numerical_context(state:&PalwChainStateV2,r:&SharedTirRootRowV1,rules:&
         if a.rules.at.daa_score>rules.at.daa_score {return Err("shared round precedes accepted ancestor".into());}
     }
     if control.root_id!=root_statement_id(r)? {return Err("shared round root substitution".into());}
+    if control.version==SHARED_TIR_POSITION_ROUND_VERSION_V2 {
+        // The terminal tile's position round, checked as the dissection's own (shape, intervals, exact fold to the tile).
+        let narrowing=prepared.phase.position_narrowing_v1().ok_or("shared position round before a terminal tile")?;
+        if !narrowing.awaits_position_round() {return Err("shared position round on a one-position tile".into());}
+        return narrowing.check_position_round_v1(&control.round).map_err(|e|e.to_string());
+    }
     prepared.phase.check_unrooted_round_v1(&control.round)
 }
 #[derive(Clone,Debug,PartialEq,Eq,BorshSerialize)]
@@ -130,7 +144,7 @@ impl BorshDeserialize for SharedTirRoundRowV1 {
 }
 impl SharedTirRoundRowV1 {
     pub fn check(&self,key:&Key)->Result<(),String>{
-        if self.version!=1 || self.control.version!=1 || *key!=Key::CourtSharedRound(self.control.id()?)
+        if self.version!=1 || !round_version_ok(self.control.version) || *key!=Key::CourtSharedRound(self.control.id()?)
             || self.signer_pubkey.len()!=crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN
             || self.control.signature.len()!=crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {return Err("shared round row shape/key".into());}
         Ok(())

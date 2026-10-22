@@ -172,9 +172,16 @@ pub fn check_tir_position_dissection_v2(
     if d.version != PALW_TIR_POSITION_OBJECT_VERSION_V2 {
         return Err(E::UnsupportedVersion(d.version));
     }
-    let narrowing = phase.position_narrowing_v1().ok_or(E::NoPositionRound)?;
+    // Lane r6-p2-shared: an OWED position round (the phase waits on the responder) narrows as the terminal it will be.
+    let narrowing = phase.position_narrowing_v2().ok_or(E::NoPositionRound)?;
     if !narrowing.awaits_position_round() {
         return Err(E::NoPositionRound);
+    }
+    // Once a round is ON CHAIN (tag 201 or a version-3 lookahead), the close names a position of THAT round only.
+    if let Some(disclosed) = phase.disclosed_position_round_v2() {
+        if d.round.children.as_slice() != disclosed {
+            return Err(E::Binding("not the position round on chain"));
+        }
     }
     let (from, to) = narrowing.tile_range();
     if d.session_id != phase.session_id() {

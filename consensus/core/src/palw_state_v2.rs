@@ -16347,6 +16347,43 @@ pub(crate) fn court_session_challenger_declared_at_the_ir_terminal_v1(
 
 /// **RFC-0002 F7: [`cap_session_rung_deadline_v2`] for an IR phase** — the same reserve, under the
 /// same ruleset rule (a ruleset with no rung clock is not given one by the cap).
+/// **RFC-0024 A / T15 (lane r6-p2-shared): does this claim's dissection end on the on-chain position round?** Only past
+/// `palw_tir_bounded_door_v1`, only for a claim ADMITTED at or past it (an older claim keeps the whole-tile close it was
+/// admitted under), and only once a position witness bound is adopted — without one every position close is refused
+/// (`PositionWitnessBudgetIncomplete`), and retiring the whole-tile close then would let fraud reach the backstop.
+pub fn palw_tir_position_terminal_applies_v2(extras: &PalwTransitionExtrasV1, claim_accepted_daa: u64) -> bool {
+    palw_tir_position_terminal_applies_with_v2(
+        extras.tir_bounded_door_active,
+        extras.tir_bounded_door_from_daa,
+        claim_accepted_daa,
+        crate::palw_tir_position_terminal_v2::PALW_TIR_POSITION_WITNESS_BUDGET_V2,
+    )
+}
+
+/// [`palw_tir_position_terminal_applies_v2`] over its parts (the adopted budget passed in, so it is testable before one is).
+pub fn palw_tir_position_terminal_applies_with_v2(
+    door_active: bool,
+    door_from_daa: Option<u64>,
+    claim_accepted_daa: u64,
+    position_witness_budget: Option<u64>,
+) -> bool {
+    door_active && door_from_daa.is_some_and(|fence| claim_accepted_daa >= fence) && position_witness_budget.is_some()
+}
+
+/// Put a NEW claim's terminal tile on the owed position round (no-op otherwise; see
+/// `PalwTirDissectPhaseV1::owe_position_round_v2`). Called by every fold arm that can make a phase terminal, BEFORE the
+/// session cap and `write_court` (which re-indexes the session under the phase's clock).
+fn owe_tir_position_round_v2(
+    state: &PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    session: &PalwCourtSessionStateV2,
+    phase: &mut crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+) {
+    if state.claims.get(&session.claim).is_some_and(|claim| palw_tir_position_terminal_applies_v2(extras, claim.accepted_daa)) {
+        phase.owe_position_round_v2();
+    }
+}
+
 fn cap_tir_phase_deadline_v1(
     phase: &mut crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
     session: &PalwCourtSessionStateV2,
@@ -20319,6 +20356,10 @@ pub struct PalwTransitionExtrasV1 {
     /// RFC-0024 §4 / §5: `palw_tir_bounded_door_v1` in force at this block — the position terminal and lookahead moves
     /// (tags 201-204) fold only where it is. False on every preset (a strict no-op, as tag 245 below its fence).
     pub tir_bounded_door_active: bool,
+    /// Lane r6-p2-shared (RFC-0024 A, T15): the DAA `palw_tir_bounded_door_v1` is armed at, `None` where it is not. A claim
+    /// whose `accepted_daa` is at or past it has its terminal tile put on the on-chain position round (the whole-tile close
+    /// retired for it); a claim admitted before it keeps the whole-tile close. `None` by `Default` (every preset).
+    pub tir_bounded_door_from_daa: Option<u64>,
     /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
     /// admitted with the rooted f32 row court. False below it: refused.
     pub staged_float_constraint_active: bool,
