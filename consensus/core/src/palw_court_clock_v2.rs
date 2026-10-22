@@ -162,7 +162,14 @@ pub fn palw_dispute_record_hard_deadline_v2(
         reorg_retention,
         std::iter::once(&own).chain(dependencies.iter()),
     )
-    .map_err(|e| match e {
+    .map_err(palw_court_dependency_refusal_text_v2)?;
+    palw_court_clocks_v2_with(claim.accepted_daa, true, w_disclose, reorg_retention, claim.trace_retention_daa, 0)
+        .map(|c| c.hard_deadline)
+        .map_err(|_| "palw_court_clock_v2: the claim's clocks overflow or its signed retention is short (F07)")
+}
+
+fn palw_court_dependency_refusal_text_v2(e: PalwCourtDependencyRefusalV2) -> &'static str {
+    match e {
         PalwCourtDependencyRefusalV2::Overflow => "palw_court_clock_v2: the claim's clocks overflow",
         PalwCourtDependencyRefusalV2::TooShort(PalwCourtDependencyKindV2::ClaimTrace) => {
             "palw_court_clock_v2: the claim's signed retention does not cover a + 10,000 + max(W_disclose, reorg) (F07)"
@@ -176,10 +183,26 @@ pub fn palw_dispute_record_hard_deadline_v2(
         PalwCourtDependencyRefusalV2::TooShort(PalwCourtDependencyKindV2::Custody) => {
             "palw_court_clock_v2: a custody / route dependency's signed horizon does not cover the extended deadline (F07)"
         }
-    })?;
-    palw_court_clocks_v2_with(claim.accepted_daa, true, w_disclose, reorg_retention, claim.trace_retention_daa, 0)
-        .map(|c| c.hard_deadline)
-        .map_err(|_| "palw_court_clock_v2: the claim's clocks overflow or its signed retention is short (F07)")
+    }
+}
+
+/// **audit B-06 (fix-b): the same F07 coverage, asked at ADMISSION.** A claim clock v2 governs must be disputable for its whole
+/// extended window, so every dependency it is admitted with (TIR custody / material horizon, EXEC root floor) must already cover
+/// `a + 10,000 + max(W_disclose, reorg_retention)` — refused at admission, rather than discovered when the first dispute's extension
+/// is refused (which made such a claim indisputable on the legacy route). A claim clock v2 does not govern: no check (old rules).
+pub fn palw_court_clock_v2_admission_dependencies_v2(
+    params: &PalwStateParamsV2,
+    claim: &PalwClaimStateV2,
+    w_disclose: u64,
+    reorg_retention: u64,
+    dependencies: &[PalwCourtDependencyV2],
+) -> Result<(), &'static str> {
+    if !palw_court_clock_v2_governs(params, claim) {
+        return Ok(());
+    }
+    palw_court_clock_v2_dependencies_cover_v2(claim.accepted_daa, w_disclose, reorg_retention, dependencies.iter())
+        .map(|_| ())
+        .map_err(palw_court_dependency_refusal_text_v2)
 }
 
 // =================================================================================================================================
@@ -843,11 +866,25 @@ mod tests {
         assert!(hard >= collect_until, "the TIR install's only clock-v2 check passes");
         let custody = dep(PalwCourtDependencyKindV2::Custody, collect_until);
         let exec = dep(PalwCourtDependencyKindV2::Exec, collect_until + 1 + sp.window_court());
+        // fix-b: the verifier's two acceptable outcomes were "the first dispute is admitted" OR "admission refuses the claim"; the
+        // lane asked for the admission refusal (B-06), so the short dependency sets are now refused AT ADMISSION, and a dependency
+        // set admission accepts makes the first in-window dispute admissible.
         for deps in [vec![custody], vec![exec]] {
+            let admitted = palw_court_clock_v2_admission_dependencies_v2(&sp, &c, W, reorg, &deps);
             let got = palw_dispute_record_hard_deadline_v2(&sp, &c, W, reorg, &deps, F + 10);
-            eprintln!("[verify2-b06] window_court {}, need {need}, deps {:?}: {got:?}", sp.window_court(),
+            eprintln!("[verify2-b06] window_court {}, need {need}, deps {:?}: admission {admitted:?}, dispute {got:?}", sp.window_court(),
                 deps.iter().map(|d| (d.kind, d.signed_horizon_daa)).collect::<Vec<_>>());
-            assert!(got.is_ok(), "B-06: expected the first dispute on an admitted claim to be admitted, got {got:?}");
+            assert!(admitted.is_err() || got.is_ok(), "B-06: a claim admitted with these dependencies must be disputable, got {got:?}");
         }
+        // Boundary: exactly `need` is admitted and disputable; `need - 1` is refused at admission.
+        for (h, ok) in [(need, true), (need - 1, false)] {
+            let deps = vec![dep(PalwCourtDependencyKindV2::Custody, h), dep(PalwCourtDependencyKindV2::Exec, h)];
+            assert_eq!(palw_court_clock_v2_admission_dependencies_v2(&sp, &c, W, reorg, &deps).is_ok(), ok, "admission at {h}");
+            if ok {
+                assert!(palw_dispute_record_hard_deadline_v2(&sp, &c, W, reorg, &deps, F + 10).is_ok());
+            }
+        }
+        // A claim clock v2 does not govern (accepted below the fence): no admission check (old rules).
+        assert!(palw_court_clock_v2_admission_dependencies_v2(&sp, &claim(F - 1, 0), W, reorg, &[custody]).is_ok());
     }
 }

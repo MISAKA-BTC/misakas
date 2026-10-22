@@ -639,6 +639,24 @@ pub(super) fn install_original_v1(
             return Err(refused("TIR original collection door outlives the claim's fixed X3 hard deadline"));
         }
     }
+    // audit B-06 (fix-b): under clock v2 the original's custody / material horizons must already cover the claim's whole extended
+    // dispute window (`a + 10,000 + max(W_disclose, reorg)`), or the first dispute's extension would be refused (F07) and the claim
+    // could never be disputed on the legacy route. Refused here, at admission. A claim clock v2 does not govern: unchanged.
+    {
+        use crate::palw_court_clock_v2::{PalwCourtDependencyKindV2 as Kind, PalwCourtDependencyV2 as Dep};
+        let deps = [
+            Dep { kind: Kind::Custody, signed_horizon_daa: frame.custody_v1().pledge_v1().material_until_daa },
+            Dep { kind: Kind::Custody, signed_horizon_daa: p.terms.material_until_daa },
+        ];
+        crate::palw_court_clock_v2::palw_court_clock_v2_admission_dependencies_v2(
+            b.params,
+            c,
+            palw_da_disclose_window_daa_v1(b.params),
+            crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(b.extras.staged_public_court.as_ref()),
+            &deps,
+        )
+        .map_err(refused)?;
+    }
     let original_source = source(b, &frame)?;
     let preparation = PalwTirPublicPreparationV1::new_v1(
         PalwTirPublicPreparationContractV1 {
