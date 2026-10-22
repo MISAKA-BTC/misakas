@@ -432,6 +432,52 @@ fn audit_v3_c01_a_tir_class_without_a_registrant_is_unrewardable_forever_past_th
     );
 }
 
+/// **audit fix-cd C-01 boundary: who must sign a container binding.** An Active registrant keeps priority (its signature is
+/// required, so a third party's binding is verified against the registrant's key and refused); a registrant that is no longer
+/// Active, or a sentinel registration, leaves the binding open (no signer, empty signature) — and the fold then binds it with the
+/// same strict identity check (a stray inventory is still refused).
+#[test]
+fn audit_fixcd_c01_an_active_registrant_keeps_binding_priority_and_an_inactive_one_opens_it() {
+    use crate::palw_tir_container_v1::{palw_tir_container_binding_signer_v1, test_binding_v1};
+    let mut l = lane(false);
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
+    let binding = test_binding_v1(&record, artifact_root, b"{\"model\":\"tiny\"}");
+    assert!(palw_tir_container_binding_signer_v1(&l.state, &binding).unwrap().is_none(), "sentinel: open");
+    const REGISTRANT: u64 = 0x4C0;
+    tn1_bond(&mut l.state, REGISTRANT, vec![0x4C; 4]);
+    let mut class = l.state.class(&l.class_id).unwrap().clone();
+    class.registrant_bond = Some(bond_key(REGISTRANT));
+    l.state.set_class_for_tests(l.class_id, class);
+    assert_eq!(
+        palw_tir_container_binding_signer_v1(&l.state, &binding).unwrap().map(|(key, _)| *key),
+        Some(bond_key(REGISTRANT)),
+        "an Active registrant must sign (priority)"
+    );
+    l.state.bonds.get_mut(&bond_key(REGISTRANT)).unwrap().status = PalwBondStatusV2::Retiring { since_daa: 1, settled_at_since: 0 };
+    assert!(palw_tir_container_binding_signer_v1(&l.state, &binding).unwrap().is_none(), "a retiring registrant: open");
+    l.state.bonds.remove(&bond_key(REGISTRANT));
+    assert!(palw_tir_container_binding_signer_v1(&l.state, &binding).unwrap().is_none(), "a gone registrant: open");
+    let mut past = l.extras.clone();
+    past.tir_container_identity_active = true;
+    let open = PalwConsensusObjectV2::TirClassContainerBoundV1 { binding: Box::new(binding), signature: Vec::new() };
+    let (bound, _) = apply_derived(&l.state, &l.p, &at(), &[open, l.object.clone()], &past).expect("an open binding folds");
+    assert!(bound.claim(&l.claim).is_some(), "and the class's original is admitted");
+    let mut stray = test_binding_v1(&record, Hash64::from_u64_word(0xBAD), b"{}");
+    stray.class_id = l.class_id;
+    assert!(
+        apply_derived(
+            &l.state,
+            &l.p,
+            &at(),
+            &[PalwConsensusObjectV2::TirClassContainerBoundV1 { binding: Box::new(stray), signature: Vec::new() }],
+            &past
+        )
+        .is_err(),
+        "an open binding keeps the strict identity check"
+    );
+}
+
 /// **The lane's authentication on a gated network**: an IR class passes the free-prompt certification gate past the fence only
 /// when one certified family covers every primitive its program reaches; below the fence the gate is the legacy one.
 #[test]

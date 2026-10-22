@@ -21,7 +21,8 @@
 //! * **What it refuses.** A root that the opening does not recompute (another container); a weight section whose inner root is
 //!   not the class's artifact root (another inventory under the same container identity); a program record whose bytes, graph
 //!   id or tokenizer are not the registered class's (another runtime under the same inventory); more than one weight section;
-//!   an unsigned or foreign binding (the registrant signs, as for `ClassSemanticsDeclaredV1`).
+//!   an unsigned or foreign binding while the registrant is Active (the registrant signs, as for `ClassSemanticsDeclaredV1`);
+//!   with no Active registrant the binding is open and unsigned (`palw_tir_container_binding_signer_v1`, audit C-01).
 //! * **Not a proof of computation** (PRINCIPLES §8): hashes for identity only. Whether a claim over these bytes was computed
 //!   correctly is still decided by sampled re-execution and the deterministic court.
 //! * **Dormant.** Owned by `Params::palw_tir_container_identity_v1` (None on every preset): below it the kind rides unjudged.
@@ -226,6 +227,29 @@ pub fn palw_tir_bound_container_v1(state: &crate::palw_state_v2::PalwChainStateV
         Some(PalwStagedCourtRowV1::TirContainer(row)) => Some(row.as_ref()),
         _ => None,
     }
+}
+
+/// **Who must sign a TIR class's container binding** (audit C-01; only judged past `palw_tir_container_identity_v1`).
+///
+/// The binding is a deterministic identity check (`check_tir_container_binding_v1` recomputes the root, the inventory root, the
+/// program and the tokenizer from the opening), so its signature is not what makes it true: it only gives the class's registrant
+/// PRIORITY, because several distinct containers (other manifests or non-weight sections) can satisfy the same check and the first
+/// one bound is immutable. Hence:
+///
+/// * the registrant bond exists and is `Active` → `Ok(Some(registrant))`: its signature is required, exactly as before;
+/// * otherwise (a sentinel registration with no registrant, or a registrant that is retiring, retired, ejected or gone) →
+///   `Ok(None)`: nobody can sign any more, and requiring it would leave the class unrewardable in the free-prompt lane forever.
+///   The binding is then open and must carry an EMPTY signature (no malleable bytes ride); the identity check stays strict.
+pub fn palw_tir_container_binding_signer_v1<'a>(
+    state: &'a crate::palw_state_v2::PalwChainStateV2,
+    binding: &PalwTirContainerBindingV1,
+) -> Result<Option<(&'a crate::palw_state_v2::PalwBondKeyV2, &'a crate::palw_state_v2::PalwBondStateV2)>, &'static str> {
+    let class = state.class(&binding.class_id).ok_or("a container binding names an unknown class")?;
+    Ok(class
+        .registrant_bond
+        .as_ref()
+        .and_then(|key| state.bond(key).map(|bond| (key, bond)))
+        .filter(|(_, bond)| matches!(bond.status, crate::palw_state_v2::PalwBondStatusV2::Active)))
 }
 
 /// The refusal code of a TIR original whose class is unbound past the container fence (`ClassNotRewardable`).

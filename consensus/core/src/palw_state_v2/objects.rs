@@ -573,19 +573,21 @@ fn apply_object_inner(
         // **RFC-0002 02-A (tag 175): a registered TIR class bound to its `PALWART3` container** — the opening recomputes the root,
         // its one weight section's inner root is the class's artifact root and its program record is the class's program and
         // tokenizer (`check_tir_container_binding_v1`). Bound once: the same container again folds to nothing, another is refused.
-        // The registrant's signature is the acceptance layer's (as for `ClassSemanticsDeclaredV1`).
+        // The registrant's signature (while it is Active) is the acceptance layer's (as for `ClassSemanticsDeclaredV1`).
         PalwConsensusObjectV2::TirClassContainerBoundV1 { binding, signature: _ } => {
             use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
             if !builder.extras.tir_container_identity_active {
                 return Err(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding before palw_tir_container_identity_v1"));
             }
             let class_id = binding.class_id;
+            // Audit C-01: a sentinel class (no registrant) or one whose registrant is no longer Active is bound openly — the
+            // acceptance layer requires the registrant's signature only while it is Active (`palw_tir_container_binding_signer_v1`);
+            // the identity check below is the same for every binder.
             let artifact_root = builder
                 .state
                 .class(&class_id)
-                .filter(|class| class.registrant_bond.is_some())
                 .map(|class| class.artifact_root)
-                .ok_or(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding names no registrant-signed class"))?;
+                .ok_or(PalwStateV2Error::ImmutableModelUpdate("a TIR container binding names no registered class"))?;
             let record = builder
                 .state
                 .tir_class_v1(&class_id)
