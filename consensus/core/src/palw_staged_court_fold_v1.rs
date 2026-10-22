@@ -974,6 +974,7 @@ impl TransitionBuilder<'_> {
 
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
         self.check_archive_progress_write_v1(&key,new.as_ref())?;
+        self.check_material_intake_write_v1(&key,new.as_ref())?;
         if matches!(key,PalwStagedCourtKeyV1::CourtSharedBottom(_)) || matches!(&new,Some(PalwStagedCourtRowV1::CourtSharedBottom(_))) {
             let Some(PalwStagedCourtRowV1::CourtSharedBottom(r))=&new else {
                 return Err(PalwStateV2Error::CarriageInconsistent("shared bottom evidence cannot be removed or retyped".into()));
@@ -3442,6 +3443,12 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtSharedBottom(r) => (r.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
+        // RFC-0032 A: drafts and their parts leave at their TTL; canonical material and
+        // the derived ledger stay until the claim's material horizon.
+        PalwStagedCourtRowV1::CourtMaterialDraft(d) => (d.expires_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtMaterialPart(p) => (p.expires_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtMaterial(m) => (m.material_until_daa,Vec::new()),
+        PalwStagedCourtRowV1::CourtMaterialLedger(l) => (l.material_until_daa,Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::TirAcquisition(row) => {
             let c = row.owned.contract_v1();
@@ -3760,6 +3767,13 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
         .take(64).map(|(_, key)| *key).collect();
     for key in due {
         let Some(mut saved) = b.state.staged_courts.get(&key).cloned() else { continue };
+        // An expired incomplete draft releases its parts and its submitter's reservation.
+        if let PalwStagedCourtRowV1::CourtMaterialDraft(draft) = &saved {
+            if ctx.daa_score >= draft.expires_daa {
+                super::palw_court_shared_material_intake_fold_v1::release_draft(b, draft)?;
+            }
+            continue;
+        }
         // Acquisition metadata and immutable public bytes have their own exact
         // paid material TTL, not an old mutable court checkpoint or DA default.
         // No semantic close, sibling default, or expired response erases them.
@@ -3783,6 +3797,9 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtSharedBottom(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtMaterialPart(row) => Some(row.expires_daa),
+            PalwStagedCourtRowV1::CourtMaterial(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtMaterialLedger(row) => Some(row.material_until_daa),
             _ => None,
         };
         if let Some(until) = tir_until {

@@ -204,6 +204,10 @@ mod palw_staged_court_fold_v1;
 mod palw_court_shared_tir_fold_v1;
 #[path = "palw_court_service_lifecycle_fold_v1.rs"]
 mod palw_court_service_lifecycle_fold_v1;
+// RFC-0032 A material intake fold (lane material-intake); no dispatcher calls it yet.
+#[path = "palw_court_shared_material_intake_fold_v1.rs"]
+#[cfg_attr(not(test), allow(dead_code))]
+mod palw_court_shared_material_intake_fold_v1;
 #[path = "palw_tir_public_fold_v1.rs"]
 mod palw_tir_public_fold_v1;
 pub use palw_tir_public_fold_v1::{

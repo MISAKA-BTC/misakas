@@ -2459,6 +2459,15 @@ impl PalwChainStateV2 {
             .min()
     }
 
+    /// Ordered read of staged rows in `[from, to]` (RFC-0032 A material intake).
+    pub fn staged_court_range_v1<'a>(
+        &'a self,
+        from: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+        to: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+    ) -> impl Iterator<Item = (&'a crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, &'a crate::palw_staged_court_state_v1::PalwStagedCourtRowV1)> + 'a {
+        self.staged_courts.range(*from..=*to)
+    }
+
     /// Derived lifecycle consistency only, not proof of a new paid acquisition
     /// or raw-source grant. Admission remains disabled until the full native
     /// allocation and distinct custody pledge/grants are wired.
@@ -3982,7 +3991,9 @@ impl PalwChainStateV2 {
                 R::CourtSharedRound(r)=>r.check_loaded_context(self),
                 R::CourtSharedBottom(r)=>r.check_loaded_context(self),
                 R::CourtSharedStream(s)=>s.check_context(self),
-                R::CourtSharedChunk(c)=>c.check_context(self),_=>Ok(()),
+                R::CourtSharedChunk(c)=>c.check_context(self),
+                R::CourtMaterialDraft(d)=>d.check_context(self),
+                R::CourtMaterial(m)=>m.check_context(self),_=>Ok(()),
             }.map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
