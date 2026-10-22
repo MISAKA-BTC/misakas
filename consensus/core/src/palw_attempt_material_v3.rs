@@ -278,6 +278,69 @@ pub fn select_native_session_v3(
         .min_by_key(|row| row.terms.root)
 }
 
+/// **The canonical session as a producer with a PARTIAL bond view can know it** (audit C-02). Consensus re-selects with
+/// [`select_native_session_v3`] over every bond's operator; a remote miner knows the operators of only the providers it proved.
+/// This walks the same eligible rows (unbound, `matches`) in the same smallest-root order and, per row, bounds the number of
+/// distinct uncharged provider operators the CHAIN would count: the known operators are exact, every provider `known_operator`
+/// does not answer may add at most one. A row with two known distinct operators is healthy on chain (consensus only adds); a row
+/// whose upper bound is below two is unhealthy on chain and skipped. Any row in between makes the canonical choice
+/// undeterminable here, so the answer is `None` (hold) — never a later row that `verify_prior` would refuse as a substitute.
+/// The selected row is returned only when every uncharged provider of it is known (otherwise the exchange could not reach it).
+/// With `known_operator` answering for every bond this equals [`select_native_session_v3`] or holds.
+pub fn select_native_session_partial_view_v3(
+    rows: impl IntoIterator<Item = crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>,
+    attempt: &PalwAttemptUnsignedV2,
+    daa: u64,
+    known_operator: impl Fn(&PalwBondKeyV2) -> Option<Hash64>,
+) -> Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1> {
+    let mut eligible: Vec<_> = rows
+        .into_iter()
+        .filter(|row| row.native_binding.is_none() && row.terms.native_session.as_ref().is_some_and(|s| s.matches(attempt, daa)))
+        .collect();
+    eligible.sort_by_key(|row| row.terms.root);
+    for row in eligible {
+        let mut known = std::collections::BTreeSet::new();
+        let mut unknown = 0usize;
+        for provider in row.providers.iter().filter(|p| !p.charged) {
+            match known_operator(&provider.provider) {
+                Some(operator) => {
+                    known.insert(operator);
+                }
+                None => unknown += 1,
+            }
+        }
+        if known.len() >= 2 {
+            return (unknown == 0).then_some(row);
+        }
+        if known.len() + unknown >= 2 {
+            return None;
+        }
+    }
+    None
+}
+
+/// **The one-scope manifest the DRAW is priced with** (moved from kaspad's producer so the remote miner prices the same ticket,
+/// audit C-03): the session's root and codec and this exact execution, with unit placeholders for the bundle's
+/// bytes/units/content. `priced_execution` reads none of those, so the ticket is the final envelope's ticket (re-checked after
+/// assembly); the placeholder is never signed or published.
+pub fn palw_native_draw_manifest_v3(
+    row: &crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+    attempt: &PalwAttemptUnsignedV2,
+) -> Result<PalwMaterialManifestV1, String> {
+    let session = row.terms.native_session.as_ref().ok_or("row carries no prospective native session")?;
+    Ok(PalwMaterialManifestV1 {
+        root: row.terms.root,
+        scopes: vec![crate::palw_material_capacity_v1::PalwMaterialScopeV1 {
+            claim: attempt_id_v2(attempt),
+            commitment: attempt.execution_root,
+            codec: session.codec,
+            bytes: 1,
+            units: 1,
+            content: Hash64::from_u64_word(1),
+        }],
+    })
+}
+
 /// Current-fence producer selection shares the exact recovery filter used by
 /// native admission. Existing accepted pre-fence work is never re-enrolled.
 pub fn select_native_session_with_recovery_v4(
@@ -365,6 +428,63 @@ pub struct PalwNativeMaterialProviderAuthorityV3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **audit C-02 boundary: a partial bond view never selects a session consensus would not.** With every operator known the
+    /// partial selector equals `select_native_session_v3`; with an undeterminable smaller root it holds; a smaller root that is
+    /// surely unhealthy (one provider in all) is skipped exactly as the chain skips it.
+    #[test]
+    fn audit_fixcd_c02_the_partial_view_selector_equals_consensus_or_holds() {
+        use crate::palw_monetary_material_v1::{PalwMonetaryMaterialProviderV1, PalwMonetaryMaterialRowV1};
+        fn zeroed<T: BorshDeserialize>() -> T {
+            (0..65536).find_map(|len| borsh::from_slice::<T>(&vec![0u8; len]).ok()).expect("a zeroed value decodes")
+        }
+        let bond = |word| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(word), 0));
+        let a = crate::palw_attempt_v2::tests::attempt();
+        let session = PalwNativeMaterialSessionV3 {
+            version: 3,
+            class_id: a.class_id,
+            artifact_root: a.artifact_root,
+            executor: PalwBondKeyV2(a.executor_bond),
+            operator: a.operator_id,
+            job_policy: native_job_policy_v3(),
+            codec: PalwMaterialCodecV1::NativeHeldComplete,
+            max_units: 1,
+            one_claim_cap: 1,
+            admit_from_daa: 0,
+            admit_until_daa: u64::MAX,
+        };
+        let daa = 10;
+        assert!(session.matches(&a, daa));
+        let row = |root: u64, providers: &[u64]| {
+            let mut row: PalwMonetaryMaterialRowV1 = zeroed();
+            row.terms.root = Hash64::from_u64_word(root);
+            row.terms.native_session = Some(session.clone());
+            row.providers = providers
+                .iter()
+                .map(|w| {
+                    let mut p: PalwMonetaryMaterialProviderV1 = zeroed();
+                    p.provider = bond(*w);
+                    p
+                })
+                .collect();
+            row
+        };
+        let chain = |b: &PalwBondKeyV2| Some(b.0.transaction_id);
+        let root_of = |r: Option<PalwMonetaryMaterialRowV1>| r.map(|r| r.terms.root);
+        let rows = vec![row(1, &[900, 901]), row(2, &[100, 101])];
+        let consensus = root_of(select_native_session_v3(rows.clone(), &a, daa, chain));
+        assert_eq!(consensus, Some(Hash64::from_u64_word(1)));
+        assert_eq!(root_of(select_native_session_partial_view_v3(rows.clone(), &a, daa, chain)), consensus, "full view: equal");
+        let configured = |b: &PalwBondKeyV2| [100u64, 101].iter().any(|w| bond(*w) == *b).then_some(b.0.transaction_id);
+        assert_eq!(root_of(select_native_session_partial_view_v3(rows, &a, daa, configured)), None, "undeterminable: hold");
+        // A smaller root with a single provider is unhealthy on chain whatever its operator: skipped, and B is canonical.
+        let rows = vec![row(1, &[900]), row(2, &[100, 101])];
+        assert_eq!(root_of(select_native_session_v3(rows.clone(), &a, daa, chain)), Some(Hash64::from_u64_word(2)));
+        assert_eq!(root_of(select_native_session_partial_view_v3(rows, &a, daa, configured)), Some(Hash64::from_u64_word(2)));
+        // A canonical row healthy by its known providers but naming an unknown third: hold (unreachable roster).
+        let rows = vec![row(1, &[100, 101, 900])];
+        assert_eq!(root_of(select_native_session_partial_view_v3(rows, &a, daa, configured)), None);
+    }
 
     /// The seal message moves with every provider signature byte and with the Ready identity, so
     /// a relayed byte flip in a provider signature cannot keep a valid seal (header-stage
