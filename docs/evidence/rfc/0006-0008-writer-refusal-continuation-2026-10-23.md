@@ -68,8 +68,9 @@ A further material/router/bootstrap/retention/liability run passed 40 tests
 and failed one stale wire-tag assertion. The actual declaration codec and
 lifecycle registry assign `ReaderRouterDeclaredV2` tag 248; 244 belongs to
 `MemoryRoutingV2`. `fc88a4a38` corrects only the assertion. The combined
-recheck is running with output in `/tmp/misaka-rfc06-08-consumers-recheck.log`;
-do not infer its result from the earlier runs.
+recheck passed 81 tests with zero failures, using the actual library test
+binary rebuilt after that correction. Output is in
+`/tmp/misaka-rfc06-08-consumers-recheck.log`.
 
 Source inspection also identified a remaining production GDN history issue:
 `gdn_filer_tick.rs` discards both errors and continuation from its 4096-block
@@ -77,3 +78,10 @@ accepted-lifecycle page read. This is not runtime evidence of a false verdict,
 but completeness of disclosure lookup across the full eligible history has
 not been established. Production GDN acceptance must include paged history,
 read failure, restart and reorg cases rather than treating a prefix as complete.
+
+`29b97afcd` now propagates a page-read error out of the blocking collector:
+the service logs it and returns before stepping the filer book or queuing a
+new court object. This fixes the error path only. Continuation beyond the first
+page remains unimplemented. A `kaspad --lib` cargo check is in progress with
+output at `/tmp/misaka-rfc06-gdn-service-check.log`; runtime failure/retry
+controls and production acceptance are still required.
