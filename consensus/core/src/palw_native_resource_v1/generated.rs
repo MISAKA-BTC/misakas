@@ -102,6 +102,7 @@ native_struct!(crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1; version
 native_struct!(crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1; version, family, job, claim, producer, queue, payload, amount, income_root, income_kind, budget, refund_payload, final_daa, horizon_daa);
 native_struct!(crate::palw_receipt_pause_v2::PalwReceiptPauseRowV2; version, claim, open, open_since_daa, paused_total_daa);
 native_struct!(crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalDutyRowV1; version, family, job, claim, accusation, accuser, accused_daa, duties);
+native_struct!(crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalMaterialRowV1; version, family, job, commitment, max_bytes);
 native_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; reserved, filed_daa, serve_until_daa, charged);
 native_struct!(crate::palw_provider_court_v1::ProviderChallengeRowV1; challenger, bond, filed_daa, deadline_daa, answered);
 native_struct!(crate::palw_provider_court_v1::ProviderSubjectRowV1; transferred_daa, lapsed_daa, charged, requested);

@@ -618,6 +618,7 @@ wire_struct!(crate::palw_native_paged_proof_v29::NativePagedProofPlanRecordV29; 
 wire_struct!(crate::palw_native_paged_proof_v29::NativePagedSealV29; u16, u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], crate::palw_state_v2::PalwBondKeyV2, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u16, u32, u64, u64, u64, u64, u64, [u8;64], [u8; 512], [u8; 64], u8, u8, bool, [u8;64], u8, bool, bool, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11);
 wire_struct!(crate::palw_native_post_final_duty_row_v1::NativePostFinalDutyV1; crate::palw_court_duty_clock_v1::CourtDutyClockV1, Option<u64>, Option<(u64, [u8; 64])>);
 wire_struct!(crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalDutyRowV1; u8, u8, [u8; 64], [u8; 64], [u8; 64], crate::palw_state_v2::PalwBondKeyV2, u64, Vec<crate::palw_native_post_final_duty_row_v1::NativePostFinalDutyV1>);
+wire_struct!(crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalMaterialRowV1; u8, u8, [u8; 64], [u8; 64], u32);
 wire_struct!(crate::palw_native_queue_v30::NativeQueueLeaseV30; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, u64, u64, bool);
 wire_struct!(crate::palw_native_queue_v30::NativeQueuePlanRecordV30; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, u64, u64, u64);
 wire_struct!(crate::palw_native_queue_v30::NativeQueuePolicyV30; u16, [u8;64], u32, u32, u64, u32, u64, u64, bool);

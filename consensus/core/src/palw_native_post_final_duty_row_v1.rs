@@ -14,6 +14,20 @@ pub struct NativePostFinalDutyV1 {
     pub answered: Option<(u64, [u8; 64])>,
 }
 
+/// **audit B-02 (fix-b): one unit of material a held Final is RECORDED to owe after Final** (aux 144,
+/// `0x03 ‖ family ‖ job ‖ commitment`). A post-Final accusation must name such a commitment (a concrete, fold-checkable claim of
+/// missing material), and only bytes that open it (`post_final_material_commitment_v1(family, job, bytes) == commitment`, at most
+/// `max_bytes`) discharge the duty. Which units each family's Final records here is NOT adopted (no production writer: user
+/// decision), so a production accusation is refused until it is.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwNativePostFinalMaterialRowV1 {
+    pub version: u8,
+    pub family: u8,
+    pub job: [u8; 64],
+    pub commitment: [u8; 64],
+    pub max_bytes: u32,
+}
+
 /// A job's post-Final accusation and its duties (aux 144, `0x02 ‖ family ‖ job`).
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwNativePostFinalDutyRowV1 {
