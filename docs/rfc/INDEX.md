@@ -41,3 +41,4 @@
 | RFC-0033 | [D2 readiness rootのdigest opening取得](0033-d2-readiness-root-opening-availability.md) | 原文と後続改定を参照 |
 | RFC-0034 | [archived closeの実受付と金融責任の適格解消](0034-archived-close-qualified-financial-discharge.md) | 原文と後続改定を参照 |
 | RFC-0035 | [shared court originalの実原資と役割別同意](0035-court-original-funded-contract-and-role-consent.md) | 原文と後続改定を参照 |
+| RFC-0037 | [IBD の有界 authenticated row stream と世代番号付き保存](0037-ibd-bounded-row-stream-and-storage-generations.md) | 原文と後続改定を参照 |

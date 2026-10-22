@@ -1578,6 +1578,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0204",
+      "path": "docs/adr/0204-ibd-bounded-row-stream-and-storage-generations.md",
+      "title": "ADR-0204 — IBD の有界 authenticated row stream と世代番号付き保存",
+      "topic": "Operations / interfaces / recovery",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1855,6 +1863,14 @@
       "path": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
       "title": "RFC-0035 — shared court originalの実原資と役割別同意",
       "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0037",
+      "path": "docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md",
+      "title": "RFC-0037 — IBD の有界 authenticated row stream と世代番号付き保存",
+      "topic": "Operations / interfaces / recovery",
       "status": "原文と後続改定を参照"
     }
   ]

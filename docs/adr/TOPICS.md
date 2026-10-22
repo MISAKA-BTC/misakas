@@ -187,6 +187,7 @@
 - [ADR-0063 — The operator's half of the protocol is missing, and one gap locks money in](0063-operator-tooling-the-missing-half.md)
 - [ADR-0108 — An extension is a manifest the verifier recomputes, and a receipt is evidence, not a vote](0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md)
 - [ADR-0122 — Mining is a purpose: an operator runs one command and reads one work id](0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md)
+- [ADR-0204 — IBD の有界 authenticated row stream と世代番号付き保存](0204-ibd-bounded-row-stream-and-storage-generations.md)
 
 ## PQ / identity / UTXO
 

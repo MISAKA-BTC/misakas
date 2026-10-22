@@ -42,6 +42,7 @@
 ## Operations / interfaces / recovery
 
 - [RFC-0009 — PALW Remote Client — node を持たないモデル登録・claim・非保管型の報酬回収](0009-palw-remote-miner.md)
+- [RFC-0037 — IBD の有界 authenticated row stream と世代番号付き保存](0037-ibd-bounded-row-stream-and-storage-generations.md)
 
 ## Verification / court
 
