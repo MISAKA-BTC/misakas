@@ -125,6 +125,9 @@ required-features = ["legacy-secp256k1"]
 # (scripts/ci/pq-ci-guard.sh, HARD_SECP_GATE=1).
 default = ["pq-only"]
 pq-only = []
+# Lane r5-t-campaign: compile the RFC-0026 T-campaign bodies that call objects of parallel G14 lanes (paid ingress, shared-court
+# op, escrow settlement, position terminal). OFF until those lanes are merged; the tests are also #[ignore]d.
+g14-t-campaign-merged = []
 legacy-secp256k1 = [
     "dep:secp256k1",
     "kaspa-consensus-core/legacy-secp256k1",
