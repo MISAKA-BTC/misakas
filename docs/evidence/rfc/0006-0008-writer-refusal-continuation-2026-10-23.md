@@ -217,3 +217,15 @@ The revised first-use regression is now compiling under the original handle.
 The GDN E2E recheck of `2ffe0ef32` is queued separately at
 `/tmp/misaka-rfc06-gdn-first-route-recheck.log`; neither of these later runs
 has produced an outcome yet. Earlier failing GDN logs are preserved.
+
+The first-use regression subsequently passed (1 test, zero failures), including
+native carriage restore from the route initially created by registration.
+Output: `/tmp/misaka-rfc06-first-route-profile-recheck.log`. This verifies the
+first-use fix rather than only the earlier already-initialized-route fixture.
+
+The rebuilt core binary also passed 12 filtered selected-event/source-bootstrap/
+paid-bootstrap tests (`/tmp/misaka-rfc07-bootstrap-source-controls.log`). These
+cover local source/context contracts; they do not measure independent source
+availability, participation, cumulative soundness or actual checker income.
+Normal startup remains refused for the private bootstrap paths. The GDN E2E
+recheck at `/tmp/misaka-rfc06-gdn-first-route-recheck.log` is still compiling.
