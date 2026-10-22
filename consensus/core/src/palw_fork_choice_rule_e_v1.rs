@@ -333,6 +333,14 @@ pub struct PalwRuleEClaimRecordV1 {
     /// **RFC-0018 Gate C: the claim's certification state at this state** — committed in the leaf-v2 window, so a header-verified
     /// client applies Gate C exactly as the node does (and counts the uncertified `Final`s). `NotGoverned` below the fence.
     pub certification: PalwRuleECertificationV1,
+    /// **RFC-0023 stage 2 (audit D-1): the claim is an irreversible claim-local anchor at this state** — past
+    /// `palw_claim_local_settlement_v1` the state's checkpoint holds it as an anchor whose whole dependency closure is
+    /// liability-closed (`palw_claim_local_irreversible_anchors_v1`). Such a `Final` record stands as the side's frontier even
+    /// above an unrelated live claim — the checkpoint's own frontier rule. `false` below the fence (every shipped network). Not
+    /// committed by leaf v2 or leaf v3 (nor carried in their openings): a header-verified client past the
+    /// claim-local fence needs a leaf version that commits it. Skipped by Borsh, so every record and leaf encoding is unchanged.
+    #[borsh(skip)]
+    pub claim_local_irreversible: bool,
 }
 
 /// **RFC-0018 Gate C, as rule E reads a claim** (Borsh-appended to the record; a client reads it from the leaf-v2 window).
@@ -360,6 +368,27 @@ impl PalwChainStateV2 {
         canonical_work_daa: Option<u64>,
         shares: &BTreeMap<Hash64, u16>,
         budget: &dyn PalwRuleEBondBudgetV1,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+    ) -> Result<PalwRuleEClaimRecordV1, PalwRuleEErrorV1> {
+        let irreversible = self.palw_rule_e_irreversible_v1(params)?;
+        self.palw_rule_e_record_in_v1(params, uncertified_weightless, canonical_work_daa, shares, budget, &irreversible, claim_id, claim)
+    }
+
+    /// The state's irreversible claim-local anchors (audit D-1; empty below `palw_claim_local_settlement_v1`), read once per side.
+    fn palw_rule_e_irreversible_v1(&self, params: &PalwStateParamsV2) -> Result<BTreeSet<Hash64>, PalwRuleEErrorV1> {
+        crate::palw_state_v2::palw_claim_local_irreversible_anchors_v1(self, params).map_err(|_| PalwRuleEErrorV1::NotWeighable)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn palw_rule_e_record_in_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        uncertified_weightless: bool,
+        canonical_work_daa: Option<u64>,
+        shares: &BTreeMap<Hash64, u16>,
+        budget: &dyn PalwRuleEBondBudgetV1,
+        irreversible: &BTreeSet<Hash64>,
         claim_id: Hash64,
         claim: &PalwClaimStateV2,
     ) -> Result<PalwRuleEClaimRecordV1, PalwRuleEErrorV1> {
@@ -400,6 +429,7 @@ impl PalwChainStateV2 {
                 capped,
                 bond_collateral,
                 budget,
+                claim_local_irreversible: irreversible.contains(&claim_id),
             }
         };
         if let Some(allocation) = budget.allocation(self, &claim_id, claim) {
@@ -449,18 +479,20 @@ impl PalwChainStateV2 {
         mut exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
     ) -> Result<Vec<PalwRuleEClaimRecordV1>, PalwRuleEErrorV1> {
         let shares: BTreeMap<Hash64, u16> = self.class_shares_iter().map(|(k, v)| (*k, *v)).collect();
+        let irreversible = self.palw_rule_e_irreversible_v1(params)?;
         let mut records = Vec::new();
         for (id, claim) in self.claims_iter() {
             if exclusive(id, claim) {
                 if records.len() == PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1 {
                     return Err(PalwRuleEErrorV1::TooManyExclusiveClaims);
                 }
-                records.push(self.palw_rule_e_record_v1(
+                records.push(self.palw_rule_e_record_in_v1(
                     params,
                     uncertified_weightless,
                     canonical_work_daa,
                     &shares,
                     budget,
+                    &irreversible,
                     *id,
                     claim,
                 )?);
@@ -500,11 +532,20 @@ impl PalwChainStateV2 {
         common_capital: impl Fn(&PalwBondKeyV2) -> Option<u64>,
     ) -> Result<PalwRuleESideV1, PalwRuleEErrorV1> {
         let shares: BTreeMap<Hash64, u16> = self.class_shares_iter().map(|(k, v)| (*k, *v)).collect();
+        let irreversible = self.palw_rule_e_irreversible_v1(params)?;
         let mut side = PalwRuleESideAccV1::default();
         for (id, claim) in self.claims_iter() {
             if exclusive(id, claim) {
-                let record =
-                    self.palw_rule_e_record_v1(params, uncertified_weightless, canonical_work_daa, &shares, budget, *id, claim)?;
+                let record = self.palw_rule_e_record_in_v1(
+                    params,
+                    uncertified_weightless,
+                    canonical_work_daa,
+                    &shares,
+                    budget,
+                    &irreversible,
+                    *id,
+                    claim,
+                )?;
                 side.push(&record, common_capital(&record.bond))?;
             }
         }
@@ -524,6 +565,8 @@ struct PalwRuleESideAccV1 {
     budgeted: BTreeMap<(PalwBondKeyV2, u16, u64), (u128, u128, u128)>,
     oldest_live: Option<u64>,
     finals: BTreeSet<u64>,
+    /// Audit D-1: the deepest `Final` record that is an irreversible claim-local anchor (none below the claim-local fence).
+    irreversible_final: Option<u64>,
     count: u64,
     /// RFC-0018 §6: the v2 participation (capital of common bonds with a counted attempt).
     capital_v2: crate::palw_rfc0018_v1::PalwRuleEParticipationV2Acc,
@@ -551,6 +594,9 @@ impl PalwRuleESideAccV1 {
             PalwRuleEClaimStatusV1::Final => {
                 if frontier_ok {
                     self.finals.insert(record.accepted_blue_score);
+                    if record.claim_local_irreversible {
+                        self.irreversible_final = self.irreversible_final.max(Some(record.accepted_blue_score));
+                    }
                 }
             }
             PalwRuleEClaimStatusV1::Live => {
@@ -592,9 +638,13 @@ impl PalwRuleESideAccV1 {
             immature = immature.checked_add(credited_total - credited_safe).ok_or(PalwRuleEErrorV1::Overflow)?;
         }
         let resolved_through = self.oldest_live.map(|oldest| oldest.saturating_sub(1)).unwrap_or(u64::MAX);
+        // RFC-0023 §4.5 (audit D-1): past the claim-local fence the checkpoint's irreversible anchors stand as the frontier whatever
+        // unrelated claim is still live — the fold's own frontier rule, restricted to the side. Below it no record carries the flag
+        // and this is the resolved-prefix rule alone, byte for byte.
+        let resolved_prefix = self.finals.range(..=resolved_through).next_back().copied().unwrap_or(0);
         Ok(PalwRuleESideV1 {
             participation: u32::try_from(self.bonds.len()).unwrap_or(u32::MAX),
-            safe_frontier_blue_score: self.finals.range(..=resolved_through).next_back().copied().unwrap_or(0),
+            safe_frontier_blue_score: resolved_prefix.max(self.irreversible_final.unwrap_or(0)),
             safe_weight: safe,
             live_total: safe.checked_add(immature).ok_or(PalwRuleEErrorV1::Overflow)?,
             exclusive_claims: u32::try_from(self.count).unwrap_or(u32::MAX),
@@ -1178,6 +1228,7 @@ mod tests {
                 bond_collateral: if capped { Some(13_000 * 100_000_000) } else { None },
                 budget: None,
                 certification: PalwRuleECertificationV1::NotGoverned,
+                claim_local_irreversible: false,
             }
         };
         use PalwRuleEClaimStatusV1::{Final, Live, Voided};
@@ -1220,15 +1271,31 @@ mod tests {
             bond_collateral: None,
             budget: None,
             certification: PalwRuleECertificationV1::NotGoverned,
+            claim_local_irreversible: false,
         };
-        // A: unrelated, unresolved (bond 1). B: Final on another bond, no dependency on A.
-        let records = [rec(1, 10, 1, PalwRuleEClaimStatusV1::Live, 0, 5), rec(2, 20, 2, PalwRuleEClaimStatusV1::Final, 100, 0)];
+        // A: unrelated, unresolved (bond 1). B: Final on another bond, no dependency on A — past the claim-local fence the
+        // state's checkpoint holds B as an irreversible anchor (`palw_rule_e_record_v1` sets the flag from it).
+        // fix-cd: the verifier's form asserted 20 for UNMARKED records, i.e. below the fence too; the record now carries the
+        // fence-gated irreversibility, so the expected-vs-actual is stated on the marked record, and the unmarked (pre-fence)
+        // twin keeps the released rule.
+        let mut b = rec(2, 20, 2, PalwRuleEClaimStatusV1::Final, 100, 0);
+        b.claim_local_irreversible = true;
+        let records = [rec(1, 10, 1, PalwRuleEClaimStatusV1::Live, 0, 5), b];
         let side = palw_rule_e_side_from_records_v1(&records, |_| true).unwrap();
         assert_eq!(
             side.safe_frontier_blue_score, 20,
             "D-1: Rule E side frontier is {} (held by unrelated live A at 10); RFC-0023 stage 2 checkpoint frontier would be 20",
             side.safe_frontier_blue_score
         );
+        let below = [rec(1, 10, 1, PalwRuleEClaimStatusV1::Live, 0, 5), rec(2, 20, 2, PalwRuleEClaimStatusV1::Final, 100, 0)];
+        assert_eq!(palw_rule_e_side_from_records_v1(&below, |_| true).unwrap().safe_frontier_blue_score, 0, "below the fence: unchanged");
+        // An irreversible anchor that is not a counted frontier (an uncertified Final past Gate C) still stands as nothing.
+        let mut uncertified = b;
+        uncertified.certification = PalwRuleECertificationV1::Uncertified;
+        let side = palw_rule_e_side_from_records_v1(&[rec(1, 10, 1, PalwRuleEClaimStatusV1::Live, 0, 5), uncertified], |_| true).unwrap();
+        assert_eq!(side.safe_frontier_blue_score, 0);
+        // Borsh skips the flag: every record (and so every leaf v2/v3 window and opening) encodes as before.
+        assert_eq!(borsh::to_vec(&b).unwrap(), borsh::to_vec(&rec(2, 20, 2, PalwRuleEClaimStatusV1::Final, 100, 0)).unwrap());
     }
 
     fn budget_bond(i: u32) -> PalwBondKeyV2 {
@@ -1256,6 +1323,7 @@ mod tests {
             bond_collateral: None,
             budget: Some(PalwRuleEBudgetTermsV1 { version: 1, window, final_weight_ceiling: ceiling }),
             certification: PalwRuleECertificationV1::NotGoverned,
+            claim_local_irreversible: false,
         }
     }
 
