@@ -491,6 +491,7 @@ mod tests {
             bond_collateral: None,
             budget: None,
             certification: C::NotGoverned,
+            claim_local_irreversible: false,
         };
         let ext = palw_rule_e_leaf_v2_ext_of(0, &[record], &[bond]);
         let leaf = PalwForkChoiceLeafV2 {

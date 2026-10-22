@@ -140,6 +140,32 @@ pub(super) fn stored_claim_local_checkpoint_v1(
     })
 }
 
+/// **The claims this state's claim-local checkpoint holds as irreversible anchors** (audit D-1): `anchors` and
+/// irreversible-eligible (credit-eligible with its whole dependency closure liability-closed) — exactly the set whose deepest member
+/// is the checkpoint's irreversible frontier, the fold's frontier past the fence. Rule E reads it so a side's frontier is that same
+/// rule restricted to the side, never held back by an unrelated live claim. Empty below `palw_claim_local_settlement_v1` (and for a
+/// state with no point or no stored row), so every pre-fence reader is unchanged.
+pub fn palw_claim_local_irreversible_anchors_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+) -> Result<BTreeSet<Hash64>, PalwStateV2Error> {
+    let Some(point) = state.last_point else { return Ok(BTreeSet::new()) };
+    if !params.claim_local_settlement_active_at(point.daa_score) {
+        return Ok(BTreeSet::new());
+    }
+    let Some(checkpoint) = stored_claim_local_checkpoint_v1(state)? else { return Ok(BTreeSet::new()) };
+    let validated = checkpoint.validate(&point, &checkpoint.records, &checkpoint.liability_state).map_err(checkpoint_err)?;
+    Ok(checkpoint
+        .records
+        .values()
+        .filter(|r| r.anchors && validated.irreversible_eligible(r.work))
+        .filter_map(|r| match r.work {
+            PalwClaimLocalWorkRefV1::ChainClaim { claim } => Some(claim),
+            _ => None,
+        })
+        .collect())
+}
+
 fn checkpoint_err(e: PalwClaimCheckpointErrorV1) -> PalwStateV2Error {
     match e {
         PalwClaimCheckpointErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),

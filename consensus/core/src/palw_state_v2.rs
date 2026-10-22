@@ -273,6 +273,7 @@ pub use palw_claim_local_rewards_v1::{PalwClaimLocalSettlementV1, palw_claim_loc
 mod palw_claim_local_checkpoint_fold_v1;
 pub use palw_claim_local_checkpoint_fold_v1::{
     PalwClaimLocalCheckpointStatusV1, palw_claim_local_checkpoint_key_v1, palw_claim_local_checkpoint_status_v1,
+    palw_claim_local_irreversible_anchors_v1,
 };
 // RFC-0008: the once-only settlement registry (dormant `palw_settlement_once_v1`; kernel route aux 140) — every settlement consumer
 // checks and writes its exact obligation's marker in the same transition before any value moves.

@@ -4281,7 +4281,21 @@ pub struct PalwPanelConfig {
 struct PalwExecutorBackendV1 {
     class_id: Hash64,
     artifact_root: Hash64,
+    /// The registered semantics the instance was resolved under (audit C-04): a declaration landing while it is kept makes
+    /// it stale, so a lookup reuses it only under the same facts.
+    facts: Option<kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3>,
     backend: std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+}
+
+/// **Whether a class's registered semantics bind a claim** (audit C-04): the statement names the claim's artifact, and — for a
+/// claim whose acceptance DAA is known — it was bound at or before that acceptance (`bound_from_daa <= accepted_daa`, the rule
+/// consensus applies). `accepted == None` reads the tip statement.
+pub(crate) fn palw_semantics_bind_claim_v1(
+    semantics: &kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1,
+    artifact_root: Hash64,
+    accepted: Option<u64>,
+) -> bool {
+    semantics.artifact_root == artifact_root && accepted.is_none_or(|daa| semantics.bound_from_daa <= daa)
 }
 
 /// **One named leaf a seat is pursuing** (ADR-0111 Decision 6).
@@ -4520,12 +4534,26 @@ impl PalwPanelService {
         class_id: Hash64,
         artifact_root: Hash64,
     ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String> {
+        self.resolve_backend_for_claim_v1(session, class_id, artifact_root, None)
+    }
+
+    /// [`Self::resolve_backend`] for judging ONE claim (audit C-04): the class's registered semantics apply only when their
+    /// `bound_from_daa` is at or below the claim's accepted DAA — the rule consensus applies
+    /// (`palw_tir_public_allocation_v1`, the shared-court builders). A claim accepted before a later declaration is judged with
+    /// the facts it was produced under, never the tip's. `None` (or a claim the state no longer lists) reads the tip, as before.
+    fn resolve_backend_for_claim_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        claim: Option<Hash64>,
+    ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String> {
         let mut backend = self.backends().resolve_or_chain(class_id, artifact_root, |id| self.chain_carriage_v1(session, id))?;
         // **Audit 02-B (RFC-0002 Phase H): the class's registered runtime semantics, read off this node's accepted state**, on every
         // backend this door resolves — so a free-prompt context this node builds (producer and seat alike) carries the chain's
         // statement, never the backend's defaults. Absent a statement (every shipped chain: the semantics fence is dormant, and the
         // read answers only past the TIR frame's fence) nothing is set and the backend is what it was.
-        if let Some(facts) = Self::registered_class_facts_v1(session, class_id, artifact_root) {
+        if let Some(facts) = Self::registered_class_facts_v1(session, class_id, artifact_root, claim) {
             backend.set_registered_class_facts_v1(facts);
         }
         Ok(backend)
@@ -4543,20 +4571,35 @@ impl PalwPanelService {
         class_id: Hash64,
         artifact_root: Hash64,
     ) -> Option<Result<misaka_palw_sdk::lineages::tir::TirBackendV1, String>> {
+        self.resolve_tir_registered_for_claim_v1(session, class_id, artifact_root, None)
+    }
+
+    /// [`Self::resolve_tir_registered_v1`] for judging one claim: the semantics as of its acceptance (audit C-04).
+    fn resolve_tir_registered_for_claim_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        claim: Option<Hash64>,
+    ) -> Option<Result<misaka_palw_sdk::lineages::tir::TirBackendV1, String>> {
         let resolved = self.backends().resolve_tir_v1(class_id, artifact_root)?;
-        Some(resolved.map(|tir| palw_tir_with_registered_facts_v1(tir, Self::registered_class_facts_v1(session, class_id, artifact_root))))
+        Some(resolved.map(|tir| {
+            palw_tir_with_registered_facts_v1(tir, Self::registered_class_facts_v1(session, class_id, artifact_root, claim))
+        }))
     }
 
     /// The registered semantics of `class_id` over `artifact_root` as free-prompt class facts (`None`: no statement, or the read
-    /// is not in force).
+    /// is not in force). With `claim`, only a statement bound at or before that claim's accepted DAA (audit C-04).
     fn registered_class_facts_v1(
         session: &kaspa_consensusmanager::ConsensusProxy,
         class_id: Hash64,
         artifact_root: Hash64,
+        claim: Option<Hash64>,
     ) -> Option<kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3> {
         let mut facts = None;
         let read = session.palw_tir_public_read_v1(&mut |state| {
-            facts = state.class_semantics_v1(&class_id).filter(|s| s.artifact_root == artifact_root).map(|s| {
+            let accepted = claim.and_then(|claim| state.claim(&claim)).map(|claim| claim.accepted_daa);
+            facts = state.class_semantics_v1(&class_id).filter(|s| palw_semantics_bind_claim_v1(s, artifact_root, accepted)).map(|s| {
                 kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
                     model_profile_id: s.model_profile_id,
                     runtime_manifest_hash: s.runtime_manifest_hash,
@@ -4581,9 +4624,13 @@ impl PalwPanelService {
         class_id: Hash64,
         artifact_root: Hash64,
     ) -> Result<std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String> {
+        let facts = Self::registered_class_facts_v1(session, class_id, artifact_root, None);
         {
             let kept = self.executor_backend.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(kept) = kept.as_ref().filter(|kept| kept.class_id == class_id && kept.artifact_root == artifact_root) {
+            if let Some(kept) = kept
+                .as_ref()
+                .filter(|kept| kept.class_id == class_id && kept.artifact_root == artifact_root && kept.facts == facts)
+            {
                 return Ok(kept.backend.clone());
             }
         }
@@ -4591,7 +4638,7 @@ impl PalwPanelService {
         // never holds two.
         self.release_executor_backend_v1();
         let backend = self.resolve_backend(session, class_id, artifact_root)?;
-        Ok(self.keep_executor_backend_v1(class_id, artifact_root, backend))
+        Ok(self.keep_executor_backend_v1(class_id, artifact_root, facts, backend))
     }
 
     /// Keep `backend` as the executor's one instance, replacing whatever was kept. The replaced
@@ -4601,12 +4648,14 @@ impl PalwPanelService {
         &self,
         class_id: Hash64,
         artifact_root: Hash64,
+        facts: Option<kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3>,
         backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
     ) -> std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> {
         let backend: std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> = std::sync::Arc::from(backend);
         let replaced = self.executor_backend.lock().unwrap_or_else(|e| e.into_inner()).replace(PalwExecutorBackendV1 {
             class_id,
             artifact_root,
+            facts,
             backend: backend.clone(),
         });
         drop(replaced);
@@ -4636,9 +4685,10 @@ impl PalwPanelService {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .map(|kept| (kept.class_id, kept.artifact_root, kept.backend.clone()));
-        if let Some((class_id, artifact_root, backend)) = kept
+            .map(|kept| (kept.class_id, kept.artifact_root, kept.facts.clone(), kept.backend.clone()));
+        if let Some((class_id, artifact_root, kept_facts, backend)) = kept
             && session.palw_producer_facts_v2(class_id, None).is_some_and(|facts| facts.artifact_root == artifact_root)
+            && Self::registered_class_facts_v1(session, class_id, artifact_root, None) == kept_facts
             && let Some(shape) = backend.capture_shape(bytes)
             && shape.job_context.shape_profile_id == class_id
         {
@@ -4648,7 +4698,8 @@ impl PalwPanelService {
         let (backend, shape) = self.backend_for_raw_capture_v1(session, bytes)?;
         let class_id = shape.job_context.shape_profile_id;
         let artifact_root = session.palw_producer_facts_v2(class_id, None)?.artifact_root;
-        Some((self.keep_executor_backend_v1(class_id, artifact_root, backend), shape))
+        let facts = Self::registered_class_facts_v1(session, class_id, artifact_root, None);
+        Some((self.keep_executor_backend_v1(class_id, artifact_root, facts, backend), shape))
     }
 
     /// The chain arm of the one door: the class's registered profile and canonical job, read from
@@ -12012,7 +12063,7 @@ impl PalwPanelService {
         use crate::palw_fp_seat::PalwFpChainCountsV1;
         use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
 
-        let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
+        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
             return Some(PalwReceiptVerdictV2::Incapable);
         };
         // **Nothing this claim's replay resumes from was computed for another claim.** The state
@@ -13572,7 +13623,7 @@ impl PalwPanelService {
             palw_fp_seat_prompt_admit_v1,
         };
         let form = self.class_prompt_ids_form(duty.class_id);
-        let Ok(probe) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
+        let Ok(probe) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
             return (PalwSeatReplayStepV1::NoVerdict, None);
         };
         // The distinct jobs this seat holds, in pool order, each with every payload that spells it.
@@ -13734,7 +13785,7 @@ impl PalwPanelService {
                         });
                         continue;
                     }
-                    let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
+                    let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
                         return (PalwSeatReplayStepV1::NoVerdict, None);
                     };
                     let Some(prompt_ids) = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), material, form) else { continue };
@@ -13839,7 +13890,7 @@ impl PalwPanelService {
                     });
                     return false;
                 }
-                let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return false };
+                let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { return false };
                 // At the widest prefill run the ledger grants, on this duty's own instance (int-10.2 A2).
                 let backends = self.backends();
                 let partial = kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment };
@@ -13967,7 +14018,7 @@ impl PalwPanelService {
         network_domain: Hash64,
         pooled: &[Vec<u8>],
     ) -> Result<Option<tokio::task::JoinHandle<PalwSeatS3SampleV1>>, ()> {
-        let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return Ok(None) };
+        let Ok(mut backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { return Ok(None) };
         let captures = self.seat_s3_captures_v1(session, backend.as_ref(), duty, network_domain, pooled);
         if captures.is_empty() {
             return Ok(None);

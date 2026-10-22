@@ -21,7 +21,7 @@ use kaspa_consensus_core::config::params::{
 };
 
 /// The list's names, in the order its prerequisites need. Adding an entry is one line here, one line in the list, and the notes.
-const LIST: [&str; 36] = [
+const LIST: [&str; 35] = [
     "palw_audit_1004_v1",
     "palw_gen_range_twin_v1",
     "palw_model_court_window",
@@ -49,7 +49,6 @@ const LIST: [&str; 36] = [
     "palw_native_liability_horizon_v1",
     "palw_reward_liability_horizon_v1",
     "palw_unresolved_bound_v1",
-    "palw_claim_local_settlement_v1",
     "palw_independently_work_certified_v1",
     "palw_dag_sibling_attribution_v1",
     "palw_panel_anchor_permissionless_v1",

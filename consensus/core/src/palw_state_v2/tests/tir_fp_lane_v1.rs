@@ -401,6 +401,83 @@ fn tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3
     assert!(admitted.claim(&l.claim).is_some());
 }
 
+/// **audit(verify-3) C-01**: past `palw_tir_container_identity_v1`, a TIR class with no signing registrant (a sentinel / genesis
+/// registration: `registrant_bond == None`) can never be bound — the fold refuses every binding — so every producer's framed original
+/// on it is refused `TIR_CLASS_CONTAINER_UNBOUND` forever. Expected: some binding route (or an exemption) so the honest original folds.
+#[test]
+fn audit_v3_c01_a_tir_class_without_a_registrant_is_unrewardable_forever_past_the_container_fence() {
+    use crate::palw_tir_container_v1::{PALW_TIR_UNBOUND_CONTAINER_CODE_V1, test_binding_v1};
+    let l = lane(false);
+    assert!(l.state.class(&l.class_id).unwrap().registrant_bond.is_none(), "the lane's class is a sentinel registration");
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
+    let bound = PalwConsensusObjectV2::TirClassContainerBoundV1 {
+        binding: Box::new(test_binding_v1(&record, artifact_root, b"{\"model\":\"tiny\"}")),
+        signature: Vec::new(),
+    };
+    let mut past = l.extras.clone();
+    past.tir_container_identity_active = true;
+    // Below the fence the honest original is taken.
+    assert!(apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).is_ok());
+    let binding = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).map(|_| ()).map_err(|e| format!("{e:?}"));
+    let together =
+        apply_derived(&l.state, &l.p, &at(), &[bound.clone(), l.object.clone()], &past).map(|_| ()).map_err(|e| format!("{e:?}"));
+    let alone = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &past);
+    let refused_unbound =
+        matches!(&alone, Err(PalwStateV2Error::ClassNotRewardable { code, .. }) if *code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1);
+    assert!(
+        together.is_ok() || binding.is_ok() || !refused_unbound,
+        "C-01: past the container fence the sentinel TIR class can never be bound (binding: {binding:?}; binding+original: \
+         {together:?}) and its honest original is refused {PALW_TIR_UNBOUND_CONTAINER_CODE_V1}"
+    );
+}
+
+/// **audit fix-cd C-01 boundary: who must sign a container binding.** An Active registrant keeps priority (its signature is
+/// required, so a third party's binding is verified against the registrant's key and refused); a registrant that is no longer
+/// Active, or a sentinel registration, leaves the binding open (no signer, empty signature) — and the fold then binds it with the
+/// same strict identity check (a stray inventory is still refused).
+#[test]
+fn audit_fixcd_c01_an_active_registrant_keeps_binding_priority_and_an_inactive_one_opens_it() {
+    use crate::palw_tir_container_v1::{palw_tir_container_binding_signer_v1, test_binding_v1};
+    let mut l = lane(false);
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
+    let binding = test_binding_v1(&record, artifact_root, b"{\"model\":\"tiny\"}");
+    assert!(palw_tir_container_binding_signer_v1(&l.state, &binding).unwrap().is_none(), "sentinel: open");
+    const REGISTRANT: u64 = 0x4C0;
+    tn1_bond(&mut l.state, REGISTRANT, vec![0x4C; 4]);
+    let mut class = l.state.class(&l.class_id).unwrap().clone();
+    class.registrant_bond = Some(bond_key(REGISTRANT));
+    l.state.set_class_for_tests(l.class_id, class);
+    assert_eq!(
+        palw_tir_container_binding_signer_v1(&l.state, &binding).unwrap().map(|(key, _)| *key),
+        Some(bond_key(REGISTRANT)),
+        "an Active registrant must sign (priority)"
+    );
+    l.state.bonds.get_mut(&bond_key(REGISTRANT)).unwrap().status = PalwBondStatusV2::Retiring { since_daa: 1, settled_at_since: 0 };
+    assert!(palw_tir_container_binding_signer_v1(&l.state, &binding).unwrap().is_none(), "a retiring registrant: open");
+    l.state.bonds.remove(&bond_key(REGISTRANT));
+    assert!(palw_tir_container_binding_signer_v1(&l.state, &binding).unwrap().is_none(), "a gone registrant: open");
+    let mut past = l.extras.clone();
+    past.tir_container_identity_active = true;
+    let open = PalwConsensusObjectV2::TirClassContainerBoundV1 { binding: Box::new(binding), signature: Vec::new() };
+    let (bound, _) = apply_derived(&l.state, &l.p, &at(), &[open, l.object.clone()], &past).expect("an open binding folds");
+    assert!(bound.claim(&l.claim).is_some(), "and the class's original is admitted");
+    let mut stray = test_binding_v1(&record, Hash64::from_u64_word(0xBAD), b"{}");
+    stray.class_id = l.class_id;
+    assert!(
+        apply_derived(
+            &l.state,
+            &l.p,
+            &at(),
+            &[PalwConsensusObjectV2::TirClassContainerBoundV1 { binding: Box::new(stray), signature: Vec::new() }],
+            &past
+        )
+        .is_err(),
+        "an open binding keeps the strict identity check"
+    );
+}
+
 /// **The lane's authentication on a gated network**: an IR class passes the free-prompt certification gate past the fence only
 /// when one certified family covers every primitive its program reaches; below the fence the gate is the legacy one.
 #[test]
@@ -935,4 +1012,44 @@ fn tir_catalog_tier_reaches_a_class_through_its_bound_container_root_only() {
     assert!(palw_model_tier_at_v1(&l.state, &p, &l.class_id, AT_DAA).is_approved());
     p.model_tier_v1 = Some(mirror_of(Hash64::from_u64_word(0xC0FFEE)));
     assert!(!palw_model_tier_at_v1(&bound_state, &p, &l.class_id, AT_DAA).is_approved());
+}
+
+/// **Audit C-04 (fold half): a TIR class's first semantic statement names its registered TIR tokenizer.** The first declaration
+/// sets every field, so a tokenizer other than the TIR record's (the one its container binding and every TIR court read) is
+/// refused; the record's own tokenizer folds.
+#[test]
+fn audit_fixcd_c04_a_tir_class_semantic_statement_names_its_registered_tokenizer() {
+    let mut l = lane(false);
+    let mut class = l.state.class(&l.class_id).unwrap().clone();
+    class.registrant_bond = Some(bond_key(PRODUCER));
+    l.state.set_class_for_tests(l.class_id, class);
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
+    let declaration = |tokenizer_id: Hash64| crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1 {
+        version: crate::palw_class_semantics_v1::PALW_CLASS_SEMANTICS_VERSION_V1,
+        class_id: l.class_id,
+        artifact_root,
+        model_profile_id: Hash64::from_u64_word(0x51),
+        runtime_manifest_hash: Hash64::from_u64_word(0x52),
+        runtime_class_id: Hash64::from_u64_word(0x53),
+        tokenizer_id,
+        cu_ruleset_id: Hash64::from_u64_word(0x54),
+        token_table_root: Hash64::from_u64_word(0x55),
+        rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
+        raw_tokenizer_bytes: 16,
+        tokenizer_key_events: 8,
+        prefix_state_relation: None,
+    };
+    let declare = |d| PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { declaration: Box::new(d), signature: Vec::new() };
+    let mut on = l.extras.clone();
+    on.class_semantics_active = true;
+    let other = Hash64::from_u64_word(0xBAD7);
+    assert_ne!(other, record.tokenizer_id);
+    assert_eq!(
+        apply_derived(&l.state, &l.p, &at(), &[declare(declaration(other))], &on).map(|_| ()).unwrap_err(),
+        PalwStateV2Error::ImmutableModelUpdate("a TIR class's semantic tokenizer must be its registered TIR record's tokenizer")
+    );
+    let (declared, _) =
+        apply_derived(&l.state, &l.p, &at(), &[declare(declaration(record.tokenizer_id))], &on).expect("the registered tokenizer folds");
+    assert_eq!(declared.class_semantics_v1(&l.class_id).map(|s| s.tokenizer_id), Some(record.tokenizer_id));
 }

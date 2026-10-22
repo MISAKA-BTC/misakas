@@ -505,20 +505,22 @@ impl VirtualStateProcessor {
                 }
                 // **Lane BUDGET (tag 140): a bond's capital assignment** — the fence, an Active signer, its signature; ADR-0177 D3's rules
                 // are the fold's.
-                // RFC-0002 02-A (tag 175): a TIR class's container binding, signed by the class's original registrant. A-2: below
+                // RFC-0002 02-A (tag 175): a TIR class's container binding, signed by the class's original registrant while it is
+                // Active (open and unsigned otherwise, audit C-01). A-2: below
                 // its owning fence the kind rides unjudged. The opening, the class and immutability are the fold's.
                 Obj::TirClassContainerBoundV1 { binding, signature } => {
                     use kaspa_consensus_core::palw_tir_container_v1 as container;
                     if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
                         return Ok(());
                     }
-                    let class = state.class(&binding.class_id).ok_or("a container binding names an unknown class")?;
-                    let registrant =
-                        class.registrant_bond.as_ref().ok_or("a sentinel registration has no signing registrant for a container binding")?;
-                    let bond = state.bond(registrant).ok_or("the signing registrant is not a public bond")?;
-                    if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
-                        return Err("the signing registrant is not Active".into());
-                    }
+                    // Audit C-01: an Active registrant has priority and must sign; with none (sentinel, or a registrant no longer
+                    // Active) the binding is open and carries an empty signature — the fold's identity check is what makes it true.
+                    let Some((_, bond)) = container::palw_tir_container_binding_signer_v1(state, binding)? else {
+                        if !signature.is_empty() {
+                            return Err("an open TIR container binding (no Active registrant) carries no signature".into());
+                        }
+                        return Ok(());
+                    };
                     let message = container::palw_tir_container_binding_message_v1(self.palw_network_domain_v2(), binding);
                     if !Self::verify_mldsa87_with_context_bool(
                         &bond.pubkey,

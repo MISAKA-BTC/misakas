@@ -1465,7 +1465,7 @@ impl PalwPanelService {
         let retained_exists = retained.is_file();
         palw_replay_served_held_v1(pool.len(), retained_exists)?;
         let backend = self
-            .resolve_backend(session, duty.class_id, duty.artifact_root)
+            .resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
             .map_err(|e| PalwReplayStartV1::Never(format!("the class: {e}")))?;
         let form = self.class_prompt_ids_form(duty.class_id);
         let ladder = self.class_step_ladder(duty.class_id);
@@ -2664,7 +2664,7 @@ mod tests {
         let start = &start[..start.find("\n    }\n").expect("its body")];
         let looked = start.find("palw_replay_served_held_v1(").expect("looks first");
         assert!(
-            looked < start.find(".resolve_backend(").expect("the class")
+            looked < start.find(".resolve_backend_for_claim_v1(").expect("the class")
                 && looked < start.find(".job_anchor_for_claim(").expect("the job")
         );
         let anchor = &start[start.find(".job_anchor_for_claim(").unwrap()..start.find(".attempt_job_for_claim(").expect("the job")];

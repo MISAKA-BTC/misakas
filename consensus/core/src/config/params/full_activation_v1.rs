@@ -66,7 +66,6 @@ palw_full_activation_bare_entry_v1!(PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY, palw_se
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY, palw_native_liability_horizon_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY, palw_reward_liability_horizon_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_UNRESOLVED_BOUND_ENTRY, palw_unresolved_bound_v1);
-palw_full_activation_bare_entry_v1!(PALW_T12_FULL_CLAIM_LOCAL_SETTLEMENT_ENTRY, palw_claim_local_settlement_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_GATE_C_ENTRY, palw_independently_work_certified_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_DAG_SIBLING_ATTRIBUTION_ENTRY, palw_dag_sibling_attribution_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_PANEL_ANCHOR_PERMISSIONLESS_ENTRY, palw_panel_anchor_permissionless_v1);
@@ -174,13 +173,13 @@ pub const PALW_T12_FULL_MONETARY_MATERIAL_ENTRY: PalwPostLaunchFenceV1 = PalwPos
 /// 14–17. TIR container identity, public conviction (needs 12, 11), designated answers and the bounded door (need 15);
 /// 18–19. outsider lane and court clock v2 (need 9); 20. court capacity (needs 9); 21. D2 court model scope (needs 10);
 /// 22. N4 public evidence reward; 23. X3 hard deadline; 24. settlement once (needs 23, 5 — and the ADR-0176 bond budget, NOT on this
-///     list: see the notes); 25. native liability horizon (needs 24); 26. the reward liability horizon; 27–28. RFC-0023 unresolved bound
-///     and claim-local settlement;
-/// 29–31. RFC-0018: Gate C (needs 5), DAG sibling attribution, permissionless Panel anchor;
-/// 32. ADR-0179 model tiers (needs 29 — and `palw_model_bond_allocation_v1`, NOT on this list); 33. memory/routing court v2 (its parent
-///     `palw_shard_court` is a genesis rule of testnet-12's held regime); 34. monetary material (needs 8 — and `palw_material_income_v3`,
-///     NOT on this list); 35. elastic final capacity (needs 5 and the genesis model registry);
-/// 36. `palw_g14_route_required_v1` LAST: its mirror is the resolved height of every route fence above.
+///     list: see the notes); 25. native liability horizon (needs 24); 26. the reward liability horizon; 27. RFC-0023 unresolved bound
+///     (RFC-0023 stage 2's claim-local settlement is NOT on this list: its arming needs measurements, audit fix-cd);
+/// 28–30. RFC-0018: Gate C (needs 5), DAG sibling attribution, permissionless Panel anchor;
+/// 31. ADR-0179 model tiers (needs 28 — and `palw_model_bond_allocation_v1`, NOT on this list); 32. memory/routing court v2 (its parent
+///     `palw_shard_court` is a genesis rule of testnet-12's held regime); 33. monetary material (needs 8 — and `palw_material_income_v3`,
+///     NOT on this list); 34. elastic final capacity (needs 5 and the genesis model registry);
+/// 35. `palw_g14_route_required_v1` LAST: its mirror is the resolved height of every route fence above.
 pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     // The int-13 list, unchanged and first.
     crate::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY,
@@ -210,7 +209,10 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY,
     PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY,
     PALW_T12_FULL_UNRESOLVED_BOUND_ENTRY,
-    PALW_T12_FULL_CLAIM_LOCAL_SETTLEMENT_ENTRY,
+    // `palw_claim_local_settlement_v1` (RFC-0023 stage 2) is NOT on this list (audit fix-cd): its validation refuses every armed
+    // height ("material retention / transition drills are unmeasured"), which no code change can supply, so with it the list could
+    // never validate as a whole. Rule E's side frontier now reads the claim-local irreversible anchors past that fence (audit D-1),
+    // but the measurements remain the user's; it rejoins (before Gate C) with its measured record behind the standard gate.
     PALW_T12_FULL_GATE_C_ENTRY,
     PALW_T12_FULL_DAG_SIBLING_ATTRIBUTION_ENTRY,
     PALW_T12_FULL_PANEL_ANCHOR_PERMISSIONLESS_ENTRY,

@@ -176,6 +176,8 @@ pub struct TirWeightFileV1 {
     path: PathBuf,
     len: u64,
     read: AtomicU64,
+    /// The inode's stamp at open (audit C-07): rows read later through this descriptor are refused if it was rewritten in place.
+    stamp: super::mapped::FileStampV1,
 }
 
 /// A read this large is split into parallel reads of this size (the device has a queue).
@@ -184,10 +186,20 @@ const PARALLEL_READ_BYTES: usize = 8 << 20;
 impl TirWeightFileV1 {
     pub fn open(path: &Path) -> std::io::Result<Self> {
         let file = std::fs::File::open(path)?;
-        let len = file.metadata()?.len();
+        let stamp = super::mapped::FileStampV1::of(&file)?;
+        let len = stamp.len_v1();
         #[cfg(not(unix))]
         let file = Mutex::new(file);
-        Ok(Self { file, path: path.to_path_buf(), len, read: AtomicU64::new(0) })
+        Ok(Self { file, path: path.to_path_buf(), len, read: AtomicU64::new(0), stamp })
+    }
+
+    /// The file has not been rewritten in place since it was opened (audit C-07).
+    pub fn check_unmodified(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        let r = self.stamp.check(&self.file);
+        #[cfg(not(unix))]
+        let r = self.stamp.check(&self.file.lock().expect("the file lock is never poisoned"));
+        r.map_err(|e| format!("{}: {e}", self.path.display()))
     }
 
     pub fn path(&self) -> &Path {
@@ -460,6 +472,11 @@ pub fn tir_weight_store_for_root_v1(root: &Hash64) -> Option<Arc<TirWeightStoreV
 }
 
 impl TirWeightStoreV1 {
+    /// The weight file this store reads rows through has not been rewritten in place (audit C-07).
+    pub fn check_unmodified(&self) -> Result<(), String> {
+        self.file.check_unmodified()
+    }
+
     /// **Open `container`'s weights under `policy`** (see the module documentation): the tiers and
     /// their arithmetic, the budget against the floor, then the one pass that reads every byte — the
     /// pinned set kept, the root and the ranges computed.
