@@ -2,7 +2,7 @@
 
 ## 入口
 
-- **統合RFC:** [RFC-DRAFT-palw-scalable-objective-court-v2.md](RFC-DRAFT-palw-scalable-objective-court-v2.md)
+- **統合RFC:** [RFC-0025](../0025-scalable-objective-court-many-models-mass-disputes.md)(旧 Draft 名 RFC-DRAFT-palw-scalable-objective-court-v2.md)
 - **決定記録:** [ADR-DRAFT-scalable-court-v2.md](ADR-DRAFT-scalable-court-v2.md)
 - **今回のソース確認:** [source-audit-v2.md](source-audit-v2.md)
 - **算術の出力:** [capacity-report.json](capacity-report.json)
