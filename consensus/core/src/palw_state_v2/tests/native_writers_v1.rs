@@ -23,7 +23,11 @@ fn ordinary_registration_keeps_routing_profile_without_certification_or_price_in
     let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap();
     let class = profile.shape_profile_id();
     let p = old.with_memory_routing_court_from_daa(Some(101));
-    let (child, delta) = apply(&parent, &p, &ctx(2, 101, 2), &[registration(class, 0, Some(bond_key(1)))], None);
+    let mut object = registration(class, 0, Some(bond_key(1)));
+    if let PalwConsensusObjectV2::ClassRegistered { slash_value_per_pwu, .. } = &mut object {
+        *slash_value_per_pwu = parent.class(&h64(1)).unwrap().slash_value_per_pwu;
+    }
+    let (child, delta) = apply(&parent, &p, &ctx(2, 101, 2), &[object], None);
     assert_eq!(&*child.reader_router_profile_v2(class).unwrap().unwrap(), &profile);
     assert!(child.fp_work_profile_of(&class).is_none(), "registration must not populate the price/deadline index");
     assert!(!child.fp_certified_classes.contains_key(&class), "graph identity is not model approval");
