@@ -258,3 +258,4 @@ fn the_tiered_roll_is_the_same_after_reorg_ibd_and_restart() {
         assert_eq!(back.model_row(&m), a.model_row(&m));
     }
 }
+
