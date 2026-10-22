@@ -384,6 +384,11 @@ pub fn palw_claim_pursuit_budget_v1(params: &PalwStateParamsV2, policy: &PalwCla
 /// and only if `start + B_remaining <= hard` — a pursuit that could not finish inside the claim's fixed deadline is not begun.
 /// Boundaries: admitted at `d <= deadline`, refused at `d > deadline`.
 pub fn palw_claim_pursuit_may_start_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, start: u64) -> Result<(), &'static str> {
+    // G14 r5 (item 2): where `palw_court_clock_v2` governs the claim, clock v2 owns the cutoff (a + 3,120) and the hard deadline
+    // (a + 10,000); X3's `B_remaining` is kept as the budget (`crate::palw_court_clock_v2::palw_claim_pursuit_may_start_v2`).
+    if crate::palw_court_clock_v2::palw_court_clock_v2_governs(params, claim) {
+        return crate::palw_court_clock_v2::palw_claim_pursuit_may_start_v2(params, claim, start);
+    }
     let Some(deadlines) = palw_claim_deadlines_v1(params, claim) else { return Ok(()) };
     let policy = params.claim_hard_deadline_v1().expect("deadlines exist only under the mirror").policy;
     if start > deadlines.open_cutoff_daa {

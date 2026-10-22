@@ -2189,8 +2189,15 @@ fn history_control_v1(
     };
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || ctx.daa_score < bundle.plan.terms.accepted_daa
-        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
+        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
+            b.params,
+            b.state.legacy_disputes.get(&movement.claim),
+            b.state.claim(&movement.claim),
+            palw_da_disclose_window_daa_v1(b.params),
+            bundle.plan.terms.accepted_daa,
+            bundle.plan.terms.collect_until_daa,
+            ctx.daa_score,
+        )
     {
         return Err(stage_refused(movement.claim, "history recovery changes original paid frame or horizon"));
     }
@@ -2333,8 +2340,15 @@ fn selected_control_v1(
     }
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || ctx.daa_score < bundle.plan.terms.accepted_daa
-        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
+        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
+            b.params,
+            b.state.legacy_disputes.get(&movement.claim),
+            b.state.claim(&movement.claim),
+            palw_da_disclose_window_daa_v1(b.params),
+            bundle.plan.terms.accepted_daa,
+            bundle.plan.terms.collect_until_daa,
+            ctx.daa_score,
+        )
     {
         return Err(stage_refused(movement.claim, "selected source changes original paid frame identity or clock"));
     }
@@ -2469,8 +2483,15 @@ fn native_selected_control_v1(
     };
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || ctx.daa_score < bundle.plan.terms.accepted_daa
-        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
+        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
+            b.params,
+            b.state.legacy_disputes.get(&movement.claim),
+            b.state.claim(&movement.claim),
+            palw_da_disclose_window_daa_v1(b.params),
+            bundle.plan.terms.accepted_daa,
+            bundle.plan.terms.collect_until_daa,
+            ctx.daa_score,
+        )
     {
         return Err(stage_refused(movement.claim, "native selected source changes original paid frame identity or clock"));
     }
@@ -2592,8 +2613,15 @@ fn tir_prefix_control_v1(
         .ok_or_else(|| stage_refused(movement.claim, "TIR prefix move has no active native stage"))?;
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != native.seed.seed_id_v1()
-        || ctx.daa_score < bundle.plan.terms.accepted_daa
-        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
+        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
+            b.params,
+            b.state.legacy_disputes.get(&movement.claim),
+            b.state.claim(&movement.claim),
+            palw_da_disclose_window_daa_v1(b.params),
+            bundle.plan.terms.accepted_daa,
+            bundle.plan.terms.collect_until_daa,
+            ctx.daa_score,
+        )
     {
         return Err(stage_refused(movement.claim, "TIR prefix move changes the paid frame, active seed or clock"));
     }
@@ -2899,8 +2927,15 @@ fn flat_control_v1(
     };
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || ctx.daa_score < bundle.plan.terms.accepted_daa
-        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
+        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
+            b.params,
+            b.state.legacy_disputes.get(&movement.claim),
+            b.state.claim(&movement.claim),
+            palw_da_disclose_window_daa_v1(b.params),
+            bundle.plan.terms.accepted_daa,
+            bundle.plan.terms.collect_until_daa,
+            ctx.daa_score,
+        )
     {
         return Err(stage_refused(movement.claim, "flat source changes literal paid original owner, seed or clock"));
     }
@@ -3060,8 +3095,15 @@ fn float_control_v1(
     };
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
-        || ctx.daa_score < bundle.plan.terms.accepted_daa
-        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
+        || !crate::palw_court_clock_v2::palw_route_door_open_v2(
+            b.params,
+            b.state.legacy_disputes.get(&movement.claim),
+            b.state.claim(&movement.claim),
+            palw_da_disclose_window_daa_v1(b.params),
+            bundle.plan.terms.accepted_daa,
+            bundle.plan.terms.collect_until_daa,
+            ctx.daa_score,
+        )
     {
         return Err(stage_refused(movement.claim, "Float32 source changes literal paid original owner, seed or clock"));
     }

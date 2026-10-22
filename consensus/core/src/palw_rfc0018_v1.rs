@@ -334,6 +334,27 @@ pub fn palw_fp_receipt_clock_v1(
     Ok(final_daa.max(certified_daa))
 }
 
+/// **G14 r5 (user decision 2026-10-22): the receipt use-window clock PAUSES during an accusation suspension.** Same predicate as
+/// [`palw_fp_receipt_clock_v1`] (suspended while an accusation is pending), then the window's start moves forward by every DAA the
+/// claim spent suspended before a dismissal ([`crate::palw_court_clock_v2::palw_fp_receipt_window_start_v2`]), so the remaining
+/// window resumes on dismissal instead of having lapsed. `pause` is the claim's pause account; a conviction voids the claim (refused
+/// above as `revoked`), so only dismissals credit time back. Below Gate C's fence `pause` is never consulted.
+pub fn palw_fp_receipt_clock_paused_v2(
+    params: &PalwStateParamsV2,
+    chain: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    final_daa: u64,
+    pause: &crate::palw_court_clock_v2::PalwReceiptPauseV2,
+) -> Result<u64, PalwFpReceiptUncertifiedV1> {
+    let base = palw_fp_receipt_clock_v1(params, chain, claim_id, claim, final_daa)?;
+    if !palw_gate_c_governs_v1(params, claim) {
+        return Ok(base);
+    }
+    crate::palw_court_clock_v2::palw_fp_receipt_window_start_v2(base, pause)
+        .ok_or(PalwFpReceiptUncertifiedV1 { claim: *claim_id, status: "accusation-pending" })
+}
+
 // -------------------------------------------------------------------------------------------------
 // Rule E participation v2 (RFC-0018 §6)
 // -------------------------------------------------------------------------------------------------

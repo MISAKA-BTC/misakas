@@ -128,7 +128,7 @@ fn court_clock_v2_notice_3120_and_hard_10000_boundaries() {
     let claim = c.claim(&id);
     let (a, w) = (claim.accepted_daa, palw_da_disclose_window_daa_v1(&c.sp));
     for (now, ok) in [(a + NOTICE_WINDOW_DAA - 1, true), (a + NOTICE_WINDOW_DAA, true), (a + NOTICE_WINDOW_DAA + 1, false)] {
-        let got = palw_dispute_record_hard_deadline_v2(&c.sp, &claim, w, now);
+        let got = palw_dispute_record_hard_deadline_v2(&c.sp, &claim, w, 0, &[], now);
         if ok {
             assert_eq!(got, Ok(a + DISPUTE_WINDOW_DAA), "a first dispute at {now} extends to a + 10,000");
         } else {
@@ -156,7 +156,7 @@ fn court_clock_v2_an_old_claim_keeps_the_old_clock_across_the_fence() {
         assert!(!palw_court_clock_v2_governs(&sp, &claim));
         assert_eq!(palw_claim_court_hard_deadline_v2(&sp, None, &claim, w), legacy);
         // Disputed long after the fence, still the old formula; no 3,120 window applies to it.
-        assert_eq!(palw_dispute_record_hard_deadline_v2(&sp, &claim, w, from + 20_000), Ok(legacy));
+        assert_eq!(palw_dispute_record_hard_deadline_v2(&sp, &claim, w, 0, &[], from + 20_000), Ok(legacy));
     }
     // At equality the claim IS governed.
     let sp = c.sp.clone().with_court_clock_v2_from_daa(Some(claim.accepted_daa));

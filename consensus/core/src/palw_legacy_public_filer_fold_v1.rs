@@ -499,6 +499,18 @@ pub(super) fn apply_dispute_reserved_v1(
     // G14 U07 (`palw_court_clock_v2`): for a claim accepted past the fence, creating this record IS the dispute extension — its hard
     // deadline becomes `a + 10,000` and every clock derived from it (collect, disclosure, retention, Final hold, bond release) moves
     // in this one write. The first reservation must land in `a <= now <= a + 3,120` (ADR-0198 A). Old claims: the old formula.
+    // G14 r5 (item 3, F07): the extension must not outrun ANY dependency — the claim's own trace, plus the staged route's custody
+    // horizon when the claim carries one. The reorg-retention term comes from the staged court config (0 on the legacy route).
+    let reorg_retention = crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(builder.extras.staged_public_court.as_ref());
+    let dependencies: Vec<crate::palw_court_clock_v2::PalwCourtDependencyV2> = builder
+        .state
+        .staged_claim_contract_v1(&claim_id)
+        .map(|c| crate::palw_court_clock_v2::PalwCourtDependencyV2 {
+            kind: crate::palw_court_clock_v2::PalwCourtDependencyKindV2::Custody,
+            signed_horizon_daa: c.terms.material_until_daa,
+        })
+        .into_iter()
+        .collect();
     let mut record = match builder.state.legacy_disputes.get(&claim_id).cloned() {
         Some(record) => record,
         None => PalwDisputeClaimV1 {
@@ -507,6 +519,8 @@ pub(super) fn apply_dispute_reserved_v1(
                 builder.params,
                 &claim,
                 w_disclose,
+                reorg_retention,
+                &dependencies,
                 now,
             )
             .map_err(refused)?,
