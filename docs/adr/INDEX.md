@@ -205,3 +205,4 @@
 | ADR-0202 | [shared court originalの実原資と役割別同意](0202-court-original-funded-contract-and-role-consent.md) | 原文と後続改定を参照 |
 | ADR-0203 | [認証付き PALW state map と行単位アクセス](0203-authenticated-palw-state-map-and-row-access.md) | 原文と後続改定を参照 |
 | ADR-0204 | [IBD の有界 authenticated row stream と世代番号付き保存](0204-ibd-bounded-row-stream-and-storage-generations.md) | 原文と後続改定を参照 |
+| ADR-0205 | [decode 済みの回答は二度支払わない](0205-a-decoded-answer-is-not-paid-twice.md) | 原文と後続改定を参照 |

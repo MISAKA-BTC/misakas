@@ -9637,6 +9637,10 @@ pub enum PalwStateV2Error {
         "free-prompt claim {claim} carries {carried} prompt token ids, which is not its committed prompt length — past Params::palw_fp_derived_work the chain reads the prompt itself to see which prefix of it has already been paid for (ADR-0145 §6), and a commitment that carries no ids cannot be read"
     )]
     FreePromptPromptNotAccountable { claim: Hash64, carried: usize },
+    /// Compute-claim audit CX-01/CX-02 (`palw_fp_answer_accounting_v1`): a compute-priced commitment past the fence carried no
+    /// answer, or one whose length is not its executed decode count.
+    #[error("free-prompt claim {claim}: {}: carried {carried:?} ids for {decoded} decoded", crate::palw_fp_answer_accounting_v1::PALW_FP_ANSWER_NOT_ACCOUNTABLE_V1)]
+    FreePromptAnswerNotAccountable { claim: Hash64, carried: Option<usize>, decoded: u32 },
     /// **ADR-0145 §6: a prefix-STATE of another class is a different object.** Using it here
     /// would price this run against a cache a seat of THIS class cannot replay from.
     #[error(
@@ -19480,6 +19484,41 @@ pub fn palw_fp_commitment_price_from_state_v1(
     work_leaves: u64,
     prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1,
 ) -> Result<PalwFpCommitmentPriceV1, PalwStateV2Error> {
+    palw_fp_commitment_price_answered_v1(
+        state,
+        params,
+        inputs,
+        claim_id,
+        class_id,
+        prompt_token_ids,
+        prompt_tokens,
+        decode_tokens_executed,
+        work_leaves,
+        prefix_state,
+        None,
+    )
+}
+
+/// **[`palw_fp_commitment_price_from_state_v1`] with the run's decoded answer** (compute-claim audit CX-01/CX-02,
+/// `palw_fp_answer_accounting_v1`). `answer: Some(ids)` — the fold passes it past the fence, and only there — credits the run
+/// only for the positions past `c`, the longest run of positions some unexpired paid row of the class already computed with the
+/// same tokens ([`crate::palw_fp_answer_accounting_v1::palw_fp_answer_covered_positions_v1`]): within the prompt `c` is the
+/// accounted prefix (it can only raise it), past the prompt the credit is the derivation of the positions `c ..` alone, and a run
+/// with no position past `c` is refused `ZeroQuanta`. `None` is the function above, byte for byte.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_commitment_price_answered_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    inputs: PalwFpPriceInputsV1,
+    claim_id: &Hash64,
+    class_id: &Hash64,
+    prompt_token_ids: &[u32],
+    prompt_tokens: u32,
+    decode_tokens_executed: u32,
+    work_leaves: u64,
+    prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1,
+    answer: Option<&[u32]>,
+) -> Result<PalwFpCommitmentPriceV1, PalwStateV2Error> {
     let class = state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
     let (per_job, cap) = (params.fp_quanta_per_canonical_job, params.fp_max_quanta_per_receipt);
     if per_job == 0 || cap == 0 {
@@ -19556,6 +19595,54 @@ pub fn palw_fp_commitment_price_from_state_v1(
             crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid)
         };
         let underivable = |why: String| PalwStateV2Error::FreePromptWorkUnderivable { claim: *claim_id, class: *class_id, why };
+        // **CX-01/CX-02: the positions a paid claim of this class already computed with the same tokens** — `None` below
+        // `palw_fp_answer_accounting_v1` (the fold passes no answer there), so everything after it is byte for byte as before.
+        let covered = answer.map(|answer| {
+            crate::palw_fp_answer_accounting_v1::palw_fp_answer_covered_positions_v1(
+                state.fp_paid_sequences_of_v1(class_id, inputs.daa_score),
+                prompt_token_ids,
+                answer,
+            )
+        });
+        // Within the prompt the coverage IS the accounted prefix (a sequence row's last answer token was never computed, so the
+        // prompt-ids reading above would over-count it by one); past it the decode rules still price the whole prompt at zero.
+        let accounted = covered.map_or(accounted, |c| if decode_rules { prompt_tokens } else { c.min(prompt_tokens) });
+        let positions = prompt_tokens.saturating_add(decode_tokens_executed).saturating_sub(1);
+        let beyond = covered.filter(|c| *c > prompt_tokens);
+        if beyond.is_some_and(|c| c >= positions) {
+            return Err(PalwStateV2Error::ZeroQuanta);
+        }
+        // The credit of the positions `c ..` alone: the same run seen as a prompt of `c` (every one of them paid) that decoded
+        // to the same last position. `(credited leaves, credited compute)`.
+        let answer_credit = match beyond {
+            None => None,
+            Some(c) => {
+                let decode = positions - c + 1;
+                let genesis = crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(*class_id);
+                Some(match &source {
+                    PalwFpWorkGraphV1::Profile(profile) => (
+                        crate::palw_freeprompt_v3::fp_derive_work_from_state_v1(profile, c, decode, c, genesis, ladder)
+                            .map_err(|e| underivable(e.to_string()))?
+                            .credited_leaves,
+                        crate::palw_freeprompt_v3::fp_derive_credited_compute_from_state_v1(profile, c, decode, c, genesis)
+                            .map_err(|e| underivable(e.to_string()))?,
+                    ),
+                    PalwFpWorkGraphV1::Tir(class) => {
+                        let tir = crate::palw_tir_fp_lane_v1::palw_tir_fp_derive_work_v1(
+                            class,
+                            c,
+                            decode,
+                            c,
+                            genesis,
+                            ladder,
+                            params.tir_fence2_active_at(inputs.daa_score),
+                        )
+                        .map_err(underivable)?;
+                        (tir.derived.credited_leaves, tir.credited_compute)
+                    }
+                })
+            }
+        };
         let (work, credited) = match &source {
             PalwFpWorkGraphV1::Profile(profile) => (
                 crate::palw_freeprompt_v3::fp_derive_work_from_state_v1(
@@ -19590,7 +19677,16 @@ pub fn palw_fp_commitment_price_from_state_v1(
                 derived: work.total_leaves,
             });
         }
-        Some((work, source, credited))
+        // CX-01/CX-02: past the prompt, the credit is the uncovered positions' alone (the leaves and, below, the compute).
+        let (work, credited) = match answer_credit {
+            Some((leaves, _)) => (crate::palw_freeprompt_v3::PalwFpDerivedWorkV1 { credited_leaves: leaves, ..work }, credited),
+            None => (work, credited),
+        };
+        let credited = match (answer_credit, &source) {
+            (Some((_, compute)), PalwFpWorkGraphV1::Tir(_)) => Some(compute),
+            _ => credited,
+        };
+        Some((work, source, credited, answer_credit.map(|(_, compute)| compute)))
     } else {
         None
     };
@@ -19622,10 +19718,12 @@ pub fn palw_fp_commitment_price_from_state_v1(
     let pricing = PalwFpPricingV1::of(params, inputs.canonical_work_daa);
     let in_compute = pricing.canonical_work_daa.is_some_and(|height| inputs.daa_score >= height);
     let (quanta, pwu, reserved) = if in_compute {
-        let Some((work, source, tir_credited)) = &derived else {
+        let Some((work, source, tir_credited, answer_compute)) = &derived else {
             return Err(PalwStateV2Error::FreePromptComputeWithoutDerivation { claim: *claim_id, class: *class_id });
         };
         let credited = match (source, tir_credited) {
+            // CX-01/CX-02: the uncovered positions' compute, derived above.
+            (PalwFpWorkGraphV1::Profile(_), _) if answer_compute.is_some() => answer_compute.unwrap_or_default(),
             // An IR class: the structural work vector of the NEW positions, derived above with the leaves.
             (PalwFpWorkGraphV1::Tir(_), Some(credited)) => *credited,
             (PalwFpWorkGraphV1::Profile(profile), _) => crate::palw_freeprompt_v3::fp_derive_credited_compute_from_state_v1(
@@ -19662,14 +19760,14 @@ pub fn palw_fp_commitment_price_from_state_v1(
     } else {
         let credited = match &derived {
             // RFC-0002 Phase H: an IR class prices compute only (ADR-0148); it has no leaves-era price.
-            Some((_, PalwFpWorkGraphV1::Tir(_), _)) => {
+            Some((_, PalwFpWorkGraphV1::Tir(_), _, _)) => {
                 return Err(PalwStateV2Error::FreePromptWorkUnderivable {
                     claim: *claim_id,
                     class: *class_id,
                     why: crate::palw_tir_fp_lane_v1::PALW_TIR_FP_COMPUTE_ONLY_V1.to_string(),
                 });
             }
-            Some((work, _, _)) => work.credited_leaves,
+            Some((work, _, _, _)) => work.credited_leaves,
             // Below the derivation the chain holds no graph to split the capture with, so the
             // decode rules cannot price this claim: refused by name (unreachable on an assembled
             // ruleset — `validate_palw_v2` arms the rules only over `palw_fp_derived_work`).
@@ -19702,7 +19800,7 @@ pub fn palw_fp_commitment_price_from_state_v1(
         rights_reserved,
         reserved,
         priced_in_compute: in_compute,
-        derived_work: derived.map(|(work, _, _)| work),
+        derived_work: derived.map(|(work, _, _, _)| work),
     })
 }
 
@@ -20358,6 +20456,13 @@ pub struct PalwTransitionExtrasV1 {
     /// `palw_tir_container_identity_v1` at this block (RFC-0002 02-A): a TIR class's `PALWART3` container binding folds, and a
     /// TIR original of an unbound class is refused. False below it (every shipped preset).
     pub tir_container_identity_active: bool,
+    /// **`palw_fp_answer_accounting_v1` at this block** (compute-claim audit CX-01/CX-02): a compute-priced free-prompt commitment
+    /// must carry its answer ([`Self::fp_claim_answers`]), is credited only past the positions a paid row of its class already
+    /// computed, and records `prompt ‖ answer`. `false` by `Default` and below the fence (every shipped preset): byte-identical.
+    pub fp_answer_accounting_active: bool,
+    /// The decoded answer ids each free-prompt commitment of this block carried (`FPA1`), keyed by claim — native ingress only,
+    /// never a carrier-declared map. Empty below `palw_fp_answer_accounting_v1`.
+    pub fp_claim_answers: BTreeMap<Hash64, Vec<u32>>,
     /// `palw_tir_designated_answers_v1` at this block (ADR-0191 step B): a tag-245 event folds into the designated registry.
     /// `false` by `Default` and below the fence (every shipped preset). The processor sets it from `palw_tir_designated_answers_v1`.
     pub tir_designated_answers_active: bool,

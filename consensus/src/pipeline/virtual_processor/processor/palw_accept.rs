@@ -2079,6 +2079,10 @@ impl VirtualStateProcessor {
             tir_public_conviction_active: self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa_score)),
             // RFC-0002 02-A: the TIR container identity's own fence.
             tir_container_identity_active: self.palw_tir_container_identity_v1.is_some_and(|f| f.is_active(daa_score)),
+            // Compute-claim audit CX-01/CX-02: the answer accounting's own fence. Its answers (`fp_claim_answers`) are filled by native
+            // ingress of the `FPA1` carriage — an arming prerequisite (ADR-0205 draft); `validate_palw_v2` refuses arming until it is.
+            fp_answer_accounting_active: self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(daa_score)),
+            fp_claim_answers: Default::default(),
             staged_float_constraint_active: self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(daa_score)),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),

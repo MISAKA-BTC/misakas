@@ -28,6 +28,8 @@ mod r5_f02_wire_v1;
 // G14 r6 D4: native post-Final duty clocks (text29 / funded v11).
 mod r6_d4_post_final_duty_v1;
 mod paid_consumer_retention_v1;
+// Compute-claim audit (lane compute-exec, 2026-10-22): a decoded answer re-sold as prefill / under a second bond.
+mod audit_compute_exec_v1;
 // RFC-0002 Phase H: the IR class free-prompt lane through the production fold (framed, priced from the admitted program).
 mod tir_fp_lane_v1;
 // ADR-0191 step B: the designated-answer registry as a state field (tag 245, dormant behind its fence).
@@ -28595,6 +28597,8 @@ mod evm_market {
             tir_public_originals: Default::default(),
             tir_public_conviction_active: false,
             tir_container_identity_active: false,
+            fp_answer_accounting_active: false,
+            fp_claim_answers: Default::default(),
             tir_designated_answers_active: false,
             tir_bounded_door_active: false,
             tir_bounded_door_from_daa: None,
@@ -28880,6 +28884,8 @@ mod evm_market {
             tir_public_originals: Default::default(),
             tir_public_conviction_active: false,
             tir_container_identity_active: false,
+            fp_answer_accounting_active: false,
+            fp_claim_answers: Default::default(),
             tir_designated_answers_active: false,
             tir_bounded_door_active: false,
             tir_bounded_door_from_daa: None,

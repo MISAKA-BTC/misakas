@@ -62,6 +62,8 @@ palw_full_activation_bare_entry_v1!(PALW_T12_FULL_COURT_OUTSIDER_LANE_ENTRY, pal
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_COURT_CLOCK_V2_ENTRY, palw_court_clock_v2);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_COURT_MODEL_SCOPE_ENTRY, palw_court_model_scope_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_PUBLIC_EVIDENCE_REWARD_ENTRY, palw_public_evidence_reward_v1);
+// Compute-claim audit CX-01/CX-02 (lane compute-exec, 2026-10-22): a decoded answer is not paid twice.
+palw_full_activation_bare_entry_v1!(PALW_T12_FULL_FP_ANSWER_ACCOUNTING_ENTRY, palw_fp_answer_accounting_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY, palw_settlement_once_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY, palw_native_liability_horizon_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY, palw_reward_liability_horizon_v1);
@@ -204,6 +206,7 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_COURT_CAPACITY_ENTRY,
     PALW_T12_FULL_COURT_MODEL_SCOPE_ENTRY,
     PALW_T12_FULL_PUBLIC_EVIDENCE_REWARD_ENTRY,
+    PALW_T12_FULL_FP_ANSWER_ACCOUNTING_ENTRY,
     PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,
     PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY,
     PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY,

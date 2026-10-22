@@ -1333,6 +1333,18 @@ impl PalwChainStateV2 {
             .collect()
     }
 
+    /// **Every sequence this CLASS has been paid to compute** (compute-claim audit CX-01/CX-02): the ids and the prompt length of
+    /// every unexpired `fp_claim_prompts` row — prompt rows and, past `palw_fp_answer_accounting_v1`, `prompt ‖ answer` rows —
+    /// for [`crate::palw_fp_answer_accounting_v1::palw_fp_answer_covered_positions_v1`].
+    pub fn fp_paid_sequences_of_v1(&self, class_id: &Hash64, now_daa: u64) -> Vec<(&[u32], u32)> {
+        self.fp_claim_prompts
+            .range((*class_id, PALW_BOND_KEY_V2_MIN, Hash64::default())..)
+            .take_while(|((class, _, _), _)| class == class_id)
+            .filter(|(_, row)| row.expires_daa > now_daa)
+            .map(|(_, row)| (row.prompt_token_ids.as_slice(), row.prompt_tokens))
+            .collect()
+    }
+
     /// **G14 R4 (node replay input): the prompt ids `claim` was accepted with**, when its acceptance kept them (the ADR-0145 row,
     /// written for compute-priced claims and swept at its retention). `None` otherwise: the caller then has no public input to
     /// replay, never a guessed one.
