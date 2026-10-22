@@ -1017,4 +1017,47 @@ mod tests {
         assert_eq!(palw_escrow_row_transition_v1(&r.contract_id, Some(&settled), None), Ok(()));
         assert_eq!(palw_escrow_row_transition_v1(&h(98), Some(&settled), None), Err(PalwEscrowRefusalV1::Transition));
     }
+
+    /// **audit(a) A-2 reproducer: two escrow inputs in one transaction share the same "escrow-funded" outputs.** Each row's plan
+    /// starts its output walk at index 0 and counts every OTHER input (including the second escrow) as relay funding, so one
+    /// payee output and one change-back/return output satisfy both rows. The books record two payments; the payee receives one; the
+    /// second escrow's value leaves through an unconstrained output (here: back to the payer).
+    #[test]
+    fn audit_a_two_escrow_inputs_alias_one_set_of_due_outputs() {
+        let a = PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), outpoint(), 1_000, h(3), payer_payload(), 100, 10_100, false).unwrap();
+        let b_out = TransactionOutpoint::new(Hash64::from_u64_word(78), 0);
+        let b = PalwFundedEscrowRowV1::fresh_v1(h(21), h(22), b_out, 1_000, h(3), payer_payload(), 100, 10_100, false).unwrap();
+        let dues = || vec![due(PalwEscrowDueKindV1::WorkPayment, Some(11), 300)];
+        let sa = PalwEscrowFeeScheduleV1::test_only_v1(a.contract_id, dues());
+        let sb = PalwEscrowFeeScheduleV1::test_only_v1(b.contract_id, dues());
+        // One payee output (300), one return (700), and 1,000 to the payer: in 2,000 = out 2,000.
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput::new(a.funding_outpoint, vec![], 0, 0), TransactionInput::new(b.funding_outpoint, vec![], 0, 0)],
+            vec![pay(11, 300), TransactionOutput::new(700, payer_spk()), TransactionOutput::new(1_000, payer_spk())],
+            0,
+            crate::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        let pa = palw_escrow_qualified_spend_v1(&a, &tx, &[1_000, 1_000], 500, Some(&sa)).expect("A qualifies");
+        let pb = palw_escrow_qualified_spend_v1(&b, &tx, &[1_000, 1_000], 500, Some(&sb)).expect("B qualifies on the same outputs");
+        assert_eq!((pa.paid_now, pa.returned_now), (300, 700));
+        assert_eq!((pb.paid_now, pb.returned_now), (300, 700));
+        let booked_paid = pa.new.paid_sompi + pb.new.paid_sompi;
+        let actually_paid: u64 = tx.outputs.iter().filter(|o| payload_of(o) == Some(party(11))).map(|o| o.value).sum();
+        assert_eq!(booked_paid, 600, "the rows record two work payments");
+        assert_eq!(actually_paid, 300, "the payee received one");
+        // Liability still open: both rows continue on the SAME change-back outpoint (one 700 output backs 2 x 700 unreleased).
+        let (ao, bo) = (row(true), PalwFundedEscrowRowV1 { contract_id: h(21), funding_outpoint: b_out, ..row(true) });
+        let pao = palw_escrow_qualified_spend_v1(&ao, &tx, &[1_000, 1_000], 500, Some(&sa)).expect("A continues");
+        let pbo = palw_escrow_qualified_spend_v1(&bo, &tx, &[1_000, 1_000], 500, Some(&sb)).expect("B continues");
+        assert_eq!(pao.new.funding_outpoint, pbo.new.funding_outpoint, "two rows re-locked on one 700-sompi output");
+        assert_eq!(pao.new.unreleased_v1().unwrap() + pbo.new.unreleased_v1().unwrap(), 1_400);
+        // The block filter's shape: by outpoint, the second row is shadowed (it can never be spent again: a permanent orphan).
+        let mut rows = BTreeMap::new();
+        rows.insert(pao.new.contract_id, pao.new);
+        rows.insert(pbo.new.contract_id, pbo.new);
+        assert_eq!(palw_escrow_rows_by_outpoint_v1(&rows).len(), 1);
+    }
 }
