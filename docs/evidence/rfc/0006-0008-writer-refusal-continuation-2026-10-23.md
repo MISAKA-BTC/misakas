@@ -82,6 +82,14 @@ read failure, restart and reorg cases rather than treating a prefix as complete.
 `29b97afcd` now propagates a page-read error out of the blocking collector:
 the service logs it and returns before stepping the filer book or queuing a
 new court object. This fixes the error path only. Continuation beyond the first
-page remains unimplemented. A `kaspad --lib` cargo check is in progress with
-output at `/tmp/misaka-rfc06-gdn-service-check.log`; runtime failure/retry
-controls and production acceptance are still required.
+page remains unimplemented. `cargo check -p kaspad --lib` passed for that
+change (2m 36s; 60 warnings), with output at
+`/tmp/misaka-rfc06-gdn-service-check.log`.
+
+`dbf505cae` extracts the production strict page collector and adds a control
+using the accepted-chain mock: a short page reports its continuation; an
+unavailable older acceptance record returns an error rather than a partial
+success. The accepted-history/service tests are compiling with output at
+`/tmp/misaka-rfc06-gdn-history-tests.log`. The new test's outcome is not yet
+known. Cross-tick continuation, runtime failure/retry controls and production
+acceptance are still required.
