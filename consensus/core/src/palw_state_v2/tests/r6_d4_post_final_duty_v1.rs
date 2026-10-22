@@ -322,7 +322,9 @@ fn verify2_b02_an_answered_decoy_does_not_block_the_honest_accuser_for_all_of_h(
     assert!(decide_native_post_final_default_v1(&b, &held(family), deadline(&p) + 1, &production).is_err(), "answered: no default");
     register_post_final_material_v1(&mut b, family, &JOB, [0x78; 64], 1_024).unwrap();
     let honest = bond_key(7);
-    let refused = accuse_post_final_v1(&mut b, &ctx(6, HORIZON - 100, 6), &honest, family, &JOB, [0x78; 64]);
+    // fix-b: filed right after the decoy's window (the round-2 H-100 lies inside the last turn before H, which the pre-existing
+    // horizon rule refuses for ANY accusation — "would not close before the liability horizon" — independent of the decoy).
+    let refused = accuse_post_final_v1(&mut b, &ctx(6, deadline(&p) + 2, 6), &honest, family, &JOB, [0x78; 64]);
     eprintln!("[verify2-b02b] honest accusation at H-100 after the answered decoy: {refused:?}");
     assert!(refused.is_ok(), "B-02: expected the honest verifier's accusation to be admitted, got {refused:?}");
 }
