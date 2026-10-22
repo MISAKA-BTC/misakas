@@ -755,19 +755,17 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     // fence, the cap as it always was.
     let admission_window =
         builder.state.class_model_court_window_v1(&claim.class_id).unwrap_or_else(|| builder.params.window_court());
-    match super::palw_court_capacity_fold_v1::court_admission_v1(builder, ctx, claim_id, challenger_bond, admission_window)? {
+    // Lane r5-f03-ingress: the paid public ingress wraps the same admission (identical while its schedule is missing).
+    match super::palw_court_capacity_fold_v1::court_ingress_admission_v1(
+        builder,
+        ctx,
+        claim_id,
+        challenger_bond,
+        direct_evidence,
+        admission_window,
+    )? {
         super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(None),
-        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open => {}
-        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {
-            super::palw_court_capacity_fold_v1::legacy_court_cap_admits_v1(
-                &builder.state,
-                builder.params,
-                claim_id,
-                challenger_bond,
-                direct_evidence,
-                ctx.daa_score,
-            )?;
-        }
+        super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open | super::palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {}
     }
     let challenger_collateral =
         builder.state.bonds.get(&challenger_bond).ok_or(PalwStateV2Error::MissingBond(challenger_bond))?.collateral;

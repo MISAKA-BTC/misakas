@@ -496,6 +496,27 @@ pub(super) trait PalwHeldFilerHostV1 {
     fn sign(&self, message: &[u8], context: &[u8]) -> Option<Vec<u8>>;
     /// The fold's answer to `object` in the next block (`palw_object_rehearsal_v1`); `None`: no tip.
     fn rehearse(&self, object: &PalwConsensusObjectV2) -> Option<PalwObjectRehearsalV1>;
+    /// **G14 item 3 (lane r5-f03-ingress)**: whether this node pays the paid court ingress (`--palw-court-paid-ingress`).
+    fn paid_ingress_opt_in(&self) -> bool {
+        false
+    }
+    /// The once-only court ingress fee the fold burns from the opener at `daa` (`palw_court_ingress_fee_due_v1`); `None` while
+    /// the paid ingress is dormant (every shipped build: its schedule is typed-missing).
+    fn ingress_fee_due(&self, _daa: u64) -> Option<u64> {
+        None
+    }
+}
+
+/// **G14 item 3 (lane r5-f03-ingress): the filer's paid-ingress gate.** `None`: no fee is due (dormant ingress) — the fold's answer
+/// alone decides, exactly as before. With a fee due: an operator that did not opt in settles the case unpaid (it never burns a fee
+/// it was not told to pay); one that did files — the fold burns the fee once, at admission, and its outside reservation on the
+/// claim is the outsider's own (a coalition cannot occupy it).
+pub(super) fn palw_held_paid_ingress_step_v1(opt_in: bool, fee_due: Option<u64>) -> Option<PalwSeatAccuseStepV1> {
+    match fee_due {
+        None | Some(0) => None,
+        Some(_) if opt_in => None,
+        Some(_) => Some(PalwSeatAccuseStepV1::Settle),
+    }
 }
 
 /// **The loop's half, once a tick** — see the module's header, step 2. The chain's held dissections
@@ -582,6 +603,16 @@ pub(super) fn palw_held_dissections_step_v1<H: PalwHeldFilerHostV1>(
                 continue;
             }
             dissect.asked_at = Some(current_daa);
+            if let Some(PalwSeatAccuseStepV1::Settle) =
+                palw_held_paid_ingress_step_v1(host.paid_ingress_opt_in(), host.ingress_fee_due(current_daa.saturating_add(1)))
+            {
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: the held dissection's opening would burn the court ingress fee and this node does \
+                     not pay it (--palw-court-paid-ingress off) — settled unpaid"
+                );
+                filer.settle_at(&claim, current_daa);
+                continue;
+            }
             match host.rehearse(&object).map(|r| (palw_held_rehearsal_step_v1(&r), r)) {
                 None => {}
                 Some((PalwSeatAccuseStepV1::File, _)) => {
@@ -719,6 +750,19 @@ impl PalwHeldFilerHostV1 for PalwPanelHeldFilerHostV1<'_> {
 
     fn rehearse(&self, object: &PalwConsensusObjectV2) -> Option<PalwObjectRehearsalV1> {
         self.session.palw_object_rehearsal_v1(object)
+    }
+
+    fn paid_ingress_opt_in(&self) -> bool {
+        self.panel.drill_config_v1().court_paid_ingress
+    }
+
+    fn ingress_fee_due(&self, daa: u64) -> Option<u64> {
+        match &self.panel.consensus_config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                kaspa_consensus_core::palw_state_v2::palw_court_ingress_fee_due_v1(&bundle.state, daa)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -1118,5 +1162,16 @@ mod tests {
         let found = PalwReplayRunV1::HostFailed("whatever it found".into());
         assert!(filer.on_run_v1(running, found, 111, &me).is_none());
         assert!(filer.settled_v1(&running) && court_pending.is_empty());
+    }
+
+    /// G14 item 3 (lane r5-f03-ingress): the paid-ingress gate. Dormant (no fee due) → the fold alone decides, opted in or not; a fee
+    /// due → an operator that did not opt in settles unpaid, one that did files.
+    #[test]
+    fn r5_f03_the_filer_pays_the_court_ingress_only_when_opted_in() {
+        assert_eq!(palw_held_paid_ingress_step_v1(false, None), None, "dormant: unchanged");
+        assert_eq!(palw_held_paid_ingress_step_v1(true, None), None, "dormant: unchanged");
+        assert_eq!(palw_held_paid_ingress_step_v1(false, Some(0)), None, "a zero fee is no fee");
+        assert_eq!(palw_held_paid_ingress_step_v1(true, Some(5)), None, "opted in: file and pay");
+        assert_eq!(palw_held_paid_ingress_step_v1(false, Some(5)), Some(PalwSeatAccuseStepV1::Settle), "not opted in: settle unpaid");
     }
 }

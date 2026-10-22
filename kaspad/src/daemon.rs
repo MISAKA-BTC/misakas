@@ -2043,6 +2043,7 @@ Do you confirm? (y/n)";
                         tir_shard_demand_runs: args.palw_tir_shard_demand_runs,
                         tir_shard_watch: args.palw_tir_shard_watch,
                         gdn_step_filer: args.palw_gdn_step_filer,
+                        court_paid_ingress: args.palw_court_paid_ingress,
                         tir_shard_mirror: args.palw_tir_shard_mirror.as_ref().map(std::path::PathBuf::from),
                         tir_shard_fetch: args.palw_tir_shard_fetch,
                         tir_shard_run_leaves: args.palw_tir_shard_run_leaves.unwrap_or(0),
@@ -2336,6 +2337,7 @@ Do you confirm? (y/n)";
                 c.vertex_equivocate_at = None;
                 c.tir_shard_watch = false;
                 c.gdn_step_filer = false;
+                c.court_paid_ingress = false;
                 c.tir_shard_declare = None;
                 if let Some(bonds) = &extra_collude {
                     c.drill_collude_with = bonds.clone();

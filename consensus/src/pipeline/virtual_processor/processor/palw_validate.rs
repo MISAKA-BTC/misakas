@@ -93,6 +93,7 @@ impl VirtualStateProcessor {
                 | Obj::SeatReadinessRootV1 { .. }
                 | Obj::SeatReadinessDemandedV1 { .. }
                 | Obj::SeatReadinessAnsweredV1 { .. }
+                | Obj::MaterialIntakeV1 { .. }
                 | Obj::ShardCourtAccused { .. }
                 | Obj::CheckpointAccused { .. }
                 | Obj::DefaultAccusedTirStep { .. }

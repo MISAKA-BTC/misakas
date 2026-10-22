@@ -208,7 +208,7 @@ fn owner(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&Palw
     if !pay_restore(builder,ctx,signer,p,s,c,h.input_bytes,body.len() as u32)?{return Ok(());}
     let(class,actual,plan,book,_data)=restore_job(builder,p,&h)?;let maximum=contract(builder,p,&class,&actual,&plan)?;
     if h.terminal!=StageTerminalV28::Challengeable||maximum.record()!=&h.contract||book.challenge_end().is_none_or(|end|ctx.daa_score>end){return Err(refused("stage28 paid owner outside original whole-claim admission interval"));}
-    let status=paid_status(builder,id)?;let bond=builder.state.bonds.get(signer).ok_or_else(||refused("stage28 owner absent"))?;let actor=palw_kernel_bond_id_v1(signer);let operator=bond.operator_id.as_bytes();let producer_operator=book.producer_operator();if !matches!(bond.status,PalwBondStatusV2::Active)||actor==book.job().producer||operator==producer_operator{return Err(refused("stage28 paid owner is not independent from original producer"));}
+    let mut status=paid_status(builder,id)?;let bond=builder.state.bonds.get(signer).ok_or_else(||refused("stage28 owner absent"))?;let actor=palw_kernel_bond_id_v1(signer);let operator=bond.operator_id.as_bytes();let producer_operator=book.producer_operator();if !matches!(bond.status,PalwBondStatusV2::Active)||actor==book.job().producer||operator==producer_operator{return Err(refused("stage28 paid owner is not independent from original producer"));}
     let discovery=body[200];if discovery>1{return Err(refused("stage28 paid owner mode exceeded"));}let mut proof:Digest=body[66..130].try_into().unwrap();let mut seal_root:Digest=body[130..194].try_into().unwrap();let total=u32::from_le_bytes(body[194..198].try_into().unwrap());let count=u16::from_le_bytes(body[198..200].try_into().unwrap());
     if discovery==0&&(proof==[0;64]||seal_root==[0;64])||discovery==1&&(proof!=[0;64]||seal_root!=[0;64]||total!=maximum.paged().record().maximum_bytes||count!=maximum.paged().record().maximum_parts){return Err(refused("stage28 original proof/discovery explicit metadata differs"));}
     let ticket=if discovery==1{object_id(b"misaka-palw/native/stage-original-discovery-ticket/v28",&(id,status.claim,actor,operator,ctx.block.as_bytes(),h.contract.root()))}else{[0;64]};if discovery==1{proof=object_id(b"misaka-palw/native/stage-unproved-discovery-marker/v28",&ticket);seal_root=object_id(b"misaka-palw/native/stage-unsealed-discovery-marker/v28",&ticket);}
@@ -216,17 +216,91 @@ fn owner(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&Palw
     if horizon>=book.deadline()||ctx.daa_score.checked_add(maximum.caller().required_horizon()).is_none_or(|at|at>reveal_until){return Err(refused("stage28 original paid owner adaptive source/proof/delivery horizon does not fit before-Fund deadline"));}
     let ledger=super::super::palw_kernel_route_fold_v1::route_ledger_policy_v1(builder)?;let fee=ledger.job_fee.max(1);let free=(bond.collateral as u128).saturating_sub(builder.committed_at(signer,ctx.daa_score));if free<fee as u128{return Err(refused("stage28 actual paid owner fee unavailable"));}
     let receipt=object_id(b"misaka-palw/native/stage-original-paid-owner-debit/v28",&(id,actor,operator,ctx.block.as_bytes(),fee,h.contract.root(),proof,seal_root));let paid=maximum.paged().record();let own=NativePagedSealV29{version:29,namespace:28,job:id,claim:status.claim,original_funding:h.original,maximum_contract:h.contract.root(),original_plan:h.contract.paged_plan,original_service:p.physical_service,original_lease:{let raw=builder.state.kernel_route.as_ref().unwrap().aux.get(&(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(29u8,id,22u8)))).ok_or_else(||refused("stage28 original physical lease journal absent"))?;let(root,l):(Digest,crate::palw_native_paged_proof_v29::NativePagedLeaseJournalV29)=borsh::from_slice(raw).map_err(|_|refused("stage28 original lease grammar"))?;if l.root()!=root||l.job!=id||l.namespace!=28||l.funding!=h.original{return Err(refused("stage28 original lease root differs"));}l.lease_root},maximum_scope:h.contract.maximum_scope,real_parameter:class.source().parameters().root(),inventory:class.source().inventory_root(),bond:*signer,actor,operator,producer_operator,proof_root:proof,seal_root,original_paid_receipt:receipt,count,total_bytes:total,posted:ctx.daa_score,matures,reveal_until,horizon,admitted_interval:book.admitted_interval(),admitted_block:ctx.block.as_bytes(),part_attempts:[0;512],accepted:[0;64],assembly_attempts:0,court_attempts:0,discovery:discovery==1,original_ticket:ticket,conversion_attempts:0,retired:false,spent:false,committed:paid.admission.checked_add(&paid.guarantee).map_err(refused)?,consumed:paid.admission.clone(),remaining:paid.guarantee.clone()};
+    // G14 item 4 (lane r5-f03-ingress): the lifetime catalogue (cap 4) is checked BEFORE the admission token, as text29's. Past
+    // `palw_court_outsider_lane_v1` a full catalogue may reclaim the entry of an owner that expired WITHOUT progress (the court-owner
+    // round-2 text29 rule, G-N1); below the fence the closure is never consulted and the refusal is byte for byte the old one.
+    let mut owner_ids:Vec<Digest>=read(builder.state.kernel_route.as_ref().unwrap(),19,&id,4+4*64).unwrap_or_default();
+    let evicted={let ro:&TransitionBuilder<'_>=&*builder;let reclaim_active=ro.params.court_outsider_lane_active_v1(ctx.daa_score);
+        stage28_owner_catalogue_admit_v28(&owner_ids,own.id(),reclaim_active,|member|stage28_owner_reclaimable_v28(ro,&h,id,*member,ctx.daa_score)).map_err(refused)?};
+    if let Some(gone)=evicted{owner_ids.retain(|v|*v!=gone);
+        // The evicted owner holds no paid slot (`expire_owner` ran), so the LIFETIME count the token refuses at 4 becomes the
+        // live-plus-progressed count (v39's `admitted`).
+        status.owners_admitted=status.owners_admitted.checked_sub(1).ok_or_else(||refused("stage28 reclaimed owner count absent"))?;}
+    owner_ids.push(own.id());
     let epoch=TrustedEpochV11::from_chain(&p.execution.quota,ctx.block.as_bytes(),ctx.daa_score).map_err(refused)?;let shard=super::super::palw_flat_execution_fold_v11::quota_shard(builder,&p.execution,&epoch,actor,id)?;
     let token=CheckedNativePagedAdmissionV29::from_current_native(status.clone(),own.clone(),maximum.paged(),&p.execution.quota,&epoch).map_err(refused)?;
     let mut projection=NativePagedQuotaProjectionV29::from_native_rows(&p.execution.quota,maximum.paged(),&shard.global_row(),shard.global_row().root(),&shard.actor_row(),shard.actor_row().root(),&status,status.root(),None).map_err(refused)?;let r=builder.state.kernel_route.as_ref().unwrap();let legacy_actor=(r.flat_model_seals_of_v6(signer).len()+r.flat_model_seals_of_v7(signer).len()+r.flat_model_seals_of_v9(signer).len()) as u32;projection.admit(&p.execution.quota,&epoch,maximum.paged(),&token,r.flat_model_seal_count_v6()+r.flat_model_seal_count_v7()+r.flat_model_seal_count_v9(),legacy_actor).map_err(refused)?;
     let source_quote=source28::source_quote(builder,p,&h)?;let producer_source=source28::producer_shard(builder,p,&epoch,&h,&source_quote)?;let producer_row=producer_source.source_row().unwrap();
     if producer_row.retired||producer_row.requests_cap.checked_sub(producer_row.requests_admitted).is_none_or(|n|n<plan.requests_per_owner()){return Err(refused("stage28 original producer lifetime answer pool cannot promise this additional owner"));}
-    let mut owner_ids:Vec<Digest>=read(builder.state.kernel_route.as_ref().unwrap(),19,&id,4+4*64).unwrap_or_default();if owner_ids.len()>=4||owner_ids.contains(&own.id()){return Err(refused("stage28 original four-owner lifetime catalogue exhausted"));}owner_ids.push(own.id());
     let native=NativeStageSourceOwnerV28{job:id,original_book:h.original,consent:h.consent,claim:status.claim,seal:own.id(),actor,actor_operator:operator,producer_operator,original_paid:receipt,original_plan:h.contract.caller_source,horizon,paid_at:ctx.daa_score,actual_debit:fee,actual_receipt:receipt};let source_grant=check_stage_source_owner_v28(&class,&actual,&plan,&book,&p.execution.quota,&p.execution.execution,&p.execution.discovery,&epoch,maximum.caller(),&native).map_err(refused)?;
     let subject=shard.subject_row().ok_or_else(||refused("stage28 original owner subject absent"))?;let mut caller=StageSourceCallerShardV26::from_native_rows(&p.execution.quota,maximum.caller(),projection.global(),&projection.global().root(),actor,Some((projection.actor(),&projection.actor().root())),(subject,&subject.row_root()),None).map_err(refused)?;caller.admit(&p.execution.quota,&epoch,maximum.caller(),&source_grant).map_err(refused)?;
     let slotkey=bytes(&(22u8,id,2u8));let raw=builder.state.kernel_route.as_ref().unwrap().aux.get(&(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,slotkey.clone())).ok_or_else(||refused("stage28 original physical slots absent"))?;let(root,mut slots):(Digest,crate::palw_flat_execution_capacity_v22::NativePhysicalSlotsV22)=borsh::from_slice(raw).map_err(|_|refused("stage28 original physical streams grammar"))?;if slots.root()!=root||slots.job!=id||slots.original_consent23!=h.consent{return Err(refused("stage28 original physical stream lineage differs"));}slots.reserve_owner(own.id(),horizon).map_err(refused)?;
     if builder.slash_bond(*signer,fee as u128)?!=fee{return Err(PalwStateV2Error::BondBudgetRefused("stage28 actual own paid fee changed after complete preflight".into()));}
-    builder.write_kernel_row(STAGE_TABLE_V14,key(19,&id),Some(bytes(&owner_ids)))?;write_paged(builder,&projection)?;write_caller(builder,&caller)?;builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,slotkey,Some(bytes(&(slots.root(),slots))))?;builder.write_kernel_row(STAGE_TABLE_V14,key(15,&own.id()),Some(bytes(&(id,receipt,maximum.caller().root(),own.id()))))?;builder.note_kernel_bond(signer)?;Ok(())
+    builder.write_kernel_row(STAGE_TABLE_V14,key(19,&id),Some(bytes(&owner_ids)))?;write_paged(builder,&projection)?;write_caller(builder,&caller)?;builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,slotkey,Some(bytes(&(slots.root(),slots))))?;
+    if let Some(gone)=evicted{
+        // The evicted owner leaves the lifetime catalogue, so collection no longer iterates it: retire now exactly the two archival
+        // rows collection checks per catalogued owner — nothing is orphaned.
+        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(29u8,id,gone)),None)?;
+        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(26u8,id,gone)),None)?;}
+    builder.write_kernel_row(STAGE_TABLE_V14,key(15,&own.id()),Some(bytes(&(id,receipt,maximum.caller().root(),own.id()))))?;builder.note_kernel_bond(signer)?;Ok(())
+}
+
+/// **G14 item 4 (lane r5-f03-ingress): the stage28 lifetime owner catalogue's admission (cap 4)** — the mirror of text29's
+/// `text29_owner_catalogue_admit_v29` (court-owner round 2). `Ok(None)`: the newcomer takes a free entry. `Ok(Some(member))`: the
+/// catalogue is full, the reclamation is in force, and `member` — the FIRST catalogued owner (catalogue order, a rooted fact) that
+/// `reclaimable` accepts — gives up its entry. Otherwise the old refusal, with its old text. Below the fence `reclaimable` is never
+/// called; an owner that made progress is never reclaimable.
+pub(crate) fn stage28_owner_catalogue_admit_v28(
+    catalogue: &[Digest],
+    newcomer: Digest,
+    reclaim_active: bool,
+    reclaimable: impl Fn(&Digest) -> bool,
+) -> Result<Option<Digest>, &'static str> {
+    const EXHAUSTED: &str = "stage28 original four-owner lifetime catalogue exhausted";
+    if catalogue.contains(&newcomer) {
+        return Err(EXHAUSTED);
+    }
+    if catalogue.len() < 4 {
+        return Ok(None);
+    }
+    if !reclaim_active || catalogue.len() > 4 {
+        return Err(EXHAUSTED);
+    }
+    catalogue.iter().find(|member| reclaimable(member)).copied().map(Some).ok_or(EXHAUSTED)
+}
+
+/// **A stage28 owner that made no progress before its deadline** (pure on its archival seal): namespace 28, expired and retired
+/// (`expire_owner` ran, past its horizon), no part attempt, no accepted part, no assembly, no court move, no discovery conversion.
+pub(crate) fn stage28_owner_made_no_progress_v28(seal: &crate::palw_native_paged_proof_v29::NativePagedSealV29, now: u64) -> bool {
+    seal.namespace == 28
+        && seal.retired
+        && now > seal.horizon
+        && seal.part_attempts.iter().all(|n| *n == 0)
+        && seal.accepted == [0; 64]
+        && seal.assembly_attempts == 0
+        && seal.court_attempts == 0
+        && seal.conversion_attempts == 0
+}
+
+/// [`stage28_owner_made_no_progress_v28`] on the chain rows, plus every liability collection would demand of it already retired: its
+/// caller row (26) retired with nothing remaining and bound to its paid receipt, and no pending owned source request.
+fn stage28_owner_reclaimable_v28(builder: &TransitionBuilder<'_>, h: &JobHeader, job: Digest, member: Digest, now: u64) -> bool {
+    use misaka_palw_kernel::flat_quota11::stage14::source26::StageSourceCallerRowV26;
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let Some(seal) = r.native_paged_seal_original_v29(job, member) else { return false };
+    if !stage28_owner_made_no_progress_v28(&seal, now) {
+        return false;
+    }
+    let Some(raw) = r.aux.get(&(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11, bytes(&(26u8, job, member)))) else {
+        return false;
+    };
+    let Ok((root, caller)) = borsh::from_slice::<(Digest, StageSourceCallerRowV26)>(raw) else { return false };
+    caller.root() == root
+        && caller.retired
+        && caller.owner == member
+        && caller.original_paid == seal.original_paid_receipt
+        && caller.remaining == Default::default()
+        && source28::pending_owned(builder, h, member).is_ok_and(|n| n == 0)
 }
 
 fn paged_projection(builder:&TransitionBuilder<'_>,p:&NativeStagePoliciesV28,epoch:&TrustedEpochV11,h:&JobHeader,maximum:&CheckedNativeStageMaximumV28,status:&crate::palw_native_paged_proof_v29::NativePagedJobStatusV29,own:&crate::palw_native_paged_proof_v29::NativePagedSealV29)->Result<crate::palw_native_paged_quota_v29::NativePagedQuotaProjectionV29,PalwStateV2Error>{
@@ -512,5 +586,115 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             requester_operator:a.requester_operator,producer_operator:a.producer_operator,nonce:book.job().nonce,
             admitted,commit_deadline,deadline:book.deadline(),claim:book.claim(),committed,challenge_end:book.challenge_end(),terminal:a.terminal,
         })
+    }
+}
+
+/// G14 item 4 (lane r5-f03-ingress): the stage28 lifetime owner catalogue's reclamation (cap 4), on the pure admission and the
+/// progress predicate — the text29 rule of court-owner round 2, applied to namespace 28.
+#[cfg(test)]
+mod g14_r5_f03_stage28_reclaim_tests {
+    use super::*;
+    use crate::palw_native_paged_proof_v29::NativePagedSealV29;
+
+    fn d(n: u8) -> Digest {
+        [n; 64]
+    }
+
+    fn probe_seal() -> NativePagedSealV29 {
+        NativePagedSealV29 {
+            version: 29,
+            namespace: 28,
+            job: d(0x11),
+            claim: d(0x12),
+            original_funding: d(0x13),
+            maximum_contract: d(0x14),
+            original_plan: d(0x15),
+            original_service: d(0x16),
+            original_lease: d(0x17),
+            maximum_scope: d(0x18),
+            real_parameter: d(0x19),
+            inventory: d(0x1A),
+            bond: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), 0)),
+            actor: d(0x1B),
+            operator: d(0x1C),
+            producer_operator: d(0x1D),
+            proof_root: d(0x1E),
+            seal_root: d(0x1F),
+            original_paid_receipt: d(0x20),
+            count: 1,
+            total_bytes: 68,
+            posted: 10,
+            matures: 20,
+            reveal_until: 30,
+            horizon: 40,
+            admitted_interval: 0,
+            admitted_block: d(0x21),
+            part_attempts: [0; 512],
+            accepted: [0; 64],
+            assembly_attempts: 0,
+            court_attempts: 0,
+            discovery: false,
+            original_ticket: d(0x22),
+            conversion_attempts: 0,
+            retired: false,
+            spent: false,
+            committed: Default::default(),
+            consumed: Default::default(),
+            remaining: Default::default(),
+        }
+    }
+
+    /// Four stalled owners (expired, no progress) and an outsider after their deadline: past the fence the outsider takes the first
+    /// stalled owner's entry; the cap stays 4; a duplicate is still refused.
+    #[test]
+    fn r5_f03_stage28_four_stalled_owners_yield_a_slot_to_an_outsider_after_the_deadline() {
+        let catalogue = [d(1), d(2), d(3), d(4)];
+        let got = stage28_owner_catalogue_admit_v28(&catalogue, d(9), true, |_| true).expect("a stalled owner yields");
+        assert_eq!(got, Some(d(1)), "catalogue order picks the first stalled owner");
+        let mut after: Vec<Digest> = catalogue.to_vec();
+        after.retain(|v| Some(*v) != got);
+        after.push(d(9));
+        assert_eq!(after.len(), 4, "the cap stays 4");
+        assert_eq!(stage28_owner_catalogue_admit_v28(&after, d(10), true, |m| *m != d(9)), Ok(Some(d(2))));
+        assert!(stage28_owner_catalogue_admit_v28(&after, d(9), true, |_| true).is_err());
+        assert_eq!(stage28_owner_catalogue_admit_v28(&[d(1)], d(9), false, |_| unreachable!()), Ok(None), "room: no reclamation");
+    }
+
+    /// Owners that made progress are never evicted; the predicate reads namespace 28 only.
+    #[test]
+    fn r5_f03_stage28_progressing_owners_are_never_evicted() {
+        let catalogue = [d(1), d(2), d(3), d(4)];
+        assert!(stage28_owner_catalogue_admit_v28(&catalogue, d(9), true, |_| false).is_err());
+        assert_eq!(stage28_owner_catalogue_admit_v28(&catalogue, d(9), true, |m| *m == d(3)), Ok(Some(d(3))));
+        let mut seal = probe_seal();
+        seal.retired = true;
+        assert!(stage28_owner_made_no_progress_v28(&seal, 41));
+        assert!(!stage28_owner_made_no_progress_v28(&seal, 40), "not past its deadline");
+        for touch in 0..5 {
+            let mut s = seal.clone();
+            match touch {
+                0 => s.part_attempts[7] = 1,
+                1 => s.accepted[0] = 1,
+                2 => s.assembly_attempts = 1,
+                3 => s.court_attempts = 1,
+                _ => s.conversion_attempts = 1,
+            }
+            assert!(!stage28_owner_made_no_progress_v28(&s, 41), "progress {touch} is never evicted");
+        }
+        let mut other = seal.clone();
+        other.namespace = 29;
+        assert!(!stage28_owner_made_no_progress_v28(&other, 41), "a text29 seal is not a stage28 owner");
+        seal.retired = false;
+        assert!(!stage28_owner_made_no_progress_v28(&seal, 41), "a live owner is never evicted");
+    }
+
+    /// Below the fence: a full catalogue refuses with the OLD text and the predicate is never consulted.
+    #[test]
+    fn r5_f03_stage28_below_the_fence_the_catalogue_is_unchanged() {
+        let catalogue = [d(1), d(2), d(3), d(4)];
+        assert_eq!(
+            stage28_owner_catalogue_admit_v28(&catalogue, d(9), false, |_| panic!("never consulted below the fence")),
+            Err("stage28 original four-owner lifetime catalogue exhausted")
+        );
     }
 }

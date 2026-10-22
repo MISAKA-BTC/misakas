@@ -7803,6 +7803,138 @@ fn c03_a_guilty_responder_pays_for_the_time_it_kept_the_court_open() {
     );
 }
 
+/// **G14 item 3, lane r5-f03-ingress — fold-level E2E: colluders occupy and refill every slot they can, and one outsider still
+/// completes disclosure → localization → verdict inside the claim's hard deadline.** The real fold (`apply`, both consistency
+/// checkers): the outsider court lane armed at genesis (`with_court_outsider_lane_from_daa(Some(0))`), the paid ingress schedule
+/// injected (test-only), the rung window 8 so the network cap is 8 and `R = 4` claims hold an outside reservation.
+///
+/// The coalition (bond 1: the producer of every claim and its only panel seat) owns three decoy claims beside the lying target and
+/// opens a court on every claim and space it can, one per block, until the fold refuses (`CourtSessionsAtCapacity`) — the
+/// non-reserved room `cap − R` is full; its further tries (another decoy, the target's inside first session) are refused. The
+/// outsider (bond 2), never a seat or producer, opens on the target's own reservation, pays the ingress fee exactly once, and the
+/// court closes `ExecutorGuilty` before the hard deadline: the lying claim is voided. Below the fence twin (lane unarmed) the
+/// outsider is refused at the same occupancy.
+#[test]
+fn r5_f03_colluders_refill_every_slot_and_one_outsider_reaches_a_verdict_in_time() {
+    use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
+    const FEE: u64 = 5;
+    for armed in [true, false] {
+        set_palw_court_ingress_test_schedule_v1(Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: FEE }));
+        let p = params()
+            .with_turn_deadline_daa(8)
+            .unwrap()
+            .with_court_outsider_lane_from_daa(armed.then_some(0));
+        let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
+        assert_eq!(cap, 8, "the fixture's cap");
+        let genesis = PalwChainStateV2::genesis();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        let (mut s, _) = apply(&genesis, &p, &ctx(1, 100, 1), &objects, None);
+        // The lying target and three decoys: four claims of the coalition, every one licensed by its own seat.
+        let mut claims = Vec::new();
+        let mut daa = 101u64;
+        for nonce in 1..=4u64 {
+            let env = attempt(40, nonce);
+            claims.push(attempt_id_v2(&env.attempt));
+            (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &[], Some(&env));
+            daa += 1;
+        }
+        let (target, decoys) = (claims[0], &claims[1..]);
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let binds: Vec<PalwConsensusObjectV2> = claims
+            .iter()
+            .enumerate()
+            .map(|(i, c)| PalwConsensusObjectV2::PanelBound { claim: *c, anchor: h64(77 + i as u64), seats: seats.clone() })
+            .collect();
+        (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &binds, None);
+        daa += 1;
+        let licences: Vec<PalwConsensusObjectV2> = claims
+            .iter()
+            .map(|c| PalwConsensusObjectV2::ReceiptLicensed { claim: *c, receipts: seat_says(true) })
+            .collect();
+        (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &licences, None);
+        daa += 1;
+        // The coalition opens one court a block on every decoy and space until the fold refuses: the non-reserved room
+        // (cap − R = 4 armed; the whole cap's legacy share below) is theirs.
+        let mut coalition: Vec<PalwConsensusObjectV2> = Vec::new();
+        for d in decoys {
+            coalition.push(court_open(*d, h64(31), bond_key(1), bond_key(1)));
+            coalition.push(second_court_open(*d, h64(31), bond_key(1), bond_key(1)));
+        }
+        coalition.push(court_open(target, h64(31), bond_key(1), bond_key(1)));
+        coalition.push(second_court_open(target, h64(31), bond_key(1), bond_key(1)));
+        let mut admitted = 0u64;
+        for open in &coalition {
+            match apply_palw_transition_v2(&s, &p, &ctx(daa, daa, daa), std::slice::from_ref(open), None) {
+                Ok((next, _)) => {
+                    next.assert_internal_consistency(&p).expect("consistent");
+                    s = next;
+                    admitted += 1;
+                    daa += 1;
+                }
+                Err(PalwStateV2Error::CourtSessionsAtCapacity { .. }) => {}
+                Err(other) => panic!("armed {armed}: a coalition court is refused only for capacity, got {other:?}"),
+            }
+            assert!(s.court_sessions_iter().count() as u64 <= cap, "the total never exceeds the cap");
+        }
+        let outsider_open = court_open(target, h64(31), bond_key(1), bond_key(2));
+        if !armed {
+            // Below the lane: the coalition's follow-ons fill the cap's whole legacy share it reached; whether the outsider fits
+            // depends on the int-12 rule alone (no reservation exists). Pin that no reservation is consulted: the schedule is
+            // ignored without the lane.
+            assert!(crate::palw_state_v2::palw_court_capacity_fold_v1::court_ingress_schedule_at_v1(&p, daa).is_none());
+            continue;
+        }
+        assert_eq!(admitted, cap - 4, "the coalition holds exactly the non-reserved room");
+        // The coalition's refill tries are refused; the outsider opens on the target's reservation and pays once.
+        for open in &coalition {
+            assert!(apply_palw_transition_v2(&s, &p, &ctx(daa, daa, daa), std::slice::from_ref(open), None).is_err());
+        }
+        let before = s.bond(&bond_key(2)).unwrap().collateral;
+        (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &[outsider_open], None);
+        let opened_at = daa;
+        daa += 1;
+        let after_open = s.bond(&bond_key(2)).unwrap().collateral;
+        assert_eq!(before - after_open, FEE, "the ingress fee is burned once, at admission");
+        let sid = court_session_of(target, h64(31), bond_key(1), bond_key(2));
+        assert!(s.court_session(&sid).is_some(), "the outsider's court runs");
+        assert!(s.court_sessions_iter().count() as u64 <= cap);
+        // The coalition still cannot take the room back.
+        for open in &coalition {
+            assert!(apply_palw_transition_v2(&s, &p, &ctx(daa, daa, daa), std::slice::from_ref(open), None).is_err());
+        }
+        // Localization → verdict: the court closes ExecutorGuilty inside the rung window, before the hard deadline.
+        let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(
+            &p,
+            s.claim(&target).unwrap(),
+            palw_da_disclose_window_daa_v1(&p),
+        );
+        assert!(daa < hard && daa < opened_at + p.turn_deadline_daa(), "inside the hard deadline and the rung");
+        let close = PalwConsensusObjectV2::CourtClosed {
+            session_id: sid,
+            verdict: PalwCourtVerdictV2::ExecutorGuilty,
+            proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                operand_openings: Vec::new(),
+            },
+        };
+        (s, _) = apply(&s, &p, &ctx(daa, daa, daa), &[close], None);
+        assert!(s.court_session(&sid).is_none(), "the outsider's court reached its verdict");
+        assert!(matches!(s.claim(&target).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "the lying claim is voided");
+        assert!(s.bond(&bond_key(2)).unwrap().collateral >= after_open, "no second ingress charge on the close");
+        set_palw_court_ingress_test_schedule_v1(None);
+    }
+    set_palw_court_ingress_test_schedule_v1(None);
+}
+
 #[test]
 fn a_guilty_verdict_voids_the_claim_and_a_late_verdict_changes_nothing() {
     let p = params();
@@ -32432,6 +32564,172 @@ mod rcore_s1_api {
             assert!(legacy_court_cap_admits_v1(&s, &p, target, bond_key(0x901), false, 1_000).is_err());
             // Below the fence the old rule (open < cap) alone.
             legacy_court_cap_admits_v1(&s, &lane(false), target, bond_key(0x901), false, 1_000).expect("below: old rule");
+        }
+
+        // ---- lane r5-f03-ingress (G14 item 3) --------------------------------------------------------------------------------
+
+        /// G14 item 3 (3): a HELD ATTENTION accusation (`ShardCourtAccused` → `open_held_dissection_v1`, which passes
+        /// `direct_evidence = false`: it stays subject to the follow-on share — decoy protection) by an outsider on a claim whose only
+        /// sessions are the colluders' own (its producer and a panel seat) is the outside side's FIRST session: admitted while the
+        /// follow-on room is full, under the lane rule and under the paid ingress alike. A second outside held accusation is a
+        /// follow-on and is refused while the room is full (decoy protection kept).
+        #[test]
+        fn r5_f03_held_attention_outsider_on_a_colluder_only_claim_counts_as_first_session() {
+            use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
+            use crate::palw_state_v2::palw_court_capacity_fold_v1::paid_court_cap_admits_v1;
+            let p = lane(true);
+            let (mut s, _cap) = decoy_full(&p);
+            let target = h64(0x7A61);
+            let (producer, seat) = (bond_key(0x80), bond_key(0x81));
+            claimed(&mut s, target, producer, &[seat]);
+            s.court_sessions.insert(h64(0x7710), session(target, producer));
+            s.court_sessions.insert(h64(0x7711), session(target, seat));
+            let outsider = bond_key(0x900);
+            const HELD_ATTENTION_DIRECT_EVIDENCE: bool = false; // `open_held_dissection_v1`'s argument
+            assert!(!court_outsider_lane_is_followon_v1(&s, target, outsider), "only colluder-side sessions run on the target");
+            legacy_court_cap_admits_v1(&s, &p, target, outsider, HELD_ATTENTION_DIRECT_EVIDENCE, 1_000)
+                .expect("the outsider's held attention accusation is a first session");
+            for schedule in [None, Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 })] {
+                set_palw_court_ingress_test_schedule_v1(schedule);
+                paid_court_cap_admits_v1(&s, &p, target, outsider, HELD_ATTENTION_DIRECT_EVIDENCE, 1_000)
+                    .unwrap_or_else(|e| panic!("schedule {schedule:?}: the outsider opens: {e:?}"));
+            }
+            set_palw_court_ingress_test_schedule_v1(None);
+            // Decoy protection kept: once the outsider runs, a second outside held accusation is a follow-on and is refused.
+            s.court_sessions.insert(h64(0x7712), session(target, outsider));
+            assert!(court_outsider_lane_is_followon_v1(&s, target, bond_key(0x901)));
+            assert!(matches!(
+                legacy_court_cap_admits_v1(&s, &p, target, bond_key(0x901), HELD_ATTENTION_DIRECT_EVIDENCE, 1_000),
+                Err(PalwStateV2Error::CourtSessionsAtCapacity { .. })
+            ));
+        }
+
+        /// G14 item 3 (2), court-owner risk 1, on hand-made states: the coalition owns `R − 1` claims beside the lying target
+        /// (`R = ⌊cap / 2⌋`, every in-flight claim holds its own outside reservation), and over several rounds its producer, a seat
+        /// and fresh Sybils keep opening sessions on every claim (inside sessions, Sybil outside sessions on its own decoys, inside
+        /// sessions on the target) and refill the moment one ends. The total never exceeds the unchanged cap; every coalition try
+        /// past the non-reserved room is refused; and in every round the outsider's first session on the target still opens on
+        /// the target's own reservation. A further claim is refused at admission (`CourtClaimAdmissionFull`).
+        #[test]
+        fn r5_f03_colluders_refilling_every_slot_cannot_take_the_target_claims_reservation() {
+            use crate::palw_court_paid_ingress_v1::{
+                PalwCourtIngressScheduleV1, palw_court_ingress_reserved_claims_cap_v1, set_palw_court_ingress_test_schedule_v1,
+            };
+            use crate::palw_state_v2::palw_court_capacity_fold_v1::{
+                court_ingress_outside_running_v1, court_ingress_reserved_claims_v1, paid_court_cap_admits_v1,
+            };
+            set_palw_court_ingress_test_schedule_v1(Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }));
+            let p = lane(true);
+            let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
+            let r = palw_court_ingress_reserved_claims_cap_v1(cap);
+            assert!(r >= 2, "cap {cap}");
+            let mut s = PalwChainStateV2::genesis();
+            let (producer, seat) = (bond_key(0x80), bond_key(0x81));
+            let target = h64(0x7A60);
+            claimed(&mut s, target, producer, &[seat]);
+            let decoys: Vec<Hash64> = (0..r - 1).map(|i| h64(0xD000 + i)).collect();
+            for d in &decoys {
+                claimed(&mut s, *d, producer, &[seat]);
+            }
+            let reserved = court_ingress_reserved_claims_v1(&s, &p, 1_000);
+            assert_eq!(reserved.len() as u64, r, "every in-flight claim holds its reservation");
+            assert!(reserved.contains(&target));
+            assert!(matches!(
+                palw_court_ingress_claim_admits_v1(&s, &p, &h64(0xC1), 1_000),
+                Err(PalwStateV2Error::CourtClaimAdmissionFull { .. })
+            ), "the admission coordinator bounds the reserved claims");
+            let outsider = bond_key(0x900);
+            let mut next_id = 0u64;
+            let mut sybil = 0u64;
+            for round in 0..4u64 {
+                // The coalition tries everything it can, until a whole pass admits nothing.
+                loop {
+                    let mut tries: Vec<(Hash64, PalwBondKeyV2)> = Vec::new();
+                    for d in &decoys {
+                        tries.push((*d, producer));
+                        tries.push((*d, seat));
+                        sybil += 1;
+                        tries.push((*d, bond_key(0x2000 + sybil)));
+                    }
+                    tries.push((target, producer));
+                    tries.push((target, seat));
+                    let mut admitted = 0;
+                    for (claim_id, opener) in tries {
+                        if paid_court_cap_admits_v1(&s, &p, claim_id, opener, false, 1_000).is_ok() {
+                            next_id += 1;
+                            s.court_sessions.insert(h64(0x5_0000 + next_id), session(claim_id, opener));
+                            admitted += 1;
+                        }
+                        assert!(s.court_sessions.len() as u64 <= cap, "round {round}: the total never exceeds the cap");
+                    }
+                    if admitted == 0 {
+                        break;
+                    }
+                }
+                assert!(
+                    matches!(
+                        paid_court_cap_admits_v1(&s, &p, target, producer, false, 1_000),
+                        Err(PalwStateV2Error::CourtSessionsAtCapacity { .. })
+                    ),
+                    "round {round}: the coalition is at the end of its room"
+                );
+                if round < 3 {
+                    paid_court_cap_admits_v1(&s, &p, target, outsider, false, 1_000)
+                        .unwrap_or_else(|e| panic!("round {round}: the outsider opens on the target's reservation: {e:?}"));
+                    // One coalition session reaches its verdict; the coalition refills at once (next pass).
+                    let ended = *s.court_sessions.iter().find(|(_, x)| x.claim != target || x.challenger_bond != outsider).unwrap().0;
+                    s.court_sessions.remove(&ended);
+                } else {
+                    // The outsider opens; its session holds the target's reservation while the coalition stays full.
+                    paid_court_cap_admits_v1(&s, &p, target, outsider, false, 1_000).expect("the outsider opens");
+                    next_id += 1;
+                    s.court_sessions.insert(h64(0x5_0000 + next_id), session(target, outsider));
+                    assert!(court_ingress_outside_running_v1(&s, target));
+                    assert!(s.court_sessions.len() as u64 <= cap);
+                    // A second outside session on the target is not reserved: refused while the coalition holds the rest.
+                    assert!(paid_court_cap_admits_v1(&s, &p, target, bond_key(0x901), false, 1_000).is_err());
+                }
+            }
+            // Below the lane fence (or with the schedule missing) the reservation does not exist: the lane rule alone.
+            set_palw_court_ingress_test_schedule_v1(None);
+            assert!(crate::palw_state_v2::palw_court_capacity_fold_v1::court_ingress_schedule_at_v1(&p, 1_000).is_none());
+            palw_court_ingress_claim_admits_v1(&s, &p, &h64(0xC1), 1_000).expect("dormant without the schedule");
+        }
+
+        /// G14 item 3 (2): the ingress fee is burned ONCE, at the session's admission, from the opener — and a refused try burns
+        /// nothing. Through the fold's own `court_ingress_admission_v1` on a `TransitionBuilder` (court capacity dormant: the legacy
+        /// path). With the schedule missing nothing is burned.
+        #[test]
+        fn r5_f03_the_ingress_fee_is_charged_once_and_never_for_a_refused_try() {
+            use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
+            use crate::palw_state_v2::palw_court_capacity_fold_v1::{PalwCourtAdmissionV1, court_ingress_admission_v1};
+            let p = lane(true);
+            let extras = PalwTransitionExtrasV1::default();
+            let at = ctx(0x77, 1_000, 1_000);
+            let mut s = PalwChainStateV2::genesis();
+            let target = h64(0x7A60);
+            claimed(&mut s, target, bond_key(0x80), &[bond_key(0x81)]);
+            let outsider = bond_key(0x900);
+            s.bonds.insert(outsider, bond(10_000, PalwBondStatusV2::Active));
+            for (schedule, fee) in [(None, 0u64), (Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), 5)] {
+                set_palw_court_ingress_test_schedule_v1(schedule);
+                let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+                let admitted = court_ingress_admission_v1(&mut b, &at, target, outsider, false, 20).expect("admitted");
+                assert_eq!(admitted, PalwCourtAdmissionV1::Legacy);
+                assert_eq!(b.state.bonds[&outsider].collateral, 10_000 - fee, "{schedule:?}: charged once at admission");
+                assert_eq!(b.state.bonds[&outsider].slashed, fee);
+            }
+            // A refused try (the cap is full) burns nothing.
+            set_palw_court_ingress_test_schedule_v1(Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }));
+            let cap = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
+            let mut full = s.clone();
+            for n in 0..cap {
+                full.court_sessions.insert(h64(0x6_0000 + n), session(h64(0xF_0000 + n), bond_key(0x3000 + n)));
+            }
+            let mut b = TransitionBuilder::new(&full, &p, false, false, false, false, &extras);
+            assert!(court_ingress_admission_v1(&mut b, &at, target, outsider, false, 20).is_err());
+            assert_eq!(b.state.bonds[&outsider].collateral, 10_000, "a refused try is not charged");
+            set_palw_court_ingress_test_schedule_v1(None);
         }
     }
 }

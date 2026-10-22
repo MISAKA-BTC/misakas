@@ -729,6 +729,14 @@ fn apply_object_inner(
         PalwConsensusObjectV2::SeatReadinessAnsweredV1 { answer, .. } => {
             builder.answer_d2_disclosure_v1(answer, ctx.daa_score)?;
         }
+        // RFC-0032 A material intake (tag 255, lane r5-f03-ingress): the acceptance gate routes it by `palw_staged_tir_route_v1`, so
+        // below that fence it never reaches this fold (A-2). Past it the fold re-checks the fence's extras flag, the typed-missing
+        // storage schedule, the installed shared context, the submitter's Active bond and signature, and authenticates the
+        // material against the original — atomic (checkpoint/restore). Every effect (Begun/Retried/Part/Completed/AlreadyComplete)
+        // is an accepted object; a refusal is an error.
+        PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
+            super::palw_court_shared_material_intake_fold_v1::material_intake(builder, ctx, intake)?;
+        }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
                 return Err(PalwStateV2Error::ShardCourtDormant);
@@ -2099,19 +2107,10 @@ fn apply_object_inner(
             let gated_claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
             let gated_window =
                 builder.state.class_model_court_window_v1(&gated_claim.class_id).unwrap_or_else(|| builder.params.window_court());
-            match palw_court_capacity_fold_v1::court_admission_v1(builder, ctx, *claim_id, *challenger_bond, gated_window)? {
+            // Lane r5-f03-ingress: the paid public ingress wraps the same admission (identical while its schedule is missing).
+            match palw_court_capacity_fold_v1::court_ingress_admission_v1(builder, ctx, *claim_id, *challenger_bond, false, gated_window)? {
                 palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Queued => return Ok(()),
-                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open => {}
-                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {
-                    palw_court_capacity_fold_v1::legacy_court_cap_admits_v1(
-                        &builder.state,
-                        builder.params,
-                        *claim_id,
-                        *challenger_bond,
-                        false,
-                        ctx.daa_score,
-                    )?;
-                }
+                palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Open | palw_court_capacity_fold_v1::PalwCourtAdmissionV1::Legacy => {}
             }
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
             if claim.phase.is_terminal() {

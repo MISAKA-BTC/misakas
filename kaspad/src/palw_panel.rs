@@ -4191,6 +4191,10 @@ pub struct PalwPanelConfig {
     /// steps of disputable Qwen3.6 hybrid claims and file `GdnStepAccusedV2` on a mismatch the court's own verdict convicts. Off by
     /// default; dormant below `palw_memory_routing_court_v2` either way.
     pub gdn_step_filer: bool,
+    /// **G14 item 3 (lane r5-f03-ingress): the paid public court ingress** (`--palw-court-paid-ingress`): the held/outsider filer may
+    /// file an accusation whose admission burns the once-only court ingress fee. Off by default (such a case settles unpaid);
+    /// dormant while the fee schedule is unadopted.
+    pub court_paid_ingress: bool,
     /// **RFC-0006: where an outsider fetches a class it does not hold** (`--palw-tir-shard-mirror=<class container path>`): loaded
     /// on the first sharded duty of a class this node holds no artifact of, and used only if it derives exactly the class and the
     /// inventory root the chain registered.
@@ -10593,6 +10597,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
         PalwConsensusObjectV2::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
         PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => "TirDesignatedEventV1",
+        PalwConsensusObjectV2::MaterialIntakeV1 { .. } => "MaterialIntakeV1",
         PalwConsensusObjectV2::SeatReadinessRootV1 { .. } => "SeatReadinessRootV1",
         PalwConsensusObjectV2::SeatReadinessDemandedV1 { .. } => "SeatReadinessDemandedV1",
         PalwConsensusObjectV2::SeatReadinessAnsweredV1 { .. } => "SeatReadinessAnsweredV1",

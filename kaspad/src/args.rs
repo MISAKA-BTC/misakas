@@ -636,6 +636,10 @@ pub struct Args {
     /// **G14 ③ / ⑦: the GDN step filer** (`--palw-gdn-step-filer`): file `GdnStepAccusedV2` against a recurrence step this node's own
     /// recompute convicts. Off by default; dormant below `palw_memory_routing_court_v2`.
     pub palw_gdn_step_filer: bool,
+    /// **G14 item 3 (lane r5-f03-ingress): the paid public court ingress** (`--palw-court-paid-ingress`): the held/outsider filer files
+    /// an accusation whose admission burns the court ingress fee. Off by default: without it the filer settles such a case instead of
+    /// paying. Dormant either way while the ingress fee schedule is not adopted (typed-missing) or below `palw_court_outsider_lane_v1`.
+    pub palw_court_paid_ingress: bool,
     /// RFC-0006: where an outsider fetches a class it does not hold (`--palw-tir-shard-mirror=<class container path>`); verified against
     /// the chain's registered root before it is used.
     pub palw_tir_shard_mirror: Option<String>,
@@ -1039,6 +1043,7 @@ impl Default for Args {
             palw_tir_shard_demand_runs: false,
             palw_tir_shard_watch: false,
             palw_gdn_step_filer: false,
+            palw_court_paid_ingress: false,
             palw_tir_shard_mirror: None,
             palw_tir_shard_fetch: false,
             palw_tir_shard_run_leaves: None,
@@ -2922,6 +2927,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-court-paid-ingress")
+                .long("palw-court-paid-ingress")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "G14 item 3: let the held/outsider court filer pay the once-only court ingress fee (the paid public path whose \
+                     per-claim outside reservation a coalition cannot occupy). Without it a case whose admission would burn the fee \
+                     settles unpaid. Dormant while the fee schedule is unadopted or below palw_court_outsider_lane_v1. Off by default.",
+                ),
+        )
+        .arg(
             Arg::new("palw-tir-shard-watch")
                 .long("palw-tir-shard-watch")
                 .action(clap::ArgAction::SetTrue)
@@ -4114,6 +4129,7 @@ impl Args {
             palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
             palw_tir_shard_watch: m.get_one::<bool>("palw-tir-shard-watch").copied().unwrap_or(false),
             palw_gdn_step_filer: m.get_one::<bool>("palw-gdn-step-filer").copied().unwrap_or(false),
+            palw_court_paid_ingress: m.get_one::<bool>("palw-court-paid-ingress").copied().unwrap_or(false),
             palw_tir_shard_mirror: m.get_one::<String>("palw-tir-shard-mirror").cloned(),
             palw_tir_shard_fetch: m.get_one::<bool>("palw-tir-shard-fetch").copied().unwrap_or(false),
             palw_tir_shard_run_leaves: m.get_one::<u32>("palw-tir-shard-run-leaves").copied(),
