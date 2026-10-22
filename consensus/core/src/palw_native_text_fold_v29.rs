@@ -1399,7 +1399,36 @@ fn settle(
     if s.actual_collected_slash > 0 && builder.slash_bond(h.producer, s.actual_collected_slash as u128)? != s.actual_collected_slash {
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original collected collateral changed after final preflight".into()));
     }
-    if s.producer > 0 {
+    // RFC08 08-B (ADR-0184 §1, dormant `palw_native_liability_horizon_v1`): the producer's Final fee of a claim committed past the
+    // fence is held to its liability horizon (signed deadline + window_court) instead of queued; the quota subject and the budget
+    // reservation stay open with it, and the job stays accusable by public filing (`court`) through the horizon.
+    let held = s.terminal == NativeTextTerminalV29::Final
+        && s.producer > 0
+        && b.claim().is_some_and(|c| {
+            super::super::palw_native_liability_hold_fold_v1::native_fee_needs_hold_v1(builder.params, c.committed_daa, ctx.daa_score, b.funding().deadline)
+        });
+    if held {
+        let horizon = super::super::palw_native_liability_hold_fold_v1::native_horizon_v1(builder.params, b.funding().deadline);
+        super::super::palw_native_liability_hold_fold_v1::hold_native_fee_v1(
+            builder,
+            &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1 {
+                version: crate::palw_native_liability_hold_v1::PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1,
+                family: crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29,
+                job: h.job,
+                claim: s.claim.unwrap_or([0; 64]),
+                producer: h.producer,
+                queue: queue.as_bytes(),
+                payload: h.producer_payout.as_bytes(),
+                amount: s.producer,
+                income_root: h.job,
+                income_kind: 11,
+                budget: super::super::palw_bond_budget_fold_v1::native_text_budget_id_v29(&h.job).as_bytes(),
+                refund_payload: h.requester_payout.as_bytes(),
+                final_daa: ctx.daa_score,
+                horizon_daa: horizon,
+            },
+        )?;
+    } else if s.producer > 0 {
         builder.pay_native_recipient_v1(Hash64::from_bytes(h.job), h.producer, 11, ctx.daa_score, s.producer, queue, true)?;
         builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.producer_payout, amount: s.producer }))?;
     } else {
@@ -1418,17 +1447,105 @@ fn settle(
             builder.add_kernel_payout(payout, s.finder_credit)?;
         }
     }
-    subject.closed = true;
+    // A held Final keeps its subject open (closed when the held fee leaves: `held_fee_left_v29`).
+    subject.closed = !held;
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &h.job), Some(key(&(subject.row_root(), subject))))?;
     write_book(builder, h, b)?;
     builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job), Some(key(&(s, queue, ctx.daa_score))))?;
-    builder.bond_budget_close_v1(&super::super::palw_bond_budget_fold_v1::native_text_budget_id_v29(&h.job), ctx.daa_score)?;
+    if !held {
+        builder.bond_budget_close_v1(&super::super::palw_bond_budget_fold_v1::native_text_budget_id_v29(&h.job), ctx.daa_score)?;
+    }
     if let Ok(mut status) = paid_status(builder.state.kernel_route.as_ref().unwrap(), h.job) {
         status.active = false;
         builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, 0u8)), Some(key(&(status.root(), status))))?;
     }
     let _ = p;
     Ok(())
+}
+/// The queue a text29 post-Final conviction refunded its held fee through (re-derived after the held row is gone).
+fn held_refund_queue(h: &JobHeader, s: &NativeTextSettlementV29) -> Hash64 {
+    super::super::palw_native_liability_hold_fold_v1::native_refund_queue_of_v1(crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29, h.job, s.claim.unwrap_or([0; 64]), h.requester_payout.as_bytes())
+}
+/// **RFC08 08-B (ADR-0184 §1): the settlement of a conviction of a held Final** (public filing within its liability horizon). The
+/// Final's fee was held (aux 144), never queued: it is refunded to the requester whole, the producer's reserve is collected as a
+/// pre-Final conviction collects it, the finder is paid as [`settle`] pays it, and the job's credit row is replaced by the
+/// conviction's (its queue is the held row's refund queue). Refused without a held fee inside its horizon.
+fn settle_after_final(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    h: &mut JobHeader,
+    b: &NativeTextBookV29,
+    s: &NativeTextSettlementV29,
+    finder: &PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    if s.terminal != NativeTextTerminalV29::Convicted
+        || b.settlement() != Some(s)
+        || b.escrow() != 0
+        || s.job != h.job
+        || s.original_funding != h.funding
+        || s.producer != 0
+        || s.requester != b.funding().request.reward
+        || !r.aux.contains_key(&(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job)))
+    {
+        return Err(refused("text29 post-Final conviction settlement differs"));
+    }
+    let v = builder.state.bonds.get(finder).ok_or_else(|| refused("text29 post-Final finder absent"))?;
+    if palw_kernel_bond_id_v1(finder) != s.finder || v.operator_id.as_bytes() == b.funding().request.producer_operator {
+        return Err(refused("text29 post-Final finder is not an independent court owner"));
+    }
+    let payout = v.payout_payload;
+    if s.actual_collected_slash > 0 && builder.state.bonds.get(&h.producer).is_none_or(|v| v.collateral < s.actual_collected_slash) {
+        return Err(refused("text29 post-Final producer collateral no longer collectible"));
+    }
+    let row = super::super::palw_native_liability_hold_fold_v1::refund_native_fee_v1(builder, crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29, &h.job, ctx.daa_score)?;
+    if row.amount != s.requester || held_refund_queue(h, s) != super::super::palw_native_liability_hold_fold_v1::native_refund_queue_v1(&row) {
+        return Err(refused("text29 held fee differs from the original escrow"));
+    }
+    if s.actual_collected_slash > 0 && builder.slash_bond(h.producer, s.actual_collected_slash as u128)? != s.actual_collected_slash {
+        return Err(refused("text29 post-Final collected collateral changed"));
+    }
+    if s.finder_credit > 0 {
+        if builder.params.reporter_income_active_at(ctx.daa_score) {
+            let award = Hash64::from_bytes(object_id(
+                b"misaka-palw/native/text-post-final-collected-finder-award/v29",
+                &(h.job, h.funding, s.proof, s.finder),
+            ));
+            builder.stage_reporter_recipient_v1(award, *finder, ctx.daa_score, s.finder_credit, Hash64::from_bytes(h.job))?;
+        } else {
+            builder.add_kernel_payout(payout, s.finder_credit)?;
+        }
+    }
+    write_book(builder, h, b)?;
+    let queue = super::super::palw_native_liability_hold_fold_v1::native_refund_queue_v1(&row);
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job), Some(key(&(s, queue, ctx.daa_score))))?;
+    Ok(())
+}
+/// RFC08 08-B: the text29 post-Final accusation is one atomic public filing, so a held fee has no multi-step dispute; only an
+/// unreadable or no-longer-Final job keeps it held (fail closed).
+pub(super) fn held_dispute_open_v29(
+    builder: &TransitionBuilder<'_>,
+    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
+) -> bool {
+    let Some(r) = builder.state.kernel_route.as_ref() else { return true };
+    let Ok(h) = original_header(r, row.job) else { return true };
+    original_book(r, &h).map_or(true, |b| b.terminal() != NativeTextTerminalV29::Final || h.producer != row.producer)
+}
+/// RFC08 08-B: a held text29 fee left (paid or refunded): close the quota subject the Final kept open.
+pub(super) fn held_fee_left_v29(
+    builder: &mut TransitionBuilder<'_>,
+    row: &crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1,
+) -> Result<(), PalwStateV2Error> {
+    let r = builder.state.kernel_route.as_ref().ok_or_else(|| refused("text29 held subject route absent"))?;
+    let Some((root, mut subject)) = r.aux_row::<(Digest, QuotaSubjectSummaryV11)>(EXECUTION_QUOTA_TABLE_V11, &quota_key(2, &row.job))
+    else {
+        return Ok(());
+    };
+    if root != subject.row_root() || subject.binding.job_id != row.job {
+        return Err(refused("text29 held subject root/job differs"));
+    }
+    subject.closed = true;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &row.job), Some(key(&(subject.row_root(), subject))))
 }
 /// Called only by original common paid Part/Assembly/Court path. No ordinary
 /// reveal action may allocate this file or borrow another actor's prepaid work.
@@ -1497,7 +1614,14 @@ fn court(
     let mut b = original_book(r, &h)?;
     let f = b.funding().clone();
     let claim = b.claim().ok_or_else(|| refused("text29 court original claim absent"))?.clone();
-    if b.terminal() != NativeTextTerminalV29::Challengeable {
+    // RFC08 08-B (ADR-0184 §1): a Final whose fee is held stays accusable by public filing (never a paid owner's seal: a Final
+    // had none live) through its liability horizon.
+    let held_horizon = if b.terminal() == NativeTextTerminalV29::Final && seal.is_none() {
+        super::super::palw_native_liability_hold_fold_v1::native_accusable_after_final_v1(&builder.state, crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29, &job, ctx.daa_score).map(|row| row.horizon_daa)
+    } else {
+        None
+    };
+    if b.terminal() != NativeTextTerminalV29::Challengeable && held_horizon.is_none() {
         return Err(refused("text29 court original book is not challengeable"));
     }
     let filer_operator = builder.state.bonds.get(signer).ok_or_else(|| refused("text29 court filer bond absent"))?.operator_id.as_bytes();
@@ -1635,8 +1759,14 @@ fn court(
         builder.state.bonds.get(&h.producer).map(|v| v.collateral),
         f.maximum.producer_reserve,
     );
-    let settlement = b.convict(proof_root, finder, finder_operator, collectible, ctx.daa_score).map_err(refused)?;
-    settle(builder, ctx, &p, &mut h, &b, &settlement, Some(signer))?;
+    if let Some(horizon) = held_horizon {
+        let settlement =
+            b.convict_after_final(proof_root, finder, finder_operator, collectible, ctx.daa_score, horizon).map_err(refused)?;
+        settle_after_final(builder, ctx, &mut h, &b, &settlement, signer)?;
+    } else {
+        let settlement = b.convict(proof_root, finder, finder_operator, collectible, ctx.daa_score).map_err(refused)?;
+        settle(builder, ctx, &p, &mut h, &b, &settlement, Some(signer))?;
+    }
     if let Some(seal) = seal {
         let mut paid = seal.clone();
         paid.spent = true;
@@ -2036,9 +2166,11 @@ fn collect_terminal(
         .ok_or_else(|| refused("text29 collection immutable original credit receipt absent"))?;
     if !matches!(b.terminal(), NativeTextTerminalV29::Final | NativeTextTerminalV29::Convicted | NativeTextTerminalV29::Refunded)
         || credited != s
-        || queue != terminal_queue(&h, &s)
+        || (queue != terminal_queue(&h, &s) && queue != held_refund_queue(&h, &s))
         || b.escrow() != 0
         || ctx.daa_score <= f.deadline
+        // RFC08 08-B: a held Final's material stays until its fee leaves (accusable to its liability horizon).
+        || super::super::palw_native_liability_hold_fold_v1::held_native_fee_v1(&builder.state, crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29, &id).is_some()
         || b.claim().is_some_and(|c| ctx.daa_score <= c.retained_until)
     {
         return Err(refused("text29 collection lacks genuine expired original terminal and single credit"));

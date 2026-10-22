@@ -191,7 +191,7 @@ pub(super) fn reveal(
     shard.debit_protected(&p.quota, &epoch, &plan, ProtectedActionKindV11::Court, &bytes[132..]).map_err(refused)?;
     write_shard(builder, &shard, id)?;
     seal.check_reveal(&actor, &salt, &bytes[132..], ctx.daa_score).map_err(refused)?;
-    convict(builder, ctx, p, signer, row, class, book, plan, &bytes[132..], seal.proof_root, seal.operator)?;
+    convict(builder, ctx, p, signer, row, class, book, plan, &bytes[132..], seal.proof_root, seal.operator, None)?;
     seal.spent = true;
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&seal_id), Some(key(&seal)))?;
     Ok(())
@@ -225,11 +225,23 @@ pub(super) fn file(
     let h = r.execution_job_header_v11(&id).ok_or_else(|| refused("native publicly filed job absent"))?;
     let bond = builder.state.bonds.get(signer).ok_or_else(|| refused("native public filer bond absent"))?;
     let operator = bond.operator_id.as_bytes();
+    // RFC08 08-B (ADR-0184 §1, dormant `palw_native_liability_horizon_v1`): a Final whose fee is held stays accusable by public
+    // filing through its liability horizon. Only the self-contained public filing reaches it (a Final had no live seal or demand).
+    let held_horizon = if h.terminal == ExecutionTerminalV11::Final {
+        super::super::palw_native_liability_hold_fold_v1::native_accusable_after_final_v1(
+            &builder.state,
+            crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_FUNDED_V11,
+            &id,
+            ctx.daa_score,
+        )
+        .map(|row| row.horizon_daa)
+    } else {
+        None
+    };
     if !matches!(bond.status, PalwBondStatusV2::Active)
         || operator == h.producer_operator
         || *signer == h.producer
-        || h.terminal != ExecutionTerminalV11::Challengeable
-        || ctx.daa_score > h.deadline_daa
+        || (held_horizon.is_none() && (h.terminal != ExecutionTerminalV11::Challengeable || ctx.daa_score > h.deadline_daa))
     {
         return Err(refused("native public filer is the producer or the job is not challengeable"));
     }
@@ -238,6 +250,14 @@ pub(super) fn file(
         return Ok(());
     }
     let (row, class, book, plan) = original_job(builder, id)?;
+    if let Some(horizon) = held_horizon {
+        // The Final closed the job's quota subject; the post-Final filing pays only its work fee (prepaid above, kept if wrong).
+        if book.terminal() != ExecutionTerminalV11::Final {
+            return Err(refused("native post-Final filing original book is not a held Final"));
+        }
+        let proof_id = object_id(b"misaka-palw/native/g14-public-filing/v11", &(id, filing));
+        return convict(builder, ctx, p, signer, row, class, book, plan, filing, proof_id, operator, Some(horizon));
+    }
     if book.terminal() != ExecutionTerminalV11::Challengeable {
         return Err(refused("native public filing original book is not challengeable"));
     }
@@ -248,7 +268,7 @@ pub(super) fn file(
     shard.debit_public_action(&p.quota, &epoch, &binding, &plan, &action).map_err(refused)?;
     write_shard(builder, &shard, id)?;
     let proof_id = object_id(b"misaka-palw/native/g14-public-filing/v11", &(id, filing));
-    convict(builder, ctx, p, signer, row, class, book, plan, filing, proof_id, operator)
+    convict(builder, ctx, p, signer, row, class, book, plan, filing, proof_id, operator, None)
 }
 /// **G14 lane closure G-N1 (v11): a lapsed seal gives its retained job ticket back** (`job ‖ seal`, anyone, work fee prepaid). A
 /// seal never revealed whose reveal window has closed (`now ≥ reveal_until`, so it can no longer be revealed: `check_reveal`) and
@@ -329,6 +349,7 @@ fn convict(
     filing: &[u8],
     proof_id: Digest,
     finder_operator: Digest,
+    held_horizon: Option<u64>,
 ) -> Result<(), PalwStateV2Error> {
     let id = row.header.job_id;
     let actor = palw_kernel_bond_id_v1(signer);
@@ -423,8 +444,15 @@ fn convict(
         builder.state.bonds.get(&row.header.producer).map(|b| b.collateral),
         claim.reserved_original,
     );
-    let s = book.adjudicate(class.record(), &result, collectible).map_err(refused)?;
-    close_adjudicated_quota(builder, ctx, p, id, &class, &book, &plan, *signer)?;
+    // RFC08 08-B: a held Final is re-adjudicated (its unpaid fee moves to the requester); its quota subject closed at Final.
+    let s = match held_horizon {
+        Some(horizon) => book.adjudicate_held_final(class.record(), &result, collectible, horizon).map_err(refused)?,
+        None => {
+            let s = book.adjudicate(class.record(), &result, collectible).map_err(refused)?;
+            close_adjudicated_quota(builder, ctx, p, id, &class, &book, &plan, *signer)?;
+            s
+        }
+    };
     let collected = if s.collected_original_slash == 0 {
         0
     } else {
@@ -471,6 +499,9 @@ fn convict(
                 Some(key(&NativeVerifiedSourceFactV11 { header, proof_bytes: filing_body })),
             )?;
         }
+    }
+    if held_horizon.is_some() {
+        return credit_after_final_v11(builder, ctx, &mut row, &book, &s);
     }
     credit(builder, ctx, &mut row, &book, &s)?;
     Ok(())

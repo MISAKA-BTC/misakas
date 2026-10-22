@@ -96,15 +96,47 @@ pub(super) fn release_native_fee_v1(
     )?;
     builder.write_payout(queue, Some(PalwPayoutV2 { payload: Hash64::from_bytes(row.payload), amount: row.amount }))?;
     builder.bond_budget_close_v1(&Hash64::from_bytes(row.budget), now)?;
-    super::palw_native_job_fold_v39::clear_held_producer_slot_v39(builder, row)?;
+    after_held_fee_left_v1(builder, row)?;
     Ok(())
+}
+
+/// **What a family retained for its held fee, closed once the fee leaves** (paid or refunded): native39's producer slot and
+/// subject; text29's quota subject (funded v11 closed its subject at Final and retains nothing else). Unknown families retain
+/// nothing here (they never hold).
+fn after_held_fee_left_v1(builder: &mut TransitionBuilder<'_>, row: &PalwNativeHeldFeeRowV1) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_liability_hold_v1::{PALW_NATIVE_FAMILY_JOB_V39, PALW_NATIVE_FAMILY_TEXT_V29};
+    match row.family {
+        PALW_NATIVE_FAMILY_JOB_V39 => super::palw_native_job_fold_v39::clear_held_producer_slot_v39(builder, row),
+        PALW_NATIVE_FAMILY_TEXT_V29 => super::palw_flat_execution_fold_v11::text29_held_fee_left_v29(builder, row),
+        _ => Ok(()),
+    }
+}
+
+/// **Does a held fee's claim still have an open dispute?** (the release waits for its verdict), dispatched by family: native39's
+/// pending demands / proof owners; text29 and funded v11, whose post-Final accusation is a single atomic public filing, only an
+/// unreadable job (fail closed). Unknown families never release.
+pub(super) fn native_held_dispute_open_v1(builder: &TransitionBuilder<'_>, row: &PalwNativeHeldFeeRowV1) -> bool {
+    use crate::palw_native_liability_hold_v1::{
+        PALW_NATIVE_FAMILY_FUNDED_V11, PALW_NATIVE_FAMILY_JOB_V39, PALW_NATIVE_FAMILY_TEXT_V29,
+    };
+    match row.family {
+        PALW_NATIVE_FAMILY_JOB_V39 => super::palw_native_job_fold_v39::native_dispute_open_v39(builder, row),
+        PALW_NATIVE_FAMILY_TEXT_V29 => super::palw_flat_execution_fold_v11::text29_held_dispute_open_v29(builder, row),
+        PALW_NATIVE_FAMILY_FUNDED_V11 => super::palw_flat_execution_fold_v11::funded_held_dispute_open_v11(builder, row),
+        _ => true,
+    }
 }
 
 /// The queue a refunded held fee is paid to the requester through (distinct from the producer's queue).
 pub(super) fn native_refund_queue_v1(row: &PalwNativeHeldFeeRowV1) -> Hash64 {
+    native_refund_queue_of_v1(row.family, row.job, row.claim, row.refund_payload)
+}
+
+/// [`native_refund_queue_v1`] from its parts (a family's collection re-derives it after the held row is gone).
+pub(super) fn native_refund_queue_of_v1(family: u8, job: [u8; 64], claim: [u8; 64], refund_payload: [u8; 64]) -> Hash64 {
     Hash64::from_bytes(misaka_palw_kernel::hash::object_id(
         b"misaka-palw/native/held-fee-refund/v1",
-        &(row.family, row.job, row.claim, row.refund_payload),
+        &(family, job, claim, refund_payload),
     ))
 }
 
@@ -127,7 +159,7 @@ pub(super) fn refund_native_fee_v1(
     builder.cancel_native_recipient_v1(Hash64::from_bytes(row.income_root), row.producer, row.income_kind)?;
     builder.write_payout(queue, Some(PalwPayoutV2 { payload: Hash64::from_bytes(row.refund_payload), amount: row.amount }))?;
     builder.bond_budget_close_v1(&Hash64::from_bytes(row.budget), now)?;
-    super::palw_native_job_fold_v39::clear_held_producer_slot_v39(builder, &row)?;
+    after_held_fee_left_v1(builder, &row)?;
     Ok(row)
 }
 

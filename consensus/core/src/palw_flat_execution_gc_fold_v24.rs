@@ -61,6 +61,16 @@ fn terminal_header(builder: &TransitionBuilder<'_>, job: Digest, now: u64) -> Re
     if matches!(h.terminal, ExecutionTerminalV11::Funded | ExecutionTerminalV11::Challengeable) || now <= h.deadline_daa {
         return Err(refused("native GC original job is live or complete horizon has not expired"));
     }
+    // RFC08 08-B: a Final whose fee is still held stays accusable to its liability horizon; its material is not collected.
+    if super::super::palw_native_liability_hold_fold_v1::held_native_fee_v1(
+        &builder.state,
+        crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_FUNDED_V11,
+        &job,
+    )
+    .is_some()
+    {
+        return Err(refused("native GC original Final's fee is held to its liability horizon"));
+    }
     let state = pursuit(builder.state.kernel_route.as_ref().unwrap(), &job)?;
     if state.open_demands != 0 || now <= state.required_retained_until {
         return Err(refused("native GC original pending/delivery retention remains"));
