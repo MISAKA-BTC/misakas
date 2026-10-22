@@ -14,13 +14,15 @@
     },
     {
       "key": "average",
-      "symbol": "N_30",
-      "baseline": "30日相当 DAA",
+      "symbol": "N_7",
+      "baseline": "7日相当 DAA",
       "unit": "DAA",
-      "approval_state": "確定設計値。今回変更なし",
+      "approval_state": "2026-10-16 ユーザー決定・2026-10-22 再確認(旧 30日相当)。通常 court 窓 3,120 DAA ≈ 7 日、紛争時のみ 10,000 DAA",
       "guard": "立上り・短期投入・退出後の履歴を評価",
       "source": "docs/rfc/0015-panel-free-permissionless-verification.md",
-      "changed_by_reorganization": false
+      "changed_by_reorganization": false,
+      "previous_baseline": "30日相当 DAA",
+      "implementation": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs PALW_ALLOCATION_AVERAGE_DAYS_V1 = 7"
     },
     {
       "key": "hold_panel0",

@@ -1,11 +1,11 @@
-# パラメーター台帳 — 今回の数値変更は0件
+# パラメーター台帳 — 数値変更1件(2026-10-22 記録: 平均期間 30→7 日)
 
 初期台帳は RFC-0016 / 0017 と ADR-0176 / 0177 / 0179 の主要値です。他領域の全変数を網羅したとはしません。未掲載値は出典・条件・承認を登録してから調整します。これは node 設定ではありません。[機械可読版](parameters.json)
 
 | キー / 変数 | 基準値 | 単位 | 状態・出典 |
 | --- | --- | --- | --- |
 | `alpha` / α | 1.5 | 無次元 | 確定設計値。今回変更なし。[出典](../adr/0177-model-bond-allocation-without-availability-consensus.md) |
-| `average` / N_30 | 30日相当 DAA | DAA | 確定設計値。今回変更なし。[出典](../rfc/0015-panel-free-permissionless-verification.md) |
+| `average` / N_7（旧 N_30） | 7日相当 DAA（旧 30日相当） | DAA | **変更記録**: 2026-10-16 ユーザー決定、2026-10-22 ユーザー再確認。根拠: 通常 court 窓 DAA 3,120 ≈ 7 日に対応し、不正時に対話が始まった claim だけ DAA 10,000 まで延びる。実装 `PALW_ALLOCATION_AVERAGE_DAYS_V1 = 7`（consensus/core/src/palw_bond_budget_v1/allocation_v3.rs）。試験: allocation_v3 の既存 policy 検査。[出典](../rfc/0015-panel-free-permissionless-verification.md) |
 | `hold_panel0` / W_hold(Panel=0) | 7日相当 DAA | DAA | 設計基準。今回変更なし。[出典](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md) |
 | `hold_panel1` / W_hold(Panel=1) | 1日相当 DAA | DAA | 後続改定の設計基準。今回変更なし。[出典](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md) |
 | `tier_approved` / c_m 指定階層 | 1.0 | 係数 | 現在の設計値。今回変更なし。[出典](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) |
@@ -21,7 +21,7 @@
 
 **α:** 超線形配分という構造を廃止する変更は通常調整ではない。
 
-**N_30:** 立上り・短期投入・退出後の履歴を評価。
+**N_7（旧 N_30）:** 立上り・短期投入・退出後の履歴を評価。通常 court 窓 3,120 DAA との対応を保つ。
 
 **W_hold(Panel=0):** 共通履歴・残存責任・burst を維持。
 
