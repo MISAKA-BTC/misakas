@@ -2453,6 +2453,11 @@ pub struct Params {
     /// advanced within its deadline is reclaimed so an outsider's Open is not refused by a full owner catalogue. `None` on every
     /// shipped preset; hashed Some-only. Needs `palw_legacy_public_filer_v1` at or below it (validation).
     pub palw_court_outsider_lane_v1: Option<ForkActivation>,
+    /// **RFC-0036 / ADR-0203 authenticated state map and row access (Proposed — DORMANT, lane storage/state).** The height from which
+    /// a state root of the authenticated-map form (`crate::palw_state_auth_map_v1`) and parent-root-pinned row reads
+    /// (`crate::palw_state_row_access_v1`) would govern. `None` on every shipped preset; hashed Some-only, so every id is byte-identical
+    /// to a build without it. Refused if armed (`Params::validate_palw_state_row_map_v1`): nothing is wired and the RFC is not adopted.
+    pub palw_state_row_map_v1: Option<ForkActivation>,
     /// **Kernel route Panel=1 seat policy (DORMANT, lane g14p/kernel-route, survey U02; USER DECISION PENDING).** From this height the
     /// kernel route's post-commit seat draw (`palw_kernel_route_fold_v1::draw_seats`) and the paid-claim / round committees
     /// (`palw_claim_challenge_fold_v2`) assign ONE seat with quorum 1 (PRINCIPLES §5, RFC-0010 §0 addendum: Panel=1 is the normal
@@ -5087,6 +5092,11 @@ impl Params {
         self.palw_court_outsider_lane_v1.filter(|f| *f != ForkActivation::never())
     }
 
+    /// RFC-0036 authenticated state map / row access fence (dormant: `None` on every shipped preset; `never()` reads as `None`).
+    pub fn palw_state_row_map_v1_fence(&self) -> Option<ForkActivation> {
+        self.palw_state_row_map_v1.filter(|f| *f != ForkActivation::never())
+    }
+
     /// Kernel route Panel=1 seat policy fence (dormant: `None` on every shipped preset; `never()` reads as `None`).
     pub fn palw_kernel_route_panel_one_v1_fence(&self) -> Option<ForkActivation> {
         self.palw_kernel_route_panel_one_v1.filter(|f| *f != ForkActivation::never())
@@ -6167,6 +6177,7 @@ impl Params {
             palw_tir_bounded_door_v1: self.palw_tir_bounded_door_v1,
             palw_tir_designated_answers_v1: self.palw_tir_designated_answers_v1,
             palw_court_outsider_lane_v1: self.palw_court_outsider_lane_v1,
+            palw_state_row_map_v1: self.palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1: self.palw_kernel_route_panel_one_v1,
             palw_court_clock_v2: self.palw_court_clock_v2,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
@@ -7342,6 +7353,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_court_clock_v2: None,
     palw_staged_float_constraint_v1: None,
@@ -7709,6 +7721,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_court_clock_v2: None,
     palw_staged_float_constraint_v1: None,
@@ -8058,6 +8071,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_court_clock_v2: None,
     palw_staged_float_constraint_v1: None,
@@ -13592,6 +13606,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_bounded_door_v1: None,
     palw_tir_designated_answers_v1: None,
     palw_court_outsider_lane_v1: None,
+    palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_court_clock_v2: None,
     palw_staged_float_constraint_v1: None,

@@ -33,6 +33,8 @@ mod tir_fp_lane_v1;
 mod tir_designated_registry_v1;
 // RFC-0016 V8 (audit 2026-10-17, 16-A): capacity attestations through the fold and the attested capacity read.
 mod rfc0016_capacity_attestation_v1;
+// RFC-0036 (Proposed, dormant): the row access layer's full-state adapter is behaviour-identical on these fixtures.
+mod row_access_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;
