@@ -50,7 +50,75 @@ pub const PALW_NATIVE_POST_FINAL_ANSWER_MAX_BYTES_V1: usize = 64 * 1024;
 /// At most this many duty records are observed / recovered by one block (key order).
 pub const PALW_NATIVE_POST_FINAL_DUTIES_PER_BLOCK_V1: usize = 64;
 
-pub use crate::palw_native_post_final_duty_row_v1::{NativePostFinalDutyV1, PalwNativePostFinalDutyRowV1};
+pub use crate::palw_native_post_final_duty_row_v1::{NativePostFinalDutyV1, PalwNativePostFinalDutyRowV1, PalwNativePostFinalMaterialRowV1};
+
+/// audit B-02 (fix-b): aux 144 prefix of a recorded post-Final material unit (`0x04 ‖ family ‖ job ‖ commitment`, 130 bytes).
+pub const PALW_NATIVE_POST_FINAL_MATERIAL_PREFIX_V1: u8 = 0x04; // integration: 0x03 is the held-fee horizon index (fix-a)
+
+pub fn palw_native_post_final_material_key_v1(family: u8, job: &[u8; 64], commitment: &[u8; 64]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(130);
+    key.push(PALW_NATIVE_POST_FINAL_MATERIAL_PREFIX_V1);
+    key.push(family);
+    key.extend_from_slice(job);
+    key.extend_from_slice(commitment);
+    key
+}
+
+/// audit B-02 (fix-b): the commitment a unit of post-Final material is recorded under (and an answer must open).
+pub fn post_final_material_commitment_v1(family: u8, job: &[u8; 64], bytes: &[u8]) -> [u8; 64] {
+    misaka_palw_kernel::hash::object_id(b"misaka-palw/native/post-final-material/v1", &(family, *job, bytes))
+}
+
+/// The recorded material unit `commitment` of the held `(family, job)`, if any.
+pub(super) fn native_post_final_material_row_v1(
+    state: &PalwChainStateV2,
+    family: u8,
+    job: &[u8; 64],
+    commitment: &[u8; 64],
+) -> Option<PalwNativePostFinalMaterialRowV1> {
+    state
+        .kernel_route
+        .as_ref()?
+        .aux_row::<PalwNativePostFinalMaterialRowV1>(
+            PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+            &palw_native_post_final_material_key_v1(family, job, commitment),
+        )
+        .filter(|r| r.version == PALW_NATIVE_POST_FINAL_DUTY_VERSION_V1 && r.family == family && r.job == *job && r.commitment == *commitment)
+}
+
+/// **audit B-02 (fix-b): record a unit of material the held Final owes after Final.** No production caller: which units a text29 /
+/// funded v11 Final records (and their bound) is a user decision, so production accusations stay refused. Fixtures call it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn register_post_final_material_v1(
+    b: &mut TransitionBuilder<'_>,
+    family: u8,
+    job: &[u8; 64],
+    commitment: [u8; 64],
+    max_bytes: u32,
+) -> Result<(), PalwStateV2Error> {
+    if !family_supported_v1(family) || max_bytes == 0 || max_bytes as usize > PALW_NATIVE_POST_FINAL_ANSWER_MAX_BYTES_V1 {
+        return Err(refused("post-Final material unit outside its family or bound"));
+    }
+    let row = PalwNativePostFinalMaterialRowV1 { version: PALW_NATIVE_POST_FINAL_DUTY_VERSION_V1, family, job: *job, commitment, max_bytes };
+    b.write_kernel_row_encoded_v1(
+        PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
+        &palw_native_post_final_material_key_v1(family, job, &commitment),
+        Some(&row),
+    )
+}
+
+/// audit B-02 (fix-b): what a failed (answered) post-Final accusation costs its accuser — the kernel ledger's demand bond, the existing
+/// price of a public material demand (text29 / stage28 public requests), collected from what the accuser's bond holds.
+fn failed_accusation_cost_v1(b: &TransitionBuilder<'_>) -> u64 {
+    b.state.kernel_route.as_ref().map(|r| r.header.policy.demand_bond).unwrap_or(0).max(1)
+}
+
+/// Every duty of the row's latest turn is answered (the accusation was discharged by authenticated material).
+fn latest_turn_discharged_v1(row: &PalwNativePostFinalDutyRowV1) -> bool {
+    let turn = row.duties.iter().map(|d| d.clock.turn).max().unwrap_or(0);
+    let latest: Vec<&NativePostFinalDutyV1> = row.duties.iter().filter(|d| d.clock.turn == turn).collect();
+    !latest.is_empty() && latest.iter().all(|d| d.answered.is_some())
+}
 
 pub fn palw_native_post_final_duty_key_v1(family: u8, job: &[u8; 64]) -> Vec<u8> {
     let mut key = Vec::with_capacity(66);
@@ -133,8 +201,10 @@ fn responsible_actors_v1(held: &PalwNativeHeldFeeRowV1) -> Vec<PalwBondKeyV2> {
 }
 
 /// **Accept a post-Final accusation** of the held `(family, job)` by `accuser`: one duty clock per responsible actor. Refused below
-/// the fences, outside the hold, for the producer itself, and while an earlier accusation of the job is still recorded (one at a
-/// time; it is cleared when the held fee leaves).
+/// the fences, outside the hold, for the producer itself, and (audit B-02, fix-b) unless `accusation` names a unit of material the
+/// held Final is RECORDED to owe ([`native_post_final_material_row_v1`]). One live accusation per job: a later one is admitted
+/// once the earlier one was DISCHARGED (its latest turn answered with authenticated material) — a decoy no longer excludes other
+/// accusers for the whole horizon; an earlier one still silent stays (its default / no-slash recovery must not be wiped).
 pub(super) fn accuse_post_final_v1(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -155,8 +225,11 @@ pub(super) fn accuse_post_final_v1(
     if *accuser == held.producer || !b.state.bonds.get(accuser).is_some_and(|v| matches!(v.status, PalwBondStatusV2::Active)) {
         return Err(refused("post-Final accuser must be an Active bond other than the producer"));
     }
-    if native_post_final_duty_row_v1(&b.state, family, job).is_some() {
-        return Err(refused("the held Final already carries a post-Final accusation"));
+    if native_post_final_material_row_v1(&b.state, family, job, &accusation).is_none() {
+        return Err(refused("post-Final accusation names no material unit the held Final is recorded to owe"));
+    }
+    if native_post_final_duty_row_v1(&b.state, family, job).is_some_and(|row| !latest_turn_discharged_v1(&row)) {
+        return Err(refused("the held Final already carries a live post-Final accusation"));
     }
     let mut duties = Vec::new();
     for actor in responsible_actors_v1(&held) {
@@ -176,6 +249,8 @@ pub(super) fn accuse_post_final_v1(
 }
 
 /// **Record the actor's answer.** Only the actor of an open clock (`first_eligible ≤ now ≤ deadline`) may answer, once per clock.
+/// audit B-02 (fix-b): only AUTHENTICATED material counts — bytes that open the demanded commitment within its recorded bound; any
+/// other bytes are refused and the duty stays unanswered. A discharged accusation failed: its accuser bears the demand-bond cost.
 pub(super) fn answer_post_final_v1(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -194,6 +269,11 @@ pub(super) fn answer_post_final_v1(
     super::palw_native_liability_hold_fold_v1::native_accusable_after_final_v1(&b.state, family, job, now)
         .ok_or_else(|| refused("no held native fee inside its liability horizon"))?;
     let mut row = native_post_final_duty_row_v1(&b.state, family, job).ok_or_else(|| refused("no post-Final accusation to answer"))?;
+    let material = native_post_final_material_row_v1(&b.state, family, job, &row.accusation)
+        .ok_or_else(|| refused("the accused material unit is no longer recorded"))?;
+    if answer.len() > material.max_bytes as usize || post_final_material_commitment_v1(family, job, answer) != row.accusation {
+        return Err(refused("post-Final answer does not open the demanded material commitment"));
+    }
     let digest = misaka_palw_kernel::hash::object_id(b"misaka-palw/native/post-final-answer/v1", &(family, *job, answer));
     let duty = row
         .duties
@@ -201,7 +281,13 @@ pub(super) fn answer_post_final_v1(
         .find(|d| d.clock.answerer == *signer && d.answered.is_none() && now >= d.clock.first_eligible_daa && now <= d.clock.response_deadline_daa)
         .ok_or_else(|| refused("signer has no open post-Final duty"))?;
     duty.answered = Some((now, digest));
-    write_v1(b, family, job, Some(&row))
+    let (discharged, accuser) = (latest_turn_discharged_v1(&row), row.accuser);
+    write_v1(b, family, job, Some(&row))?;
+    if discharged && b.state.bonds.contains_key(&accuser) {
+        let cost = failed_accusation_cost_v1(b);
+        b.slash_bond(accuser, u128::from(cost))?;
+    }
+    Ok(())
 }
 
 /// Delete the job's duty record (the held fee left: released, refunded or convicted).
@@ -362,13 +448,25 @@ pub(super) fn reopen_unsupplied_turn_v1(
     Ok(true)
 }
 
-/// Every held row with a recorded native accusation (the recovery sweep's candidates), bounded, key order.
+/// Every held row with a recorded native accusation that the recovery sweep can still act on (the latest turn has an UNANSWERED
+/// duty whose window closed), bounded. audit B-09 (fix-b): answered / still-open rows are not candidates (they used to occupy the
+/// first 64 key-order slots until H and starve every other row), and the bounded window ROTATES with the DAA so no row is starved
+/// by key order.
 pub(super) fn held_rows_with_native_duties_v1(b: &TransitionBuilder<'_>, now: u64) -> Vec<PalwNativeHeldFeeRowV1> {
-    duty_rows_v1(b)
+    let actionable: Vec<PalwNativeHeldFeeRowV1> = duty_rows_v1(b)
         .into_iter()
+        .filter(|r| {
+            let turn = r.duties.iter().map(|d| d.clock.turn).max().unwrap_or(0);
+            r.duties.iter().any(|d| d.clock.turn == turn && d.answered.is_none() && d.clock.response_deadline_daa < now)
+        })
         .filter_map(|r| super::palw_native_liability_hold_fold_v1::native_accusable_after_final_v1(&b.state, r.family, &r.job, now))
-        .take(PALW_NATIVE_POST_FINAL_DUTIES_PER_BLOCK_V1)
-        .collect()
+        .collect();
+    let n = actionable.len();
+    if n <= PALW_NATIVE_POST_FINAL_DUTIES_PER_BLOCK_V1 {
+        return actionable;
+    }
+    let start = (now % n as u64) as usize;
+    actionable.into_iter().cycle().skip(start).take(PALW_NATIVE_POST_FINAL_DUTIES_PER_BLOCK_V1).collect()
 }
 
 /// Decode a post-Final accusation body: `family ‖ job ‖ accusation`.

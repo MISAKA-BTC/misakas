@@ -639,6 +639,24 @@ pub(super) fn install_original_v1(
             return Err(refused("TIR original collection door outlives the claim's fixed X3 hard deadline"));
         }
     }
+    // audit B-06 (fix-b): under clock v2 the original's custody / material horizons must already cover the claim's whole extended
+    // dispute window (`a + 10,000 + max(W_disclose, reorg)`), or the first dispute's extension would be refused (F07) and the claim
+    // could never be disputed on the legacy route. Refused here, at admission. A claim clock v2 does not govern: unchanged.
+    {
+        use crate::palw_court_clock_v2::{PalwCourtDependencyKindV2 as Kind, PalwCourtDependencyV2 as Dep};
+        let deps = [
+            Dep { kind: Kind::Custody, signed_horizon_daa: frame.custody_v1().pledge_v1().material_until_daa },
+            Dep { kind: Kind::Custody, signed_horizon_daa: p.terms.material_until_daa },
+        ];
+        crate::palw_court_clock_v2::palw_court_clock_v2_admission_dependencies_v2(
+            b.params,
+            c,
+            palw_da_disclose_window_daa_v1(b.params),
+            crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(b.extras.staged_public_court.as_ref()),
+            &deps,
+        )
+        .map_err(refused)?;
+    }
     let original_source = source(b, &frame)?;
     let preparation = PalwTirPublicPreparationV1::new_v1(
         PalwTirPublicPreparationContractV1 {
@@ -1082,8 +1100,13 @@ fn apply_verified_control_inner_v1(
         Effect::PreparationDefault(default) => Some(std::iter::once(default.actor).collect()),
         _ => None,
     };
+    // audit B-01 (fix-b): the book is read in EITHER row variant (`court_service_state_v1`); the released (V3) form must not skip
+    // the guard. audit N-1/B-03 (fix-b): the guard collects each unpaid actor's OUTSTANDING duty clock (the defaulted duty) and the
+    // F02 attribution decides from it alone; a `PartyDefault` it returns is what lets the charge below proceed on a bound claim.
+    let mut f02_attributed = false;
     if unpaid.is_some() {
-        if let Some(Row::CourtService(service)) = b.state.staged_court_row_v1(&Key::CourtService) {
+        if let Some(service) = b.state.court_service_state_v1().cloned() {
+            let mut defaulted: Vec<crate::palw_court_duty_clock_v1::CourtDutyClockV1> = Vec::new();
             if service.claims.contains_key(&frame.plan_v1().original_claim) {
                 if let T::Acquisition { owner, reserved_daa } = control.target {
                     let key = owner_key(frame, owner, reserved_daa)?;
@@ -1094,17 +1117,21 @@ fn apply_verified_control_inner_v1(
                         if !duty.response_fits_original_hard {
                             return Err(refused("native response exceeds original service hard bound; no party default"));
                         }
+                        if let Some(Row::CourtDutyClock(clock)) = b.state.staged_court_row_v1(&Key::CourtDutyClock(duty.id)) {
+                            defaulted.push((**clock).clone());
+                        }
                     }
                 }
             }
             // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): with the explicit inclusion premise in force (the conviction fence
-            // and a pinned service profile), attribute from the RECORDED reserved supply and the actors' native duty clocks:
-            // supplied-and-silent defaults through the existing path below; unsupplied is a no-slash hold. Otherwise the legacy
+            // and a pinned service profile), attribute from the RECORDED reserved supply and the defaulted duty's own clock:
+            // supplied-and-silent defaults through the attributed charge below; unsupplied is a no-slash hold. Otherwise the legacy
             // deny-only guard is unchanged.
             if super::palw_court_service_lifecycle_fold_v1::court_service_f02_active_v1(b) {
                 let unpaid = unpaid.as_ref().expect("default effect was matched");
-                match service.default_attribution_v1(&b.state, &frame, unpaid, true).map_err(refused)? {
-                    crate::palw_court_service_binding_v1::CourtServiceAttributionV1::PartyDefault => {}
+                let refs: Vec<&crate::palw_court_duty_clock_v1::CourtDutyClockV1> = defaulted.iter().collect();
+                match service.default_attribution_v1(&frame, &refs, unpaid, true).map_err(refused)? {
+                    crate::palw_court_service_binding_v1::CourtServiceAttributionV1::PartyDefault => f02_attributed = true,
                     crate::palw_court_service_binding_v1::CourtServiceAttributionV1::NoSlashHold(why) => return Err(refused(why)),
                 }
             } else {
@@ -1191,14 +1218,27 @@ fn apply_verified_control_inner_v1(
     }
     if let Some(unpaid) = unpaid {
         let claim = b.state.claim(&control.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(control.claim))?;
-        b.staged_selected_default_charge_v1(
-            ctx,
-            control.claim,
-            &claim,
-            frame.custody_v1().pledge_v1().producer,
-            &unpaid,
-            control.signer,
-        )?;
+        if f02_attributed {
+            // audit N-1 (fix-b): the adopted F02 attribution (ADR-0192 A) established THIS duty's supplied opportunity and the
+            // actors' silence, so the bound claim's default is charged through the common economic leg.
+            b.staged_selected_default_charge_attributed_v1(
+                ctx,
+                control.claim,
+                &claim,
+                frame.custody_v1().pledge_v1().producer,
+                &unpaid,
+                control.signer,
+            )?;
+        } else {
+            b.staged_selected_default_charge_v1(
+                ctx,
+                control.claim,
+                &claim,
+                frame.custody_v1().pledge_v1().producer,
+                &unpaid,
+                control.signer,
+            )?;
+        }
     }
     Ok(())
 }
@@ -4914,6 +4954,10 @@ mod conviction_e2e_tests {
         archive_roundtrip(&mut b,&params,&frame,id,at(&frame,6),state.state_root());
     }
 
+    /// fix-b (audit B-04): the court DEADLINE sweep no longer skips a service-bound session — it ends at its own deadline with the
+    /// existing outcome minus any responder default (never a producer default), archived with the sweep as its cause, and the
+    /// orphan cleanup still progresses. The independent ASSEMBLY sweep still skips a held head (an incomplete assembly on a bound
+    /// claim is never a timeout default; the backstop ends that session).
     #[test]
     fn rooted_service_court_sweeps_skip_held_without_starving_cleanup() {
         use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
@@ -4963,33 +5007,41 @@ mod conviction_e2e_tests {
                 claim: plan.original_claim, challenger_bond: outsider(), opened_daa: opened,
                 deadline_daa: opened + 10, ladder, dissection: None,
             };
-            let held_id = h(0xC3);
+            // Keyed by its own ladder id (as every opener writes it; the archive checks it).
+            let held_id = session.ladder.session_id();
             let orphan_id = h(0xC4);
+            let producer = frame.custody_v1().pledge_v1().producer;
             let mut held = TransitionBuilder::new(&service_state, &params, false, false, false, false, &extras);
             held.write_court(held_id, Some(session.clone())).unwrap();
             let mut orphan = session.clone();
             orphan.claim = h(0xC5);
             orphan.deadline_daa += 1;
-            // Both index keys are deliberately ordered: held first, orphan next.
             held.write_court(orphan_id, Some(orphan)).unwrap();
             let before = held.state.clone();
             let journal = held.entries.len();
             super::super::sweep_court_deadlines(&mut held, &ctx).unwrap();
-            assert_eq!(held.state.court_sessions.get(&held_id), before.court_sessions.get(&held_id));
+            assert!(!held.state.court_sessions.contains_key(&held_id), "fix-b B-04: the bound session ends");
             assert!(!held.state.court_sessions.contains_key(&orphan_id));
-            assert_eq!(held.state.claims, before.claims);
-            assert_eq!(held.state.bonds, before.bonds);
-            assert_eq!(held.state.court_deadlines.len(), 1);
-            assert_eq!(held.state.court_deadlines.iter().next(), before.court_deadlines.iter().next());
-            assert!(held.entries.len() > journal, "orphan cleanup must progress past the held head");
+            assert!(held.state.court_deadlines.is_empty());
+            assert_eq!(held.state.bond(&producer), before.bond(&producer), "never a producer default on a bound claim");
+            assert!(matches!(held.state.court_end_archive_v1(held_id).map(|a| a.evidence.as_ref().clone()),
+                Some(crate::palw_court_end_archive_v1::CourtEndEvidenceV1::DeadlineSweep { .. })), "fix-b B-05: resolvable cause");
+            assert!(held.entries.len() > journal, "orphan cleanup progresses");
             let settled = held.state.clone();
             let journal = held.entries.len();
             super::super::sweep_court_deadlines(&mut held, &ctx).unwrap();
             assert_eq!(held.state, settled);
-            assert_eq!(held.entries.len(), journal, "repeated sweep does not refresh a held clock");
+            assert_eq!(held.entries.len(), journal, "a repeated sweep changes nothing");
             // The independent assembly sweep must also skip a held head,
             // preserving its charged deposit while cleaning up a later orphan.
             if turn == PalwBisectTurnV1::Terminal {
+                // A fresh builder: the held session is open again (the deadline sweep above ended it).
+                let mut held = TransitionBuilder::new(&service_state, &params, false, false, false, false, &extras);
+                held.write_court(held_id, Some(session.clone())).unwrap();
+                let mut orphan = session.clone();
+                orphan.claim = h(0xC5);
+                orphan.deadline_daa += 1;
+                held.write_court(orphan_id, Some(orphan)).unwrap();
                 let group = PalwCourtCloseGroupV2 {
                     declarer: frame.custody_v1().pledge_v1().producer, count: 1,
                     chunk_digests: vec![h(0xD2)], close_digest: h(0xD3),
@@ -6370,6 +6422,74 @@ mod conviction_e2e_tests {
         use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
         use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
         use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+    // fix-b: the round-1 reproducers `audit_b01_…` / `audit_b04_…` asserted the DEFECTS (a V3-row default; a never-ending bound
+    // session) and are superseded by the verify-2 expected-vs-actual tests below, which assert the corrected behaviour.
+    /// **audit(verify-2) B-01** regression guard (PASSES: refuted by the later charge guard): the TIR default guard reads the service book only in its LEGACY row
+    /// variant (`Row::CourtService`). Once the book is rewritten in its released form (`Row::CourtServiceV3`, which the D1 release
+    /// step does at the first release and never undoes), the same bound claim with the same unsupplied packet is defaulted.
+    #[test]
+    fn verify2_b01_released_service_row_keeps_the_f02_default_guard() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras, acquisition, _) = demanded_world(&fx, &frame, 0);
+        let (demand_id, until, turn, _) = owner_pending(&frame, &state, acquisition);
+        let base = frame.plan_v1().terms.accepted_daa;
+        let ctx = at(&frame, until - base);
+        let control = Control { version: 1, claim: frame.plan_v1().original_claim,
+            allocation_id: frame.plan_v1().allocation_id, source_id: frame.plan_v1().source_id,
+            target: acquisition, expected_turn: turn, declared_rent_sompi: 0, signer: outsider(),
+            action: A::Acquisition(Owned::Collect { demand_id }), signature: vec![5; SIG] };
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id: [1; 64], release_daa: base + 1, service_before: base + 2, cost }], base + 10_000).unwrap();
+        // The packet's slot (base+1) is never supplied: the assessment is MissingSupply (a no-slash hold under F02).
+        book.observe_block(base + 2, [12; 64], Default::default()).unwrap();
+        let service = CourtServiceStateV2 { version: 2, source_profile_id: Hash64::from_u64_word(42),
+            profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(42)), book,
+            claims: std::collections::BTreeMap::from([(control.claim, ServiceClaimBinding {
+                claim: control.claim, allocation_id: control.allocation_id, source_id: control.source_id,
+                original_accepted_daa: base, hard_deadline_daa: base + 10_000,
+                packet_ids: std::collections::BTreeSet::from([[1; 64]]) })]) };
+        let mut extras = extras.clone();
+        extras.tir_public_conviction_active = true;
+        // Legacy row: denied, nothing moves.
+        let mut v2 = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        v2.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service.clone()).into()))).unwrap();
+        let err = apply_verified_control_v1(&mut v2, &ctx, &frame, &control).unwrap_err();
+        assert!(format!("{err:?}").contains("supply is missing"), "{err:?}");
+        // The SAME book and binding in the released row form (nothing released yet).
+        let mut v3 = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let row3 = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&service);
+        v3.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(row3).into()))).unwrap();
+        assert!(v3.state.court_service_holds_claim_v1(&control.claim), "the claim is still bound");
+        let before = v3.state.state_root();
+        let result = apply_verified_control_v1(&mut v3, &ctx, &frame, &control);
+        let changed = v3.state.state_root() != before;
+        eprintln!("[verify2-b01] released-row result: {result:?}; state changed: {changed}");
+        // Round 2 verdict REFUTED (as a sanction): the F02 guard IS skipped for the V3 row (the error is not the guard's
+        // "supply is missing"), but `staged_selected_default_charge_v1` (transition_builder.rs:3039) refuses every default charge on
+        // a service-held claim, and `apply_verified_control_v1`'s checkpoint restores the transition. Regression guard: nothing moves.
+        assert!(result.is_err() && !changed, "B-01: a released-row bound claim must not be defaulted; got {result:?}");
+        // fix-b (B-01 hygiene, load-bearing since N-1 connects the attributed charge): the guard now reads the book in EITHER row
+        // variant, so the released row is refused by the F02 guard itself (the round-2 observation recorded the bypass).
+        assert!(format!("{:?}", result.unwrap_err()).contains("supply is missing"), "the F02 guard reads the released (V3) row");
+    }
+
+    /// **audit(verify-2) B-04** expected-vs-actual (FAILS on current code): a court session on a service-bound claim has no terminal path for
+    /// silence. The deadline sweep skips it at every height (here 100,000 DAA past the claim's hard deadline), so the session holds
+    /// a global court slot forever, the binding can never be released (`open_courts_of > 0`) and the producer's collateral stays
+    /// held by the service book forever.
+    #[test]
+    fn verify2_b04_a_silent_session_on_a_bound_claim_ends_by_its_backstop() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras) = world(&fx, &frame);
         let plan = frame.plan_v1();
         let a = plan.terms.accepted_daa;
         let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
@@ -6524,4 +6644,102 @@ mod conviction_e2e_tests {
         eprintln!("[fix-a B-05w] void-closed sibling archive at material_until+1: present {still}, challenger exit-held {exit_held}");
         assert!(!still && !exit_held, "B-05 widened: a void-closed sibling session's archive is resolvable");
     }
+        let service = CourtServiceStateV2 { version: 2, source_profile_id: Hash64::from_u64_word(43),
+            profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(43)), book,
+            claims: std::collections::BTreeMap::from([(plan.original_claim, ServiceClaimBinding {
+                claim: plan.original_claim, allocation_id: plan.allocation_id, source_id: plan.source_id,
+                original_accepted_daa: a, hard_deadline_daa: a + 10_000,
+                packet_ids: std::collections::BTreeSet::from([[41; 64]]) })]) };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        let opened = a + 3;
+        let ladder = PalwBisectLadderV1::open(
+            &frame.header_v1().job_context.context_hash(), &frame.original_v1().execution_root,
+            &h(0xC1), &h(0xC2), PalwBisectSpaceV1::StepLeaves,
+            frame.header_v1().step_leaf_count, opened, opened + 1,
+        ).unwrap();
+        // The challenger opens and then never moves; the responder never moves either.
+        let session = PalwCourtSessionStateV2 {
+            claim: plan.original_claim, challenger_bond: outsider(), opened_daa: opened,
+            deadline_daa: opened + 10, ladder, dissection: None,
+        };
+        // fix-b: keyed by its own ladder id, as every real opener writes it (the archive a bound session's ending now builds checks
+        // `session.ladder.session_id() == key`; the round-2 fixture used an arbitrary key).
+        let id = session.ladder.session_id();
+        b.write_court(id, Some(session)).unwrap();
+        for far in [10_001u64, 20_000, 100_000] {
+            super::super::sweep_court_deadlines(&mut b, &at(&frame, far)).unwrap();
+        }
+        let producer = frame.custody_v1().pledge_v1().producer;
+        eprintln!(
+            "[verify2-b04] after sweeps to a+100,000: session open {}, slots {}, release eligible {}, producer held {}",
+            b.state.court_sessions.contains_key(&id), b.state.court_sessions.len(),
+            b.state.court_service_release_eligible_v1(&plan.original_claim), b.state.court_service_holds_bond_v1(&producer),
+        );
+        assert!(!b.state.court_sessions.contains_key(&id),
+            "B-04: expected the silent session to be ended by a+100,000 (binding hard a+10,000, backstop opened+10); it is still open");
+    }
+
+    /// **fix-b B-04/B-05 regression**: the swept bound session (a) ends at its own deadline (not later), frees its court slot and
+    /// never defaults the producer; (b) is archived with the sweep as its cause (`DeadlineSweep`, not `Uncaptured`), so
+    /// the archive holds no nominal against either bond and is fully resolved once its material retention passed (D3); (c) one block
+    /// before the session's deadline the sweep leaves it open.
+    #[test]
+    fn fix_b05_a_swept_bound_session_is_archived_with_a_resolvable_cause() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
+        use crate::palw_court_end_archive_v1::{CourtEndDispositionV1, CourtEndEvidenceV1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras) = world(&fx, &frame);
+        let plan = frame.plan_v1();
+        let a = plan.terms.accepted_daa;
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id: [51; 64], release_daa: a + 1, service_before: a + 2, cost }], a + 10_000).unwrap();
+        book.observe_block(a + 1, [52; 64], Default::default()).unwrap();
+        let service = CourtServiceStateV2 { version: 2, source_profile_id: Hash64::from_u64_word(53),
+            profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(53)), book,
+            claims: std::collections::BTreeMap::from([(plan.original_claim, ServiceClaimBinding {
+                claim: plan.original_claim, allocation_id: plan.allocation_id, source_id: plan.source_id,
+                original_accepted_daa: a, hard_deadline_daa: a + 10_000,
+                packet_ids: std::collections::BTreeSet::from([[51; 64]]) })]) };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        let opened = a + 3;
+        let ladder = PalwBisectLadderV1::open(
+            &frame.header_v1().job_context.context_hash(), &frame.original_v1().execution_root,
+            &h(0xD1), &h(0xD2), PalwBisectSpaceV1::StepLeaves,
+            frame.header_v1().step_leaf_count, opened, opened + 1,
+        ).unwrap();
+        let session = PalwCourtSessionStateV2 {
+            claim: plan.original_claim, challenger_bond: outsider(), opened_daa: opened,
+            deadline_daa: opened + 10, ladder, dissection: None,
+        };
+        let id = session.ladder.session_id();
+        b.write_court(id, Some(session)).unwrap();
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let (producer_before, outsider_before) =
+            (b.state.bond(&producer).unwrap().collateral, b.state.bond(&outsider()).unwrap().collateral);
+        // −1: the rung deadline (opened + 1) has not run out yet.
+        super::super::sweep_court_deadlines(&mut b, &at(&frame, opened + 1 - a)).unwrap();
+        assert!(b.state.court_sessions.contains_key(&id), "the rung deadline is still in time");
+        // The first block past it ends the session: the responder's opening silence on a bound claim fines nobody.
+        super::super::sweep_court_deadlines(&mut b, &at(&frame, opened + 2 - a)).unwrap();
+        assert!(!b.state.court_sessions.contains_key(&id) && b.state.court_sessions.is_empty(), "slot freed");
+        assert_eq!(b.state.bond(&producer).unwrap().collateral, producer_before, "no default on an unattributed turn");
+        // Whichever side the ladder named silent, the outcome is the existing one minus any responder default: the challenger is
+        // charged at most its claim-side close, never more.
+        assert!(b.state.bond(&outsider()).unwrap().collateral <= outsider_before);
+        let archive = b.state.court_end_archive_v1(id).expect("a bound session's ending is archived").clone();
+        assert!(matches!(archive.evidence.as_ref(), CourtEndEvidenceV1::DeadlineSweep { point } if point.daa_score == at(&frame, opened + 2 - a).daa_score));
+        assert_eq!(archive.adjudication(), CourtEndDispositionV1::DeadlineSwept);
+        assert_eq!(archive.pending_nominal(&outsider()), 0, "B-05: the challenger's stake is not held through the archive");
+        assert_eq!(archive.pending_nominal(&producer), 0);
+        assert!(!b.state.court_archive_holds_bond_v1(&outsider()));
+        assert!(!b.state.court_archive_fully_resolved_v1(id, archive.material_until_daa), "retention boundary: not yet");
+        assert!(b.state.court_archive_fully_resolved_v1(id, archive.material_until_daa + 1), "B-05: resolvable after retention");
+    }
+
 }

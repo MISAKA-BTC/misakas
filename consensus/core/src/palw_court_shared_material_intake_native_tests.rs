@@ -28,7 +28,8 @@ fn material_intake_world(fx: &PalwTirPublicFrameFixtureV1)
 
 fn material_test_schedule() -> crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1 {
     let s = crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1 {
-        sompi_per_byte: 1,
+        // audit B-09 (fix-b): a non-zero storage fee refuses the intake until V5 adopts its payer; the lane fixtures run fee-free.
+        sompi_per_byte: 0,
         draft_ttl_daa: 100,
         cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
             max_original_leaves: 1_000_000, max_total_edges: 10_000_000, max_total_coordinates: 1_000_000, max_root_memberships: 1_000_000 },
@@ -382,4 +383,37 @@ fn material_intake_incomplete_drafts_expire_and_release_reservation() {
     let Some(Row::CourtMaterialLedger(l)) = b.state.staged_court_row_v1(&Key::CourtMaterialLedger(claim, who)) else { panic!() };
     assert_eq!(l.reserved_bytes, 0);
     crate::palw_court_shared_material_intake_v1::set_material_intake_test_schedule_v1(None);
+}
+
+/// **fix-b B-09 regression**: a non-zero storage fee (no adopted payer) refuses the Begin and writes nothing — never a fee that is
+/// accounted in `charged_sompi` but never debited.
+#[test]
+fn fix_b09_a_nonzero_material_fee_refuses_the_intake() {
+    use crate::palw_court_shared_material_intake_v1::*;
+    use super::super::palw_court_shared_material_intake_fold_v1::material_intake;
+    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+    let frame = &fx.frame;
+    let (mut state, params, extras, claim, scope) = material_intake_world(&fx);
+    let who = outsider();
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([79; 32]);
+    state.bonds.get_mut(&who).unwrap().pubkey = kp.verification_key.as_ref().to_vec();
+    let net = extras.tir_public_network_domain_v1.unwrap();
+    let mut schedule = material_test_schedule();
+    let leaf = required_parameter_leaves_v1(&state, claim, schedule.cover).unwrap()[0];
+    let body = borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap();
+    let target = MaterialTargetV1::Parameter { leaf };
+    let begin = MaterialActionV1::Begin { total_bytes: body.len() as u64,
+        body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) };
+    schedule.sompi_per_byte = 1;
+    set_material_intake_test_schedule_v1(Some(schedule));
+    let before = state.state_root();
+    let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let err = material_intake(&mut b, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin.clone())).unwrap_err();
+    assert!(format!("{err:?}").contains("no adopted payer"), "{err:?}");
+    assert_eq!(b.state.state_root(), before);
+    // Fee-free: admitted, nothing owed.
+    set_material_intake_test_schedule_v1(Some(material_test_schedule()));
+    material_intake(&mut b, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin)).unwrap();
+    set_material_intake_test_schedule_v1(None);
 }

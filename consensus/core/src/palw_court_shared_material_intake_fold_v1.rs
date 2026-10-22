@@ -113,6 +113,12 @@ fn material_intake_inner(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 last_daa: ctx.daa_score, accepted_bytes: 0, head: Hash64::default(), expires_daa,
                 material_until_daa: c.material_until_daa,
             };
+            // audit B-09 (fix-b): a fee is never merely ACCOUNTED. Its payer is an unadopted part of the V5 storage schedule, and a
+            // debit here would also leave the intake's derived native read/write set, so a non-zero fee REFUSES the intake (nothing
+            // written) until V5 adopts the payer and its debit; a zero fee charges nothing and records nothing owed.
+            if fee > 0 {
+                return Err(refused("material storage fee has no adopted payer (V5): intake refused rather than accounted and never debited"));
+            }
             b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(ledger))))?;
             b.write_staged_row_v1(key, Some(Row::CourtMaterialDraft(Box::new(draft))))?;
             Ok(MaterialIntakeEffectV1::Begun)
@@ -200,7 +206,7 @@ fn own_draft(b: &TransitionBuilder<'_>, s: &m::SignedMaterialIntakeV1, draft_id:
 }
 
 /// Removes a draft and its parts and returns its reservation. The ledger's
-/// accounting of the charged schedule price is kept (payer unadopted).
+/// accounting of the charged schedule price is kept (always 0 since audit B-09 fix-b: a non-zero fee refuses the intake).
 pub(super) fn release_draft(b: &mut TransitionBuilder<'_>, draft: &m::MaterialDraftV1) -> Result<(), PalwStateV2Error> {
     let mut at = 0u64;
     while at < draft.accepted_bytes {
