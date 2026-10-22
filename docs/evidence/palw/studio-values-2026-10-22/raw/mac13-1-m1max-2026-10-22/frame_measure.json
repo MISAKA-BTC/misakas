@@ -1,0 +1,857 @@
+{
+ "batch": "frame_measure",
+ "executable": "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+ "host": {
+  "hw.memsize": "34359738368",
+  "hw.model": "Mac13,1",
+  "hw.ncpu": "10",
+  "hw.perflevel0.physicalcpu": "8",
+  "hw.perflevel1.physicalcpu": "2",
+  "machdep.cpu.brand_string": "Apple M1 Max",
+  "machine": "arm64",
+  "ncpu": 10,
+  "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.6"
+ },
+ "load_after": {
+  "loadavg": [
+   51.7724609375,
+   50.0029296875,
+   48.181640625
+  ],
+  "t": 1792671220.236554,
+  "uptime": "21:13  up 11:15, 1 user, load averages: 51.77 50.00 48.18"
+ },
+ "load_before": {
+  "loadavg": [
+   51.63818359375,
+   49.4609375,
+   47.74365234375
+  ],
+  "t": 1792671092.427598,
+  "uptime": "21:11  up 11:13, 1 user, load averages: 51.64 49.46 47.74"
+ },
+ "runs": [
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-00.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-00.json, blake2b-256 c32505a0960caee884beb1c1c971ec170d98001bbea3bbdac422f3ca86b0adcf",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=2054709ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=29588166ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=24029709ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=10606500ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=24199625ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=23417792ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=24193708ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=29594167ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=2148209ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=2115792ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=35375ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    51.63818359375,
+    49.4609375,
+    47.74365234375
+   ],
+   "peak_rss_bytes": 29425664,
+   "process_wall_s": 6.429,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.28,
+   "under_load": true,
+   "user_s": 3.21
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-01.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-01.json, blake2b-256 abd8139ab986fcd46317222ebed9e34eaa8bdb40878824826b450b349fec03b5",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=869084ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=41752292ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=4406917ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1073875ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=46865250ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=24100083ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=60553917ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=25469083ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=13313166ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=2995125ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=55958ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    51.5869140625,
+    49.486328125,
+    47.7626953125
+   ],
+   "peak_rss_bytes": 28950528,
+   "process_wall_s": 6.45,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.24
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-02.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-02.json, blake2b-256 4f21c0a7a9d78724aceb97b958c97b1e386baa55cb4aef4261ac1e4ad5320816",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=20679875ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=47051792ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=24083875ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=7680333ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=23120375ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=65139416ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=25185250ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=31993375ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=4618750ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1255625ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=31458ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    52.10009765625,
+    49.62744140625,
+    47.822265625
+   ],
+   "peak_rss_bytes": 29655040,
+   "process_wall_s": 6.484,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.23
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-03.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-03.json, blake2b-256 8078b4d9adfb128a890285b8aef028bbb2fe278ab6a5eb4919d70f042457017a",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=10651917ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=27468542ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=38658542ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=13747833ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=18399792ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=23393709ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=34712917ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=37474666ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=5031625ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=25551708ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=39000ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    52.10693359375,
+    49.69287109375,
+    47.865234375
+   ],
+   "peak_rss_bytes": 29491200,
+   "process_wall_s": 6.392,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.27,
+   "under_load": true,
+   "user_s": 3.26
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-04.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-04.json, blake2b-256 cc5df50eb38c84e43c67a85a8efe1df9c117f240bd3c3a0578624c6f0b7188a3",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=24105375ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=19798458ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=11685833ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=3848458ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=24717209ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=38051500ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=25153375ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=39350459ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=8502667ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1169708ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=89041ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    52.97900390625,
+    49.91357421875,
+    47.95361328125
+   ],
+   "peak_rss_bytes": 29458432,
+   "process_wall_s": 6.507,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.27,
+   "under_load": true,
+   "user_s": 3.26
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-05.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-05.json, blake2b-256 e32b5a2491b56c65cb1800614f2a121008ce9347776953ebf4c3500317ff3276",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=5977542ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=79386125ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=3254417ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=19688375ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=24192334ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=21232583ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=38588375ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=36570875ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=1844291ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=24358417ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=148333ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    52.01953125,
+    49.76513671875,
+    47.91259765625
+   ],
+   "peak_rss_bytes": 29196288,
+   "process_wall_s": 6.335,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.21
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-06.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-06.json, blake2b-256 a2621b4af76f72d3300c10b133b6011498724f2faea4e59a1e47152e95ddc971",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=11341917ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=26397667ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=18380458ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=4649291ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=18398500ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=16670584ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=18249625ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=75013584ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=2339042ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1068333ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=29250ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    52.658203125,
+    49.9345703125,
+    47.9833984375
+   ],
+   "peak_rss_bytes": 29114368,
+   "process_wall_s": 6.563,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.26
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-07.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-07.json, blake2b-256 44ccb536c5f98550832b76cea869d761ac0aee73e848481ae2476a0312ade6e0",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=17749166ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=19685792ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=22979166ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1528625ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=24281042ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=21124208ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=24195708ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=15627917ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=23498750ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=24152875ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=28708ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    51.970703125,
+    49.8583984375,
+    47.97802734375
+   ],
+   "peak_rss_bytes": 29196288,
+   "process_wall_s": 6.443,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.25
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-08.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-08.json, blake2b-256 96f7a9aeb281a22aa3d1cdac0378e91fcfc546b9b17a713b767e4bc28908e830",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=1894084ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=28384792ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=5235042ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=24200416ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=39426042ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=28629041ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=25704000ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=54514541ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=4450500ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1622625ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=489125ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    50.451171875,
+    49.578125,
+    47.89013671875
+   ],
+   "peak_rss_bytes": 29458432,
+   "process_wall_s": 6.581,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.27,
+   "under_load": true,
+   "user_s": 3.32
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-09.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-09.json, blake2b-256 7d6e2f37aa860803f9bfce0809890aa85efd45714dcd8817d8200b7343e0d99c",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=20457209ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=44590834ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=17331583ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=11332208ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=12959208ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=2925625ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=70705458ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=31866042ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=24909459ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=8515209ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=33750ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    51.1357421875,
+    49.734375,
+    47.955078125
+   ],
+   "peak_rss_bytes": 28950528,
+   "process_wall_s": 6.544,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.27,
+   "under_load": true,
+   "user_s": 3.24
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-10.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-10.json, blake2b-256 00d78b123ce1207261a1ed537383cfb7216eaee1cde7a1ee7b2a402a11c9829b",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=3880833ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=24260500ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=1871833ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=13695792ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=12862958ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=33415459ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=24171292ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=26705750ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=24768750ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=7563917ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=28750ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    50.951171875,
+    49.7294921875,
+    47.97314453125
+   ],
+   "peak_rss_bytes": 29507584,
+   "process_wall_s": 6.825,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.27,
+   "under_load": true,
+   "user_s": 3.3
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-11.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-11.json, blake2b-256 9aaad93e15cb657ddafcadaec9406769b5e4121ce028f825225e575e31c3f440",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=871709ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=34821250ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=11600083ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=3902041ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=26873750ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=40879541ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=23772958ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=36859125ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=24109542ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1118542ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=1583916ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    49.994140625,
+    49.55126953125,
+    47.92041015625
+   ],
+   "peak_rss_bytes": 29376512,
+   "process_wall_s": 6.817,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.27,
+   "under_load": true,
+   "user_s": 3.24
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-12.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-12.json, blake2b-256 c58715964b04777e8d8227e4d0c24f1b35c954b0816a210135ed03dc10f8a621",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=2305958ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=85836500ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=4594667ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1126042ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=12882000ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=17799708ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=15956250ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=23943334ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=1837458ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1053125ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=28833ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    50.71484375,
+    49.7080078125,
+    47.98486328125
+   ],
+   "peak_rss_bytes": 29065216,
+   "process_wall_s": 5.86,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.21
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-13.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-13.json, blake2b-256 d84ac630fcf5b21d802b2f625d1d673e373bbaf8907be47466c35a61e8fe11ed",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=2211333ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=17771375ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=2733042ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1057792ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=23979708ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=5082208ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=24300959ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=26578542ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=1860583ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1077000ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=53833ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    50.12060546875,
+    49.60400390625,
+    47.96728515625
+   ],
+   "peak_rss_bytes": 29278208,
+   "process_wall_s": 5.356,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.25,
+   "under_load": true,
+   "user_s": 3.18
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-14.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-14.json, blake2b-256 02abfff05175c9837fcdcad389758ce52cd2835f8a4d17f5244d64735c882ca5",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=834875ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=26184125ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=1880000ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=5073917ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=23750917ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=23509542ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=5178250ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=37935667ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=10191291ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=2641208ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=760625ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    49.47021484375,
+    49.4775390625,
+    47.93212890625
+   ],
+   "peak_rss_bytes": 29310976,
+   "process_wall_s": 5.335,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.27,
+   "under_load": true,
+   "user_s": 3.28
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-15.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-15.json, blake2b-256 8f7c006d497367b0abac96b1fe7ea2ac89a2ad482e5e244a941897437d517a58",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=868792ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=10395542ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=18081833ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=3035541ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=23714834ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=32670958ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=17675542ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=15409250ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=13114791ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=3325625ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=28667ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    50.31298828125,
+    49.65185546875,
+    48.00244140625
+   ],
+   "peak_rss_bytes": 29179904,
+   "process_wall_s": 5.315,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.23
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-16.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-16.json, blake2b-256 c6a843c44afbba974445c4976a86e442558a583f4ac3bf7e11cc7265b23d90f6",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=1817458ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=26968166ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=1858375ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=3329292ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=28437792ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=18761250ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=18610417ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=65243791ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=11815083ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=3961083ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=68167ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    50.04736328125,
+    49.607421875,
+    47.99609375
+   ],
+   "peak_rss_bytes": 28950528,
+   "process_wall_s": 5.763,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.27
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-17.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-17.json, blake2b-256 7e908a752aab6258006174e13017edfe5f6387f2bc8e2f57ceaa9950a9604c2c",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=828500ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=25729000ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=9436000ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=17491208ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=21111084ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=19805042ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=21087417ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=37523583ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=1878541ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1060042ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=2544625ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    50.60400390625,
+    49.72998046875,
+    48.048828125
+   ],
+   "peak_rss_bytes": 29016064,
+   "process_wall_s": 5.21,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.21
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-18.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-18.json, blake2b-256 16b1525901ac8c120be9aef2fb735cde523038d680f96b3470b317854e4aa1db",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=829875ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=25649209ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=2068834ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1061875ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=11650292ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=2797792ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=14000917ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=30549958ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=16103791ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1223167ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=1347291ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    48.71337890625,
+    49.3525390625,
+    47.92529296875
+   ],
+   "peak_rss_bytes": 29507584,
+   "process_wall_s": 5.258,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.21
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-19.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-19.json, blake2b-256 5bab5e573d59388b77594968f912883d0df475b2154224abf13a001533f98202",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=851459ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=17442417ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=3365125ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1055208ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=11889417ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=21428959ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=45276375ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=25012416ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=3116542ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1082083ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=28708ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    48.9765625,
+    49.396484375,
+    47.94873046875
+   ],
+   "peak_rss_bytes": 29065216,
+   "process_wall_s": 5.649,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.26,
+   "under_load": true,
+   "user_s": 3.28
+  },
+  {
+   "cmd": [
+    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-native-redemption-impl-d36ce9/64c2a95b-144f-4f1a-9acb-51ee6b3c8862/scratchpad/p1bin/frame_measure-f88ed682c61c7105",
+    "tir_frame_operations_are_measured_on_every_corpus_class",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+   ],
+   "env": {
+    "MISAKA_MEASURE_HOST": "Mac-Studio.local",
+    "MISAKA_TIR_FRAME_MEASURE_OUT": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-20.json"
+   },
+   "lines": [
+    "[tir-frame-measure] wrote /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-a06757cf6c5cbad6d/docs/evidence/palw/studio-values-2026-10-22/raw/m1max-macbook-2026-10-22/frame/frame-20.json, blake2b-256 2daec40e2691c743538ad8626497c27f8a859d8b4d171ba525b441ad3d91b749",
+    "[tir-frame-measure] \"dense-gqa-2layer\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=865125ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"gdn-k2-v4-grouped\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=36661500ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=7121208ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"moe-top2-shared\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=3083166ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"sliding-global\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=13863708ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus dense\" n=118 prepared=32189B/6 slices (bound 1 per pass) cold=248 slices answer_max=647B step_check_max=12138084ns filing_witness=11892B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus sliding\" n=166 prepared=47114B/8 slices (bound 1 per pass) cold=344 slices answer_max=711B step_check_max=21514292ns filing_witness=17569B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus gdn\" n=222 prepared=59494B/8 slices (bound 1 per pass) cold=457 slices answer_max=711B step_check_max=26823333ns filing_witness=20403B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus mamba2\" n=95 prepared=30937B/7 slices (bound 1 per pass) cold=202 slices answer_max=647B step_check_max=3556834ns filing_witness=15076B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"corpus moe\" n=52 prepared=18028B/6 slices (bound 1 per pass) cold=116 slices answer_max=583B step_check_max=1106666ns filing_witness=9789B frame6=84905B frame257=2921707B",
+    "[tir-frame-measure] \"h-window-sum\" n=55 prepared=12823B/6 slices (bound 1 per pass) cold=122 slices answer_max=523B step_check_max=28708ns filing_witness=2356B frame6=84905B frame257=2921707B"
+   ],
+   "loadavg_at_start": [
+    52.10107421875,
+    50.037109375,
+    48.18310546875
+   ],
+   "peak_rss_bytes": 29016064,
+   "process_wall_s": 5.647,
+   "rc": 0,
+   "stderr_tail": "",
+   "sys_s": 0.27,
+   "under_load": true,
+   "user_s": 3.27
+  }
+ ],
+ "source_commit": "80c8f5e1b",
+ "under_load": true
+}

@@ -231,6 +231,7 @@ def main():
     a = ap.parse_args()
     global BIN_DIR
     BIN_DIR = a.bin_dir
+    a.out = os.path.abspath(a.out)  # the frame batch runs in the crate dir: record paths must be absolute
     os.makedirs(a.out, exist_ok=True)
     names = list(BATCHES) if a.batches == "all" else a.batches.split(",")
     log = os.path.join(a.out, "build.log")

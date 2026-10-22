@@ -26,7 +26,7 @@ python3 docs/evidence/palw/studio-values-2026-10-22/rerun/analyze.py docs/eviden
 | batch | binary / test | 内容 | 回数 |
 |---|---|---|---|
 | `court_verify` | `kaspa-consensus-core --test palw_tir_court_verify_cpu`(`court_verify_cpu_measure`、`MEASURE_OP`/`MEASURE_N`/`MEASURE_SCALE`) | court 操作ごとの検証時間・証拠 bytes・peak RSS。1 process 1 operation | 各 op: N=0 ×3(RSS 基準)、N=10・100 ×1、N=1000 ×3。scale 付き op は scale 3 段階 × (N=0 ×1 + 計測 ×3、position は ×1) |
-| `in_crate` | `kaspa-consensus-core --lib` の ignored test 2 本 | material intake(Begin/Part/Finish、追加 bond 0/1k/10k)、post-Final duty(held fee 10/100/1000) | `MEASURE_RUNS=21`(run 0 が warm-up) |
+| `in_crate` | `kaspa-consensus-core --lib` の ignored test 2 本 | material intake(Begin/Part/Finish、追加 bond 0/1k/10k、`MEASURE_TARGETS`=8 target を body の大きさ順に散らして選ぶ。M1 Max で約 7 分)、post-Final duty(held fee 10/100/1000) | `MEASURE_RUNS=21`(run 0 が warm-up) |
 | `court_op_harness` | `--test g14_court_capacity` の `palw_court_op_timing_harness` | 実 fold(`apply_palw_transition_v7`)での DisputeReserved・OneMove 開廷・42 本同時・default sweep の block fold 時間 | `MEASURE_RUNS=21` |
 | `frame_measure` | `misaka-palw-tir-exec --features node --test frame_measure` | corpus 11 class の frame 操作(execute・cold answer・step check・filing・frame bytes) | 21 process |
 
