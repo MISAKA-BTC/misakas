@@ -1594,6 +1594,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0205",
+      "path": "docs/adr/0205-a-decoded-answer-is-not-paid-twice.md",
+      "title": "ADR-0205 — decode 済みの回答は二度支払わない",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1887,6 +1895,14 @@
       "path": "docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md",
       "title": "RFC-0037 — IBD の有界 authenticated row stream と世代番号付き保存",
       "topic": "Operations / interfaces / recovery",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0038",
+      "path": "docs/rfc/0038-palw-fp-answer-accounting.md",
+      "title": "RFC-0038 — free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)",
+      "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
     }
   ]

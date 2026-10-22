@@ -13,6 +13,7 @@
 - [RFC-0033 — D2 readiness rootのdigest opening取得](0033-d2-readiness-root-opening-availability.md)
 - [RFC-0034 — archived closeの実受付と金融責任の適格解消](0034-archived-close-qualified-financial-discharge.md)
 - [RFC-0036 — 認証付き PALW state map と行単位アクセス](0036-authenticated-palw-state-map-and-row-access.md)
+- [RFC-0038 — free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)](0038-palw-fp-answer-accounting.md)
 
 ## EVM / wallet
 

@@ -110,6 +110,7 @@
 - [ADR-0200 — D2 readiness rootの認証path供給](0200-d2-readiness-root-opening-availability.md)
 - [ADR-0201 — archived closeの期限内実受付と責任解消](0201-archived-close-qualified-financial-discharge.md)
 - [ADR-0203 — 認証付き PALW state map と行単位アクセス](0203-authenticated-palw-state-map-and-row-access.md)
+- [ADR-0205 — decode 済みの回答は二度支払わない](0205-a-decoded-answer-is-not-paid-twice.md)
 
 ## EVM / wallet
 
