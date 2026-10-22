@@ -12,7 +12,9 @@ use misaka_palw_challenge::bootstrap_epoch_v1::BootstrapSeatV1;
 fn refuse(s: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(s.into())
 }
-fn decode_error(e: NativeDecodeErrorV1<std::io::Error>) -> PalwStateV2Error {
+// Retained readers may report either Borsh IO errors or typed provenance text.
+// Preserve resource exhaustion as Resource independently of the decode payload.
+fn decode_error<E: std::fmt::Display>(e: NativeDecodeErrorV1<E>) -> PalwStateV2Error {
     match e {
         NativeDecodeErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),
         NativeDecodeErrorV1::Decode(e) => refuse(e.to_string()),
