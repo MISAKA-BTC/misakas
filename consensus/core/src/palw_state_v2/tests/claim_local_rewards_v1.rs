@@ -305,3 +305,30 @@ fn rfc23s2_reward_missing_certification_row_preserves_the_retry_clock() {
     assert!(builder.state.claim(&c).is_some());
     assert!(!builder.state.pending_payouts.contains_key(&palw_certification_payout_key_v1(&c)));
 }
+#[test]
+fn rfc23s2_claim_local_settlement_read_settles_independent_b_while_a_is_unresolved() {
+    use super::super::{PalwClaimLocalSettlementV1 as S, palw_claim_local_settlement_v1 as read};
+    // A (root 600) never bound: unresolved. B (root 601) independent. C shares A's root.
+    let (p, s, [a, b, c]) = world(false);
+    assert!(!matches!(s.claim(&a).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "A stays unresolved");
+    // Inside B's own liability window: held by B's window, not by A.
+    assert!(matches!(read(&s, &p, b, 129).unwrap(), S::Held { .. }));
+    assert!(matches!(read(&s, &p, c, 129).unwrap(), S::Held { .. }));
+    // Past B's own window B settles although A is still unresolved; C still waits on A.
+    assert_eq!(read(&s, &p, b, 1001).unwrap(), S::Settled, "an unrelated unresolved claim never blocks B");
+    assert!(matches!(read(&s, &p, c, 1001).unwrap(), S::Held { .. }), "C actually depends on A");
+    assert!(!matches!(read(&s, &p, a, 1001).unwrap(), S::Settled));
+    // B's answer is the same whether or not A ever resolves.
+    let (p2, s2, [_, b2, _]) = world(true);
+    assert_eq!(read(&s2, &p2, b2, 1001).unwrap(), S::Settled);
+    // Unknown id: no answer, never a guess.
+    assert_eq!(read(&s, &p, h64(0xDEAD), 1001).unwrap(), S::NotRetained);
+    // Below / without the stage-2 fence: Dormant (callers keep palw_settlement_v1 unchanged).
+    assert_eq!(read(&s, &p, b, 99).unwrap(), S::Dormant);
+    let off = p.clone().with_claim_local_settlement_from_daa(None);
+    assert_eq!(read(&s, &off, b, 1001).unwrap(), S::Dormant);
+    // The read is pure: no state change.
+    let root = s.state_root();
+    let _ = read(&s, &p, c, 1001).unwrap();
+    assert_eq!(s.state_root(), root);
+}

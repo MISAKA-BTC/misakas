@@ -910,3 +910,51 @@ def refund_link(row, lock_point, refund_point, original_amount, maximum_fee):
     if not original_amount - maximum_fee <= outputs[index]['value'] <= original_amount:
         raise Violation('the returned deposit amount differs from the declared refund')
     return dict(inputOutpoint=lock_point, refundOutpoint=refund_point, feeSompi=fee, outputTotalSompi=total)
+
+
+def refund_recovered_once(before, after, consumed, materialized):
+    """Across a crash/cold reopen: every consumed input (refund lock, claimed deposit) is still spent and every named
+    refund output is still present with the identical right (amount, script, coinbase flag) - no missed refund (the output
+    vanished or the lock came back unspent) and no double count (a second, different materialization of the same right)."""
+    require_real(list(before) + list(after))
+    if not before or not after:
+        raise NotObservable('the recovery comparison needs a read on both sides of the crash')
+    reference = None
+    for row in list(before) + list(after):
+        states = row['value'].get('pointStates', {})
+        for point in list(consumed) + list(materialized):
+            if point not in states:
+                raise NotObservable('the recovery read omits %s' % point)
+        for point in consumed:
+            if states[point] is not None:
+                raise Violation('consumed input %s is unspent again after recovery (%s)' % (point, row.get('role')))
+        for point in materialized:
+            if states[point] is None:
+                raise Violation('refund output %s is missing after recovery (%s)' % (point, row.get('role')))
+        key = stable_point_states({point: states[point] for point in list(consumed) + list(materialized)})
+        if reference is None:
+            reference = key
+        elif key != reference:
+            raise Violation('a refund right changed across the crash/recovery (%s)' % row.get('role'))
+    return dict(consumed=sorted(consumed), materialized=sorted(materialized), reads=len(before) + len(after))
+
+
+def reserve_stable_across_recovery(before, after):
+    """The DNS security reserve balance at one fixed block is the same known value before and after the crash: recovery
+    neither double counts nor drops an accrual already committed at that block. Per-block reads only, not flow reconciliation."""
+    require_real(list(before) + list(after))
+    if not before or not after:
+        raise NotObservable('the reserve comparison needs a read on both sides of the crash')
+    block, balance = None, None
+    for row in list(before) + list(after):
+        value = row['value']
+        if value.get('reserveBalance') is None:
+            raise NotObservable('the node does not know the reserve balance at %s' % value.get('blockHash'))
+        amount = exact_int(value['reserveBalance'], 'reserve balance')
+        if block is None:
+            block, balance = value['blockHash'], amount
+        elif value['blockHash'] != block:
+            raise NotObservable('the reserve reads name different blocks')
+        elif amount != balance:
+            raise Violation('reserve balance at %s changed across recovery: %d -> %d' % (block, balance, amount))
+    return dict(blockHash=block, balanceSompi=balance, reads=len(before) + len(after))

@@ -1070,6 +1070,7 @@ class AcceptanceRun:
             self.judge(5, 'refund-exactly-once/%s' % P.ROLE_NAMES[row['role']], J.exactly_one_new_utxo,
                        self.bridge['destinationsBefore']['refund'], row['value']['entries'], low, high)
         refund_point = J.exactly_one_new_utxo(self.bridge['destinationsBefore']['refund'], rows[0]['value']['entries'], low, high)['outpoint']
+        self.bridge['refundPoint'] = refund_point
         def refunded_points():
             found = self.point_set(self.live(PRIMARY), 'refund-points', [refund_lock['outpoint'], refund_point, self.bridge['deposit']['outpoint']])
             J.point_consumed(found, refund_lock['outpoint'])
@@ -1375,6 +1376,9 @@ class AcceptanceRun:
         source = SOURCE_OF['FRESH']
         require_finalized = 'workSettled' in self.flags
         before = self.wait(lambda: self.consumer_set([source, 'FRESH'], 'cold-before'), 'cold reopen prior read')[1]
+        consumed, materialized = self.recovery_points()
+        anchor = J.norm(before['dag']['sink'])
+        pre = self.recovery_read([source, 'FRESH'], 'cold-before-recovery', consumed + materialized, anchor)
         self.drill.kill('FRESH')  # SIGKILL of the owned child, then the same DB
         self.drill.start('FRESH')
         self.drill.join_link('FRESH', source)
@@ -1385,6 +1389,7 @@ class AcceptanceRun:
             return rows
         rows = self.wait(reopened, 'the cold-reopened DB reaches the source generation')
         self.judge(2, 'cold-reopen-same-db', J.cold_reopen, before, rows[1], rows[0], require_finalized)
+        self.judge_recovery('cold-reopen', [source, 'FRESH'], pre, consumed, materialized, anchor)
         if 'scaleRows' in self.work:
             limit = self.plan['scan']['kernelFinalsLimit']
             scale = self.plan['scale']
@@ -1398,6 +1403,45 @@ class AcceptanceRun:
             self.judge(2, 'scale-carried-by-pruned-join-and-reopen', J.scale_reached, rows, scale['claimCounter'],
                        scale['minimumClaims'])
         self.after_convergence('coldReopen')
+
+    def recovery_points(self):
+        """Inputs a settled refund consumed and the refund output it created; empty before the bridge refund ran."""
+        if 'refundPoint' not in self.bridge:
+            return [], []
+        return [self.bridge['refundLock']['outpoint'], self.bridge['deposit']['outpoint']], [self.bridge['refundPoint']]
+
+    def recovery_rows(self, roles, label, points, anchor):
+        """One op-246 read per role: the named outpoints and the reserve balance at the fixed anchor block."""
+        def read(role):
+            def body(rpc, dag, node):
+                return O.rfc12_state_value(rpc, points, block_hash=anchor)
+            return O.bracketed(self.drill, role, label, body)
+        return self.parallel(roles, read)
+
+    def recovery_read(self, roles, label, points, anchor):
+        """Bounded retry of `recovery_rows`; an unobservable read is BLOCKED for this step, never inferred."""
+        try:
+            rows = self.wait(lambda: self.recovery_rows(roles, label, points, anchor), label + ' reads', optional=True)
+        except (J.NotObservable, transport.Blocked) as error:
+            self.block(5, label, str(error))
+            return None
+        if rows is None:
+            self.block(5, label, 'no read within the phase bound')
+        return rows
+
+    def judge_recovery(self, kind, roles, pre, consumed, materialized, anchor):
+        """After a SIGKILL + reopen of the same DB: no missed refund, no double-counted refund or reserve accrual."""
+        if pre is None:
+            return
+        post = self.recovery_read(roles, kind + '-after-recovery', consumed + materialized, anchor)
+        if post is None:
+            return
+        self.rows.extend(pre + post)
+        if materialized:
+            self.judge(5, 'refund-once-across-%s' % kind, J.refund_recovered_once, pre, post, consumed, materialized)
+        else:
+            self.block(5, 'refund-once-across-%s' % kind, 'no settled refund preceded this recovery')
+        self.judge(7, 'reserve-not-double-counted-across-%s' % kind, J.reserve_stable_across_recovery, pre, post)
 
     def mismatch_argv(self, role, profile):
         argv, out = self.drill.argv(self.drill.plan['nodes'][role]['argv']), []
