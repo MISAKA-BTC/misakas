@@ -18,6 +18,9 @@ async fn t12_concentration_at_one_boundary_every_accepted_duty_funded_and_exact(
         let job = w.job().await;
         claims.push(w.claim(producers[i % producers.len()], &job, false).await);
     }
+    // Every claim's seats, read while the interim assignments exist (they are gone once the receipts cover the claims). Studio T4
+    // (2026-10-22): the first run read them after coverage and panicked in the harness ("the claim has an interim assignment").
+    let seats_of: Vec<Vec<usize>> = claims.iter().map(|c| w.seats(&c.id)).collect();
     // Every seat's receipts for every claim in ONE send: the claims pass together.
     let daa = w.net.daa();
     let mut receipts = Vec::new();
@@ -34,15 +37,26 @@ async fn t12_concentration_at_one_boundary_every_accepted_duty_funded_and_exact(
         .collect();
     let end = *ends.iter().max().unwrap();
     assert!(ends.len() <= 2, "the windows concentrate on (at most two adjacent) DAAs: {ends:?}");
-    // Demands concentrated in the window's last blocks, by distinct demanders.
-    let all_seats: std::collections::BTreeSet<usize> = claims.iter().flat_map(|c| w.seats(&c.id)).collect();
-    let demanders: Vec<usize> =
-        (0..cards(&w)).filter(|c| *c != 1 && !all_seats.contains(c) && !claims.iter().any(|k| k.producer == *c)).collect();
-    assert!(!demanders.is_empty(), "a demander outside every Panel");
+    // Demands concentrated in the window's last blocks, each by an outsider OF THAT CLAIM (neither its producer, nor its seat, nor the
+    // class registrant), distinct across claims where the cards allow. Studio T4 (2026-10-22): the first full run required one
+    // demander outside EVERY claim's Panel and every producer; with N = 3 claims on this network's cards no such card exists ("a
+    // demander outside every Panel") — a harness over-constraint, not the T12 property (each demand is an outsider's).
+    let mut used = std::collections::BTreeSet::new();
+    let demander_of: Vec<usize> = claims
+        .iter()
+        .zip(&seats_of)
+        .map(|(c, seats)| {
+            let ok: Vec<usize> = (0..cards(&w)).filter(|d| *d != 1 && *d != c.producer && !seats.contains(d)).collect();
+            assert!(!ok.is_empty(), "an outsider of claim {:?}", c.id);
+            let d = ok.iter().copied().find(|d| !used.contains(d)).unwrap_or(ok[0]);
+            used.insert(d);
+            d
+        })
+        .collect();
     w.net.beat_to(end.saturating_sub(4)).await;
     let mut items = Vec::new();
     for (i, c) in claims.iter().enumerate() {
-        let d = demanders[i % demanders.len()];
+        let d = demander_of[i];
         let o = w.net.route(d, &K::FileDemand { demander: w.net.kid(d), claim: c.id, stage: 0, position: 1 });
         items.push((d, o));
     }
@@ -83,11 +97,11 @@ async fn t12_concentration_at_one_boundary_every_accepted_duty_funded_and_exact(
 
 /// **T12 (full)**: concentration at the ORIGINAL's hard boundary of 10,000 DAA — every duty accepted for every admitted original is
 /// funded by its admission reservation and settles to its exact outcome at the boundary.
-// DEPENDS ON lane r5-original-admission (hard 10,000 boundary), r5-escrow-settlement (exact settlement).
+// MERGED on g14/integration-r7 (studio T4) — the remaining blocker is the #[ignore] reason; was: DEPENDS ON lane r5-original-admission (hard 10,000 boundary), r5-escrow-settlement (exact settlement).
 #[tokio::test]
-#[ignore = "needs lane r5-original-admission + r5-escrow-settlement merge"]
+#[ignore = "blocked on values V2+V3 (+V10 X3 record) (lanes merged on r7)"]
 async fn t12_hard_boundary_concentration_at_10000_daa_every_duty_funded() {
-    #[cfg(feature = "g14-t-campaign-merged")]
+    #[cfg(feature = "g14-t-campaign-intended-api")]
     {
         let n = campaign_n("G14_T12_N", 3);
         let mut w = World::new().await;
@@ -103,8 +117,8 @@ async fn t12_hard_boundary_concentration_at_10000_daa_every_duty_funded() {
             assert!(o.is_exact_and_funded());
         }
     }
-    #[cfg(not(feature = "g14-t-campaign-merged"))]
-    pending_lane!("r5-original-admission + r5-escrow-settlement");
+    #[cfg(not(feature = "g14-t-campaign-intended-api"))]
+    blocked_on!("no funded original is admitted and no escrow settlement schedule exists on a node (V2, V3 typed-missing); the X3 hard deadline needs its arming record (V10); intended palw_funded_original_v1 / palw_original_escrow_outcome_v1 do not exist");
 }
 
 /// **T13: the oldest claim loses service; an independent claim still progresses; unresolved evidence and bonds stay held without a
@@ -122,7 +136,7 @@ async fn t13_oldest_claim_loses_service_independent_claim_progresses_and_nothing
     let seats_a = w.seats(&a.id);
     w.cover(&a.id).await;
     let b_producer = (0..cards(&w)).find(|c| *c != 0 && *c != 1 && !seats_a.contains(c)).expect("an independent producer");
-    let (b, _) = covered_claim(&mut w, b_producer, false).await;
+    let (b, seats_b) = covered_claim(&mut w, b_producer, false).await;
     let outsider = (0..cards(&w))
         .find(|c| ![0, 1, b_producer].contains(c) && !seats_a.contains(c))
         .expect("an outsider");
@@ -141,11 +155,30 @@ async fn t13_oldest_claim_loses_service_independent_claim_progresses_and_nothing
     );
     assert!(!w.net.ledger().claims[&a.id].convicted, "no false fraud slash");
     assert_eq!(w.net.collateral(0), a_before - pol.default_penalty, "only the fixed penalty");
-    assert_eq!(w.net.kernel_reserved(0), u128::from(pol.claim_collateral - pol.default_penalty), "the rest of A stays HELD");
+    // Studio T4 (2026-10-22): card 0 can also be drawn as a seat of B, and a seat holds a G-K1 signer liability lock for B outside
+    // the ledger (`PalwKernelRouteV1::reserved_of` = ledger reservation + chunk deposits + signer locks). The first run compared
+    // the whole `kernel_reserved(0)` with A's remainder and failed by exactly such a lock (90,183,333,333 vs 90,000,000,000). A's
+    // remainder is the LEDGER part, asserted exactly; every other part must be B's seat lock (or none when card 0 is not B's seat).
+    let route_part = |w: &World| {
+        let state = w.net.chain.tip_state().1;
+        let k = state.kernel_route().expect("the kernel route");
+        let bond = w.net.bond(0);
+        (u128::from(k.ledger_reserved_of(&bond)), u128::from(k.signer_locks_of_v1(&bond)), u128::from(k.chunk_deposits_of_v1(&bond)))
+    };
+    let (ledger_0, locks_0, deposits_0) = route_part(&w);
+    assert_eq!(ledger_0, u128::from(pol.claim_collateral - pol.default_penalty), "the rest of A stays HELD");
+    assert_eq!(deposits_0, 0, "card 0 holds no chunk deposit");
+    assert!(locks_0 == 0 || seats_b.contains(&0), "a signer lock on card 0 is only ever its seat on B: {locks_0}");
+    assert_eq!(w.net.kernel_reserved(0), ledger_0 + locks_0, "nothing else is reserved on card 0");
     assert_eq!(w.net.collateral(b_producer), b_before, "B's producer untouched by A's failure");
     let horizon = w.net.ledger().claims[&a.id].liability_until.expect("A's liability horizon");
     w.net.beat_to(horizon + 1).await;
-    assert_eq!(w.net.kernel_reserved(0), 0, "released at the horizon");
+    let (ledger_0, locks_0, _) = route_part(&w);
+    assert_eq!(ledger_0, 0, "A's remainder is released at the horizon");
+    assert!(locks_0 == 0 || seats_b.contains(&0), "only B's seat lock can remain on card 0: {locks_0}");
+    if !seats_b.contains(&0) {
+        assert_eq!(w.net.kernel_reserved(0), 0, "released at the horizon");
+    }
     assert_eq!(w.net.collateral(0), a_before - pol.default_penalty, "never slashed for the held evidence");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");

@@ -80,14 +80,14 @@ fn t15_shipping_identity_unchanged_and_the_armed_ruleset_is_a_different_identity
 /// **T15 (full)**: the G14 full-activation list (every fence the lanes need, see the lane notes) armed at one height over the
 /// release, crossed with claims admitted before and after: old claims keep their admission rules (court policy, original
 /// admission, escrow), new claims are admitted only under the new ones.
-// DEPENDS ON every r5 lane's fence + the central full-activation arming record (16,000 on testnet-12).
+// MERGED on g14/integration-r7 (studio T4: name aligned to palw_t12_arm_full_activation_at_v1); was: DEPENDS ON every r5 lane fence + the central full-activation arming record (16,000 on testnet-12).
 #[tokio::test]
-#[ignore = "needs every r5 lane merge + the central full-activation list"]
+#[ignore = "blocked on arming records: validate_palw_v2 refuses the full-activation list while its records are unpinned (first refusal: palw_probabilistic_constraints_v1, PALW_KERNEL_ROUTE_ARMING_RECORDS_V1 empty)"]
 async fn t15_full_activation_list_crossed_with_old_and_new_claims() {
     #[cfg(feature = "g14-t-campaign-merged")]
     {
         let mut params = palw_t12_shipped_params();
-        kaspa_consensus_core::config::params::palw_t12_arm_g14_full_activation_at_v1(&mut params, Some(H));
+        kaspa_consensus_core::config::params::palw_t12_arm_full_activation_at_v1(&mut params, Some(H));
         assert!(params.validate_palw_v2().is_ok(), "the full-activation list over the release is a runnable ruleset");
     }
     #[cfg(not(feature = "g14-t-campaign-merged"))]

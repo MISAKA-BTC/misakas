@@ -103,11 +103,11 @@ async fn t04_invalid_codec_and_paid_court_floods_are_bounded_separately_and_neve
 /// **T04 (native part)**: the normal-tx flood, the paid-court flood and the invalid-codec flood measured SEPARATELY against the
 /// bounded native intake — actual supply per block and the calibrated per-op cost table, with a normal ordinary-tx flood never
 /// displacing a paid court op that paid its quote.
-// DEPENDS ON lane r5-f02-wire (shared-court op object + native intake bound), r5-f03-ingress (paid ingress quote).
+// MERGED on g14/integration-r7 (studio T4) — the remaining blocker is the #[ignore] reason; was: DEPENDS ON lane r5-f02-wire (shared-court op object + native intake bound), r5-f03-ingress (paid ingress quote).
 #[tokio::test]
-#[ignore = "needs lane r5-f02-wire + r5-f03-ingress merge"]
+#[ignore = "blocked on values V1+V4+V5 (measurement M-C) (lanes merged on r7)"]
 async fn t04_native_intake_separates_normal_paid_court_and_invalid_codec_floods_with_calibrated_costs() {
-    #[cfg(feature = "g14-t-campaign-merged")]
+    #[cfg(feature = "g14-t-campaign-intended-api")]
     {
         let mut w = World::new().await;
         let (lie, seats) = covered_claim(&mut w, 0, true).await;
@@ -121,8 +121,8 @@ async fn t04_native_intake_separates_normal_paid_court_and_invalid_codec_floods_
         w.net.send(vec![(outsider, o)]).await;
         assert!(w.net.chain.tip_state().1.palw_paid_ingress_v1(&lie.id, &w.net.kid(outsider)).is_some());
     }
-    #[cfg(not(feature = "g14-t-campaign-merged"))]
-    pending_lane!("r5-f02-wire + r5-f03-ingress");
+    #[cfg(not(feature = "g14-t-campaign-intended-api"))]
+    blocked_on!("tag 255 MaterialIntakeV1 is refused on every node (material_intake_schedule_v1 typed-missing, V5); the paid-ingress fee is typed-missing (V4); no calibrated per-op cost table exists (V1 from measurement M-C); intended palw_native_court_intake_v1 / palw_paid_ingress_quote_v1 / palw_paid_ingress_v1 / K::PaidIngressOpen do not exist");
 }
 
 /// **T05 (route part): every owner slot occupied and refilled by colluders; exactly one external verifier finishes.** The producer and
@@ -174,11 +174,11 @@ async fn t05_every_owner_slot_refilled_by_colluders_and_exactly_one_outsider_fin
 /// verifier finishes through FAIR PAID PUBLIC INGRESS (it pays the published quote, is admitted ahead of no one and behind no one,
 /// and completes the court op on the shared original). The colluders' refills never evict or delay the paid outsider past its
 /// lawful deadline.
-// DEPENDS ON lane r5-f03-ingress (paid public ingress object), r5-f02-wire (shared-court op), r5-original-admission.
+// MERGED on g14/integration-r7 (studio T4) — the remaining blocker is the #[ignore] reason; was: DEPENDS ON lane r5-f03-ingress (paid public ingress object), r5-f02-wire (shared-court op), r5-original-admission.
 #[tokio::test]
-#[ignore = "needs lane r5-f03-ingress + r5-f02-wire + r5-original-admission merge"]
+#[ignore = "blocked on value V4 and a node-level shared original (lanes merged on r7)"]
 async fn t05_all_owners_refilled_by_colluders_one_outsider_finishes_through_fair_paid_public_ingress() {
-    #[cfg(feature = "g14-t-campaign-merged")]
+    #[cfg(feature = "g14-t-campaign-intended-api")]
     {
         const OWNERS: usize = 8;
         let mut w = World::new().await;
@@ -205,6 +205,6 @@ async fn t05_all_owners_refilled_by_colluders_one_outsider_finishes_through_fair
         let finishers = w.net.chain.tip_state().1.palw_paid_ingress_finishers_v1(&lie.id);
         assert_eq!(finishers, vec![w.net.kid(outsider)]);
     }
-    #[cfg(not(feature = "g14-t-campaign-merged"))]
-    pending_lane!("r5-f03-ingress + r5-f02-wire + r5-original-admission");
+    #[cfg(not(feature = "g14-t-campaign-intended-api"))]
+    blocked_on!("no paid-ingress object exists (the fee rides TIR CourtOpened; palw_court_ingress_schedule_v1 typed-missing, V4); the advance-reserved outside slot needs a TIR claim admitted past palw_court_outsider_lane_v1 with a CourtSharedContext (no production installer); intended palw_paid_ingress_quote_v1 / _owners_v1 / _finishers_v1 / K::PaidIngressOpen do not exist");
 }
