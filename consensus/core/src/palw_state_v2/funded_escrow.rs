@@ -344,7 +344,7 @@ mod tests {
     }
 
     /// **Item 5: every path reverts.** Install (liability open) → partial settlement with change-back (continuation) → liability
-    /// cleared by the sweep (claim discharged: no record) → final return → retirement past the retention. Reverting each delta in
+    /// cleared by the sweep (claim discharged: no record; at the hard deadline, the strict rule) → the payer's return → retirement past the retention. Reverting each delta in
     /// reverse order restores every intermediate row and root exactly, and the lock map follows the row (old outpoint, new outpoint,
     /// none).
     #[test]
@@ -384,19 +384,27 @@ mod tests {
         let locks = palw_escrow_rows_by_outpoint_v1(s1.funded_escrows_v1());
         assert!(locks.contains_key(&TransactionOutpoint::new(tx1.id(), 1)) && locks.len() == 1, "the lock moved to the change-back");
 
-        // The sweep: the claim has no record and no liability record (discharged) ⇒ the liability clears; no budget engine, so no
-        // reservation to close. A second sweep changes nothing.
+        // The sweep: the claim has no record and no liability record (discharged), but the strict admission predicate
+        // (`funded_liability_resolved_v1`) also needs the hard deadline: before it nothing clears, at it the liability clears; no
+        // budget engine, so no reservation to close. A second sweep changes nothing.
+        let hard = open_row().hard_deadline_daa;
+        let mut early = TransitionBuilder::new(&s1, &p, false, false, false, false, &extras);
+        early.sweep_funded_escrows_v1(5_001).unwrap();
+        assert!(early.entries.is_empty(), "a discharged claim's liability never clears before the hard deadline");
+        early.sweep_funded_escrows_v1(hard - 1).unwrap();
+        assert!(early.entries.is_empty(), "not one DAA before the hard deadline either");
         let mut b = TransitionBuilder::new(&s1, &p, false, false, false, false, &extras);
-        b.sweep_funded_escrows_v1(5_001).unwrap();
+        b.sweep_funded_escrows_v1(hard).unwrap();
         let s2 = b.state.clone();
         let d2 = delta(b.entries.clone());
         assert!(!s2.funded_escrows_v1()[&h(1)].liability_open);
         let mut again = TransitionBuilder::new(&s2, &p, false, false, false, false, &extras);
-        again.sweep_funded_escrows_v1(5_002).unwrap();
+        again.sweep_funded_escrows_v1(hard + 1).unwrap();
         assert!(again.entries.is_empty(), "a cleared liability is cleared once");
-        assert!(again.clear_funded_escrow_liability_v1(h(1), 5_002).is_err());
+        assert!(again.clear_funded_escrow_liability_v1(h(1), hard + 1).is_err());
 
-        // Before the hard deadline the payer return still needs the (typed-missing) schedule; with it, the rest returns.
+        // Before the hard deadline a return still needs the (typed-missing) schedule (pure rule); once the liability is closed at or
+        // after the hard deadline the payer's own return qualifies without one.
         let tx2 = Transaction::new(
             0,
             vec![TransactionInput::new(TransactionOutpoint::new(tx1.id(), 1), vec![], 0, 0)],
@@ -407,9 +415,10 @@ mod tests {
             vec![],
         );
         let row2 = s2.funded_escrows_v1()[&h(1)];
-        assert!(palw_escrow_qualified_spend_v1(&row2, &tx2, &[600], 5_003, None).is_err());
-        let plan2 = palw_escrow_qualified_spend_v1(&row2, &tx2, &[600], 5_003, Some(&schedule)).unwrap();
-        assert_eq!((plan2.returned_now, plan2.new.settled_daa), (600, 5_003));
+        assert!(palw_escrow_qualified_spend_v1(&row2, &tx2, &[600], hard - 1, None).is_err());
+        let settled = hard + 3;
+        let plan2 = palw_escrow_qualified_spend_v1(&row2, &tx2, &[600], settled, None).unwrap();
+        assert_eq!((plan2.returned_now, plan2.new.settled_daa), (600, settled));
         let mut b = TransitionBuilder::new(&s2, &p, false, false, false, false, &extras);
         b.settle_funded_escrow_v1(&PalwEscrowSettlementFactV1 { contract_id: h(1), old: plan2.old, new: plan2.new }).unwrap();
         let s3 = b.state.clone();
@@ -418,10 +427,10 @@ mod tests {
 
         // Retirement: not at settled + retention, only after.
         let mut b = TransitionBuilder::new(&s3, &p, false, false, false, false, &extras);
-        b.sweep_funded_escrows_v1(5_103).unwrap();
+        b.sweep_funded_escrows_v1(settled + 100).unwrap();
         assert!(b.entries.is_empty() && b.state.funded_escrows_v1().contains_key(&h(1)));
         let mut b = TransitionBuilder::new(&s3, &p, false, false, false, false, &extras);
-        b.sweep_funded_escrows_v1(5_104).unwrap();
+        b.sweep_funded_escrows_v1(settled + 101).unwrap();
         let s4 = b.state.clone();
         let d4 = delta(b.entries.clone());
         assert!(s4.funded_escrows_v1().is_empty());
