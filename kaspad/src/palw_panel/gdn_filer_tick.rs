@@ -242,14 +242,21 @@ impl PalwPanelService {
             .spawn_blocking(move |c| {
                 let mut found: Vec<PalwConsensusObjectV2> = Vec::new();
                 let tip = c.get_sink();
-                let _ = walk_accepted_lifecycle_page_v1(c, tip, floor, PALW_GDN_FILER_WALK_BLOCKS_V1, &mut |object| {
+                let _continuation = walk_accepted_lifecycle_page_v1(c, tip, floor, PALW_GDN_FILER_WALK_BLOCKS_V1, &mut |object| {
                     if disclosure_claim_v1(&object).is_some_and(|claim| wanted.contains(&claim)) {
                         found.push(object);
                     }
-                });
-                found
+                })?;
+                Ok::<_, String>(found)
             })
             .await;
+        let found = match found {
+            Ok(found) => found,
+            Err(why) => {
+                warn!("[{PALW_PANEL}] held-GDN disclosure history unavailable: {why}; filer tick waits");
+                return;
+            }
+        };
         let mut objects: HashMap<Hash64, Vec<PalwConsensusObjectV2>> = HashMap::new();
         for object in found {
             if let Some(claim) = disclosure_claim_v1(&object) {
