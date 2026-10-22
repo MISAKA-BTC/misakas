@@ -452,6 +452,12 @@ pub fn palw_gdn_step_probe_case_v1<K: Base0FpRecomputeKernelsV1>(
     let (profile, ctx) = (&material.binding.shape_profile, &material.binding.job_context);
     let actual = PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: claim.class_id, artifact_root: claim.artifact_root };
     for leaf in &window {
+        // A served tile outside the chain's class ladder can never reach the
+        // court. Reject it before allocating/recomputing an evidence body.
+        if *leaf >= limits.ladder {
+            notes.push(format!("leaf {leaf}: shape at the fold's ladder {}: leaf outside ladder", limits.ladder));
+            continue;
+        }
         let Some(coord) = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, *leaf) else {
             continue;
         };
