@@ -464,6 +464,48 @@ mod tests {
         assert_eq!(cursor.map(|(_, next)| next), Some(2));
     }
 
+    /// **audit(verify-3) C-05**: an executor that returns NO capture (the CLI's `material_file` omitted ⇒ `Vec::new()`) must be refused
+    /// before the bond key is touched — the signed claim names roots nobody can serve. Today the attempt is signed and mounted.
+    #[test]
+    fn audit_v3_c05_an_attempt_without_a_capture_is_never_signed() {
+        struct EmptyCapture;
+        impl AttemptExecutor for EmptyCapture {
+            fn execute(&mut self, _anchor: Hash64) -> Result<ExecutedAttempt, String> {
+                Ok(ExecutedAttempt {
+                    execution: PalwAttemptExecutionV1 {
+                        trace_root: h(10),
+                        output_root: h(11),
+                        execution_root: h(12),
+                        trace_manifest_root: h(13),
+                        trace_chunk_count: 1,
+                    },
+                    material: Vec::new(),
+                })
+            }
+        }
+        let t = accepted();
+        let signer = Signer { signed: Cell::new(0) };
+        let r = mount_attempt(
+            &t,
+            &header(100),
+            &params(u128::MAX),
+            7_708,
+            3_000,
+            h(31),
+            h(30),
+            &mut None,
+            &mut EmptyCapture,
+            &signer,
+            &|_, _, _| true,
+        );
+        let mounted = matches!(r, Ok(Some(_)));
+        assert!(
+            matches!(r, Err(AttemptError::Executor(_))) && signer.signed.get() == 0,
+            "C-05: expected Executor refusal with 0 signatures for an empty capture; got mounted={mounted} signatures={}",
+            signer.signed.get()
+        );
+    }
+
     #[test]
     fn a_header_that_is_not_an_attempt_lane_is_refused_before_any_inference() {
         let t = accepted();

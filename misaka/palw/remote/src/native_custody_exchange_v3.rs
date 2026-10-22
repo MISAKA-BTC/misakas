@@ -544,14 +544,23 @@ mod tests {
         row_b.terms.native_session = Some(session);
         let rows = vec![row_a.clone(), row_b.clone()];
         // Consensus: every bond's operator is on chain.
-        let chain_operator = |b: &PalwBondKeyV2| Some(Hash64::from_u64_word(1_000 + b.0.transaction_id.as_byte_slice()[0] as u64));
+        let chain_operator = |b: &PalwBondKeyV2| Some(b.0.transaction_id); // distinct per bond (verify-3: byte[0] of from_u64_word was 0 for every bond)
         let consensus = select_native_session_v3(rows.clone(), &a, daa, chain_operator).expect("consensus selects a session");
         assert_eq!(consensus.terms.root, row_a.terms.root, "consensus picks the canonical smaller-root session");
         // The remote miner over the same authenticated rows.
         x.set_rows(rows, daa);
-        let miner = x.session(&a, daa).expect("the miner selects a session");
-        assert_eq!(miner.terms.root, row_b.terms.root, "the miner, blind to row A's operators, picks row B");
-        assert_ne!(miner.terms.root, consensus.terms.root, "the miner's Ready names a session verify_prior refuses");
+        let miner = x.session(&a, daa);
+        // verify(3): expected-vs-actual. The miner must either select consensus's canonical session (then hold at the manifest
+        // round for lack of endpoints) or hold now; any OTHER session is refused by verify_prior only after inference, draw and
+        // the journaled attempt signature.
+        let miner_root = miner.as_ref().map(|r| r.terms.root);
+        assert!(
+            miner_root.is_none() || miner_root == Some(consensus.terms.root),
+            "C-02: remote miner selected session {:?}, consensus verify_prior requires {:?} (row B={:?})",
+            miner_root,
+            consensus.terms.root,
+            row_b.terms.root
+        );
     }
 
     #[test]

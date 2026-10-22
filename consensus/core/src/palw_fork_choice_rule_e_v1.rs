@@ -1200,6 +1200,37 @@ mod tests {
         assert_eq!(side.exclusive_claims, 8);
     }
 
+    /// **audit(verify-3) D-1**: RFC-0023 §4.5 — past `palw_claim_local_settlement_v1` the fold's frontier moves to the deepest
+    /// claim-local IRREVERSIBLE anchor, so an unrelated unresolved claim no longer caps it. Rule E's side frontier has no fence input
+    /// and no dependency/liability data in its records: an unrelated Live claim A (blue 10) below a Final, liability-closed B (blue 20)
+    /// still pins the side's frontier to 0, whatever the fence. Expected past the fence: 20 (B is past every liability).
+    #[test]
+    fn audit_v3_d1_rule_e_frontier_is_still_held_by_an_unrelated_live_claim() {
+        use crate::tx::TransactionOutpoint;
+        let bond = |i: u32| PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(3), i));
+        let rec = |id: u64, bs: u64, b: u32, status: PalwRuleEClaimStatusV1, safe: u128, live: u128| PalwRuleEClaimRecordV1 {
+            claim_id: Hash64::from_u64_word(id),
+            accepted_blue_score: bs,
+            bond: bond(b),
+            attempt: true,
+            status,
+            safe_weight: safe,
+            live_weight: live,
+            capped: false,
+            bond_collateral: None,
+            budget: None,
+            certification: PalwRuleECertificationV1::NotGoverned,
+        };
+        // A: unrelated, unresolved (bond 1). B: Final on another bond, no dependency on A.
+        let records = [rec(1, 10, 1, PalwRuleEClaimStatusV1::Live, 0, 5), rec(2, 20, 2, PalwRuleEClaimStatusV1::Final, 100, 0)];
+        let side = palw_rule_e_side_from_records_v1(&records, |_| true).unwrap();
+        assert_eq!(
+            side.safe_frontier_blue_score, 20,
+            "D-1: Rule E side frontier is {} (held by unrelated live A at 10); RFC-0023 stage 2 checkpoint frontier would be 20",
+            side.safe_frontier_blue_score
+        );
+    }
+
     fn budget_bond(i: u32) -> PalwBondKeyV2 {
         PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(11), i))
     }

@@ -401,6 +401,37 @@ fn tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3
     assert!(admitted.claim(&l.claim).is_some());
 }
 
+/// **audit(verify-3) C-01**: past `palw_tir_container_identity_v1`, a TIR class with no signing registrant (a sentinel / genesis
+/// registration: `registrant_bond == None`) can never be bound — the fold refuses every binding — so every producer's framed original
+/// on it is refused `TIR_CLASS_CONTAINER_UNBOUND` forever. Expected: some binding route (or an exemption) so the honest original folds.
+#[test]
+fn audit_v3_c01_a_tir_class_without_a_registrant_is_unrewardable_forever_past_the_container_fence() {
+    use crate::palw_tir_container_v1::{PALW_TIR_UNBOUND_CONTAINER_CODE_V1, test_binding_v1};
+    let l = lane(false);
+    assert!(l.state.class(&l.class_id).unwrap().registrant_bond.is_none(), "the lane's class is a sentinel registration");
+    let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
+    let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
+    let bound = PalwConsensusObjectV2::TirClassContainerBoundV1 {
+        binding: Box::new(test_binding_v1(&record, artifact_root, b"{\"model\":\"tiny\"}")),
+        signature: Vec::new(),
+    };
+    let mut past = l.extras.clone();
+    past.tir_container_identity_active = true;
+    // Below the fence the honest original is taken.
+    assert!(apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).is_ok());
+    let binding = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).map(|_| ()).map_err(|e| format!("{e:?}"));
+    let together =
+        apply_derived(&l.state, &l.p, &at(), &[bound.clone(), l.object.clone()], &past).map(|_| ()).map_err(|e| format!("{e:?}"));
+    let alone = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &past);
+    let refused_unbound =
+        matches!(&alone, Err(PalwStateV2Error::ClassNotRewardable { code, .. }) if *code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1);
+    assert!(
+        together.is_ok() || binding.is_ok() || !refused_unbound,
+        "C-01: past the container fence the sentinel TIR class can never be bound (binding: {binding:?}; binding+original: \
+         {together:?}) and its honest original is refused {PALW_TIR_UNBOUND_CONTAINER_CODE_V1}"
+    );
+}
+
 /// **The lane's authentication on a gated network**: an IR class passes the free-prompt certification gate past the fence only
 /// when one certified family covers every primitive its program reaches; below the fence the gate is the legacy one.
 #[test]
