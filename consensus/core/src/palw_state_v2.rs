@@ -14738,6 +14738,11 @@ fn apply_palw_transition_v7_inner(
     // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned
     // service profile only (none is pinned).
     palw_court_service_lifecycle_fold_v1::observe_court_service_block_v1(&mut builder, ctx)?;
+    // G14 item 1 (lane r5): close funded-original liabilities whose exact predicate now holds (after this block's supply is
+    // recorded). Dormant below `palw_tir_public_conviction_v1`; no funded row exists in production (schedule typed-missing).
+    if builder.extras.tir_public_conviction_active {
+        builder.close_resolved_funded_liabilities_v1(ctx.daa_score)?;
+    }
     // 3″. G14 lane D: the kernel route's closing step — demand deadlines, windows, Final, liability release, and the settlements
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;

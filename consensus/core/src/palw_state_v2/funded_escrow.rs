@@ -41,6 +41,40 @@ impl TransitionBuilder<'_> {
         self.write_funded_escrow_v1(row.contract_id, Some(row))
     }
 
+    /// **G14 item 1 (lane r5): close every open funded liability whose predicate now holds.** Called once per accepting block after
+    /// every object (`palw_state_v2.rs`, past `palw_tir_public_conviction_v1` only). The predicate
+    /// ([`crate::palw_funded_original_admission_v1::funded_liability_resolved_v1`]) reads only rooted state at `daa`: the row's hard
+    /// deadline, the original frame's material horizon, every duty clock of the claim, and the book's assessment of every packet of
+    /// the claim's binding. Closing is the one unsettled-row transition the row rules allow (`open → closed`, nothing paid); it is
+    /// journalled, so a reorg reopens it. The book's binding itself is NOT removed: its slots all lie before hard, so the reserved
+    /// capacity is already released by the accepting clock, and the binding stays as supply history.
+    pub(super) fn close_resolved_funded_liabilities_v1(&mut self, daa: u64) -> Result<(), PalwStateV2Error> {
+        use crate::palw_funded_original_admission_v1::{FundedLiabilityViewV1, funded_liability_resolved_v1};
+        let open: Vec<PalwFundedEscrowRowV1> =
+            self.state.funded_escrows.values().filter(|r| r.liability_open && r.settled_by.is_none()).copied().collect();
+        for row in open {
+            let material_until_daa = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, row.claim)
+                .map(|frame| frame.plan_v1().terms.material_until_daa);
+            let clocks = self
+                .state
+                .court_duty_clocks_for_claim_v1(row.claim)
+                .into_iter()
+                .map(|c| (c.response_deadline_daa, c.material_until_daa))
+                .collect();
+            let packets = match self.state.court_service_state_v1().and_then(|s| s.claims.get(&row.claim).map(|b| (s, b))) {
+                Some((service, binding)) => binding.packet_ids.iter().map(|id| service.book.assess(id)).collect(),
+                None => Vec::new(),
+            };
+            let view = FundedLiabilityViewV1 { daa, hard_deadline_daa: row.hard_deadline_daa, material_until_daa, clocks, packets };
+            if funded_liability_resolved_v1(&view) {
+                let mut closed = row;
+                closed.liability_open = false;
+                self.write_funded_escrow_v1(row.contract_id, Some(closed))?;
+            }
+        }
+        Ok(())
+    }
+
     /// **Settle a row from a qualified spend the processor accepted.** The fact's `old` must be exactly the rooted row (the
     /// processor read the same parent state); anything else is a refusal, never a re-derivation from the processor's word.
     pub(super) fn settle_funded_escrow_v1(&mut self, fact: &PalwEscrowSettlementFactV1) -> Result<(), PalwStateV2Error> {
@@ -112,6 +146,40 @@ mod tests {
         let before = revert_delta_v2(&installed, &install_delta, &p).unwrap();
         assert!(before.funded_escrows_v1().is_empty());
         assert_eq!(before.state_root(), parent.state_root(), "an empty table roots exactly as before");
+    }
+
+    /// **Lane r5: release at resolution.** An open liability blocks the payer's return; it closes only once the predicate holds
+    /// (here: no frame, clock or binding, so the hard deadline decides), the close is journalled, and a revert reopens it.
+    #[test]
+    fn r5_funded_liability_closes_only_at_resolution_and_reverts() {
+        let p = params();
+        let extras = PalwTransitionExtrasV1::default();
+        let open = PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), TransactionOutpoint::new(h(77), 1), 1_000, h(3), payload(), 100, 10_100, true).unwrap();
+        let parent = PalwChainStateV2::genesis();
+        let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+        b.install_funded_escrow_v1(open).unwrap();
+        b.close_resolved_funded_liabilities_v1(10_099).unwrap();
+        assert!(b.state.funded_escrows_v1()[&h(1)].liability_open, "before hard: still open");
+        let installed = b.state.clone();
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput::new(open.funding_outpoint, vec![], 0, 0)],
+            vec![TransactionOutput::new(1_000, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&payload().as_bytes()))],
+            0,
+            crate::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        assert!(palw_escrow_qualified_spend_v1(&open, &tx, &[1_000], 10_200, None).is_err(), "open liability holds the return");
+        let mut b = TransitionBuilder::new(&installed, &p, false, false, false, false, &extras);
+        b.close_resolved_funded_liabilities_v1(10_100).unwrap();
+        let closed = b.state.funded_escrows_v1()[&h(1)];
+        assert!(!closed.liability_open && closed.paid_sompi == 0);
+        assert!(palw_escrow_qualified_spend_v1(&closed, &tx, &[1_000], 10_200, None).is_ok(), "payer return after resolution");
+        let after = b.state.clone();
+        let undone = revert_delta_v2(&after, &delta(b.entries.clone()), &p).unwrap();
+        assert!(undone.funded_escrows_v1()[&h(1)].liability_open, "reorg reopens the liability");
+        assert_eq!(undone.state_root(), installed.state_root());
     }
 
     /// The carriage round-trips a row; a row violating its invariants does not decode.

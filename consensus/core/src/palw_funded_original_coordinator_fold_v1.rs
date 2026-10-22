@@ -68,12 +68,53 @@ fn requirements_refusal(e: PreparedRequirementsErrorV1) -> FundedOriginalRefusal
 pub(super) struct FundedOriginalPlanV1 {
     requirements: PreparedOriginalRequirementsV1,
     row: crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1,
+    /// G14 item 1 (lane r5): every legal branch, its packets, resources and capital, derived from the native preparation.
+    derivation: crate::palw_funded_original_admission_v1::FundedAdmissionDerivationV1,
+    admission: crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1,
+    signers: std::collections::BTreeSet<PalwBondKeyV2>,
 }
 impl FundedOriginalPlanV1 {
     #[cfg(test)]
     pub(super) fn row_v1(&self) -> &crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1 {
         &self.row
     }
+    #[cfg(test)]
+    pub(super) fn derivation_v1(&self) -> &crate::palw_funded_original_admission_v1::FundedAdmissionDerivationV1 {
+        &self.derivation
+    }
+}
+
+fn admission_refusal(e: crate::palw_funded_original_admission_v1::FundedAdmissionRefusalV1) -> FundedOriginalRefusalV1 {
+    use crate::palw_funded_original_admission_v1::FundedAdmissionRefusalV1 as A;
+    match e {
+        A::ActorWithoutAuthority => FundedOriginalRefusalV1::Invalid("a responsible actor has no current authority"),
+        A::ScheduleInvalid => FundedOriginalRefusalV1::Missing(FundedMissingV1::AdmissionSchedule),
+        other => FundedOriginalRefusalV1::State(refused(format!("RFC-0035 A all-branch reservation refused: {other:?}"))),
+    }
+}
+
+/// The full rooted service-book candidate for this plan against the CURRENT book (lane r5). `(after_signer_step, full)`.
+fn funded_book_candidate_v1(
+    b: &TransitionBuilder<'_>,
+    requirements: &PreparedOriginalRequirementsV1,
+    derivation: &crate::palw_funded_original_admission_v1::FundedAdmissionDerivationV1,
+    admission: &crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1,
+    signers: &std::collections::BTreeSet<PalwBondKeyV2>,
+) -> Result<(crate::palw_court_service_state_v2::CourtServiceStateV2, crate::palw_court_service_state_v2::CourtServiceStateV2), FundedOriginalRefusalV1> {
+    let graph = requirements.source_graph_v1().map_err(requirements_refusal)?;
+    let plan = requirements.frame_v1().plan_v1();
+    crate::palw_funded_original_admission_v1::funded_admission_book_candidate_v1(
+        b.state.court_service_state_v1(),
+        plan.original_claim,
+        plan.allocation_id,
+        plan.source_id,
+        plan.terms.accepted_daa,
+        signers,
+        graph,
+        derivation,
+        admission,
+    )
+    .map_err(admission_refusal)
 }
 
 /// What the FP arm carries from the seam to the install: the ordinary TFP1 preparation, or the coordinated funded original.
@@ -179,6 +220,44 @@ pub(super) fn coordinate_funded_original_v1(
     if pledge.producer != source_actor.bond || pledge.id_v1() != source_actor.pledge_id {
         return Err(Invalid("source actor consent differs from the frame's pledge"));
     }
+    // G14 item 1 (lane r5): the all-branch admission values are part of the unadopted schedule.
+    let admission = schedule.admission_v1().ok_or(M(FundedMissingV1::AdmissionSchedule))?;
+    // Responsible actors' current authority: every liable signer and every drawn Panel member must hold an ACTIVE bond whose
+    // operator is still its own key's (the bond registration is the actor's signed standing consent; the producer's pledge
+    // signature was re-verified by the catalog above). Never assumed for an absent or exiting actor.
+    let signers = frame.custody_v1().liable_signers_v1();
+    for actor in signers.iter().chain(frame.custody_v1().drawn_panel_v1().iter()) {
+        let bond = b.state.bond(actor).ok_or(Invalid("a responsible actor has no bond"))?;
+        if !matches!(bond.status, PalwBondStatusV2::Active) || bond.operator_id != palw_operator_id_v2(&bond.pubkey) {
+            return Err(Invalid("a responsible actor has no current authority"));
+        }
+    }
+    // Every legal branch (liable signer × turn, every native source-graph node, retention), its resources and capital; then a
+    // dry-run reservation of ALL of them in a clone of the rooted book (all-or-nothing). The install re-derives against the book
+    // as it stands at the install point.
+    let derivation = crate::palw_funded_original_admission_v1::derive_funded_admission_v1(
+        claim,
+        plan.allocation_id,
+        plan.source_id,
+        plan.terms.accepted_daa,
+        &signers,
+        graph,
+        &admission,
+    )
+    .map_err(admission_refusal)?;
+    funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers)?;
+    // Capital (RFC-0035 §7.1): Σ branch capital (≥ the schedule floor), less the producer deposit the native work room already
+    // holds, plus the fee once.
+    let required_amount = crate::palw_funded_original_admission_v1::funded_required_amount_v1(
+        schedule.fee_sompi(),
+        schedule.capital_floor_sompi(),
+        derivation.capital_sompi,
+        plan.terms.plan.deposit_sompi,
+    )
+    .ok_or(Invalid("required capital overflow"))?;
+    if required_amount == 0 {
+        return Err(M(FundedMissingV1::Schedule));
+    }
     let hard = crate::palw_funded_escrow_v1::palw_funded_escrow_hard_deadline_v1(b.params.claim_hard_deadline_v1(), ctx.daa_score)
         .map_err(|_| M(FundedMissingV1::HardDeadline))?;
     let expected = crate::palw_court_original_escrow_v1::OriginalFundingScopeV1 {
@@ -220,9 +299,9 @@ pub(super) fn coordinate_funded_original_v1(
         terms.refund_payload,
         ctx.daa_score,
         hard,
-        // The original's liability is bounded by the hard deadline; no rule that clears an open flag exists yet, so the row does not
-        // open one (it would freeze the payer's return forever). Payee paths stay refused (`SettlementScheduleMissing`).
-        false,
+        // Lane r5: the liability opens at admission and closes only when `funded_liability_resolved_v1` holds
+        // (`close_resolved_funded_liabilities_v1`, once per block). Payee paths stay refused (`SettlementScheduleMissing`).
+        true,
     )
     .map_err(|_| Invalid("escrow row shape"))?;
     // Capacity: one row per contract and per outpoint (also re-checked by the writer).
@@ -232,7 +311,7 @@ pub(super) fn coordinate_funded_original_v1(
         return Err(Invalid("contract or funding outpoint already escrowed"));
     }
     drop(funding);
-    Ok(FundedOriginalPlanV1 { requirements, row })
+    Ok(FundedOriginalPlanV1 { requirements, row, derivation, admission, signers })
 }
 
 /// **Install** at the existing original install point (after `reserve_for_claim` / `write_claim`), inside the same checkpoint.
@@ -245,11 +324,23 @@ pub(super) fn install_original_admission_v1(
     match admission {
         OriginalAdmissionV1::Plain(prepared) => install_prepared_original_v1(b, ctx, prepared, prompt),
         OriginalAdmissionV1::Funded(plan) => {
-            let FundedOriginalPlanV1 { requirements, row } = *plan;
-            if row.accepted_daa != ctx.daa_score || b.state.claim(&row.claim).is_none() {
+            let FundedOriginalPlanV1 { requirements, row, derivation, admission, signers } = *plan;
+            if row.accepted_daa != ctx.daa_score || b.state.claim(&row.claim).is_none() || !row.liability_open {
                 return Err(refused("RFC-0035 A funded install lacks this block's native FP acceptance"));
             }
+            // Lane r5: re-derive the all-branch book candidate against the book as it stands NOW (before the frame install).
+            let before = b.state.court_service_state_v1().cloned();
+            let (after_signer, full) =
+                funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers).map_err(FundedOriginalRefusalV1::into_state_v1)?;
             requirements.into_geometry_v1().install_native_v1(b, ctx, prompt)?;
+            // The ordinary install may have written court-f02's per-signer binding (only with a pinned F02 profile): it must be
+            // exactly the signer prefix of this candidate; anything else is refused (the checkpoint restores every write).
+            let now = b.state.court_service_state_v1();
+            if now != before.as_ref() && now != Some(&after_signer) {
+                return Err(refused("RFC-0035 A funded install: the court service book moved under the all-branch reservation"));
+            }
+            // Packets, court capacity, resources (in the retention packet) — all branches, one rooted write.
+            b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(full).into())))?;
             b.install_funded_escrow_v1(row)
         }
     }
