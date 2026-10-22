@@ -1866,6 +1866,44 @@ pub fn check_tir_dissect_bottom_v1(
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let range = phase.terminal_range().ok_or(bad("the dissection has not narrowed to one tile"))?;
+    check_tir_dissect_bottom_range_v1(phase, range, phase.claim(), bottom, narrowed, rules)
+}
+
+/// **RFC-0024 A: the bottom over ONE history position** (DORMANT; selected by
+/// [`tir_dissect_terminal_narrows_to_position_v1`]). The same adjudication as
+/// [`check_tir_dissect_bottom_v1`], but every reduction is evaluated over the narrowed position
+/// `[p, p+1)` only, against the named position's claim; the carriage's canonical-read check then
+/// admits exactly that position's read set (a carriage carrying any other position's units is
+/// refused as non-canonical, not silently ignored).
+pub fn check_tir_dissect_position_bottom_v1(
+    phase: &PalwTirDissectPhaseV1,
+    narrowing: &crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1,
+    bottom: &PalwTirConeRefutationV1,
+    narrowed: u64,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    if narrowing.tile() != phase || phase.terminal_range() != Some(narrowing.tile_range()) {
+        return Err(bad("the position narrowing is not this phase's terminal tile"));
+    }
+    let range = narrowing.terminal_position_range().ok_or(bad("the terminal tile has not narrowed to one position"))?;
+    check_tir_dissect_bottom_range_v1(phase, range, narrowing.claim(), bottom, narrowed, rules)
+}
+
+/// **Which terminal a TIR dissection closes with at `daa`.** Below the ADR-0190 / RFC-0024 door
+/// fence (`palw_tir_bounded_door_v1`, dormant on every preset) the bottom is the whole tile, exactly
+/// as before; from it, the tile is first narrowed to one position. Pure selector.
+pub fn tir_dissect_terminal_narrows_to_position_v1(bounded_door: Option<crate::config::params::ForkActivation>, daa: u64) -> bool {
+    bounded_door.is_some_and(|fence| fence != crate::config::params::ForkActivation::never() && fence.is_active(daa))
+}
+
+fn check_tir_dissect_bottom_range_v1(
+    phase: &PalwTirDissectPhaseV1,
+    range: (usize, usize),
+    claim: &PalwTirRangeClaimV1,
+    bottom: &PalwTirConeRefutationV1,
+    narrowed: u64,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let c = match check_carriage(bottom, rules)? {
         CarriageStage::Convicted(verdict) => return Ok(verdict),
         CarriageStage::Checked(c) => c,
@@ -1891,7 +1929,7 @@ pub fn check_tir_dissect_bottom_v1(
         partials.extend(values);
     }
     c.check_canonical(&source.used, rules)?;
-    let claimed: Vec<i128> = phase.claim().partials.iter().flatten().copied().collect();
+    let claimed: Vec<i128> = claim.partials.iter().flatten().copied().collect();
     match partials.iter().zip(claimed.iter()).position(|(a, b)| a != b).or((partials.len() != claimed.len()).then_some(0)) {
         Some(i) => {
             let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
@@ -2232,6 +2270,38 @@ fn build_tir_dissect_bottom_with_budget(
         let (v, _, _) = builder_prelude(binding, phase.leaf_index())?;
         assemble_carriage(&v, binding, phase.leaf_index(), &used, store, rules)
     }
+}
+
+/// **RFC-0024 A: build the responder's position round** — one child per history position of the
+/// terminal tile, each the reductions' partials over that one position against the root totals.
+pub fn build_tir_dissect_position_round_v1(
+    binding: &PalwTirStepBindingV1,
+    narrowing: &crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1,
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwTirDissectRoundV1, PalwTirEvidenceErrorV1> {
+    let mut children = Vec::new();
+    for p in narrowing.positions() {
+        children.push(builder_partials(binding, narrowing.tile(), (p, p + 1), store, rules, None)?.0);
+    }
+    Ok(PalwTirDissectRoundV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, children })
+}
+
+/// **RFC-0024 A: build the one-position bottom's carriage**: exactly the units the evaluation over
+/// `[p, p+1)` reads.
+pub fn build_tir_dissect_position_bottom_v1(
+    binding: &PalwTirStepBindingV1,
+    narrowing: &crate::palw_tir_dissect_v1::PalwTirPositionNarrowingV1,
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
+    let range = narrowing
+        .terminal_position_range()
+        .ok_or_else(|| PalwTirEvidenceErrorV1::Binding("the terminal tile has not narrowed to one position".into()))?;
+    let phase = narrowing.tile();
+    let (_, used) = builder_partials(binding, phase, range, store, rules, None)?;
+    let (v, _, _) = builder_prelude(binding, phase.leaf_index())?;
+    assemble_carriage(&v, binding, phase.leaf_index(), &used, store, rules)
 }
 
 // ---------------------------------------------------------------------------------------------

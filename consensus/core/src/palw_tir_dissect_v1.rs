@@ -759,14 +759,27 @@ impl PalwTirDissectPhaseV1 {
             }
             check_bounds(&self.bounds, child)?;
         }
-        for (i, fold) in self.folds.iter().enumerate() {
-            for e in 0..self.elements[i].len() {
-                let mut values = msg.children.iter().map(|c| c.partials[i][e]);
+        check_children_fold(&self.folds, &self.elements, &self.claim, &msg.children)
+    }
+}
+
+/// The exact integer fold of children to their parent's claim (`Σ` or `max`), shared by the tile
+/// rounds and the RFC-0024 A position round.
+fn check_children_fold(
+    folds: &[PalwTirFoldV1],
+    elements: &[Vec<u32>],
+    parent: &PalwTirRangeClaimV1,
+    children: &[PalwTirRangeClaimV1],
+) -> Result<(), PalwTirDissectError> {
+    {
+        for (i, fold) in folds.iter().enumerate() {
+            for e in 0..elements[i].len() {
+                let mut values = children.iter().map(|c| c.partials[i][e]);
                 let folded = match fold {
                     PalwTirFoldV1::Sum => values.try_fold(0i128, |a, v| a.checked_add(v)),
                     PalwTirFoldV1::Max => values.max(),
                 };
-                let claimed = self.claim.partials[i][e];
+                let claimed = parent.partials[i][e];
                 match folded {
                     Some(f) if f == claimed => {}
                     other => {
@@ -782,7 +795,9 @@ impl PalwTirDissectPhaseV1 {
         }
         Ok(())
     }
+}
 
+impl PalwTirDissectPhaseV1 {
     /// Read-only arithmetic descent. No accepted choice, signature, timestamp or
     /// deadline update; never install the returned phase or use it for default.
     pub fn project_unrooted_child_v1(&self, msg: &PalwTirDissectRoundV1, child: u8) -> Result<Self, String> {
@@ -876,6 +891,117 @@ impl PalwTirDissectPhaseV1 {
             deadline_daa: self.last_deadline_daa,
             observed_daa,
         })
+    }
+}
+
+// =================================================================================================
+// RFC-0024 A — the terminal tile narrowed to ONE history position (DORMANT)
+// =================================================================================================
+
+/// **RFC-0024 A / ADR-0191 (2) position round.** A terminal tile phase (one tile of up to
+/// `tile_positions` history positions) is narrowed by one more round to a single position
+/// `[p, p+1)`: the responder discloses one [`PalwTirRangeClaimV1`] per position of the tile, each
+/// computed against the ROOT totals exactly as a tile child is (no per-position renormalisation of a
+/// softmax: `H`-local nodes keep consuming the root's `m*`/`S*`), the court checks that they fold
+/// exactly (`Σ` / `max`) to the tile's claim and lie in the proven intervals, and the challenger names
+/// the position. The bottom then evaluates every reduction over that one position only.
+///
+/// This is the TIR analogue of [`crate::palw_tir_history_bisection_v1::palw_tir_history_position_round_v1`]
+/// (the dormant attention-only position round of 16458bbb1), over the generic reductions of the TIR
+/// dissection. Pure, never stored: no wire, borsh layout or phase field changes. A tile that is
+/// already one position needs no round (RFC-0024 §4: "tile が既に 1 位置なら追加段を作らない").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirPositionNarrowingV1 {
+    tile: PalwTirDissectPhaseV1,
+    /// The tile's history positions `[from, to)`.
+    tile_range: (usize, usize),
+    /// The chosen position, once named (or the tile's only position).
+    position: Option<usize>,
+    /// The claim under dispute: the tile's, then the named position's.
+    claim: PalwTirRangeClaimV1,
+}
+
+impl PalwTirDissectPhaseV1 {
+    /// Start the RFC-0024 A position narrowing of a phase that is terminal on one tile. `None` before
+    /// the phase is terminal.
+    pub fn position_narrowing_v1(&self) -> Option<PalwTirPositionNarrowingV1> {
+        let (from, to) = self.terminal_range()?;
+        Some(PalwTirPositionNarrowingV1 {
+            tile: self.clone(),
+            tile_range: (from, to),
+            position: (to - from == 1).then_some(from),
+            claim: self.claim.clone(),
+        })
+    }
+}
+
+impl PalwTirPositionNarrowingV1 {
+    /// The terminal tile phase this narrowing descends from.
+    pub fn tile(&self) -> &PalwTirDissectPhaseV1 {
+        &self.tile
+    }
+    /// The tile's history positions `[from, to)`.
+    pub fn tile_range(&self) -> (usize, usize) {
+        self.tile_range
+    }
+    /// The positions a position round discloses, in order (one child each).
+    pub fn positions(&self) -> std::ops::Range<usize> {
+        self.tile_range.0..self.tile_range.1
+    }
+    /// The claim under dispute (the tile's until a position is named).
+    pub fn claim(&self) -> &PalwTirRangeClaimV1 {
+        &self.claim
+    }
+    /// `true` while a position round is still owed.
+    pub fn awaits_position_round(&self) -> bool {
+        self.position.is_none()
+    }
+    /// The single history position `[p, p+1)` the terminal evaluates, once narrowed.
+    pub fn terminal_position_range(&self) -> Option<(usize, usize)> {
+        self.position.map(|p| (p, p + 1))
+    }
+
+    /// **Check the responder's position round**: one child per position of the tile, each of the
+    /// claim's shape, inside the proven intervals, folding exactly to the tile's claim.
+    pub fn check_position_round_v1(&self, msg: &PalwTirDissectRoundV1) -> Result<(), PalwTirDissectError> {
+        if msg.version != PALW_TIR_DISSECT_OBJECT_VERSION_V1 {
+            return Err(PalwTirDissectError::UnsupportedVersion { got: msg.version });
+        }
+        if self.position.is_some() {
+            return Err(PalwTirDissectError::AlreadyTerminal);
+        }
+        let expected = self.tile_range.1 - self.tile_range.0;
+        if expected > usize::from(u8::MAX) + 1 {
+            return Err(PalwTirDissectError::Shape("a tile wider than one position round can name"));
+        }
+        if msg.children.len() != expected {
+            return Err(PalwTirDissectError::ChildCount { got: msg.children.len(), expected });
+        }
+        for child in &msg.children {
+            if child.partials.len() != self.tile.elements.len()
+                || child.partials.iter().zip(&self.tile.elements).any(|(v, e)| v.len() != e.len())
+            {
+                return Err(PalwTirDissectError::Shape("a position claims one value per demanded element"));
+            }
+            check_bounds(&self.tile.bounds, child)?;
+        }
+        check_children_fold(&self.tile.folds, &self.tile.elements, &self.claim, &msg.children)
+    }
+
+    /// **The challenger names a position** of a checked round: its claim and its one position
+    /// become the disputed ones.
+    pub fn choose_position_v1(&self, msg: &PalwTirDissectRoundV1, child: u8) -> Result<Self, PalwTirDissectError> {
+        self.check_position_round_v1(msg)?;
+        let index = usize::from(child);
+        let claim = msg
+            .children
+            .get(index)
+            .cloned()
+            .ok_or(PalwTirDissectError::ChildOutOfRange { got: child, children: msg.children.len() })?;
+        let mut next = self.clone();
+        next.position = Some(self.tile_range.0 + index);
+        next.claim = claim;
+        Ok(next)
     }
 }
 
