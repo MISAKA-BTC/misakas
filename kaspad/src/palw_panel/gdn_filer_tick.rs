@@ -101,32 +101,44 @@ fn disclosure_claim_v1(object: &PalwConsensusObjectV2) -> Option<Hash64> {
 /// How many chain blocks one tick reads back for disclosures, at most.
 const PALW_GDN_FILER_WALK_BLOCKS_V1: usize = 4096;
 
+/// One claim a GDN filer may pursue, with the class backend and the served capture (public material) that names it.
+pub(super) struct GdnFilerEntryV1 {
+    pub(super) d: kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2,
+    pub(super) backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+    pub(super) capture: Vec<u8>,
+    pub(super) prompt: Vec<u32>,
+}
+
 impl PalwPanelService {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn gdn_held_filer_tick_v1(
+    /// **The claims a GDN filer (held checkpoint, 06-A; or step, G14 ③) may pursue** — disputable by `bond_key`, of a Qwen3.6 hybrid
+    /// class, with a pooled served capture that names the claim's execution and its job's prompt. Shared by both filers.
+    pub(super) async fn gdn_filer_entries_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
-        book: &mut PalwGdnHeldBookV1,
+        skip: impl Fn(&Hash64) -> bool,
         materials: &HashMap<Hash64, Vec<Vec<u8>>>,
-        current_daa: u64,
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
-        court_outbox: &mut CourtOutboxV1,
-    ) {
-        use kaspa_consensus_core::config::params::ForkActivation;
-        let armed = self
-            .consensus_config
-            .params
-            .palw_memory_routing_court_v2_fence()
-            .is_some_and(|f| f != ForkActivation::never() && f.is_active(current_daa));
-        if !armed || !self.config.challenge {
-            return;
-        }
-        let Some(kp) = self.keypair.clone() else { return };
+    ) -> Vec<GdnFilerEntryV1> {
         let targets = session.clone().spawn_blocking(move |c| c.palw_disputable_claims_v2(vec![bond_key])).await;
+        let targets: Vec<_> = targets.into_iter().filter(|d| !skip(&d.claim_id)).collect();
+        self.gdn_filer_entries_from_v1(session, targets, materials, network_domain, bond_key)
+    }
+
+    /// The material half of [`Self::gdn_filer_entries_v1`] over targets the caller already discovered (the step filer discovers
+    /// every claim inside tag 243's window, not only `ReceiptLicensed` ones — lane gdn-filer round 2). No await: nothing borrowed
+    /// by the caller is held across a suspension point.
+    pub(super) fn gdn_filer_entries_from_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        targets: Vec<kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2>,
+        materials: &HashMap<Hash64, Vec<Vec<u8>>>,
+        network_domain: Hash64,
+        bond_key: PalwBondKeyV2,
+    ) -> Vec<GdnFilerEntryV1> {
         let mut entries = Vec::new();
         for d in targets {
-            if d.executor_bond == bond_key || book.settled.contains_key(&d.claim_id) {
+            if d.executor_bond == bond_key {
                 continue;
             }
             let Some(pooled) = materials.get(&d.claim_id) else { continue };
@@ -177,15 +189,49 @@ impl PalwPanelService {
                 };
                 (capture, prompt)
             };
-            let claim = PalwGdnHeldClaimV1 {
-                claim: d.claim_id,
-                executor: d.executor_bond,
-                execution_root: d.execution_root,
-                trace_root: d.trace_root,
-                shape_profile_id: d.class_id,
-            };
-            entries.push((d.licensed_daa, claim, backend, capture, prompt));
+            entries.push(GdnFilerEntryV1 { d, backend, capture, prompt });
         }
+        entries
+    }
+}
+
+impl PalwPanelService {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn gdn_held_filer_tick_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwGdnHeldBookV1,
+        materials: &HashMap<Hash64, Vec<Vec<u8>>>,
+        current_daa: u64,
+        network_domain: Hash64,
+        bond_key: PalwBondKeyV2,
+        court_outbox: &mut CourtOutboxV1,
+    ) {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        let armed = self
+            .consensus_config
+            .params
+            .palw_memory_routing_court_v2_fence()
+            .is_some_and(|f| f != ForkActivation::never() && f.is_active(current_daa));
+        if !armed || !self.config.challenge {
+            return;
+        }
+        let Some(kp) = self.keypair.clone() else { return };
+        let entries: Vec<_> = self
+            .gdn_filer_entries_v1(session, |claim| book.settled.contains_key(claim), materials, network_domain, bond_key)
+            .await
+            .into_iter()
+            .map(|e| {
+                let claim = PalwGdnHeldClaimV1 {
+                    claim: e.d.claim_id,
+                    executor: e.d.executor_bond,
+                    execution_root: e.d.execution_root,
+                    trace_root: e.d.trace_root,
+                    shape_profile_id: e.d.class_id,
+                };
+                (e.d.licensed_daa, claim, e.backend, e.capture, e.prompt)
+            })
+            .collect();
         if entries.is_empty() {
             return;
         }

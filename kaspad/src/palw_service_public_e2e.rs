@@ -533,6 +533,7 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         tir_shard_shadow: false,
         tir_shard_demand_runs: false,
         tir_shard_watch: false,
+        gdn_step_filer: false,
         tir_shard_mirror: None,
         tir_shard_fetch: false,
         tir_shard_run_leaves: 0,

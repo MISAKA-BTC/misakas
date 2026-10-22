@@ -1778,6 +1778,34 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **G14 ③ (lane gdn-filer): a page of the claims `me` may still accuse with tag 243 at the tip** — every claim inside the fold's
+    /// accusation window (`palw_gdn_step_candidate_v1`), in `(accepted_daa, claim_id)` order after `after`, at most `limit`. Empty off
+    /// `ConsensusV2`. Node policy only.
+    fn palw_gdn_step_candidates_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64)>,
+        _limit: usize,
+    ) -> Vec<crate::palw_state_v2::PalwGdnStepCandidateV1> {
+        Vec::new()
+    }
+
+    /// **G14 ③: one claim's tag-243 window facts for `me` at the tip** (`None`: outside the window, or not held).
+    fn palw_gdn_step_candidate_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+        _claim: crate::Hash64,
+    ) -> Option<crate::palw_state_v2::PalwGdnStepCandidateV1> {
+        None
+    }
+
+    /// **G14 ③: the limits the fold judges a `GdnStepAccusedV2` of `class_id` by at the tip** — exactly the fold's sources: the ladder
+    /// `class_step_ladder_v1(class_id, palw_court_step_ladder_at(daa))` and the court's `max_close_bytes`. `None` while
+    /// `palw_memory_routing_court_v2` is not in force (the fold refuses tag 243 then).
+    fn palw_gdn_court_limits_v2(&self, _class_id: crate::Hash64) -> Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2> {
+        None
+    }
+
     /// **Lane LG14-A (RPC 205): the claims a live dispute reservation holds at the tip** (those of `reserver` when given), at most
     /// `limit`, in claim order.
     fn palw_legacy_disputes_v1(&self, _reserver: Option<crate::palw_state_v2::PalwBondKeyV2>, _limit: usize) -> Vec<crate::Hash64> {

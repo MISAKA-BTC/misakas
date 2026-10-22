@@ -633,6 +633,9 @@ pub struct Args {
     /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`): verify the shards of live sharded claims this bond does
     /// not seat from public material, and accuse (as a non-seat bond) or demand their runs on chain. Off by default; files no receipt.
     pub palw_tir_shard_watch: bool,
+    /// **G14 ③ / ⑦: the GDN step filer** (`--palw-gdn-step-filer`): file `GdnStepAccusedV2` against a recurrence step this node's own
+    /// recompute convicts. Off by default; dormant below `palw_memory_routing_court_v2`.
+    pub palw_gdn_step_filer: bool,
     /// RFC-0006: where an outsider fetches a class it does not hold (`--palw-tir-shard-mirror=<class container path>`); verified against
     /// the chain's registered root before it is used.
     pub palw_tir_shard_mirror: Option<String>,
@@ -1035,6 +1038,7 @@ impl Default for Args {
             palw_drill_tamper_boundary: None,
             palw_tir_shard_demand_runs: false,
             palw_tir_shard_watch: false,
+            palw_gdn_step_filer: false,
             palw_tir_shard_mirror: None,
             palw_tir_shard_fetch: false,
             palw_tir_shard_run_leaves: None,
@@ -2907,6 +2911,17 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-gdn-step-filer")
+                .long("palw-gdn-step-filer")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "G14 / RFC-0006: the GDN step filer — re-execute the served recurrence steps of disputable Qwen3.6 hybrid claims from \
+                     public material and file GdnStepAccusedV2 (tag 243) when the court's own verdict convicts the step; reserves the claim \
+                     first near its Final deadline where the legacy public filer is in force, re-submits what a reorg dropped, and hands a \
+                     conviction to the false-Valid filer. Dormant below palw_memory_routing_court_v2. Off by default.",
+                ),
+        )
+        .arg(
             Arg::new("palw-tir-shard-watch")
                 .long("palw-tir-shard-watch")
                 .action(clap::ArgAction::SetTrue)
@@ -4098,6 +4113,7 @@ impl Args {
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
             palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
             palw_tir_shard_watch: m.get_one::<bool>("palw-tir-shard-watch").copied().unwrap_or(false),
+            palw_gdn_step_filer: m.get_one::<bool>("palw-gdn-step-filer").copied().unwrap_or(false),
             palw_tir_shard_mirror: m.get_one::<String>("palw-tir-shard-mirror").cloned(),
             palw_tir_shard_fetch: m.get_one::<bool>("palw-tir-shard-fetch").copied().unwrap_or(false),
             palw_tir_shard_run_leaves: m.get_one::<u32>("palw-tir-shard-run-leaves").copied(),

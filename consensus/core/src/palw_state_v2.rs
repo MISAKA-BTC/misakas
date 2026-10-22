@@ -215,6 +215,8 @@ pub use palw_legacy_public_filer_fold_v1::{
     PALW_FILER_EXPLICIT_TARGETS_V1, PalwFraudFilerCandidateV1, PalwFraudFilerReservationStatusV1, PalwFraudFilerStatusV1,
     PalwLegacyDisputeObservationV1, PalwLegacyDisputeViewV1, palw_bond_text_v1, palw_legacy_dispute_reservation_check_v1,
 };
+// G14 ③ (lane gdn-filer round 2): the GDN step filer's discovery (node-side read; nothing folded).
+pub use palw_legacy_public_filer_fold_v1::{PalwGdnStepCandidateV1, palw_gdn_step_candidate_v1, palw_gdn_step_candidates_v1};
 // Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's fold — the engine's journal as deltas 190/191, the capital assignment's arm (tag
 // 140), the per-block clock and the reservation / consumption hooks. A child module for the same reason as the others.
 #[path = "palw_bond_budget_fold_v1.rs"]

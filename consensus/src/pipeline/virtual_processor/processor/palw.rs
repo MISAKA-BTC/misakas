@@ -1089,6 +1089,68 @@ impl VirtualStateProcessor {
         state.palw_legacy_dispute_view_v1(state_params, &claim)
     }
 
+    /// G14 ③ (lane gdn-filer): the tip's DAA for a node-side read — the virtual's, as `palw_court_close_verdict_v2_impl` reads it.
+    fn palw_gdn_step_tip_daa_v1(&self) -> Option<u64> {
+        self.virtual_stores.read().state.get().ok().map(|s| s.daa_score)
+    }
+
+    pub fn palw_gdn_step_candidates_v1_impl(
+        &self,
+        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        limit: usize,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwGdnStepCandidateV1> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some(daa) = self.palw_gdn_step_tip_daa_v1() else { return Vec::new() };
+        let Some((_, state)) = self.palw_v2_reader_state(state_params).ok().flatten() else { return Vec::new() };
+        kaspa_consensus_core::palw_state_v2::palw_gdn_step_candidates_v1(
+            &state,
+            state_params,
+            &me,
+            daa,
+            self.palw_offence_attribution_at(daa),
+            after,
+            limit,
+        )
+    }
+
+    pub fn palw_gdn_step_candidate_v1_impl(
+        &self,
+        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwGdnStepCandidateV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let daa = self.palw_gdn_step_tip_daa_v1()?;
+        let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        kaspa_consensus_core::palw_state_v2::palw_gdn_step_candidate_v1(
+            &state,
+            state_params,
+            &me,
+            &claim,
+            daa,
+            self.palw_offence_attribution_at(daa),
+        )
+    }
+
+    /// The fold's own `GdnStepAccusedV2` limits (`palw_accept.rs`'s `memory_routing_court` extras + `objects.rs`'s
+    /// `class_step_ladder_v1`), resolved at the tip's DAA.
+    pub fn palw_gdn_court_limits_v2_impl(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let court = self.palw_court_params_v2.as_ref()?;
+        let daa = self.palw_gdn_step_tip_daa_v1()?;
+        if !self.palw_memory_routing_court_v2_at(daa) {
+            return None;
+        }
+        let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        Some(kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2 {
+            ladder: state.class_step_ladder_v1(&class_id, self.palw_court_step_ladder_at(daa, court)),
+            max_close_bytes: court.max_close_bytes(),
+        })
+    }
+
     pub fn palw_staged_paid_authority_v1_impl(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
