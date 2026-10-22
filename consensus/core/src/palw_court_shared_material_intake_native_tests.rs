@@ -428,6 +428,18 @@ fn material_intake_measure_wall_time_and_retained_bytes() {
     if fx.rules.prompt_form == crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat {
         targets.push((MaterialTargetV1::PromptFlat, borsh::to_vec(&fx.execution.prompt).unwrap()));
     }
+    // `MEASURE_TARGETS` (default 8) bounds the run: targets spread over the body-size order, the largest always kept, so Finish's
+    // growth with the body is still sampled. 0 = every target.
+    let all_targets = targets.len();
+    let cap: usize = std::env::var("MEASURE_TARGETS").ok().map(|v| v.parse().unwrap()).unwrap_or(8);
+    if cap > 0 && targets.len() > cap {
+        targets.sort_by_key(|(_, body)| body.len());
+        let n = targets.len();
+        let picks: std::collections::BTreeSet<usize> = (0..cap).map(|i| i * (n - 1) / (cap - 1).max(1)).collect();
+        targets = picks.into_iter().map(|i| targets[i].clone()).collect();
+    }
+    eprintln!("MEASURE_SETUP in_crate=true op=material_intake targets_all={all_targets} targets_used={} body_bytes_used={}",
+        targets.len(), targets.iter().map(|(_, b)| b.len()).sum::<usize>());
     // (daa, signed, kind, bytes carried by the action, total body bytes)
     let mut script: Vec<(u64, SignedMaterialIntakeV1, &'static str, u64, u64)> = Vec::new();
     let mut daa = 1;
@@ -469,6 +481,7 @@ fn material_intake_measure_wall_time_and_retained_bytes() {
                     samples.entry(*kind).or_default().push((ns, *carried, *total));
                 }
             }
+            eprintln!("MEASURE_PROGRESS op=material_intake extra_bonds={extra} run={run} steps={}", script.len());
             if run == 0 {
                 let mut rows = 0u64;
                 for (target, _) in &targets {

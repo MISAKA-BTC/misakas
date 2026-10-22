@@ -140,8 +140,8 @@ def find(exes, name, kind=None):
 
 
 def batch_court_verify(out, log, max_wait):
-    exes = cargo_build(["test", "--release", "-p", "kaspa-consensus-core", "--test", "palw_tir_court_verify_cpu", "--no-run"], log)
-    exe = find(exes, "palw_tir_court_verify_cpu")
+    exe = executable(["test", "--release", "-p", "kaspa-consensus-core", "--test", "palw_tir_court_verify_cpu", "--no-run"], log,
+                     "palw_tir_court_verify_cpu")
     base = [exe, "court_verify_cpu_measure", "--exact", "--ignored", "--nocapture", "--test-threads=1"]
     runs = []
     before, under = gate(max_wait)
@@ -166,8 +166,7 @@ def batch_court_verify(out, log, max_wait):
 
 
 def batch_in_crate(out, log, max_wait):
-    exes = cargo_build(["test", "--release", "-p", "kaspa-consensus-core", "--lib", "--no-run"], log)
-    exe = find(exes, "kaspa_consensus_core", "lib")
+    exe = executable(["test", "--release", "-p", "kaspa-consensus-core", "--lib", "--no-run"], log, "kaspa_consensus_core", "lib")
     runs = []
     before, under = gate(max_wait)
     for name, scales in [("material_intake_measure_wall_time_and_retained_bytes", "0,1000,10000"),
@@ -179,8 +178,8 @@ def batch_in_crate(out, log, max_wait):
 
 
 def batch_court_op_harness(out, log, max_wait):
-    exes = cargo_build(["test", "--release", "-p", "kaspa-consensus-core", "--test", "g14_court_capacity", "--no-run"], log)
-    exe = find(exes, "g14_court_capacity")
+    exe = executable(["test", "--release", "-p", "kaspa-consensus-core", "--test", "g14_court_capacity", "--no-run"], log,
+                     "g14_court_capacity")
     before, under = gate(max_wait)
     runs = [timed([exe, "palw_court_op_timing_harness", "--exact", "--ignored", "--nocapture", "--test-threads=1"],
                   {"MEASURE_RUNS": "21"}, REPO)]
@@ -189,9 +188,8 @@ def batch_court_op_harness(out, log, max_wait):
 
 
 def batch_frame_measure(out, log, max_wait):
-    exes = cargo_build(["test", "--release", "-p", "misaka-palw-tir-exec", "--features", "node", "--test", "frame_measure",
-                        "--no-run"], log)
-    exe = find(exes, "frame_measure")
+    exe = executable(["test", "--release", "-p", "misaka-palw-tir-exec", "--features", "node", "--test", "frame_measure",
+                      "--no-run"], log, "frame_measure")
     before, under = gate(max_wait)
     runs = []
     os.makedirs(os.path.join(out, "frame"), exist_ok=True)
@@ -204,6 +202,21 @@ def batch_frame_measure(out, log, max_wait):
     return {"batch": "frame_measure", "executable": exe, "load_before": before, "under_load": under, "load_after": after, "runs": runs}
 
 
+BIN_DIR = None
+
+
+def executable(build_args, log, name, kind=None):
+    """With --bin-dir, the pre-built binary whose file name starts with `name` (a private copy, so a concurrent build in a
+    shared CARGO_TARGET_DIR cannot overwrite it mid-run); otherwise build and copy it next to the output."""
+    if BIN_DIR:
+        cands = sorted(f for f in os.listdir(BIN_DIR) if f.startswith(name))
+        if not cands:
+            sys.exit(f"no {name}* in {BIN_DIR}")
+        return os.path.join(BIN_DIR, cands[-1])
+    exe = find(cargo_build(build_args, log), name, kind)
+    return exe
+
+
 BATCHES = {"court_verify": batch_court_verify, "in_crate": batch_in_crate, "court_op_harness": batch_court_op_harness,
            "frame_measure": batch_frame_measure}
 
@@ -214,7 +227,10 @@ def main():
     ap.add_argument("--batches", default="all")
     ap.add_argument("--max-wait", type=int, default=1200, help="seconds to wait for load <= cores/2 before a batch")
     ap.add_argument("--source-commit", default="")
+    ap.add_argument("--bin-dir", default=None, help="use pre-built test binaries from this directory (names start with the target)")
     a = ap.parse_args()
+    global BIN_DIR
+    BIN_DIR = a.bin_dir
     os.makedirs(a.out, exist_ok=True)
     names = list(BATCHES) if a.batches == "all" else a.batches.split(",")
     log = os.path.join(a.out, "build.log")
