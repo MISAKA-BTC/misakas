@@ -61,16 +61,8 @@ fn route_with(h: &JobHeader) -> PalwKernelRouteStateV1 {
     route
 }
 
-#[test]
-fn audit_a_text29_held_final_releases_the_producer_reserve_while_liable() {
-    const RESERVE: u64 = 400;
-    // Challengeable: the reserve is committed (what write_book writes for Funded / Challengeable).
-    let live = header(NativeTextTerminalV29::Challengeable, RESERVE);
-    assert_eq!(reserved(&route_with(&live), &live.producer), RESERVE as u128);
-    // A held Final: write_book writes reserved = 0 for Final; the held row (aux 144) is present, the producer still liable to H.
-    let fin = header(NativeTextTerminalV29::Final, 0);
-    let mut route = route_with(&fin);
-    let row = PalwNativeHeldFeeRowV1 {
+fn held_row(fin: &JobHeader) -> PalwNativeHeldFeeRowV1 {
+    PalwNativeHeldFeeRowV1 {
         version: PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1,
         family: PALW_NATIVE_FAMILY_TEXT_V29,
         job: fin.job,
@@ -78,18 +70,69 @@ fn audit_a_text29_held_final_releases_the_producer_reserve_while_liable() {
         producer: fin.producer,
         queue: [44; 64],
         payload: fin.producer_payout.as_bytes(),
-        amount: 100,
+        amount: 20,
         income_root: fin.job,
         income_kind: 11,
         budget: [45; 64],
         refund_payload: fin.requester_payout.as_bytes(),
         final_daa: 200,
         horizon_daa: 500,
+    }
+}
+
+/// **audit(verify-1) A-1, fold level**: `settle`'s own `write_book` turns a Challengeable header (reserve 1,000 committed) into a
+/// Final header with `reserved = 0`; with the job's fee HELD in aux 144 (the producer accusable to H = 500, a post-Final conviction
+/// collecting `min(collateral, reserve)`), the reserve must stay in the producer's committed collateral. It does not: the producer's
+/// whole bond is free for a second job while the first is still liable. Expected 1,000 committed; actual 0. (native39 keeps it.)
+#[test]
+fn audit_a_text29_held_final_releases_the_producer_reserve_while_liable() {
+    const RESERVE: u64 = 1_000;
+    let book = crate::palw_native_text_stop_v29::audit_verify1_unpaid_final_v29();
+    assert_eq!(book.terminal(), NativeTextTerminalV29::Final);
+    assert_eq!(book.funding().maximum.producer_reserve, RESERVE);
+    let live = header(NativeTextTerminalV29::Challengeable, RESERVE);
+    let mut state = crate::palw_state_v2::PalwChainStateV2::genesis();
+    state.bonds.insert(
+        live.producer,
+        crate::palw_state_v2::PalwBondStateV2 {
+            pubkey: vec![2],
+            operator_id: Hash64::from_u64_word(2),
+            collateral: RESERVE,
+            slashed: 0,
+            status: crate::palw_state_v2::PalwBondStatusV2::Active,
+            registered_daa: 0,
+            payout_payload: Hash64::from_u64_word(42),
+            capable_classes: Default::default(),
+        },
+    );
+    state.kernel_route = Some(route_with(&live));
+    let params = crate::palw_state_v2::PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0)
+        .unwrap();
+    let extras = crate::palw_state_v2::PalwTransitionExtrasV1 {
+        kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+            network_domain: Hash64::from_u64_word(1),
+            ruleset_digest: Hash64::from_u64_word(2),
+            ..Default::default()
+        }),
+        ..Default::default()
     };
-    route.aux.insert((PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_TEXT_V29, &fin.job)), key(&row));
+    let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let committed = |tb: &TransitionBuilder<'_>| {
+        crate::palw_state_v2::palw_bond_committed_v1(&tb.state, &live.producer, 300, None, params.window_court)
+    };
+    assert_eq!(committed(&tb), RESERVE as u128, "premise: a Challengeable job commits its reserve");
+    // The Final as `settle` writes it (held branch): the header via `write_book`, the fee row in aux 144 with horizon 500.
+    let mut fin = live.clone();
+    write_book(&mut tb, &mut fin, &book).unwrap();
+    assert_eq!((fin.terminal, fin.reserved), (NativeTextTerminalV29::Final, 0), "write_book zeroes the reserve at Final");
+    let row = held_row(&fin);
+    tb.write_kernel_row(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_TEXT_V29, &fin.job), Some(key(&row)))
+        .unwrap();
+    let now_committed = committed(&tb);
+    let free = (RESERVE as u128).saturating_sub(now_committed);
+    eprintln!("[verify-1 A-1] held Final at DAA 300 (H = 500): committed {now_committed}, free collateral for new work {free}");
     assert_eq!(
-        reserved(&route, &fin.producer),
-        0,
-        "A-1: a held text29 Final (accusable to H, slash = min(collateral, reserve)) leaves its reserve out of committed_at"
+        now_committed, RESERVE as u128,
+        "A-1: a held text29 Final (accusable to H, conviction collects min(collateral, reserve)) must keep its reserve committed"
     );
 }

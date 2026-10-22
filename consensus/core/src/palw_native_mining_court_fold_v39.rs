@@ -719,4 +719,50 @@ mod tests {
         assert!(before == after, "a refused accusation below the fence leaves the state byte-identical");
         assert!(!native_mining_convicted_v39(&tb.state, &c.claim_hash()));
     }
+
+    /// **audit(verify-1) A-3**: an honest accuser's demand is open (bond 50 already burned from its bond at `demand`) when ANOTHER
+    /// filing convicts the claim. `convict` settles no open demand, and the demand's own `default` is refused for a convicted claim,
+    /// so the burned demand bond is never refunded (the only refund leg lives in `default`). Expected: refunded once; actual: never.
+    #[test]
+    fn audit_verify1_a3_open_demand_bond_is_stranded_by_a_conviction_from_another_path() {
+        let (mut state, params, extras) = (state(), params(), extras());
+        state.bonds.get_mut(&bond(3)).unwrap().collateral -= 50; // what `demand` burned (`slash_bond(signer, bond)`)
+        let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let c = claim(4_000);
+        world(&mut tb, &c);
+        let id = [0x5d; 64];
+        let d = NativeMiningDemandV39 {
+            version: 39,
+            id,
+            claim: c.id,
+            stage: 0,
+            job: [21; 64],
+            demand: vec![],
+            accuser: bond(3),
+            accuser_operator: h(3).as_bytes(),
+            accuser_payout: h(103),
+            bond: 50,
+            opened: 25,
+            deadline: 30,
+            settled: false,
+        };
+        tb.write_kernel_row(MINING, mk(MINING_ACCUSATION_DEMAND_KIND_V39, &id), Some(super::b(&d))).unwrap();
+        tb.write_kernel_row(MINING, mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id), Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })))
+            .unwrap();
+        // Another finder's verified filing convicts the claim first (inside the demand's answer window).
+        convict(&mut tb, &ctx(28), &policy(), &c, 0, [0x99; 64], Some((bond(2), h(2).as_bytes()))).unwrap();
+        // The accuser then files its default once the deadline has passed.
+        let p = crate::palw_native_execution_v39::PalwNativeExecutionFenceV39::unapproved_probe_at(
+            crate::config::params::ForkActivation::always(),
+            [1; 64],
+        )
+        .policies;
+        let wire = NativeMiningAccusationWireV39 { version: 39, kind: 3, claim: c.id, stage: 0, body: id.to_vec() };
+        let defaulted = default(&mut tb, &ctx(31), &bond(3), &p, &wire);
+        let refund_key = Hash64::from_bytes(object_id(b"misaka-palw/native/g14-mining-demand-refund/v39", &id));
+        let refunded = tb.state.pending_payouts.get(&refund_key).map(|v| v.amount);
+        let row: NativeMiningDemandV39 = mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_DEMAND_KIND_V39, &id, 1 << 20).unwrap();
+        eprintln!("[verify-1 A-3] default after conviction: {defaulted:?}; demand settled {}; refund payout {refunded:?}", row.settled);
+        assert_eq!(refunded, Some(50), "A-3: the honest accuser's burned demand bond is never refunded after another path convicts");
+    }
 }

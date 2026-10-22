@@ -681,6 +681,12 @@ pub(crate) struct CheckedNativeTextCloseV29 {
     pub(crate) final_basis: Digest,
 }
 
+/// audit(verify-1): the unpaid Final fixture (reserve 1,000) for the fold-level A-1 reproducer. Test-only.
+#[cfg(test)]
+pub(crate) fn audit_verify1_unpaid_final_v29() -> NativeTextBookV29 {
+    tests::unpaid_final()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -802,7 +808,7 @@ mod tests {
         assert_eq!((s.actual_collected_slash, s.finder_credit, s.requester), (0, 0, 20));
         assert!(challengeable().convict(proof, finder, finder_operator, 1_001, 40).is_err(), "never more than the reserve");
     }
-    fn unpaid_final() -> NativeTextBookV29 {
+    pub(super) fn unpaid_final() -> NativeTextBookV29 {
         let mut book = challengeable();
         let reward = book.escrow();
         book.settle(NativeTextSettlementV29 {

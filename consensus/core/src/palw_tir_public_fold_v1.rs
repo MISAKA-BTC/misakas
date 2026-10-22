@@ -6363,4 +6363,122 @@ mod conviction_e2e_tests {
             std::fs::write(out, serde_json::to_string(&record).unwrap()).unwrap();
         }
     }
+
+    /// audit(verify-1): a service-bound claim (hard deadline a + 10,000, its one packet decided at a + 10,001) and one court session
+    /// on it opened at a + 3 by `outsider()` with NO close groups — the challenger and the responder both go silent.
+    fn verify1_bound_silent_session(b: &mut TransitionBuilder<'_>, frame: &Frame) -> Hash64 {
+        use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        let plan = frame.plan_v1();
+        let a = plan.terms.accepted_daa;
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id: [41; 64], release_daa: a + 1, service_before: a + 2, cost }], a + 10_000).unwrap();
+        book.observe_block(a + 1, [42; 64], Default::default()).unwrap();
+        book.observe_block(a + 10_001, [43; 64], Default::default()).unwrap();
+        let service = CourtServiceStateV2 {
+            version: 2,
+            source_profile_id: Hash64::from_u64_word(43),
+            profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(Hash64::from_u64_word(43)),
+            book,
+            claims: std::collections::BTreeMap::from([(
+                plan.original_claim,
+                ServiceClaimBinding {
+                    claim: plan.original_claim,
+                    allocation_id: plan.allocation_id,
+                    source_id: plan.source_id,
+                    original_accepted_daa: a,
+                    hard_deadline_daa: a + 10_000,
+                    packet_ids: std::collections::BTreeSet::from([[41; 64]]),
+                },
+            )]),
+        };
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        let opened = a + 3;
+        let ladder = PalwBisectLadderV1::open(
+            &frame.header_v1().job_context.context_hash(),
+            &frame.original_v1().execution_root,
+            &h(0xC1),
+            &h(0xC2),
+            PalwBisectSpaceV1::StepLeaves,
+            frame.header_v1().step_leaf_count,
+            opened,
+            opened + 1,
+        )
+        .unwrap();
+        let id = ladder.session_id();
+        let session = PalwCourtSessionStateV2 {
+            claim: plan.original_claim,
+            challenger_bond: outsider(),
+            opened_daa: opened,
+            deadline_daa: opened + 10,
+            ladder,
+            dissection: None,
+        };
+        b.write_court(id, Some(session)).unwrap();
+        id
+    }
+
+    /// **audit(verify-1) B-04 (money side)**: the deadline sweep skips a session on a service-bound claim at every height, so a
+    /// silent session (deadline a + 13) is still open at a + 100,000: its court slot is held, the binding is never release-eligible,
+    /// and the producer's and the challenger's WHOLE bonds stay exit-held (`palw_bond_collateral_is_locked`'s
+    /// `staged_bond_exit_held_v1` / `palw_bond_has_open_court_v1` terms). Expected: the session ends by its backstop.
+    #[test]
+    fn audit_verify1_b04_a_silent_session_on_a_bound_claim_never_ends() {
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras) = world(&fx, &frame);
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let id = verify1_bound_silent_session(&mut b, &frame);
+        let plan = frame.plan_v1();
+        let a = plan.terms.accepted_daa;
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let slots = b.state.court_sessions.len();
+        for far in [10_001u64, 20_000, 100_000] {
+            super::super::sweep_court_deadlines(&mut b, &at(&frame, far)).unwrap();
+        }
+        let far = a + 100_000;
+        let open = b.state.court_sessions.contains_key(&id);
+        let eligible = b.state.court_service_release_eligible_v1(&plan.original_claim);
+        let producer_held = b.state.staged_bond_exit_held_v1(&producer, far);
+        let challenger_open_court = crate::palw_state_v2::palw_bond_has_open_court_v1(&b.state, &outsider());
+        eprintln!(
+            "[verify-1 B-04] at a+100,000: session open {open}, slots {} (was {slots}), release eligible {eligible}, \
+             producer exit-held {producer_held}, challenger has open court {challenger_open_court}",
+            b.state.court_sessions.len()
+        );
+        assert_eq!((open, eligible), (false, true), "B-04: the silent bound session never ends, so its binding is never released");
+    }
+
+    /// **audit(verify-1) B-05 (money side)**: any removal of a bound-claim session that is not an object (a sweep or tick; here the
+    /// writer the void/sweep paths call) archives it `Uncaptured`, whose `pending_nominal` keeps the challenger's court stake forever:
+    /// the archive is never `fully_resolved` (never pruned), so the challenger's whole bond stays exit-held and the binding (whose
+    /// release waits on every dependent row) never releases the producer. Expected: resolvable after the material horizon.
+    #[test]
+    fn audit_verify1_b05_an_uncaptured_court_end_archive_is_never_prunable() {
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras) = world(&fx, &frame);
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let id = verify1_bound_silent_session(&mut b, &frame);
+        b.write_court(id, None).unwrap();
+        let archive = b.state.court_end_archive_v1(id).unwrap().clone();
+        assert_eq!(archive.adjudication(), crate::palw_court_end_archive_v1::CourtEndDispositionV1::Uncaptured);
+        assert!(archive.groups.is_empty(), "no close declaration: nothing but the court stake is pending");
+        let far = archive.material_until_daa.saturating_add(1_000_000);
+        b.sweep_resolved_court_archives_v1(far).unwrap();
+        let still = b.state.court_end_archive_v1(id).is_some();
+        let resolved = b.state.court_archive_fully_resolved_v1(id, far);
+        let challenger_held = b.state.court_archive_holds_bond_v1(&outsider());
+        let exit_held = b.state.staged_bond_exit_held_v1(&outsider(), far);
+        eprintln!(
+            "[verify-1 B-05] material_until {} ; at +1,000,000: archive present {still}, fully resolved {resolved}, nominal on challenger {}, \
+             challenger archive-held {challenger_held}, challenger exit-held {exit_held}, producer exit-held {}",
+            archive.material_until_daa,
+            archive.pending_nominal(&outsider()),
+            b.state.staged_bond_exit_held_v1(&frame.custody_v1().pledge_v1().producer, far)
+        );
+        assert!(!still && !exit_held, "B-05: an Uncaptured archive is never pruned; the challenger's bond exit is held forever");
+    }
 }

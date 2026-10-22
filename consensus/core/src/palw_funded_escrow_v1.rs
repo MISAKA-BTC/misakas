@@ -1041,23 +1041,20 @@ mod tests {
             vec![],
         );
         let pa = palw_escrow_qualified_spend_v1(&a, &tx, &[1_000, 1_000], 500, Some(&sa)).expect("A qualifies");
-        let pb = palw_escrow_qualified_spend_v1(&b, &tx, &[1_000, 1_000], 500, Some(&sb)).expect("B qualifies on the same outputs");
-        assert_eq!((pa.paid_now, pa.returned_now), (300, 700));
-        assert_eq!((pb.paid_now, pb.returned_now), (300, 700));
-        let booked_paid = pa.new.paid_sompi + pb.new.paid_sompi;
-        let actually_paid: u64 = tx.outputs.iter().filter(|o| payload_of(o) == Some(party(11))).map(|o| o.value).sum();
-        assert_eq!(booked_paid, 600, "the rows record two work payments");
-        assert_eq!(actually_paid, 300, "the payee received one");
+        let pb = palw_escrow_qualified_spend_v1(&b, &tx, &[1_000, 1_000], 500, Some(&sb));
         // Liability still open: both rows continue on the SAME change-back outpoint (one 700 output backs 2 x 700 unreleased).
         let (ao, bo) = (row(true), PalwFundedEscrowRowV1 { contract_id: h(21), funding_outpoint: b_out, ..row(true) });
         let pao = palw_escrow_qualified_spend_v1(&ao, &tx, &[1_000, 1_000], 500, Some(&sa)).expect("A continues");
-        let pbo = palw_escrow_qualified_spend_v1(&bo, &tx, &[1_000, 1_000], 500, Some(&sb)).expect("B continues");
-        assert_eq!(pao.new.funding_outpoint, pbo.new.funding_outpoint, "two rows re-locked on one 700-sompi output");
-        assert_eq!(pao.new.unreleased_v1().unwrap() + pbo.new.unreleased_v1().unwrap(), 1_400);
-        // The block filter's shape: by outpoint, the second row is shadowed (it can never be spent again: a permanent orphan).
-        let mut rows = BTreeMap::new();
-        rows.insert(pao.new.contract_id, pao.new);
-        rows.insert(pbo.new.contract_id, pbo.new);
-        assert_eq!(palw_escrow_rows_by_outpoint_v1(&rows).len(), 1);
+        let pbo = palw_escrow_qualified_spend_v1(&bo, &tx, &[1_000, 1_000], 500, Some(&sb));
+        let booked_paid = pa.new.paid_sompi + pb.as_ref().map(|p| p.new.paid_sompi).unwrap_or(0);
+        let actually_paid: u64 = tx.outputs.iter().filter(|o| payload_of(o) == Some(party(11))).map(|o| o.value).sum();
+        let aliased = pbo.as_ref().is_ok_and(|p| p.new.funding_outpoint == pao.new.funding_outpoint);
+        eprintln!(
+            "[verify-1 A-2] B on A's outputs: {:?}; booked paid {booked_paid}, payee received {actually_paid}; continued rows share one outpoint: {aliased}",
+            pb.as_ref().map(|p| (p.paid_now, p.returned_now))
+        );
+        // Expected: a transaction's outputs discharge at most one escrow row (the second row is refused, or books equal payments).
+        assert_eq!(booked_paid, actually_paid, "A-2: two escrow rows booked as paid from ONE payee output");
+        assert!(!aliased, "A-2: two continued rows re-locked on ONE outpoint");
     }
 }
