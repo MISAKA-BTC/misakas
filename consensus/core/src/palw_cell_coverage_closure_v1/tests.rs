@@ -126,7 +126,10 @@ fn req_cell_the_closure_is_refused_until_a_record_for_this_network_and_height_is
     let g = p.genesis.hash;
     p.validate_palw_cell_coverage_closure_in_v1(&[closure_record(g, FENCE)]).expect("the exact record admits");
     assert!(p.validate_palw_cell_coverage_closure_in_v1(&[closure_record(g, FENCE + 1)]).is_err(), "another height");
-    assert!(p.validate_palw_cell_coverage_closure_in_v1(&[closure_record(Hash64::from_bytes([5; 64]), FENCE)]).is_err(), "another net");
+    assert!(
+        p.validate_palw_cell_coverage_closure_in_v1(&[closure_record(Hash64::from_bytes([5; 64]), FENCE)]).is_err(),
+        "another net"
+    );
     // Malformed records refuse by reason.
     let mut r = closure_record(g, FENCE);
     r.version = 2;
