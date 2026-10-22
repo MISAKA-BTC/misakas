@@ -242,7 +242,7 @@ pub(super) fn sign_spend(tx: &mut Transaction, utxo: UtxoEntry, i: usize, storag
 
 /// Each input spends a real imported card fee float or a real carrier change.
 /// Multiple inputs let a counterfactual fee equal the complete recipient R room.
-fn sign_spend_many(tx: &mut Transaction, inputs: &[(UtxoEntry, usize)], storage_mass_parameter: u64) {
+pub(super) fn sign_spend_many(tx: &mut Transaction, inputs: &[(UtxoEntry, usize)], storage_mass_parameter: u64) {
     use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
     use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
     use kaspa_consensus_core::mass::MassCalculator;
