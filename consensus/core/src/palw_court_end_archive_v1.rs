@@ -210,10 +210,13 @@ impl PalwChainStateV2 {
     }
     /// Every declared side is resolved AND neither financial actor retains a
     /// nominal hold (including the unresolved court stake of an uncaptured or
-    /// related ending, which therefore is never prunable). Read-only.
-    pub fn court_archive_fully_resolved_v1(&self,id:Hash64)->bool{
+    /// related ending, which therefore is never prunable) AND (user decision
+    /// D3, 2026-10-22) the archived session's material retention has passed:
+    /// `now > material_until_daa`. Read-only.
+    pub fn court_archive_fully_resolved_v1(&self,id:Hash64,now:u64)->bool{
         let Some(a)=self.court_end_archive_v1(id) else {return false};
-        a.groups.keys().all(|side|self.court_archive_side_resolved_v1(a,*side))
+        now>a.material_until_daa
+            && a.groups.keys().all(|side|self.court_archive_side_resolved_v1(a,*side))
             && self.archive_pending_nominal_v1(a,&a.producer)==0
             && self.archive_pending_nominal_v1(a,&a.session.challenger_bond)==0
     }

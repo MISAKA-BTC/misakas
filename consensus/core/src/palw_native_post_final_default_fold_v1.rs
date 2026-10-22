@@ -13,9 +13,9 @@
 //!
 //! Dormant three ways: `palw_native_liability_horizon_v1` (the hold), `court_service_f02_active_v1` (the conviction fence and a
 //! pinned service profile — typed-missing today) and the typed-missing slash amount [`PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1`]
-//! (a money amount = user decision). "Silent" is a family fact: [`native_post_final_duty_answered_v1`] answers it per family, and
-//! neither text29 nor funded v11 records post-Final DA answers yet (rfc08-hold open item 1), so both answer a typed refusal — the
-//! default is undecided, never inferred.
+//! (a money amount = user decision). "Silent" is a family fact: [`native_post_final_duty_answered_v1`] answers it from the native
+//! post-Final duty record (G14 r6 D4, `palw_native_post_final_duty_v1`: accusation → clocks → answers → supplied opportunity); a
+//! job with a recorded accusation is decided from that record alone, one without falls back to the TIR service binding below.
 use super::*;
 use crate::palw_court_duty_clock_v1::CourtDutyClockV1;
 use crate::palw_native_liability_hold_v1::{
@@ -47,16 +47,18 @@ fn family_supported_v1(family: u8) -> bool {
     matches!(family, PALW_NATIVE_FAMILY_TEXT_V29 | PALW_NATIVE_FAMILY_FUNDED_V11)
 }
 
-/// **Was the post-Final duty behind `clock` answered?** A family fact. Neither family records post-Final DA answers (rfc08-hold open
-/// item 1: post-Final DA is not reopened), so both refuse — undecided, never a default by inference.
+/// **Was the post-Final duty behind `clock` answered?** A family fact, recorded natively since G14 r6 D4: a post-Final accusation
+/// (`palw_native_post_final_duty_v1`) records the actor's clocks and answers. A clock that is not such a recorded native duty is
+/// undecided (never a default by inference).
 pub(super) fn native_post_final_duty_answered_v1(
-    _b: &TransitionBuilder<'_>,
+    b: &TransitionBuilder<'_>,
     row: &PalwNativeHeldFeeRowV1,
-    _clock: &CourtDutyClockV1,
+    clock: &CourtDutyClockV1,
 ) -> Result<bool, &'static str> {
     match row.family {
-        PALW_NATIVE_FAMILY_TEXT_V29 => Err("text29 records no post-Final service answer; post-Final default undecided"),
-        PALW_NATIVE_FAMILY_FUNDED_V11 => Err("funded v11 records no post-Final service answer; post-Final default undecided"),
+        PALW_NATIVE_FAMILY_TEXT_V29 | PALW_NATIVE_FAMILY_FUNDED_V11 => {
+            super::palw_native_post_final_duty_v1::native_duty_answered_v1(b, row, clock)
+        }
         _ => Err("family has no post-Final service duty"),
     }
 }
@@ -75,6 +77,10 @@ pub(super) fn decide_native_post_final_default_v1(
     }
     if now > row.horizon_daa {
         return Err("held fee is past its liability horizon; released without slash");
+    }
+    // G14 r6 D4: a recorded native post-Final accusation decides from its own clocks, answers and supplied opportunities.
+    if super::palw_native_post_final_duty_v1::native_post_final_duty_row_v1(&b.state, row.family, &row.job).is_some() {
+        return super::palw_native_post_final_duty_v1::decide_native_post_final_duty_v1(b, row, now, answered);
     }
     let claim = Hash64::from_bytes(row.claim);
     let service = b.state.court_service_state_v1().ok_or("court service book is absent")?;
@@ -181,6 +187,26 @@ pub(super) fn recover_native_post_final_defaults_with_v1(
     let now = ctx.daa_score;
     if !b.params.native_liability_horizon_active_at(now) || !b.extras.tir_public_conviction_active {
         return Ok(());
+    }
+    // G14 r6 D4: held rows with a recorded native accusation. A decided default is applied below; a no-slash hold re-opens one more
+    // response turn (recovery) while it still closes before H.
+    let mut due: Vec<PalwNativeHeldFeeRowV1> = Vec::new();
+    let mut reopen: Vec<PalwNativeHeldFeeRowV1> = Vec::new();
+    for row in super::palw_native_post_final_duty_v1::held_rows_with_native_duties_v1(b, now) {
+        if !family_supported_v1(row.family) {
+            continue;
+        }
+        match decide_native_post_final_default_v1(b, &row, now, answered) {
+            Ok(crate::palw_court_service_binding_v1::CourtServiceAttributionV1::PartyDefault) => due.push(row),
+            Ok(crate::palw_court_service_binding_v1::CourtServiceAttributionV1::NoSlashHold(_)) => reopen.push(row),
+            Err(_) => {}
+        }
+    }
+    for row in reopen {
+        super::palw_native_post_final_duty_v1::reopen_unsupplied_turn_v1(b, ctx, &row)?;
+    }
+    for row in due {
+        let _ = apply_native_post_final_default_with_v1(b, ctx, row.family, &row.job, slash, answered);
     }
     let Some(service) = b.state.court_service_state_v1() else { return Ok(()) };
     if service.claims.is_empty() {

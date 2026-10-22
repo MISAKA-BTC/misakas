@@ -5,6 +5,9 @@ use super::*;
 use crate::palw_native_resource_v1::{NativeWireReaderV1,NativeWireScanV1};
 use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key,PalwStagedCourtRowV1 as Row};
 
+/// G14 r6 D3: at most this many resolved archives are pruned by one block (key order).
+pub(super) const PALW_COURT_ARCHIVE_PRUNES_PER_BLOCK_V1: usize = 64;
+
 /// Only this verifier constructs the result. No Borsh/Clone/from-bool path.
 /// A later financial transition must also check the bound state root and its
 /// own funded contract/once-only effects; this result alone settles nothing.
@@ -166,21 +169,21 @@ impl TransitionBuilder<'_> {
     /// RFC-0030 / RFC-0034 S1 / ADR-0201: once every pending liability of an
     /// archived court is resolved (applied native debit, fulfilled native
     /// close, or rooted on-time positive fulfillment) and no nominal hold
-    /// remains for either actor, the archive and its per-side receipt and
-    /// provenance rows may be removed. Nothing here moves money: deposits are
+    /// remains for either actor, AND (user decision D3) the archived session's
+    /// `material_until_daa` has passed at `now`, the archive and its per-side
+    /// receipt and provenance rows may be removed. Nothing here moves money: deposits are
     /// nominal and were never escrow. Gated by the archive's own existence
     /// condition (the court service book that created it). The removal is
     /// journaled, so undoing the block restores every row exactly.
-    #[allow(dead_code)]
-    pub(super) fn prune_resolved_court_archive_v1(&mut self,id:Hash64)->Result<(),PalwStateV2Error>{
+    pub(super) fn prune_resolved_court_archive_v1(&mut self,id:Hash64,now:u64)->Result<(),PalwStateV2Error>{
         if self.state.court_service_state_v1().is_none(){return Err(refusal("archive pruning requires the court service book"));}
         let archive=self.state.court_end_archive_v1(id).ok_or_else(||refusal("court archive missing"))?;
         archive.check_context(&self.state).map_err(refusal)?;
         for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {
             if let Some(p)=self.state.court_archive_progress_v1(id,side) {p.check(&Key::CourtArchiveProgress(id,side)).map_err(refusal)?;}
         }
-        if !self.state.court_archive_fully_resolved_v1(id){
-            return Err(refusal("archived court still carries an unresolved liability or nominal hold"));
+        if !self.state.court_archive_fully_resolved_v1(id,now){
+            return Err(refusal("archived court still carries an unresolved liability, a nominal hold or retained material"));
         }
         if self.court_archive_prune.is_some(){return Err(refusal("archive pruning is not re-entrant"));}
         let saved=self.try_checkpoint()?;
@@ -201,6 +204,28 @@ impl TransitionBuilder<'_> {
         self.court_archive_prune=None;
         if result.is_err(){self.restore(saved);}
         result
+    }
+
+    /// **G14 r6 D3: the per-block archive pruner.** Called once per block from
+    /// the PALW fold after the court service observation. Gated by the archive's
+    /// own existence condition (the court service book; absent on every network
+    /// today, so a no-op). Removes, in key order, at most
+    /// [`PALW_COURT_ARCHIVE_PRUNES_PER_BLOCK_V1`] archives that are fully
+    /// resolved and past their material horizon. An archive the pruner refuses
+    /// (context lost, re-entrancy) is left in place: the pruner restores its own
+    /// checkpoint, so a refusal never invalidates the block. Journaled through
+    /// the staged-court writer; reorg restores every row.
+    pub(super) fn sweep_resolved_court_archives_v1(&mut self,now:u64)->Result<(),PalwStateV2Error>{
+        if self.state.court_service_state_v1().is_none(){return Ok(());}
+        let due:Vec<Hash64>=self.state.staged_cache_lease_rows_v1()
+            .filter_map(|(k,_)|match k{Key::CourtEndArchive(id)=>Some(id),_=>None})
+            .filter(|id|self.state.court_archive_fully_resolved_v1(*id,now))
+            .take(PALW_COURT_ARCHIVE_PRUNES_PER_BLOCK_V1)
+            .collect();
+        for id in due{
+            let _=self.prune_resolved_court_archive_v1(id,now);
+        }
+        Ok(())
     }
 
     /// All forward writes require the actual removal/native event and retained

@@ -4727,11 +4727,13 @@ mod conviction_e2e_tests {
         super::super::objects::apply_object(&mut b,&at(&frame,7),&close).unwrap();
         assert!(b.state.court_session(&id).is_none());
         let parent=b.state.clone();
-        assert!(!parent.court_archive_fully_resolved_v1(id),"pending declaration deposit is an unresolved liability");
+        // D3: pruning also waits for the archived session's material horizon.
+        let material=parent.court_end_archive_v1(id).unwrap().material_until_daa;let past=material+1;
+        assert!(!parent.court_archive_fully_resolved_v1(id,past),"pending declaration deposit is an unresolved liability");
         {
             let mut early=TransitionBuilder::new(&parent,&params,false,false,false,false,&extras);
             let before=early.state.clone();
-            assert!(early.prune_resolved_court_archive_v1(id).is_err());
+            assert!(early.prune_resolved_court_archive_v1(id,past).is_err());
             assert_eq!(early.state,before);assert!(early.entries.is_empty());
         }
         let deadline=parent.court_end_archive_v1(id).unwrap().groups[&side].assembly_deadline_daa;
@@ -4744,10 +4746,10 @@ mod conviction_e2e_tests {
             assert_eq!(late.state,before);
             late.append_archived_close_chunk_v1(id,side,1,&raw[split..]).unwrap();
             assert!(late.state.court_end_archive_v1(id).unwrap().groups[&side].is_complete());
-            assert!(!late.state.court_archive_fully_resolved_v1(id));
+            assert!(!late.state.court_archive_fully_resolved_v1(id,past));
             assert!(late.state.court_archive_holds_bond_v1(&outsider()));
             let root=late.state.state_root();let entries=late.entries.len();
-            assert!(late.prune_resolved_court_archive_v1(id).is_err());
+            assert!(late.prune_resolved_court_archive_v1(id,past).is_err());
             assert_eq!(late.state.state_root(),root);assert_eq!(late.entries.len(),entries);
         }
         // Timely actual completion (at the original deadline).
@@ -4758,7 +4760,13 @@ mod conviction_e2e_tests {
         assert_eq!(t.state.court_archive_pending_exposure_v1(&outsider()),0);
         assert!(!t.state.court_archive_holds_bond_v1(&outsider()),"exit hold released for the discharged side");
         assert_eq!(t.state.bond(&outsider()),Some(&money),"nominal deposit is never escrow: no money moves");
-        assert!(t.state.court_archive_fully_resolved_v1(id));
+        assert!(t.state.court_archive_fully_resolved_v1(id,past));
+        // D3: every liability resolved, but the material horizon has not passed -> not prunable (at the horizon itself too).
+        assert!(!t.state.court_archive_fully_resolved_v1(id,material));
+        {let before=t.state.clone();let entries=t.entries.len();
+         assert!(t.prune_resolved_court_archive_v1(id,material).is_err());
+         t.sweep_resolved_court_archives_v1(material).unwrap();
+         assert_eq!(t.state,before);assert_eq!(t.entries.len(),entries);}
         // Only the pruner may remove these rows.
         let discharged=t.state.clone();let entries=t.entries.len();
         assert!(t.write_staged_row_v1(Key::CourtEndArchive(id),None).is_err());
@@ -4766,21 +4774,82 @@ mod conviction_e2e_tests {
         assert!(t.write_staged_row_v1(Key::CourtArchiveProgress(id,side),None).is_err());
         assert_eq!(t.state,discharged);assert_eq!(t.entries.len(),entries);
         // A different session id is not pruned.
-        assert!(t.prune_resolved_court_archive_v1(h(0x993)).is_err());assert_eq!(t.state,discharged);
-        t.prune_resolved_court_archive_v1(id).unwrap();
+        assert!(t.prune_resolved_court_archive_v1(h(0x993),past).is_err());assert_eq!(t.state,discharged);
+        t.prune_resolved_court_archive_v1(id,past).unwrap();
         assert!(t.court_archive_prune.is_none());
         assert!(t.state.court_end_archive_v1(id).is_none());
         assert!(t.state.court_archive_progress_v1(id,side).is_none());
         assert!(t.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)).is_none());
         assert_eq!(t.state.bond(&outsider()),Some(&money));
         assert_eq!(t.state.court_archive_pending_exposure_v1(&outsider()),0);
-        assert!(t.prune_resolved_court_archive_v1(id).is_err(),"prune is once-only");
+        assert!(t.prune_resolved_court_archive_v1(id,past).is_err(),"prune is once-only");
         // Reorg: undo restores the parent exactly, redo re-prunes.
         let pruned=t.state.state_root();
         let mut backwards=t.state.clone();for e in t.entries.iter().rev(){apply_delta_entry(&mut backwards,e,true).unwrap();}
         assert_eq!(backwards.state_root(),parent.state_root());
         assert_eq!(backwards.court_end_archive_v1(id),parent.court_end_archive_v1(id));
         assert_eq!(backwards.court_archive_pending_exposure_v1(&outsider()),parent.court_archive_pending_exposure_v1(&outsider()));
+        for e in &t.entries{apply_delta_entry(&mut backwards,e,false).unwrap();}
+        assert_eq!(backwards.state_root(),pruned);
+    }
+
+    #[test]
+    fn archive_d3_the_per_block_pruner_waits_for_the_material_horizon_and_reorg_restores() {
+        use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
+        use crate::palw_court_v2::{palw_court_close_declaration_message_v1 as message,PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT as DOMAIN};
+        // Same discharged archive as `archive_s1_timely_fulfillment_discharges_and_prunes_only_when_all_resolved`.
+        let fx=palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF,1)),4);let frame=fx.frame.clone();
+        let (mut state,params,mut extras)=world(&fx,&frame);let params=params.with_tir_from_daa(Some(0));
+        let keys=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([85;32]);state.bonds.get_mut(&outsider()).unwrap().pubkey=keys.verification_key.as_ref().to_vec();
+        extras.native_court_rules_v1=Some(NativeCourtRulesV1 {network_domain:h(0x881),at:at(&frame,5),
+            court:crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap(),
+            step_ladder:frame.header_v1().step_leaf_count,prompt_ids_merkle:false,held_regime:false,decode_close_convicts_only:true,
+            fp_decode_from_daa:None,cell_closure_from_daa:None,memory_routing_from_daa:None,
+            tir_active:true,gen_active:false,task_heads_active:false,improvement_active:false,constraint_active:false});
+        extras.offence_attribution_active=true;
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);archive_service(&mut b,&frame);
+        let (id,_)=archive_session(&mut b,&frame);let side=PalwCourtSideV1::Challenger;
+        for s in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {b.write_court_close_group((id,s),None).unwrap();}
+        let Evidence::Arithmetic {proof}=cone(&fx) else {unreachable!()};
+        let close=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:PalwCourtVerdictV2::ExecutorGuilty,proof:*proof};
+        let raw=borsh::to_vec(&close).unwrap();let split=raw.len()/2;
+        let digests=vec![palw_court_close_chunk_digest_v1(&raw[..split]),palw_court_close_chunk_digest_v1(&raw[split..])];
+        let digest=palw_court_close_chunk_digest_v1(&raw);
+        let signature=libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,&message(&id,side,2,&digests,&digest,PalwCourtVerdictV2::ExecutorGuilty),DOMAIN,[86;32]).unwrap().as_ref().to_vec();
+        let declaration=PalwConsensusObjectV2::CourtCloseDeclared {session_id:id,side,count:2,chunk_digests:digests,close_digest:digest,verdict:PalwCourtVerdictV2::ExecutorGuilty,signature};
+        super::super::objects::apply_object(&mut b,&at(&frame,5),&declaration).unwrap();
+        super::super::objects::apply_object(&mut b,&at(&frame,6),&PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:0,bytes:raw[..split].to_vec()}).unwrap();
+        super::super::objects::apply_object(&mut b,&at(&frame,7),&close).unwrap();
+        let deadline=b.state.court_end_archive_v1(id).unwrap().groups[&side].assembly_deadline_daa;
+        let final_chunk=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:raw[split..].to_vec()};
+        b.prepare_native_court_end_cause_v1(&at(&frame,deadline-frame.plan_v1().terms.accepted_daa),&final_chunk).unwrap();
+        assert!(b.apply_native_archived_chunk_v1().unwrap());b.court_end_evidence=None;
+        let discharged=b.state.clone();
+        let material=discharged.court_end_archive_v1(id).unwrap().material_until_daa;
+        // Before / at the material horizon the per-block pruner leaves the resolved archive in place.
+        for now in [material.saturating_sub(1),material] {
+            let mut t=TransitionBuilder::new(&discharged,&params,false,false,false,false,&extras);
+            t.sweep_resolved_court_archives_v1(now).unwrap();
+            assert!(t.entries.is_empty(),"no prune at {now}");assert!(t.state.court_end_archive_v1(id).is_some());
+        }
+        // Without the court service book the pruner is a no-op (its existence condition).
+        {
+            let mut bare=discharged.clone();bare.staged_courts.remove(&Key::CourtService);
+            let mut t=TransitionBuilder::new(&bare,&params,false,false,false,false,&extras);
+            t.sweep_resolved_court_archives_v1(material+1).unwrap();assert!(t.entries.is_empty());
+        }
+        // Past it the sweep prunes, once.
+        let mut t=TransitionBuilder::new(&discharged,&params,false,false,false,false,&extras);
+        t.sweep_resolved_court_archives_v1(material+1).unwrap();
+        assert!(t.state.court_end_archive_v1(id).is_none());
+        assert!(t.state.court_archive_progress_v1(id,side).is_none());
+        assert!(t.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)).is_none());
+        let entries=t.entries.len();t.sweep_resolved_court_archives_v1(material+2).unwrap();assert_eq!(t.entries.len(),entries);
+        // Reorg: undo restores the discharged archive exactly; redo re-prunes.
+        let pruned=t.state.state_root();
+        let mut backwards=t.state.clone();for e in t.entries.iter().rev(){apply_delta_entry(&mut backwards,e,true).unwrap();}
+        assert_eq!(backwards.state_root(),discharged.state_root());
+        assert_eq!(backwards.court_end_archive_v1(id),discharged.court_end_archive_v1(id));
         for e in &t.entries{apply_delta_entry(&mut backwards,e,false).unwrap();}
         assert_eq!(backwards.state_root(),pruned);
     }
