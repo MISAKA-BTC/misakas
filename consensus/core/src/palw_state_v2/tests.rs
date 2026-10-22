@@ -3,6 +3,8 @@
 #![cfg(test)]
 
 mod kernel_route_locator_v1;
+// Liveness audit (lane lifecycle): per-object rehearsal / per-block fold cost vs state rows.
+mod liveness_lifecycle_v1;
 mod public_filer_targeting_v1;
 mod claim_local_v1;
 mod claim_local_rewards_v1;
