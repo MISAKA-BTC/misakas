@@ -614,8 +614,17 @@ mod tests {
     #[test]
     fn no_shipped_build_adopts_a_typed_missing_value() {
         // The day one is adopted this test is updated with the reviewed change that adopts it — never silently.
+        // Lane P3 (2026-10-22, user delegation of value decisions; awaiting independent verification): V7 and V8 —
+        // docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md.
+        const DECIDED_P3: &[&str] =
+            &["D2 disclosure fee schedule", "D2 readiness draw cap", "TIR position witness budget", "TIR lookahead frontier bound"];
         for value in palw_typed_missing_values_v1() {
-            assert!(!value.adopted, "{} is adopted in this build; update the tooling register and its guide", value.name);
+            assert_eq!(
+                value.adopted,
+                DECIDED_P3.contains(&value.name),
+                "{} adoption differs from the reviewed list; update the tooling register and its guide",
+                value.name
+            );
         }
         assert_eq!(palw_typed_missing_json_v1()["values"][0]["status"], "not adopted");
     }

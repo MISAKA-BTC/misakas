@@ -238,6 +238,10 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 /// measured records, approved X3 / court-capacity / monetary-material / model-tier policies) AND the user approves; the same change
 /// updates `contrib/t12-deploy-kit/fleet.env.example` (pinned by `t12_deploy_kit_constants`) and re-pins the ids. One constant the preset,
 /// the drill flag `--palw-drill-full-activation-at` and the kit share.
+///
+/// 2026-10-22: the value pin is in the parameter register. This height stays `None`. No gated fence has one evidence digest per
+/// arming requirement (suite, node E2E, shipped-binary crossing drill). Those digests are not filled in from estimates.
+/// `docs/evidence/palw/studio-values-2026-10-22/fence-readiness-2026-10-22.md`.
 pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = None;
 
 /// The intended height, for tests and the notes only — NEVER read by the preset.

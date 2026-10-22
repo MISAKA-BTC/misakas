@@ -78,6 +78,17 @@ fn original_book(r: &PalwKernelRouteStateV1, h: &JobHeader) -> Result<NativeText
     }
     Ok(b)
 }
+/// **V6 (lane P3, 2026-10-22): the reserve a conviction of this held text29 Final collects** — the signed
+/// `maximum.producer_reserve` of the header-anchored book, the same amount `convict_after_final` is bounded by. Refused (never a
+/// default) when the header, the book or the Final is not readable as recorded.
+pub(super) fn held_final_reserve_v29(r: &PalwKernelRouteStateV1, job: &Digest) -> Result<u64, PalwStateV2Error> {
+    let h = original_header(r, *job)?;
+    let b = original_book(r, &h)?;
+    if b.terminal() != NativeTextTerminalV29::Final {
+        return Err(refused("text29 held reserve: the anchored book is not Final"));
+    }
+    Ok(b.funding().maximum.producer_reserve)
+}
 fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, b: &NativeTextBookV29) -> Result<(), PalwStateV2Error> {
     let raw = key(b);
     h.book = b.root();

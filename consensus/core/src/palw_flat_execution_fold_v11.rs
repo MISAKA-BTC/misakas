@@ -1311,6 +1311,30 @@ fn held_final_reserve_v11(r: &PalwKernelRouteStateV1, h: &NativeExecutionJobHead
         .unwrap_or(u64::MAX as u128)
 }
 
+/// **V6 (lane P3, 2026-10-22): the reserve a conviction of the held Final of `(family, job)` collects** — funded v11: the anchored
+/// book's `claim.reserved_original` (what [`held_final_reserve_v11`] keeps committed and a post-Final conviction collects); text29:
+/// the book's signed `maximum.producer_reserve`. The post-Final F02 default slashes exactly this (bounded by what the bond still
+/// holds), consistent with the families' pre-Final DA default and conviction. Refused — never a default — when it is not readable.
+pub(super) fn native_held_final_reserve_v1(builder: &TransitionBuilder<'_>, family: u8, job: &Digest) -> Result<u64, PalwStateV2Error> {
+    if builder.state.kernel_route.is_none() {
+        return Err(refused("held reserve: no kernel route"));
+    }
+    match family {
+        crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_FUNDED_V11 => {
+            let (_, _, book, _) = original_job(builder, *job)?;
+            if book.terminal() != ExecutionTerminalV11::Final {
+                return Err(refused("funded v11 held reserve: the anchored book is not Final"));
+            }
+            Ok(book.claim().ok_or_else(|| refused("funded v11 held reserve: the Final book has no claim"))?.reserved_original)
+        }
+        crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_TEXT_V29 => {
+            let r = builder.state.kernel_route.as_ref().ok_or_else(|| refused("held reserve: no kernel route"))?;
+            text29::held_final_reserve_v29(r, job)
+        }
+        _ => Err(refused("held reserve: no post-Final default for this family")),
+    }
+}
+
 /// New funded jobs cannot lose original candidate/program/PC through a legacy
 /// owner withdrawal. A bounded fixed-prefix walk is paid before any header read.
 pub(super) fn candidate_withdraw_held(

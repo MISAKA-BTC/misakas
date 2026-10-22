@@ -10,6 +10,9 @@
 //! | `c_m_is_applied_once_never_0_09` | `A_m = c_m · S̄^α` once; a claim's reward is never × 0.3 again |
 //! | `n_registrations_never_raise_the_registered_tier_total` | the registered tier's aggregate cap |
 //! | `the_tiered_roll_is_the_same_after_reorg_ibd_and_restart` | reorg / IBD / restart consistency |
+//! | `p4_registered_capital_cannot_dilute_the_approved_tier_beyond_its_scaled_weight` | ΣA of the scaled weights (2026-10-22) |
+//! | `p4_canonical_only_and_unbound_allocations_are_unchanged` | no change where κ does not bind |
+//! | `p4_registered_models_receive_exactly_their_scaled_share` | each registered row is c·S̄^α scaled by κ's factor |
 //!
 //! Gate C for every tier: `palw_rfc0018_v1/tests.rs` `rfc18_round5_every_tier_needs_security_certified_and_none_is_exempt`.
 
@@ -203,7 +206,7 @@ fn c_m_is_applied_once_never_0_09() {
 }
 
 /// N registrations of equally capitalised 0.3 models never take more than the registered tier's cap κ of the allocation, however
-/// large N is; below the cap nothing changes, and what the cap removes is never handed to the approved tier.
+/// large N is; below the cap nothing changes, and the approved tier keeps at least `1 − κ` (ΣA of the scaled weights, 2026-10-22).
 #[test]
 fn n_registrations_never_raise_the_registered_tier_total() {
     let approved = h(20);
@@ -229,10 +232,144 @@ fn n_registrations_never_raise_the_registered_tier_total() {
             assert!((229..=231).contains(&share), "N = 1: {share}");
         }
     }
-    // The cap factor itself.
-    let w = PalwAllocationWeightV1::from_u64(1_000);
-    assert_eq!(palw_model_tier_cap_factor_ppm_v1(w, PalwAllocationWeightV1::from_u64(100), 300), 1_000_000, "within the cap");
-    assert_eq!(palw_model_tier_cap_factor_ppm_v1(w, PalwAllocationWeightV1::from_u64(600), 300), 500_000, "600 → 300 of 1000");
+    // The cap factor itself (canonical, registered, κ): the scaled registered total is at most κ of the SCALED ΣA.
+    let w = |n: u64| PalwAllocationWeightV1::from_u64(n);
+    assert_eq!(palw_model_tier_cap_factor_ppm_v1(w(900), w(100), 300), 1_000_000, "100 of 1000 is within κ");
+    assert_eq!(palw_model_tier_cap_factor_ppm_v1(w(700), w(300), 300), 1_000_000, "exactly κ: within");
+    // 600 registered over 400 canonical → 400 · 0.3/0.7 = 171.43 → factor 285,714 ppm; 171 of 571 ≈ 0.3.
+    assert_eq!(palw_model_tier_cap_factor_ppm_v1(w(400), w(600), 300), 285_714);
+    assert_eq!(palw_model_tier_cap_factor_ppm_v1(w(400), w(600), 1_000), 1_000_000, "κ = 1000 never binds");
+    assert_eq!(palw_model_tier_cap_factor_ppm_v1(w(0), w(600), 300), 0, "no approved weight: the registered tier gets κ of nothing");
+    assert_eq!(palw_model_tier_cap_factor_ppm_v1(w(400), w(0), 300), 1_000_000);
+}
+
+/// A world with explicit capital per model (one bond per model, each bond's capital = its assignment).
+fn capital_world(models: &[(Hash64, u64)]) -> (PalwModelAllocationPolicyV1, PalwBondBudgetStateV1, BTreeMap<PalwBondKeyV2, u64>) {
+    let ap = PalwModelAllocationPolicyV1::decided_unapproved_v3();
+    let mut s = PalwBondBudgetStateV1::new(0, &PalwBondBudgetPolicyV1::hold_baseline_unapproved_v1());
+    let mut j = Vec::new();
+    let mut capital = BTreeMap::new();
+    for (i, (m, c)) in models.iter().enumerate() {
+        s.assign(&ap, bond(i as u8), &[(*m, *c)], 1, *c, 0, |_| true, &mut j).unwrap();
+        capital.insert(bond(i as u8), *c);
+    }
+    (ap, s, capital)
+}
+
+fn roll_capital(
+    ap: &PalwModelAllocationPolicyV1,
+    s: &mut PalwBondBudgetStateV1,
+    capital: &BTreeMap<PalwBondKeyV2, u64>,
+    approved: &[Hash64],
+    cap: Option<u32>,
+    epochs: std::ops::Range<u64>,
+) {
+    let empty = BTreeMap::new();
+    let mut j = Vec::new();
+    for epoch in epochs {
+        s.roll_epoch_v3_tiered(
+            ap,
+            epoch,
+            epoch * ap.epoch_daa,
+            |b| (capital.get(b).copied().unwrap_or(0), true),
+            &empty,
+            |_, c| c,
+            |m: &Hash64| {
+                if approved.contains(m) {
+                    (false, PALW_MODEL_TIER_APPROVED_PERMILLE_V1)
+                } else {
+                    (true, PALW_MODEL_TIER_REGISTERED_PERMILLE_DESIGN_V1)
+                }
+            },
+            cap,
+            &mut j,
+        );
+    }
+}
+
+fn shares_permille(s: &PalwBondBudgetStateV1, models: &[Hash64], total: u64) -> Vec<u128> {
+    models.iter().map(|m| s.model_available(m) as u128 * 1_000 / total as u128).collect()
+}
+
+/// **The dilution counterexample (P4, 2026-10-22) no longer dilutes.** One approved model with 1,000 KAS, one registered model with
+/// 100,000 KAS: before the correction the header kept the unscaled `ΣA`, so the approved model's share fell to ≈ 3 ‰ while the
+/// registered model was cut to κ and the rest went unminted. With `ΣA` the sum of the scaled weights the approved model keeps
+/// `1 − κ` and the registered model takes exactly κ.
+#[test]
+fn p4_registered_capital_cannot_dilute_the_approved_tier_beyond_its_scaled_weight() {
+    let (approved, registered) = (h(40), h(41));
+    let (ap, mut s, capital) = capital_world(&[(approved, 1_000 * KAS), (registered, 100_000 * KAS)]);
+    let cap = PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1;
+    roll_capital(&ap, &mut s, &capital, &[approved], Some(cap), 0..9); // epochs 2..=8: a full 7-epoch average
+    let total: u64 = 1_000_000 * KAS;
+    let mut j = Vec::new();
+    s.accrue(total, &mut j);
+    let sh = shares_permille(&s, &[approved, registered], total);
+    assert!(sh[0] >= 699, "the approved tier keeps 1 − κ: {} ‰", sh[0]);
+    assert!(sh[1] <= cap as u128 && sh[1] >= cap as u128 - 1, "the registered tier takes κ: {} ‰", sh[1]);
+    // The unscaled denominator (the old rule) would have left the approved model ≈ 3 ‰: A_c / (A_c + 0.3·A_r).
+    let wa = PalwAllocationCurveV1 { alpha_halves: 3 }.weight((1_000 * KAS) as u128);
+    let wr = palw_model_tier_weight_v1(PalwAllocationCurveV1 { alpha_halves: 3 }.weight((100_000 * KAS) as u128), 300);
+    let old = palw_model_available_v1(total, &wa, &wa.saturating_add(wr), 0) as u128 * 1_000 / total as u128;
+    assert!(old <= 4, "the counterexample: {old} ‰ under the unscaled ΣA");
+    s.check_consistency().expect("consistent");
+}
+
+/// Canonical-only allocation (and any allocation where κ does not bind) is unchanged: the same rows, the same header and roots
+/// with the cap as without it.
+#[test]
+fn p4_canonical_only_and_unbound_allocations_are_unchanged() {
+    let models = [(h(50), 1_000 * KAS), (h(51), 4_000 * KAS)];
+    let approved = [h(50), h(51)];
+    let (ap, mut capped, capital) = capital_world(&models);
+    let (_, mut free, _) = capital_world(&models);
+    roll_capital(&ap, &mut capped, &capital, &approved, Some(PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1), 0..3);
+    roll_capital(&ap, &mut free, &capital, &approved, None, 0..3);
+    assert_eq!(capped.root_parts(), free.root_parts(), "canonical only: identical with or without κ");
+    let sum: PalwAllocationWeightV1 =
+        approved.iter().fold(PalwAllocationWeightV1::ZERO, |a, m| a.saturating_add(capped.model_row(m).unwrap().weight));
+    assert_eq!(capped.header.allocation.unwrap().sum_a, sum, "ΣA is the rows' sum");
+    // One registered model at 0.3 under κ (0.3 / 1.3 of an equal approved model ≈ 230 ‰ < 300 ‰): the cap does not bind, nothing moves.
+    let models = [(h(52), 1_000 * KAS), (h(53), 1_000 * KAS)];
+    let (ap, mut capped, capital) = capital_world(&models);
+    let (_, mut free, _) = capital_world(&models);
+    roll_capital(&ap, &mut capped, &capital, &[h(52)], Some(PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1), 0..3);
+    roll_capital(&ap, &mut free, &capital, &[h(52)], None, 0..3);
+    assert_eq!(capped.root_parts(), free.root_parts(), "an unbound cap changes nothing");
+}
+
+/// Registered models still receive exactly their scaled share: each row's weight is `scale(c·S̄^α, factor)`, `ΣA` is the sum of the
+/// rows, and each model's allocation is `⌊accrued · A_m / ΣA⌋`.
+#[test]
+fn p4_registered_models_receive_exactly_their_scaled_share() {
+    let approved = h(60);
+    let registered = [h(61), h(62), h(63)];
+    let mut models = vec![(approved, 1_000 * KAS)];
+    models.extend(registered.iter().map(|m| (*m, 3_000 * KAS)));
+    let (ap, mut s, capital) = capital_world(&models);
+    let cap = PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1;
+    roll_capital(&ap, &mut s, &capital, &[approved], Some(cap), 0..9); // epochs 2..=8: a full 7-epoch average
+    let curve = PalwAllocationCurveV1 { alpha_halves: 3 };
+    let wa = curve.weight((1_000 * KAS) as u128);
+    let wr = palw_model_tier_weight_v1(curve.weight((3_000 * KAS) as u128), PALW_MODEL_TIER_REGISTERED_PERMILLE_DESIGN_V1);
+    let reg_sum = wr.saturating_add(wr).saturating_add(wr);
+    let factor = palw_model_tier_cap_factor_ppm_v1(wa, reg_sum, cap);
+    assert!(factor < 1_000_000, "the cap binds here");
+    assert_eq!(s.model_row(&approved).unwrap().weight, wa, "the approved weight is never scaled");
+    let scaled = palw_model_tier_scale_v1(wr, factor);
+    for m in &registered {
+        assert_eq!(s.model_row(m).unwrap().weight, scaled, "c·S̄^α, then the κ factor");
+    }
+    let sum_a = s.header.allocation.unwrap().sum_a;
+    assert_eq!(sum_a, wa.saturating_add(scaled).saturating_add(scaled).saturating_add(scaled), "ΣA = Σ of the scaled rows");
+    let total: u64 = 1_000_000 * KAS;
+    let mut j = Vec::new();
+    s.accrue(total, &mut j);
+    for m in &registered {
+        assert_eq!(s.model_available(m), palw_model_available_v1(total, &scaled, &sum_a, 0));
+    }
+    let tier: u128 = registered.iter().map(|m| s.model_available(m) as u128).sum();
+    assert!(tier * 1_000 / total as u128 <= cap as u128, "the registered tier stays within κ");
 }
 
 /// The tiered roll is a pure function of the book and the tier read: a second node (IBD), a restart (the book's borsh round trip)

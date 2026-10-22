@@ -622,6 +622,103 @@ mod tests {
         t12_sp().with_court_clock_v2_from_daa(Some(F))
     }
 
+    /// V9 (decided 2026-10-22, lane P3): on testnet-12 the staged court's material covers the clock-v2 extension as a Custody
+    /// dependency (the old 4,096 / 256 windows were short), its reorg term is the finality depth, and T06 without X3 still fits.
+    #[test]
+    fn p3_v9_the_staged_config_covers_the_clock_v2_extension_on_testnet_12() {
+        use crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1 as Cfg;
+        let sp = t12_sp();
+        let w = crate::palw_state_v2::palw_da_disclose_window_daa_v1(&sp);
+        assert_eq!(w, 1_200, "testnet-12 W_disclose");
+        assert_eq!(crate::config::params::BlockrateParams::new_two_minute_bps().finality_depth, 360);
+        let cfg = Cfg::network_v1();
+        assert_eq!((cfg.acquisition_daa, cfg.collection_daa, cfg.reorg_retention_daa), (4_096, 7_104, 360));
+        let reorg = palw_court_clock_v2_reorg_retention(Some(&cfg));
+        // Independent of any plan's inclusion term (≥ 0): acquisition + collection alone reach a + 10,000 + W_disclose.
+        assert!(cfg.acquisition_daa + cfg.collection_daa >= DISPUTE_WINDOW_DAA + w.max(reorg));
+        let old = Cfg { collection_daa: 4_096, reorg_retention_daa: 256, ..cfg };
+        let mut old_short = 0;
+        for (a, prefix_tokens, vocab) in [(F, 4, 32), (16_000, 1, 2), (16_000, 8, 256)] {
+            let terms = cfg.claim_terms(a, prefix_tokens, vocab).unwrap();
+            let custody = PalwCourtDependencyV2 { kind: PalwCourtDependencyKindV2::Custody, signed_horizon_daa: terms.material_until_daa };
+            let need = palw_court_clock_v2_dependencies_cover_v2(a, w, reorg, [&custody]).expect("the staged material covers it");
+            assert_eq!(need, a + DISPUTE_WINDOW_DAA + w.max(reorg));
+            assert!(terms.collect_until_daa > a + DISPUTE_WINDOW_DAA, "the route's own door outlives the extended hard");
+            // The old windows (4,096 collection, 256 reorg): covered only when the plan's inclusion term happens to fill the gap.
+            let old_terms = old.claim_terms(a, prefix_tokens, vocab).unwrap();
+            let short = PalwCourtDependencyV2 { kind: PalwCourtDependencyKindV2::Custody, signed_horizon_daa: old_terms.material_until_daa };
+            let covered = palw_court_clock_v2_dependencies_cover_v2(a, w, 256, [&short]);
+            eprintln!(
+                "[p3-v9] plan ({prefix_tokens},{vocab}) a {a}: inclusion {} DAA, new material a + {}, old material a + {} -> old {covered:?}",
+                terms.stream_until_daa - terms.open_until_daa,
+                terms.material_until_daa - a,
+                old_terms.material_until_daa - a
+            );
+            if covered == Err(PalwCourtDependencyRefusalV2::TooShort(PalwCourtDependencyKindV2::Custody)) {
+                old_short += 1;
+            }
+        }
+        // The smallest plan (inclusion = the margin only) is the one the old windows refused.
+        let small = old.claim_terms(16_000, 1, 2).unwrap();
+        if small.material_until_daa < 16_000 + DISPUTE_WINDOW_DAA + w {
+            assert!(old_short >= 1);
+        }
+        // T06 without X3 (legacy demand W_disclose + window_court) with the new reorg term.
+        let slack = palw_court_clock_v2_t06_of_params_v2(&sp, reorg).expect("T06 holds");
+        eprintln!(
+            "[p3-v9] t12 window_court {} W_disclose {} turn_deadline {} reorg {} -> T06 slack {} DAA",
+            sp.window_court(),
+            w,
+            sp.turn_deadline_daa(),
+            reorg,
+            slack
+        );
+    }
+
+    /// V10 (decided 2026-10-22, lane P3): the decided Δ terms are all non-zero; composed on testnet-12 at DAA 16,000 the policy's
+    /// `B_remaining` passes T06 with the staged reorg term, the latest legal notice (a + 3,120) may still start, and with the 目安
+    /// `c_retain` no term is unmeasured (a 0 term is still named and refused).
+    #[test]
+    fn p3_v10_the_decided_x3_terms_fit_t06_and_leave_only_c_retain_open() {
+        use crate::palw_ruling_fences_v1 as x3;
+        let terms = x3::PALW_X3_DECIDED_DELTA_TERMS_V1;
+        assert_eq!(terms.delta_daa(), 2_016);
+        let activation = crate::config::params::ForkActivation::new(16_000);
+        let sp = t12_sp();
+        // c_retain 目安 (provisional, user 2026-10-22): ⌈2,250,000 B × 50 sompi/B ÷ 3,120 DAA⌉.
+        assert_eq!(x3::PALW_X3_RETENTION_COST_PER_DAA_SOMPI_V1, Some(36_058));
+        assert_eq!(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES, 2_250_000);
+        assert_eq!((2_250_000u64 * 50).div_ceil(NOTICE_WINDOW_DAA), 36_058);
+        let policy = x3::palw_x3_decided_policy_v1(&sp, activation).expect("every term decided");
+        assert_eq!(policy, x3::palw_x3_policy_with_terms_v1(&sp, activation, terms, 36_058));
+        policy.validate().unwrap();
+        // Arming validation's X3 checks: no unmeasured term, composition matches the windows.
+        assert!(x3::palw_x3_unmeasured_terms_v1(&policy).is_empty());
+        assert_eq!(x3::palw_x3_composition_refusal_v1(&sp, activation, &policy), None);
+        // REQ-X3-6 pricing with the 目安 c_retain: a positive extension is priced, never free; 0 is still refused.
+        assert_eq!(x3::palw_x3_retention_cost_sompi_v1(&policy, 1_912), Ok(1_912 * 36_058));
+        assert!(x3::palw_x3_retention_cost_sompi_v1(&x3::palw_x3_policy_with_terms_v1(&sp, activation, terms, 0), 1).is_err());
+        assert_eq!(x3::palw_x3_unmeasured_terms_v1(&x3::palw_x3_policy_with_terms_v1(&sp, activation, terms, 0)), vec!["c_retain"]);
+        let b_remaining = x3::palw_claim_pursuit_budget_v1(&sp, &policy);
+        assert_eq!(b_remaining, crate::palw_state_v2::palw_da_disclose_window_daa_v1(&sp) + sp.window_court() + 2_016);
+        let armed = sp.clone().with_claim_hard_deadline_v1(Some(x3::PalwClaimHardDeadlineMirrorV1 { from_daa: 16_000, policy }));
+        let reorg = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1().reorg_retention_daa;
+        let slack = palw_court_clock_v2_t06_of_params_v2(&armed, reorg).expect("T06 holds with the decided terms");
+        assert_eq!(slack, PALW_COURT_CLOCK_V2_RESIDUAL_DAA - (b_remaining + reorg + 1));
+        // Combined start rule: a governed claim accepted at 16,000 may start at its last legal notice and finish by a + 10,000.
+        let governed = armed.with_court_clock_v2_from_daa(Some(16_000));
+        let c = claim(16_000, u64::MAX);
+        assert!(palw_claim_pursuit_may_start_v2(&governed, &c, 16_000 + NOTICE_WINDOW_DAA).is_ok());
+        assert!(palw_claim_pursuit_may_start_v2(&governed, &c, 16_000 + NOTICE_WINDOW_DAA + 1).is_err(), "past the notice window");
+        // Each term at the limit: one DAA more Δ than the slack refuses T06 (the boundary is exact).
+        let over = x3::PalwX3DeltaTermsV1 { reorg_slack_daa: terms.reorg_slack_daa + slack + 1, ..terms };
+        let over_policy = x3::palw_x3_policy_with_terms_v1(&sp, activation, over, 1);
+        let over_armed = sp.with_claim_hard_deadline_v1(Some(x3::PalwClaimHardDeadlineMirrorV1 { from_daa: 16_000, policy: over_policy }));
+        assert!(palw_court_clock_v2_t06_of_params_v2(&over_armed, reorg).is_err());
+        let hard = x3::palw_x3_hard_deadline_at_v1(&policy, 16_000);
+        eprintln!("[p3-v10] t12 B_remaining {b_remaining} DAA, T06 slack {slack} DAA, X3-only hard a + {}", hard - 16_000);
+    }
+
     fn with_x3(sp: PalwStateParamsV2) -> PalwStateParamsV2 {
         let policy = crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(
             crate::config::params::ForkActivation::new(F),

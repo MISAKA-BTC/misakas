@@ -218,27 +218,35 @@ pub fn palw_model_tier_weight_v1(weight: PalwAllocationWeightV1, c_permille: u32
     product.div_rem_u64(PALW_MODEL_TIER_APPROVED_PERMILLE_V1 as u64).0
 }
 
-/// **The registered tier's cap factor** in ppm: 1,000,000 while `Σ_registered / Σ_all ≤ cap`; past it `⌊cap · Σ_all · 10^6 /
-/// (1000 · Σ_registered)⌋`, so the scaled registered weights total at most `cap` of the (unscaled) denominator — the excess is never
-/// allocated (never minted, never redistributed).
-pub fn palw_model_tier_cap_factor_ppm_v1(total: PalwAllocationWeightV1, registered: PalwAllocationWeightV1, cap_permille: u32) -> u64 {
-    if registered.is_zero() {
+/// **The registered tier's cap factor** in ppm (ADR-0179 5 with the 2026-10-22 user correction: `ΣA` is the sum of the SAME scaled
+/// `A_m` the rows carry). `canonical` is the approved tier's `Σ A_m`, `registered` the registered tier's `Σ c_m·S̄_m^α` before the
+/// cap. 1,000,000 while `registered ≤ κ/(1−κ) · canonical` (the registered tier is at most `κ` of the scaled `ΣA`); past it
+/// `⌊κ · canonical · 10^6 / ((1000 − κ) · registered)⌋`, so the scaled registered total is at most `κ` of the scaled denominator and
+/// capital on registered models never dilutes the approved tier beyond the registered tier's scaled weight. `κ = 1000` never binds.
+/// With no approved weight at all the registered tier is at most `κ` of nothing: factor 0.
+pub fn palw_model_tier_cap_factor_ppm_v1(
+    canonical: PalwAllocationWeightV1,
+    registered: PalwAllocationWeightV1,
+    cap_permille: u32,
+) -> u64 {
+    if registered.is_zero() || cap_permille >= PALW_MODEL_TIER_APPROVED_PERMILLE_V1 {
         return PALW_MODEL_TIER_CAP_FACTOR_SCALE_V1;
     }
-    let (lhs, o1) = registered.overflowing_mul_u64(1_000);
-    let (rhs, o2) = total.overflowing_mul_u64(cap_permille as u64);
+    let rest = (PALW_MODEL_TIER_APPROVED_PERMILLE_V1 - cap_permille) as u64;
+    let (lhs, o1) = registered.overflowing_mul_u64(rest);
+    let (rhs, o2) = canonical.overflowing_mul_u64(cap_permille as u64);
     if o1 || o2 {
         return 0;
     }
     if lhs <= rhs {
         return PALW_MODEL_TIER_CAP_FACTOR_SCALE_V1;
     }
-    // cap · total · 10^6 / (1000 · registered) = cap · total · 1000 / registered (< 10^6 here).
-    let (num, o3) = total.overflowing_mul_u64((cap_permille as u64).saturating_mul(1_000));
+    // κ · canonical · 10^6 / ((1000 − κ) · registered)  (< 10^6 here).
+    let (num, o3) = rhs.overflowing_mul_u64(PALW_MODEL_TIER_CAP_FACTOR_SCALE_V1);
     if o3 {
         return 0;
     }
-    let (q, _) = num.div_rem(registered);
+    let (q, _) = num.div_rem(lhs);
     if q > PalwAllocationWeightV1::from_u64(PALW_MODEL_TIER_CAP_FACTOR_SCALE_V1) {
         PALW_MODEL_TIER_CAP_FACTOR_SCALE_V1
     } else {

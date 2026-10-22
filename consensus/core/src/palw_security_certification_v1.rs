@@ -74,11 +74,25 @@ pub const PALW_CERTIFICATION_PAYOUT_DOMAIN_V1: &[u8] = b"misaka-palw/security-ce
 
 // ---- named, unapproved design values (RFC-0018 §11) ------------------------------------------------------------------------------
 
-/// `m` drawn positions and `k` positives (UNAPPROVED). Chosen so the premise-failure tail stays negligible at the claim volumes of the
-/// 300M case: per-claim P(adversary ≥ k of m) at f = 1/3 is 1.19e-6 (47/32) versus 4.53e-2 (7/5) — over 23,076 claims ≈ 0.03 versus
-/// ≈ 1,045 expected certified claims (RFC-0018 §7.3). The cost is `m` re-executions per certified claim (U-5).
-pub const PALW_CERT_M_DESIGN_V1: u16 = 47;
-pub const PALW_CERT_K_DESIGN_V1: u16 = 32;
+/// **The honest-fraction premise of Gate C: `f = 0.25`** (USER DECISION 2026-10-22) — at most a quarter of the drawn verifier stake
+/// is adversarial, including verifiers that withhold their approval. Permille.
+pub const PALW_CERT_PREMISE_ADVERSARY_PERMILLE_V1: u32 = 250;
+/// The honest drawn verifiers' response rate the liveness criterion is sized for (90 %; sensitivity 80–95 % in the evidence file).
+pub const PALW_CERT_HONEST_RESPONSE_PERMILLE_V1: u32 = 900;
+
+/// **RFC-0018 U-5: `m` drawn positions and `k` positives — DECIDED, AWAITING INDEPENDENT VERIFICATION** (user delegation and premise
+/// `f = 0.25`, 2026-10-22; was 47 / 32). The smallest `m` (with `k > m/2`) meeting, at `f = 0.25`:
+/// (a) per-claim false certification `P(Bin(75, 0.25) ≥ 41) = 3.99e-8`, so even an adversary filling the whole network draw cap
+///     (`⌊4,096 / 75⌋ = 54` certifications a day) expects ≤ 1e-3 falsely certified claims a YEAR (7.9e-4);
+/// (b) an honest claim certifies with `P(Bin(75, 0.75·a) ≥ 41) = 0.9926` at a 90 % honest response rate (0.9589 at 85 %), so
+///     withholding approvals stops < 1 % of honest issuance — 47 / 32 certified only 53.5 % at the same premise.
+/// The cost is `m` re-executions per certified claim and 54 certifications a day under the 4,096-draw cap
+/// (`docs/evidence/palw/studio-values-2026-10-22/values-p4-policy-rfc.md` §6a.3).
+pub const PALW_CERT_M_DECIDED_V1: u16 = 75;
+pub const PALW_CERT_K_DECIDED_V1: u16 = 41;
+/// The policy's `m` / `k` (the decided values).
+pub const PALW_CERT_M_DESIGN_V1: u16 = PALW_CERT_M_DECIDED_V1;
+pub const PALW_CERT_K_DESIGN_V1: u16 = PALW_CERT_K_DECIDED_V1;
 /// `0`: no veto — the instructed rule is m-of-k positives alone. A veto (`v > 0`: `v` negative positions refuse) is a LEAD PROPOSAL
 /// awaiting the user's decision (RFC-0018 U-6), evaluated in the RFC's table; it is not part of the adopted design.
 pub const PALW_CERT_VETO_DESIGN_V1: u16 = 0;
@@ -588,6 +602,27 @@ mod tests {
         let minority = PalwSecurityCertificationPolicyV1 { k: 3, ..p };
         assert!(minority.validate().is_err(), "a Panel-style minority/majority of a set the registrant fills is not the rule");
         assert!(p.lifetime_daa() >= p.prosecution_window_daa);
+    }
+
+    /// U-5 (premise f = 0.25, user decision 2026-10-22): the decided 75 / 41 meets both criteria, 47 / 32 fails liveness, and no
+    /// smaller m with a strict-majority k meets both.
+    #[test]
+    fn p4_u5_decided_m_k_meet_false_certification_and_liveness_at_the_premise() {
+        let f = PALW_CERT_PREMISE_ADVERSARY_PERMILLE_V1 as f64 / 1000.0;
+        let a = PALW_CERT_HONEST_RESPONSE_PERMILLE_V1 as f64 / 1000.0;
+        let cap = |m: u32| (PALW_CERT_DRAWS_PER_EPOCH_DESIGN_V1 / m) as f64;
+        // (a) expected false certifications a year with the whole draw cap filled; (b) honest certification rate (silent = adversary).
+        let false_per_year = |m: u32, k: u32| palw_certification_false_pass_f64(f, m, k, 0) * 365.0 * cap(m);
+        let honest = |m: u32, k: u32, a: f64| 1.0 - palw_certification_grief_f64(1.0 - (1.0 - f) * a, m, k, 0);
+        let meets = |m: u32, k: u32| false_per_year(m, k) <= 1e-3 && honest(m, k, a) >= 0.99 && honest(m, k, 0.85) >= 0.95;
+        let (m, k) = (PALW_CERT_M_DESIGN_V1 as u32, PALW_CERT_K_DESIGN_V1 as u32);
+        assert_eq!((m, k), (75, 41));
+        assert!(meets(m, k), "75/41: {:.2e}/yr, honest {:.4}", false_per_year(m, k), honest(m, k, a));
+        assert!(!meets(47, 32) && honest(47, 32, a) < 0.6, "47/32 stops ~46 % of honest issuance at f = 0.25");
+        for small in 7..m {
+            assert!(((small / 2 + 1)..=small).all(|kk| !meets(small, kk)), "a smaller m = {small} also meets the criteria");
+        }
+        PalwSecurityCertificationPolicyV1::design_unapproved_v1(720).validate().expect("75/41 is a strict majority");
     }
 
     #[test]

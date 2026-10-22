@@ -10,7 +10,7 @@
 | `hold_panel1` / W_hold(Panel=1) | 1日相当 DAA | DAA | 後続改定の設計基準。今回変更なし。[出典](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md) |
 | `tier_approved` / c_m 指定階層 | 1.0 | 係数 | 現在の設計値。今回変更なし。[出典](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) |
 | `tier_registered` / c_m 登録階層 | 0.3 | 係数 | 固定設計値。今回変更なし。[出典](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) |
-| `registered_tier_cap` / κ_registered | 300‰（設計値） | 総枠比率 | 未承認という原文状態を保持。[出典](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) |
+| `registered_tier_cap` / κ_registered | 300‰ | 総枠比率 | **2026-10-22 pin**（ユーザー委任）。分母は縮めた後の ΣA。fence は未武装。[pin](../evidence/palw/studio-values-2026-10-22/pin-2026-10-22.md)。定義の出典は [ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) |
 | `sigma` / σ | 未確定 | 倍率 | 測定で決定。[出典](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md) |
 | `ticket_tilt` / k（補助 ticket） | 未確定 | 無次元 | 測定・導入範囲確認。[出典](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md) |
 | `reissue_start` / φ / pace margin | 未確定 | 割合 / 無次元 | 測定で決定。[出典](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md) |
@@ -31,7 +31,7 @@
 
 **c_m 登録階層:** 自動昇格なし。制度の廃止は設計変更。
 
-**κ_registered:** 縮小分不発行・再配分なし。上限無効化は通常調整でない。
+**κ_registered:** 2026-10-22 の pin は、分母を縮めた後の ΣA にする（登録資本で正規 tier の発行を薄めない）。その結果、縮めた分は正規 tier の取り分として発行される。ADR-0179 §5 の「縮小分を発行しない」とは両立しない。ADR 本文はこの pin では改定していない。κ の撤廃と、測定による登録モデルの昇格は通常調整でない。fence は未武装。
 
 **σ:** 総権利・個別cap・登録tier上限を迂回しない。
 
@@ -71,3 +71,55 @@ RFC-0016 の旧 carry 上限 κ と RFC-0017 の登録総枠 κ は別の量で�
 | `palwq361_estimate_kl_margin` | KL 閾値 ×0.5、late/early ≤ 1.25、top-1 ≥ 0.8 | 倍率 / 比 | 目安（未実測）。prefix の外の 32K drift は比べていないことへの余裕。A16 の基準より緩い項目はない。[導出 §2.2](../evidence/palw/studio-values-2026-10-22/r7-palwq361-estimate.md) |
 
 **外さない条件:** fit は `measured: False, estimated: True` として記録し、card には「ESTIMATE」と書く。spread に合わせて scale を選び直すこと（snap）はしない。spread の上限を 0.5 以上にする変更と、KL の基準を A16 より緩める変更は、通常の調整ではない。upload gate の例外は、この承認文字列と PALWQ361 に限る。
+
+## 2026-10-22 P3・P4 の値の pin（fence は未武装）
+
+- 承認: **ユーザー委任 2026-10-22**（値の決定と、目安で pin してよいこと）。機械可読の行は [parameters.json](parameters.json)。導出・監査・再計算: [pin-2026-10-22.md](../evidence/palw/studio-values-2026-10-22/pin-2026-10-22.md)。
+- この節は台帳への pin である。`PALW_T12_FULL_ACTIVATION_DAA` は `None` のまま。arming record の一覧も空のまま。理由は [fence-readiness-2026-10-22.md](../evidence/palw/studio-values-2026-10-22/fence-readiness-2026-10-22.md)。
+- 出荷 preset はこれらの値を読まない。コード上の置き場は `consensus/core/src/palw_values_p4_v1.rs` と、P3 が既存定数へ入れた値である。
+
+### 決定値（再計算で一致。武装は別）
+
+| キー | 値 | 単位 | 状態 |
+| --- | --- | --- | --- |
+| `post_final_default_slash` | `ClaimReserve`（その claim の回収可能な reserve） | 規則 | 決定。V1 profile が pin されるまで fold は休眠 |
+| `d2_readiness_draw_cap` | 64 | 座標 | 決定。予約・料金移動・slash 配線が済むまで D2 は武装しない |
+| `d2_disclosure_fee_sompi` | 1,300,000 | sompi / demand | 決定。fold はまだ料金を移動しない |
+| `d2_conviction_slash_sompi` | 300,000,000（3 MSK） | sompi / root | 決定。適用する fold は無い |
+| `tir_position_witness_budget_bytes` | 83,333 | B | 決定。chunk 1 part |
+| `tir_lookahead_max_frontier_values` | 3,072 | 値 | 決定 |
+| `staged_court_collection_daa` | 7,104 | DAA | 決定 |
+| `staged_court_reorg_retention_daa` | 360 | DAA | 決定。t12 finality depth |
+| `model_allocation_epoch_daa` | 720 | DAA | 決定。t12 bundle の epoch 1,000 とは V+ を組めない（ADJUST） |
+| `model_allocation_seasoning_epochs` | 1 | epoch | 決定 |
+| `model_allocation_max_models_per_bond` | 16 | 件 | 決定。安全上の上限ではない |
+| `model_allocation_block_opportunity` | V+ と同じ高さ以下なら false、そうでなければ true | 真理値 | ADJUST。今の `validate_v3` は false を拒否し、V+ は true を拒否する。同時武装はコード変更が要る |
+| `cert_m` / `cert_k` | 75 / 41 | 席 | 決定。前提 f = 250‰。この pin で二項分布を再計算し、誤認証の年間期待 7.87e-4、応答率 90% で認証率 0.9926 |
+| `cert_premise_adversary_permille` | 250 | ‰ | 決定（前提）。崩れると上の確率は保証しない |
+| `paid_claim_bootstrap_seed_domain` | `MISAKA/PALW/PAID-CLAIM-BOOTSTRAP-SEED/NETWORK/V1` | domain | 決定。seed は network 名と genesis から導出。承認済み profile には入れない |
+| `material_session_min_providers` | 2 | provider | 決定。独立性の保証ではない |
+| `budget_window_daa` | 720 | DAA | 決定（値）。court clock v2 の claim（最大 10,000）では `L ≤ W_budget` は不成立。単独では武装しない |
+| `wallet_retirement_margin_daa` | 1,000 | DAA | 決定（t12、client）。名目 120 s では約 33 時間 |
+| `legacy_evidence_horizon_daa` | network の `dns_params.evidence_window_blocks`（t12 は 10,080、mainnet は 12,096,000、devnet は 300） | DAA / block | ADJUST。単一の 10,080 を全 network に置かない |
+
+### 目安（未実測。方針はあとから変える）
+
+いずれも実測 record ではない。`PALW_RFC0016_MEASURED_RECORDS_V1`、`PALW_RFC0608_MEASURED_RECORDS_V1`、`PALW_TIR_FRAME_COST_RECORDS_V1`、`PALW_G14_ARMING_RECORDS_V1` は空のまま。beacon の k / D / delay / window / retry は承認一覧に入れていない。
+
+| キー | 目安 | 見直しのきっかけ |
+| --- | --- | --- |
+| `bond_budget_capital_unit_kas` | 13,000 KAS | 対象 ruleset の最小 producer bond |
+| `bond_budget_daily_per_unit` | 72（claim・reward block・Round rights） | ADR-0176 Stage 1 |
+| `bond_budget_export_cap_permille` | 250 | Stage 1 の S/K |
+| `bond_budget_liability_hold_daa` | 10,000 | X3 の実測 Δ |
+| `source_seal_deposit_kas` | 28.6 | beacon と受付料が pin されたとき |
+| `source_max_concurrent_attempts` | 3 | 遅延の価値 ν |
+| `work_beacon_k` / `settlement_depth_daa` / `anchor_delay_slots` / `window_slots` / `retry_limit` | 3 / 200 / 2 / 40 / 2 | 外部の bias review。承認ではない |
+| `rfc0006_draw_retry` / `seats` / `outsiders` / `retained` | 2 / 1 / 1 / 4 | 実 sharded class |
+| `rfc0006_worst_cell_bytes` / `verify_us` / `shard_court_sessions` | 33,629 / 134,000 / 42 | release ハードウェア |
+| `rfc0016_sigma_permille` / `pace_margin_permille` / `capacity_safety_permille` | 250 / 1,200 / 500 | RFC-0016 §3.6 |
+| `rfc0016_epsilon_permille` | 0 | tier fence と同じ高さ以下のときだけ。そうでなければ未決定 |
+| `x3_b_cold_fetch_daa` / `b_check` / `b_localize` / `b_carrier` / `b_reorg_slack` | 512 / 512 / 512 / 120 / 360 | P1 の M-X3 と最低要件ハードウェア。0 にしない |
+| `x3_c_retain_sompi_per_daa` | 36,058 | M-DA と V5 |
+
+**外さない条件:** 目安を measured record や arming record の evidence digest として扱わない。0 の X3 項は採らない。D2 の slash 定数を、適用 fold が無いのに作動中の罰則と読まない。

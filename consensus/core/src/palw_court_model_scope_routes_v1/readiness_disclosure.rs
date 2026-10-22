@@ -50,8 +50,21 @@ pub struct PalwD2DisclosureFeeScheduleV1 {
     pub demand_fee_sompi: u64,
 }
 
-/// **NOT adopted**: `None` refuses every demand.
-pub const PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1: Option<PalwD2DisclosureFeeScheduleV1> = None;
+/// **The adopted demand fee: 1,300,000 sompi (0.013 MSK) per demand.** **Decided 2026-10-22 (lane P3, user delegation of value
+/// decisions), awaiting independent verification** — `docs/evidence/palw/studio-values-2026-10-22/values-p3-slash-clock.md` V7:
+/// twice the seat's cost of carrying one answer (a depth-6 path + ML-DSA-87 signature in one transaction, ≈ 12,672 B at the
+/// 49.96 sompi/B fee observed in `docs/measurements/2026-10-22-devnet-payload-carrier.md`), so a demand never costs an honest seat
+/// more than the challenger reserves. Today it is a free-collateral requirement only (the money movement is the escrow lane's).
+/// `None` (a caller passing no schedule) still refuses every demand.
+pub const PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1: Option<PalwD2DisclosureFeeScheduleV1> =
+    Some(PalwD2DisclosureFeeScheduleV1 { demand_fee_sompi: 1_300_000 });
+
+/// **The decided slash of a seat on `PathConvicted` or `DisclosureDefaulted`: 300,000,000 sompi (3 MSK) per root.** Decided
+/// 2026-10-22 (lane P3), awaiting independent verification (same record, V7): at least what the challengers spend demanding every
+/// one of the 64 ordinals (fee + demand carriage ≈ 1.91 M sompi each, 122.5 M in all) is returned through the ≤ 490‰ finder share
+/// (ADR-0032), i.e. ≥ 250 M sompi, rounded up. **No fold applies it yet**: the C1 court records standing only (lane r5-d2-c1 §4);
+/// wiring the slash (and the fee movement) is an open dependency, and this constant must not be read as an active penalty.
+pub const PALW_D2_READINESS_CONVICTION_SLASH_SOMPI_V1: Option<u64> = Some(300_000_000);
 
 /// **The F02 supply premise for a disclosure default**: a pinned court service profile (RFC-0026 F02 / ADR-0192 A, lane court-f02).
 /// Unpinned (today) every unanswered demand is a no-slash hold.
@@ -390,24 +403,41 @@ mod tests {
         PalwD2DisclosureDemandV1 { root_key: rk, ordinal, challenger: bond(9), fee_sompi: 7, valid_until_daa: 1_000 }
     }
 
-    /// The shipped cap and fee schedule are typed-missing: recording and demanding refuse; `None` is never success.
+    /// No cap or no fee schedule passed: recording and demanding refuse; `None` is never success.
     #[test]
     fn d2c1_unadopted_cap_and_fee_refuse_record_and_demand() {
-        assert_eq!(super::super::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1, None);
-        assert_eq!(PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1, None);
         let (root, _) = fixture(3);
         let reg = PalwD2ReadinessRegistryV1::new();
-        assert_eq!(
-            palw_d2_readiness_record_v1(&reg, &root, super::super::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1, 1),
-            Err(PalwD2DisclosureRefusalV1::DrawCapUnadopted)
-        );
+        assert_eq!(palw_d2_readiness_record_v1(&reg, &root, None, 1), Err(PalwD2DisclosureRefusalV1::DrawCapUnadopted));
         let (reg, rk, _, _) = recorded(3);
         assert_eq!(palw_d2_disclosure_open_v1(&reg, &demand(rk, 0), None, FEES, 20), Err(PalwD2DisclosureRefusalV1::DrawCapUnadopted));
         assert_eq!(
-            palw_d2_disclosure_open_v1(&reg, &demand(rk, 0), NonZeroU32::new(3), PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1, 20),
+            palw_d2_disclosure_open_v1(&reg, &demand(rk, 0), NonZeroU32::new(3), None, 20),
             Err(PalwD2DisclosureRefusalV1::FeeScheduleUnadopted)
         );
         assert!(!palw_d2_disclosure_supply_premise_v1(), "no court service profile is pinned: an unanswered demand holds");
+    }
+
+    /// V7 (decided 2026-10-22, lane P3): the shipped cap and fee admit a record and a demand that pays exactly the adopted fee; a
+    /// demand naming any other fee is refused; the slash bound covers 64 demands through the 490‰ finder share.
+    #[test]
+    fn p3_d2c1_adopted_cap_and_fee_record_and_demand() {
+        let cap = super::super::readiness_root::PALW_D2_READINESS_DRAW_CAP_V1;
+        let fees = PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1;
+        assert_eq!(fees.map(|f| f.demand_fee_sompi), Some(1_300_000));
+        let (root, _) = fixture(3);
+        let mut reg = PalwD2ReadinessRegistryV1::new();
+        let (k, e) = palw_d2_readiness_record_v1(&reg, &root, cap, 10).expect("the adopted cap records a 3-leaf root");
+        reg.insert(k, e);
+        let PalwD2ReadinessKeyV1::Root(rk) = k else { unreachable!() };
+        let mut d = demand(rk, 1);
+        d.fee_sompi = 1_300_000;
+        assert!(palw_d2_disclosure_open_v1(&reg, &d, cap, fees, 20).is_ok());
+        d.fee_sompi = 1_299_999;
+        assert_eq!(palw_d2_disclosure_open_v1(&reg, &d, cap, fees, 20), Err(PalwD2DisclosureRefusalV1::FeeMismatch));
+        let slash = PALW_D2_READINESS_CONVICTION_SLASH_SOMPI_V1.expect("decided");
+        let all_demands = 64 * (1_300_000 + 614_000u64);
+        assert!(slash * 490 / 1_000 >= all_demands, "the finder share repays a challenger who demanded every ordinal");
     }
 
     /// Demand admission boundaries: fee, replay bound, draw ordinal, self-demand, one case per coordinate, re-record refused.

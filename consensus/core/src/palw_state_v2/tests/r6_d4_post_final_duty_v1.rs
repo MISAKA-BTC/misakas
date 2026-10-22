@@ -163,8 +163,9 @@ fn r6_d4_silent_supplied_actor_defaults_with_the_test_slash_value() {
         assert_eq!(collateral(&b.state), before - SLASH, "actor slashed");
         assert!(native_post_final_duty_row_v1(&b.state, family, &JOB).is_none(), "the duty record left with the fee");
     }
-    // Production: the slash amount is typed-missing, so the production sweep does nothing.
-    assert!(PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1.is_none());
+    // Production: the slash rule is decided (V6, lane P3: the claim's reserve) but the service profile is not pinned, so the
+    // production sweep still does nothing; and this fixture has no anchored family book, so no production amount is readable.
+    assert_eq!(PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1, Some(PalwNativePostFinalDefaultSlashV1::ClaimReserve));
     let state = parent();
     let (p, e) = (armed(), conviction_extras());
     let mut b = accused(&state, &p, &e, 29);
