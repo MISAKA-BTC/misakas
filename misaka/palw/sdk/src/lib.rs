@@ -657,3 +657,8 @@ pub mod native_upstream_material_v39;
 
 #[cfg(feature = "native-rpc")]
 pub mod state_carriage_rpc;
+
+// Shared real dense/MoE execution fixture for provider acquisition controls.
+#[cfg(test)]
+#[path = "../../kernel/tests/common/mod.rs"]
+mod provider_reader_fixture;

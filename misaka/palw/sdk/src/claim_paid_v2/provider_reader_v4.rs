@@ -526,6 +526,85 @@ mod tests {
     use super::*;
     use misaka_palw_tir::types::DType;
 
+    #[test]
+    fn producer_parameters_round_trip_every_authenticated_row_and_refuse_missing_or_substituted_units() {
+        use crate::provider_reader_fixture::ledger_world::World;
+        use kaspa_consensus_core::palw_kernel_parameter_material_v4::kernel_parameter_at_v4;
+        let mut world = World::new();
+        let job = world.post_job(2, &[3, 17], 1, 0x72);
+        let made = world.honest(&job, 1);
+        let claim = made.claim.id();
+        world.block(4, vec![made.tx]);
+        assert!(world.l.claims.contains_key(&claim));
+        let limits = ProviderReaderLimitsV4 {
+            max_unit_bytes: PALW_KERNEL_MATERIAL_UNIT_BYTES_V4,
+            max_total_fetch_bytes: 64 << 20,
+            max_workspace_bytes: 1 << 30,
+            max_units: 10_000,
+        };
+        let mut parameters = Vec::new();
+        visit_kernel_parameters_v4(&world.l, &claim, |spec| {
+            parameters.push((spec.program, spec.parameter, spec.layer, spec.units()?));
+            Ok(())
+        })
+        .unwrap();
+        assert!(!parameters.is_empty());
+        let fetch = |stage, ordinal, substitute| {
+            assert_eq!(stage, PALW_KERNEL_PARAMETER_STAGE_V4);
+            let (spec, row) = kernel_parameter_at_v4(&world.l, &claim, ordinal).unwrap();
+            let tensor = &world.params.tensors[&(spec.parameter, spec.layer)];
+            let opening = match spec.suite {
+                2 => PalwKernelParameterOpeningV4::RowV2(misaka_palw_kernel::merkle::TensorOpeningV1::row(tensor, row).unwrap()),
+                3 => PalwKernelParameterOpeningV4::TileV3(
+                    misaka_palw_kernel::merkle3::LeafOpeningV3::of(
+                        tensor,
+                        misaka_palw_kernel::merkle::AXIS_ROW,
+                        row / spec.row_tiles,
+                        row % spec.row_tiles,
+                    )
+                    .unwrap(),
+                ),
+                suite => panic!("unsupported fixture suite {suite}"),
+            };
+            let unit = PalwKernelParameterRowV4 {
+                program: spec.program,
+                parameter: spec.parameter,
+                layer: spec.layer,
+                row: row + u64::from(substitute),
+                opening,
+            };
+            NativeRetainedV1::retain_existing_v1(borsh::to_vec(&unit).unwrap()).map_err(|e| e.to_string())
+        };
+        for (program, parameter, layer, units) in parameters {
+            let mut calls = 0;
+            let actual = fetch_parameter_from_provider_v4(&world.l, &claim, program, parameter, layer, limits, |s, p| {
+                calls += 1;
+                fetch(s, p, false)
+            })
+            .unwrap();
+            let expected = &world.params.tensors[&(parameter, layer)];
+            assert_eq!(actual.tensor().shape, expected.shape);
+            assert_eq!(actual.tensor().to_le_bytes(), expected.to_le_bytes());
+            assert_eq!(calls, units);
+            assert!(fetch_parameter_from_provider_v4(&world.l, &claim, program, parameter, layer, limits, |_, _| Err(
+                "provider unavailable".into()
+            ))
+            .is_err());
+            assert!(fetch_parameter_from_provider_v4(&world.l, &claim, program, parameter, layer, limits, |s, p| fetch(s, p, true))
+                .is_err());
+            assert!(fetch_parameter_from_provider_v4(
+                &world.l,
+                &claim,
+                program,
+                parameter,
+                layer,
+                ProviderReaderLimitsV4 { max_workspace_bytes: 1, ..limits },
+                |_, _| panic!("insufficient workspace must refuse before fetching")
+            )
+            .is_err());
+        }
+    }
+
     // All row memberships can agree with a mixed row/column commitment while
     // its unused column root describes no reconstructed tensor. The complete
     // fetched artifact must reproduce BOTH trees, not just authenticate rows.

@@ -321,3 +321,30 @@ library check passed (2m46s including the build lock wait); output:
 new issues and the unchanged 43-issue baseline. Public activation and source-economic
 parameters are unchanged; this fix does not close the restart/reorg/prune,
 real-provider or campaign requirements.
+
+## RFC-0007 provider acquisition controls
+
+The SDK provider reader now has an end-to-end parameter acquisition regression
+using the shared in-process dense/MoE execution fixture. It creates a job and
+an honest claim, then obtains every immutable parameter through the actual
+provider reader callback. The callback builds native row/tile openings from
+the producer's tensors; the consumer authenticates canonical ordinals,
+reconstructs each complete tensor, and compares its shape and bytes. The test
+also asserts the exact number of fetched units and refuses a missing provider,
+a substituted row ordinal and insufficient workspace before fetching.
+
+`cargo test -p misaka-palw-sdk --lib provider_ -- --test-threads=1` passed
+6 tests (zero failures or ignored tests, 1.09s; build 4m29s). Output:
+`/tmp/misaka-rfc07-provider-adapter-tests.log`. These include the existing
+mixed row/column root, commitment-suite and objective-demand selection controls.
+The fixture is one in-process Program path, not four-target real-node adapter
+acceptance, an independent source, model screening or a whole-model cost bound.
+
+The current core binary additionally passed 11 selected-approval consumer
+controls (zero failures or ignored tests, 0.28s): event export requires a
+positive quorum and canonical Final, bootstrap carries no EXEC credit,
+uncertified claims have no frontier/weight/reward, all model tiers retain
+SecurityCertified, and native dependency reads require selected OPV approval.
+Output: `/tmp/misaka-rfc07-selected-consumer-controls.log`. This is evidence for
+these named consumers only; all-consumer coverage and the full campaign remain
+open. No activation or UNKNOWN gate changes.
