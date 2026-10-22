@@ -252,8 +252,11 @@ mod tests {
         let deadline = FENCE + dc::PALW_D2_DISCLOSURE_TURN_DAA_V1;
         // audit B-08 (fix-b): the default needs a court service opportunity RECORDED inside the case's own window.
         let supplied_at = |daa: u64| {
-            use crate::palw_court_service_v1::{ServiceCost, ServiceReservations};
-            let mut book = ServiceReservations::new(ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 }).unwrap();
+            use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+            let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+            let mut book = ServiceReservations::new(cost).unwrap();
+            // Supply is recorded only where a reserved unit was served: reserve one at `daa`, then the block at `daa` supplies it.
+            book.reserve(&[ServicePacket { id: [0xD2; 64], release_daa: daa, service_before: daa + 1, cost }], daa + 10_000).unwrap();
             book.observe_block(daa, [1; 64], Default::default()).unwrap();
             let h = Hash64::from_u64_word(0xD2);
             let svc = crate::palw_court_service_state_v2::CourtServiceStateV2 { version: 2, source_profile_id: h,
