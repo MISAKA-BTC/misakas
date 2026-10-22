@@ -60,6 +60,11 @@ pub const PALW_ANNUAL_CATALOG_KERNEL_VERSION_MAX_V1: u16 = 1;
 /// **One catalog entry** — a registered class id, its fixed artifact root, the kernel version the entry requires and the
 /// verification plan it names (`0^64` = the class's own registered plan). Membership is decided by `(class_id, artifact_root)`;
 /// the other two are commitments an operator reads (and the root binds), not inputs of the tier.
+///
+/// **Which root an edition names** (audit C-06): the class's registered `artifact_root`, or — for a TIR class only — the root of
+/// the `PALWART3` container the class bound on chain (tag 175), which `palw_model_tier_at_v1` reaches through the recorded binding.
+/// A non-TIR class (A16, PALWQ361) has no on-chain container door, so an entry naming its container root never matches: such an
+/// entry must name the registered root (see `palw_genesis8_edition0_v1`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ApprovedModelV1 {
     pub class_id: Hash64,

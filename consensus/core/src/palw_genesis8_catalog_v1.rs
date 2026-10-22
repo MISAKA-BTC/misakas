@@ -26,6 +26,10 @@
 //!   registered inventory root; courts open operands under that inventory root. The catalog lists the container root (typed
 //!   [`crate::palw_artifact_identity_v1::PalwContainerRootV1`]) and the tier read reaches the class through the recorded binding
 //!   only (`palw_model_tier_at_v1` → `palw_catalog_container_root_of_class_v1`).
+//! * **A non-TIR model (A16 #1, PALWQ361 #8) is catalogued under its REGISTERED root** (audit C-06): the container binding checks a
+//!   TIR inventory, so no on-chain door maps a container root to an A16 `artifact_digest` or a PALWQ361 file digest, and an entry
+//!   keyed by the container root would never match. Edition 0 takes that root from [`PalwGenesisRootsV1::registered_root`] (the
+//!   inner root the container commits) and refuses a non-TIR model without it.
 
 use crate::Hash64;
 use crate::palw_annual_catalog_v1::{AnnualModelCatalogV1, ApprovedModelV1, PALW_ANNUAL_CATALOG_KERNEL_VERSION_MAX_V1};
@@ -242,6 +246,11 @@ pub struct PalwGenesisRootsV1 {
     pub container_root: crate::palw_artifact_identity_v1::PalwContainerRootV1,
     /// The verification plan the entry names (`0^64`: the class's own registered plan).
     pub verification_plan_id: Hash64,
+    /// **A non-TIR route's registered class root** (audit C-06): the A16 `artifact_digest` or the PALWQ361 file digest the class
+    /// registers as its `artifact_root` (the container commits it as its weight section's inner root). Only a TIR class can bind
+    /// its container on chain (tag 175 checks a TIR inventory), so a non-TIR class is catalogued under this registered root —
+    /// the key `palw_model_tier_at_v1` matches directly — and a container root would never reach it. `None` for a TIR route.
+    pub registered_root: Option<Hash64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -268,6 +277,11 @@ pub enum PalwGenesisCatalogErrorV1 {
     KernelVersion {
         genesis_id: u8,
         version: u16,
+    },
+    /// A non-TIR (A16 / PALWQ361) model without its registered class root, or a TIR model with one (audit C-06): the chain reaches
+    /// a non-TIR class only by its registered root and a TIR class only through its bound container.
+    RegisteredRoot {
+        genesis_id: u8,
     },
     Shape(&'static str),
 }
@@ -308,9 +322,16 @@ pub fn palw_genesis8_edition0_v1(
         if models.iter().any(|x: &ApprovedModelV1| x.class_id == r.class_id) {
             return Err(E::SharedClass { genesis_id: m.genesis_id });
         }
+        // Audit C-06: the key the tier read can reach — a TIR class's container (through its recorded binding), a non-TIR
+        // class's registered root (no on-chain door maps a container root to an A16 digest or a PALWQ361 file digest).
+        let artifact_root = match (m.route, r.registered_root) {
+            (PalwGenesisRouteV1::TirV1, None) => r.container_root.hash(),
+            (PalwGenesisRouteV1::Base0A16 | PalwGenesisRouteV1::PalwQ361, Some(root)) if root != Hash64::default() => root,
+            _ => return Err(E::RegisteredRoot { genesis_id: m.genesis_id }),
+        };
         models.push(ApprovedModelV1 {
             class_id: r.class_id,
-            artifact_root: r.container_root.hash(),
+            artifact_root,
             kernel_version: m.kernel_version,
             verification_plan_id: r.verification_plan_id,
         });
@@ -336,10 +357,36 @@ mod tests {
                         ))
                         .unwrap(),
                         verification_plan_id: Hash64::default(),
+                        registered_root: palw_genesis8_model_v1(*id)
+                            .filter(|m| m.route != PalwGenesisRouteV1::TirV1)
+                            .map(|_| Hash64::from_u64_word(3000 + *id as u64)),
                     },
                 )
             })
             .collect()
+    }
+
+    /// **Audit C-06: every genesis entry is keyed where the tier read can reach it.** A TIR model by its container root (reached
+    /// through the recorded binding), a non-TIR model (A16 #1, PALWQ361 #8) by its registered class root — and a non-TIR model
+    /// without one, or a TIR model with one, is refused by name.
+    #[test]
+    fn audit_fixcd_c06_a_non_tir_genesis_model_is_catalogued_under_its_registered_root() {
+        let all = [1, 2, 3, 4, 5, 6, 8, 10];
+        let roots = roots_for(&all);
+        let c = palw_genesis8_edition0_v1(&roots, true).expect("edition 0");
+        for (id, r) in &roots {
+            let entry = c.models.iter().find(|m| m.class_id == r.class_id).unwrap();
+            match palw_genesis8_model_v1(*id).unwrap().route {
+                PalwGenesisRouteV1::TirV1 => assert_eq!(entry.artifact_root, r.container_root.hash(), "#{id}"),
+                _ => assert_eq!(Some(entry.artifact_root), r.registered_root, "#{id}: the registered root, not the container"),
+            }
+        }
+        let mut missing = roots.clone();
+        missing.iter_mut().find(|(id, _)| *id == 8).unwrap().1.registered_root = None;
+        assert_eq!(palw_genesis8_edition0_v1(&missing, true), Err(PalwGenesisCatalogErrorV1::RegisteredRoot { genesis_id: 8 }));
+        let mut extra = roots;
+        extra.iter_mut().find(|(id, _)| *id == 2).unwrap().1.registered_root = Some(Hash64::from_u64_word(5));
+        assert_eq!(palw_genesis8_edition0_v1(&extra, true), Err(PalwGenesisCatalogErrorV1::RegisteredRoot { genesis_id: 2 }));
     }
 
     #[test]
