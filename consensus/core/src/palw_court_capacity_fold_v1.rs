@@ -370,9 +370,25 @@ pub(super) fn legacy_court_cap_admits_v1(
 /// **Round 2 (risk 2): the claim's own side.** The bonds the chain records as the claim's accused/colluding side: its producer
 /// (`claim.bond`) and the bonds of its panel's seats (`panels[claim].seats[].bond`). Rooted facts only — the claim and panel rows of
 /// the chain state. A missing claim or panel contributes nothing.
+///
+/// **audit B-07 (fix-b): and every bond the state LINKS to that side** — one whose recorded operator id (derived from its key at
+/// registration) or payout payload (where its rewards are paid) equals the producer's or a seat's. Such a bond is the same
+/// operator / funding destination, so it is not an outsider and cannot take the outside-first slot. A Sybil that shares neither is
+/// indistinguishable from an honest outsider on chain; that residual is bounded only by cost (the floor collateral, the failed
+/// accusation's charge and, once adopted, the paid ingress).
 fn court_outsider_lane_inside_v1(state: &PalwChainStateV2, claim_id: Hash64, bond: &PalwBondKeyV2) -> bool {
-    state.claims.get(&claim_id).is_some_and(|claim| claim.bond == *bond)
-        || state.panels.get(&claim_id).is_some_and(|panel| panel.seats.iter().any(|seat| seat.bond == *bond))
+    let mut side: Vec<PalwBondKeyV2> = Vec::new();
+    if let Some(claim) = state.claims.get(&claim_id) {
+        side.push(claim.bond);
+    }
+    if let Some(panel) = state.panels.get(&claim_id) {
+        side.extend(panel.seats.iter().map(|seat| seat.bond));
+    }
+    if side.contains(bond) {
+        return true;
+    }
+    let Some(record) = state.bonds.get(bond) else { return false };
+    side.iter().filter_map(|k| state.bonds.get(k)).any(|s| s.operator_id == record.operator_id || s.payout_payload == record.payout_payload)
 }
 
 /// A session opened by `opener` on `claim_id` is a FOLLOW-ON iff the claim already has a running session opened from the same side

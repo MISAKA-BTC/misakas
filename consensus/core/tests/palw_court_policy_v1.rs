@@ -95,11 +95,14 @@ fn court_f02_completeness_gate_clears_each_half_on_its_own_evidence() {
     p.palw_court_outsider_lane_v1 = Some(ForkActivation::new(20_001));
     let above = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
     assert!(above.contains("OneOutsiderCapacityIncomplete"), "{above}");
+    // audit B-07 (fix-b): the outsider lane alone no longer clears F03 — the paid ingress (typed-missing in every non-test build)
+    // is required too, so both halves keep refusing at and below the fence.
     for at in [19_999, 20_000] {
         p.palw_court_outsider_lane_v1 = Some(ForkActivation::new(at));
-        let only_f02 = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
-        assert!(!only_f02.contains("OneOutsiderCapacityIncomplete"), "{only_f02}");
-        assert!(only_f02.contains("ServiceOpportunityIncomplete"), "{only_f02}");
+        let lane_only = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
+        assert!(lane_only.contains("OneOutsiderCapacityIncomplete"), "{lane_only}");
+        assert!(lane_only.contains("ServiceOpportunityIncomplete"), "{lane_only}");
     }
+    assert!(kaspa_consensus_core::palw_court_paid_ingress_v1::palw_court_ingress_schedule_v1().is_err());
     assert!(!kaspa_consensus_core::palw_court_service_binding_v1::palw_court_service_opportunity_complete_v1());
 }
