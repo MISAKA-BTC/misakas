@@ -67,7 +67,8 @@ pub(super) fn install_court_service_binding_with_profile_v1(
     )
     .map_err(|e| refused(format!("court service binding refused: {e:?}")))?;
     // The native writer re-runs `check_retains_unresolved` and `check_context` (signed custody horizon) and journals the write.
-    b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(next).into())))
+    // G14 lane r6-d1-release: written in the row variant the book already has (a released book stays released).
+    b.write_court_service_state_v1(next)
 }
 
 /// **ADR-0192 A: record this accepting block's actual reserved service supply.** Called once per block after every object. The
@@ -100,9 +101,55 @@ pub(super) fn observe_court_service_block_v1(b: &mut TransitionBuilder<'_>, ctx:
         Err(e) => return Err(refused(format!("court service observation refused: {e:?}"))),
     }
     if &next != old {
-        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(next).into())))?;
+        b.write_court_service_state_v1(next)?;
     }
     b.recover_court_service_supply_v1(ctx)?;
+    // G14 lane r6-d1-release (user decision D1): release every binding that is fully decided (bounded per block).
+    release_resolved_court_service_bindings_v1(b, ctx)?;
+    Ok(())
+}
+
+/// **G14 lane r6-d1-release: the resolved-binding release step** (user decision D1). Runs once per accepting block, after the
+/// block's supply was recorded and the recovery sweep ran, only past `palw_tir_public_conviction_v1` (the caller's gate) and only on
+/// the FIRST block at a DAA (the book's clock equals this block's DAA and the observation advanced it). A binding is released when
+/// [`PalwChainStateV2::court_service_release_eligible_v1`] holds (every packet decided at/after hard, no open court, every duty clock
+/// past its response deadline) AND no dependent row of the claim remains (one scan of the staged rows, only when a candidate
+/// exists; dependents are no longer held once eligible, so they leave at their own TTL). At most
+/// [`crate::palw_court_service_release_v1::COURT_SERVICE_RELEASES_PER_BLOCK_V1`] per block, in claim order. The book is rewritten in
+/// its released form through the journalled writer (reorg undoes it with the rest of the block); each released claim's DL-1 deadline
+/// is re-armed (its retirement, now that the hold is gone).
+pub(super) fn release_resolved_court_service_bindings_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
+    let Some(service) = b.state.court_service_state_v1() else { return Ok(()) };
+    if service.book.last_observed_daa != Some(ctx.daa_score) {
+        return Ok(());
+    }
+    let mut candidates: std::collections::BTreeSet<Hash64> = service
+        .claims
+        .keys()
+        .filter(|claim| b.state.court_service_release_eligible_v1(claim))
+        .take(crate::palw_court_service_release_v1::COURT_SERVICE_RELEASES_PER_BLOCK_V1)
+        .copied()
+        .collect();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    for key in b.state.staged_courts.keys() {
+        if let Some(claim) = b.state.court_service_dependent_claim_v1(key) {
+            candidates.remove(&claim);
+            if candidates.is_empty() {
+                return Ok(());
+            }
+        }
+    }
+    let mut next = b.state.court_service_as_v3_v1().ok_or_else(|| refused("service book vanished before its release"))?;
+    next.release_v1(&candidates, ctx.daa_score).map_err(refused)?;
+    b.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(next).into())))?;
+    for claim in candidates {
+        b.rearm_claim_deadline_dl1_v1(claim, ctx.daa_score)?;
+    }
     Ok(())
 }
 

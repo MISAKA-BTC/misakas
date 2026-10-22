@@ -1125,6 +1125,7 @@ pub mod palw_court_service_v1;
 
 pub mod palw_court_service_state_v2;
 pub mod palw_court_service_binding_v1;
+pub mod palw_court_service_release_v1;
 pub mod palw_court_end_archive_v1;
 pub mod palw_court_archive_discharge_v1;
 pub mod palw_court_close_receipt_v1;

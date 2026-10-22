@@ -964,12 +964,30 @@ impl TransitionBuilder<'_> {
             return Err(PalwStateV2Error::CarriageInconsistent("court service recovery needs the current accepting-block supply clock".into()));
         }
         let mut next = old.clone();
-        let report = next.repair_missing_supply().map_err(PalwStateV2Error::CarriageInconsistent)?;
+        // G14 lane r6-d1-release: the sweep keeps causal order along the row's recorded edges (none on a legacy row).
+        let edges = self.state.court_service_causal_edges_v1();
+        let report = next.repair_missing_supply_ordered_v1(&edges).map_err(PalwStateV2Error::CarriageInconsistent)?;
         if &next != old {
-            self.write_staged_row_v1(PalwStagedCourtKeyV1::CourtService,
-                Some(PalwStagedCourtRowV1::CourtService(Box::new(next).into())))?;
+            self.write_court_service_state_v1(next)?;
         }
         Ok(report)
+    }
+
+    /// **G14 lane r6-d1-release: write the book's live state in the row variant it already has** (the released `CourtServiceV3`
+    /// keeps its records and edges; a legacy row stays legacy). Through the one journalled writer.
+    pub(super) fn write_court_service_state_v1(
+        &mut self,
+        next: crate::palw_court_service_state_v2::CourtServiceStateV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let row = match self.state.court_service_row_v3_v1() {
+            Some(released) => {
+                let mut row = released.clone();
+                row.state = next;
+                PalwStagedCourtRowV1::CourtServiceV3(Box::new(row).into())
+            }
+            None => PalwStagedCourtRowV1::CourtService(Box::new(next).into()),
+        };
+        self.write_staged_row_v1(PalwStagedCourtKeyV1::CourtService, Some(row))
     }
 
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
@@ -1111,13 +1129,37 @@ impl TransitionBuilder<'_> {
                 return Err(PalwStateV2Error::CarriageInconsistent("native duty clock is immutable".into()));
             }
         }
+        // G14 lane r6-d1-release: the book's live state, from either row variant (`CourtServiceV3` is the released form).
+        let new_service: Option<&crate::palw_court_service_state_v2::CourtServiceStateV2> = match &new {
+            Some(PalwStagedCourtRowV1::CourtService(service)) if key == PalwStagedCourtKeyV1::CourtService => Some(service.as_ref()),
+            Some(PalwStagedCourtRowV1::CourtServiceV3(row)) if key == PalwStagedCourtKeyV1::CourtService => Some(&row.state),
+            _ => None,
+        };
         if key == PalwStagedCourtKeyV1::CourtService {
+            if let Some(PalwStagedCourtRowV1::CourtServiceV3(row)) = &new {
+                // The released form is new consensus behaviour: dormant below the conviction fence.
+                if !self.extras.tir_public_conviction_active {
+                    return Err(PalwStateV2Error::CarriageInconsistent(
+                        "the released court service row is written only past palw_tir_public_conviction_v1".into(),
+                    ));
+                }
+                row.check().map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
             if let Some(old) = self.state.court_service_state_v1() {
+                let old_released = self.state.court_service_row_v3_v1().is_some();
                 match &new {
-                    Some(PalwStagedCourtRowV1::CourtService(service)) => {
+                    Some(PalwStagedCourtRowV1::CourtService(service)) if !old_released => {
                         service.check_retains_unresolved(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
                     }
-                    _ if !old.claims.is_empty() => {
+                    Some(PalwStagedCourtRowV1::CourtService(_)) => {
+                        return Err(PalwStateV2Error::CarriageInconsistent("a released service book cannot return to the legacy row".into()));
+                    }
+                    Some(PalwStagedCourtRowV1::CourtServiceV3(row)) => {
+                        let lifted = self.state.court_service_as_v3_v1()
+                            .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service book vanished under its writer".into()))?;
+                        row.check_transition_from_v1(&lifted).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                    }
+                    _ if !old.claims.is_empty() || old_released => {
                         return Err(PalwStateV2Error::CarriageInconsistent("unresolved service book cannot be removed or retyped".into()));
                     }
                     _ => {}
@@ -1125,20 +1167,20 @@ impl TransitionBuilder<'_> {
             }
             for row in self.state.staged_courts.values() {
                 if let PalwStagedCourtRowV1::CourtSharedContext(c)=row {
-                    let Some(PalwStagedCourtRowV1::CourtService(service))=&new else {
+                    let Some(service)=new_service else {
                         return Err(PalwStateV2Error::CarriageInconsistent("shared data retains service binding".into()));
                     };
                     c.check_binding(service).map_err(PalwStateV2Error::CarriageInconsistent)?;
                 }
                 if let PalwStagedCourtRowV1::CourtDutyClock(clock) = row {
-                    let Some(PalwStagedCourtRowV1::CourtService(service)) = &new else {
+                    let Some(service) = new_service else {
                         return Err(PalwStateV2Error::CarriageInconsistent("unresolved duty history retains service binding".into()));
                     };
                     clock.check_service_binding(service).map_err(PalwStateV2Error::CarriageInconsistent)?;
                 }
             }
         }
-        if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
+        if let Some(service) = new_service {
             service.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
         if let PalwStagedCourtKeyV1::Claim(claim) = key
@@ -1177,10 +1219,22 @@ impl TransitionBuilder<'_> {
         };
         update_indices(&mut self.state, key, old.as_ref(), new.as_ref());
         if key == PalwStagedCourtKeyV1::CourtService {
-            if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
-                // Do not re-date unrelated claims midway through an accepting
-                // block. This candidate only installs/updates unresolved holds.
-                self.state.deadlines.retain(|(_, claim)| !service.claims.contains_key(claim));
+            let service = match &new {
+                Some(PalwStagedCourtRowV1::CourtService(service)) => Some(service.as_ref()),
+                Some(PalwStagedCourtRowV1::CourtServiceV3(row)) => Some(&row.state),
+                _ => None,
+            };
+            if let Some(service) = service {
+                // Do not re-date unrelated claims midway through an accepting block. G14 lane r6-d1-release (user decision D1): a
+                // bound claim keeps its normal (pre-Final / Final) deadline — DL-1 arms it — and only a TERMINAL bound claim owes
+                // none (its retirement waits for the release, which re-arms it).
+                let held_terminal: Vec<Hash64> = service
+                    .claims
+                    .keys()
+                    .filter(|claim| self.state.claims.get(*claim).is_some_and(|c| c.phase.is_terminal()))
+                    .copied()
+                    .collect();
+                self.state.deadlines.retain(|(_, claim)| !held_terminal.contains(claim));
             }
         }
         if old != new {
@@ -3477,7 +3531,8 @@ pub(super) fn index_rows(
             (due, vec![(c.owner, c.plan.terms.material_until_daa, key)])
         }
         PalwStagedCourtRowV1::ArtifactInventoryOpen(c) => (c.until_daa, vec![(c.offer.opener, c.until_daa, key)]),
-        PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) | PalwStagedCourtRowV1::TirContainer(_) | PalwStagedCourtRowV1::CourtService(_) => {
+        PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) | PalwStagedCourtRowV1::TirContainer(_) | PalwStagedCourtRowV1::CourtService(_)
+        | PalwStagedCourtRowV1::CourtServiceV3(_) => {
             (u64::MAX, Vec::new())
         }
         PalwStagedCourtRowV1::CourtDutyClock(c) => (c.material_until_daa, Vec::new()),

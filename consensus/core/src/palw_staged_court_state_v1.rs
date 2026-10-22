@@ -162,6 +162,10 @@ pub enum PalwStagedCourtRowV1 {
     CourtMaterialPart(PalwSharedCourtV1<crate::palw_court_shared_material_intake_v1::MaterialPartV1>),
     CourtMaterial(PalwSharedCourtV1<crate::palw_court_shared_material_intake_v1::MaterialRowV1>),
     CourtMaterialLedger(Box<crate::palw_court_shared_material_intake_v1::MaterialLedgerV1>),
+    /// G14 lane r6-d1-release (user decision D1), appended row 36 under the SAME key `CourtService`: the book past the
+    /// resolved-binding release rule (released records + causal edges). Written only past `palw_tir_public_conviction_v1`; the
+    /// legacy `CourtService` variant keeps its encoding and stays readable.
+    CourtServiceV3(PalwSharedCourtV1<crate::palw_court_service_release_v1::CourtServiceRowV3>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -170,7 +174,8 @@ impl PalwStagedCourtRowV1 {
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
             | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) | Self::CourtSharedRound(_) | Self::CourtSharedBottom(_) | Self::CourtArchiveProgress(_)
-            | Self::CourtMaterialDraft(_) | Self::CourtMaterialPart(_) | Self::CourtMaterial(_) | Self::CourtMaterialLedger(_) => None,
+            | Self::CourtMaterialDraft(_) | Self::CourtMaterialPart(_) | Self::CourtMaterial(_) | Self::CourtMaterialLedger(_)
+            | Self::CourtServiceV3(_) => None,
             _ => Some(self),
         }
     }
@@ -180,7 +185,8 @@ impl PalwStagedCourtRowV1 {
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
             | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) | Self::CourtSharedRound(_) | Self::CourtSharedBottom(_) | Self::CourtArchiveProgress(_)
-            | Self::CourtMaterialDraft(_) | Self::CourtMaterialPart(_) | Self::CourtMaterial(_) | Self::CourtMaterialLedger(_) => None,
+            | Self::CourtMaterialDraft(_) | Self::CourtMaterialPart(_) | Self::CourtMaterial(_) | Self::CourtMaterialLedger(_)
+            | Self::CourtServiceV3(_) => None,
             _ => Some(self),
         }
     }
@@ -296,7 +302,10 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::TirPreparation(..), Self::TirPreparation(row)) => row.check_structure_v1(key),
             (PalwStagedCourtKeyV1::TirClaim(..), Self::TirClaim(frame)) => frame.check_structure_v1(key),
             (PalwStagedCourtKeyV1::TirWitness(claim, filer), Self::TirWitness(row)) => row.check_structure_v1(*claim, *filer),
-            (PalwStagedCourtKeyV1::CourtService, Self::CourtService(row)) => row.check(),
+            // The legacy variant carries only the version-2 state (a version-3 state rides `CourtServiceV3`, whose check sees the
+            // released records).
+            (PalwStagedCourtKeyV1::CourtService, Self::CourtService(row)) if row.version == 2 => row.check(),
+            (PalwStagedCourtKeyV1::CourtService, Self::CourtServiceV3(row)) => row.check(),
             (PalwStagedCourtKeyV1::CourtDutyClock(_), Self::CourtDutyClock(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtSharedContext(_), Self::CourtSharedContext(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtSharedQuery(_), Self::CourtSharedQuery(row)) => row.check(key),

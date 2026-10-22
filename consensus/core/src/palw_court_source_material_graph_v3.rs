@@ -647,6 +647,20 @@ pub struct SourceServiceProjectionV3<'a> {
     packets: Vec<CausalServicePacketV1>,
 }
 impl SourceServiceProjectionV3<'_> {
+    /// **G14 lane r6-d1-release: the projection's causal predecessors** (child -> strictly increasing predecessor ids; nodes with
+    /// none omitted), as the court service row records them so the canonical recovery sweep keeps causal order.
+    pub fn causal_edges_v3(&self) -> std::collections::BTreeMap<[u8; 64], Vec<[u8; 64]>> {
+        self.packets
+            .iter()
+            .filter(|n| !n.predecessors.is_empty())
+            .map(|n| {
+                let mut preds = n.predecessors.clone();
+                preds.sort_unstable();
+                preds.dedup();
+                (n.packet.id, preds)
+            })
+            .collect()
+    }
     pub fn check_loaded_v3(&self, book: &ServiceReservations, claim_ids: &BTreeSet<[u8; 64]>) -> Result<(), String> {
         self.graph.check_v3()?;
         if *claim_ids != self.graph.packet_ids_v3() {

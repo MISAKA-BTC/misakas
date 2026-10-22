@@ -8907,7 +8907,10 @@ impl<'a> TransitionBuilder<'a> {
         // `palw_rcore_plus`, where this is the plain insert it always was.
         let mut deadline = deadline;
         // Lane LG14-A: DL-1's dispute-reservation row, at the same primitive — a claim a live reservation holds owes none.
-        if self.state.palw_legacy_dispute_holds_v1(&claim) || self.state.court_service_holds_claim_v1(&claim) {
+        // G14 lane r6-d1-release (D1): the service binding holds only a terminal claim's retirement (DL-1's same row).
+        if self.state.palw_legacy_dispute_holds_v1(&claim)
+            || self.state.claims.get(&claim).is_some_and(|c| self.state.court_service_holds_retirement_v1(&claim, c))
+        {
             return Ok(());
         }
         // **RFC-0008 v2: a licensed claim whose work session is not ready owes no `Final` deadline** — the same pause a DA session
@@ -9621,7 +9624,8 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
-        if self.state.court_service_holds_claim_v1(&id) { return Ok(()); }
+        // G14 lane r6-d1-release (user decision D1): a claim bound to the court service book goes Final on its normal schedule; the
+        // binding holds its retirement (`retire_claim`) and its collateral/material until the binding's release.
         if self.state.staged_claim_contract_v1(&id).and_then(|c| c.prefix_custody.as_ref()).is_some_and(|c| !c.qualified()) {
             // Refusal to opt into prospective custody buys no Final/activation credit and
             // creates no retroactive DA guilt. Pending accusations keep their existing route.

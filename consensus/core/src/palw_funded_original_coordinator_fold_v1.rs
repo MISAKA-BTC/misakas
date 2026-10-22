@@ -332,6 +332,13 @@ pub(super) fn install_original_admission_v1(
             let before = b.state.court_service_state_v1().cloned();
             let (after_signer, full) =
                 funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers).map_err(FundedOriginalRefusalV1::into_state_v1)?;
+            // G14 lane r6-d1-release: the source branches' causal edges, recorded with the book (recovery keeps causal order).
+            let edges = crate::palw_funded_original_admission_v1::funded_admission_causal_edges_v1(
+                requirements.source_graph_v1().map_err(requirements_refusal).map_err(FundedOriginalRefusalV1::into_state_v1)?,
+                &derivation,
+            )
+            .map_err(admission_refusal)
+            .map_err(FundedOriginalRefusalV1::into_state_v1)?;
             requirements.into_geometry_v1().install_native_v1(b, ctx, prompt)?;
             // The ordinary install may have written court-f02's per-signer binding (only with a pinned F02 profile): it must be
             // exactly the signer prefix of this candidate; anything else is refused (the checkpoint restores every write).
@@ -339,9 +346,25 @@ pub(super) fn install_original_admission_v1(
             if now != before.as_ref() && now != Some(&after_signer) {
                 return Err(refused("RFC-0035 A funded install: the court service book moved under the all-branch reservation"));
             }
-            // Packets, court capacity, resources (in the retention packet) — all branches, one rooted write.
-            b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(full).into())))?;
-            b.install_funded_escrow_v1(row)
+            // Packets, court capacity, resources (in the retention packet) — all branches, one rooted write. G14 lane r6-d1-release:
+            // with causal source edges the book is written in its V3 form carrying them (past the conviction fence, where every
+            // funded admission is); without edges, in the form it already has.
+            if edges.is_empty() {
+                b.write_court_service_state_v1(full)?;
+            } else {
+                let mut next = match b.state.court_service_row_v3_v1() {
+                    Some(released) => released.clone(),
+                    None => crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&full),
+                };
+                next.state = full;
+                next.state.version = crate::palw_court_service_release_v1::COURT_SERVICE_ROW_VERSION_V3;
+                next.causal.extend(edges);
+                b.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(next).into())))?;
+            }
+            let claim_id = row.claim;
+            b.install_funded_escrow_v1(row)?;
+            // G14 lane r6-d1-release (r5 open 4): reserve the claim's court capacity under `palw_court_capacity_v1` (dormant below it).
+            super::palw_court_capacity_fold_v1::check_funded_court_reserve_v1(&b.state, b.params, claim_id, ctx.daa_score)
         }
     }
 }

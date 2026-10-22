@@ -263,6 +263,48 @@ mod tests {
         assert_eq!(undone.state_root(), installed.state_root());
     }
 
+    /// **G14 lane r6-d1-release (r5 open 4): a funded original admission reserves court capacity when `palw_court_capacity_v1` is
+    /// armed** — the funded claim takes its hard-deadline bucket slot (refused when full), is counted by every later admission, and
+    /// is entitled to the reserve pool for its first court row. Dormant (nothing reserved, never refused) below the fence.
+    #[test]
+    fn r6_d1_funded_admission_reserves_court_capacity_under_the_fence() {
+        use super::super::palw_court_capacity_fold_v1::{check_funded_court_reserve_v1, palw_funded_court_reserve_claims_v1};
+        let base = params();
+        let policy = crate::palw_court_capacity_v1::palw_court_capacity_placeholder_policy_v1();
+        let armed = base.clone().with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 { from_daa: 0, policy }));
+        let cap = policy.admission_claims_per_bucket(armed.turn_deadline_daa());
+        let zero_claim = |accepted: u64, retention: u64| {
+            use borsh::BorshDeserialize;
+            let zeros = [0u8; 8192];
+            let mut c = <PalwClaimStateV2 as BorshDeserialize>::deserialize(&mut &zeros[..]).expect("a zero claim decodes");
+            c.accepted_daa = accepted;
+            c.trace_retention_daa = retention;
+            c
+        };
+        let mut state = PalwChainStateV2::genesis();
+        let fund = |state: &mut PalwChainStateV2, i: u64, open: bool| {
+            state.claims.insert(h(1_000 + i), zero_claim(100, 50_000));
+            let row = PalwFundedEscrowRowV1::fresh_v1(h(2_000 + i), h(1_000 + i), TransactionOutpoint::new(h(3_000 + i), 0), 1_000, h(3),
+                payload(), 100, 10_100, open).unwrap();
+            state.funded_escrows.insert(h(2_000 + i), row);
+        };
+        // A closed liability holds no reserve.
+        fund(&mut state, 999, false);
+        assert!(!palw_funded_court_reserve_claims_v1(&state).contains(&h(1_999)));
+        for i in 0..cap {
+            fund(&mut state, i, true);
+            check_funded_court_reserve_v1(&state, &armed, h(1_000 + i), 100).expect("the bucket still has room");
+        }
+        assert_eq!(palw_funded_court_reserve_claims_v1(&state).len() as u64, cap);
+        fund(&mut state, cap, true);
+        let full = check_funded_court_reserve_v1(&state, &armed, h(1_000 + cap), 100).unwrap_err();
+        assert!(matches!(full, PalwStateV2Error::CourtClaimAdmissionFull { admitted, cap: c, .. } if admitted == cap && c == cap));
+        // Dormant below the fence: nothing is reserved or refused.
+        check_funded_court_reserve_v1(&state, &base, h(1_000 + cap), 100).unwrap();
+        let later = base.clone().with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 { from_daa: 101, policy }));
+        check_funded_court_reserve_v1(&state, &later, h(1_000 + cap), 100).unwrap();
+    }
+
     /// The carriage round-trips a row; a row violating its invariants does not decode.
     #[test]
     fn funded_escrow_rows_round_trip_the_carriage() {

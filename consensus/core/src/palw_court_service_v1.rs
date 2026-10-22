@@ -54,6 +54,9 @@ pub enum ServiceRefusal {
     ReservationInThePast,
     InvalidState,
     DeadlineExhausted,
+    /// G14 lane r6-d1-release: recovery would schedule a packet at or after a packet that causally depends on it (or a dependent at
+    /// or before its predecessor). The move is refused; the packet stays `MissingSupply` (a no-slash hold).
+    CausalOrder,
 }
 
 /// A qualified empty block still offers service under the explicit inclusion
@@ -248,6 +251,20 @@ impl ServiceReservations {
     /// All selected missing packets move atomically; other assignments and all
     /// supplied history remain untouched. This does not authorize default.
     pub fn repair_missing(&mut self, ids: &BTreeSet<[u8; 64]>, hard_deadline: u64) -> Result<usize, ServiceRefusal> {
+        self.repair_missing_ordered_v1(ids, hard_deadline, &BTreeMap::new())
+    }
+
+    /// **G14 lane r6-d1-release: [`Self::repair_missing`] that keeps causal order.** `edges` maps a packet to its causal
+    /// predecessors (`CourtServiceRowV3::causal`). Missed packets are placed in topological order (ready packets by deadline then
+    /// identity — with no edges exactly the legacy order), each no earlier than one DAA after every predecessor's (possibly just
+    /// moved) slot; afterwards every edge touching `ids` must still run strictly forward, else the whole move is refused with
+    /// [`ServiceRefusal::CausalOrder`] (nothing changes; the hold stays). With an empty `edges` this is the legacy sweep.
+    pub fn repair_missing_ordered_v1(
+        &mut self,
+        ids: &BTreeSet<[u8; 64]>,
+        hard_deadline: u64,
+        edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
+    ) -> Result<usize, ServiceRefusal> {
         self.check().map_err(|_| ServiceRefusal::InvalidState)?;
         let Some(now) = self.last_observed_daa else {
             if ids.iter().any(|id| !self.packets.contains_key(id)) {
@@ -273,9 +290,41 @@ impl ServiceReservations {
         if missing.iter().any(|packet| next >= packet.service_before) {
             return Err(ServiceRefusal::DeadlineExhausted);
         }
-        missing.sort_by_key(|packet| (packet.service_before, packet.id));
-        let mut candidate = self.clone();
+        // Topological order over the missed set (ready by deadline then identity: the legacy order when no edge applies).
+        let by_id: BTreeMap<[u8; 64], &ServicePacket> = missing.iter().map(|p| (p.id, p)).collect();
+        let mut waiting: BTreeMap<[u8; 64], usize> = BTreeMap::new();
+        let mut children: BTreeMap<[u8; 64], Vec<[u8; 64]>> = BTreeMap::new();
+        let mut ready = BTreeSet::new();
         for packet in &missing {
+            let preds = edges.get(&packet.id).map(Vec::as_slice).unwrap_or(&[]);
+            let mut count = 0usize;
+            for pred in preds {
+                if by_id.contains_key(pred) {
+                    count += 1;
+                    children.entry(*pred).or_default().push(packet.id);
+                }
+            }
+            waiting.insert(packet.id, count);
+            if count == 0 {
+                ready.insert((packet.service_before, packet.id));
+            }
+        }
+        let mut order = Vec::with_capacity(missing.len());
+        while let Some((_, id)) = ready.pop_first() {
+            order.push(by_id[&id]);
+            for child in children.get(&id).into_iter().flatten() {
+                let count = waiting.get_mut(child).ok_or(ServiceRefusal::InvalidState)?;
+                *count -= 1;
+                if *count == 0 {
+                    ready.insert((by_id[child].service_before, *child));
+                }
+            }
+        }
+        if order.len() != missing.len() {
+            return Err(ServiceRefusal::InvalidState);
+        }
+        let mut candidate = self.clone();
+        for packet in order {
             let old = candidate.assignments[&packet.id];
             let left = candidate.remaining.get(&old).copied().ok_or(ServiceRefusal::InvalidState)?;
             let returned = ServiceCost {
@@ -290,13 +339,32 @@ impl ServiceReservations {
             } else {
                 candidate.remaining.insert(old, returned);
             }
-            let (slot, residual) = (next.max(packet.release_daa)..packet.service_before)
+            let mut floor = next.max(packet.release_daa);
+            for pred in edges.get(&packet.id).map(Vec::as_slice).unwrap_or(&[]) {
+                let after = candidate.assignments.get(pred).ok_or(ServiceRefusal::InvalidState)?.checked_add(1)
+                    .ok_or(ServiceRefusal::DeadlineExhausted)?;
+                floor = floor.max(after);
+            }
+            let (slot, residual) = (floor..packet.service_before)
                 .find_map(|daa| {
                     candidate.remaining.get(&daa).copied().unwrap_or(candidate.budget).subtract(packet.cost).map(|left| (daa, left))
                 })
-                .ok_or(ServiceRefusal::NoCapacity)?;
+                .ok_or(if floor > next.max(packet.release_daa) { ServiceRefusal::CausalOrder } else { ServiceRefusal::NoCapacity })?;
             candidate.remaining.insert(slot, residual);
             candidate.assignments.insert(packet.id, slot);
+        }
+        // Every edge touching the moved set must still run strictly forward (a retained dependent may now sit at or before its
+        // moved predecessor).
+        for (child, preds) in edges {
+            for pred in preds {
+                if !ids.contains(child) && !ids.contains(pred) {
+                    continue;
+                }
+                let (Some(c), Some(p)) = (candidate.assignments.get(child), candidate.assignments.get(pred)) else { continue };
+                if c <= p {
+                    return Err(ServiceRefusal::CausalOrder);
+                }
+            }
         }
         candidate.check().map_err(|_| ServiceRefusal::InvalidState)?;
         *self = candidate;

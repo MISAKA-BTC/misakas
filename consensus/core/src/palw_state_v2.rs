@@ -4080,7 +4080,8 @@ pub fn palw_rcore_deadline_v1(
     // **Lane LG14-A (RFC-0014 §7.3): a live dispute reservation holds every end of the claim** — no Final, no bind / receipt / redraw /
     // unavailable / replay timeout, and no retirement of a Final claim — until its lapse at the claim's own hard deadline or the claim's
     // outcome. The table is empty below `palw_legacy_public_filer_v1`, so every other row reads as it did.
-    if state.palw_legacy_dispute_holds_v1(claim_id) || state.court_service_holds_claim_v1(claim_id) {
+    // G14 lane r6-d1-release (D1): the court service binding holds only a terminal claim's retirement, never its Final.
+    if state.palw_legacy_dispute_holds_v1(claim_id) || state.court_service_holds_retirement_v1(claim_id, claim) {
         return Ok(None);
     }
     // **Lane PL part C × G14 (SHARD)**: a lane-A claim whose next end past `palw_panel_unavailable_expiry` is uncharged owes no

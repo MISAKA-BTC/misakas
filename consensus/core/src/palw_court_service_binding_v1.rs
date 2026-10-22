@@ -163,7 +163,7 @@ pub fn court_service_binding_candidate_v1(
         hard_deadline_daa: hard,
         packet_ids: packets.iter().map(|p| p.id).collect(),
     });
-    next.check().map_err(|_| R::Inconsistent)?;
+    next.check_live_v1().map_err(|_| R::Inconsistent)?;
     Ok(next)
 }
 
@@ -186,7 +186,7 @@ pub fn attribute_service_default_v1(
     inclusion_premise_adopted: bool,
 ) -> Result<CourtServiceAttributionV1, &'static str> {
     let binding = service.claims.get(&claim).ok_or("court service binding is missing")?;
-    if service.check().is_err() {
+    if service.check_live_v1().is_err() {
         return Err("court service state is inconsistent");
     }
     let mut supplied = Vec::with_capacity(binding.packet_ids.len());

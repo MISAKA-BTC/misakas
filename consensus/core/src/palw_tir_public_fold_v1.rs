@@ -4970,12 +4970,17 @@ mod conviction_e2e_tests {
         b.state.last_point = Some(ctx);
         b.entries.push(PalwDeltaEntryV2::LastPoint { old: old_point, new: Some(ctx) });
         let protected = b.state.clone();
-        assert!(palw_rcore_deadline_v1(&b.state, &params, &plan.original_claim, &claim, Some(now)).unwrap().is_none());
-        assert!(!b.state.deadlines.iter().any(|(_, id)| *id == plan.original_claim));
-        b.finalize_claim(plan.original_claim, &claim, now).unwrap();
+        // G14 lane r6-d1-release (user decision D1): the binding no longer withholds Final (DL-1 owes the bound claim its normal
+        // deadline, `finalize_claim` proceeds — covered by `r6_d1_*` in `palw_state_v2::tests`); it still holds retirement,
+        // collateral and evidence past hard/TTL until the binding is released.
+        assert_eq!(
+            palw_rcore_deadline_v1(&b.state, &params, &plan.original_claim, &claim, Some(now)).unwrap().is_none(),
+            claim.phase.is_terminal(),
+            "only a terminal bound claim owes no deadline"
+        );
         b.retire_claim(plan.original_claim, &claim).unwrap();
         super::super::palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
-        assert_eq!(b.state, protected, "hard/TTL passage cannot Final, pay, retire, refund or prune");
+        assert_eq!(b.state, protected, "hard/TTL passage cannot pay, retire, refund or prune a bound claim");
         for liable in frame.custody_v1().liable_signers_v1() {
             assert!(b.state.staged_bond_exit_held_v1(&liable, now));
         }
@@ -4984,10 +4989,8 @@ mod conviction_e2e_tests {
         assert!(owner_pending(&frame, &b.state, acquisition).3.is_some(), "authenticated response remains available");
         assert!(b.write_staged_row_v1(frame.key_v1(), None).is_err(), "direct evidence erasure is refused too");
         assert_eq!(b.state, protected);
-        // A stale derived deadline cannot bypass the hold; no replacement hard deadline is manufactured.
-        b.state.deadlines.insert((now - 1, plan.original_claim));
-        super::super::sweep_deadlines(&mut b, &ctx).unwrap();
-        assert_eq!(b.state, protected);
+        // (D1: a stale derived deadline of a NON-terminal bound claim now runs its normal schedule, so the old "stale deadline
+        // cannot bypass the hold" probe is only meaningful for a terminal claim; see `r6_d1_*`.)
         let mut restored = b.state.clone();
         for entry in b.entries.iter().rev() { apply_delta_entry(&mut restored, entry, true).unwrap(); }
         super::super::rebuild_deadline_index_v2(&mut restored, &params).unwrap();
@@ -5086,6 +5089,112 @@ mod conviction_e2e_tests {
         assert_eq!(fresh.state_root(),after.state_root());
         assert_eq!(fresh.court_service_state_v1(),after.court_service_state_v1());
         assert!(fresh.court_service_holds_claim_v1(&plan.original_claim));
+    }
+
+    /// **G14 lane r6-d1-release (user decision D1)**: a claim bound to the court service book goes Final on its normal schedule; the
+    /// per-block supply recording keeps writing the book after Final (the regression: `check_context` refused every write while a
+    /// bound claim was Final, so the block's observation failed — a chain stall); once every packet is decided past hard the
+    /// binding is released (journalled, reorg-safe, carried by the snapshot), and the claim's retirement is re-armed.
+    #[test]
+    fn r6_d1_bound_claim_goes_final_supply_continues_and_the_binding_releases() {
+        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+        use crate::palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let (state, params, extras, _, owner_offset) = demanded_world(&fx, &frame, 0);
+        let mut extras = extras.clone();
+        extras.tir_public_conviction_active = true;
+        let plan = frame.plan_v1();
+        let id = plan.original_claim;
+        let hard = plan.terms.accepted_daa + 10_000;
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let start = plan.terms.accepted_daa + owner_offset + 1;
+        let packet = ServicePacket { id: [61; 64], release_daa: start, service_before: start + 1, cost };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(std::slice::from_ref(&packet), hard).unwrap();
+        let source = Hash64::from_u64_word(62);
+        let service = CourtServiceStateV2 { version: 2, source_profile_id: source,
+            profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(source), book,
+            claims: std::collections::BTreeMap::from([(id, ServiceClaimBinding {
+                claim: id, allocation_id: plan.allocation_id, source_id: plan.source_id,
+                original_accepted_daa: plan.terms.accepted_daa, hard_deadline_daa: hard,
+                packet_ids: std::collections::BTreeSet::from([packet.id]) })]) };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service).into()))).unwrap();
+        // The packet's slot is supplied by the first block at its DAA (the per-block supply step's two writes).
+        fn observe(b: &mut TransitionBuilder<'_>, frame: &Frame, offset: u64) -> PalwBlockContextV2 {
+            let ctx = at(frame, offset);
+            let mut next = b.state.court_service_state_v1().unwrap().clone();
+            next.book.observe_block(ctx.daa_score, *ctx.block.as_byte_slice(), Default::default()).unwrap();
+            b.write_court_service_state_v1(next).expect("the per-block supply write never fails the block");
+            b.recover_court_service_supply_v1(&ctx).unwrap();
+            ctx
+        }
+        observe(&mut b, &frame, start - plan.terms.accepted_daa);
+        // D1: the binding does not withhold Final.
+        let claim = b.state.claim(&id).unwrap().clone();
+        if !claim.phase.is_terminal() {
+            b.finalize_claim(id, &claim, start + 1).unwrap();
+        }
+        let finalized = b.state.claim(&id).unwrap().clone();
+        assert!(finalized.phase.is_terminal(), "a bound claim goes Final on its schedule");
+        // Retirement is still held while bound; the per-block supply write still succeeds after Final (the stall regression).
+        b.retire_claim(id, &finalized).unwrap();
+        assert!(b.state.claim(&id).is_some(), "retirement waits for the release");
+        assert!(b.state.court_service_holds_claim_v1(&id));
+        observe(&mut b, &frame, start + 5 - plan.terms.accepted_daa);
+        assert!(!b.state.court_service_release_eligible_v1(&id), "before hard nothing is released");
+        let mid = at(&frame, start + 5 - plan.terms.accepted_daa);
+        super::super::palw_court_service_lifecycle_fold_v1::release_resolved_court_service_bindings_v1(&mut b, &mid).unwrap();
+        assert!(b.state.court_service_holds_claim_v1(&id));
+        // At hard every packet is decided: eligible. Dependent rows (if the fixture has any) are no longer held and leave at their
+        // TTL; emulate that sweep, then the release.
+        let at_hard = observe(&mut b, &frame, hard - plan.terms.accepted_daa);
+        assert!(b.state.court_service_release_eligible_v1(&id));
+        let dependents: Vec<_> = b.state.staged_courts.keys()
+            .filter(|key| b.state.court_service_dependent_claim_v1(key) == Some(id)).copied().collect();
+        for key in dependents {
+            assert!(!b.state.court_service_holds_material_v1(&key), "an eligible binding no longer holds its dependents");
+            b.write_staged_row_v1(key, None).unwrap();
+        }
+        let before = b.state.clone();
+        let journal = b.entries.len();
+        super::super::palw_court_service_lifecycle_fold_v1::release_resolved_court_service_bindings_v1(&mut b, &at_hard).unwrap();
+        let row = b.state.court_service_row_v3_v1().expect("the released form is written");
+        row.check().unwrap();
+        let record = &row.resolved[&id];
+        assert_eq!((record.packets, record.served, record.missing, record.released_daa), (1, 1, 0, at_hard.daa_score));
+        assert!(row.state.book.packets.is_empty(), "the only slot held only retired packets: compacted");
+        assert!(!b.state.court_service_holds_claim_v1(&id));
+        assert!(!b.state.court_service_holds_bond_v1(&frame.custody_v1().pledge_v1().producer), "the service hold on collateral ends");
+        // A second run releases nothing more and writes nothing.
+        let after = b.state.clone();
+        let entries = b.entries[journal..].to_vec();
+        assert_eq!(entries.len(), 1, "one journalled row write commits the release");
+        super::super::palw_court_service_lifecycle_fold_v1::release_resolved_court_service_bindings_v1(&mut b, &at_hard).unwrap();
+        assert_eq!(b.entries.len(), journal + 1);
+        // Reorg across the release: undo restores the bound book (and DL-1 the held retirement), redo the release.
+        let mut reverted = after.clone();
+        for entry in entries.iter().rev() { apply_delta_entry(&mut reverted, entry, true).unwrap(); }
+        super::super::rebuild_deadline_index_v2(&mut reverted, &params).unwrap();
+        assert_eq!(reverted.state_root(), before.state_root());
+        assert!(reverted.court_service_holds_claim_v1(&id));
+        assert!(reverted.court_service_row_v3_v1().is_none(), "below the release the legacy row form is back");
+        for entry in &entries { apply_delta_entry(&mut reverted, entry, false).unwrap(); }
+        super::super::rebuild_deadline_index_v2(&mut reverted, &params).unwrap();
+        assert_eq!(reverted.state_root(), after.state_root());
+        assert!(!reverted.court_service_holds_claim_v1(&id));
+        // The released row is rooted and carried: a fresh snapshot reconstructs it (and DL-1's re-armed retirement).
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&after)).unwrap();
+        let fresh = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap()
+            .into_state(&params, Some(after.state_root())).expect("the released book loads");
+        assert_eq!(fresh.court_service_row_v3_v1(), after.court_service_row_v3_v1());
+        assert_eq!(fresh.deadlines, after.deadlines);
+        // Below the conviction fence the released form is refused by the writer.
+        let mut dormant = TransitionBuilder::new(&before, &params, false, false, false, false, &PalwTransitionExtrasV1 {
+            tir_public_conviction_active: false, ..extras.clone() });
+        assert!(super::super::palw_court_service_lifecycle_fold_v1::release_resolved_court_service_bindings_v1(&mut dormant, &at_hard)
+            .is_err());
     }
 
     /// **G14 R5: an honest custodian that answers an outside owner's demand inside its clock is never defaulted or charged** —

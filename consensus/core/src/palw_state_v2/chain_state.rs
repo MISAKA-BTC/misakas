@@ -1507,8 +1507,9 @@ impl PalwChainStateV2 {
     /// four per seat, each at most `W_disclose`; court sessions by the court's own capacity and backstop.
     pub fn palw_accusation_pending_v1(&self, claim_id: &Hash64) -> bool {
         // Lane LG14-A: a live dispute reservation is a pending accusation (empty below `palw_legacy_public_filer_v1`).
+        // G14 lane r6-d1-release (D1): a court service binding is not an accusation — it must not pause or defer the claim's Final
+        // (open courts and shared demands on the claim still count through their own rows below).
         self.palw_legacy_dispute_holds_v1(claim_id)
-            || self.court_service_holds_claim_v1(claim_id)
             || self.da_claims.get(claim_id).is_some_and(|record| record.open_sessions() > 0)
             || self.open_courts_by_claim.get(claim_id).is_some_and(|open| *open > 0)
             || matches!(self.claims.get(claim_id).map(|claim| &claim.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
@@ -3998,6 +3999,10 @@ impl PalwChainStateV2 {
         if let Some(service) = self.court_service_state_v1() {
             service.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
+        // G14 lane r6-d1-release: the released form's strict ownership/record/edge check (also run by the row codec check).
+        if let Some(row) = self.court_service_row_v3_v1() {
+            row.check().map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
         for row in self.staged_courts.values() {
             if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtDutyClock(clock) = row {
                 clock.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
@@ -4044,7 +4049,7 @@ impl PalwChainStateV2 {
                 continue;
             }
             // Lane LG14-A: a claim a live dispute reservation holds owes none (DL-1's reservation row; empty below the fence).
-            if self.palw_legacy_dispute_holds_v1(id) || self.court_service_holds_claim_v1(id) {
+            if self.palw_legacy_dispute_holds_v1(id) || self.court_service_holds_retirement_v1(id, claim) {
                 continue;
             }
             // RFC-0010: the engine clocks a claim it tracks until the claim is licensed (it owes no V2 deadline).
@@ -4513,7 +4518,7 @@ impl PalwChainStateV2 {
         }
         let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
-            if self.court_service_holds_claim_v1(id) { continue; }
+            if self.court_service_holds_retirement_v1(id, claim) { continue; }
             let open_courts = self.open_courts_by_claim.get(id).copied().unwrap_or(0);
             match claim.phase {
                 PalwClaimPhaseV2::Provisional => {

@@ -26,8 +26,25 @@ pub struct CourtServiceStateV2 {
     pub claims: BTreeMap<Hash64, ServiceClaimBinding>,
 }
 impl CourtServiceStateV2 {
+    /// The legacy (version 2) check, unchanged: every packet is owned by exactly one binding.
     pub fn check(&self) -> Result<(), String> {
-        if self.version != 2 || self.profile_id != court_service_profile_id_v2(self.source_profile_id) {
+        if self.version != 2 {
+            return Err("unsupported court service state version".into());
+        }
+        self.check_inner_v1()
+    }
+    /// **G14 lane r6-d1-release: the check of the LIVE state in either row form.** Version 2: [`Self::check`]. Version 3 (the state
+    /// embedded in `CourtServiceRowV3`): the same checks except that packets no live binding owns are allowed — they are retired
+    /// packets of released bindings, and `CourtServiceRowV3::check` (which sees the released records) decides that strictly.
+    pub fn check_live_v1(&self) -> Result<(), String> {
+        match self.version {
+            2 => self.check(),
+            crate::palw_court_service_release_v1::COURT_SERVICE_ROW_VERSION_V3 => self.check_inner_v1(),
+            _ => Err("unsupported court service state version".into()),
+        }
+    }
+    fn check_inner_v1(&self) -> Result<(), String> {
+        if self.profile_id != court_service_profile_id_v2(self.source_profile_id) {
             return Err("unsupported court service state version".into());
         }
         self.book.check().map_err(str::to_owned)?;
@@ -50,7 +67,7 @@ impl CourtServiceStateV2 {
                 }
             }
         }
-        if owned.len() != self.book.packets.len() {
+        if self.version != crate::palw_court_service_release_v1::COURT_SERVICE_ROW_VERSION_V3 && owned.len() != self.book.packets.len() {
             return Err("unbound service packet".into());
         }
         Ok(())
@@ -110,7 +127,7 @@ impl CourtServiceStateV2 {
     pub fn default_hold(&self, frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1) -> Result<(), &'static str> {
         let plan = frame.plan_v1();
         let Some(binding) = self.claims.get(&plan.original_claim) else { return Ok(()) };
-        if self.check().is_err() {
+        if self.check_live_v1().is_err() {
             return Err("court service state is inconsistent");
         }
         if binding.allocation_id != plan.allocation_id
@@ -230,7 +247,7 @@ impl CourtServiceStateV2 {
     /// Contextual validation is separate from the standalone row codec check.
     /// A recovery binding may not outlive or substitute its immutable frame.
     pub fn check_context(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> Result<(), String> {
-        self.check()?;
+        self.check_live_v1()?;
         for binding in self.claims.values() {
             let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, binding.claim)
                 .ok_or("service recovery lost its original frame")?;
@@ -242,10 +259,11 @@ impl CourtServiceStateV2 {
             }
             let material_until = tir_service_required_material_until_v1(frame, binding.hard_deadline_daa)?;
             require_tir_service_custody_window_v1(state, frame, material_until)?;
-            let claim = state.claim(&binding.claim).ok_or("service recovery lost its claim")?;
-            if matches!(claim.phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }) {
-                return Err("unresolved service claim cannot already be Final".into());
-            }
+            // G14 lane r6-d1-release (user decision D1): a bound claim goes Final on its normal schedule and the per-block supply
+            // recording must still write the book afterwards, so a Final bound claim is NOT refused here (it was: every later
+            // `observe_court_service_block_v1` write then failed the block). The claim record itself must still exist: retirement
+            // stays held until the binding is released.
+            state.claim(&binding.claim).ok_or("service recovery lost its claim")?;
         }
         Ok(())
     }
@@ -254,13 +272,50 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     pub fn court_service_state_v1(&self) -> Option<&CourtServiceStateV2> {
         match self.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService) {
             Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(row)) => Some(row.as_ref()),
+            // G14 lane r6-d1-release: the live book of the released form.
+            Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtServiceV3(row)) => Some(&row.state),
             _ => None,
         }
+    }
+    /// G14 lane r6-d1-release: the book row in its released (V3) form, if it was ever upgraded.
+    pub fn court_service_row_v3_v1(&self) -> Option<&crate::palw_court_service_release_v1::CourtServiceRowV3> {
+        match self.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService) {
+            Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtServiceV3(row)) => Some(row),
+            _ => None,
+        }
+    }
+    /// G14 lane r6-d1-release: the book as a V3 row (the legacy row lifted by `CourtServiceRowV3::from_v2`).
+    pub fn court_service_as_v3_v1(&self) -> Option<crate::palw_court_service_release_v1::CourtServiceRowV3> {
+        match self.court_service_row_v3_v1() {
+            Some(row) => Some(row.clone()),
+            None => self.court_service_state_v1().map(crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2),
+        }
+    }
+    /// G14 lane r6-d1-release: the causal edges the canonical recovery sweep keeps (empty for a legacy row).
+    pub fn court_service_causal_edges_v1(&self) -> std::collections::BTreeMap<[u8; 64], Vec<[u8; 64]>> {
+        self.court_service_row_v3_v1().map(|row| row.causal.clone()).unwrap_or_default()
+    }
+    /// **G14 lane r6-d1-release: may `claim`'s live binding be released at the book's clock** (everything but the dependent-row scan,
+    /// which the fold's release step does once per block)? Every packet decided at or past hard, no open court of the claim, every
+    /// duty clock past its response deadline. Also what relaxes the material hold of the claim's DEPENDENT rows (so they leave at
+    /// their own TTL and the release can follow); the original's own material stays held until the release.
+    pub fn court_service_release_eligible_v1(&self, claim: &Hash64) -> bool {
+        let Some(service) = self.court_service_state_v1() else { return false };
+        let Some(now) = service.book.last_observed_daa else { return false };
+        crate::palw_court_service_release_v1::CourtServiceRowV3::binding_decided_v1(service, claim)
+            && self.open_courts_of(claim) == 0
+            && self.court_duty_clocks_for_claim_v1(*claim).iter().all(|clock| now >= clock.response_deadline_daa)
     }
     /// All bindings remain unresolved in this candidate. Quota alone cannot
     /// discharge a duty, and no unadopted release flag or wall-clock expiry can.
     pub fn court_service_holds_claim_v1(&self, claim: &Hash64) -> bool {
         self.court_service_state_v1().is_some_and(|service| service.claims.contains_key(claim))
+    }
+    /// **G14 lane r6-d1-release (user decision D1): the service binding holds only a claim's RETIREMENT, never its Final.** A bound
+    /// claim owes its normal pre-Final and Final deadlines (DL-1 arms them, `finalize_claim` proceeds); once terminal, its retirement
+    /// (record, collateral and evidence) waits for the binding's release, which re-arms DL-1.
+    pub fn court_service_holds_retirement_v1(&self, claim_id: &Hash64, claim: &crate::palw_state_v2::PalwClaimStateV2) -> bool {
+        claim.phase.is_terminal() && self.court_service_holds_claim_v1(claim_id)
     }
     pub fn court_service_holds_bond_v1(&self, bond: &crate::palw_state_v2::PalwBondKeyV2) -> bool {
         self.court_service_state_v1().is_some_and(|service| {
@@ -273,7 +328,27 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         })
     }
     pub fn court_service_holds_material_v1(&self, key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1) -> bool {
+        // G14 lane r6-d1-release: the original's own material stays held until the release; a DEPENDENT row (one whose context
+        // check reads the binding or the frame: clocks, shared court rows, archives, receipts, canonical material) is no longer
+        // held once the binding is release-eligible, so it leaves at its own TTL and the release (which waits for every dependent
+        // to be gone) never strands one without its frame.
+        self.court_service_material_claim_v1(key).is_some_and(|(claim, original)| {
+            self.court_service_holds_claim_v1(&claim) && (original || !self.court_service_release_eligible_v1(&claim))
+        })
+    }
+    /// G14 lane r6-d1-release: the claim a dependent row (see [`Self::court_service_holds_material_v1`]) belongs to.
+    pub fn court_service_dependent_claim_v1(&self, key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1) -> Option<Hash64> {
+        self.court_service_material_claim_v1(key).and_then(|(claim, original)| (!original).then_some(claim))
+    }
+    /// The claim whose service binding holds `key`, and whether `key` is the original's own material (frame, acquisition and its
+    /// bytes, preparation, witness, semantic claim/owner contracts) rather than a dependent court row.
+    fn court_service_material_claim_v1(&self, key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1) -> Option<(Hash64, bool)> {
         use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+        let original = matches!(
+            key,
+            Key::Claim(_) | Key::Owner(..) | Key::TirClaim(_) | Key::TirAcquisition(..) | Key::TirPreparation(..) | Key::TirWitness(..)
+                | Key::TirRawChunk(_) | Key::TirAcceptedBody(_)
+        );
         let claim = match key {
             // Keep semantic dependencies and their owner material across TTL.
             // Native moves/closures still mutate rows; only destructive removal
@@ -328,7 +403,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             }
             _ => None,
         };
-        claim.is_some_and(|claim| self.court_service_holds_claim_v1(&claim))
+        claim.map(|claim| (claim, original))
     }
 }
 
@@ -343,18 +418,30 @@ impl CourtServiceStateV2 {
     /// claim; it cannot evict another claim or keep a smaller recoverable claim
     /// from using residual quota. All unresolved holds remain in either case.
     pub fn repair_missing_supply(&mut self) -> Result<Vec<ClaimServiceRecovery>, String> {
-        self.check()?;
+        self.repair_missing_supply_ordered_v1(&BTreeMap::new())
+    }
+
+    /// **G14 lane r6-d1-release: the canonical sweep keeping causal order.** `edges` are the row's causal predecessors
+    /// (`CourtServiceRowV3::causal`); each claim's repair sees only its own packets' edges. Empty `edges`: the legacy sweep.
+    pub fn repair_missing_supply_ordered_v1(
+        &mut self,
+        edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
+    ) -> Result<Vec<ClaimServiceRecovery>, String> {
+        self.check_live_v1()?;
         let mut order: Vec<_> =
             self.claims.values().map(|binding| (binding.hard_deadline_daa, binding.original_accepted_daa, binding.claim)).collect();
         order.sort();
         let mut report = Vec::new();
         for (hard, _, claim) in order {
-            let result = self.book.repair_missing(&self.claims[&claim].packet_ids, hard);
+            let ids = &self.claims[&claim].packet_ids;
+            let own: BTreeMap<[u8; 64], Vec<[u8; 64]>> =
+                edges.iter().filter(|(child, _)| ids.contains(*child)).map(|(c, p)| (*c, p.clone())).collect();
+            let result = self.book.repair_missing_ordered_v1(ids, hard, &own);
             if result != Ok(0) {
                 report.push(ClaimServiceRecovery { claim, result });
             }
         }
-        self.check()?;
+        self.check_live_v1()?;
         Ok(report)
     }
 }

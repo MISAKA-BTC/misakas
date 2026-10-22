@@ -184,11 +184,13 @@ pub(super) fn check_court_claim_admission_v1(
     } else {
         trace_retention_daa.saturating_sub(w_disclose) / width
     };
+    // G14 lane r6-d1-release: a funded original with an open liability holds its court reserve too (`check_funded_court_reserve_v1`).
+    let funded = palw_funded_court_reserve_claims_v1(state);
     let admitted = state
         .claims
-        .values()
-        .filter(|claim| {
-            palw_court_demanding_claim_v1(state, mirror.from_daa, claim)
+        .iter()
+        .filter(|(id, claim)| {
+            (palw_court_demanding_claim_v1(state, mirror.from_daa, claim) || (claim.accepted_daa >= mirror.from_daa && funded.contains(*id)))
                 && !matches!(claim.phase, PalwClaimPhaseV2::Voided { .. })
                 && {
                     let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, w_disclose);
@@ -198,6 +200,56 @@ pub(super) fn check_court_claim_admission_v1(
         .count() as u64;
     if admitted >= cap {
         return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: *class_id, bucket, admitted, cap });
+    }
+    Ok(())
+}
+
+/// **G14 lane r6-d1-release (r5-original-admission open 4): the claims a funded original admission reserved court capacity for** —
+/// every funded escrow row with an open, unsettled liability. Empty below `palw_tir_public_conviction_v1` (no funded row exists).
+pub(super) fn palw_funded_court_reserve_claims_v1(state: &PalwChainStateV2) -> std::collections::BTreeSet<Hash64> {
+    state.funded_escrows_v1().values().filter(|row| row.liability_open && row.settled_by.is_none()).map(|row| row.claim).collect()
+}
+
+/// **G14 lane r6-d1-release: the court-capacity reservation of a funded original admission** (when `palw_court_capacity_v1` is in
+/// force at `now`; `Ok` and nothing reserved below it). The capacity design's per-claim reserve is the bounded admission's bucket
+/// slot plus the claim's ONE reserve court row (`court_reserve_used`); a queue row (`PalwReservedCourtV1`) can only exist beside a
+/// live challenger reservation, which no admission has. So the funded claim (already written by the install, `claim_id`) is counted
+/// in its hard-deadline bucket exactly like a court-demanding claim, refused when the bucket is full, and — once admitted — counted
+/// by every later admission ([`palw_funded_court_reserve_claims_v1`]) and given the reserve pool for its first court row.
+pub(super) fn check_funded_court_reserve_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: Hash64,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    let Some(mirror) = params.court_capacity_v1().filter(|m| m.active_at(now)) else { return Ok(()) };
+    let policy = mirror.policy;
+    let turn = params.turn_deadline_daa();
+    let width = policy.admission_bucket_daa(turn, params.window_court());
+    if width == 0 {
+        return Err(refused("court capacity bucket width is zero"));
+    }
+    let w_disclose = palw_da_disclose_window_daa_v1(params);
+    let claim = state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
+    let bucket = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, claim, w_disclose) / width;
+    let funded = palw_funded_court_reserve_claims_v1(state);
+    let admitted = state
+        .claims
+        .iter()
+        .filter(|(id, other)| {
+            **id != claim_id
+                && (palw_court_demanding_claim_v1(state, mirror.from_daa, other)
+                    || (other.accepted_daa >= mirror.from_daa && funded.contains(*id)))
+                && !matches!(other.phase, PalwClaimPhaseV2::Voided { .. })
+                && {
+                    let hard = crate::palw_court_clock_v2::palw_claim_court_reserve_hard_v2(params, other, w_disclose);
+                    hard >= now && hard / width == bucket
+                }
+        })
+        .count() as u64;
+    let cap = policy.admission_claims_per_bucket(turn);
+    if admitted >= cap {
+        return Err(PalwStateV2Error::CourtClaimAdmissionFull { class: claim.class_id, bucket, admitted, cap });
     }
     Ok(())
 }
@@ -577,7 +629,11 @@ pub(super) fn court_admission_v1(
         ));
     }
     let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
-    let reserve = !record.court_reserve_used && palw_court_demanding_claim_v1(&builder.state, mirror.from_daa, claim);
+    // G14 lane r6-d1-release: a funded original admitted under the capacity fence took its reserve at admission
+    // (`check_funded_court_reserve_v1`); its first court row runs on it.
+    let reserve = !record.court_reserve_used
+        && (palw_court_demanding_claim_v1(&builder.state, mirror.from_daa, claim)
+            || (claim.accepted_daa >= mirror.from_daa && palw_funded_court_reserve_claims_v1(&builder.state).contains(&claim_id)));
     // Round 2 (limit 2): the j-th concurrent court row on one claim pays j × the occupancy rate.
     let weight = policy.weight().saturating_mul(1 + record.courts.len() as u64);
     let escrow = policy.fee(ticket_window.saturating_add(session_window), weight);

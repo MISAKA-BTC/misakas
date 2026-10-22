@@ -249,8 +249,18 @@ pub fn funded_admission_book_candidate_v1(
     if binding.packet_ids != derivation.packet_ids() || binding.packet_ids.len() as u64 != derivation.branch_count() {
         return Err(R::BranchMismatch);
     }
-    full.check().map_err(R::SourceGraph)?;
+    full.check_live_v1().map_err(R::SourceGraph)?;
     Ok((after_signer, full))
+}
+
+/// **G14 lane r6-d1-release: the causal edges of the funded source branches** — recorded with the all-branch book (in its
+/// `CourtServiceRowV3` form) so the canonical recovery sweep never reschedules a source packet at or after one that depends on it.
+pub fn funded_admission_causal_edges_v1(
+    graph: &NativeSourceMaterialGraphV3,
+    derivation: &FundedAdmissionDerivationV1,
+) -> Result<std::collections::BTreeMap<[u8; 64], Vec<[u8; 64]>>, FundedAdmissionRefusalV1> {
+    let projection = graph.bind_projection_v3(derivation.source_packets.clone()).map_err(FundedAdmissionRefusalV1::SourceGraph)?;
+    Ok(projection.causal_edges_v3())
 }
 
 /// What the liability predicate reads for one funded row (all from rooted state at `daa`).
