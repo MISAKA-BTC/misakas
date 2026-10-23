@@ -259,29 +259,53 @@ class AnchorReorged(NotObservable):
     pass
 
 
-def accepted_transactions(rpc, anchor, wanted, scan):
+def accepted_transactions(rpc, anchor, wanted, scan, *, end=None):
     """Locate wanted transaction ids accepted on the selected chain after `anchor`, with their full bodies.
-    `wanted=None` collects every accepted transaction of the window (bounded by the plan's scan bounds)."""
+    `wanted=None` collects every accepted transaction of the window (bounded by the plan's scan bounds).
+    `end` fixes an inclusive selected-chain endpoint; later blocks never enter the measurement."""
     collect_all = wanted is None
     wanted = set() if collect_all else {norm(txid) for txid in wanted}
+    anchor, end = norm(anchor), norm(end)
     found, start, blocks, reads = {}, anchor, 0, 0
-    while collect_all or wanted - set(found):
+    reached = end is not None and end == anchor
+    while not reached and (end is not None or collect_all or wanted - set(found)):
         chain = rpc.call('getVirtualChainFromBlock', {'startHash': start, 'includeAcceptedTransactionIds': True,
                                                       'minConfirmationCount': None})
         if chain.get('removedChainBlockHashes'):
             raise AnchorReorged('the scan anchor %s left the selected chain' % norm(start)[:16])
-        added = chain.get('addedChainBlockHashes') or []
+        added = [norm(block) for block in chain.get('addedChainBlockHashes') or []]
+        page = added
+        if end is not None and end in added:
+            page = added[:added.index(end) + 1]
+            reached = True
         blocks += len(added)
         if blocks > scan['maximumScannedChainBlocks']:
             raise NotObservable('the accepted-transaction scan exceeds its predeclared chain-block bound')
         for entry in chain.get('acceptedTransactionIds') or []:
+            accepting = norm(entry['acceptingBlockHash'])
+            if end is not None and accepting not in page:
+                if accepting in added:
+                    continue  # beyond the frozen endpoint in this same RPC page
+                raise NotObservable('accepted transaction entry is outside its selected-chain page')
             accepted = {norm(txid) for txid in entry.get('acceptedTransactionIds') or []}
             hits = accepted - set(found) if collect_all else accepted & (wanted - set(found))
             if hits:
                 reads = _bodies(rpc, entry['acceptingBlockHash'], hits, found, reads, scan)
+                if collect_all and hits - set(found):
+                    raise NotObservable('accepted transaction bodies are incomplete; total costs stay UNKNOWN')
         if not added:
             break
         start = added[-1]
+    if end is not None:
+        if not reached:
+            raise NotObservable('the frozen accepted-transaction endpoint was not reached on the selected chain')
+        current = rpc.call('getVirtualChainFromBlock', {'startHash': end, 'includeAcceptedTransactionIds': False,
+                                                       'minConfirmationCount': None})
+        if current.get('removedChainBlockHashes'):
+            raise AnchorReorged('the frozen accepted-transaction endpoint left the selected chain')
+        blocks += len(current.get('addedChainBlockHashes') or [])
+        if blocks > scan['maximumScannedChainBlocks']:
+            raise NotObservable('the endpoint recheck exceeds the predeclared chain-block bound')
     return found
 
 

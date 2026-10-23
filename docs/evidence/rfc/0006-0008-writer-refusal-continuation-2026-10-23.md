@@ -392,3 +392,46 @@ final implementation or the node campaign.
 The campaign requires implementation-complete execution and still has
 unconnected gate collectors; no executable campaign candidate exists at the
 shared debug binary path. The 15-gate campaign remains unrun and UNKNOWN.
+
+## RFC-0008 measurement attribution and fixed windows
+
+Three measurement defects were corrected without supplying any unapproved
+economic values. First, all resolved input owners must be the same actual
+address before fees/payments are assigned to a payer; mixed or unidentified
+owners stay unresolved, and duplicate inputs are rejected. A fee-sharing rule
+is not inferred from the first input or from address labels.
+
+Second, capital integration retains every sampled DAA endpoint. A missing
+interval-start value makes the integral UNKNOWN rather than bridging or
+dropping its interval. The final endpoint's unused value may be missing while
+its DAA still closes the preceding interval. Clocks and values reject booleans,
+floats, negative values and noncanonical decimal strings. This remains a
+sampled left sum, not a physical upper bound between samples.
+
+Third, the cost driver fixes accepted transaction collection to the recorded
+after-snapshot sink. Later accepting blocks in the same RPC page are excluded,
+pagination continues only to that endpoint, and a final own-node selected-chain
+read checks that the endpoint did not reorg. Missing accepted bodies or an
+unreachable endpoint block observation. The existing chain/mergeset scan
+budgets remain enforced, including chain hashes read by the endpoint recheck.
+
+The cost controls passed 10 tests and the read-helper controls passed 12. The
+final complete RFC Python control suite passed 193 tests (0.916s, zero failures),
+output: `/tmp/misaka-rfc08-cost-window-final2-python-tests.log`. These are fake
+transport/measurement controls, not actual fees, provider replacement, capital
+cost measurements or coinbase acceptance. The initial attribution test's
+self-referencing synthetic transaction was corrected before the successful
+runs; its failed output remains `/tmp/misaka-rfc08-cost-attribution-tests.log`.
+
+The attempted current-source consensus coinbase build did not execute tests.
+The first non-EVM build exhausted disk space and was interrupted; output:
+`/tmp/misaka-rfc08-consensus-coinbase-tests.log`. A subsequent EVM/private feature
+build also failed during compiler file writes with `No space left on device`;
+output: `/tmp/misaka-rfc08-evm-consensus-coinbase-tests.log`. This is an environment
+capacity failure, not a coinbase verdict. Completed incremental caches positively
+identified with this worktree and these failed build sessions were reclaimed;
+unrelated shared caches, sources, test binaries and evidence logs were retained.
+Approximately 2.3 GiB remained afterwards. No old-branch binary was substituted
+for current acceptance. Larger Rust builds await sufficient storage; the K3
+asset/manifest and signed campaign input locations also remain unprovided.
+All full-scope requirements and UNKNOWN gates stay open.

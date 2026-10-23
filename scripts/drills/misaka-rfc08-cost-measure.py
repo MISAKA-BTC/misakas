@@ -130,7 +130,8 @@ class CostRun(acceptance.AcceptanceRun):
         after = self.snapshot('after:' + name)
         rpc = self.drill.rpc('JOIN')
         try:
-            window = O.accepted_transactions(rpc, J.norm(before['dag']['sink']), None, self.plan['scan'])
+            window = O.accepted_transactions(rpc, J.norm(before['dag']['sink']), None, self.plan['scan'],
+                                             end=J.norm(after['dag']['sink']))
         finally:
             rpc.close()
         known = {J.outpoint_key(entry): (entry['utxoEntry']['amount'], entry['address']) for entry in before['value']['entries']}

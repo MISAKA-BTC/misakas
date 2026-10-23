@@ -143,7 +143,8 @@ def attribute(transactions, known, labels):
 
     transactions: {txid: transaction JSON} accepted in the window; known: {'txid:index': (amount, address)} from the
     opening snapshot; labels: {address: label}. Each non-coinbase transaction is attributed to the address funding its
-    first input; payments are its outputs to any other address. Unresolved inputs leave the transaction UNKNOWN."""
+    inputs, only when every input resolves to the same address; payments are its outputs to any other address.
+    Unresolved or mixed-owner inputs leave the transaction UNKNOWN; no fee-sharing rule is invented."""
     outputs = dict(known)
     for txid, tx in transactions.items():
         for index, output in enumerate(tx['outputs']):
@@ -160,9 +161,14 @@ def attribute(transactions, known, labels):
         if any(point not in outputs for point in points):
             unresolved.append(J.norm(txid))
             continue
+        if len(set(points)) != len(points):
+            raise J.Violation('accepted transaction %s repeats an input' % J.norm(txid)[:16])
         funder = outputs[points[0]][1]
+        if funder is None or any(outputs[point][1] != funder for point in points):
+            unresolved.append(J.norm(txid))
+            continue
         label = labels.get(funder, 'other')
-        total_in = sum(outputs[point][0] for point in points)
+        total_in = sum(J.exact_int(outputs[point][0], 'resolved input amount') for point in points)
         total_out = sum(output['value'] for output in tx['outputs'])
         if total_out > total_in:
             raise J.Violation('accepted transaction %s pays out more than its inputs' % J.norm(txid)[:16])
@@ -176,14 +182,21 @@ def attribute(transactions, known, labels):
 
 def integrate(samples, field):
     """Left Riemann sum of a piecewise-constant sampled quantity over DAA: sum(v_i * (daa_{i+1} - daa_i))."""
-    points = [(sample['virtualDaaScore'], sample[field]) for sample in samples if sample.get(field) is not None]
-    if len(points) < 2:
+    if len(samples) < 2:
+        return None
+    daas = [J.exact_int(sample['virtualDaaScore'], 'capital sample DAA') for sample in samples]
+    if any(right < left for left, right in zip(daas, daas[1:])):
+        raise J.Violation('capital samples are not ordered by DAA')
+    values = [None if sample.get(field) is None else
+              J.decimal(sample[field], 'capital sample value') if isinstance(sample[field], str) else
+              J.exact_int(sample[field], 'capital sample value') for sample in samples]
+    # Only interval starts contribute a value to the left sum. Keep the final
+    # clock even when its unused endpoint value is unavailable.
+    if any(value is None for value in values[:-1]):
         return None
     total = 0
-    for (daa, value), (next_daa, _) in zip(points, points[1:]):
-        if next_daa < daa:
-            raise J.Violation('capital samples are not ordered by DAA')
-        total += int(value) * (next_daa - daa)
+    for daa, value, next_daa in zip(daas, values, daas[1:]):
+        total += value * (next_daa - daa)
     return total
 
 
@@ -244,7 +257,7 @@ def scenario_conditions(scenario, samples):
 
 def costs_measured(attribution):
     if attribution['unresolvedTransactions']:
-        raise J.NotObservable('%d accepted transactions spend outputs this run cannot resolve; their fees stay UNKNOWN'
+        raise J.NotObservable('%d accepted transactions lack resolved single-payer inputs; their fees stay UNKNOWN'
                               % len(attribution['unresolvedTransactions']))
     if not attribution['acceptedTransactions']:
         raise J.NotObservable('no transaction was accepted in the scenario window')

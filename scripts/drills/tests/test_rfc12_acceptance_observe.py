@@ -41,6 +41,46 @@ class ChainRpc:
 
 
 class AcceptedTransactions(unittest.TestCase):
+    def test_frozen_endpoint_excludes_later_accepted_fees_in_the_same_page(self):
+        rpc = ChainRpc()
+        found = O.accepted_transactions(rpc, 'anchor', None, SCAN, end='c1')
+        self.assertEqual(list(found), ['t1'])
+        self.assertFalse(any(method == 'getBlock' and params['hash'] in ('c2', 'm2', 'm3') for method, params in rpc.calls))
+        self.assertEqual(O.accepted_transactions(ChainRpc(), 'anchor', None, SCAN, end='anchor'), {})
+        with self.assertRaisesRegex(J.NotObservable, 'chain-block bound'):
+            O.accepted_transactions(ChainRpc(), 'anchor', None, dict(SCAN, maximumScannedChainBlocks=1), end='c1')
+
+    def test_frozen_endpoint_paginates_and_is_rechecked_after_body_reads(self):
+        class Pages(ChainRpc):
+            def call(self, method, params=None):
+                if method == 'getVirtualChainFromBlock' and params['startHash'] == 'c1':
+                    return dict(removedChainBlockHashes=[], addedChainBlockHashes=['c2'],
+                                acceptedTransactionIds=[dict(acceptingBlockHash='c2', acceptedTransactionIds=['t2', 't3'])])
+                value = super().call(method, params)
+                if method == 'getVirtualChainFromBlock' and params['startHash'] == 'anchor':
+                    value['addedChainBlockHashes'] = ['c1']
+                    value['acceptedTransactionIds'] = value['acceptedTransactionIds'][:1]
+                return value
+        self.assertEqual(sorted(O.accepted_transactions(Pages(), 'anchor', None, SCAN, end='c2')), ['t1', 't2', 't3'])
+        class Reorg(ChainRpc):
+            def call(self, method, params=None):
+                if method == 'getVirtualChainFromBlock' and params['startHash'] == 'c1':
+                    return dict(removedChainBlockHashes=['c1'], addedChainBlockHashes=[])
+                return super().call(method, params)
+        with self.assertRaises(O.AnchorReorged):
+            O.accepted_transactions(Reorg(), 'anchor', None, SCAN, end='c1')
+        with self.assertRaises(J.NotObservable):
+            O.accepted_transactions(ChainRpc(), 'anchor', None, SCAN, end='absent')
+
+    def test_collect_all_cannot_silently_omit_an_accepted_transaction_body(self):
+        class MissingBody(ChainRpc):
+            def call(self, method, params=None):
+                if method == 'getBlock' and params['includeTransactions'] and params['hash'] == 'm1':
+                    return dict(block=dict(transactions=[]))
+                return super().call(method, params)
+        with self.assertRaisesRegex(J.NotObservable, 'bodies are incomplete'):
+            O.accepted_transactions(MissingBody(), 'anchor', None, SCAN, end='c1')
+
     def test_wanted_ids_are_found_with_their_accepting_block(self):
         found = O.accepted_transactions(ChainRpc(), 'anchor', ['T2'], SCAN)
         self.assertEqual(list(found), ['t2'])

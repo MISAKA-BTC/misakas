@@ -67,6 +67,21 @@ def tx(inputs, outputs):
 
 
 class Attribution(unittest.TestCase):
+    def test_multiple_inputs_need_one_exact_payer_not_the_first_input_owner(self):
+        known = {'a:0': (100, 'addr:a'), 'b:0': (100, 'addr:b'), 'a:1': (100, 'addr:a')}
+        labels = {'addr:a': 'producer', 'addr:b': 'provider'}
+        same = C.attribute({'s': tx([('a', 0), ('a', 1)], [(190, 'addr:a')])}, known, labels)
+        self.assertEqual(same['byPayer']['producer']['feesSompi'], 10)
+        for points in [[('a', 0), ('b', 0)], [('b', 0), ('a', 0)]]:
+            mixed = C.attribute({'m': tx(points, [(190, 'addr:a')])}, known, labels)
+            self.assertEqual(mixed['byPayer'], {})
+            self.assertEqual(mixed['unresolvedTransactions'], ['m'])
+            self.assertEqual(J.judge(8, 'mixed', C.costs_measured, mixed)['verdict'], J.BLOCKED)
+        unknown = C.attribute({'u-spend': tx([('u', 0)], [(90, 'addr:a')])}, {'u:0': (100, None)}, labels)
+        self.assertEqual(unknown['unresolvedTransactions'], ['u-spend'])
+        with self.assertRaises(J.Violation):
+            C.attribute({'d': tx([('a', 0), ('a', 0)], [(190, 'addr:a')])}, known, labels)
+
     def test_fees_payments_payouts_and_unknowns_are_exact(self):
         known = {'f0:0': (1000, 'addr:payer')}
         window = {
@@ -94,6 +109,21 @@ def sample(daa, committed='0', collateral=100, n_more=3, budget='10', conviction
 
 
 class Samples(unittest.TestCase):
+    def test_missing_capital_samples_do_not_bridge_an_unknown_interval(self):
+        for samples in [
+            [sample(10, None), sample(20, '7'), sample(30, '0')],
+            [sample(10, '5'), sample(20, None), sample(30, '0')],
+        ]:
+            self.assertIsNone(C.integrate(samples, 'committedTodaySompi'))
+        self.assertEqual(C.integrate([sample(10, '5'), sample(20, '7'), sample(30, None)],
+                                     'committedTodaySompi'), 5 * 10 + 7 * 10)
+        for invalid in [True, 1.5, '1.5', '-1', '01', '1e2']:
+            with self.assertRaises(J.Violation):
+                C.integrate([sample(10, invalid), sample(20, '0')], 'committedTodaySompi')
+        for daa in [True, 10.5]:
+            with self.assertRaises(J.Violation):
+                C.integrate([sample(daa, '5'), sample(20, '0')], 'committedTodaySompi')
+
     def test_capital_time_integration(self):
         samples = [sample(10, '5'), sample(20, '7'), sample(25, '0')]
         self.assertEqual(C.integrate(samples, 'committedTodaySompi'), 5 * 10 + 7 * 5)
