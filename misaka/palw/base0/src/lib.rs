@@ -110,3 +110,5 @@ pub mod reference;
 pub use artifact::{ArtifactError, Base0ArtifactV1, Base0LayerWeightsV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
 pub use engine::{Base0Engine, EngineError, KvCache};
 pub use rope::{RopeGenError, RopeTableV1};
+
+mod gdn_inventory_openings_v2;

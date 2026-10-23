@@ -811,3 +811,64 @@ reads only its parameter slice and a conv-window terminal reads none. Omitting
 unneeded operands from the final window accusation does not close that earlier
 inventory construction/clone path or its lifetime. It remains in scope along
 with candidate/case ownership and the real campaign.
+
+
+### GDN parameter openings stream under the existing complete artifact root
+
+`Qwen36Backend::gdn_inventory_openings_v2` previously materialized every artifact
+operand and opened every row before the service built its GDN oracle. The step
+and held filer both use this API, even though Q36 recurrence terminals only read
+small parameter rows and a convolution-window terminal reads no operands.
+The backend now calls `gdn_inventory_openings_v2.rs`, which selects the parameter
+tensor names/layers of actual registered Q36 GdnStep descriptors. It does not
+reimplement the court's per-head byte offset or parameter-length conventions.
+Every canonical inventory row is still visited and hashed under the existing
+leaf/node domains. Unselected weights and leaf metadata are discarded.
+
+The helper builds the existing V1 per-leaf opening format directly during that
+single stream. A fixed frontier holds at most 33 subtrees (V1 leaf_count is u32).
+Merging adjacent subtrees appends the opposite subtree hash only to selected
+leaves in that interval; the final fold promotes unmatched odd subtrees without
+duplicating leaves or adding fictitious siblings. Selected operands keep at most
+32 sibling slots. No vector of every leaf or every artifact operand is created
+by this helper. Empty, noncanonical and unrepresentable-count streams return no
+result. The original emitter's errors also abort rather than publish a prefix.
+This is data identity authentication, not computation correctness certification.
+No model review/tier, commitment domain, wire field, fence or approval rule changes.
+
+Four direct-source runtime controls passed, using compatible cached base0/core
+libraries for the unchanged emitter/backend and court functions. They compare
+roots and complete V1 openings against the original materialized implementation
+for trees of size 1..65 and sparse selections at 1023/1024/1025; include dense,
+empty and sparse selections/odd promotions; compare a 10,000-row, 8,192-byte
+unselected stream against the existing inventory summary; and reject empty,
+duplicate and overflowed streams. In the real Q36 dev fixture the helper keeps
+12 rows / 816 operand bytes instead of 801 rows / 187,886 bytes. Every selected
+opening equals the legacy opening under the same complete root; the oracle
+serves every GDN parameter row and refuses unrelated rows. An actual backend
+execution/capture, evidence construction and step court query using this reduced
+oracle return the expected NoFaultFound for the honest step, rather than a
+missing-operand refusal. The quantities are toy-fixture observations, not
+production-model memory limits or approved economic measurements.
+
+Exact argv, dependency paths and source digests:
+`/tmp/misaka-gdn-stream-build.json`; build/runtime output:
+`/tmp/misaka-gdn-stream-build.log`, `/tmp/misaka-gdn-stream-current-runtime.log`
+(four controls, 0.19s). `cargo check -p kaspad --lib --features private-integration-config`
+passed in 18.92s (`/tmp/misaka-gdn-stream-check.log`), compiling both actual service
+consumers with the backend change. The standalone runtime uses the new helper
+source directly; it is not a complete newly built node binary or live campaign.
+
+Still open: reservations and lifetime ownership for the selected Vec/paths and
+oracle copies; the upstream emitter's plan/read/overlap workspace; case/evidence
+ownership and all-model bounds. Selection is derived from the registered
+descriptors, so the tiny fixture's retained size is not asserted for every
+possible profile. Every weight is still read to compute the root and sibling
+paths, so large-model I/O/time/energy/capital costs require real measurement.
+These changes neither complete RFC06 nor arm a public preset or UNKNOWN gate.
+
+
+Documentation checks retained the 43 known baseline issues and added none
+(`/tmp/misaka-gdn-stream-docs.log`). The final runtime source digests match the
+files in the build manifest. Public full activation remains `None`; the model
+tiers, mandatory per-claim approvals and dormant bootstrap guards are unchanged.

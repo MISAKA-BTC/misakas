@@ -1395,20 +1395,14 @@ impl Qwen36Backend {
         })
     }
 
-    /// **The class inventory's operand openings and its root** (RFC-0006 06-A): what a GDN accusation carries and its oracle checks
-    /// against the class's registered artifact root. Public data of the registered artifact; never a proof of computation.
+    /// GDN parameter tensor openings under the unchanged complete artifact root.
+    /// Other weight rows are streamed and discarded, rather than copied or opened.
+    /// The existing court determines which per-head parameter slice it reads.
     pub fn gdn_inventory_openings_v2(
         &self,
     ) -> Result<(Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, kaspa_hashes::Hash64), String> {
         let profile = self.profile.as_ref().ok_or_else(|| "this backend serves no registered profile".to_string())?;
-        let inventory = crate::inventory::qwen36_inventory_v1(&self.artifact, profile).map_err(|e| format!("{e:?}"))?;
-        let openings = (0..inventory.operands().len())
-            .map(|i| {
-                kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32)
-                    .ok_or_else(|| format!("inventory row {i} has no opening"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((openings, inventory.root()))
+        crate::gdn_inventory_openings_v2::qwen36_gdn_inventory_openings_streamed_v2(&self.artifact, profile)
     }
 
     /// **Fresh recompute kernels over this tier's registered plan** — what the accuser's own anchor states are computed with.
