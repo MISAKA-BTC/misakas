@@ -128,7 +128,7 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// committed fact, and the block that finalizes a claim cannot pay it, because its coinbase
     /// is fixed before its transition. Empty on every network without a V2 bundle, and on most
     /// blocks of one.
-    pub palw_v2_payout_outputs: Vec<TransactionOutput>,
+    pub palw_v2_payout_outputs: crate::processes::coinbase::PalwPayoutOutputsV2,
     /// **MISAKA audit C-08: the PALW V2 bond collateral outpoints that may not be spent.**
     ///
     /// Set by the virtual walk from the SELECTED PARENT's V2 state (the same read that supplies
@@ -326,7 +326,7 @@ impl<'a> UtxoProcessingContext<'a> {
             validator_quality_subpool: 0,
             reserve_accrual: 0,
             reserve_balance_after: 0,
-            palw_v2_payout_outputs: Vec::new(),
+            palw_v2_payout_outputs: Default::default(),
             palw_v2_locked_bonds: Default::default(),
             palw_v2_escrow_withheld: 0,
             palw_v2_merged_escrow_withheld: BlockHashMap::default(),
@@ -1401,11 +1401,10 @@ impl VirtualStateProcessor {
             validator_reward_outputs.extend(drip_outputs);
             ctx.reserve_balance_after = parent_balance.saturating_add(ctx.reserve_accrual).saturating_sub(drip_total);
         }
-        // ADR-0042 Decision 10: the V2 escrow releases, appended LAST so both paths build the
-        // identical list. Computed by the walk from the selected parent's committed queue — not
-        // recomputed here — because the queue is exactly the set the parent's `state_root`
-        // already commits to, and recomputing it from claims would be a second answer.
-        validator_reward_outputs.extend(ctx.palw_v2_payout_outputs.iter().cloned());
+        // ADR-0042 Decision 10: borrow the V2 escrow releases LAST in the iterator below,
+        // matching construction without an intermediate script copy. Keep the native source
+        // owner in ctx while the manager builds its expected coinbase. The queue is the
+        // selected parent's committed fact, not a second derivation from claims.
 
         // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
         // ADR-0060 Decision 1.4: a heartbeat block's own payload declares ZERO subsidy — the
@@ -1424,7 +1423,7 @@ impl VirtualStateProcessor {
             &ctx.ghostdag_data,
             &ctx.mergeset_rewards,
             &mergeset_non_daa,
-            &validator_reward_outputs,
+            validator_reward_outputs.iter().chain(ctx.palw_v2_payout_outputs.iter()),
             carve.as_ref(),
             (newly_included_stake, expected_stake),
             ctx.palw_v2_escrow_withheld,
@@ -1466,7 +1465,7 @@ impl VirtualStateProcessor {
     // bundling them into a struct would move the coupling rather than remove it -- the call
     // sites would still have to get all eleven right, with one more indirection to read through.
     #[allow(clippy::too_many_arguments)]
-    fn verify_coinbase_transaction(
+    fn verify_coinbase_transaction<'a>(
         &self,
         coinbase: &Transaction,
         daa_score: u64,
@@ -1477,7 +1476,7 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         mergeset_rewards: &BlockHashMap<BlockRewardData>,
         mergeset_non_daa: &BlockHashSet,
-        validator_reward_outputs: &[TransactionOutput],
+        validator_reward_outputs: impl IntoIterator<Item = &'a TransactionOutput>,
         // kaspa-pq Phase 13 (ADR-0018 §F): the per-source-block reward carve,
         // threaded to `expected_coinbase_transaction`. `None` on every current
         // network (matches the construction path).
@@ -1503,6 +1502,8 @@ impl VirtualStateProcessor {
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
+        let mut validator_output_count = 0usize;
+        let validator_reward_outputs = validator_reward_outputs.into_iter().inspect(|_| validator_output_count += 1);
         let expected_coinbase = self
             .coinbase_manager
             .expected_coinbase_transaction(
@@ -1546,7 +1547,7 @@ impl VirtualStateProcessor {
                         // Which HALF of the coinbase disagrees. Without this the shape alone
                         // cannot say whether the overlay's fan-out or the base mergeset payout is
                         // the one that differs, and those are different investigations.
-                        validator_reward_outputs.len(),
+                        validator_output_count,
                         mergeset_rewards.len(),
                     );
                 }

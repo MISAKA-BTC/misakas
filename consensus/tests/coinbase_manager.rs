@@ -19,24 +19,14 @@ fn palw_queue_coinbase_prefix_is_consumed_once_and_carriage_delta_restore_it_exa
         coinbase::{BlockRewardData, MinerData},
         mldsa87_primitives::p2pkh_mldsa87_spk,
         palw_state_v2::{
-            PALW_V2_MAX_PAYOUTS_PER_BLOCK, PalwBlockContextV2, PalwChainStateV2, PalwPayoutV2, PalwStateCarriageV2, PalwStateParamsV2,
-            apply_delta_v2, apply_palw_transition_v2, revert_delta_v2,
+            PALW_V2_MAX_PAYOUTS_PER_BLOCK, PalwBlockContextV2, PalwChainStateV2, PalwStateCarriageV2, apply_delta_v2,
+            apply_palw_transition_v2, revert_delta_v2,
         },
     };
     // Controlled queue fixture. This tests rendering/drain/replay, not the
     // earning, funding or selected-validator approval of any reward leg.
-    let params = PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, Hash64::from_u64_word(1), 4, 1_000, 100, 1_000, 0).unwrap();
-    let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
     let count = PALW_V2_MAX_PAYOUTS_PER_BLOCK + 2;
-    for index in (0..count).rev() {
-        let mut key = [0; 64];
-        key[..8].copy_from_slice(&(index as u64).to_be_bytes());
-        carriage.pending_payouts.insert(
-            Hash64::from_bytes(key),
-            PalwPayoutV2 { payload: Hash64::from_u64_word(100 + index as u64), amount: 1 + index as u64 },
-        );
-    }
-    let parent = carriage.into_state(&params, None).unwrap();
+    let (params, parent) = payout_fixture(count);
     let expected_total: u64 = (1..=count as u64).sum();
     let network = &params::MAINNET_PARAMS;
     let manager = CoinbaseManager::new(
@@ -53,7 +43,7 @@ fn palw_queue_coinbase_prefix_is_consumed_once_and_carriage_delta_restore_it_exa
     let ghostdag =
         GhostdagData::new(1, 0.into(), selected, BlockHashes::new(vec![selected]), BlockHashes::new(vec![]), Default::default());
     let build = |state: &PalwChainStateV2| {
-        let outputs = palw_pending_payout_outputs_v2(state);
+        let outputs = palw_pending_payout_outputs_v2(state).unwrap();
         let coinbase = manager
             .expected_coinbase_transaction(
                 1,
@@ -62,7 +52,7 @@ fn palw_queue_coinbase_prefix_is_consumed_once_and_carriage_delta_restore_it_exa
                 &ghostdag,
                 &rewards,
                 &BlockHashSet::default(),
-                &outputs,
+                outputs.iter(),
                 None,
                 (0, 0),
                 0,
@@ -73,7 +63,7 @@ fn palw_queue_coinbase_prefix_is_consumed_once_and_carriage_delta_restore_it_exa
                 &BlockHashMap::default(),
             )
             .unwrap();
-        assert_eq!(coinbase.tx.outputs, outputs);
+        assert_eq!(coinbase.tx.outputs.as_slice(), outputs.as_ref());
         coinbase.tx
     };
     let first = build(&parent);
@@ -96,4 +86,90 @@ fn palw_queue_coinbase_prefix_is_consumed_once_and_carriage_delta_restore_it_exa
     let rolled_back = revert_delta_v2(&child, &delta, &params).unwrap();
     assert_eq!(rolled_back, parent);
     assert_eq!(build(&rolled_back), first);
+}
+
+fn payout_fixture(
+    count: usize,
+) -> (kaspa_consensus_core::palw_state_v2::PalwStateParamsV2, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
+    use kaspa_consensus_core::{
+        Hash64,
+        palw_state_v2::{PalwStateParamsV2, PalwStateCarriageV2, PalwChainStateV2, PalwPayoutV2},
+    };
+    let params = PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, Hash64::from_u64_word(1), 4, 1_000, 100, 1_000, 0).unwrap();
+    let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+    for index in (0..count).rev() {
+        let mut key = [0; 64];
+        key[..8].copy_from_slice(&(index as u64).to_be_bytes());
+        carriage.pending_payouts.insert(
+            Hash64::from_bytes(key),
+            PalwPayoutV2 { payload: Hash64::from_u64_word(100 + index as u64), amount: 1 + index as u64 },
+        );
+    }
+    let state = carriage.into_state(&params, None).unwrap();
+    (params, state)
+}
+
+#[test]
+fn palw_payout_native_capacity_child() {
+    use coinbase_manager::{palw_pending_payout_outputs_v2, palw_pending_payout_requests_v2};
+    use kaspa_consensus_core::palw_native_resource_v1::{
+        arm_native_logical_limits_v1, reserve_native_requests_v1, NativeSnapshotResourceLimitsV1,
+    };
+    let Ok(case) = std::env::var("MISAKA_PALW_PAYOUT_CAPACITY_CASE") else {
+        return;
+    };
+    // Native admission is process-global: each case runs in its own child.
+    // This quota covers the render buffer, not the pre-existing fixture state.
+    let count = if case == "empty" {
+        0
+    } else if case.ends_with("prefix") {
+        kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK + 2
+    } else {
+        1
+    };
+    let (_, state) = payout_fixture(count);
+    let root = state.state_root();
+    let request = palw_pending_payout_requests_v2(&state);
+    let memory = if case == "zero" {
+        0
+    } else if case.starts_with("below") {
+        request - 1
+    } else {
+        request
+    };
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
+    if case == "zero" || case.starts_with("below") {
+        assert!(palw_pending_payout_outputs_v2(&state).is_err());
+        assert!(reserve_native_requests_v1(memory).is_ok(), "a failed render must release every reservation");
+    } else {
+        let outputs = palw_pending_payout_outputs_v2(&state).unwrap();
+        if case == "empty" {
+            assert!(outputs.is_empty());
+            assert_eq!(request, 0);
+        } else {
+            assert_eq!(outputs.len(), count.min(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK));
+            assert!(outputs.iter().all(|output| output.script_public_key.script().len() == 69));
+            assert!(reserve_native_requests_v1(1).is_err(), "the live output owner retains its full request");
+        }
+        drop(outputs);
+        assert!(reserve_native_requests_v1(memory).is_ok(), "dropping the output owner returns capacity");
+    }
+    assert_eq!(state.state_root(), root);
+}
+
+#[test]
+fn palw_payout_render_rejects_short_capacity_and_holds_its_owner_until_drop() {
+    for case in ["zero", "below", "exact", "below-prefix", "exact-prefix", "empty"] {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "palw_payout_native_capacity_child", "--test-threads=1"])
+            .env("MISAKA_PALW_PAYOUT_CAPACITY_CASE", case)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "capacity case {case}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

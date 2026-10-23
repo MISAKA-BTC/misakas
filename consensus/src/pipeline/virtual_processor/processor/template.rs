@@ -781,10 +781,12 @@ impl VirtualStateProcessor {
         // on, so its queue is the same one the validating walk will read; appended last, matching
         // `verify_expected_utxo_state`'s order exactly. A template that got this wrong would mine
         // blocks its own node rejects.
-        if palw_at_selected_parent.is_some() {
-            let payouts = palw_at_selected_parent.as_ref().map(|(_, state)| self.palw_v2_payout_outputs(state)).unwrap_or_default();
-            validator_reward_outputs.extend(payouts);
-        }
+        let palw_payouts = palw_at_selected_parent
+            .as_ref()
+            .map(|(_, state)| self.palw_v2_payout_outputs(state))
+            .transpose()
+            .map_err(RuleError::LocalNativeCapacityUnavailable)?
+            .unwrap_or_default();
         // ADR-0042 Decision 10's funding side, construction path. The selected parent is the block
         // being built on, so its escrow is the one the validating walk will withhold. Computed from
         // the same state the payouts came from, so the two halves cannot disagree.
@@ -854,7 +856,7 @@ impl VirtualStateProcessor {
                 &virtual_state.ghostdag_data,
                 &virtual_state.mergeset_rewards,
                 &virtual_state.mergeset_non_daa,
-                &validator_reward_outputs,
+                validator_reward_outputs.iter().chain(palw_payouts.iter()),
                 carve.as_ref(),
                 (newly_included_stake, expected_stake),
                 palw_escrow_withheld,

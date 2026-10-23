@@ -485,3 +485,52 @@ This verifies queue rendering/drain and PALW state replay, not UTXO rollback,
 whole-block acceptance, full reward-leg provenance/once settlement, material
 restart/reorg/pruned IBD, process crash, allocation/RSS bounds or the 15-gate
 campaign. Those remain open; no dormant fence or UNKNOWN gate changes.
+
+## RFC-0006 payout rendering buffer reservation
+
+The renderer now returns `Result<PalwPayoutOutputsV2, NativeCoverageV1>` rather
+than a bare Vec. Its private output storage owns the logical native ticket;
+there is no mutable dereference, implicit deep Clone or consuming extraction.
+The payload drops before its ticket. The request is derived from the actual
+bounded queue prefix, output struct sizes and the fixed 69-byte P2PKH script
+construction, including a two-length retained script envelope and temporary
+script Vec. This is a typed request bound for that source buffer, not RSS or a
+whole-block bound. Empty queues allocate no render payload and need no ticket.
+
+Admission precedes the output Vec/scripts. Both real callers propagate refusal:
+the virtual walk returns its local native transition fault, and the template
+returns `LocalNativeCapacityUnavailable`. Neither substitutes an empty payout
+list nor converts local capacity into a peer/block semantic verdict. Validation
+keeps the owner in its processing context; template construction keeps its owner
+through coinbase assembly. The coinbase manager accepts borrowed output
+iterators, so the existing validator/reserve sequence and native prefix are
+chained in their original order without an intermediate native-script copy.
+Coinbase destination allocations remain a separate owner/capacity boundary.
+
+The source-built test target passed 13 harness cases (0.22s, zero failures or
+ignored tests), including its inactive child entry and one parent launching six
+isolated native-checker cases: zero capacity, one byte short and exact capacity
+for one row and a full eight-row prefix with backlog, and an empty queue under
+zero capacity. A live output owner exhausts its admitted request; dropping it
+returns capacity. Refusal preserves the state root and leaks no reservation.
+The previous queue/coinbase/drain/carriage/delta controls still pass. Exact argv,
+matching cached dependency paths and source digests:
+`/tmp/misaka-rfc06-payout-owner-iterator-build.json`; build/runtime outputs:
+`/tmp/misaka-rfc06-payout-owner-iterator-build.log`,
+`/tmp/misaka-rfc06-payout-owner-iterator-runtime.log`. The execution uses the same
+direct-source test workflow described above, not a full-node binary.
+
+The first iterator integration check found a remaining slice-only `len()` in
+the mismatch diagnostic. It now counts outputs while the iterator is consumed,
+without another traversal or allocation. Those failed logs remain. The final
+private library check passed (4.24s), output:
+`/tmp/misaka-rfc06-payout-owner-final-private-check.log`. The full consensus
+`cargo check --tests --features private-integration-config,evm` also passed
+(8.23s including its lock wait), output:
+`/tmp/misaka-rfc06-payout-owner-final-all-tests-check.log`. That compiles test
+callers; it is not execution of every consensus test.
+
+Still open: destination coinbase/block-copy ownership and reservations,
+outer live-node capacity/retry acceptance, other payout/court/aux consumers,
+whole-model/physical costs, all reward provenance and the full campaign. No
+activation, consensus bytes, economic policy values or UNKNOWN gate changes.

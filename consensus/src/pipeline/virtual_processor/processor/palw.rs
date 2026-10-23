@@ -4637,7 +4637,7 @@ impl VirtualStateProcessor {
     pub(super) fn palw_v2_payout_outputs(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
-    ) -> Vec<TransactionOutput> {
+    ) -> Result<crate::processes::coinbase::PalwPayoutOutputsV2, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         use kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK;
         // The queue lemma, where it holds: past `palw_rcore_plus` at the block that committed
         // `state`. Every testnet-12 panel has five seats, so a row costs at most six keys and the

@@ -17,17 +17,63 @@ use crate::{constants, model::stores::ghostdag::GhostdagData};
 /// Render exactly the selected parent's queue prefix consumed by the next
 /// PALW transition. A queued row is already decided; do not derive rewards or
 /// consult current bond keys here. Construction and validation share this path.
-pub fn palw_pending_payout_outputs_v2(state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Vec<TransactionOutput> {
-    state
-        .pending_payouts_iter()
-        .take(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK)
-        .map(|(_, payout)| {
-            TransactionOutput::new(
-                payout.amount,
-                kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
-            )
-        })
-        .collect()
+pub struct PalwPayoutOutputsV2 {
+    outputs: Vec<TransactionOutput>,
+    // Payload drops before its reservation. No Clone/IntoIterator can detach it.
+    _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+impl Default for PalwPayoutOutputsV2 {
+    fn default() -> Self {
+        Self { outputs: Vec::new(), _lease: None }
+    }
+}
+impl std::ops::Deref for PalwPayoutOutputsV2 {
+    type Target = [TransactionOutput];
+    fn deref(&self) -> &Self::Target {
+        &self.outputs
+    }
+}
+impl AsRef<[TransactionOutput]> for PalwPayoutOutputsV2 {
+    fn as_ref(&self) -> &[TransactionOutput] {
+        &self.outputs
+    }
+}
+
+/// Typed request envelope for this rendering buffer only, not destination
+/// coinbase/block copies or physical RSS. P2PKH-ML-DSA-87 has exactly 69 bytes;
+/// retain a two-length script allocation envelope plus its temporary Vec.
+pub fn palw_pending_payout_requests_v2(state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> u64 {
+    let count = state.pending_payouts_iter().take(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK).count();
+    if count == 0 {
+        return 0;
+    }
+    std::mem::size_of::<PalwPayoutOutputsV2>() as u64 + count as u64 * (std::mem::size_of::<TransactionOutput>() as u64 + 2 * 69) + 69
+}
+
+pub fn palw_pending_payout_outputs_v2(
+    state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+) -> Result<PalwPayoutOutputsV2, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+    use kaspa_consensus_core::{
+        palw_native_resource_v1::{reserve_native_requests_v1, NativeCoverageV1},
+        palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK,
+    };
+    let requests = palw_pending_payout_requests_v2(state);
+    if requests == 0 {
+        return Ok(PalwPayoutOutputsV2::default());
+    }
+    let lease = reserve_native_requests_v1(requests)?;
+    let count = state.pending_payouts_iter().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).count();
+    let mut outputs = Vec::new();
+    outputs
+        .try_reserve_exact(count)
+        .map_err(|why| NativeCoverageV1::unsupported::<PalwPayoutOutputsV2>("PALW payout output allocation", &why.to_string()))?;
+    for (_, payout) in state.pending_payouts_iter().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK) {
+        outputs.push(TransactionOutput::new(
+            payout.amount,
+            kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
+        ));
+    }
+    Ok(PalwPayoutOutputsV2 { outputs, _lease: lease })
 }
 
 const LENGTH_OF_BLUE_SCORE: usize = size_of::<u64>();
@@ -140,7 +186,7 @@ impl CoinbaseManager {
     // bundling them into a struct would move the coupling rather than remove it -- the call
     // sites would still have to get all eleven right, with one more indirection to read through.
     #[allow(clippy::too_many_arguments)]
-    pub fn expected_coinbase_transaction<T: AsRef<[u8]>>(
+    pub fn expected_coinbase_transaction<'a, T: AsRef<[u8]>>(
         &self,
         _daa_score: u64,
         // **The subsidy this block's own payload declares** (ADR-0060 Decision 1.4). Almost
@@ -158,7 +204,7 @@ impl CoinbaseManager {
         // canonical order. Appended verbatim after the miner outputs. The overlay
         // is genesis-active on every current network (`dns_activation_daa_score` = 0),
         // so these are populated and the coinbase carries them from block 1.
-        validator_reward_outputs: &[TransactionOutput],
+        validator_reward_outputs: impl IntoIterator<Item = &'a TransactionOutput>,
         // kaspa-pq Phase 13 (ADR-0018 §F): when `Some`, carve each source block's
         // reward into Worker / Validator / Service shares and pay only the Worker
         // share to the miner. The Validator share funds the appended
@@ -398,7 +444,7 @@ impl CoinbaseManager {
         // is the "unspent remainder" and is burned by don't-mint — a deliberate
         // bootstrap-period supply reduction (no minting without recipients). Once
         // validators bond, this carries their participation payouts.
-        outputs.extend_from_slice(validator_reward_outputs);
+        outputs.extend(validator_reward_outputs.into_iter().cloned());
 
         // kaspa-pq Phase 13 (ADR-0018 §D base inclusion bounty): pay THIS block's miner
         // (the includer) a stake-proportional share of the §D worker-inclusion pool for

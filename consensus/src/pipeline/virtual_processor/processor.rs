@@ -2352,7 +2352,7 @@ impl VirtualStateProcessor {
                     // walk currently holds — which IS this block's selected parent, since the
                     // transition below has not run yet. Set before `calculate_utxo_state` because
                     // that is where the coinbase is verified against it.
-                    ctx.palw_v2_payout_outputs = palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).unwrap_or_default();
+                    ctx.palw_v2_payout_outputs = palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).transpose()?.unwrap_or_default();
                     // Audit C-08: and the collateral this block may not let anyone spend, from the
                     // same parent state and for the same reason — PLUS every bond this block's own
                     // mergeset declares.
