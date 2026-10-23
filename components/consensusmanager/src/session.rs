@@ -428,7 +428,7 @@ impl ConsensusSessionOwned {
     }
 
     /// RFC-0006 read-only census of the historical headers the EXEC origin migration needs (authorizes nothing).
-    pub fn palw_exec_origin_coverage_v1(&self, listed: usize) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+    pub fn palw_exec_origin_coverage_v1(&self, listed: usize) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageOwnedV1, String> {
         self.consensus.palw_exec_origin_coverage_v1(listed)
     }
 

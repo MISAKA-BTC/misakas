@@ -75,7 +75,7 @@ pub(super) fn start(ctx: &PalwNativeCustodyContextV3) -> Result<(), String> {
                     let api = manager.consensus().unguarded_session();
                     let result = api.with_consensus_api_v1(|api| bracketed(|| generation(api), || api.palw_exec_origin_coverage_v1(LISTED)));
                     let (generation, census, error) = match &result {
-                        Ok((generation, census)) => (Some(generation), Some(census), None),
+                        Ok((generation, census)) => (Some(generation), Some(&**census), None),
                         Err(e) => (None, None, Some(e.as_str())),
                     };
                     let envelope = Envelope {

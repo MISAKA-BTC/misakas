@@ -2355,7 +2355,7 @@ impl ConsensusApi for Consensus {
     fn palw_exec_origin_coverage_v1(
         &self,
         listed: usize,
-    ) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+    ) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageOwnedV1, String> {
         let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
         if !stable || generation.active.is_some() {
             return Err("historical header census import incomplete".into());
@@ -2368,7 +2368,7 @@ impl ConsensusApi for Consensus {
             .map_err(|e| format!("historical header census state unavailable: {e:?}"))?;
         let census = kaspa_consensus_core::palw_work_slice_v2::palw_exec_origin_coverage_v1(&state, listed.min(4096), |block| {
             self.headers_store.get_header(block).ok().and_then(|header| borsh::object_length(&*header).ok()).map(|n| n as u64)
-        });
+        }).map_err(|e| e.to_string())?;
         let after = self.lkg_virtual_state.load();
         let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
         if !stable

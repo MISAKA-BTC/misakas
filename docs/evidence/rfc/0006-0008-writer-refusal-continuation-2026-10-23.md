@@ -573,3 +573,69 @@ Still open: historical-header resource reservation ownership, archive coverage
 at real campaign scale, migration approval, other consumer requirements and all
 unrun campaign gates. The activation pin remains unarmed and UNKNOWN remains
 UNKNOWN.
+
+
+### Historical census result lists retain their reservation
+
+The census previously pushed into two bare Vecs and returned them without a
+native capacity lease. Its implementation now lives in
+`consensus/core/src/palw_exec_origin_coverage_v1.rs`, re-exported from the prior
+work-slice module. Before reading a historical header it computes the maximum
+named entries from the actual eligible native claims and requested list cap,
+reserves the two concrete tuple layouts plus the result owner, and fallibly
+allocates both lists. It returns `PalwExecOriginCoverageOwnedV1`; the consensus
+API, session and private writer preserve that owner until publication finishes.
+The writer borrows the counts for serde, preserving the V2 envelope and original
+V1 census fields. No deep serialized header buffer is introduced.
+
+An empty history or a zero list cap allocates no list storage and needs no list
+lease. A zero list cap still counts every eligible header. Both named lists stop
+at their cap while totals continue. Capacity refusal precedes header callbacks;
+errors and dropped results release their reservations. An outstanding result
+holds its full admitted typed-list capacity until drop. This covers typed list
+requests only, not allocator RSS, the already owned source state, historical
+header store decode/cache allocations, CPU work or disk reads.
+
+Four controls ran from this exact production source through a small direct-source
+rustc module harness with compatible cached core/serde dependencies. They cover
+empty native history, exact cap/above cap/missing headers, complete totals beyond
+list limits, checked request overflow, and five separate-process capacity cases
+(zero, one below, exact, empty, totals-only). The exact-cap result prevents a
+simultaneous extra reservation until dropped; refusals make zero header reads.
+Logs and source digest/argv: `/tmp/misaka-census-owned-build.json`,
+`/tmp/misaka-census-owned-build.log`, `/tmp/misaka-census-owned-runtime.log`.
+This does not execute full archive/pruned nodes. The initial integration compile
+caught an opaque iterator that does not expose Clone; the implementation now
+regenerates a borrowed state iterator instead of cloning or collecting it.
+
+The full historical-header consumer and campaign requirements remain open.
+No public preset, activation pin, model tier, source economics input or UNKNOWN
+gate is changed by the reservation.
+
+
+Private integration validation passed:
+`cargo check -p kaspad --lib --tests --features private-integration-config`
+completed in 1m19s (`/tmp/misaka-census-owner-final-check.log`). This compiles the
+owner API through the session and writer, not a full live acceptance run. The
+RFC Python suite remains 195/195 (`/tmp/misaka-census-owner-python.log`). Docs
+checks retain the 43 baseline issues and add none
+(`/tmp/misaka-census-owner-docs.log`). Streaming JSON serializer scratch remains
+outside the typed census-list reservation, as do header cache/decode owners.
+
+
+The broader core test typecheck uncovered a pre-existing compile failure in
+`palw_t12_full_activation_16000`: its independently named LIST has 37 entries,
+but its declaration still said 36. Only that declared array length was corrected
+to 37. The ordered names, comparison with the production list, prerequisite
+checks, activation pin and schedules remain unchanged. The failed check log is
+`/tmp/misaka-census-owner-core-tests-check.log`.
+
+
+After that declaration fix, the complete core test typecheck passed:
+`cargo check -p kaspa-consensus-core --tests --features private-integration-config,evm`
+finished in 1m37s (`/tmp/misaka-census-owner-core-tests-final-check.log`). This
+includes compilation of the core unit controls and integration test targets; it
+is not runtime execution of all those tests. The four direct-source census
+controls above are the runtime evidence for this change. The remaining local
+filesystem headroom was about 1.3 GiB after this check; no new full codegen or
+campaign run was attempted on that space.
