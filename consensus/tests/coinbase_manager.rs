@@ -93,7 +93,7 @@ fn payout_fixture(
 ) -> (kaspa_consensus_core::palw_state_v2::PalwStateParamsV2, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
     use kaspa_consensus_core::{
         Hash64,
-        palw_state_v2::{PalwStateParamsV2, PalwStateCarriageV2, PalwChainStateV2, PalwPayoutV2},
+        palw_state_v2::{PalwChainStateV2, PalwPayoutV2, PalwStateCarriageV2, PalwStateParamsV2},
     };
     let params = PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, Hash64::from_u64_word(1), 4, 1_000, 100, 1_000, 0).unwrap();
     let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
@@ -113,7 +113,7 @@ fn payout_fixture(
 fn palw_payout_native_capacity_child() {
     use coinbase_manager::{palw_pending_payout_outputs_v2, palw_pending_payout_requests_v2};
     use kaspa_consensus_core::palw_native_resource_v1::{
-        arm_native_logical_limits_v1, reserve_native_requests_v1, NativeSnapshotResourceLimitsV1,
+        NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
     };
     let Ok(case) = std::env::var("MISAKA_PALW_PAYOUT_CAPACITY_CASE") else {
         return;
@@ -172,4 +172,231 @@ fn palw_payout_render_rejects_short_capacity_and_holds_its_owner_until_drop() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[path = "coinbase_manager/allocation_counter.rs"]
+mod allocation_counter;
+
+struct BorrowedCoinbaseFixture {
+    manager: coinbase_manager::CoinbaseManager,
+    ghostdag: model::stores::ghostdag::GhostdagData,
+    rewards: kaspa_consensus_core::BlockHashMap<kaspa_consensus_core::coinbase::BlockRewardData>,
+    non_daa: kaspa_consensus_core::BlockHashSet,
+    unentitled: kaspa_consensus_core::BlockHashSet,
+    withheld: kaspa_consensus_core::BlockHashMap<u64>,
+    rounds: kaspa_consensus_core::BlockHashSet,
+    receipts: kaspa_consensus_core::BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
+    extra: Vec<kaspa_consensus_core::tx::TransactionOutput>,
+    miner_script: kaspa_consensus_core::tx::ScriptPublicKey,
+    carve: Option<kaspa_consensus_core::dns_finality::FeeSplitParams>,
+    pay_reds: bool,
+    own_subsidy: u64,
+    escrow: u64,
+}
+impl BorrowedCoinbaseFixture {
+    fn new(extra: usize) -> Self {
+        use kaspa_consensus_core::{Hash64, blockhash::BlockHashes, coinbase::BlockRewardData, mldsa87_primitives::p2pkh_mldsa87_spk};
+        let network = &params::MAINNET_PARAMS;
+        let manager = coinbase_manager::CoinbaseManager::new(
+            network.coinbase_payload_script_public_key_max_len,
+            network.max_coinbase_payload_len,
+            network.deflationary_phase_daa_score,
+            network.pre_deflationary_phase_base_subsidy,
+            network.target_time_per_block_history(),
+        );
+        let miner_script = p2pkh_mldsa87_spk(&[7; 64]);
+        let mut rewards = kaspa_consensus_core::BlockHashMap::default();
+        rewards.insert(Hash64::from_u64_word(1), BlockRewardData::new(0, 0, 0, miner_script.clone()));
+        Self {
+            manager,
+            ghostdag: model::stores::ghostdag::GhostdagData::new(
+                1,
+                0.into(),
+                Hash64::from_u64_word(1),
+                BlockHashes::new(vec![Hash64::from_u64_word(1)]),
+                BlockHashes::new(vec![]),
+                Default::default(),
+            ),
+            rewards,
+            non_daa: Default::default(),
+            unentitled: Default::default(),
+            withheld: Default::default(),
+            rounds: Default::default(),
+            receipts: Default::default(),
+            extra: (0..extra)
+                .map(|n| {
+                    kaspa_consensus_core::tx::TransactionOutput::new(
+                        10 + n as u64,
+                        p2pkh_mldsa87_spk(&Hash64::from_u64_word(100 + n as u64).as_bytes()),
+                    )
+                })
+                .collect(),
+            miner_script,
+            carve: None,
+            pay_reds: false,
+            own_subsidy: 1000,
+            escrow: 0,
+        }
+    }
+    fn build(&self) -> kaspa_consensus_core::tx::Transaction {
+        self.manager
+            .expected_coinbase_transaction(
+                1,
+                self.own_subsidy,
+                kaspa_consensus_core::coinbase::MinerData::new(self.miner_script.clone(), &[]),
+                &self.ghostdag,
+                &self.rewards,
+                &self.non_daa,
+                self.extra.iter(),
+                self.carve.as_ref(),
+                (1, 1),
+                self.escrow,
+                &self.unentitled,
+                self.pay_reds,
+                &self.withheld,
+                &self.rounds,
+                &self.receipts,
+            )
+            .unwrap()
+            .tx
+    }
+    fn compare(&self, actual: &kaspa_consensus_core::tx::Transaction) -> coinbase_manager::CoinbaseComparisonV2 {
+        self.manager
+            .compare_coinbase_transaction_v2(
+                actual,
+                1,
+                self.own_subsidy,
+                kaspa_consensus_core::coinbase::MinerData::new(self.miner_script.clone(), &[]),
+                &self.ghostdag,
+                &self.rewards,
+                &self.non_daa,
+                self.extra.iter(),
+                self.carve.as_ref(),
+                (1, 1),
+                self.escrow,
+                &self.unentitled,
+                self.pay_reds,
+                &self.withheld,
+                &self.rounds,
+                &self.receipts,
+            )
+            .unwrap()
+    }
+}
+
+#[test]
+fn borrowed_coinbase_comparison_covers_every_hashed_field_and_output_order() {
+    use kaspa_consensus_core::{
+        Hash64, hashing, subnets,
+        tx::{TransactionInput, TransactionOutpoint, TransactionOutput},
+    };
+    let fixture = BorrowedCoinbaseFixture::new(8);
+    let expected = fixture.build();
+    assert!(fixture.compare(&expected).matches);
+    for mutation in 0..11 {
+        let mut actual = expected.clone();
+        match mutation {
+            0 => actual.version += 1,
+            1 => actual.inputs.push(TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(99), 0), vec![], 0, 0)),
+            2 => {
+                actual.outputs.pop();
+            }
+            3 => actual.outputs.push(TransactionOutput::new(1, fixture.miner_script.clone())),
+            4 => actual.outputs.swap(0, 1),
+            5 => actual.outputs[0].value += 1,
+            6 => actual.outputs[0].script_public_key = fixture.miner_script.clone(),
+            7 => actual.lock_time = 1,
+            8 => actual.subnetwork_id = subnets::SUBNETWORK_ID_NATIVE,
+            9 => actual.gas = 1,
+            10 => actual.set_mass(1),
+            _ => unreachable!(),
+        }
+        let comparison = fixture.compare(&actual);
+        assert_eq!(comparison.matches, hashing::tx::hash(&actual) == hashing::tx::hash(&expected), "field {mutation}");
+        assert!(!comparison.matches, "field {mutation}");
+    }
+    let mut changed_payload = expected.clone();
+    changed_payload.payload[0] ^= 1;
+    let comparison = fixture.compare(&changed_payload);
+    assert!(!comparison.matches);
+    assert!(!comparison.payload_matches);
+    assert!(comparison.first_output_difference.is_none());
+    let mut changed_output = expected;
+    changed_output.outputs[3].value += 1;
+    assert_eq!(fixture.compare(&changed_output).first_output_difference, Some((3, false, true, 14, 13)));
+}
+
+#[test]
+fn borrowed_coinbase_comparison_shares_blue_red_round_receipt_and_carve_rules() {
+    use kaspa_consensus_core::{
+        Hash64, blockhash::BlockHashes, coinbase::BlockRewardData, dns_finality::FeeSplitParams, palw_receipt_v4::PalwReceiptV4Payout,
+    };
+    let h = Hash64::from_u64_word;
+    let mut fixture = BorrowedCoinbaseFixture::new(8);
+    fixture.ghostdag.mergeset_reds = BlockHashes::new(vec![h(2), h(3), h(4)]);
+    fixture.rewards.insert(h(1), BlockRewardData::new(1000, 100, 40, fixture.miner_script.clone()));
+    fixture.rewards.insert(h(2), BlockRewardData::new(1000, 90, 30, fixture.miner_script.clone()));
+    fixture.rewards.insert(h(3), BlockRewardData::new(0, 70, 0, fixture.extra[0].script_public_key.clone()));
+    fixture.rewards.insert(h(4), BlockRewardData::new(0, 80, 0, fixture.extra[0].script_public_key.clone()));
+    fixture.rounds.extend([h(3), h(4)]);
+    fixture.non_daa.extend([h(3), h(4)]);
+    fixture.receipts.insert(h(1), PalwReceiptV4Payout { miner_script: fixture.extra[1].script_public_key.clone(), fee_bps: 500 });
+    let split = FeeSplitParams {
+        subsidy_worker_base_bps: 6200,
+        subsidy_worker_inclusion_bps: 800,
+        subsidy_validator_bps: 3000,
+        subsidy_service_bps: 0,
+        normal_fee_worker_bps: 9000,
+        normal_fee_validator_bps: 1000,
+        normal_fee_service_bps: 0,
+        finality_fee_validator_bps: 7500,
+        finality_fee_worker_bps: 2500,
+        finality_fee_service_bps: 0,
+    };
+    for carve in [None, Some(split)] {
+        fixture.carve = carve;
+        for pay_reds in [false, true] {
+            fixture.pay_reds = pay_reds;
+            for deny_red in [false, true] {
+                fixture.unentitled.clear();
+                if deny_red {
+                    fixture.unentitled.insert(h(2));
+                }
+                for (subsidy, escrow) in [(0, 0), (1000, 200)] {
+                    fixture.own_subsidy = subsidy;
+                    fixture.escrow = escrow;
+                    fixture.withheld.clear();
+                    if escrow > 0 {
+                        fixture.withheld.insert(h(2), 100);
+                    }
+                    let expected = fixture.build();
+                    let comparison = fixture.compare(&expected);
+                    assert!(comparison.matches);
+                    assert_eq!(comparison.expected_outputs, expected.outputs.len());
+                    assert!(
+                        expected
+                            .outputs
+                            .iter()
+                            .any(|out| out.value == 150 && out.script_public_key == fixture.extra[0].script_public_key)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn borrowed_validation_allocation_requests_do_not_grow_with_the_eight_payout_scripts() {
+    let mut observations = Vec::new();
+    for count in [0, 1, 8] {
+        let fixture = BorrowedCoinbaseFixture::new(count);
+        let expected = fixture.build();
+        assert!(fixture.compare(&expected).matches); // warm one-time runtime machinery before observing requests
+        let (comparison, requested) = allocation_counter::requested(|| fixture.compare(&expected));
+        assert!(comparison.matches);
+        observations.push(requested);
+        println!("borrowed coinbase comparison: payouts={count}, requested_bytes={requested}");
+    }
+    assert_eq!(observations[0], observations[1]);
+    assert_eq!(observations[0], observations[2], "comparison must not allocate owning payout scripts or output rows");
 }

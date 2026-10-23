@@ -685,3 +685,65 @@ checks retain the same 43 baseline issues with none added
 (`/tmp/misaka-cost-gap-docs.log`). Real cost measurement and the full RFC12 campaign remain
 unrun. Working filesystem headroom was approximately 1.3 GiB; no large Rust
 codegen was started for this Python-only change.
+
+
+### Coinbase validation compares borrowed reward outputs
+
+After the rendering buffer got a retained owner, validation still constructed
+an entire expected coinbase just to hash-compare it with the received one. Every
+native payout script was cloned again and held by that comparison transaction.
+`CoinbaseManager` now has one shared reward renderer with building and comparison
+sinks. The building sink retains the existing owning outputs. The comparison
+sink consumes each expected `(value, borrowed script)` in canonical order,
+compares the corresponding received output, and keeps only count/first-mismatch
+scalars. Validator/PALW appended outputs are borrowed rather than cloned. Round
+payee aggregation borrows its source scripts; it does not make an intermediate
+owning script copy before output rendering.
+
+`verify_coinbase_transaction` uses the comparison sink. It checks every field
+previously included by `hashing::tx::hash(FULL)`: version, empty inputs, output
+count/order/value/script, lock time, subnetwork, gas, payload and zero storage
+mass. The cached transaction ID remains irrelevant, as it was to the hash.
+Mismatch logs retain the same shape facts without keeping an expected output
+collection. No reward formula, queue prefix, selected approval requirement,
+wire field, hash definition, activation pin or public economic input changes.
+
+The current production coinbase source and integration controls were compiled
+directly against the compatible cached dependencies described above. All 16
+controls passed, including the original manager/queue/reservation tests and
+three new controls: mutated hashed fields and output order; a mixed
+blue/red/round/receipt/carve reward stream; and allocation requests for 0/1/8
+appended ML-DSA payout scripts. The mixed fixture covers own subsidy 0/1000,
+selected-parent escrow 0/200, a merged red withholding 100, both red payout modes
+and denied/entitled reds. These are controlled values, not a proposed policy.
+
+A second harness also compiles the unchanged builder source from parent commit
+`0c698bf21` and compares its complete transaction (including cached ID) with the
+new builder for the same fixtures. All 26 controls passed (16 current plus 10
+legacy manager controls). It also compares the new predicate with the old full
+transaction hash test on changed metadata/output cases. Exact argv, cached
+inputs, parent commit and source digests:
+`/tmp/misaka-payout-legacy-comparison-build.json`; build/runtime logs:
+`/tmp/misaka-payout-legacy-comparison-build.log`,
+`/tmp/misaka-payout-legacy-comparison-runtime.log`.
+
+A test-only thread-local System allocator observer counts requested bytes
+(including realloc requests), not allocator rounding, live heap or RSS. It
+observed 488 bytes for each of 0, 1 and 8 payouts in the small fixed fixture.
+That confirms removal of payout-count-dependent copying in this comparison;
+it is not a whole-node bound or a consensus cost constant. Payload serialization,
+mergeset classification, miner-index and round-aggregation scratch still allocate
+and need their own coverage. Template/block/mining-cache owning copies remain
+open, as do all other RFC06/07/08/12 requirements not explicitly verified here.
+
+`cargo check -p kaspad --lib --features private-integration-config` passed in
+35.78s (`/tmp/misaka-payout-borrowed-validation-check.log`). It compiles the actual
+validation consumer and template callers; the direct-source harness is runtime
+manager evidence, not a full newly built node or acceptance campaign. No new
+full codegen or large campaign was attempted with approximately 1.1 GiB left.
+
+
+Documentation validation retained 43 known baseline issues with zero new issues
+(`/tmp/misaka-payout-borrowed-validation-docs.log`). The final runtime rerun
+uses the current production source, including the comparison renderer, and all
+26 controls remain successful. The harness digest manifest matches those files.

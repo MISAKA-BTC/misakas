@@ -1504,9 +1504,10 @@ impl VirtualStateProcessor {
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
         let mut validator_output_count = 0usize;
         let validator_reward_outputs = validator_reward_outputs.into_iter().inspect(|_| validator_output_count += 1);
-        let expected_coinbase = self
+        let comparison = self
             .coinbase_manager
-            .expected_coinbase_transaction(
+            .compare_coinbase_transaction_v2(
+                coinbase,
                 daa_score,
                 own_subsidy,
                 miner_data,
@@ -1523,27 +1524,24 @@ impl VirtualStateProcessor {
                 palw_round_blocks,
                 palw_receipt_v4_payouts,
             )
-            .unwrap()
-            .tx;
-        if hashing::tx::hash(coinbase) != hashing::tx::hash(&expected_coinbase) {
+            .unwrap();
+        if !comparison.matches {
             // kaspa-pq diagnostic (coinbase mismatch): dump the mismatch SHAPE so the
             // cache-retarget class (equal output count, payload already retargeted, a
             // single SCRIPT-only diff at a miner-script output index — old miner's spk
             // left behind) is distinguishable in-field from a reward-generation skew
             // (differing output count, or an AMOUNT diff, or a validator/bond-owner
             // script diff). Emitted only on the already-failing branch → consensus-neutral.
-            let (n_act, n_exp) = (coinbase.outputs.len(), expected_coinbase.outputs.len());
-            let first_diff = (0..n_act.min(n_exp)).find(|&i| coinbase.outputs[i] != expected_coinbase.outputs[i]);
-            match first_diff {
-                Some(i) => {
-                    let (a, e) = (&coinbase.outputs[i], &expected_coinbase.outputs[i]);
+            let (n_act, n_exp) = (coinbase.outputs.len(), comparison.expected_outputs);
+            match comparison.first_output_difference {
+                Some((i, same_value, same_script, actual_value, expected_value)) => {
                     kaspa_core::warn!(
                         "[coinbase-mismatch] outputs act={n_act} exp={n_exp}; first diff @{i}: value_eq={} script_eq={} payload_eq={} (act_value={} exp_value={}); this node generated {} validator-reward output(s) and {} mergeset reward(s)",
-                        a.value == e.value,
-                        a.script_public_key == e.script_public_key,
-                        coinbase.payload == expected_coinbase.payload,
-                        a.value,
-                        e.value,
+                        same_value,
+                        same_script,
+                        comparison.payload_matches,
+                        actual_value,
+                        expected_value,
                         // Which HALF of the coinbase disagrees. Without this the shape alone
                         // cannot say whether the overlay's fan-out or the base mergeset payout is
                         // the one that differs, and those are different investigations.
@@ -1554,7 +1552,7 @@ impl VirtualStateProcessor {
                 None => {
                     kaspa_core::warn!(
                         "[coinbase-mismatch] outputs act={n_act} exp={n_exp}; no in-range output diff (count or payload mismatch) payload_eq={}",
-                        coinbase.payload == expected_coinbase.payload,
+                        comparison.payload_matches,
                     );
                 }
             }

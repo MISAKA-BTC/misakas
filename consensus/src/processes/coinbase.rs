@@ -54,7 +54,7 @@ pub fn palw_pending_payout_outputs_v2(
     state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
 ) -> Result<PalwPayoutOutputsV2, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
     use kaspa_consensus_core::{
-        palw_native_resource_v1::{reserve_native_requests_v1, NativeCoverageV1},
+        palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1},
         palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK,
     };
     let requests = palw_pending_payout_requests_v2(state);
@@ -74,6 +74,47 @@ pub fn palw_pending_payout_outputs_v2(
         ));
     }
     Ok(PalwPayoutOutputsV2 { outputs, _lease: lease })
+}
+
+/// Scalar mismatch facts; validation borrows every payout script instead of
+/// constructing a second owning transaction/output collection.
+pub struct CoinbaseComparisonV2 {
+    pub matches: bool,
+    pub expected_outputs: usize,
+    pub payload_matches: bool,
+    pub first_output_difference: Option<(usize, bool, bool, u64, u64)>,
+}
+
+enum CoinbaseOutputsV2<'a> {
+    Build(Vec<TransactionOutput>),
+    Compare { actual: &'a Transaction, count: usize, first_difference: Option<(usize, bool, bool, u64, u64)> },
+}
+impl CoinbaseOutputsV2<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Build(outputs) => outputs.len(),
+            Self::Compare { count, .. } => *count,
+        }
+    }
+    fn push(&mut self, value: u64, script: &ScriptPublicKey) {
+        match self {
+            Self::Build(outputs) => outputs.push(TransactionOutput::new(value, script.clone())),
+            Self::Compare { actual, count, first_difference } => {
+                if let Some(output) = actual.outputs.get(*count) {
+                    let same_value = output.value == value;
+                    let same_script = output.script_public_key == *script;
+                    if first_difference.is_none() && (!same_value || !same_script) {
+                        *first_difference = Some((*count, same_value, same_script, output.value, value));
+                    }
+                }
+                *count += 1;
+            }
+        }
+    }
+}
+enum CoinbaseRenderedV2 {
+    Built(CoinbaseTransactionTemplate),
+    Compared(CoinbaseComparisonV2),
 }
 
 const LENGTH_OF_BLUE_SCORE: usize = size_of::<u64>();
@@ -293,6 +334,94 @@ impl CoinbaseManager {
         // moves. Empty where the fence is dormant, which leaves this function byte-identical.
         palw_receipt_v4_payouts: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
+        match self.render_coinbase_v2(
+            None,
+            _daa_score,
+            own_subsidy,
+            miner_data,
+            ghostdag_data,
+            mergeset_rewards,
+            mergeset_non_daa,
+            validator_reward_outputs,
+            carve,
+            inclusion,
+            palw_escrow_withheld,
+            palw_unentitled_blues,
+            palw_pay_entitled_reds_to_their_miner,
+            palw_merged_escrow_withheld,
+            palw_round_blocks,
+            palw_receipt_v4_payouts,
+        )? {
+            CoinbaseRenderedV2::Built(template) => Ok(template),
+            CoinbaseRenderedV2::Compared(_) => unreachable!("builder requested owning outputs"),
+        }
+    }
+
+    /// Compare the same reward stream against an existing transaction. No
+    /// payout output or script is cloned into a comparison-only transaction.
+    #[allow(clippy::too_many_arguments)] // Keep the exact builder inputs in the comparison path.
+    pub fn compare_coinbase_transaction_v2<'a, T: AsRef<[u8]>>(
+        &self,
+        actual: &Transaction,
+        _daa_score: u64,
+        own_subsidy: u64,
+        miner_data: MinerData<T>,
+        ghostdag_data: &GhostdagData,
+        mergeset_rewards: &BlockHashMap<BlockRewardData>,
+        mergeset_non_daa: &BlockHashSet,
+        validator_reward_outputs: impl IntoIterator<Item = &'a TransactionOutput>,
+        carve: Option<&FeeSplitParams>,
+        inclusion: (u128, u128),
+        palw_escrow_withheld: u64,
+        palw_unentitled_blues: &BlockHashSet,
+        palw_pay_entitled_reds_to_their_miner: bool,
+        palw_merged_escrow_withheld: &BlockHashMap<u64>,
+        palw_round_blocks: &BlockHashSet,
+        palw_receipt_v4_payouts: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
+    ) -> CoinbaseResult<CoinbaseComparisonV2> {
+        match self.render_coinbase_v2(
+            Some(actual),
+            _daa_score,
+            own_subsidy,
+            miner_data,
+            ghostdag_data,
+            mergeset_rewards,
+            mergeset_non_daa,
+            validator_reward_outputs,
+            carve,
+            inclusion,
+            palw_escrow_withheld,
+            palw_unentitled_blues,
+            palw_pay_entitled_reds_to_their_miner,
+            palw_merged_escrow_withheld,
+            palw_round_blocks,
+            palw_receipt_v4_payouts,
+        )? {
+            CoinbaseRenderedV2::Compared(comparison) => Ok(comparison),
+            CoinbaseRenderedV2::Built(_) => unreachable!("comparison requested borrowed outputs"),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)] // One reward calculation for both output consumers.
+    fn render_coinbase_v2<'a, T: AsRef<[u8]>>(
+        &self,
+        compare: Option<&Transaction>,
+        _daa_score: u64,
+        own_subsidy: u64,
+        miner_data: MinerData<T>,
+        ghostdag_data: &GhostdagData,
+        mergeset_rewards: &BlockHashMap<BlockRewardData>,
+        mergeset_non_daa: &BlockHashSet,
+        validator_reward_outputs: impl IntoIterator<Item = &'a TransactionOutput>,
+        carve: Option<&FeeSplitParams>,
+        inclusion: (u128, u128),
+        palw_escrow_withheld: u64,
+        palw_unentitled_blues: &BlockHashSet,
+        palw_pay_entitled_reds_to_their_miner: bool,
+        palw_merged_escrow_withheld: &BlockHashMap<u64>,
+        palw_round_blocks: &BlockHashSet,
+        palw_receipt_v4_payouts: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
+    ) -> CoinbaseResult<CoinbaseRenderedV2> {
         // §D base inclusion bounty: the worker-inclusion sub-pool summed over the SAME
         // mergeset blue(∩DAA)+red iteration the Worker carve uses (paid to the includer below).
         // The withholding must LAND, or an escrow would be released that was never funded. The only
@@ -306,7 +435,10 @@ impl CoinbaseManager {
         );
         let classified = ghostdag_data.classify_palw_mergeset_v1(|member| palw_round_blocks.contains(&member));
         let mut worker_inclusion_pool = 0u64;
-        let mut outputs = Vec::with_capacity(classified.blues().len() + 1); // + 1 for possible red reward
+        let mut outputs = match compare {
+            Some(actual) => CoinbaseOutputsV2::Compare { actual, count: 0, first_difference: None },
+            None => CoinbaseOutputsV2::Build(Vec::with_capacity(classified.blues().len() + 1)),
+        };
         let mut miner_script_output_indices = Vec::with_capacity(2); // red reward + optional inclusion bounty
 
         // Add an output for each mergeset blue block (∩ DAA window), paying to the script reported by the block.
@@ -359,16 +491,16 @@ impl CoinbaseManager {
         // Collect all rewards from mergeset reds ∩ DAA window and create a
         // single output rewarding all to the current block (the "merging" block)
         let mut red_reward = 0u64;
-        let mut round_payees: Vec<(ScriptPublicKey, u64)> = Vec::new();
+        let mut round_payees: Vec<(&ScriptPublicKey, u64)> = Vec::new();
 
         for round in classified.rounds() {
             // ADR-0125: a round block's fees are its payout's, aggregated — never the merger's lump,
             // never a carve (the lane mints nothing, so there is no subsidy to carve).
             let reward_data = mergeset_rewards.get(round).unwrap();
             if reward_data.total_fees > 0 {
-                match round_payees.iter_mut().find(|(script, _)| *script == reward_data.script_public_key) {
+                match round_payees.iter_mut().find(|(script, _)| *script == &reward_data.script_public_key) {
                     Some((_, value)) => *value = value.saturating_add(reward_data.total_fees),
-                    None => round_payees.push((reward_data.script_public_key.clone(), reward_data.total_fees)),
+                    None => round_payees.push((&reward_data.script_public_key, reward_data.total_fees)),
                 }
             }
         }
@@ -429,12 +561,12 @@ impl CoinbaseManager {
 
         if red_reward > 0 {
             miner_script_output_indices.push(outputs.len());
-            outputs.push(TransactionOutput::new(red_reward, miner_data.script_public_key.clone()));
+            outputs.push(red_reward, &miner_data.script_public_key);
         }
 
         // ADR-0125: the round lane's payouts, after the red lump.
         for (script, value) in round_payees {
-            outputs.push(TransactionOutput::new(value, script));
+            outputs.push(value, script);
         }
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): append the
@@ -444,7 +576,9 @@ impl CoinbaseManager {
         // is the "unspent remainder" and is burned by don't-mint — a deliberate
         // bootstrap-period supply reduction (no minting without recipients). Once
         // validators bond, this carries their participation payouts.
-        outputs.extend(validator_reward_outputs.into_iter().cloned());
+        for output in validator_reward_outputs {
+            outputs.push(output.value, &output.script_public_key);
+        }
 
         // kaspa-pq Phase 13 (ADR-0018 §D base inclusion bounty): pay THIS block's miner
         // (the includer) a stake-proportional share of the §D worker-inclusion pool for
@@ -465,7 +599,7 @@ impl CoinbaseManager {
             .min(worker_inclusion_pool as u128) as u64;
             if bounty > 0 {
                 miner_script_output_indices.push(outputs.len());
-                outputs.push(TransactionOutput::new(bounty, miner_data.script_public_key.clone()));
+                outputs.push(bounty, &miner_data.script_public_key);
             }
         }
 
@@ -474,10 +608,29 @@ impl CoinbaseManager {
         let payload =
             self.serialize_coinbase_payload(&CoinbaseData { blue_score: ghostdag_data.blue_score, subsidy: own_subsidy, miner_data })?;
 
-        Ok(CoinbaseTransactionTemplate {
-            tx: Transaction::new(constants::TX_VERSION, vec![], outputs, 0, subnets::SUBNETWORK_ID_COINBASE, 0, payload),
-            has_red_reward: red_reward > 0,
-            miner_script_output_indices,
+        Ok(match outputs {
+            CoinbaseOutputsV2::Build(outputs) => CoinbaseRenderedV2::Built(CoinbaseTransactionTemplate {
+                tx: Transaction::new(constants::TX_VERSION, vec![], outputs, 0, subnets::SUBNETWORK_ID_COINBASE, 0, payload),
+                has_red_reward: red_reward > 0,
+                miner_script_output_indices,
+            }),
+            CoinbaseOutputsV2::Compare { actual, count, first_difference } => {
+                let payload_matches = actual.payload == payload;
+                // The same fields hashed by hashing::tx::hash(FULL), including
+                // storage mass. The cached transaction id is deliberately ignored.
+                let metadata_matches = actual.version == constants::TX_VERSION
+                    && actual.inputs.is_empty()
+                    && actual.lock_time == 0
+                    && actual.subnetwork_id == subnets::SUBNETWORK_ID_COINBASE
+                    && actual.gas == 0
+                    && actual.mass() == 0;
+                CoinbaseRenderedV2::Compared(CoinbaseComparisonV2 {
+                    matches: metadata_matches && payload_matches && first_difference.is_none() && actual.outputs.len() == count,
+                    expected_outputs: count,
+                    payload_matches,
+                    first_output_difference: first_difference,
+                })
+            }
         })
     }
 
@@ -486,7 +639,7 @@ impl CoinbaseManager {
     /// to the executor bond's payout, and everything else — the builder's fee and every fee-derived share — to the block's own script.
     /// `miner_leg + builder_output == value` always, so the block's total is unchanged.
     fn push_worker_output(
-        outputs: &mut Vec<TransactionOutput>,
+        outputs: &mut CoinbaseOutputsV2<'_>,
         value: u64,
         reward_data: &BlockRewardData,
         carve: Option<&FeeSplitParams>,
@@ -494,7 +647,7 @@ impl CoinbaseManager {
     ) {
         let Some(v4) = v4 else {
             if value > 0 {
-                outputs.push(TransactionOutput::new(value, reward_data.script_public_key.clone()));
+                outputs.push(value, &reward_data.script_public_key);
             }
             return;
         };
@@ -506,11 +659,11 @@ impl CoinbaseManager {
         .min(value);
         let (miner_leg, _builder_fee) = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_split_v1(subsidy_part, v4.fee_bps);
         if miner_leg > 0 {
-            outputs.push(TransactionOutput::new(miner_leg, v4.miner_script.clone()));
+            outputs.push(miner_leg, &v4.miner_script);
         }
         let builder_output = value - miner_leg;
         if builder_output > 0 {
-            outputs.push(TransactionOutput::new(builder_output, reward_data.script_public_key.clone()));
+            outputs.push(builder_output, &reward_data.script_public_key);
         }
     }
 
