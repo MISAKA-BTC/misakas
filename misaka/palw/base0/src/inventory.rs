@@ -70,6 +70,11 @@ pub enum InventoryBuildError {
     /// when it compiles the graph, because it is the same question: an operand nothing can serve
     /// is a step nothing can open.
     Operand(OperandError),
+    /// Local typed allocation refusal; never evidence that model data is invalid.
+    Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
+}
+impl From<kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> for InventoryBuildError {
+    fn from(value: kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1) -> Self { Self::Resource(value) }
 }
 
 /// `(multiplier LE, shift)` — the five bytes op 9 reads.
@@ -1156,95 +1161,9 @@ struct Q36PlannedTensorV1 {
     rows: Q36RowsV1,
 }
 
-/// **The emitter's only state: one scratch buffer and the size of one read** (ADR-0106). Every
-/// row it hands over is a slice of `buf` (or of a planned row), so what the emitter holds is one
-/// read block or one row — never a tensor, whatever the artifact's size.
-struct Q36RowReaderV1<'a> {
-    artifact: &'a crate::qwen36::Qwen36ArtifactV1,
-    buf: Vec<u8>,
-    block: usize,
-}
-
-impl Q36RowReaderV1<'_> {
-    /// Every row of one planned tensor, in ascending offset, into `sink`.
-    fn stream(&mut self, planned: &Q36PlannedTensorV1, sink: &mut Qwen36RowSinkV1<'_>) -> Result<(), InventoryBuildError> {
-        let (name, layer) = (planned.name.as_str(), planned.layer);
-        match &planned.rows {
-            Q36RowsV1::Stored { store, total, stride } => {
-                // Read a block of whole rows at a time: every block starts on a row, so the rows are
-                // exactly a slicing of the tensor whatever the block.
-                let stride = (*stride).max(1);
-                let per_block = (self.block / stride).max(1) * stride;
-                let mut at = 0usize;
-                while at < *total {
-                    let take = per_block.min(total - at);
-                    self.buf.clear();
-                    self.buf.resize(take, 0);
-                    self.artifact.read_tensor_range_into(store, at, &mut self.buf).map_err(|e| q36_missing(&e))?;
-                    let mut offset = 0usize;
-                    while offset < take {
-                        let end = (offset + stride).min(take);
-                        sink(name, layer, (at + offset) as u32, &self.buf[offset..end])?;
-                        offset = end;
-                    }
-                    at += take;
-                }
-            }
-            Q36RowsV1::Zeros { total, stride } => {
-                let stride = (*stride).max(1);
-                self.buf.clear();
-                self.buf.resize(stride.min(*total), 0);
-                let mut at = 0usize;
-                while at < *total {
-                    let end = (at + stride).min(*total);
-                    sink(name, layer, at as u32, &self.buf[..end - at])?;
-                    at = end;
-                }
-            }
-            Q36RowsV1::Params { stored, rule, chunk } => {
-                // Row `k` is lanes `[k·chunk, (k+1)·chunk)` at byte `k·chunk·17`, the chunking the
-                // arms read; each row's wire bytes are written as it is emitted.
-                let w = kaspa_consensus_core::palw_base0_a16::A16QuantParams::WIRE_BYTES;
-                let view = q36_view(self.artifact.param_rows(stored).map_err(|_| q36_missing(stored))?, *rule, stored)?;
-                let chunk = (*chunk).max(1);
-                let mut lane = 0usize;
-                while lane < view.width {
-                    let end = (lane + chunk).min(view.width);
-                    self.buf.clear();
-                    for l in lane..end {
-                        self.buf.extend_from_slice(&view.get(l).to_wire());
-                    }
-                    sink(name, layer, (lane * w) as u32, &self.buf)?;
-                    lane = end;
-                }
-            }
-            Q36RowsV1::Small(rows) => {
-                for (start, bytes) in rows {
-                    sink(name, layer, *start, bytes)?;
-                }
-            }
-            Q36RowsV1::Rope { pairs, table_pairs } => {
-                // One row per position: `cos` then `sin` at the class's ROTARY width — the slice of
-                // the pinned table the partial rotation reads.
-                let rope = &self.artifact.rope;
-                let mut offset = 0u32;
-                for position in 0..self.artifact.shape.max_position {
-                    let start = position * table_pairs;
-                    self.buf.clear();
-                    for v in &rope.cos_q[start..start + pairs] {
-                        self.buf.extend_from_slice(&v.to_le_bytes());
-                    }
-                    for v in &rope.sin_q[start..start + pairs] {
-                        self.buf.extend_from_slice(&v.to_le_bytes());
-                    }
-                    sink(name, layer, offset, &self.buf)?;
-                    offset += self.buf.len() as u32;
-                }
-            }
-        }
-        Ok(())
-    }
-}
+#[path = "inventory/q36_row_reader_v1.rs"]
+mod q36_row_reader_v1;
+use q36_row_reader_v1::Q36RowReaderV1;
 
 /// **ADR-0106: the ONE place a Qwen3.6-family inventory's rows are laid out**, handed to `sink` in
 /// CANONICAL order — by `(tensor, layer, byte offset)`, each coordinate once — as they are read.
@@ -1312,7 +1231,7 @@ fn qwen36_emit_plan_v1(
     // first-planned-wins merge below reads.
     let mut order: Vec<usize> = (0..plan.len()).collect();
     order.sort_by(|&a, &b| (plan[a].name.as_str(), plan[a].layer).cmp(&(plan[b].name.as_str(), plan[b].layer)));
-    let mut rd = Q36RowReaderV1 { artifact, buf: Vec::new(), block: block.max(1) };
+    let mut rd = Q36RowReaderV1::new(artifact, block)?;
     let mut i = 0usize;
     while i < order.len() {
         let key = (plan[order[i]].name.as_str(), plan[order[i]].layer);

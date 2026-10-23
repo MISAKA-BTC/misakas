@@ -948,3 +948,54 @@ The final source rerun passes all 16 controls in 12.42s
 match the current helper/filer/test files. Documentation checks retain 43 known
 baseline issues with zero new issues (`/tmp/misaka-gdn-owned-filer-docs.log`).
 The full campaign and remaining ownership scopes above are not promoted to PASS.
+
+
+## Q36 inventory reusable read buffer admission — 2026-10-23
+
+The canonical emitter now constructs a scoped `Q36RowReaderV1` with a typed
+base reservation. Stored, zero, parameter-wire and rotary rows reserve a
+checked byte envelope before growing their reusable read buffer. Growth keeps
+the old ticket live until fallible allocation succeeds; refusal preserves the
+old bytes, length and ticket. The byte payload drops before its retained
+tickets. Only slices escape the buffer. Parameter/rotary serialization writes
+into the admitted slice rather than growing an unreserved Vec via extend.
+`InventoryBuildError::Resource` distinguishes local admission refusal from
+invalid artifact data. This is logical typed admission, not an allocator/RSS
+upper bound or an OS crash test.
+
+The prechange production emitter at parent
+`eb5c2a73376ac5e7f21c69687ee189e6f679b10f` generated the golden roots.
+The current emitter reproduces them for graph v5/v6/v7/v8 at read sizes
+1, 7, 17 and 4096 on the actual small Q36 fixture. Five isolated quota cases
+cover zero, one below/exact old-plus-new growth peak, refusal/retry, and a
+Stored read refused before any sink call. They also check retained reservation,
+overflow refusal, unchanged old bytes and full release after drop.
+
+Fresh runtime harness: `/tmp/misaka-inventory-reader-build.json` records argv,
+parent commit and source digests. It compiles each inventory source's production
+prefix before the first old cfg(test) module; only the new child-module path is
+made absolute. Existing inventory test modules are omitted because their private
+fixture helpers are not exported by the compatible cached dependency. The new
+reader tests are included from their actual source. Cached base0/core/hash/Borsh
+rlibs supply unchanged dependencies, not current-node acceptance evidence.
+`/tmp/misaka-inventory-reader-final-build.log` and
+`/tmp/misaka-inventory-reader-runtime.log`: 4 test entries pass (including the
+child entry that returns when unselected, the parent golden-root generator,
+the five-process quota driver, and the 16 current root comparisons).
+The actual product wiring also passes
+`cargo check -p kaspad --lib --features private-integration-config`
+(`/tmp/misaka-inventory-read-buffer-check.log`, 19.04s).
+
+Still open: inventory plan/order/distinct-index storage, parameter-view
+construction (which precedes parameter wire-buffer admission), overlapping-row
+merge, downstream result collections and accusation/case/outbox copies. Small
+rows borrow already-planned storage and do not retroactively cover its owner.
+Whole-model costs and the 15-gate live campaign remain unexecuted/UNKNOWN.
+The activation pin remains None; no model tier, claim approval, wire identity,
+public economics or bootstrap permission changes.
+
+The complete base0 test targets also typecheck via
+`cargo check -p misaka-palw-base0 --tests`
+(`/tmp/misaka-inventory-reader-tests-check.log`, 1m15s); this does not execute
+those existing tests. Documentation checks retain 43 baseline issues and zero
+new issues (`/tmp/misaka-inventory-reader-docs.log`).
